@@ -208,12 +208,6 @@ export default function App() {
                   >
                     <Type size={18} />
                   </button>
-                  <button className="p-2 rounded-lg bg-slate-800 hover:bg-red-900/30 text-red-500 border border-slate-700 flex justify-center items-center" title="Ghost Refinement">
-                    <Ghost size={18} />
-                  </button>
-                  <button className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-yellow-400 border border-slate-700 flex justify-center items-center" title="Explain SFX">
-                    <Volume2 size={18} />
-                  </button>
                 </div>
               </div>
 
@@ -319,7 +313,7 @@ export default function App() {
         {/* Viewport Area */}
         <div className="flex-1 overflow-hidden relative bg-slate-900/50">
           {file.type === 'application/pdf' ? (
-            <PDFCanvas regions={regions} />
+            <PDFCanvas />
           ) : (
             <SmartCanvas regions={regions} />
           )}

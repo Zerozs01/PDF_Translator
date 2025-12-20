@@ -16,8 +16,23 @@ self.onmessage = async (e: MessageEvent) => {
 
       case 'SEGMENT':
         // TODO: Run YOLOv8 segmentation
-        console.log('Processing Image:', payload.imageId);
-        self.postMessage({ type: 'SEGMENT_RESULT', id, payload: [] });
+        console.log('Processing Image:', payload.imageUrl ? 'Image URL received' : 'No Image');
+        
+        // Mock Result for now
+        const mockRegions = [
+          {
+            id: 'mock-1',
+            type: 'balloon',
+            box: { x: 100, y: 100, w: 200, h: 100 },
+            originalText: 'Mock Text from Worker',
+            confidence: 0.95
+          }
+        ];
+        
+        // Simulate processing time
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        self.postMessage({ type: 'SEGMENT_RESULT', id, payload: mockRegions });
         break;
 
       default:

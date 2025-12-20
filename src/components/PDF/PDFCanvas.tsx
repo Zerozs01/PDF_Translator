@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { Region } from '../../types';
+import { useSegmentationStore } from '../../stores/useSegmentationStore';
+import { visionService } from '../../services/vision/VisionService';
 
 // Set worker source for pdf.js
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -10,40 +11,67 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
-interface PDFCanvasProps {
-  regions: Region[];
-}
-
-export const PDFCanvas: React.FC<PDFCanvasProps> = ({ regions }) => {
+export const PDFCanvas: React.FC = () => {
   const { fileUrl, currentPage, totalPages, setTotalPages, viewMode } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
+  const { regions, setRegions, setIsProcessing } = useSegmentationStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const pageRef = useRef<HTMLDivElement>(null);
 
   // Handle Document Load
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setTotalPages(numPages);
   };
 
-  // Handle Page Load (Fit to Screen Logic)
-  const onPageLoadSuccess = (page: any) => {
+  // Handle Page Load (Fit to Screen Logic & Vision Trigger)
+  const onPageLoadSuccess = async (page: any) => {
+    // 1. Fit to Screen Logic
     if (containerRef.current && zoom === 1) {
       const { clientWidth, clientHeight } = containerRef.current;
       const { width, height } = page.originalWidth ? { width: page.originalWidth, height: page.originalHeight } : page;
       
-      // Calculate scale to fit
-      const scaleX = (clientWidth - 40) / width; // 40px padding
+      const scaleX = (clientWidth - 40) / width;
       const scaleY = (clientHeight - 40) / height;
-      const fitScale = Math.min(scaleX, scaleY, 1); // Don't zoom in if image is smaller
+      const fitScale = Math.min(scaleX, scaleY, 1);
       
       setZoom(fitScale);
       
-      // Center the page
       const scaledWidth = width * fitScale;
       const x = (clientWidth - scaledWidth) / 2;
       setPan(x, 20);
     }
+
+    // 2. Trigger Vision Service
+    // We need to wait for the canvas to be rendered. 
+    // react-pdf renders a canvas inside the Page component.
+    // We can access it via DOM query since we don't have direct ref to canvas here easily without custom renderer.
+  };
+
+  // Handle Page Render Success (Trigger Vision)
+  const onPageRenderSuccess = async () => {
+    console.log("Page Rendered. Triggering Vision...");
+    // Small delay to ensure the canvas is fully painted and accessible
+    setTimeout(async () => {
+      const canvas = document.querySelector(`.react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
+      if (canvas) {
+        console.log("Canvas found, sending to Vision Service...");
+        setIsProcessing(true);
+        const imageUrl = canvas.toDataURL('image/jpeg');
+        try {
+          const detectedRegions = await visionService.segmentImage(imageUrl);
+          console.log("Vision Service returned:", detectedRegions);
+          setRegions(detectedRegions);
+        } catch (error) {
+          console.error("Vision Service Error:", error);
+        } finally {
+          setIsProcessing(false);
+        }
+      } else {
+        console.warn("Canvas not found for vision processing");
+      }
+    }, 100);
   };
 
   // Mouse Wheel Zoom & Pan
@@ -114,6 +142,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = ({ regions }) => {
                   className="border border-slate-700 bg-white"
                   width={800} // Base width, scaled by CSS transform
                   onLoadSuccess={onPageLoadSuccess}
+                  onRenderSuccess={onPageRenderSuccess}
                 />
                 {/* Regions Overlay for Single Page */}
                 {regions.map(reg => (
