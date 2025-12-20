@@ -25,6 +25,8 @@ interface ProjectState {
   // Settings
   translationMode: TranslationMode;
   safetySettings: SafetySettings;
+  sourceLanguage: string;
+  targetLanguage: string;
 
   // Actions
   loadProject: (file: File) => void;
@@ -33,6 +35,8 @@ interface ProjectState {
   setTotalPages: (total: number) => void;
   setViewMode: (mode: ViewMode) => void;
   setTranslationMode: (mode: TranslationMode) => void;
+  setSourceLanguage: (lang: string) => void;
+  setTargetLanguage: (lang: string) => void;
   updateSafetySettings: (settings: Partial<SafetySettings>) => void;
 }
 
@@ -53,6 +57,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
     sexual: 'off',
     dangerous: 'off'
   },
+  sourceLanguage: 'eng',
+  targetLanguage: 'th',
 
   loadProject: (file) => {
     const url = URL.createObjectURL(file);
@@ -75,6 +81,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setTotalPages: (total) => set({ totalPages: total }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setTranslationMode: (mode) => set({ translationMode: mode }),
+  setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
+  setTargetLanguage: (lang) => set({ targetLanguage: lang }),
   updateSafetySettings: (newSettings) => set((state) => ({
     safetySettings: { ...state.safetySettings, ...newSettings }
   }))

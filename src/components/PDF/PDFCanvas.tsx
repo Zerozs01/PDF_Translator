@@ -12,7 +12,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 export const PDFCanvas: React.FC = () => {
-  const { fileUrl, currentPage, totalPages, setTotalPages, viewMode } = useProjectStore();
+  const { fileUrl, currentPage, totalPages, setTotalPages, viewMode, sourceLanguage } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -77,9 +77,31 @@ export const PDFCanvas: React.FC = () => {
     if (canvas) {
       console.log("Canvas found, sending to Vision Service...");
       setIsProcessing(true);
-      const imageUrl = canvas.toDataURL('image/jpeg');
+      
+      // Create a temporary canvas to ensure white background (react-pdf canvas might be transparent)
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const ctx = tempCanvas.getContext('2d');
+      
+      let imageUrl = '';
+      
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        ctx.drawImage(canvas, 0, 0);
+        imageUrl = tempCanvas.toDataURL('image/jpeg', 1.0);
+      } else {
+        // Fallback if context fails (unlikely)
+        imageUrl = canvas.toDataURL('image/jpeg');
+      }
+
+      console.log(`Captured Image URL Length: ${imageUrl.length}`);
+      console.log(`Sending OCR Request with Language: ${sourceLanguage}`);
+      
       try {
-        const detectedRegions = await visionService.segmentImage(imageUrl);
+        // Pass the current source language to the vision service
+        const detectedRegions = await visionService.segmentImage(imageUrl, sourceLanguage);
         console.log("Vision Service returned:", detectedRegions);
         setRegions(detectedRegions);
       } catch (error) {

@@ -63,11 +63,24 @@ async function callGemini(userQuery: string, systemPrompt: string) {
 
 export default function App() {
   const { isSidebarOpen, toggleSidebar, activeTool, setActiveTool } = useUIStore();
-  const { file, currentPage, totalPages, setPage, closeProject, viewMode, setViewMode } = useProjectStore();
+  const { 
+    file, 
+    currentPage, 
+    totalPages, 
+    setPage, 
+    closeProject, 
+    viewMode, 
+    setViewMode,
+    sourceLanguage,
+    setSourceLanguage,
+    targetLanguage,
+    setTargetLanguage,
+    translationMode,
+    setTranslationMode
+  } = useProjectStore();
   
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [isVisionReady, setIsVisionReady] = useState(false);
-  const [translationMode, setTranslationMode] = useState<'manga' | 'official'>('manga');
   
   useEffect(() => {
     // Initialize Vision Worker
@@ -179,11 +192,21 @@ export default function App() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between bg-slate-800 p-2 rounded-lg border border-slate-700">
                     <span className="text-xs text-slate-400">OCR Source</span>
-                    <button className="text-xs font-bold text-cyan-400 hover:text-cyan-300">Japanese</button>
+                    <button 
+                      onClick={() => setSourceLanguage(sourceLanguage === 'eng' ? 'jpn' : 'eng')}
+                      className="text-xs font-bold text-cyan-400 hover:text-cyan-300 uppercase"
+                    >
+                      {sourceLanguage === 'eng' ? 'English' : 'Japanese'}
+                    </button>
                   </div>
                   <div className="flex items-center justify-between bg-slate-800 p-2 rounded-lg border border-slate-700">
                     <span className="text-xs text-slate-400">Translate To</span>
-                    <button className="text-xs font-bold text-green-400 hover:text-green-300">Thai</button>
+                    <button 
+                      onClick={() => setTargetLanguage(targetLanguage === 'th' ? 'en' : 'th')}
+                      className="text-xs font-bold text-green-400 hover:text-green-300 uppercase"
+                    >
+                      {targetLanguage === 'th' ? 'Thai' : 'English'}
+                    </button>
                   </div>
                 </div>
               </div>

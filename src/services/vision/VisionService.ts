@@ -39,8 +39,8 @@ class VisionService {
     return this.sendMessage('INIT');
   }
 
-  public async segmentImage(imageUrl: string): Promise<Region[]> {
-    return this.sendMessage('SEGMENT', { imageUrl });
+  public async segmentImage(imageUrl: string, language: string = 'eng'): Promise<Region[]> {
+    return this.sendMessage('SEGMENT', { imageUrl, language });
   }
 
   private sendMessage(type: string, payload?: any): Promise<any> {
