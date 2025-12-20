@@ -13,10 +13,16 @@ import {
   RefreshCw,
   BrainCircuit,
   Volume2,
-  Eye
+  Eye,
+  FileText,
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
 import { SmartCanvas } from './components/SmartCanvas';
+import { PDFCanvas } from './components/PDF/PDFCanvas';
+import { UploadScreen } from './components/Home/UploadScreen';
 import { useUIStore } from './stores/useUIStore';
+import { useProjectStore } from './stores/useProjectStore';
 import { Region } from './types';
 import { visionService } from './services/vision/VisionService';
 
@@ -58,6 +64,8 @@ async function callGemini(userQuery: string, systemPrompt: string) {
 
 export default function App() {
   const { isSidebarOpen, toggleSidebar, activeTool, setActiveTool } = useUIStore();
+  const { file, currentPage, totalPages, setPage, closeProject } = useProjectStore();
+  
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [isVisionReady, setIsVisionReady] = useState(false);
   const [translationMode, setTranslationMode] = useState<'manga' | 'official'>('manga');
@@ -74,6 +82,11 @@ export default function App() {
     { id: '1', type: 'balloon', originalText: 'お前、何者だ？', box: { x: 150, y: 100, w: 120, h: 80 } },
     { id: '2', type: 'sfx', originalText: 'ゴゴゴ', box: { x: 50, y: 300, w: 100, h: 100 } }
   ]);
+
+  // If no file is loaded, show Upload Screen
+  if (!file) {
+    return <UploadScreen />;
+  }
 
   /**
    * ✨ Feature: Translate All Regions using Gemini
@@ -110,7 +123,31 @@ export default function App() {
       >
         <div className={`flex-1 overflow-hidden flex flex-col ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="p-6 border-b border-slate-700">
-            <h1 className="text-xl font-black bg-gradient-to-br from-cyan-400 to-blue-500 bg-clip-text text-transparent flex items-center gap-2">
+            <h1 Page Navigation (New) */}
+            <section className="bg-slate-700/30 p-4 rounded-xl border border-slate-700">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-slate-400">PAGE NAVIGATION</span>
+                <span className="text-xs text-cyan-400">{currentPage} / {totalPages}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage <= 1}
+                  className="flex-1 p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg flex justify-center"
+                >
+                  <ArrowLeft size={16} />
+                </button>
+                <button 
+                  onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="flex-1 p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg flex justify-center"
+                >
+                  <ArrowRight size={16} />
+                </button>
+              </div>
+            </section>
+
+            {/* className="text-xl font-black bg-gradient-to-br from-cyan-400 to-blue-500 bg-clip-text text-transparent flex items-center gap-2">
               <BrainCircuit className="text-cyan-400" />
               MangaRebirth
             </h1>
@@ -244,8 +281,12 @@ export default function App() {
         </div>
 
         {/* Viewport Area */}
-        <div className="flex-1 overflow-hidden relative">
-          <SmartCanvas regions={regions} />
+        <div className="flex-1 overflow-hidden relative bg-slate-900/50">
+          {file.type === 'application/pdf' ? (
+            <PDFCanvas regions={regions} />
+          ) : (
+            <SmartCanvas regions={regions} />
+          )}
         </div>
 
         {/* AI Status Bar */}
