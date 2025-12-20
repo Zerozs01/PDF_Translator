@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -12,11 +12,13 @@ import {
   Sparkles,
   RefreshCw,
   BrainCircuit,
-  Volume2
+  Volume2,
+  Eye
 } from 'lucide-react';
 import { SmartCanvas } from './components/SmartCanvas';
 import { useUIStore } from './stores/useUIStore';
 import { Region } from './types';
+import { visionService } from './services/vision/VisionService';
 
 // --- Gemini API Configurations ---
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; // Environment will provide this at runtime
@@ -57,8 +59,17 @@ async function callGemini(userQuery: string, systemPrompt: string) {
 export default function App() {
   const { isSidebarOpen, toggleSidebar, activeTool, setActiveTool } = useUIStore();
   const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const [isVisionReady, setIsVisionReady] = useState(false);
   const [translationMode, setTranslationMode] = useState<'manga' | 'official'>('manga');
   
+  useEffect(() => {
+    // Initialize Vision Worker
+    visionService.initialize().then(() => {
+      console.log('Vision System Ready');
+      setIsVisionReady(true);
+    });
+  }, []);
+
   const [regions, setRegions] = useState<Region[]>([
     { id: '1', type: 'balloon', originalText: 'お前、何者だ？', box: { x: 150, y: 100, w: 120, h: 80 } },
     { id: '2', type: 'sfx', originalText: 'ゴゴゴ', box: { x: 50, y: 300, w: 100, h: 100 } }
@@ -179,14 +190,7 @@ export default function App() {
 
         {/* TOGGLE BUTTON */}
         <button 
-          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          className={`absolute top-1/2 -right-3 -translate-y-1/2 bg-slate-800 border border-slate-600 shadow-xl rounded-full p-1.5 hover:bg-slate-700 hover:text-cyan-400 transition-all z-[100] ${!isSidebarOpen && 'right-[-40px]'}`}
-        >
-          {isSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-        </button>
-      </aside>
-
-      {/* 2. MAIN WtoggleSidebar}
+          onClick={toggleSidebar}
           className={`absolute top-1/2 -right-3 -translate-y-1/2 bg-slate-800 border border-slate-600 shadow-xl rounded-full p-1.5 hover:bg-slate-700 hover:text-cyan-400 transition-all z-[100] ${!isSidebarOpen && 'right-[-40px]'}`}
         >
           {isSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
@@ -241,8 +245,15 @@ export default function App() {
 
         {/* Viewport Area */}
         <div className="flex-1 overflow-hidden relative">
-          <SmartCanvas regions={regions} /div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
-              AI System Online
+          <SmartCanvas regions={regions} />
+        </div>
+
+        {/* AI Status Bar */}
+        <footer className="h-10 bg-slate-800 border-t border-slate-700 px-6 flex items-center justify-between text-[11px] text-slate-400">
+          <div className="flex items-center gap-6">
+            <span className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)] ${isVisionReady ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
+              {isVisionReady ? "Vision System Online" : "Initializing Vision..."}
             </span>
             <span className="text-slate-500">|</span>
             <span>Current Language: JP → TH</span>
