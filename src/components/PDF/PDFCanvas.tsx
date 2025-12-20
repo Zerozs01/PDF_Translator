@@ -19,30 +19,49 @@ export const PDFCanvas: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const pageRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef(pan);
+
+  // State Ref for Event Listeners to avoid stale closures
+  const stateRef = useRef({ zoom, pan });
+  useEffect(() => {
+    stateRef.current = { zoom, pan };
+    if (!isDragging) {
+      panRef.current = pan;
+    }
+  }, [zoom, pan, isDragging]);
 
   // Handle Document Load
-  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
+  const onDocumentLoadSuccess = React.useCallback(({ numPages }: { numPages: number }) => {
     setTotalPages(numPages);
-  };
+  }, [setTotalPages]);
 
   // Handle Page Load (Fit to Screen Logic)
-  const onPageLoadSuccess = async (page: any) => {
+  const onPageLoadSuccess = React.useCallback(async (page: any) => {
     // 1. Fit to Screen Logic
-    if (containerRef.current && zoom === 1) {
+    if (containerRef.current) {
       const { clientWidth, clientHeight } = containerRef.current;
       const { width, height } = page.originalWidth ? { width: page.originalWidth, height: page.originalHeight } : page;
+      
+      // Only fit if we are at default zoom (approx 1) or initial load
+      // We can't easily check "initial load" here without more state, but checking zoom === 1 is a decent heuristic
+      // However, accessing 'zoom' here would make this callback change when zoom changes.
+      // Let's just calculate fit scale and set it if it seems appropriate (e.g. first page load)
       
       const scaleX = (clientWidth - 40) / width;
       const scaleY = (clientHeight - 40) / height;
       const fitScale = Math.min(scaleX, scaleY, 1);
       
-      setZoom(fitScale);
+      // We only auto-fit if the current zoom is exactly 1 (default)
+      if (stateRef.current.zoom === 1) {
+        setZoom(fitScale);
+      }
       
       const scaledWidth = width * fitScale;
       const x = (clientWidth - scaledWidth) / 2;
       setPan(x, 20);
     }
-  };
+  }, [setZoom, setPan]);
 
   // Listen for Process Request
   useEffect(() => {
@@ -73,56 +92,85 @@ export const PDFCanvas: React.FC = () => {
     }
   };
 
-  // Mouse Wheel Zoom & Pan
-  const handleWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey) {
-      // Zoom
+  // Manual Event Listener for Wheel (Non-Passive)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      // Only prevent default if Ctrl is pressed (Zoom) to allow normal scrolling if needed,
+      // BUT since we are implementing custom pan, we likely want to prevent default always
+      // to stop the browser from scrolling the page itself.
       e.preventDefault();
-      const scaleAmount = -e.deltaY * 0.001;
-      const newZoom = Math.min(Math.max(0.1, zoom + scaleAmount), 5);
-      setZoom(newZoom);
-    } else {
-      // Pan (Scroll)
-      // If we are in continuous mode or zoomed in, we want to scroll
-      const scrollSpeed = 1; // Adjust as needed
-      setPan(pan.x - e.deltaX * scrollSpeed, pan.y - e.deltaY * scrollSpeed);
-    }
-  };
+
+      if (e.ctrlKey) {
+        // Zoom
+        const { zoom } = stateRef.current;
+        const scaleAmount = -e.deltaY * 0.001;
+        const newZoom = Math.min(Math.max(0.1, zoom + scaleAmount), 5);
+        setZoom(newZoom);
+      } else {
+        // Pan
+        const { pan } = stateRef.current;
+        setPan(pan.x - e.deltaX, pan.y - e.deltaY);
+      }
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onWheel);
+  }, [setZoom, setPan]);
 
   // Pan Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (activeTool === 'hand' || e.button === 1) { // Hand tool or Middle Click
+    // Allow panning with Hand tool OR Middle Mouse Button (button 1)
+    if (activeTool === 'hand' || e.button === 1) { 
       setIsDragging(true);
+      // Calculate the offset from the mouse position to the current pan position
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-      e.preventDefault();
+      e.preventDefault(); // Prevent text selection
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) {
-      setPan(e.clientX - dragStart.x, e.clientY - dragStart.y);
+      e.preventDefault();
+      // Calculate new position
+      const newX = e.clientX - dragStart.x;
+      const newY = e.clientY - dragStart.y;
+      
+      // Update ref
+      panRef.current = { x: newX, y: newY };
+
+      // Direct DOM manipulation for performance
+      if (contentRef.current) {
+        contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+      }
     }
   };
 
   const handleMouseUp = () => {
-    setIsDragging(false);
+    if (isDragging) {
+      setIsDragging(false);
+      setPan(panRef.current.x, panRef.current.y);
+    }
   };
 
   return (
     <div 
       ref={containerRef}
       className={`w-full h-full overflow-hidden relative bg-slate-900/50 ${activeTool === 'hand' ? 'cursor-grab active:cursor-grabbing' : ''}`}
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
     >
       <div 
+        ref={contentRef}
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
           transformOrigin: '0 0',
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out'
+          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+          willChange: 'transform'
         }}
         className="absolute top-0 left-0 origin-top-left"
       >
@@ -139,31 +187,29 @@ export const PDFCanvas: React.FC = () => {
                   renderTextLayer={false} 
                   renderAnnotationLayer={false}
                   className="border border-slate-700 bg-white"
-                  width={800} // Base width, scaled by CSS transform
+                  width={800}
                   onLoadSuccess={onPageLoadSuccess}
                 />
-                {/* Regions Overlay for Single Page */}
+                {/* Regions Overlay */}
                 {regions.map(reg => (
-                   <div 
-                     key={reg.id}
-                     style={{
-                       left: reg.box.x,
-                       top: reg.box.y,
-                       width: reg.box.w,
-                       height: reg.box.h
-                     }}
-                     className={`absolute border-2 border-dashed transition-all cursor-pointer hover:bg-opacity-20 ${
-                       reg.type === 'balloon' ? 'border-green-500 bg-green-500/10' : 
-                       reg.type === 'sfx' ? 'border-orange-500 bg-orange-500/10' :
-                       'border-blue-500 bg-blue-500/10'
-                     }`}
-                   >
-                     {/* Region Content */}
-                   </div>
-                 ))}
+                    <div 
+                      key={reg.id}
+                      style={{
+                        left: reg.box.x,
+                        top: reg.box.y,
+                        width: reg.box.w,
+                        height: reg.box.h
+                      }}
+                      className={`absolute border-2 border-dashed transition-all cursor-pointer hover:bg-opacity-20 ${
+                        reg.type === 'balloon' ? 'border-green-500 bg-green-500/10' : 
+                        reg.type === 'sfx' ? 'border-orange-500 bg-orange-500/10' :
+                        'border-blue-500 bg-blue-500/10'
+                      }`}
+                    >
+                    </div>
+                  ))}
               </div>
             ) : (
-              // Continuous Mode: Render all pages
               Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
                 <div key={`page_${pageNum}`} className="relative mb-4 group">
                   <Page 
