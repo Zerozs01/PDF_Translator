@@ -2,9 +2,11 @@
   "name": "pdf_translator",
   "version": "1.0.0",
   "description": "**Next-Gen Local OCR & Manga Translation Engine**\r แอปพลิเคชันเวอร์ชันยกเครื่องใหม่ (Rebirth) ที่สร้างขึ้นเพื่อแก้ปัญหาความล่าช้าและการแยกแยะองค์ประกอบภาพที่ไม่แม่นยำ โดยเน้นการประมวลผลแบบ Offline 100% และมี UI ที่ยืดหยุ่นสูงสุด",
-  "main": "index.js",
+  "main": "dist-electron/main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite",
+    "build": "tsc && vite build && electron-builder",
+    "preview": "vite preview"
   },
   "repository": {
     "type": "git",
@@ -19,6 +21,7 @@
   },
   "homepage": "https://github.com/Zerozs01/PDF_Translator#readme",
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",

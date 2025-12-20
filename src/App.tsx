@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
-  FileImage, 
   Settings, 
   Languages, 
   MousePointer2, 
+  Hand,
   Square, 
   Type,
   Ghost,
@@ -14,6 +14,9 @@ import {
   BrainCircuit,
   Volume2
 } from 'lucide-react';
+import { SmartCanvas } from './components/SmartCanvas';
+import { useUIStore } from './stores/useUIStore';
+import { Region } from './types';
 
 // --- Gemini API Configurations ---
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; // Environment will provide this at runtime
@@ -49,17 +52,10 @@ async function callGemini(userQuery: string, systemPrompt: string) {
 }
 
 // --- Mock Regions for Prototype ---
-interface Region {
-  id: string;
-  type: 'text' | 'balloon' | 'sfx' | 'panel';
-  originalText?: string;
-  translatedText?: string;
-  box: { x: number, y: number, w: number, h: number };
-}
+// Region interface moved to src/types/index.ts
 
 export default function App() {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [activeTool, setActiveTool] = useState<'select' | 'region' | 'text'>('select');
+  const { isSidebarOpen, toggleSidebar, activeTool, setActiveTool } = useUIStore();
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [translationMode, setTranslationMode] = useState<'manga' | 'official'>('manga');
   
@@ -190,6 +186,13 @@ export default function App() {
         </button>
       </aside>
 
+      {/* 2. MAIN WtoggleSidebar}
+          className={`absolute top-1/2 -right-3 -translate-y-1/2 bg-slate-800 border border-slate-600 shadow-xl rounded-full p-1.5 hover:bg-slate-700 hover:text-cyan-400 transition-all z-[100] ${!isSidebarOpen && 'right-[-40px]'}`}
+        >
+          {isSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+        </button>
+      </aside>
+
       {/* 2. MAIN WORKSPACE (Canvas) */}
       <main className="flex-1 relative overflow-hidden bg-slate-950 flex flex-col">
         
@@ -198,19 +201,29 @@ export default function App() {
           <button 
             onClick={() => setActiveTool('select')}
             className={`p-2 rounded-full transition-all ${activeTool === 'select' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
+            title="Select Tool"
           >
             <MousePointer2 size={20} />
+          </button>
+          <button 
+            onClick={() => setActiveTool('hand')}
+            className={`p-2 rounded-full transition-all ${activeTool === 'hand' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
+            title="Pan Tool (Hand)"
+          >
+            <Hand size={20} />
           </button>
           <div className="w-[1px] h-6 bg-slate-700" />
           <button 
             onClick={() => setActiveTool('region')}
             className={`p-2 rounded-full transition-all ${activeTool === 'region' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
+            title="Draw Region"
           >
             <Square size={20} />
           </button>
           <button 
             onClick={() => setActiveTool('text')}
             className={`p-2 rounded-full transition-all ${activeTool === 'text' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
+            title="Text Tool"
           >
             <Type size={20} />
           </button>
@@ -227,51 +240,8 @@ export default function App() {
         </div>
 
         {/* Viewport Area */}
-        <div className="flex-1 overflow-auto p-12 flex items-center justify-center custom-scrollbar">
-          <div className="relative bg-white shadow-[0_0_50px_rgba(0,0,0,0.5)] min-w-[500px] min-h-[700px] flex flex-col items-center justify-center border border-slate-700 group cursor-crosshair">
-             {/* Manga Content Simulation */}
-             <div className="text-slate-200 flex flex-col items-center gap-6 select-none opacity-20 group-hover:opacity-40 transition-opacity">
-                <FileImage size={120} strokeWidth={0.5} />
-                <div className="text-center">
-                  <p className="text-xl font-bold">WORKSPACE CANVAS</p>
-                  <p className="text-sm italic">Place PDF or Scan for AI Analysis</p>
-                </div>
-             </div>
-
-             {/* GHOST FILTERS OVERLAY */}
-             {regions.map(reg => (
-               <div 
-                 key={reg.id}
-                 style={{
-                   left: reg.box.x,
-                   top: reg.box.y,
-                   width: reg.box.w,
-                   height: reg.box.h
-                 }}
-                 className={`absolute border-2 border-dashed transition-all cursor-move flex items-start p-1 ${
-                   reg.type === 'balloon' ? 'border-green-500 bg-green-500/10' : 'border-orange-500 bg-orange-500/10'
-                 }`}
-               >
-                 <div className="flex flex-col gap-1 w-full overflow-hidden">
-                    <span className={`text-[8px] px-1 rounded self-start text-white uppercase font-black ${reg.type === 'balloon' ? 'bg-green-500' : 'bg-orange-500'}`}>
-                      {reg.type}
-                    </span>
-                    {reg.translatedText && (
-                      <div className="bg-white text-slate-900 p-1 text-[10px] leading-tight rounded shadow-sm">
-                        {reg.translatedText}
-                      </div>
-                    )}
-                 </div>
-               </div>
-             ))}
-          </div>
-        </div>
-
-        {/* AI Status Bar */}
-        <footer className="h-10 bg-slate-800 border-t border-slate-700 px-6 flex items-center justify-between text-[11px] text-slate-400">
-          <div className="flex items-center gap-6">
-            <span className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+        <div className="flex-1 overflow-hidden relative">
+          <SmartCanvas regions={regions} /div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
               AI System Online
             </span>
             <span className="text-slate-500">|</span>
