@@ -14,7 +14,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 export const PDFCanvas: React.FC = () => {
   const { fileUrl, currentPage, totalPages, setTotalPages, viewMode } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
-  const { regions, setRegions, setIsProcessing } = useSegmentationStore();
+  const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -25,7 +25,7 @@ export const PDFCanvas: React.FC = () => {
     setTotalPages(numPages);
   };
 
-  // Handle Page Load (Fit to Screen Logic & Vision Trigger)
+  // Handle Page Load (Fit to Screen Logic)
   const onPageLoadSuccess = async (page: any) => {
     // 1. Fit to Screen Logic
     if (containerRef.current && zoom === 1) {
@@ -42,36 +42,35 @@ export const PDFCanvas: React.FC = () => {
       const x = (clientWidth - scaledWidth) / 2;
       setPan(x, 20);
     }
-
-    // 2. Trigger Vision Service
-    // We need to wait for the canvas to be rendered. 
-    // react-pdf renders a canvas inside the Page component.
-    // We can access it via DOM query since we don't have direct ref to canvas here easily without custom renderer.
   };
 
-  // Handle Page Render Success (Trigger Vision)
-  const onPageRenderSuccess = async () => {
-    console.log("Page Rendered. Triggering Vision...");
-    // Small delay to ensure the canvas is fully painted and accessible
-    setTimeout(async () => {
-      const canvas = document.querySelector(`.react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
-      if (canvas) {
-        console.log("Canvas found, sending to Vision Service...");
-        setIsProcessing(true);
-        const imageUrl = canvas.toDataURL('image/jpeg');
-        try {
-          const detectedRegions = await visionService.segmentImage(imageUrl);
-          console.log("Vision Service returned:", detectedRegions);
-          setRegions(detectedRegions);
-        } catch (error) {
-          console.error("Vision Service Error:", error);
-        } finally {
-          setIsProcessing(false);
-        }
-      } else {
-        console.warn("Canvas not found for vision processing");
+  // Listen for Process Request
+  useEffect(() => {
+    if (processRequest > 0) {
+      captureAndProcess();
+    }
+  }, [processRequest]);
+
+  const captureAndProcess = async () => {
+    console.log("Processing Triggered...");
+    const canvas = document.querySelector(`.react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
+    
+    if (canvas) {
+      console.log("Canvas found, sending to Vision Service...");
+      setIsProcessing(true);
+      const imageUrl = canvas.toDataURL('image/jpeg');
+      try {
+        const detectedRegions = await visionService.segmentImage(imageUrl);
+        console.log("Vision Service returned:", detectedRegions);
+        setRegions(detectedRegions);
+      } catch (error) {
+        console.error("Vision Service Error:", error);
+      } finally {
+        setIsProcessing(false);
       }
-    }, 100);
+    } else {
+      console.warn("Canvas not found for vision processing");
+    }
   };
 
   // Mouse Wheel Zoom & Pan
@@ -142,7 +141,6 @@ export const PDFCanvas: React.FC = () => {
                   className="border border-slate-700 bg-white"
                   width={800} // Base width, scaled by CSS transform
                   onLoadSuccess={onPageLoadSuccess}
-                  onRenderSuccess={onPageRenderSuccess}
                 />
                 {/* Regions Overlay for Single Page */}
                 {regions.map(reg => (

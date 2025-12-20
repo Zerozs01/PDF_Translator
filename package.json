@@ -20,7 +20,21 @@
     "url": "https://github.com/Zerozs01/PDF_Translator/issues"
   },
   "homepage": "https://github.com/Zerozs01/PDF_Translator#readme",
+  "build": {
+    "appId": "com.pdftranslator.app",
+    "productName": "PDF Translator",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "!node_modules/@napi-rs/canvas-android-arm64"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
   "devDependencies": {
+    "electron": "^39.2.7",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -34,7 +48,6 @@
     "vite-plugin-electron": "^0.29.0"
   },
   "dependencies": {
-    "electron": "^39.2.7",
     "lucide-react": "^0.562.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

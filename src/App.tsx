@@ -14,13 +14,12 @@ import {
   BrainCircuit,
   Volume2,
   Eye,
-  FileText,
-  ArrowLeft,
-  ArrowRight
+  FileText
 } from 'lucide-react';
 import { SmartCanvas } from './components/SmartCanvas';
 import { PDFCanvas } from './components/PDF/PDFCanvas';
 import { UploadScreen } from './components/Home/UploadScreen';
+import { RightSidebar } from './components/Layout/RightSidebar';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore } from './stores/useProjectStore';
 import { Region } from './types';
@@ -127,45 +126,8 @@ export default function App() {
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
-            {/* Page Navigation (New) */}
-            <section className="bg-slate-700/30 p-4 rounded-xl border border-slate-700">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-400">PAGE NAVIGATION</span>
-                <span className="text-xs text-cyan-400">{currentPage} / {totalPages}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage <= 1}
-                  className="flex-1 p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg flex justify-center"
-                >
-                  <ArrowLeft size={16} />
-                </button>
-                <button 
-                  onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
-                  disabled={currentPage >= totalPages}
-                  className="flex-1 p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg flex justify-center"
-                >
-                  <ArrowRight size={16} />
-                </button>
-              </div>
-              
-              {/* View Mode Toggle */}
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button 
-                  onClick={() => setViewMode('single')}
-                  className={`text-[10px] p-1.5 rounded border ${viewMode === 'single' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
-                >
-                  Single Page
-                </button>
-                <button 
-                  onClick={() => setViewMode('continuous')}
-                  className={`text-[10px] p-1.5 rounded border ${viewMode === 'continuous' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
-                >
-                  Continuous
-                </button>
-              </div>
-            </section>
+            {/* Page Navigation (Moved to Right Sidebar) */}
+
 
             {/* className="text-xl font-black bg-gradient-to-br from-cyan-400 to-blue-500 bg-clip-text text-transparent flex items-center gap-2">
               <BrainCircuit className="text-cyan-400" />
@@ -320,6 +282,9 @@ export default function App() {
         </div>
 
       </main>
+
+      {/* 3. RIGHT SIDEBAR (Navigation & OCR) */}
+      <RightSidebar />
     </div>
   );
 }

@@ -9,11 +9,17 @@ interface SegmentationState {
   updateRegion: (id: string, updates: Partial<Region>) => void;
   removeRegion: (id: string) => void;
   setIsProcessing: (isProcessing: boolean) => void;
+  
+  // Trigger Actions
+  processRequest: number; // Timestamp to trigger processing
+  triggerProcess: () => void;
 }
 
 export const useSegmentationStore = create<SegmentationState>((set) => ({
   regions: [],
   isProcessing: false,
+  processRequest: 0,
+
   setRegions: (regions) => set({ regions }),
   addRegion: (region) => set((state) => ({ regions: [...state.regions, region] })),
   updateRegion: (id, updates) => set((state) => ({
@@ -23,4 +29,5 @@ export const useSegmentationStore = create<SegmentationState>((set) => ({
     regions: state.regions.filter((r) => r.id !== id),
   })),
   setIsProcessing: (isProcessing) => set({ isProcessing }),
+  triggerProcess: () => set({ processRequest: Date.now() }),
 }));
