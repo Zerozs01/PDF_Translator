@@ -23,21 +23,21 @@ export const UploadScreen: React.FC = () => {
   return (
     <div className="flex h-full w-full bg-slate-950 text-slate-200">
       {/* Left: Recent Files & Quick Actions */}
-      <div className="w-1/3 border-r border-slate-800 p-8 flex flex-col">
-        <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-          <Clock className="text-cyan-400" /> Recent Projects
+      <div className="w-64 border-r border-slate-800 p-6 flex flex-col">
+        <h2 className="text-lg font-bold mb-6 flex items-center gap-2">
+          <Clock className="text-cyan-400" size={20} /> Recent
         </h2>
-        <div className="flex-1 overflow-y-auto space-y-3">
+        <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar">
           {/* Mock Recent Files */}
           {[1, 2, 3].map((i) => (
-            <div key={i} className="p-4 rounded-xl bg-slate-900/50 border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-800 transition-all cursor-pointer group">
+            <div key={i} className="p-3 rounded-lg bg-slate-900/50 border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-800 transition-all cursor-pointer group">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-slate-800 group-hover:bg-cyan-900/30 text-cyan-400">
-                  <FileText size={20} />
+                <div className="p-1.5 rounded bg-slate-800 group-hover:bg-cyan-900/30 text-cyan-400">
+                  <FileText size={16} />
                 </div>
-                <div>
-                  <h3 className="font-medium text-sm text-slate-200">One Piece Chapter {1000 + i}.pdf</h3>
-                  <p className="text-xs text-slate-500">Edited 2 hours ago • Manga Mode</p>
+                <div className="min-w-0">
+                  <h3 className="font-medium text-xs text-slate-200 truncate">One Piece Ch.{1000 + i}</h3>
+                  <p className="text-[10px] text-slate-500 truncate">2h ago • Manga</p>
                 </div>
               </div>
             </div>

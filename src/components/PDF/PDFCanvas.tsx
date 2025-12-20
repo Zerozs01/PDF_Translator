@@ -66,16 +66,18 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = ({ regions }) => {
                ))}
             </div>
           ) : (
-            // Continuous Mode (Simplified for now)
-            Array.from(new Array(3), (el, index) => (
-              <Page 
-                key={`page_${currentPage + index}`}
-                pageNumber={currentPage + index}
-                renderTextLayer={false} 
-                renderAnnotationLayer={false}
-                className="border border-slate-700 bg-white mb-4"
-                width={800}
-              />
+            // Continuous Mode: Render all pages
+            Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+              <div key={`page_${pageNum}`} className="relative mb-4 group">
+                <Page 
+                  pageNumber={pageNum}
+                  renderTextLayer={false} 
+                  renderAnnotationLayer={false}
+                  className="border border-slate-700 bg-white"
+                  width={800}
+                />
+                {/* Overlay for this page could be added here if we track page number in regions */}
+              </div>
             ))
           )}
         </Document>

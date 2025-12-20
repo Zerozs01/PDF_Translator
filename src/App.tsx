@@ -64,7 +64,7 @@ async function callGemini(userQuery: string, systemPrompt: string) {
 
 export default function App() {
   const { isSidebarOpen, toggleSidebar, activeTool, setActiveTool } = useUIStore();
-  const { file, currentPage, totalPages, setPage, closeProject } = useProjectStore();
+  const { file, currentPage, totalPages, setPage, closeProject, viewMode, setViewMode } = useProjectStore();
   
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [isVisionReady, setIsVisionReady] = useState(false);
@@ -78,10 +78,7 @@ export default function App() {
     });
   }, []);
 
-  const [regions, setRegions] = useState<Region[]>([
-    { id: '1', type: 'balloon', originalText: 'お前、何者だ？', box: { x: 150, y: 100, w: 120, h: 80 } },
-    { id: '2', type: 'sfx', originalText: 'ゴゴゴ', box: { x: 50, y: 300, w: 100, h: 100 } }
-  ]);
+  const [regions, setRegions] = useState<Region[]>([]); // Empty regions initially
 
   // If no file is loaded, show Upload Screen
   if (!file) {
@@ -123,7 +120,14 @@ export default function App() {
       >
         <div className={`flex-1 overflow-hidden flex flex-col ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="p-6 border-b border-slate-700">
-            <h1 Page Navigation (New) */}
+            <h1 className="text-xl font-black bg-gradient-to-br from-cyan-400 to-blue-500 bg-clip-text text-transparent flex items-center gap-2">
+              <BrainCircuit className="text-cyan-400" />
+              MangaRebirth
+            </h1>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            {/* Page Navigation (New) */}
             <section className="bg-slate-700/30 p-4 rounded-xl border border-slate-700">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-slate-400">PAGE NAVIGATION</span>
@@ -143,6 +147,22 @@ export default function App() {
                   className="flex-1 p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg flex justify-center"
                 >
                   <ArrowRight size={16} />
+                </button>
+              </div>
+              
+              {/* View Mode Toggle */}
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button 
+                  onClick={() => setViewMode('single')}
+                  className={`text-[10px] p-1.5 rounded border ${viewMode === 'single' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
+                >
+                  Single Page
+                </button>
+                <button 
+                  onClick={() => setViewMode('continuous')}
+                  className={`text-[10px] p-1.5 rounded border ${viewMode === 'continuous' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-300' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
+                >
+                  Continuous
                 </button>
               </div>
             </section>
