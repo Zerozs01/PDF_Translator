@@ -174,6 +174,65 @@ export default function App() {
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            {/* Tools & Settings (Replaces Detected Regions) */}
+            <section className="space-y-4">
+              {/* Tool Palette */}
+              <div>
+                <h2 className="text-[10px] uppercase font-bold text-slate-500 mb-3 tracking-widest">Tools</h2>
+                <div className="grid grid-cols-4 gap-2">
+                  <button 
+                    onClick={() => setActiveTool('select')}
+                    className={`p-2 rounded-lg transition-all flex justify-center items-center ${activeTool === 'select' ? 'bg-cyan-600 text-white shadow-lg' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'}`}
+                    title="Select Tool"
+                  >
+                    <MousePointer2 size={18} />
+                  </button>
+                  <button 
+                    onClick={() => setActiveTool('hand')}
+                    className={`p-2 rounded-lg transition-all flex justify-center items-center ${activeTool === 'hand' ? 'bg-cyan-600 text-white shadow-lg' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'}`}
+                    title="Pan Tool (Hand)"
+                  >
+                    <Hand size={18} />
+                  </button>
+                  <button 
+                    onClick={() => setActiveTool('region')}
+                    className={`p-2 rounded-lg transition-all flex justify-center items-center ${activeTool === 'region' ? 'bg-cyan-600 text-white shadow-lg' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'}`}
+                    title="Draw Region"
+                  >
+                    <Square size={18} />
+                  </button>
+                  <button 
+                    onClick={() => setActiveTool('text')}
+                    className={`p-2 rounded-lg transition-all flex justify-center items-center ${activeTool === 'text' ? 'bg-cyan-600 text-white shadow-lg' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'}`}
+                    title="Text Tool"
+                  >
+                    <Type size={18} />
+                  </button>
+                  <button className="p-2 rounded-lg bg-slate-800 hover:bg-red-900/30 text-red-500 border border-slate-700 flex justify-center items-center" title="Ghost Refinement">
+                    <Ghost size={18} />
+                  </button>
+                  <button className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-yellow-400 border border-slate-700 flex justify-center items-center" title="Explain SFX">
+                    <Volume2 size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Language Settings */}
+              <div>
+                <h2 className="text-[10px] uppercase font-bold text-slate-500 mb-3 tracking-widest">Language</h2>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between bg-slate-800 p-2 rounded-lg border border-slate-700">
+                    <span className="text-xs text-slate-400">OCR Source</span>
+                    <button className="text-xs font-bold text-cyan-400 hover:text-cyan-300">Japanese</button>
+                  </div>
+                  <div className="flex items-center justify-between bg-slate-800 p-2 rounded-lg border border-slate-700">
+                    <span className="text-xs text-slate-400">Translate To</span>
+                    <button className="text-xs font-bold text-green-400 hover:text-green-300">Thai</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             {/* Translation Settings */}
             <section>
               <h2 className="text-[10px] uppercase font-bold text-slate-500 mb-3 tracking-widest">Translation Context ✨</h2>
@@ -213,8 +272,8 @@ export default function App() {
               </p>
             </section>
 
-            {/* Regions List */}
-            <section>
+            {/* Regions List (Hidden for now as per request) */}
+            {/* <section>
               <h2 className="text-[10px] uppercase font-bold text-slate-500 mb-3 tracking-widest flex items-center justify-between">
                 Detected Regions
                 <span className="bg-slate-700 px-2 py-0.5 rounded-full text-cyan-400">{regions.length}</span>
@@ -233,7 +292,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-            </section>
+            </section> */}
           </div>
 
           {/* Footer Sidebar */}
@@ -257,49 +316,6 @@ export default function App() {
       {/* 2. MAIN WORKSPACE (Canvas) */}
       <main className="flex-1 relative overflow-hidden bg-slate-950 flex flex-col">
         
-        {/* Floating Toolbar */}
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-slate-800/80 backdrop-blur-xl border border-slate-700 shadow-2xl rounded-full px-6 py-3 flex items-center gap-4 z-50">
-          <button 
-            onClick={() => setActiveTool('select')}
-            className={`p-2 rounded-full transition-all ${activeTool === 'select' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
-            title="Select Tool"
-          >
-            <MousePointer2 size={20} />
-          </button>
-          <button 
-            onClick={() => setActiveTool('hand')}
-            className={`p-2 rounded-full transition-all ${activeTool === 'hand' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
-            title="Pan Tool (Hand)"
-          >
-            <Hand size={20} />
-          </button>
-          <div className="w-[1px] h-6 bg-slate-700" />
-          <button 
-            onClick={() => setActiveTool('region')}
-            className={`p-2 rounded-full transition-all ${activeTool === 'region' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
-            title="Draw Region"
-          >
-            <Square size={20} />
-          </button>
-          <button 
-            onClick={() => setActiveTool('text')}
-            className={`p-2 rounded-full transition-all ${activeTool === 'text' ? 'bg-cyan-600 text-white shadow-lg' : 'hover:bg-slate-700 text-slate-400'}`}
-            title="Text Tool"
-          >
-            <Type size={20} />
-          </button>
-          <div className="w-[1px] h-6 bg-slate-700" />
-          <button className="p-2 rounded-full hover:bg-red-900/30 text-red-500 group relative">
-            <Ghost size={20} />
-            <span className="absolute -bottom-10 left-1/2 -translate-x-1/2 bg-red-600 text-[10px] text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap transition-opacity">
-              Ghost Refinement Mode
-            </span>
-          </button>
-          <button className="p-2 rounded-full hover:bg-slate-700 text-yellow-400">
-            <Volume2 size={20} title="Explain SFX" />
-          </button>
-        </div>
-
         {/* Viewport Area */}
         <div className="flex-1 overflow-hidden relative bg-slate-900/50">
           {file.type === 'application/pdf' ? (
@@ -309,25 +325,6 @@ export default function App() {
           )}
         </div>
 
-        {/* AI Status Bar */}
-        <footer className="h-10 bg-slate-800 border-t border-slate-700 px-6 flex items-center justify-between text-[11px] text-slate-400">
-          <div className="flex items-center gap-6">
-            <span className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)] ${isVisionReady ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
-              {isVisionReady ? "Vision System Online" : "Initializing Vision..."}
-            </span>
-            <span className="text-slate-500">|</span>
-            <span>Current Language: JP → TH</span>
-          </div>
-          <div className="flex items-center gap-6">
-             <span className="flex items-center gap-1.5 hover:text-cyan-400 cursor-pointer transition-colors">
-               <BrainCircuit size={14} /> Gemini 2.5 Active
-             </span>
-             <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
-               FPS: 60
-             </span>
-          </div>
-        </footer>
       </main>
     </div>
   );
