@@ -1,4 +1,4 @@
-import { Region } from '../../types';
+import { Region, OCRPageResult } from '../../types';
 
 type WorkerMessage = {
   type: string;
@@ -6,9 +6,16 @@ type WorkerMessage = {
   id: string;
 };
 
+export type OCRProgressCallback = (progress: {
+  status: string;
+  progress: number;
+  workerId?: string;
+}) => void;
+
 class VisionService {
   private worker: Worker | null = null;
   private pendingRequests: Map<string, (data: any) => void> = new Map();
+  private progressCallback: OCRProgressCallback | null = null;
 
   constructor() {
     this.initWorker();
@@ -21,6 +28,13 @@ class VisionService {
 
     this.worker.onmessage = (e) => {
       const { type, id, payload, error } = e.data;
+      
+      // Handle progress updates
+      if (type === 'OCR_PROGRESS' && this.progressCallback) {
+        this.progressCallback(payload);
+        return;
+      }
+
       const resolver = this.pendingRequests.get(id);
 
       if (resolver) {
@@ -41,6 +55,33 @@ class VisionService {
 
   public async segmentImage(imageUrl: string, language: string = 'eng'): Promise<Region[]> {
     return this.sendMessage('SEGMENT', { imageUrl, language });
+  }
+
+  /**
+   * Set callback for OCR progress updates
+   */
+  public setProgressCallback(callback: OCRProgressCallback | null): void {
+    this.progressCallback = callback;
+  }
+
+  /**
+   * OCR for Text Layer Overlay
+   * Returns word-level bounding boxes for precise text positioning
+   */
+  public async ocrForTextLayer(
+    imageUrl: string,
+    imageWidth: number,
+    imageHeight: number,
+    language: string = 'eng',
+    dpi: number = 300
+  ): Promise<OCRPageResult> {
+    return this.sendMessage('OCR_FOR_TEXT_LAYER', {
+      imageUrl,
+      imageWidth,
+      imageHeight,
+      language,
+      dpi
+    });
   }
 
   private sendMessage(type: string, payload?: any): Promise<any> {

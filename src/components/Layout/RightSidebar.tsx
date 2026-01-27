@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Document, Page } from 'react-pdf';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
-import { BrainCircuit, Layers, Play, CheckSquare, Settings, List, MessageSquare, Image as ImageIcon } from 'lucide-react';
+import { BrainCircuit, Layers, Play, CheckSquare, Settings, List, MessageSquare, Image as ImageIcon, FileText } from 'lucide-react';
+import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
 export const RightSidebar: React.FC = () => {
-  const { fileUrl, currentPage, totalPages, setPage, viewMode, setViewMode } = useProjectStore();
+  const { fileUrl, currentPage, totalPages, setPage, viewMode, setViewMode, fileType } = useProjectStore();
   const { triggerProcess, isProcessing, regions } = useSegmentationStore();
-  const [activeTab, setActiveTab] = useState<'pages' | 'results'>('pages');
+  const [activeTab, setActiveTab] = useState<'pages' | 'results' | 'textlayer'>('pages');
 
   // Auto-switch to results when processing finishes and we have regions
   useEffect(() => {
@@ -15,6 +16,13 @@ export const RightSidebar: React.FC = () => {
       setActiveTab('results');
     }
   }, [isProcessing, regions]);
+
+  // Default to textlayer tab for PDF files
+  useEffect(() => {
+    if (fileType === 'pdf') {
+      setActiveTab('textlayer');
+    }
+  }, [fileType]);
 
   return (
     <aside className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col h-full">
@@ -24,65 +32,50 @@ export const RightSidebar: React.FC = () => {
         <h2 className="font-bold text-slate-200">OCR Processing</h2>
       </div>
 
-      {/* OCR Controls */}
-      <div className="p-4 space-y-4 border-b border-slate-700 bg-slate-800/50">
-        <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-          <span>Current Page: {currentPage}</span>
-          <span className="flex items-center gap-1">
-            <div className={`w-2 h-2 rounded-full ${isProcessing ? 'bg-yellow-400 animate-pulse' : 'bg-slate-600'}`} />
-            {isProcessing ? 'Processing...' : 'Idle'}
-          </span>
-        </div>
-        
-        <button 
-          onClick={triggerProcess}
-          disabled={isProcessing}
-          className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
-        >
-          <Play size={16} fill="currentColor" />
-          Process Current Page
-        </button>
-
-        <div className="grid grid-cols-2 gap-2">
-          <button className="bg-slate-700 hover:bg-slate-600 text-slate-300 py-2 rounded-lg text-xs font-medium border border-slate-600">
-            Process All
-          </button>
-          <button className="bg-slate-700 hover:bg-slate-600 text-slate-300 py-2 rounded-lg text-xs font-medium border border-slate-600 flex items-center justify-center gap-1">
-            <Settings size={12} />
-            Config
-          </button>
-        </div>
-      </div>
-
       {/* Tabs */}
       <div className="flex border-b border-slate-700 bg-slate-900/30">
         <button
+          onClick={() => setActiveTab('textlayer')}
+          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors ${
+            activeTab === 'textlayer' 
+              ? 'text-cyan-400 border-b-2 border-cyan-400 bg-slate-800' 
+              : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+          }`}
+        >
+          <FileText size={12} />
+          Text Layer
+        </button>
+        <button
           onClick={() => setActiveTab('pages')}
-          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors ${
+          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors ${
             activeTab === 'pages' 
               ? 'text-cyan-400 border-b-2 border-cyan-400 bg-slate-800' 
               : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
           }`}
         >
-          <Layers size={14} />
+          <Layers size={12} />
           Pages
         </button>
         <button
           onClick={() => setActiveTab('results')}
-          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-colors ${
+          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors ${
             activeTab === 'results' 
               ? 'text-pink-400 border-b-2 border-pink-400 bg-slate-800' 
               : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
           }`}
         >
-          <List size={14} />
-          Results ({regions.length})
+          <List size={12} />
+          ({regions.length})
         </button>
       </div>
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab === 'pages' ? (
+        {activeTab === 'textlayer' ? (
+          <div className="flex-1 overflow-y-auto p-4">
+            <OCRTextLayerPanel />
+          </div>
+        ) : activeTab === 'pages' ? (
           <>
             <div className="p-3 bg-slate-900/30 border-b border-slate-700 flex justify-between items-center">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
@@ -185,7 +178,7 @@ export const RightSidebar: React.FC = () => {
                       </span>
                     </div>
                     <span className="text-[10px] text-slate-500 font-mono">
-                      {Math.round(region.confidence * 100)}%
+                      {Math.round((region.confidence ?? 0) * 100)}%
                     </span>
                   </div>
                   

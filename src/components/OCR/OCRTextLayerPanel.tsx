@@ -1,0 +1,300 @@
+/**
+ * OCRTextLayerPanel - UI สำหรับสร้าง Searchable PDF ด้วย OCR
+ * 
+ * Features:
+ * - เลือกภาษา OCR
+ * - เลือก Quality Profile (DPI)
+ * - แสดง Progress
+ * - Export PDF
+ */
+
+import React, { useCallback, useRef } from 'react';
+import { 
+  FileText, 
+  Settings, 
+  Play, 
+  Download, 
+  RefreshCw,
+  Languages,
+  Zap,
+  CheckCircle,
+  AlertCircle
+} from 'lucide-react';
+import { useOCRTextLayerStore, SUPPORTED_LANGUAGES, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
+import { useProjectStore } from '../../stores/useProjectStore';
+import { searchablePDFService } from '../../services/pdf';
+
+// PDF.js will be imported dynamically
+import { pdfjs } from 'react-pdf';
+
+export const OCRTextLayerPanel: React.FC = () => {
+  const { file, fileUrl } = useProjectStore();
+  const {
+    options,
+    setOptions,
+    isProcessing,
+    progress,
+    setProgress,
+    setIsProcessing,
+    searchablePDFBlob,
+    setSearchablePDFBlob,
+    reset
+  } = useOCRTextLayerStore();
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  /**
+   * Render PDF page to canvas at specified DPI
+   */
+  const renderPageToCanvas = useCallback(async (pageNum: number, dpi: number) => {
+    if (!fileUrl) throw new Error('No PDF loaded');
+
+    // Load PDF document with PDF.js
+    const loadingTask = pdfjs.getDocument(fileUrl);
+    const pdfDoc = await loadingTask.promise;
+    const page = await pdfDoc.getPage(pageNum);
+
+    // Calculate scale (PDF uses 72 DPI by default)
+    const scale = dpi / 72;
+    const viewport = page.getViewport({ scale });
+
+    // Create canvas
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Cannot get canvas context');
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    // Render page to canvas (use type assertion for pdf.js compatibility)
+    await page.render({
+      canvasContext: context,
+      viewport: viewport
+    } as any).promise;
+
+    return {
+      canvas,
+      width: viewport.width,
+      height: viewport.height
+    };
+  }, [fileUrl]);
+
+  /**
+   * Start OCR processing
+   */
+  const handleStartOCR = useCallback(async () => {
+    if (!file || !fileUrl) {
+      console.error('No file loaded');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      
+      // Set initial progress (don't call reset() here!)
+      setProgress({
+        stage: 'init',
+        currentPage: 0,
+        totalPages: 0,
+        message: 'กำลังเริ่มต้น...',
+        progress: 0
+      });
+
+      // Set up progress callback
+      searchablePDFService.setProgressCallback(setProgress);
+
+      // Read file as ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+
+      // Create searchable PDF
+      const resultBytes = await searchablePDFService.createSearchablePDF(
+        arrayBuffer,
+        options,
+        renderPageToCanvas
+      );
+
+      // Convert to Blob (cast for TypeScript compatibility)
+      const blob = new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
+      setSearchablePDFBlob(blob);
+
+      console.log('[OCRPanel] Searchable PDF created successfully!');
+    } catch (error) {
+      console.error('[OCRPanel] OCR processing failed:', error);
+      setProgress({
+        stage: 'complete',
+        currentPage: 0,
+        totalPages: 0,
+        message: `เกิดข้อผิดพลาด: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        progress: 0
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, reset, setSearchablePDFBlob]);
+
+  /**
+   * Download the searchable PDF
+   */
+  const handleDownload = useCallback(() => {
+    if (!searchablePDFBlob || !file) return;
+
+    const url = URL.createObjectURL(searchablePDFBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name.replace('.pdf', '_searchable.pdf');
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [searchablePDFBlob, file]);
+
+  // Current profile
+  const currentProfile = OCR_PROFILES.find(p => p.dpi === options.dpi) || OCR_PROFILES[2];
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center gap-2 text-sm font-bold text-slate-200">
+        <FileText size={16} className="text-cyan-400" />
+        OCR Text Layer
+      </div>
+
+      {/* Language Selector */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <Languages size={12} />
+          OCR Language
+        </label>
+        <select
+          value={options.language}
+          onChange={(e) => setOptions({ language: e.target.value })}
+          disabled={isProcessing}
+          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 disabled:opacity-50"
+        >
+          {SUPPORTED_LANGUAGES.map(lang => (
+            <option key={lang.code} value={lang.code}>
+              {lang.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Quality Profile */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <Settings size={12} />
+          Quality Profile
+        </label>
+        <div className="grid grid-cols-3 gap-1">
+          {OCR_PROFILES.map(profile => (
+            <button
+              key={profile.id}
+              onClick={() => setOptions({ dpi: profile.dpi, profile: profile.id as any })}
+              disabled={isProcessing}
+              className={`px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all ${
+                currentProfile.id === profile.id
+                  ? 'bg-cyan-600 text-white shadow-lg'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600'
+              } disabled:opacity-50`}
+              title={profile.description}
+            >
+              {profile.name}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-slate-500 italic">
+          DPI: {options.dpi} • {currentProfile.description}
+        </p>
+      </div>
+
+      {/* Progress Bar */}
+      {isProcessing && (
+        <div className="space-y-2 bg-slate-700/50 rounded-lg p-3 border border-slate-600">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-300 truncate max-w-[180px]">
+              {progress?.message || 'กำลังเริ่มต้น...'}
+            </span>
+            <span className="text-cyan-400 font-mono">
+              {progress ? Math.round(progress.progress) : 0}%
+            </span>
+          </div>
+          <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-150"
+              style={{ width: `${progress?.progress || 0}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[10px] text-slate-500">
+            <span>
+              {progress?.stage === 'rendering' && '📄 Rendering...'}
+              {progress?.stage === 'ocr' && '🔍 OCR Processing...'}
+              {progress?.stage === 'text-layer' && '✍️ Adding Text...'}
+              {progress?.stage === 'saving' && '💾 Saving...'}
+              {!progress && '⏳ Initializing...'}
+            </span>
+            <span>
+              {progress?.currentPage || 0} / {progress?.totalPages || '?'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      <div className="space-y-2">
+        <button
+          onClick={handleStartOCR}
+          disabled={isProcessing || !file}
+          className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+        >
+          {isProcessing ? (
+            <>
+              <RefreshCw size={16} className="animate-spin" />
+              Processing...
+            </>
+          ) : (
+            <>
+              <Play size={16} fill="currentColor" />
+              Create Searchable PDF
+            </>
+          )}
+        </button>
+
+        {searchablePDFBlob && !isProcessing && (
+          <button
+            onClick={handleDownload}
+            className="w-full bg-green-600 hover:bg-green-500 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+          >
+            <Download size={16} />
+            Download Searchable PDF
+          </button>
+        )}
+      </div>
+
+      {/* Success Message */}
+      {searchablePDFBlob && !isProcessing && (
+        <div className="flex items-start gap-2 bg-green-900/30 border border-green-700 rounded-lg p-3">
+          <CheckCircle size={16} className="text-green-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs">
+            <p className="text-green-300 font-medium">สร้าง Searchable PDF สำเร็จ!</p>
+            <p className="text-green-400/70 mt-1">
+              คุณสามารถ select และ copy ข้อความจาก PDF ได้แล้ว
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Info */}
+      <div className="text-[10px] text-slate-500 leading-relaxed">
+        <p className="flex items-start gap-1">
+          <Zap size={10} className="flex-shrink-0 mt-0.5 text-yellow-500" />
+          <span>
+            ฟีเจอร์นี้จะเพิ่ม invisible text layer บน PDF ทำให้ค้นหาและ copy ข้อความได้ เหมือน PDF24
+          </span>
+        </p>
+      </div>
+
+      {/* Hidden canvas for rendering */}
+      <canvas ref={canvasRef} className="hidden" />
+    </div>
+  );
+};
