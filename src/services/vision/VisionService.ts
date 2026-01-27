@@ -18,7 +18,8 @@ class VisionService {
   private progressCallback: OCRProgressCallback | null = null;
 
   constructor() {
-    this.initWorker();
+    // Lazy init via initialize() method
+    // this.initWorker(); 
   }
 
   private initWorker() {
@@ -86,6 +87,11 @@ class VisionService {
 
   private sendMessage(type: string, payload?: any): Promise<any> {
     return new Promise((resolve) => {
+      // Ensure worker is initialized
+      if (!this.worker) {
+        this.initWorker();
+      }
+
       const id = crypto.randomUUID();
       this.pendingRequests.set(id, resolve);
       this.worker?.postMessage({ type, payload, id });

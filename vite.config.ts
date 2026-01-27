@@ -25,4 +25,15 @@ export default defineConfig({
       },
     ]),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          pdf: ['react-pdf', 'pdf-lib'],
+          ocr: ['tesseract.js'],
+          ui: ['lucide-react', 'zustand'],
+        },
+      },
+    },
+  },
 })

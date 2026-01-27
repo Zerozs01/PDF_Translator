@@ -17,11 +17,13 @@ import {
   FileText
 } from 'lucide-react';
 import { SmartCanvas } from './components/SmartCanvas';
-import { PDFCanvas } from './components/PDF/PDFCanvas';
 import { UploadScreen } from './components/Home/UploadScreen';
-import { RightSidebar } from './components/Layout/RightSidebar';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore } from './stores/useProjectStore';
+
+// Lazy Load Heavy Components
+const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
+const PDFCanvas = React.lazy(() => import('./components/PDF/PDFCanvas').then(module => ({ default: module.PDFCanvas })));
 import { Region } from './types';
 import { visionService } from './services/vision/VisionService';
 
@@ -83,11 +85,15 @@ export default function App() {
   const [isVisionReady, setIsVisionReady] = useState(false);
   
   useEffect(() => {
-    // Initialize Vision Worker
-    visionService.initialize().then(() => {
-      console.log('Vision System Ready');
-      setIsVisionReady(true);
-    });
+    // Lazy Initialize Vision Worker (low priority)
+    const timer = setTimeout(() => {
+      visionService.initialize().then(() => {
+        console.log('Vision System Ready (Lazy Loaded)');
+        setIsVisionReady(true);
+      });
+    }, 2000); // Delay 2s to let UI render first
+
+    return () => clearTimeout(timer);
   }, []);
 
   const [regions, setRegions] = useState<Region[]>([]); // Empty regions initially
@@ -297,17 +303,21 @@ export default function App() {
         
         {/* Viewport Area */}
         <div className="flex-1 overflow-hidden relative bg-slate-900/50">
-          {file.type === 'application/pdf' ? (
-            <PDFCanvas />
-          ) : (
-            <SmartCanvas regions={regions} />
-          )}
+         <React.Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500">Loading Canvas...</div>}>
+            {file.type === 'application/pdf' ? (
+              <PDFCanvas />
+            ) : (
+              <SmartCanvas regions={regions} />
+            )}
+          </React.Suspense>
         </div>
 
       </main>
 
       {/* 3. RIGHT SIDEBAR (Navigation & OCR) */}
-      <RightSidebar />
+      <React.Suspense fallback={<div className="w-80 bg-slate-800 border-l border-slate-700" />}>
+        <RightSidebar />
+      </React.Suspense>
     </div>
   );
 }
