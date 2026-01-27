@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'path'
+import { initDB, DocumentDAO, OCRCacheDAO } from './db'
 
 // The built directory structure
 //
@@ -50,4 +51,47 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  // Initialize SQLite Database with Performance Pragmas
+  initDB();
+
+  // Register IPC Handlers for Database Operations
+  ipcMain.handle('db:save-document', async (_, { filepath, filename, totalPages }) => {
+    try {
+      return DocumentDAO.upsert(filepath, filename, totalPages);
+    } catch (error) {
+      console.error('db:save-document error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:get-document', async (_, filepath) => {
+    try {
+      return DocumentDAO.get(filepath);
+    } catch (error) {
+      console.error('db:get-document error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('db:save-ocr', async (_, { docId, pageNum, data }) => {
+    try {
+      OCRCacheDAO.save(docId, pageNum, data);
+      return true;
+    } catch (error) {
+      console.error('db:save-ocr error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-ocr', async (_, { docId, pageNum }) => {
+    try {
+      return OCRCacheDAO.get(docId, pageNum);
+    } catch (error) {
+      console.error('db:get-ocr error:', error);
+      return null;
+    }
+  });
+
+  createWindow();
+})
