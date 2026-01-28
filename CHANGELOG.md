@@ -38,6 +38,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrated from raw `ipcRenderer` to typed `electronAPI` with legacy fallback
 - Improved code organization in main process with validation helpers
 
+### 🎯 OCR & Segmentation Improvements
+
+- **Smart Region Classification**: Regions are now classified as `text`, `balloon`, or `sfx` based on:
+  - Word count and text density
+  - Region size relative to page
+  - OCR confidence levels
+  - Document type (manga vs document)
+- **VisionService Stability**:
+  - Added request timeout (2 minutes) with auto-retry (up to 2 attempts)
+  - Implemented request queue to prevent overlapping OCR requests
+  - Added health check and worker crash recovery
+- **SearchablePDFService Resilience**:
+  - Per-page error handling - failed pages are skipped instead of stopping entire process
+  - OCR retry logic with exponential backoff
+  - Progress reporting for failed pages
+- **TSV Parsing**: Improved word-level bounding box extraction from Tesseract output
+- **Document Type Awareness**: Segmentation adapts based on translation mode (manga/official)
+
+
 ---
 
 ## [1.0.0] - 2025-01-27

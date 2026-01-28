@@ -71,13 +71,18 @@ export const PDFCanvas: React.FC = () => {
   }, [processRequest]);
 
   const captureAndProcess = async () => {
-    console.log("Processing Triggered...");
+    console.log("[PDFCanvas] Processing Triggered...");
     const canvas = document.querySelector(`.react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
     
-    if (canvas) {
-      console.log("Canvas found, sending to Vision Service...");
-      setIsProcessing(true);
-      
+    if (!canvas) {
+      console.warn("[PDFCanvas] Canvas not found for vision processing");
+      return;
+    }
+
+    console.log("[PDFCanvas] Canvas found, sending to Vision Service...");
+    setIsProcessing(true);
+    
+    try {
       // Create a temporary canvas to ensure white background (react-pdf canvas might be transparent)
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = canvas.width;
@@ -90,27 +95,46 @@ export const PDFCanvas: React.FC = () => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
         ctx.drawImage(canvas, 0, 0);
-        imageUrl = tempCanvas.toDataURL('image/jpeg', 1.0);
+        imageUrl = tempCanvas.toDataURL('image/jpeg', 0.95);
       } else {
         // Fallback if context fails (unlikely)
-        imageUrl = canvas.toDataURL('image/jpeg');
+        imageUrl = canvas.toDataURL('image/jpeg', 0.95);
       }
 
-      console.log(`Captured Image URL Length: ${imageUrl.length}`);
-      console.log(`Sending OCR Request with Language: ${sourceLanguage}`);
+      console.log(`[PDFCanvas] Image captured: ${canvas.width}x${canvas.height}, URL length: ${imageUrl.length}`);
+      console.log(`[PDFCanvas] OCR Language: ${sourceLanguage}`);
       
-      try {
-        // Pass the current source language to the vision service
-        const detectedRegions = await visionService.segmentImage(imageUrl, sourceLanguage);
-        console.log("Vision Service returned:", detectedRegions);
-        setRegions(detectedRegions);
-      } catch (error) {
-        console.error("Vision Service Error:", error);
-      } finally {
-        setIsProcessing(false);
-      }
-    } else {
-      console.warn("Canvas not found for vision processing");
+      // Determine document type based on translation mode
+      // manga mode = comic/manga, official mode = document
+      const translationMode = useProjectStore.getState().translationMode;
+      const documentType = translationMode === 'manga' ? 'manga' : 'document';
+      
+      console.log(`[PDFCanvas] Document type: ${documentType}`);
+      
+      // Pass document type to vision service for smart segmentation
+      const detectedRegions = await visionService.segmentImage(
+        imageUrl, 
+        sourceLanguage,
+        documentType
+      );
+      
+      console.log(`[PDFCanvas] Vision Service returned ${detectedRegions.length} regions:`, 
+        detectedRegions.map(r => `${r.type}(${r.originalText?.substring(0, 20)}...)`).join(', ')
+      );
+      
+      setRegions(detectedRegions);
+      
+    } catch (error) {
+      console.error("[PDFCanvas] Vision Service Error:", error);
+      
+      // Show error to user (could be enhanced with toast notification)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[PDFCanvas] OCR Failed: ${errorMessage}`);
+      
+      // Clear regions on error
+      setRegions([]);
+    } finally {
+      setIsProcessing(false);
     }
   };
 

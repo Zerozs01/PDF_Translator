@@ -57,7 +57,8 @@ export class SearchablePDFService {
   async createSearchablePDF(
     pdfBytes: ArrayBuffer,
     options: OCROptions,
-    renderPageToCanvas: (pageNum: number, dpi: number) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number }>
+    renderPageToCanvas: (pageNum: number, dpi: number) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number }>,
+    pageRange?: number[] // Optional: specify pages to process (1-based)
   ): Promise<Uint8Array> {
     this.reportProgress({
       stage: 'init',
@@ -74,74 +75,130 @@ export class SearchablePDFService {
 
     console.log(`[SearchablePDF] Processing ${totalPages} pages with DPI: ${options.dpi}`);
 
-    // Process each page
+    // Process each page with error recovery
+    const failedPages: number[] = [];
+    
     for (let i = 0; i < totalPages; i++) {
       const pageNum = i + 1;
-      const page = pages[i];
-      const { width: pdfWidth, height: pdfHeight } = page.getSize();
-
-      // Stage 1: Render page to canvas
-      this.reportProgress({
-        stage: 'rendering',
-        currentPage: pageNum,
-        totalPages,
-        message: `กำลัง Render หน้า ${pageNum}/${totalPages}...`,
-        progress: ((i * 3) / (totalPages * 3)) * 100
-      });
-
-      const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi);
       
-      // Calculate scale factor (image pixels per PDF point)
-      // PDF uses 72 DPI by default
-      const scale = options.dpi / 72;
+      // Skip pages not in range
+      if (pageRange && !pageRange.includes(pageNum)) {
+        continue;
+      }
+      
+      const page = pages[i];
+      
+      try {
+        const { width: pdfWidth, height: pdfHeight } = page.getSize();
 
-      // Stage 2: OCR the rendered image
-      this.reportProgress({
-        stage: 'ocr',
-        currentPage: pageNum,
-        totalPages,
-        message: `กำลัง OCR หน้า ${pageNum}/${totalPages} (${options.language})...`,
-        progress: ((i * 3 + 1) / (totalPages * 3)) * 100
-      });
+        // Stage 1: Render page to canvas
+        this.reportProgress({
+          stage: 'rendering',
+          currentPage: pageNum,
+          totalPages,
+          message: `กำลัง Render หน้า ${pageNum}/${totalPages}...`,
+          progress: ((i * 3) / (totalPages * 3)) * 100
+        });
 
-      // Set up OCR progress callback
-      visionService.setProgressCallback((ocrProgress) => {
-        const baseProgress = ((i * 3 + 1) / (totalPages * 3)) * 100;
-        const ocrContribution = (1 / (totalPages * 3)) * 100 * ocrProgress.progress;
+        const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi);
         
+        // Calculate scale factor (image pixels per PDF point)
+        // PDF uses 72 DPI by default
+        const scale = options.dpi / 72;
+
+        // Stage 2: OCR the rendered image
         this.reportProgress({
           stage: 'ocr',
           currentPage: pageNum,
           totalPages,
-          message: `OCR หน้า ${pageNum}: ${ocrProgress.status} (${Math.round(ocrProgress.progress * 100)}%)`,
-          progress: baseProgress + ocrContribution
+          message: `กำลัง OCR หน้า ${pageNum}/${totalPages} (${options.language})...`,
+          progress: ((i * 3 + 1) / (totalPages * 3)) * 100
         });
-      });
 
-      const imageDataUrl = canvas.toDataURL('image/png');
-      const ocrResult = await visionService.ocrForTextLayer(
-        imageDataUrl,
-        imageWidth,
-        imageHeight,
-        options.language,
-        options.dpi
-      );
-      
-      // Clear OCR progress callback
-      visionService.setProgressCallback(null);
+        // Set up OCR progress callback
+        visionService.setProgressCallback((ocrProgress) => {
+          const baseProgress = ((i * 3 + 1) / (totalPages * 3)) * 100;
+          const ocrContribution = (1 / (totalPages * 3)) * 100 * ocrProgress.progress;
+          
+          this.reportProgress({
+            stage: 'ocr',
+            currentPage: pageNum,
+            totalPages,
+            message: `OCR หน้า ${pageNum}: ${ocrProgress.status} (${Math.round(ocrProgress.progress * 100)}%)`,
+            progress: baseProgress + ocrContribution
+          });
+        });
 
-      console.log(`[SearchablePDF] Page ${pageNum}: OCR found ${ocrResult.words.length} words, confidence: ${ocrResult.confidence.toFixed(1)}%`);
+        const imageDataUrl = canvas.toDataURL('image/png');
+        
+        // OCR with retry
+        let ocrResult: OCRPageResult | null = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 2;
+        
+        while (retryCount <= MAX_RETRIES && !ocrResult) {
+          try {
+            ocrResult = await visionService.ocrForTextLayer(
+              imageDataUrl,
+              imageWidth,
+              imageHeight,
+              options.language,
+              options.dpi
+            );
+          } catch (ocrError) {
+            retryCount++;
+            console.warn(`[SearchablePDF] OCR retry ${retryCount}/${MAX_RETRIES} for page ${pageNum}:`, ocrError);
+            
+            if (retryCount > MAX_RETRIES) {
+              throw ocrError;
+            }
+            
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        
+        // Clear OCR progress callback
+        visionService.setProgressCallback(null);
+        
+        if (!ocrResult) {
+          throw new Error(`OCR failed after ${MAX_RETRIES} retries`);
+        }
 
-      // Stage 3: Add text layer
-      this.reportProgress({
-        stage: 'text-layer',
-        currentPage: pageNum,
-        totalPages,
-        message: `กำลังเพิ่ม Text Layer หน้า ${pageNum}/${totalPages}...`,
-        progress: ((i * 3 + 2) / (totalPages * 3)) * 100
-      });
+        console.log(`[SearchablePDF] Page ${pageNum}: OCR found ${ocrResult.words.length} words, confidence: ${ocrResult.confidence.toFixed(1)}%`);
 
-      await this.textLayerService.addTextLayerToPage(i, ocrResult, scale, { invisible: true });
+        // Stage 3: Add text layer
+        this.reportProgress({
+          stage: 'text-layer',
+          currentPage: pageNum,
+          totalPages,
+          message: `กำลังเพิ่ม Text Layer หน้า ${pageNum}/${totalPages}...`,
+          progress: ((i * 3 + 2) / (totalPages * 3)) * 100
+        });
+
+        await this.textLayerService.addTextLayerToPage(i, ocrResult, scale, { invisible: true });
+        
+      } catch (pageError) {
+        console.error(`[SearchablePDF] Failed to process page ${pageNum}:`, pageError);
+        failedPages.push(pageNum);
+        
+        // Report error but continue with next page
+        this.reportProgress({
+          stage: 'ocr',
+          currentPage: pageNum,
+          totalPages,
+          message: `⚠️ หน้า ${pageNum} ล้มเหลว - ข้ามไปหน้าถัดไป...`,
+          progress: ((i * 3 + 3) / (totalPages * 3)) * 100
+        });
+        
+        // Clear OCR progress callback
+        visionService.setProgressCallback(null);
+      }
+    }
+    
+    // Log summary
+    if (failedPages.length > 0) {
+      console.warn(`[SearchablePDF] Completed with ${failedPages.length} failed pages: ${failedPages.join(', ')}`);
     }
 
     // Stage 4: Save PDF
