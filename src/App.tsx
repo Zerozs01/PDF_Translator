@@ -8,13 +8,9 @@ import {
   Hand,
   Square, 
   Type,
-  Ghost,
   Sparkles,
   RefreshCw,
-  BrainCircuit,
-  Volume2,
-  Eye,
-  FileText
+  BrainCircuit
 } from 'lucide-react';
 import { SmartCanvas } from './components/SmartCanvas';
 import { UploadScreen } from './components/Home/UploadScreen';
@@ -26,37 +22,28 @@ const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar')
 const PDFCanvas = React.lazy(() => import('./components/PDF/PDFCanvas').then(module => ({ default: module.PDFCanvas })));
 import { Region } from './types';
 import { visionService } from './services/vision/VisionService';
+import './types/electron.d'; // Import type declarations
 
-// --- Gemini API Configurations ---
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; // Environment will provide this at runtime
-const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
+// --- Gemini API: Secure IPC to Main Process ---
+// API key is stored securely in Main Process, not exposed to renderer
 
 /**
- * Gemini API Caller with Exponential Backoff
+ * Translate text using Gemini API via secure IPC
+ * @param text - Text to translate
+ * @param type - Type of text (text, sfx, etc.)
+ * @param mode - Translation mode (manga or official)
  */
-async function callGemini(userQuery: string, systemPrompt: string) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  const payload = {
-    contents: [{ parts: [{ text: userQuery }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] }
-  };
-
-  let delay = 1000;
-  for (let i = 0; i < 5; i++) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const result = await response.json();
-      return result.candidates?.[0]?.content?.parts?.[0]?.text || "No response";
-    } catch (error) {
-      if (i === 4) throw error;
-      await new Promise(res => setTimeout(res, delay));
-      delay *= 2;
-    }
+async function translateWithGemini(text: string, type: string, mode: 'manga' | 'official'): Promise<string> {
+  try {
+    // Use secure electronAPI instead of direct API call
+    const result = await window.electronAPI.gemini.translate(text, {
+      mode,
+      sourceType: type
+    });
+    return result;
+  } catch (error) {
+    console.error('Gemini translation error:', error);
+    throw error;
   }
 }
 
@@ -104,18 +91,21 @@ export default function App() {
   }
 
   /**
-   * ✨ Feature: Translate All Regions using Gemini
+   * ✨ Feature: Translate All Regions using Gemini (via secure IPC)
    */
   const handleAiTranslate = async () => {
     setIsAiProcessing(true);
     try {
-      const systemPrompt = `You are a professional manga translator. Translate to Thai. 
-        Mode: ${translationMode === 'manga' ? 'Informal, emotional, use particle like "นะ", "โว้ย"' : 'Formal, polite'}.
-        If the type is "sfx", explain the sound in brackets like [เสียงสั่นสะเทือน].`;
-
       const updatedRegions = await Promise.all(regions.map(async (reg) => {
         if (!reg.originalText) return reg;
-        const translated = await callGemini(`Translate this text: "${reg.originalText}" (Type: ${reg.type})`, systemPrompt);
+        
+        // Use secure IPC call instead of direct API
+        const translated = await translateWithGemini(
+          reg.originalText,
+          reg.type,
+          translationMode
+        );
+        
         return { ...reg, translatedText: translated };
       }));
       

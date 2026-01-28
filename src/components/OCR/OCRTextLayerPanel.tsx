@@ -130,7 +130,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, reset, setSearchablePDFBlob]);
+  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, setSearchablePDFBlob]);
 
   /**
    * Download the searchable PDF

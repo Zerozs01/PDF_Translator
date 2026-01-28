@@ -60,17 +60,22 @@ export const useProjectStore = create<ProjectState>((set) => ({
   sourceLanguage: 'eng',
   targetLanguage: 'th',
 
-  loadProject: (file) => {
+  loadProject: (file) => set((state) => {
+    // IMPORTANT: Revoke old URL to prevent memory leak
+    if (state.fileUrl) {
+      URL.revokeObjectURL(state.fileUrl);
+    }
+    
     const url = URL.createObjectURL(file);
     const type = file.type === 'application/pdf' ? 'pdf' : 'image';
-    set({ 
+    return { 
       file, 
       fileUrl: url, 
       fileType: type, 
       fileName: file.name,
       currentPage: 1 
-    });
-  },
+    };
+  }),
 
   closeProject: () => set((state) => {
     if (state.fileUrl) URL.revokeObjectURL(state.fileUrl);

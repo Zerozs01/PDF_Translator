@@ -5,3 +5,27 @@ release/
 *.log
 .DS_Store
 
+# Environment files (SECURITY: Never commit API keys!)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Build artifacts
+*.tsbuildinfo
+
