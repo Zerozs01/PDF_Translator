@@ -185,8 +185,6 @@ async function preprocessImage(imageUrl: string): Promise<{
     // Put processed image back
     ctx.putImageData(imageData, 0, 0);
     
-    console.log(`[Worker] Image preprocessed with gamma=${gamma}, contrast=${contrast}`);
-    
     // Convert to PNG (lossless, no JPEG artifacts)
     const outputBlob = await canvas.convertToBlob({ type: 'image/png' });
     
@@ -230,9 +228,144 @@ async function getImageDimensions(imageUrl: string): Promise<{ width: number; he
     imageBitmap.close();
     return result;
   } catch (error) {
-    console.error('[Worker] getImageDimensions error:', error);
     throw error;
   }
+}
+
+/**
+ * Extract words from Tesseract's output
+ * 
+ * Tesseract.js v7: blocks output is disabled (causes GetJSONText error)
+ * Must use TSV parsing for word-level bounding boxes
+ * TSV format: level=5 is word with left, top, width, height coordinates
+ */
+function extractWordsFromBlocks(data: any): any[] {
+  // DEBUG: Log available data structure (only first time)
+  if (!extractWordsFromBlocks._logged) {
+    extractWordsFromBlocks._logged = true;
+    console.log('[Worker] Tesseract data keys:', Object.keys(data));
+    if (data.tsv) {
+      console.log('[Worker] TSV available, length:', data.tsv.length);
+    }
+  }
+  
+  // PRIORITY 1: Parse TSV - this is the primary source for Tesseract.js v7
+  // TSV contains word-level bounding boxes needed for PDF24-like accuracy
+  if (data.tsv && typeof data.tsv === 'string' && data.tsv.length > 50) {
+    const parsed = parseTSV(data.tsv);
+    if (parsed.words.length > 0) {
+      console.log(`[Worker] Extracted ${parsed.words.length} words from TSV`);
+      return parsed.words;
+    }
+  }
+  
+  // PRIORITY 2: Try direct words array (fallback)
+  if (data.words && Array.isArray(data.words) && data.words.length > 0) {
+    const directWords = data.words.filter((w: any) => {
+      if (!w.text || !w.text.trim()) return false;
+      if (w.bbox && typeof w.bbox.x0 === 'number') return true;
+      if (typeof w.x0 === 'number') return true;
+      return false;
+    }).map((w: any) => ({
+      text: w.text.trim(),
+      confidence: w.confidence || 0,
+      bbox: w.bbox || {
+        x0: w.x0,
+        y0: w.y0,
+        x1: w.x1,
+        y1: w.y1
+      }
+    }));
+    
+    if (directWords.length > 0) {
+      console.log(`[Worker] Extracted ${directWords.length} words from direct array`);
+      return directWords;
+    }
+  }
+  
+  // PRIORITY 3: Try nested blocks structure (may not work in v7)
+  const words: any[] = [];
+  if (data.blocks && Array.isArray(data.blocks)) {
+    data.blocks.forEach((block: any) => {
+      if (block.paragraphs) {
+        block.paragraphs.forEach((para: any) => {
+          if (para.lines) {
+            para.lines.forEach((line: any) => {
+              if (line.words) {
+                line.words.forEach((word: any) => {
+                  if (word.text && word.text.trim() && word.bbox) {
+                    words.push({
+                      text: word.text.trim(),
+                      confidence: word.confidence || 0,
+                      bbox: {
+                        x0: word.bbox.x0,
+                        y0: word.bbox.y0,
+                        x1: word.bbox.x1,
+                        y1: word.bbox.y1
+                      }
+                    });
+                  }
+                });
+              }
+            });
+          }
+        });
+      }
+    });
+    
+    if (words.length > 0) {
+      console.log(`[Worker] Extracted ${words.length} words from blocks structure`);
+      return words;
+    }
+  }
+  
+  console.warn('[Worker] No word data found in any source');
+  return [];
+}
+// Add flag to track logging
+(extractWordsFromBlocks as any)._logged = false;
+
+
+
+/**
+ * Extract lines from Tesseract's nested blocks structure
+ */
+function extractLinesFromBlocks(data: any): any[] {
+  const lines: any[] = [];
+  
+  if (data.blocks && Array.isArray(data.blocks)) {
+    data.blocks.forEach((block: any) => {
+      if (block.paragraphs) {
+        block.paragraphs.forEach((para: any) => {
+          if (para.lines) {
+            para.lines.forEach((line: any) => {
+              if (line.text && line.bbox) {
+                const lineWords = line.words ? line.words.map((w: any) => ({
+                  text: w.text,
+                  confidence: w.confidence || 0,
+                  bbox: w.bbox
+                })) : [];
+                
+                lines.push({
+                  text: line.text,
+                  confidence: line.confidence || 0,
+                  bbox: line.bbox,
+                  words: lineWords
+                });
+              }
+            });
+          }
+        });
+      }
+    });
+  }
+  
+  // Fallback to direct lines array
+  if (lines.length === 0 && data.lines && Array.isArray(data.lines)) {
+    return data.lines;
+  }
+  
+  return lines;
 }
 
 /**
@@ -343,6 +476,8 @@ function classifyRegion(
 
 /**
  * Parse TSV output for word-level data
+ * TSV format from Tesseract contains precise word bounding boxes
+ * Level 5 = word, Level 4 = line, Level 3 = paragraph, etc.
  */
 function parseTSV(tsv: string): {
   words: Array<{ text: string; confidence: number; bbox: BBox }>;
@@ -352,47 +487,98 @@ function parseTSV(tsv: string): {
   const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
   
   if (!tsv || typeof tsv !== 'string') {
+    console.warn('[Worker] parseTSV: No TSV data');
     return { words, lines };
   }
   
-  const tsvLines = tsv.split('\n');
-  if (tsvLines.length < 2) {
+  const tsvLines = tsv.split('\n').filter(line => line.trim().length > 0);
+  if (tsvLines.length < 1) {
+    console.warn('[Worker] parseTSV: TSV is empty');
     return { words, lines };
   }
   
-  // Parse header
-  const header = tsvLines[0].split('\t');
-  const indices = {
-    level: header.indexOf('level'),
-    left: header.indexOf('left'),
-    top: header.indexOf('top'),
-    width: header.indexOf('width'),
-    height: header.indexOf('height'),
-    conf: header.indexOf('conf'),
-    text: header.indexOf('text'),
+  // Check if first row looks like a header (contains non-numeric column names)
+  const firstRow = tsvLines[0].split('\t');
+  const hasHeader = firstRow.some(col => isNaN(Number(col)) && col.length > 0);
+  
+  console.log('[Worker] parseTSV: hasHeader =', hasHeader, 'firstRow sample:', firstRow.slice(0, 5).join(', '));
+  
+  // Standard Tesseract TSV format (12 columns):
+  // level, page_num, block_num, par_num, line_num, word_num, left, top, width, height, conf, text
+  // Fixed indices for standard format:
+  const FIXED_INDICES = {
+    level: 0,
+    page_num: 1,
+    block_num: 2,
+    par_num: 3,
+    line_num: 4,
+    word_num: 5,
+    left: 6,
+    top: 7,
+    width: 8,
+    height: 9,
+    conf: 10,
+    text: 11
   };
   
-  // Validate header
-  if (Object.values(indices).some(i => i === -1)) {
-    console.warn('[Worker] Invalid TSV header');
-    return { words, lines };
+  let indices = FIXED_INDICES;
+  let startRow = 0;
+  
+  // If there's a header, try to parse column names
+  if (hasHeader) {
+    const header = firstRow.map(h => h.toLowerCase().trim());
+    console.log('[Worker] parseTSV header columns:', header.join(', '));
+    
+    const findIndex = (names: string[]) => {
+      for (const name of names) {
+        const idx = header.indexOf(name);
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    };
+    
+    const parsedIndices = {
+      level: findIndex(['level']),
+      left: findIndex(['left', 'x', 'x0']),
+      top: findIndex(['top', 'y', 'y0']),
+      width: findIndex(['width', 'w']),
+      height: findIndex(['height', 'h']),
+      conf: findIndex(['conf', 'confidence']),
+      text: findIndex(['text', 'word']),
+    };
+    
+    // Use parsed indices if they seem valid
+    if (parsedIndices.text !== -1) {
+      indices = { ...FIXED_INDICES, ...parsedIndices };
+      startRow = 1; // Skip header
+    }
   }
   
+  console.log('[Worker] parseTSV using indices:', { level: indices.level, left: indices.left, text: indices.text });
+  
   // Parse data rows
-  for (let i = 1; i < tsvLines.length; i++) {
+  let wordCount = 0;
+  let lineCount = 0;
+  
+  for (let i = startRow; i < tsvLines.length; i++) {
     const cols = tsvLines[i].split('\t');
-    if (cols.length <= indices.text) continue;
+    if (cols.length < 12) continue; // Need at least 12 columns for standard format
     
+    // Parse using fixed positions
     const level = parseInt(cols[indices.level] || '0');
-    const text = cols[indices.text]?.trim() || '';
+    const text = (cols[indices.text] || '').trim();
     
+    // Skip empty text entries
     if (text.length === 0) continue;
     
     const left = parseInt(cols[indices.left] || '0');
     const top = parseInt(cols[indices.top] || '0');
     const width = parseInt(cols[indices.width] || '0');
     const height = parseInt(cols[indices.height] || '0');
-    const conf = parseFloat(cols[indices.conf] || '0');
+    let conf = parseFloat(cols[indices.conf] || '0');
+    
+    // Skip words with invalid dimensions
+    if (width <= 0 || height <= 0) continue;
     
     const bbox: BBox = {
       x0: left,
@@ -401,17 +587,20 @@ function parseTSV(tsv: string): {
       y1: top + height
     };
     
-    // Level 5 = word
+    // Level 5 = word (most important for PDF24-like accuracy)
     if (level === 5) {
       words.push({ text, confidence: conf, bbox });
+      wordCount++;
     }
     
     // Level 4 = line
     if (level === 4) {
       lines.push({ text, confidence: conf, bbox, words: [] });
+      lineCount++;
     }
   }
   
+  console.log(`[Worker] parseTSV result: ${wordCount} words, ${lineCount} lines`);
   return { words, lines };
 }
 
@@ -552,7 +741,6 @@ self.onmessage = async (e: MessageEvent) => {
       // ============================================
       case 'OCR_FOR_TEXT_LAYER': {
         const { imageUrl, imageWidth, imageHeight, language = 'eng', dpi = 300 } = payload;
-        console.log(`[Worker] OCR_FOR_TEXT_LAYER: ${imageWidth}x${imageHeight} @ ${dpi}DPI, Lang: ${language}`);
         
         sendProgress('Preprocessing image...', 0);
         
@@ -566,9 +754,7 @@ self.onmessage = async (e: MessageEvent) => {
           processedUrl = preprocessed.processedUrl;
           actualWidth = preprocessed.width;
           actualHeight = preprocessed.height;
-          console.log(`[Worker] Image preprocessed: ${actualWidth}x${actualHeight}`);
         } catch (preprocessError) {
-          console.warn('[Worker] Image preprocessing failed, using original:', preprocessError);
           // Continue with original image
         }
         
@@ -579,67 +765,93 @@ self.onmessage = async (e: MessageEvent) => {
         
         sendProgress('Configuring OCR...', 0.15);
         
-        // Configure for detailed output
+        // Configure for PRECISE word-level output (PDF24-like accuracy)
+        // PSM.AUTO (3) is more reliable for standard documents
+        // PSM.SPARSE_TEXT (11) is better for mixed/manga content
         await worker.setParameters({
-          tessedit_create_hocr: '1',
-          tessedit_create_tsv: '1',
+          tessedit_pageseg_mode: PSM.AUTO, // Mode 3: Fully automatic (best for documents)
+          tessedit_create_tsv: '1',  // CRITICAL: TSV contains word-level bboxes
+          tessedit_create_hocr: '1', 
           tessedit_create_pdf: '0',
-          hocr_font_info: '1',
+          preserve_interword_spaces: '1',
         });
         
         sendProgress('Recognizing text...', 0.2);
         
-        // Run OCR on preprocessed image
-        const result = await worker.recognize(processedUrl) as TesseractResult;
+        sendProgress('Recognizing text...', 0.2);
         
-        sendProgress('Processing results...', 0.8);
+        let words: any[] = [];
+        let lines: any[] = [];
+        let confidence = 0;
+        let text = '';
         
-        const data = result.data;
+        // Check if image needs chunking (height > 4000px)
+        // Tesseract has trouble with very tall images (common in webtoons)
+        const CHUNK_LIMIT = 4000;
         
-        // Debug raw OCR data
-        console.log(`[Worker] Raw text length: ${data.text?.length || 0}`);
-        if (data.tsv) {
-          console.log(`[Worker] First 100 chars of TSV: ${data.tsv.substring(0, 100).replace(/\n/g, '\\n')}`);
+        // Tesseract.js v7: Use TSV output for word-level bounding boxes
+        // Note: blocks: true causes 'GetJSONText is not a function' error in v7
+        const outputOptions = { tsv: true };
+        
+        if (actualHeight > CHUNK_LIMIT) {
+          try {
+            const chunkResult = await processLargeImageInChunks(worker, processedUrl, actualWidth, actualHeight);
+            words = chunkResult.words;
+            lines = chunkResult.lines;
+            confidence = chunkResult.confidence;
+            text = chunkResult.text;
+          } catch (err) {
+            // Fallback to normal OCR attempts
+            const result = await worker.recognize(processedUrl, {}, outputOptions) as TesseractResult;
+            text = result.data.text;
+            confidence = result.data.confidence;
+            // Use helper functions to extract from nested structure
+            words = extractWordsFromBlocks(result.data);
+            lines = extractLinesFromBlocks(result.data);
+          }
         } else {
-          console.warn('[Worker] No TSV data returned!');
+          // Standard processing for normal sized images
+          const result = await worker.recognize(processedUrl, {}, outputOptions) as TesseractResult;
+          text = result.data.text;
+          confidence = result.data.confidence;
+          // Use helper functions to extract from nested structure
+          words = extractWordsFromBlocks(result.data);
+          lines = extractLinesFromBlocks(result.data);
         }
 
-        // Parse TSV for word-level data
-        let { words, lines } = parseTSV(data.tsv || '');
-        
-        // Fallback: If no words found but text exists, create a single large block
+        sendProgress('Processing results...', 0.8);
+
+        // Fallback: If no words found but text exists (and not already processed by chunks)
         // This handles cases where TSV parsing fails or structure is simple
-        if (words.length === 0 && data.text && data.text.trim().length > 0) {
-          console.log('[Worker] No words from TSV, creating fallback from raw text (split by lines)');
-          
-          const rawLines = data.text.split('\n').filter(l => l.trim().length > 0);
-          const approxLineHeight = actualHeight / (rawLines.length + 2); // Add padding
-          
-          words = [];
-          lines = [];
-          
-          rawLines.forEach((lineText, i) => {
-            const y0 = (i + 1) * approxLineHeight; // Start from top margin
+        if (words.length === 0 && text && text.trim().length > 0) {
+           console.warn('[Worker] No word-level data found, using line-based fallback');
+           
+           const rawLines = text.split('\n').filter(l => l.trim().length > 0);
+           const approxLineHeight = actualHeight / (rawLines.length + 2);
+           
+           words = [];
+           lines = [];
+           
+           rawLines.forEach((lineText, i) => {
+            const y0 = (i + 1) * approxLineHeight; 
             const y1 = y0 + approxLineHeight;
-            const bbox = { x0: 20, y0: y0, x1: actualWidth - 20, y1: y1 }; // Full width approx
+            const bbox = { x0: 20, y0: y0, x1: actualWidth - 20, y1: y1 }; 
             
             const lineWords = [{
               text: lineText.trim(),
-              confidence: data.confidence || 0,
+              confidence: confidence || 0,
               bbox: bbox
             }];
             
             words.push(...lineWords);
             lines.push({
               text: lineText.trim(),
-              confidence: data.confidence || 0,
+              confidence: confidence || 0,
               bbox: bbox,
               words: lineWords
             });
           });
         }
-        
-        console.log(`[Worker] OCR complete: ${words.length} words, ${lines.length} lines, confidence: ${data.confidence?.toFixed(1)}%`);
         
         const pageResult = {
           pageNumber: 1,
@@ -649,8 +861,8 @@ self.onmessage = async (e: MessageEvent) => {
           language: language,
           lines: lines,
           words: words,
-          text: data.text || '',
-          confidence: data.confidence || 0
+          text: text || '',
+          confidence: confidence || 0
         };
         
         sendProgress('Complete', 1.0);
@@ -708,8 +920,8 @@ self.onmessage = async (e: MessageEvent) => {
         
         sendProgress('Running OCR...', 0.3);
         
-        // Run OCR on preprocessed image
-        const result = await worker.recognize(processedUrl) as TesseractResult;
+        // Run OCR on preprocessed image - use TSV for word-level data
+        const result = await worker.recognize(processedUrl, {}, { tsv: true }) as TesseractResult;
         
         sendProgress('Analyzing regions...', 0.7);
         
@@ -797,5 +1009,192 @@ self.onmessage = async (e: MessageEvent) => {
     });
   }
 };
+
+
+/**
+ * Process a large image in overlapping chunks to handle Tesseract limitations
+ * Useful for long webtoons or documents that exceed Tesseract's max dimension
+ */
+async function processLargeImageInChunks(
+  worker: any, 
+  imageUrl: string, 
+  width: number, 
+  height: number
+): Promise<{ words: any[], lines: any[], text: string, confidence: number }> {
+  const CHUNK_SIZE = 4000;
+  const OVERLAP = 200; // Overlap to catch text cut by chunk boundary
+  const EFF_HEIGHT = CHUNK_SIZE - OVERLAP;
+  
+  const allWords: any[] = [];
+  let fullText = '';
+  let totalConf = 0;
+  let chunkCount = 0;
+
+  // 1. Prepare source canvas
+  let sourceBitmap: ImageBitmap | null = null;
+  try {
+    let blob: Blob;
+    if (imageUrl.startsWith('data:')) {
+      const resp = await fetch(imageUrl);
+      blob = await resp.blob();
+    } else {
+      const resp = await fetch(imageUrl);
+      blob = await resp.blob();
+    }
+    sourceBitmap = await createImageBitmap(blob);
+  } catch (e) {
+    throw new Error(`Failed to load source image for chunking: ${e}`);
+  }
+
+  // We need to render slices. Since we can't easily crop ImageBitmap to Blob without canvas,
+  // we use OffscreenCanvas.
+  
+  const totalChunks = Math.ceil(height / EFF_HEIGHT);
+
+  for (let i = 0; i < totalChunks; i++) {
+    const yStart = i * EFF_HEIGHT;
+    const chunkHeight = Math.min(CHUNK_SIZE, height - yStart);
+    
+    // Stop if we have passed the end
+    if (chunkHeight <= 0) break;
+
+    // Create chunk canvas
+    const chunkCanvas = new OffscreenCanvas(width, chunkHeight);
+    const ctx = chunkCanvas.getContext('2d');
+    
+    if (!ctx) throw new Error('Failed to create chunk canvas context');
+    
+    // Draw white background
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, chunkHeight);
+    
+    // Draw slice from source
+    // drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
+    // Beware of source bounds
+    const sourceHeight = Math.min(chunkHeight, height - yStart);
+    ctx.drawImage(sourceBitmap, 0, yStart, width, sourceHeight, 0, 0, width, sourceHeight);
+    
+    // Prepare chunk URL
+    const chunkBlob = await chunkCanvas.convertToBlob({ type: 'image/png' });
+    const chunkUrl = URL.createObjectURL(chunkBlob);
+    
+    try {
+      // Run OCR on this chunk - use TSV for word-level bbox (blocks causes error in v7)
+      const result = await worker.recognize(chunkUrl, {}, { tsv: true });
+      const data = result.data as any;
+      
+      // Accumulate text and confidence
+      fullText += (data.text || '') + '\n';
+      totalConf += (data.confidence || 0);
+      chunkCount++;
+      
+      // Extract words from Tesseract's nested structure using helper
+      const chunkWords = extractWordsFromBlocks(data);
+      
+      // Offset coordinates and filter duplicates in overlap area
+      chunkWords.forEach(w => {
+        // Adjust Y coordinates
+        const absY0 = w.bbox.y0 + yStart;
+        const absY1 = w.bbox.y1 + yStart;
+        
+        // Filtering logic:
+        // We want to avoid duplicates in the overlap region.
+        // Rule: Only accept words that end BEFORE the overlap region start of this chunk,
+        // UNLESS it's the last chunk.
+        
+        const isLastChunk = (i === totalChunks - 1);
+        const overlapStartInChunk = EFF_HEIGHT;
+        
+        // If word is completely in the overlap region (bottom of this chunk), skip it 
+        // (unless it's the last chunk, then keep everything)
+        // Using center point for safety
+        const wordCenterY = (w.bbox.y0 + w.bbox.y1) / 2;
+        
+        if (!isLastChunk && wordCenterY > overlapStartInChunk) {
+           return; // Skip, let next chunk handle it
+        }
+        
+        // Also skip if it's in the top overlap region (which is covered by previous chunk)
+        // But our yStart increment is based on EFF_HEIGHT, so the previous chunk covered up to yStart
+        // Wait, chunk i covers [yStart, yStart + chunkHeight]
+        // Chunk i-1 covered [yStart - EFF_HEIGHT, yStart - EFF_HEIGHT + chunkHeight] 
+        // = [yStart - EFF_HEIGHT, yStart + OVERLAP]
+        // So the top 200px of this chunk (0 to OVERLAP) was covered by previous chunk bottom.
+        // We should skip top overlap if not first chunk?
+        // No, let's stick to "Bottom overlap is strictly for next chunk".
+        // The previous chunk's bottom overlap was skipped by previous chunk logic.
+        // So this chunk should handle its top part.
+        
+        // However, if the word started in previous chunk but ended here?
+        // This simple logic might split words. But Tesseract usually finds whole words.
+        
+        // Add valid word
+        allWords.push({
+            ...w,
+            bbox: {
+                x0: w.bbox.x0,
+                x1: w.bbox.x1,
+                y0: absY0,
+                y1: absY1
+            }
+        });
+      });
+      
+    } catch (err) {
+      console.error(`[Worker] Error processing chunk ${i}:`, err);
+    } finally {
+      URL.revokeObjectURL(chunkUrl);
+    }
+  }
+  
+  if (sourceBitmap) sourceBitmap.close();
+  
+  // Reconstruct lines from all words
+  // Sort words by Y then X
+  allWords.sort((a, b) => {
+      const yDiff = a.bbox.y0 - b.bbox.y0;
+      if (Math.abs(yDiff) < 10) return a.bbox.x0 - b.bbox.x0; // Same lineish
+      return yDiff;
+  });
+  
+  // Simple line grouping
+  const lines: any[] = [];
+  let currentLine: any = null;
+  
+  allWords.forEach(w => {
+      if (!currentLine) {
+          currentLine = { words: [w], bbox: { ...w.bbox }, text: w.text, confidence: w.confidence };
+      } else {
+          // Check if vertically aligned with current line
+          const verticalOverlap = Math.min(currentLine.bbox.y1, w.bbox.y1) - Math.max(currentLine.bbox.y0, w.bbox.y0);
+          const lineHeight = Math.max(1, currentLine.bbox.y1 - currentLine.bbox.y0);
+          
+          // If overlap > 50% of height, same line
+          if (verticalOverlap > lineHeight * 0.5) {
+             // Add to line
+             currentLine.words.push(w);
+             currentLine.text += ' ' + w.text;
+             currentLine.bbox.x1 = Math.max(currentLine.bbox.x1, w.bbox.x1);
+             currentLine.bbox.y0 = Math.min(currentLine.bbox.y0, w.bbox.y0);
+             currentLine.bbox.y1 = Math.max(currentLine.bbox.y1, w.bbox.y1);
+             // Avg confidence
+             const totalWords = currentLine.words.length;
+             currentLine.confidence = ((currentLine.confidence * (totalWords - 1)) + w.confidence) / totalWords;
+          } else {
+             // New line
+             lines.push(currentLine);
+             currentLine = { words: [w], bbox: { ...w.bbox }, text: w.text, confidence: w.confidence };
+          }
+      }
+  });
+  if (currentLine) lines.push(currentLine);
+  
+  return {
+      words: allWords,
+      lines: lines,
+      text: fullText,
+      confidence: chunkCount > 0 ? totalConf / chunkCount : 0
+  };
+}
 
 export {};

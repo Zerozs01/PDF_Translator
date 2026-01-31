@@ -21,10 +21,12 @@ export interface ProcessingProgress {
 }
 
 export type ProgressCallback = (progress: ProcessingProgress) => void;
+export type OCRResultCallback = (pageNum: number, result: OCRPageResult) => void;
 
 export class SearchablePDFService {
   private textLayerService: TextLayerService;
   private onProgress: ProgressCallback | null = null;
+  private onOCRResult: OCRResultCallback | null = null;
 
   constructor() {
     this.textLayerService = new TextLayerService();
@@ -35,6 +37,13 @@ export class SearchablePDFService {
    */
   setProgressCallback(callback: ProgressCallback): void {
     this.onProgress = callback;
+  }
+
+  /**
+   * Set OCR result callback - called when each page's OCR completes
+   */
+  setOCRResultCallback(callback: OCRResultCallback | null): void {
+    this.onOCRResult = callback;
   }
 
   /**
@@ -72,8 +81,6 @@ export class SearchablePDFService {
     const pdfDoc = await this.textLayerService.loadPDF(pdfBytes);
     const pages = pdfDoc.getPages();
     const totalPages = pages.length;
-
-    console.log(`[SearchablePDF] Processing ${totalPages} pages with DPI: ${options.dpi}`);
 
     // Process each page with error recovery
     const failedPages: number[] = [];
@@ -165,7 +172,10 @@ export class SearchablePDFService {
           throw new Error(`OCR failed after ${MAX_RETRIES} retries`);
         }
 
-        console.log(`[SearchablePDF] Page ${pageNum}: OCR found ${ocrResult.words.length} words, confidence: ${ocrResult.confidence.toFixed(1)}%`);
+        // Emit OCR result for UI display
+        if (this.onOCRResult) {
+          this.onOCRResult(pageNum, ocrResult);
+        }
 
         // Stage 3: Add text layer
         this.reportProgress({

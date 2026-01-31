@@ -37,8 +37,8 @@ export class TextLayerService {
    * Add invisible text layer to a specific page
    * 
    * @param pageIndex - 0-based page index
-   * @param ocrResult - OCR result with word-level bounding boxes
-   * @param imageScale - Scale factor (image pixels / PDF points)
+   * @param ocrResult - OCR result with word-level bounding boxes (coords in image pixels)
+   * @param imageScale - Scale factor (DPI/72, e.g., 300/72 ≈ 4.17 for 300 DPI)
    * @param options - Text layer options
    */
   async addTextLayerToPage(
@@ -57,58 +57,83 @@ export class TextLayerService {
     }
 
     const page = pages[pageIndex];
-    const { height: pdfHeight } = page.getSize();
-
-    console.log(`[TextLayer] Adding text to page ${pageIndex + 1}. OCR has ${ocrResult.words.length} words.`);
-    console.log(`[TextLayer] Image scale: ${imageScale}, PDF height: ${pdfHeight}`);
+    const { width: pdfWidth, height: pdfHeight } = page.getSize();
+    
+    // Calculate ACTUAL scale based on OCR image dimensions vs PDF page dimensions
+    // This is more accurate than using DPI/72 alone
+    const ocrImageWidth = ocrResult.width;
+    const ocrImageHeight = ocrResult.height;
+    
+    // Scale factors: how many image pixels per PDF point
+    const scaleX = ocrImageWidth / pdfWidth;
+    const scaleY = ocrImageHeight / pdfHeight;
 
     // Process each word
     for (const word of ocrResult.words) {
-      await this.drawWord(page, word, pdfHeight, imageScale, options);
+      await this.drawWord(page, word, pdfWidth, pdfHeight, scaleX, scaleY, options);
     }
-
-    console.log(`[TextLayer] Completed page ${pageIndex + 1}`);
   }
 
   /**
    * Draw a single word on the page
+   * 
+   * PDF24-style positioning: Transform OCR bbox to PDF coordinates accurately
+   * OCR coordinates: top-left origin (0,0 at top-left)
+   * PDF coordinates: bottom-left origin (0,0 at bottom-left)
    */
   private async drawWord(
     page: PDFPage,
     word: OCRWord,
+    pdfWidth: number,
     pdfHeight: number,
-    scale: number,
+    scaleX: number,
+    scaleY: number,
     options: TextLayerOptions
   ): Promise<void> {
     if (!this.font || !word.text.trim()) return;
 
+    // Validate bbox
+    if (!word.bbox || word.bbox.x0 === undefined || word.bbox.y0 === undefined) {
+      return;
+    }
+
     // Transform image coordinates to PDF coordinates
     // Image: top-left origin, PDF: bottom-left origin
-    const x = word.bbox.x0 / scale;
-    const y = pdfHeight - (word.bbox.y1 / scale); // Flip Y axis
-    const width = (word.bbox.x1 - word.bbox.x0) / scale;
-    const height = (word.bbox.y1 - word.bbox.y0) / scale;
+    // 
+    // OCR bbox is in image pixels, we need to:
+    // 1. Scale down by the image/PDF ratio (scaleX, scaleY)
+    // 2. Flip Y axis (PDF y = pdfHeight - imageY/scaleY)
+    
+    const x = word.bbox.x0 / scaleX;
+    const width = (word.bbox.x1 - word.bbox.x0) / scaleX;
+    const height = (word.bbox.y1 - word.bbox.y0) / scaleY;
+    
+    // CRITICAL: For PDF24-like accuracy, position at the BASELINE of text
+    // bbox.y1 is the bottom of the bbox in image coords (where text baseline is)
+    // We convert to PDF coords by: pdfY = pdfHeight - (imageY / scaleY)
+    const y = pdfHeight - (word.bbox.y1 / scaleY);
 
     // Calculate font size to fit text in bounding box
     const fontSize = this.estimateFontSize(word.text, width, height);
 
-    // Skip if font size is too small
-    if (fontSize < 1) return;
+    // Skip if font size is too small or dimensions invalid
+    if (fontSize < 1 || width <= 0 || height <= 0) return;
+    
+    // Clamp position to page bounds
+    const clampedX = Math.max(0, Math.min(x, pdfWidth - width));
+    const clampedY = Math.max(0, Math.min(y, pdfHeight - fontSize));
 
     try {
       page.drawText(word.text, {
-        x: x,
-        y: y + (height * 0.15), // Adjust baseline slightly
+        x: clampedX,
+        y: clampedY,
         size: fontSize,
         font: this.font,
         color: rgb(0, 0, 0),
         opacity: options.invisible ? 0 : (options.debugOpacity ?? 0.3),
-        // Note: pdf-lib doesn't support text rendering mode directly
-        // but opacity: 0 achieves invisible but selectable text
       });
-    } catch (error) {
+    } catch {
       // Skip words with characters not supported by the font
-      console.warn(`[TextLayer] Skipped word "${word.text.substring(0, 10)}...": Font encoding issue`);
     }
   }
 

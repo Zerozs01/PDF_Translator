@@ -5,6 +5,7 @@
  * - เลือกภาษา OCR
  * - เลือก Quality Profile (DPI)
  * - แสดง Progress
+ * - แสดงผล OCR ที่สแกนได้
  * - Export PDF
  */
 
@@ -18,7 +19,8 @@ import {
   Languages,
   Zap,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Eye
 } from 'lucide-react';
 import { useOCRTextLayerStore, SUPPORTED_LANGUAGES, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -27,7 +29,7 @@ import { searchablePDFService } from '../../services/pdf';
 // PDF.js will be imported dynamically when needed
 
 export const OCRTextLayerPanel: React.FC = () => {
-  const { file, fileUrl } = useProjectStore();
+  const { file, fileUrl, currentPage } = useProjectStore();
   const {
     options,
     setOptions,
@@ -37,10 +39,15 @@ export const OCRTextLayerPanel: React.FC = () => {
     setIsProcessing,
     searchablePDFBlob,
     setSearchablePDFBlob,
+    setPageOCR,
+    allPagesOCR,
     reset
   } = useOCRTextLayerStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Get current page OCR result
+  const currentPageOCR = allPagesOCR.get(currentPage);
 
   /**
    * Render PDF page to canvas at specified DPI
@@ -51,8 +58,6 @@ export const OCRTextLayerPanel: React.FC = () => {
   const renderPageToCanvas = useCallback(async (pageNum: number, targetDpi: number) => {
     if (!file) throw new Error('No PDF loaded');
 
-    console.log(`[OCRPanel] Rendering page ${pageNum} at ${targetDpi} DPI...`);
-
     // Strategy 1: Try to capture existing canvas from react-pdf
     // This is more reliable because react-pdf already handles JPEG decoding
     const existingCanvas = document.querySelector(
@@ -60,54 +65,28 @@ export const OCRTextLayerPanel: React.FC = () => {
     ) as HTMLCanvasElement | null;
 
     if (existingCanvas && existingCanvas.width > 0 && existingCanvas.height > 0) {
-      console.log(`[OCRPanel] Found existing canvas for page ${pageNum}: ${existingCanvas.width}x${existingCanvas.height}`);
-      
-      // DEBUG: Check if existing canvas has actual content (sample CENTER of canvas)
-      const debugCtx = existingCanvas.getContext('2d');
-      if (debugCtx) {
-        // Sample from center of canvas instead of top-left
-        const centerX = Math.floor(existingCanvas.width / 2) - 50;
-        const centerY = Math.floor(existingCanvas.height / 2) - 50;
-        const sampleData = debugCtx.getImageData(
-          Math.max(0, centerX), 
-          Math.max(0, centerY), 
-          100, 
-          100
-        );
-        let nonWhitePixels = 0;
-        for (let i = 0; i < sampleData.data.length; i += 4) {
-          if (sampleData.data[i] !== 255 || sampleData.data[i+1] !== 255 || sampleData.data[i+2] !== 255) {
-            nonWhitePixels++;
-          }
-        }
-        console.log(`[OCRPanel] Canvas CENTER sample: ${nonWhitePixels} non-white pixels`);
-        
-        if (nonWhitePixels < 100) {
-          console.warn('[OCRPanel] WARNING: Canvas center appears mostly empty!');
-        }
-      }
-      
       // Calculate current DPI estimate
       const currentWidth = existingCanvas.width;
       const currentHeight = existingCanvas.height;
       const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
-      
-      console.log(`[OCRPanel] Existing canvas estimated DPI: ${estimatedCurrentDpi}`);
 
       // Upscale if DPI is too low (< 200) or user requested higher
       // Tesseract works best at 300 DPI
+      // We rely on chunking in the worker to handle very tall images, so no height limit here.
       const shouldUpscale = estimatedCurrentDpi < 200 || targetDpi > estimatedCurrentDpi;
       
       let outputWidth = currentWidth;
       let outputHeight = currentHeight;
       
       if (shouldUpscale) {
-        const scaleFactor = Math.min(targetDpi / Math.max(estimatedCurrentDpi, 72), 4.0); // Cap at 4x
+        // Calculate scale factor only based on DPI
+        let scaleFactor = Math.min(targetDpi / Math.max(estimatedCurrentDpi, 72), 3.0); // Cap at 3x
+        
+        // NEVER downscale. Only upscale or keep 1x.
+        if (scaleFactor < 1.0) scaleFactor = 1.0;
+        
         outputWidth = Math.round(currentWidth * scaleFactor);
         outputHeight = Math.round(currentHeight * scaleFactor);
-        console.log(`[OCRPanel] Upscaling by ${scaleFactor.toFixed(2)}x to ${outputWidth}x${outputHeight} (${targetDpi} DPI target)`);
-      } else {
-        console.log(`[OCRPanel] Using original size ${outputWidth}x${outputHeight} (Sufficient DPI)`);
       }
       
       const outputCanvas = document.createElement('canvas');
@@ -178,11 +157,6 @@ export const OCRTextLayerPanel: React.FC = () => {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(newCanvas, 0, 0, outputWidth, outputHeight);
         
-        console.log(`[OCRPanel] Page ${pageNum} upscaled to ${outputWidth}x${outputHeight}`);
-        
-        // Restore previous page (optional, can comment out if not needed)
-        // setPage(previousPage);
-        
         return {
           canvas: outputCanvas,
           width: outputWidth,
@@ -219,6 +193,11 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       // Set up progress callback
       searchablePDFService.setProgressCallback(setProgress);
+      
+      // Set up OCR result callback to store results for display
+      searchablePDFService.setOCRResultCallback((pageNum, result) => {
+        setPageOCR(pageNum, result);
+      });
 
       // Read file as ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
@@ -234,10 +213,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       // Convert to Blob (cast for TypeScript compatibility)
       const blob = new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
       setSearchablePDFBlob(blob);
+      
+      // Clear callback
+      searchablePDFService.setOCRResultCallback(null);
 
-      console.log('[OCRPanel] Searchable PDF created successfully!');
     } catch (error) {
       console.error('[OCRPanel] OCR processing failed:', error);
+      searchablePDFService.setOCRResultCallback(null);
       setProgress({
         stage: 'complete',
         currentPage: 0,
@@ -248,7 +230,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, setSearchablePDFBlob]);
+  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, setSearchablePDFBlob, setPageOCR]);
 
   /**
    * Download the searchable PDF
@@ -268,6 +250,10 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   // Current profile
   const currentProfile = OCR_PROFILES.find(p => p.dpi === options.dpi) || OCR_PROFILES[2];
+  
+  // Total OCR stats
+  const totalOCRPages = allPagesOCR.size;
+  const totalWords = Array.from(allPagesOCR.values()).reduce((sum, r) => sum + r.words.length, 0);
 
   return (
     <div className="space-y-4">
@@ -405,12 +391,49 @@ export const OCRTextLayerPanel: React.FC = () => {
       {/* Success Message */}
       {searchablePDFBlob && !isProcessing && (
         <div className="flex items-start gap-2 bg-green-900/30 border border-green-700 rounded-lg p-3">
-          <CheckCircle size={16} className="text-green-400 flex-shrink-0 mt-0.5" />
+          <CheckCircle size={16} className="text-green-400 shrink-0 mt-0.5" />
           <div className="text-xs">
             <p className="text-green-300 font-medium">สร้าง Searchable PDF สำเร็จ!</p>
             <p className="text-green-400/70 mt-1">
-              คุณสามารถ select และ copy ข้อความจาก PDF ได้แล้ว
+              OCR {totalOCRPages} หน้า • พบ {totalWords} คำ
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* OCR Results Preview */}
+      {currentPageOCR && !isProcessing && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
+            <Eye size={12} className="text-cyan-400" />
+            OCR Result - หน้า {currentPage}
+            <span className="ml-auto text-slate-500 font-normal">
+              {currentPageOCR.words.length} คำ • {currentPageOCR.confidence.toFixed(0)}%
+            </span>
+          </div>
+          
+          <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-2 max-h-48 overflow-y-auto">
+            {currentPageOCR.words.length > 0 ? (
+              <div className="space-y-1">
+                {/* Show text grouped by lines for better readability */}
+                {currentPageOCR.lines && currentPageOCR.lines.length > 0 ? (
+                  currentPageOCR.lines.map((line, i) => (
+                    <p key={i} className="text-xs text-slate-300 leading-relaxed">
+                      {line.text}
+                    </p>
+                  ))
+                ) : (
+                  // Fallback: show words joined
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {currentPageOCR.words.map(w => w.text).join(' ')}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 italic text-center py-2">
+                ไม่พบข้อความในหน้านี้
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -418,7 +441,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       {/* Info */}
       <div className="text-[10px] text-slate-500 leading-relaxed">
         <p className="flex items-start gap-1">
-          <Zap size={10} className="flex-shrink-0 mt-0.5 text-yellow-500" />
+          <Zap size={10} className="shrink-0 mt-0.5 text-yellow-500" />
           <span>
             ฟีเจอร์นี้จะเพิ่ม invisible text layer บน PDF ทำให้ค้นหาและ copy ข้อความได้ เหมือน PDF24
           </span>

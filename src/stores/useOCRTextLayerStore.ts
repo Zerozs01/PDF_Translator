@@ -17,7 +17,13 @@ interface OCRTextLayerState {
   setProgress: (progress: ProcessingProgress | null) => void;
   setIsProcessing: (isProcessing: boolean) => void;
 
-  // Results
+  // Results - All pages OCR data
+  allPagesOCR: Map<number, OCRPageResult>;
+  setPageOCR: (pageNum: number, result: OCRPageResult) => void;
+  getPageOCR: (pageNum: number) => OCRPageResult | undefined;
+  clearAllOCR: () => void;
+
+  // Current page OCR (for preview)
   currentPageOCR: OCRPageResult | null;
   setCurrentPageOCR: (result: OCRPageResult | null) => void;
 
@@ -51,7 +57,7 @@ export const OCR_PROFILES = [
   { id: 'best', name: 'Best Quality', dpi: 300, description: 'Highest accuracy, slower' },
 ] as const;
 
-export const useOCRTextLayerStore = create<OCRTextLayerState>((set) => ({
+export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   // Default options
   options: {
     language: 'eng',
@@ -69,7 +75,17 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set) => ({
   setProgress: (progress) => set({ progress }),
   setIsProcessing: (isProcessing) => set({ isProcessing }),
 
-  // Results
+  // All pages OCR results
+  allPagesOCR: new Map(),
+  setPageOCR: (pageNum, result) => set((state) => {
+    const newMap = new Map(state.allPagesOCR);
+    newMap.set(pageNum, result);
+    return { allPagesOCR: newMap };
+  }),
+  getPageOCR: (pageNum) => get().allPagesOCR.get(pageNum),
+  clearAllOCR: () => set({ allPagesOCR: new Map() }),
+
+  // Current page OCR (for preview)
   currentPageOCR: null,
   setCurrentPageOCR: (result) => set({ currentPageOCR: result }),
 
@@ -83,5 +99,6 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set) => ({
     progress: null,
     currentPageOCR: null,
     searchablePDFBlob: null,
+    allPagesOCR: new Map(),
   }),
 }));

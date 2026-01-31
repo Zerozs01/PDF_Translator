@@ -1,6 +1,6 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import path from 'path'
-import { initDB, DocumentDAO, OCRCacheDAO } from './db'
+import { initDB, DocumentDAO, OCRCacheDAO, TagDAO, ProjectDAO } from './db'
 
 // The built directory structure
 //
@@ -19,8 +19,12 @@ let win: BrowserWindow | null
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
 function createWindow() {
+  // Remove the default menu bar
+  Menu.setApplicationMenu(null)
+  
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
+    autoHideMenuBar: true, // Hide menu bar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // SECURITY: Explicit security settings
@@ -133,6 +137,237 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:get-ocr error:', error);
       return null;
+    }
+  });
+
+  // ============================================
+  // Document Management IPC Handlers
+  // ============================================
+  ipcMain.handle('db:get-recent-documents', async (_, limit = 50) => {
+    try {
+      return DocumentDAO.getRecent(limit);
+    } catch (error) {
+      console.error('db:get-recent-documents error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:get-documents-by-project', async (_, projectId) => {
+    try {
+      return DocumentDAO.getByProject(projectId);
+    } catch (error) {
+      console.error('db:get-documents-by-project error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:get-favorite-documents', async () => {
+    try {
+      return DocumentDAO.getFavorites();
+    } catch (error) {
+      console.error('db:get-favorite-documents error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:search-documents', async (_, query) => {
+    if (!isValidString(query)) {
+      return [];
+    }
+    try {
+      return DocumentDAO.search(query);
+    } catch (error) {
+      console.error('db:search-documents error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:update-document', async (_, { id, updates }) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return DocumentDAO.update(id, updates);
+    } catch (error) {
+      console.error('db:update-document error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:delete-document', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return DocumentDAO.delete(id);
+    } catch (error) {
+      console.error('db:delete-document error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:toggle-favorite', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return DocumentDAO.toggleFavorite(id);
+    } catch (error) {
+      console.error('db:toggle-favorite error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-documents-by-tag', async (_, tagId) => {
+    if (!isValidNumber(tagId)) {
+      throw new Error('Invalid input: tagId must be a positive number');
+    }
+    try {
+      return DocumentDAO.getByTag(tagId);
+    } catch (error) {
+      console.error('db:get-documents-by-tag error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:add-document-tag', async (_, { documentId, tagId }) => {
+    if (!isValidNumber(documentId) || !isValidNumber(tagId)) {
+      throw new Error('Invalid input: documentId and tagId must be positive numbers');
+    }
+    try {
+      return DocumentDAO.addTag(documentId, tagId);
+    } catch (error) {
+      console.error('db:add-document-tag error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:remove-document-tag', async (_, { documentId, tagId }) => {
+    if (!isValidNumber(documentId) || !isValidNumber(tagId)) {
+      throw new Error('Invalid input: documentId and tagId must be positive numbers');
+    }
+    try {
+      return DocumentDAO.removeTag(documentId, tagId);
+    } catch (error) {
+      console.error('db:remove-document-tag error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-document-tags', async (_, documentId) => {
+    if (!isValidNumber(documentId)) {
+      throw new Error('Invalid input: documentId must be a positive number');
+    }
+    try {
+      return DocumentDAO.getTags(documentId);
+    } catch (error) {
+      console.error('db:get-document-tags error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:update-last-page', async (_, { id, pageNum }) => {
+    if (!isValidNumber(id) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid input: id and pageNum must be positive numbers');
+    }
+    try {
+      return DocumentDAO.updateLastPage(id, pageNum);
+    } catch (error) {
+      console.error('db:update-last-page error:', error);
+      return false;
+    }
+  });
+
+  // ============================================
+  // Tag Management IPC Handlers
+  // ============================================
+  ipcMain.handle('db:get-all-tags', async () => {
+    try {
+      return TagDAO.getAll();
+    } catch (error) {
+      console.error('db:get-all-tags error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:create-tag', async (_, { name, color }) => {
+    if (!isValidString(name)) {
+      throw new Error('Invalid input: name must be a non-empty string');
+    }
+    try {
+      return TagDAO.create(name, color);
+    } catch (error) {
+      console.error('db:create-tag error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('db:delete-tag', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return TagDAO.delete(id);
+    } catch (error) {
+      console.error('db:delete-tag error:', error);
+      return false;
+    }
+  });
+
+  // ============================================
+  // Project Management IPC Handlers
+  // ============================================
+  ipcMain.handle('db:get-all-projects', async () => {
+    try {
+      return ProjectDAO.getAll();
+    } catch (error) {
+      console.error('db:get-all-projects error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:get-project-children', async (_, parentId) => {
+    try {
+      return ProjectDAO.getChildren(parentId);
+    } catch (error) {
+      console.error('db:get-project-children error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:create-project', async (_, project) => {
+    if (!isValidString(project?.name)) {
+      throw new Error('Invalid input: name must be a non-empty string');
+    }
+    try {
+      return ProjectDAO.create(project);
+    } catch (error) {
+      console.error('db:create-project error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('db:update-project', async (_, { id, updates }) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return ProjectDAO.update(id, updates);
+    } catch (error) {
+      console.error('db:update-project error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:delete-project', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return ProjectDAO.delete(id);
+    } catch (error) {
+      console.error('db:delete-project error:', error);
+      return false;
     }
   });
 
