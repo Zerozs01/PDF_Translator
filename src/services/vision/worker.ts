@@ -286,6 +286,12 @@ function parseTSV(tsv: string): {
 } {
   const words: Array<{ text: string; confidence: number; bbox: BBox }> = [];
   const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
+  const lineMap = new Map<string, {
+    words: Array<{ text: string; confidence: number; bbox: BBox }>;
+    bbox: BBox;
+    confidenceSum: number;
+    confidenceCount: number;
+  }>();
   
   if (!tsv || typeof tsv !== 'string') {
     console.log('[parseTSV] No TSV input');
@@ -310,6 +316,11 @@ function parseTSV(tsv: string): {
   // Fixed column indices for Tesseract TSV format
   const COL = {
     level: 0,
+    page: 1,
+    block: 2,
+    par: 3,
+    line: 4,
+    word: 5,
     left: 6,
     top: 7,
     width: 8,
@@ -329,7 +340,7 @@ function parseTSV(tsv: string): {
     if (cols.length < 12) continue;
     
     const level = parseInt(cols[COL.level] || '0');
-    const text = cols[COL.text]?.trim() || '';
+    const text = cols.slice(COL.text).join('\t').trim();
     
     // Log first few rows
     if (i < startIndex + 5) {
@@ -354,17 +365,64 @@ function parseTSV(tsv: string): {
     // Level 5 = word
     if (level === 5) {
       level5Count++;
-      words.push({ text, confidence: conf, bbox });
+      const word = { text, confidence: conf, bbox };
+      words.push(word);
+
+      const pageNum = cols[COL.page] || '0';
+      const blockNum = cols[COL.block] || '0';
+      const parNum = cols[COL.par] || '0';
+      const lineNum = cols[COL.line] || '0';
+      const key = `${pageNum}-${blockNum}-${parNum}-${lineNum}`;
+
+      const existing = lineMap.get(key);
+      if (existing) {
+        existing.words.push(word);
+        existing.bbox = {
+          x0: Math.min(existing.bbox.x0, bbox.x0),
+          y0: Math.min(existing.bbox.y0, bbox.y0),
+          x1: Math.max(existing.bbox.x1, bbox.x1),
+          y1: Math.max(existing.bbox.y1, bbox.y1),
+        };
+        if (conf >= 0) {
+          existing.confidenceSum += conf;
+          existing.confidenceCount += 1;
+        }
+      } else {
+        lineMap.set(key, {
+          words: [word],
+          bbox: { ...bbox },
+          confidenceSum: conf >= 0 ? conf : 0,
+          confidenceCount: conf >= 0 ? 1 : 0,
+        });
+      }
     }
     
-    // Level 4 = line
+    // Level 4 = line (keep for logging)
     if (level === 4) {
       level4Count++;
-      lines.push({ text, confidence: conf, bbox, words: [] });
     }
   }
   
-  console.log(`[parseTSV] Found: ${level5Count} words, ${level4Count} lines`);
+  // Build line objects from grouped words
+  for (const [, group] of lineMap) {
+    const sortedWords = group.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const lineText = sortedWords.map(w => w.text).join(' ');
+    const avgConf = group.confidenceCount > 0
+      ? group.confidenceSum / group.confidenceCount
+      : 0;
+
+    lines.push({
+      text: lineText,
+      confidence: avgConf,
+      bbox: group.bbox,
+      words: sortedWords
+    });
+  }
+
+  // Sort lines by vertical position
+  lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  
+  console.log(`[parseTSV] Found: ${level5Count} words, ${lines.length} lines (level4 rows: ${level4Count})`);
   
   return { words, lines };
 }

@@ -155,7 +155,8 @@ export class SearchablePDFService {
               imageWidth,
               imageHeight,
               options.language,
-              options.dpi
+              options.dpi,
+              options.pageSegMode
             );
           } catch (ocrError) {
             retryCount++;
@@ -246,9 +247,10 @@ export class SearchablePDFService {
     imageWidth: number,
     imageHeight: number,
     language: string = 'eng',
-    dpi: number = 300
+    dpi: number = 300,
+    pageSegMode?: number
   ): Promise<OCRPageResult> {
-    return visionService.ocrForTextLayer(imageDataUrl, imageWidth, imageHeight, language, dpi);
+    return visionService.ocrForTextLayer(imageDataUrl, imageWidth, imageHeight, language, dpi, pageSegMode);
   }
 }
 

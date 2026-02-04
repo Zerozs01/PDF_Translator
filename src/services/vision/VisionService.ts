@@ -260,14 +260,16 @@ class VisionService {
     imageWidth: number,
     imageHeight: number,
     language: string = 'eng',
-    dpi: number = 300
+    dpi: number = 300,
+    pageSegMode?: number
   ): Promise<OCRPageResult> {
     return this.sendMessage('OCR_FOR_TEXT_LAYER', {
       imageUrl,
       imageWidth,
       imageHeight,
       language,
-      dpi
+      dpi,
+      pageSegMode
     });
   }
 

@@ -30,6 +30,16 @@ export const PDFCanvas: React.FC = () => {
   const debugLineBoxes = useMemo(() => {
     if (!currentPageOCR || currentPageOCR.words.length === 0) return [];
 
+    if (currentPageOCR.lines && currentPageOCR.lines.length > 0) {
+      return currentPageOCR.lines.map(line => ({
+        x0: line.bbox.x0,
+        y0: line.bbox.y0,
+        x1: line.bbox.x1,
+        y1: line.bbox.y1,
+        centerY: (line.bbox.y0 + line.bbox.y1) / 2
+      }));
+    }
+
     const sorted = [...currentPageOCR.words].sort((a, b) => {
       const yDiff = a.bbox.y0 - b.bbox.y0;
       if (Math.abs(yDiff) > 2) return yDiff;
@@ -84,12 +94,16 @@ export const PDFCanvas: React.FC = () => {
       const canvasRect = canvas.getBoundingClientRect();
 
       if (!currentPageOCR.width || !currentPageOCR.height) return;
+      if (canvasRect.width === 0 || canvasRect.height === 0) return;
+
+      const zoomValue = Math.max(0.0001, stateRef.current.zoom);
+      const invZoom = 1 / zoomValue;
 
       setOcrOverlayTransform({
-        scaleX: canvasRect.width / currentPageOCR.width,
-        scaleY: canvasRect.height / currentPageOCR.height,
-        offsetX: canvasRect.left - containerRect.left,
-        offsetY: canvasRect.top - containerRect.top
+        scaleX: (canvasRect.width * invZoom) / currentPageOCR.width,
+        scaleY: (canvasRect.height * invZoom) / currentPageOCR.height,
+        offsetX: (canvasRect.left - containerRect.left) * invZoom,
+        offsetY: (canvasRect.top - containerRect.top) * invZoom
       });
     };
 
@@ -103,7 +117,7 @@ export const PDFCanvas: React.FC = () => {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateTransform);
     };
-  }, [currentPageOCR, currentPage]);
+  }, [currentPageOCR, currentPage, zoom]);
 
   // Handle Document Load
   const onDocumentLoadSuccess = React.useCallback(({ numPages }: { numPages: number }) => {
