@@ -9,7 +9,7 @@
  * - Export PDF
  */
 
-import React, { useCallback, useRef, useEffect } from 'react';
+import React, { useCallback, useRef, useEffect, useState } from 'react';
 import { 
   FileText, 
   Settings, 
@@ -39,8 +39,6 @@ export const OCRTextLayerPanel: React.FC = () => {
     progress,
     setProgress,
     setIsProcessing,
-    searchablePDFBlob,
-    setSearchablePDFBlob,
     setPageOCR,
     allPagesOCR,
     showDebugOverlay,
@@ -48,6 +46,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     reset
   } = useOCRTextLayerStore();
 
+  const [isExporting, setIsExporting] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
@@ -265,17 +264,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       const arrayBuffer = await file.arrayBuffer();
       pdfDataRef.current = arrayBuffer;
 
-      // Create searchable PDF
+      // Create searchable PDF (also performs OCR)
       const resultBytes = await searchablePDFService.createSearchablePDF(
         arrayBuffer,
         options,
         renderPageToCanvas,
         targetPages
       );
-
-      // Convert to Blob (cast for TypeScript compatibility)
-      const blob = new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
-      setSearchablePDFBlob(blob);
+      void resultBytes;
       
       // Clear callback
       searchablePDFService.setOCRResultCallback(null);
@@ -293,23 +289,39 @@ export const OCRTextLayerPanel: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, setSearchablePDFBlob, setPageOCR]);
+  }, [file, fileUrl, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR]);
 
   /**
-   * Download the searchable PDF
+   * Download searchable PDF from cached OCR results
    */
-  const handleDownload = useCallback(() => {
-    if (!searchablePDFBlob || !file) return;
+  const handleDownloadFromCache = useCallback(async (mode: 'current' | 'all') => {
+    if (!file || allPagesOCR.size === 0) return;
 
-    const url = URL.createObjectURL(searchablePDFBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name.replace('.pdf', '_searchable.pdf');
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [searchablePDFBlob, file]);
+    const pageRange = mode === 'current' ? [currentPage] : undefined;
+    if (mode === 'current' && !allPagesOCR.get(currentPage)) return;
+
+    try {
+      setIsExporting(true);
+      const arrayBuffer = await file.arrayBuffer();
+      const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
+        arrayBuffer,
+        allPagesOCR,
+        pageRange
+      );
+
+      const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      const suffix = mode === 'current' ? `_page_${currentPage}_searchable.pdf` : '_searchable.pdf';
+      a.download = file.name.replace('.pdf', suffix);
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [file, allPagesOCR, currentPage]);
 
   // Total OCR stats
   const totalOCRPages = allPagesOCR.size;
@@ -388,7 +400,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           <button
             onClick={() => handleStartOCR()}
             disabled={isProcessing || !file}
-            className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            className="flex-[0.65] bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
             title="Process all pages"
           >
             {isProcessing ? (
@@ -408,30 +420,43 @@ export const OCRTextLayerPanel: React.FC = () => {
           <button
             onClick={() => handleStartOCR([useProjectStore.getState().currentPage])}
             disabled={isProcessing || !file}
-            className="w-12 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-slate-600"
+            className="flex-[0.35] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-slate-600"
             title="Process current page only"
           >
-            <span className="text-xs font-bold">Curr</span>
+            <span className="text-xs font-bold">Current</span>
           </button>
         </div>
 
-        {searchablePDFBlob && !isProcessing && (
-          <button
-            onClick={handleDownload}
-            className="w-full bg-green-600 hover:bg-green-500 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
-          >
-            <Download size={16} />
-            Download Searchable PDF
-          </button>
+        {totalOCRPages > 0 && !isProcessing && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleDownloadFromCache('current')}
+              disabled={isExporting || !allPagesOCR.get(currentPage)}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+              title="Download current page"
+            >
+              <Download size={16} />
+              Current Page
+            </button>
+            <button
+              onClick={() => handleDownloadFromCache('all')}
+              disabled={isExporting}
+              className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+              title="Download all OCR pages"
+            >
+              <Download size={16} />
+              All Pages
+            </button>
+          </div>
         )}
       </div>
 
       {/* Success Message */}
-      {searchablePDFBlob && !isProcessing && (
+      {totalOCRPages > 0 && !isProcessing && (
         <div className="flex items-start gap-2 bg-green-900/30 border border-green-700 rounded-lg p-3">
           <CheckCircle size={16} className="text-green-400 shrink-0 mt-0.5" />
           <div className="text-xs">
-            <p className="text-green-300 font-medium">สร้าง Searchable PDF สำเร็จ!</p>
+            <p className="text-green-300 font-medium">OCR สำเร็จ!</p>
             <p className="text-green-400/70 mt-1">
               OCR {totalOCRPages} หน้า • พบ {totalWords} คำ
             </p>

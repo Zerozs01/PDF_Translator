@@ -80,6 +80,13 @@ const CONFIG = {
   PHOTO_BG_VARIANCE: 700,
   PHOTO_FILTER_MIN_HEIGHT_RATIO: 0.03,
   PHOTO_FILTER_MIN_CONFIDENCE: 85,
+
+  // Noise filtering
+  NOISE_MIN_CONF_SINGLE: 55,
+  NOISE_MIN_CONF_SHORT: 45,
+  NOISE_MIXEDCASE_CONF: 75,
+  NOISE_LEADING_CONF: 70,
+  NOISE_LEADING_HEIGHT_RATIO: 0.75,
 };
 
 // ============================================
@@ -601,6 +608,72 @@ function filterWordsByBackground(
   });
 }
 
+function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>): {
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
+  words: Array<OCRWord>;
+} {
+  const cleanedLines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> = [];
+  const cleanedWords: Array<OCRWord> = [];
+
+  for (const line of lines) {
+    const lineWords = (line.words as OCRWord[]).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (lineWords.length === 0) continue;
+
+    const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+    const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+
+    const filtered = lineWords.filter((word, index) => {
+      const raw = word.text.trim();
+      const alphaNum = raw.replace(/[^a-zA-Z0-9]/g, '');
+      if (alphaNum.length === 0) return false;
+
+      const hasUpper = /[A-Z]/.test(alphaNum);
+      const hasLower = /[a-z]/.test(alphaNum);
+
+      // Drop mixed-case short noise like "rE" or "Bm" when confidence is low
+      if (alphaNum.length <= 3 && hasUpper && hasLower && word.confidence < CONFIG.NOISE_MIXEDCASE_CONF) {
+        return false;
+      }
+
+      // Drop very low confidence single/short tokens
+      if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE) return false;
+      if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT) return false;
+
+      // Leading bullet-like noise
+      if (index === 0 && alphaNum.length <= 2 && word.confidence < CONFIG.NOISE_LEADING_CONF) {
+        const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+        if (h < medianHeight * CONFIG.NOISE_LEADING_HEIGHT_RATIO) return false;
+        if (/^[mMbB]+$/.test(alphaNum)) return false;
+        if (/^[iIl1]+$/.test(alphaNum) && word.confidence < 80) return false;
+      }
+
+      return true;
+    });
+
+    if (filtered.length === 0) continue;
+
+    const bbox = filtered.reduce((acc, w) => ({
+      x0: Math.min(acc.x0, w.bbox.x0),
+      y0: Math.min(acc.y0, w.bbox.y0),
+      x1: Math.max(acc.x1, w.bbox.x1),
+      y1: Math.max(acc.y1, w.bbox.y1),
+    }), { ...filtered[0].bbox });
+
+    const avgConf = filtered.reduce((sum, w) => sum + w.confidence, 0) / filtered.length;
+    const text = filtered.map(w => w.text).join(' ');
+
+    cleanedLines.push({
+      text,
+      confidence: avgConf,
+      bbox,
+      words: filtered
+    });
+    cleanedWords.push(...filtered);
+  }
+
+  return { lines: cleanedLines, words: cleanedWords };
+}
+
 /**
  * Group words into logical blocks/regions
  */
@@ -811,6 +884,15 @@ self.onmessage = async (e: MessageEvent) => {
 
         // Parse TSV for word-level data
         let { words, lines } = parseTSV(data.tsv || '');
+
+        if (lines.length > 0) {
+          const cleaned = cleanLineNoise(lines);
+          if (cleaned.words.length !== words.length) {
+            console.log(`[Worker] Filtered noisy tokens: ${words.length - cleaned.words.length} removed`);
+            words = cleaned.words;
+            lines = cleaned.lines;
+          }
+        }
 
         if (gray && words.length > 0) {
           const filteredWords = filterWordsByBackground(words, gray, actualWidth, actualHeight);

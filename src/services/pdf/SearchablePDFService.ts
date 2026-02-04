@@ -240,6 +240,30 @@ export class SearchablePDFService {
   }
 
   /**
+   * Create searchable PDF from cached OCR results (no OCR pass)
+   */
+  async createSearchablePDFWithOCR(
+    pdfBytes: ArrayBuffer,
+    ocrPages: Map<number, OCRPageResult>,
+    pageRange?: number[]
+  ): Promise<Uint8Array> {
+    const pdfDoc = await this.textLayerService.loadPDF(pdfBytes);
+    const pages = pdfDoc.getPages();
+
+    for (let i = 0; i < pages.length; i++) {
+      const pageNum = i + 1;
+      if (pageRange && !pageRange.includes(pageNum)) continue;
+
+      const ocrResult = ocrPages.get(pageNum);
+      if (!ocrResult) continue;
+
+      await this.textLayerService.addTextLayerToPage(i, ocrResult, 1, { invisible: true });
+    }
+
+    return await this.textLayerService.savePDF();
+  }
+
+  /**
    * Process single page and return OCR result (for preview/debugging)
    */
   async ocrSinglePage(
