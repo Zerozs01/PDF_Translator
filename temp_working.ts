@@ -91,16 +91,23 @@ function sendProgress(status: string, progress: number, workerId?: string): void
  * This fixes corrupted JPEG issues and ensures proper dimensions
  * NOTE: Uses fetch + createImageBitmap because Image is not available in Workers
  */
-async function preprocessImage(imageUrl: string | Blob): Promise<{
-  image: Blob;
+async function preprocessImage(imageUrl: string): Promise<{
+  processedUrl: string;
   width: number;
   height: number;
 }> {
   try {
-    // Fetch the image as blob when needed (data: and http(s): supported)
-    const blob = typeof imageUrl === 'string'
-      ? await (await fetch(imageUrl)).blob()
-      : imageUrl;
+    // Fetch the image as blob
+    let blob: Blob;
+    
+    if (imageUrl.startsWith('data:')) {
+      // Convert data URL to blob
+      const response = await fetch(imageUrl);
+      blob = await response.blob();
+    } else {
+      const response = await fetch(imageUrl);
+      blob = await response.blob();
+    }
     
     // Create ImageBitmap (works in Workers)
     const imageBitmap = await createImageBitmap(blob);
@@ -132,15 +139,68 @@ async function preprocessImage(imageUrl: string | Blob): Promise<{
     imageBitmap.close();
     
     // ============================================
-    // OCR PREPROCESSING - Keep original colors
-    // Don't convert to grayscale - Tesseract handles this internally
-    // and colored text on colored backgrounds is preserved better
+    // OCR PREPROCESSING - Enhance for Tesseract
     // ============================================
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+    
+    // Parameters for enhancement
+    const gamma = 0.95;      // Slightly brighten dark areas
+    const contrast = 1.15;   // Increase contrast
+    const brightness = 5;    // Slight brightness boost
+    
+    // Build gamma lookup table
+    const gammaLUT = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) {
+      gammaLUT[i] = Math.min(255, Math.max(0, Math.round(255 * Math.pow(i / 255, gamma))));
+    }
+    
+    // Process each pixel
+    for (let i = 0; i < data.length; i += 4) {
+      // Get RGB
+      let r = data[i];
+      let g = data[i + 1];
+      let b = data[i + 2];
+      
+      // Apply gamma correction
+      r = gammaLUT[r];
+      g = gammaLUT[g];
+      b = gammaLUT[b];
+      
+      // Apply contrast and brightness
+      r = Math.min(255, Math.max(0, (r - 128) * contrast + 128 + brightness));
+      g = Math.min(255, Math.max(0, (g - 128) * contrast + 128 + brightness));
+      b = Math.min(255, Math.max(0, (b - 128) * contrast + 128 + brightness));
+      
+      // Convert to grayscale (weighted average)
+      const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+      
+      // Write back as grayscale (still RGB format for compatibility)
+      data[i] = gray;
+      data[i + 1] = gray;
+      data[i + 2] = gray;
+      // Keep alpha as is
+    }
+    
+    // Put processed image back
+    ctx.putImageData(imageData, 0, 0);
+    
+    console.log(`[Worker] Image preprocessed with gamma=${gamma}, contrast=${contrast}`);
     
     // Convert to PNG (lossless, no JPEG artifacts)
     const outputBlob = await canvas.convertToBlob({ type: 'image/png' });
-
-    return { image: outputBlob, width, height };
+    
+    // Convert blob to data URL
+    const arrayBuffer = await outputBlob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    let binary = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
+    }
+    const base64 = btoa(binary);
+    const processedUrl = `data:image/png;base64,${base64}`;
+    
+    return { processedUrl, width, height };
   } catch (error) {
     console.error('[Worker] preprocessImage error:', error);
     throw error;
@@ -150,11 +210,17 @@ async function preprocessImage(imageUrl: string | Blob): Promise<{
 /**
  * Get image dimensions using createImageBitmap
  */
-async function getImageDimensions(imageUrl: string | Blob): Promise<{ width: number; height: number }> {
+async function getImageDimensions(imageUrl: string): Promise<{ width: number; height: number }> {
   try {
-    const blob = typeof imageUrl === 'string'
-      ? await (await fetch(imageUrl)).blob()
-      : imageUrl;
+    let blob: Blob;
+    
+    if (imageUrl.startsWith('data:')) {
+      const response = await fetch(imageUrl);
+      blob = await response.blob();
+    } else {
+      const response = await fetch(imageUrl);
+      blob = await response.blob();
+    }
     
     const imageBitmap = await createImageBitmap(blob);
     const result = {
@@ -164,6 +230,7 @@ async function getImageDimensions(imageUrl: string | Blob): Promise<{ width: num
     imageBitmap.close();
     return result;
   } catch (error) {
+    console.error('[Worker] getImageDimensions error:', error);
     throw error;
   }
 }
@@ -276,9 +343,6 @@ function classifyRegion(
 
 /**
  * Parse TSV output for word-level data
- * Tesseract.js v7 TSV format (no header):
- * level, page_num, block_num, par_num, line_num, word_num, left, top, width, height, conf, text
- * Columns: 0      1         2         3        4         5        6    7    8      9       10   11
  */
 function parseTSV(tsv: string): {
   words: Array<{ text: string; confidence: number; bbox: BBox }>;
@@ -288,61 +352,47 @@ function parseTSV(tsv: string): {
   const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
   
   if (!tsv || typeof tsv !== 'string') {
-    console.log('[parseTSV] No TSV input');
     return { words, lines };
   }
   
-  const tsvLines = tsv.split('\n').filter(line => line.trim().length > 0);
-  console.log(`[parseTSV] Total lines: ${tsvLines.length}`);
-  
-  if (tsvLines.length < 1) {
-    console.log('[parseTSV] No data lines');
+  const tsvLines = tsv.split('\n');
+  if (tsvLines.length < 2) {
     return { words, lines };
   }
   
-  // Check if first line is a header (contains 'level' text)
-  const firstLine = tsvLines[0];
-  const hasHeader = firstLine.toLowerCase().includes('level');
-  const startIndex = hasHeader ? 1 : 0;
-  
-  console.log(`[parseTSV] Has header: ${hasHeader}, starting from index ${startIndex}`);
-  
-  // Fixed column indices for Tesseract TSV format
-  const COL = {
-    level: 0,
-    left: 6,
-    top: 7,
-    width: 8,
-    height: 9,
-    conf: 10,
-    text: 11,
+  // Parse header
+  const header = tsvLines[0].split('\t');
+  const indices = {
+    level: header.indexOf('level'),
+    left: header.indexOf('left'),
+    top: header.indexOf('top'),
+    width: header.indexOf('width'),
+    height: header.indexOf('height'),
+    conf: header.indexOf('conf'),
+    text: header.indexOf('text'),
   };
   
-  // Parse data rows
-  let level5Count = 0;
-  let level4Count = 0;
+  // Validate header
+  if (Object.values(indices).some(i => i === -1)) {
+    console.warn('[Worker] Invalid TSV header');
+    return { words, lines };
+  }
   
-  for (let i = startIndex; i < tsvLines.length; i++) {
+  // Parse data rows
+  for (let i = 1; i < tsvLines.length; i++) {
     const cols = tsvLines[i].split('\t');
+    if (cols.length <= indices.text) continue;
     
-    // Need at least 12 columns
-    if (cols.length < 12) continue;
-    
-    const level = parseInt(cols[COL.level] || '0');
-    const text = cols[COL.text]?.trim() || '';
-    
-    // Log first few rows
-    if (i < startIndex + 5) {
-      console.log(`[parseTSV] Row ${i}: level=${level}, text="${text.substring(0, 30)}"`);
-    }
+    const level = parseInt(cols[indices.level] || '0');
+    const text = cols[indices.text]?.trim() || '';
     
     if (text.length === 0) continue;
     
-    const left = parseInt(cols[COL.left] || '0');
-    const top = parseInt(cols[COL.top] || '0');
-    const width = parseInt(cols[COL.width] || '0');
-    const height = parseInt(cols[COL.height] || '0');
-    const conf = parseFloat(cols[COL.conf] || '0');
+    const left = parseInt(cols[indices.left] || '0');
+    const top = parseInt(cols[indices.top] || '0');
+    const width = parseInt(cols[indices.width] || '0');
+    const height = parseInt(cols[indices.height] || '0');
+    const conf = parseFloat(cols[indices.conf] || '0');
     
     const bbox: BBox = {
       x0: left,
@@ -353,18 +403,14 @@ function parseTSV(tsv: string): {
     
     // Level 5 = word
     if (level === 5) {
-      level5Count++;
       words.push({ text, confidence: conf, bbox });
     }
     
     // Level 4 = line
     if (level === 4) {
-      level4Count++;
       lines.push({ text, confidence: conf, bbox, words: [] });
     }
   }
-  
-  console.log(`[parseTSV] Found: ${level5Count} words, ${level4Count} lines`);
   
   return { words, lines };
 }
@@ -505,34 +551,25 @@ self.onmessage = async (e: MessageEvent) => {
       // OCR_FOR_TEXT_LAYER - Word-Level OCR
       // ============================================
       case 'OCR_FOR_TEXT_LAYER': {
-        const { imageUrl, imageWidth, imageHeight, language = 'eng', dpi = 300, pageSegMode } = payload;
+        const { imageUrl, imageWidth, imageHeight, language = 'eng', dpi = 300 } = payload;
+        console.log(`[Worker] OCR_FOR_TEXT_LAYER: ${imageWidth}x${imageHeight} @ ${dpi}DPI, Lang: ${language}`);
         
         sendProgress('Preprocessing image...', 0);
         
         // Preprocess image to fix corrupted JPEG and ensure valid dimensions
-        let processedInput: Blob | string = imageUrl;
+        let processedUrl = imageUrl;
         let actualWidth = Math.round(imageWidth);
         let actualHeight = Math.round(imageHeight);
         
-        const isStringInput = typeof imageUrl === 'string';
-        console.log('[Worker] OCR_FOR_TEXT_LAYER input:', {
-          imageType: isStringInput ? 'string' : 'blob',
-          imageBytes: isStringInput ? undefined : (imageUrl as Blob).size,
-          imageUrlLength: isStringInput ? imageUrl.length : undefined,
-          imageUrlStart: isStringInput ? imageUrl.substring(0, 100) : undefined,
-          imageWidth,
-          imageHeight
-        });
-        
         try {
           const preprocessed = await preprocessImage(imageUrl);
-          processedInput = preprocessed.image;
+          processedUrl = preprocessed.processedUrl;
           actualWidth = preprocessed.width;
           actualHeight = preprocessed.height;
-          console.log('[Worker] After preprocess:', { actualWidth, actualHeight, processedBytes: preprocessed.image.size });
+          console.log(`[Worker] Image preprocessed: ${actualWidth}x${actualHeight}`);
         } catch (preprocessError) {
+          console.warn('[Worker] Image preprocessing failed, using original:', preprocessError);
           // Continue with original image
-          console.error('[Worker] Preprocess error:', preprocessError);
         }
         
         sendProgress('Initializing OCR...', 0.1);
@@ -542,24 +579,18 @@ self.onmessage = async (e: MessageEvent) => {
         
         sendProgress('Configuring OCR...', 0.15);
         
-        const psm = typeof pageSegMode === 'number' ? pageSegMode : PSM.AUTO;
-
         // Configure for detailed output
         await worker.setParameters({
+          tessedit_create_hocr: '1',
           tessedit_create_tsv: '1',
-          user_defined_dpi: String(Math.round(dpi)),
-          tessedit_pageseg_mode: String(psm),
+          tessedit_create_pdf: '0',
+          hocr_font_info: '1',
         });
         
         sendProgress('Recognizing text...', 0.2);
         
         // Run OCR on preprocessed image
-        // Tesseract.js v7: Must request output formats in recognize() 3rd arg
-        // setParameters alone doesn't enable tsv output anymore
-        const result = await worker.recognize(processedInput as any, undefined, {
-          text: true,
-          tsv: true,
-        }) as TesseractResult;
+        const result = await worker.recognize(processedUrl) as TesseractResult;
         
         sendProgress('Processing results...', 0.8);
         
@@ -567,10 +598,8 @@ self.onmessage = async (e: MessageEvent) => {
         
         // Debug raw OCR data
         console.log(`[Worker] Raw text length: ${data.text?.length || 0}`);
-        console.log(`[Worker] Raw text preview:`, data.text?.substring(0, 200));
         if (data.tsv) {
-          console.log(`[Worker] TSV length: ${data.tsv.length}`);
-          console.log(`[Worker] TSV first 500 chars:`, data.tsv.substring(0, 500));
+          console.log(`[Worker] First 100 chars of TSV: ${data.tsv.substring(0, 100).replace(/\n/g, '\\n')}`);
         } else {
           console.warn('[Worker] No TSV data returned!');
         }
@@ -645,13 +674,13 @@ self.onmessage = async (e: MessageEvent) => {
         sendProgress('Preprocessing image...', 0);
         
         // Preprocess image to get proper dimensions and fix corrupted images
-        let processedInput: Blob | string = imageUrl;
+        let processedUrl = imageUrl;
         let imageWidth = 1000;
         let imageHeight = 1000;
         
         try {
           const preprocessed = await preprocessImage(imageUrl);
-          processedInput = preprocessed.image;
+          processedUrl = preprocessed.processedUrl;
           imageWidth = preprocessed.width;
           imageHeight = preprocessed.height;
           console.log(`[Worker] SEGMENT image preprocessed: ${imageWidth}x${imageHeight}`);
@@ -672,21 +701,15 @@ self.onmessage = async (e: MessageEvent) => {
         
         const worker = await getOrCreateWorker(language);
         
-        const segPsm = documentType === 'manga' ? PSM.SPARSE_TEXT : PSM.AUTO;
-
         // Enable TSV output for word-level data
         await worker.setParameters({
           tessedit_create_tsv: '1',
-          tessedit_pageseg_mode: String(segPsm),
         });
         
         sendProgress('Running OCR...', 0.3);
         
         // Run OCR on preprocessed image
-        const result = await worker.recognize(processedInput as any, undefined, {
-          text: true,
-          tsv: true,
-        }) as TesseractResult;
+        const result = await worker.recognize(processedUrl) as TesseractResult;
         
         sendProgress('Analyzing regions...', 0.7);
         
@@ -774,192 +797,5 @@ self.onmessage = async (e: MessageEvent) => {
     });
   }
 };
-
-
-/**
- * Process a large image in overlapping chunks to handle Tesseract limitations
- * Useful for long webtoons or documents that exceed Tesseract's max dimension
- */
-async function processLargeImageInChunks(
-  worker: any, 
-  imageUrl: string, 
-  width: number, 
-  height: number
-): Promise<{ words: any[], lines: any[], text: string, confidence: number }> {
-  const CHUNK_SIZE = 4000;
-  const OVERLAP = 200; // Overlap to catch text cut by chunk boundary
-  const EFF_HEIGHT = CHUNK_SIZE - OVERLAP;
-  
-  const allWords: any[] = [];
-  let fullText = '';
-  let totalConf = 0;
-  let chunkCount = 0;
-
-  // 1. Prepare source canvas
-  let sourceBitmap: ImageBitmap | null = null;
-  try {
-    let blob: Blob;
-    if (imageUrl.startsWith('data:')) {
-      const resp = await fetch(imageUrl);
-      blob = await resp.blob();
-    } else {
-      const resp = await fetch(imageUrl);
-      blob = await resp.blob();
-    }
-    sourceBitmap = await createImageBitmap(blob);
-  } catch (e) {
-    throw new Error(`Failed to load source image for chunking: ${e}`);
-  }
-
-  // We need to render slices. Since we can't easily crop ImageBitmap to Blob without canvas,
-  // we use OffscreenCanvas.
-  
-  const totalChunks = Math.ceil(height / EFF_HEIGHT);
-
-  for (let i = 0; i < totalChunks; i++) {
-    const yStart = i * EFF_HEIGHT;
-    const chunkHeight = Math.min(CHUNK_SIZE, height - yStart);
-    
-    // Stop if we have passed the end
-    if (chunkHeight <= 0) break;
-
-    // Create chunk canvas
-    const chunkCanvas = new OffscreenCanvas(width, chunkHeight);
-    const ctx = chunkCanvas.getContext('2d');
-    
-    if (!ctx) throw new Error('Failed to create chunk canvas context');
-    
-    // Draw white background
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, width, chunkHeight);
-    
-    // Draw slice from source
-    // drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
-    // Beware of source bounds
-    const sourceHeight = Math.min(chunkHeight, height - yStart);
-    ctx.drawImage(sourceBitmap, 0, yStart, width, sourceHeight, 0, 0, width, sourceHeight);
-    
-    // Prepare chunk URL
-    const chunkBlob = await chunkCanvas.convertToBlob({ type: 'image/png' });
-    const chunkUrl = URL.createObjectURL(chunkBlob);
-    
-    try {
-      // Run OCR on this chunk
-      const result = await worker.recognize(chunkUrl);
-      const data = result.data as any;
-      
-      // Accumulate text and confidence
-      fullText += (data.text || '') + '\n';
-      totalConf += (data.confidence || 0);
-      chunkCount++;
-      
-      // Extract words from Tesseract's nested structure using helper
-      const chunkWords = extractWordsFromBlocks(data);
-      
-      // Offset coordinates and filter duplicates in overlap area
-      chunkWords.forEach(w => {
-        // Adjust Y coordinates
-        const absY0 = w.bbox.y0 + yStart;
-        const absY1 = w.bbox.y1 + yStart;
-        
-        // Filtering logic:
-        // We want to avoid duplicates in the overlap region.
-        // Rule: Only accept words that end BEFORE the overlap region start of this chunk,
-        // UNLESS it's the last chunk.
-        
-        const isLastChunk = (i === totalChunks - 1);
-        const overlapStartInChunk = EFF_HEIGHT;
-        
-        // If word is completely in the overlap region (bottom of this chunk), skip it 
-        // (unless it's the last chunk, then keep everything)
-        // Using center point for safety
-        const wordCenterY = (w.bbox.y0 + w.bbox.y1) / 2;
-        
-        if (!isLastChunk && wordCenterY > overlapStartInChunk) {
-           return; // Skip, let next chunk handle it
-        }
-        
-        // Also skip if it's in the top overlap region (which is covered by previous chunk)
-        // But our yStart increment is based on EFF_HEIGHT, so the previous chunk covered up to yStart
-        // Wait, chunk i covers [yStart, yStart + chunkHeight]
-        // Chunk i-1 covered [yStart - EFF_HEIGHT, yStart - EFF_HEIGHT + chunkHeight] 
-        // = [yStart - EFF_HEIGHT, yStart + OVERLAP]
-        // So the top 200px of this chunk (0 to OVERLAP) was covered by previous chunk bottom.
-        // We should skip top overlap if not first chunk?
-        // No, let's stick to "Bottom overlap is strictly for next chunk".
-        // The previous chunk's bottom overlap was skipped by previous chunk logic.
-        // So this chunk should handle its top part.
-        
-        // However, if the word started in previous chunk but ended here?
-        // This simple logic might split words. But Tesseract usually finds whole words.
-        
-        // Add valid word
-        allWords.push({
-            ...w,
-            bbox: {
-                x0: w.bbox.x0,
-                x1: w.bbox.x1,
-                y0: absY0,
-                y1: absY1
-            }
-        });
-      });
-      
-    } catch (err) {
-      console.error(`[Worker] Error processing chunk ${i}:`, err);
-    } finally {
-      URL.revokeObjectURL(chunkUrl);
-    }
-  }
-  
-  if (sourceBitmap) sourceBitmap.close();
-  
-  // Reconstruct lines from all words
-  // Sort words by Y then X
-  allWords.sort((a, b) => {
-      const yDiff = a.bbox.y0 - b.bbox.y0;
-      if (Math.abs(yDiff) < 10) return a.bbox.x0 - b.bbox.x0; // Same lineish
-      return yDiff;
-  });
-  
-  // Simple line grouping
-  const lines: any[] = [];
-  let currentLine: any = null;
-  
-  allWords.forEach(w => {
-      if (!currentLine) {
-          currentLine = { words: [w], bbox: { ...w.bbox }, text: w.text, confidence: w.confidence };
-      } else {
-          // Check if vertically aligned with current line
-          const verticalOverlap = Math.min(currentLine.bbox.y1, w.bbox.y1) - Math.max(currentLine.bbox.y0, w.bbox.y0);
-          const lineHeight = Math.max(1, currentLine.bbox.y1 - currentLine.bbox.y0);
-          
-          // If overlap > 50% of height, same line
-          if (verticalOverlap > lineHeight * 0.5) {
-             // Add to line
-             currentLine.words.push(w);
-             currentLine.text += ' ' + w.text;
-             currentLine.bbox.x1 = Math.max(currentLine.bbox.x1, w.bbox.x1);
-             currentLine.bbox.y0 = Math.min(currentLine.bbox.y0, w.bbox.y0);
-             currentLine.bbox.y1 = Math.max(currentLine.bbox.y1, w.bbox.y1);
-             // Avg confidence
-             const totalWords = currentLine.words.length;
-             currentLine.confidence = ((currentLine.confidence * (totalWords - 1)) + w.confidence) / totalWords;
-          } else {
-             // New line
-             lines.push(currentLine);
-             currentLine = { words: [w], bbox: { ...w.bbox }, text: w.text, confidence: w.confidence };
-          }
-      }
-  });
-  if (currentLine) lines.push(currentLine);
-  
-  return {
-      words: allWords,
-      lines: lines,
-      text: fullText,
-      confidence: chunkCount > 0 ? totalConf / chunkCount : 0
-  };
-}
 
 export {};

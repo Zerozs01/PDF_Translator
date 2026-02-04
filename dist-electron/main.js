@@ -1,6 +1,7 @@
 "use strict";
 const electron = require("electron");
 const path = require("path");
+const fs = require("fs");
 const Database = require("better-sqlite3");
 let db = null;
 function initDB() {
@@ -382,6 +383,12 @@ function createWindow() {
       webSecurity: true
     }
   });
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.control && input.shift && input.key.toLowerCase() === "i" || input.key === "F12") {
+      win?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
   win.webContents.on("did-finish-load", () => {
     win?.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
   });
@@ -524,6 +531,30 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:toggle-favorite error:", error);
       return false;
+    }
+  });
+  electron.ipcMain.handle("fs:read-file", async (_, filepath) => {
+    if (!isValidString(filepath)) {
+      throw new Error("Invalid filepath");
+    }
+    try {
+      const safePath = sanitizePath(filepath);
+      if (!fs.existsSync(safePath)) {
+        throw new Error("File not found");
+      }
+      const buffer = fs.readFileSync(safePath);
+      const stats = fs.statSync(safePath);
+      const ext = path.extname(safePath).toLowerCase();
+      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
+      return {
+        data: buffer.toString("base64"),
+        mimeType,
+        size: stats.size,
+        name: path.basename(safePath)
+      };
+    } catch (error) {
+      console.error("fs:read-file error:", error);
+      throw error;
     }
   });
   electron.ipcMain.handle("db:get-documents-by-tag", async (_, tagId) => {

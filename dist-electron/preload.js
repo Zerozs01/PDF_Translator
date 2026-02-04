@@ -43,6 +43,10 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   gemini: {
     translate: (text, context) => electron.ipcRenderer.invoke("gemini:translate", { text, context })
   },
+  // File system operations (SECURE: validated in main process)
+  fs: {
+    readFile: (filepath) => electron.ipcRenderer.invoke("fs:read-file", filepath)
+  },
   // Message handling (restricted to allowed channels)
   on: (channel, callback) => {
     if (ALLOWED_RECEIVE_CHANNELS.includes(channel)) {

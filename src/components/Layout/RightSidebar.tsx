@@ -1,126 +1,170 @@
 import React, { useState, useEffect } from 'react';
-import { Document, Page } from 'react-pdf';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { Layers, CheckSquare, FileText } from 'lucide-react';
+import { useOCRTextLayerStore, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
+import { 
+  FileText, 
+  Settings, 
+  ChevronDown, 
+  ChevronUp,
+  Languages,
+  Sparkles,
+  RefreshCw
+} from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
-export const RightSidebar: React.FC = () => {
-  const { fileUrl, currentPage, totalPages, setPage, viewMode, setViewMode, fileType } = useProjectStore();
-  const [activeTab, setActiveTab] = useState<'pages' | 'textlayer'>('pages');
+interface RightSidebarProps {
+  isAiProcessing?: boolean;
+  onAiTranslate?: () => void;
+}
 
-  // Default to textlayer tab for PDF files
-  useEffect(() => {
-    if (fileType === 'pdf') {
-      setActiveTab('textlayer');
-    }
-  }, [fileType]);
+export const RightSidebar: React.FC<RightSidebarProps> = ({ 
+  isAiProcessing = false, 
+  onAiTranslate 
+}) => {
+  const { 
+    fileType,
+    targetLanguage,
+    setTargetLanguage,
+    translationMode,
+    setTranslationMode
+  } = useProjectStore();
+  
+  const { options, setOptions, isProcessing } = useOCRTextLayerStore();
+  const currentProfile = OCR_PROFILES.find(p => p.dpi === options.dpi) || OCR_PROFILES[2];
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   return (
-    <aside className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col h-full">
-      {/* Tabs */}
-      <div className="flex border-b border-slate-700 bg-slate-900/30">
-        <button
-          onClick={() => setActiveTab('textlayer')}
-          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors ${
-            activeTab === 'textlayer' 
-              ? 'text-cyan-400 border-b-2 border-cyan-400 bg-slate-800' 
-              : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+    <aside className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col h-full shrink-0">
+      {/* Header */}
+      <div className="p-3 border-b border-slate-700 bg-slate-900/30 flex items-center justify-between">
+        <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+          <FileText size={14} />
+          OCR Text Layer
+        </h3>
+        
+        {/* Settings Toggle */}
+        <button 
+          onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+          className={`p-1.5 rounded-lg transition-colors ${
+            isSettingsOpen ? 'bg-cyan-600 text-white' : 'hover:bg-slate-700 text-slate-400'
           }`}
+          title="Settings"
         >
-          <FileText size={12} />
-          Text Layer
-        </button>
-        <button
-          onClick={() => setActiveTab('pages')}
-          className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1 transition-colors ${
-            activeTab === 'pages' 
-              ? 'text-cyan-400 border-b-2 border-cyan-400 bg-slate-800' 
-              : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
-          }`}
-        >
-          <Layers size={12} />
-          Pages
+          <Settings size={14} />
         </button>
       </div>
 
-      {/* Content Area */}
-      <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab === 'textlayer' ? (
-          <div className="flex-1 overflow-y-auto p-4">
-            <OCRTextLayerPanel />
+      {/* Collapsible Settings Panel */}
+      {isSettingsOpen && (
+        <div className="border-b border-slate-700 bg-slate-900/50 p-3 space-y-4">
+          {/* Translate To */}
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+              Translate To
+            </label>
+            <select
+              value={targetLanguage}
+              onChange={(e) => setTargetLanguage(e.target.value)}
+              className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+            >
+              <option value="th">Thai (ไทย)</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese (日本語)</option>
+              <option value="ko">Korean (한국어)</option>
+              <option value="zh">Chinese (中文)</option>
+            </select>
           </div>
-        ) : (
-          <>
-            <div className="p-3 bg-slate-900/30 border-b border-slate-700 flex justify-between items-center">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                All Pages ({totalPages})
-              </h3>
-              
-              {/* View Mode Toggle */}
-              <div className="flex bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-                <button 
-                  onClick={() => setViewMode('single')}
-                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                    viewMode === 'single' 
-                      ? 'bg-cyan-600 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                  title="Single Page View"
-                >
-                  Single
-                </button>
-                <button 
-                  onClick={() => setViewMode('continuous')}
-                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                    viewMode === 'continuous' 
-                      ? 'bg-cyan-600 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                  title="Continuous Scroll View"
-                >
-                  Scroll
-                </button>
-              </div>
+
+          {/* Translation Context */}
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+              Translation Context
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                onClick={() => setTranslationMode('manga')}
+                className={`text-xs p-2 rounded-lg border flex items-center justify-center gap-1 transition-all ${
+                  translationMode === 'manga' 
+                    ? 'bg-blue-600 border-blue-400 text-white' 
+                    : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                <Sparkles size={12} />
+                Manga
+              </button>
+              <button 
+                onClick={() => setTranslationMode('official')}
+                className={`text-xs p-2 rounded-lg border flex items-center justify-center gap-1 transition-all ${
+                  translationMode === 'official' 
+                    ? 'bg-emerald-600 border-emerald-400 text-white' 
+                    : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                <FileText size={12} />
+                Official
+              </button>
             </div>
-            
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              <Document file={fileUrl} className="space-y-4">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-                  <div 
-                    key={pageNum}
-                    onClick={() => setPage(pageNum)}
-                    className={`cursor-pointer group relative rounded-lg overflow-hidden border-2 transition-all ${
-                      currentPage === pageNum 
-                        ? 'border-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.3)]' 
-                        : 'border-slate-700 hover:border-slate-500'
-                    }`}
-                  >
-                    <div className="relative bg-white min-h-[100px]">
-                      <Page 
-                        pageNumber={pageNum} 
-                        width={280} 
-                        renderTextLayer={false}
-                        renderAnnotationLayer={false}
-                        className="opacity-90 group-hover:opacity-100 transition-opacity"
-                      />
-                      {/* Page Number Badge */}
-                      <div className="absolute bottom-2 right-2 bg-slate-900/80 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur-sm">
-                        {pageNum}
-                      </div>
-                      
-                      {/* Active Indicator */}
-                      {currentPage === pageNum && (
-                        <div className="absolute top-2 left-2 bg-cyan-500 text-white p-1 rounded-full shadow-lg">
-                          <CheckSquare size={12} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </Document>
+          </div>
+
+          {/* Quality Profile */}
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+              OCR Quality Profile
+            </label>
+            <div className="grid grid-cols-3 gap-1">
+              {OCR_PROFILES.map(profile => (
+                <button 
+                  key={profile.id}
+                  onClick={() => setOptions({ dpi: profile.dpi, profile: profile.id as any })}
+                  disabled={isProcessing}
+                  className={`text-[10px] p-1.5 rounded border transition-all ${
+                    currentProfile.id === profile.id 
+                      ? 'bg-cyan-600 border-cyan-400 text-white' 
+                      : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600'
+                  } disabled:opacity-50`}
+                  title={profile.description}
+                >
+                  {profile.name}
+                </button>
+              ))}
             </div>
-          </>
-        )}
+            <p className="text-[9px] text-slate-500 mt-1 italic">
+              DPI: {options.dpi} • {currentProfile.description}
+            </p>
+          </div>
+
+          {/* AI Translate Button */}
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+              Gemini Intelligence
+            </label>
+            <button 
+              onClick={onAiTranslate}
+              disabled={isAiProcessing}
+              className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
+            >
+              {isAiProcessing ? (
+                <>
+                  <RefreshCw className="animate-spin" size={14} />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Languages size={14} />
+                  ✨ AI Translate Page
+                </>
+              )}
+            </button>
+            <p className="text-[9px] text-slate-500 mt-1.5 text-center">
+              Powered by Gemini 2.5 Flash
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* OCR Text Layer Panel */}
+      <div className="flex-1 overflow-y-auto">
+        <OCRTextLayerPanel />
       </div>
     </aside>
   );

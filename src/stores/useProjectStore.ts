@@ -60,22 +60,33 @@ export const useProjectStore = create<ProjectState>((set) => ({
   sourceLanguage: 'eng',
   targetLanguage: 'th',
 
-  loadProject: (file) => set((state) => {
-    // IMPORTANT: Revoke old URL to prevent memory leak
-    if (state.fileUrl) {
-      URL.revokeObjectURL(state.fileUrl);
+  loadProject: (file) => {
+    // Save document to database for recent files tracking
+    // We need filepath - for dropped/selected files we can try to get path
+    const filePath = (file as unknown as { path?: string }).path;
+    if (filePath && window.electronAPI?.db) {
+      // Save asynchronously (don't block UI)
+      window.electronAPI.db.saveDocument(filePath, file.name, 0)
+        .catch(err => console.error('Failed to save document to DB:', err));
     }
     
-    const url = URL.createObjectURL(file);
-    const type = file.type === 'application/pdf' ? 'pdf' : 'image';
-    return { 
-      file, 
-      fileUrl: url, 
-      fileType: type, 
-      fileName: file.name,
-      currentPage: 1 
-    };
-  }),
+    return set((state) => {
+      // IMPORTANT: Revoke old URL to prevent memory leak
+      if (state.fileUrl) {
+        URL.revokeObjectURL(state.fileUrl);
+      }
+      
+      const url = URL.createObjectURL(file);
+      const type = file.type === 'application/pdf' ? 'pdf' : 'image';
+      return { 
+        file, 
+        fileUrl: url, 
+        fileType: type, 
+        fileName: file.name,
+        currentPage: 1 
+      };
+    });
+  },
 
   closeProject: () => set((state) => {
     if (state.fileUrl) URL.revokeObjectURL(state.fileUrl);

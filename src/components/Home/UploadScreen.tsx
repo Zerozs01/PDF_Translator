@@ -245,18 +245,28 @@ export const UploadScreen: React.FC = () => {
   };
 
   const handleOpenDocument = async (doc: DBDocument) => {
-    // Create a File object from filepath and load
-    // Note: In Electron, we need to read the file from disk
-    // For now, we'll use fetch to get the file
+    // Use Electron's fs API for fast file reading
     try {
-      const response = await fetch(`file://${doc.filepath}`);
-      const blob = await response.blob();
-      const file = new File([blob], doc.filename, { type: blob.type });
+      const result = await window.electronAPI.fs.readFile(doc.filepath);
+      
+      // Convert base64 to Uint8Array
+      const binaryString = atob(result.data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      // Create File object with path attached for database tracking
+      const blob = new Blob([bytes], { type: result.mimeType });
+      const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+      // Attach the filepath so loadProject can save to DB
+      Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
+      
       loadProject(file);
     } catch (error) {
       console.error('Failed to open document:', error);
       // Fallback: Let user know they need to re-import
-      alert('Could not open file. Please re-import the document.');
+      alert('Could not open file. The file may have been moved or deleted.');
     }
   };
 
@@ -270,7 +280,7 @@ export const UploadScreen: React.FC = () => {
   const sortedDocuments = getSortedDocuments();
 
   return (
-    <div className="flex h-full w-full bg-slate-950 text-slate-200">
+    <div className="flex h-screen w-screen bg-slate-950 text-slate-200 overflow-hidden">
       {/* Left Navigation Sidebar */}
       <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4">
         <button
@@ -469,35 +479,65 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
           ) : (
-            // Empty State / Upload Area
-            <div className="h-full flex items-center justify-center">
-              <div 
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-                className={`w-full max-w-xl aspect-video rounded-3xl border-2 border-dashed flex flex-col items-center justify-center transition-all duration-300 ${
-                  isDragging 
-                    ? 'border-cyan-400 bg-cyan-400/10 scale-105' 
-                    : 'border-slate-700 bg-slate-900/30 hover:border-slate-600'
-                }`}
-              >
-                <div className="p-5 rounded-full bg-slate-800 mb-5 shadow-2xl">
-                  <Upload size={40} className="text-cyan-400" />
+            // Empty State / Upload Area with Recent Files
+            <div className="h-full flex flex-col">
+              {/* Recent Files Section */}
+              {documents.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2">
+                    <Clock size={14} className="text-cyan-400" />
+                    Recent Files
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                    {documents.slice(0, 5).map(doc => (
+                      <button
+                        key={doc.id}
+                        onClick={() => handleOpenDocument(doc)}
+                        className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/50 border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-800 transition-all text-left group"
+                      >
+                        <div className="p-2 rounded-lg bg-slate-800 group-hover:bg-slate-700">
+                          {getFileIcon(doc.file_type)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-200 truncate">{doc.filename}</p>
+                          <p className="text-[10px] text-slate-500">{formatDate(doc.last_accessed)}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <h3 className="text-xl font-bold mb-2">
-                  {documents.length === 0 ? 'No documents yet' : 'No results found'}
-                </h3>
-                <p className="text-slate-500 mb-6 text-sm">
-                  {documents.length === 0 
-                    ? 'Drag & drop PDF or images to get started'
-                    : 'Try a different search term or filter'
-                  }
-                </p>
-                
-                <label className="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold cursor-pointer transition-all shadow-lg shadow-cyan-900/20 text-sm">
-                  Browse Files
-                  <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" onChange={handleFileSelect} />
-                </label>
+              )}
+
+              {/* Upload Area */}
+              <div className="flex-1 flex items-center justify-center">
+                <div 
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  className={`w-full max-w-xl aspect-video rounded-3xl border-2 border-dashed flex flex-col items-center justify-center transition-all duration-300 ${
+                    isDragging 
+                      ? 'border-cyan-400 bg-cyan-400/10 scale-105' 
+                      : 'border-slate-700 bg-slate-900/30 hover:border-slate-600'
+                  }`}
+                >
+                  <div className="p-5 rounded-full bg-slate-800 mb-5 shadow-2xl">
+                    <Upload size={40} className="text-cyan-400" />
+                  </div>
+                  <h3 className="text-xl font-bold mb-2">
+                    {documents.length === 0 ? 'No documents yet' : 'No results found'}
+                  </h3>
+                  <p className="text-slate-500 mb-6 text-sm">
+                    {documents.length === 0 
+                      ? 'Drag & drop PDF or images to get started'
+                      : 'Try a different search term or filter'
+                    }
+                  </p>
+                  
+                  <label className="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold cursor-pointer transition-all shadow-lg shadow-cyan-900/20 text-sm">
+                    Browse Files
+                    <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" onChange={handleFileSelect} />
+                  </label>
+                </div>
               </div>
             </div>
           )}

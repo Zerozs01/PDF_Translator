@@ -136,7 +136,12 @@ export class SearchablePDFService {
           });
         });
 
-        const imageDataUrl = canvas.toDataURL('image/png');
+        const imageBlob = await new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Failed to convert canvas to Blob'));
+          }, 'image/png');
+        });
         
         // OCR with retry
         let ocrResult: OCRPageResult | null = null;
@@ -146,7 +151,7 @@ export class SearchablePDFService {
         while (retryCount <= MAX_RETRIES && !ocrResult) {
           try {
             ocrResult = await visionService.ocrForTextLayer(
-              imageDataUrl,
+              imageBlob,
               imageWidth,
               imageHeight,
               options.language,

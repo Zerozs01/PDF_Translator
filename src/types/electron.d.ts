@@ -105,6 +105,15 @@ export interface ElectronAPI {
     translate: (text: string, context: { mode: string; sourceType: string }) => Promise<string>;
   };
   
+  fs: {
+    readFile: (filepath: string) => Promise<{
+      data: string;
+      mimeType: string;
+      size: number;
+      name: string;
+    }>;
+  };
+  
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 

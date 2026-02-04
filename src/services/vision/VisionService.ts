@@ -139,6 +139,11 @@ class VisionService {
           console.warn(`[VisionService] Request ${id} timed out`);
           pending.reject(new Error('Request timeout'));
           this.pendingRequests.delete(id);
+          
+          if (this.pendingRequests.size === 0) {
+            this.isProcessing = false;
+            this.processQueue();
+          }
         }
       }
     }, CONFIG.HEALTH_CHECK_INTERVAL_MS);
@@ -251,7 +256,7 @@ class VisionService {
    * Returns word-level bounding boxes for precise text positioning
    */
   public async ocrForTextLayer(
-    imageUrl: string,
+    imageUrl: string | Blob,
     imageWidth: number,
     imageHeight: number,
     language: string = 'eng',
@@ -318,6 +323,7 @@ class VisionService {
             }, CONFIG.RETRY_DELAY_MS);
           } else {
             reject(new Error(`Request timeout after ${CONFIG.RETRY_ATTEMPTS} retries`));
+            this.processQueue();
           }
         }
       }, CONFIG.REQUEST_TIMEOUT_MS);

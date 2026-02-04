@@ -18,5 +18,6 @@
     "types": ["vite/client"]
   },
   "include": ["src", "electron"],
+  "exclude": ["**/*.stories.ts", "**/*.stories.tsx", "src/stories"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

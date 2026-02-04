@@ -1,15 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
+import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { visionService } from '../../services/vision/VisionService';
-
-// Set worker source for pdf.js
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
 
 export const PDFCanvas: React.FC = () => {
   const { fileUrl, currentPage, totalPages, setTotalPages, viewMode, sourceLanguage } = useProjectStore();

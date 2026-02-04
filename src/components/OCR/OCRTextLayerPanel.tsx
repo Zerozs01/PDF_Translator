@@ -9,7 +9,7 @@
  * - Export PDF
  */
 
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useEffect } from 'react';
 import { 
   FileText, 
   Settings, 
@@ -22,11 +22,13 @@ import {
   AlertCircle,
   Eye
 } from 'lucide-react';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { useOCRTextLayerStore, SUPPORTED_LANGUAGES, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
+import { pdfjs } from '../../services/pdf/pdfjsWorker';
 
-// PDF.js will be imported dynamically when needed
+// PDF.js worker is configured via pdfjsWorker
 
 export const OCRTextLayerPanel: React.FC = () => {
   const { file, fileUrl, currentPage } = useProjectStore();
@@ -45,6 +47,57 @@ export const OCRTextLayerPanel: React.FC = () => {
   } = useOCRTextLayerStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
+  const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
+  const fileRef = useRef<File | null>(null);
+  const pdfDataRef = useRef<ArrayBuffer | null>(null);
+
+  useEffect(() => {
+    return () => {
+      pdfDocRef.current?.destroy();
+      pdfDocRef.current = null;
+      pdfLoadingRef.current = null;
+      fileRef.current = null;
+      pdfDataRef.current = null;
+    };
+  }, []);
+
+  const getPdfDoc = useCallback(async () => {
+    if (!file) {
+      throw new Error('No PDF loaded');
+    }
+
+    // If file changed, reset cached doc
+    if (fileRef.current && fileRef.current !== file) {
+      pdfDocRef.current?.destroy();
+      pdfDocRef.current = null;
+      pdfLoadingRef.current = null;
+      pdfDataRef.current = null;
+    }
+
+    fileRef.current = file;
+
+    if (pdfDocRef.current) {
+      return pdfDocRef.current;
+    }
+
+    if (pdfLoadingRef.current) {
+      return pdfLoadingRef.current;
+    }
+
+    const loadingPromise = (async () => {
+      const data = pdfDataRef.current ?? await file.arrayBuffer();
+      pdfDataRef.current = data;
+      const loadingTask = pdfjs.getDocument({ data });
+      const doc = await loadingTask.promise;
+      pdfDocRef.current = doc;
+      pdfLoadingRef.current = null;
+      return doc;
+    })();
+
+    pdfLoadingRef.current = loadingPromise;
+    return loadingPromise;
+  }, [file]);
 
   // Get current page OCR result
   const currentPageOCR = allPagesOCR.get(currentPage);
@@ -52,123 +105,130 @@ export const OCRTextLayerPanel: React.FC = () => {
   /**
    * Render PDF page to canvas at specified DPI
    * 
-   * Strategy: Capture the existing canvas from react-pdf if it exists,
-   * otherwise fall back to manual pdfjs rendering
+   * Strategy:
+   * 1) Render directly with pdf.js at target DPI (best OCR accuracy)
+   * 2) Fallback to existing react-pdf canvas if pdf.js render fails
    */
   const renderPageToCanvas = useCallback(async (pageNum: number, targetDpi: number) => {
     if (!file) throw new Error('No PDF loaded');
 
-    // Strategy 1: Try to capture existing canvas from react-pdf
-    // This is more reliable because react-pdf already handles JPEG decoding
-    const existingCanvas = document.querySelector(
-      `.react-pdf__Page[data-page-number="${pageNum}"] canvas`
-    ) as HTMLCanvasElement | null;
-
-    if (existingCanvas && existingCanvas.width > 0 && existingCanvas.height > 0) {
-      // Calculate current DPI estimate
-      const currentWidth = existingCanvas.width;
-      const currentHeight = existingCanvas.height;
-      const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
-
-      // Upscale if DPI is too low (< 200) or user requested higher
-      // Tesseract works best at 300 DPI
-      // We rely on chunking in the worker to handle very tall images, so no height limit here.
-      const shouldUpscale = estimatedCurrentDpi < 200 || targetDpi > estimatedCurrentDpi;
-      
-      let outputWidth = currentWidth;
-      let outputHeight = currentHeight;
-      
-      if (shouldUpscale) {
-        // Calculate scale factor only based on DPI
-        let scaleFactor = Math.min(targetDpi / Math.max(estimatedCurrentDpi, 72), 3.0); // Cap at 3x
-        
-        // NEVER downscale. Only upscale or keep 1x.
-        if (scaleFactor < 1.0) scaleFactor = 1.0;
-        
-        outputWidth = Math.round(currentWidth * scaleFactor);
-        outputHeight = Math.round(currentHeight * scaleFactor);
-      }
-      
-      const outputCanvas = document.createElement('canvas');
-      outputCanvas.width = outputWidth;
-      outputCanvas.height = outputHeight;
-      const ctx = outputCanvas.getContext('2d');
-      
-      if (!ctx) throw new Error('Cannot get canvas context');
-      
-      // Fill with white background first
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, outputWidth, outputHeight);
-      
-      // Draw existing canvas (scaled or 1:1)
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(existingCanvas, 0, 0, outputWidth, outputHeight);
-      
-      return {
-        canvas: outputCanvas,
-        width: outputWidth,
-        height: outputHeight
-      };
-    }
-
-    // Strategy 2: Navigate to the page and wait for canvas to appear
-    console.log(`[OCRPanel] Navigating to page ${pageNum} and waiting for canvas...`);
-    
-    const { setPage } = useProjectStore.getState();
-    const previousPage = useProjectStore.getState().currentPage;
-    
-    // Navigate to target page
-    setPage(pageNum);
-    
-    // Wait for canvas to appear (with timeout)
-    const startTime = Date.now();
-    const maxWaitTime = 10000; // 10 seconds
-    
-    while (Date.now() - startTime < maxWaitTime) {
-      await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms
-      
-      const newCanvas = document.querySelector(
+    const renderFromExistingCanvas = async () => {
+      const existingCanvas = document.querySelector(
         `.react-pdf__Page[data-page-number="${pageNum}"] canvas`
       ) as HTMLCanvasElement | null;
-      
-      if (newCanvas && newCanvas.width > 0 && newCanvas.height > 0) {
-        console.log(`[OCRPanel] Canvas appeared for page ${pageNum}: ${newCanvas.width}x${newCanvas.height}`);
-        
-        // Calculate scaling
-        const currentWidth = newCanvas.width;
-        const currentHeight = newCanvas.height;
+
+      if (existingCanvas && existingCanvas.width > 0 && existingCanvas.height > 0) {
+        const currentWidth = existingCanvas.width;
+        const currentHeight = existingCanvas.height;
         const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
-        const scaleFactor = targetDpi / Math.max(estimatedCurrentDpi, 72);
-        
+        const scaleFactor = Math.max(1, Math.min(targetDpi / Math.max(estimatedCurrentDpi, 72), 3.0));
+
         const outputWidth = Math.round(currentWidth * scaleFactor);
         const outputHeight = Math.round(currentHeight * scaleFactor);
-        
+
         const outputCanvas = document.createElement('canvas');
         outputCanvas.width = outputWidth;
         outputCanvas.height = outputHeight;
         const ctx = outputCanvas.getContext('2d');
-        
+
         if (!ctx) throw new Error('Cannot get canvas context');
-        
+
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, outputWidth, outputHeight);
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(newCanvas, 0, 0, outputWidth, outputHeight);
-        
+        ctx.drawImage(existingCanvas, 0, 0, outputWidth, outputHeight);
+
         return {
           canvas: outputCanvas,
           width: outputWidth,
           height: outputHeight
         };
       }
+
+      // Navigate to the page and wait for canvas to appear (legacy fallback)
+      console.log(`[OCRPanel] Navigating to page ${pageNum} and waiting for canvas...`);
+
+      const { setPage } = useProjectStore.getState();
+      const previousPage = useProjectStore.getState().currentPage;
+
+      setPage(pageNum);
+
+      const startTime = Date.now();
+      const maxWaitTime = 10000;
+
+      while (Date.now() - startTime < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        const newCanvas = document.querySelector(
+          `.react-pdf__Page[data-page-number="${pageNum}"] canvas`
+        ) as HTMLCanvasElement | null;
+
+        if (newCanvas && newCanvas.width > 0 && newCanvas.height > 0) {
+          console.log(`[OCRPanel] Canvas appeared for page ${pageNum}: ${newCanvas.width}x${newCanvas.height}`);
+
+          const currentWidth = newCanvas.width;
+          const currentHeight = newCanvas.height;
+          const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
+          const scaleFactor = targetDpi / Math.max(estimatedCurrentDpi, 72);
+
+          const outputWidth = Math.round(currentWidth * scaleFactor);
+          const outputHeight = Math.round(currentHeight * scaleFactor);
+
+          const outputCanvas = document.createElement('canvas');
+          outputCanvas.width = outputWidth;
+          outputCanvas.height = outputHeight;
+          const ctx = outputCanvas.getContext('2d');
+
+          if (!ctx) throw new Error('Cannot get canvas context');
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, outputWidth, outputHeight);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(newCanvas, 0, 0, outputWidth, outputHeight);
+
+          return {
+            canvas: outputCanvas,
+            width: outputWidth,
+            height: outputHeight
+          };
+        }
+      }
+
+      setPage(previousPage);
+      throw new Error(`Timeout waiting for page ${pageNum} canvas to render`);
+    };
+
+    try {
+      const pdfDoc = await getPdfDoc();
+      const page = await pdfDoc.getPage(pageNum);
+      const scale = targetDpi / 72;
+      const viewport = page.getViewport({ scale });
+
+      const outputCanvas = document.createElement('canvas');
+      outputCanvas.width = Math.floor(viewport.width);
+      outputCanvas.height = Math.floor(viewport.height);
+
+      const ctx = outputCanvas.getContext('2d', { alpha: false });
+      if (!ctx) throw new Error('Cannot get canvas context');
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+
+      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'print' });
+      await renderTask.promise;
+
+      return {
+        canvas: outputCanvas,
+        width: outputCanvas.width,
+        height: outputCanvas.height
+      };
+    } catch (error) {
+      console.warn('[OCRPanel] pdf.js render failed, falling back to existing canvas:', error);
+      return renderFromExistingCanvas();
     }
-    
-    // Timeout - restore previous page
-    setPage(previousPage);
-    throw new Error(`Timeout waiting for page ${pageNum} canvas to render`);
-  }, [file]);
+  }, [file, getPdfDoc]);
 
   /**
    * Start OCR processing
@@ -201,6 +261,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       // Read file as ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
+      pdfDataRef.current = arrayBuffer;
 
       // Create searchable PDF
       const resultBytes = await searchablePDFService.createSearchablePDF(
@@ -248,21 +309,12 @@ export const OCRTextLayerPanel: React.FC = () => {
     URL.revokeObjectURL(url);
   }, [searchablePDFBlob, file]);
 
-  // Current profile
-  const currentProfile = OCR_PROFILES.find(p => p.dpi === options.dpi) || OCR_PROFILES[2];
-  
   // Total OCR stats
   const totalOCRPages = allPagesOCR.size;
   const totalWords = Array.from(allPagesOCR.values()).reduce((sum, r) => sum + r.words.length, 0);
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-2 text-sm font-bold text-slate-200">
-        <FileText size={16} className="text-cyan-400" />
-        OCR Text Layer
-      </div>
-
+    <div className="space-y-4 p-4">
       {/* Language Selector */}
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs text-slate-400">
@@ -281,34 +333,6 @@ export const OCRTextLayerPanel: React.FC = () => {
             </option>
           ))}
         </select>
-      </div>
-
-      {/* Quality Profile */}
-      <div className="space-y-2">
-        <label className="flex items-center gap-2 text-xs text-slate-400">
-          <Settings size={12} />
-          Quality Profile
-        </label>
-        <div className="grid grid-cols-3 gap-1">
-          {OCR_PROFILES.map(profile => (
-            <button
-              key={profile.id}
-              onClick={() => setOptions({ dpi: profile.dpi, profile: profile.id as any })}
-              disabled={isProcessing}
-              className={`px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all ${
-                currentProfile.id === profile.id
-                  ? 'bg-cyan-600 text-white shadow-lg'
-                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600'
-              } disabled:opacity-50`}
-              title={profile.description}
-            >
-              {profile.name}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-slate-500 italic">
-          DPI: {options.dpi} • {currentProfile.description}
-        </p>
       </div>
 
       {/* Progress Bar */}
