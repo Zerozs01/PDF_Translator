@@ -59,6 +59,8 @@ let isInitializing = false;
 const CONFIG = {
   // Tesseract WASM core URL (stable version)
   CORE_PATH: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/tesseract-core.wasm.js',
+  // Local language data path (served from app). Falls back to CDN if not found.
+  LANG_PATH: '/tessdata',
   
   // Region classification thresholds
   MIN_REGION_AREA: 100, // Minimum pixel area to consider
@@ -75,6 +77,12 @@ const CONFIG = {
 
   // OCR preprocessing
   OCR_BINARIZE: true,
+
+  // Large image handling
+  MAX_OCR_WIDTH: 10000,
+  MAX_OCR_HEIGHT: 10000,
+  CHUNK_HEIGHT: 4000,
+  CHUNK_OVERLAP: 200,
 
   // Photo-text filtering (reduce OCR in image-heavy regions)
   PHOTO_BG_VARIANCE: 850,
@@ -97,8 +105,8 @@ const CONFIG = {
   IMG_HOLE_FILL_MIN: 7,
   IMG_KEEP_LARGE_TEXT_RATIO: 0.045,
   IMG_KEEP_LARGE_TEXT_CONF: 80,
-  IMG_PROTECT_LINE_WORDS: 3,
-  IMG_PROTECT_LINE_CONF: 70,
+  IMG_PROTECT_LINE_WORDS: 2,
+  IMG_PROTECT_LINE_CONF: 65,
   IMG_TILE_DROP_MAX_LEN: 2,
   IMG_TILE_DROP_CONF: 70,
   IMG_TILE_DROP_HEIGHT_RATIO: 0.02,
@@ -114,6 +122,8 @@ const CONFIG = {
   NOISE_MIXEDCASE_CONF: 75,
   NOISE_LEADING_CONF: 70,
   NOISE_LEADING_HEIGHT_RATIO: 0.75,
+  NOISE_SHORT_HEIGHT_RATIO: 0.7,
+  NOISE_MIXEDCASE_HEIGHT_RATIO: 0.8,
 };
 
 // ============================================
@@ -128,6 +138,19 @@ function sendProgress(status: string, progress: number, workerId?: string): void
     type: 'OCR_PROGRESS',
     payload: { status, progress, workerId }
   });
+}
+
+function getLangPath(): string | undefined {
+  if (!CONFIG.LANG_PATH) return undefined;
+  try {
+    if (typeof self !== 'undefined' && 'location' in self) {
+      const base = (self as DedicatedWorkerGlobalScope).location.origin;
+      return new URL(CONFIG.LANG_PATH, base).toString().replace(/\/$/, '');
+    }
+  } catch {
+    // ignore and fall back
+  }
+  return CONFIG.LANG_PATH;
 }
 
 /**
@@ -298,6 +321,21 @@ async function createWorkerWithLanguage(
   console.log(`[Worker] Creating Tesseract worker for: ${lang}`);
   
   try {
+    const langPath = getLangPath();
+    const worker = await createWorker(lang, OEM.LSTM_ONLY, {
+      corePath: CONFIG.CORE_PATH,
+      langPath,
+      logger: m => {
+        if (sendUpdates && m.status && typeof m.progress === 'number') {
+          sendProgress(m.status, m.progress, m.workerId);
+        }
+      }
+    });
+
+    console.log(`[Worker] Tesseract initialized for: ${lang}${langPath ? ` (langPath=${langPath})` : ''}`);
+    return worker;
+  } catch (err) {
+    console.warn(`[Worker] Failed to initialize Tesseract for ${lang} with local langPath. Retrying with CDN...`, err);
     const worker = await createWorker(lang, OEM.LSTM_ONLY, {
       corePath: CONFIG.CORE_PATH,
       logger: m => {
@@ -306,12 +344,8 @@ async function createWorkerWithLanguage(
         }
       }
     });
-    
-    console.log(`[Worker] Tesseract initialized for: ${lang}`);
+    console.log(`[Worker] Tesseract initialized for: ${lang} (CDN fallback)`);
     return worker;
-  } catch (err) {
-    console.error(`[Worker] Failed to initialize Tesseract for ${lang}:`, err);
-    throw err;
   }
 }
 
@@ -683,6 +717,150 @@ function splitLineWords(lineWords: OCRWord[]): OCRWord[][] {
   return groups;
 }
 
+function buildLinesFromWordsByY(words: Array<OCRWord>, pageHeight: number): Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> {
+  if (words.length === 0) return [];
+  const sorted = [...words].sort((a, b) => {
+    const yDiff = a.bbox.y0 - b.bbox.y0;
+    if (Math.abs(yDiff) > 2) return yDiff;
+    return a.bbox.x0 - b.bbox.x0;
+  });
+
+  const heights = sorted.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const yThreshold = Math.max(4, medianHeight * 0.6, pageHeight * 0.001);
+
+  const lines: Array<{ words: OCRWord[]; bbox: BBox; confidenceSum: number }> = [];
+  for (const word of sorted) {
+    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+    const last = lines[lines.length - 1];
+    if (!last) {
+      lines.push({
+        words: [word],
+        bbox: { ...word.bbox },
+        confidenceSum: word.confidence
+      });
+      continue;
+    }
+
+    const lastCenterY = (last.bbox.y0 + last.bbox.y1) / 2;
+    if (Math.abs(centerY - lastCenterY) > yThreshold) {
+      lines.push({
+        words: [word],
+        bbox: { ...word.bbox },
+        confidenceSum: word.confidence
+      });
+      continue;
+    }
+
+    last.words.push(word);
+    last.bbox = {
+      x0: Math.min(last.bbox.x0, word.bbox.x0),
+      y0: Math.min(last.bbox.y0, word.bbox.y0),
+      x1: Math.max(last.bbox.x1, word.bbox.x1),
+      y1: Math.max(last.bbox.y1, word.bbox.y1),
+    };
+    last.confidenceSum += word.confidence;
+  }
+
+  return lines.map(line => {
+    const sortedWords = line.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const text = sortedWords.map(w => w.text).join(' ');
+    return {
+      text,
+      confidence: line.confidenceSum / Math.max(1, sortedWords.length),
+      bbox: line.bbox,
+      words: sortedWords
+    };
+  });
+}
+
+async function recognizeInChunks(
+  worker: Awaited<ReturnType<typeof createWorker>>,
+  imageInput: string | Blob,
+  width: number,
+  height: number,
+  overlap: number
+): Promise<{ words: OCRWord[]; lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>; text: string; confidence: number }> {
+  const blob = typeof imageInput === 'string'
+    ? await (await fetch(imageInput)).blob()
+    : imageInput;
+
+  const sourceBitmap = await createImageBitmap(blob);
+
+  const chunkHeight = CONFIG.CHUNK_HEIGHT;
+  const step = Math.max(1, chunkHeight - overlap);
+  const totalChunks = Math.ceil(height / step);
+
+  const allWords: OCRWord[] = [];
+  const wordKeySet = new Set<string>();
+  let fullText = '';
+  let totalConf = 0;
+  let confCount = 0;
+
+  for (let i = 0; i < totalChunks; i++) {
+    const yStart = i * step;
+    const currentHeight = Math.min(chunkHeight, height - yStart);
+    if (currentHeight <= 0) break;
+
+    const chunkCanvas = new OffscreenCanvas(width, currentHeight);
+    const ctx = chunkCanvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to create chunk canvas context');
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, currentHeight);
+    ctx.drawImage(sourceBitmap, 0, yStart, width, currentHeight, 0, 0, width, currentHeight);
+
+    const chunkBlob = await chunkCanvas.convertToBlob({ type: 'image/png' });
+
+    const result = await worker.recognize(chunkBlob as any, undefined, {
+      text: true,
+      tsv: true,
+    }) as TesseractResult;
+
+    const data = result.data;
+    fullText += (data.text || '') + '\n';
+    if (typeof data.confidence === 'number') {
+      totalConf += data.confidence;
+      confCount += 1;
+    }
+
+    const { words } = parseTSV(data.tsv || '');
+    const isLast = i === totalChunks - 1;
+    const localKeepMax = currentHeight - overlap;
+
+    for (const word of words) {
+      const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+      if (!isLast && centerY > localKeepMax) continue;
+
+      const adjusted: OCRWord = {
+        text: word.text,
+        confidence: word.confidence,
+        bbox: {
+          x0: word.bbox.x0,
+          x1: word.bbox.x1,
+          y0: word.bbox.y0 + yStart,
+          y1: word.bbox.y1 + yStart,
+        }
+      };
+
+      const key = `${Math.round(adjusted.bbox.x0)}_${Math.round(adjusted.bbox.y0)}_${Math.round(adjusted.bbox.x1)}_${Math.round(adjusted.bbox.y1)}_${adjusted.text}`;
+      if (wordKeySet.has(key)) continue;
+      wordKeySet.add(key);
+      allWords.push(adjusted);
+    }
+  }
+
+  sourceBitmap.close();
+
+  const lines = buildLinesFromWordsByY(allWords, height);
+  return {
+    words: allWords,
+    lines,
+    text: fullText.trim(),
+    confidence: confCount > 0 ? totalConf / confCount : 0
+  };
+}
+
 function rebuildLinesFromWords(
   lines: Array<OCRLine>,
   words: Array<OCRWord>
@@ -914,18 +1092,21 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
       const hasUpper = /[A-Z]/.test(alphaNum);
       const hasLower = /[a-z]/.test(alphaNum);
 
-      // Drop mixed-case short noise like "rE" or "Bm" when confidence is low
-      if (alphaNum.length <= 3 && hasUpper && hasLower && word.confidence < CONFIG.NOISE_MIXEDCASE_CONF) {
+      const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+      const shortHeight = h < medianHeight * CONFIG.NOISE_SHORT_HEIGHT_RATIO;
+      const mixedHeight = h < medianHeight * CONFIG.NOISE_MIXEDCASE_HEIGHT_RATIO;
+
+      // Drop mixed-case short noise like "rE" or "Bm" when confidence + height indicate noise
+      if (alphaNum.length <= 3 && hasUpper && hasLower && word.confidence < CONFIG.NOISE_MIXEDCASE_CONF && mixedHeight) {
         return false;
       }
 
-      // Drop very low confidence single/short tokens
-      if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && (!denseLine || index === 0)) return false;
-      if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT && (!denseLine || index === 0)) return false;
+      // Drop very low confidence single/short tokens only if they are also shorter than the line median
+      if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && shortHeight && (!denseLine || index === 0)) return false;
+      if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT && shortHeight && (!denseLine || index === 0)) return false;
 
       // Leading bullet-like noise
       if (index === 0 && alphaNum.length <= 2 && word.confidence < CONFIG.NOISE_LEADING_CONF) {
-        const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
         if (h < medianHeight * CONFIG.NOISE_LEADING_HEIGHT_RATIO) return false;
         if (/^[mMbB]+$/.test(alphaNum)) return false;
         if (/^[iIl1]+$/.test(alphaNum) && word.confidence < 80) return false;
@@ -1144,30 +1325,49 @@ self.onmessage = async (e: MessageEvent) => {
         
         sendProgress('Recognizing text...', 0.2);
         
-        // Run OCR on preprocessed image
-        // Tesseract.js v7: Must request output formats in recognize() 3rd arg
-        // setParameters alone doesn't enable tsv output anymore
-        const result = await worker.recognize(processedInput as any, undefined, {
-          text: true,
-          tsv: true,
-        }) as TesseractResult;
-        
-        sendProgress('Processing results...', 0.8);
-        
-        const data = result.data;
-        
-        // Debug raw OCR data
-        console.log(`[Worker] Raw text length: ${data.text?.length || 0}`);
-        console.log(`[Worker] Raw text preview:`, data.text?.substring(0, 200));
-        if (data.tsv) {
-          console.log(`[Worker] TSV length: ${data.tsv.length}`);
-          console.log(`[Worker] TSV first 500 chars:`, data.tsv.substring(0, 500));
-        } else {
-          console.warn('[Worker] No TSV data returned!');
-        }
+        let data: TesseractResult['data'] | null = null;
+        let words: Array<OCRWord> = [];
+        let lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
 
-        // Parse TSV for word-level data
-        let { words, lines } = parseTSV(data.tsv || '');
+        const tooLarge = actualWidth > CONFIG.MAX_OCR_WIDTH || actualHeight > CONFIG.MAX_OCR_HEIGHT;
+        if (tooLarge) {
+          console.warn(`[Worker] Image too large (${actualWidth}x${actualHeight}). Using chunked OCR.`);
+          const chunkResult = await recognizeInChunks(worker, processedInput, actualWidth, actualHeight, CONFIG.CHUNK_OVERLAP);
+          words = chunkResult.words;
+          lines = chunkResult.lines as Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+          data = {
+            text: chunkResult.text,
+            confidence: chunkResult.confidence,
+            tsv: ''
+          };
+        } else {
+          // Run OCR on preprocessed image
+          // Tesseract.js v7: Must request output formats in recognize() 3rd arg
+          // setParameters alone doesn't enable tsv output anymore
+          const result = await worker.recognize(processedInput as any, undefined, {
+            text: true,
+            tsv: true,
+          }) as TesseractResult;
+
+          sendProgress('Processing results...', 0.8);
+
+          data = result.data;
+
+          // Debug raw OCR data
+          console.log(`[Worker] Raw text length: ${data.text?.length || 0}`);
+          console.log(`[Worker] Raw text preview:`, data.text?.substring(0, 200));
+          if (data.tsv) {
+            console.log(`[Worker] TSV length: ${data.tsv.length}`);
+            console.log(`[Worker] TSV first 500 chars:`, data.tsv.substring(0, 500));
+          } else {
+            console.warn('[Worker] No TSV data returned!');
+          }
+
+          // Parse TSV for word-level data
+          const parsed = parseTSV(data.tsv || '');
+          words = parsed.words;
+          lines = parsed.lines;
+        }
 
         if (lines.length > 0) {
           const cleaned = cleanLineNoise(lines);
@@ -1203,7 +1403,7 @@ self.onmessage = async (e: MessageEvent) => {
         
         // Fallback: If no words found but text exists, create a single large block
         // This handles cases where TSV parsing fails or structure is simple
-        if (words.length === 0 && data.text && data.text.trim().length > 0) {
+        if (words.length === 0 && data?.text && data.text.trim().length > 0) {
           console.log('[Worker] No words from TSV, creating fallback from raw text (split by lines)');
           
           const rawLines = data.text.split('\n').filter(l => l.trim().length > 0);
@@ -1243,8 +1443,8 @@ self.onmessage = async (e: MessageEvent) => {
           language: language,
           lines: lines,
           words: words,
-          text: data.text || '',
-          confidence: data.confidence || 0
+          text: data?.text || '',
+          confidence: data?.confidence || 0
         };
         
         sendProgress('Complete', 1.0);

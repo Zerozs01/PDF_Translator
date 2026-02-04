@@ -44,6 +44,14 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
    - Photo filters
    - Tile sampling step
 
+4. **Offline language data**  
+   Place `.traineddata` in `public/tessdata` and set `LANG_PATH` to `/tessdata`.
+   The worker will try local first and fall back to CDN if missing.
+
+5. **Large image chunking**  
+   Pages exceeding `MAX_OCR_WIDTH/HEIGHT` are processed in vertical chunks
+   (`CHUNK_HEIGHT` with `CHUNK_OVERLAP`) to avoid Tesseract size limits.
+
 ## Files to Check When Tuning
 
 - `src/services/vision/worker.ts`

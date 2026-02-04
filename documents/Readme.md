@@ -108,6 +108,7 @@ npm run build
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - สรุปสถาปัตยกรรม (ดูฉบับเต็มที่ root)
 - [OCR_OPTIMIZATION.md](./OCR_OPTIMIZATION.md) - แนวทางจูน OCR และจุดที่กินเวลา
+- [LOCAL_TESSDATA.md](./LOCAL_TESSDATA.md) - ตั้งค่า OCR ภาษาแบบออฟไลน์
 - [CHANGELOG.md](./CHANGELOG.md) - ประวัติเอกสารในโฟลเดอร์นี้
   
 > เอกสารฉบับเต็มอยู่ที่ root: `ARCHITECTURE.md`, `CHANGELOG.md`
