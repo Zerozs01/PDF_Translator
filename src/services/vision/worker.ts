@@ -77,26 +77,36 @@ const CONFIG = {
   OCR_BINARIZE: true,
 
   // Photo-text filtering (reduce OCR in image-heavy regions)
-  PHOTO_BG_VARIANCE: 700,
-  PHOTO_FILTER_MIN_HEIGHT_RATIO: 0.03,
-  PHOTO_FILTER_MIN_CONFIDENCE: 85,
+  PHOTO_BG_VARIANCE: 850,
+  PHOTO_FILTER_MIN_HEIGHT_RATIO: 0.028,
+  PHOTO_FILTER_MIN_CONFIDENCE: 80,
 
   // Image tile detection (coarse image region mask)
-  IMG_TILE_SIZE_MIN: 48,
-  IMG_TILE_SIZE_MAX: 96,
+  IMG_TILE_SIZE_MIN: 44,
+  IMG_TILE_SIZE_MAX: 88,
   IMG_TILE_SAMPLE_STEP: 2,
   IMG_TILE_MID_LOW: 40,
   IMG_TILE_MID_HIGH: 220,
-  IMG_MID_RATIO: 0.35,
-  IMG_VARIANCE: 600,
-  IMG_EDGE: 18,
-  IMG_EDGE_VARIANCE: 350,
-  IMG_TEXT_WORDS_MIN: 2,
-  IMG_TEXT_COVERAGE_MIN: 0.08,
-  IMG_TEXT_CONF_MIN: 90,
-  IMG_HOLE_FILL_MIN: 5,
+  IMG_MID_RATIO: 0.4,
+  IMG_VARIANCE: 820,
+  IMG_EDGE: 23,
+  IMG_EDGE_VARIANCE: 480,
+  IMG_TEXT_WORDS_MIN: 1,
+  IMG_TEXT_COVERAGE_MIN: 0.05,
+  IMG_TEXT_CONF_MIN: 80,
+  IMG_HOLE_FILL_MIN: 7,
   IMG_KEEP_LARGE_TEXT_RATIO: 0.045,
   IMG_KEEP_LARGE_TEXT_CONF: 80,
+  IMG_PROTECT_LINE_WORDS: 3,
+  IMG_PROTECT_LINE_CONF: 70,
+  IMG_TILE_DROP_MAX_LEN: 2,
+  IMG_TILE_DROP_CONF: 70,
+  IMG_TILE_DROP_HEIGHT_RATIO: 0.02,
+  IMG_KEEP_MIN_LEN: 4,
+  IMG_KEEP_MIN_CONF: 78,
+  IMG_KEEP_MIN_HEIGHT_RATIO: 0.022,
+  IMG_DROP_SHORT_MAX_LEN: 3,
+  IMG_DROP_SHORT_HEIGHT_RATIO: 0.025,
 
   // Noise filtering
   NOISE_MIN_CONF_SINGLE: 55,
@@ -589,9 +599,11 @@ function filterWordsByBackground(
   words: Array<OCRWord>,
   gray: Uint8ClampedArray,
   width: number,
-  height: number
+  height: number,
+  protectedWords?: Set<OCRWord>
 ): Array<OCRWord> {
   return words.filter(word => {
+    if (protectedWords?.has(word)) return true;
     const h = word.bbox.y1 - word.bbox.y0;
     const heightRatio = h / Math.max(1, height);
     const pad = Math.max(2, Math.round(h * 0.6));
@@ -617,8 +629,9 @@ function filterWordsByBackground(
     if (heightRatio >= 0.06) return true;
 
     if (variance > CONFIG.PHOTO_BG_VARIANCE) {
-      if (heightRatio < CONFIG.PHOTO_FILTER_MIN_HEIGHT_RATIO) return false;
-      if (word.confidence < CONFIG.PHOTO_FILTER_MIN_CONFIDENCE) return false;
+      const small = heightRatio < CONFIG.PHOTO_FILTER_MIN_HEIGHT_RATIO;
+      const lowConf = word.confidence < CONFIG.PHOTO_FILTER_MIN_CONFIDENCE;
+      if (small && lowConf) return false;
     }
 
     return true;
@@ -627,34 +640,82 @@ function filterWordsByBackground(
 
 type OCRLine = { text: string; confidence: number; bbox: BBox; words: unknown[] };
 
+function buildProtectedWordSet(lines: Array<OCRLine>): Set<OCRWord> {
+  const protectedWords = new Set<OCRWord>();
+  for (const line of lines) {
+    const lineWords = (line.words as OCRWord[]) || [];
+    if (lineWords.length === 0) continue;
+    if (lineWords.length >= CONFIG.IMG_PROTECT_LINE_WORDS || line.confidence >= CONFIG.IMG_PROTECT_LINE_CONF) {
+      for (const word of lineWords) {
+        protectedWords.add(word);
+      }
+    }
+  }
+  return protectedWords;
+}
+
+function splitLineWords(lineWords: OCRWord[]): OCRWord[][] {
+  if (lineWords.length <= 1) return [lineWords];
+  const sorted = lineWords.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+
+  const heights = sorted.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const gapThreshold = Math.max(18, medianHeight * 2.6);
+
+  const groups: OCRWord[][] = [];
+  let current: OCRWord[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const word = sorted[i];
+    if (current.length === 0) {
+      current.push(word);
+      continue;
+    }
+    const prev = current[current.length - 1];
+    const gap = word.bbox.x0 - prev.bbox.x1;
+    if (gap > gapThreshold) {
+      groups.push(current);
+      current = [word];
+    } else {
+      current.push(word);
+    }
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
 function rebuildLinesFromWords(
   lines: Array<OCRLine>,
   words: Array<OCRWord>
 ): Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> {
   const wordSet = new Set(words);
-  return lines
-    .map(line => {
-      const lineWords = (line.words as OCRWord[]).filter(w => wordSet.has(w));
-      if (lineWords.length === 0) return null;
+  const rebuilt: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> = [];
+  for (const line of lines) {
+    const lineWords = (line.words as OCRWord[]).filter(w => wordSet.has(w));
+    if (lineWords.length === 0) continue;
 
-      const bbox = lineWords.reduce((acc, w) => ({
+    const groups = splitLineWords(lineWords);
+    for (const group of groups) {
+      if (group.length === 0) continue;
+      const bbox = group.reduce((acc, w) => ({
         x0: Math.min(acc.x0, w.bbox.x0),
         y0: Math.min(acc.y0, w.bbox.y0),
         x1: Math.max(acc.x1, w.bbox.x1),
         y1: Math.max(acc.y1, w.bbox.y1)
-      }), { ...lineWords[0].bbox });
+      }), { ...group[0].bbox });
 
-      const avgConf = lineWords.reduce((sum, w) => sum + w.confidence, 0) / lineWords.length;
-      const text = lineWords.map(w => w.text).join(' ');
+      const avgConf = group.reduce((sum, w) => sum + w.confidence, 0) / group.length;
+      const text = group.map(w => w.text).join(' ');
 
-      return {
+      rebuilt.push({
         text,
         confidence: avgConf,
         bbox,
-        words: lineWords
-      };
-    })
-    .filter(Boolean) as Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
+        words: group
+      });
+    }
+  }
+
+  return rebuilt.sort((a, b) => a.bbox.y0 - b.bbox.y0);
 }
 
 function buildImageTileMask(
@@ -784,7 +845,8 @@ function filterWordsByImageTiles(
   words: Array<OCRWord>,
   maskInfo: { mask: Uint8Array; tileSize: number; cols: number; rows: number },
   width: number,
-  height: number
+  height: number,
+  protectedWords?: Set<OCRWord>
 ): Array<OCRWord> {
   const { mask, tileSize, cols, rows } = maskInfo;
   return words.filter(word => {
@@ -793,13 +855,39 @@ function filterWordsByImageTiles(
     if (heightRatio >= CONFIG.IMG_KEEP_LARGE_TEXT_RATIO && word.confidence >= CONFIG.IMG_KEEP_LARGE_TEXT_CONF) {
       return true;
     }
+    if (protectedWords?.has(word)) {
+      return true;
+    }
 
-    const cx = (word.bbox.x0 + word.bbox.x1) / 2;
-    const cy = (word.bbox.y0 + word.bbox.y1) / 2;
-    const col = Math.min(cols - 1, Math.max(0, (cx / tileSize) | 0));
-    const row = Math.min(rows - 1, Math.max(0, (cy / tileSize) | 0));
-    const idx = row * cols + col;
-    return mask[idx] !== 1;
+    const col0 = Math.min(cols - 1, Math.max(0, Math.floor(word.bbox.x0 / tileSize)));
+    const col1 = Math.min(cols - 1, Math.max(0, Math.floor(word.bbox.x1 / tileSize)));
+    const row0 = Math.min(rows - 1, Math.max(0, Math.floor(word.bbox.y0 / tileSize)));
+    const row1 = Math.min(rows - 1, Math.max(0, Math.floor(word.bbox.y1 / tileSize)));
+
+    let inImageTile = false;
+    for (let r = row0; r <= row1 && !inImageTile; r++) {
+      for (let c = col0; c <= col1; c++) {
+        if (mask[r * cols + c] === 1) {
+          inImageTile = true;
+          break;
+        }
+      }
+    }
+
+    const raw = word.text.trim();
+    const alphaNum = raw.replace(/[^a-zA-Z0-9]/g, '');
+    const len = alphaNum.length;
+
+    if (inImageTile) {
+      if (len > 0 && len <= CONFIG.IMG_TILE_DROP_MAX_LEN
+        && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO
+        && word.confidence < CONFIG.IMG_TILE_DROP_CONF) {
+        return false;
+      }
+      return true;
+    }
+
+    return true;
   });
 }
 
@@ -813,6 +901,7 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
   for (const line of lines) {
     const lineWords = (line.words as OCRWord[]).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
     if (lineWords.length === 0) continue;
+    const denseLine = lineWords.length >= 4;
 
     const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
     const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
@@ -831,8 +920,8 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
       }
 
       // Drop very low confidence single/short tokens
-      if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE) return false;
-      if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT) return false;
+      if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && (!denseLine || index === 0)) return false;
+      if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT && (!denseLine || index === 0)) return false;
 
       // Leading bullet-like noise
       if (index === 0 && alphaNum.length <= 2 && word.confidence < CONFIG.NOISE_LEADING_CONF) {
@@ -1090,24 +1179,25 @@ self.onmessage = async (e: MessageEvent) => {
         }
 
         if (gray && words.length > 0) {
+          const protectedWords = buildProtectedWordSet(lines);
           const maskInfo = buildImageTileMask(gray, actualWidth, actualHeight, words);
           if (maskInfo && maskInfo.imageTiles > 0) {
             console.log(`[Worker] Image tiles: ${maskInfo.imageTiles}/${maskInfo.totalTiles} (tile=${maskInfo.tileSize})`);
-            const filteredWords = filterWordsByImageTiles(words, maskInfo, actualWidth, actualHeight);
+            const filteredWords = filterWordsByImageTiles(words, maskInfo, actualWidth, actualHeight, protectedWords);
             if (filteredWords.length !== words.length) {
               console.log(`[Worker] Filtered image regions: ${words.length - filteredWords.length} words removed`);
               words = filteredWords;
               lines = rebuildLinesFromWords(lines, filteredWords);
             }
           }
-        }
 
-        if (gray && words.length > 0) {
-          const filteredWords = filterWordsByBackground(words, gray, actualWidth, actualHeight);
-          if (filteredWords.length !== words.length) {
-            console.log(`[Worker] Filtered photo-text: ${words.length - filteredWords.length} words removed`);
-            words = filteredWords;
-            lines = rebuildLinesFromWords(lines, filteredWords);
+          if (gray && words.length > 0) {
+            const filteredWords = filterWordsByBackground(words, gray, actualWidth, actualHeight, protectedWords);
+            if (filteredWords.length !== words.length) {
+              console.log(`[Worker] Filtered photo-text: ${words.length - filteredWords.length} words removed`);
+              words = filteredWords;
+              lines = rebuildLinesFromWords(lines, filteredWords);
+            }
           }
         }
         

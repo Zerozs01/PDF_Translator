@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -26,52 +26,6 @@ export const PDFCanvas: React.FC = () => {
   });
 
   const currentPageOCR = showDebugOverlay ? allPagesOCR.get(currentPage) : undefined;
-
-  const debugLineBoxes = useMemo(() => {
-    if (!currentPageOCR || currentPageOCR.words.length === 0) return [];
-
-    if (currentPageOCR.lines && currentPageOCR.lines.length > 0) {
-      return currentPageOCR.lines.map(line => ({
-        x0: line.bbox.x0,
-        y0: line.bbox.y0,
-        x1: line.bbox.x1,
-        y1: line.bbox.y1,
-        centerY: (line.bbox.y0 + line.bbox.y1) / 2
-      }));
-    }
-
-    const sorted = [...currentPageOCR.words].sort((a, b) => {
-      const yDiff = a.bbox.y0 - b.bbox.y0;
-      if (Math.abs(yDiff) > 2) return yDiff;
-      return a.bbox.x0 - b.bbox.x0;
-    });
-
-    const lines: Array<{ x0: number; y0: number; x1: number; y1: number; centerY: number }> = [];
-    const yThreshold = Math.max(4, currentPageOCR.height * 0.005);
-
-    for (const word of sorted) {
-      const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
-      const last = lines[lines.length - 1];
-
-      if (!last || Math.abs(centerY - last.centerY) > yThreshold) {
-        lines.push({
-          x0: word.bbox.x0,
-          y0: word.bbox.y0,
-          x1: word.bbox.x1,
-          y1: word.bbox.y1,
-          centerY
-        });
-      } else {
-        last.x0 = Math.min(last.x0, word.bbox.x0);
-        last.y0 = Math.min(last.y0, word.bbox.y0);
-        last.x1 = Math.max(last.x1, word.bbox.x1);
-        last.y1 = Math.max(last.y1, word.bbox.y1);
-        last.centerY = (last.centerY + centerY) / 2;
-      }
-    }
-
-    return lines;
-  }, [currentPageOCR]);
 
   // State Ref for Event Listeners to avoid stale closures
   const stateRef = useRef({ zoom, pan });
@@ -359,19 +313,6 @@ export const PDFCanvas: React.FC = () => {
                 {/* OCR Debug Overlay */}
                 {showDebugOverlay && currentPageOCR && (
                   <div className="absolute inset-0 pointer-events-none">
-                    {debugLineBoxes.map((line, idx) => {
-                      const left = ocrOverlayTransform.offsetX + line.x0 * ocrOverlayTransform.scaleX;
-                      const top = ocrOverlayTransform.offsetY + line.y0 * ocrOverlayTransform.scaleY;
-                      const width = (line.x1 - line.x0) * ocrOverlayTransform.scaleX;
-                      const height = (line.y1 - line.y0) * ocrOverlayTransform.scaleY;
-                      return (
-                        <div
-                          key={`ocr-line-${idx}`}
-                          style={{ left, top, width, height }}
-                          className="absolute border border-blue-400/60"
-                        />
-                      );
-                    })}
                     {currentPageOCR.words.map((word, idx) => {
                       const left = ocrOverlayTransform.offsetX + word.bbox.x0 * ocrOverlayTransform.scaleX;
                       const top = ocrOverlayTransform.offsetY + word.bbox.y0 * ocrOverlayTransform.scaleY;
