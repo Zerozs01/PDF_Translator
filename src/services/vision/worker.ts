@@ -28,6 +28,8 @@ interface OCRBlock {
   blockType?: 'text' | 'image' | 'separator' | 'unknown';
 }
 
+type OCRWord = { text: string; confidence: number; bbox: BBox };
+
 interface TesseractResult {
   data: {
     text: string;
@@ -70,6 +72,14 @@ const CONFIG = {
   // SFX detection
   SFX_MIN_FONT_SIZE_RATIO: 0.1, // Relative to page height
   SFX_MAX_WORDS: 3,
+
+  // OCR preprocessing
+  OCR_BINARIZE: true,
+
+  // Photo-text filtering (reduce OCR in image-heavy regions)
+  PHOTO_BG_VARIANCE: 700,
+  PHOTO_FILTER_MIN_HEIGHT_RATIO: 0.03,
+  PHOTO_FILTER_MIN_CONFIDENCE: 85,
 };
 
 // ============================================
@@ -91,10 +101,14 @@ function sendProgress(status: string, progress: number, workerId?: string): void
  * This fixes corrupted JPEG issues and ensures proper dimensions
  * NOTE: Uses fetch + createImageBitmap because Image is not available in Workers
  */
-async function preprocessImage(imageUrl: string | Blob): Promise<{
+async function preprocessImage(
+  imageUrl: string | Blob,
+  options: { binarize?: boolean; returnGray?: boolean } = {}
+): Promise<{
   image: Blob;
   width: number;
   height: number;
+  gray?: Uint8ClampedArray;
 }> {
   try {
     // Fetch the image as blob when needed (data: and http(s): supported)
@@ -132,15 +146,87 @@ async function preprocessImage(imageUrl: string | Blob): Promise<{
     imageBitmap.close();
     
     // ============================================
-    // OCR PREPROCESSING - Keep original colors
-    // Don't convert to grayscale - Tesseract handles this internally
-    // and colored text on colored backgrounds is preserved better
+    // OCR PREPROCESSING
+    // - Optional grayscale + contrast stretch + binarize (document friendly)
     // ============================================
+    let gray: Uint8ClampedArray | undefined;
+    if (options.binarize || options.returnGray) {
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+      const grayData = new Uint8ClampedArray(width * height);
+
+      let min = 255;
+      let max = 0;
+      for (let i = 0, p = 0; i < grayData.length; i++, p += 4) {
+        const r = data[p];
+        const g = data[p + 1];
+        const b = data[p + 2];
+        const v = (0.299 * r + 0.587 * g + 0.114 * b) | 0;
+        grayData[i] = v;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+
+      // Contrast stretch
+      const range = Math.max(1, max - min);
+      const scale = 255 / range;
+      for (let i = 0; i < grayData.length; i++) {
+        grayData[i] = Math.max(0, Math.min(255, ((grayData[i] - min) * scale) | 0));
+      }
+
+      if (options.binarize) {
+        // Otsu threshold
+        const hist = new Uint32Array(256);
+        for (let i = 0; i < grayData.length; i++) {
+          hist[grayData[i]]++;
+        }
+        const total = grayData.length;
+        let sum = 0;
+        for (let i = 0; i < 256; i++) sum += i * hist[i];
+        let sumB = 0;
+        let wB = 0;
+        let maxVar = 0;
+        let threshold = 128;
+        for (let i = 0; i < 256; i++) {
+          wB += hist[i];
+          if (wB === 0) continue;
+          const wF = total - wB;
+          if (wF === 0) break;
+          sumB += i * hist[i];
+          const mB = sumB / wB;
+          const mF = (sum - sumB) / wF;
+          const varBetween = wB * wF * (mB - mF) * (mB - mF);
+          if (varBetween > maxVar) {
+            maxVar = varBetween;
+            threshold = i;
+          }
+        }
+
+        for (let i = 0, p = 0; i < grayData.length; i++, p += 4) {
+          const v = grayData[i] > threshold ? 255 : 0;
+          data[p] = v;
+          data[p + 1] = v;
+          data[p + 2] = v;
+          data[p + 3] = 255;
+        }
+      } else {
+        for (let i = 0, p = 0; i < grayData.length; i++, p += 4) {
+          const v = grayData[i];
+          data[p] = v;
+          data[p + 1] = v;
+          data[p + 2] = v;
+          data[p + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      gray = grayData;
+    }
     
     // Convert to PNG (lossless, no JPEG artifacts)
     const outputBlob = await canvas.convertToBlob({ type: 'image/png' });
 
-    return { image: outputBlob, width, height };
+    return { image: outputBlob, width, height, gray };
   } catch (error) {
     console.error('[Worker] preprocessImage error:', error);
     throw error;
@@ -281,10 +367,10 @@ function classifyRegion(
  * Columns: 0      1         2         3        4         5        6    7    8      9       10   11
  */
 function parseTSV(tsv: string): {
-  words: Array<{ text: string; confidence: number; bbox: BBox }>;
+  words: Array<OCRWord>;
   lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
 } {
-  const words: Array<{ text: string; confidence: number; bbox: BBox }> = [];
+  const words: Array<OCRWord> = [];
   const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
   const lineMap = new Map<string, {
     words: Array<{ text: string; confidence: number; bbox: BBox }>;
@@ -425,6 +511,94 @@ function parseTSV(tsv: string): {
   console.log(`[parseTSV] Found: ${level5Count} words, ${lines.length} lines (level4 rows: ${level4Count})`);
   
   return { words, lines };
+}
+
+function computeBackgroundVariance(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  rect: { x0: number; y0: number; x1: number; y1: number },
+  inner: { x0: number; y0: number; x1: number; y1: number },
+  grid: number = 5
+): number {
+  const x0 = Math.max(0, Math.min(width - 1, Math.round(rect.x0)));
+  const y0 = Math.max(0, Math.min(height - 1, Math.round(rect.y0)));
+  const x1 = Math.max(0, Math.min(width - 1, Math.round(rect.x1)));
+  const y1 = Math.max(0, Math.min(height - 1, Math.round(rect.y1)));
+
+  if (x1 <= x0 || y1 <= y0) return 0;
+
+  const inX0 = Math.max(0, Math.min(width - 1, Math.round(inner.x0)));
+  const inY0 = Math.max(0, Math.min(height - 1, Math.round(inner.y0)));
+  const inX1 = Math.max(0, Math.min(width - 1, Math.round(inner.x1)));
+  const inY1 = Math.max(0, Math.min(height - 1, Math.round(inner.y1)));
+
+  const stepX = (x1 - x0) / (grid + 1);
+  const stepY = (y1 - y0) / (grid + 1);
+
+  let count = 0;
+  let sum = 0;
+  let sumSq = 0;
+
+  for (let gy = 1; gy <= grid; gy++) {
+    for (let gx = 1; gx <= grid; gx++) {
+      const x = Math.round(x0 + stepX * gx);
+      const y = Math.round(y0 + stepY * gy);
+
+      // Skip samples inside the word bbox (focus on background)
+      if (x >= inX0 && x <= inX1 && y >= inY0 && y <= inY1) continue;
+
+      const idx = y * width + x;
+      const v = gray[idx] || 0;
+      count++;
+      sum += v;
+      sumSq += v * v;
+    }
+  }
+
+  if (count === 0) return 0;
+  const mean = sum / count;
+  return (sumSq / count) - (mean * mean);
+}
+
+function filterWordsByBackground(
+  words: Array<OCRWord>,
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number
+): Array<OCRWord> {
+  return words.filter(word => {
+    const h = word.bbox.y1 - word.bbox.y0;
+    const heightRatio = h / Math.max(1, height);
+    const pad = Math.max(2, Math.round(h * 0.6));
+
+    const rect = {
+      x0: word.bbox.x0 - pad,
+      y0: word.bbox.y0 - pad,
+      x1: word.bbox.x1 + pad,
+      y1: word.bbox.y1 + pad
+    };
+
+    const innerPad = Math.max(1, Math.round(h * 0.15));
+    const inner = {
+      x0: word.bbox.x0 - innerPad,
+      y0: word.bbox.y0 - innerPad,
+      x1: word.bbox.x1 + innerPad,
+      y1: word.bbox.y1 + innerPad
+    };
+
+    const variance = computeBackgroundVariance(gray, width, height, rect, inner);
+
+    // Keep larger words (titles) even on photo backgrounds
+    if (heightRatio >= 0.06) return true;
+
+    if (variance > CONFIG.PHOTO_BG_VARIANCE) {
+      if (heightRatio < CONFIG.PHOTO_FILTER_MIN_HEIGHT_RATIO) return false;
+      if (word.confidence < CONFIG.PHOTO_FILTER_MIN_CONFIDENCE) return false;
+    }
+
+    return true;
+  });
 }
 
 /**
@@ -582,11 +756,13 @@ self.onmessage = async (e: MessageEvent) => {
           imageHeight
         });
         
+        let gray: Uint8ClampedArray | undefined;
         try {
-          const preprocessed = await preprocessImage(imageUrl);
+          const preprocessed = await preprocessImage(imageUrl, { binarize: CONFIG.OCR_BINARIZE, returnGray: true });
           processedInput = preprocessed.image;
           actualWidth = preprocessed.width;
           actualHeight = preprocessed.height;
+          gray = preprocessed.gray;
           console.log('[Worker] After preprocess:', { actualWidth, actualHeight, processedBytes: preprocessed.image.size });
         } catch (preprocessError) {
           // Continue with original image
@@ -635,6 +811,40 @@ self.onmessage = async (e: MessageEvent) => {
 
         // Parse TSV for word-level data
         let { words, lines } = parseTSV(data.tsv || '');
+
+        if (gray && words.length > 0) {
+          const filteredWords = filterWordsByBackground(words, gray, actualWidth, actualHeight);
+          if (filteredWords.length !== words.length) {
+            console.log(`[Worker] Filtered photo-text: ${words.length - filteredWords.length} words removed`);
+            const wordSet = new Set(filteredWords);
+            const filteredLines = lines
+              .map(line => {
+                const lineWords = (line.words as OCRWord[]).filter(w => wordSet.has(w));
+                if (lineWords.length === 0) return null;
+
+                const bbox = lineWords.reduce((acc, w) => ({
+                  x0: Math.min(acc.x0, w.bbox.x0),
+                  y0: Math.min(acc.y0, w.bbox.y0),
+                  x1: Math.max(acc.x1, w.bbox.x1),
+                  y1: Math.max(acc.y1, w.bbox.y1)
+                }), { ...lineWords[0].bbox });
+
+                const avgConf = lineWords.reduce((sum, w) => sum + w.confidence, 0) / lineWords.length;
+                const text = lineWords.map(w => w.text).join(' ');
+
+                return {
+                  text,
+                  confidence: avgConf,
+                  bbox,
+                  words: lineWords
+                };
+              })
+              .filter(Boolean) as Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+
+            words = filteredWords;
+            lines = filteredLines;
+          }
+        }
         
         // Fallback: If no words found but text exists, create a single large block
         // This handles cases where TSV parsing fails or structure is simple
