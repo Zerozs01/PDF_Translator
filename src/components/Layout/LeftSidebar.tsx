@@ -9,6 +9,7 @@
 
 import React, { useState } from 'react';
 import { Document, Page } from 'react-pdf';
+import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { ChevronLeft, ChevronRight, Grid3X3, List, CheckSquare } from 'lucide-react';
 

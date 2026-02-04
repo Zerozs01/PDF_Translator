@@ -43,6 +43,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     setSearchablePDFBlob,
     setPageOCR,
     allPagesOCR,
+    showDebugOverlay,
+    setShowDebugOverlay,
     reset
   } = useOCRTextLayerStore();
 
@@ -333,6 +335,18 @@ export const OCRTextLayerPanel: React.FC = () => {
             </option>
           ))}
         </select>
+      </div>
+
+      {/* Debug Overlay Toggle */}
+      <div className="flex items-center justify-between bg-slate-700/40 border border-slate-600 rounded-lg px-3 py-2">
+        <span className="text-xs text-slate-300">Show OCR Overlay</span>
+        <input
+          type="checkbox"
+          checked={showDebugOverlay}
+          onChange={(e) => setShowDebugOverlay(e.target.checked)}
+          className="accent-cyan-500"
+          aria-label="Show OCR Overlay"
+        />
       </div>
 
       {/* Progress Bar */}

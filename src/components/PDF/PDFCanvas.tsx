@@ -1,21 +1,67 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { visionService } from '../../services/vision/VisionService';
 
 export const PDFCanvas: React.FC = () => {
   const { fileUrl, currentPage, totalPages, setTotalPages, viewMode, sourceLanguage } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
+  const { allPagesOCR, showDebugOverlay } = useOCRTextLayerStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const pageRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const panRef = useRef(pan);
+  const [ocrOverlayTransform, setOcrOverlayTransform] = useState({
+    scaleX: 1,
+    scaleY: 1,
+    offsetX: 0,
+    offsetY: 0
+  });
+
+  const currentPageOCR = showDebugOverlay ? allPagesOCR.get(currentPage) : undefined;
+
+  const debugLineBoxes = useMemo(() => {
+    if (!currentPageOCR || currentPageOCR.words.length === 0) return [];
+
+    const sorted = [...currentPageOCR.words].sort((a, b) => {
+      const yDiff = a.bbox.y0 - b.bbox.y0;
+      if (Math.abs(yDiff) > 2) return yDiff;
+      return a.bbox.x0 - b.bbox.x0;
+    });
+
+    const lines: Array<{ x0: number; y0: number; x1: number; y1: number; centerY: number }> = [];
+    const yThreshold = Math.max(4, currentPageOCR.height * 0.005);
+
+    for (const word of sorted) {
+      const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+      const last = lines[lines.length - 1];
+
+      if (!last || Math.abs(centerY - last.centerY) > yThreshold) {
+        lines.push({
+          x0: word.bbox.x0,
+          y0: word.bbox.y0,
+          x1: word.bbox.x1,
+          y1: word.bbox.y1,
+          centerY
+        });
+      } else {
+        last.x0 = Math.min(last.x0, word.bbox.x0);
+        last.y0 = Math.min(last.y0, word.bbox.y0);
+        last.x1 = Math.max(last.x1, word.bbox.x1);
+        last.y1 = Math.max(last.y1, word.bbox.y1);
+        last.centerY = (last.centerY + centerY) / 2;
+      }
+    }
+
+    return lines;
+  }, [currentPageOCR]);
 
   // State Ref for Event Listeners to avoid stale closures
   const stateRef = useRef({ zoom, pan });
@@ -25,6 +71,39 @@ export const PDFCanvas: React.FC = () => {
       panRef.current = pan;
     }
   }, [zoom, pan, isDragging]);
+
+  useEffect(() => {
+    if (!currentPageOCR || !pageRef.current) return;
+
+    const updateTransform = () => {
+      const container = pageRef.current;
+      const canvas = container?.querySelector('canvas') as HTMLCanvasElement | null;
+      if (!container || !canvas) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const canvasRect = canvas.getBoundingClientRect();
+
+      if (!currentPageOCR.width || !currentPageOCR.height) return;
+
+      setOcrOverlayTransform({
+        scaleX: canvasRect.width / currentPageOCR.width,
+        scaleY: canvasRect.height / currentPageOCR.height,
+        offsetX: canvasRect.left - containerRect.left,
+        offsetY: canvasRect.top - containerRect.top
+      });
+    };
+
+    const raf = requestAnimationFrame(updateTransform);
+    const resizeObserver = new ResizeObserver(updateTransform);
+    resizeObserver.observe(pageRef.current);
+    window.addEventListener('resize', updateTransform);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateTransform);
+    };
+  }, [currentPageOCR, currentPage]);
 
   // Handle Document Load
   const onDocumentLoadSuccess = React.useCallback(({ numPages }: { numPages: number }) => {
@@ -222,7 +301,7 @@ export const PDFCanvas: React.FC = () => {
             className="flex flex-col gap-4"
           >
             {viewMode === 'single' ? (
-              <div className="relative group">
+              <div ref={pageRef} className="relative group">
                 <Page 
                   pageNumber={currentPage} 
                   renderTextLayer={false} 
@@ -249,6 +328,43 @@ export const PDFCanvas: React.FC = () => {
                     >
                     </div>
                   ))}
+                {/* OCR Debug Overlay */}
+                {showDebugOverlay && currentPageOCR && (
+                  <div className="absolute inset-0 pointer-events-none">
+                    {debugLineBoxes.map((line, idx) => {
+                      const left = ocrOverlayTransform.offsetX + line.x0 * ocrOverlayTransform.scaleX;
+                      const top = ocrOverlayTransform.offsetY + line.y0 * ocrOverlayTransform.scaleY;
+                      const width = (line.x1 - line.x0) * ocrOverlayTransform.scaleX;
+                      const height = (line.y1 - line.y0) * ocrOverlayTransform.scaleY;
+                      return (
+                        <div
+                          key={`ocr-line-${idx}`}
+                          style={{ left, top, width, height }}
+                          className="absolute border border-blue-400/60"
+                        />
+                      );
+                    })}
+                    {currentPageOCR.words.map((word, idx) => {
+                      const left = ocrOverlayTransform.offsetX + word.bbox.x0 * ocrOverlayTransform.scaleX;
+                      const top = ocrOverlayTransform.offsetY + word.bbox.y0 * ocrOverlayTransform.scaleY;
+                      const width = (word.bbox.x1 - word.bbox.x0) * ocrOverlayTransform.scaleX;
+                      const height = (word.bbox.y1 - word.bbox.y0) * ocrOverlayTransform.scaleY;
+                      const baselineY = ocrOverlayTransform.offsetY + word.bbox.y1 * ocrOverlayTransform.scaleY;
+                      return (
+                        <React.Fragment key={`ocr-word-${idx}`}>
+                          <div
+                            style={{ left, top, width, height }}
+                            className="absolute border border-red-400/60"
+                          />
+                          <div
+                            style={{ left, top: baselineY, width, height: 1 }}
+                            className="absolute bg-yellow-400/70"
+                          />
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ) : (
               Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
