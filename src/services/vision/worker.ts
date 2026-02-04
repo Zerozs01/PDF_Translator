@@ -81,6 +81,23 @@ const CONFIG = {
   PHOTO_FILTER_MIN_HEIGHT_RATIO: 0.03,
   PHOTO_FILTER_MIN_CONFIDENCE: 85,
 
+  // Image tile detection (coarse image region mask)
+  IMG_TILE_SIZE_MIN: 48,
+  IMG_TILE_SIZE_MAX: 96,
+  IMG_TILE_SAMPLE_STEP: 2,
+  IMG_TILE_MID_LOW: 40,
+  IMG_TILE_MID_HIGH: 220,
+  IMG_MID_RATIO: 0.35,
+  IMG_VARIANCE: 600,
+  IMG_EDGE: 18,
+  IMG_EDGE_VARIANCE: 350,
+  IMG_TEXT_WORDS_MIN: 2,
+  IMG_TEXT_COVERAGE_MIN: 0.08,
+  IMG_TEXT_CONF_MIN: 90,
+  IMG_HOLE_FILL_MIN: 5,
+  IMG_KEEP_LARGE_TEXT_RATIO: 0.045,
+  IMG_KEEP_LARGE_TEXT_CONF: 80,
+
   // Noise filtering
   NOISE_MIN_CONF_SINGLE: 55,
   NOISE_MIN_CONF_SHORT: 45,
@@ -608,6 +625,184 @@ function filterWordsByBackground(
   });
 }
 
+type OCRLine = { text: string; confidence: number; bbox: BBox; words: unknown[] };
+
+function rebuildLinesFromWords(
+  lines: Array<OCRLine>,
+  words: Array<OCRWord>
+): Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> {
+  const wordSet = new Set(words);
+  return lines
+    .map(line => {
+      const lineWords = (line.words as OCRWord[]).filter(w => wordSet.has(w));
+      if (lineWords.length === 0) return null;
+
+      const bbox = lineWords.reduce((acc, w) => ({
+        x0: Math.min(acc.x0, w.bbox.x0),
+        y0: Math.min(acc.y0, w.bbox.y0),
+        x1: Math.max(acc.x1, w.bbox.x1),
+        y1: Math.max(acc.y1, w.bbox.y1)
+      }), { ...lineWords[0].bbox });
+
+      const avgConf = lineWords.reduce((sum, w) => sum + w.confidence, 0) / lineWords.length;
+      const text = lineWords.map(w => w.text).join(' ');
+
+      return {
+        text,
+        confidence: avgConf,
+        bbox,
+        words: lineWords
+      };
+    })
+    .filter(Boolean) as Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
+}
+
+function buildImageTileMask(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  words: Array<OCRWord>
+): { mask: Uint8Array; tileSize: number; cols: number; rows: number; imageTiles: number; totalTiles: number } | null {
+  if (!gray || gray.length < width * height) return null;
+
+  const baseSize = Math.round(Math.min(width, height) / 40);
+  const tileSize = Math.max(CONFIG.IMG_TILE_SIZE_MIN, Math.min(CONFIG.IMG_TILE_SIZE_MAX, baseSize));
+  const cols = Math.ceil(width / tileSize);
+  const rows = Math.ceil(height / tileSize);
+  const totalTiles = cols * rows;
+
+  const sum = new Float64Array(totalTiles);
+  const sumSq = new Float64Array(totalTiles);
+  const edge = new Float64Array(totalTiles);
+  const mid = new Uint32Array(totalTiles);
+  const samples = new Uint32Array(totalTiles);
+
+  const step = Math.max(1, CONFIG.IMG_TILE_SAMPLE_STEP);
+  for (let y = 0; y < height; y += step) {
+    const row = Math.min(rows - 1, (y / tileSize) | 0);
+    const yIdx = y * width;
+    for (let x = 0; x < width; x += step) {
+      const col = Math.min(cols - 1, (x / tileSize) | 0);
+      const idx = row * cols + col;
+      const v = gray[yIdx + x] || 0;
+      sum[idx] += v;
+      sumSq[idx] += v * v;
+      samples[idx] += 1;
+
+      if (v >= CONFIG.IMG_TILE_MID_LOW && v <= CONFIG.IMG_TILE_MID_HIGH) {
+        mid[idx] += 1;
+      }
+
+      if (x + step < width) {
+        edge[idx] += Math.abs(v - (gray[yIdx + x + step] || 0));
+      }
+      if (y + step < height) {
+        edge[idx] += Math.abs(v - (gray[(y + step) * width + x] || 0));
+      }
+    }
+  }
+
+  const wordCount = new Uint16Array(totalTiles);
+  const confSum = new Float32Array(totalTiles);
+  const areaSum = new Float32Array(totalTiles);
+
+  for (const word of words) {
+    const cx = (word.bbox.x0 + word.bbox.x1) / 2;
+    const cy = (word.bbox.y0 + word.bbox.y1) / 2;
+    if (cx < 0 || cy < 0 || cx > width || cy > height) continue;
+
+    const col = Math.min(cols - 1, Math.max(0, (cx / tileSize) | 0));
+    const row = Math.min(rows - 1, Math.max(0, (cy / tileSize) | 0));
+    const idx = row * cols + col;
+
+    wordCount[idx] += 1;
+    confSum[idx] += word.confidence;
+
+    const area = Math.max(0, (word.bbox.x1 - word.bbox.x0) * (word.bbox.y1 - word.bbox.y0));
+    areaSum[idx] += area;
+  }
+
+  let mask = new Uint8Array(totalTiles);
+  let imageTiles = 0;
+
+  for (let idx = 0; idx < totalTiles; idx++) {
+    if (samples[idx] === 0) continue;
+    const mean = sum[idx] / samples[idx];
+    const variance = (sumSq[idx] / samples[idx]) - (mean * mean);
+    const midRatio = mid[idx] / samples[idx];
+    const edgeAvg = edge[idx] / samples[idx];
+
+    const wc = wordCount[idx];
+    const avgConf = wc > 0 ? confSum[idx] / wc : 0;
+    const coverage = areaSum[idx] / (tileSize * tileSize);
+
+    const textLikely = wc >= CONFIG.IMG_TEXT_WORDS_MIN
+      || coverage >= CONFIG.IMG_TEXT_COVERAGE_MIN
+      || avgConf >= CONFIG.IMG_TEXT_CONF_MIN;
+
+    const imageLikely = (midRatio >= CONFIG.IMG_MID_RATIO && variance >= CONFIG.IMG_VARIANCE)
+      || (edgeAvg >= CONFIG.IMG_EDGE && variance >= CONFIG.IMG_EDGE_VARIANCE);
+
+    if (imageLikely && !textLikely) {
+      mask[idx] = 1;
+      imageTiles += 1;
+    }
+  }
+
+  if (CONFIG.IMG_HOLE_FILL_MIN > 0) {
+    const filled = mask.slice();
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        if (mask[idx] === 1) continue;
+        if (wordCount[idx] > 0) continue;
+
+        let neighbors = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nr = r + dy;
+            const nc = c + dx;
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+            if (mask[nr * cols + nc] === 1) neighbors += 1;
+          }
+        }
+
+        if (neighbors >= CONFIG.IMG_HOLE_FILL_MIN) {
+          filled[idx] = 1;
+          imageTiles += 1;
+        }
+      }
+    }
+    mask = filled;
+  }
+
+  return { mask, tileSize, cols, rows, imageTiles, totalTiles };
+}
+
+function filterWordsByImageTiles(
+  words: Array<OCRWord>,
+  maskInfo: { mask: Uint8Array; tileSize: number; cols: number; rows: number },
+  width: number,
+  height: number
+): Array<OCRWord> {
+  const { mask, tileSize, cols, rows } = maskInfo;
+  return words.filter(word => {
+    const h = word.bbox.y1 - word.bbox.y0;
+    const heightRatio = h / Math.max(1, height);
+    if (heightRatio >= CONFIG.IMG_KEEP_LARGE_TEXT_RATIO && word.confidence >= CONFIG.IMG_KEEP_LARGE_TEXT_CONF) {
+      return true;
+    }
+
+    const cx = (word.bbox.x0 + word.bbox.x1) / 2;
+    const cy = (word.bbox.y0 + word.bbox.y1) / 2;
+    const col = Math.min(cols - 1, Math.max(0, (cx / tileSize) | 0));
+    const row = Math.min(rows - 1, Math.max(0, (cy / tileSize) | 0));
+    const idx = row * cols + col;
+    return mask[idx] !== 1;
+  });
+}
+
 function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>): {
   lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
   words: Array<OCRWord>;
@@ -895,36 +1090,24 @@ self.onmessage = async (e: MessageEvent) => {
         }
 
         if (gray && words.length > 0) {
+          const maskInfo = buildImageTileMask(gray, actualWidth, actualHeight, words);
+          if (maskInfo && maskInfo.imageTiles > 0) {
+            console.log(`[Worker] Image tiles: ${maskInfo.imageTiles}/${maskInfo.totalTiles} (tile=${maskInfo.tileSize})`);
+            const filteredWords = filterWordsByImageTiles(words, maskInfo, actualWidth, actualHeight);
+            if (filteredWords.length !== words.length) {
+              console.log(`[Worker] Filtered image regions: ${words.length - filteredWords.length} words removed`);
+              words = filteredWords;
+              lines = rebuildLinesFromWords(lines, filteredWords);
+            }
+          }
+        }
+
+        if (gray && words.length > 0) {
           const filteredWords = filterWordsByBackground(words, gray, actualWidth, actualHeight);
           if (filteredWords.length !== words.length) {
             console.log(`[Worker] Filtered photo-text: ${words.length - filteredWords.length} words removed`);
-            const wordSet = new Set(filteredWords);
-            const filteredLines = lines
-              .map(line => {
-                const lineWords = (line.words as OCRWord[]).filter(w => wordSet.has(w));
-                if (lineWords.length === 0) return null;
-
-                const bbox = lineWords.reduce((acc, w) => ({
-                  x0: Math.min(acc.x0, w.bbox.x0),
-                  y0: Math.min(acc.y0, w.bbox.y0),
-                  x1: Math.max(acc.x1, w.bbox.x1),
-                  y1: Math.max(acc.y1, w.bbox.y1)
-                }), { ...lineWords[0].bbox });
-
-                const avgConf = lineWords.reduce((sum, w) => sum + w.confidence, 0) / lineWords.length;
-                const text = lineWords.map(w => w.text).join(' ');
-
-                return {
-                  text,
-                  confidence: avgConf,
-                  bbox,
-                  words: lineWords
-                };
-              })
-              .filter(Boolean) as Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
-
             words = filteredWords;
-            lines = filteredLines;
+            lines = rebuildLinesFromWords(lines, filteredWords);
           }
         }
         

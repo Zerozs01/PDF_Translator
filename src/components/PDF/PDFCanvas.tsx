@@ -85,25 +85,39 @@ export const PDFCanvas: React.FC = () => {
   useEffect(() => {
     if (!currentPageOCR || !pageRef.current) return;
 
+    let observedCanvas: HTMLCanvasElement | null = null;
+
     const updateTransform = () => {
       const container = pageRef.current;
       const canvas = container?.querySelector('canvas') as HTMLCanvasElement | null;
       if (!container || !canvas) return;
 
-      const containerRect = container.getBoundingClientRect();
-      const canvasRect = canvas.getBoundingClientRect();
-
       if (!currentPageOCR.width || !currentPageOCR.height) return;
-      if (canvasRect.width === 0 || canvasRect.height === 0) return;
+      if (canvas.clientWidth === 0 || canvas.clientHeight === 0) return;
 
-      const zoomValue = Math.max(0.0001, stateRef.current.zoom);
-      const invZoom = 1 / zoomValue;
+      if (canvas !== observedCanvas) {
+        if (observedCanvas) {
+          resizeObserver.unobserve(observedCanvas);
+        }
+        observedCanvas = canvas;
+        resizeObserver.observe(canvas);
+      }
+
+      let offsetX = 0;
+      let offsetY = 0;
+      let node: HTMLElement | null = canvas;
+      const root = pageRef.current;
+      while (node && node !== root) {
+        offsetX += node.offsetLeft;
+        offsetY += node.offsetTop;
+        node = node.offsetParent as HTMLElement | null;
+      }
 
       setOcrOverlayTransform({
-        scaleX: (canvasRect.width * invZoom) / currentPageOCR.width,
-        scaleY: (canvasRect.height * invZoom) / currentPageOCR.height,
-        offsetX: (canvasRect.left - containerRect.left) * invZoom,
-        offsetY: (canvasRect.top - containerRect.top) * invZoom
+        scaleX: canvas.clientWidth / currentPageOCR.width,
+        scaleY: canvas.clientHeight / currentPageOCR.height,
+        offsetX,
+        offsetY
       });
     };
 
@@ -117,7 +131,7 @@ export const PDFCanvas: React.FC = () => {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateTransform);
     };
-  }, [currentPageOCR, currentPage, zoom]);
+  }, [currentPageOCR, currentPage]);
 
   // Handle Document Load
   const onDocumentLoadSuccess = React.useCallback(({ numPages }: { numPages: number }) => {
