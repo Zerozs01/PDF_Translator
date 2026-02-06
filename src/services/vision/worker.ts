@@ -135,8 +135,13 @@ const CONFIG = {
   FALLBACK_LINE_CONF: 60,
   FALLBACK_GAP_CONF: 60,
   FALLBACK_GAP_MAX_LEN: 2,
+  FALLBACK_GAP_MAX_LEN_CJK: 6,
   FALLBACK_GAP_PAD_RATIO: 0.25,
   FALLBACK_GAP_MIN_PX: 12,
+  FALLBACK_GAP_MEDIAN_MULT: 1.6,
+  FALLBACK_GAP_MEDIAN_MULT_CJK: 1.1,
+  FALLBACK_GAP_HEIGHT_MULT: 0.9,
+  FALLBACK_GAP_HEIGHT_MULT_CJK: 0.6,
   FALLBACK_MIN_WORDS: 8,
 
   // CJK retry heuristics
@@ -144,10 +149,20 @@ const CONFIG = {
   CJK_MIN_TEXT_CHARS_BEFORE_RETRY: 4,
   CJK_SKIP_NOISE_FILTER_MAX_WORDS: 12,
   CJK_VERTICAL_GAP_MIN_RATIO: 0.07,
-  CJK_VERTICAL_GAP_MIN_MULT: 3.5,
-  CJK_VERTICAL_GAP_MAX_PASSES: 2,
+  CJK_VERTICAL_GAP_MIN_MULT: 2.4,
+  CJK_VERTICAL_GAP_MAX_PASSES: 3,
   CJK_VERTICAL_GAP_PAD_RATIO: 0.25,
   CJK_VERTICAL_GAP_CONF: 60,
+  CJK_LINE_RESCAN_MAX: 4,
+  CJK_LINE_RESCAN_COVERAGE: 0.62,
+  CJK_LINE_RESCAN_CONF: 60,
+  CJK_LINE_RESCAN_PAD_X: 1.0,
+  CJK_LINE_RESCAN_PAD_Y: 0.35,
+  LATIN_LINE_RESCAN_MAX: 2,
+  LATIN_LINE_RESCAN_COVERAGE: 0.55,
+  LATIN_LINE_RESCAN_CONF: 55,
+  LATIN_LINE_RESCAN_PAD_X: 0.7,
+  LATIN_LINE_RESCAN_PAD_Y: 0.25,
 };
 
 // ============================================
@@ -668,6 +683,30 @@ function computeBackgroundVariance(
   return (sumSq / count) - (mean * mean);
 }
 
+function getWordBackgroundVariance(
+  word: OCRWord,
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number
+): number {
+  const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+  const pad = Math.max(2, Math.round(h * 0.6));
+  const rect = {
+    x0: word.bbox.x0 - pad,
+    y0: word.bbox.y0 - pad,
+    x1: word.bbox.x1 + pad,
+    y1: word.bbox.y1 + pad
+  };
+  const innerPad = Math.max(1, Math.round(h * 0.15));
+  const inner = {
+    x0: word.bbox.x0 - innerPad,
+    y0: word.bbox.y0 - innerPad,
+    x1: word.bbox.x1 + innerPad,
+    y1: word.bbox.y1 + innerPad
+  };
+  return computeBackgroundVariance(gray, width, height, rect, inner);
+}
+
 function filterWordsByBackground(
   words: Array<OCRWord>,
   gray: Uint8ClampedArray,
@@ -698,13 +737,19 @@ function filterWordsByBackground(
 
     const variance = computeBackgroundVariance(gray, width, height, rect, inner);
 
+    const raw = word.text.trim();
+    const alphaNum = getAlphaNum(raw);
+    const nonLatin = isNonLatinToken(alphaNum);
+
     // Keep larger words (titles) even on photo backgrounds
     if (heightRatio >= 0.06) return true;
+    if (nonLatin && word.confidence >= 55) return true;
 
     if (variance > CONFIG.PHOTO_BG_VARIANCE) {
       const small = heightRatio < CONFIG.PHOTO_FILTER_MIN_HEIGHT_RATIO;
       const lowConf = word.confidence < CONFIG.PHOTO_FILTER_MIN_CONFIDENCE;
       if (small && lowConf) return false;
+      if (nonLatin && small && word.confidence < 45) return false;
     }
 
     return true;
@@ -901,19 +946,22 @@ function findVerticalGapRegions(
   const heights = sorted.map(l => Math.max(1, l.bbox.y1 - l.bbox.y0)).sort((a, b) => a - b);
   const medianH = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
   const minGap = Math.max(pageHeight * CONFIG.CJK_VERTICAL_GAP_MIN_RATIO, medianH * CONFIG.CJK_VERTICAL_GAP_MIN_MULT);
-  const pad = medianH * CONFIG.CJK_VERTICAL_GAP_PAD_RATIO;
+  const padY = medianH * CONFIG.CJK_VERTICAL_GAP_PAD_RATIO;
+  const padX = medianH * (CONFIG.CJK_VERTICAL_GAP_PAD_RATIO * 1.2);
 
   const regions: Array<{ bbox: BBox; gap: number }> = [];
 
   const topGap = sorted[0].bbox.y0;
   if (topGap > minGap) {
+    const x0 = sorted[0].bbox.x0 - padX;
+    const x1 = sorted[0].bbox.x1 + padX;
     regions.push({
       gap: topGap,
       bbox: {
-        x0: 0,
+        x0,
         y0: 0,
-        x1: pageWidth,
-        y1: sorted[0].bbox.y0 + pad
+        x1,
+        y1: sorted[0].bbox.y0 + padY
       }
     });
   }
@@ -921,13 +969,15 @@ function findVerticalGapRegions(
   for (let i = 0; i < sorted.length - 1; i++) {
     const gap = sorted[i + 1].bbox.y0 - sorted[i].bbox.y1;
     if (gap > minGap) {
+      const x0 = Math.min(sorted[i].bbox.x0, sorted[i + 1].bbox.x0) - padX;
+      const x1 = Math.max(sorted[i].bbox.x1, sorted[i + 1].bbox.x1) + padX;
       regions.push({
         gap,
         bbox: {
-          x0: 0,
-          y0: sorted[i].bbox.y1 - pad,
-          x1: pageWidth,
-          y1: sorted[i + 1].bbox.y0 + pad
+          x0,
+          y0: sorted[i].bbox.y1 - padY,
+          x1,
+          y1: sorted[i + 1].bbox.y0 + padY
         }
       });
     }
@@ -1023,7 +1073,7 @@ function findBestLineBoxForLine(
   return bestScore >= 0.45 ? best : null;
 }
 
-function findLargeGaps(lineWords: OCRWord[]): Array<BBox> {
+function findLargeGaps(lineWords: OCRWord[], isCjk: boolean = false): Array<BBox> {
   if (lineWords.length < 2) return [];
   const sorted = lineWords.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
   const gaps: Array<{ gap: number; left: OCRWord; right: OCRWord; medianHeight: number }> = [];
@@ -1043,7 +1093,9 @@ function findLargeGaps(lineWords: OCRWord[]): Array<BBox> {
   if (gapValues.length === 0) return [];
   gapValues.sort((a, b) => a - b);
   const medianGap = gapValues[Math.floor(gapValues.length / 2)] || 0;
-  const threshold = Math.max(CONFIG.FALLBACK_GAP_MIN_PX, medianGap * 1.6, medianHeight * 0.9);
+  const gapMult = isCjk ? CONFIG.FALLBACK_GAP_MEDIAN_MULT_CJK : CONFIG.FALLBACK_GAP_MEDIAN_MULT;
+  const heightMult = isCjk ? CONFIG.FALLBACK_GAP_HEIGHT_MULT_CJK : CONFIG.FALLBACK_GAP_HEIGHT_MULT;
+  const threshold = Math.max(CONFIG.FALLBACK_GAP_MIN_PX, medianGap * gapMult, medianHeight * heightMult);
 
   const regions: BBox[] = [];
   for (const g of gaps) {
@@ -1058,6 +1110,45 @@ function findLargeGaps(lineWords: OCRWord[]): Array<BBox> {
     });
   }
   return regions;
+}
+
+function computeLineCoverageRatio(lineWords: OCRWord[], lineBox: BBox): number {
+  if (lineWords.length === 0) return 0;
+  const boxW = Math.max(1, lineBox.x1 - lineBox.x0);
+  const boxH = Math.max(1, lineBox.y1 - lineBox.y0);
+  const horizontal = boxW >= boxH * 1.2;
+  const axisLength = horizontal ? boxW : boxH;
+  const axisThickness = horizontal ? boxH : boxW;
+  const intervals: Array<{ start: number; end: number }> = [];
+
+  for (const word of lineWords) {
+    const overlap = horizontal
+      ? Math.min(word.bbox.y1, lineBox.y1) - Math.max(word.bbox.y0, lineBox.y0)
+      : Math.min(word.bbox.x1, lineBox.x1) - Math.max(word.bbox.x0, lineBox.x0);
+    const overlapRatio = overlap / Math.max(1, axisThickness);
+    if (overlapRatio < 0.2) continue;
+    const start = horizontal ? Math.max(lineBox.x0, word.bbox.x0) : Math.max(lineBox.y0, word.bbox.y0);
+    const end = horizontal ? Math.min(lineBox.x1, word.bbox.x1) : Math.min(lineBox.y1, word.bbox.y1);
+    if (end > start) intervals.push({ start, end });
+  }
+
+  if (intervals.length === 0) return 0;
+  intervals.sort((a, b) => a.start - b.start);
+  let covered = 0;
+  let currentStart = intervals[0].start;
+  let currentEnd = intervals[0].end;
+  for (let i = 1; i < intervals.length; i++) {
+    const seg = intervals[i];
+    if (seg.start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, seg.end);
+    } else {
+      covered += Math.max(0, currentEnd - currentStart);
+      currentStart = seg.start;
+      currentEnd = seg.end;
+    }
+  }
+  covered += Math.max(0, currentEnd - currentStart);
+  return Math.max(0, Math.min(1, covered / axisLength));
 }
 
 async function recognizeRegion(
@@ -1352,7 +1443,8 @@ function filterWordsByImageTiles(
   maskInfo: { mask: Uint8Array; tileSize: number; cols: number; rows: number },
   width: number,
   height: number,
-  protectedWords?: Set<OCRWord>
+  protectedWords?: Set<OCRWord>,
+  gray?: Uint8ClampedArray
 ): Array<OCRWord> {
   const { mask, tileSize, cols, rows } = maskInfo;
   return words.filter(word => {
@@ -1395,6 +1487,12 @@ function filterWordsByImageTiles(
         return false;
       }
       if (nonLatin && !protectedWords?.has(word)) {
+        if (gray) {
+          const variance = getWordBackgroundVariance(word, gray, width, height);
+          if (variance <= CONFIG.PHOTO_BG_VARIANCE) {
+            return true;
+          }
+        }
         if (word.confidence < CONFIG.IMG_TILE_DROP_CONF_CJK && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO_CJK) {
           return false;
         }
@@ -1443,10 +1541,7 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
 
       if (keepSingle) return true;
       if (nonLatin) {
-        // Be conservative for non-Latin scripts; avoid dropping valid glyphs.
-        if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && shortHeight && (!denseLine || index === 0)) {
-          return false;
-        }
+        // Keep non-Latin tokens to avoid dropping valid syllables.
         return true;
       }
 
@@ -1822,23 +1917,92 @@ self.onmessage = async (e: MessageEvent) => {
           }
         }
 
-        if (!tooLarge && parsed && words.length >= CONFIG.FALLBACK_MIN_WORDS && (parsed.lineBoxes.length > 0 || lines.length > 0)) {
-          let fallbackInput: Blob | string | null = null;
-          const ensureFallbackInput = async () => {
-            if (fallbackInput) return;
-            if (CONFIG.OCR_BINARIZE) {
-              try {
-                const alt = await preprocessImage(imageUrl, { binarize: false });
-                fallbackInput = alt.image;
-              } catch (error) {
-                console.warn('[Worker] Fallback preprocess failed, using binarized input', error);
-                fallbackInput = processedInput;
-              }
-            } else {
+        const needsUnbinarized = CONFIG.OCR_BINARIZE && !isCjk;
+        let fallbackInput: Blob | string | null = null;
+        const ensureFallbackInput = async () => {
+          if (fallbackInput) return;
+          if (needsUnbinarized) {
+            try {
+              const alt = await preprocessImage(imageUrl, { binarize: false });
+              fallbackInput = alt.image;
+            } catch (error) {
+              console.warn('[Worker] Fallback preprocess failed, using existing input', error);
               fallbackInput = processedInput;
             }
-          };
+          } else {
+            fallbackInput = processedInput;
+          }
+        };
 
+        const lineRescanMax = isCjk ? CONFIG.CJK_LINE_RESCAN_MAX : CONFIG.LATIN_LINE_RESCAN_MAX;
+        if (lineRescanMax > 0 && !tooLarge && parsed && lines.length > 0 && parsed.lineBoxes.length > 0) {
+          const coverageThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_COVERAGE : CONFIG.LATIN_LINE_RESCAN_COVERAGE;
+          const confThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_CONF : CONFIG.LATIN_LINE_RESCAN_CONF;
+          const padXMult = isCjk ? CONFIG.CJK_LINE_RESCAN_PAD_X : CONFIG.LATIN_LINE_RESCAN_PAD_X;
+          const padYMult = isCjk ? CONFIG.CJK_LINE_RESCAN_PAD_Y : CONFIG.LATIN_LINE_RESCAN_PAD_Y;
+
+          const candidates: Array<{ line: { text: string; confidence: number; bbox: BBox; words: unknown[] }; lineBox: BBox; coverage: number }> = [];
+          for (const line of lines) {
+            const lineWords = (line.words as OCRWord[]) || [];
+            if (lineWords.length === 0) continue;
+            const lineBox = findBestLineBoxForLine(parsed.lineBoxes, line);
+            if (!lineBox) continue;
+            const coverage = computeLineCoverageRatio(lineWords, lineBox);
+            if (coverage < coverageThreshold) {
+              candidates.push({ line, lineBox, coverage });
+            }
+          }
+          candidates.sort((a, b) => a.coverage - b.coverage);
+          const limited = candidates.slice(0, lineRescanMax);
+          if (limited.length > 0) {
+            await ensureFallbackInput();
+            let rescanAdded = 0;
+            for (const item of limited) {
+              const lineWords = (item.line.words as OCRWord[]) || [];
+              if (lineWords.length === 0) continue;
+              const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+              const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+              const padX = medianHeight * padXMult;
+              const padY = medianHeight * padYMult;
+              const padded: BBox = {
+                x0: item.lineBox.x0 - padX,
+                y0: item.lineBox.y0 - padY,
+                x1: item.lineBox.x1 + padX,
+                y1: item.lineBox.y1 + padY
+              };
+              const boxW = Math.max(1, item.lineBox.x1 - item.lineBox.x0);
+              const boxH = Math.max(1, item.lineBox.y1 - item.lineBox.y0);
+              const linePsm = isCjk && boxH > boxW * 1.25 ? PSM.SPARSE_TEXT : PSM.SINGLE_LINE;
+              const regionWords = await recognizeRegion(
+                worker,
+                fallbackInput as Blob | string,
+                padded,
+                linePsm,
+                actualWidth,
+                actualHeight,
+                dpi
+              );
+              const filtered = regionWords.filter(w => {
+                const raw = w.text.trim();
+                if (!raw) return false;
+                if (w.confidence < confThreshold) return false;
+                const alphaNum = getAlphaNum(raw);
+                return alphaNum.length > 0;
+              });
+              if (filtered.length === 0) continue;
+              const added = appendUniqueWords(words, filtered, 0.55);
+              if (added.length === 0) continue;
+              rescanAdded += added.length;
+              mergeWordsIntoLine(item.line, added);
+            }
+            if (rescanAdded > 0) {
+              lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+              console.log(`[Worker] ${isCjk ? 'CJK' : 'Latin'} line rescan added ${rescanAdded} tokens`);
+            }
+          }
+        }
+
+        if (!tooLarge && parsed && words.length >= CONFIG.FALLBACK_MIN_WORDS && (parsed.lineBoxes.length > 0 || lines.length > 0)) {
           let fallbackAdded = 0;
           const emptyLineBoxes = parsed.lineBoxes.filter(line => !parsed.lineKeysWithWords.has(line.key));
           if (emptyLineBoxes.length > 0) {
@@ -1887,7 +2051,7 @@ self.onmessage = async (e: MessageEvent) => {
             if (gapBudget <= 0) break;
             const lineWords = (line.words as OCRWord[]) || [];
             if (lineWords.length === 0) continue;
-            const gaps = lineWords.length >= 2 ? findLargeGaps(lineWords) : [];
+            const gaps = lineWords.length >= 2 ? findLargeGaps(lineWords, isCjk) : [];
             const edgeGaps: BBox[] = [];
             const lineBox = findBestLineBoxForLine(parsed.lineBoxes, line);
             if (lineBox) {
@@ -1901,7 +2065,9 @@ self.onmessage = async (e: MessageEvent) => {
               }
               gapValues.sort((a, b) => a - b);
               const medianGap = gapValues.length > 0 ? gapValues[Math.floor(gapValues.length / 2)] : 0;
-              const threshold = Math.max(CONFIG.FALLBACK_GAP_MIN_PX, medianGap * 1.4, medianHeight * 0.9);
+              const gapMult = isCjk ? CONFIG.FALLBACK_GAP_MEDIAN_MULT_CJK : CONFIG.FALLBACK_GAP_MEDIAN_MULT;
+              const heightMult = isCjk ? CONFIG.FALLBACK_GAP_HEIGHT_MULT_CJK : CONFIG.FALLBACK_GAP_HEIGHT_MULT;
+              const threshold = Math.max(CONFIG.FALLBACK_GAP_MIN_PX, medianGap * gapMult, medianHeight * heightMult);
               const padX = medianHeight * CONFIG.FALLBACK_GAP_PAD_RATIO;
               const padY = medianHeight * CONFIG.FALLBACK_GAP_PAD_RATIO;
               const leadGap = sorted[0].bbox.x0 - lineBox.x0;
@@ -1930,11 +2096,12 @@ self.onmessage = async (e: MessageEvent) => {
             for (const gap of limitedGaps) {
               if (gapBudget <= 0) break;
               gapBudget -= 1;
+              const gapPsm = isCjk ? PSM.SINGLE_LINE : PSM.SINGLE_WORD;
               const gapWords = await recognizeRegion(
                 worker,
                 fallbackInput as Blob | string,
                 gap,
-                PSM.SINGLE_WORD,
+                gapPsm,
                 actualWidth,
                 actualHeight,
                 dpi
@@ -1946,7 +2113,7 @@ self.onmessage = async (e: MessageEvent) => {
                 const alphaNum = getAlphaNum(raw);
                 if (alphaNum.length === 0) return false;
                 const nonLatin = isNonLatinToken(alphaNum);
-                const maxLen = nonLatin ? Math.max(CONFIG.FALLBACK_GAP_MAX_LEN, 3) : CONFIG.FALLBACK_GAP_MAX_LEN;
+                const maxLen = nonLatin ? CONFIG.FALLBACK_GAP_MAX_LEN_CJK : CONFIG.FALLBACK_GAP_MAX_LEN;
                 return alphaNum.length <= maxLen;
               });
               if (filtered.length === 0) continue;
@@ -1968,7 +2135,7 @@ self.onmessage = async (e: MessageEvent) => {
           const maskInfo = buildImageTileMask(gray, actualWidth, actualHeight, words);
           if (maskInfo && maskInfo.imageTiles > 0) {
             console.log(`[Worker] Image tiles: ${maskInfo.imageTiles}/${maskInfo.totalTiles} (tile=${maskInfo.tileSize})`);
-            const filteredWords = filterWordsByImageTiles(words, maskInfo, actualWidth, actualHeight, protectedWords);
+            const filteredWords = filterWordsByImageTiles(words, maskInfo, actualWidth, actualHeight, protectedWords, gray);
             if (filteredWords.length !== words.length) {
               console.log(`[Worker] Filtered image regions: ${words.length - filteredWords.length} words removed`);
               words = filteredWords;

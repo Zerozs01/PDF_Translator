@@ -14,3 +14,12 @@ For full project history, see `CHANGELOG.md` in the repo root.
 - Raised OCR chunk threshold and skip binarization for CJK languages to improve Korean/Japanese/Chinese accuracy.
 - Added CJK retry pass (binarize + SPARSE_TEXT) and guarded fallback OCR to reduce slowdowns.
 - Refined CJK retry to merge results and tightened image-tile filtering for non-Latin false positives.
+- Preserve non-Latin text in image tiles when background variance is low (reduce missed speech bubbles).
+- Relaxed non-Latin noise/background filtering and improved vertical-gap pass targeting for missing nearby lines.
+
+## 2026-02-06
+
+- Added CJK line rescan for low-coverage line boxes to recover missing tokens at line edges.
+- Tuned gap recovery thresholds for CJK and allow longer CJK gap tokens.
+- Reused non-binarized input for CJK rescans and fallbacks to reduce redundant preprocessing.
+- Added low-coverage line rescan for Latin text and expanded rescan padding to recover trimmed words.
