@@ -8,7 +8,8 @@
     "build": "tsc && vite build && electron-builder",
     "preview": "vite preview",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "tessdata:download": "node scripts/download-tessdata.js"
   },
   "repository": {
     "type": "git",

@@ -15,7 +15,12 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
    - `filterWordsByImageTiles`: reduce OCR in image-heavy tiles.
    - `filterWordsByBackground`: remove words on photo backgrounds.
 
-4. **Text Layer**  
+4. **Fallback Recovery**  
+   - Re-OCR empty line boxes (`PSM.SINGLE_LINE`) to recover missed lines.
+   - Re-OCR large gaps in a line (`PSM.SINGLE_WORD`) to recover short missing tokens.
+   - Uses grayscale (non-binarized) input when available to avoid losing thin glyphs.
+
+5. **Text Layer**  
    `src/services/pdf/TextLayerService.ts` injects invisible text.
 
 ## Performance Hotspots
@@ -51,6 +56,14 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
 5. **Large image chunking**  
    Pages exceeding `MAX_OCR_WIDTH/HEIGHT` are processed in vertical chunks
    (`CHUNK_HEIGHT` with `CHUNK_OVERLAP`) to avoid Tesseract size limits.
+
+6. **DIP-Inspired Preprocessing (Targeted)**  
+   - **Adaptive threshold vs. global**: use per-page heuristics to decide when
+     Otsu binarization should be skipped (e.g., high anti-aliasing or comic fonts).
+   - **Morphology (lightweight)**: apply small closing/opening after binarization
+     to reconnect broken strokes for thin fonts.
+   - **Quality scoring**: collect simple metrics (contrast, skew, noise) to
+     choose preprocessing paths automatically.
 
 ## Files to Check When Tuning
 

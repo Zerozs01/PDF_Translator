@@ -124,6 +124,16 @@ const CONFIG = {
   NOISE_LEADING_HEIGHT_RATIO: 0.75,
   NOISE_SHORT_HEIGHT_RATIO: 0.7,
   NOISE_MIXEDCASE_HEIGHT_RATIO: 0.8,
+  NOISE_KEEP_SINGLE_CHARS: ['I', 'A'],
+  NOISE_KEEP_SINGLE_HEIGHT_RATIO: 0.7,
+
+  // Fallback OCR for missing tokens
+  FALLBACK_MAX_EMPTY_LINES: 8,
+  FALLBACK_LINE_CONF: 60,
+  FALLBACK_GAP_CONF: 60,
+  FALLBACK_GAP_MAX_LEN: 2,
+  FALLBACK_GAP_PAD_RATIO: 0.25,
+  FALLBACK_GAP_MIN_PX: 12,
 };
 
 // ============================================
@@ -437,9 +447,13 @@ function classifyRegion(
 function parseTSV(tsv: string): {
   words: Array<OCRWord>;
   lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+  lineBoxes: Array<{ key: string; bbox: BBox }>;
+  lineKeysWithWords: Set<string>;
 } {
   const words: Array<OCRWord> = [];
   const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
+  const lineBoxes: Array<{ key: string; bbox: BBox }> = [];
+  const lineKeysWithWords = new Set<string>();
   const lineMap = new Map<string, {
     words: Array<{ text: string; confidence: number; bbox: BBox }>;
     bbox: BBox;
@@ -449,7 +463,7 @@ function parseTSV(tsv: string): {
   
   if (!tsv || typeof tsv !== 'string') {
     console.log('[parseTSV] No TSV input');
-    return { words, lines };
+    return { words, lines, lineBoxes, lineKeysWithWords };
   }
   
   const tsvLines = tsv.split('\n').filter(line => line.trim().length > 0);
@@ -457,7 +471,7 @@ function parseTSV(tsv: string): {
   
   if (tsvLines.length < 1) {
     console.log('[parseTSV] No data lines');
-    return { words, lines };
+    return { words, lines, lineBoxes, lineKeysWithWords };
   }
   
   // Check if first line is a header (contains 'level' text)
@@ -489,33 +503,31 @@ function parseTSV(tsv: string): {
   
   for (let i = startIndex; i < tsvLines.length; i++) {
     const cols = tsvLines[i].split('\t');
-    
+
     // Need at least 12 columns
     if (cols.length < 12) continue;
-    
+
     const level = parseInt(cols[COL.level] || '0');
     const text = cols.slice(COL.text).join('\t').trim();
-    
+
     // Log first few rows
     if (i < startIndex + 5) {
       console.log(`[parseTSV] Row ${i}: level=${level}, text="${text.substring(0, 30)}"`);
     }
-    
-    if (text.length === 0) continue;
-    
+
     const left = parseInt(cols[COL.left] || '0');
     const top = parseInt(cols[COL.top] || '0');
     const width = parseInt(cols[COL.width] || '0');
     const height = parseInt(cols[COL.height] || '0');
     const conf = parseFloat(cols[COL.conf] || '0');
-    
+
     const bbox: BBox = {
       x0: left,
       y0: top,
       x1: left + width,
       y1: top + height
     };
-    
+
     // Level 5 = word
     if (level === 5) {
       level5Count++;
@@ -527,6 +539,7 @@ function parseTSV(tsv: string): {
       const parNum = cols[COL.par] || '0';
       const lineNum = cols[COL.line] || '0';
       const key = `${pageNum}-${blockNum}-${parNum}-${lineNum}`;
+      lineKeysWithWords.add(key);
 
       const existing = lineMap.get(key);
       if (existing) {
@@ -551,10 +564,18 @@ function parseTSV(tsv: string): {
       }
     }
     
-    // Level 4 = line (keep for logging)
+    // Level 4 = line (keep even if text is empty)
     if (level === 4) {
       level4Count++;
+      const pageNum = cols[COL.page] || '0';
+      const blockNum = cols[COL.block] || '0';
+      const parNum = cols[COL.par] || '0';
+      const lineNum = cols[COL.line] || '0';
+      const key = `${pageNum}-${blockNum}-${parNum}-${lineNum}`;
+      lineBoxes.push({ key, bbox });
     }
+
+    if (text.length === 0) continue;
   }
   
   // Build line objects from grouped words
@@ -578,7 +599,7 @@ function parseTSV(tsv: string): {
   
   console.log(`[parseTSV] Found: ${level5Count} words, ${lines.length} lines (level4 rows: ${level4Count})`);
   
-  return { words, lines };
+  return { words, lines, lineBoxes, lineKeysWithWords };
 }
 
 function computeBackgroundVariance(
@@ -774,6 +795,212 @@ function buildLinesFromWordsByY(words: Array<OCRWord>, pageHeight: number): Arra
   });
 }
 
+function clampBBox(bbox: BBox, width: number, height: number): BBox {
+  return {
+    x0: Math.max(0, Math.min(width, bbox.x0)),
+    y0: Math.max(0, Math.min(height, bbox.y0)),
+    x1: Math.max(0, Math.min(width, bbox.x1)),
+    y1: Math.max(0, Math.min(height, bbox.y1)),
+  };
+}
+
+function bboxIoU(a: BBox, b: BBox): number {
+  const x0 = Math.max(a.x0, b.x0);
+  const y0 = Math.max(a.y0, b.y0);
+  const x1 = Math.min(a.x1, b.x1);
+  const y1 = Math.min(a.y1, b.y1);
+  const interW = Math.max(0, x1 - x0);
+  const interH = Math.max(0, y1 - y0);
+  const inter = interW * interH;
+  if (inter === 0) return 0;
+  const areaA = Math.max(1, (a.x1 - a.x0) * (a.y1 - a.y0));
+  const areaB = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
+  return inter / (areaA + areaB - inter);
+}
+
+function getAlphaNum(raw: string): string {
+  try {
+    return raw.replace(/[^\p{L}\p{N}]/gu, '');
+  } catch {
+    return raw.replace(/[^a-zA-Z0-9]/g, '');
+  }
+}
+
+function isNonLatinToken(alphaNum: string): boolean {
+  return /[^\x00-\x7F]/.test(alphaNum);
+}
+
+function appendUniqueWords(existing: OCRWord[], incoming: OCRWord[], iouThreshold: number = 0.6): OCRWord[] {
+  const added: OCRWord[] = [];
+  for (const w of incoming) {
+    let overlap = false;
+    for (const e of existing) {
+      if (bboxIoU(e.bbox, w.bbox) >= iouThreshold) {
+        overlap = true;
+        break;
+      }
+    }
+    if (!overlap) {
+      existing.push(w);
+      added.push(w);
+    }
+  }
+  return added;
+}
+
+function makeLineFromWords(words: OCRWord[]): { text: string; confidence: number; bbox: BBox; words: OCRWord[] } {
+  const sorted = words.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const bbox = sorted.reduce((acc, w) => ({
+    x0: Math.min(acc.x0, w.bbox.x0),
+    y0: Math.min(acc.y0, w.bbox.y0),
+    x1: Math.max(acc.x1, w.bbox.x1),
+    y1: Math.max(acc.y1, w.bbox.y1),
+  }), { ...sorted[0].bbox });
+  const text = sorted.map(w => w.text).join(' ');
+  const confidence = sorted.reduce((sum, w) => sum + w.confidence, 0) / sorted.length;
+  return { text, confidence, bbox, words: sorted };
+}
+
+function mergeWordsIntoLine(
+  line: { text: string; confidence: number; bbox: BBox; words: unknown[] },
+  added: OCRWord[]
+): void {
+  if (added.length === 0) return;
+  const lineWords = (line.words as OCRWord[]).slice();
+  lineWords.push(...added);
+  lineWords.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const merged = makeLineFromWords(lineWords);
+  line.text = merged.text;
+  line.confidence = merged.confidence;
+  line.bbox = merged.bbox;
+  line.words = merged.words;
+}
+
+function findBestLineForBox(
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>,
+  box: BBox
+): { text: string; confidence: number; bbox: BBox; words: unknown[] } | null {
+  let best: { text: string; confidence: number; bbox: BBox; words: unknown[] } | null = null;
+  let bestScore = 0;
+  const boxH = Math.max(1, box.y1 - box.y0);
+  for (const line of lines) {
+    const lineH = Math.max(1, line.bbox.y1 - line.bbox.y0);
+    const overlap = Math.min(line.bbox.y1, box.y1) - Math.max(line.bbox.y0, box.y0);
+    if (overlap <= 0) continue;
+    const score = overlap / Math.min(lineH, boxH);
+    if (score > bestScore) {
+      bestScore = score;
+      best = line;
+    }
+  }
+  return bestScore >= 0.4 ? best : null;
+}
+
+function findBestLineBoxForLine(
+  lineBoxes: Array<{ key: string; bbox: BBox }>,
+  line: { bbox: BBox }
+): BBox | null {
+  let best: BBox | null = null;
+  let bestScore = 0;
+  const lineH = Math.max(1, line.bbox.y1 - line.bbox.y0);
+  for (const candidate of lineBoxes) {
+    const box = candidate.bbox;
+    const boxH = Math.max(1, box.y1 - box.y0);
+    const overlap = Math.min(line.bbox.y1, box.y1) - Math.max(line.bbox.y0, box.y0);
+    if (overlap <= 0) continue;
+    const score = overlap / Math.min(lineH, boxH);
+    if (score > bestScore) {
+      bestScore = score;
+      best = box;
+    }
+  }
+  return bestScore >= 0.45 ? best : null;
+}
+
+function findLargeGaps(lineWords: OCRWord[]): Array<BBox> {
+  if (lineWords.length < 2) return [];
+  const sorted = lineWords.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const gaps: Array<{ gap: number; left: OCRWord; right: OCRWord; medianHeight: number }> = [];
+  const heights = sorted.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+
+  const gapValues: number[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const left = sorted[i];
+    const right = sorted[i + 1];
+    const gap = right.bbox.x0 - left.bbox.x1;
+    if (gap > 0) {
+      gapValues.push(gap);
+      gaps.push({ gap, left, right, medianHeight });
+    }
+  }
+  if (gapValues.length === 0) return [];
+  gapValues.sort((a, b) => a - b);
+  const medianGap = gapValues[Math.floor(gapValues.length / 2)] || 0;
+  const threshold = Math.max(CONFIG.FALLBACK_GAP_MIN_PX, medianGap * 1.6, medianHeight * 0.9);
+
+  const regions: BBox[] = [];
+  for (const g of gaps) {
+    if (g.gap <= threshold) continue;
+    const padY = g.medianHeight * CONFIG.FALLBACK_GAP_PAD_RATIO;
+    const padX = g.medianHeight * CONFIG.FALLBACK_GAP_PAD_RATIO;
+    regions.push({
+      x0: g.left.bbox.x1 - padX,
+      y0: Math.min(g.left.bbox.y0, g.right.bbox.y0) - padY,
+      x1: g.right.bbox.x0 + padX,
+      y1: Math.max(g.left.bbox.y1, g.right.bbox.y1) + padY
+    });
+  }
+  return regions;
+}
+
+async function recognizeRegion(
+  worker: Awaited<ReturnType<typeof createWorker>>,
+  imageInput: string | Blob,
+  bbox: BBox,
+  psm: number,
+  width: number,
+  height: number,
+  dpi?: number
+): Promise<OCRWord[]> {
+  const safe = clampBBox(bbox, width, height);
+  const cropW = Math.max(1, Math.round(safe.x1 - safe.x0));
+  const cropH = Math.max(1, Math.round(safe.y1 - safe.y0));
+
+  const blob = typeof imageInput === 'string'
+    ? await (await fetch(imageInput)).blob()
+    : imageInput;
+
+  const bitmap = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(cropW, cropH);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to create crop canvas context');
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, cropW, cropH);
+  ctx.drawImage(bitmap, safe.x0, safe.y0, cropW, cropH, 0, 0, cropW, cropH);
+  bitmap.close();
+
+  await worker.setParameters({
+    tessedit_pageseg_mode: String(psm),
+    tessedit_create_tsv: '1',
+    ...(dpi ? { user_defined_dpi: String(Math.round(dpi)) } : {})
+  });
+
+  const result = await worker.recognize(canvas as any, undefined, { text: true, tsv: true }) as TesseractResult;
+  const parsed = parseTSV(result.data.tsv || '');
+  return parsed.words.map(w => ({
+    text: w.text,
+    confidence: w.confidence,
+    bbox: {
+      x0: w.bbox.x0 + safe.x0,
+      y0: w.bbox.y0 + safe.y0,
+      x1: w.bbox.x1 + safe.x0,
+      y1: w.bbox.y1 + safe.y0,
+    }
+  }));
+}
+
 async function recognizeInChunks(
   worker: Awaited<ReturnType<typeof createWorker>>,
   imageInput: string | Blob,
@@ -825,13 +1052,7 @@ async function recognizeInChunks(
     }
 
     const { words } = parseTSV(data.tsv || '');
-    const isLast = i === totalChunks - 1;
-    const localKeepMax = currentHeight - overlap;
-
     for (const word of words) {
-      const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
-      if (!isLast && centerY > localKeepMax) continue;
-
       const adjusted: OCRWord = {
         text: word.text,
         confidence: word.confidence,
@@ -843,7 +1064,7 @@ async function recognizeInChunks(
         }
       };
 
-      const key = `${Math.round(adjusted.bbox.x0)}_${Math.round(adjusted.bbox.y0)}_${Math.round(adjusted.bbox.x1)}_${Math.round(adjusted.bbox.y1)}_${adjusted.text}`;
+      const key = `${Math.round(adjusted.bbox.x0 / 2)}_${Math.round(adjusted.bbox.y0 / 2)}_${Math.round(adjusted.bbox.x1 / 2)}_${Math.round(adjusted.bbox.y1 / 2)}_${adjusted.text}`;
       if (wordKeySet.has(key)) continue;
       wordKeySet.add(key);
       allWords.push(adjusted);
@@ -1053,11 +1274,12 @@ function filterWordsByImageTiles(
     }
 
     const raw = word.text.trim();
-    const alphaNum = raw.replace(/[^a-zA-Z0-9]/g, '');
+    const alphaNum = getAlphaNum(raw);
     const len = alphaNum.length;
+    const nonLatin = isNonLatinToken(alphaNum);
 
     if (inImageTile) {
-      if (len > 0 && len <= CONFIG.IMG_TILE_DROP_MAX_LEN
+      if (!nonLatin && len > 0 && len <= CONFIG.IMG_TILE_DROP_MAX_LEN
         && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO
         && word.confidence < CONFIG.IMG_TILE_DROP_CONF) {
         return false;
@@ -1086,15 +1308,29 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
 
     const filtered = lineWords.filter((word, index) => {
       const raw = word.text.trim();
-      const alphaNum = raw.replace(/[^a-zA-Z0-9]/g, '');
+      const alphaNum = getAlphaNum(raw);
       if (alphaNum.length === 0) return false;
 
+      const nonLatin = isNonLatinToken(alphaNum);
       const hasUpper = /[A-Z]/.test(alphaNum);
       const hasLower = /[a-z]/.test(alphaNum);
 
       const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
       const shortHeight = h < medianHeight * CONFIG.NOISE_SHORT_HEIGHT_RATIO;
       const mixedHeight = h < medianHeight * CONFIG.NOISE_MIXEDCASE_HEIGHT_RATIO;
+      const keepSingle = alphaNum.length === 1
+        && CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(alphaNum)
+        && lineWords.length >= 2
+        && h >= medianHeight * CONFIG.NOISE_KEEP_SINGLE_HEIGHT_RATIO;
+
+      if (keepSingle) return true;
+      if (nonLatin) {
+        // Be conservative for non-Latin scripts; avoid dropping valid glyphs.
+        if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && shortHeight && (!denseLine || index === 0)) {
+          return false;
+        }
+        return true;
+      }
 
       // Drop mixed-case short noise like "rE" or "Bm" when confidence + height indicate noise
       if (alphaNum.length <= 3 && hasUpper && hasLower && word.confidence < CONFIG.NOISE_MIXEDCASE_CONF && mixedHeight) {
@@ -1328,6 +1564,7 @@ self.onmessage = async (e: MessageEvent) => {
         let data: TesseractResult['data'] | null = null;
         let words: Array<OCRWord> = [];
         let lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
+        let parsed: ReturnType<typeof parseTSV> | null = null;
 
         const tooLarge = actualWidth > CONFIG.MAX_OCR_WIDTH || actualHeight > CONFIG.MAX_OCR_HEIGHT;
         if (tooLarge) {
@@ -1364,7 +1601,7 @@ self.onmessage = async (e: MessageEvent) => {
           }
 
           // Parse TSV for word-level data
-          const parsed = parseTSV(data.tsv || '');
+          parsed = parseTSV(data.tsv || '');
           words = parsed.words;
           lines = parsed.lines;
         }
@@ -1375,6 +1612,147 @@ self.onmessage = async (e: MessageEvent) => {
             console.log(`[Worker] Filtered noisy tokens: ${words.length - cleaned.words.length} removed`);
             words = cleaned.words;
             lines = cleaned.lines;
+          }
+        }
+
+        if (!tooLarge && parsed && (parsed.lineBoxes.length > 0 || lines.length > 0)) {
+          let fallbackInput: Blob | string | null = null;
+          const ensureFallbackInput = async () => {
+            if (fallbackInput) return;
+            if (CONFIG.OCR_BINARIZE) {
+              try {
+                const alt = await preprocessImage(imageUrl, { binarize: false });
+                fallbackInput = alt.image;
+              } catch (error) {
+                console.warn('[Worker] Fallback preprocess failed, using binarized input', error);
+                fallbackInput = processedInput;
+              }
+            } else {
+              fallbackInput = processedInput;
+            }
+          };
+
+          let fallbackAdded = 0;
+          const emptyLineBoxes = parsed.lineBoxes.filter(line => !parsed.lineKeysWithWords.has(line.key));
+          if (emptyLineBoxes.length > 0) {
+            const limited = emptyLineBoxes.slice(0, CONFIG.FALLBACK_MAX_EMPTY_LINES);
+            await ensureFallbackInput();
+            for (const lineBox of limited) {
+              const h = Math.max(1, lineBox.bbox.y1 - lineBox.bbox.y0);
+              const padY = h * 0.35;
+              const padX = h * 0.25;
+              const padded: BBox = {
+                x0: lineBox.bbox.x0 - padX,
+                y0: lineBox.bbox.y0 - padY,
+                x1: lineBox.bbox.x1 + padX,
+                y1: lineBox.bbox.y1 + padY
+              };
+              const regionWords = await recognizeRegion(
+                worker,
+                fallbackInput as Blob | string,
+                padded,
+                PSM.SINGLE_LINE,
+                actualWidth,
+                actualHeight,
+                dpi
+              );
+              const filtered = regionWords.filter(w => {
+                const raw = w.text.trim();
+                if (!raw) return false;
+                if (w.confidence < CONFIG.FALLBACK_LINE_CONF) return false;
+                return true;
+              });
+              if (filtered.length === 0) continue;
+              const added = appendUniqueWords(words, filtered, 0.55);
+              if (added.length === 0) continue;
+              fallbackAdded += added.length;
+              const targetLine = findBestLineForBox(lines, padded);
+              if (targetLine) {
+                mergeWordsIntoLine(targetLine, added);
+              } else {
+                lines.push(makeLineFromWords(added));
+              }
+            }
+          }
+
+          let gapBudget = 20;
+          for (const line of lines) {
+            if (gapBudget <= 0) break;
+            const lineWords = (line.words as OCRWord[]) || [];
+            if (lineWords.length === 0) continue;
+            const gaps = lineWords.length >= 2 ? findLargeGaps(lineWords) : [];
+            const edgeGaps: BBox[] = [];
+            const lineBox = findBestLineBoxForLine(parsed.lineBoxes, line);
+            if (lineBox) {
+              const sorted = lineWords.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+              const heights = sorted.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+              const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+              const gapValues: number[] = [];
+              for (let i = 0; i < sorted.length - 1; i++) {
+                const gap = sorted[i + 1].bbox.x0 - sorted[i].bbox.x1;
+                if (gap > 0) gapValues.push(gap);
+              }
+              gapValues.sort((a, b) => a - b);
+              const medianGap = gapValues.length > 0 ? gapValues[Math.floor(gapValues.length / 2)] : 0;
+              const threshold = Math.max(CONFIG.FALLBACK_GAP_MIN_PX, medianGap * 1.4, medianHeight * 0.9);
+              const padX = medianHeight * CONFIG.FALLBACK_GAP_PAD_RATIO;
+              const padY = medianHeight * CONFIG.FALLBACK_GAP_PAD_RATIO;
+              const leadGap = sorted[0].bbox.x0 - lineBox.x0;
+              if (leadGap > threshold) {
+                edgeGaps.push({
+                  x0: lineBox.x0 - padX,
+                  y0: lineBox.y0 - padY,
+                  x1: sorted[0].bbox.x0 + padX,
+                  y1: lineBox.y1 + padY
+                });
+              }
+              const trailGap = lineBox.x1 - sorted[sorted.length - 1].bbox.x1;
+              if (trailGap > threshold) {
+                edgeGaps.push({
+                  x0: sorted[sorted.length - 1].bbox.x1 - padX,
+                  y0: lineBox.y0 - padY,
+                  x1: lineBox.x1 + padX,
+                  y1: lineBox.y1 + padY
+                });
+              }
+            }
+            const gapRegions = gaps.concat(edgeGaps);
+            if (gapRegions.length === 0) continue;
+            await ensureFallbackInput();
+            const limitedGaps = gapRegions.slice(0, 3);
+            for (const gap of limitedGaps) {
+              if (gapBudget <= 0) break;
+              gapBudget -= 1;
+              const gapWords = await recognizeRegion(
+                worker,
+                fallbackInput as Blob | string,
+                gap,
+                PSM.SINGLE_WORD,
+                actualWidth,
+                actualHeight,
+                dpi
+              );
+              const filtered = gapWords.filter(w => {
+                const raw = w.text.trim();
+                if (!raw) return false;
+                if (w.confidence < CONFIG.FALLBACK_GAP_CONF) return false;
+                const alphaNum = getAlphaNum(raw);
+                if (alphaNum.length === 0) return false;
+                const nonLatin = isNonLatinToken(alphaNum);
+                const maxLen = nonLatin ? Math.max(CONFIG.FALLBACK_GAP_MAX_LEN, 3) : CONFIG.FALLBACK_GAP_MAX_LEN;
+                return alphaNum.length <= maxLen;
+              });
+              if (filtered.length === 0) continue;
+              const added = appendUniqueWords(words, filtered, 0.5);
+              if (added.length === 0) continue;
+              fallbackAdded += added.length;
+              mergeWordsIntoLine(line, added);
+            }
+          }
+
+          if (fallbackAdded > 0) {
+            lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+            console.log(`[Worker] Fallback OCR added ${fallbackAdded} tokens`);
           }
         }
 

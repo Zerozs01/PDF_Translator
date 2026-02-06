@@ -9,3 +9,5 @@ For full project history, see `CHANGELOG.md` in the repo root.
 - Added `documents/OCR_OPTIMIZATION.md` (OCR performance & tuning notes).
 - Added `documents/LOCAL_TESSDATA.md` (offline language data setup).
 - Updated `documents/Readme.md` with documentation index.
+- Updated `documents/OCR_OPTIMIZATION.md` with fallback recovery + DIP-inspired preprocessing notes.
+- Added `scripts/download-tessdata.js` and `npm run tessdata:download` for offline language data.

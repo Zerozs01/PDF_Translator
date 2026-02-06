@@ -12,7 +12,7 @@ The worker uses `LANG_PATH` in `src/services/vision/worker.ts`:
 
 ## Setup
 
-1. Create folder:
+1. Create folder (or use the script below):
    - `public/tessdata`
 
 2. Place language files inside:
@@ -23,6 +23,26 @@ The worker uses `LANG_PATH` in `src/services/vision/worker.ts`:
    - `public/tessdata/chi_tra.traineddata`
 
 3. Restart the dev server.
+
+## Auto Download Script
+
+Use the built-in script to fetch official Tesseract.js language data:
+
+```bash
+npm run tessdata:download
+```
+
+Download only specific languages:
+
+```bash
+npm run tessdata:download -- --langs=eng,kor,chi_sim
+```
+
+Force re-download:
+
+```bash
+npm run tessdata:download -- --force
+```
 
 ## Notes
 
