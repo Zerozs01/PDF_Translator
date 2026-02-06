@@ -19,6 +19,7 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
    - Re-OCR empty line boxes (`PSM.SINGLE_LINE`) to recover missed lines.
    - Re-OCR large gaps in a line (`PSM.SINGLE_WORD`) to recover short missing tokens.
    - Uses grayscale (non-binarized) input when available to avoid losing thin glyphs.
+   - Disabled when page has too few words to avoid slowing low-confidence pages.
 
 5. **Text Layer**  
    `src/services/pdf/TextLayerService.ts` injects invisible text.
@@ -60,6 +61,7 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
 6. **DIP-Inspired Preprocessing (Targeted)**  
    - **Adaptive threshold vs. global**: use per-page heuristics to decide when
      Otsu binarization should be skipped (e.g., high anti-aliasing or comic fonts).
+   - **CJK safety**: skip binarization for `kor/jpn/chi_*` to preserve stroke detail.
    - **Morphology (lightweight)**: apply small closing/opening after binarization
      to reconnect broken strokes for thin fonts.
    - **Quality scoring**: collect simple metrics (contrast, skew, noise) to

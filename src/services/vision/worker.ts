@@ -79,8 +79,8 @@ const CONFIG = {
   OCR_BINARIZE: true,
 
   // Large image handling
-  MAX_OCR_WIDTH: 10000,
-  MAX_OCR_HEIGHT: 10000,
+  MAX_OCR_WIDTH: 12000,
+  MAX_OCR_HEIGHT: 20000,
   CHUNK_HEIGHT: 4000,
   CHUNK_OVERLAP: 200,
 
@@ -110,6 +110,9 @@ const CONFIG = {
   IMG_TILE_DROP_MAX_LEN: 2,
   IMG_TILE_DROP_CONF: 70,
   IMG_TILE_DROP_HEIGHT_RATIO: 0.02,
+  IMG_TILE_DROP_CONF_CJK: 70,
+  IMG_TILE_DROP_HEIGHT_RATIO_CJK: 0.02,
+  IMG_TILE_DROP_AR_CJK: 18,
   IMG_KEEP_MIN_LEN: 4,
   IMG_KEEP_MIN_CONF: 78,
   IMG_KEEP_MIN_HEIGHT_RATIO: 0.022,
@@ -134,6 +137,17 @@ const CONFIG = {
   FALLBACK_GAP_MAX_LEN: 2,
   FALLBACK_GAP_PAD_RATIO: 0.25,
   FALLBACK_GAP_MIN_PX: 12,
+  FALLBACK_MIN_WORDS: 8,
+
+  // CJK retry heuristics
+  CJK_MIN_WORDS_BEFORE_RETRY: 6,
+  CJK_MIN_TEXT_CHARS_BEFORE_RETRY: 4,
+  CJK_SKIP_NOISE_FILTER_MAX_WORDS: 12,
+  CJK_VERTICAL_GAP_MIN_RATIO: 0.07,
+  CJK_VERTICAL_GAP_MIN_MULT: 3.5,
+  CJK_VERTICAL_GAP_MAX_PASSES: 2,
+  CJK_VERTICAL_GAP_PAD_RATIO: 0.25,
+  CJK_VERTICAL_GAP_CONF: 60,
 };
 
 // ============================================
@@ -161,6 +175,10 @@ function getLangPath(): string | undefined {
     // ignore and fall back
   }
   return CONFIG.LANG_PATH;
+}
+
+function isCjkLanguage(lang: string): boolean {
+  return /^(kor|jpn|jpn_vert|chi_sim|chi_tra)$/.test(lang);
 }
 
 /**
@@ -580,7 +598,7 @@ function parseTSV(tsv: string): {
   
   // Build line objects from grouped words
   for (const [, group] of lineMap) {
-    const sortedWords = group.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const sortedWords = sortWordsByOrientation(group.words);
     const lineText = sortedWords.map(w => w.text).join(' ');
     const avgConf = group.confidenceCount > 0
       ? group.confidenceSum / group.confidenceCount
@@ -784,7 +802,7 @@ function buildLinesFromWordsByY(words: Array<OCRWord>, pageHeight: number): Arra
   }
 
   return lines.map(line => {
-    const sortedWords = line.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const sortedWords = sortWordsByOrientation(line.words);
     const text = sortedWords.map(w => w.text).join(' ');
     return {
       text,
@@ -830,6 +848,95 @@ function isNonLatinToken(alphaNum: string): boolean {
   return /[^\x00-\x7F]/.test(alphaNum);
 }
 
+function getWordCenter(word: OCRWord): { x: number; y: number } {
+  return {
+    x: (word.bbox.x0 + word.bbox.x1) / 2,
+    y: (word.bbox.y0 + word.bbox.y1) / 2,
+  };
+}
+
+function sortWordsByOrientation(words: OCRWord[]): OCRWord[] {
+  if (words.length <= 1) return words.slice();
+  const centers = words.map(getWordCenter);
+  const meanX = centers.reduce((sum, p) => sum + p.x, 0) / centers.length;
+  const meanY = centers.reduce((sum, p) => sum + p.y, 0) / centers.length;
+  let varX = 0;
+  let varY = 0;
+  let cov = 0;
+  for (const p of centers) {
+    const dx = p.x - meanX;
+    const dy = p.y - meanY;
+    varX += dx * dx;
+    varY += dy * dy;
+    cov += dx * dy;
+  }
+  if (varX < 1e-3 && varY < 1e-3) return words.slice();
+  // Near-vertical lines: sort by Y
+  if (varX < varY * 0.1) {
+    return words.slice().sort((a, b) => getWordCenter(a).y - getWordCenter(b).y);
+  }
+  const slope = cov / Math.max(1e-6, varX);
+  const angle = Math.atan(slope);
+  if (Math.abs(angle) < 0.12) {
+    return words.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  }
+  const dirX = 1 / Math.sqrt(1 + slope * slope);
+  const dirY = slope * dirX;
+  return words.slice().sort((a, b) => {
+    const ca = getWordCenter(a);
+    const cb = getWordCenter(b);
+    const pa = ca.x * dirX + ca.y * dirY;
+    const pb = cb.x * dirX + cb.y * dirY;
+    return pa - pb;
+  });
+}
+
+function findVerticalGapRegions(
+  lines: Array<{ bbox: BBox }>,
+  pageWidth: number,
+  pageHeight: number
+): BBox[] {
+  if (lines.length === 0) return [];
+  const sorted = lines.slice().sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  const heights = sorted.map(l => Math.max(1, l.bbox.y1 - l.bbox.y0)).sort((a, b) => a - b);
+  const medianH = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const minGap = Math.max(pageHeight * CONFIG.CJK_VERTICAL_GAP_MIN_RATIO, medianH * CONFIG.CJK_VERTICAL_GAP_MIN_MULT);
+  const pad = medianH * CONFIG.CJK_VERTICAL_GAP_PAD_RATIO;
+
+  const regions: Array<{ bbox: BBox; gap: number }> = [];
+
+  const topGap = sorted[0].bbox.y0;
+  if (topGap > minGap) {
+    regions.push({
+      gap: topGap,
+      bbox: {
+        x0: 0,
+        y0: 0,
+        x1: pageWidth,
+        y1: sorted[0].bbox.y0 + pad
+      }
+    });
+  }
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const gap = sorted[i + 1].bbox.y0 - sorted[i].bbox.y1;
+    if (gap > minGap) {
+      regions.push({
+        gap,
+        bbox: {
+          x0: 0,
+          y0: sorted[i].bbox.y1 - pad,
+          x1: pageWidth,
+          y1: sorted[i + 1].bbox.y0 + pad
+        }
+      });
+    }
+  }
+
+  regions.sort((a, b) => b.gap - a.gap);
+  return regions.slice(0, CONFIG.CJK_VERTICAL_GAP_MAX_PASSES).map(r => r.bbox);
+}
+
 function appendUniqueWords(existing: OCRWord[], incoming: OCRWord[], iouThreshold: number = 0.6): OCRWord[] {
   const added: OCRWord[] = [];
   for (const w of incoming) {
@@ -849,7 +956,7 @@ function appendUniqueWords(existing: OCRWord[], incoming: OCRWord[], iouThreshol
 }
 
 function makeLineFromWords(words: OCRWord[]): { text: string; confidence: number; bbox: BBox; words: OCRWord[] } {
-  const sorted = words.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const sorted = sortWordsByOrientation(words.slice());
   const bbox = sorted.reduce((acc, w) => ({
     x0: Math.min(acc.x0, w.bbox.x0),
     y0: Math.min(acc.y0, w.bbox.y0),
@@ -868,7 +975,6 @@ function mergeWordsIntoLine(
   if (added.length === 0) return;
   const lineWords = (line.words as OCRWord[]).slice();
   lineWords.push(...added);
-  lineWords.sort((a, b) => a.bbox.x0 - b.bbox.x0);
   const merged = makeLineFromWords(lineWords);
   line.text = merged.text;
   line.confidence = merged.confidence;
@@ -1095,21 +1201,22 @@ function rebuildLinesFromWords(
     const groups = splitLineWords(lineWords);
     for (const group of groups) {
       if (group.length === 0) continue;
-      const bbox = group.reduce((acc, w) => ({
+      const sortedGroup = sortWordsByOrientation(group);
+      const bbox = sortedGroup.reduce((acc, w) => ({
         x0: Math.min(acc.x0, w.bbox.x0),
         y0: Math.min(acc.y0, w.bbox.y0),
         x1: Math.max(acc.x1, w.bbox.x1),
         y1: Math.max(acc.y1, w.bbox.y1)
-      }), { ...group[0].bbox });
+      }), { ...sortedGroup[0].bbox });
 
-      const avgConf = group.reduce((sum, w) => sum + w.confidence, 0) / group.length;
-      const text = group.map(w => w.text).join(' ');
+      const avgConf = sortedGroup.reduce((sum, w) => sum + w.confidence, 0) / sortedGroup.length;
+      const text = sortedGroup.map(w => w.text).join(' ');
 
       rebuilt.push({
         text,
         confidence: avgConf,
         bbox,
-        words: group
+        words: sortedGroup
       });
     }
   }
@@ -1277,12 +1384,23 @@ function filterWordsByImageTiles(
     const alphaNum = getAlphaNum(raw);
     const len = alphaNum.length;
     const nonLatin = isNonLatinToken(alphaNum);
+    const boxW = Math.max(1, word.bbox.x1 - word.bbox.x0);
+    const boxH = Math.max(1, word.bbox.y1 - word.bbox.y0);
+    const aspect = boxW / boxH;
 
     if (inImageTile) {
       if (!nonLatin && len > 0 && len <= CONFIG.IMG_TILE_DROP_MAX_LEN
         && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO
         && word.confidence < CONFIG.IMG_TILE_DROP_CONF) {
         return false;
+      }
+      if (nonLatin && !protectedWords?.has(word)) {
+        if (word.confidence < CONFIG.IMG_TILE_DROP_CONF_CJK && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO_CJK) {
+          return false;
+        }
+        if (aspect >= CONFIG.IMG_TILE_DROP_AR_CJK && word.confidence < CONFIG.IMG_TILE_DROP_CONF_CJK) {
+          return false;
+        }
       }
       return true;
     }
@@ -1299,7 +1417,7 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
   const cleanedWords: Array<OCRWord> = [];
 
   for (const line of lines) {
-    const lineWords = (line.words as OCRWord[]).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const lineWords = sortWordsByOrientation((line.words as OCRWord[]).slice());
     if (lineWords.length === 0) continue;
     const denseLine = lineWords.length >= 4;
 
@@ -1532,7 +1650,8 @@ self.onmessage = async (e: MessageEvent) => {
         
         let gray: Uint8ClampedArray | undefined;
         try {
-          const preprocessed = await preprocessImage(imageUrl, { binarize: CONFIG.OCR_BINARIZE, returnGray: true });
+          const binarize = CONFIG.OCR_BINARIZE && !isCjkLanguage(language);
+          const preprocessed = await preprocessImage(imageUrl, { binarize, returnGray: true });
           processedInput = preprocessed.image;
           actualWidth = preprocessed.width;
           actualHeight = preprocessed.height;
@@ -1565,6 +1684,7 @@ self.onmessage = async (e: MessageEvent) => {
         let words: Array<OCRWord> = [];
         let lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
         let parsed: ReturnType<typeof parseTSV> | null = null;
+        const isCjk = isCjkLanguage(language);
 
         const tooLarge = actualWidth > CONFIG.MAX_OCR_WIDTH || actualHeight > CONFIG.MAX_OCR_HEIGHT;
         if (tooLarge) {
@@ -1604,9 +1724,56 @@ self.onmessage = async (e: MessageEvent) => {
           parsed = parseTSV(data.tsv || '');
           words = parsed.words;
           lines = parsed.lines;
+
+          // CJK retry: if OCR is too weak, retry with binarization + SPARSE_TEXT
+          if (isCjk) {
+            const textLen = (data.text || '').trim().length;
+            if (words.length < CONFIG.CJK_MIN_WORDS_BEFORE_RETRY || textLen < CONFIG.CJK_MIN_TEXT_CHARS_BEFORE_RETRY) {
+              try {
+                const alt = await preprocessImage(imageUrl, { binarize: true });
+                await worker.setParameters({
+                  tessedit_create_tsv: '1',
+                  user_defined_dpi: String(Math.round(dpi)),
+                  tessedit_pageseg_mode: String(PSM.SPARSE_TEXT),
+                });
+                const retryResult = await worker.recognize(alt.image as any, undefined, {
+                  text: true,
+                  tsv: true,
+                }) as TesseractResult;
+
+                const retryData = retryResult.data;
+                const retryParsed = parseTSV(retryData.tsv || '');
+                if (retryParsed.words.length > words.length) {
+                  const added = appendUniqueWords(words, retryParsed.words, 0.55);
+                  for (const word of added) {
+                    const target = findBestLineForBox(lines, word.bbox);
+                    if (target) {
+                      mergeWordsIntoLine(target, [word]);
+                    } else {
+                      lines.push(makeLineFromWords([word]));
+                    }
+                  }
+                  console.log('[Worker] CJK retry improved results:', {
+                    before: words.length - added.length,
+                    after: words.length,
+                  });
+                  data = retryData.text && retryData.text.length > (data.text || '').length ? retryData : data;
+                  parsed = retryParsed;
+                }
+              } catch (retryError) {
+                console.warn('[Worker] CJK retry failed:', retryError);
+              } finally {
+                await worker.setParameters({
+                  tessedit_create_tsv: '1',
+                  user_defined_dpi: String(Math.round(dpi)),
+                  tessedit_pageseg_mode: String(psm),
+                });
+              }
+            }
+          }
         }
 
-        if (lines.length > 0) {
+        if (lines.length > 0 && !(isCjk && words.length <= CONFIG.CJK_SKIP_NOISE_FILTER_MAX_WORDS)) {
           const cleaned = cleanLineNoise(lines);
           if (cleaned.words.length !== words.length) {
             console.log(`[Worker] Filtered noisy tokens: ${words.length - cleaned.words.length} removed`);
@@ -1615,7 +1782,47 @@ self.onmessage = async (e: MessageEvent) => {
           }
         }
 
-        if (!tooLarge && parsed && (parsed.lineBoxes.length > 0 || lines.length > 0)) {
+        if (isCjk && !tooLarge && lines.length > 0) {
+          const gapRegions = findVerticalGapRegions(lines, actualWidth, actualHeight);
+          if (gapRegions.length > 0) {
+            let addedCount = 0;
+            for (const region of gapRegions) {
+              const regionWords = await recognizeRegion(
+                worker,
+                processedInput as Blob | string,
+                region,
+                PSM.SPARSE_TEXT,
+                actualWidth,
+                actualHeight,
+                dpi
+              );
+              const filtered = regionWords.filter(w => {
+                if (w.confidence < CONFIG.CJK_VERTICAL_GAP_CONF) return false;
+                const alphaNum = getAlphaNum(w.text.trim());
+                return alphaNum.length > 0;
+              });
+              if (filtered.length === 0) continue;
+              const added = appendUniqueWords(words, filtered, 0.55);
+              if (added.length === 0) continue;
+              addedCount += added.length;
+              const regionLines = buildLinesFromWordsByY(added, actualHeight);
+              for (const regionLine of regionLines) {
+                const target = findBestLineForBox(lines, regionLine.bbox);
+                if (target) {
+                  mergeWordsIntoLine(target, regionLine.words as OCRWord[]);
+                } else {
+                  lines.push(regionLine);
+                }
+              }
+            }
+            if (addedCount > 0) {
+              lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+              console.log(`[Worker] CJK vertical gap added ${addedCount} tokens`);
+            }
+          }
+        }
+
+        if (!tooLarge && parsed && words.length >= CONFIG.FALLBACK_MIN_WORDS && (parsed.lineBoxes.length > 0 || lines.length > 0)) {
           let fallbackInput: Blob | string | null = null;
           const ensureFallbackInput = async () => {
             if (fallbackInput) return;
