@@ -550,13 +550,13 @@ electron.app.whenReady().then(() => {
       if (!fs.existsSync(safePath)) {
         throw new Error("File not found");
       }
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
       return {
         filepath: safePath,
-        data: buffer.toString("base64"),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath)
@@ -575,12 +575,12 @@ electron.app.whenReady().then(() => {
       if (!fs.existsSync(safePath)) {
         throw new Error("File not found");
       }
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
       return {
-        data: buffer.toString("base64"),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath)

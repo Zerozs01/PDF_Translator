@@ -107,14 +107,14 @@ export interface ElectronAPI {
   
   fs: {
     readFile: (filepath: string) => Promise<{
-      data: string;
+      data: Uint8Array | ArrayBuffer | string;
       mimeType: string;
       size: number;
       name: string;
     }>;
     openFile: () => Promise<{
       filepath: string;
-      data: string;
+      data: Uint8Array | ArrayBuffer | string;
       mimeType: string;
       size: number;
       name: string;

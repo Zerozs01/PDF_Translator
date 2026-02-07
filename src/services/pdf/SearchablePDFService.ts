@@ -9,6 +9,7 @@
 
 import { PDFDocument } from 'pdf-lib';
 import { visionService } from '../vision/VisionService';
+import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
 import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions } from '../../types';
 import { dbService } from '../dbService';
@@ -69,8 +70,35 @@ export class SearchablePDFService {
     options: OCROptions,
     renderPageToCanvas: (pageNum: number, dpi: number) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number }>,
     pageRange?: number[], // Optional: specify pages to process (1-based)
-    cacheDocId?: number
+    cacheDocId?: number,
+    signal?: AbortSignal
   ): Promise<Uint8Array> {
+    const createAbortError = (reason: string = 'OCR job canceled'): Error => {
+      const error = new Error(reason);
+      (error as Error & { name?: string }).name = 'AbortError';
+      return error;
+    };
+
+    const isAbortError = (error: unknown): boolean =>
+      error instanceof Error && error.name === 'AbortError';
+
+    const throwIfAborted = () => {
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+    };
+
+    const onAbort = () => {
+      visionService.cancelAll('OCR job canceled');
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    try {
+      throwIfAborted();
+
     this.reportProgress({
       stage: 'init',
       currentPage: 0,
@@ -95,6 +123,7 @@ export class SearchablePDFService {
       if (cached.language !== options.language) return false;
       if (cached.dpi !== options.dpi) return false;
       if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
+      if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
       return true;
     };
 
@@ -144,10 +173,12 @@ export class SearchablePDFService {
     const inFlight = new Set<Promise<void>>();
 
     for (let i = 0; i < totalPages; i++) {
+      throwIfAborted();
       const pageNum = i + 1;
       if (pageSet && !pageSet.has(pageNum)) continue;
 
       const task = (async () => {
+        throwIfAborted();
         let unitsUsed = 0;
         const stepProgress = (stage: ProcessingProgress['stage'], message: string, units: number = 0) => {
           if (units > 0) unitsUsed += units;
@@ -170,6 +201,7 @@ export class SearchablePDFService {
             ocrResult.pageNumber = pageNum;
             stepProgress('ocr', `ใช้ OCR จากแคช หน้า ${pageNum}/${pagesToProcess}`, 2);
           } else {
+            throwIfAborted();
             stepProgress('rendering', `กำลัง Render หน้า ${pageNum}/${pagesToProcess}...`);
 
             const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi);
@@ -189,7 +221,8 @@ export class SearchablePDFService {
               imageHeight,
               options.language,
               options.dpi,
-              options.pageSegMode
+              options.pageSegMode,
+              signal
             );
             ocrResult.pageNumber = pageNum;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
@@ -225,8 +258,23 @@ export class SearchablePDFService {
       }
     }
 
-    await Promise.all(inFlight);
+    if (signal?.aborted) {
+      await Promise.allSettled(inFlight);
+      throw createAbortError();
+    }
+
+    try {
+      await Promise.all(inFlight);
+    } catch (error) {
+      if (isAbortError(error)) {
+        await Promise.allSettled(inFlight);
+        throw createAbortError();
+      }
+      throw error;
+    }
     await textLayerChain;
+
+    throwIfAborted();
     
     // Log summary
     if (failedPages.length > 0) {
@@ -253,6 +301,11 @@ export class SearchablePDFService {
     });
 
     return result;
+    } finally {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    }
   }
 
   /**

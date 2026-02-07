@@ -58,6 +58,7 @@ export interface OCRPageResult {
   dpi: number;
   language: string;
   pageSegMode?: number;
+  algorithmVersion: number;
   lines: OCRLine[];
   words: OCRWord[];
   text: string;

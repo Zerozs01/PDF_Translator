@@ -84,6 +84,11 @@ export default function App() {
   const [regions, setRegions] = useState<Region[]>([]); // Empty regions initially
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
+
+  const handleBackToHome = () => {
+    visionService.cancelAll('Project closed');
+    closeProject();
+  };
   
   useEffect(() => {
     // Lazy Initialize Vision Worker (low priority)
@@ -143,7 +148,7 @@ export default function App() {
       <header className="h-12 bg-slate-800 border-b border-slate-700 flex items-center px-2 gap-1 shrink-0">
         {/* Home Button */}
         <button 
-          onClick={closeProject}
+          onClick={handleBackToHome}
           className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
           title="Back to Home"
         >

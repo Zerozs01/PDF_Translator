@@ -33,6 +33,24 @@ const formatDate = (dateString: string): string => {
   return date.toLocaleDateString();
 };
 
+const decodeFileData = (data: Uint8Array | ArrayBuffer | string): Uint8Array => {
+  if (typeof data === 'string') {
+    const binaryString = atob(data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  return new Uint8Array();
+};
+
 // Get file icon based on type
 const getFileIcon = (fileType: string) => {
   if (fileType === 'pdf') return <FileText className="text-red-400" size={20} />;
@@ -204,7 +222,7 @@ const TagPill: React.FC<{
 );
 
 export const UploadScreen: React.FC = () => {
-  const { loadProject, setFileData, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
+  const { loadProject, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
   const {
     viewMode, setViewMode,
     filterType, setFilterType,
@@ -231,17 +249,25 @@ export const UploadScreen: React.FC = () => {
     loadProjects();
   }, []);
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      loadProject(e.dataTransfer.files[0]);
+      try {
+        await loadProject(e.dataTransfer.files[0]);
+      } catch (error) {
+        console.error('Failed to load project:', error);
+      }
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      loadProject(e.target.files[0]);
+      try {
+        await loadProject(e.target.files[0]);
+      } catch (error) {
+        console.error('Failed to load project:', error);
+      }
     }
   };
 
@@ -251,17 +277,12 @@ export const UploadScreen: React.FC = () => {
         const result = await window.electronAPI.fs.openFile();
         if (!result) return;
 
-        const binaryString = atob(result.data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
+        const bytes = decodeFileData(result.data);
 
         const blob = new Blob([bytes], { type: result.mimeType });
         const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
         Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
-        loadProject(file);
-        setFileData(bytes);
+        await loadProject(file, bytes);
         return;
       } catch (error) {
         console.error('Failed to open file:', error);
@@ -275,13 +296,7 @@ export const UploadScreen: React.FC = () => {
     // Use Electron's fs API for fast file reading
     try {
       const result = await window.electronAPI.fs.readFile(doc.filepath);
-      
-      // Convert base64 to Uint8Array
-      const binaryString = atob(result.data);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      const bytes = decodeFileData(result.data);
       
       // Create File object with path attached for database tracking
       const blob = new Blob([bytes], { type: result.mimeType });
@@ -289,8 +304,7 @@ export const UploadScreen: React.FC = () => {
       // Attach the filepath so loadProject can save to DB
       Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
       
-      loadProject(file);
-      setFileData(bytes);
+      await loadProject(file, bytes);
     } catch (error) {
       console.error('Failed to open document:', error);
       // Fallback: Let user know they need to re-import

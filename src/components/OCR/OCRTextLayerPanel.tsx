@@ -29,12 +29,13 @@ import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
 import { dbService } from '../../services/dbService';
 import { visionService } from '../../services/vision/VisionService';
+import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
 import { pdfjs } from '../../services/pdf/pdfjsWorker';
 
 // PDF.js worker is configured via pdfjsWorker
 
 export const OCRTextLayerPanel: React.FC = () => {
-  const { file, fileUrl, fileData, currentPage, documentId, filePath } = useProjectStore();
+  const { file, fileUrl, fileData, currentPage, ensureDocumentId } = useProjectStore();
   const {
     options,
     setOptions,
@@ -45,16 +46,22 @@ export const OCRTextLayerPanel: React.FC = () => {
     setPageOCR,
     allPagesOCR,
     showDebugOverlay,
-    setShowDebugOverlay,
-    reset
+    setShowDebugOverlay
   } = useOCRTextLayerStore();
 
   const [isExporting, setIsExporting] = useState(false);
+  const [cacheStatus, setCacheStatus] = useState<{ page: number; source: 'memory' | 'db' } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
   const fileRef = useRef<File | null>(null);
   const pdfDataRef = useRef<ArrayBuffer | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const isAbortError = useCallback(
+    (error: unknown): boolean => error instanceof Error && error.name === 'AbortError',
+    []
+  );
 
   useEffect(() => {
     return () => {
@@ -63,6 +70,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       pdfLoadingRef.current = null;
       fileRef.current = null;
       pdfDataRef.current = null;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
     };
   }, []);
 
@@ -108,56 +117,58 @@ export const OCRTextLayerPanel: React.FC = () => {
     return loadingPromise;
   }, [file, fileData]);
 
-  const resolveDocumentId = useCallback(async (): Promise<number | null> => {
-    if (!dbService.isAvailable()) return null;
-    if (documentId) return documentId;
-    const path = filePath ?? (file as unknown as { path?: string }).path ?? null;
-    if (!path || !file) return null;
-
-    let doc = await dbService.getDocument(path);
-    if (!doc?.id) {
-      try {
-        await dbService.saveDocument(path, file.name, 0);
-        doc = await dbService.getDocument(path);
-      } catch (error) {
-        console.warn('[OCRPanel] Failed to create document entry for OCR cache:', error);
-      }
-    }
-
-    if (doc?.id) {
-      useProjectStore.setState({ documentId: doc.id, filePath: path });
-      return doc.id;
-    }
-    return null;
-  }, [documentId, filePath, file]);
-
   const isCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
     if (cached.language !== options.language) return false;
     if (cached.dpi !== options.dpi) return false;
     if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
+    if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
     return true;
   }, [options]);
 
   const loadCachedOCR = useCallback(async (pageNum: number): Promise<boolean> => {
+    setCacheStatus(null);
+    const activeFile = file;
     const state = useOCRTextLayerStore.getState();
     const memoryCached = state.allPagesOCR.get(pageNum);
     if (memoryCached && isCacheCompatible(memoryCached)) {
+      if (useProjectStore.getState().file !== activeFile) return false;
       setPageOCR(pageNum, memoryCached);
+      setCacheStatus({ page: pageNum, source: 'memory' });
       return true;
     }
 
-    const cacheDocId = await resolveDocumentId();
+    let cacheDocId: number | null = null;
+    try {
+      cacheDocId = await ensureDocumentId();
+    } catch (error) {
+      console.warn('[OCRPanel] Failed to ensure document ID for OCR cache:', error);
+      return false;
+    }
     if (!cacheDocId) return false;
 
     const cached = await dbService.getOCR(cacheDocId, pageNum);
     if (cached && isCacheCompatible(cached)) {
+      if (useProjectStore.getState().file !== activeFile) return false;
       cached.pageNumber = pageNum;
       setPageOCR(pageNum, cached);
+      setCacheStatus({ page: pageNum, source: 'db' });
       return true;
     }
 
     return false;
-  }, [isCacheCompatible, resolveDocumentId, setPageOCR]);
+  }, [file, isCacheCompatible, ensureDocumentId, setPageOCR]);
+
+  const beginAbortableJob = useCallback(() => {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    return controller;
+  }, []);
+
+  const cancelCurrentJob = useCallback(() => {
+    abortControllerRef.current?.abort();
+    visionService.cancelAll('OCR job canceled');
+  }, []);
 
   useEffect(() => {
     if (!file) return;
@@ -305,6 +316,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
 
     try {
+      const controller = beginAbortableJob();
+      setCacheStatus(null);
       if (!force) {
         const loaded = await loadCachedOCR(pageNum);
         if (loaded) {
@@ -355,14 +368,15 @@ export const OCRTextLayerPanel: React.FC = () => {
         imageHeight,
         options.language,
         options.dpi,
-        options.pageSegMode
+        options.pageSegMode,
+        controller.signal
       );
       visionService.setProgressCallback(null);
 
       ocrResult.pageNumber = pageNum;
       setPageOCR(pageNum, ocrResult);
 
-      const cacheDocId = await resolveDocumentId();
+      const cacheDocId = await ensureDocumentId();
       if (cacheDocId) {
         await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
       }
@@ -375,19 +389,29 @@ export const OCRTextLayerPanel: React.FC = () => {
         progress: 100
       });
     } catch (error) {
-      console.error('[OCRPanel] Current page OCR failed:', error);
-      setProgress({
-        stage: 'complete',
-        currentPage: pageNum,
-        totalPages: 1,
-        message: `OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        progress: 0
-      });
+      if (isAbortError(error)) {
+        setProgress({
+          stage: 'complete',
+          currentPage: pageNum,
+          totalPages: 1,
+          message: 'OCR canceled',
+          progress: 0
+        });
+      } else {
+        console.error('[OCRPanel] Current page OCR failed:', error);
+        setProgress({
+          stage: 'complete',
+          currentPage: pageNum,
+          totalPages: 1,
+          message: `OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          progress: 0
+        });
+      }
     } finally {
       visionService.setProgressCallback(null);
       setIsProcessing(false);
     }
-  }, [file, fileUrl, options, renderPageToCanvas, resolveDocumentId, setIsProcessing, setProgress, setPageOCR, loadCachedOCR]);
+  }, [file, fileUrl, options, renderPageToCanvas, ensureDocumentId, setIsProcessing, setProgress, setPageOCR, loadCachedOCR, beginAbortableJob, isAbortError]);
 
   const handleStartOCR = useCallback(async (targetPages?: number[]) => {
     if (!file || !fileUrl) {
@@ -396,6 +420,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
 
     try {
+      const controller = beginAbortableJob();
+      setCacheStatus(null);
       setIsProcessing(true);
       
       // Set initial progress (don't call reset() here!)
@@ -422,13 +448,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       pdfDataRef.current = arrayBuffer;
 
       // Create searchable PDF (also performs OCR)
-      const cacheDocId = await resolveDocumentId();
+      const cacheDocId = await ensureDocumentId();
       const resultBytes = await searchablePDFService.createSearchablePDF(
         arrayBuffer,
         options,
         renderPageToCanvas,
         targetPages,
-        cacheDocId ?? undefined
+        cacheDocId ?? undefined,
+        controller.signal
       );
       void resultBytes;
       
@@ -436,19 +463,32 @@ export const OCRTextLayerPanel: React.FC = () => {
       searchablePDFService.setOCRResultCallback(null);
 
     } catch (error) {
-      console.error('[OCRPanel] OCR processing failed:', error);
-      searchablePDFService.setOCRResultCallback(null);
-      setProgress({
-        stage: 'complete',
-        currentPage: 0,
-        totalPages: 0,
-        message: `เกิดข้อผิดพลาด: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        progress: 0
-      });
+      if (isAbortError(error)) {
+        searchablePDFService.setOCRResultCallback(null);
+        setProgress({
+          stage: 'complete',
+          currentPage: 0,
+          totalPages: 0,
+          message: 'OCR canceled',
+          progress: 0
+        });
+      } else {
+        console.error('[OCRPanel] OCR processing failed:', error);
+        searchablePDFService.setOCRResultCallback(null);
+        setProgress({
+          stage: 'complete',
+          currentPage: 0,
+          totalPages: 0,
+          message: `OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          progress: 0
+        });
+
+      }
     } finally {
+      searchablePDFService.setProgressCallback(null);
       setIsProcessing(false);
     }
-  }, [file, fileUrl, fileData, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, resolveDocumentId]);
+  }, [file, fileUrl, fileData, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, ensureDocumentId, beginAbortableJob, isAbortError]);
 
   /**
    * Download searchable PDF from cached OCR results
@@ -552,6 +592,12 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
       )}
 
+      {cacheStatus && cacheStatus.page === currentPage && !isProcessing && (
+        <div className="text-xs text-emerald-300 bg-emerald-900/30 border border-emerald-700 rounded-lg px-3 py-2">
+          Loaded from cache ({cacheStatus.source === 'memory' ? 'memory' : 'disk'})
+        </div>
+      )}
+
       {/* Action Buttons */}
       <div className="space-y-2">
         <div className="flex gap-2">
@@ -585,6 +631,16 @@ export const OCRTextLayerPanel: React.FC = () => {
             <span className="text-xs font-bold">Current</span>
           </button>
         </div>
+
+        {isProcessing && (
+          <button
+            onClick={cancelCurrentJob}
+            className="w-full bg-red-600 hover:bg-red-500 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            title="Cancel OCR"
+          >
+            Cancel
+          </button>
+        )}
 
         {totalOCRPages > 0 && !isProcessing && (
           <div className="flex gap-2">

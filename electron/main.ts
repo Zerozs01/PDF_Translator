@@ -251,8 +251,8 @@ app.whenReady().then(() => {
         throw new Error('File not found');
       }
 
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === '.pdf' ? 'application/pdf' :
                        ext === '.png' ? 'image/png' :
@@ -261,7 +261,7 @@ app.whenReady().then(() => {
 
       return {
         filepath: safePath,
-        data: buffer.toString('base64'),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath),
@@ -283,8 +283,8 @@ app.whenReady().then(() => {
         throw new Error('File not found');
       }
       // Read file as buffer and return base64
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === '.pdf' ? 'application/pdf' : 
                        ext === '.png' ? 'image/png' :
@@ -292,7 +292,7 @@ app.whenReady().then(() => {
                        'application/octet-stream';
       
       return {
-        data: buffer.toString('base64'),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath)

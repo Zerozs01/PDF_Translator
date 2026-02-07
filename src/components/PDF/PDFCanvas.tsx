@@ -263,6 +263,8 @@ export const PDFCanvas: React.FC = () => {
     return { data: new Uint8Array(fileData) };
   }, [fileData, fileUrl]);
 
+  const docKey = fileUrl ?? 'pdf-document';
+
   return (
     <div 
       ref={containerRef}
@@ -284,6 +286,7 @@ export const PDFCanvas: React.FC = () => {
       >
         <div className="relative shadow-2xl">
           <Document
+            key={docKey}
             file={pdfSource}
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={(error) => console.error('[PDFCanvas] PDF load error:', error)}

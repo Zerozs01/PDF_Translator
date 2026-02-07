@@ -27,6 +27,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
     return { data: new Uint8Array(fileData) };
   }, [fileData, fileUrl]);
 
+  const docKey = fileUrl ?? 'pdf-thumbs';
+
   return (
     <aside 
       className={`bg-slate-800 border-r border-slate-700 flex flex-col transition-all duration-300 ease-in-out relative shrink-0 ${
@@ -115,6 +117,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
           {displayMode === 'gallery' ? (
             // Gallery View - Thumbnails
             <Document
+              key={docKey}
               file={pdfSource}
               onLoadError={(error) => console.error('[LeftSidebar] PDF load error:', error)}
               className="p-2 space-y-2"

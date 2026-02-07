@@ -34,7 +34,8 @@ interface ProjectState {
   targetLanguage: string;
 
   // Actions
-  loadProject: (file: File) => void;
+  loadProject: (file: File, fileData?: Uint8Array | null) => Promise<void>;
+  ensureDocumentId: () => Promise<number | null>;
   closeProject: () => void;
   setFileData: (data: Uint8Array | null) => void;
   setPage: (page: number) => void;
@@ -69,7 +70,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   sourceLanguage: 'eng',
   targetLanguage: 'th',
 
-  loadProject: (file) => {
+  loadProject: async (file, fileData) => {
     // Clear OCR cache when loading a new file to avoid cross-file reuse
     useOCRTextLayerStore.getState().reset();
     // Save document to database for recent files tracking
@@ -78,45 +79,82 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!filePath) {
       console.warn('[DB] File path not available. Recent list will not be saved for this file.');
     }
-    if (filePath && dbService.isAvailable()) {
-      // Save asynchronously (don't block UI)
-      dbService.saveDocument(filePath, file.name, 0)
-        .then(() => dbService.getDocument(filePath))
-        .then((doc) => {
-          if (!doc?.id) return;
-          const currentPath = get().filePath;
-          if (currentPath === filePath) {
-            set({ documentId: doc.id });
-          }
-        })
-        .catch(err => console.error('Failed to save document to DB:', err));
+
+    const previousUrl = get().fileUrl;
+    if (previousUrl) {
+      // Revoke after state update to avoid revoking while components still render.
+      setTimeout(() => URL.revokeObjectURL(previousUrl), 0);
     }
-    
-    return set((state) => {
-      // IMPORTANT: Revoke old URL to prevent memory leak
-      if (state.fileUrl) {
-        URL.revokeObjectURL(state.fileUrl);
-      }
-      
-      const url = URL.createObjectURL(file);
-      const type = file.type === 'application/pdf' ? 'pdf' : 'image';
-      return { 
-        file, 
-        fileUrl: url, 
-        fileType: type, 
-        fileName: file.name,
-        filePath,
-        documentId: null,
-        fileData: null,
-        currentPage: 1 
-      };
+
+    const url = URL.createObjectURL(file);
+    const type = file.type === 'application/pdf' ? 'pdf' : 'image';
+    set({ 
+      file, 
+      fileUrl: url, 
+      fileType: type, 
+      fileName: file.name,
+      filePath,
+      documentId: null,
+      fileData: fileData ?? null,
+      currentPage: 1,
+      totalPages: 0
     });
+
+    if (filePath && dbService.isAvailable()) {
+      try {
+        await get().ensureDocumentId();
+      } catch (error) {
+        console.error('[DB] Failed to ensure documentId:', error);
+      }
+    }
+  },
+
+  ensureDocumentId: async () => {
+    if (!dbService.isAvailable()) return null;
+    const { documentId, file, filePath } = get();
+    if (documentId) return documentId;
+
+    const path = filePath ?? (file as unknown as { path?: string }).path ?? null;
+    if (!path || !file) {
+      throw new Error('File path not available. Cannot ensure document_id.');
+    }
+
+    let doc = await dbService.getDocument(path);
+    if (!doc?.id) {
+      await dbService.saveDocument(path, file.name, 0);
+      doc = await dbService.getDocument(path);
+    }
+
+    if (!doc?.id) {
+      throw new Error('Failed to create document entry for OCR cache.');
+    }
+
+    const currentPath = get().filePath;
+    if (currentPath !== path) {
+      return null;
+    }
+
+    set({ documentId: doc.id, filePath: path });
+    return doc.id;
   },
 
   closeProject: () => set((state) => {
-    if (state.fileUrl) URL.revokeObjectURL(state.fileUrl);
+    if (state.fileUrl) {
+      // Revoke after unmount to avoid interrupting PDF.js loads.
+      setTimeout(() => URL.revokeObjectURL(state.fileUrl!), 0);
+    }
     useOCRTextLayerStore.getState().reset();
-    return { file: null, fileUrl: null, fileType: null, fileName: '', filePath: null, documentId: null, fileData: null };
+    return { 
+      file: null,
+      fileUrl: null,
+      fileType: null,
+      fileName: '',
+      filePath: null,
+      documentId: null,
+      fileData: null,
+      currentPage: 1,
+      totalPages: 0
+    };
   }),
   setFileData: (data) => set({ fileData: data }),
 

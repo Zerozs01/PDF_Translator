@@ -9,6 +9,7 @@
  */
 
 import { createWorker, PSM, OEM } from 'tesseract.js';
+import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 
 // ============================================
 // Types
@@ -2194,6 +2195,7 @@ self.onmessage = async (e: MessageEvent) => {
           dpi: dpi,
           language: language,
           pageSegMode: psm,
+          algorithmVersion: OCR_ALGORITHM_VERSION,
           lines: lines,
           words: words,
           text: data?.text || '',

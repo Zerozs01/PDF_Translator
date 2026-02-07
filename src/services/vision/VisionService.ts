@@ -31,6 +31,8 @@ type QueuedRequest = {
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
   retryCount: number;
+  signal?: AbortSignal;
+  abortHandler?: () => void;
 };
 
 export type OCRProgressCallback = (progress: {
@@ -52,6 +54,12 @@ const CONFIG = {
   RETRY_DELAY_MS: 1000,
   HEALTH_CHECK_INTERVAL_MS: 30000,
   MAX_WORKERS: getDefaultWorkerCount(),
+};
+
+const createAbortError = (reason: string = 'OCR job canceled'): Error => {
+  const error = new Error(reason);
+  (error as Error & { name?: string }).name = 'AbortError';
+  return error;
 };
 
 class VisionService {
@@ -125,6 +133,7 @@ class VisionService {
     }
 
     clearTimeout(pending.timeoutId);
+    pending.request.abortHandler?.();
     this.pendingRequests.delete(id);
     if (this.workers[workerIndex]) {
       this.workers[workerIndex].busy = false;
@@ -144,6 +153,7 @@ class VisionService {
     for (const [id, pending] of this.pendingRequests) {
       if (pending.workerIndex !== workerIndex) continue;
       clearTimeout(pending.timeoutId);
+      pending.request.abortHandler?.();
       pending.reject(new Error('Worker crashed'));
       this.pendingRequests.delete(id);
     }
@@ -172,6 +182,7 @@ class VisionService {
         if (now - pending.timestamp > CONFIG.REQUEST_TIMEOUT_MS) {
           console.warn(`[VisionService] Request ${id} timed out`);
           clearTimeout(pending.timeoutId);
+          pending.request.abortHandler?.();
           pending.reject(new Error('Request timeout'));
           this.pendingRequests.delete(id);
 
@@ -203,7 +214,7 @@ class VisionService {
   }
 
   private dispatchRequest(workerIndex: number, request: QueuedRequest): void {
-    const { type, payload, resolve, reject, retryCount } = request;
+    const { type, payload, resolve, reject } = request;
     const id = crypto.randomUUID();
 
     const timeoutId = setTimeout(() => {
@@ -215,14 +226,15 @@ class VisionService {
         this.workers[workerIndex].busy = false;
       }
 
-      if (retryCount < CONFIG.RETRY_ATTEMPTS) {
-        console.warn(`[VisionService] Retry ${retryCount + 1}/${CONFIG.RETRY_ATTEMPTS} for ${type}`);
-        const retryRequest: QueuedRequest = { ...request, retryCount: retryCount + 1 };
+      if (request.retryCount < CONFIG.RETRY_ATTEMPTS) {
+        console.warn(`[VisionService] Retry ${request.retryCount + 1}/${CONFIG.RETRY_ATTEMPTS} for ${type}`);
+        request.retryCount += 1;
         setTimeout(() => {
-          this.requestQueue.unshift(retryRequest);
+          this.requestQueue.unshift(request);
           this.processQueue();
         }, CONFIG.RETRY_DELAY_MS);
       } else {
+        request.abortHandler?.();
         reject(new Error(`Request timeout after ${CONFIG.RETRY_ATTEMPTS} retries`));
         this.processQueue();
       }
@@ -339,7 +351,8 @@ class VisionService {
     imageHeight: number,
     language: string = 'eng',
     dpi: number = 300,
-    pageSegMode?: number
+    pageSegMode?: number,
+    signal?: AbortSignal
   ): Promise<OCRPageResult> {
     return this.sendMessage('OCR_FOR_TEXT_LAYER', {
       imageUrl,
@@ -348,7 +361,7 @@ class VisionService {
       language,
       dpi,
       pageSegMode
-    });
+    }, { signal });
   }
 
   /**
@@ -357,21 +370,63 @@ class VisionService {
   private async sendMessage<T>(
     type: string, 
     payload?: unknown,
-    options: { skipQueue?: boolean; retryCount?: number } = {}
+    options: { skipQueue?: boolean; retryCount?: number; signal?: AbortSignal } = {}
   ): Promise<T> {
-    const { skipQueue = false, retryCount = 0 } = options;
+    const { skipQueue = false, retryCount = 0, signal } = options;
 
     // Ensure worker is initialized
     this.initWorkers();
 
     return new Promise<T>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
+
       const request: QueuedRequest = {
         type,
         payload,
         resolve,
         reject,
-        retryCount
+        retryCount,
+        signal
       };
+
+      if (signal) {
+        const onAbort = () => {
+          const abortError = createAbortError();
+          // Remove from queue if not dispatched
+          const queuedIndex = this.requestQueue.indexOf(request);
+          if (queuedIndex >= 0) {
+            this.requestQueue.splice(queuedIndex, 1);
+            request.abortHandler?.();
+            request.reject(abortError);
+            this.processQueue();
+            return;
+          }
+
+          // Remove from pending if dispatched
+          for (const [id, pending] of this.pendingRequests) {
+            if (pending.request !== request) continue;
+            clearTimeout(pending.timeoutId);
+            pending.request.abortHandler?.();
+            pending.reject(abortError);
+            this.pendingRequests.delete(id);
+            const slot = this.workers[pending.workerIndex];
+            if (slot) {
+              slot.worker.terminate();
+              this.workers[pending.workerIndex] = this.createWorkerSlot(pending.workerIndex);
+            }
+            this.processQueue();
+            return;
+          }
+        };
+
+        signal.addEventListener('abort', onAbort, { once: true });
+        request.abortHandler = () => {
+          signal.removeEventListener('abort', onAbort);
+        };
+      }
 
       if (skipQueue) {
         this.requestQueue.unshift(request);
@@ -395,6 +450,36 @@ class VisionService {
    */
   public getQueueLength(): number {
     return this.requestQueue.length;
+  }
+
+  /**
+   * Cancel all queued and pending OCR requests
+   */
+  public cancelAll(reason: string = 'OCR job canceled'): void {
+    const abortError = createAbortError(reason);
+
+    // Reject queued requests
+    while (this.requestQueue.length > 0) {
+      const request = this.requestQueue.shift();
+      if (!request) continue;
+      request.abortHandler?.();
+      request.reject(abortError);
+    }
+
+    // Reject pending requests and reset workers
+    for (const [id, pending] of this.pendingRequests) {
+      clearTimeout(pending.timeoutId);
+      pending.request.abortHandler?.();
+      pending.reject(abortError);
+      this.pendingRequests.delete(id);
+      const slot = this.workers[pending.workerIndex];
+      if (slot) {
+        slot.worker.terminate();
+        this.workers[pending.workerIndex] = this.createWorkerSlot(pending.workerIndex);
+      }
+    }
+
+    this.processQueue();
   }
 
   /**
