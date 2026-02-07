@@ -23,3 +23,9 @@ For full project history, see `CHANGELOG.md` in the repo root.
 - Tuned gap recovery thresholds for CJK and allow longer CJK gap tokens.
 - Reused non-binarized input for CJK rescans and fallbacks to reduce redundant preprocessing.
 - Added low-coverage line rescan for Latin text and expanded rescan padding to recover trimmed words.
+
+## 2026-02-07
+
+- Updated `documents/ARCHITECTURE.md` with OCR cache and file source behavior.
+- Added `road map.md` to track upcoming phases and priorities.
+- Synced documentation notes with recent OCR cache + fileData changes.

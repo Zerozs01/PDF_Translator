@@ -30,6 +30,11 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
 - **Background variance**: computes per-word background variance for photo filtering.
 - **OCR itself**: Tesseract dominates CPU time (quality vs speed tradeoff).
 
+## Cache & Parallelism
+
+- OCR cache auto-loads on page change when parameters match; Current Page forces re-OCR.
+- `VisionService` uses a small worker pool to enable limited parallel OCR work.
+
 ## Current Tuning Strategy
 
 - Keep high-confidence, larger text (titles) even on images.

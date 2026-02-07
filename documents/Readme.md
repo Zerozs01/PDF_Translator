@@ -104,6 +104,8 @@ npm run build
 - [ ] **Phase 6:** Advanced Segmentation V3
 - [ ] **Phase 7:** Gemini Translation Bridge (Advanced)
 
+See `road map.md` in the repo root for the active, cross-machine plan.
+
 ## 📝 Documentation
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - สรุปสถาปัตยกรรม (ดูฉบับเต็มที่ root)

@@ -189,3 +189,10 @@ ipcMain.handle('db:save-document', async (_, data) => {
 - Lazy load Vision Worker after 2s delay
 - Code splitting for heavy components (react-pdf, tesseract.js)
 - IndexedDB fallback for larger OCR cache
+
+## 9. OCR Cache & File Source (2026-02-07)
+
+- OCR cache auto-loads on page change when language, DPI, and `pageSegMode` match.
+- Current Page button forces re-OCR (cache bypass) for accuracy after code changes.
+- PDF rendering prefers in-memory `fileData` and clones buffers per `Document` to avoid detached `ArrayBuffer` errors.
+- Native file open via `fs:open-file` guarantees real file paths for Recent files.
