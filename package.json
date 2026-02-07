@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "tessdata:download": "node scripts/download-tessdata.js",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "repository": {
     "type": "git",
@@ -20,25 +24,54 @@
     "url": "https://github.com/Zerozs01/PDF_Translator/issues"
   },
   "homepage": "https://github.com/Zerozs01/PDF_Translator#readme",
+  "build": {
+    "appId": "com.pdftranslator.app",
+    "productName": "PDF Translator",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "!node_modules/@napi-rs/canvas-android-arm64"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
   "devDependencies": {
+    "@chromatic-com/storybook": "^5.0.0",
+    "@storybook/addon-a11y": "^10.2.1",
+    "@storybook/addon-docs": "^10.2.1",
+    "@storybook/addon-onboarding": "^10.2.1",
+    "@storybook/addon-vitest": "^10.2.1",
+    "@storybook/react-vite": "^10.2.1",
     "@tailwindcss/postcss": "^4.1.18",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
+    "@vitest/browser-playwright": "^4.0.18",
+    "@vitest/coverage-v8": "^4.0.18",
     "autoprefixer": "^10.4.23",
+    "electron": "^39.2.7",
     "electron-builder": "^26.0.12",
+    "electron-rebuild": "^3.2.9",
+    "playwright": "^1.58.0",
     "postcss": "^8.5.6",
+    "storybook": "^10.2.1",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
-    "vite-plugin-electron": "^0.29.0"
+    "vite-plugin-electron": "^0.29.0",
+    "vitest": "^4.0.18"
   },
   "dependencies": {
-    "electron": "^39.2.7",
+    "better-sqlite3": "^12.6.2",
     "lucide-react": "^0.562.0",
+    "pdf-lib": "^1.17.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-pdf": "^10.2.0",
+    "tesseract.js": "^7.0.0",
     "zustand": "^5.0.9"
   }
 }
