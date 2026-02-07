@@ -75,8 +75,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     useOCRTextLayerStore.getState().reset();
     // Save document to database for recent files tracking
     // We need filepath - for dropped/selected files we can try to get path
-    const filePath = (file as unknown as { path?: string }).path ?? null;
-    if (!filePath) {
+    let resolvedPath = (file as unknown as { path?: string }).path ?? null;
+    let resolvedFileData = fileData ?? null;
+
+    if (!resolvedPath && window.electronAPI?.fs?.importFile) {
+      try {
+        if (!resolvedFileData) {
+          const buffer = await file.arrayBuffer();
+          resolvedFileData = new Uint8Array(buffer);
+        }
+        const imported = await window.electronAPI.fs.importFile({
+          name: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          data: resolvedFileData
+        });
+        if (imported?.filepath) {
+          resolvedPath = imported.filepath;
+        }
+      } catch (error) {
+        console.warn('[DB] Failed to import file for recent list:', error);
+      }
+    }
+
+    if (!resolvedPath) {
       console.warn('[DB] File path not available. Recent list will not be saved for this file.');
     }
 
@@ -93,14 +114,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       fileUrl: url, 
       fileType: type, 
       fileName: file.name,
-      filePath,
+      filePath: resolvedPath,
       documentId: null,
-      fileData: fileData ?? null,
+      fileData: resolvedFileData ?? null,
       currentPage: 1,
       totalPages: 0
     });
 
-    if (filePath && dbService.isAvailable()) {
+    if (resolvedPath && dbService.isAvailable()) {
       try {
         await get().ensureDocumentId();
       } catch (error) {

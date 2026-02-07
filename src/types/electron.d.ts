@@ -119,6 +119,16 @@ export interface ElectronAPI {
       size: number;
       name: string;
     } | null>;
+    importFile: (payload: {
+      name: string;
+      mimeType: string;
+      data: Uint8Array | ArrayBuffer;
+    }) => Promise<{
+      filepath: string;
+      mimeType: string;
+      size: number;
+      name: string;
+    }>;
   };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;

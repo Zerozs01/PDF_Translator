@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { 
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus,
-  Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart
+  Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart,
+  AlertTriangle, RefreshCw, X
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
@@ -49,6 +50,47 @@ const decodeFileData = (data: Uint8Array | ArrayBuffer | string): Uint8Array => 
     return data;
   }
   return new Uint8Array();
+};
+
+type FileOpenContext = 'recent' | 'browse' | 'drag_drop' | 'file_input';
+
+type FileOpenErrorEntry = {
+  id: string;
+  context: FileOpenContext;
+  message: string;
+  details?: string;
+  filename?: string;
+  filepath?: string;
+  docId?: number;
+  timestamp: number;
+};
+
+const FILE_OPEN_LOG_KEY = 'pdf_translator.file_open_errors';
+
+const recordFileOpenError = (entry: FileOpenErrorEntry): void => {
+  try {
+    const existingRaw = window.localStorage.getItem(FILE_OPEN_LOG_KEY);
+    const existing = existingRaw ? (JSON.parse(existingRaw) as FileOpenErrorEntry[]) : [];
+    const next = [entry, ...existing].slice(0, 50);
+    window.localStorage.setItem(FILE_OPEN_LOG_KEY, JSON.stringify(next));
+  } catch {
+    // ignore telemetry persistence errors
+  }
+  console.error('[FileOpenTelemetry]', entry);
+};
+
+const getFileOpenHint = (message: string): string => {
+  const lower = message.toLowerCase();
+  if (lower.includes('file not found')) {
+    return 'File not found. It may have been moved or deleted. Please re-import it.';
+  }
+  if (lower.includes('permission') || lower.includes('access') || lower.includes('denied')) {
+    return 'Permission denied. Close the file in other apps or move it to a writable folder.';
+  }
+  if (lower.includes('unsupported') || lower.includes('mime')) {
+    return 'Unsupported file type. Please choose a PDF, PNG, or JPEG.';
+  }
+  return 'Try re-importing the file or open it from a different location.';
 };
 
 // Get file icon based on type
@@ -241,6 +283,29 @@ export const UploadScreen: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [activePage, setActivePage] = useState<SidebarPage>('home');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileOpenError, setFileOpenError] = useState<FileOpenErrorEntry | null>(null);
+
+  const reportFileOpenError = useCallback((
+    context: FileOpenContext,
+    error: unknown,
+    meta?: { filename?: string; filepath?: string; docId?: number; details?: string }
+  ) => {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    const entry: FileOpenErrorEntry = {
+      id: (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      context,
+      message,
+      details: meta?.details,
+      filename: meta?.filename,
+      filepath: meta?.filepath,
+      docId: meta?.docId,
+      timestamp: Date.now()
+    };
+    recordFileOpenError(entry);
+    setFileOpenError(entry);
+  }, []);
 
   // Load initial data
   useEffect(() => {
@@ -253,20 +318,30 @@ export const UploadScreen: React.FC = () => {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const droppedFile = e.dataTransfer.files[0];
       try {
-        await loadProject(e.dataTransfer.files[0]);
+        await loadProject(droppedFile);
+        setFileOpenError(null);
       } catch (error) {
-        console.error('Failed to load project:', error);
+        reportFileOpenError('drag_drop', error, {
+          filename: droppedFile.name,
+          filepath: (droppedFile as unknown as { path?: string }).path
+        });
       }
     }
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
       try {
-        await loadProject(e.target.files[0]);
+        await loadProject(selectedFile);
+        setFileOpenError(null);
       } catch (error) {
-        console.error('Failed to load project:', error);
+        reportFileOpenError('file_input', error, {
+          filename: selectedFile.name,
+          filepath: (selectedFile as unknown as { path?: string }).path
+        });
       }
     }
   };
@@ -283,9 +358,10 @@ export const UploadScreen: React.FC = () => {
         const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
         Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
         await loadProject(file, bytes);
+        setFileOpenError(null);
         return;
       } catch (error) {
-        console.error('Failed to open file:', error);
+        reportFileOpenError('browse', error);
       }
     }
 
@@ -305,10 +381,13 @@ export const UploadScreen: React.FC = () => {
       Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
       
       await loadProject(file, bytes);
+      setFileOpenError(null);
     } catch (error) {
-      console.error('Failed to open document:', error);
-      // Fallback: Let user know they need to re-import
-      alert('Could not open file. The file may have been moved or deleted.');
+      reportFileOpenError('recent', error, {
+        filename: doc.filename,
+        filepath: doc.filepath,
+        docId: doc.id
+      });
     }
   };
 
@@ -495,6 +574,78 @@ export const UploadScreen: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* File Open Error Banner */}
+        {fileOpenError && (
+          <div className="mx-4 mt-4 mb-2 rounded-xl border border-amber-500/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-100 flex items-start gap-3">
+            <div className="mt-0.5 text-amber-400">
+              <AlertTriangle size={18} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">Open failed</span>
+                <span className="text-[10px] text-amber-300/80">
+                  {new Date(fileOpenError.timestamp).toLocaleString()}
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-200/90 mt-1">
+                {fileOpenError.filename ? `${fileOpenError.filename} — ` : ''}
+                {fileOpenError.message}
+              </p>
+              <p className="text-[11px] text-amber-200/70 mt-1">
+                {getFileOpenHint(fileOpenError.message)}
+              </p>
+              {fileOpenError.filepath && (
+                <p className="text-[10px] text-amber-300/70 mt-1 truncate">
+                  {fileOpenError.filepath}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {fileOpenError.context === 'recent' && fileOpenError.docId !== undefined ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        const doc = documents.find(d => d.id === fileOpenError.docId);
+                        if (doc) {
+                          handleOpenDocument(doc);
+                        } else {
+                          handleBrowse();
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-xs font-semibold hover:bg-amber-400 transition-colors flex items-center gap-1"
+                    >
+                      <RefreshCw size={12} /> Retry
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (fileOpenError.docId !== undefined) {
+                          await deleteDocument(fileOpenError.docId);
+                        }
+                        setFileOpenError(null);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 text-amber-200 text-xs hover:bg-slate-700 transition-colors"
+                    >
+                      Remove from Recent
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleBrowse}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-xs font-semibold hover:bg-amber-400 transition-colors flex items-center gap-1"
+                  >
+                    <RefreshCw size={12} /> Browse Again
+                  </button>
+                )}
+                <button
+                  onClick={() => setFileOpenError(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 text-amber-200 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"
+                >
+                  <X size={12} /> Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Documents Grid/List */}
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">

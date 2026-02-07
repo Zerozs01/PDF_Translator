@@ -303,6 +303,55 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('fs:import-file', async (_event, payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) => {
+    try {
+      if (!payload || typeof payload.name !== 'string' || !payload.name) {
+        throw new Error('Invalid payload: name is required');
+      }
+
+      const rawData = payload.data instanceof ArrayBuffer
+        ? new Uint8Array(payload.data)
+        : payload.data;
+
+      if (!(rawData instanceof Uint8Array)) {
+        throw new Error('Invalid payload: data must be Uint8Array or ArrayBuffer');
+      }
+
+      const safeName = payload.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const ext = path.extname(safeName);
+      const fallbackExt = payload.mimeType === 'application/pdf'
+        ? '.pdf'
+        : payload.mimeType === 'image/png'
+        ? '.png'
+        : payload.mimeType === 'image/jpeg'
+        ? '.jpg'
+        : '';
+
+      const finalName = ext ? safeName : `${safeName}${fallbackExt}`;
+      const userDataDir = app.getPath('userData');
+      const importDir = path.join(userDataDir, 'imports');
+      await fs.promises.mkdir(importDir, { recursive: true });
+
+      const uniqueId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const targetPath = path.join(importDir, `${uniqueId}-${finalName}`);
+
+      await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      const stats = await fs.promises.stat(targetPath);
+
+      return {
+        filepath: targetPath,
+        mimeType: payload.mimeType,
+        size: stats.size,
+        name: finalName
+      };
+    } catch (error) {
+      console.error('fs:import-file error:', error);
+      throw error;
+    }
+  });
+
   ipcMain.handle('db:get-documents-by-tag', async (_, tagId) => {
     if (!isValidNumber(tagId)) {
       throw new Error('Invalid input: tagId must be a positive number');

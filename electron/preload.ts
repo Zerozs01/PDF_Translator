@@ -144,6 +144,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fs: {
     readFile: (filepath: string) => ipcRenderer.invoke('fs:read-file', filepath),
     openFile: () => ipcRenderer.invoke('fs:open-file'),
+    importFile: (payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) =>
+      ipcRenderer.invoke('fs:import-file', payload),
   },
 
   // Message handling (restricted to allowed channels)

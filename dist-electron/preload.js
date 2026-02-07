@@ -46,7 +46,8 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   // File system operations (SECURE: validated in main process)
   fs: {
     readFile: (filepath) => electron.ipcRenderer.invoke("fs:read-file", filepath),
-    openFile: () => electron.ipcRenderer.invoke("fs:open-file")
+    openFile: () => electron.ipcRenderer.invoke("fs:open-file"),
+    importFile: (payload) => electron.ipcRenderer.invoke("fs:import-file", payload)
   },
   // Message handling (restricted to allowed channels)
   on: (channel, callback) => {
