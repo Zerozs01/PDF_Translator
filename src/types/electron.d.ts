@@ -112,6 +112,13 @@ export interface ElectronAPI {
       size: number;
       name: string;
     }>;
+    openFile: () => Promise<{
+      filepath: string;
+      data: string;
+      mimeType: string;
+      size: number;
+      name: string;
+    } | null>;
   };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;

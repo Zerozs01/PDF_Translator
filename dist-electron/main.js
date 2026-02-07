@@ -533,6 +533,39 @@ electron.app.whenReady().then(() => {
       return false;
     }
   });
+  electron.ipcMain.handle("fs:open-file", async () => {
+    try {
+      const result = await electron.dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [
+          { name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg"] },
+          { name: "All Files", extensions: ["*"] }
+        ]
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+      const filepath = result.filePaths[0];
+      const safePath = sanitizePath(filepath);
+      if (!fs.existsSync(safePath)) {
+        throw new Error("File not found");
+      }
+      const buffer = fs.readFileSync(safePath);
+      const stats = fs.statSync(safePath);
+      const ext = path.extname(safePath).toLowerCase();
+      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
+      return {
+        filepath: safePath,
+        data: buffer.toString("base64"),
+        mimeType,
+        size: stats.size,
+        name: path.basename(safePath)
+      };
+    } catch (error) {
+      console.error("fs:open-file error:", error);
+      throw error;
+    }
+  });
   electron.ipcMain.handle("fs:read-file", async (_, filepath) => {
     if (!isValidString(filepath)) {
       throw new Error("Invalid filepath");

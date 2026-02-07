@@ -34,6 +34,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:delete-project',
   // File system
   'fs:read-file',
+  'fs:open-file',
   'gemini:translate', // For secure Gemini API calls via main process
 ] as const;
 
@@ -142,6 +143,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system operations (SECURE: validated in main process)
   fs: {
     readFile: (filepath: string) => ipcRenderer.invoke('fs:read-file', filepath),
+    openFile: () => ipcRenderer.invoke('fs:open-file'),
   },
 
   // Message handling (restricted to allowed channels)

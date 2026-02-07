@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import type { DBDocument, DBTag, DBProject } from '../types/electron.d';
 
+const isVirtualPath = (filepath: string): boolean => filepath.startsWith('virtual://');
+const filterVirtualDocuments = (documents: DBDocument[]): DBDocument[] =>
+  documents.filter((doc) => !isVirtualPath(doc.filepath));
+
 export type ViewMode = 'grid' | 'detail';
 export type SortBy = 'name' | 'date' | 'size' | 'type';
 export type SortOrder = 'asc' | 'desc';
@@ -141,7 +145,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const documents = await window.electronAPI.db.getRecentDocuments(50);
-      set({ documents, isLoading: false, filterType: 'recent' });
+      const filtered = filterVirtualDocuments(documents);
+      set({ documents: filtered, isLoading: false, filterType: 'recent' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -151,7 +156,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const documents = await window.electronAPI.db.getDocumentsByProject(projectId);
-      set({ documents, isLoading: false, selectedProjectId: projectId, filterType: 'project' });
+      const filtered = filterVirtualDocuments(documents);
+      set({ documents: filtered, isLoading: false, selectedProjectId: projectId, filterType: 'project' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -161,7 +167,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const documents = await window.electronAPI.db.getFavoriteDocuments();
-      set({ documents, isLoading: false, filterType: 'favorites' });
+      const filtered = filterVirtualDocuments(documents);
+      set({ documents: filtered, isLoading: false, filterType: 'favorites' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -171,7 +178,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const documents = await window.electronAPI.db.getDocumentsByTag(tagId);
-      set({ documents, isLoading: false, selectedTagId: tagId, filterType: 'tag' });
+      const filtered = filterVirtualDocuments(documents);
+      set({ documents: filtered, isLoading: false, selectedTagId: tagId, filterType: 'tag' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -181,7 +189,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     set({ isLoading: true, error: null, searchQuery: query });
     try {
       const documents = await window.electronAPI.db.searchDocuments(query);
-      set({ documents, isLoading: false });
+      const filtered = filterVirtualDocuments(documents);
+      set({ documents: filtered, isLoading: false });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }

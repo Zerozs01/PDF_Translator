@@ -2193,6 +2193,7 @@ self.onmessage = async (e: MessageEvent) => {
           height: actualHeight,
           dpi: dpi,
           language: language,
+          pageSegMode: psm,
           lines: lines,
           words: words,
           text: data?.text || '',

@@ -20,6 +20,17 @@ type PendingRequest = {
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
   timestamp: number;
+  workerIndex: number;
+  timeoutId: ReturnType<typeof setTimeout>;
+  request: QueuedRequest;
+};
+
+type QueuedRequest = {
+  type: string;
+  payload?: unknown;
+  resolve: (data: unknown) => void;
+  reject: (error: Error) => void;
+  retryCount: number;
 };
 
 export type OCRProgressCallback = (progress: {
@@ -29,19 +40,25 @@ export type OCRProgressCallback = (progress: {
 }) => void;
 
 // Configuration
+const getDefaultWorkerCount = (): number => {
+  if (typeof navigator === 'undefined') return 1;
+  const cores = navigator.hardwareConcurrency || 1;
+  return Math.max(1, Math.min(3, Math.floor(cores / 2)));
+};
+
 const CONFIG = {
   REQUEST_TIMEOUT_MS: 120000, // 2 minutes timeout for OCR
   RETRY_ATTEMPTS: 2,
   RETRY_DELAY_MS: 1000,
   HEALTH_CHECK_INTERVAL_MS: 30000,
+  MAX_WORKERS: getDefaultWorkerCount(),
 };
 
 class VisionService {
-  private worker: Worker | null = null;
+  private workers: Array<{ worker: Worker; busy: boolean }> = [];
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private progressCallback: OCRProgressCallback | null = null;
-  private isProcessing: boolean = false;
-  private requestQueue: Array<() => Promise<void>> = [];
+  private requestQueue: Array<QueuedRequest> = [];
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -49,36 +66,44 @@ class VisionService {
   }
 
   /**
-   * Initialize worker with health monitoring
+   * Initialize worker pool with health monitoring
    */
-  private initWorker(): void {
-    if (this.worker) {
-      this.worker.terminate();
+  private initWorkers(): void {
+    if (this.workers.length > 0) return;
+
+    console.log(`[VisionService] Initializing ${CONFIG.MAX_WORKERS} worker(s)...`);
+    for (let i = 0; i < CONFIG.MAX_WORKERS; i++) {
+      this.workers.push(this.createWorkerSlot(i));
     }
-
-    console.log('[VisionService] Initializing worker...');
-    
-    this.worker = new Worker(new URL('./worker.ts', import.meta.url), {
-      type: 'module',
-    });
-
-    this.worker.onmessage = (e) => {
-      this.handleWorkerMessage(e.data);
-    };
-
-    this.worker.onerror = (error) => {
-      console.error('[VisionService] Worker error:', error);
-      this.handleWorkerCrash();
-    };
 
     // Start health check
     this.startHealthCheck();
   }
 
+  private createWorkerSlot(index: number): { worker: Worker; busy: boolean } {
+    const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+      type: 'module',
+    });
+
+    worker.onmessage = (e) => {
+      this.handleWorkerMessage(index, e.data);
+    };
+
+    worker.onerror = (error) => {
+      console.error(`[VisionService] Worker ${index} error:`, error);
+      this.handleWorkerCrash(index);
+    };
+
+    return { worker, busy: false };
+  }
+
   /**
    * Handle incoming worker messages
    */
-  private handleWorkerMessage(data: { type: string; id?: string; payload?: unknown; error?: string }): void {
+  private handleWorkerMessage(
+    workerIndex: number,
+    data: { type: string; id?: string; payload?: unknown; error?: string }
+  ): void {
     const { type, id, payload, error } = data;
 
     // Handle progress updates
@@ -98,29 +123,38 @@ class VisionService {
     } else {
       pending.resolve(payload);
     }
-    
+
+    clearTimeout(pending.timeoutId);
     this.pendingRequests.delete(id);
-    this.isProcessing = false;
-    
-    // Process next item in queue
+    if (this.workers[workerIndex]) {
+      this.workers[workerIndex].busy = false;
+    }
+
+    // Process next item(s) in queue
     this.processQueue();
   }
 
   /**
    * Handle worker crash - reject all pending and restart
    */
-  private handleWorkerCrash(): void {
-    console.warn('[VisionService] Worker crashed, rejecting pending requests...');
-    
-    // Reject all pending requests
-    for (const [id, pending] of this.pendingRequests) {
-      pending.reject(new Error('Worker crashed'));
-    }
-    this.pendingRequests.clear();
-    this.isProcessing = false;
+  private handleWorkerCrash(workerIndex: number): void {
+    console.warn(`[VisionService] Worker ${workerIndex} crashed, rejecting pending requests...`);
 
-    // Restart worker
-    this.worker = null;
+    // Reject pending requests assigned to this worker
+    for (const [id, pending] of this.pendingRequests) {
+      if (pending.workerIndex !== workerIndex) continue;
+      clearTimeout(pending.timeoutId);
+      pending.reject(new Error('Worker crashed'));
+      this.pendingRequests.delete(id);
+    }
+
+    const slot = this.workers[workerIndex];
+    if (slot) {
+      slot.worker.terminate();
+      this.workers[workerIndex] = this.createWorkerSlot(workerIndex);
+    }
+
+    this.processQueue();
   }
 
   /**
@@ -137,30 +171,74 @@ class VisionService {
       for (const [id, pending] of this.pendingRequests) {
         if (now - pending.timestamp > CONFIG.REQUEST_TIMEOUT_MS) {
           console.warn(`[VisionService] Request ${id} timed out`);
+          clearTimeout(pending.timeoutId);
           pending.reject(new Error('Request timeout'));
           this.pendingRequests.delete(id);
-          
-          if (this.pendingRequests.size === 0) {
-            this.isProcessing = false;
-            this.processQueue();
+
+          if (this.workers[pending.workerIndex]) {
+            this.workers[pending.workerIndex].busy = false;
           }
         }
       }
+      
+      this.processQueue();
     }, CONFIG.HEALTH_CHECK_INTERVAL_MS);
   }
 
   /**
    * Process request queue sequentially
    */
-  private async processQueue(): Promise<void> {
-    if (this.isProcessing || this.requestQueue.length === 0) {
-      return;
-    }
+  private processQueue(): void {
+    if (this.requestQueue.length === 0) return;
 
-    const nextRequest = this.requestQueue.shift();
-    if (nextRequest) {
-      await nextRequest();
+    for (let i = 0; i < this.workers.length; i++) {
+      if (this.requestQueue.length === 0) break;
+      if (this.workers[i].busy) continue;
+
+      const nextRequest = this.requestQueue.shift();
+      if (!nextRequest) continue;
+
+      this.dispatchRequest(i, nextRequest);
     }
+  }
+
+  private dispatchRequest(workerIndex: number, request: QueuedRequest): void {
+    const { type, payload, resolve, reject, retryCount } = request;
+    const id = crypto.randomUUID();
+
+    const timeoutId = setTimeout(() => {
+      const pending = this.pendingRequests.get(id);
+      if (!pending) return;
+
+      this.pendingRequests.delete(id);
+      if (this.workers[workerIndex]) {
+        this.workers[workerIndex].busy = false;
+      }
+
+      if (retryCount < CONFIG.RETRY_ATTEMPTS) {
+        console.warn(`[VisionService] Retry ${retryCount + 1}/${CONFIG.RETRY_ATTEMPTS} for ${type}`);
+        const retryRequest: QueuedRequest = { ...request, retryCount: retryCount + 1 };
+        setTimeout(() => {
+          this.requestQueue.unshift(retryRequest);
+          this.processQueue();
+        }, CONFIG.RETRY_DELAY_MS);
+      } else {
+        reject(new Error(`Request timeout after ${CONFIG.RETRY_ATTEMPTS} retries`));
+        this.processQueue();
+      }
+    }, CONFIG.REQUEST_TIMEOUT_MS);
+
+    this.pendingRequests.set(id, {
+      resolve,
+      reject,
+      timestamp: Date.now(),
+      workerIndex,
+      timeoutId,
+      request
+    });
+
+    this.workers[workerIndex].busy = true;
+    this.workers[workerIndex].worker.postMessage({ type, payload, id });
   }
 
   /**
@@ -284,65 +362,24 @@ class VisionService {
     const { skipQueue = false, retryCount = 0 } = options;
 
     // Ensure worker is initialized
-    if (!this.worker) {
-      this.initWorker();
-    }
-
-    // Queue handling
-    if (!skipQueue && this.isProcessing) {
-      return new Promise((resolve, reject) => {
-        this.requestQueue.push(async () => {
-          try {
-            const result = await this.sendMessage<T>(type, payload, { ...options, skipQueue: true });
-            resolve(result);
-          } catch (error) {
-            reject(error);
-          }
-        });
-      });
-    }
-
-    this.isProcessing = true;
+    this.initWorkers();
 
     return new Promise<T>((resolve, reject) => {
-      const id = crypto.randomUUID();
-      
-      // Set up timeout
-      const timeoutId = setTimeout(() => {
-        const pending = this.pendingRequests.get(id);
-        if (pending) {
-          this.pendingRequests.delete(id);
-          this.isProcessing = false;
-          
-          // Retry logic
-          if (retryCount < CONFIG.RETRY_ATTEMPTS) {
-            console.warn(`[VisionService] Retry ${retryCount + 1}/${CONFIG.RETRY_ATTEMPTS} for ${type}`);
-            
-            setTimeout(() => {
-              this.sendMessage<T>(type, payload, { ...options, retryCount: retryCount + 1 })
-                .then(resolve)
-                .catch(reject);
-            }, CONFIG.RETRY_DELAY_MS);
-          } else {
-            reject(new Error(`Request timeout after ${CONFIG.RETRY_ATTEMPTS} retries`));
-            this.processQueue();
-          }
-        }
-      }, CONFIG.REQUEST_TIMEOUT_MS);
+      const request: QueuedRequest = {
+        type,
+        payload,
+        resolve,
+        reject,
+        retryCount
+      };
 
-      this.pendingRequests.set(id, {
-        resolve: (data) => {
-          clearTimeout(timeoutId);
-          resolve(data as T);
-        },
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        },
-        timestamp: Date.now(),
-      });
+      if (skipQueue) {
+        this.requestQueue.unshift(request);
+      } else {
+        this.requestQueue.push(request);
+      }
 
-      this.worker?.postMessage({ type, payload, id });
+      this.processQueue();
     });
   }
 
@@ -350,7 +387,7 @@ class VisionService {
    * Check if service is currently processing
    */
   public isBusy(): boolean {
-    return this.isProcessing || this.requestQueue.length > 0;
+    return this.pendingRequests.size > 0 || this.requestQueue.length > 0;
   }
 
   /**
@@ -371,14 +408,16 @@ class VisionService {
     
     // Reject all pending
     for (const [, pending] of this.pendingRequests) {
+      clearTimeout(pending.timeoutId);
       pending.reject(new Error('Service terminated'));
     }
     this.pendingRequests.clear();
     this.requestQueue = [];
     
-    this.worker?.terminate();
-    this.worker = null;
-    this.isProcessing = false;
+    for (const slot of this.workers) {
+      slot.worker.terminate();
+    }
+    this.workers = [];
   }
 }
 

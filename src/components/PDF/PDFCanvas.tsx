@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -8,7 +8,7 @@ import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { visionService } from '../../services/vision/VisionService';
 
 export const PDFCanvas: React.FC = () => {
-  const { fileUrl, currentPage, totalPages, setTotalPages, viewMode, sourceLanguage } = useProjectStore();
+  const { fileUrl, fileData, currentPage, totalPages, setTotalPages, viewMode, sourceLanguage } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const { allPagesOCR, showDebugOverlay } = useOCRTextLayerStore();
@@ -257,6 +257,12 @@ export const PDFCanvas: React.FC = () => {
     }
   };
 
+  const pdfSource = useMemo(() => {
+    if (!fileData) return fileUrl;
+    // Create a dedicated copy so pdf.js worker can transfer without detaching shared buffers.
+    return { data: new Uint8Array(fileData) };
+  }, [fileData, fileUrl]);
+
   return (
     <div 
       ref={containerRef}
@@ -278,8 +284,9 @@ export const PDFCanvas: React.FC = () => {
       >
         <div className="relative shadow-2xl">
           <Document
-            file={fileUrl}
+            file={pdfSource}
             onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={(error) => console.error('[PDFCanvas] PDF load error:', error)}
             className="flex flex-col gap-4"
           >
             {viewMode === 'single' ? (

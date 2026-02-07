@@ -7,7 +7,7 @@
  * - Collapsible
  */
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -19,8 +19,13 @@ interface LeftSidebarProps {
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) => {
-  const { fileUrl, currentPage, totalPages, setPage, viewMode, setViewMode } = useProjectStore();
+  const { fileUrl, fileData, currentPage, totalPages, setPage, viewMode, setViewMode } = useProjectStore();
   const [displayMode, setDisplayMode] = useState<'gallery' | 'list'>('gallery');
+  const pdfSource = useMemo(() => {
+    if (!fileData) return fileUrl;
+    // Create a dedicated copy so pdf.js worker can transfer without detaching shared buffers.
+    return { data: new Uint8Array(fileData) };
+  }, [fileData, fileUrl]);
 
   return (
     <aside 
@@ -109,7 +114,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           {displayMode === 'gallery' ? (
             // Gallery View - Thumbnails
-            <Document file={fileUrl} className="p-2 space-y-2">
+            <Document
+              file={pdfSource}
+              onLoadError={(error) => console.error('[LeftSidebar] PDF load error:', error)}
+              className="p-2 space-y-2"
+            >
               {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
                 <div 
                   key={pageNum}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus,
@@ -204,7 +204,7 @@ const TagPill: React.FC<{
 );
 
 export const UploadScreen: React.FC = () => {
-  const { loadProject, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
+  const { loadProject, setFileData, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
   const {
     viewMode, setViewMode,
     filterType, setFilterType,
@@ -222,6 +222,7 @@ export const UploadScreen: React.FC = () => {
 
   const [isDragging, setIsDragging] = useState(false);
   const [activePage, setActivePage] = useState<SidebarPage>('home');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load initial data
   useEffect(() => {
@@ -244,6 +245,32 @@ export const UploadScreen: React.FC = () => {
     }
   };
 
+  const handleBrowse = async () => {
+    if (window.electronAPI?.fs?.openFile) {
+      try {
+        const result = await window.electronAPI.fs.openFile();
+        if (!result) return;
+
+        const binaryString = atob(result.data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        const blob = new Blob([bytes], { type: result.mimeType });
+        const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+        Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
+        loadProject(file);
+        setFileData(bytes);
+        return;
+      } catch (error) {
+        console.error('Failed to open file:', error);
+      }
+    }
+
+    fileInputRef.current?.click();
+  };
+
   const handleOpenDocument = async (doc: DBDocument) => {
     // Use Electron's fs API for fast file reading
     try {
@@ -263,6 +290,7 @@ export const UploadScreen: React.FC = () => {
       Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
       
       loadProject(file);
+      setFileData(bytes);
     } catch (error) {
       console.error('Failed to open document:', error);
       // Fallback: Let user know they need to re-import
@@ -533,10 +561,12 @@ export const UploadScreen: React.FC = () => {
                     }
                   </p>
                   
-                  <label className="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold cursor-pointer transition-all shadow-lg shadow-cyan-900/20 text-sm">
+                  <button
+                    onClick={handleBrowse}
+                    className="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-bold cursor-pointer transition-all shadow-lg shadow-cyan-900/20 text-sm"
+                  >
                     Browse Files
-                    <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" onChange={handleFileSelect} />
-                  </label>
+                  </button>
                 </div>
               </div>
             </div>
@@ -561,10 +591,12 @@ export const UploadScreen: React.FC = () => {
         >
           <Upload size={24} className="mx-auto mb-2 text-slate-400" />
           <p className="text-xs text-slate-500">Drop file here</p>
-          <label className="mt-3 inline-block px-4 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs cursor-pointer">
+          <button
+            onClick={handleBrowse}
+            className="mt-3 inline-block px-4 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs cursor-pointer"
+          >
             Browse
-            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" onChange={handleFileSelect} />
-          </label>
+          </button>
         </div>
 
         {/* Mode Selection */}
@@ -634,6 +666,14 @@ export const UploadScreen: React.FC = () => {
           <p>💡 <strong>Tip:</strong> Press Ctrl+O to quickly open a file.</p>
         </div>
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept=".pdf,.jpg,.jpeg,.png"
+        onChange={handleFileSelect}
+      />
     </div>
   );
 };
