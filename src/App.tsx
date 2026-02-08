@@ -21,7 +21,6 @@ import {
   AlignCenter,
   AlignRight
 } from 'lucide-react';
-import { SmartCanvas } from './components/SmartCanvas';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore } from './stores/useProjectStore';
@@ -30,6 +29,7 @@ import { useProjectStore } from './stores/useProjectStore';
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
 const PDFCanvas = React.lazy(() => import('./components/PDF/PDFCanvas').then(module => ({ default: module.PDFCanvas })));
 const LeftSidebar = React.lazy(() => import('./components/Layout/LeftSidebar').then(module => ({ default: module.LeftSidebar })));
+const ImageCanvas = React.lazy(() => import('./components/Image/ImageCanvas').then(module => ({ default: module.ImageCanvas })));
 import { Region } from './types';
 import { visionService } from './services/vision/VisionService';
 import './types/electron.d'; // Import type declarations
@@ -64,6 +64,7 @@ export default function App() {
   const { activeTool, setActiveTool } = useUIStore();
   const { 
     file, 
+    fileType,
     currentPage, 
     totalPages, 
     setPage, 
@@ -260,12 +261,14 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         
         {/* 1. LEFT SIDEBAR - Pages Navigator Only */}
-        <React.Suspense fallback={<div className="w-48 bg-slate-800 border-r border-slate-700" />}>
-          <LeftSidebar 
-            isOpen={isLeftSidebarOpen} 
-            onToggle={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)} 
-          />
-        </React.Suspense>
+        {fileType === 'pdf' && (
+          <React.Suspense fallback={<div className="w-48 bg-slate-800 border-r border-slate-700" />}>
+            <LeftSidebar 
+              isOpen={isLeftSidebarOpen} 
+              onToggle={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)} 
+            />
+          </React.Suspense>
+        )}
 
         {/* 2. MAIN WORKSPACE (Canvas) */}
         <main className="flex-1 relative overflow-hidden bg-slate-950">
@@ -273,7 +276,7 @@ export default function App() {
             {file.type === 'application/pdf' ? (
               <PDFCanvas />
             ) : (
-              <SmartCanvas regions={regions} />
+              <ImageCanvas />
             )}
           </React.Suspense>
         </main>

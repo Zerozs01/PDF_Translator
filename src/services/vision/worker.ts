@@ -53,6 +53,94 @@ let tesseractWorker: Awaited<ReturnType<typeof createWorker>> | null = null;
 let currentLang = 'eng';
 let isInitializing = false;
 
+const THAI_CHAR_RE = /[\u0E00-\u0E7F]/;
+const CJK_CHAR_RE = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]/;
+const LATIN_CHAR_RE = /[A-Za-z0-9]/;
+
+const splitLangCodes = (lang: string): string[] =>
+  lang
+    .split('+')
+    .map(code => code.trim())
+    .filter(Boolean);
+
+const hasLangCode = (lang: string, code: string): boolean =>
+  splitLangCodes(lang).includes(code);
+
+const normalizeOcrText = (text: string): string => {
+  try {
+    return text.normalize('NFC');
+  } catch {
+    return text;
+  }
+};
+
+const isPunctOnly = (text: string): boolean => {
+  try {
+    return /^[\p{P}\p{S}]+$/u.test(text);
+  } catch {
+    return /^[^A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]+$/.test(text);
+  }
+};
+
+const joinWordsForLanguage = (words: OCRWord[]): string => {
+  if (words.length === 0) return '';
+  const heights = words
+    .map(w => Math.max(1, w.bbox.y1 - w.bbox.y0))
+    .sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const tightGap = Math.max(1, medianHeight * 0.2);
+  const wideGap = Math.max(1, medianHeight * 0.9);
+
+  let output = '';
+  let prevWord: OCRWord | null = null;
+  let prevText = '';
+
+  for (const word of words) {
+    const raw = normalizeOcrText(word.text || '');
+    const text = raw.trim();
+    if (!text) continue;
+
+    if (!prevWord) {
+      output = text;
+      prevWord = word;
+      prevText = text;
+      continue;
+    }
+
+    const gap = Math.max(0, word.bbox.x0 - prevWord.bbox.x1);
+    const prevIsThai = THAI_CHAR_RE.test(prevText);
+    const prevIsCjk = CJK_CHAR_RE.test(prevText);
+    const prevIsLatin = LATIN_CHAR_RE.test(prevText);
+    const currIsThai = THAI_CHAR_RE.test(text);
+    const currIsCjk = CJK_CHAR_RE.test(text);
+    const currIsLatin = LATIN_CHAR_RE.test(text);
+    const currIsPunct = isPunctOnly(text);
+
+    let addSpace = true;
+
+    if (currIsPunct) {
+      addSpace = false;
+    } else if ((prevIsThai || prevIsCjk) && (currIsThai || currIsCjk)) {
+      addSpace = gap > wideGap;
+    } else if (prevIsLatin && currIsLatin) {
+      addSpace = gap > tightGap;
+    } else if ((prevIsThai || prevIsCjk) && currIsLatin) {
+      addSpace = true;
+    } else if (prevIsLatin && (currIsThai || currIsCjk)) {
+      addSpace = true;
+    } else if (isPunctOnly(prevText)) {
+      addSpace = false;
+    } else {
+      addSpace = gap > tightGap;
+    }
+
+    output += `${addSpace ? ' ' : ''}${text}`;
+    prevWord = word;
+    prevText = text;
+  }
+  return output;
+};
+
 // ============================================
 // Configuration
 // ============================================
@@ -194,7 +282,11 @@ function getLangPath(): string | undefined {
 }
 
 function isCjkLanguage(lang: string): boolean {
-  return /^(kor|jpn|jpn_vert|chi_sim|chi_tra)$/.test(lang);
+  return splitLangCodes(lang).some(code => /^(kor|jpn|jpn_vert|chi_sim|chi_tra)$/.test(code));
+}
+
+function isThaiLanguage(lang: string): boolean {
+  return hasLangCode(lang, 'tha');
 }
 
 /**
@@ -565,7 +657,7 @@ function parseTSV(tsv: string): {
     // Level 5 = word
     if (level === 5) {
       level5Count++;
-      const word = { text, confidence: conf, bbox };
+      const word = { text: normalizeOcrText(text), confidence: conf, bbox };
       words.push(word);
 
       const pageNum = cols[COL.page] || '0';
@@ -615,7 +707,7 @@ function parseTSV(tsv: string): {
   // Build line objects from grouped words
   for (const [, group] of lineMap) {
     const sortedWords = sortWordsByOrientation(group.words);
-    const lineText = sortedWords.map(w => w.text).join(' ');
+    const lineText = joinWordsForLanguage(sortedWords);
     const avgConf = group.confidenceCount > 0
       ? group.confidenceSum / group.confidenceCount
       : 0;
@@ -849,7 +941,7 @@ function buildLinesFromWordsByY(words: Array<OCRWord>, pageHeight: number): Arra
 
   return lines.map(line => {
     const sortedWords = sortWordsByOrientation(line.words);
-    const text = sortedWords.map(w => w.text).join(' ');
+    const text = joinWordsForLanguage(sortedWords);
     return {
       text,
       confidence: line.confidenceSum / Math.max(1, sortedWords.length),
@@ -1014,7 +1106,7 @@ function makeLineFromWords(words: OCRWord[]): { text: string; confidence: number
     x1: Math.max(acc.x1, w.bbox.x1),
     y1: Math.max(acc.y1, w.bbox.y1),
   }), { ...sorted[0].bbox });
-  const text = sorted.map(w => w.text).join(' ');
+  const text = joinWordsForLanguage(sorted);
   const confidence = sorted.reduce((sum, w) => sum + w.confidence, 0) / sorted.length;
   return { text, confidence, bbox, words: sorted };
 }
@@ -1302,7 +1394,7 @@ function rebuildLinesFromWords(
       }), { ...sortedGroup[0].bbox });
 
       const avgConf = sortedGroup.reduce((sum, w) => sum + w.confidence, 0) / sortedGroup.length;
-      const text = sortedGroup.map(w => w.text).join(' ');
+      const text = joinWordsForLanguage(sortedGroup);
 
       rebuilt.push({
         text,
@@ -1575,7 +1667,7 @@ function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: B
     }), { ...filtered[0].bbox });
 
     const avgConf = filtered.reduce((sum, w) => sum + w.confidence, 0) / filtered.length;
-    const text = filtered.map(w => w.text).join(' ');
+    const text = joinWordsForLanguage(filtered);
 
     cleanedLines.push({
       text,
@@ -1675,7 +1767,7 @@ function groupWordsIntoRegions(
   
   // Convert to regions
   return merged.map((group, index) => {
-    const text = group.words.map(w => w.text).join(' ');
+    const text = joinWordsForLanguage(group.words as OCRWord[]);
     const avgConfidence = group.words.reduce((sum, w) => sum + w.confidence, 0) / group.words.length;
     
     const type = classifyRegion(
@@ -1746,7 +1838,7 @@ self.onmessage = async (e: MessageEvent) => {
         
         let gray: Uint8ClampedArray | undefined;
         try {
-          const binarize = CONFIG.OCR_BINARIZE && !isCjkLanguage(language);
+          const binarize = CONFIG.OCR_BINARIZE && !isCjkLanguage(language) && !isThaiLanguage(language);
           const preprocessed = await preprocessImage(imageUrl, { binarize, returnGray: true });
           processedInput = preprocessed.image;
           actualWidth = preprocessed.width;

@@ -71,6 +71,7 @@ export interface OCROptions {
   dpi: number;
   profile: "fast" | "balanced" | "best";
   pageSegMode?: number;
+  skipIfTextExists?: boolean;
 }
 
 /** Text Layer Generation Options */

@@ -84,10 +84,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           const buffer = await file.arrayBuffer();
           resolvedFileData = new Uint8Array(buffer);
         }
+        const dataForImport = new Uint8Array(resolvedFileData);
         const imported = await window.electronAPI.fs.importFile({
           name: file.name,
           mimeType: file.type || 'application/octet-stream',
-          data: resolvedFileData
+          data: dataForImport
         });
         if (imported?.filepath) {
           resolvedPath = imported.filepath;
@@ -109,6 +110,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const url = URL.createObjectURL(file);
     const type = file.type === 'application/pdf' ? 'pdf' : 'image';
+    const initialTotalPages = type === 'image' ? 1 : 0;
     set({ 
       file, 
       fileUrl: url, 
@@ -118,7 +120,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       documentId: null,
       fileData: resolvedFileData ?? null,
       currentPage: 1,
-      totalPages: 0
+      totalPages: initialTotalPages
     });
 
     if (resolvedPath && dbService.isAvailable()) {

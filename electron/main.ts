@@ -235,7 +235,7 @@ app.whenReady().then(() => {
       const result = await dialog.showOpenDialog({
         properties: ['openFile'],
         filters: [
-          { name: 'Documents', extensions: ['pdf', 'png', 'jpg', 'jpeg'] },
+          { name: 'Documents', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff'] },
           { name: 'All Files', extensions: ['*'] },
         ],
       });
@@ -257,6 +257,7 @@ app.whenReady().then(() => {
       const mimeType = ext === '.pdf' ? 'application/pdf' :
                        ext === '.png' ? 'image/png' :
                        ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
+                       ext === '.tif' || ext === '.tiff' ? 'image/tiff' :
                        'application/octet-stream';
 
       return {
@@ -288,7 +289,8 @@ app.whenReady().then(() => {
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === '.pdf' ? 'application/pdf' : 
                        ext === '.png' ? 'image/png' :
-                       ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 
+                       ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
+                       ext === '.tif' || ext === '.tiff' ? 'image/tiff' :
                        'application/octet-stream';
       
       return {

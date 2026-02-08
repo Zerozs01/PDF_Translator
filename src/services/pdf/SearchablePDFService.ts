@@ -13,6 +13,7 @@ import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
 import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions } from '../../types';
 import { dbService } from '../dbService';
+import { pdfjs } from './pdfjsWorker';
 
 export interface ProcessingProgress {
   stage: 'init' | 'rendering' | 'ocr' | 'text-layer' | 'saving' | 'complete';
@@ -24,11 +25,13 @@ export interface ProcessingProgress {
 
 export type ProgressCallback = (progress: ProcessingProgress) => void;
 export type OCRResultCallback = (pageNum: number, result: OCRPageResult) => void;
+export type CacheHitCallback = (pageNum: number, source: 'db') => void;
 
 export class SearchablePDFService {
   private textLayerService: TextLayerService;
   private onProgress: ProgressCallback | null = null;
   private onOCRResult: OCRResultCallback | null = null;
+  private onCacheHit: CacheHitCallback | null = null;
 
   constructor() {
     this.textLayerService = new TextLayerService();
@@ -46,6 +49,13 @@ export class SearchablePDFService {
    */
   setOCRResultCallback(callback: OCRResultCallback | null): void {
     this.onOCRResult = callback;
+  }
+
+  /**
+   * Set cache hit callback - called when a page uses cached OCR
+   */
+  setCacheHitCallback(callback: CacheHitCallback | null): void {
+    this.onCacheHit = callback;
   }
 
   /**
@@ -96,6 +106,9 @@ export class SearchablePDFService {
       signal.addEventListener('abort', onAbort, { once: true });
     }
 
+    let textCheckDoc: import('pdfjs-dist').PDFDocumentProxy | null = null;
+    let textCheckTask: { destroy?: () => void } | null = null;
+
     try {
       throwIfAborted();
 
@@ -118,9 +131,46 @@ export class SearchablePDFService {
 
     const canUseCache = Boolean(cacheDocId && dbService.isAvailable());
     const scale = options.dpi / 72;
+    const normalizeLanguage = (value: string): string =>
+      value
+        .split('+')
+        .map(v => v.trim())
+        .filter(Boolean)
+        .sort()
+        .join('+');
+    const normalizedLanguage = normalizeLanguage(options.language);
+    const skipIfTextExists = options.skipIfTextExists !== false;
+    const textCheckBytes = skipIfTextExists ? pdfBytes.slice(0) : null;
+
+    const textLayerCache = new Map<number, boolean>();
+
+    const hasExistingTextLayer = async (pageNum: number): Promise<boolean> => {
+      if (!skipIfTextExists) return false;
+      if (textLayerCache.has(pageNum)) return textLayerCache.get(pageNum) ?? false;
+
+      try {
+        if (!textCheckDoc) {
+          const data = textCheckBytes ? new Uint8Array(textCheckBytes) : new Uint8Array(pdfBytes.slice(0));
+          textCheckTask = pdfjs.getDocument({ data });
+          textCheckDoc = await (textCheckTask as any).promise;
+        }
+        const page = await textCheckDoc.getPage(pageNum);
+        const textContent = await page.getTextContent({ includeMarkedContent: true });
+        const hasText = textContent.items.some((item) => {
+          const text = (item as { str?: string }).str ?? '';
+          return text.trim().length > 0;
+        });
+        textLayerCache.set(pageNum, hasText);
+        return hasText;
+      } catch (error) {
+        console.warn(`[SearchablePDF] Failed to detect text layer for page ${pageNum}:`, error);
+        textLayerCache.set(pageNum, false);
+        return false;
+      }
+    };
 
     const isCacheCompatible = (cached: OCRPageResult): boolean => {
-      if (cached.language !== options.language) return false;
+      if (normalizeLanguage(cached.language) !== normalizedLanguage) return false;
       if (cached.dpi !== options.dpi) return false;
       if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
@@ -189,6 +239,12 @@ export class SearchablePDFService {
           let ocrResult: OCRPageResult | null = null;
           let usedCache = false;
 
+          if (await hasExistingTextLayer(pageNum)) {
+            stepProgress('ocr', `Text layer detected â€” skipping OCR for page ${pageNum}/${pagesToProcess}`, 2);
+            stepProgress('text-layer', `Using existing text layer for page ${pageNum}/${pagesToProcess}`, 1);
+            return;
+          }
+
           if (canUseCache && cacheDocId) {
             const cached = await dbService.getOCR(cacheDocId, pageNum);
             if (cached && isCacheCompatible(cached)) {
@@ -199,6 +255,9 @@ export class SearchablePDFService {
 
           if (usedCache && ocrResult) {
             ocrResult.pageNumber = pageNum;
+            if (this.onCacheHit) {
+              this.onCacheHit(pageNum, 'db');
+            }
             stepProgress('ocr', `ใช้ OCR จากแคช หน้า ${pageNum}/${pagesToProcess}`, 2);
           } else {
             throwIfAborted();
@@ -224,6 +283,7 @@ export class SearchablePDFService {
               options.pageSegMode,
               signal
             );
+            ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
@@ -304,6 +364,20 @@ export class SearchablePDFService {
     } finally {
       if (signal) {
         signal.removeEventListener('abort', onAbort);
+      }
+      if (textCheckDoc) {
+        try {
+          await textCheckDoc.destroy();
+        } catch {
+          // ignore
+        }
+      }
+      if (textCheckTask && typeof textCheckTask.destroy === 'function') {
+        try {
+          textCheckTask.destroy();
+        } catch {
+          // ignore
+        }
       }
     }
   }

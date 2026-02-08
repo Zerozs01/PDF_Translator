@@ -35,7 +35,7 @@ import { pdfjs } from '../../services/pdf/pdfjsWorker';
 // PDF.js worker is configured via pdfjsWorker
 
 export const OCRTextLayerPanel: React.FC = () => {
-  const { file, fileUrl, fileData, currentPage, ensureDocumentId } = useProjectStore();
+  const { file, fileUrl, fileData, fileType, currentPage, ensureDocumentId } = useProjectStore();
   const {
     options,
     setOptions,
@@ -99,7 +99,13 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
 
     const loadingPromise = (async () => {
-      const data = pdfDataRef.current ?? (() => {
+      const cached = pdfDataRef.current && pdfDataRef.current.byteLength > 0
+        ? pdfDataRef.current
+        : null;
+      if (!cached) {
+        pdfDataRef.current = null;
+      }
+      const data = cached ?? (() => {
         if (fileData) {
           return fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength);
         }
@@ -117,13 +123,22 @@ export const OCRTextLayerPanel: React.FC = () => {
     return loadingPromise;
   }, [file, fileData]);
 
+  const normalizeLanguage = useCallback((value: string): string => {
+    return value
+      .split('+')
+      .map(v => v.trim())
+      .filter(Boolean)
+      .sort()
+      .join('+');
+  }, []);
+
   const isCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
-    if (cached.language !== options.language) return false;
+    if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.dpi !== options.dpi) return false;
     if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
     return true;
-  }, [options]);
+  }, [options, normalizeLanguage]);
 
   const loadCachedOCR = useCallback(async (pageNum: number): Promise<boolean> => {
     setCacheStatus(null);
@@ -185,8 +200,36 @@ export const OCRTextLayerPanel: React.FC = () => {
    * 1) Render directly with pdf.js at target DPI (best OCR accuracy)
    * 2) Fallback to existing react-pdf canvas if pdf.js render fails
    */
+  const renderImageToCanvas = useCallback(async () => {
+    if (!file) throw new Error('No image loaded');
+    const imageBlob = fileData
+      ? new Blob([fileData], { type: file.type || 'image/png' })
+      : file;
+
+    const imageBitmap = await createImageBitmap(imageBlob);
+    const outputCanvas = document.createElement('canvas');
+    outputCanvas.width = imageBitmap.width;
+    outputCanvas.height = imageBitmap.height;
+    const ctx = outputCanvas.getContext('2d', { alpha: false });
+    if (!ctx) throw new Error('Cannot get canvas context');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(imageBitmap, 0, 0);
+    imageBitmap.close?.();
+    return {
+      canvas: outputCanvas,
+      width: outputCanvas.width,
+      height: outputCanvas.height
+    };
+  }, [file, fileData]);
+
   const renderPageToCanvas = useCallback(async (pageNum: number, targetDpi: number) => {
     if (!file) throw new Error('No PDF loaded');
+    if (fileType !== 'pdf') {
+      return renderImageToCanvas();
+    }
 
     const renderFromExistingCanvas = async () => {
       const existingCanvas = document.querySelector(
@@ -304,7 +347,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       console.warn('[OCRPanel] pdf.js render failed, falling back to existing canvas:', error);
       return renderFromExistingCanvas();
     }
-  }, [file, getPdfDoc]);
+  }, [file, fileType, getPdfDoc, renderImageToCanvas]);
 
   /**
    * Start OCR processing
@@ -373,6 +416,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       );
       visionService.setProgressCallback(null);
 
+      ocrResult.language = normalizeLanguage(options.language);
       ocrResult.pageNumber = pageNum;
       setPageOCR(pageNum, ocrResult);
 
@@ -422,6 +466,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     try {
       const controller = beginAbortableJob();
       setCacheStatus(null);
+      if (fileType !== 'pdf') {
+        await handleCurrentPageOCR(1, true);
+        return;
+      }
       setIsProcessing(true);
       
       // Set initial progress (don't call reset() here!)
@@ -439,6 +487,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       // Set up OCR result callback to store results for display
       searchablePDFService.setOCRResultCallback((pageNum, result) => {
         setPageOCR(pageNum, result);
+      });
+      const activeFile = file;
+      searchablePDFService.setCacheHitCallback((pageNum) => {
+        if (useProjectStore.getState().file !== activeFile) return;
+        if (pageNum === useProjectStore.getState().currentPage) {
+          setCacheStatus({ page: pageNum, source: 'db' });
+        }
       });
 
       // Read file as ArrayBuffer
@@ -461,10 +516,12 @@ export const OCRTextLayerPanel: React.FC = () => {
       
       // Clear callback
       searchablePDFService.setOCRResultCallback(null);
+      searchablePDFService.setCacheHitCallback(null);
 
     } catch (error) {
       if (isAbortError(error)) {
         searchablePDFService.setOCRResultCallback(null);
+        searchablePDFService.setCacheHitCallback(null);
         setProgress({
           stage: 'complete',
           currentPage: 0,
@@ -475,6 +532,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       } else {
         console.error('[OCRPanel] OCR processing failed:', error);
         searchablePDFService.setOCRResultCallback(null);
+        searchablePDFService.setCacheHitCallback(null);
         setProgress({
           stage: 'complete',
           currentPage: 0,
@@ -488,7 +546,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       searchablePDFService.setProgressCallback(null);
       setIsProcessing(false);
     }
-  }, [file, fileUrl, fileData, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, ensureDocumentId, beginAbortableJob, isAbortError]);
+  }, [file, fileUrl, fileData, fileType, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, ensureDocumentId, beginAbortableJob, isAbortError, handleCurrentPageOCR]);
 
   /**
    * Download searchable PDF from cached OCR results
@@ -528,24 +586,49 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   return (
     <div className="space-y-4 p-4">
-      {/* Language Selector */}
+      {/* Language Selector (Multi-select) */}
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs text-slate-400">
           <Languages size={12} />
-          OCR Language
+          OCR Languages
         </label>
-        <select
-          value={options.language}
-          onChange={(e) => setOptions({ language: e.target.value })}
-          disabled={isProcessing}
-          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 disabled:opacity-50"
-        >
-          {SUPPORTED_LANGUAGES.map(lang => (
-            <option key={lang.code} value={lang.code}>
-              {lang.name}
-            </option>
-          ))}
-        </select>
+        <div className="text-[10px] text-slate-500">
+          Selected: {options.language.split('+').filter(Boolean).map(code => {
+            const found = SUPPORTED_LANGUAGES.find(l => l.code === code);
+            return found ? found.name : code;
+          }).join(' + ') || 'English'}
+        </div>
+        <div className="max-h-36 overflow-y-auto border border-slate-600 rounded-lg bg-slate-700/40 p-2 space-y-1">
+          {SUPPORTED_LANGUAGES.map(lang => {
+            const selected = options.language.split('+').filter(Boolean).includes(lang.code);
+            return (
+              <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  disabled={isProcessing}
+                  onChange={() => {
+                    const current = new Set(options.language.split('+').filter(Boolean));
+                    if (current.has(lang.code)) {
+                      current.delete(lang.code);
+                    } else {
+                      current.add(lang.code);
+                    }
+                    if (current.size === 0) {
+                      current.add('eng');
+                    }
+                    const ordered = SUPPORTED_LANGUAGES
+                      .map(l => l.code)
+                      .filter(code => current.has(code));
+                    setOptions({ language: ordered.join('+') });
+                  }}
+                  className="accent-cyan-500"
+                />
+                <span>{lang.name}</span>
+              </label>
+            );
+          })}
+        </div>
       </div>
 
       {/* Debug Overlay Toggle */}
@@ -559,6 +642,21 @@ export const OCRTextLayerPanel: React.FC = () => {
           aria-label="Show OCR Overlay"
         />
       </div>
+
+      {/* Skip OCR if Text Exists (PDF only) */}
+      {fileType === 'pdf' && (
+        <div className="flex items-center justify-between bg-slate-700/40 border border-slate-600 rounded-lg px-3 py-2">
+          <span className="text-xs text-slate-300">Skip OCR if Text Exists</span>
+          <input
+            type="checkbox"
+            checked={options.skipIfTextExists !== false}
+            onChange={(e) => setOptions({ skipIfTextExists: e.target.checked })}
+            disabled={isProcessing}
+            className="accent-cyan-500"
+            aria-label="Skip OCR if Text Exists"
+          />
+        </div>
+      )}
 
       {/* Progress Bar */}
       {isProcessing && (
@@ -601,12 +699,12 @@ export const OCRTextLayerPanel: React.FC = () => {
       {/* Action Buttons */}
       <div className="space-y-2">
         <div className="flex gap-2">
-          {/* Main Button - All Pages */}
+          {/* Main Button */}
           <button
             onClick={() => handleStartOCR()}
             disabled={isProcessing || !file}
-            className="flex-[0.65] bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
-            title="Process all pages"
+            className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            title={fileType === 'pdf' ? 'Process all pages' : 'Process image'}
           >
             {isProcessing ? (
               <>
@@ -616,20 +714,22 @@ export const OCRTextLayerPanel: React.FC = () => {
             ) : (
               <>
                 <Play size={16} fill="currentColor" />
-                All Pages
+                {fileType === 'pdf' ? 'All Pages' : 'Run OCR'}
               </>
             )}
           </button>
 
-          {/* Current Page Button */}
-          <button
-            onClick={() => handleCurrentPageOCR(useProjectStore.getState().currentPage, true)}
-            disabled={isProcessing || !file}
-            className="flex-[0.35] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-slate-600"
-            title="Process current page only"
-          >
-            <span className="text-xs font-bold">Current</span>
-          </button>
+          {/* Current Page Button (PDF only) */}
+          {fileType === 'pdf' && (
+            <button
+              onClick={() => handleCurrentPageOCR(useProjectStore.getState().currentPage, true)}
+              disabled={isProcessing || !file}
+              className="flex-[0.35] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-slate-600"
+              title="Process current page only"
+            >
+              <span className="text-xs font-bold">Current</span>
+            </button>
+          )}
         </div>
 
         {isProcessing && (
@@ -642,7 +742,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           </button>
         )}
 
-        {totalOCRPages > 0 && !isProcessing && (
+        {fileType === 'pdf' && totalOCRPages > 0 && !isProcessing && (
           <div className="flex gap-2">
             <button
               onClick={() => handleDownloadFromCache('current')}

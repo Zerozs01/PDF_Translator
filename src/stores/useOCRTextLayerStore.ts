@@ -67,6 +67,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     language: 'eng',
     dpi: 300,
     profile: 'best',
+    skipIfTextExists: true,
   },
   
   setOptions: (newOptions) => set((state) => ({

@@ -836,7 +836,7 @@ export const UploadScreen: React.FC = () => {
         ref={fileInputRef}
         type="file"
         className="hidden"
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
         onChange={handleFileSelect}
       />
     </div>

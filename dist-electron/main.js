@@ -538,7 +538,7 @@ electron.app.whenReady().then(() => {
       const result = await electron.dialog.showOpenDialog({
         properties: ["openFile"],
         filters: [
-          { name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg"] },
+          { name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff"] },
           { name: "All Files", extensions: ["*"] }
         ]
       });
@@ -553,7 +553,7 @@ electron.app.whenReady().then(() => {
       const buffer = await fs.promises.readFile(safePath);
       const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
+      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
       return {
         filepath: safePath,
         data: buffer,
@@ -578,7 +578,7 @@ electron.app.whenReady().then(() => {
       const buffer = await fs.promises.readFile(safePath);
       const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
+      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
       return {
         data: buffer,
         mimeType,
