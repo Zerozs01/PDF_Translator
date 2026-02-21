@@ -11,6 +11,11 @@ import type { BBox, OCRWord, OCRLine } from './ocr-types';
 import { getAlphaNum, isNonLatinToken, joinWordsForLanguage } from './ocr-text-utils';
 import { sortWordsByOrientation } from './ocr-parsing';
 
+const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
+const KOR_JAMO_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
+const KOR_JAMO_RUN_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]{2,}/g;
+const KOR_ALLOWED_REPEAT_JAMO_RE = /^([ㅋㅎㅠㅜ])\1+$/;
+
 // ============================================
 // Background variance
 // ============================================
@@ -119,12 +124,40 @@ export function filterWordsByBackground(
 // Protected words
 // ============================================
 
-export function buildProtectedWordSet(lines: Array<OCRLine>): Set<OCRWord> {
+export function buildProtectedWordSet(
+  lines: Array<OCRLine>,
+  options: {
+    isCjk?: boolean;
+    isKorean?: boolean;
+  } = {}
+): Set<OCRWord> {
   const protectedWords = new Set<OCRWord>();
+  const { isCjk = false, isKorean = false } = options;
+
   for (const line of lines) {
     const lineWords = (line.words as OCRWord[]) || [];
     if (lineWords.length === 0) continue;
-    if (lineWords.length >= CONFIG.IMG_PROTECT_LINE_WORDS || line.confidence >= CONFIG.IMG_PROTECT_LINE_CONF) {
+
+    const lineText = joinWordsForLanguage(sortWordsByOrientation(lineWords.slice()));
+    const alphaNum = getAlphaNum(lineText);
+    const chars = alphaNum.length;
+    if (chars === 0) continue;
+
+    const syllableCount = isKorean ? (alphaNum.match(/[\uAC00-\uD7AF]/g) || []).length : 0;
+    const jamoCount = isKorean ? (alphaNum.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length : 0;
+    const repeatedJamoOnly = isKorean
+      && syllableCount === 0
+      && chars >= 2
+      && KOR_ALLOWED_REPEAT_JAMO_RE.test(alphaNum);
+    const likelyKorGhost = isKorean && (
+      (!repeatedJamoOnly && syllableCount === 0 && chars <= Math.max(CONFIG.CJK_GHOST_SHORT_CHARS, 8))
+      || (jamoCount > syllableCount && chars <= 10)
+    );
+
+    const strongByWordCount = lineWords.length >= CONFIG.IMG_PROTECT_LINE_WORDS && chars >= (isCjk ? 3 : 2);
+    const strongByConfidence = line.confidence >= CONFIG.IMG_PROTECT_LINE_CONF + (isCjk ? 4 : 0);
+
+    if (!likelyKorGhost && (strongByWordCount || strongByConfidence)) {
       for (const word of lineWords) protectedWords.add(word);
     }
   }
@@ -380,15 +413,12 @@ export function filterIsolatedCjkNoise(
 // Korean jamo ghost suppression
 // ============================================
 
-const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
-const KOR_JAMO_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
-
 export function filterKoreanJamoNoise(
   words: Array<OCRWord>,
-  protectedWords?: Set<OCRWord>
+  _protectedWords?: Set<OCRWord>
 ): Array<OCRWord> {
   return words.filter(word => {
-    if (protectedWords?.has(word)) return true;
+    // Don't hard-bypass with protectedWords here; otherwise ghost jamo tokens survive too easily.
     const alphaNum = getAlphaNum(word.text.trim());
     if (!alphaNum) return false;
 
@@ -408,14 +438,23 @@ export function filterKoreanJamoNoise(
       logDrop('korGhost', word, `ascii non-syllable len=${len} conf=${word.confidence.toFixed(0)}`);
       return false;
     }
+    if (!hasSyllable && hasJamo && (hasDigit || hasAscii)) {
+      logDrop('korGhost', word, 'mixed jamo+digit/ascii non-syllable');
+      return false;
+    }
     if (!hasJamo) return true;
 
     const repeatedJamo = /^([\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF])\1+$/.test(alphaNum);
+    const allowedRepeatedJamo = KOR_ALLOWED_REPEAT_JAMO_RE.test(alphaNum);
 
-    // Keep high-confidence laughter/emphasis tokens like "ㅋㅋ" / "ㅎㅎ"
-    if (!hasSyllable && repeatedJamo && len >= 2 && word.confidence >= 92) return true;
+    // Keep high-confidence laughter/emphasis tokens only (e.g. "ㅋㅋ", "ㅎㅎ", "ㅠㅠ", "ㅜㅜ")
+    if (!hasSyllable && repeatedJamo && allowedRepeatedJamo && len >= 2 && word.confidence >= 90) return true;
 
     if (!hasSyllable) {
+      if (repeatedJamo && !allowedRepeatedJamo) {
+        logDrop('korJamo', word, `disallowed repeated jamo len=${len}`);
+        return false;
+      }
       if (word.confidence < CONFIG.KOR_JAMO_STRICT_CONF) {
         logDrop('korJamo', word, `jamo-only len=${len} conf=${word.confidence.toFixed(0)}`);
         return false;
@@ -427,6 +466,18 @@ export function filterKoreanJamoNoise(
     const edgeJamo = KOR_JAMO_RE.test(alphaNum[0] || '') || KOR_JAMO_RE.test(alphaNum[alphaNum.length - 1] || '');
     if (edgeJamo && len <= 4 && word.confidence < CONFIG.KOR_JAMO_MIXED_STRICT_CONF) {
       logDrop('korJamo', word, `mixed edge-jamo len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+    const jamoRuns = alphaNum.match(KOR_JAMO_RUN_RE) || [];
+    const hasDisallowedJamoRun = jamoRuns.some(run => !KOR_ALLOWED_REPEAT_JAMO_RE.test(run));
+    if (hasSyllable && hasDisallowedJamoRun && len <= 10 && word.confidence < 99) {
+      logDrop('korJamo', word, `mixed disallowed jamo-run len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+    const syllableCount = (alphaNum.match(/[\uAC00-\uD7AF]/g) || []).length;
+    const jamoCount = (alphaNum.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length;
+    if (jamoCount > syllableCount && len <= 6 && word.confidence < 98) {
+      logDrop('korJamo', word, `jamo-heavy mixed token len=${len} conf=${word.confidence.toFixed(0)}`);
       return false;
     }
 
@@ -464,9 +515,13 @@ export function filterWeakIsolatedCjkLines(
     const totalChars = mergedAlpha.length;
     const syllables = (mergedAlpha.match(/[\uAC00-\uD7AF]/g) || []).length;
     const jamo = (mergedAlpha.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length;
+    const digits = (mergedAlpha.match(/[0-9]/g) || []).length;
+    const ascii = (mergedAlpha.match(/[A-Za-z]/g) || []).length;
+    const jamoRuns = mergedAlpha.match(KOR_JAMO_RUN_RE) || [];
+    const hasDisallowedJamoRun = jamoRuns.some(run => !KOR_ALLOWED_REPEAT_JAMO_RE.test(run));
     const repeatedJamoOnly = syllables === 0
       && mergedAlpha.length >= 2
-      && /^([\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF])\1+$/.test(mergedAlpha);
+      && KOR_ALLOWED_REPEAT_JAMO_RE.test(mergedAlpha);
 
     let lineVariance = CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN;
     if (gray && typeof width === 'number' && typeof height === 'number' && width > 1 && height > 1) {
@@ -497,12 +552,25 @@ export function filterWeakIsolatedCjkLines(
       && totalChars <= CONFIG.CJK_GHOST_SHORT_CHARS
       && line.confidence < CONFIG.CJK_GHOST_NO_SYLLABLE_CONF
       && !repeatedJamoOnly;
+    const aggressiveKorNoSyllableGhost = syllables === 0
+      && jamo > 0
+      && totalChars >= 2
+      && totalChars <= Math.max(CONFIG.CJK_GHOST_SHORT_CHARS, 8)
+      && !repeatedJamoOnly
+      && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN * 0.85;
     const jamoRatio = jamo / Math.max(1, syllables + jamo);
     const jamoHeavyWithSyllables = syllables > 0
       && jamoRatio >= CONFIG.CJK_GHOST_JAMO_RATIO_MIN
       && line.confidence < CONFIG.CJK_GHOST_LINE_CONF;
+    const explicitKorGhostLine = !repeatedJamoOnly && (
+      (syllables === 0 && totalChars > 0 && (jamo + digits + ascii) >= 2 && totalChars <= 12)
+      || (syllables > 0 && hasDisallowedJamoRun && totalChars <= 12 && line.confidence < 99)
+      || (syllables > 0 && digits >= 2 && jamo >= 1 && totalChars <= 10 && line.confidence < 99)
+    );
 
     const weakByShape = noSyllableShort
+      || aggressiveKorNoSyllableGhost
+      || explicitKorGhostLine
       || ((weakSingle || weakShort || jamoHeavyWithSyllables)
         && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN);
 
@@ -536,7 +604,7 @@ export function filterWeakIsolatedCjkLines(
       }
     }
 
-    if (hasNeighbor) {
+    if (hasNeighbor && !explicitKorGhostLine) {
       keptLines.push(line);
     } else {
       const keyWord = lineWords[0];

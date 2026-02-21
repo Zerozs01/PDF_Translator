@@ -23,13 +23,14 @@ export function findVerticalGapRegions(
   const heights = sorted.map(l => Math.max(1, l.bbox.y1 - l.bbox.y0)).sort((a, b) => a - b);
   const medianH = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
   const minGap = Math.max(pageHeight * CONFIG.CJK_VERTICAL_GAP_MIN_RATIO, medianH * CONFIG.CJK_VERTICAL_GAP_MIN_MULT);
+  const maxGap = Math.max(pageHeight * CONFIG.CJK_VERTICAL_GAP_MAX_RATIO, medianH * CONFIG.CJK_VERTICAL_GAP_MAX_MULT);
   const padY = medianH * CONFIG.CJK_VERTICAL_GAP_PAD_RATIO;
   const padX = medianH * (CONFIG.CJK_VERTICAL_GAP_PAD_RATIO * 1.2);
 
   const regions: Array<{ bbox: BBox; gap: number }> = [];
 
   const topGap = sorted[0].bbox.y0;
-  if (topGap > minGap) {
+  if (topGap > minGap && topGap <= maxGap) {
     regions.push({
       gap: topGap,
       bbox: {
@@ -43,7 +44,7 @@ export function findVerticalGapRegions(
 
   for (let i = 0; i < sorted.length - 1; i++) {
     const gap = sorted[i + 1].bbox.y0 - sorted[i].bbox.y1;
-    if (gap > minGap) {
+    if (gap > minGap && gap <= maxGap) {
       regions.push({
         gap,
         bbox: {

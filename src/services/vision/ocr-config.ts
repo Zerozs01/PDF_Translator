@@ -5,6 +5,8 @@
  * Phase A tuning should be done incrementally and tested per-change.
  */
 
+import type { BBox, OCRDroppedWord } from './ocr-types';
+
 export const CONFIG = {
   /** Enable verbose logging when words are dropped by filters */
   DEBUG_LOG_DROPS: false,
@@ -104,14 +106,32 @@ export const CONFIG = {
   CJK_SKIP_NOISE_FILTER_MAX_WORDS: 12,
   CJK_VERTICAL_GAP_MIN_RATIO: 0.07,
   CJK_VERTICAL_GAP_MIN_MULT: 2.4,
+  CJK_VERTICAL_GAP_MAX_RATIO: 0.2,
+  CJK_VERTICAL_GAP_MAX_MULT: 9.5,
   CJK_VERTICAL_GAP_MAX_PASSES: 2,
   CJK_VERTICAL_GAP_PAD_RATIO: 0.25,
   CJK_VERTICAL_GAP_CONF: 70,
-  CJK_LINE_RESCAN_MAX: 5,
+  CJK_VERTICAL_GAP_ENABLE_MAX_WORDS: 14,
+  CJK_LINE_RESCAN_MAX: 2,
   CJK_LINE_RESCAN_COVERAGE: 0.8,
   CJK_LINE_RESCAN_CONF: 62,
   CJK_LINE_RESCAN_PAD_X: 1.0,
   CJK_LINE_RESCAN_PAD_Y: 0.35,
+  CJK_LINE_RESCAN_ENABLE_MAX_WORDS: 22,
+  CJK_RECOVER_SINGLE_CONF: 93,
+  CJK_RECOVER_SHORT_CONF: 86,
+  CJK_RECOVER_MEDIUM_CONF: 74,
+  CJK_RECOVER_ISOLATED_SHORT_CONF: 92,
+  CJK_RECOVER_Y_OVERLAP_MIN: 0.28,
+  CJK_RECOVER_HEIGHT_RATIO_MIN: 0.55,
+  CJK_RECOVER_HEIGHT_RATIO_MAX: 1.95,
+  CJK_RECOVER_MAX_GAP_MULT: 3.4,
+  CJK_RECOVER_EDGE_MARGIN_MULT: 1.4,
+  CJK_RECOVER_EDGE_RELAX: 8,
+  CJK_RECOVERY_MAX_ADDED_WORDS: 8,
+  CJK_FALLBACK_ENABLE_MAX_WORDS: 16,
+  CJK_ENABLE_EMPTY_LINE_FALLBACK: true,
+  CJK_ENABLE_GAP_FALLBACK: false,
   LATIN_LINE_RESCAN_MAX: 2,
   LATIN_LINE_RESCAN_COVERAGE: 0.55,
   LATIN_LINE_RESCAN_CONF: 55,
@@ -119,7 +139,7 @@ export const CONFIG = {
   LATIN_LINE_RESCAN_PAD_Y: 0.25,
 
   // Isolated false-positive suppression (mainly CJK tokens on textured images)
-  ISOLATED_CJK_MAX_LEN: 2,
+  ISOLATED_CJK_MAX_LEN: 3,
   ISOLATED_CJK_MIN_CONF: 78,
   ISOLATED_CJK_SINGLE_CHAR_STRICT_CONF: 88,
   ISOLATED_NEIGHBOR_Y_OVERLAP: 0.35,
@@ -127,7 +147,7 @@ export const CONFIG = {
 
   // Korean jamo / weak-line ghost suppression
   KOR_JAMO_STRICT_CONF: 94,
-  KOR_JAMO_MIXED_STRICT_CONF: 93,
+  KOR_JAMO_MIXED_STRICT_CONF: 96,
   KOR_NONSYLLABLE_DIGIT_CONF: 98,
   KOR_NONSYLLABLE_ASCII_SHORT_CONF: 95,
   KOR_NONSYLLABLE_SHORT_MAX_LEN: 3,
@@ -144,11 +164,36 @@ export const CONFIG = {
   CJK_GHOST_NO_SYLLABLE_CONF: 95,
 };
 
+let dropCollector: OCRDroppedWord[] | null = null;
+
+export function startDropCollection(enabled: boolean): void {
+  dropCollector = enabled ? [] : null;
+}
+
+export function finishDropCollection(): OCRDroppedWord[] {
+  const dropped = dropCollector ? [...dropCollector] : [];
+  dropCollector = null;
+  return dropped;
+}
+
 /**
  * Log a filter drop when DEBUG_LOG_DROPS is enabled.
  * Centralised so filter code stays clean.
  */
-export function logDrop(filter: string, word: { text: string; confidence: number }, reason: string): void {
+export function logDrop(
+  filter: string,
+  word: { text: string; confidence: number; bbox?: BBox },
+  reason: string
+): void {
+  if (dropCollector) {
+    dropCollector.push({
+      filter,
+      reason,
+      text: word.text,
+      confidence: word.confidence,
+      bbox: word.bbox
+    });
+  }
   if (!CONFIG.DEBUG_LOG_DROPS) return;
   console.log(`[OCR-DROP] ${filter}: "${word.text}" (conf=${word.confidence.toFixed(0)}) — ${reason}`);
 }

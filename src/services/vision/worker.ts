@@ -24,7 +24,7 @@ import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 declare const self: any;
 
 // ── Extracted modules ──
-import { CONFIG } from './ocr-config';
+import { CONFIG, finishDropCollection, logDrop, startDropCollection } from './ocr-config';
 import type { BBox, OCRWord, OCRLine, TesseractResult, DocumentType } from './ocr-types';
 import { hasLangCode, isCjkLanguage, isThaiLanguage, getAlphaNum, isNonLatinToken } from './ocr-text-utils';
 import { preprocessImage, getImageDimensions } from './ocr-preprocessing';
@@ -32,7 +32,7 @@ import {
   parseTSV, buildLinesFromWordsByY, clampBBox,
   makeLineFromWords, mergeWordsIntoLine, findBestLineForBox,
   findBestLineBoxForLine, appendUniqueWords, rebuildLinesFromWords,
-  computeLineCoverageRatio, findLargeGaps,
+  computeLineCoverageRatio, findLargeGaps, normalizeFinalLines,
 } from './ocr-parsing';
 import {
   cleanLineNoise, buildProtectedWordSet, buildImageTileMask,
@@ -49,6 +49,7 @@ import { classifyRegion, groupWordsIntoRegions } from './ocr-region';
 let tesseractWorker: Awaited<ReturnType<typeof createWorker>> | null = null;
 let currentLang = 'eng';
 let isInitializing = false;
+const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
 
 function sendProgress(status: string, progress: number, workerId?: string): void {
   self.postMessage({ type: 'OCR_PROGRESS', payload: { status, progress, workerId } });
@@ -117,6 +118,160 @@ async function getOrCreateWorker(targetLang: string): Promise<Awaited<ReturnType
   return tesseractWorker;
 }
 
+function getMedianHeight(words: OCRWord[]): number {
+  const heights = words
+    .map(w => Math.max(1, w.bbox.y1 - w.bbox.y0))
+    .sort((a, b) => a - b);
+  return heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+}
+
+function getVerticalOverlapRatio(a: BBox, b: BBox): number {
+  const overlap = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const minH = Math.max(1, Math.min(a.y1 - a.y0, b.y1 - b.y0));
+  return overlap / minH;
+}
+
+function getMinHorizontalGap(candidate: OCRWord, lineWords: OCRWord[]): number {
+  let minGap = Number.POSITIVE_INFINITY;
+  for (const existing of lineWords) {
+    const gap = existing.bbox.x0 > candidate.bbox.x1
+      ? existing.bbox.x0 - candidate.bbox.x1
+      : (candidate.bbox.x0 > existing.bbox.x1 ? candidate.bbox.x0 - existing.bbox.x1 : 0);
+    if (gap < minGap) minGap = gap;
+    if (minGap === 0) break;
+  }
+  return Number.isFinite(minGap) ? minGap : 0;
+}
+
+function getRecoveredCjkMinConfidence(alphaNum: string): number {
+  if (alphaNum.length <= 1) return CONFIG.CJK_RECOVER_SINGLE_CONF;
+  if (alphaNum.length <= 2) return CONFIG.CJK_RECOVER_SHORT_CONF;
+  return CONFIG.CJK_RECOVER_MEDIUM_CONF;
+}
+
+function filterRecoveredCjkWords(
+  candidateWords: OCRWord[],
+  {
+    source,
+    minConf,
+    lineWords,
+    lineBox,
+    isKorean,
+  }: {
+    source: string;
+    minConf: number;
+    lineWords?: OCRWord[];
+    lineBox?: BBox;
+    isKorean: boolean;
+  }
+): OCRWord[] {
+  const medianHeight = lineWords && lineWords.length > 0 ? getMedianHeight(lineWords) : 0;
+  const maxGap = medianHeight > 0 ? medianHeight * CONFIG.CJK_RECOVER_MAX_GAP_MULT : 0;
+
+  return candidateWords.filter((word) => {
+    const raw = (word.text || '').trim();
+    if (!raw) {
+      logDrop('recoverCjk', word, `${source}: empty`);
+      return false;
+    }
+
+    const alphaNum = getAlphaNum(raw);
+    if (!alphaNum) {
+      logDrop('recoverCjk', word, `${source}: non-alnum`);
+      return false;
+    }
+
+    const localHeight = Math.max(1, word.bbox.y1 - word.bbox.y0);
+    const edgeMargin = lineBox
+      ? Math.max(8, (medianHeight || localHeight) * CONFIG.CJK_RECOVER_EDGE_MARGIN_MULT)
+      : 0;
+    const nearLineEdge = Boolean(
+      lineBox && (
+        word.bbox.x0 <= lineBox.x0 + edgeMargin
+        || word.bbox.x1 >= lineBox.x1 - edgeMargin
+      )
+    );
+
+    if (word.confidence < minConf) {
+      logDrop('recoverCjk', word, `${source}: conf<${minConf}`);
+      return false;
+    }
+
+    const dynMin = Math.max(
+      minConf,
+      getRecoveredCjkMinConfidence(alphaNum) - (nearLineEdge ? CONFIG.CJK_RECOVER_EDGE_RELAX : 0)
+    );
+    if (word.confidence < dynMin) {
+      logDrop('recoverCjk', word, `${source}: short token conf<${dynMin}`);
+      return false;
+    }
+
+    if (isKorean && !KOR_SYLLABLE_RE.test(alphaNum)) {
+      const hasDigit = /[0-9]/.test(alphaNum);
+      const hasAscii = /[A-Za-z]/.test(alphaNum);
+      if (hasDigit && alphaNum.length <= 3 && word.confidence < CONFIG.KOR_NONSYLLABLE_DIGIT_CONF) {
+        logDrop('recoverCjk', word, `${source}: digit non-syllable`);
+        return false;
+      }
+      if (hasAscii && alphaNum.length <= CONFIG.KOR_NONSYLLABLE_SHORT_MAX_LEN
+        && word.confidence < CONFIG.KOR_NONSYLLABLE_ASCII_SHORT_CONF) {
+        logDrop('recoverCjk', word, `${source}: ascii non-syllable`);
+        return false;
+      }
+    }
+
+    if (lineBox) {
+      const yOverlap = getVerticalOverlapRatio(word.bbox, lineBox);
+      const overlapStrictConf = nearLineEdge
+        ? CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF - 5
+        : CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF;
+      if (yOverlap < CONFIG.CJK_RECOVER_Y_OVERLAP_MIN && word.confidence < overlapStrictConf) {
+        logDrop('recoverCjk', word, `${source}: low y-overlap ${yOverlap.toFixed(2)}`);
+        return false;
+      }
+    }
+
+    if (lineWords && lineWords.length > 0 && medianHeight > 0) {
+      const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+      const hRatio = h / medianHeight;
+      if (
+        (hRatio < CONFIG.CJK_RECOVER_HEIGHT_RATIO_MIN || hRatio > CONFIG.CJK_RECOVER_HEIGHT_RATIO_MAX)
+        && word.confidence < CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF
+      ) {
+        logDrop('recoverCjk', word, `${source}: abnormal height ratio ${hRatio.toFixed(2)}`);
+        return false;
+      }
+
+      if (alphaNum.length <= 2) {
+        const minGap = getMinHorizontalGap(word, lineWords);
+        if (!nearLineEdge && minGap > maxGap && word.confidence < CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF) {
+          logDrop('recoverCjk', word, `${source}: isolated short gap=${minGap.toFixed(1)}`);
+          return false;
+        }
+      }
+    }
+
+    return true;
+  });
+}
+
+function takeRecoveryCandidates(
+  candidates: OCRWord[],
+  remainingBudget: number,
+  source: string
+): OCRWord[] {
+  if (remainingBudget <= 0 || candidates.length === 0) return [];
+  if (candidates.length <= remainingBudget) return candidates;
+
+  const sorted = candidates.slice().sort((a, b) => b.confidence - a.confidence);
+  const kept = sorted.slice(0, remainingBudget);
+  const dropped = sorted.slice(remainingBudget);
+  for (const word of dropped) {
+    logDrop('recoveryBudget', word, `${source}: budget exceeded`);
+  }
+  return kept;
+}
+
 // ============================================
 // Message Handler
 // ============================================
@@ -136,7 +291,18 @@ self.onmessage = async (e: MessageEvent) => {
 
       // ── OCR_FOR_TEXT_LAYER ──
       case 'OCR_FOR_TEXT_LAYER': {
-        const { imageUrl, imageWidth, imageHeight, language = 'eng', dpi = 300, pageSegMode } = payload;
+        const {
+          imageUrl,
+          imageWidth,
+          imageHeight,
+          language = 'eng',
+          dpi = 300,
+          pageSegMode,
+          debugCollectDrops = false
+        } = payload;
+        startDropCollection(Boolean(debugCollectDrops) || CONFIG.DEBUG_LOG_DROPS);
+
+        try {
 
         sendProgress('Preprocessing image...', 0);
 
@@ -144,6 +310,7 @@ self.onmessage = async (e: MessageEvent) => {
         let actualWidth = Math.round(imageWidth);
         let actualHeight = Math.round(imageHeight);
         const isCjk = isCjkLanguage(language);
+        const isKorean = hasLangCode(language, 'kor');
 
         let gray: Uint8ClampedArray | undefined;
         try {
@@ -250,21 +417,39 @@ self.onmessage = async (e: MessageEvent) => {
           }
         }
 
+        const baseWordCountBeforeRecovery = words.length;
+        const maxRecoveryAdded = isCjk ? CONFIG.CJK_RECOVERY_MAX_ADDED_WORDS : Number.POSITIVE_INFINITY;
+        let recoveryAdded = 0;
+        const remainingRecoveryBudget = (): number => {
+          if (!Number.isFinite(maxRecoveryAdded)) return Number.MAX_SAFE_INTEGER;
+          return Math.max(0, maxRecoveryAdded - recoveryAdded);
+        };
+
         // ── CJK vertical gap rescan ──
-        if (isCjk && !tooLarge && lines.length > 0) {
+        if (
+          isCjk
+          && !tooLarge
+          && lines.length > 0
+          && baseWordCountBeforeRecovery <= CONFIG.CJK_VERTICAL_GAP_ENABLE_MAX_WORDS
+          && remainingRecoveryBudget() > 0
+        ) {
           const gapRegions = findVerticalGapRegions(lines, actualWidth, actualHeight);
           if (gapRegions.length > 0) {
             let addedCount = 0;
             for (const region of gapRegions) {
+              if (remainingRecoveryBudget() <= 0) break;
               const regionWords = await recognizeRegion(worker, processedInput as Blob | string, region, Number(PSM.SPARSE_TEXT), actualWidth, actualHeight, dpi);
-              const filtered = regionWords.filter(w => {
-                if (w.confidence < CONFIG.CJK_VERTICAL_GAP_CONF) return false;
-                return getAlphaNum(w.text.trim()).length > 0;
+              const filtered = filterRecoveredCjkWords(regionWords, {
+                source: 'verticalGap',
+                minConf: CONFIG.CJK_VERTICAL_GAP_CONF,
+                isKorean,
               });
-              if (filtered.length === 0) continue;
-              const added = appendUniqueWords(words, filtered, 0.55);
+              const capped = takeRecoveryCandidates(filtered, remainingRecoveryBudget(), 'verticalGap');
+              if (capped.length === 0) continue;
+              const added = appendUniqueWords(words, capped, 0.55);
               if (added.length === 0) continue;
               addedCount += added.length;
+              recoveryAdded += added.length;
               const regionLines = buildLinesFromWordsByY(added, actualHeight);
               for (const rl of regionLines) {
                 const target = findBestLineForBox(lines, rl.bbox);
@@ -296,7 +481,13 @@ self.onmessage = async (e: MessageEvent) => {
           }
         };
 
-        const lineRescanMax = isCjk ? CONFIG.CJK_LINE_RESCAN_MAX : CONFIG.LATIN_LINE_RESCAN_MAX;
+        const lineRescanMax = isCjk
+          ? (
+            baseWordCountBeforeRecovery <= CONFIG.CJK_LINE_RESCAN_ENABLE_MAX_WORDS
+            ? CONFIG.CJK_LINE_RESCAN_MAX
+            : 0
+          )
+          : CONFIG.LATIN_LINE_RESCAN_MAX;
         if (lineRescanMax > 0 && !tooLarge && parsed && lines.length > 0 && parsed.lineBoxes.length > 0) {
           const coverageThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_COVERAGE : CONFIG.LATIN_LINE_RESCAN_COVERAGE;
           const confThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_CONF : CONFIG.LATIN_LINE_RESCAN_CONF;
@@ -307,6 +498,15 @@ self.onmessage = async (e: MessageEvent) => {
           for (const line of lines) {
             const lineWords = (line.words as OCRWord[]) || [];
             if (lineWords.length === 0) continue;
+            if (isCjk) {
+              const mergedAlpha = getAlphaNum(lineWords.map(w => (w.text || '').trim()).join(''));
+              if (!mergedAlpha) continue;
+              const syllableCount = isKorean ? (mergedAlpha.match(/[\uAC00-\uD7AF]/g) || []).length : 1;
+              const jamoCount = isKorean ? (mergedAlpha.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length : 0;
+              if (mergedAlpha.length <= 2 && line.confidence < confThreshold + 20) continue;
+              if (isKorean && syllableCount === 0 && line.confidence < confThreshold + 24) continue;
+              if (isKorean && jamoCount > syllableCount && mergedAlpha.length <= 8 && line.confidence < 98) continue;
+            }
             const lineBox = findBestLineBoxForLine(parsed.lineBoxes, line);
             if (!lineBox) continue;
             const coverage = computeLineCoverageRatio(lineWords, lineBox);
@@ -319,6 +519,7 @@ self.onmessage = async (e: MessageEvent) => {
             await ensureFallbackInput();
             let rescanAdded = 0;
             for (const item of limited) {
+              if (remainingRecoveryBudget() <= 0) break;
               const lineWords = (item.line.words as OCRWord[]) || [];
               if (lineWords.length === 0) continue;
               const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
@@ -333,15 +534,25 @@ self.onmessage = async (e: MessageEvent) => {
               const boxH = Math.max(1, item.lineBox.y1 - item.lineBox.y0);
               const linePsm = isCjk && boxH > boxW * 1.25 ? Number(PSM.SPARSE_TEXT) : Number(PSM.SINGLE_LINE);
               const regionWords = await recognizeRegion(worker, (fallbackInput ?? processedInput) as Blob | string, padded, linePsm, actualWidth, actualHeight, dpi);
-              const validWords = regionWords.filter(w => {
-                const raw = w.text.trim();
-                if (!raw || w.confidence < confThreshold) return false;
-                return getAlphaNum(raw).length > 0;
-              });
-              if (validWords.length === 0) continue;
-              const added = appendUniqueWords(words, validWords, 0.55);
+              const validWords = isCjk
+                ? filterRecoveredCjkWords(regionWords, {
+                  source: 'lineRescan',
+                  minConf: confThreshold,
+                  lineWords,
+                  lineBox: item.lineBox,
+                  isKorean,
+                })
+                : regionWords.filter(w => {
+                  const raw = w.text.trim();
+                  if (!raw || w.confidence < confThreshold) return false;
+                  return getAlphaNum(raw).length > 0;
+                });
+              const capped = takeRecoveryCandidates(validWords, remainingRecoveryBudget(), 'lineRescan');
+              if (capped.length === 0) continue;
+              const added = appendUniqueWords(words, capped, 0.55);
               if (added.length === 0) continue;
               rescanAdded += added.length;
+              recoveryAdded += added.length;
               mergeWordsIntoLine(item.line, added);
             }
             if (rescanAdded > 0) {
@@ -352,15 +563,24 @@ self.onmessage = async (e: MessageEvent) => {
         }
 
         // ── Fallback OCR for empty line boxes & large gaps ──
-        if (!tooLarge && parsed && words.length >= CONFIG.FALLBACK_MIN_WORDS && (parsed.lineBoxes.length > 0 || lines.length > 0)) {
+        if (
+          !tooLarge
+          && parsed
+          && words.length >= CONFIG.FALLBACK_MIN_WORDS
+          && (parsed.lineBoxes.length > 0 || lines.length > 0)
+          && (!isCjk || baseWordCountBeforeRecovery <= CONFIG.CJK_FALLBACK_ENABLE_MAX_WORDS)
+          && remainingRecoveryBudget() > 0
+        ) {
           let fallbackAdded = 0;
 
           // Empty line boxes
+          const allowEmptyLineFallback = !isCjk || CONFIG.CJK_ENABLE_EMPTY_LINE_FALLBACK;
           const emptyLineBoxes = parsed.lineBoxes.filter(line => !parsed.lineKeysWithWords.has(line.key));
-          if (emptyLineBoxes.length > 0) {
+          if (allowEmptyLineFallback && emptyLineBoxes.length > 0) {
             const limitedBoxes = emptyLineBoxes.slice(0, CONFIG.FALLBACK_MAX_EMPTY_LINES);
             await ensureFallbackInput();
             for (const lineBox of limitedBoxes) {
+              if (remainingRecoveryBudget() <= 0) break;
               const h = Math.max(1, lineBox.bbox.y1 - lineBox.bbox.y0);
               const padded: BBox = {
                 x0: lineBox.bbox.x0 - h * 0.25,
@@ -369,11 +589,20 @@ self.onmessage = async (e: MessageEvent) => {
                 y1: lineBox.bbox.y1 + h * 0.35
               };
               const regionWords = await recognizeRegion(worker, (fallbackInput ?? processedInput) as Blob | string, padded, Number(PSM.SINGLE_LINE), actualWidth, actualHeight, dpi);
-              const validWords = regionWords.filter(w => w.text.trim() && w.confidence >= CONFIG.FALLBACK_LINE_CONF);
-              if (validWords.length === 0) continue;
-              const added = appendUniqueWords(words, validWords, 0.55);
+              const validWords = isCjk
+                ? filterRecoveredCjkWords(regionWords, {
+                  source: 'emptyLineFallback',
+                  minConf: CONFIG.FALLBACK_LINE_CONF,
+                  lineBox: padded,
+                  isKorean,
+                })
+                : regionWords.filter(w => w.text.trim() && w.confidence >= CONFIG.FALLBACK_LINE_CONF);
+              const capped = takeRecoveryCandidates(validWords, remainingRecoveryBudget(), 'emptyLineFallback');
+              if (capped.length === 0) continue;
+              const added = appendUniqueWords(words, capped, 0.55);
               if (added.length === 0) continue;
               fallbackAdded += added.length;
+              recoveryAdded += added.length;
               const targetLine = findBestLineForBox(lines, padded);
               if (targetLine) mergeWordsIntoLine(targetLine, added);
               else lines.push(makeLineFromWords(added));
@@ -382,8 +611,11 @@ self.onmessage = async (e: MessageEvent) => {
 
           // Large gaps within lines
           let gapBudget = 20;
+          const allowGapFallback = !isCjk || CONFIG.CJK_ENABLE_GAP_FALLBACK;
           for (const line of lines) {
+            if (!allowGapFallback) break;
             if (gapBudget <= 0) break;
+            if (remainingRecoveryBudget() <= 0) break;
             const lineWords = (line.words as OCRWord[]) || [];
             if (lineWords.length === 0) continue;
             const gaps = lineWords.length >= 2 ? findLargeGaps(lineWords, isCjk) : [];
@@ -420,23 +652,39 @@ self.onmessage = async (e: MessageEvent) => {
             const limitedGaps = gapRegions.slice(0, 3);
             for (const gap of limitedGaps) {
               if (gapBudget <= 0) break;
+              if (remainingRecoveryBudget() <= 0) break;
               gapBudget -= 1;
               const gapPsm = isCjk ? Number(PSM.SINGLE_LINE) : Number(PSM.SINGLE_WORD);
               const gapWords = await recognizeRegion(worker, (fallbackInput ?? processedInput) as Blob | string, gap, gapPsm, actualWidth, actualHeight, dpi);
-              const validWords = gapWords.filter(w => {
-                const raw = w.text.trim();
-                const gapConf = isCjk ? CONFIG.FALLBACK_GAP_CONF_CJK : CONFIG.FALLBACK_GAP_CONF;
-                if (!raw || w.confidence < gapConf) return false;
-                const alphaNum = getAlphaNum(raw);
-                if (alphaNum.length === 0) return false;
-                const nonLatin = isNonLatinToken(alphaNum);
-                const maxLen = nonLatin ? CONFIG.FALLBACK_GAP_MAX_LEN_CJK : CONFIG.FALLBACK_GAP_MAX_LEN;
-                return alphaNum.length <= maxLen;
-              });
-              if (validWords.length === 0) continue;
-              const added = appendUniqueWords(words, validWords, 0.5);
+              const validWords = isCjk
+                ? filterRecoveredCjkWords(
+                  gapWords.filter(w => {
+                    const alphaNum = getAlphaNum((w.text || '').trim());
+                    return alphaNum.length > 0 && alphaNum.length <= CONFIG.FALLBACK_GAP_MAX_LEN_CJK;
+                  }),
+                  {
+                    source: 'gapFallback',
+                    minConf: CONFIG.FALLBACK_GAP_CONF_CJK,
+                    lineWords,
+                    lineBox: line.bbox,
+                    isKorean,
+                  }
+                )
+                : gapWords.filter(w => {
+                  const raw = w.text.trim();
+                  if (!raw || w.confidence < CONFIG.FALLBACK_GAP_CONF) return false;
+                  const alphaNum = getAlphaNum(raw);
+                  if (alphaNum.length === 0) return false;
+                  const nonLatin = isNonLatinToken(alphaNum);
+                  const maxLen = nonLatin ? CONFIG.FALLBACK_GAP_MAX_LEN_CJK : CONFIG.FALLBACK_GAP_MAX_LEN;
+                  return alphaNum.length <= maxLen;
+                });
+              const capped = takeRecoveryCandidates(validWords, remainingRecoveryBudget(), 'gapFallback');
+              if (capped.length === 0) continue;
+              const added = appendUniqueWords(words, capped, 0.5);
               if (added.length === 0) continue;
               fallbackAdded += added.length;
+              recoveryAdded += added.length;
               mergeWordsIntoLine(line, added);
             }
           }
@@ -449,7 +697,10 @@ self.onmessage = async (e: MessageEvent) => {
 
         // ── Image tile & background filters ──
         if (gray && words.length > 0) {
-          const protectedWords = buildProtectedWordSet(lines);
+          const protectedWords = buildProtectedWordSet(lines as OCRLine[], {
+            isCjk,
+            isKorean,
+          });
           const maskInfo = buildImageTileMask(gray, actualWidth, actualHeight, words);
           if (maskInfo && maskInfo.imageTiles > 0) {
             console.log(`[Worker] Image tiles: ${maskInfo.imageTiles}/${maskInfo.totalTiles}`);
@@ -515,9 +766,24 @@ self.onmessage = async (e: MessageEvent) => {
           });
         }
 
+        if (words.length > 0) {
+          const seededLines = buildLinesFromWordsByY(words, actualHeight) as OCRLine[];
+          const rebuiltFromWords = rebuildLinesFromWords(seededLines, words);
+          lines = normalizeFinalLines(rebuiltFromWords, isCjk);
+        }
+
         const finalText = lines.length > 0
           ? lines.map(line => line.text).filter(Boolean).join('\n')
           : (words.length > 0 ? words.map(w => w.text).join(' ') : (data?.text || ''));
+
+        const droppedWords = finishDropCollection();
+        const dropCounts = droppedWords.reduce<Record<string, number>>((acc, dropped) => {
+          acc[dropped.filter] = (acc[dropped.filter] || 0) + 1;
+          return acc;
+        }, {});
+        const debugInfo = droppedWords.length > 0
+          ? { droppedWords, dropCounts }
+          : undefined;
 
         console.log(`[Worker] OCR complete: ${words.length} words, ${lines.length} lines, conf=${data?.confidence?.toFixed(1)}%`);
 
@@ -535,9 +801,13 @@ self.onmessage = async (e: MessageEvent) => {
             lines,
             words,
             text: finalText,
-            confidence: data?.confidence || 0
+            confidence: data?.confidence || 0,
+            debug: debugInfo
           }
         });
+        } finally {
+          finishDropCollection();
+        }
         break;
       }
 

@@ -142,9 +142,10 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, [options, normalizeLanguage]);
 
   // UI cache compatibility: allow stale algorithm cache for preview,
-  // but still require language match to avoid showing wrong-language OCR.
+  // but still require language + algorithm version to avoid stale preview confusion.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
-    return normalizeLanguage(cached.language) === normalizeLanguage(options.language);
+    return normalizeLanguage(cached.language) === normalizeLanguage(options.language)
+      && cached.algorithmVersion === OCR_ALGORITHM_VERSION;
   }, [normalizeLanguage, options.language]);
 
   const loadCachedOCR = useCallback(async (pageNum: number): Promise<boolean> => {
@@ -465,7 +466,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         options.language,
         options.dpi,
         options.pageSegMode,
-        controller.signal
+        controller.signal,
+        showDebugOverlay
       );
       visionService.setProgressCallback(null);
 
@@ -508,7 +510,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       visionService.setProgressCallback(null);
       setIsProcessing(false);
     }
-  }, [file, fileUrl, options, renderPageToCanvas, ensureDocumentId, setIsProcessing, setProgress, setPageOCR, loadCachedOCR, beginAbortableJob, isAbortError]);
+  }, [file, fileUrl, options, renderPageToCanvas, ensureDocumentId, setIsProcessing, setProgress, setPageOCR, loadCachedOCR, beginAbortableJob, isAbortError, showDebugOverlay]);
 
   const handleStartOCR = useCallback(async (targetPages?: number[], forceReOCR: boolean = false) => {
     if (!file || !fileUrl) {
@@ -564,7 +566,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         targetPages,
         cacheDocId ?? undefined,
         controller.signal,
-        forceReOCR
+        forceReOCR,
+        showDebugOverlay
       );
       void resultBytes;
       
@@ -600,7 +603,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       searchablePDFService.setProgressCallback(null);
       setIsProcessing(false);
     }
-  }, [file, fileUrl, fileData, fileType, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, ensureDocumentId, beginAbortableJob, isAbortError, handleCurrentPageOCR]);
+  }, [file, fileUrl, fileData, fileType, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, ensureDocumentId, beginAbortableJob, isAbortError, handleCurrentPageOCR, showDebugOverlay]);
 
   /**
    * Download searchable PDF from cached OCR results
@@ -637,6 +640,14 @@ export const OCRTextLayerPanel: React.FC = () => {
   // Total OCR stats
   const totalOCRPages = allPagesOCR.size;
   const totalWords = Array.from(allPagesOCR.values()).reduce((sum, r) => sum + r.words.length, 0);
+  const currentDroppedCount = currentPageOCR?.debug?.droppedWords?.length ?? 0;
+  const currentDropSummary = currentPageOCR?.debug?.dropCounts
+    ? Object.entries(currentPageOCR.debug.dropCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([filter, count]) => `${filter}:${count}`)
+      .join(', ')
+    : '';
 
   return (
     <div className="space-y-4 p-4">
@@ -855,6 +866,11 @@ export const OCRTextLayerPanel: React.FC = () => {
               {currentPageOCR.words.length} คำ • {currentPageOCR.confidence.toFixed(0)}%
             </span>
           </div>
+          {showDebugOverlay && currentDroppedCount > 0 && (
+            <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">
+              dropped {currentDroppedCount} คำ{currentDropSummary ? ` (${currentDropSummary})` : ''}
+            </div>
+          )}
           
           <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-2 max-h-48 overflow-y-auto">
             {currentPageOCR.words.length > 0 ? (

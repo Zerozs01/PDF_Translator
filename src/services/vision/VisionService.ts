@@ -352,7 +352,8 @@ class VisionService {
     language: string = 'eng',
     dpi: number = 300,
     pageSegMode?: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    debugCollectDrops: boolean = false
   ): Promise<OCRPageResult> {
     return this.sendMessage('OCR_FOR_TEXT_LAYER', {
       imageUrl,
@@ -360,7 +361,8 @@ class VisionService {
       imageHeight,
       language,
       dpi,
-      pageSegMode
+      pageSegMode,
+      debugCollectDrops
     }, { signal });
   }
 

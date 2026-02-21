@@ -10,6 +10,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "tessdata:download": "node scripts/download-tessdata.js",
+    "ocr:regression": "node scripts/ocr-regression-report.js",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "repository": {

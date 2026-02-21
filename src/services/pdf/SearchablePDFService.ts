@@ -82,7 +82,8 @@ export class SearchablePDFService {
     pageRange?: number[], // Optional: specify pages to process (1-based)
     cacheDocId?: number,
     signal?: AbortSignal,
-    forceReOCR: boolean = false
+    forceReOCR: boolean = false,
+    debugCollectDrops: boolean = false
   ): Promise<Uint8Array> {
     const createAbortError = (reason: string = 'OCR job canceled'): Error => {
       const error = new Error(reason);
@@ -286,7 +287,8 @@ export class SearchablePDFService {
               options.language,
               options.dpi,
               options.pageSegMode,
-              signal
+              signal,
+              debugCollectDrops
             );
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;

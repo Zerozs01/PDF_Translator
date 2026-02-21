@@ -260,6 +260,111 @@ export function buildLinesFromWordsByY(
   });
 }
 
+function computeXOverlapRatio(a: BBox, b: BBox): number {
+  const overlap = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const minW = Math.max(1, Math.min(a.x1 - a.x0, b.x1 - b.x0));
+  return overlap / minW;
+}
+
+function computeYOverlapRatio(a: BBox, b: BBox): number {
+  const overlap = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const minH = Math.max(1, Math.min(a.y1 - a.y0, b.y1 - b.y0));
+  return overlap / minH;
+}
+
+function getLineAlphaNumChars(line: { text: string }): number {
+  return getAlphaNum((line.text || '').trim()).length;
+}
+
+/**
+ * Conservative split for non-Latin lines:
+ * only split when there is an unusually large horizontal gap.
+ */
+function splitLineWordsNonLatinConservative(lineWords: OCRWord[]): OCRWord[][] {
+  if (lineWords.length <= 1) return [lineWords];
+  const sorted = lineWords.slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const heights = sorted
+    .map(w => Math.max(1, w.bbox.y1 - w.bbox.y0))
+    .sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const gapThreshold = Math.max(36, medianHeight * 4.6);
+
+  const groups: OCRWord[][] = [];
+  let current: OCRWord[] = [];
+  for (const word of sorted) {
+    if (current.length === 0) {
+      current.push(word);
+      continue;
+    }
+    const prev = current[current.length - 1];
+    const prevW = Math.max(1, prev.bbox.x1 - prev.bbox.x0);
+    const gap = word.bbox.x0 - prev.bbox.x1;
+    if (gap > gapThreshold && gap > prevW * 1.15) {
+      groups.push(current);
+      current = [word];
+    } else {
+      current.push(word);
+    }
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+/**
+ * Final CJK normalization:
+ * merge only when two lines strongly overlap on Y (same baseline) and one is a tiny fragment.
+ */
+export function normalizeFinalLines(
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>,
+  isCjk: boolean
+): Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> {
+  if (!isCjk || lines.length <= 1) {
+    return lines.slice().sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  }
+
+  const heights = lines
+    .map(line => Math.max(1, line.bbox.y1 - line.bbox.y0))
+    .sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const maxXBridge = Math.max(10, medianHeight * 1.8);
+
+  const sorted = lines
+    .map(line => ({ ...line, words: sortWordsByOrientation((line.words || []).slice()) }))
+    .sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  const merged: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> = [];
+
+  for (const line of sorted) {
+    if (merged.length === 0) {
+      merged.push(line);
+      continue;
+    }
+
+    const prev = merged[merged.length - 1];
+    const yOverlapRatio = computeYOverlapRatio(prev.bbox, line.bbox);
+    const xOverlapRatio = computeXOverlapRatio(prev.bbox, line.bbox);
+    const hGap = line.bbox.x0 > prev.bbox.x1
+      ? line.bbox.x0 - prev.bbox.x1
+      : (prev.bbox.x0 > line.bbox.x1 ? prev.bbox.x0 - line.bbox.x1 : 0);
+
+    const prevChars = getLineAlphaNumChars(prev);
+    const lineChars = getLineAlphaNumChars(line);
+    const prevIsFragment = prev.words.length <= 1 || prevChars <= 2;
+    const lineIsFragment = line.words.length <= 1 || lineChars <= 2;
+
+    const sameBaseline = yOverlapRatio >= 0.82;
+    const nearInline = xOverlapRatio > 0.25 || hGap <= maxXBridge;
+    if (sameBaseline && nearInline && (prevIsFragment || lineIsFragment)) {
+      const combined = makeLineFromWords((prev.words as OCRWord[]).concat(line.words as OCRWord[]));
+      merged[merged.length - 1] = combined;
+      continue;
+    }
+
+    merged.push(line);
+  }
+
+  return merged;
+}
+
 export function makeLineFromWords(words: OCRWord[]): { text: string; confidence: number; bbox: BBox; words: OCRWord[] } {
   const sorted = sortWordsByOrientation(words.slice());
   const bbox = sorted.reduce((acc, w) => ({
@@ -353,7 +458,9 @@ export function rebuildLinesFromWords(
       return count + (token && isNonLatinToken(token) ? 1 : 0);
     }, 0);
     const mostlyNonLatin = nonLatinCount / Math.max(1, lineWords.length) >= 0.5;
-    const groups = mostlyNonLatin ? [lineWords] : splitLineWords(lineWords);
+    const groups = mostlyNonLatin
+      ? splitLineWordsNonLatinConservative(lineWords)
+      : splitLineWords(lineWords);
     for (const group of groups) {
       if (group.length === 0) continue;
       const sortedGroup = sortWordsByOrientation(group);

@@ -9,6 +9,19 @@ export interface BBox {
   y1: number;
 }
 
+export interface OCRDroppedWord {
+  filter: string;
+  reason: string;
+  text: string;
+  confidence: number;
+  bbox?: BBox;
+}
+
+export interface OCRDebugInfo {
+  droppedWords: OCRDroppedWord[];
+  dropCounts: Record<string, number>;
+}
+
 export interface OCRBlock {
   text: string;
   confidence: number;

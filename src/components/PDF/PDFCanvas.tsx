@@ -26,6 +26,15 @@ export const PDFCanvas: React.FC = () => {
   });
 
   const currentPageOCR = showDebugOverlay ? allPagesOCR.get(currentPage) : undefined;
+  const droppedDebugWords = useMemo(() => {
+    if (!showDebugOverlay || !currentPageOCR?.debug?.droppedWords) return [];
+    return currentPageOCR.debug.droppedWords.filter(item => {
+      if (!item.bbox) return false;
+      const w = item.bbox.x1 - item.bbox.x0;
+      const h = item.bbox.y1 - item.bbox.y0;
+      return w > 0 && h > 0;
+    });
+  }, [showDebugOverlay, currentPageOCR]);
 
   // State Ref for Event Listeners to avoid stale closures
   const stateRef = useRef({ zoom, pan });
@@ -340,6 +349,21 @@ export const PDFCanvas: React.FC = () => {
                             className="absolute bg-yellow-400/70"
                           />
                         </React.Fragment>
+                      );
+                    })}
+                    {droppedDebugWords.map((word, idx) => {
+                      const bbox = word.bbox!;
+                      const left = ocrOverlayTransform.offsetX + bbox.x0 * ocrOverlayTransform.scaleX;
+                      const top = ocrOverlayTransform.offsetY + bbox.y0 * ocrOverlayTransform.scaleY;
+                      const width = (bbox.x1 - bbox.x0) * ocrOverlayTransform.scaleX;
+                      const height = (bbox.y1 - bbox.y0) * ocrOverlayTransform.scaleY;
+                      return (
+                        <div
+                          key={`ocr-dropped-${idx}`}
+                          style={{ left, top, width, height }}
+                          title={`${word.filter}: ${word.text} (${word.reason})`}
+                          className="absolute border border-orange-400/70 border-dashed bg-orange-400/5"
+                        />
                       );
                     })}
                   </div>

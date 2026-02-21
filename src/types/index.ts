@@ -50,6 +50,19 @@ export interface OCRLine {
   words: OCRWord[];
 }
 
+export interface OCRDroppedWord {
+  filter: string;
+  reason: string;
+  text: string;
+  confidence: number;
+  bbox?: BBox;
+}
+
+export interface OCRDebugInfo {
+  droppedWords: OCRDroppedWord[];
+  dropCounts: Record<string, number>;
+}
+
 /** Page-level OCR result */
 export interface OCRPageResult {
   pageNumber: number;
@@ -63,6 +76,7 @@ export interface OCRPageResult {
   words: OCRWord[];
   text: string;
   confidence: number;
+  debug?: OCRDebugInfo;
 }
 
 /** OCR Processing Options */
