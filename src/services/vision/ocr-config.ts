@@ -1,0 +1,154 @@
+/**
+ * OCR Configuration — centralized thresholds and tunables
+ *
+ * Values match the original worker.ts CONFIG exactly (behavior-preserving).
+ * Phase A tuning should be done incrementally and tested per-change.
+ */
+
+export const CONFIG = {
+  /** Enable verbose logging when words are dropped by filters */
+  DEBUG_LOG_DROPS: false,
+
+  // Tesseract WASM core URL (stable version)
+  CORE_PATH: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/tesseract-core.wasm.js',
+  // Local language data path (served from app). Falls back to CDN if not found.
+  LANG_PATH: '/tessdata',
+
+  // Region classification thresholds
+  MIN_REGION_AREA: 100,
+  MIN_CONFIDENCE: 20,
+
+  // Balloon detection (for manga)
+  BALLOON_ASPECT_RATIO_MIN: 0.3,
+  BALLOON_ASPECT_RATIO_MAX: 3.5,
+  BALLOON_DENSITY_THRESHOLD: 0.15,
+
+  // SFX detection
+  SFX_MIN_FONT_SIZE_RATIO: 0.1,
+  SFX_MAX_WORDS: 3,
+
+  // OCR preprocessing
+  OCR_BINARIZE: true,
+
+  // Large image handling
+  MAX_OCR_WIDTH: 12000,
+  MAX_OCR_HEIGHT: 20000,
+  CHUNK_HEIGHT: 4000,
+  CHUNK_OVERLAP: 200,
+
+  // Photo-text filtering
+  PHOTO_BG_VARIANCE: 850,
+  PHOTO_FILTER_MIN_HEIGHT_RATIO: 0.028,
+  PHOTO_FILTER_MIN_CONFIDENCE: 80,
+  PHOTO_FILTER_MIN_CONFIDENCE_CJK: 68,
+
+  // Image tile detection
+  IMG_TILE_SIZE_MIN: 44,
+  IMG_TILE_SIZE_MAX: 88,
+  IMG_TILE_SAMPLE_STEP: 2,
+  IMG_TILE_MID_LOW: 40,
+  IMG_TILE_MID_HIGH: 220,
+  IMG_MID_RATIO: 0.4,
+  IMG_VARIANCE: 820,
+  IMG_EDGE: 23,
+  IMG_EDGE_VARIANCE: 480,
+  IMG_TEXT_WORDS_MIN: 1,
+  IMG_TEXT_COVERAGE_MIN: 0.05,
+  IMG_TEXT_CONF_MIN: 80,
+  IMG_HOLE_FILL_MIN: 7,
+  IMG_KEEP_LARGE_TEXT_RATIO: 0.045,
+  IMG_KEEP_LARGE_TEXT_CONF: 80,
+  IMG_PROTECT_LINE_WORDS: 2,
+  IMG_PROTECT_LINE_CONF: 65,
+  IMG_TILE_DROP_MAX_LEN: 2,
+  IMG_TILE_DROP_CONF: 70,
+  IMG_TILE_DROP_HEIGHT_RATIO: 0.02,
+  IMG_TILE_DROP_CONF_CJK: 78,
+  IMG_TILE_DROP_HEIGHT_RATIO_CJK: 0.028,
+  IMG_TILE_DROP_AR_CJK: 14,
+  IMG_KEEP_MIN_LEN: 4,
+  IMG_KEEP_MIN_CONF: 78,
+  IMG_KEEP_MIN_HEIGHT_RATIO: 0.022,
+  IMG_DROP_SHORT_MAX_LEN: 3,
+  IMG_DROP_SHORT_HEIGHT_RATIO: 0.025,
+
+  // Noise filtering
+  NOISE_MIN_CONF_SINGLE: 55,
+  NOISE_MIN_CONF_SHORT: 45,
+  NOISE_MIXEDCASE_CONF: 75,
+  NOISE_LEADING_CONF: 70,
+  NOISE_LEADING_HEIGHT_RATIO: 0.75,
+  NOISE_SHORT_HEIGHT_RATIO: 0.7,
+  NOISE_MIXEDCASE_HEIGHT_RATIO: 0.8,
+  NOISE_KEEP_SINGLE_CHARS: ['I', 'A'],
+  NOISE_KEEP_SINGLE_HEIGHT_RATIO: 0.7,
+
+  // Fallback OCR for missing tokens
+  FALLBACK_MAX_EMPTY_LINES: 8,
+  FALLBACK_LINE_CONF: 60,
+  FALLBACK_GAP_CONF: 60,
+  FALLBACK_GAP_CONF_CJK: 70,
+  FALLBACK_GAP_MAX_LEN: 2,
+  FALLBACK_GAP_MAX_LEN_CJK: 4,
+  FALLBACK_GAP_PAD_RATIO: 0.25,
+  FALLBACK_GAP_MIN_PX: 12,
+  FALLBACK_GAP_MEDIAN_MULT: 1.6,
+  FALLBACK_GAP_MEDIAN_MULT_CJK: 1.1,
+  FALLBACK_GAP_HEIGHT_MULT: 0.9,
+  FALLBACK_GAP_HEIGHT_MULT_CJK: 0.6,
+  FALLBACK_MIN_WORDS: 8,
+
+  // CJK retry heuristics
+  CJK_MIN_WORDS_BEFORE_RETRY: 6,
+  CJK_MIN_TEXT_CHARS_BEFORE_RETRY: 4,
+  CJK_SKIP_NOISE_FILTER_MAX_WORDS: 12,
+  CJK_VERTICAL_GAP_MIN_RATIO: 0.07,
+  CJK_VERTICAL_GAP_MIN_MULT: 2.4,
+  CJK_VERTICAL_GAP_MAX_PASSES: 2,
+  CJK_VERTICAL_GAP_PAD_RATIO: 0.25,
+  CJK_VERTICAL_GAP_CONF: 70,
+  CJK_LINE_RESCAN_MAX: 5,
+  CJK_LINE_RESCAN_COVERAGE: 0.8,
+  CJK_LINE_RESCAN_CONF: 62,
+  CJK_LINE_RESCAN_PAD_X: 1.0,
+  CJK_LINE_RESCAN_PAD_Y: 0.35,
+  LATIN_LINE_RESCAN_MAX: 2,
+  LATIN_LINE_RESCAN_COVERAGE: 0.55,
+  LATIN_LINE_RESCAN_CONF: 55,
+  LATIN_LINE_RESCAN_PAD_X: 0.7,
+  LATIN_LINE_RESCAN_PAD_Y: 0.25,
+
+  // Isolated false-positive suppression (mainly CJK tokens on textured images)
+  ISOLATED_CJK_MAX_LEN: 2,
+  ISOLATED_CJK_MIN_CONF: 78,
+  ISOLATED_CJK_SINGLE_CHAR_STRICT_CONF: 88,
+  ISOLATED_NEIGHBOR_Y_OVERLAP: 0.35,
+  ISOLATED_NEIGHBOR_GAP_MULT: 2.2,
+
+  // Korean jamo / weak-line ghost suppression
+  KOR_JAMO_STRICT_CONF: 94,
+  KOR_JAMO_MIXED_STRICT_CONF: 93,
+  KOR_NONSYLLABLE_DIGIT_CONF: 98,
+  KOR_NONSYLLABLE_ASCII_SHORT_CONF: 95,
+  KOR_NONSYLLABLE_SHORT_MAX_LEN: 3,
+  CJK_WEAK_LINE_MAX_WORDS: 3,
+  CJK_WEAK_LINE_MAX_CHARS: 4,
+  CJK_WEAK_LINE_SINGLE_CONF: 93,
+  CJK_WEAK_LINE_CONF: 88,
+  CJK_WEAK_LINE_NEIGHBOR_GAP_MULT: 2.4,
+  CJK_WEAK_LINE_X_OVERLAP_MIN: 0.22,
+  CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN: 260,
+  CJK_GHOST_JAMO_RATIO_MIN: 0.45,
+  CJK_GHOST_LINE_CONF: 90,
+  CJK_GHOST_SHORT_CHARS: 6,
+  CJK_GHOST_NO_SYLLABLE_CONF: 95,
+};
+
+/**
+ * Log a filter drop when DEBUG_LOG_DROPS is enabled.
+ * Centralised so filter code stays clean.
+ */
+export function logDrop(filter: string, word: { text: string; confidence: number }, reason: string): void {
+  if (!CONFIG.DEBUG_LOG_DROPS) return;
+  console.log(`[OCR-DROP] ${filter}: "${word.text}" (conf=${word.confidence.toFixed(0)}) — ${reason}`);
+}

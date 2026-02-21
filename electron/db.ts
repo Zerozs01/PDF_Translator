@@ -391,5 +391,22 @@ export const OCRCacheDAO = {
     if (!db) throw new Error('DB not initialized');
     const row = db.prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?').get(documentId, pageNumber) as { ocr_data: string } | undefined;
     return row ? JSON.parse(row.ocr_data) : null;
+  },
+
+  getLatestForDocument: (documentId: number) => {
+    if (!db) throw new Error('DB not initialized');
+    const row = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId) as { page_number: number; ocr_data: string; updated_at: number } | undefined;
+    if (!row) return null;
+    return {
+      page_number: row.page_number,
+      updated_at: row.updated_at,
+      ocr_data: JSON.parse(row.ocr_data)
+    };
   }
 };

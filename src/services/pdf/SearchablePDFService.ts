@@ -81,7 +81,8 @@ export class SearchablePDFService {
     renderPageToCanvas: (pageNum: number, dpi: number) => Promise<{ canvas: HTMLCanvasElement; width: number; height: number }>,
     pageRange?: number[], // Optional: specify pages to process (1-based)
     cacheDocId?: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    forceReOCR: boolean = false
   ): Promise<Uint8Array> {
     const createAbortError = (reason: string = 'OCR job canceled'): Error => {
       const error = new Error(reason);
@@ -120,8 +121,13 @@ export class SearchablePDFService {
       progress: 0
     });
 
+    // Clone bytes into dedicated buffers to avoid worker transfer/detach side effects.
+    const sourceBytes = new Uint8Array(pdfBytes);
+    const editBytes = sourceBytes.slice().buffer;
+    const textCheckSeed = sourceBytes.slice();
+
     // Load original PDF
-    const pdfDoc = await this.textLayerService.loadPDF(pdfBytes);
+    const pdfDoc = await this.textLayerService.loadPDF(editBytes as ArrayBuffer);
     const pages = pdfDoc.getPages();
     const totalPages = pages.length;
     const pageSet = pageRange ? new Set(pageRange) : null;
@@ -129,7 +135,7 @@ export class SearchablePDFService {
     const totalUnits = Math.max(1, pagesToProcess * 3);
     let completedUnits = 0;
 
-    const canUseCache = Boolean(cacheDocId && dbService.isAvailable());
+    const canUseCache = !forceReOCR && Boolean(cacheDocId && dbService.isAvailable());
     const scale = options.dpi / 72;
     const normalizeLanguage = (value: string): string =>
       value
@@ -139,8 +145,7 @@ export class SearchablePDFService {
         .sort()
         .join('+');
     const normalizedLanguage = normalizeLanguage(options.language);
-    const skipIfTextExists = options.skipIfTextExists !== false;
-    const textCheckBytes = skipIfTextExists ? pdfBytes.slice(0) : null;
+    const skipIfTextExists = !forceReOCR && options.skipIfTextExists !== false;
 
     const textLayerCache = new Map<number, boolean>();
 
@@ -150,7 +155,7 @@ export class SearchablePDFService {
 
       try {
         if (!textCheckDoc) {
-          const data = textCheckBytes ? new Uint8Array(textCheckBytes) : new Uint8Array(pdfBytes.slice(0));
+          const data = textCheckSeed.slice();
           textCheckTask = pdfjs.getDocument({ data });
           textCheckDoc = await (textCheckTask as any).promise;
         }

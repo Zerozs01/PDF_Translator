@@ -103,6 +103,34 @@ export const dbService = {
       console.error('Failed to get OCR:', error);
       return null;
     }
+  },
+
+  /**
+   * Retrieve latest OCR payload for a document (most recent page update)
+   */
+  async getLatestOCR(docId: number): Promise<{
+    page_number: number;
+    updated_at: number;
+    ocr_data: OCRPageResult;
+  } | null> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] getLatestOCR skipped: DB not available');
+        return null;
+      }
+      if (window.electronAPI?.db?.getLatestOCR) {
+        return await window.electronAPI.db.getLatestOCR(docId);
+      }
+      const data = await window.ipcRenderer.invoke('db:get-latest-ocr', { docId }) as {
+        page_number: number;
+        updated_at: number;
+        ocr_data: OCRPageResult;
+      } | null;
+      return data;
+    } catch (error) {
+      console.error('Failed to get latest OCR:', error);
+      return null;
+    }
   }
 };
 

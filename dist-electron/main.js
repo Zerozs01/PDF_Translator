@@ -362,6 +362,22 @@ const OCRCacheDAO = {
     if (!db) throw new Error("DB not initialized");
     const row = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
     return row ? JSON.parse(row.ocr_data) : null;
+  },
+  getLatestForDocument: (documentId) => {
+    if (!db) throw new Error("DB not initialized");
+    const row = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId);
+    if (!row) return null;
+    return {
+      page_number: row.page_number,
+      updated_at: row.updated_at,
+      ocr_data: JSON.parse(row.ocr_data)
+    };
   }
 };
 process.env.DIST = path.join(__dirname, "../dist");
@@ -462,6 +478,17 @@ electron.app.whenReady().then(() => {
       return OCRCacheDAO.get(docId, pageNum);
     } catch (error) {
       console.error("db:get-ocr error:", error);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("db:get-latest-ocr", async (_, { docId }) => {
+    if (!isValidNumber(docId)) {
+      throw new Error("Invalid input: docId must be a positive number");
+    }
+    try {
+      return OCRCacheDAO.getLatestForDocument(docId);
+    } catch (error) {
+      console.error("db:get-latest-ocr error:", error);
       return null;
     }
   });

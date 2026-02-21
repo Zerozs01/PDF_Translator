@@ -149,6 +149,19 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:get-latest-ocr', async (_, { docId }) => {
+    if (!isValidNumber(docId)) {
+      throw new Error('Invalid input: docId must be a positive number');
+    }
+
+    try {
+      return OCRCacheDAO.getLatestForDocument(docId);
+    } catch (error) {
+      console.error('db:get-latest-ocr error:', error);
+      return null;
+    }
+  });
+
   // ============================================
   // Document Management IPC Handlers
   // ============================================

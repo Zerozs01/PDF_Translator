@@ -71,6 +71,11 @@ export interface ElectronAPI {
     getDocument: (filepath: string) => Promise<{ id: number; total_pages: number } | null>;
     saveOCR: (docId: number, pageNum: number, data: OCRPageResult) => Promise<boolean>;
     getOCR: (docId: number, pageNum: number) => Promise<OCRPageResult | null>;
+    getLatestOCR: (docId: number) => Promise<{
+      page_number: number;
+      updated_at: number;
+      ocr_data: OCRPageResult;
+    } | null>;
     
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;

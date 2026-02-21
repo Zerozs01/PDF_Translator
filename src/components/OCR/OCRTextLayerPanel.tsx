@@ -50,7 +50,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   } = useOCRTextLayerStore();
 
   const [isExporting, setIsExporting] = useState(false);
-  const [cacheStatus, setCacheStatus] = useState<{ page: number; source: 'memory' | 'db' } | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<{ page: number; source: 'memory' | 'db'; stale?: boolean } | null>(null);
+  const autoSyncedDocRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
@@ -140,15 +141,22 @@ export const OCRTextLayerPanel: React.FC = () => {
     return true;
   }, [options, normalizeLanguage]);
 
+  // UI cache compatibility: allow stale algorithm cache for preview,
+  // but still require language match to avoid showing wrong-language OCR.
+  const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
+    return normalizeLanguage(cached.language) === normalizeLanguage(options.language);
+  }, [normalizeLanguage, options.language]);
+
   const loadCachedOCR = useCallback(async (pageNum: number): Promise<boolean> => {
     setCacheStatus(null);
     const activeFile = file;
     const state = useOCRTextLayerStore.getState();
     const memoryCached = state.allPagesOCR.get(pageNum);
-    if (memoryCached && isCacheCompatible(memoryCached)) {
+    if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
       if (useProjectStore.getState().file !== activeFile) return false;
       setPageOCR(pageNum, memoryCached);
-      setCacheStatus({ page: pageNum, source: 'memory' });
+      const stale = !isCacheCompatible(memoryCached);
+      setCacheStatus({ page: pageNum, source: 'memory', stale });
       return true;
     }
 
@@ -162,16 +170,52 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (!cacheDocId) return false;
 
     const cached = await dbService.getOCR(cacheDocId, pageNum);
-    if (cached && isCacheCompatible(cached)) {
+    if (cached && isDisplayCacheCompatible(cached)) {
       if (useProjectStore.getState().file !== activeFile) return false;
       cached.pageNumber = pageNum;
       setPageOCR(pageNum, cached);
-      setCacheStatus({ page: pageNum, source: 'db' });
+      const stale = !isCacheCompatible(cached);
+      setCacheStatus({ page: pageNum, source: 'db', stale });
       return true;
     }
 
     return false;
-  }, [file, isCacheCompatible, ensureDocumentId, setPageOCR]);
+  }, [file, isCacheCompatible, isDisplayCacheCompatible, ensureDocumentId, setPageOCR]);
+
+  const syncOptionsFromLatestCache = useCallback(async (): Promise<void> => {
+    if (!file) return;
+    let docId: number | null = null;
+    try {
+      docId = await ensureDocumentId();
+    } catch {
+      return;
+    }
+    if (!docId) return;
+    if (autoSyncedDocRef.current === docId) return;
+
+    const latest = await dbService.getLatestOCR(docId);
+    autoSyncedDocRef.current = docId;
+    if (!latest?.ocr_data) return;
+
+    const latestOCR = latest.ocr_data;
+    const latestLang = normalizeLanguage(latestOCR.language || 'eng');
+    const currentLang = normalizeLanguage(options.language || 'eng');
+    const nextPatch: Partial<typeof options> = {};
+
+    if (latestLang && latestLang !== currentLang) {
+      nextPatch.language = latestLang;
+    }
+    if (typeof latestOCR.dpi === 'number' && latestOCR.dpi > 0 && latestOCR.dpi !== options.dpi) {
+      nextPatch.dpi = latestOCR.dpi;
+    }
+    if (latestOCR.pageSegMode !== options.pageSegMode) {
+      nextPatch.pageSegMode = latestOCR.pageSegMode;
+    }
+
+    if (Object.keys(nextPatch).length > 0) {
+      setOptions(nextPatch);
+    }
+  }, [ensureDocumentId, file, normalizeLanguage, options.dpi, options.language, options.pageSegMode, setOptions]);
 
   const beginAbortableJob = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -189,6 +233,15 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (!file) return;
     void loadCachedOCR(currentPage);
   }, [file, currentPage, options.language, options.dpi, options.pageSegMode, loadCachedOCR]);
+
+  useEffect(() => {
+    autoSyncedDocRef.current = null;
+  }, [file]);
+
+  useEffect(() => {
+    if (!file) return;
+    void syncOptionsFromLatestCache();
+  }, [file, syncOptionsFromLatestCache]);
 
   // Get current page OCR result
   const currentPageOCR = allPagesOCR.get(currentPage);
@@ -457,7 +510,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [file, fileUrl, options, renderPageToCanvas, ensureDocumentId, setIsProcessing, setProgress, setPageOCR, loadCachedOCR, beginAbortableJob, isAbortError]);
 
-  const handleStartOCR = useCallback(async (targetPages?: number[]) => {
+  const handleStartOCR = useCallback(async (targetPages?: number[], forceReOCR: boolean = false) => {
     if (!file || !fileUrl) {
       console.error('No file loaded');
       return;
@@ -510,7 +563,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         renderPageToCanvas,
         targetPages,
         cacheDocId ?? undefined,
-        controller.signal
+        controller.signal,
+        forceReOCR
       );
       void resultBytes;
       
@@ -692,7 +746,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {cacheStatus && cacheStatus.page === currentPage && !isProcessing && (
         <div className="text-xs text-emerald-300 bg-emerald-900/30 border border-emerald-700 rounded-lg px-3 py-2">
-          Loaded from cache ({cacheStatus.source === 'memory' ? 'memory' : 'disk'})
+          Loaded from cache ({cacheStatus.source === 'memory' ? 'memory' : 'disk'}{cacheStatus.stale ? ', stale' : ''})
         </div>
       )}
 
@@ -731,6 +785,18 @@ export const OCRTextLayerPanel: React.FC = () => {
             </button>
           )}
         </div>
+
+        {fileType === 'pdf' && !isProcessing && (
+          <button
+            onClick={() => handleStartOCR(undefined, true)}
+            disabled={!file}
+            className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            title="Force re-run OCR for all pages (ignore cache)"
+          >
+            <RefreshCw size={16} />
+            Re-OCR All (Ignore Cache)
+          </button>
+        )}
 
         {isProcessing && (
           <button

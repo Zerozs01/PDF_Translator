@@ -9,6 +9,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:get-document',
   'db:save-ocr',
   'db:get-ocr',
+  'db:get-latest-ocr',
   // Document management
   'db:get-recent-documents',
   'db:get-documents-by-project',
@@ -86,6 +87,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data }),
     getOCR: (docId: number, pageNum: number) =>
       ipcRenderer.invoke('db:get-ocr', { docId, pageNum }),
+    getLatestOCR: (docId: number) =>
+      ipcRenderer.invoke('db:get-latest-ocr', { docId }),
     
     // Document management
     getRecentDocuments: (limit?: number) =>

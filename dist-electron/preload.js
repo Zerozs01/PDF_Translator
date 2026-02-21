@@ -11,6 +11,7 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     getDocument: (filepath) => electron.ipcRenderer.invoke("db:get-document", filepath),
     saveOCR: (docId, pageNum, data) => electron.ipcRenderer.invoke("db:save-ocr", { docId, pageNum, data }),
     getOCR: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum }),
+    getLatestOCR: (docId) => electron.ipcRenderer.invoke("db:get-latest-ocr", { docId }),
     // Document management
     getRecentDocuments: (limit) => electron.ipcRenderer.invoke("db:get-recent-documents", limit),
     getDocumentsByProject: (projectId) => electron.ipcRenderer.invoke("db:get-documents-by-project", projectId),
