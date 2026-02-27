@@ -175,13 +175,14 @@ export class SearchablePDFService {
       }
     };
 
-    const isCacheCompatible = (cached: OCRPageResult): boolean => {
-      if (normalizeLanguage(cached.language) !== normalizedLanguage) return false;
-      if (cached.dpi !== options.dpi) return false;
-      if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
-      if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
-      return true;
+    const getCacheIncompatibilityReason = (cached: OCRPageResult): string | null => {
+      if (normalizeLanguage(cached.language) !== normalizedLanguage) return 'language mismatch';
+      if (cached.dpi !== options.dpi) return 'dpi mismatch';
+      if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return 'pageSegMode mismatch';
+      if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
+      return null;
     };
+    const isCacheCompatible = (cached: OCRPageResult): boolean => getCacheIncompatibilityReason(cached) === null;
 
     const updateProgress = (
       stage: ProcessingProgress['stage'],
@@ -256,6 +257,11 @@ export class SearchablePDFService {
             if (cached && isCacheCompatible(cached)) {
               ocrResult = cached;
               usedCache = true;
+            } else if (cached) {
+              const reason = getCacheIncompatibilityReason(cached) ?? 'unknown';
+              console.log(`[SearchablePDF] Cache miss for page ${pageNum}: ${reason}`);
+            } else {
+              console.log(`[SearchablePDF] Cache miss for page ${pageNum}: no cached row`);
             }
           }
 
@@ -294,8 +300,11 @@ export class SearchablePDFService {
             ocrResult.pageNumber = pageNum;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
-            if (canUseCache && cacheDocId) {
-              await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+            if (cacheDocId && dbService.isAvailable()) {
+              const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+              if (!saved) {
+                console.warn(`[SearchablePDF] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
+              }
             }
           }
 

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import { createHash } from 'crypto'
 import { initDB, DocumentDAO, OCRCacheDAO, TagDAO, ProjectDAO } from './db'
 
 // The built directory structure
@@ -119,6 +120,19 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:get-document error:', error);
       return null;
+    }
+  });
+
+  ipcMain.handle('db:find-documents-by-filename', async (_, filename) => {
+    if (!isValidString(filename)) {
+      throw new Error('Invalid input: filename must be a non-empty string');
+    }
+
+    try {
+      return DocumentDAO.findByFilenameWithCacheStats(filename);
+    } catch (error) {
+      console.error('db:find-documents-by-filename error:', error);
+      return [];
     }
   });
 
@@ -347,12 +361,56 @@ app.whenReady().then(() => {
       const importDir = path.join(userDataDir, 'imports');
       await fs.promises.mkdir(importDir, { recursive: true });
 
-      const uniqueId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const targetPath = path.join(importDir, `${uniqueId}-${finalName}`);
+      // Use deterministic content-hash path so repeated imports hit the same DB document_id/cache key.
+      const contentHash = createHash('sha256').update(Buffer.from(rawData)).digest('hex').slice(0, 24);
+      const finalExt = ext || fallbackExt || path.extname(finalName) || '';
+      const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
+      let targetPath = hashedPath;
 
-      await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      if (!fs.existsSync(hashedPath)) {
+        // Backward-compat: try to reuse previously imported UUID-style file with identical content
+        // so existing document_id/OCR cache keeps working.
+        try {
+          const entries = await fs.promises.readdir(importDir, { withFileTypes: true });
+          const candidates = entries
+            .filter((entry) => entry.isFile())
+            .map((entry) => entry.name)
+            .filter((name) => {
+              if (name === path.basename(hashedPath)) return false;
+              if (name.endsWith(`-${finalName}`)) return true;
+              if (!finalExt) return true;
+              return path.extname(name).toLowerCase() === finalExt.toLowerCase();
+            });
+
+          for (const name of candidates) {
+            const candidatePath = path.join(importDir, name);
+            let stats: fs.Stats;
+            try {
+              stats = await fs.promises.stat(candidatePath);
+            } catch {
+              continue;
+            }
+            if (stats.size !== rawData.byteLength) continue;
+
+            try {
+              const candidateBytes = await fs.promises.readFile(candidatePath);
+              const candidateHash = createHash('sha256').update(candidateBytes).digest('hex').slice(0, 24);
+              if (candidateHash === contentHash) {
+                targetPath = candidatePath;
+                break;
+              }
+            } catch {
+              // Ignore unreadable candidate files and continue searching.
+            }
+          }
+        } catch {
+          // Ignore migration scan failures and fall back to hashed path write.
+        }
+      }
+
+      if (!fs.existsSync(targetPath)) {
+        await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      }
       const stats = await fs.promises.stat(targetPath);
 
       return {

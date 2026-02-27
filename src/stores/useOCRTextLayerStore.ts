@@ -99,7 +99,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   setSearchablePDFBlob: (blob) => set({ searchablePDFBlob: blob }),
 
   // Debug overlay
-  showDebugOverlay: false,
+  showDebugOverlay: true,
   setShowDebugOverlay: (show) => set({ showDebugOverlay: show }),
 
   // Actions
@@ -108,7 +108,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     progress: null,
     currentPageOCR: null,
     searchablePDFBlob: null,
-    showDebugOverlay: false,
+    showDebugOverlay: true,
     allPagesOCR: new Map(),
   }),
 }));

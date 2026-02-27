@@ -9,6 +9,7 @@
  */
 
 import { Region, OCRPageResult } from '../../types';
+import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 
 type WorkerMessage = {
   type: string;
@@ -89,9 +90,12 @@ class VisionService {
   }
 
   private createWorkerSlot(index: number): { worker: Worker; busy: boolean } {
-    const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+    const workerUrl = new URL('./worker.ts', import.meta.url);
+    workerUrl.searchParams.set('v', String(OCR_ALGORITHM_VERSION));
+    const worker = new Worker(workerUrl, {
       type: 'module',
     });
+    console.log(`[VisionService] Worker ${index} url=${workerUrl.toString()}`);
 
     worker.onmessage = (e) => {
       this.handleWorkerMessage(index, e.data);

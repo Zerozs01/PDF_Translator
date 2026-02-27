@@ -214,6 +214,26 @@ export const DocumentDAO = {
     return db.prepare('SELECT * FROM documents WHERE filepath = ?').get(filepath);
   },
 
+  findByFilenameWithCacheStats: (filename: string, limit: number = 20) => {
+    if (!db) throw new Error('DB not initialized');
+    return db.prepare(`
+      SELECT
+        d.id,
+        d.filepath,
+        d.filename,
+        d.total_pages,
+        d.last_accessed,
+        CAST(COUNT(o.page_number) AS INTEGER) AS cache_pages,
+        MAX(o.updated_at) AS last_cache_update
+      FROM documents d
+      LEFT JOIN ocr_cache o ON o.document_id = d.id
+      WHERE d.filename = ?
+      GROUP BY d.id
+      ORDER BY cache_pages DESC, last_cache_update DESC, d.last_accessed DESC
+      LIMIT ?
+    `).all(filename, limit);
+  },
+
   getById: (id: number) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare('SELECT * FROM documents WHERE id = ?').get(id);

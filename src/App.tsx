@@ -143,20 +143,25 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-900 text-slate-100 overflow-hidden font-sans">
+    <div className="relative flex flex-col h-screen w-screen bg-[#04060f] text-slate-100 overflow-hidden font-sans">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-24 -top-24 h-[22rem] w-[22rem] rounded-full bg-[#2B9BFF]/20 blur-3xl" />
+        <div className="absolute -right-24 top-1/3 h-[24rem] w-[24rem] rounded-full bg-[#FF7E67]/12 blur-3xl" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(43,155,255,0.12),transparent_46%),linear-gradient(130deg,rgba(4,6,15,0.96)_0%,rgba(6,9,20,0.98)_55%,rgba(5,7,14,0.99)_100%)]" />
+      </div>
       
       {/* HEADER TOOLBAR - Google Docs Style */}
-      <header className="h-12 bg-slate-800 border-b border-slate-700 flex items-center px-2 gap-1 shrink-0">
+      <header className="relative z-10 h-12 bg-slate-950/65 border-b border-white/10 backdrop-blur-xl flex items-center px-2 gap-1 shrink-0">
         {/* Home Button */}
         <button 
           onClick={handleBackToHome}
-          className="p-2 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+          className="p-2 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
           title="Back to Home"
         >
           <Home size={18} />
         </button>
 
-        <div className="w-px h-6 bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-white/10 mx-1" />
 
         {/* Editable Filename */}
         <div className="flex items-center min-w-0 max-w-xs">
@@ -170,13 +175,13 @@ export default function App() {
                 if (e.key === 'Enter') setIsEditingName(false);
                 if (e.key === 'Escape') { setEditedName(file?.name || ''); setIsEditingName(false); }
               }}
-              className="bg-slate-700 border border-cyan-500 rounded px-2 py-1 text-sm text-white focus:outline-none min-w-[120px]"
+              className="bg-slate-900/70 border border-[#2B9BFF]/60 rounded px-2 py-1 text-sm text-white focus:outline-none min-w-[120px]"
               autoFocus
             />
           ) : (
             <button 
               onClick={() => { setEditedName(file?.name || ''); setIsEditingName(true); }}
-              className="text-sm text-slate-200 hover:text-white truncate px-2 py-1 rounded hover:bg-slate-700 transition-colors"
+              className="text-sm text-slate-200 hover:text-white truncate px-2 py-1 rounded hover:bg-white/10 transition-colors"
               title="Click to rename"
             >
               {editedName || file?.name || 'Untitled'}
@@ -188,68 +193,68 @@ export default function App() {
         <div className="flex-1" />
 
         {/* Undo/Redo */}
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Undo">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Undo">
           <Undo2 size={16} />
         </button>
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Redo">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Redo">
           <Redo2 size={16} />
         </button>
 
-        <div className="w-px h-6 bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-white/10 mx-1" />
 
         {/* Drawing Tools */}
         <button 
           onClick={() => setActiveTool('select')}
-          className={`p-2 rounded transition-colors ${activeTool === 'select' ? 'bg-cyan-600 text-white' : 'hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+          className={`p-2 rounded transition-colors ${activeTool === 'select' ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}
           title="Select Tool (V)"
         >
           <MousePointer2 size={16} />
         </button>
         <button 
           onClick={() => setActiveTool('hand')}
-          className={`p-2 rounded transition-colors ${activeTool === 'hand' ? 'bg-cyan-600 text-white' : 'hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+          className={`p-2 rounded transition-colors ${activeTool === 'hand' ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}
           title="Pan Tool (H)"
         >
           <Hand size={16} />
         </button>
         <button 
           onClick={() => setActiveTool('region')}
-          className={`p-2 rounded transition-colors ${activeTool === 'region' ? 'bg-cyan-600 text-white' : 'hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+          className={`p-2 rounded transition-colors ${activeTool === 'region' ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}
           title="Draw Region (R)"
         >
           <Square size={16} />
         </button>
         <button 
           onClick={() => setActiveTool('text')}
-          className={`p-2 rounded transition-colors ${activeTool === 'text' ? 'bg-cyan-600 text-white' : 'hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+          className={`p-2 rounded transition-colors ${activeTool === 'text' ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}
           title="Text Tool (T)"
         >
           <Type size={16} />
         </button>
 
-        <div className="w-px h-6 bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-white/10 mx-1" />
 
         {/* Text Formatting */}
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Bold">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Bold">
           <Bold size={16} />
         </button>
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Italic">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Italic">
           <Italic size={16} />
         </button>
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Underline">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Underline">
           <Underline size={16} />
         </button>
 
-        <div className="w-px h-6 bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-white/10 mx-1" />
 
         {/* Text Align */}
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Align Left">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Left">
           <AlignLeft size={16} />
         </button>
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Align Center">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Center">
           <AlignCenter size={16} />
         </button>
-        <button className="p-2 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition-colors" title="Align Right">
+        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Right">
           <AlignRight size={16} />
         </button>
 
@@ -258,11 +263,11 @@ export default function App() {
       </header>
 
       {/* MAIN CONTENT AREA */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative z-10 flex flex-1 overflow-hidden">
         
         {/* 1. LEFT SIDEBAR - Pages Navigator Only */}
         {fileType === 'pdf' && (
-          <React.Suspense fallback={<div className="w-48 bg-slate-800 border-r border-slate-700" />}>
+          <React.Suspense fallback={<div className="w-48 bg-slate-950/55 border-r border-white/10" />}>
             <LeftSidebar 
               isOpen={isLeftSidebarOpen} 
               onToggle={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)} 
@@ -271,7 +276,7 @@ export default function App() {
         )}
 
         {/* 2. MAIN WORKSPACE (Canvas) */}
-        <main className="flex-1 relative overflow-hidden bg-slate-950">
+        <main className="flex-1 relative overflow-hidden bg-[#050b1d]">
           <React.Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500">Loading Canvas...</div>}>
             {file.type === 'application/pdf' ? (
               <PDFCanvas />
@@ -282,7 +287,7 @@ export default function App() {
         </main>
 
         {/* 3. RIGHT SIDEBAR - OCR & Settings */}
-        <React.Suspense fallback={<div className="w-80 bg-slate-800 border-l border-slate-700" />}>
+        <React.Suspense fallback={<div className="w-80 bg-slate-950/55 border-l border-white/10" />}>
           <RightSidebar 
             isAiProcessing={isAiProcessing}
             onAiTranslate={handleAiTranslate}

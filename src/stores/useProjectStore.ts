@@ -47,6 +47,10 @@ interface ProjectState {
   updateSafetySettings: (settings: Partial<SafetySettings>) => void;
 }
 
+const isImportedCachePath = (value: string | null): boolean =>
+  typeof value === 'string'
+  && /[\\/]imports[\\/][a-f0-9]{16,}\.[^\\/]+$/i.test(value);
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   file: null,
   fileUrl: null,
@@ -73,12 +77,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loadProject: async (file, fileData) => {
     // Clear OCR cache when loading a new file to avoid cross-file reuse
     useOCRTextLayerStore.getState().reset();
-    // Save document to database for recent files tracking
-    // We need filepath - for dropped/selected files we can try to get path
-    let resolvedPath = (file as unknown as { path?: string }).path ?? null;
+    // Save document to database for recent files tracking.
+    // Use a canonical imported filepath when possible so OCR cache keys are stable
+    // across open methods (browse, drag/drop, recent list).
+    const sourcePath = (file as unknown as { path?: string }).path ?? null;
+    let resolvedPath = sourcePath;
     let resolvedFileData = fileData ?? null;
+    let importedPath: string | null = null;
 
-    if (!resolvedPath && window.electronAPI?.fs?.importFile) {
+    if (window.electronAPI?.fs?.importFile) {
       try {
         if (!resolvedFileData) {
           const buffer = await file.arrayBuffer();
@@ -91,10 +98,56 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           data: dataForImport
         });
         if (imported?.filepath) {
-          resolvedPath = imported.filepath;
+          // Canonical stable path (content-hash based in main process).
+          importedPath = imported.filepath;
         }
       } catch (error) {
-        console.warn('[DB] Failed to import file for recent list:', error);
+        console.warn('[DB] Failed to import canonical file path, fallback to source path:', error);
+      }
+    }
+
+    // Keep legacy/source path if it already exists in DB (preserve old OCR cache/doc_id).
+    if (sourcePath && dbService.isAvailable()) {
+      try {
+        const existingSourceDoc = await dbService.getDocument(sourcePath);
+        if (existingSourceDoc?.id) {
+          resolvedPath = sourcePath;
+        } else if (importedPath) {
+          resolvedPath = importedPath;
+        }
+      } catch {
+        if (importedPath) resolvedPath = importedPath;
+      }
+    } else if (importedPath) {
+      resolvedPath = importedPath;
+    }
+
+    // Migration fallback:
+    // If we opened an imported (hash-path) file that has no OCR rows yet,
+    // but there is exactly one older document with the same filename and OCR cache,
+    // reuse that path so cache lookup remains backward compatible.
+    if (resolvedPath && dbService.isAvailable() && isImportedCachePath(resolvedPath)) {
+      try {
+        const activeDoc = await dbService.getDocument(resolvedPath);
+        const hasCurrentCache = Boolean(activeDoc?.id && await dbService.getLatestOCR(activeDoc.id));
+        if (!hasCurrentCache) {
+          const candidates = await dbService.findDocumentsByFilename(file.name);
+          const cacheCandidates = candidates.filter(
+            candidate => candidate.cache_pages > 0 && candidate.filepath !== resolvedPath
+          );
+          if (cacheCandidates.length === 1) {
+            resolvedPath = cacheCandidates[0].filepath;
+            console.log(
+              `[DB] Reusing OCR-backed document ${cacheCandidates[0].id} for "${file.name}" (cache pages: ${cacheCandidates[0].cache_pages})`
+            );
+          } else if (cacheCandidates.length > 1) {
+            console.warn(
+              `[DB] Multiple OCR-backed candidates found for "${file.name}". Keeping current imported path to avoid ambiguity.`
+            );
+          }
+        }
+      } catch (error) {
+        console.warn('[DB] Failed OCR cache fallback by filename:', error);
       }
     }
 
@@ -135,7 +188,31 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   ensureDocumentId: async () => {
     if (!dbService.isAvailable()) return null;
     const { documentId, file, filePath } = get();
-    if (documentId) return documentId;
+
+    if (documentId) {
+      if (file && filePath && isImportedCachePath(filePath)) {
+        try {
+          const hasCurrentCache = Boolean(await dbService.getLatestOCR(documentId));
+          if (!hasCurrentCache) {
+            const candidates = await dbService.findDocumentsByFilename(file.name);
+            const cacheCandidates = candidates.filter(
+              candidate => candidate.cache_pages > 0 && candidate.id !== documentId
+            );
+            if (cacheCandidates.length === 1) {
+              const preferred = cacheCandidates[0];
+              console.log(
+                `[DB] Switching documentId ${documentId} -> ${preferred.id} for OCR cache compatibility`
+              );
+              set({ documentId: preferred.id, filePath: preferred.filepath });
+              return preferred.id;
+            }
+          }
+        } catch (error) {
+          console.warn('[DB] Failed to resolve legacy OCR cache document id:', error);
+        }
+      }
+      return documentId;
+    }
 
     const path = filePath ?? (file as unknown as { path?: string }).path ?? null;
     if (!path || !file) {

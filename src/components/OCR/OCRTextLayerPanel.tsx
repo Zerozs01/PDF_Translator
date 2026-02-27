@@ -11,20 +11,16 @@
 
 import React, { useCallback, useRef, useEffect, useState } from 'react';
 import {
-  FileText, 
-  Settings, 
   Play, 
   Download, 
   RefreshCw,
   Languages,
-  Zap,
   CheckCircle,
-  AlertCircle,
   Eye
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { OCRPageResult } from '../../types';
-import { useOCRTextLayerStore, SUPPORTED_LANGUAGES, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore, SUPPORTED_LANGUAGES } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
 import { dbService } from '../../services/dbService';
@@ -52,6 +48,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [cacheStatus, setCacheStatus] = useState<{ page: number; source: 'memory' | 'db'; stale?: boolean } | null>(null);
   const autoSyncedDocRef = useRef<number | null>(null);
+  const persistedCacheRef = useRef<Map<string, string>>(new Map());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
@@ -75,6 +72,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       abortControllerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    // Keep OCR overlay enabled by default and lock it on for this workflow.
+    if (!showDebugOverlay) {
+      setShowDebugOverlay(true);
+    }
+  }, [showDebugOverlay, setShowDebugOverlay]);
 
   const getPdfDoc = useCallback(async () => {
     if (!file) {
@@ -141,11 +145,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     return true;
   }, [options, normalizeLanguage]);
 
-  // UI cache compatibility: allow stale algorithm cache for preview,
-  // but still require language + algorithm version to avoid stale preview confusion.
+  // UI preview can show stale algorithm cache (marked as stale in badge) to avoid blank panel
+  // while still requiring language match.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
-    return normalizeLanguage(cached.language) === normalizeLanguage(options.language)
-      && cached.algorithmVersion === OCR_ALGORITHM_VERSION;
+    return normalizeLanguage(cached.language) === normalizeLanguage(options.language);
   }, [normalizeLanguage, options.language]);
 
   const loadCachedOCR = useCallback(async (pageNum: number): Promise<boolean> => {
@@ -169,6 +172,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       return false;
     }
     if (!cacheDocId) return false;
+    console.log(`[OCRPanel] Checking DB cache for page ${pageNum} (docId=${cacheDocId})`);
 
     const cached = await dbService.getOCR(cacheDocId, pageNum);
     if (cached && isDisplayCacheCompatible(cached)) {
@@ -178,6 +182,60 @@ export const OCRTextLayerPanel: React.FC = () => {
       const stale = !isCacheCompatible(cached);
       setCacheStatus({ page: pageNum, source: 'db', stale });
       return true;
+    }
+
+    // Alias fallback: same filename can exist under multiple document_id values
+    // (legacy source path vs imported hash path). If current doc misses, probe
+    // OCR-backed candidates and switch doc binding once a hit is found.
+    if (file?.name) {
+      const candidates = await dbService.findDocumentsByFilename(file.name);
+      const aliasCandidates = candidates
+        .filter(candidate => candidate.id !== cacheDocId && (candidate.cache_pages ?? 0) > 0)
+        .slice(0, 8);
+
+      for (const candidate of aliasCandidates) {
+        console.log(
+          `[OCRPanel] Cache miss on docId=${cacheDocId}, probing alias docId=${candidate.id} for page ${pageNum}`
+        );
+        const aliasCached = await dbService.getOCR(candidate.id, pageNum);
+        if (!aliasCached || !isDisplayCacheCompatible(aliasCached)) continue;
+        if (useProjectStore.getState().file !== activeFile) return false;
+
+        aliasCached.pageNumber = pageNum;
+        setPageOCR(pageNum, aliasCached);
+        const stale = !isCacheCompatible(aliasCached);
+        setCacheStatus({ page: pageNum, source: 'db', stale });
+
+        const currentProject = useProjectStore.getState();
+        if (currentProject.documentId !== candidate.id) {
+          useProjectStore.setState({
+            documentId: candidate.id,
+            filePath: candidate.filepath
+          });
+          autoSyncedDocRef.current = candidate.id;
+          console.log(
+            `[OCRPanel] Switched OCR cache binding: docId=${cacheDocId} -> docId=${candidate.id}`
+          );
+        }
+        return true;
+      }
+
+      // Even when this page misses, keep the OCR cache binding on the only
+      // OCR-backed alias so future page checks don't stay pinned to an empty doc.
+      if (aliasCandidates.length === 1) {
+        const preferred = aliasCandidates[0];
+        const currentProject = useProjectStore.getState();
+        if (currentProject.documentId === cacheDocId) {
+          useProjectStore.setState({
+            documentId: preferred.id,
+            filePath: preferred.filepath
+          });
+          autoSyncedDocRef.current = preferred.id;
+          console.log(
+            `[OCRPanel] Rebound OCR cache docId=${cacheDocId} -> ${preferred.id} (page ${pageNum} still uncached)`
+          );
+        }
+      }
     }
 
     return false;
@@ -237,12 +295,39 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   useEffect(() => {
     autoSyncedDocRef.current = null;
+    persistedCacheRef.current.clear();
   }, [file]);
 
   useEffect(() => {
     if (!file) return;
     void syncOptionsFromLatestCache();
   }, [file, syncOptionsFromLatestCache]);
+
+  // Self-healing persistence: if OCR results exist in memory, ensure they are flushed to DB.
+  useEffect(() => {
+    if (!file || allPagesOCR.size === 0) return;
+    let canceled = false;
+    void (async () => {
+      const docId = await ensureDocumentId();
+      if (!docId || canceled) return;
+
+      for (const [pageNum, result] of allPagesOCR.entries()) {
+        if (canceled) return;
+        const fp = `${result.algorithmVersion}|${result.dpi}|${normalizeLanguage(result.language)}|${result.words.length}|${result.text.length}`;
+        const key = `${docId}:${pageNum}`;
+        if (persistedCacheRef.current.get(key) === fp) continue;
+
+        const saved = await dbService.saveOCR(docId, pageNum, result);
+        if (saved) {
+          persistedCacheRef.current.set(key, fp);
+        }
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [allPagesOCR, ensureDocumentId, file, normalizeLanguage]);
 
   // Get current page OCR result
   const currentPageOCR = allPagesOCR.get(currentPage);
@@ -477,7 +562,10 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       const cacheDocId = await ensureDocumentId();
       if (cacheDocId) {
-        await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+        const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+        if (!saved) {
+          console.warn(`[OCRPanel] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
+        }
       }
 
       setProgress({
@@ -542,6 +630,20 @@ export const OCRTextLayerPanel: React.FC = () => {
       // Set up OCR result callback to store results for display
       searchablePDFService.setOCRResultCallback((pageNum, result) => {
         setPageOCR(pageNum, result);
+        void (async () => {
+          try {
+            const activeFileNow = useProjectStore.getState().file;
+            if (activeFileNow !== activeFile) return;
+            const docId = await ensureDocumentId();
+            if (!docId) return;
+            const saved = await dbService.saveOCR(docId, pageNum, result);
+            if (!saved) {
+              console.warn(`[OCRPanel] Background cache persist failed for page ${pageNum} (docId=${docId})`);
+            }
+          } catch (error) {
+            console.warn(`[OCRPanel] Background cache persist error for page ${pageNum}:`, error);
+          }
+        })();
       });
       const activeFile = file;
       searchablePDFService.setCacheHitCallback((pageNum) => {
@@ -650,10 +752,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     : '';
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-3 p-4">
       {/* Language Selector (Multi-select) */}
       <div className="space-y-2">
-        <label className="flex items-center gap-2 text-xs text-slate-400">
+        <label className="flex items-center gap-2 text-xs text-slate-300">
           <Languages size={12} />
           OCR Languages
         </label>
@@ -663,7 +765,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             return found ? found.name : code;
           }).join(' + ') || 'English'}
         </div>
-        <div className="max-h-36 overflow-y-auto border border-slate-600 rounded-lg bg-slate-700/40 p-2 space-y-1">
+        <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-900/45 p-2 space-y-1">
           {SUPPORTED_LANGUAGES.map(lang => {
             const selected = options.language.split('+').filter(Boolean).includes(lang.code);
             return (
@@ -687,7 +789,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                       .filter(code => current.has(code));
                     setOptions({ language: ordered.join('+') });
                   }}
-                  className="accent-cyan-500"
+                  className="accent-[#2B9BFF]"
                 />
                 <span>{lang.name}</span>
               </label>
@@ -696,28 +798,16 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Debug Overlay Toggle */}
-      <div className="flex items-center justify-between bg-slate-700/40 border border-slate-600 rounded-lg px-3 py-2">
-        <span className="text-xs text-slate-300">Show OCR Overlay</span>
-        <input
-          type="checkbox"
-          checked={showDebugOverlay}
-          onChange={(e) => setShowDebugOverlay(e.target.checked)}
-          className="accent-cyan-500"
-          aria-label="Show OCR Overlay"
-        />
-      </div>
-
       {/* Skip OCR if Text Exists (PDF only) */}
       {fileType === 'pdf' && (
-        <div className="flex items-center justify-between bg-slate-700/40 border border-slate-600 rounded-lg px-3 py-2">
+        <div className="flex items-center justify-between bg-slate-900/45 border border-white/10 rounded-lg px-3 py-2">
           <span className="text-xs text-slate-300">Skip OCR if Text Exists</span>
           <input
             type="checkbox"
             checked={options.skipIfTextExists !== false}
             onChange={(e) => setOptions({ skipIfTextExists: e.target.checked })}
             disabled={isProcessing}
-            className="accent-cyan-500"
+            className="accent-[#2B9BFF]"
             aria-label="Skip OCR if Text Exists"
           />
         </div>
@@ -725,18 +815,18 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* Progress Bar */}
       {isProcessing && (
-        <div className="space-y-2 bg-slate-700/50 rounded-lg p-3 border border-slate-600">
+        <div className="space-y-2 bg-slate-900/55 rounded-lg p-3 border border-white/10">
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-300 truncate max-w-[180px]">
               {progress?.message || 'กำลังเริ่มต้น...'}
             </span>
-            <span className="text-cyan-400 font-mono">
+            <span className="text-[#5CC6F2] font-mono">
               {progress ? Math.round(progress.progress) : 0}%
             </span>
           </div>
-          <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+          <div className="h-2 bg-slate-950 rounded-full overflow-hidden">
             <div 
-              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-150"
+              className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-150"
               style={{ width: `${progress?.progress || 0}%` }}
             />
           </div>
@@ -756,7 +846,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       )}
 
       {cacheStatus && cacheStatus.page === currentPage && !isProcessing && (
-        <div className="text-xs text-emerald-300 bg-emerald-900/30 border border-emerald-700 rounded-lg px-3 py-2">
+        <div className="text-xs text-emerald-300 bg-emerald-900/25 border border-emerald-700/70 rounded-lg px-3 py-2">
           Loaded from cache ({cacheStatus.source === 'memory' ? 'memory' : 'disk'}{cacheStatus.stale ? ', stale' : ''})
         </div>
       )}
@@ -768,7 +858,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           <button
             onClick={() => handleStartOCR()}
             disabled={isProcessing || !file}
-            className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            className="flex-1 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
             title={fileType === 'pdf' ? 'Process all pages' : 'Process image'}
           >
             {isProcessing ? (
@@ -789,7 +879,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             <button
               onClick={() => handleCurrentPageOCR(useProjectStore.getState().currentPage, true)}
               disabled={isProcessing || !file}
-              className="flex-[0.35] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-slate-600"
+              className="flex-[0.35] bg-slate-900/70 hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-white/12"
               title="Process current page only"
             >
               <span className="text-xs font-bold">Current</span>
@@ -801,7 +891,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           <button
             onClick={() => handleStartOCR(undefined, true)}
             disabled={!file}
-            className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            className="w-full bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-[0_10px_24px_rgba(255,135,5,0.28)]"
             title="Force re-run OCR for all pages (ignore cache)"
           >
             <RefreshCw size={16} />
@@ -845,7 +935,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* Success Message */}
       {totalOCRPages > 0 && !isProcessing && (
-        <div className="flex items-start gap-2 bg-green-900/30 border border-green-700 rounded-lg p-3">
+        <div className="flex items-start gap-2 bg-green-900/25 border border-green-700/70 rounded-lg p-3">
           <CheckCircle size={16} className="text-green-400 shrink-0 mt-0.5" />
           <div className="text-xs">
             <p className="text-green-300 font-medium">OCR สำเร็จ!</p>
@@ -859,8 +949,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       {/* OCR Results Preview */}
       {currentPageOCR && !isProcessing && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
-            <Eye size={12} className="text-cyan-400" />
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+            <Eye size={12} className="text-[#5CC6F2]" />
             OCR Result - หน้า {currentPage}
             <span className="ml-auto text-slate-500 font-normal">
               {currentPageOCR.words.length} คำ • {currentPageOCR.confidence.toFixed(0)}%
@@ -872,7 +962,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             </div>
           )}
           
-          <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-2 max-h-48 overflow-y-auto">
+          <div className="bg-slate-900/55 border border-white/10 rounded-lg p-2 max-h-48 overflow-y-auto">
             {currentPageOCR.words.length > 0 ? (
               <div className="space-y-1">
                 {/* Show text grouped by lines for better readability */}
@@ -897,16 +987,6 @@ export const OCRTextLayerPanel: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Info */}
-      <div className="text-[10px] text-slate-500 leading-relaxed">
-        <p className="flex items-start gap-1">
-          <Zap size={10} className="shrink-0 mt-0.5 text-yellow-500" />
-          <span>
-            ฟีเจอร์นี้จะเพิ่ม invisible text layer บน PDF ทำให้ค้นหาและ copy ข้อความได้ เหมือน PDF24
-          </span>
-        </p>
-      </div>
 
       {/* Hidden canvas for rendering */}
       <canvas ref={canvasRef} className="hidden" />

@@ -15,6 +15,29 @@ const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
 const KOR_JAMO_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
 const KOR_JAMO_RUN_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]{2,}/g;
 const KOR_ALLOWED_REPEAT_JAMO_RE = /^([ㅋㅎㅠㅜ])\1+$/;
+const LATIN_KEEP_SHORT_WORDS = new Set([
+  'I', 'A', 'EH', 'ME', 'OH', 'AH', 'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE', 'US', 'MY', 'NO', 'GO', 'OR', 'AN'
+]);
+const LATIN_PROTECT_WORDS = new Set([
+  'I', 'A', 'IT', 'ITS', 'ILL', 'GO', 'OVER', 'AND', 'TAKE', 'LOOK', 'BEST', 'IF', 'THINK', 'ME', 'EH',
+  'THOSE', 'STUDENTS', 'MAY', 'DOING', 'BAD', 'THINGS', 'ELDERLY', 'WEAK', 'WOMEN', 'CHILDREN', 'IN', 'TOWN',
+  'AYNAR', 'ESSENCE', 'KNEW', 'NYAH', 'HOW', 'MUCH', 'FOR'
+]);
+
+function normalizeLatinToken(token: string): string {
+  if (!token) return '';
+  return token
+    .toUpperCase()
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/5/g, 'S');
+}
+
+function isProtectedLatinToken(alphaNum: string): boolean {
+  const normalized = normalizeLatinToken(alphaNum);
+  if (!normalized) return false;
+  return LATIN_PROTECT_WORDS.has(normalized) || LATIN_KEEP_SHORT_WORDS.has(normalized);
+}
 
 // ============================================
 // Background variance
@@ -83,6 +106,10 @@ export function filterWordsByBackground(
     if (protectedWords?.has(word)) return true;
     const h = word.bbox.y1 - word.bbox.y0;
     const heightRatio = h / Math.max(1, height);
+    const rawAlpha = getAlphaNum(word.text.trim());
+    const nonLatin = isNonLatinToken(rawAlpha);
+    const protectedLatin = !nonLatin && isProtectedLatinToken(rawAlpha);
+    if (protectedLatin && heightRatio >= 0.0038 && word.confidence >= 34) return true;
 
     const pad = Math.max(2, Math.round(h * 0.6));
     const rect = { x0: word.bbox.x0 - pad, y0: word.bbox.y0 - pad, x1: word.bbox.x1 + pad, y1: word.bbox.y1 + pad };
@@ -90,8 +117,7 @@ export function filterWordsByBackground(
     const inner = { x0: word.bbox.x0 - innerPad, y0: word.bbox.y0 - innerPad, x1: word.bbox.x1 + innerPad, y1: word.bbox.y1 + innerPad };
     const variance = computeBackgroundVariance(gray, width, height, rect, inner);
 
-    const alphaNum = getAlphaNum(word.text.trim());
-    const nonLatin = isNonLatinToken(alphaNum);
+    const alphaNum = rawAlpha;
 
     // Keep larger words (titles) even on photo backgrounds
     if (heightRatio >= 0.06) return true;
@@ -312,11 +338,43 @@ export function filterWordsByImageTiles(
     const alphaNum = getAlphaNum(raw);
     const len = alphaNum.length;
     const nonLatin = isNonLatinToken(alphaNum);
+    const protectedLatin = !nonLatin && isProtectedLatinToken(alphaNum);
     const boxW = Math.max(1, word.bbox.x1 - word.bbox.x0);
     const boxH = Math.max(1, word.bbox.y1 - word.bbox.y0);
     const aspect = boxW / boxH;
 
     if (inImageTile) {
+      if (protectedLatin) {
+        if ((len >= 3 && word.confidence >= 34) || (len <= 2 && word.confidence >= 42)) {
+          return true;
+        }
+      }
+      if (!nonLatin) {
+        const upper = alphaNum.toUpperCase();
+        const keepShortLatin = len <= 2 && LATIN_KEEP_SHORT_WORDS.has(upper);
+        const hasVowel = /[AEIOU]/i.test(alphaNum);
+        const consonantRun = /[BCDFGHJKLMNPQRSTVWXYZ]{3,}/i.test(alphaNum);
+        if (gray && len >= 2) {
+          const variance = getWordBackgroundVariance(word, gray, width, height);
+          // Keep stylized bubble text that happens to overlap image-tile mask
+          // but sits on low-variance (clean) local background.
+          if (variance <= CONFIG.PHOTO_BG_VARIANCE * 0.62) {
+            return true;
+          }
+        }
+        if (!keepShortLatin && len <= 3 && heightRatio <= 0.03 && word.confidence < 74) {
+          logDrop('imgTile', word, `latin short sparse len=${len} hr=${heightRatio.toFixed(3)}`);
+          return false;
+        }
+        if (!keepShortLatin && consonantRun && len <= 6 && word.confidence < 90) {
+          logDrop('imgTile', word, `latin consonant-run len=${len}`);
+          return false;
+        }
+        if (!keepShortLatin && !hasVowel && len >= 4 && word.confidence < 88 && heightRatio <= 0.035) {
+          logDrop('imgTile', word, `latin no-vowel image tile len=${len}`);
+          return false;
+        }
+      }
       if (!nonLatin && len > 0 && len <= CONFIG.IMG_TILE_DROP_MAX_LEN
         && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO
         && word.confidence < CONFIG.IMG_TILE_DROP_CONF) {
@@ -641,6 +699,7 @@ export function cleanLineNoise(lines: Array<{ text: string; confidence: number; 
       const raw = word.text.trim();
       const alphaNum = getAlphaNum(raw);
       if (alphaNum.length === 0) return false;
+      const upperAlpha = alphaNum.toUpperCase();
 
       const nonLatin = isNonLatinToken(alphaNum);
       const hasUpper = /[A-Z]/.test(alphaNum);
@@ -650,13 +709,25 @@ export function cleanLineNoise(lines: Array<{ text: string; confidence: number; 
       const shortHeight = h < medianHeight * CONFIG.NOISE_SHORT_HEIGHT_RATIO;
       const mixedHeight = h < medianHeight * CONFIG.NOISE_MIXEDCASE_HEIGHT_RATIO;
       const keepSingle = alphaNum.length === 1
-        && CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(alphaNum)
+        && CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(upperAlpha)
         && lineWords.length >= 2
         && h >= medianHeight * CONFIG.NOISE_KEEP_SINGLE_HEIGHT_RATIO;
+      const keepShortLatinWord = alphaNum.length <= 2 && LATIN_KEEP_SHORT_WORDS.has(upperAlpha);
 
       if (keepSingle) return true;
+      if (keepShortLatinWord) return true;
       // Keep non-Latin tokens to avoid dropping valid syllables
       if (nonLatin) return true;
+
+      if (/^([A-Za-z])\1{1,2}$/.test(alphaNum) && word.confidence < 92 && lineWords.length >= 3) {
+        logDrop('noise', word, 'repeated-letter short artifact');
+        return false;
+      }
+
+      if (/^[0-9]{1,2}$/.test(alphaNum) && word.confidence < 85) {
+        logDrop('noise', word, 'short numeric artifact');
+        return false;
+      }
 
       // Drop mixed-case short noise like "rE" or "Bm"
       if (alphaNum.length <= 3 && hasUpper && hasLower && word.confidence < CONFIG.NOISE_MIXEDCASE_CONF && mixedHeight) {
@@ -666,6 +737,10 @@ export function cleanLineNoise(lines: Array<{ text: string; confidence: number; 
 
       if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && shortHeight && (!denseLine || index === 0)) {
         logDrop('noise', word, 'single low-conf short');
+        return false;
+      }
+      if (alphaNum.length === 1 && !CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(upperAlpha) && lineWords.length >= 2) {
+        logDrop('noise', word, 'single-char non-keep token');
         return false;
       }
       if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT && shortHeight && (!denseLine || index === 0)) {

@@ -2,6 +2,7 @@
 const electron = require("electron");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const Database = require("better-sqlite3");
 let db = null;
 function initDB() {
@@ -192,6 +193,25 @@ const DocumentDAO = {
   get: (filepath) => {
     if (!db) throw new Error("DB not initialized");
     return db.prepare("SELECT * FROM documents WHERE filepath = ?").get(filepath);
+  },
+  findByFilenameWithCacheStats: (filename, limit = 20) => {
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
+      SELECT
+        d.id,
+        d.filepath,
+        d.filename,
+        d.total_pages,
+        d.last_accessed,
+        CAST(COUNT(o.page_number) AS INTEGER) AS cache_pages,
+        MAX(o.updated_at) AS last_cache_update
+      FROM documents d
+      LEFT JOIN ocr_cache o ON o.document_id = d.id
+      WHERE d.filename = ?
+      GROUP BY d.id
+      ORDER BY cache_pages DESC, last_cache_update DESC, d.last_accessed DESC
+      LIMIT ?
+    `).all(filename, limit);
   },
   getById: (id) => {
     if (!db) throw new Error("DB not initialized");
@@ -458,6 +478,17 @@ electron.app.whenReady().then(() => {
       return null;
     }
   });
+  electron.ipcMain.handle("db:find-documents-by-filename", async (_, filename) => {
+    if (!isValidString(filename)) {
+      throw new Error("Invalid input: filename must be a non-empty string");
+    }
+    try {
+      return DocumentDAO.findByFilenameWithCacheStats(filename);
+    } catch (error) {
+      console.error("db:find-documents-by-filename error:", error);
+      return [];
+    }
+  });
   electron.ipcMain.handle("db:save-ocr", async (_, { docId, pageNum, data }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error("Invalid input: docId and pageNum must be positive numbers");
@@ -633,9 +664,44 @@ electron.app.whenReady().then(() => {
       const userDataDir = electron.app.getPath("userData");
       const importDir = path.join(userDataDir, "imports");
       await fs.promises.mkdir(importDir, { recursive: true });
-      const uniqueId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const targetPath = path.join(importDir, `${uniqueId}-${finalName}`);
-      await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      const contentHash = crypto.createHash("sha256").update(Buffer.from(rawData)).digest("hex").slice(0, 24);
+      const finalExt = ext || fallbackExt || path.extname(finalName) || "";
+      const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
+      let targetPath = hashedPath;
+      if (!fs.existsSync(hashedPath)) {
+        try {
+          const entries = await fs.promises.readdir(importDir, { withFileTypes: true });
+          const candidates = entries.filter((entry) => entry.isFile()).map((entry) => entry.name).filter((name) => {
+            if (name === path.basename(hashedPath)) return false;
+            if (name.endsWith(`-${finalName}`)) return true;
+            if (!finalExt) return true;
+            return path.extname(name).toLowerCase() === finalExt.toLowerCase();
+          });
+          for (const name of candidates) {
+            const candidatePath = path.join(importDir, name);
+            let stats2;
+            try {
+              stats2 = await fs.promises.stat(candidatePath);
+            } catch {
+              continue;
+            }
+            if (stats2.size !== rawData.byteLength) continue;
+            try {
+              const candidateBytes = await fs.promises.readFile(candidatePath);
+              const candidateHash = crypto.createHash("sha256").update(candidateBytes).digest("hex").slice(0, 24);
+              if (candidateHash === contentHash) {
+                targetPath = candidatePath;
+                break;
+              }
+            } catch {
+            }
+          }
+        } catch {
+        }
+      }
+      if (!fs.existsSync(targetPath)) {
+        await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      }
       const stats = await fs.promises.stat(targetPath);
       return {
         filepath: targetPath,

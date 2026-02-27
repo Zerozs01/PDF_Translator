@@ -39,6 +39,16 @@ export interface DBProject {
   created_at: string;
 }
 
+export interface DBDocumentCacheCandidate {
+  id: number;
+  filepath: string;
+  filename: string;
+  total_pages: number;
+  last_accessed: number | null;
+  cache_pages: number;
+  last_cache_update: number | null;
+}
+
 // Update types
 export interface DocumentUpdate {
   filename?: string;
@@ -69,6 +79,7 @@ export interface ElectronAPI {
     // Basic operations
     saveDocument: (filepath: string, filename: string, totalPages: number) => Promise<number>;
     getDocument: (filepath: string) => Promise<{ id: number; total_pages: number } | null>;
+    findDocumentsByFilename: (filename: string) => Promise<DBDocumentCacheCandidate[]>;
     saveOCR: (docId: number, pageNum: number, data: OCRPageResult) => Promise<boolean>;
     getOCR: (docId: number, pageNum: number) => Promise<OCRPageResult | null>;
     getLatestOCR: (docId: number) => Promise<{

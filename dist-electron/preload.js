@@ -9,6 +9,7 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     // Basic operations
     saveDocument: (filepath, filename, totalPages) => electron.ipcRenderer.invoke("db:save-document", { filepath, filename, totalPages }),
     getDocument: (filepath) => electron.ipcRenderer.invoke("db:get-document", filepath),
+    findDocumentsByFilename: (filename) => electron.ipcRenderer.invoke("db:find-documents-by-filename", filename),
     saveOCR: (docId, pageNum, data) => electron.ipcRenderer.invoke("db:save-ocr", { docId, pageNum, data }),
     getOCR: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum }),
     getLatestOCR: (docId) => electron.ipcRenderer.invoke("db:get-latest-ocr", { docId }),

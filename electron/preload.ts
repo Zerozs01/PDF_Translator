@@ -7,6 +7,7 @@ import { ipcRenderer, contextBridge } from 'electron'
 const ALLOWED_INVOKE_CHANNELS = [
   'db:save-document',
   'db:get-document',
+  'db:find-documents-by-filename',
   'db:save-ocr',
   'db:get-ocr',
   'db:get-latest-ocr',
@@ -83,6 +84,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:save-document', { filepath, filename, totalPages }),
     getDocument: (filepath: string) =>
       ipcRenderer.invoke('db:get-document', filepath),
+    findDocumentsByFilename: (filename: string) =>
+      ipcRenderer.invoke('db:find-documents-by-filename', filename),
     saveOCR: (docId: number, pageNum: number, data: unknown) =>
       ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data }),
     getOCR: (docId: number, pageNum: number) =>

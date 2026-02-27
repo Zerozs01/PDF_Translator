@@ -267,10 +267,12 @@ export const PDFCanvas: React.FC = () => {
   };
 
   const pdfSource = useMemo(() => {
-    if (!fileData) return fileUrl;
-    // Create a dedicated copy so pdf.js worker can transfer without detaching shared buffers.
+    // Prefer object URL source so worker transfer does not detach store-managed buffers.
+    if (fileUrl) return fileUrl;
+    if (!fileData) return null;
+    // Fallback for edge cases where URL is unavailable.
     return { data: new Uint8Array(fileData) };
-  }, [fileData, fileUrl]);
+  }, [fileUrl, fileData]);
 
   const docKey = fileUrl ?? 'pdf-document';
 
