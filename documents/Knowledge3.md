@@ -288,3 +288,31 @@ the PSD will be “layers of lies” (text on top of noisy original). Usable but
 - Primary target: OCR overlay + translate (Phase 1–2)
 - Secondary target: PSD export in later phase (Phase 4)
 - Therefore: focus on stable geometry + editing workflow first.
+
+---
+
+## 8) Empirical OCR Status Snapshot (2026-03-09)
+
+Recent manual validation on manga pages shows the current tuning direction is correct:
+
+### Confirmed improvements
+- Ghost text is materially lower than before while keeping more real speech-bubble text.
+- Lower-line recovery improved on sparse bubbles.
+- A previously missing example on Page 3 now succeeds: **"TAKE A LOOK!"**
+
+### Remaining failure pattern
+- The dominant remaining issue is **missing last lines / incomplete line tails**, especially near the bottom of bubbles.
+- This means the next iteration should prioritize **crop padding, low-coverage line rescan, and bottom-line recovery** rather than making filters harsher again.
+
+### Tracked examples
+- Page 2: missing **"Xujia town"**
+- Page 5: missing / incomplete lines:
+  - **"IN THE PAST, I ONLY FOUND THE"**
+  - **"WITH"** loses `TH`
+  - **"THIS KIND OF STUFF.."** missing
+- Page 10: missing **"THE PEOPLE HERE?"**
+
+### Practical policy note
+- Some extra background candidate boxes may remain visible.
+- If those boxes improve OCR recall, segmentation, or later cleanup, keeping them temporarily is acceptable.
+- At this phase, **slightly noisy candidate geometry is preferable to aggressive filtering that deletes real text**.

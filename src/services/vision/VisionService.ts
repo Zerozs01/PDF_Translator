@@ -8,7 +8,7 @@
  * - Error recovery
  */
 
-import { Region, OCRPageResult } from '../../types';
+import { Region, OCRPageResult, OCRPipelineProfile } from '../../types';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 
 type WorkerMessage = {
@@ -357,7 +357,8 @@ class VisionService {
     dpi: number = 300,
     pageSegMode?: number,
     signal?: AbortSignal,
-    debugCollectDrops: boolean = false
+    debugCollectDrops: boolean = false,
+    pipelineProfile: OCRPipelineProfile = 'panel'
   ): Promise<OCRPageResult> {
     return this.sendMessage('OCR_FOR_TEXT_LAYER', {
       imageUrl,
@@ -366,7 +367,8 @@ class VisionService {
       language,
       dpi,
       pageSegMode,
-      debugCollectDrops
+      debugCollectDrops,
+      pipelineProfile
     }, { signal });
   }
 
@@ -392,7 +394,7 @@ class VisionService {
       const request: QueuedRequest = {
         type,
         payload,
-        resolve,
+        resolve: resolve as (data: unknown) => void,
         reject,
         retryCount,
         signal

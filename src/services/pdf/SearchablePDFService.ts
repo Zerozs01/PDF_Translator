@@ -11,7 +11,7 @@ import { PDFDocument } from 'pdf-lib';
 import { visionService } from '../vision/VisionService';
 import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
 import { TextLayerService } from './TextLayerService';
-import { OCRPageResult, OCROptions } from '../../types';
+import { OCRPageResult, OCROptions, OCRPipelineProfile } from '../../types';
 import { dbService } from '../dbService';
 import { pdfjs } from './pdfjsWorker';
 
@@ -40,7 +40,7 @@ export class SearchablePDFService {
   /**
    * Set progress callback
    */
-  setProgressCallback(callback: ProgressCallback): void {
+  setProgressCallback(callback: ProgressCallback | null): void {
     this.onProgress = callback;
   }
 
@@ -83,7 +83,8 @@ export class SearchablePDFService {
     cacheDocId?: number,
     signal?: AbortSignal,
     forceReOCR: boolean = false,
-    debugCollectDrops: boolean = false
+    debugCollectDrops: boolean = false,
+    pipelineProfile: OCRPipelineProfile = 'export'
   ): Promise<Uint8Array> {
     const createAbortError = (reason: string = 'OCR job canceled'): Error => {
       const error = new Error(reason);
@@ -160,7 +161,7 @@ export class SearchablePDFService {
           textCheckTask = pdfjs.getDocument({ data });
           textCheckDoc = await (textCheckTask as any).promise;
         }
-        const page = await textCheckDoc.getPage(pageNum);
+        const page = await textCheckDoc!.getPage(pageNum);
         const textContent = await page.getTextContent({ includeMarkedContent: true });
         const hasText = textContent.items.some((item) => {
           const text = (item as { str?: string }).str ?? '';
@@ -180,6 +181,7 @@ export class SearchablePDFService {
       if (cached.dpi !== options.dpi) return 'dpi mismatch';
       if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return 'pageSegMode mismatch';
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
+      if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
       return null;
     };
     const isCacheCompatible = (cached: OCRPageResult): boolean => getCacheIncompatibilityReason(cached) === null;
@@ -294,10 +296,12 @@ export class SearchablePDFService {
               options.dpi,
               options.pageSegMode,
               signal,
-              debugCollectDrops
+              debugCollectDrops,
+              pipelineProfile
             );
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
+            ocrResult.pipelineProfile = pipelineProfile;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
             if (cacheDocId && dbService.isAvailable()) {
@@ -383,14 +387,14 @@ export class SearchablePDFService {
       }
       if (textCheckDoc) {
         try {
-          await textCheckDoc.destroy();
+          await (textCheckDoc as any).destroy();
         } catch {
           // ignore
         }
       }
-      if (textCheckTask && typeof textCheckTask.destroy === 'function') {
+      if (textCheckTask && typeof (textCheckTask as any).destroy === 'function') {
         try {
-          textCheckTask.destroy();
+          (textCheckTask as any).destroy();
         } catch {
           // ignore
         }
@@ -433,7 +437,7 @@ export class SearchablePDFService {
     dpi: number = 300,
     pageSegMode?: number
   ): Promise<OCRPageResult> {
-    return visionService.ocrForTextLayer(imageDataUrl, imageWidth, imageHeight, language, dpi, pageSegMode);
+    return visionService.ocrForTextLayer(imageDataUrl, imageWidth, imageHeight, language, dpi, pageSegMode, undefined, false, 'export');
   }
 }
 

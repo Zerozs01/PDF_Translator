@@ -354,7 +354,7 @@ export const UploadScreen: React.FC = () => {
 
         const bytes = decodeFileData(result.data);
 
-        const blob = new Blob([bytes], { type: result.mimeType });
+        const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
         const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
         Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
         await loadProject(file, bytes);
@@ -375,7 +375,7 @@ export const UploadScreen: React.FC = () => {
       const bytes = decodeFileData(result.data);
       
       // Create File object with path attached for database tracking
-      const blob = new Blob([bytes], { type: result.mimeType });
+      const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
       const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
       // Attach the filepath so loadProject can save to DB
       Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });

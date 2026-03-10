@@ -434,8 +434,26 @@ export function appendUniqueWords(existing: OCRWord[], incoming: OCRWord[], iouT
   const added: OCRWord[] = [];
   for (const w of incoming) {
     let overlap = false;
+    const wArea = Math.max(1, (w.bbox.x1 - w.bbox.x0) * (w.bbox.y1 - w.bbox.y0));
     for (const e of existing) {
       if (bboxIoU(e.bbox, w.bbox) >= iouThreshold) { overlap = true; break; }
+      
+      // Fix 2.3: Check inclusion ratio (intersection over smaller area) to prevent duplicate text
+      const ix0 = Math.max(e.bbox.x0, w.bbox.x0);
+      const iy0 = Math.max(e.bbox.y0, w.bbox.y0);
+      const ix1 = Math.min(e.bbox.x1, w.bbox.x1);
+      const iy1 = Math.min(e.bbox.y1, w.bbox.y1);
+      const iw = Math.max(0, ix1 - ix0);
+      const ih = Math.max(0, iy1 - iy0);
+      const inter = iw * ih;
+      if (inter > 0) {
+        const eArea = Math.max(1, (e.bbox.x1 - e.bbox.x0) * (e.bbox.y1 - e.bbox.y0));
+        const smallerArea = Math.min(eArea, wArea);
+        if (inter / smallerArea >= 0.70) {
+          overlap = true;
+          break;
+        }
+      }
     }
     if (!overlap) { existing.push(w); added.push(w); }
   }

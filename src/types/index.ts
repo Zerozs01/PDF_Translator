@@ -58,9 +58,40 @@ export interface OCRDroppedWord {
   bbox?: BBox;
 }
 
+export type OCRPipelineProfile = "panel" | "export";
+
+export interface OCRStageMetric {
+  stage: "base" | "rescan" | "anchorProbe" | "imageFilter" | "watermark" | "linePrune";
+  wordsBefore: number;
+  wordsAfter: number;
+  linesBefore: number;
+  linesAfter: number;
+}
+
+export interface OCRCandidateDebug {
+  id: string;
+  stage: "emptyLineFallback" | "gapFallback" | "anchorSecondLine" | "anchorTopSparse";
+  bbox: BBox;
+  accepted: boolean;
+  score?: number;
+  reason: string;
+}
+
 export interface OCRDebugInfo {
   droppedWords: OCRDroppedWord[];
   dropCounts: Record<string, number>;
+  stageMetrics?: OCRStageMetric[];
+  candidates?: OCRCandidateDebug[];
+}
+
+export interface OCRFixtureExpectation {
+  page: number;
+  minLines: number;
+  minMeaningfulWords: number;
+  mustContainAny: string[][];
+  mustNotContainNormalized: string[];
+  maxStandaloneShortTokens: number;
+  maxSuspiciousRatio: number;
 }
 
 /** Page-level OCR result */
@@ -72,6 +103,7 @@ export interface OCRPageResult {
   language: string;
   pageSegMode?: number;
   algorithmVersion: number;
+  pipelineProfile?: OCRPipelineProfile;
   lines: OCRLine[];
   words: OCRWord[];
   text: string;

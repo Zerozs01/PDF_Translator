@@ -2,11 +2,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const SHORT_KEEP = new Set(['i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it']);
 
 function parseArgs(argv) {
   const args = {
     base: '',
     cand: '',
+    expect: '',
     out: '',
     failOnRisk: false,
   };
@@ -15,6 +17,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--base') args.base = argv[i + 1] || '';
     if (arg === '--cand') args.cand = argv[i + 1] || '';
+    if (arg === '--expect') args.expect = argv[i + 1] || '';
     if (arg === '--out') args.out = argv[i + 1] || '';
     if (arg === '--fail-on-risk') args.failOnRisk = true;
   }
@@ -77,6 +80,18 @@ function normalizePages(input) {
   return pages;
 }
 
+function normalizeExpectations(input) {
+  if (!input || typeof input !== 'object') return new Map();
+  const list = Array.isArray(input.expectations) ? input.expectations : (Array.isArray(input) ? input : []);
+  const expectations = new Map();
+  for (const item of list) {
+    const page = Number(item && item.page);
+    if (!Number.isFinite(page) || page <= 0) continue;
+    expectations.set(page, item);
+  }
+  return expectations;
+}
+
 function toTokens(page) {
   if (Array.isArray(page.words) && page.words.length > 0) {
     return page.words
@@ -105,6 +120,34 @@ function normalizeToken(token) {
     .trim();
 }
 
+function countMeaningfulWords(tokens) {
+  let meaningful = 0;
+  for (const token of tokens) {
+    const normalized = normalizeToken(token);
+    if (!normalized) continue;
+    if (SHORT_KEEP.has(normalized)) {
+      meaningful += 1;
+      continue;
+    }
+    const hasVowel = /[aeiou]/.test(normalized);
+    const consonantRun = /[bcdfghjklmnpqrstvwxyz]{5,}/.test(normalized);
+    if (normalized.length >= 3 && hasVowel && !consonantRun) {
+      meaningful += 1;
+    }
+  }
+  return meaningful;
+}
+
+function countStandaloneShortTokens(tokens) {
+  return tokens.reduce((sum, token) => {
+    const normalized = normalizeToken(token);
+    if (!normalized) return sum;
+    if (normalized.length <= 1 && !SHORT_KEEP.has(normalized)) return sum + 1;
+    if (normalized.length === 2 && !SHORT_KEEP.has(normalized) && !/[aeiou]/.test(normalized)) return sum + 1;
+    return sum;
+  }, 0);
+}
+
 function isCjkLike(language) {
   const lang = String(language || '').toLowerCase();
   return lang.includes('kor') || lang.includes('jpn') || lang.includes('chi') || lang.includes('tha');
@@ -116,6 +159,7 @@ function suspiciousBreakdown(tokens, language) {
     digitShort: 0,
     asciiShort: 0,
     edgeJamo: 0,
+    latinSingleton: 0,
   };
 
   const cjk = isCjkLike(language);
@@ -126,6 +170,7 @@ function suspiciousBreakdown(tokens, language) {
   for (const token of tokens) {
     const clean = token.trim();
     if (!clean) continue;
+    const normalized = normalizeToken(clean);
     const hasJamo = jamoRe.test(clean);
     const hasSyllable = syllableRe.test(clean);
 
@@ -133,6 +178,7 @@ function suspiciousBreakdown(tokens, language) {
     if (/^[0-9]{1,3}$/.test(clean)) stats.digitShort += 1;
     if (cjk && /^[A-Za-z]{1,2}$/.test(clean)) stats.asciiShort += 1;
     if (hasSyllable && edgeJamoRe.test(clean) && clean.length <= 4) stats.edgeJamo += 1;
+    if (!cjk && normalized.length === 1 && !SHORT_KEEP.has(normalized)) stats.latinSingleton += 1;
   }
 
   const total = stats.jamoOnly + stats.digitShort + stats.asciiShort + stats.edgeJamo;
@@ -154,7 +200,8 @@ function metric(page) {
     ? page.debug.droppedWords.length
     : 0;
 
-  const normalizedSet = new Set(tokens.map(normalizeToken).filter(Boolean));
+  const normalizedTokens = tokens.map(normalizeToken).filter(Boolean);
+  const normalizedSet = new Set(normalizedTokens);
   return {
     wordCount,
     lineCount,
@@ -164,8 +211,11 @@ function metric(page) {
     suspiciousRatio: suspicious.total / Math.max(1, wordCount),
     suspiciousDetail: suspicious.stats,
     droppedCount,
+    meaningfulWords: countMeaningfulWords(tokens),
+    standaloneShortTokens: countStandaloneShortTokens(tokens),
     language,
     tokens,
+    normalizedTokens,
     tokenSet: normalizedSet,
   };
 }
@@ -188,6 +238,10 @@ function diffTokenSet(baseSet, candSet, limit = 8) {
 function buildRisk(baseMetric, candMetric) {
   const reasons = [];
   let score = 0;
+
+  if (!baseMetric || !candMetric) {
+    return { score, reasons };
+  }
 
   if (baseMetric.wordCount >= 6 && candMetric.wordCount < baseMetric.wordCount * 0.9) {
     reasons.push('coverage_drop');
@@ -213,86 +267,178 @@ function buildRisk(baseMetric, candMetric) {
   return { score, reasons };
 }
 
+function evaluateExpectation(candMetric, expectation) {
+  const reasons = [];
+  const details = {};
+  let score = 0;
+
+  if (!candMetric) {
+    return { score: 3, reasons: ['missing_candidate'], details };
+  }
+
+  if (!expectation) {
+    return { score, reasons, details };
+  }
+
+  if (candMetric.lineCount < expectation.minLines) {
+    reasons.push('expect_lines');
+    details.lineCount = { actual: candMetric.lineCount, expected: expectation.minLines };
+    score += 2;
+  }
+
+  if (candMetric.meaningfulWords < expectation.minMeaningfulWords) {
+    reasons.push('expect_meaningful');
+    details.meaningfulWords = { actual: candMetric.meaningfulWords, expected: expectation.minMeaningfulWords };
+    score += 2;
+  }
+
+  const missingGroups = [];
+  for (const group of expectation.mustContainAny || []) {
+    const normalizedGroup = (group || []).map(normalizeToken).filter(Boolean);
+    const matched = normalizedGroup.some((token) => candMetric.tokenSet.has(token));
+    if (!matched && normalizedGroup.length > 0) {
+      missingGroups.push(normalizedGroup);
+    }
+  }
+  if (missingGroups.length > 0) {
+    reasons.push('expect_missing_token');
+    details.missingGroups = missingGroups;
+    score += missingGroups.length;
+  }
+
+  const forbiddenHits = (expectation.mustNotContainNormalized || [])
+    .map(normalizeToken)
+    .filter((token) => token && candMetric.tokenSet.has(token));
+  if (forbiddenHits.length > 0) {
+    reasons.push('expect_forbidden_token');
+    details.forbiddenHits = forbiddenHits;
+    score += forbiddenHits.length;
+  }
+
+  if (candMetric.standaloneShortTokens > expectation.maxStandaloneShortTokens) {
+    reasons.push('expect_short_tokens');
+    details.standaloneShortTokens = {
+      actual: candMetric.standaloneShortTokens,
+      expected: expectation.maxStandaloneShortTokens,
+    };
+    score += 1;
+  }
+
+  if (candMetric.suspiciousRatio > expectation.maxSuspiciousRatio) {
+    reasons.push('expect_suspicious_ratio');
+    details.suspiciousRatio = {
+      actual: candMetric.suspiciousRatio,
+      expected: expectation.maxSuspiciousRatio,
+    };
+    score += 2;
+  }
+
+  return { score, reasons, details };
+}
+
 function formatPercent(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (!args.base || !args.cand) {
-    console.error('Usage: node scripts/ocr-regression-report.js --base <baseline.json> --cand <candidate.json> [--out report.json] [--fail-on-risk]');
+  if (!args.cand) {
+    console.error('Usage: node scripts/ocr-regression-report.js --cand <candidate.json> [--base baseline.json] [--expect expectations.json] [--out report.json] [--fail-on-risk]');
     process.exit(1);
   }
 
-  const baseJson = loadJson(args.base);
+  const baseJson = args.base ? loadJson(args.base) : null;
   const candJson = loadJson(args.cand);
-  const basePages = normalizePages(baseJson);
+  const expectJson = args.expect ? loadJson(args.expect) : null;
+  const basePages = baseJson ? normalizePages(baseJson) : new Map();
   const candPages = normalizePages(candJson);
+  const expectations = normalizeExpectations(expectJson);
 
-  const pageNumbers = Array.from(new Set([...basePages.keys(), ...candPages.keys()])).sort((a, b) => a - b);
+  const pageNumbers = Array.from(new Set([
+    ...basePages.keys(),
+    ...candPages.keys(),
+    ...expectations.keys(),
+  ])).sort((a, b) => a - b);
   const pageReports = [];
 
   let baseWordsTotal = 0;
   let candWordsTotal = 0;
   let baseSuspiciousTotal = 0;
   let candSuspiciousTotal = 0;
+  let expectationFailures = 0;
 
   for (const pageNum of pageNumbers) {
     const basePage = basePages.get(pageNum);
     const candPage = candPages.get(pageNum);
-    if (!basePage || !candPage) {
+    const expectation = expectations.get(pageNum);
+    if (!candPage) {
       pageReports.push({
         page: pageNum,
         score: 3,
         reasons: ['missing_page'],
         baseExists: Boolean(basePage),
-        candExists: Boolean(candPage),
+        candExists: false,
+        expectation: expectation || null,
       });
+      if (expectation) expectationFailures += 1;
       continue;
     }
 
-    const baseMetric = metric(basePage);
+    const baseMetric = basePage ? metric(basePage) : null;
     const candMetric = metric(candPage);
-    const { score, reasons } = buildRisk(baseMetric, candMetric);
-    const tokenDiff = diffTokenSet(baseMetric.tokenSet, candMetric.tokenSet);
+    const { score: baseScore, reasons: baseReasons } = buildRisk(baseMetric, candMetric);
+    const { score: expectScore, reasons: expectReasons, details: expectDetails } = evaluateExpectation(candMetric, expectation);
+    const combinedReasons = Array.from(new Set([...baseReasons, ...expectReasons]));
+    const tokenDiff = baseMetric ? diffTokenSet(baseMetric.tokenSet, candMetric.tokenSet) : { missing: [], added: [] };
+    if (expectReasons.length > 0) {
+      expectationFailures += 1;
+    }
 
     pageReports.push({
       page: pageNum,
-      score,
-      reasons,
-      base: {
+      score: baseScore + expectScore,
+      reasons: combinedReasons,
+      base: baseMetric ? {
         words: baseMetric.wordCount,
         lines: baseMetric.lineCount,
         suspicious: baseMetric.suspiciousCount,
         suspiciousRatio: baseMetric.suspiciousRatio,
         avgWordsPerLine: baseMetric.avgWordsPerLine,
         confidence: Number(baseMetric.confidence.toFixed(2)),
-      },
+      } : null,
       candidate: {
         words: candMetric.wordCount,
         lines: candMetric.lineCount,
+        meaningfulWords: candMetric.meaningfulWords,
         suspicious: candMetric.suspiciousCount,
         suspiciousRatio: candMetric.suspiciousRatio,
         avgWordsPerLine: candMetric.avgWordsPerLine,
         confidence: Number(candMetric.confidence.toFixed(2)),
         dropped: candMetric.droppedCount,
+        standaloneShortTokens: candMetric.standaloneShortTokens,
       },
+      expectation: expectation || null,
+      expectationDetails: expectDetails,
       missingTokens: tokenDiff.missing,
       addedTokens: tokenDiff.added,
     });
 
-    baseWordsTotal += baseMetric.wordCount;
+    if (baseMetric) {
+      baseWordsTotal += baseMetric.wordCount;
+      baseSuspiciousTotal += baseMetric.suspiciousCount;
+    }
     candWordsTotal += candMetric.wordCount;
-    baseSuspiciousTotal += baseMetric.suspiciousCount;
     candSuspiciousTotal += candMetric.suspiciousCount;
   }
 
   const risky = pageReports
-    .filter((report) => report.score >= 2)
+    .filter((report) => report.score >= 2 || report.reasons.length > 0)
     .sort((a, b) => b.score - a.score || a.page - b.page);
 
   const summary = {
     comparedPages: pageNumbers.length,
+    expectationPages: expectations.size,
+    expectationFailures,
     baseWordsTotal,
     candWordsTotal,
     wordDelta: candWordsTotal - baseWordsTotal,
@@ -304,8 +450,14 @@ function main() {
 
   console.log('[OCR Regression] Summary');
   console.log(`- pages: ${summary.comparedPages}`);
-  console.log(`- words: ${summary.baseWordsTotal} -> ${summary.candWordsTotal} (delta ${summary.wordDelta >= 0 ? '+' : ''}${summary.wordDelta})`);
-  console.log(`- suspicious: ${summary.baseSuspiciousTotal} -> ${summary.candSuspiciousTotal} (delta ${summary.suspiciousDelta >= 0 ? '+' : ''}${summary.suspiciousDelta})`);
+  if (args.base) {
+    console.log(`- words: ${summary.baseWordsTotal} -> ${summary.candWordsTotal} (delta ${summary.wordDelta >= 0 ? '+' : ''}${summary.wordDelta})`);
+    console.log(`- suspicious: ${summary.baseSuspiciousTotal} -> ${summary.candSuspiciousTotal} (delta ${summary.suspiciousDelta >= 0 ? '+' : ''}${summary.suspiciousDelta})`);
+  } else {
+    console.log(`- candidate words: ${summary.candWordsTotal}`);
+    console.log(`- candidate suspicious: ${summary.candSuspiciousTotal}`);
+  }
+  console.log(`- expectation failures: ${summary.expectationFailures}/${summary.expectationPages}`);
   console.log(`- risky pages: ${summary.riskyPages}`);
 
   if (risky.length > 0) {
@@ -321,6 +473,9 @@ function main() {
         `- page ${report.page}: score=${report.score} [${report.reasons.join(', ')}] `
         + `words ${baseWords}->${candWords}, lines ${baseLines}->${candLines}, ghost ${baseGhost}->${candGhost}`
       );
+      if (report.expectationDetails && Object.keys(report.expectationDetails).length > 0) {
+        console.log(`  expect: ${JSON.stringify(report.expectationDetails)}`);
+      }
       if (report.addedTokens && report.addedTokens.length > 0) {
         console.log(`  added: ${report.addedTokens.join(', ')}`);
       }

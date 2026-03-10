@@ -116,8 +116,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         }
         return null;
       })() ?? await file.arrayBuffer();
-      pdfDataRef.current = data;
-      const loadingTask = pdfjs.getDocument({ data });
+      pdfDataRef.current = data as ArrayBuffer;
+      const loadingTask = pdfjs.getDocument({ data: data as ArrayBuffer });
       const doc = await loadingTask.promise;
       pdfDocRef.current = doc;
       pdfLoadingRef.current = null;
@@ -142,6 +142,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.dpi !== options.dpi) return false;
     if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.pipelineProfile || 'panel') !== 'panel') return false;
     return true;
   }, [options, normalizeLanguage]);
 
@@ -342,7 +343,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const renderImageToCanvas = useCallback(async () => {
     if (!file) throw new Error('No image loaded');
     const imageBlob = fileData
-      ? new Blob([fileData], { type: file.type || 'image/png' })
+      ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
       : file;
 
     const imageBitmap = await createImageBitmap(imageBlob);
@@ -474,7 +475,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
 
-      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'print' });
+      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'print', canvas: outputCanvas });
       await renderTask.promise;
 
       return {
@@ -552,12 +553,14 @@ export const OCRTextLayerPanel: React.FC = () => {
         options.dpi,
         options.pageSegMode,
         controller.signal,
-        showDebugOverlay
+        showDebugOverlay,
+        'panel'
       );
       visionService.setProgressCallback(null);
 
       ocrResult.language = normalizeLanguage(options.language);
       ocrResult.pageNumber = pageNum;
+      ocrResult.pipelineProfile = 'panel';
       setPageOCR(pageNum, ocrResult);
 
       const cacheDocId = await ensureDocumentId();
@@ -657,19 +660,20 @@ export const OCRTextLayerPanel: React.FC = () => {
       const arrayBuffer = fileData
         ? fileData.buffer.slice(fileData.byteOffset, fileData.byteOffset + fileData.byteLength)
         : await file.arrayBuffer();
-      pdfDataRef.current = arrayBuffer;
+      pdfDataRef.current = arrayBuffer as ArrayBuffer;
 
       // Create searchable PDF (also performs OCR)
       const cacheDocId = await ensureDocumentId();
       const resultBytes = await searchablePDFService.createSearchablePDF(
-        arrayBuffer,
+        arrayBuffer as ArrayBuffer,
         options,
         renderPageToCanvas,
         targetPages,
         cacheDocId ?? undefined,
         controller.signal,
         forceReOCR,
-        showDebugOverlay
+        showDebugOverlay,
+        'panel'
       );
       void resultBytes;
       
@@ -749,6 +753,33 @@ export const OCRTextLayerPanel: React.FC = () => {
       .slice(0, 3)
       .map(([filter, count]) => `${filter}:${count}`)
       .join(', ')
+    : '';
+  const currentStageSummary = currentPageOCR?.debug?.stageMetrics
+    ? currentPageOCR.debug.stageMetrics
+      .map((metric) => {
+        const deltaWords = metric.wordsAfter - metric.wordsBefore;
+        const deltaLines = metric.linesAfter - metric.linesBefore;
+        return `${metric.stage}:${deltaWords >= 0 ? '+' : ''}${deltaWords}w/${deltaLines >= 0 ? '+' : ''}${deltaLines}l`;
+      })
+      .join(', ')
+    : '';
+  const currentCandidateSummary = currentPageOCR?.debug?.candidates
+    ? (() => {
+      const rejected = currentPageOCR.debug.candidates.filter(candidate => !candidate.accepted);
+      const accepted = currentPageOCR.debug.candidates.filter(candidate => candidate.accepted).length;
+      const rejectReasons = rejected.reduce<Record<string, number>>((acc, candidate) => {
+        const key = candidate.reason || 'unknown';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      const topRejects = Object.entries(rejectReasons)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([reason, count]) => `${reason}:${count}`)
+        .join(', ');
+      if (!topRejects && accepted === 0) return '';
+      return `candidates accepted:${accepted}${topRejects ? ` | reject ${topRejects}` : ''}`;
+    })()
     : '';
 
   return (
@@ -959,6 +990,16 @@ export const OCRTextLayerPanel: React.FC = () => {
           {showDebugOverlay && currentDroppedCount > 0 && (
             <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">
               dropped {currentDroppedCount} คำ{currentDropSummary ? ` (${currentDropSummary})` : ''}
+            </div>
+          )}
+          {showDebugOverlay && currentStageSummary && (
+            <div className="text-[11px] text-sky-200 bg-sky-900/20 border border-sky-700/40 rounded px-2 py-1">
+              stages {currentStageSummary}
+            </div>
+          )}
+          {showDebugOverlay && currentCandidateSummary && (
+            <div className="text-[11px] text-fuchsia-200 bg-fuchsia-900/20 border border-fuchsia-700/40 rounded px-2 py-1">
+              {currentCandidateSummary}
             </div>
           )}
           

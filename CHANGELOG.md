@@ -75,6 +75,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TSV Parsing**: Improved word-level bounding box extraction from Tesseract output
 - **Document Type Awareness**: Segmentation adapts based on translation mode (manga/official)
 
+## [1.2.1] - 2026-03-09
+
+### Changed
+- OCR preprocessing now includes adaptive binarization, dark-border cleanup, and lightweight binary repair for thin manga bubble text.
+- Latin sparse-page handling is more recall-oriented to reduce over-pruning of valid speech-bubble lines.
+
+### Improved
+- Manual validation shows better recovery on sparse manga bubbles, including Page 3 lower-line detection (`TAKE A LOOK!`).
+
+### Known Issues
+- Some final / bottom bubble lines are still missed on difficult pages.
+- Confirmed follow-up cases:
+  - Page 2: missing `Xujia town`
+  - Page 5: partial or missing lines including `IN THE PAST, I ONLY FOUND THE`, `WITH`, `THIS KIND OF STUFF..`
+  - Page 10: missing `THE PEOPLE HERE?`
+
 
 ---
 

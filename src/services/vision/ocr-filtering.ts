@@ -39,6 +39,222 @@ function isProtectedLatinToken(alphaNum: string): boolean {
   return LATIN_PROTECT_WORDS.has(normalized) || LATIN_KEEP_SHORT_WORDS.has(normalized);
 }
 
+export interface RegionTextLikeness {
+  edgeDarkRatio: number;
+  interiorDarkRatio: number;
+  centerBandDarkRatio: number;
+  connectedComponentCount: number;
+  horizontalPeakCount: number;
+  textLikeScore: number;
+  threshold: number;
+  patchWidth: number;
+  patchHeight: number;
+}
+
+function clampRegionBBox(bbox: BBox, width: number, height: number): BBox {
+  return {
+    x0: Math.max(0, Math.min(width - 1, Math.floor(bbox.x0))),
+    y0: Math.max(0, Math.min(height - 1, Math.floor(bbox.y0))),
+    x1: Math.max(1, Math.min(width, Math.ceil(bbox.x1))),
+    y1: Math.max(1, Math.min(height, Math.ceil(bbox.y1))),
+  };
+}
+
+function computePatchOtsuThreshold(samples: Uint8Array): number {
+  if (samples.length === 0) return 128;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < samples.length; i++) hist[samples[i]] += 1;
+  const total = samples.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0;
+  let wB = 0;
+  let maxVar = 0;
+  let threshold = 128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) {
+      maxVar = between;
+      threshold = i;
+    }
+  }
+  return threshold;
+}
+
+function countConnectedComponents(binary: Uint8Array, width: number, height: number): number {
+  const visited = new Uint8Array(binary.length);
+  let components = 0;
+  const stack = new Int32Array(Math.max(8, binary.length));
+
+  for (let idx = 0; idx < binary.length; idx++) {
+    if (binary[idx] === 0 || visited[idx] === 1) continue;
+
+    let area = 0;
+    let top = 0;
+    stack[top++] = idx;
+    visited[idx] = 1;
+
+    while (top > 0) {
+      const current = stack[--top];
+      area += 1;
+      const x = current % width;
+      const y = (current / width) | 0;
+
+      const neighbors = [
+        x > 0 ? current - 1 : -1,
+        x + 1 < width ? current + 1 : -1,
+        y > 0 ? current - width : -1,
+        y + 1 < height ? current + width : -1,
+      ];
+
+      for (const next of neighbors) {
+        if (next < 0 || binary[next] === 0 || visited[next] === 1) continue;
+        visited[next] = 1;
+        stack[top++] = next;
+      }
+    }
+
+    if (area >= 2) components += 1;
+  }
+
+  return components;
+}
+
+function countHorizontalPeaks(binary: Uint8Array, width: number, height: number): number {
+  if (width <= 0 || height <= 0) return 0;
+  const rowRatios = new Array<number>(height).fill(0);
+  for (let y = 0; y < height; y++) {
+    let dark = 0;
+    const rowOffset = y * width;
+    for (let x = 0; x < width; x++) dark += binary[rowOffset + x];
+    rowRatios[y] = dark / Math.max(1, width);
+  }
+
+  let peaks = 0;
+  let inRun = false;
+  for (let y = 0; y < height; y++) {
+    const ratio = rowRatios[y];
+    const active = ratio >= 0.08;
+    if (active && !inRun) {
+      peaks += 1;
+      inRun = true;
+      continue;
+    }
+    if (!active) inRun = false;
+  }
+  return peaks;
+}
+
+export function analyzeRegionTextLikeness(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  bbox: BBox
+): RegionTextLikeness {
+  const box = clampRegionBBox(bbox, width, height);
+  const sourceW = Math.max(1, box.x1 - box.x0);
+  const sourceH = Math.max(1, box.y1 - box.y0);
+  const patchWidth = Math.max(8, Math.min(96, sourceW));
+  const patchHeight = Math.max(8, Math.min(96, sourceH));
+  const samples = new Uint8Array(patchWidth * patchHeight);
+
+  for (let py = 0; py < patchHeight; py++) {
+    const sy = Math.min(height - 1, box.y0 + Math.floor((py / patchHeight) * sourceH));
+    for (let px = 0; px < patchWidth; px++) {
+      const sx = Math.min(width - 1, box.x0 + Math.floor((px / patchWidth) * sourceW));
+      samples[py * patchWidth + px] = gray[sy * width + sx] || 0;
+    }
+  }
+
+  const threshold = computePatchOtsuThreshold(samples);
+  const binary = new Uint8Array(samples.length);
+  let edgeDark = 0;
+  let edgeCount = 0;
+  let interiorDark = 0;
+  let interiorCount = 0;
+  let centerBandDark = 0;
+  let centerBandCount = 0;
+  const edgeX = Math.max(1, Math.round(patchWidth * 0.18));
+  const edgeY = Math.max(1, Math.round(patchHeight * 0.18));
+  const interiorX0 = Math.floor(patchWidth * 0.18);
+  const interiorX1 = Math.ceil(patchWidth * 0.82);
+  const interiorY0 = Math.floor(patchHeight * 0.18);
+  const interiorY1 = Math.ceil(patchHeight * 0.82);
+  const centerY0 = Math.floor(patchHeight * 0.3);
+  const centerY1 = Math.ceil(patchHeight * 0.7);
+
+  for (let py = 0; py < patchHeight; py++) {
+    for (let px = 0; px < patchWidth; px++) {
+      const index = py * patchWidth + px;
+      const dark = samples[index] <= threshold ? 1 : 0;
+      binary[index] = dark;
+
+      const isEdge = px < edgeX || px >= patchWidth - edgeX || py < edgeY || py >= patchHeight - edgeY;
+      if (isEdge) {
+        edgeDark += dark;
+        edgeCount += 1;
+      }
+
+      const isInterior = px >= interiorX0 && px < interiorX1 && py >= interiorY0 && py < interiorY1;
+      if (isInterior) {
+        interiorDark += dark;
+        interiorCount += 1;
+      }
+
+      const isCenterBand = py >= centerY0 && py < centerY1;
+      if (isCenterBand) {
+        centerBandDark += dark;
+        centerBandCount += 1;
+      }
+    }
+  }
+
+  const edgeDarkRatio = edgeDark / Math.max(1, edgeCount);
+  const interiorDarkRatio = interiorDark / Math.max(1, interiorCount);
+  const centerBandDarkRatio = centerBandDark / Math.max(1, centerBandCount);
+  const connectedComponentCount = countConnectedComponents(binary, patchWidth, patchHeight);
+  const horizontalPeakCount = countHorizontalPeaks(binary, patchWidth, patchHeight);
+  const edgePenalty = Math.max(0, edgeDarkRatio - interiorDarkRatio * 1.2);
+  const textLikeScore = Math.max(
+    0,
+    Math.min(
+      1,
+      (centerBandDarkRatio * 18)
+      + Math.min(connectedComponentCount / 6, 1) * 0.28
+      + Math.min(horizontalPeakCount / 3, 1) * 0.28
+      + Math.min(interiorDarkRatio * 3.2, 0.24)
+      - (edgePenalty * 1.5)
+    )
+  );
+
+  return {
+    edgeDarkRatio,
+    interiorDarkRatio,
+    centerBandDarkRatio,
+    connectedComponentCount,
+    horizontalPeakCount,
+    textLikeScore,
+    threshold,
+    patchWidth,
+    patchHeight,
+  };
+}
+
+export function isLikelyTextRegion(metrics: RegionTextLikeness): boolean {
+  if (metrics.centerBandDarkRatio < CONFIG.BORDER_ARTIFACT_CENTER_DARK_RATIO_MIN) return false;
+  if (metrics.connectedComponentCount < CONFIG.BORDER_ARTIFACT_COMPONENT_MIN) return false;
+  if (metrics.horizontalPeakCount < CONFIG.BORDER_ARTIFACT_HORIZONTAL_PEAKS_MIN) return false;
+  if (metrics.edgeDarkRatio >= metrics.interiorDarkRatio * CONFIG.BORDER_ARTIFACT_EDGE_BAND_RATIO) return false;
+  return true;
+}
+
 // ============================================
 // Background variance
 // ============================================

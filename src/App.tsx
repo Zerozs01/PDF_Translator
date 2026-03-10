@@ -22,6 +22,7 @@ import {
   AlignRight
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
+import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore } from './stores/useProjectStore';
 
@@ -61,6 +62,8 @@ async function translateWithGemini(text: string, type: string, mode: 'manga' | '
 // Region interface moved to src/types/index.ts
 
 export default function App() {
+  const showOCRHarness = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
   const { activeTool, setActiveTool } = useUIStore();
   const { 
     file, 
@@ -92,6 +95,7 @@ export default function App() {
   };
   
   useEffect(() => {
+    if (showOCRHarness) return undefined;
     // Lazy Initialize Vision Worker (low priority)
     const timer = setTimeout(() => {
       visionService.initialize().then(() => {
@@ -101,7 +105,7 @@ export default function App() {
     }, 2000); // Delay 2s to let UI render first
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [showOCRHarness]);
 
   // Update editedName when file changes
   useEffect(() => {
@@ -109,6 +113,10 @@ export default function App() {
       setEditedName(file.name);
     }
   }, [file]);
+
+  if (showOCRHarness) {
+    return <OCRRegressionHarness />;
+  }
 
   // If no file is loaded, show Upload Screen
   if (!file) {

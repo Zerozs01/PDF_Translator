@@ -29,3 +29,14 @@ For full project history, see `CHANGELOG.md` in the repo root.
 - Updated `documents/ARCHITECTURE.md` with OCR cache and file source behavior.
 - Added `road map.md` to track upcoming phases and priorities.
 - Synced documentation notes with recent OCR cache + fileData changes.
+
+## 2026-03-09
+
+- Backed up latest OCR tuning notes after manual manga-page validation.
+- Documented preprocessing upgrades: adaptive binarization, dark-border cleanup, and lightweight binary repair.
+- Recorded that Page 3 lower line (`TAKE A LOOK!`) is now detected successfully.
+- Recorded remaining OCR misses for follow-up:
+	- Page 2 missing `Xujia town`
+	- Page 5 missing / truncated lines including `IN THE PAST, I ONLY FOUND THE`, `WITH`, and `THIS KIND OF STUFF..`
+	- Page 10 missing `THE PEOPLE HERE?`
+- Documented decision to temporarily tolerate some extra background candidate boxes if they help OCR recall / segmentation.
