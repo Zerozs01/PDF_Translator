@@ -118,6 +118,8 @@ export interface OCROptions {
   profile: "fast" | "balanced" | "best";
   pageSegMode?: number;
   skipIfTextExists?: boolean;
+  /** Per-page OCR timeout in seconds (0 = no timeout). Default: 120 */
+  perPageTimeoutSec?: number;
 }
 
 /** Text Layer Generation Options */

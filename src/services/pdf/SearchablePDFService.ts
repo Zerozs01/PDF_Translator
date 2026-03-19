@@ -10,6 +10,7 @@
 import { PDFDocument } from 'pdf-lib';
 import { visionService } from '../vision/VisionService';
 import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+import { withPerPageOCRTimeout } from '../vision/ocr-timeout';
 import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions, OCRPipelineProfile } from '../../types';
 import { dbService } from '../dbService';
@@ -288,7 +289,8 @@ export class SearchablePDFService {
             });
 
             stepProgress('ocr', `กำลัง OCR หน้า ${pageNum}/${pagesToProcess} (${options.language})...`);
-            ocrResult = await visionService.ocrForTextLayer(
+
+            const ocrPromise = visionService.ocrForTextLayer(
               imageBlob,
               imageWidth,
               imageHeight,
@@ -298,6 +300,12 @@ export class SearchablePDFService {
               signal,
               debugCollectDrops,
               pipelineProfile
+            );
+
+            ocrResult = await withPerPageOCRTimeout(
+              ocrPromise,
+              pageNum,
+              options.perPageTimeoutSec
             );
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
@@ -323,6 +331,11 @@ export class SearchablePDFService {
           await enqueueTextLayer(i, pageNum, ocrResult);
           unitsUsed += 1;
         } catch (pageError) {
+          if (isAbortError(pageError)) {
+            const remaining = Math.max(0, 3 - unitsUsed);
+            updateProgress('ocr', pageNum, `OCR canceled on page ${pageNum}`, remaining);
+            return;
+          }
           console.error(`[SearchablePDF] Failed to process page ${pageNum}:`, pageError);
           failedPages.push(pageNum);
           const remaining = Math.max(0, 3 - unitsUsed);

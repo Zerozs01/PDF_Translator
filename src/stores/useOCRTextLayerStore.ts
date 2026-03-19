@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { OCRPageResult, OCROptions } from '../types';
 import { ProcessingProgress } from '../services/pdf';
+import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout';
 
 interface OCRTextLayerState {
   // OCR Options
@@ -68,6 +69,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     dpi: 300,
     profile: 'best',
     skipIfTextExists: true,
+    perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
   },
   
   setOptions: (newOptions) => set((state) => ({

@@ -104,13 +104,14 @@ npm run build
 - [ ] **Phase 6:** Advanced Segmentation V3
 - [ ] **Phase 7:** Gemini Translation Bridge (Advanced)
 
-See `road map.md` in the repo root for the active, cross-machine plan.
+See `Roadmap.md` in this folder for the active OCR roadmap and code-status audit.
 
 ## 📝 Documentation
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - สรุปสถาปัตยกรรม (ดูฉบับเต็มที่ root)
 - [OCR_OPTIMIZATION.md](./OCR_OPTIMIZATION.md) - แนวทางจูน OCR และจุดที่กินเวลา
 - [LOCAL_TESSDATA.md](./LOCAL_TESSDATA.md) - ตั้งค่า OCR ภาษาแบบออฟไลน์
+- [Roadmap.md](./Roadmap.md) - แผน OCR หลัก + สถานะเทียบโค้ดจริง
 - [CHANGELOG.md](./CHANGELOG.md) - ประวัติเอกสารในโฟลเดอร์นี้
   
 > เอกสารฉบับเต็มอยู่ที่ root: `ARCHITECTURE.md`, `CHANGELOG.md`

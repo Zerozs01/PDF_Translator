@@ -37,10 +37,14 @@ function createWindow() {
     },
   })
 
-  // Enable DevTools shortcut (Ctrl+Shift+I or F12)
+  // Enable DevTools shortcut (Ctrl+Shift+I or F12) and page refresh (Ctrl+R / F5) in dev mode
   win.webContents.on('before-input-event', (event, input) => {
     if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
       win?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+    if (VITE_DEV_SERVER_URL && ((input.control && input.key.toLowerCase() === 'r') || input.key === 'F5')) {
+      win?.webContents.reload();
       event.preventDefault();
     }
   });

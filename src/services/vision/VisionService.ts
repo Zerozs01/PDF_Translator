@@ -10,6 +10,11 @@
 
 import { Region, OCRPageResult, OCRPipelineProfile } from '../../types';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
+import {
+  OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
+  OCR_WORKER_RETRY_ATTEMPTS_DEFAULT,
+  OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
+} from './ocr-timeout';
 
 type WorkerMessage = {
   type: string;
@@ -41,6 +46,7 @@ type WorkerMode = 'primary' | 'stable';
 type WorkerSlot = {
   worker: Worker;
   busy: boolean;
+  booted: boolean;
   mode: WorkerMode;
 };
 
@@ -52,15 +58,13 @@ export type OCRProgressCallback = (progress: {
 
 // Configuration
 const getDefaultWorkerCount = (): number => {
-  if (typeof navigator === 'undefined') return 1;
-  const cores = navigator.hardwareConcurrency || 1;
-  return Math.max(1, Math.min(3, Math.floor(cores / 2)));
+  return 1;
 };
 
 const CONFIG = {
-  REQUEST_TIMEOUT_MS: 120000, // 2 minutes timeout for OCR
-  RETRY_ATTEMPTS: 2,
-  RETRY_DELAY_MS: 1000,
+  REQUEST_TIMEOUT_MS: OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
+  RETRY_ATTEMPTS: OCR_WORKER_RETRY_ATTEMPTS_DEFAULT,
+  RETRY_DELAY_MS: OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
   HEALTH_CHECK_INTERVAL_MS: 30000,
   MAX_WORKERS: getDefaultWorkerCount(),
 };
@@ -73,6 +77,7 @@ const createAbortError = (reason: string = 'OCR job canceled'): Error => {
 
 class VisionService {
   private workers: WorkerSlot[] = [];
+  private workerVersion: number | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private progressCallback: OCRProgressCallback | null = null;
   private requestQueue: Array<QueuedRequest> = [];
@@ -86,9 +91,19 @@ class VisionService {
    * Initialize worker pool with health monitoring
    */
   private initWorkers(): void {
-    if (this.workers.length > 0) return;
+    if (this.workers.length > 0 && this.workerVersion === OCR_ALGORITHM_VERSION) return;
+
+    if (this.workers.length > 0 && this.workerVersion !== OCR_ALGORITHM_VERSION) {
+      for (const slot of this.workers) {
+        slot.worker.terminate();
+      }
+      this.workers = [];
+      this.pendingRequests.clear();
+      this.requestQueue = [];
+    }
 
     console.log(`[VisionService] Initializing ${CONFIG.MAX_WORKERS} worker(s)...`);
+    this.workerVersion = OCR_ALGORITHM_VERSION;
     for (let i = 0; i < CONFIG.MAX_WORKERS; i++) {
       this.workers.push(this.createWorkerSlot(i));
     }
@@ -120,13 +135,13 @@ class VisionService {
         lineno: error.lineno ?? -1,
         colno: error.colno ?? -1,
         type: error.type ?? '(no type)',
-        errorObj: (error as any).error ?? null,
+        errorObj: error.error ?? null,
       };
       console.error(`[VisionService] Worker ${index} (${mode}) error:`, JSON.stringify(errInfo, null, 2));
       this.handleWorkerCrash(index, error);
     };
 
-    return { worker, busy: false, mode };
+    return { worker, busy: false, booted: false, mode };
   }
 
   private recreateWorkerSlot(index: number, mode?: WorkerMode): void {
@@ -156,6 +171,10 @@ class VisionService {
     // Handle boot status messages from worker-boot.ts
     if (type === 'WORKER_BOOT') {
       console.log(`[VisionService] Worker ${workerIndex} booted OK (primary pipeline active).`);
+      if (this.workers[workerIndex]) {
+        this.workers[workerIndex].booted = true;
+      }
+      this.processQueue();
       return;
     }
     if (type === 'WORKER_BOOT_ERROR') {
@@ -166,7 +185,8 @@ class VisionService {
         `  Stack: ${info?.stack || '(no stack)'}\n` +
         `  → Worker will use STABLE fallback pipeline (already loaded by boot loader).`,
       );
-      // Mark as stable mode since the boot loader already imported worker-stable
+      // Mark as stable mode since the boot loader already imported worker-stable.
+      // Don't set booted=true yet — wait for the fallback WORKER_BOOT message.
       if (this.workers[workerIndex]) {
         this.workers[workerIndex].mode = 'stable';
       }
@@ -191,6 +211,7 @@ class VisionService {
     if (this.workers[workerIndex]) {
       this.workers[workerIndex].busy = false;
     }
+      console.log(`[VisionService] Completed ${type} request ${id} from worker ${workerIndex}`);
 
     // Process next item(s) in queue
     this.processQueue();
@@ -236,22 +257,6 @@ class VisionService {
     }
 
     this.healthCheckTimer = setInterval(() => {
-      const now = Date.now();
-      
-      for (const [id, pending] of this.pendingRequests) {
-        if (now - pending.timestamp > CONFIG.REQUEST_TIMEOUT_MS) {
-          console.warn(`[VisionService] Request ${id} timed out`);
-          clearTimeout(pending.timeoutId);
-          pending.request.abortHandler?.();
-          pending.reject(new Error('Request timeout'));
-          this.pendingRequests.delete(id);
-
-          if (this.workers[pending.workerIndex]) {
-            this.workers[pending.workerIndex].busy = false;
-          }
-        }
-      }
-      
       this.processQueue();
     }, CONFIG.HEALTH_CHECK_INTERVAL_MS);
   }
@@ -264,7 +269,7 @@ class VisionService {
 
     for (let i = 0; i < this.workers.length; i++) {
       if (this.requestQueue.length === 0) break;
-      if (this.workers[i].busy) continue;
+      if (this.workers[i].busy || !this.workers[i].booted) continue;
 
       const nextRequest = this.requestQueue.shift();
       if (!nextRequest) continue;
@@ -277,13 +282,19 @@ class VisionService {
     const { type, payload, resolve, reject } = request;
     const id = crypto.randomUUID();
 
+    console.log(`[VisionService] Dispatching ${type} request ${id} to worker ${workerIndex}`);
+
     const timeoutId = setTimeout(() => {
       const pending = this.pendingRequests.get(id);
       if (!pending) return;
 
+      console.warn(`[VisionService] Request ${id} timed out`);
+
       this.pendingRequests.delete(id);
-      if (this.workers[workerIndex]) {
-        this.workers[workerIndex].busy = false;
+      const slot = this.workers[workerIndex];
+      if (slot) {
+        slot.busy = false;
+        this.recreateWorkerSlot(workerIndex, slot.mode);
       }
 
       if (request.retryCount < CONFIG.RETRY_ATTEMPTS) {

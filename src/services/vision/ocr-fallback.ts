@@ -104,7 +104,8 @@ export async function recognizeRegion(
     ...(dpi ? { user_defined_dpi: String(Math.round(dpi)) } : {})
   } as Record<string, string>);
 
-  const result = await worker.recognize(canvas as any, undefined, { text: true, tsv: true }) as TesseractResult;
+  const cropBlob = await canvas.convertToBlob({ type: 'image/png' });
+  const result = await worker.recognize(cropBlob, undefined, { text: true, tsv: true }) as TesseractResult;
   const parsed = parseTSV(result.data.tsv || '');
   return parsed.words.map(w => ({
     text: w.text,
@@ -159,7 +160,7 @@ export async function recognizeInChunks(
     ctx.drawImage(sourceBitmap, 0, yStart, width, currentHeight, 0, 0, width, currentHeight);
 
     const chunkBlob = await chunkCanvas.convertToBlob({ type: 'image/png' });
-    const result = await worker.recognize(chunkBlob as any, undefined, { text: true, tsv: true }) as TesseractResult;
+    const result = await worker.recognize(chunkBlob, undefined, { text: true, tsv: true }) as TesseractResult;
 
     fullText += (result.data.text || '') + '\n';
     if (typeof result.data.confidence === 'number') {

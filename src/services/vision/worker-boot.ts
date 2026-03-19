@@ -9,8 +9,17 @@
  * VisionService loads this file instead of worker.ts directly.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const _self = self as any;
+const _self = self as DedicatedWorkerGlobalScope;
+
+// ── Buffer incoming messages while the real worker module loads ──
+// The module worker port is enabled after this entry module evaluates,
+// but self.onmessage is only set by worker.ts (or worker-stable.ts)
+// inside the dynamic import below. Without buffering, any messages
+// dispatched in the gap (e.g. INIT) are silently dropped.
+const _bootBuffer: MessageEvent[] = [];
+_self.onmessage = (e: MessageEvent) => {
+  _bootBuffer.push(e);
+};
 
 console.log('[worker-boot] Starting module load...');
 
@@ -40,9 +49,22 @@ console.log('[worker-boot] Starting module load...');
     try {
       await import('./worker-stable');
       console.log('[worker-boot] ✅ Stable worker loaded as fallback.');
+      // worker-stable doesn't post WORKER_BOOT itself, so we do it here
+      _self.postMessage({ type: 'WORKER_BOOT', payload: { status: 'ok-fallback', ts: Date.now() } });
     } catch (err2: unknown) {
       const e2 = err2 as Error | undefined;
       console.error('[worker-boot] Stable worker ALSO failed:', e2?.message || String(err2));
     }
+  }
+
+  // worker.ts (or worker-stable.ts) has now set self.onmessage to the
+  // real handler.  Replay any messages that arrived during module loading.
+  if (_bootBuffer.length > 0) {
+    console.log(`[worker-boot] Replaying ${_bootBuffer.length} buffered message(s)...`);
+    const realHandler = _self.onmessage;
+    for (const msg of _bootBuffer) {
+      realHandler.call(_self, msg);
+    }
+    _bootBuffer.length = 0;
   }
 })();

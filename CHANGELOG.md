@@ -5,14 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.3] - 2026-03-10
+## [1.2.10] - 2026-03-11
 
-### Fixed — OCR Algorithm v47 (Primary Worker Pipeline)
-- **XUJIA TOWN regression**: Added zero-lexical-line re-OCR with unbinarized image. When binarization corrupts text (all words non-lexical), the line is re-OCR'd with the original image and replaced if better lexical matches are found.
+### Fixed — OCR Algorithm v47 (Rollback Recovery)
+- Re-applied the core runtime fixes after rollback: OCR now runs with a single worker, longer request timeout, and cleaner timeout recovery instead of competing 3-worker retries.
+- Re-applied renderer-side OCR protections so stale algorithm cache is no longer shown as a valid preview, page-change cache auto-load pauses while OCR is running, and overlapping OCR starts are ignored.
+- Batch OCR now avoids visible-page navigation as a render fallback, reducing `currentPage` churn during `Re-OCR All`.
+- Re-applied core Latin cleanup improvements: original-image fallback for low-coverage rescans, approximate lexical repair, merged-word splitting, and late cleanup for mixed-case/lowercase ghost fragments.
+
+## [1.2.9] - 2026-03-11
+
+### Fixed — OCR Algorithm v53 (Batch Render Path)
+- `Re-OCR All` no longer navigates the visible PDF pages as a fallback render strategy during batch OCR.
+- Suppressed cache auto-load while OCR is actively running, so page changes during processing cannot overwrite the panel with cached results.
+- Simplified direct pdf.js page rendering for OCR capture to reduce render-fallback failures.
+
+## [1.2.8] - 2026-03-11
+
+### Fixed — OCR Algorithm v52 (Cache Invalidation + Trigger Logging)
+- Bumped OCR algorithm version again so recent runtime/recovery changes cannot be masked by stale v51 OCR cache.
+- Added explicit `OCRTextLayerPanel` logs for current-page changes and OCR starts, making it obvious whether page 2 OCR is actually being triggered or only cached page 1 is being shown.
+
+## [1.2.7] - 2026-03-10
+
+### Fixed — OCR Algorithm v51 (Bottom-Line Recovery)
+- **Timeout stability**: `VisionService` now defaults to a single OCR worker in dev/runtime because the heavy primary pipeline was contending badly with 3 parallel workers and timing out.
+- **Worker recovery**: request timeouts now recreate the timed-out worker and let the normal retry path run, instead of failing early from the health-check loop.
+- **Panel-mode rescue cap**: expensive Latin rescue passes are now limited to sparse pages and a small time budget in panel mode, preventing long stalls after the initial OCR result is already available.
+- **Longer request window**: OCR/Tesseract init timeout increased to 5 minutes to avoid false restarts while local worker startup finishes.
+- Re-aligned the fix direction with the documented analysis: the dominant issue is missing last lines / incomplete line tails, not the OCR model itself.
+- **Low-coverage line rescan** now evaluates original-image retries as well, instead of relying only on preprocessed inputs.
+- **Bottom-tail rescue** added for panel OCR: strong anchor lines now probe a larger region below themselves to recover missing final bubble lines and truncated tails.
+- Extra downward padding is now used on very low-coverage Latin rescans to better catch bottom-of-bubble text.
+
+## [1.2.6] - 2026-03-10
+
+### Fixed — OCR Algorithm v50 (Latin Word Spacing)
+- **Actual missing piece found**: The OCR post-processor was splitting merged tokens into separate `OCRWord`s, but final line text still re-joined adjacent Latin words with no spaces when their boxes touched. This made fixes appear ineffective.
+- **Latin spacing normalization**: `joinWordsForLanguage()` now keeps separate Latin OCR words space-separated even when synthetic split boxes are adjacent or slightly overlap.
+- This specifically unblocks visible text improvements for outputs such as `STUDENTSMAY`, `TAKEA`, `TOLIVE`, `ONLYMAKEDO`, and `NowI`.
+
+## [1.2.5] - 2026-03-10
+
+### Fixed — OCR Algorithm v49 (Primary Worker Line Reconstruction)
+- **Runtime refresh fix**: The OCR worker pool now auto-recreates itself when `OCR_ALGORITHM_VERSION` changes, so dev-session workers do not stay pinned to old logic after code edits.
+- **Stale preview removal**: OCR preview no longer displays results from older algorithm versions, preventing old memory-cache output from masquerading as the latest OCR pass.
+- **Approximate lexicon repair**: Added bounded edit-distance correction for stylized near-matches such as `XUJTA`→`XUJIA`, while keeping the correction scope tight to avoid noisy short-token rewrites.
+- **Recursive merged-word splitting**: `trySplitMergedLatinWord()` now supports multi-part segmentation, so tokens like `ONLYMAKEDO` and `TOLIVE` can be rebuilt as `ONLY MAKE DO` and `TO LIVE`, not just simple two-way splits.
+- **Edge-line protection**: Top/bottom bubble lines now treat near-dictionary tokens as readable, which helps keep lines like `XUJIA TOWN` from being dropped during ghost-edge pruning.
+
+## [1.2.4] - 2026-03-10
+
+### Fixed — OCR Algorithm v48 (Primary Worker Pipeline)
+- **XUJIA TOWN recovery**: Zero-lexical re-OCR now tries the ORIGINAL image first, then grayscale, then binarized input. This avoids the v1.2.1 preprocessing path that was still corrupting the bottom line retry.
 - **Case-transition gibberish**: Enhanced `pruneLatinResidualNoiseWords` to detect and drop alternating-case artifacts (e.g. `CREAweaErSRETHIbe`) — 3+ case transitions = garbage.
 - **Merged word splitting**: Added `trySplitMergedLatinWord` step to split concatenated words (e.g. `STUDENTSMAY`→`STUDENTS MAY`, `TAKEA`→`TAKE A`, `MAKEDO`→`MAKE DO`).
 - **Lowercase noise words**: Added filter to drop non-lexical lowercase artifacts (e.g. `vided`, `wraphimills`) that lack vowels or have long consonant runs.
 - **Single-char line drop**: Lines consisting of a single character (except "I") with low confidence are now removed.
+- **Residual line cleanup**: Added final in-line token cleanup and a final residual ghost-line prune so `CREAweaErSRETHIbe`, `Wis`, and similar leftovers are less likely to survive late rescue stages.
 - **Dictionary expansion**: Expanded `LATIN_COMMON_WORDS` from ~55 to ~200+ words for better lexical matching. Fixed `XUJITA`→`XUJIA` typo.
 
 ## [1.1.0] - 2025-01-29

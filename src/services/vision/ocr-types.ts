@@ -80,7 +80,7 @@ export interface TesseractResult {
     text: string;
     confidence: number;
     blocks?: OCRBlock[];
-    lines?: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+    lines?: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
     words?: Array<{ text: string; confidence: number; bbox: BBox }>;
     hocr?: string;
     tsv?: string;
@@ -89,4 +89,4 @@ export interface TesseractResult {
 
 export type DocumentType = 'manga' | 'document';
 
-export type OCRLine = { text: string; confidence: number; bbox: BBox; words: unknown[] };
+export type OCRLine = { text: string; confidence: number; bbox: BBox; words: OCRWord[] };

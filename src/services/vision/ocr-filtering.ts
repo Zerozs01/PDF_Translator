@@ -896,7 +896,7 @@ export function filterWeakIsolatedCjkLines(
 // Line noise cleanup
 // ============================================
 
-export function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>): {
+export function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>): {
   lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
   words: Array<OCRWord>;
 } {

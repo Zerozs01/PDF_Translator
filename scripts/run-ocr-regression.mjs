@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 
 function parseArgs(argv) {
   const args = {
-    baseUrl: 'http://127.0.0.1:5173',
+    baseUrl: 'http://localhost:5173',
     manifest: 'public/fixtures/ocr/manga/expectations.json',
     out: '.tmp-ocr-current.json',
   };
@@ -26,9 +26,44 @@ function loadManifest(filePath) {
   return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
 }
 
+function validateFixtureImages(manifest, manifestPath) {
+  const fixtures = Array.isArray(manifest.cases) ? manifest.cases : [];
+  const repoRoot = process.cwd();
+  const missing = [];
+
+  for (const fixture of fixtures) {
+    const relativeImage = String(fixture?.image || '').replace(/^\/+/, '');
+    if (!relativeImage) {
+      missing.push({
+        id: fixture?.id || '(unknown-fixture)',
+        path: '(missing image path in manifest)',
+      });
+      continue;
+    }
+
+    const absolutePath = path.resolve(repoRoot, 'public', relativeImage.replace(/^fixtures\//, 'fixtures/'));
+    if (!fs.existsSync(absolutePath)) {
+      missing.push({ id: fixture.id || '(unknown-fixture)', path: absolutePath });
+    }
+  }
+
+  if (missing.length > 0) {
+    const lines = missing.map((item) => `- ${item.id}: ${item.path}`);
+    throw new Error(
+      [
+        `Fixture image preflight failed for manifest: ${manifestPath}`,
+        'Missing files:',
+        ...lines,
+        'Add real fixture images to public/fixtures/ocr/manga before running OCR regression.',
+      ].join('\n')
+    );
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const manifest = loadManifest(args.manifest);
+  validateFixtureImages(manifest, args.manifest);
   const fixtures = Array.isArray(manifest.cases) ? manifest.cases : [];
 
   if (fixtures.length === 0) {

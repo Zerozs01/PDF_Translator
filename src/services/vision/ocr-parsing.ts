@@ -91,12 +91,12 @@ export function bboxIoU(a: BBox, b: BBox): number {
  */
 export function parseTSV(tsv: string): {
   words: Array<OCRWord>;
-  lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
   lineBoxes: Array<{ key: string; bbox: BBox }>;
   lineKeysWithWords: Set<string>;
 } {
   const words: Array<OCRWord> = [];
-  const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
+  const lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> = [];
   const lineBoxes: Array<{ key: string; bbox: BBox }> = [];
   const lineKeysWithWords = new Set<string>();
   const lineMap = new Map<string, {
@@ -382,7 +382,7 @@ export function makeLineFromWords(words: OCRWord[]): { text: string; confidence:
 }
 
 export function mergeWordsIntoLine(
-  line: { text: string; confidence: number; bbox: BBox; words: unknown[] },
+  line: { text: string; confidence: number; bbox: BBox; words: OCRWord[] },
   added: OCRWord[]
 ): void {
   if (added.length === 0) return;
@@ -396,9 +396,9 @@ export function mergeWordsIntoLine(
 }
 
 export function findBestLineForBox(
-  lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>,
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>,
   box: BBox
-): { text: string; confidence: number; bbox: BBox; words: unknown[] } | null {
+): { text: string; confidence: number; bbox: BBox; words: OCRWord[] } | null {
   let best: typeof lines[number] | null = null;
   let bestScore = 0;
   const boxH = Math.max(1, box.y1 - box.y0);

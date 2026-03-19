@@ -25,12 +25,19 @@ import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
 import { dbService } from '../../services/dbService';
 import { visionService } from '../../services/vision/VisionService';
+import {
+  OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT,
+  OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
+  withPerPageOCRTimeout,
+} from '../../services/vision/ocr-timeout';
 import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
 import { pdfjs } from '../../services/pdf/pdfjsWorker';
 
 // PDF.js worker is configured via pdfjsWorker
 
 export const OCRTextLayerPanel: React.FC = () => {
+  const DIRECT_RENDER_TIMEOUT_MS = OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT;
+
   const { file, fileUrl, fileData, fileType, currentPage, ensureDocumentId } = useProjectStore();
   const {
     options,
@@ -55,6 +62,9 @@ export const OCRTextLayerPanel: React.FC = () => {
   const fileRef = useRef<File | null>(null);
   const pdfDataRef = useRef<ArrayBuffer | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const ocrJobActiveRef = useRef(false);
+  const suspendCacheReadsRef = useRef(false);
+  const cacheLoadInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
 
   const isAbortError = useCallback(
     (error: unknown): boolean => error instanceof Error && error.name === 'AbortError',
@@ -68,7 +78,6 @@ export const OCRTextLayerPanel: React.FC = () => {
       pdfLoadingRef.current = null;
       fileRef.current = null;
       pdfDataRef.current = null;
-      abortControllerRef.current?.abort();
       abortControllerRef.current = null;
     };
   }, []);
@@ -149,97 +158,128 @@ export const OCRTextLayerPanel: React.FC = () => {
   // UI preview can show stale algorithm cache (marked as stale in badge) to avoid blank panel
   // while still requiring language match.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
-    return normalizeLanguage(cached.language) === normalizeLanguage(options.language);
-  }, [normalizeLanguage, options.language]);
+    return isCacheCompatible(cached);
+  }, [isCacheCompatible]);
 
-  const loadCachedOCR = useCallback(async (pageNum: number): Promise<boolean> => {
-    setCacheStatus(null);
-    const activeFile = file;
-    const state = useOCRTextLayerStore.getState();
-    const memoryCached = state.allPagesOCR.get(pageNum);
-    if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
-      if (useProjectStore.getState().file !== activeFile) return false;
-      setPageOCR(pageNum, memoryCached);
-      const stale = !isCacheCompatible(memoryCached);
-      setCacheStatus({ page: pageNum, source: 'memory', stale });
-      return true;
-    }
-
-    let cacheDocId: number | null = null;
-    try {
-      cacheDocId = await ensureDocumentId();
-    } catch (error) {
-      console.warn('[OCRPanel] Failed to ensure document ID for OCR cache:', error);
+  const loadCachedOCR = useCallback(async (
+    pageNum: number,
+    options?: { allowDuringSuspension?: boolean }
+  ): Promise<boolean> => {
+    if (suspendCacheReadsRef.current && !options?.allowDuringSuspension) {
+      console.log(`[OCRPanel] Skipping passive cache load for page ${pageNum} while OCR job is active`);
       return false;
     }
-    if (!cacheDocId) return false;
-    console.log(`[OCRPanel] Checking DB cache for page ${pageNum} (docId=${cacheDocId})`);
 
-    const cached = await dbService.getOCR(cacheDocId, pageNum);
-    if (cached && isDisplayCacheCompatible(cached)) {
-      if (useProjectStore.getState().file !== activeFile) return false;
-      cached.pageNumber = pageNum;
-      setPageOCR(pageNum, cached);
-      const stale = !isCacheCompatible(cached);
-      setCacheStatus({ page: pageNum, source: 'db', stale });
-      return true;
+    const requestKey = [
+      file?.name || 'no-file',
+      pageNum,
+      normalizeLanguage(options?.allowDuringSuspension ? useOCRTextLayerStore.getState().options.language : useOCRTextLayerStore.getState().options.language),
+      useOCRTextLayerStore.getState().options.dpi,
+      useOCRTextLayerStore.getState().options.pageSegMode ?? 'default',
+      options?.allowDuringSuspension ? 'forced' : 'passive',
+    ].join('|');
+
+    const existingRequest = cacheLoadInFlightRef.current.get(requestKey);
+    if (existingRequest) {
+      return existingRequest;
     }
 
-    // Alias fallback: same filename can exist under multiple document_id values
-    // (legacy source path vs imported hash path). If current doc misses, probe
-    // OCR-backed candidates and switch doc binding once a hit is found.
-    if (file?.name) {
-      const candidates = await dbService.findDocumentsByFilename(file.name);
-      const aliasCandidates = candidates
-        .filter(candidate => candidate.id !== cacheDocId && (candidate.cache_pages ?? 0) > 0)
-        .slice(0, 8);
-
-      for (const candidate of aliasCandidates) {
-        console.log(
-          `[OCRPanel] Cache miss on docId=${cacheDocId}, probing alias docId=${candidate.id} for page ${pageNum}`
-        );
-        const aliasCached = await dbService.getOCR(candidate.id, pageNum);
-        if (!aliasCached || !isDisplayCacheCompatible(aliasCached)) continue;
+    const loadPromise = (async (): Promise<boolean> => {
+      setCacheStatus(null);
+      const activeFile = file;
+      const state = useOCRTextLayerStore.getState();
+      const memoryCached = state.allPagesOCR.get(pageNum);
+      if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
         if (useProjectStore.getState().file !== activeFile) return false;
-
-        aliasCached.pageNumber = pageNum;
-        setPageOCR(pageNum, aliasCached);
-        const stale = !isCacheCompatible(aliasCached);
-        setCacheStatus({ page: pageNum, source: 'db', stale });
-
-        const currentProject = useProjectStore.getState();
-        if (currentProject.documentId !== candidate.id) {
-          useProjectStore.setState({
-            documentId: candidate.id,
-            filePath: candidate.filepath
-          });
-          autoSyncedDocRef.current = candidate.id;
-          console.log(
-            `[OCRPanel] Switched OCR cache binding: docId=${cacheDocId} -> docId=${candidate.id}`
-          );
-        }
+        setPageOCR(pageNum, memoryCached);
+        const stale = !isCacheCompatible(memoryCached);
+        setCacheStatus({ page: pageNum, source: 'memory', stale });
         return true;
       }
 
-      // Even when this page misses, keep the OCR cache binding on the only
-      // OCR-backed alias so future page checks don't stay pinned to an empty doc.
-      if (aliasCandidates.length === 1) {
-        const preferred = aliasCandidates[0];
-        const currentProject = useProjectStore.getState();
-        if (currentProject.documentId === cacheDocId) {
-          useProjectStore.setState({
-            documentId: preferred.id,
-            filePath: preferred.filepath
-          });
-          autoSyncedDocRef.current = preferred.id;
+      let cacheDocId: number | null = null;
+      try {
+        cacheDocId = await ensureDocumentId();
+      } catch (error) {
+        console.warn('[OCRPanel] Failed to ensure document ID for OCR cache:', error);
+        return false;
+      }
+      if (!cacheDocId) return false;
+      console.log(`[OCRPanel] Checking DB cache for page ${pageNum} (docId=${cacheDocId})`);
+
+      const cached = await dbService.getOCR(cacheDocId, pageNum);
+      if (cached && isDisplayCacheCompatible(cached)) {
+        if (useProjectStore.getState().file !== activeFile) return false;
+        cached.pageNumber = pageNum;
+        setPageOCR(pageNum, cached);
+        const stale = !isCacheCompatible(cached);
+        setCacheStatus({ page: pageNum, source: 'db', stale });
+        return true;
+      }
+
+      // Alias fallback: same filename can exist under multiple document_id values
+      // (legacy source path vs imported hash path). If current doc misses, probe
+      // OCR-backed candidates and switch doc binding once a hit is found.
+      if (file?.name) {
+        const candidates = await dbService.findDocumentsByFilename(file.name);
+        const aliasCandidates = candidates
+          .filter(candidate => candidate.id !== cacheDocId && (candidate.cache_pages ?? 0) > 0)
+          .slice(0, 8);
+
+        for (const candidate of aliasCandidates) {
           console.log(
-            `[OCRPanel] Rebound OCR cache docId=${cacheDocId} -> ${preferred.id} (page ${pageNum} still uncached)`
+            `[OCRPanel] Cache miss on docId=${cacheDocId}, probing alias docId=${candidate.id} for page ${pageNum}`
           );
+          const aliasCached = await dbService.getOCR(candidate.id, pageNum);
+          if (!aliasCached || !isDisplayCacheCompatible(aliasCached)) continue;
+          if (useProjectStore.getState().file !== activeFile) return false;
+
+          aliasCached.pageNumber = pageNum;
+          setPageOCR(pageNum, aliasCached);
+          const stale = !isCacheCompatible(aliasCached);
+          setCacheStatus({ page: pageNum, source: 'db', stale });
+
+          const currentProject = useProjectStore.getState();
+          if (currentProject.documentId !== candidate.id) {
+            useProjectStore.setState({
+              documentId: candidate.id,
+              filePath: candidate.filepath
+            });
+            autoSyncedDocRef.current = candidate.id;
+            console.log(
+              `[OCRPanel] Switched OCR cache binding: docId=${cacheDocId} -> docId=${candidate.id}`
+            );
+          }
+          return true;
+        }
+
+        // Even when this page misses, keep the OCR cache binding on the only
+        // OCR-backed alias so future page checks don't stay pinned to an empty doc.
+        if (aliasCandidates.length === 1) {
+          const preferred = aliasCandidates[0];
+          const currentProject = useProjectStore.getState();
+          if (currentProject.documentId === cacheDocId) {
+            useProjectStore.setState({
+              documentId: preferred.id,
+              filePath: preferred.filepath
+            });
+            autoSyncedDocRef.current = preferred.id;
+            console.log(
+              `[OCRPanel] Rebound OCR cache docId=${cacheDocId} -> ${preferred.id} (page ${pageNum} still uncached)`
+            );
+          }
         }
       }
-    }
 
-    return false;
+      return false;
+    })();
+
+    cacheLoadInFlightRef.current.set(requestKey, loadPromise);
+    try {
+      return await loadPromise;
+    } finally {
+      cacheLoadInFlightRef.current.delete(requestKey);
+    }
   }, [file, isCacheCompatible, isDisplayCacheCompatible, ensureDocumentId, setPageOCR]);
 
   const syncOptionsFromLatestCache = useCallback(async (): Promise<void> => {
@@ -291,8 +331,9 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   useEffect(() => {
     if (!file) return;
+    if (isProcessing) return;
     void loadCachedOCR(currentPage);
-  }, [file, currentPage, options.language, options.dpi, options.pageSegMode, loadCachedOCR]);
+  }, [file, currentPage, options.language, options.dpi, options.pageSegMode, loadCachedOCR, isProcessing]);
 
   useEffect(() => {
     autoSyncedDocRef.current = null;
@@ -365,7 +406,11 @@ export const OCRTextLayerPanel: React.FC = () => {
     };
   }, [file, fileData]);
 
-  const renderPageToCanvas = useCallback(async (pageNum: number, targetDpi: number) => {
+  const renderPageToCanvas = useCallback(async (
+    pageNum: number,
+    targetDpi: number,
+    renderOptions?: { allowNavigationFallback?: boolean }
+  ) => {
     if (!file) throw new Error('No PDF loaded');
     if (fileType !== 'pdf') {
       return renderImageToCanvas();
@@ -403,6 +448,10 @@ export const OCRTextLayerPanel: React.FC = () => {
           width: outputWidth,
           height: outputHeight
         };
+      }
+
+      if (!renderOptions?.allowNavigationFallback) {
+        throw new Error(`No rendered canvas available for page ${pageNum}`);
       }
 
       // Navigate to the page and wait for canvas to appear (legacy fallback)
@@ -460,6 +509,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     };
 
     try {
+      console.log(`[OCRPanel] Direct pdf.js render start for page ${pageNum} @ ${targetDpi} DPI`);
       const pdfDoc = await getPdfDoc();
       const page = await pdfDoc.getPage(pageNum);
       const scale = targetDpi / 72;
@@ -476,7 +526,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
 
       const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'print', canvas: outputCanvas });
-      await renderTask.promise;
+      await Promise.race([
+        renderTask.promise,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`Direct pdf.js render timeout after ${DIRECT_RENDER_TIMEOUT_MS}ms for page ${pageNum}`)), DIRECT_RENDER_TIMEOUT_MS);
+        })
+      ]);
+
+      console.log(`[OCRPanel] Direct pdf.js render complete for page ${pageNum}: ${outputCanvas.width}x${outputCanvas.height}`);
 
       return {
         canvas: outputCanvas,
@@ -489,6 +546,109 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [file, fileType, getPdfDoc, renderImageToCanvas]);
 
+  const runCurrentPageOCR = useCallback(async (
+    pageNum: number,
+    force: boolean,
+    controller: AbortController
+  ) => {
+    setCacheStatus(null);
+    if (!force) {
+      const loaded = await loadCachedOCR(pageNum, { allowDuringSuspension: true });
+      if (loaded) {
+        return;
+      }
+    }
+
+    setIsProcessing(true);
+    setProgress({
+      stage: 'init',
+      currentPage: pageNum,
+      totalPages: 1,
+      message: 'Initializing...',
+      progress: 0
+    });
+
+    setProgress({
+      stage: 'rendering',
+      currentPage: pageNum,
+      totalPages: 1,
+      message: `Rendering page ${pageNum}...`,
+      progress: 10
+    });
+
+    console.log(`[OCRPanel] Current-page OCR rendering start for page ${pageNum}`);
+
+    const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi, {
+      allowNavigationFallback: true,
+    });
+
+    console.log(`[OCRPanel] Current-page OCR render complete for page ${pageNum}: ${imageWidth}x${imageHeight}`);
+
+    const imageBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to convert canvas to Blob'));
+      }, 'image/png');
+    });
+
+    console.log(`[OCRPanel] Current-page OCR image blob ready for page ${pageNum}: ${imageBlob.size} bytes`);
+
+    visionService.setProgressCallback((ocrProgress) => {
+      const scaled = 15 + (ocrProgress.progress * 80);
+      setProgress({
+        stage: 'ocr',
+        currentPage: pageNum,
+        totalPages: 1,
+        message: `OCR page ${pageNum}: ${ocrProgress.status} (${Math.round(ocrProgress.progress * 100)}%)`,
+        progress: scaled
+      });
+    });
+
+    console.log(`[OCRPanel] Dispatching OCR request for page ${pageNum}`);
+
+    const ocrPromise = visionService.ocrForTextLayer(
+      imageBlob,
+      imageWidth,
+      imageHeight,
+      options.language,
+      options.dpi,
+      options.pageSegMode,
+      controller.signal,
+      showDebugOverlay,
+      'panel'
+    );
+
+    const ocrResult: import('../../types').OCRPageResult = await withPerPageOCRTimeout(
+      ocrPromise,
+      pageNum,
+      options.perPageTimeoutSec
+    );
+
+    console.log(`[OCRPanel] OCR request resolved for page ${pageNum} with ${ocrResult.words.length} words`);
+    visionService.setProgressCallback(null);
+
+    ocrResult.language = normalizeLanguage(options.language);
+    ocrResult.pageNumber = pageNum;
+    ocrResult.pipelineProfile = 'panel';
+    setPageOCR(pageNum, ocrResult);
+
+    const cacheDocId = await ensureDocumentId();
+    if (cacheDocId) {
+      const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+      if (!saved) {
+        console.warn(`[OCRPanel] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
+      }
+    }
+
+    setProgress({
+      stage: 'complete',
+      currentPage: pageNum,
+      totalPages: 1,
+      message: `OCR complete for page ${pageNum}`,
+      progress: 100
+    });
+  }, [ensureDocumentId, loadCachedOCR, normalizeLanguage, options.dpi, options.language, options.pageSegMode, renderPageToCanvas, setIsProcessing, setPageOCR, setProgress, showDebugOverlay]);
+
   /**
    * Start OCR processing
    */
@@ -498,86 +658,17 @@ export const OCRTextLayerPanel: React.FC = () => {
       return;
     }
 
+    if (ocrJobActiveRef.current) {
+      console.warn('[OCRPanel] Ignored current-page OCR request while another OCR job is active');
+      return;
+    }
+
     try {
+      console.log(`[OCRPanel] Starting current-page OCR for page ${pageNum} (force=${force})`);
+      ocrJobActiveRef.current = true;
+      suspendCacheReadsRef.current = true;
       const controller = beginAbortableJob();
-      setCacheStatus(null);
-      if (!force) {
-        const loaded = await loadCachedOCR(pageNum);
-        if (loaded) {
-          return;
-        }
-      }
-
-      setIsProcessing(true);
-      setProgress({
-        stage: 'init',
-        currentPage: pageNum,
-        totalPages: 1,
-        message: 'Initializing...',
-        progress: 0
-      });
-
-      setProgress({
-        stage: 'rendering',
-        currentPage: pageNum,
-        totalPages: 1,
-        message: `Rendering page ${pageNum}...`,
-        progress: 10
-      });
-
-      const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi);
-
-      const imageBlob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error('Failed to convert canvas to Blob'));
-        }, 'image/png');
-      });
-
-      visionService.setProgressCallback((ocrProgress) => {
-        const scaled = 15 + (ocrProgress.progress * 80);
-        setProgress({
-          stage: 'ocr',
-          currentPage: pageNum,
-          totalPages: 1,
-          message: `OCR page ${pageNum}: ${ocrProgress.status} (${Math.round(ocrProgress.progress * 100)}%)`,
-          progress: scaled
-        });
-      });
-
-      const ocrResult = await visionService.ocrForTextLayer(
-        imageBlob,
-        imageWidth,
-        imageHeight,
-        options.language,
-        options.dpi,
-        options.pageSegMode,
-        controller.signal,
-        showDebugOverlay,
-        'panel'
-      );
-      visionService.setProgressCallback(null);
-
-      ocrResult.language = normalizeLanguage(options.language);
-      ocrResult.pageNumber = pageNum;
-      ocrResult.pipelineProfile = 'panel';
-      setPageOCR(pageNum, ocrResult);
-
-      const cacheDocId = await ensureDocumentId();
-      if (cacheDocId) {
-        const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
-        if (!saved) {
-          console.warn(`[OCRPanel] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
-        }
-      }
-
-      setProgress({
-        stage: 'complete',
-        currentPage: pageNum,
-        totalPages: 1,
-        message: `OCR complete for page ${pageNum}`,
-        progress: 100
-      });
+      await runCurrentPageOCR(pageNum, force, controller);
     } catch (error) {
       if (isAbortError(error)) {
         setProgress({
@@ -599,9 +690,11 @@ export const OCRTextLayerPanel: React.FC = () => {
       }
     } finally {
       visionService.setProgressCallback(null);
+      ocrJobActiveRef.current = false;
+      suspendCacheReadsRef.current = false;
       setIsProcessing(false);
     }
-  }, [file, fileUrl, options, renderPageToCanvas, ensureDocumentId, setIsProcessing, setProgress, setPageOCR, loadCachedOCR, beginAbortableJob, isAbortError, showDebugOverlay]);
+  }, [beginAbortableJob, file, fileUrl, isAbortError, runCurrentPageOCR, setIsProcessing, setProgress]);
 
   const handleStartOCR = useCallback(async (targetPages?: number[], forceReOCR: boolean = false) => {
     if (!file || !fileUrl) {
@@ -609,11 +702,19 @@ export const OCRTextLayerPanel: React.FC = () => {
       return;
     }
 
+    if (ocrJobActiveRef.current) {
+      console.warn('[OCRPanel] Ignored batch OCR request while another OCR job is active');
+      return;
+    }
+
     try {
+      console.log(`[OCRPanel] Starting batch OCR (forceReOCR=${forceReOCR}, targetPages=${targetPages?.join(',') || 'all'})`);
+      ocrJobActiveRef.current = true;
+      suspendCacheReadsRef.current = true;
       const controller = beginAbortableJob();
       setCacheStatus(null);
       if (fileType !== 'pdf') {
-        await handleCurrentPageOCR(1, true);
+        await runCurrentPageOCR(1, true, controller);
         return;
       }
       setIsProcessing(true);
@@ -649,7 +750,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         })();
       });
       const activeFile = file;
-      searchablePDFService.setCacheHitCallback((pageNum) => {
+      searchablePDFService.setCacheHitCallback(forceReOCR ? null : (pageNum) => {
         if (useProjectStore.getState().file !== activeFile) return;
         if (pageNum === useProjectStore.getState().currentPage) {
           setCacheStatus({ page: pageNum, source: 'db' });
@@ -667,7 +768,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       const resultBytes = await searchablePDFService.createSearchablePDF(
         arrayBuffer as ArrayBuffer,
         options,
-        renderPageToCanvas,
+        (pageNum, dpi) => renderPageToCanvas(pageNum, dpi, { allowNavigationFallback: false }),
         targetPages,
         cacheDocId ?? undefined,
         controller.signal,
@@ -707,9 +808,11 @@ export const OCRTextLayerPanel: React.FC = () => {
       }
     } finally {
       searchablePDFService.setProgressCallback(null);
+      ocrJobActiveRef.current = false;
+      suspendCacheReadsRef.current = false;
       setIsProcessing(false);
     }
-  }, [file, fileUrl, fileData, fileType, options, renderPageToCanvas, setIsProcessing, setProgress, setPageOCR, ensureDocumentId, beginAbortableJob, isAbortError, handleCurrentPageOCR, showDebugOverlay]);
+  }, [beginAbortableJob, ensureDocumentId, file, fileData, fileType, fileUrl, isAbortError, options, renderPageToCanvas, runCurrentPageOCR, setIsProcessing, setPageOCR, setProgress, showDebugOverlay]);
 
   /**
    * Download searchable PDF from cached OCR results
@@ -843,6 +946,25 @@ export const OCRTextLayerPanel: React.FC = () => {
           />
         </div>
       )}
+
+      {/* Per-page OCR Timeout */}
+      <div className="flex items-center justify-between bg-slate-900/45 border border-white/10 rounded-lg px-3 py-2">
+        <span className="text-xs text-slate-300">OCR Timeout (sec/page)</span>
+        <select
+          value={options.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
+          onChange={(e) => setOptions({ perPageTimeoutSec: Number(e.target.value) })}
+          disabled={isProcessing}
+          className="bg-slate-800 text-white text-xs rounded px-2 py-1 border border-white/10"
+          aria-label="OCR Timeout per page"
+        >
+          <option value={0}>No Limit</option>
+          <option value={30}>30s</option>
+          <option value={60}>60s</option>
+          <option value={120}>120s</option>
+          <option value={180}>180s</option>
+          <option value={300}>300s</option>
+        </select>
+      </div>
 
       {/* Progress Bar */}
       {isProcessing && (

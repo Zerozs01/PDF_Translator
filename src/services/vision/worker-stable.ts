@@ -12,6 +12,7 @@
  */
 
 import { createWorker, PSM, OEM } from 'tesseract.js';
+import { createOCRLogger, ensureWorkerForLanguage, getWorkerImageDimensions, sendOCRProgress } from './ocr-worker-shared';
 
 // ─── Types (duplicated intentionally — keep self-contained) ───
 
@@ -27,7 +28,7 @@ interface TesseractResult {
     text: string;
     confidence: number;
     blocks?: Array<{ text: string; confidence: number; bbox: BBox }>;
-    lines?: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+    lines?: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
     words?: Array<{ text: string; confidence: number; bbox: BBox }>;
     hocr?: string;
     tsv?: string;
@@ -40,7 +41,7 @@ type DocumentType = 'manga' | 'document';
 
 let tesseractWorker: Awaited<ReturnType<typeof createWorker>> | null = null;
 let currentLang = '';
-let isInitializing = false;
+let workerInitPromise: Promise<void> | null = null;
 
 // ─── Config ───
 
@@ -56,23 +57,11 @@ const CONFIG = {
 // ─── Helpers ───
 
 function sendProgress(status: string, progress: number, workerId?: string): void {
-  self.postMessage({
-    type: 'OCR_PROGRESS',
-    payload: { status, progress, workerId },
-  });
+  sendOCRProgress({ status, progress, workerId });
 }
 
-/**
- * Get image dimensions without heavy pixel processing.
- * Uses createImageBitmap (available in Workers) to read width/height.
- */
 async function getImageDimensions(imageUrl: string): Promise<{ width: number; height: number }> {
-  const response = await fetch(imageUrl);
-  const blob = await response.blob();
-  const bmp = await createImageBitmap(blob);
-  const { width, height } = bmp;
-  bmp.close();
-  return { width, height };
+  return getWorkerImageDimensions(imageUrl);
 }
 
 // ─── Word type alias ───
@@ -585,43 +574,44 @@ async function createWorkerWithLanguage(
   console.log(`[Worker-Stable] Creating Tesseract worker for: ${lang}`);
   const w = await createWorker(lang, OEM.LSTM_ONLY, {
     corePath: CONFIG.CORE_PATH,
-    logger: m => {
-      if (sendUpdates && m.status && typeof m.progress === 'number') {
-        sendProgress(m.status, m.progress, m.workerId);
-      }
-    },
+    logger: createOCRLogger(sendUpdates, ({ status, progress, workerId }) => {
+      sendProgress(status, progress, workerId);
+    }),
   });
   console.log(`[Worker-Stable] Tesseract ready for: ${lang}`);
   return w;
 }
 
 async function getOrCreateWorker(lang: string): Promise<Awaited<ReturnType<typeof createWorker>>> {
-  while (isInitializing) await new Promise(r => setTimeout(r, 100));
-
-  if (!tesseractWorker || currentLang !== lang) {
-    isInitializing = true;
-    try {
-      if (tesseractWorker) {
-        console.log(`[Worker-Stable] Switching language ${currentLang} → ${lang}`);
-        await tesseractWorker.terminate();
+  return ensureWorkerForLanguage(
+    lang,
+    () => ({ worker: tesseractWorker, lang: currentLang }),
+    (next) => {
+      tesseractWorker = next.worker;
+      currentLang = next.lang;
+    },
+    () => workerInitPromise,
+    (promise) => {
+      workerInitPromise = promise;
+    },
+    async (targetLang, previous) => {
+      if (previous.worker) {
+        console.log(`[Worker-Stable] Switching language ${previous.lang} → ${targetLang}`);
+        await previous.worker.terminate();
       }
-      tesseractWorker = await createWorkerWithLanguage(lang, false);
-      currentLang = lang;
-    } finally {
-      isInitializing = false;
+      return createWorkerWithLanguage(targetLang, false);
     }
-  }
-  return tesseractWorker;
+  );
 }
 
 // ─── TSV parser ───
 
 function parseTSV(tsv: string): {
   words: Array<{ text: string; confidence: number; bbox: BBox }>;
-  lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }>;
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
 } {
   const words: Array<{ text: string; confidence: number; bbox: BBox }> = [];
-  const lines: Array<{ text: string; confidence: number; bbox: BBox; words: unknown[] }> = [];
+  const lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> = [];
 
   if (!tsv || typeof tsv !== 'string') return { words, lines };
   const rows = tsv.split('\n');

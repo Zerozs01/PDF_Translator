@@ -3,6 +3,46 @@
 This file mirrors key updates that affect documentation in `documents/`.
 For full project history, see `CHANGELOG.md` in the repo root.
 
+## 2026-03-20 (priority phase planning + phase 0 kickoff)
+
+- Added a new "Execution Plan (Priority Phases)" section in `documents/Roadmap.md` to sequence work before OCR accuracy tuning.
+- Plan order: Phase 0 Immediate guardrails -> Phase 1 Runtime stability + shared pipeline -> Phase 2 Type safety + refactor hygiene -> Phase 3 Performance optimization -> Phase 4 Accuracy tuning -> Phase 5 Test/tooling hardening.
+- Started Phase 0 by changing default `DEBUG_LOG_DROPS` to `false` in `src/services/vision/ocr-config.ts` to reduce runtime log overhead/noise.
+- Executed OCR regression harness and found blocker: `public/fixtures/ocr/manga` currently contains only `expectations.json` (fixture images missing), so `npm run ocr:regression` cannot produce page results yet.
+- Improved `scripts/run-ocr-regression.mjs` with fixture image preflight validation (fail-fast + explicit missing-file list) and changed default base URL to `http://localhost:5173`.
+- Applied low-risk Phase 1 runtime refactor: replaced busy-wait worker initialization loops with promise locks in `src/services/vision/worker.ts` and `src/services/vision/worker-stable.ts`.
+- Reduced timeout-policy duplication: added `src/services/vision/ocr-timeout.ts` and switched both `OCRTextLayerPanel.tsx` and `SearchablePDFService.ts` to use shared per-page OCR timeout handling.
+- Centralized timeout defaults in `src/services/vision/ocr-timeout.ts` and aligned `VisionService`, OCR store defaults, and OCR panel render timeout to the same source of truth.
+- Centralized Vision worker retry policy defaults (`retry attempts` and `retry delay`) in `src/services/vision/ocr-timeout.ts` and wired `VisionService` to use those shared constants.
+- Started shared worker-module extraction by adding `src/services/vision/ocr-worker-shared.ts` and moving common `OCR_PROGRESS` + image-dimension helpers to be used by both `worker.ts` and `worker-stable.ts`.
+- Continued shared worker extraction by moving worker initialization lock flow into shared utility (`withWorkerInitLock`) and wiring both `worker.ts` and `worker-stable.ts` to use it.
+- Continued shared worker extraction by centralizing language-switch/get-or-create flow into `ensureWorkerForLanguage` and using it from both worker implementations.
+- Continued shared worker extraction by centralizing Tesseract progress logger callback creation in `createOCRLogger` and wiring both worker implementations to use it.
+- Started Phase 2 type-safety work by replacing `unknown[]` with `OCRWord[]` on stable worker OCR line structures/TSV parse path.
+- Completed the first Phase 2 type-safety slice by replacing remaining `words: unknown[]` OCR line types with `words: OCRWord[]` across core OCR modules (`worker.ts`, `ocr-types.ts`, `ocr-parsing.ts`, `ocr-filtering.ts`).
+- Reduced risky `as any` casts in primary OCR execution paths by passing typed Blob/string inputs directly to `recognize` in `worker.ts` and `ocr-fallback.ts`.
+- Finished remaining `as any` cleanup in vision runtime by removing non-core casts from `VisionService.ts` worker error diagnostics and `worker-boot.ts` boot bridge.
+- Started heuristic modularization in Phase 2 by extracting core Latin normalization/splitting/approx-correction helpers from `worker.ts` into `src/services/vision/ocr-latin-heuristics.ts` and wiring existing call sites to the new module.
+- Continued heuristic modularization by extracting Latin line cleanup/prune helpers from `worker.ts` into `src/services/vision/ocr-latin-heuristics.ts` and rewiring worker call sites with explicit dependencies.
+
+## 2026-03-19 (docs cleanup)
+
+- Consolidated duplicate roadmap docs by merging key plan context from `documents/road map.md` into `documents/Roadmap.md`.
+- Removed `documents/road map.md` to avoid duplicate planning files.
+- Added a "Progress Audit (Code vs Plan)" section to `documents/Roadmap.md` with current implementation status for A2/A3/C/D phases.
+- Updated `documents/Readme.md` to reference `documents/Roadmap.md` as the single active roadmap file.
+
+## 2026-03-11 (v47 — rollback recovery)
+
+- Re-applied the core OCR runtime fixes after rollback:
+	- `VisionService` now uses a single worker again, with longer timeout handling and worker recreation on timeout.
+	- `OCRTextLayerPanel` no longer displays stale algorithm cache as a valid preview, skips cache auto-load while OCR is running, blocks overlapping OCR starts, and avoids visible-page navigation during batch OCR.
+- Re-applied the main Latin cleanup improvements in [src/services/vision/worker.ts](../src/services/vision/worker.ts):
+	- original-image fallback for low-coverage rescans
+	- approximate lexical correction
+	- merged-word splitting (`TAKEA` → `TAKE A`, `NowI` → `Now I`, `MAKEDO` → `MAKE DO`)
+	- late cleanup for mixed-case/lowercase ghost fragments such as `CREAweaErSRETHIbe`, `vided`, and `wraphimills`
+
 ## 2026-02-05
 
 - Added `documents/ARCHITECTURE.md` (summary + links to root architecture).
@@ -29,6 +69,50 @@ For full project history, see `CHANGELOG.md` in the repo root.
 - Updated `documents/ARCHITECTURE.md` with OCR cache and file source behavior.
 - Added `road map.md` to track upcoming phases and priorities.
 - Synced documentation notes with recent OCR cache + fileData changes.
+
+## 2026-03-11 (v53 — batch OCR render fix)
+
+- Fixed a renderer-side issue where batch OCR could fall back to visible-page navigation, causing `currentPage` churn (`1 -> 2 -> 3 -> 2 -> 1`) and repeated cache loads instead of stable off-screen OCR rendering.
+- Disabled cache auto-load while OCR is processing and forced `Re-OCR All` to use direct pdf.js rendering without page-navigation fallback.
+- Bumped OCR algorithm version 52→53.
+
+## 2026-03-11 (v52 — fresh cache + trigger logs)
+
+- Bumped OCR algorithm version 51→52 so stale cache cannot hide the latest worker/runtime fixes.
+- Added panel-side logs for `currentPage` changes and OCR start actions to confirm whether page navigation / OCR triggering is actually reaching the renderer.
+
+## 2026-03-10 (v51 — Follow the analysis docs)
+
+- Reduced runtime OCR worker count to 1 for stability. The primary pipeline is too heavy to benefit from 3 parallel browser workers in Electron dev mode and was timing out instead.
+- Fixed timeout handling in `VisionService`: health checks no longer short-circuit retries, and timed-out workers are recreated before retrying.
+- Raised the OCR request timeout to 5 minutes and capped the most expensive panel-only Latin rescue passes to sparse pages / a short time budget.
+- Corrected the debugging direction to match the project notes in [documents/Knowledge3.md](documents/Knowledge3.md) and [documents/OCR_OPTIMIZATION.md](documents/OCR_OPTIMIZATION.md): the remaining dominant failure is **missing bottom lines / incomplete tails**, not a fundamental model limitation.
+- Updated `worker.ts` so low-coverage Latin line rescans compare original-image, grayscale, and processed inputs before choosing the best candidate.
+- Added a dedicated bottom-tail rescue pass below strong anchor lines to recover missing final bubble lines such as `XUJIA TOWN`, `THIS KIND OF STUFF`, and `THE PEOPLE HERE?`.
+- Bumped OCR algorithm version 50→51.
+
+## 2026-03-10 (v50 — Latin Join Fix)
+
+- Found the reason several fixes looked like they had no effect: merged-token splitting was working internally, but final line assembly still concatenated adjacent Latin `OCRWord`s back together.
+- Updated `joinWordsForLanguage()` in [src/services/vision/ocr-text-utils.ts](src/services/vision/ocr-text-utils.ts) to preserve spaces between separate Latin OCR words even when their bounding boxes touch or slightly overlap.
+- Bumped OCR algorithm version 49→50.
+
+## 2026-03-10 (v49 — Approximate Lexicon + Multi-Split)
+
+- Fixed a runtime issue where already-created OCR workers could keep running old logic inside the same dev session. `VisionService` now recreates the worker pool automatically when the OCR algorithm version changes.
+- Stopped showing OCR preview results from older algorithm versions, so stale memory-cache output no longer looks like a fresh OCR pass.
+- Added bounded edit-distance lexicon repair in `worker.ts` so close stylized misses such as `XUJTA` can be normalized back to `XUJIA`.
+- Upgraded merged-word splitting from two-part only to recursive multi-part segmentation. This targets outputs like `ONLYMAKEDO` and `TOLIVE` in addition to `TAKEA` / `STUDENTSMAY`.
+- Relaxed edge-line pruning for near-lexical speech lines, helping preserve bubble lines that contain one exact word plus one close OCR miss.
+- Bumped OCR algorithm version 48→49 to force a fresh OCR pass.
+
+## 2026-03-10 (v48 — Primary Worker Retry + Cleanup)
+
+- Zero-lexical line retry now tests **original image → grayscale preprocessed → binarized** inputs, instead of only the preprocessed fallback. This specifically targets regressions like `XUJIA TOWN` where preprocessing itself damaged the retry source.
+- Added final residual Latin cleanup in `worker.ts`:
+	- `cleanNoiseWordsWithinLatinLines()` removes late non-lexical noise from otherwise valid lines.
+	- `pruneResidualLatinNoiseLines()` drops leftover non-lexical singleton / low-quality ghost lines after rescue.
+- Bumped OCR algorithm version 47→48 to invalidate cache again.
 
 ## 2026-03-10 (v47 — Primary Worker Fix)
 

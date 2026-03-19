@@ -98,7 +98,7 @@ export const joinWordsForLanguage = (words: OCRWord[]): string => {
     } else if ((prevIsThai || prevIsCjk) && (currIsThai || currIsCjk)) {
       addSpace = gap > wideGap;
     } else if (prevIsLatin && currIsLatin) {
-      addSpace = gap > tightGap;
+      addSpace = true;
     } else if ((prevIsThai || prevIsCjk) && currIsLatin) {
       addSpace = true;
     } else if (prevIsLatin && (currIsThai || currIsCjk)) {

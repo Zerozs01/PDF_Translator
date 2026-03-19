@@ -424,6 +424,10 @@ function createWindow() {
       win?.webContents.toggleDevTools();
       event.preventDefault();
     }
+    if (VITE_DEV_SERVER_URL && (input.control && input.key.toLowerCase() === "r" || input.key === "F5")) {
+      win?.webContents.reload();
+      event.preventDefault();
+    }
   });
   win.webContents.on("did-finish-load", () => {
     win?.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());

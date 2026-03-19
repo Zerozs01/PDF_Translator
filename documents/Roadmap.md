@@ -2,6 +2,145 @@
 
 Last updated: 2026-03-10
 
+## Progress Audit (Code vs Plan) - 2026-03-19
+
+สถานะนี้อิงจากโค้ดปัจจุบันใน `src/services/vision` และ `src/components/OCR` เพื่อเช็คว่า roadmap ไปถึงไหนแล้วจริง
+
+### Phase A2: แก้ปัญหา OCR ข้อความหาย
+
+- [x] **A2.1 เปิด DEBUG_LOG_DROPS**
+  - มีอยู่ใน `ocr-config.ts` และถูกใช้งานจริงใน `worker.ts`
+
+- [~] **A2.2 ใช้ PSM ที่เหมาะกับ webtoon**
+  - ทำแล้วบางส่วน: CJK ใช้ `PSM.SPARSE_TEXT` เป็น default
+  - Latin/non-CJK ยัง default ที่ `PSM.AUTO` และใช้ sparse เฉพาะบาง pass
+
+- [~] **A2.3 Speech bubble / text-like region detection**
+  - มี text-likeness metrics (`analyzeRegionTextLikeness`, `isLikelyTextRegion`) และ logic rescue สำหรับ balloon
+  - แต่ยังไม่ใช่ rule ตรงๆ แบบ "background variance < 200 = text-only area"
+
+- [x] **A2.4 Bounding box padding สำหรับ re-OCR**
+  - มี CJK/Latin line rescan padding และ low-coverage padding เพิ่มเติมใน `worker.ts`
+
+### Phase A3: แก้บัค ghost text
+
+- [x] **A3.1 mixed-case readability gate**
+- [x] **A3.2 single-word non-lexical filter**
+- [x] **A3.3 word-merging post-processing**
+- [x] **A3.4 primary worker crash handling (boot loader + fallback)**
+- [~] **A3.5 investigate missing text**
+  - มี rescue pass หลายชั้น (line rescan / bottom probe) แล้ว
+  - ยังมีเคส missing text ที่ถูกติดตามต่อเนื่อง
+
+### Phase C: Performance
+
+- [~] **C1 Adaptive tile sampling** - มี `IMG_TILE_SAMPLE_STEP` แล้ว แต่ยังเป็นค่าคงที่
+- [ ] **C2 Skip photo filter เมื่อ text-heavy** - ยังไม่เห็น short-circuit แบบชัดเจน
+- [ ] **C3 Cache preprocessed image ข้าม pass** - ยังไม่ครบแบบ shared cache ระหว่างทุก pass
+- [~] **C4 Reduce fallback re-OCR calls** - มีการจำกัดด้วย budget/เงื่อนไขหลายจุด แต่ยังไม่ปิดงานเต็ม
+
+### Phase D: Code Quality & Testing
+
+- [ ] **D1 Unit tests สำหรับ filter functions** - ยังไม่พบไฟล์ test สำหรับ OCR filter หลัก
+- [~] **D2 ลด any/unknown** - ดีขึ้น แต่ยังมี cast หลายจุด เช่น `processedInput as any`, `words: unknown[]`
+- [~] **D3 ลด duplication** - ลดลงแล้วจากการแยกโมดูล แต่ยังมี pattern rescue ที่คล้ายกันหลายช่วง
+- [ ] **D4 Error boundaries สำหรับ recognizeRegion path** - ยังมีบางเส้นทางที่พึ่งพา caller เป็นหลัก
+
+### Consistency Note
+
+- เอกสาร changelog ใน docs และ root มีบันทึกถึง OCR algorithm v52/v53
+- แต่โค้ดปัจจุบันใน `ocrVersion.ts` ยังเป็น `51`
+- ควร confirm เวอร์ชันที่ต้องการใช้จริง เพื่อไม่ให้เอกสารนำผิดทาง
+
+### Legacy Plan Consolidation
+
+- เนื้อหาหลักจากไฟล์ `road map.md` ถูกรวมเข้ามาในไฟล์นี้แล้ว
+- ให้ใช้ไฟล์นี้เป็น roadmap หลักเพียงไฟล์เดียว
+
+## Execution Plan (Priority Phases) - 2026-03-20
+
+เป้าหมาย: เคลียร์ความเสี่ยงด้าน performance/maintainability ก่อน แล้วค่อยจูน OCR accuracy เพื่อลด regression และทำให้ผลทดสอบเชื่อถือได้
+
+### Phase 0 - Immediate Guardrails (P0)
+
+สถานะ: **IN PROGRESS**
+
+- [x] ปรับ default debug logging ให้ปลอดภัยกับ runtime (`DEBUG_LOG_DROPS=false`)
+- [~] ตั้งเกณฑ์ regression gate ชุดเดียวก่อนจูน (ใช้ harness เดิม + baseline ที่ตรงเวอร์ชันปัจจุบัน)
+- [x] เพิ่ม regression preflight check: ตรวจ fixture image ก่อนรัน harness และ fail-fast พร้อมรายการไฟล์ที่หาย
+- [ ] แก้ regression fixture assets: ใน `public/fixtures/ocr/manga` ยังไม่มีไฟล์ภาพ test pages (มีแค่ `expectations.json`)
+- [ ] Freeze tuning window: ไม่เพิ่ม heuristic ใหม่จนกว่า gate ผ่าน
+
+Exit criteria:
+
+- OCR regression รันได้ซ้ำและมีรายงานเปรียบเทียบ baseline ที่ใช้งานจริง
+
+Latest run note (2026-03-20):
+
+- `node scripts/run-ocr-regression.mjs` ตอนนี้ fail-fast พร้อมรายการไฟล์ fixture ที่หายอย่างชัดเจน
+
+### Phase 1 - Runtime Stability & Shared Pipeline (P1)
+
+สถานะ: **IN PROGRESS**
+
+- [~] แยก shared logic ระหว่าง `worker.ts` และ `worker-stable.ts` ไป module กลาง (คืบหน้า: shared progress/image-dim + shared init-lock + shared language-switch/getOrCreate flow ใน `ocr-worker-shared.ts`)
+- [x] ลด busy-wait init loop เป็น promise lock (ทำแล้วใน `worker.ts` และ `worker-stable.ts`)
+- [x] รวมจุด timeout/retry policy ให้อยู่แหล่งเดียวผ่าน constants กลาง (`src/services/vision/ocr-timeout.ts`) และใช้งานใน `VisionService`
+- [x] รวม per-page OCR timeout logic เป็น utility กลาง (`src/services/vision/ocr-timeout.ts`) และใช้งานจากทั้ง panel + pdf service
+- [x] รวม timeout defaults เป็น constants กลาง (worker request timeout / per-page timeout default / render timeout)
+
+Exit criteria:
+
+- worker หลัก/สำรองใช้พฤติกรรมแกนกลางเดียวกันในส่วนที่ไม่ใช่ fallback เฉพาะทาง
+
+### Phase 2 - Type Safety & Refactor Hygiene (P1)
+
+สถานะ: **IN PROGRESS**
+
+- [x] ลด `unknown[]` ใน `OCRLine.words` ไปเป็น `OCRWord[]` (ครอบคลุม `worker.ts`, `worker-stable.ts`, `ocr-types.ts`, `ocr-parsing.ts`, `ocr-filtering.ts`)
+- [x] ลด cast ที่เสี่ยง (`as any`) เฉพาะ path OCR หลักและจุด runtime สำคัญ (รวม `VisionService.ts`/`worker-boot.ts` แล้ว)
+- [~] แยกฟังก์ชัน heuristic Latin ขนาดใหญ่ใน `worker.ts` เป็นไฟล์ย่อยตามหมวด (คืบหน้า: extract `ocr-latin-heuristics.ts` สำหรับ normalize/split/correction core + line cleanup/prune helpers)
+
+Exit criteria:
+
+- type check ผ่านโดยไม่เพิ่ม suppressions ใหม่ และ surface API ของ OCR pipeline ชัดเจนขึ้น
+
+### Phase 3 - Performance Optimization Before Accuracy Tuning (P2)
+
+สถานะ: **PLANNED**
+
+- [ ] Adaptive tile sampling ตามขนาดภาพ
+- [ ] text-heavy short-circuit สำหรับ photo/background filters
+- [ ] ลดจำนวน re-OCR rescue pass ด้วย budget policy ที่วัดผลได้
+
+Exit criteria:
+
+- เวลาประมวลผลต่อหน้าและ timeout rate ลดลง โดย coverage ไม่ตกเกณฑ์ regression
+
+### Phase 4 - Accuracy Tuning (P2)
+
+สถานะ: **BLOCKED by P0-P3**
+
+- [ ] tune PSM/default strategy ตาม document profile
+- [ ] tune speech-bubble specific rules (uniform/background-aware)
+- [ ] tune line-completion rescue สำหรับเคสท้าย bubble
+
+Exit criteria:
+
+- ผ่าน regression gate + expectation set และไม่มี spike ของ ghost text
+
+### Phase 5 - Test & Tooling Hardening (P3)
+
+สถานะ: **PLANNED**
+
+- [ ] เพิ่ม unit tests สำหรับ `parseTSV`, `cleanLineNoise`, `buildImageTileMask`, และ lexical split
+- [ ] แยก baseline ตาม profile (panel/batch) ถ้าพฤติกรรมต่างกัน
+- [ ] เพิ่มรายงานแนวโน้ม (coverage, suspicious ratio, fragmentation)
+
+Exit criteria:
+
+- การเปลี่ยน heuristic สามารถประเมินผลเชิงตัวเลขได้ทุกครั้งก่อน merge
+
 ---
 
 ## ปัญหาหลัก: OCR ตรวจจับข้อความไม่ครบในหน้าเดียวกัน
