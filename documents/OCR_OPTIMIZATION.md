@@ -77,7 +77,7 @@ Latest tuning pass focused on three goals:
 - For now this is considered acceptable if they help OCR recall, segmentation, or later filtering.
 - Prefer keeping slightly noisy candidate geometry over prematurely removing useful rescue regions.
 
-### Current interpretation
+### Current interpretation (as of 2026-03-09)
 
 - The system is now **better at recall** on hard manga speech bubbles.
 - The main remaining weakness is **line completion at bubble edges / last-line recovery**, not catastrophic ghosting.
@@ -85,6 +85,74 @@ Latest tuning pass focused on three goals:
    1. region padding for last-line crops
    2. low-coverage line rescans near bubble bottoms
    3. less aggressive post-rescue pruning for short but valid final lines
+
+---
+
+## 2026-03-10 — Ghost Text Reduction & Boot Loader
+
+### Architecture Changes
+
+- **Boot Loader** (`worker-boot.ts`): Primary worker still crashes with opaque "(no message)" in Vite dev-mode. Created a tiny boot loader (~50 lines) that dynamically imports `worker.ts` in try-catch, captures the real error (message, stack, name) via `WORKER_BOOT_ERROR` postMessage, then auto-falls back to `worker-stable.ts`.
+- **VisionService** now loads `worker-boot.ts` instead of `worker.ts` for primary mode.
+- **Vite config** updated: `worker: { format: 'es' }`, `optimizeDeps: { include: ['tesseract.js'] }`.
+
+### Filtering Pipeline Overhaul (worker-stable.ts)
+
+Replaced the basic 4-rule `filterGarbageWords` with a comprehensive **9-step pipeline**:
+
+| Step | Function | Purpose |
+|------|----------|---------|
+| 0 | `splitMergedWords` | Dictionary-based word splitting (TAKEA→TAKE+A, NowI→Now+I, MAKEDO→MAKE+DO) |
+| 1 | `filterNoiseWords` | Remove garbage words (conf<20, symbols, consonant-heavy, mixed-case 3+ transitions) + watermarks |
+| 2 | `buildLines` | Group words into lines by Y proximity (threshold: pageHeight × 0.015) |
+| 3a | `pruneEdgeGhostLines` | Lines in top/bottom 16% band must have readability ≥ 0.7 or lexicalHits ≥ 2 |
+| 3a | `pruneGarbageLines` | Require proportionate lexical content; zero-lexical catch-all (conf < 90 → drop) |
+| 3a | `pruneShortFragments` | Remove single-char lines (except "I"), short non-lexical orphans |
+| 3b | `cleanNoiseWordsWithinLines` | Remove lowercase noise words from uppercase-dominant lines |
+| 3c | Density check | totalAlpha ≤ 4 + lexHits < 2 + maxConf < 85 → drop |
+| 4 | Page quality gate | avgReadability < 0.35 + lexCount < 2 + totalAlpha < 20 → clear all |
+
+### Key Components
+
+- **`LATIN_COMMON`** — ~260 common English words + compound words (prevent false word-splitting)
+- **`LATIN_SHORT_KEEP`** — 18 valid short words (I, A, IT, TO, IN, ON, OF, etc.) protected from short-word filters
+- **`isLexicalWord(text)`** — strips punctuation before lookup (DON'T → DONT → found)
+- **`scoreTokenReadability(word)`** — 0-1 score: vowel ratio, consonant runs, case mixing, length, confidence
+- **`countCaseTransitions(text)`** — counts upper↔lower transitions; ≥3 = gibberish
+- **`isWatermarkWord(word, pw, ph)`** — detects URLs, manga sites (LikeManga, ACloudMerge, ColaManga), standalone COM/IO/NET near edges
+- **`trySplitWord(text)`** — dictionary-based merged-word detection: tries case boundaries first, then all positions
+- **`cleanNoiseWordsWithinLines(lines)`** — drops lowercase non-lexical words on uppercase-dominant lines
+
+### Results
+
+| Page | Before (ghost words) | After (total words) | Confidence | Key changes |
+|------|---------------------|---------------------|------------|-------------|
+| 2 | 59 dropped | 22 words | 68% | Main bubble text detected correctly |
+| 3 | 25 dropped | 12 words | 58% | "I'LL OVER AND / TAKEA LOOK" detected |
+| 5 | 60 dropped | 25 words | 74% | Core sentences detected with some noise |
+
+### Remaining Bugs (Post-Filtering)
+
+1. **Tesseract misreads** (not fixable by post-filters — the correct text never enters the pipeline):
+   - P2 L4: `XUJIA TOWN` → `AVIA TOdl CR En Se` + stray `A`
+   - P3: `TAKE A LOOK` may still be merged as `TAKEA LOOK` depending on Tesseract output
+   - P5: `NowI CAN ONLY MAKEDO WITH` → now fixed by word-splitting
+
+2. **Ghost fragments now caught**:
+   - P3: `CREAweaErSRETHIbe` — caught by `countCaseTransitions ≥ 3` in `isGarbageWord`
+   - P5: `vided`, `Wis`, `wraphimills` — caught by zero-lexical catch-all and per-word cleanup
+   - P2: `A` standalone — caught by single-char line filter
+   - P2: `AVIA TOdl CR En Se` — caught by zero-lexical catch-all (no dictionary words)
+
+3. **Missing text** (Tesseract not detecting at all — needs preprocessing/detection improvements):
+   - P5: `THIS KIND OF STUFF` not detected
+   - P10: `THE PEOPLE HERE?` still missing
+
+### Next tuning priorities
+
+1. Investigate primary worker crash using boot loader error output
+2. Improve Tesseract detection for missing text (P5 `THIS KIND OF STUFF`, P10 `THE PEOPLE HERE?`) — likely needs preprocessing or PSM tuning
+3. Consider expanding `LATIN_COMMON` with domain-specific vocabulary as more manga pages are tested
 
 ## Suggested Next Optimizations
 

@@ -36,6 +36,14 @@ type QueuedRequest = {
   abortHandler?: () => void;
 };
 
+type WorkerMode = 'primary' | 'stable';
+
+type WorkerSlot = {
+  worker: Worker;
+  busy: boolean;
+  mode: WorkerMode;
+};
+
 export type OCRProgressCallback = (progress: {
   status: string;
   progress: number;
@@ -64,7 +72,7 @@ const createAbortError = (reason: string = 'OCR job canceled'): Error => {
 };
 
 class VisionService {
-  private workers: Array<{ worker: Worker; busy: boolean }> = [];
+  private workers: WorkerSlot[] = [];
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private progressCallback: OCRProgressCallback | null = null;
   private requestQueue: Array<QueuedRequest> = [];
@@ -89,24 +97,45 @@ class VisionService {
     this.startHealthCheck();
   }
 
-  private createWorkerSlot(index: number): { worker: Worker; busy: boolean } {
-    const workerUrl = new URL('./worker.ts', import.meta.url);
+  private createWorkerSlot(index: number, mode: WorkerMode = 'primary'): WorkerSlot {
+    // Primary mode uses the boot loader which dynamically imports worker.ts
+    // and falls back to worker-stable.ts on error with full error reporting.
+    // Stable mode loads worker-stable.ts directly.
+    const workerEntry = mode === 'stable' ? './worker-stable.ts' : './worker-boot.ts';
+    const workerUrl = new URL(workerEntry, import.meta.url);
     workerUrl.searchParams.set('v', String(OCR_ALGORITHM_VERSION));
     const worker = new Worker(workerUrl, {
       type: 'module',
     });
-    console.log(`[VisionService] Worker ${index} url=${workerUrl.toString()}`);
+    console.log(`[VisionService] Worker ${index} (${mode}) url=${workerUrl.toString()}`);
 
     worker.onmessage = (e) => {
       this.handleWorkerMessage(index, e.data);
     };
 
     worker.onerror = (error) => {
-      console.error(`[VisionService] Worker ${index} error:`, error);
-      this.handleWorkerCrash(index);
+      const errInfo = {
+        message: error.message ?? '(no message)',
+        filename: error.filename ?? '(no filename)',
+        lineno: error.lineno ?? -1,
+        colno: error.colno ?? -1,
+        type: error.type ?? '(no type)',
+        errorObj: (error as any).error ?? null,
+      };
+      console.error(`[VisionService] Worker ${index} (${mode}) error:`, JSON.stringify(errInfo, null, 2));
+      this.handleWorkerCrash(index, error);
     };
 
-    return { worker, busy: false };
+    return { worker, busy: false, mode };
+  }
+
+  private recreateWorkerSlot(index: number, mode?: WorkerMode): void {
+    const current = this.workers[index];
+    const nextMode = mode ?? current?.mode ?? 'primary';
+    if (current) {
+      current.worker.terminate();
+    }
+    this.workers[index] = this.createWorkerSlot(index, nextMode);
   }
 
   /**
@@ -121,6 +150,26 @@ class VisionService {
     // Handle progress updates
     if (type === 'OCR_PROGRESS' && this.progressCallback) {
       this.progressCallback(payload as { status: string; progress: number; workerId?: string });
+      return;
+    }
+
+    // Handle boot status messages from worker-boot.ts
+    if (type === 'WORKER_BOOT') {
+      console.log(`[VisionService] Worker ${workerIndex} booted OK (primary pipeline active).`);
+      return;
+    }
+    if (type === 'WORKER_BOOT_ERROR') {
+      const info = payload as { message?: string; stack?: string; name?: string } | undefined;
+      console.error(
+        `[VisionService] Worker ${workerIndex} PRIMARY module failed to load!\n` +
+        `  Error: ${info?.name || '(unknown)'}: ${info?.message || '(no message)'}\n` +
+        `  Stack: ${info?.stack || '(no stack)'}\n` +
+        `  → Worker will use STABLE fallback pipeline (already loaded by boot loader).`,
+      );
+      // Mark as stable mode since the boot loader already imported worker-stable
+      if (this.workers[workerIndex]) {
+        this.workers[workerIndex].mode = 'stable';
+      }
       return;
     }
 
@@ -150,22 +199,29 @@ class VisionService {
   /**
    * Handle worker crash - reject all pending and restart
    */
-  private handleWorkerCrash(workerIndex: number): void {
-    console.warn(`[VisionService] Worker ${workerIndex} crashed, rejecting pending requests...`);
+  private handleWorkerCrash(workerIndex: number, _error?: Event | ErrorEvent): void {
+    const slot = this.workers[workerIndex];
+    const currentMode = slot?.mode ?? 'primary';
+    const fallbackMode: WorkerMode = currentMode === 'primary' ? 'stable' : 'stable';
+    console.warn(`[VisionService] Worker ${workerIndex} crashed in ${currentMode} mode; requeueing pending requests and switching to ${fallbackMode}...`);
 
-    // Reject pending requests assigned to this worker
+    // Requeue pending requests assigned to this worker so OCR doesn't silently skip.
     for (const [id, pending] of this.pendingRequests) {
       if (pending.workerIndex !== workerIndex) continue;
       clearTimeout(pending.timeoutId);
-      pending.request.abortHandler?.();
-      pending.reject(new Error('Worker crashed'));
       this.pendingRequests.delete(id);
+
+      if (pending.request.retryCount < CONFIG.RETRY_ATTEMPTS) {
+        pending.request.retryCount += 1;
+        this.requestQueue.unshift(pending.request);
+      } else {
+        pending.request.abortHandler?.();
+        pending.reject(new Error(`Worker crashed repeatedly in ${currentMode} mode`));
+      }
     }
 
-    const slot = this.workers[workerIndex];
     if (slot) {
-      slot.worker.terminate();
-      this.workers[workerIndex] = this.createWorkerSlot(workerIndex);
+      this.recreateWorkerSlot(workerIndex, fallbackMode);
     }
 
     this.processQueue();
@@ -422,8 +478,7 @@ class VisionService {
             this.pendingRequests.delete(id);
             const slot = this.workers[pending.workerIndex];
             if (slot) {
-              slot.worker.terminate();
-              this.workers[pending.workerIndex] = this.createWorkerSlot(pending.workerIndex);
+              this.recreateWorkerSlot(pending.workerIndex, slot.mode);
             }
             this.processQueue();
             return;
@@ -482,8 +537,7 @@ class VisionService {
       this.pendingRequests.delete(id);
       const slot = this.workers[pending.workerIndex];
       if (slot) {
-        slot.worker.terminate();
-        this.workers[pending.workerIndex] = this.createWorkerSlot(pending.workerIndex);
+        this.recreateWorkerSlot(pending.workerIndex, slot.mode);
       }
     }
 

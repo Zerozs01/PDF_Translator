@@ -70,7 +70,7 @@ export interface OCRStageMetric {
 
 export interface OCRCandidateDebug {
   id: string;
-  stage: "emptyLineFallback" | "gapFallback" | "anchorSecondLine" | "anchorTopSparse";
+  stage: "emptyLineFallback" | "gapFallback" | "anchorSecondLine" | "anchorTopSparse" | "anchorBottomSparse";
   bbox: BBox;
   accepted: boolean;
   score?: number;

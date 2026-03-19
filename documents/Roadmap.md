@@ -1,6 +1,6 @@
 # OCR Accuracy & Refactor Roadmap
 
-Last updated: 2026-02-12
+Last updated: 2026-03-10
 
 ---
 
@@ -37,6 +37,21 @@ Last updated: 2026-02-12
 | `ocr-fallback.ts` | ~180 | Region re-OCR, chunked recognition, vertical gap detection |
 | `ocr-region.ts` | ~112 | Region classification & word grouping |
 | `worker.ts` | ~500 | Message handler + imports only |
+
+### ✅ Phase A1: Ghost Text Reduction (2026-03-10)
+
+**สิ่งที่ทำ:**
+- สร้าง `worker-boot.ts` boot loader สำหรับ primary worker crash recovery
+- เปลี่ยน `worker-stable.ts` จาก basic 4-rule filter เป็น 7-layer filtering pipeline
+- เพิ่ม lexical dictionary (`LATIN_COMMON` ~200+ คำ) แทน pure heuristics
+- เพิ่ม readability scoring + watermark detection (manga sites, URLs)
+- Ghost text ลดลงมาก: P2 59→22, P3 25→12, P5 60→25
+
+**บัคที่ยังเหลือ:**
+- Tesseract misread: `XUJIA TOWN` → `AVIA TOdl CR En Se` (P2)
+- Ghost fragments: `CREAweaErSRETHIbe` (P3), `vided/Wis/wraphimills` (P5)
+- Missing text: `THIS KIND OF STUFF` (P5), `THE PEOPLE HERE?` (P10)
+- Word merging: `TAKEA LOOK`, `NowI`, `MAKEDO`
 
 ### ⚠️ Phase A: บทเรียนจาก "relaxed filters"
 
@@ -75,6 +90,14 @@ Last updated: 2026-02-12
 
 - [ ] **A2.4. Bounding box padding สำหรับ CJK speech bubble**
   - ตัวอักษรที่มุมของ bubble มักถูก crop พอดี → เพิ่ม padding เมื่อ re-OCR region
+
+### Phase A3: แก้บัคที่เหลือจาก Ghost Text Reduction (2026-03-10)
+
+- [ ] **A3.1. Tighten mixed-case readability gate** — `CREAweaErSRETHIbe` ยังผ่าน filter ได้ ต้องเพิ่ม readability threshold สำหรับ mixed-case tokens
+- [ ] **A3.2. Single-word non-lexical filter** — fragments เช่น `vided`, `Wis`, `wraphimills` ต้องถูกกรองออก (single-word line + ไม่อยู่ใน dictionary + conf ไม่สูง)
+- [ ] **A3.3. Word-merging post-processing** — แก้ `TAKEA` → `TAKE A`, `NowI` → `Now I`, `MAKEDO` → `MAKE DO` ด้วย dictionary-based word splitting
+- [ ] **A3.4. Fix primary worker crash** — ใช้ boot loader error output วิเคราะห์ root cause ว่า Vite module worker + large import tree crash เพราะอะไร
+- [ ] **A3.5. Investigate missing text** — `THIS KIND OF STUFF` (P5) และ `THE PEOPLE HERE?` (P10) ไม่ถูก detect เลย → ต้อง debug ว่า Tesseract ไม่เห็นหรือถูก filter drop
 
 ---
 
@@ -118,14 +141,16 @@ Already done      → Phase B (refactor ✅)
 
 | File | Lines | Role |
 |------|-------|------|
-| `worker.ts` | ~500 | OCR message handler (imports modules) |
+| `worker-boot.ts` | ~50 | Boot loader: dynamic import + crash recovery |
+| `worker.ts` | ~3519 | Full OCR pipeline (currently crashes in dev) |
+| `worker-stable.ts` | ~738 | Fallback worker with 7-layer filtering pipeline |
+| `VisionService.ts` | ~572 | Worker pool management + boot loader handling |
 | `ocr-config.ts` | ~120 | Centralized thresholds |
-| `ocr-filtering.ts` | ~400 | All filter logic |
+| `ocr-filtering.ts` | ~400 | All filter logic (primary worker) |
 | `ocr-fallback.ts` | ~180 | Region re-OCR, chunking |
 | `ocr-parsing.ts` | ~280 | TSV parsing, line building |
 | `ocr-preprocessing.ts` | ~100 | Image preprocessing |
 | `ocr-text-utils.ts` | ~114 | Text utilities |
 | `ocr-region.ts` | ~112 | Region classification |
 | `ocr-types.ts` | ~43 | Shared types |
-| `VisionService.ts` | ~510 | Worker pool management |
 | `OCRTextLayerPanel.tsx` | ~834 | UI, page rendering, OCR trigger |

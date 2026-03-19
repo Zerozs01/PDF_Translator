@@ -30,6 +30,39 @@ For full project history, see `CHANGELOG.md` in the repo root.
 - Added `road map.md` to track upcoming phases and priorities.
 - Synced documentation notes with recent OCR cache + fileData changes.
 
+## 2026-03-10 (v47 — Primary Worker Fix)
+
+- **ROOT CAUSE found**: Boot loader succeeded → `worker.ts` (primary) is running, NOT `worker-stable.ts`. All previous ghost-text fixes were in `worker-stable.ts` and never activated.
+- All fixes now applied directly to the PRIMARY worker (`worker.ts`):
+  - **Zero-lexical-line re-OCR**: After all filtering, lines where EVERY word is non-lexical are re-OCR'd with the UNBINARIZED (original) image via `recognizeRegion`. If the retry yields lexical words, the line's words are REPLACED. This fixes the XUJIA TOWN regression caused by v1.2.1 adaptive binarization.
+  - **Case-transition gibberish**: Enhanced `pruneLatinResidualNoiseWords` — words with ≥3 case transitions (e.g. `CREAweaErSRETHIbe`) are dropped.
+  - **Merged word splitting**: `trySplitMergedLatinWord` splits concatenated words (STUDENTSMAY→STUDENTS+MAY, TAKEA→TAKE+A).
+  - **Lowercase noise filter**: Drops non-lexical lowercase words with no vowels or long consonant runs (e.g. `vided`, `wraphimills`).
+  - **Single-char line drop**: Lines of a single character (except "I") with low confidence are removed.
+- Expanded `LATIN_COMMON_WORDS` from ~55 to ~200+ words in worker.ts. Fixed `XUJITA`→`XUJIA` typo.
+- Bumped OCR algorithm version 46→47.
+
+## 2026-03-10 (earlier)
+
+- Created `worker-boot.ts` — boot loader that wraps `worker.ts` dynamic import in try-catch, reports real crash error via `WORKER_BOOT_ERROR`, auto-falls back to `worker-stable.ts`.
+- Expanded `worker-stable.ts` from 447→738 lines with a comprehensive 7-layer filtering pipeline (noise words → line building → edge ghost → garbage lines → short fragments → density check → page quality gate).
+- Added `LATIN_COMMON` dictionary (~200+ words) and `LATIN_SHORT_KEEP` set for lexical classification.
+- Added `isLexicalWord()`, `scoreTokenReadability()`, enhanced `isWatermarkWord()` with manga-site detection.
+- Updated `VisionService.ts` to load `worker-boot.ts` as primary entry point; added `WORKER_BOOT` / `WORKER_BOOT_ERROR` message handlers.
+- Updated `vite.config.ts` with `worker: { format: 'es' }` and `optimizeDeps: { include: ['tesseract.js'] }`.
+- Ghost text significantly reduced: P2 59→22 words, P3 25→12 words, P5 60→25 words.
+- Added word-splitting post-processor: fixes TAKEA→TAKE+A, NowI→Now+I, MAKEDO→MAKE+DO, STUDENTSMAY→STUDENTS+MAY.
+- Added zero-lexical-words catch-all: drops lines with no dictionary words (catches vided, Wis, wraphimills, AVIA TOdl CR En Se).
+- Added mixed-case gibberish detection via case-transition counting (catches CREAweaErSRETHIbe).
+- Added single-char orphan line filter (drops standalone A, but keeps I).
+- Added per-word cleanup within multi-word lines (drops lowercase noise on uppercase-dominant lines).
+- Expanded LATIN_COMMON to ~260 words with compound-word prevention.
+- Remaining bugs documented:
+	- P2 L4: `XUJIA TOWN` misread as `AVIA TOdl CR En Se` (Tesseract accuracy)
+	- P3: ghost `CREAweaErSRETHIbe` still passes; `TAKEA LOOK` not properly spaced
+	- P5: ghost words `vided`, `Wis`, `wraphimills` remain; `THIS KIND OF STUFF` not detected
+	- P10: `THE PEOPLE HERE?` still missing
+
 ## 2026-03-09
 
 - Backed up latest OCR tuning notes after manual manga-page validation.

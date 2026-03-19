@@ -52,6 +52,14 @@ import {
 import { findVerticalGapRegions, recognizeRegion, recognizeInChunks } from './ocr-fallback';
 import { classifyRegion, groupWordsIntoRegions } from './ocr-region';
 
+// ── Crash diagnostic: report if module loaded successfully ──
+try {
+  console.log('[Worker-Primary] Module loaded OK – all imports resolved.');
+  self.postMessage({ type: 'WORKER_BOOT', payload: { status: 'ok', ts: Date.now() } });
+} catch (e) {
+  console.error('[Worker-Primary] Boot postMessage failed:', e);
+}
+
 // ============================================
 // Tesseract Worker State
 // ============================================
@@ -93,7 +101,7 @@ interface LatinAnchorProbe {
   id: string;
   anchorLineIndex: number;
   bbox: BBox;
-  probeType: 'anchorSecondLine' | 'anchorTopSparse';
+  probeType: 'anchorSecondLine' | 'anchorTopSparse' | 'anchorBottomSparse';
   minConf: number;
   psmOrder: number[];
 }
@@ -274,6 +282,34 @@ function buildLatinAnchorProbes(
         minConf: Math.max(34, CONFIG.LATIN_TOP_PROBE_MIN_CONF - 18),
         psmOrder: [Number(PSM.SPARSE_TEXT)],
       });
+    }
+
+    if (CONFIG.LATIN_BOTTOM_PROBE_ENABLE) {
+      const bottomXPad = medianHeight * CONFIG.LATIN_BOTTOM_PROBE_X_PAD_MULT;
+      const bottomProbe = clampBBox({
+        x0: line.bbox.x0 - bottomXPad,
+        x1: line.bbox.x1 + bottomXPad,
+        y0: line.bbox.y0 - medianHeight * CONFIG.LATIN_BOTTOM_PROBE_Y_PAD_ABOVE,
+        y1: line.bbox.y1 + medianHeight * CONFIG.LATIN_BOTTOM_PROBE_Y_PAD_BELOW,
+      }, actualWidth, actualHeight);
+
+      const lowerFreeBand = Math.max(0, bottomProbe.y1 - line.bbox.y1);
+      const minLowerFreeBand = lineHeight * CONFIG.LATIN_BOTTOM_PROBE_MIN_FREE_BAND_MULT;
+      const maxLowerFreeBand = lineHeight * CONFIG.LATIN_BOTTOM_PROBE_MAX_FREE_BAND_MULT;
+      if (
+        lowerFreeBand >= minLowerFreeBand
+        && lowerFreeBand <= maxLowerFreeBand
+        && line.bbox.y1 < actualHeight - medianHeight * 0.6
+      ) {
+        probes.push({
+          id: `anchor-bottom-${index}`,
+          anchorLineIndex: index,
+          bbox: bottomProbe,
+          probeType: 'anchorBottomSparse',
+          minConf: CONFIG.LATIN_BOTTOM_PROBE_MIN_CONF,
+          psmOrder: [Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)],
+        });
+      }
     }
   }
 
@@ -709,7 +745,7 @@ function filterLatinRescueWords(
     const strictShortKeep = LATIN_SHORT_KEEP_FOR_LINE.has(upper);
     const lexicalToken = LATIN_COMMON_WORDS.has(normalized) || LATIN_SHORT_KEEP_FOR_LINE.has(normalized);
     const postPruneSource = source.startsWith('postPruneLine');
-    const anchorSource = source === 'anchorSecondLine' || source === 'anchorTopSparse';
+    const anchorSource = source === 'anchorSecondLine' || source === 'anchorTopSparse' || source === 'anchorBottomSparse';
     const lexicalRelax = (postPruneSource || anchorSource) && lexicalToken;
     const effectiveMinConf = lexicalRelax
       ? Math.max(30, minConf - (anchorSource ? 12 : (strictShortKeep ? 14 : 10)))
@@ -2037,15 +2073,24 @@ self.onmessage = async (e: MessageEvent) => {
               if (lineWords.length === 0) continue;
               const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
               const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+              const lowCoverageLatin = !isCjk && item.coverage < CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_THRESHOLD;
+              const effectivePadX = lowCoverageLatin
+                ? Math.max(padXMult, CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_PAD_X)
+                : padXMult;
+              const effectivePadY = lowCoverageLatin
+                ? Math.max(padYMult, CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_PAD_Y)
+                : padYMult;
               const padded: BBox = {
-                x0: item.lineBox.x0 - medianHeight * padXMult,
-                y0: item.lineBox.y0 - medianHeight * padYMult,
-                x1: item.lineBox.x1 + medianHeight * padXMult,
-                y1: item.lineBox.y1 + medianHeight * padYMult
+                x0: item.lineBox.x0 - medianHeight * effectivePadX,
+                y0: item.lineBox.y0 - medianHeight * effectivePadY,
+                x1: item.lineBox.x1 + medianHeight * effectivePadX,
+                y1: item.lineBox.y1 + medianHeight * effectivePadY
               };
               const boxW = Math.max(1, item.lineBox.x1 - item.lineBox.x0);
               const boxH = Math.max(1, item.lineBox.y1 - item.lineBox.y0);
-              const linePsm = isCjk && boxH > boxW * 1.25 ? Number(PSM.SPARSE_TEXT) : Number(PSM.SINGLE_LINE);
+              const linePsm = isCjk
+                ? (boxH > boxW * 1.25 ? Number(PSM.SPARSE_TEXT) : Number(PSM.SINGLE_LINE))
+                : (lowCoverageLatin ? Number(PSM.SINGLE_BLOCK) : Number(PSM.SINGLE_LINE));
               const regionWords = await recognizeRegion(worker, (fallbackInput ?? processedInput) as Blob | string, padded, linePsm, actualWidth, actualHeight, dpi);
               const validWords = isCjk
                 ? filterRecoveredCjkWords(regionWords, {
@@ -2998,8 +3043,8 @@ self.onmessage = async (e: MessageEvent) => {
           && parsed
           && parsed.lineBoxes.length > 0
           && words.length > 0
-          && words.length <= 10
-          && lines.length <= 4
+          && words.length <= CONFIG.LATIN_POST_PRUNE_RESCUE_MAX_WORDS
+          && lines.length <= CONFIG.LATIN_POST_PRUNE_RESCUE_MAX_LINES
         ) {
           const candidateLineBoxes = parsed.lineBoxes
             .map((lineBox) => {
@@ -3032,14 +3077,20 @@ self.onmessage = async (e: MessageEvent) => {
                 || overlapCoverage < 0.74;
             })
             .sort((a, b) => a.bbox.y0 - b.bbox.y0)
-            .slice(0, 6);
+            .slice(0, 8);
 
           if (candidateLineBoxes.length > 0) {
             await ensureFallbackInput();
             let postPruneAdded = 0;
             for (const candidate of candidateLineBoxes) {
-              const padX = candidate.h * 0.35;
-              const padY = candidate.h * 0.42;
+              const overlapLine = findBestLineForBox(lines, candidate.bbox);
+              const overlapWords = overlapLine ? ((overlapLine.words as OCRWord[]) || []) : [];
+              const overlapCoverage = overlapLine && overlapWords.length > 0
+                ? computeLineCoverageRatio(overlapWords, candidate.bbox)
+                : 0;
+              const lowCoverageCandidate = overlapCoverage > 0 && overlapCoverage < CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_THRESHOLD;
+              const padX = candidate.h * (lowCoverageCandidate ? 0.6 : 0.35);
+              const padY = candidate.h * (lowCoverageCandidate ? 0.58 : 0.42);
               const probeBox = clampBBox({
                 x0: candidate.bbox.x0 - padX,
                 y0: candidate.bbox.y0 - padY,
@@ -3061,7 +3112,7 @@ self.onmessage = async (e: MessageEvent) => {
                   worker,
                   probe.input,
                   probeBox,
-                  Number(PSM.SINGLE_LINE),
+                  lowCoverageCandidate ? Number(PSM.SINGLE_BLOCK) : Number(PSM.SINGLE_LINE),
                   actualWidth,
                   actualHeight,
                   dpi
