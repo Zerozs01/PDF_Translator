@@ -11,6 +11,7 @@
     "build-storybook": "storybook build",
     "tessdata:download": "node scripts/download-tessdata.js",
     "ocr:regression": "node scripts/run-ocr-regression.mjs --out .tmp-ocr-current.json && node scripts/ocr-regression-report.js --cand .tmp-ocr-current.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report.json",
+    "ocr:regression:partial": "node scripts/run-ocr-regression.mjs --skip-missing --out .tmp-ocr-current.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report.json",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "repository": {

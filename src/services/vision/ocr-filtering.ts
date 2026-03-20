@@ -30,7 +30,10 @@ function normalizeLatinToken(token: string): string {
     .toUpperCase()
     .replace(/0/g, 'O')
     .replace(/1/g, 'I')
-    .replace(/5/g, 'S');
+    .replace(/5/g, 'S')
+    .replace(/6/g, 'G')
+    .replace(/7/g, 'T')
+    .replace(/8/g, 'B');
 }
 
 function isProtectedLatinToken(alphaNum: string): boolean {
@@ -928,7 +931,8 @@ export function cleanLineNoise(lines: Array<{ text: string; confidence: number; 
         && CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(upperAlpha)
         && lineWords.length >= 2
         && h >= medianHeight * CONFIG.NOISE_KEEP_SINGLE_HEIGHT_RATIO;
-      const keepShortLatinWord = alphaNum.length <= 2 && LATIN_KEEP_SHORT_WORDS.has(upperAlpha);
+      const normalizedAlpha = normalizeLatinToken(alphaNum);
+      const keepShortLatinWord = alphaNum.length <= 2 && LATIN_KEEP_SHORT_WORDS.has(normalizedAlpha);
 
       if (keepSingle) return true;
       if (keepShortLatinWord) return true;
@@ -941,8 +945,12 @@ export function cleanLineNoise(lines: Array<{ text: string; confidence: number; 
       }
 
       if (/^[0-9]{1,2}$/.test(alphaNum) && word.confidence < 85) {
-        logDrop('noise', word, 'short numeric artifact');
-        return false;
+        const normalizedNumeric = normalizeLatinToken(alphaNum);
+        const numericLooksLexical = isProtectedLatinToken(normalizedNumeric);
+        if (!numericLooksLexical) {
+          logDrop('noise', word, 'short numeric artifact');
+          return false;
+        }
       }
 
       // Drop mixed-case short noise like "rE" or "Bm"

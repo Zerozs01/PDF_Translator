@@ -77,6 +77,7 @@ const createAbortError = (reason: string = 'OCR job canceled'): Error => {
 
 class VisionService {
   private workers: WorkerSlot[] = [];
+  private workerCrashCounts: number[] = [];
   private workerVersion: number | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private progressCallback: OCRProgressCallback | null = null;
@@ -98,6 +99,7 @@ class VisionService {
         slot.worker.terminate();
       }
       this.workers = [];
+      this.workerCrashCounts = [];
       this.pendingRequests.clear();
       this.requestQueue = [];
     }
@@ -106,6 +108,7 @@ class VisionService {
     this.workerVersion = OCR_ALGORITHM_VERSION;
     for (let i = 0; i < CONFIG.MAX_WORKERS; i++) {
       this.workers.push(this.createWorkerSlot(i));
+      this.workerCrashCounts[i] = 0;
     }
 
     // Start health check
@@ -123,6 +126,7 @@ class VisionService {
       type: 'module',
     });
     console.log(`[VisionService] Worker ${index} (${mode}) url=${workerUrl.toString()}`);
+    if (typeof this.workerCrashCounts[index] !== 'number') this.workerCrashCounts[index] = 0;
 
     worker.onmessage = (e) => {
       this.handleWorkerMessage(index, e.data);
@@ -174,6 +178,7 @@ class VisionService {
       if (this.workers[workerIndex]) {
         this.workers[workerIndex].booted = true;
       }
+      this.workerCrashCounts[workerIndex] = 0;
       this.processQueue();
       return;
     }
@@ -190,6 +195,7 @@ class VisionService {
       if (this.workers[workerIndex]) {
         this.workers[workerIndex].mode = 'stable';
       }
+      this.workerCrashCounts[workerIndex] = 2;
       return;
     }
 
@@ -210,6 +216,9 @@ class VisionService {
     this.pendingRequests.delete(id);
     if (this.workers[workerIndex]) {
       this.workers[workerIndex].busy = false;
+      if (this.workers[workerIndex].mode === 'primary') {
+        this.workerCrashCounts[workerIndex] = 0;
+      }
     }
       console.log(`[VisionService] Completed ${type} request ${id} from worker ${workerIndex}`);
 
@@ -223,7 +232,11 @@ class VisionService {
   private handleWorkerCrash(workerIndex: number, _error?: Event | ErrorEvent): void {
     const slot = this.workers[workerIndex];
     const currentMode = slot?.mode ?? 'primary';
-    const fallbackMode: WorkerMode = currentMode === 'primary' ? 'stable' : 'stable';
+    this.workerCrashCounts[workerIndex] = (this.workerCrashCounts[workerIndex] || 0) + 1;
+    const crashCount = this.workerCrashCounts[workerIndex];
+    const fallbackMode: WorkerMode = currentMode === 'primary'
+      ? (crashCount >= 2 ? 'stable' : 'primary')
+      : 'stable';
     console.warn(`[VisionService] Worker ${workerIndex} crashed in ${currentMode} mode; requeueing pending requests and switching to ${fallbackMode}...`);
 
     // Requeue pending requests assigned to this worker so OCR doesn't silently skip.

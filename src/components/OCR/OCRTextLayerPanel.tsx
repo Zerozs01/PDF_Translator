@@ -158,8 +158,10 @@ export const OCRTextLayerPanel: React.FC = () => {
   // UI preview can show stale algorithm cache (marked as stale in badge) to avoid blank panel
   // while still requiring language match.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
-    return isCacheCompatible(cached);
-  }, [isCacheCompatible]);
+    if (!cached || !Array.isArray(cached.words) || !Array.isArray(cached.lines)) return false;
+    if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
+    return normalizeLanguage(cached.language) === normalizeLanguage(options.language);
+  }, [normalizeLanguage, options.language]);
 
   const loadCachedOCR = useCallback(async (
     pageNum: number,

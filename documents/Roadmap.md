@@ -68,6 +68,7 @@ Last updated: 2026-03-10
 - [x] ปรับ default debug logging ให้ปลอดภัยกับ runtime (`DEBUG_LOG_DROPS=false`)
 - [~] ตั้งเกณฑ์ regression gate ชุดเดียวก่อนจูน (ใช้ harness เดิม + baseline ที่ตรงเวอร์ชันปัจจุบัน)
 - [x] เพิ่ม regression preflight check: ตรวจ fixture image ก่อนรัน harness และ fail-fast พร้อมรายการไฟล์ที่หาย
+- [x] เพิ่ม partial regression mode: รองรับ `--skip-missing` + report `--partial` เพื่อเริ่มวัดผล tuning ได้ทันทีเมื่อมี fixture บางหน้า
 - [ ] แก้ regression fixture assets: ใน `public/fixtures/ocr/manga` ยังไม่มีไฟล์ภาพ test pages (มีแค่ `expectations.json`)
 - [ ] Freeze tuning window: ไม่เพิ่ม heuristic ใหม่จนกว่า gate ผ่าน
 
@@ -78,6 +79,7 @@ Exit criteria:
 Latest run note (2026-03-20):
 
 - `node scripts/run-ocr-regression.mjs` ตอนนี้ fail-fast พร้อมรายการไฟล์ fixture ที่หายอย่างชัดเจน
+- เพิ่ม `npm run ocr:regression:partial` สำหรับรันเฉพาะ fixture ที่มีอยู่จริงระหว่างเติม assets (ยังคงใช้ report เดิมแต่ scope เฉพาะหน้าที่รันได้)
 
 ### Phase 1 - Runtime Stability & Shared Pipeline (P1)
 
@@ -99,7 +101,7 @@ Exit criteria:
 
 - [x] ลด `unknown[]` ใน `OCRLine.words` ไปเป็น `OCRWord[]` (ครอบคลุม `worker.ts`, `worker-stable.ts`, `ocr-types.ts`, `ocr-parsing.ts`, `ocr-filtering.ts`)
 - [x] ลด cast ที่เสี่ยง (`as any`) เฉพาะ path OCR หลักและจุด runtime สำคัญ (รวม `VisionService.ts`/`worker-boot.ts` แล้ว)
-- [~] แยกฟังก์ชัน heuristic Latin ขนาดใหญ่ใน `worker.ts` เป็นไฟล์ย่อยตามหมวด (คืบหน้า: extract `ocr-latin-heuristics.ts` สำหรับ normalize/split/correction core + line cleanup/prune helpers)
+- [~] แยกฟังก์ชัน heuristic Latin ขนาดใหญ่ใน `worker.ts` เป็นไฟล์ย่อยตามหมวด (คืบหน้า: extract `ocr-latin-heuristics.ts` สำหรับ normalize/split/correction core + line cleanup/prune + anchor/probe builders/text-like probe helpers + readability/speech-fastpath scoring helpers + candidate scoring/meaningful-word metrics ผ่าน dependency injection)
 
 Exit criteria:
 
@@ -124,6 +126,23 @@ Exit criteria:
 - [ ] tune PSM/default strategy ตาม document profile
 - [ ] tune speech-bubble specific rules (uniform/background-aware)
 - [ ] tune line-completion rescue สำหรับเคสท้าย bubble
+
+Note (2026-03-20):
+
+- เริ่ม tuning แบบ targeted แล้ว 1 จุดจาก evidence จริง (page 10 log): เพิ่มการประเมิน `PSM.SPARSE_TEXT` เฉพาะ post-prune line rescue region เพื่อเพิ่ม recall ของเส้นข้อความโค้ง โดยไม่เปิด sparse retry ทั้งหน้า
+- ทำ tuning รอบต่อจาก evidence หน้า 10/14/15: เพิ่มกฎตัด residual singleton/short non-lexical lines ใน final pass และขยาย post-prune coverage threshold เพื่อให้เก็บบรรทัดที่หายบางส่วนได้มากขึ้น
+- ทำ tuning เพิ่มแบบ context-aware: ใช้ strong text cluster จาก lexical lines เพื่อคัดทิ้ง short-line ghosts ที่อยู่ไกลจากบับเบิลข้อความจริง
+- แก้ blocker ของผลที่ "แทบไม่เปลี่ยน": เอา protected-line bypass ออกจาก final residual prune สำหรับเคส short ghost lines และผ่อน gate readability ของ lexical rescue token เพื่อไม่ให้คำจริงสั้นๆ หลุด
+- จูนต่อสำหรับเคส page 10 คำหายริมบรรทัด (`HERE`, `TO`, `HERE?`): เพิ่ม adaptive probe padding ซ้าย/ขวาใน post-prune rescue และผ่อน lexical gate เฉพาะ source กลุ่ม `postPruneLine*`
+- จูนต่อรอบล่าสุด: เพิ่ม `MR` เข้า short-keep เพื่อกัน title ต้นประโยคหาย และเพิ่ม panel-only edge-token rescue สำหรับบรรทัดแข็งแรงที่มีช่องว่างริม line box เพื่อดึงคำท้าย/ต้นบรรทัดกลับมา
+- จูนต่อรอบนี้: ผ่อน gate ของ `lineRescanEdge` สำหรับ lexical tokens เพื่อแก้ page 10 คำหายริมบรรทัด และเพิ่มกฎตัด fragmented mixed-case non-lexical residual line เพื่อเคลียร์บัค text ผีหน้า 3 ใต้บรรทัด `TAKE A LOOK`
+- จูนรอบติดตามสำหรับเคสที่ยังดื้อ: ขยาย trigger/padding ของ edge-token rescue และเพิ่ม fallback + looser dedupe retry เพื่อดึงคำริมบรรทัดที่ overlap ใกล้เคียง; พร้อม tighten กฎลบ fragmented line แบบ lexical-density ต่ำ (lexicalHits<=1)
+- จูนรอบล่าสุดสำหรับเคสที่เหลือ (หน้า 2/3/5/10): เปิดใช้ lexical neighborhood + top-balloon rescue ใน panel mode แบบมีเพดานเข้ม และเพิ่มกฎตัด residual line ที่เป็น short-keep ซ้ำๆ (`A A A`) ใน final pass
+- จูนรอบ quality-focused ล่าสุด (หน้า 2/3/4/5/10/12/17/19/20): จำกัด Latin recovery budget ให้มีเพดานจริงเพื่อลดคำผีจาก texture-heavy rescue, ปรับลำดับคัดคำตอน budget overflow ให้คำ lexical/readable มาก่อน, และเพิ่ม singleton keep guard เพื่อกันหน้าข้อความสั้นมาก (เช่นมีแค่ `YOU`) ไม่โดนล้างทั้งหน้า
+- เพิ่ม post-cleanup รอบท้าย: normalize short digit lexical tokens (`60` -> `GO`) และตัด trailing non-lexical tail artifacts แบบ lowercase (`at`, `or`, `fem`) โดยไม่แตะคำสั้นตัวพิมพ์ใหญ่ที่มี lexical support
+- เพิ่มกฎลบ residual สาย `A I` แบบ two-token one-char short-keep ghost เมื่อไม่ protected/ไม่ confidence สูง
+- จูนรอบล่าสุดจากหลักฐานหน้า 2/3/4/5/10: แก้จุดที่ `GO` หายตั้งแต่ noise stage โดยยกเว้น short-digit token ที่ normalize เป็น lexical word, เพิ่ม targeted correction สำหรับ alias ของ `XUJIA/TOWN` (เคส `AVIA TO`), เปิด top-band probe ใน panel mode เพื่อกู้บรรทัดบนที่ raw ไม่เจอ, และลด rescue หนักบนหน้าที่ noise สูงมากเพื่อลด timeout
+- สรุป root cause รอบนี้: ปัญหาหลักมาจาก accuracy logic/threshold (short-digit normalization + line-prune over-drop + tail short-token artifacts) มากกว่างาน refactor ที่ค้าง จึงปรับกฎเชิงคุณภาพตรงจุดดังกล่าวเพิ่ม
 
 Exit criteria:
 

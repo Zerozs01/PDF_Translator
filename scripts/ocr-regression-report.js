@@ -11,6 +11,7 @@ function parseArgs(argv) {
     expect: '',
     out: '',
     failOnRisk: false,
+    partial: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -20,6 +21,7 @@ function parseArgs(argv) {
     if (arg === '--expect') args.expect = argv[i + 1] || '';
     if (arg === '--out') args.out = argv[i + 1] || '';
     if (arg === '--fail-on-risk') args.failOnRisk = true;
+    if (arg === '--partial') args.partial = true;
   }
   return args;
 }
@@ -343,7 +345,7 @@ function formatPercent(value) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.cand) {
-    console.error('Usage: node scripts/ocr-regression-report.js --cand <candidate.json> [--base baseline.json] [--expect expectations.json] [--out report.json] [--fail-on-risk]');
+    console.error('Usage: node scripts/ocr-regression-report.js --cand <candidate.json> [--base baseline.json] [--expect expectations.json] [--out report.json] [--fail-on-risk] [--partial]');
     process.exit(1);
   }
 
@@ -354,11 +356,15 @@ function main() {
   const candPages = normalizePages(candJson);
   const expectations = normalizeExpectations(expectJson);
 
-  const pageNumbers = Array.from(new Set([
-    ...basePages.keys(),
-    ...candPages.keys(),
-    ...expectations.keys(),
-  ])).sort((a, b) => a - b);
+  const pageNumbers = args.partial
+    ? Array.from(new Set([
+      ...candPages.keys(),
+    ])).sort((a, b) => a - b)
+    : Array.from(new Set([
+      ...basePages.keys(),
+      ...candPages.keys(),
+      ...expectations.keys(),
+    ])).sort((a, b) => a - b);
   const pageReports = [];
 
   let baseWordsTotal = 0;
@@ -435,9 +441,13 @@ function main() {
     .filter((report) => report.score >= 2 || report.reasons.length > 0)
     .sort((a, b) => b.score - a.score || a.page - b.page);
 
+  const scopedExpectationPages = args.partial
+    ? pageNumbers.filter((pageNum) => expectations.has(pageNum)).length
+    : expectations.size;
+
   const summary = {
     comparedPages: pageNumbers.length,
-    expectationPages: expectations.size,
+    expectationPages: scopedExpectationPages,
     expectationFailures,
     baseWordsTotal,
     candWordsTotal,
