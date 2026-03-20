@@ -608,6 +608,11 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     console.log(`[OCRPanel] Dispatching OCR request for page ${pageNum}`);
 
+    const pageAbortController = new AbortController();
+    const pageSignal = pageAbortController.signal;
+    const parentAbortHandler = () => pageAbortController.abort();
+    controller.signal.addEventListener('abort', parentAbortHandler, { once: true });
+
     const ocrPromise = visionService.ocrForTextLayer(
       imageBlob,
       imageWidth,
@@ -615,16 +620,26 @@ export const OCRTextLayerPanel: React.FC = () => {
       options.language,
       options.dpi,
       options.pageSegMode,
-      controller.signal,
+      pageSignal,
       showDebugOverlay,
       'panel'
     );
 
-    const ocrResult: import('../../types').OCRPageResult = await withPerPageOCRTimeout(
-      ocrPromise,
-      pageNum,
-      options.perPageTimeoutSec
-    );
+    const ocrResult: import('../../types').OCRPageResult = await (async () => {
+      try {
+        return await withPerPageOCRTimeout(
+          ocrPromise,
+          pageNum,
+          options.perPageTimeoutSec,
+          () => {
+            pageAbortController.abort();
+            visionService.cancelAll(`OCR timeout on page ${pageNum}`);
+          }
+        );
+      } finally {
+        controller.signal.removeEventListener('abort', parentAbortHandler);
+      }
+    })();
 
     console.log(`[OCRPanel] OCR request resolved for page ${pageNum} with ${ocrResult.words.length} words`);
     visionService.setProgressCallback(null);
@@ -886,6 +901,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       return `candidates accepted:${accepted}${topRejects ? ` | reject ${topRejects}` : ''}`;
     })()
     : '';
+  const currentSkipReason = currentPageOCR?.debug?.skipReason || '';
 
   return (
     <div className="space-y-3 p-4">
@@ -1124,6 +1140,11 @@ export const OCRTextLayerPanel: React.FC = () => {
           {showDebugOverlay && currentCandidateSummary && (
             <div className="text-[11px] text-fuchsia-200 bg-fuchsia-900/20 border border-fuchsia-700/40 rounded px-2 py-1">
               {currentCandidateSummary}
+            </div>
+          )}
+          {showDebugOverlay && currentSkipReason && (
+            <div className="text-[11px] text-amber-200 bg-amber-900/20 border border-amber-700/40 rounded px-2 py-1">
+              skipReason {currentSkipReason}
             </div>
           )}
           

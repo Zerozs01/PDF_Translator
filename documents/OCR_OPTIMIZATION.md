@@ -2,6 +2,92 @@
 
 This document focuses on performance and quality tradeoffs in the OCR pipeline.
 
+## Current Baseline Decision (2026-03-21)
+
+- Keep runtime behavior aligned with the existing `Best Quality` profile as default baseline.
+- Do not switch users to a new fast profile yet.
+- Continue with stability/timeout hardening first, then roll out speed profile as an explicit opt-in optimization phase.
+
+## 2026-03-21 Practical Answer: Are only required steps left?
+
+Short answer: no. The pipeline still contains several accuracy-oriented optional rescue stages that can be reduced or bypassed for a speed profile.
+
+### Step classification (current worker)
+
+Mandatory core (keep for all profiles):
+- PDF render to canvas
+- One primary Tesseract recognize pass
+- TSV parsing and base noise cleanup
+- Minimal line reconstruction
+- Final text-layer payload assembly
+
+Optional heavy stages (accuracy-first, expensive):
+- Line rescan loops
+- Anchor probe / neighborhood rescue
+- Top-band sparse rescue
+- Post-prune line rescue
+- Edge-token rescue
+- Gap and empty-line fallback retries
+- Full image tile + background variance filtering on every page
+
+### What to change for pdf24-like speed while preserving baseline quality
+
+1. Introduce dual runtime profiles in worker entry.
+   - Accuracy profile: current behavior.
+   - Fast profile: single recognize pass + minimal cleanup + strict micro-rescue cap.
+
+2. Add hard per-page rescue budget by operation count, not only time.
+   - Example: max 2 recognizeRegion calls in fast profile.
+   - This gives deterministic latency and avoids long-tail pages.
+
+3. Make costly filters conditional.
+   - Run image-tile and background-variance filters only when base output is sufficiently dense/noisy.
+   - Skip these filters for low-word or already-clean pages.
+
+4. Shrink panel defaults for interactive OCR.
+   - Keep export profile for full-quality batch generation.
+   - Keep panel profile focused on user-perceived speed and fail-fast.
+
+5. Add telemetry per stage for auto-tuning.
+   - Track stage time and token delta.
+   - Disable stages that cost high time but rarely improve text on a given document pattern.
+
+### Suggested refactor slices
+
+Slice A (low risk, immediate):
+- Add Fast profile toggle and operation-cap gate.
+- Disable line-rescan/top-band/post-prune in Fast profile by default.
+
+Slice B (medium risk):
+- Convert image-tile/background filters to conditional execution policy.
+- Apply based on base-noise signature and confidence distribution.
+
+Slice C (higher value):
+- Build adaptive stage scheduler from telemetry (budget-aware stage ordering).
+- Run highest ROI stage first; stop when confidence/readability target is reached.
+
+## 2026-03-21 Timeout Follow-up (Page 1 Hostile Texture Case)
+
+### What was observed
+
+- Many pages are now stable and no longer hit the 120s page timeout.
+- Page 4-style non-target/no-text pages are now correctly fail-fast skipped with explicit skip reason.
+- A residual Page 1 pattern could still run long in some retries because expensive rescue stages were entered before hard-skip criteria were reached in all runs.
+
+### Why Page 1 could still be slow
+
+- The page produces many noisy tokens from texture/watermark-like regions.
+- Post-filter lexical signals can fluctuate between runs, so one run may classify as garbage early while another run still qualifies for line-rescan/top-band rescue.
+- Budget checks were initially missing on some late rescue branches, allowing additional heavy probes after budget warning.
+
+### Current mitigation in code
+
+- Fail-fast now also uses raw-before-filter metrics (`rawWordCountBeforeNoise`, filtered-out ratio) to catch hostile texture pages earlier.
+- Added stricter panel-only texture garbage rules to skip heavy rescue when raw-noise signatures are dominant.
+- Recovery budget gate is applied to remaining heavy branches (top-band sparse probe, post-prune line rescue, edge-token rescue) to prevent stage-overrun cascades.
+- Timeout hook now tears down worker requests hard (`visionService.cancelAll`) instead of only timing out the wrapper promise.
+- UI now shows `skipReason` for fast diagnosis during tuning.
+
 ## Pipeline Overview
 
 1. **Render PDF → Canvas**  

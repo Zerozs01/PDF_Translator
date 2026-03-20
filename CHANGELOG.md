@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.12] - 2026-03-21
+
+### Fixed — OCR Algorithm v70 (Panel Noisy-Page Fast Fail)
+
+- Added stricter panel noisy-page detection to disable expensive line-rescan on hostile texture pages (notably page-1 style cases).
+- Added additional panel fail-fast gate based on raw token count, filtered-out ratio, lexical ratio, and meaningful token evidence.
+- Reduced repeat timeout risk by forcing these pages into fast-skip behavior before heavy rescue branches.
+
+## [1.2.11] - 2026-03-21
+
+### Fixed — OCR Algorithm v69 (Current-Page Timeout Guard)
+- Added hard timeout teardown for both Current Page and SearchablePDF paths: per-page timeout now aborts the page signal and force-cancels in-flight worker requests via `visionService.cancelAll(...)`.
+- Added fail-fast detection for non-English/garbage pages with panel/export-aware heuristics using lexical evidence, short-junk ratio, low-confidence ratio, and weak-line ratio.
+- Added raw-before-filter diagnostics (`rawWordCountBeforeNoise`, filtered-out ratio) so texture/noise pages are skipped earlier instead of entering expensive rescue loops.
+- Added worker recovery stage budget gating (panel 45s, export 70s) and propagated `debug.skipReason` to UI for explainable skips (`non_english_or_garbage_page...`, `stage_budget_exceeded`).
+- Guarded remaining heavy rescue stages (top-band probe, post-prune line rescue, edge-token rescue) with budget checks to prevent second-pass timeout regressions on hostile pages.
+
 ## [1.2.10] - 2026-03-11
 
 ### Fixed — OCR Algorithm v47 (Rollback Recovery)

@@ -12,7 +12,8 @@ export function getPerPageTimeoutMs(timeoutSec?: number): number {
 export async function withPerPageOCRTimeout<T>(
   task: Promise<T>,
   pageNum: number,
-  timeoutSec?: number
+  timeoutSec?: number,
+  onTimeout?: () => void
 ): Promise<T> {
   const timeoutMs = getPerPageTimeoutMs(timeoutSec);
   if (timeoutMs <= 0) return task;
@@ -20,6 +21,11 @@ export async function withPerPageOCRTimeout<T>(
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } catch {
+        // Best effort timeout cancellation hook.
+      }
       reject(new Error(`OCR timeout: page ${pageNum} exceeded ${timeoutSec}s`));
     }, timeoutMs);
   });

@@ -3,6 +3,29 @@
 This file mirrors key updates that affect documentation in `documents/`.
 For full project history, see `CHANGELOG.md` in the repo root.
 
+## 2026-03-21 (v70 panel noisy-page fast-fail)
+
+- Added panel noisy-page fast-fail gating to disable expensive line-rescan on page-1 style hostile texture pages.
+- Added panel ultra fail-fast rule using raw-before-filter token count + filtered-out ratio + lexical evidence.
+- Bumped OCR algorithm version to v70.
+
+## 2026-03-21 (performance planning: pdf24-like fast profile)
+
+- Added documentation guidance to split OCR pipeline into two profiles:
+	- Accuracy profile: keep current heavy rescue stack.
+	- Fast profile: minimal post-processing and strict budgeted rescue.
+- Documented a step-classification matrix (mandatory vs optional) and suggested runtime toggles for each optional stage.
+- Current product baseline remains `Best Quality` until fast-profile tuning is explicitly released.
+
+## 2026-03-21 (OCR timeout + skip-reason hardening)
+
+- Hardened per-page timeout cancellation in both panel and export flows: timeout now aborts page-scoped signal and force-cancels active worker requests (`visionService.cancelAll(...)`) to avoid background OCR stragglers.
+- Added panel/export fail-fast garbage detection using lexical/meaningful evidence plus low-confidence and weak-line ratios.
+- Added panel texture-noise detection from raw-before-filter stats (high raw words + high filtered-out ratio) to skip expensive rescue on pages that are clearly non-target language/noise.
+- Added worker recovery stage budget gates (panel 45s, export 70s) and applied them to top-band, post-prune, and edge-token rescue stages to reduce second-pass timeout recurrence.
+- Added OCR debug skip reason propagation (`debug.skipReason`) and UI rendering in OCR panel for visible diagnostics.
+- OCR algorithm version bumped through v69 to invalidate stale cache and ensure new worker behavior is applied.
+
 ## 2026-03-20 (priority phase planning + phase 0 kickoff)
 
 - Added a new "Execution Plan (Priority Phases)" section in `documents/Roadmap.md` to sequence work before OCR accuracy tuning.

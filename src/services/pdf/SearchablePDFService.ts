@@ -208,11 +208,7 @@ export class SearchablePDFService {
 
     // Process each page with error recovery
     const failedPages: number[] = [];
-    const maxParallel = (() => {
-      if (typeof navigator === 'undefined') return 1;
-      const cores = navigator.hardwareConcurrency || 1;
-      return Math.max(1, Math.min(2, Math.floor(cores / 2)));
-    })();
+    const maxParallel = 1;
 
     let textLayerChain = Promise.resolve();
     const enqueueTextLayer = (pageIndex: number, pageNum: number, ocrResult: OCRPageResult) => {
@@ -290,6 +286,13 @@ export class SearchablePDFService {
 
             stepProgress('ocr', `กำลัง OCR หน้า ${pageNum}/${pagesToProcess} (${options.language})...`);
 
+            const pageAbortController = new AbortController();
+            const pageSignal = pageAbortController.signal;
+            const parentAbortHandler = () => pageAbortController.abort();
+            if (signal) {
+              signal.addEventListener('abort', parentAbortHandler, { once: true });
+            }
+
             const ocrPromise = visionService.ocrForTextLayer(
               imageBlob,
               imageWidth,
@@ -297,16 +300,28 @@ export class SearchablePDFService {
               options.language,
               options.dpi,
               options.pageSegMode,
-              signal,
+              pageSignal,
               debugCollectDrops,
               pipelineProfile
             );
 
-            ocrResult = await withPerPageOCRTimeout(
-              ocrPromise,
-              pageNum,
-              options.perPageTimeoutSec
-            );
+            try {
+              ocrResult = await withPerPageOCRTimeout(
+                ocrPromise,
+                pageNum,
+                options.perPageTimeoutSec,
+                () => {
+                  pageAbortController.abort();
+                  // Ensure the in-flight worker request is torn down immediately
+                  // so timeout pages do not keep consuming OCR time in the background.
+                  visionService.cancelAll(`OCR timeout on page ${pageNum}`);
+                }
+              );
+            } finally {
+              if (signal) {
+                signal.removeEventListener('abort', parentAbortHandler);
+              }
+            }
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
             ocrResult.pipelineProfile = pipelineProfile;

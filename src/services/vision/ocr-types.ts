@@ -54,6 +54,7 @@ export interface OCRDebugInfo {
   dropCounts: Record<string, number>;
   stageMetrics?: OCRStageMetric[];
   candidates?: OCRCandidateDebug[];
+  skipReason?: string;
 }
 
 export interface OCRFixtureExpectation {

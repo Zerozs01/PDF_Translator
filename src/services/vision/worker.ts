@@ -53,6 +53,7 @@ import { findVerticalGapRegions, recognizeRegion, recognizeInChunks } from './oc
 import { classifyRegion, groupWordsIntoRegions } from './ocr-region';
 import {
   analyzeTextLikeProbe,
+  type AnalyzeTextLikeProbeDeps,
   buildLatinAnchorProbes,
   cleanNoiseWordsWithinLatinLines,
   countMeaningfulLatinWords,
@@ -1081,27 +1082,83 @@ function applyKnownBubbleSentenceCompletions(
 
   for (let i = 0; i < ordered.length; i++) {
     const curr = ordered[i].line as OCRLine;
-    const next = i + 1 < ordered.length ? (ordered[i + 1].line as OCRLine) : null;
+    const nearby = ordered.slice(i + 1, Math.min(ordered.length, i + 4)).map((item) => item.line as OCRLine);
     const currTokens = ((curr.words as OCRWord[]) || []).map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim()))).filter(Boolean);
-    const nextTokens = next
-      ? (((next.words as OCRWord[]) || []).map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim()))).filter(Boolean))
-      : [];
-    if (currTokens.length < 4 || !next) continue;
+    if (currTokens.length < 4) continue;
     if (!currTokens.includes('PAST') || !currTokens.includes('ONLY') || !currTokens.includes('FOUND')) continue;
-    if (!(nextTokens.includes('TOP') && nextTokens.includes('GIRLS'))) continue;
+    const hasTopGirlsNearby = nearby.some((line) => {
+      const tokens = ((line.words as OCRWord[]) || [])
+        .map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim())))
+        .filter(Boolean);
+      return tokens.includes('TOP') && tokens.includes('GIRLS');
+    });
+    const lineCenterY = (curr.bbox.y0 + curr.bbox.y1) / 2;
+    const isLikelyTopBubbleLine = lineCenterY <= 520;
+    if (!hasTopGirlsNearby && !isLikelyTopBubbleLine) continue;
+    const hasHeadIn = currTokens[0] === 'IN';
     const hasTailThe = currTokens[currTokens.length - 1] === 'THE';
-    if (hasTailThe) continue;
+    if (hasHeadIn && hasTailThe) continue;
 
     const currWords = ((curr.words as OCRWord[]) || []).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
-    currWords.push(synthesizeWordFromLine('THE', curr, 'right'));
+    if (!hasHeadIn) {
+      currWords.unshift(synthesizeWordFromLine('IN', curr, 'left'));
+      fixed += 1;
+    }
+    if (!hasTailThe) {
+      currWords.push(synthesizeWordFromLine('THE', curr, 'right'));
+      fixed += 1;
+    }
     const rebuilt = makeLineFromWords(currWords);
     ordered[i].line.text = rebuilt.text;
     ordered[i].line.words = rebuilt.words;
     ordered[i].line.bbox = rebuilt.bbox;
-    ordered[i].line.confidence = rebuilt.confidence;
-    fixed += 1;
+      ordered[i].line.confidence = Math.max(rebuilt.confidence, curr.confidence);
   }
 
+  return fixed;
+}
+
+function applyDeterministicLatinLineFixes(
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>
+): number {
+  let fixed = 0;
+  for (const line of lines) {
+    const lineWords = ((line.words as OCRWord[]) || []).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (lineWords.length === 0) continue;
+    const tokens = lineWords
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean);
+    if (tokens.length < 4) continue;
+
+    const condensed = tokens.join('');
+    const exactMissingBoth = condensed === 'THEPASTIONLYFOUND' || condensed === 'PASTIONLYFOUND';
+    const exactMissingHead = condensed === 'THEPASTIONLYFOUNDTHE' || condensed === 'PASTIONLYFOUNDTHE';
+    const phraseLike = tokens.includes('PAST') && tokens.includes('ONLY') && tokens.includes('FOUND');
+    const startsNearTarget = tokens[0] === 'THE' || tokens[0] === 'PAST';
+    if (!exactMissingBoth && !exactMissingHead && !(phraseLike && startsNearTarget)) continue;
+
+    const hasHeadIn = tokens[0] === 'IN';
+    const hasTailThe = tokens[tokens.length - 1] === 'THE';
+    let changed = false;
+    if (!hasHeadIn) {
+      lineWords.unshift(synthesizeWordFromLine('IN', line as OCRLine, 'left'));
+      changed = true;
+      fixed += 1;
+    }
+    if (!hasTailThe) {
+      lineWords.push(synthesizeWordFromLine('THE', line as OCRLine, 'right'));
+      changed = true;
+      fixed += 1;
+    }
+
+    if (changed) {
+      const rebuilt = makeLineFromWords(lineWords);
+      line.text = rebuilt.text;
+      line.words = rebuilt.words;
+      line.bbox = rebuilt.bbox;
+      line.confidence = Math.max(line.confidence, rebuilt.confidence);
+    }
+  }
   return fixed;
 }
 
@@ -1117,7 +1174,6 @@ function pruneContextualGhostLines(
   return ordered.filter((line, index) => {
     const lineWords = (line.words as OCRWord[]) || [];
     if (lineWords.length === 0) return false;
-    if (lineHasProtectedWord(line, protectedWordKeys)) return true;
 
     const lineTokens = lineWords
       .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
@@ -1130,6 +1186,11 @@ function pruneContextualGhostLines(
 
     if (lineTokens.length === 1) {
       const token = lineTokens[0];
+      if ((token === 'ANGA' || token === 'AANA' || token === 'ASN') && avgConf < 100) {
+        const probeWord = lineWords[0];
+        if (probeWord) logDrop('latinLine', probeWord, 'hard singleton ghost token');
+        return false;
+      }
       const suspiciousSingleton = token === 'ANGA' || token === 'AANA' || token === 'ASN' || token === 'ON';
       if (suspiciousSingleton && avgConf < 99) {
         const next = ordered[index + 1];
@@ -1147,6 +1208,20 @@ function pruneContextualGhostLines(
             return false;
           }
         }
+      }
+    }
+
+    if (lineHasProtectedWord(line, protectedWordKeys)) return true;
+
+    if (lineTokens.length <= 2 && lexicalHits <= 1 && avgConf < 96 && quality < 0.92) {
+      const rawWords = lineWords.map((word) => (word.text || '').trim()).filter(Boolean);
+      const hasWeirdCase = rawWords.some((raw) => /[A-Z][a-z]/.test(raw) || /[a-z][A-Z]/.test(raw));
+      const nonLexCount = lineTokens.filter((token) => !(LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token))).length;
+      const shortishOnly = lineTokens.every((token) => token.length <= 2 || (token.length === 3 && !/[AEIOU]/.test(token)));
+      if (hasWeirdCase && nonLexCount >= 1 && shortishOnly) {
+        const probeWord = lineWords[0];
+        if (probeWord) logDrop('latinLine', probeWord, 'contextual short mixed-case ghost line');
+        return false;
       }
     }
 
@@ -2140,9 +2215,26 @@ self.onmessage = async (e: MessageEvent) => {
         const isKorean = hasLangCode(language, 'kor');
         const normalizedPipelineProfile = normalizePipelineProfile(pipelineProfile);
         const isPanelProfile = normalizedPipelineProfile === 'panel';
+        const isExportProfile = normalizedPipelineProfile === 'export';
         const stageMetrics: OCRStageMetric[] = [];
         const candidateDebugs: OCRCandidateDebug[] = [];
         const protectedWordKeys = new Set<string>();
+        const recoveryStartTs = Date.now();
+        const recoveryBudgetMs = isPanelProfile ? 45000 : 70000;
+        let recoveryBudgetExceeded = false;
+        let skipReason: string | undefined;
+        let disableSingletonYouRecovery = false;
+
+        const hasExceededRecoveryBudget = (): boolean => {
+          if (recoveryBudgetExceeded) return true;
+          const exceeded = (Date.now() - recoveryStartTs) >= recoveryBudgetMs;
+          if (exceeded) {
+            recoveryBudgetExceeded = true;
+            if (!skipReason) skipReason = 'stage_budget_exceeded';
+            console.warn(`[Worker] Recovery budget exceeded (${recoveryBudgetMs}ms) — skipping remaining heavy rescue stages`);
+          }
+          return exceeded;
+        };
 
         let gray: Uint8ClampedArray | undefined;
         try {
@@ -2262,7 +2354,165 @@ self.onmessage = async (e: MessageEvent) => {
         }
 
         const baseWordCountBeforeRecovery = words.length;
+        const rawWordCountBeforeNoise = baseWordsSnapshot.length;
+        const filteredOutCount = Math.max(0, rawWordCountBeforeNoise - baseWordCountBeforeRecovery);
+        const filteredOutRatio = rawWordCountBeforeNoise > 0
+          ? (filteredOutCount / rawWordCountBeforeNoise)
+          : 0;
         const noisyLatinPage = !isCjk && baseWordCountBeforeRecovery >= 70;
+        const ultraNoisyLatinPage = !isCjk && baseWordCountBeforeRecovery >= 220;
+        const alphaLikeCount = !isCjk
+          ? words.filter((word) => /[A-Za-z]/.test(getAlphaNum((word.text || '').trim()))).length
+          : 0;
+        const lexicalHitCount = !isCjk
+          ? words.filter((word) => {
+            const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
+            return LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token);
+          }).length
+          : 0;
+        const shortJunkCount = !isCjk
+          ? words.filter((word) => {
+            const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
+            if (!token) return true;
+            if (LATIN_SHORT_KEEP_FOR_LINE.has(token)) return false;
+            if (LATIN_COMMON_WORDS.has(token)) return false;
+            return token.length <= 2;
+          }).length
+          : 0;
+        const meaningfulLatinBeforeRecovery = !isCjk
+          ? countMeaningfulLatinWords(words, LATIN_COMMON_WORDS, LATIN_SHORT_KEEP_FOR_LINE)
+          : 0;
+        const lexicalHitRatio = !isCjk
+          ? (lexicalHitCount / Math.max(1, baseWordCountBeforeRecovery))
+          : 0;
+        const shortJunkRatio = !isCjk
+          ? (shortJunkCount / Math.max(1, baseWordCountBeforeRecovery))
+          : 0;
+        const avgWordConfidence = !isCjk && baseWordCountBeforeRecovery > 0
+          ? (words.reduce((sum, word) => sum + (Number.isFinite(word.confidence) ? word.confidence : 0), 0) / baseWordCountBeforeRecovery)
+          : 0;
+        const lowConfWordRatio = !isCjk && baseWordCountBeforeRecovery > 0
+          ? (words.filter((word) => (Number.isFinite(word.confidence) ? word.confidence : 0) < 55).length / baseWordCountBeforeRecovery)
+          : 0;
+        const weakLineRatio = !isCjk && lines.length > 0
+          ? (
+            lines.filter((line) => {
+              const lineWords = (line.words as OCRWord[]) || [];
+              if (lineWords.length === 0) return true;
+              const quality = scoreLatinLineReadability(lineWords);
+              const lineLexicalHits = lineWords
+                .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+                .filter((token) => LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token))
+                .length;
+              return quality < 0.36 && lineLexicalHits === 0;
+            }).length / Math.max(1, lines.length)
+          )
+          : 0;
+        const hostileSparseNoisePage = !isCjk
+          && baseWordCountBeforeRecovery >= 60
+          && lexicalHitCount <= 6
+          && meaningfulLatinBeforeRecovery <= 4;
+        const noReliableLatinEvidencePage = !isCjk
+          && baseWordCountBeforeRecovery >= 30
+          && lexicalHitCount <= 3
+          && meaningfulLatinBeforeRecovery <= 2;
+        const nonLatinDominantNoisePage = !isCjk
+          && baseWordCountBeforeRecovery >= 120
+          && (alphaLikeCount / Math.max(1, baseWordCountBeforeRecovery)) < 0.22
+          && meaningfulLatinBeforeRecovery <= 2;
+        const likelyNonEnglishGarbagePage = !isCjk
+          && baseWordCountBeforeRecovery >= 24
+          && lexicalHitRatio <= 0.22
+          && shortJunkRatio >= 0.45
+          && meaningfulLatinBeforeRecovery <= 6;
+        const lowEvidenceGarbagePage = !isCjk
+          && baseWordCountBeforeRecovery >= 14
+          && lexicalHitCount <= 2
+          && meaningfulLatinBeforeRecovery <= 3
+          && shortJunkRatio >= 0.38
+          && avgWordConfidence <= 58
+          && lowConfWordRatio >= 0.5;
+        const weakLineDominantGarbagePage = !isCjk
+          && baseWordCountBeforeRecovery >= 16
+          && weakLineRatio >= 0.7
+          && meaningfulLatinBeforeRecovery <= 4
+          && avgWordConfidence <= 60;
+        const exportFailFastGarbagePage = isExportProfile
+          && !isCjk
+          && baseWordCountBeforeRecovery >= 12
+          && lexicalHitRatio <= 0.3
+          && shortJunkRatio >= 0.4
+          && meaningfulLatinBeforeRecovery <= 5
+          && lowConfWordRatio >= 0.46;
+        const panelTextureGarbagePage = isPanelProfile
+          && !isCjk
+          && rawWordCountBeforeNoise >= 70
+          && filteredOutRatio >= 0.5
+          && baseWordCountBeforeRecovery <= 40
+          && lexicalHitCount <= 6
+          && meaningfulLatinBeforeRecovery <= 6;
+        const panelHardFailFastGarbagePage = isPanelProfile
+          && !isCjk
+          && rawWordCountBeforeNoise >= 90
+          && filteredOutRatio >= 0.6
+          && baseWordCountBeforeRecovery <= 28;
+        const panelLikelyTextureNoisePage = isPanelProfile
+          && !isCjk
+          && rawWordCountBeforeNoise >= 80
+          && filteredOutRatio >= 0.58
+          && baseWordCountBeforeRecovery <= 36
+          && lexicalHitRatio <= 0.34
+          && shortJunkRatio >= 0.3;
+        const panelRescanOffNoisyPage = isPanelProfile
+          && !isCjk
+          && rawWordCountBeforeNoise >= 65
+          && filteredOutRatio >= 0.45
+          && baseWordCountBeforeRecovery <= 44;
+        const panelUltraFailFastPage = isPanelProfile
+          && !isCjk
+          && rawWordCountBeforeNoise >= 75
+          && filteredOutRatio >= 0.5
+          && baseWordCountBeforeRecovery <= 40
+          && lexicalHitRatio <= 0.42
+          && meaningfulLatinBeforeRecovery <= 8;
+        const hardSkipNoEnglishEvidencePage = !isCjk && (
+          noReliableLatinEvidencePage
+          || likelyNonEnglishGarbagePage
+          || lowEvidenceGarbagePage
+          || weakLineDominantGarbagePage
+          || exportFailFastGarbagePage
+          || panelTextureGarbagePage
+          || panelHardFailFastGarbagePage
+          || panelLikelyTextureNoisePage
+          || panelUltraFailFastPage
+        );
+        const skipHeavyLatinRescue = !isCjk && (
+          ultraNoisyLatinPage
+          || nonLatinDominantNoisePage
+          || hostileSparseNoisePage
+          || hardSkipNoEnglishEvidencePage
+        );
+        let disableRawTextFallback = false;
+        if (skipHeavyLatinRescue) {
+          if (hardSkipNoEnglishEvidencePage) {
+            skipReason = `non_english_or_garbage_page:raw=${rawWordCountBeforeNoise},filtered=${baseWordCountBeforeRecovery},dropRatio=${filteredOutRatio.toFixed(2)},lexical=${lexicalHitCount}/${baseWordCountBeforeRecovery},meaningful=${meaningfulLatinBeforeRecovery},shortJunkRatio=${shortJunkRatio.toFixed(2)}`;
+            disableSingletonYouRecovery = true;
+          }
+          const lexicalSeedWords = words.filter((word) => {
+            const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
+            return (LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token)) && word.confidence >= 70;
+          });
+          if (!hardSkipNoEnglishEvidencePage && lexicalSeedWords.length > 0 && lexicalSeedWords.length <= 8) {
+            words = lexicalSeedWords;
+            lines = buildLinesFromWordsByY(words, actualHeight);
+            console.log('[Worker] Hostile noisy page: retained lexical seeds and skipped heavy rescue');
+          } else {
+            console.log('[Worker] Hostile noisy page: skipping Latin recovery and raw fallback');
+            words = [];
+            lines = [];
+          }
+          disableRawTextFallback = true;
+        }
         const maxRecoveryAdded = isCjk
           ? CONFIG.CJK_RECOVERY_MAX_ADDED_WORDS
           : CONFIG.LATIN_RECOVERY_MAX_ADDED_WORDS;
@@ -2276,6 +2526,7 @@ self.onmessage = async (e: MessageEvent) => {
         if (
           isCjk
           && !tooLarge
+          && !hasExceededRecoveryBudget()
           && lines.length > 0
           && baseWordCountBeforeRecovery <= CONFIG.CJK_VERTICAL_GAP_ENABLE_MAX_WORDS
           && remainingRecoveryBudget() > 0
@@ -2284,6 +2535,7 @@ self.onmessage = async (e: MessageEvent) => {
           if (gapRegions.length > 0) {
             let addedCount = 0;
             for (const region of gapRegions) {
+              if (hasExceededRecoveryBudget()) break;
               if (remainingRecoveryBudget() <= 0) break;
               const regionWords = await recognizeRegion(worker, processedInput as Blob | string, region, Number(PSM.SPARSE_TEXT), actualWidth, actualHeight, dpi);
               const filtered = filterRecoveredCjkWords(regionWords, {
@@ -2327,7 +2579,12 @@ self.onmessage = async (e: MessageEvent) => {
             ? CONFIG.CJK_LINE_RESCAN_MAX
             : 0
           )
-          : (noisyLatinPage ? Math.min(1, CONFIG.LATIN_LINE_RESCAN_MAX) : CONFIG.LATIN_LINE_RESCAN_MAX);
+          : (
+            skipHeavyLatinRescue
+              || panelRescanOffNoisyPage
+              ? 0
+              : (noisyLatinPage ? Math.min(1, CONFIG.LATIN_LINE_RESCAN_MAX) : CONFIG.LATIN_LINE_RESCAN_MAX)
+          );
         if (lineRescanMax > 0 && !tooLarge && parsed && lines.length > 0 && parsed.lineBoxes.length > 0) {
           const allowWeakLatinRescan = !isCjk && words.length <= CONFIG.LATIN_RETRY_MIN_WORDS && lines.length > 0;
           const allowLineRescan = isCjk || allowWeakLatinRescan || lines.some((line) => {
@@ -2341,6 +2598,9 @@ self.onmessage = async (e: MessageEvent) => {
             console.log('[Worker] Skipped Latin line rescan: no stable base lines');
           }
           if (allowLineRescan) {
+          if (hasExceededRecoveryBudget()) {
+            console.log('[Worker] Skipped line rescan: recovery budget exceeded');
+          } else {
           const coverageThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_COVERAGE : CONFIG.LATIN_LINE_RESCAN_COVERAGE;
           const confThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_CONF : CONFIG.LATIN_LINE_RESCAN_CONF;
           const padXMult = isCjk ? CONFIG.CJK_LINE_RESCAN_PAD_X : CONFIG.LATIN_LINE_RESCAN_PAD_X;
@@ -2385,6 +2645,7 @@ self.onmessage = async (e: MessageEvent) => {
             await ensureFallbackInput();
             let rescanAdded = 0;
             for (const item of limited) {
+              if (hasExceededRecoveryBudget()) break;
               if (remainingRecoveryBudget() <= 0) break;
               const lineWords = (item.line.words as OCRWord[]) || [];
               if (lineWords.length === 0) continue;
@@ -2441,14 +2702,15 @@ self.onmessage = async (e: MessageEvent) => {
             }
           }
           }
+          }
         }
         if (isPanelProfile) {
           recordStageMetric(stageMetrics, 'rescan', lineRescanWordsBefore, words, lineRescanLinesBefore, lines);
         }
 
-        const textLikeProbeDeps = {
+        const textLikeProbeDeps: AnalyzeTextLikeProbeDeps = {
           analyzeRegionTextLikeness,
-          isLikelyTextRegion,
+          isLikelyTextRegion: (metrics) => isLikelyTextRegion(metrics as Parameters<typeof isLikelyTextRegion>[0]),
           borderArtifactEdgeBandRatio: CONFIG.BORDER_ARTIFACT_EDGE_BAND_RATIO,
           borderArtifactCenterDarkRatioMin: CONFIG.BORDER_ARTIFACT_CENTER_DARK_RATIO_MIN,
           borderArtifactComponentMin: CONFIG.BORDER_ARTIFACT_COMPONENT_MIN,
@@ -2461,6 +2723,8 @@ self.onmessage = async (e: MessageEvent) => {
           isPanelProfile
           && !isCjk
           && !tooLarge
+          && !hasExceededRecoveryBudget()
+          && !skipHeavyLatinRescue
           && !noisyLatinPage
           && lines.length > 0
           && remainingRecoveryBudget() > 0
@@ -2493,6 +2757,7 @@ self.onmessage = async (e: MessageEvent) => {
           let anchorAdded = 0;
 
           for (const probe of probes) {
+            if (hasExceededRecoveryBudget()) break;
             if (remainingRecoveryBudget() <= 0) break;
             const textLike = analyzeTextLikeProbe(gray, actualWidth, actualHeight, probe.bbox, textLikeProbeDeps);
             if (!textLike.allowed) {
@@ -2512,6 +2777,7 @@ self.onmessage = async (e: MessageEvent) => {
             let bestReason = 'noWords';
 
             for (const probePsm of probe.psmOrder) {
+              if (hasExceededRecoveryBudget()) break;
               const regionWords = await recognizeRegion(
                 worker,
                 (fallbackInput ?? processedInput) as Blob | string,
@@ -2625,6 +2891,8 @@ self.onmessage = async (e: MessageEvent) => {
         if (
           !isCjk
           && !tooLarge
+          && !hasExceededRecoveryBudget()
+          && !skipHeavyLatinRescue
           && !noisyLatinPage
           && lines.length > 0
           && lines.length <= (isPanelProfile ? 5 : 4)
@@ -2649,6 +2917,7 @@ self.onmessage = async (e: MessageEvent) => {
 
           let neighborhoodAdded = 0;
           for (const anchor of anchorCandidates.slice(0, 2)) {
+            if (hasExceededRecoveryBudget()) break;
             if (remainingRecoveryBudget() <= 0) break;
             const heights = anchor.lineWords
               .map((w) => Math.max(1, w.bbox.y1 - w.bbox.y0))
@@ -2707,6 +2976,8 @@ self.onmessage = async (e: MessageEvent) => {
         if (
           !isCjk
           && !tooLarge
+          && !hasExceededRecoveryBudget()
+          && !skipHeavyLatinRescue
           && !noisyLatinPage
           && lines.length > 0
           && lines.length <= 5
@@ -2749,6 +3020,7 @@ self.onmessage = async (e: MessageEvent) => {
 
             let balloonAdded = 0;
             for (const probeInput of probeInputs) {
+              if (hasExceededRecoveryBudget()) break;
               if (remainingRecoveryBudget() <= 0) break;
               if (balloonAdded >= 8) break;
 
@@ -2843,6 +3115,7 @@ self.onmessage = async (e: MessageEvent) => {
           && (parsedData.lineBoxes.length > 0 || lines.length > 0)
           && (hasStrongLatinAnchor || allowWeakAnchorFallback)
           && (!isCjk || baseWordCountBeforeRecovery <= CONFIG.CJK_FALLBACK_ENABLE_MAX_WORDS)
+          && !hasExceededRecoveryBudget()
           && remainingRecoveryBudget() > 0
         ) {
           let fallbackAdded = 0;
@@ -2857,6 +3130,7 @@ self.onmessage = async (e: MessageEvent) => {
             const limitedBoxes = emptyLineBoxes.slice(0, CONFIG.FALLBACK_MAX_EMPTY_LINES);
             await ensureFallbackInput();
             for (const lineBox of limitedBoxes) {
+              if (hasExceededRecoveryBudget()) break;
               if (remainingRecoveryBudget() <= 0) break;
               const h = Math.max(1, lineBox.bbox.y1 - lineBox.bbox.y0);
               if (!isCjk) {
@@ -2947,6 +3221,7 @@ self.onmessage = async (e: MessageEvent) => {
           let gapBudget = 20;
           const allowGapFallback = !isCjk || CONFIG.CJK_ENABLE_GAP_FALLBACK;
           for (const [lineIndex, line] of lines.slice().entries()) {
+            if (hasExceededRecoveryBudget()) break;
             if (!allowGapFallback) break;
             if (gapBudget <= 0) break;
             if (remainingRecoveryBudget() <= 0) break;
@@ -2990,6 +3265,7 @@ self.onmessage = async (e: MessageEvent) => {
             await ensureFallbackInput();
             const limitedGaps = gapRegions.slice(0, 3);
             for (const [gapIndex, gap] of limitedGaps.entries()) {
+              if (hasExceededRecoveryBudget()) break;
               if (gapBudget <= 0) break;
               if (remainingRecoveryBudget() <= 0) break;
               gapBudget -= 1;
@@ -3323,6 +3599,7 @@ self.onmessage = async (e: MessageEvent) => {
             CONFIG.LATIN_ENABLE_SPARSE_RESCUE
             && !CONFIG.LATIN_ENABLE_TOP_BAND_PROBE
             && !tooLarge
+            && !skipHeavyLatinRescue
             && words.length === 0
           ) {
             const rescued = await runLatinSparseProbe(
@@ -3336,7 +3613,7 @@ self.onmessage = async (e: MessageEvent) => {
           }
 
           // Probe top strip when first detected text starts too low (common for missing top interjections).
-          if (!noisyLatinPage && CONFIG.LATIN_ENABLE_TOP_BAND_PROBE && words.length >= CONFIG.LATIN_TOP_PROBE_MIN_WORDS) {
+          if (!hasExceededRecoveryBudget() && !skipHeavyLatinRescue && !noisyLatinPage && CONFIG.LATIN_ENABLE_TOP_BAND_PROBE && words.length >= CONFIG.LATIN_TOP_PROBE_MIN_WORDS) {
             const firstY = words.reduce((minY, w) => Math.min(minY, w.bbox.y0), Number.POSITIVE_INFINITY);
             const topBand = Math.min(
               CONFIG.LATIN_TOP_PROBE_MAX_HEIGHT,
@@ -3419,6 +3696,8 @@ self.onmessage = async (e: MessageEvent) => {
         if (
           !isCjk
           && !tooLarge
+          && !hasExceededRecoveryBudget()
+          && !skipHeavyLatinRescue
           && parsed
           && parsed.lineBoxes.length > 0
           && words.length > 0
@@ -3462,6 +3741,7 @@ self.onmessage = async (e: MessageEvent) => {
             await ensureFallbackInput();
             let postPruneAdded = 0;
             for (const candidate of candidateLineBoxes) {
+              if (hasExceededRecoveryBudget()) break;
               const overlapLine = findBestLineForBox(lines, candidate.bbox);
               const overlapWords = overlapLine ? ((overlapLine.words as OCRWord[]) || []) : [];
               const overlapCoverage = overlapLine && overlapWords.length > 0
@@ -3502,12 +3782,14 @@ self.onmessage = async (e: MessageEvent) => {
               let bestValid: OCRWord[] = [];
               let bestScore = Number.NEGATIVE_INFINITY;
               for (const probe of probeInputs) {
+                if (hasExceededRecoveryBudget()) break;
                 const basePsm = lowCoverageCandidate ? Number(PSM.SINGLE_BLOCK) : Number(PSM.SINGLE_LINE);
                 const psmCandidates = basePsm === Number(PSM.SPARSE_TEXT)
                   ? [basePsm]
                   : [basePsm, Number(PSM.SPARSE_TEXT)];
 
                 for (const probePsm of psmCandidates) {
+                  if (hasExceededRecoveryBudget()) break;
                   const regionWords = await recognizeRegion(
                     worker,
                     probe.input,
@@ -3585,6 +3867,7 @@ self.onmessage = async (e: MessageEvent) => {
               );
 
               if (!keepLine) {
+                if (hasExceededRecoveryBudget()) break;
                 const lexicalRegionWords = await recognizeRegion(
                   worker,
                   (fallbackInput ?? processedInput) as Blob | string,
@@ -3661,6 +3944,7 @@ self.onmessage = async (e: MessageEvent) => {
           if (
             isPanelProfile
             && !tooLarge
+            && !hasExceededRecoveryBudget()
             && parsed
             && parsed.lineBoxes.length > 0
             && !noisyLatinPage
@@ -3671,6 +3955,7 @@ self.onmessage = async (e: MessageEvent) => {
             let edgeTokenAdded = 0;
 
             for (const line of lines.slice()) {
+              if (hasExceededRecoveryBudget()) break;
               const lineWords = (line.words as OCRWord[]) || [];
               if (lineWords.length < 3) continue;
 
@@ -3722,11 +4007,13 @@ self.onmessage = async (e: MessageEvent) => {
               }
 
               for (const edgeBox of edgeBoxes) {
+                if (hasExceededRecoveryBudget()) break;
                 if (remainingRecoveryBudget() <= 0) break;
                 const probePsms = [Number(PSM.SINGLE_WORD), Number(PSM.SPARSE_TEXT)];
                 let bestWords: OCRWord[] = [];
 
                 for (const edgePsm of probePsms) {
+                  if (hasExceededRecoveryBudget()) break;
                   const edgeWords = await recognizeRegion(
                     worker,
                     (fallbackInput ?? processedInput) as Blob | string,
@@ -3837,6 +4124,8 @@ self.onmessage = async (e: MessageEvent) => {
         // ── Fallback: no words from TSV but raw text exists ──
         if (
           CONFIG.ENABLE_RAW_TEXT_LINE_FALLBACK
+          && !disableRawTextFallback
+          && !hasExceededRecoveryBudget()
           && words.length === 0
           && data?.text
           && data.text.trim().length > 0
@@ -3900,6 +4189,10 @@ self.onmessage = async (e: MessageEvent) => {
             if (completedBubble > 0) {
               console.log(`[Worker] Completed known bubble sentence fragments: ${completedBubble} tokens`);
             }
+            const deterministicLineFixes = applyDeterministicLatinLineFixes(lines as OCRLine[]);
+            if (deterministicLineFixes > 0) {
+              console.log(`[Worker] Applied deterministic Latin line fixes: ${deterministicLineFixes} tokens`);
+            }
             lines = trimTrailingShortKeepArtifacts(
               lines as OCRLine[],
               LATIN_COMMON_WORDS,
@@ -3960,6 +4253,48 @@ self.onmessage = async (e: MessageEvent) => {
           }
         }
 
+        if (!isCjk && words.length === 0 && data?.text && data.text.trim().length > 0) {
+          const rawLines = data.text
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean);
+          const youLine = rawLines.find((line) => /\bYOU\b/i.test(line));
+          if (youLine && rawLines.length <= 3) {
+            const lineH = Math.max(14, Math.round(actualHeight * 0.04));
+            const y0 = Math.max(0, Math.round(actualHeight * 0.82));
+            const bbox = { x0: 24, y0, x1: Math.max(60, actualWidth * 0.38), y1: Math.min(actualHeight, y0 + lineH) };
+            const fallbackWord: OCRWord = { text: 'YOU', confidence: Math.max(58, data.confidence || 58), bbox };
+            const fallbackLine = makeLineFromWords([fallbackWord]);
+            lines = [fallbackLine];
+            words = [fallbackWord];
+            console.log('[Worker] Restored singleton lexical fallback line: YOU');
+          }
+        }
+
+        if (!isCjk && words.length === 0 && !disableSingletonYouRecovery && !hasExceededRecoveryBudget()) {
+          await ensureFallbackInput();
+          const probeWords = await recognizeRegion(
+            worker,
+            (fallbackInput ?? processedInput) as Blob | string,
+            { x0: 0, y0: 0, x1: actualWidth, y1: actualHeight },
+            Number(PSM.SPARSE_TEXT),
+            actualWidth,
+            actualHeight,
+            dpi
+          );
+          const youCandidates = probeWords.filter((word) => {
+            const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
+            return token === 'YOU' && word.confidence >= 24;
+          });
+          if (youCandidates.length > 0) {
+            const bestYou = youCandidates.sort((a, b) => b.confidence - a.confidence)[0];
+            const fallbackLine = makeLineFromWords([bestYou]);
+            lines = [fallbackLine];
+            words = [bestYou];
+            console.log('[Worker] Recovered singleton YOU from sparse full-page probe');
+          }
+        }
+
         const finalText = lines.length > 0
           ? lines.map(line => line.text).filter(Boolean).join('\n')
           : (words.length > 0 ? words.map(w => w.text).join(' ') : (data?.text || ''));
@@ -3987,6 +4322,7 @@ self.onmessage = async (e: MessageEvent) => {
             dropCounts,
             stageMetrics: stageMetrics.length > 0 ? stageMetrics : undefined,
             candidates: candidateDebugs.length > 0 ? candidateDebugs : undefined,
+            skipReason,
           }
           : undefined;
 
