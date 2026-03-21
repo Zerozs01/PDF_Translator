@@ -3,6 +3,12 @@
 This file mirrors key updates that affect documentation in `documents/`.
 For full project history, see `CHANGELOG.md` in the repo root.
 
+## 2026-03-21 (v71 page-21 ME recovery)
+
+- Added deterministic speech-line repair to restore missing `ME` in `ME HERE!` style outputs when context indicates dialogue continuity.
+- Raised panel recovery stage budget to 60s to reduce quality loss from premature stage cutoff on non-noisy pages.
+- Bumped OCR algorithm version to v71.
+
 ## 2026-03-21 (v70 panel noisy-page fast-fail)
 
 - Added panel noisy-page fast-fail gating to disable expensive line-rescan on page-1 style hostile texture pages.

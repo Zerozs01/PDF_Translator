@@ -152,6 +152,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
     if ((cached.pipelineProfile || 'panel') !== 'panel') return false;
+    if ((cached.ocrQualityProfile || 'best') !== options.profile) return false;
     return true;
   }, [options, normalizeLanguage]);
 
@@ -622,7 +623,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       options.pageSegMode,
       pageSignal,
       showDebugOverlay,
-      'panel'
+      'panel',
+      options.profile
     );
 
     const ocrResult: import('../../types').OCRPageResult = await (async () => {
@@ -647,6 +649,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     ocrResult.language = normalizeLanguage(options.language);
     ocrResult.pageNumber = pageNum;
     ocrResult.pipelineProfile = 'panel';
+    ocrResult.ocrQualityProfile = options.profile;
     setPageOCR(pageNum, ocrResult);
 
     const cacheDocId = await ensureDocumentId();
@@ -664,7 +667,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       message: `OCR complete for page ${pageNum}`,
       progress: 100
     });
-  }, [ensureDocumentId, loadCachedOCR, normalizeLanguage, options.dpi, options.language, options.pageSegMode, renderPageToCanvas, setIsProcessing, setPageOCR, setProgress, showDebugOverlay]);
+  }, [ensureDocumentId, loadCachedOCR, normalizeLanguage, options.dpi, options.language, options.pageSegMode, options.profile, renderPageToCanvas, setIsProcessing, setPageOCR, setProgress, showDebugOverlay]);
 
   /**
    * Start OCR processing
@@ -902,6 +905,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     })()
     : '';
   const currentSkipReason = currentPageOCR?.debug?.skipReason || '';
+  const currentRuntimeMs = currentPageOCR?.debug?.runtimeMs;
+  const currentQualityProfile = currentPageOCR?.ocrQualityProfile || 'best';
 
   return (
     <div className="space-y-3 p-4">
@@ -1126,6 +1131,9 @@ export const OCRTextLayerPanel: React.FC = () => {
             <span className="ml-auto text-slate-500 font-normal">
               {currentPageOCR.words.length} คำ • {currentPageOCR.confidence.toFixed(0)}%
             </span>
+          </div>
+          <div className="text-[11px] text-slate-400">
+            profile {currentQualityProfile}{typeof currentRuntimeMs === 'number' ? ` • runtime ${Math.round(currentRuntimeMs)}ms` : ''}
           </div>
           {showDebugOverlay && currentDroppedCount > 0 && (
             <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">

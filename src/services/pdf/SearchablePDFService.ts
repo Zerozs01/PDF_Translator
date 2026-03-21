@@ -183,6 +183,7 @@ export class SearchablePDFService {
       if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return 'pageSegMode mismatch';
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
       if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
+      if ((cached.ocrQualityProfile || 'best') !== options.profile) return 'ocrQualityProfile mismatch';
       return null;
     };
     const isCacheCompatible = (cached: OCRPageResult): boolean => getCacheIncompatibilityReason(cached) === null;
@@ -302,7 +303,8 @@ export class SearchablePDFService {
               options.pageSegMode,
               pageSignal,
               debugCollectDrops,
-              pipelineProfile
+              pipelineProfile,
+              options.profile
             );
 
             try {
@@ -325,6 +327,7 @@ export class SearchablePDFService {
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
             ocrResult.pipelineProfile = pipelineProfile;
+            ocrResult.ocrQualityProfile = options.profile;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
             if (cacheDocId && dbService.isAvailable()) {

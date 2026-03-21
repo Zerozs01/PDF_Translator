@@ -18,6 +18,7 @@ export interface OCRDroppedWord {
 }
 
 export type OCRPipelineProfile = 'panel' | 'export';
+export type OCRQualityProfile = 'fast' | 'balanced' | 'best';
 
 export interface OCRStageMetric {
   stage: 'base' | 'rescan' | 'anchorProbe' | 'imageFilter' | 'watermark' | 'linePrune';
@@ -55,6 +56,8 @@ export interface OCRDebugInfo {
   stageMetrics?: OCRStageMetric[];
   candidates?: OCRCandidateDebug[];
   skipReason?: string;
+  runtimeMs?: number;
+  qualityProfile?: OCRQualityProfile;
 }
 
 export interface OCRFixtureExpectation {

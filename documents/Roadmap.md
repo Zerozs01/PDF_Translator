@@ -1,6 +1,73 @@
 # OCR Accuracy & Refactor Roadmap
 
-Last updated: 2026-03-10
+Last updated: 2026-03-21
+
+## Korean Optimization Snapshot (Current Code Truth)
+
+Baseline references:
+
+- OCR algorithm version is `86` in `src/services/vision/ocrVersion.ts`
+- Korean path currently relies on:
+  - `filterIsolatedCjkNoise`
+  - `filterKoreanJamoNoise`
+  - `filterWeakIsolatedCjkLines`
+
+Current pain points (from recent runs):
+
+- ghost fragments survive as short Korean-like lines
+- valid Korean lines lose internal syllables/joins
+- keep/drop behavior shifts between pages with similar visual style
+
+Immediate Korean roadmap (for Codex handoff):
+
+### K-Phase 0: Measurement lock
+
+- [ ] Define Korean quality metrics per page: `rawWords`, `keptWords`, `droppedByStage`, `finalLines`, `shortFragmentLines`
+- [ ] Persist drop summaries per stage (`imgTile`, `bgVariance`, `isolatedCjk`, `korJamo`, `weakCjkLine`)
+
+Exit criteria:
+
+- Korean failures are reproducible with stable counters, not only visual inspection.
+
+### K-Phase 1: Fragment suppression without losing valid short speech
+
+- [ ] Add stricter rejection for low-confidence short Korean fragments without terminal punctuation
+- [ ] Add explicit safe-keep for short conversational endings with punctuation (`?`, `!`, `~`)
+- [ ] Keep laughter/emphasis tokens only when confidence and repetition pattern are valid
+
+Exit criteria:
+
+- Ghost short-line count drops while preserving question/exclamation lines.
+
+### K-Phase 2: Context-aware CJK line pruning
+
+- [ ] Add local-neighborhood consistency scoring (vertical gap, x-overlap, syllable density)
+- [ ] Prune weak isolated lines only when neighborhood support is below threshold
+- [ ] Avoid hard global threshold shifts that impact non-Korean CJK pages
+
+Exit criteria:
+
+- Fewer isolated garbage lines with no increase in Korean line-drop regressions.
+
+### K-Phase 3: Detect-derived Korean continuity rescue
+
+- [ ] Add bounded re-scan for lines that lose too many syllables after pruning
+- [ ] Merge only OCR-detected tokens (bbox + overlap + reading order checks)
+- [ ] No synthetic token/text generation
+
+Exit criteria:
+
+- Known broken phrases recover syllable continuity without introducing fabricated text.
+
+### K-Phase 4: Regression & rollout guard
+
+- [ ] Validate on 2 fixture groups: tall comic and dense technical/document
+- [ ] Track runtime impact (`runtimeMs`) and timeout risk
+- [ ] Bump OCR version only after fixture pass, then freeze thresholds for one cycle
+
+Exit criteria:
+
+- Korean accuracy gain is measurable and stable across both fixture groups.
 
 ## Progress Audit (Code vs Plan) - 2026-03-19
 
@@ -48,9 +115,9 @@ Last updated: 2026-03-10
 
 ### Consistency Note
 
-- เอกสาร changelog ใน docs และ root มีบันทึกถึง OCR algorithm v52/v53
-- แต่โค้ดปัจจุบันใน `ocrVersion.ts` ยังเป็น `51`
-- ควร confirm เวอร์ชันที่ต้องการใช้จริง เพื่อไม่ให้เอกสารนำผิดทาง
+- เอกสารบางส่วนยังมีประวัติ version เก่าปะปน
+- โค้ดปัจจุบันอ้างอิง `OCR_ALGORITHM_VERSION = 86`
+- ใช้ค่าในโค้ดเป็น source of truth สำหรับ regression baseline
 
 ### Legacy Plan Consolidation
 

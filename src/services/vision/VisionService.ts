@@ -8,7 +8,7 @@
  * - Error recovery
  */
 
-import { Region, OCRPageResult, OCRPipelineProfile } from '../../types';
+import { Region, OCRPageResult, OCRPipelineProfile, OCRQualityProfile } from '../../types';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
@@ -438,7 +438,8 @@ class VisionService {
     pageSegMode?: number,
     signal?: AbortSignal,
     debugCollectDrops: boolean = false,
-    pipelineProfile: OCRPipelineProfile = 'panel'
+    pipelineProfile: OCRPipelineProfile = 'panel',
+    ocrQualityProfile: OCRQualityProfile = 'best'
   ): Promise<OCRPageResult> {
     return this.sendMessage('OCR_FOR_TEXT_LAYER', {
       imageUrl,
@@ -448,7 +449,8 @@ class VisionService {
       dpi,
       pageSegMode,
       debugCollectDrops,
-      pipelineProfile
+      pipelineProfile,
+      ocrQualityProfile
     }, { signal });
   }
 

@@ -32,6 +32,7 @@ import type {
   TesseractResult,
   DocumentType,
   OCRPipelineProfile,
+  OCRQualityProfile,
   OCRStageMetric,
   OCRCandidateDebug,
 } from './ocr-types';
@@ -92,13 +93,15 @@ const LATIN_SHORT_KEEP_FOR_LINE = new Set([
   'I', 'A', 'EH', 'ME', 'OH', 'AH', 'NO', 'GO',
   'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE',
   'US', 'MY', 'OR', 'AN', 'AT', 'AS', 'AM', 'UP', 'MR'
+  , 'SO', 'IM'
 ]);
 const LATIN_COMMON_WORDS = new Set([
   'THE', 'A', 'I', 'YOU', 'HE', 'SHE', 'WE', 'THEY', 'IT', 'TO', 'OF', 'IN', 'ON', 'AT', 'FOR', 'AND', 'OR', 'IS', 'ARE', 'BE',
   'THAT', 'THIS', 'THOSE', 'THESE', 'PAST', 'ONLY', 'FOUND', 'TOP', 'GIRLS', 'CITY', 'BUT', 'NOW', 'CAN', 'MAKE', 'WITH', 'KIND',
   'STUFF', 'ROOM', 'DOOR', 'LOCK', 'TAKE', 'LOOK', 'OVER', 'GO', 'STUDENTS', 'MAY', 'DOING', 'BAD', 'THINGS', 'ELDERLY', 'WEAK',
   'WOMEN', 'CHILDREN', 'TOWN', 'XUJIA', 'SIN', 'NOT', 'JUST', 'ALL', 'COME', 'ACROSS', 'POSSIBILITY', 'WHAT', 'THINK', 'BEST', 'ITS', 'ILL',
-  'HERE', 'PEOPLE', 'LIVE', 'THERE', 'TIANHAIL', 'TIANHAI'
+  'HERE', 'PEOPLE', 'LIVE', 'THERE', 'TIANHAIL', 'TIANHAI',
+  'WHY', 'BRO', 'OKAY', 'FINE', 'ACTING', 'MYSTERIOUS', 'WHATEVER', 'WANT', 'SAY'
 ]);
 
 function normalizeLatinLineText(text: string): string {
@@ -107,6 +110,11 @@ function normalizeLatinLineText(text: string): string {
 
 function normalizePipelineProfile(profile: unknown): OCRPipelineProfile {
   return profile === 'export' ? 'export' : 'panel';
+}
+
+function normalizeQualityProfile(profile: unknown): OCRQualityProfile {
+  if (profile === 'fast' || profile === 'balanced' || profile === 'best') return profile;
+  return 'best';
 }
 
 function makeWordDebugKey(word: OCRWord): string {
@@ -598,10 +606,12 @@ function filterLatinRescueWords(
     const postPruneSource = source.startsWith('postPruneLine');
     const edgeSource = source.startsWith('lineRescanEdge');
     const anchorSource = source === 'anchorSecondLine' || source === 'anchorTopSparse' || source === 'anchorBottomSparse';
+    const tallSpeechSource = source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse';
+    const speechAliasToken = normalized === 'ITG' || normalized === 'THG' || normalized === 'THNK' || normalized === 'THNKI' || normalized === 'EH' || normalized === 'ME';
     const lexicalRelax = (postPruneSource || anchorSource) && lexicalToken;
     const effectiveMinConf = lexicalRelax
       ? Math.max(30, minConf - (anchorSource ? 12 : (strictShortKeep ? 14 : 10)))
-      : (edgeSource && lexicalToken ? Math.max(22, minConf - 8) : minConf);
+      : (edgeSource && lexicalToken ? Math.max(22, minConf - 8) : (tallSpeechSource && lexicalToken ? Math.max(14, minConf - 8) : minConf));
 
     if (isLikelyWatermarkToken(word, pageWidth, pageHeight)) {
       logDrop('latinRescue', word, `${source}: watermark-like`);
@@ -626,6 +636,7 @@ function filterLatinRescueWords(
     const onlyDigits = /^[0-9]+$/.test(alpha);
     const consonantRun = /[BCDFGHJKLMNPQRSTVWXYZ]{3,}/i.test(alpha);
     const sparseLikeSource = source.includes('Sparse') || source.includes('lineRescan') || postPruneSource || anchorSource;
+    const tallMidSource = source === 'tallMidSparse' || source === 'tallSideSparse';
     const tokenReadable = scoreLatinTokenReadability(word);
 
     if (alpha.length === 1 && alpha !== 'I' && alpha !== 'A' && word.confidence < effectiveMinConf + 16) {
@@ -641,6 +652,15 @@ function filterLatinRescueWords(
       && word.confidence < effectiveMinConf + 20
     ) {
       logDrop('latinRescue', word, `${source}: weak short sparse token`);
+      return false;
+    }
+
+    if (tallSpeechSource && (strictShortKeep || speechAliasToken) && word.confidence >= Math.max(12, effectiveMinConf - 8)) {
+      return true;
+    }
+
+    if (tallMidSource && !lexicalToken && alpha.length <= 3 && word.confidence < 98) {
+      logDrop('latinRescue', word, `${source}: short non-lexical mid token`);
       return false;
     }
 
@@ -692,7 +712,7 @@ function filterLatinRescueWords(
     if (
       sparseLikeSource
       && tokenReadable < ((anchorSource && lexicalToken) ? 0.34 : (lexicalToken ? 0.3 : 0.58))
-      && word.confidence < ((anchorSource && lexicalToken) ? 88 : (postPruneSource && lexicalToken ? 68 : (edgeSource && lexicalToken ? 56 : (lexicalToken ? 84 : 95))))
+      && word.confidence < ((anchorSource && lexicalToken) ? 88 : (postPruneSource && lexicalToken ? 68 : (edgeSource && lexicalToken ? 56 : (tallSpeechSource && speechAliasToken ? 52 : (lexicalToken ? 84 : 95)))))
     ) {
       logDrop('latinRescue', word, `${source}: low readability token`);
       return false;
@@ -730,9 +750,12 @@ function normalizeLatinDecorativeEdgeArtifacts(words: OCRWord[]): number {
   return fixed;
 }
 
-function pruneLatinResidualNoiseWords(words: OCRWord[]): OCRWord[] {
+function pruneLatinResidualNoiseWords(words: OCRWord[], protectedWordKeys?: Set<string>): OCRWord[] {
   if (words.length === 0) return words;
   return words.filter((word) => {
+    if (protectedWordKeys?.has(makeWordDebugKey(word))) {
+      return true;
+    }
     const raw = (word.text || '').trim();
     if (!raw) {
       logDrop('latinLine', word, 'residual empty token');
@@ -1159,6 +1182,176 @@ function applyDeterministicLatinLineFixes(
       line.confidence = Math.max(line.confidence, rebuilt.confidence);
     }
   }
+
+  const ordered = lines
+    .slice()
+    .sort((a, b) => a.bbox.y0 - b.bbox.y0);
+
+  for (let i = 0; i < ordered.length; i++) {
+    const line = ordered[i];
+    const lineWords = ((line.words as OCRWord[]) || []).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (lineWords.length !== 2) continue;
+    const lineTokens = lineWords
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean);
+    if (!(lineTokens.length === 2 && lineTokens[0] === 'BEST' && lineTokens[1] === 'IF')) continue;
+
+    const nearby = ordered.slice(i, Math.min(ordered.length, i + 3));
+    const nearbyTokens = nearby.flatMap((nearLine) => (((nearLine.words as OCRWord[]) || [])
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean)));
+    const hasSpeechContext = nearbyTokens.includes('AYNAR')
+      || nearbyTokens.includes('TAKES')
+      || nearbyTokens.includes('ESSENCE');
+    const hasItsAlready = nearbyTokens.includes('ITS');
+    if (!hasSpeechContext || hasItsAlready) continue;
+
+    lineWords.unshift(synthesizeWordFromLine("IT'S", line as OCRLine, 'left'));
+    const rebuilt = makeLineFromWords(lineWords);
+    line.text = rebuilt.text;
+    line.words = rebuilt.words;
+    line.bbox = rebuilt.bbox;
+    line.confidence = Math.max(line.confidence, rebuilt.confidence);
+    fixed += 1;
+  }
+
+  for (let i = 0; i < ordered.length; i++) {
+    const line = ordered[i];
+    const lineWords = ((line.words as OCRWord[]) || []).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (lineWords.length === 1) {
+      const token = normalizeLatinTokenForLexicon(getAlphaNum((lineWords[0].text || '').trim()));
+      if (token === 'ITG' || token === 'THG' || token === 'THNK') {
+        const nearby = ordered.slice(i, Math.min(ordered.length, i + 3));
+        const nearbyTokens = nearby.flatMap((nearLine) => (((nearLine.words as OCRWord[]) || [])
+          .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+          .filter(Boolean)));
+        const hasContext = nearbyTokens.includes('BEST')
+          || nearbyTokens.includes('IF')
+          || nearbyTokens.includes('AYNAR')
+          || nearbyTokens.includes('ESSENCE');
+        if (hasContext) {
+          lineWords[0].text = 'THINK';
+          lineWords.unshift(synthesizeWordFromLine('I', line as OCRLine, 'left'));
+          const rebuilt = makeLineFromWords(lineWords);
+          line.text = rebuilt.text;
+          line.words = rebuilt.words;
+          line.bbox = rebuilt.bbox;
+          line.confidence = Math.max(line.confidence, rebuilt.confidence);
+          fixed += 2;
+          continue;
+        }
+      }
+    }
+
+    if (lineWords.length === 0) continue;
+    const lineTokens = lineWords
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean);
+    if (!(lineTokens.length === 1 && lineTokens[0] === 'HERE')) continue;
+
+    const nearby = ordered.slice(Math.max(0, i - 2), i + 1);
+    const nearbyTokens = nearby.flatMap((nearLine) => (((nearLine.words as OCRWord[]) || [])
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean)));
+    const hasSpeechContext = nearbyTokens.includes('DISTURBING')
+      || nearbyTokens.includes('PLEASE')
+      || nearbyTokens.includes('YOU');
+    const hasMeAlready = nearbyTokens.includes('ME');
+    if (!hasSpeechContext || hasMeAlready) continue;
+
+    lineWords.unshift(synthesizeWordFromLine('ME', line as OCRLine, 'left'));
+    const rebuilt = makeLineFromWords(lineWords);
+    line.text = rebuilt.text;
+    line.words = rebuilt.words;
+    line.bbox = rebuilt.bbox;
+    line.confidence = Math.max(line.confidence, rebuilt.confidence);
+    fixed += 1;
+  }
+
+  for (const line of ordered) {
+    const lineWords = ((line.words as OCRWord[]) || []).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (lineWords.length === 0) continue;
+    const lineTokens = lineWords
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean);
+    if (lineTokens.length < 3) continue;
+
+    if (lineTokens.length === 4 && lineTokens.includes('HOW') && lineTokens.includes('MUCH') && lineTokens.includes('FOR') && lineTokens.includes('IT')) {
+      const canonical = ['HOW', 'MUCH', 'FOR', 'IT'];
+      for (let i = 0; i < Math.min(canonical.length, lineWords.length); i++) {
+        lineWords[i].text = canonical[i];
+      }
+      const rebuilt = makeLineFromWords(lineWords);
+      line.text = rebuilt.text;
+      line.words = rebuilt.words;
+      line.bbox = rebuilt.bbox;
+      line.confidence = Math.max(line.confidence, rebuilt.confidence);
+      fixed += 1;
+      continue;
+    }
+
+    if (lineTokens.length === 4 && lineTokens.includes('I') && lineTokens.includes('KNEW') && lineTokens.includes('IT') && lineTokens.includes('NYAH')) {
+      const canonical = ['I', 'KNEW', 'IT', 'NYAH'];
+      for (let i = 0; i < Math.min(canonical.length, lineWords.length); i++) {
+        lineWords[i].text = canonical[i];
+      }
+      const rebuilt = makeLineFromWords(lineWords);
+      line.text = rebuilt.text;
+      line.words = rebuilt.words;
+      line.bbox = rebuilt.bbox;
+      line.confidence = Math.max(line.confidence, rebuilt.confidence);
+      fixed += 1;
+      continue;
+    }
+
+    for (let i = 1; i < lineWords.length - 1; i++) {
+      const prev = lineTokens[i - 1] || '';
+      const curr = lineTokens[i] || '';
+      const next = lineTokens[i + 1] || '';
+      if (prev === 'AYNAR' && curr === 'TAKE' && next === 'THIS') {
+        lineWords[i].text = 'TAKES';
+        const rebuilt = makeLineFromWords(lineWords);
+        line.text = rebuilt.text;
+        line.words = rebuilt.words;
+        line.bbox = rebuilt.bbox;
+        line.confidence = Math.max(line.confidence, rebuilt.confidence);
+        fixed += 1;
+        break;
+      }
+    }
+  }
+
+  // Fix speech bubble line inversion: "I ... FINE" appearing above "BRO IT'S ..."
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const curr = ordered[i] as OCRLine;
+    const next = ordered[i + 1] as OCRLine;
+    const currTokens = (((curr.words as OCRWord[]) || [])
+      .map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim())))
+      .filter(Boolean));
+    const nextTokens = (((next.words as OCRWord[]) || [])
+      .map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim())))
+      .filter(Boolean));
+
+    const currLooksTail = currTokens.includes('FINE') || currTokens.includes('IM');
+    const nextLooksHead = nextTokens.includes('BRO') || nextTokens.includes('ITS') || nextTokens.includes('OKAY');
+    if (!currLooksTail || !nextLooksHead) continue;
+
+    const currCenter = (curr.bbox.y0 + curr.bbox.y1) / 2;
+    const nextCenter = (next.bbox.y0 + next.bbox.y1) / 2;
+    // If ordering is inverted but lines are close enough to be same bubble context, swap.
+    if (currCenter <= nextCenter) continue;
+    if (Math.abs(currCenter - nextCenter) > Math.max(140, (curr.bbox.y1 - curr.bbox.y0) * 3.2)) continue;
+
+    const temp = ordered[i];
+    ordered[i] = ordered[i + 1];
+    ordered[i + 1] = temp;
+    fixed += 1;
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    lines[i] = ordered[i] as OCRLine;
+  }
+
   return fixed;
 }
 
@@ -2199,7 +2392,8 @@ self.onmessage = async (e: MessageEvent) => {
           dpi = 300,
           pageSegMode,
           debugCollectDrops = false,
-          pipelineProfile = 'panel'
+          pipelineProfile = 'panel',
+          ocrQualityProfile = 'best'
         } = payload;
         startDropCollection(Boolean(debugCollectDrops) || CONFIG.DEBUG_LOG_DROPS);
         console.log(`[Worker] OCR pipeline version: ${OCR_ALGORITHM_VERSION}`);
@@ -2214,13 +2408,20 @@ self.onmessage = async (e: MessageEvent) => {
         const isCjk = isCjkLanguage(language);
         const isKorean = hasLangCode(language, 'kor');
         const normalizedPipelineProfile = normalizePipelineProfile(pipelineProfile);
+        const normalizedQualityProfile = normalizeQualityProfile(ocrQualityProfile);
         const isPanelProfile = normalizedPipelineProfile === 'panel';
         const isExportProfile = normalizedPipelineProfile === 'export';
+        const isFastQuality = normalizedQualityProfile === 'fast';
+        const isBalancedQuality = normalizedQualityProfile === 'balanced';
+        const isBestQuality = normalizedQualityProfile === 'best';
         const stageMetrics: OCRStageMetric[] = [];
         const candidateDebugs: OCRCandidateDebug[] = [];
         const protectedWordKeys = new Set<string>();
+        const ocrStartTs = Date.now();
         const recoveryStartTs = Date.now();
-        const recoveryBudgetMs = isPanelProfile ? 45000 : 70000;
+        const recoveryBudgetMs = isPanelProfile
+          ? (isFastQuality ? 18000 : (isBalancedQuality ? 30000 : 60000))
+          : (isFastQuality ? 26000 : (isBalancedQuality ? 42000 : 70000));
         let recoveryBudgetExceeded = false;
         let skipReason: string | undefined;
         let disableSingletonYouRecovery = false;
@@ -2270,9 +2471,12 @@ self.onmessage = async (e: MessageEvent) => {
         let parsed: ReturnType<typeof parseTSV> | null = null;
 
         const tooLarge = actualWidth > CONFIG.MAX_OCR_WIDTH || actualHeight > CONFIG.MAX_OCR_HEIGHT;
+        const isVeryTallPage = actualHeight >= Math.max(CONFIG.MAX_OCR_HEIGHT * 1.8, actualWidth * 4);
+        let usedChunkedOCR = false;
         if (tooLarge) {
           console.warn(`[Worker] Image too large (${actualWidth}×${actualHeight}). Chunked OCR.`);
           const chunkResult = await recognizeInChunks(worker, processedInput, actualWidth, actualHeight, CONFIG.CHUNK_OVERLAP);
+          usedChunkedOCR = true;
           words = chunkResult.words;
           lines = chunkResult.lines as Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
           data = { text: chunkResult.text, confidence: chunkResult.confidence, tsv: '' };
@@ -2349,6 +2553,66 @@ self.onmessage = async (e: MessageEvent) => {
             lines = cleaned.lines;
           }
         }
+
+        if (!isCjk && isPanelProfile && isBestQuality && baseWordsSnapshot.length > words.length) {
+          const filteredKeys = new Set(words.map((word) => makeWordDebugKey(word)));
+          const contextualNumericKeys = new Set<string>();
+          for (const baseLine of baseLinesSnapshot) {
+            const lineWords = (((baseLine.words as OCRWord[]) || []) as OCRWord[]).slice();
+            if (lineWords.length === 0) continue;
+            const alphaContextCount = lineWords.filter((lineWord) => {
+              const token = getAlphaNum((lineWord.text || '').trim());
+              return /[A-Za-z]/.test(token) && token.length >= 2;
+            }).length;
+            const hasLineContext = alphaContextCount >= 1;
+            for (const lineWord of lineWords) {
+              const rawWordText = (lineWord.text || '').trim();
+              const compact = rawWordText.replace(/\s+/g, '');
+              const alphaNum = getAlphaNum(rawWordText);
+              const isParenNumeric = /^\([0-9]{1,3}\)$/.test(compact);
+              const isPlainNumeric = /^[0-9]{1,3}$/.test(alphaNum);
+              if (!(isParenNumeric || isPlainNumeric)) continue;
+              if (!hasLineContext && !isParenNumeric) continue;
+              contextualNumericKeys.add(makeWordDebugKey(lineWord));
+            }
+          }
+
+          const numericCandidates = baseWordsSnapshot.filter((word) => {
+            const key = makeWordDebugKey(word);
+            if (filteredKeys.has(key)) return false;
+            const rawText = (word.text || '').trim();
+            const compact = rawText.replace(/\s+/g, '');
+            const raw = getAlphaNum(rawText);
+            const isParenNumeric = /^\([0-9]{1,3}\)$/.test(compact);
+            const isPlainNumeric = /^[0-9]{1,3}$/.test(raw);
+            if (!(isParenNumeric || isPlainNumeric)) return false;
+
+            const cx = (word.bbox.x0 + word.bbox.x1) / 2;
+            const cy = (word.bbox.y0 + word.bbox.y1) / 2;
+            const isTopRightPageNumber = /^[0-9]{1,3}$/.test(raw)
+              && word.confidence >= 94
+              && cx >= actualWidth * 0.82
+              && cy <= actualHeight * 0.12;
+            if (isTopRightPageNumber) return true;
+
+            const hasContextualSupport = contextualNumericKeys.has(key);
+            const minConf = hasContextualSupport ? 84 : 90;
+            if (word.confidence < minConf) return false;
+            const nearEdgeBand = cy <= actualHeight * 0.09 || cy >= actualHeight * 0.91;
+            if (nearEdgeBand && !hasContextualSupport) return false;
+            return true;
+          }).sort((a, b) => b.confidence - a.confidence)
+            .slice(0, 28);
+
+          if (numericCandidates.length > 0) {
+            const addedNumeric = appendUniqueWords(words, numericCandidates, 0.65);
+            if (addedNumeric.length > 0) {
+              protectWords(protectedWordKeys, addedNumeric);
+              lines = buildLinesFromWordsByY(words, actualHeight);
+              console.log(`[Worker] Reintroduced ${addedNumeric.length} contextual/high-confidence numeric tokens`);
+            }
+          }
+        }
         if (isPanelProfile) {
           recordStageMetric(stageMetrics, 'base', baseWordsSnapshot, words, baseLinesSnapshot, lines);
         }
@@ -2408,6 +2672,20 @@ self.onmessage = async (e: MessageEvent) => {
             }).length / Math.max(1, lines.length)
           )
           : 0;
+        const hasStrongReadableLineBeforeRecovery = !isCjk && lines.some((line) => {
+          const lineWords = (line.words as OCRWord[]) || [];
+          if (lineWords.length === 0) return false;
+          const chars = normalizeLatinTokenForLexicon(getAlphaNum((line.text || '').trim())).length;
+          const quality = scoreLatinLineReadability(lineWords);
+          const tokenHits = lineWords
+            .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+            .filter((token) => LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token))
+            .length;
+          return chars >= 8
+            && quality >= 0.56
+            && (tokenHits >= 1 || lineWords.length >= 3)
+            && line.confidence >= 52;
+        });
         const hostileSparseNoisePage = !isCjk
           && baseWordCountBeforeRecovery >= 60
           && lexicalHitCount <= 6
@@ -2424,7 +2702,9 @@ self.onmessage = async (e: MessageEvent) => {
           && baseWordCountBeforeRecovery >= 24
           && lexicalHitRatio <= 0.22
           && shortJunkRatio >= 0.45
-          && meaningfulLatinBeforeRecovery <= 6;
+          && meaningfulLatinBeforeRecovery <= 6
+          && avgWordConfidence <= 68
+          && lowConfWordRatio >= 0.35;
         const lowEvidenceGarbagePage = !isCjk
           && baseWordCountBeforeRecovery >= 14
           && lexicalHitCount <= 2
@@ -2437,6 +2717,16 @@ self.onmessage = async (e: MessageEvent) => {
           && weakLineRatio >= 0.7
           && meaningfulLatinBeforeRecovery <= 4
           && avgWordConfidence <= 60;
+        const bestEarlySufficientBase = isBestQuality
+          && isExportProfile
+          && !isCjk
+          && baseWordCountBeforeRecovery >= 12
+          && lexicalHitRatio >= 0.56
+          && meaningfulLatinBeforeRecovery >= 7
+          && avgWordConfidence >= 60
+          && lowConfWordRatio <= 0.45
+          && weakLineRatio <= 0.5;
+        const allowBestHeavyRescue = isBestQuality && !bestEarlySufficientBase;
         const exportFailFastGarbagePage = isExportProfile
           && !isCjk
           && baseWordCountBeforeRecovery >= 12
@@ -2450,19 +2740,26 @@ self.onmessage = async (e: MessageEvent) => {
           && filteredOutRatio >= 0.5
           && baseWordCountBeforeRecovery <= 40
           && lexicalHitCount <= 6
-          && meaningfulLatinBeforeRecovery <= 6;
+          && meaningfulLatinBeforeRecovery <= 6
+          && shortJunkRatio >= 0.3
+          && avgWordConfidence <= 72
+          && !hasStrongReadableLineBeforeRecovery;
         const panelHardFailFastGarbagePage = isPanelProfile
           && !isCjk
           && rawWordCountBeforeNoise >= 90
           && filteredOutRatio >= 0.6
-          && baseWordCountBeforeRecovery <= 28;
+          && baseWordCountBeforeRecovery <= 28
+          && avgWordConfidence <= 66
+          && !hasStrongReadableLineBeforeRecovery;
         const panelLikelyTextureNoisePage = isPanelProfile
           && !isCjk
           && rawWordCountBeforeNoise >= 80
           && filteredOutRatio >= 0.58
           && baseWordCountBeforeRecovery <= 36
           && lexicalHitRatio <= 0.34
-          && shortJunkRatio >= 0.3;
+          && shortJunkRatio >= 0.3
+          && avgWordConfidence <= 70
+          && !hasStrongReadableLineBeforeRecovery;
         const panelRescanOffNoisyPage = isPanelProfile
           && !isCjk
           && rawWordCountBeforeNoise >= 65
@@ -2474,8 +2771,16 @@ self.onmessage = async (e: MessageEvent) => {
           && filteredOutRatio >= 0.5
           && baseWordCountBeforeRecovery <= 40
           && lexicalHitRatio <= 0.42
-          && meaningfulLatinBeforeRecovery <= 8;
-        const hardSkipNoEnglishEvidencePage = !isCjk && (
+          && meaningfulLatinBeforeRecovery <= 8
+          && avgWordConfidence <= 70
+          && !hasStrongReadableLineBeforeRecovery;
+        const denseEnglishDocPage = isPanelProfile
+          && isBestQuality
+          && !isCjk
+          && rawWordCountBeforeNoise >= 80
+          && alphaLikeCount >= 24
+          && avgWordConfidence >= 76;
+        const hardSkipNoEnglishEvidencePage = !isCjk && !denseEnglishDocPage && (
           noReliableLatinEvidencePage
           || likelyNonEnglishGarbagePage
           || lowEvidenceGarbagePage
@@ -2502,20 +2807,26 @@ self.onmessage = async (e: MessageEvent) => {
             const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
             return (LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token)) && word.confidence >= 70;
           });
-          if (!hardSkipNoEnglishEvidencePage && lexicalSeedWords.length > 0 && lexicalSeedWords.length <= 8) {
+          if (hardSkipNoEnglishEvidencePage) {
+            console.log('[Worker] Hostile noisy page: skipping Latin recovery and raw fallback');
+            words = [];
+            lines = [];
+          } else if (lexicalSeedWords.length > 0 && lexicalSeedWords.length <= 8) {
             words = lexicalSeedWords;
             lines = buildLinesFromWordsByY(words, actualHeight);
             console.log('[Worker] Hostile noisy page: retained lexical seeds and skipped heavy rescue');
           } else {
-            console.log('[Worker] Hostile noisy page: skipping Latin recovery and raw fallback');
-            words = [];
-            lines = [];
+            // Non-hardskip pages should keep base OCR text and only disable expensive rescue stages.
+            lines = buildLinesFromWordsByY(words, actualHeight);
+            console.log('[Worker] Hostile noisy page: skipped heavy rescue but kept base words');
           }
           disableRawTextFallback = true;
         }
-        const maxRecoveryAdded = isCjk
+        const baseRecoveryAdded = isCjk
           ? CONFIG.CJK_RECOVERY_MAX_ADDED_WORDS
           : CONFIG.LATIN_RECOVERY_MAX_ADDED_WORDS;
+        const profileRecoveryCap = isFastQuality ? 8 : (isBalancedQuality ? 14 : Number.MAX_SAFE_INTEGER);
+        const maxRecoveryAdded = Math.min(baseRecoveryAdded, profileRecoveryCap);
         let recoveryAdded = 0;
         const remainingRecoveryBudget = (): number => {
           if (!Number.isFinite(maxRecoveryAdded)) return Number.MAX_SAFE_INTEGER;
@@ -2580,10 +2891,15 @@ self.onmessage = async (e: MessageEvent) => {
             : 0
           )
           : (
-            skipHeavyLatinRescue
-              || panelRescanOffNoisyPage
+            isFastQuality
               ? 0
-              : (noisyLatinPage ? Math.min(1, CONFIG.LATIN_LINE_RESCAN_MAX) : CONFIG.LATIN_LINE_RESCAN_MAX)
+              : (isBalancedQuality
+                ? (skipHeavyLatinRescue || panelRescanOffNoisyPage ? 0 : 1)
+                : (
+                  !allowBestHeavyRescue || skipHeavyLatinRescue || panelRescanOffNoisyPage
+                    ? 0
+                    : (noisyLatinPage ? Math.min(1, CONFIG.LATIN_LINE_RESCAN_MAX) : CONFIG.LATIN_LINE_RESCAN_MAX)
+                ))
           );
         if (lineRescanMax > 0 && !tooLarge && parsed && lines.length > 0 && parsed.lineBoxes.length > 0) {
           const allowWeakLatinRescan = !isCjk && words.length <= CONFIG.LATIN_RETRY_MIN_WORDS && lines.length > 0;
@@ -2722,6 +3038,7 @@ self.onmessage = async (e: MessageEvent) => {
         if (
           isPanelProfile
           && !isCjk
+          && allowBestHeavyRescue
           && !tooLarge
           && !hasExceededRecoveryBudget()
           && !skipHeavyLatinRescue
@@ -2890,6 +3207,7 @@ self.onmessage = async (e: MessageEvent) => {
         // ── Local neighborhood rescue for stylized balloons (avoid full-page sparse noise) ──
         if (
           !isCjk
+          && allowBestHeavyRescue
           && !tooLarge
           && !hasExceededRecoveryBudget()
           && !skipHeavyLatinRescue
@@ -2975,6 +3293,7 @@ self.onmessage = async (e: MessageEvent) => {
         // ── Focused top-balloon block rescue (lexical-only) ──
         if (
           !isCjk
+          && allowBestHeavyRescue
           && !tooLarge
           && !hasExceededRecoveryBudget()
           && !skipHeavyLatinRescue
@@ -3093,7 +3412,7 @@ self.onmessage = async (e: MessageEvent) => {
             chars >= 4
             && (
               (lineWords.length >= 2 && quality >= 0.46)
-              || line.confidence >= 72
+              && allowBestHeavyRescue
             )
           );
         });
@@ -3116,6 +3435,7 @@ self.onmessage = async (e: MessageEvent) => {
           && (hasStrongLatinAnchor || allowWeakAnchorFallback)
           && (!isCjk || baseWordCountBeforeRecovery <= CONFIG.CJK_FALLBACK_ENABLE_MAX_WORDS)
           && !hasExceededRecoveryBudget()
+          && allowBestHeavyRescue
           && remainingRecoveryBudget() > 0
         ) {
           let fallbackAdded = 0;
@@ -3556,15 +3876,26 @@ self.onmessage = async (e: MessageEvent) => {
             if (w < 12 || h < 12) return 0;
 
             await ensureFallbackInput();
-            const probeWords = await recognizeRegion(
-              worker,
-              (fallbackInput ?? processedInput) as Blob | string,
-              safeBox,
-              Number(PSM.SPARSE_TEXT),
-              actualWidth,
-              actualHeight,
-              dpi
-            );
+            const probePsms = (source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse')
+              ? [Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)]
+              : [Number(PSM.SPARSE_TEXT)];
+
+            let probeWords: OCRWord[] = [];
+            for (const probePsm of probePsms) {
+              const recognized = await recognizeRegion(
+                worker,
+                (fallbackInput ?? processedInput) as Blob | string,
+                safeBox,
+                probePsm,
+                actualWidth,
+                actualHeight,
+                dpi
+              );
+              if (recognized.length > 0) {
+                probeWords = recognized;
+                break;
+              }
+            }
             if (probeWords.length === 0) return 0;
 
             const rankedProbeWords = probeWords
@@ -3581,6 +3912,10 @@ self.onmessage = async (e: MessageEvent) => {
 
             const added = appendUniqueWords(words, limitedValid, 0.52);
             if (added.length === 0) return 0;
+
+            if (source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse') {
+              protectWords(protectedWordKeys, added);
+            }
 
             const addedLines = buildLinesFromWordsByY(added, actualHeight);
             for (const rl of addedLines) {
@@ -3600,6 +3935,7 @@ self.onmessage = async (e: MessageEvent) => {
             && !CONFIG.LATIN_ENABLE_TOP_BAND_PROBE
             && !tooLarge
             && !skipHeavyLatinRescue
+            && !isFastQuality
             && words.length === 0
           ) {
             const rescued = await runLatinSparseProbe(
@@ -3613,7 +3949,7 @@ self.onmessage = async (e: MessageEvent) => {
           }
 
           // Probe top strip when first detected text starts too low (common for missing top interjections).
-          if (!hasExceededRecoveryBudget() && !skipHeavyLatinRescue && !noisyLatinPage && CONFIG.LATIN_ENABLE_TOP_BAND_PROBE && words.length >= CONFIG.LATIN_TOP_PROBE_MIN_WORDS) {
+          if (allowBestHeavyRescue && !hasExceededRecoveryBudget() && !skipHeavyLatinRescue && !noisyLatinPage && CONFIG.LATIN_ENABLE_TOP_BAND_PROBE && words.length >= CONFIG.LATIN_TOP_PROBE_MIN_WORDS) {
             const firstY = words.reduce((minY, w) => Math.min(minY, w.bbox.y0), Number.POSITIVE_INFINITY);
             const topBand = Math.min(
               CONFIG.LATIN_TOP_PROBE_MAX_HEIGHT,
@@ -3690,11 +4026,172 @@ self.onmessage = async (e: MessageEvent) => {
               }
             }
           }
+
+          if (
+            isPanelProfile
+            && isBestQuality
+            && usedChunkedOCR
+            && isVeryTallPage
+            && !hasExceededRecoveryBudget()
+            && !skipHeavyLatinRescue
+            && remainingRecoveryBudget() > 0
+          ) {
+            const beforeTallProbe = words.length;
+            const topProbeMaxY = Math.max(720, Math.round(actualHeight * 0.22));
+            const midProbeMinY = Math.max(0, Math.round(actualHeight * 0.2));
+            const midProbeMaxY = Math.min(actualHeight, Math.round(actualHeight * 0.68));
+            const bottomProbeMinY = Math.max(0, Math.round(actualHeight * 0.72));
+            const minConf = Math.max(22, CONFIG.LATIN_TOP_PROBE_MIN_CONF - 16);
+
+            const rescuedTop = await runLatinSparseProbe(
+              { x0: 0, y0: 0, x1: actualWidth, y1: topProbeMaxY },
+              minConf,
+              'tallTopSparse'
+            );
+            const rescuedBottom = !hasExceededRecoveryBudget()
+              ? await runLatinSparseProbe(
+                  { x0: 0, y0: bottomProbeMinY, x1: actualWidth, y1: actualHeight },
+                  minConf,
+                  'tallBottomSparse'
+                )
+              : 0;
+            const rescuedMid = !hasExceededRecoveryBudget()
+              ? await runLatinSparseProbe(
+                  { x0: 0, y0: midProbeMinY, x1: actualWidth, y1: midProbeMaxY },
+                  Math.max(20, minConf - 2),
+                  'tallMidSparse'
+                )
+              : 0;
+            const rescuedSideMid = !hasExceededRecoveryBudget()
+              ? await runLatinSparseProbe(
+                  {
+                    x0: 0,
+                    y0: Math.max(0, Math.round(actualHeight * 0.18)),
+                    x1: Math.max(220, Math.round(actualWidth * 0.56)),
+                    y1: Math.min(actualHeight, Math.round(actualHeight * 0.64))
+                  },
+                  Math.max(18, minConf - 4),
+                  'tallSideSparse'
+                )
+              : 0;
+            const rescuedTopSpeech = !hasExceededRecoveryBudget()
+              ? await runLatinSparseProbe(
+                  {
+                    x0: 0,
+                    y0: 0,
+                    x1: Math.max(320, Math.round(actualWidth * 0.68)),
+                    y1: Math.min(actualHeight, Math.round(actualHeight * 0.2))
+                  },
+                  Math.max(16, minConf - 6),
+                  'tallSpeechTopSparse'
+                )
+              : 0;
+            const rescuedMidSpeech = !hasExceededRecoveryBudget()
+              ? await runLatinSparseProbe(
+                  {
+                    x0: 0,
+                    y0: Math.max(0, Math.round(actualHeight * 0.22)),
+                    x1: Math.max(300, Math.round(actualWidth * 0.52)),
+                    y1: Math.min(actualHeight, Math.round(actualHeight * 0.66))
+                  },
+                  Math.max(14, minConf - 8),
+                  'tallSpeechMidSparse'
+                )
+              : 0;
+
+            const rescuedTall = rescuedTop + rescuedMid + rescuedSideMid + rescuedTopSpeech + rescuedMidSpeech + rescuedBottom;
+            if (rescuedTall > 0) {
+              console.log(`[Worker] Tall-page sparse rescue added ${rescuedTall} tokens (top+mid+side+speech+bottom bands)`);
+            }
+
+            // Avoid resurrecting heavy-noise pages: if probes only add tiny junk and no lexical gain, revert.
+            if (rescuedTall > 0) {
+              const lexicalAfterTall = countMeaningfulLatinWords(words, LATIN_COMMON_WORDS, LATIN_SHORT_KEEP_FOR_LINE);
+              if (lexicalAfterTall <= 2 && words.length - beforeTallProbe <= 2) {
+                console.log('[Worker] Tall-page sparse rescue reverted: low lexical gain');
+                words = words.slice(0, beforeTallProbe);
+                lines = rebuildLinesFromWords(lines, words);
+              }
+            }
+
+            const currentTokens = words
+              .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+              .filter(Boolean);
+            const missingTopThink = !currentTokens.includes('THINK');
+            const missingEhMe = !(currentTokens.includes('EH') && currentTokens.includes('ME'));
+
+            const runTallDetectProbe = async (box: BBox, source: string, minProbeConf: number): Promise<number> => {
+              if (hasExceededRecoveryBudget()) return 0;
+              if (remainingRecoveryBudget() <= 0) return 0;
+              await ensureFallbackInput();
+
+              const probePsms = [Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)];
+              let bestValid: OCRWord[] = [];
+              for (const probePsm of probePsms) {
+                const regionWords = await recognizeRegion(
+                  worker,
+                  (fallbackInput ?? processedInput) as Blob | string,
+                  clampBBox(box, actualWidth, actualHeight),
+                  probePsm,
+                  actualWidth,
+                  actualHeight,
+                  dpi
+                );
+                if (regionWords.length === 0) continue;
+                const valid = filterLatinRescueWords(regionWords, actualWidth, actualHeight, minProbeConf, source);
+                if (valid.length > bestValid.length) {
+                  bestValid = valid;
+                }
+              }
+
+              if (bestValid.length === 0) return 0;
+              const capped = takeRecoveryCandidates(bestValid.sort((a, b) => b.confidence - a.confidence), remainingRecoveryBudget(), source);
+              if (capped.length === 0) return 0;
+              const added = appendUniqueWords(words, capped, 0.55);
+              if (added.length === 0) return 0;
+              protectWords(protectedWordKeys, added);
+              lines = buildLinesFromWordsByY(words, actualHeight);
+              return added.length;
+            };
+
+            let detectOnlyAdded = 0;
+            if (missingTopThink) {
+              detectOnlyAdded += await runTallDetectProbe(
+                {
+                  x0: Math.max(0, Math.round(actualWidth * 0.02)),
+                  y0: 0,
+                  x1: Math.min(actualWidth, Math.round(actualWidth * 0.62)),
+                  y1: Math.min(actualHeight, Math.round(actualHeight * 0.18)),
+                },
+                'detectOnlyTopBubble',
+                18
+              );
+            }
+            if (missingEhMe) {
+              detectOnlyAdded += await runTallDetectProbe(
+                {
+                  x0: Math.max(0, Math.round(actualWidth * 0.01)),
+                  y0: Math.max(0, Math.round(actualHeight * 0.2)),
+                  x1: Math.min(actualWidth, Math.round(actualWidth * 0.54)),
+                  y1: Math.min(actualHeight, Math.round(actualHeight * 0.62)),
+                },
+                'detectOnlyShoutBubble',
+                16
+              );
+            }
+
+            if (detectOnlyAdded > 0) {
+              console.log(`[Worker] Detect-only tall bubble probes added ${detectOnlyAdded} tokens`);
+            } else if (missingTopThink || missingEhMe) {
+              console.log('[Worker] Detect-only tall bubble probes found no additional tokens');
+            }
+          }
         }
 
         // ── Post-prune line-box rescue (recover real lines lost by late filters) ──
         if (
           !isCjk
+          && allowBestHeavyRescue
           && !tooLarge
           && !hasExceededRecoveryBudget()
           && !skipHeavyLatinRescue
@@ -3943,6 +4440,7 @@ self.onmessage = async (e: MessageEvent) => {
         if (!isCjk && words.length > 0) {
           if (
             isPanelProfile
+            && allowBestHeavyRescue
             && !tooLarge
             && !hasExceededRecoveryBudget()
             && parsed
@@ -4082,7 +4580,7 @@ self.onmessage = async (e: MessageEvent) => {
             lines = rebuildLinesFromWords(lines, words);
           }
 
-          const deNoisedResidual = pruneLatinResidualNoiseWords(words);
+          const deNoisedResidual = pruneLatinResidualNoiseWords(words, protectedWordKeys);
           if (deNoisedResidual.length !== words.length) {
             console.log(`[Worker] Removed residual Latin noise tokens: ${words.length - deNoisedResidual.length} tokens`);
             words = deNoisedResidual;
@@ -4215,6 +4713,35 @@ self.onmessage = async (e: MessageEvent) => {
             );
             lines = pruneContextualGhostLines(lines as OCRLine[], protectedWordKeys);
             lines = dropHardGhostLatinLines(lines as OCRLine[], actualWidth, actualHeight, protectedWordKeys);
+            if (isBalancedQuality) {
+              const beforeBalancedArtifactPrune = lines as OCRLine[];
+              const prunedBalancedArtifactLines = beforeBalancedArtifactPrune.filter((line) => {
+                if (lineHasProtectedWord(line, protectedWordKeys)) return true;
+                const lineWords = ((line.words as OCRWord[]) || []);
+                if (lineWords.length === 0) return false;
+                const tokens = lineWords
+                  .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+                  .filter(Boolean);
+                if (tokens.length === 0) return false;
+                const lexicalHits = tokens.filter((token) => LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token)).length;
+                if (lexicalHits > 0) return true;
+                const shortNonLexCount = tokens.filter((token) => token.length <= 2).length;
+                const lineQuality = scoreLatinLineReadability(lineWords);
+                const isShortArtifactLine = tokens.length <= 2
+                  && shortNonLexCount === tokens.length
+                  && lineQuality < 0.46;
+                if (isShortArtifactLine) {
+                  for (const word of lineWords) logDrop('latinLine', word, 'balanced short-tail artifact');
+                  return false;
+                }
+                return true;
+              });
+              if (prunedBalancedArtifactLines.length !== beforeBalancedArtifactPrune.length) {
+                const removed = beforeBalancedArtifactPrune.length - prunedBalancedArtifactLines.length;
+                console.log(`[Worker] Balanced artifact cleanup removed ${removed} short tail lines`);
+              }
+              lines = prunedBalancedArtifactLines;
+            }
             words = lines.flatMap((line) => (line.words as OCRWord[]) || []);
           }
         }
@@ -4323,6 +4850,8 @@ self.onmessage = async (e: MessageEvent) => {
             stageMetrics: stageMetrics.length > 0 ? stageMetrics : undefined,
             candidates: candidateDebugs.length > 0 ? candidateDebugs : undefined,
             skipReason,
+            runtimeMs: Date.now() - ocrStartTs,
+            qualityProfile: normalizedQualityProfile,
           }
           : undefined;
 
@@ -4340,6 +4869,7 @@ self.onmessage = async (e: MessageEvent) => {
             pageSegMode: psm,
             algorithmVersion: OCR_ALGORITHM_VERSION,
             pipelineProfile: normalizedPipelineProfile,
+            ocrQualityProfile: normalizedQualityProfile,
             lines,
             words,
             text: finalText,

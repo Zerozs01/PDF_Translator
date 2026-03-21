@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.13] - 2026-03-21
+
+### Fixed — OCR Algorithm v71 (Page 21 ME Recovery)
+
+- Added deterministic dialogue repair that restores missing `ME` before singleton `HERE` in speech-context lines (prevents the page-21 `ME HERE!` regression).
+- Increased panel recovery stage budget from 45s to 60s to reduce mid-stage truncation on valid dialogue pages while keeping existing noisy-page fast-fail gates.
+
 ## [1.2.12] - 2026-03-21
 
 ### Fixed — OCR Algorithm v70 (Panel Noisy-Page Fast Fail)

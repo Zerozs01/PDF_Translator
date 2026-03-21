@@ -8,6 +8,61 @@ This document focuses on performance and quality tradeoffs in the OCR pipeline.
 - Do not switch users to a new fast profile yet.
 - Continue with stability/timeout hardening first, then roll out speed profile as an explicit opt-in optimization phase.
 
+## 2026-03-21 Korean Accuracy Recovery Roadmap (Current Code Baseline: OCR v86)
+
+This section reflects the current code path in `src/services/vision/worker.ts` and `src/services/vision/ocr-filtering.ts`.
+
+### Observed symptoms from current Korean pages
+
+- Valid Korean phrases are partially dropped (for example, missing syllables inside otherwise valid lines).
+- Ghost fragments still survive into final text (`년 기 겨느`, `노카`, `가으` pattern).
+- Final output often mixes true lines with short low-value fragments, reducing translation quality.
+
+### Root-cause map (current implementation)
+
+| Area | Current behavior | Accuracy risk |
+| ---- | ---------------- | ------------- |
+| Raw OCR input quality | Tesseract still emits many short CJK artifacts on textured/illustrated regions | Noise enters pipeline early and competes with real speech text |
+| `filterKoreanJamoNoise` | Strictly removes many jamo-heavy artifacts, but allows some mixed tokens when they do not match hard fail patterns | Some non-lexical mixed fragments survive; some valid edge tokens may be over-pruned |
+| `filterWeakIsolatedCjkLines` | Uses short-line, confidence, variance, and neighbor checks for CJK line pruning | Neighbor rescue can keep weak fragment lines; strict shape gates can drop valid short Korean lines |
+| Image/background filters | Applied before CJK-specific pruning and tuned mostly by generic thresholds | Over/under filtering shifts work to later heuristics, causing unstable keep/drop outcomes |
+| Recovery strategy | No dedicated Korean continuity rescue pass after CJK pruning | Missing syllables/joins are not recovered when line structure is partially damaged |
+
+### Optimization principles (must keep)
+
+- No synthetic text injection. Every token must come from OCR detection with valid bbox.
+- Deterministic behavior over ad-hoc heuristics.
+- Profile-safe changes: avoid breaking Latin/document paths while tuning Korean.
+
+### Korean roadmap (execution order)
+
+1. Stage K1 - Instrumentation first
+   - Add Korean-specific drop telemetry buckets: `korJamo`, `weakCjkLine`, `imgTile`, `bgVariance` split by line length and confidence bins.
+   - Capture per-page counters before/after each Korean filter stage.
+2. Stage K2 - Stabilize keep/drop boundaries
+   - Tighten short non-punctuation fragment rejection for low-confidence Korean lines.
+   - Add explicit keep rules for short but valid conversational tokens ending with punctuation (`?`, `!`, `~`).
+3. Stage K3 - Context-aware line validation
+   - Introduce a Korean line consistency score using nearby-line support (vertical proximity + overlap + syllable density).
+   - Drop isolated weak fragments only when local context score is below threshold.
+4. Stage K4 - Korean continuity rescue (detect-derived only)
+   - Add bounded region re-scan for damaged Korean lines where syllable ratio drops unexpectedly after pruning.
+   - Merge only OCR-detected tokens with IoU and reading-order checks; no text fabrication.
+5. Stage K5 - Regression guard and rollout
+   - Validate on two fixture classes: tall comic pages and dense technical/document pages.
+   - Bump OCR algorithm version after each approved Korean-core rule change.
+
+### Success criteria
+
+- Ghost fragment count per Korean page decreases without increasing empty-line rate.
+- Korean phrase completeness improves on known failure pages.
+- Runtime remains within current panel timeout budget and does not regress export stability.
+
+## 2026-03-21 v71 Regression Follow-up (Page 21 "ME HERE")
+
+- Added deterministic line repair to restore missing `ME` before singleton `HERE` when nearby dialogue context indicates the phrase should be `ME HERE`.
+- Increased panel recovery budget to 60s so valid dialogue pages are less likely to be truncated by stage budget cutoffs.
+
 ## 2026-03-21 Practical Answer: Are only required steps left?
 
 Short answer: no. The pipeline still contains several accuracy-oriented optional rescue stages that can be reduced or bypassed for a speed profile.
