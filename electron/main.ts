@@ -26,6 +26,11 @@ function createWindow() {
   
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
+    show: false,
+    width: 1440,
+    height: 960,
+    minWidth: 1200,
+    minHeight: 780,
     autoHideMenuBar: true, // Hide menu bar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -36,6 +41,11 @@ function createWindow() {
       webSecurity: true,
     },
   })
+
+  win.once('ready-to-show', () => {
+    win?.maximize();
+    win?.show();
+  });
 
   // Enable DevTools shortcut (Ctrl+Shift+I or F12) and page refresh (Ctrl+R / F5) in dev mode
   win.webContents.on('before-input-event', (event, input) => {
@@ -106,7 +116,8 @@ app.whenReady().then(() => {
 
     try {
       const safePath = sanitizePath(filepath);
-      return DocumentDAO.upsert(safePath, filename, totalPages);
+      const row = DocumentDAO.upsert(safePath, filename, totalPages) as { id?: number } | undefined;
+      return row?.id ?? 0;
     } catch (error) {
       console.error('db:save-document error:', error);
       throw error;
@@ -474,6 +485,19 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:get-document-tags error:', error);
       return [];
+    }
+  });
+
+  ipcMain.handle('db:touch-document', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      DocumentDAO.touch(id);
+      return true;
+    } catch (error) {
+      console.error('db:touch-document error:', error);
+      return false;
     }
   });
 

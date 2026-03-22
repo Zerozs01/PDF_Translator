@@ -1,81 +1,183 @@
-# Deep Research on Reducing “Ghost Text” in Tesseract-Based OCR Pipelines
+# Local OCR in Snipping Tool vs PDF24: What It Uses and What You Can Reuse
 
-## What “ghost text” usually means and why it happens
+## TL;DR
 
-In practice, “ghost text” (text ผี) in a Tesseract OCR pipeline usually means **spurious characters/words that appear in the OCR output even though the corresponding image region does not contain real text**, or contains only weak text-like patterns (borders, noise, halftone texture, compressed artifacts, bleed-through, shadows). This is rarely a single bug; it is typically an interaction between (1) *image artifacts*, (2) *layout/segmentation mistakes*, and (3) *a recognizer that is forced to emit some hypothesis unless you add rejection logic*. citeturn7view1turn7view3turn16view0turn15view0
+Snipping Tool’s OCR is **confirmed to run locally on-device**, but **entity["company","Microsoft","technology company"] does not publicly disclose the exact neural architecture/model name** used inside the app. citeturn26view0  
+Based on Microsoft’s public platform surface, Snipping Tool almost certainly sits on top of the **Windows on-device OCR stack**: either the legacy **Windows.Media.Ocr** engine (WinRT, language packs) or the newer **Windows AI TextRecognizer** (NPU‑accelerated, “faster and more accurate” than the legacy engine on supported hardware). citeturn24view0turn2view0turn14view0  
+PDF24’s offline OCR path is comparatively “heavier”: it renders PDF pages to bitmaps (Ghostscript), then runs **Tesseract** (LSTM-based OCR engine) with specific flags and per-page pipelines—more moving parts, more I/O, and (in some versions) an intentionally older Tesseract build for OS compatibility. citeturn27view0turn16search22turn16search6turn16search8  
+If you want Snipping Tool–level “fast + stable” inside your Electron app, the most practical route is to **add a Windows-native OCR provider** (Windows.Media.Ocr +/or Windows AI TextRecognizer) behind your current VisionService abstraction, and keep Tesseract as a fallback for portability. citeturn24view0turn2view0turn22view0turn17view0  
 
-Tesseract’s own documentation describes several “non-text becomes text” traps that map directly to ghosting. Examples include **dark scanning borders** being “picked up as extra characters,” skew hurting line segmentation (which cascades into garbage recognition), and overly large backgrounds around tiny text triggering “empty page” or other failures that can manifest as odd outputs downstream. citeturn16view0turn7view3turn7view4
+## What Snipping Tool publicly says about its OCR
 
-A second meaning of “ghost text” (especially in overlay workflows like your Phase 1) is **layout-driven ghosting**: duplicated, mispositioned, or drifting overlays caused by OCR done on the wrong region geometry (e.g., full-page OCR in multi-column layouts; OCR bounding boxes that are too tight and clip characters; reading-order mismatches). This is why Tesseract guidance repeatedly pushes ROI-style use (“OCR a small region” → set an appropriate segmentation mode, add a small border, avoid unreasonable borders). citeturn16view2turn7view4turn11view3
+Microsoft’s support documentation explicitly states:
 
-Finally, Tesseract’s own training docs explicitly acknowledge a kind of **model “hallucination” behavior**: systematic insertion or alteration patterns (e.g., unwanted capitalization, added spaces) can arise when the training texts overrepresent specific forms; the recommended mitigation is diverse, cleaned training data. This is conceptually different from image-noise ghosting, but it matters if you fine-tune models for manga fonts or niche typography. citeturn15view0turn13view2
+- Snipping Tool has a **Text actions** button that activates OCR to extract/copy text. citeturn26view0  
+- “All text recognition processes are performed locally on your device.” citeturn26view0  
 
-## Image preprocessing methods that measurably lower error and spurious character detection
+On the rollout timeline, Microsoft’s Windows Insider blog shows OCR capabilities arriving as first‑party features:
 
-Tesseract does internal preprocessing (via Leptonica), but its docs emphasize that there are cases where the internal steps are not enough. They recommend **external preprocessing** and provide a built-in debug knob: you can write out the internally processed image (`tessedit_write_images=true`) to inspect whether thresholding, borders, deskew, etc., are producing a “bad tessinput,” which strongly predicts garbage OCR. citeturn7view1turn7view2
+- **Text Actions** appeared in Snipping Tool **version 11.2308.33.0** (announced September 14, 2023). citeturn7view0  
+- A dedicated **Text Extractor** entry in the capture bar (no intermediate screenshot needed) was announced for **version 11.2503.29.0** (April 15, 2025). citeturn7view1  
 
-A major evidence-backed lever is **binarization under uneven illumination**. A peer-reviewed study on non-uniformly illuminated documents evaluated many thresholding/binarization methods *using Tesseract as the OCR engine* and reported large quality differences depending on binarization choice. In their results table, global Otsu thresholding performed poorly on the tested dataset (OCR accuracy around ~0.52), while adaptive methods such as Sauvola and NICK produced substantially higher OCR accuracy (around ~0.90+ in their table). The key point for ghost reduction is straightforward: better binarization suppresses background texture/shadows that otherwise get interpreted as strokes. citeturn2view6turn12view1
+What you *won’t* find in Microsoft’s public Snipping Tool docs or Insider posts is a named OCR model (e.g., “we ship <model X>”), a paper, or an architecture diagram. The public claim is about **locality and UX**, not model disclosure. citeturn26view0turn7view0turn7view1  
 
-Research also supports a **pipeline view** rather than a single “magic filter.” An MDPI study analyzing OCR on electronic IC labeling (again using Tesseract) performed an ablation study and found that multiple preprocessing stages mattered; in particular, removing binarization or scaling caused large performance drops, and “minor” steps like **image straightening (deskew), morphological border cleaning, and morphological noise removal** still contributed to the final improvement. This lines up tightly with ghost-text behavior you see in scanned pages: small speckles and border gradients become characters unless you remove them explicitly. citeturn12view2turn2view3
+image_group{"layout":"carousel","aspect_ratio":"16:9","query":["Windows 11 Snipping Tool Text actions OCR screenshot","Windows 11 Snipping Tool Text Extractor capture bar screenshot","Windows 11 Snipping Tool Quick Redact text screenshot"],"num_per_query":1}
 
-More advanced approaches treat preprocessing as a **learned selection or optimization problem**. A 2020 paper in entity["organization","MDPI","academic publisher"]’s journal *Symmetry* proposed an adaptive convolution-based preprocessing method guided by reinforcement learning, explicitly optimizing recognition quality by minimizing edit distance to ground truth. They report large gains on a challenging dataset, illustrating that “choose/compose preprocessing transforms adaptively” can be a principled approach instead of hand-tuning one fixed pipeline. citeturn7view0turn12view3
+## The Windows on-device OCR stacks Snipping Tool can leverage
 
-At the “document restoration” end (useful for very degraded scans, bleed-through, heavy noise), a 2025 arXiv pipeline (“PreP-OCR”) combines a restoration model with a semantic-aware post-OCR corrector (ByT5). On a large evaluation (13,831 pages), they report character error rate reductions on the order of ~64–70% compared to OCR on raw images. While this is not Tesseract-specific, it is directly relevant if your pipeline must handle low-quality manga scans or archival PDFs where classic preprocessing is insufficient. citeturn12view4turn2view7
+### Legacy Windows OCR: Windows.Media.Ocr
 
-image_group{"layout":"carousel","aspect_ratio":"16:9","query":["document binarization Otsu vs Sauvola example","scanned page dark border artifact OCR example","deskew scanned document before after","CRAFT text detection bounding boxes example"],"num_per_query":1}
+Microsoft documents **Windows.Media.Ocr** as the Windows OCR API surface for “reading text from images,” returning structured results (lines/words). citeturn24view0turn25view0  
 
-## Detection-first OCR: why “crop and OCR regions” is the highest leverage ghost-killer
+Key implementation facts that matter for your architecture:
 
-Across both Tesseract guidance and the broader OCR literature, the most consistent “ghost killer” is **not OCR’ing the whole page**. Instead: detect text/layout regions first, crop them, add sane padding, deskew locally if needed, then recognize. This reduces the search space for the recognizer and prevents background structures from being interpreted as characters. Tesseract’s docs explicitly recommend changing segmentation modes when OCR’ing small regions and warn about border conditions (too tight vs too large), which is essentially a lightweight form of “detection-first” thinking. citeturn16view2turn7view4turn7view3
+- **Runs on-device, offline**: Microsoft’s Windows Developer Blog describes the Windows OCR API as “highly optimized” and “runs entirely on the device without requiring an Internet connection.” citeturn25view0  
+- **Requires language resources**: Microsoft’s PowerToys documentation (which uses the same OCR language pack mechanism) points to OCR language packs as Windows “capabilities” and shows how to query/install them. citeturn5view0turn13view0  
+- **Requires package identity for desktop use**: Microsoft Learn explicitly states the Windows.Media.Ocr APIs are “only supported for desktop apps with package identity,” meaning installed/running from an MSIX package. citeturn24view0  
 
-Strong empirical evidence comes from a 2025 study on complex-layout historical documents (published as a PDF via the German National Library site) that tested multiple scenarios: full-page OCR vs OCR after layout detection/segmentation. Their results table shows that **adding layout detection as a preprocessing step** (segmenting the page into meaningful blocks and feeding snippets to Tesseract) substantially improved both CER and WER compared to full-page OCR—even when the Tesseract model was already fine-tuned. They also report a small but impactful detail that matters for ghosts-and-overlay: adding **a tiny padding (two pixels) around predicted boxes** helped because “very accurate” boxes may still clip character strokes at borders. citeturn11view2turn11view3turn9view4
+Practical takeaway: if Snipping Tool is using this stack (very plausible historically, given feature timing and the existence of this mature OS OCR engine), its “model” is whatever Windows ships as its official OCR resources + engine—**not Tesseract**—and you access it through WinRT APIs rather than shipping .traineddata yourself. citeturn25view0turn24view0  
 
-A complementary perspective comes from the “Text Detection Forgot About Document OCR” paper, which argues (based on evaluation on structured document benchmarks) that modern “in-the-wild” text detection methods can be competitive on documents and can outperform some available document OCR methods, reinforcing the idea that **state-of-the-art detectors are valuable even in document-style pipelines**. For your Knowledge3 Phase 1, the practical implication is: a good detector is not “extra complexity,” it is the gate that prevents ghost explosions. citeturn2view4
+### Newer Windows AI OCR: Microsoft.Windows.AI.Imaging.TextRecognizer
 
-Concrete detector families that support detection-first OCR—each producing boxes/polygons you can store as first-class geometry—include:
-- EAST (predicts oriented rectangles/quadrangles efficiently) citeturn4search2turn4search6  
-- CRAFT (character-region + affinity modeling; strong at finding text in complex layouts) citeturn4search4turn4search0  
-- DBNet / differentiable binarization detectors (segmentation-based detection with integrated binarization behavior) citeturn4search1turn4search9  
+In 2026, Microsoft introduced (and is actively documenting) “AI Text Recognition (OCR)” via **Windows AI APIs**. citeturn2view0turn14view0  
 
-These papers are not “about Tesseract ghosts” by name—but algorithmically they target the *root cause*: stop feeding background clutter into the recognizer. citeturn2view4turn11view2
+What is *explicitly* stated in Microsoft docs:
 
-## Tesseract-side levers: segmentation modes, models, and settings that suppress hallucinations
+- Text recognition is supported by **Windows AI APIs** that return characters/words/lines/bounds/confidence. citeturn2view0  
+- These APIs are “exclusively supported by hardware acceleration in devices with a neural processing unit (NPU),” and are “faster and more accurate than the legacy Windows.Media.Ocr.OcrEngine APIs.” citeturn2view0  
+- The Windows AI APIs are “powered by Windows Machine Learning (ML)” and run local models on Copilot+ PCs. citeturn14view0  
+- Apps must declare the **systemAIModels** capability in the app manifest, and model installation can be triggered via **EnsureReadyAsync** (downloading required components). citeturn15view0turn2view0  
 
-Even with detection-first, Tesseract configuration strongly affects ghost rate because page layout assumptions drive which connected components get grouped into “text.” Tesseract’s “ImproveQuality” guide emphasizes that Tesseract expects a page of text by default; when OCR’ing small regions you should select a suitable `--psm` mode, and it even lists modes such as “single uniform block,” “single line,” “sparse text,” and “raw line.” In ghost-heavy scenarios, picking the wrong segmentation mode is equivalent to telling the engine to invent structure where none exists. citeturn16view2turn2view0
+So while Microsoft still does not publish the exact neural network architecture in these docs, they are very clear that this is a **model-driven OCR system** that is OS-managed and NPU-accelerated when available. citeturn2view0turn14view0turn15view0  
 
-Tesseract’s own docs also call out several image-format conditions that can induce bad recognition:
-- For modern versions, prefer **dark text on a light background** rather than inverted polarity. citeturn7view2  
-- Work near **300 DPI (or rescale appropriately)**. citeturn7view2turn11view3  
-- Handle **alpha channels** carefully; even though newer Tesseract versions remove alpha internally, blending behavior can still cause problems in some cases. citeturn7view4turn16view0  
-- Remove / crop **dark scanning borders**—explicitly noted as a source of extra-character pickup. citeturn16view0turn7view3  
+### What Snipping Tool is most likely doing
 
-Model choice matters too. The official traineddata repository documentation states that the integerized LSTM models are updated from the “best” set and are “probably a little less accurate,” while the `tessdata_fast` set trades accuracy for speed with a smaller network. For ghost reduction (a quality-first objective in your Phase 1), this implies preferring “best” when latency allows, and using “fast” only when you can compensate with stronger gating/post-filters. citeturn2view1turn1search5
+This is an inference, but a well-bounded one:
 
-If you fine-tune models (common for stylized manga fonts or historical typefaces), Tesseract’s documentation explicitly warns about a “hallucination effect” in 4.x training behavior: skewed training distributions (e.g., overrepresented capitalization or leading/trailing spaces) can cause systematic misbehavior, and the mitigation recommended is diverse, cleaned training text. In other words: fine-tuning can reduce errors, but it can also *create new ghosts* if training data is biased or dirty. citeturn15view0turn13view2
+- Snipping Tool’s OCR is **local**. citeturn26view0  
+- Windows exposes **two** first‑party, local OCR stacks: Windows.Media.Ocr (legacy) and Windows AI TextRecognizer (newer, NPU‑accelerated). citeturn24view0turn2view0  
 
-Finally, Tesseract provides dictionary/pattern controls that can reduce spurious outputs when your domain doesn’t match “natural language sentences.” The ImproveQuality guide notes you can disable system/frequent word dictionaries (`load_system_dawg`, `load_freq_dawg`), add expected words/patterns, and restrict recognized characters via `tessedit_char_whitelist`. Character-set restriction is one of the simplest ways to prevent “random punctuation salad” ghosts in known-format regions (e.g., page numbers, prices, IDs). citeturn16view2
+Given the public platform direction, the most likely implementation in 2026 is:
 
-## Post-OCR filtering: confidence gating, morphological checks, and sequence correction
+- Use **Windows AI TextRecognizer** on devices where it’s supported/ready (Copilot+ PC / NPU path). citeturn2view0turn15view0  
+- Fall back to **Windows.Media.Ocr** where Windows AI OCR isn’t available. citeturn24view0turn25view0  
 
-Because OCR engines can emit text even from borderline visual evidence, production pipelines usually treat OCR output as **probabilistic** and add rejection/cleanup stages. A 2023 paper in entity["organization","Association for Computational Linguistics","academic society"] proceedings emphasizes that OCR confidence is “not an absolute measure”: low confidence can still be correct, and high confidence can still be wrong; nonetheless, confidence is commonly used as a decision signal because it reflects the engine’s internal assessment of correctness. This is the core justification for your “confidence gating is mandatory” principle in Knowledge3. citeturn12view5turn3view1
+That would also explain why many users perceive Snipping Tool OCR as “fast”: the best case is hardware-accelerated inference with OS-managed models, and the fallback path is still a native, OS-optimized OCR engine. citeturn2view0turn25view0  
 
-There is also good evidence that **language-aware or lexicon-aware filtering** reduces downstream harm from OCR noise (including ghosts). Work on Finnish historical newspaper re-OCR (distributed as a CEUR-WS PDF; developed in the context of the entity["organization","National Library of Finland","Helsinki, Finland"]) describes a re-OCR process whose components include multiple image preprocessing techniques, OCR, candidate selection, and crucially **morphological analyzers plus character-level weighting rules**. They report improved OCR quality metrics (including CER/WER) and show that morphology-based recognition rates can improve substantially compared to baseline OCR. For your pipeline, the transferable idea is: “is this output word plausible in my language/domain?” is a powerful ghost suppressor—especially before translation. citeturn11view0turn11view1turn11view1turn11view1turn11view1turn11view1
+## What PDF24 uses for OCR
 
-Error-correction research in NLP also supports post-OCR correction as a structured problem. A 2017 paper on historical Finnish OCR combines OCR output with data-driven spelling correction using weighted finite-state methods, achieving high character recognition accuracy in their best configuration. While their OCR engine was not Tesseract in that experiment, the architecture generalizes: (1) OCR generates noisy text (including insertions), (2) a correction model penalizes implausible strings and reduces insertions/substitutions. This is directly relevant to “ghost tokens”: inserted characters/words are exactly what edit-distance–style correction tries to delete. citeturn9view2turn11view1
+PDF24 exists in two relevant “OCR modes,” and mixing them up leads to confusion:
 
-On evaluation methodology, the CEUR-WS re-OCR paper explicitly defines and uses **CER/WER** and frames them in terms of insertions/substitutions/deletions needed to transform OCR output into reference text (edit-distance family). This is useful for your roadmap because “ghost text” is often dominated by **insertions**, so tracking insertion-heavy error profiles (not just overall CER) gives a clearer signal that your ghost-suppression work is working. citeturn11view1turn11view3
+- **PDF24 online OCR**: explicitly cloud/server-based (“The text is recognized on our servers in the cloud”). This is not local OCR. citeturn16search29  
+- **PDF24 Creator / offline tools**: uses local executables and local pipelines. citeturn16search15turn27view0  
 
-## How to fold these research-backed techniques into your Knowledge3.md roadmap
+For the offline pipeline, there is direct evidence from PDF24’s own help center logs showing the chain:
 
-Your Knowledge3.md already emphasizes detection-first OCR, geometry-first overlay, and confidence gating. The research above mostly validates that architecture and suggests a few specific upgrades that are unusually high-impact for ghost reduction.
+1. A Java-based optimizer step. citeturn27view0  
+2. **Ghostscript** renders each PDF page to an image (e.g., `-sDEVICE=png16m -r300`). citeturn27view0  
+3. **Tesseract** is invoked per page, with explicit flags like:
+   - `--tessdata-dir ...\tessdata`
+   - `--dpi 300`
+   - `--oem 3`
+   - `--psm 1`
+   - output formats including `pdf` and `txt` citeturn27view0  
 
-For Phase 1 (“OCR overlay + minimal ghosts”), the most evidence-backed additions are:
-- **Make cropping/padding a first-class algorithm**, not a convenience. The 2025 complex-layout paper shows that running OCR on segmented snippets improves CER/WER, and that even a tiny padding around boxes can avoid clipped strokes that lead to recognition noise (and misalignment in overlays). citeturn11view2turn11view3  
-- **Treat border removal as ghost prevention**, not cleanup. Tesseract’s docs explicitly state scanned dark borders can be “picked up as extra characters,” which is ghost text in the most literal sense. Putting border detection/removal ahead of OCR is therefore a justified “non-negotiable” step for scanned pages. citeturn16view0turn7view3  
-- **Instrument Tesseract preprocessing output** (`tessedit_write_images`) so you can debug when internal thresholding/deskew fails; this reduces time wasted on model-side guessing when the real cause is image conditioning. citeturn7view1turn7view2  
+Separately, PDF24’s changelog confirms that the product uses **Tesseract**, and that some PDF24 Creator lines intentionally use **older Tesseract versions** for compatibility (e.g., reverting to Tesseract 5.3 in some 9.x releases due to Windows 7 support, with newer Tesseract in 11.x). citeturn16search22  
 
-For Phase 2 (“Translate + Replace Overlay”), the main research-driven reinforcement is: you should **not translate low-confidence or morphologically implausible tokens by default**, because confidence is designed as a probability-like decision aid (even if imperfect), and language-aware checking is a proven strategy in large-scale re-OCR workflows. citeturn12view5turn11view1turn11view0
+Tesseract itself documents that v4+ includes a neural-network subsystem as a textline recognizer, and the project explicitly describes the “new neural net (LSTM) based OCR engine.” citeturn16search6turn16search8turn16search1  
 
-For Phase 3 (“Manga Editor Mode”), detection-first becomes even more important because manga pages contain dense non-text structure (panels, screentones, art textures) that can trigger spurious OCR. Modern detection models like EAST/CRAFT/DBNet are explicitly designed to localize text under complex backgrounds and arbitrary orientations; using them (or a document-layout detector) as your “text/no-text gate” is the algorithmic way to stop full-page hallucinations. citeturn4search2turn4search4turn4search1turn2view4
+So, PDF24 offline OCR is basically: **PDF rendering + per-page Tesseract + PDF/text assembly**, with multiple external components and intermediate files, which increases failure modes and performance variance. citeturn27view0turn16search22  
 
-For Phase 4 (“PSD export”), two research-aligned notes matter for overlay correctness: (1) keep geometry stable and explicit, and (2) store coordinates in a clear, interoperable coordinate system. The hOCR spec precisely defines `bbox` coordinates (x0 y0 x1 y1) relative to the top-left of the image in pixels, and is explicitly intended to represent OCR results alongside layout analysis. Even if you don’t output hOCR, matching its coordinate conventions reduces ambiguity when mapping OCR geometry into canvas coordinates and later into PSD layer geometry. citeturn17view0turn17view1
+## Why Snipping Tool often feels faster and more stable than PDF24
+
+### Fewer pipeline stages and fewer external processes
+
+Snipping Tool OCR operates on a selected region/screenshot with a first-party Windows OCR stack; there’s no requirement to render PDF content, churn temp files, or coordinate Ghostscript + Java + Tesseract. citeturn26view0turn25view0turn24view0  
+
+PDF24’s offline path, by contrast, visibly shells out to multiple executables and processes each page through rasterization before OCR. The PDF24 logs demonstrate Ghostscript and Tesseract invocations per page. citeturn27view0  
+
+### OS-managed models + hardware acceleration when available
+
+Microsoft explicitly claims the newer Windows AI OCR is NPU-accelerated and “faster and more accurate” than the legacy Windows OCR engine on supported devices. citeturn2view0turn15view0  
+
+PDF24’s Tesseract path is CPU-bound in most deployments, and the quality/speed varies heavily with language models, fonts, page structure, and segmentation settings (OEM/PSM). Tesseract itself acknowledges the neural OCR engine improves accuracy at the cost of compute. citeturn16search1turn16search6turn27view0  
+
+### Version and compatibility pressure
+
+PDF24’s changelog shows they sometimes choose older Tesseract versions to keep Windows 7 compatibility in specific product lines. That’s a rational distribution choice, but it does constrain the OCR engine evolution in those builds. citeturn16search22  
+
+Snipping Tool, as a Windows inbox app, can rely on Windows’ own shipping OCR stacks and update channels; the support doc also highlights device-class gating for some “AI” features (e.g., Copilot+ PC-only features), which is consistent with a strategy of using the best available local acceleration paths. citeturn26view0turn2view0turn15view0  
+
+## How to upgrade your Electron OCR architecture to get Snipping Tool–like results
+
+You already have the right **control plane** (single worker slot, queueing, timeouts, retries, cache compat checks, panel vs export profiles). The missing piece—if your product target is Windows—is a **Windows-native OCR backend** that lets you reuse the OS OCR stack instead of fighting Tesseract heuristics forever. citeturn24view0turn2view0turn26view0  
+
+### Optimal solution
+
+Keep your current `VisionService` API, but make “OCR engine” a first-class provider:
+
+- Provider A (best): **Windows AI TextRecognizer** when available/ready. citeturn2view0turn15view0turn20view0  
+- Provider B (fallback on Windows): **Windows.Media.Ocr** (legacy). citeturn24view0turn25view0  
+- Provider C (portable fallback): your existing Tesseract worker pipeline.
+
+This matches how Microsoft positions Windows AI OCR vs legacy OCR (AI is better when supported; legacy is still on-device). citeturn2view0turn24view0  
+
+### Critical trade-off: Packaging / identity requirements
+
+This is the part people underestimate and then lose months:
+
+- **Windows.Media.Ocr** desktop use requires **MSIX package identity**. citeturn24view0  
+- Windows AI APIs require manifest capability `systemAIModels` and (in Microsoft’s “getting started” flow) target Copilot+ PC class devices. citeturn15view0turn2view0turn14view0  
+
+For Electron specifically, Microsoft now provides a documented path to package Electron apps as MSIX using **winapp CLI**, including concrete commands and guidance. citeturn22view0turn17view0  
+
+### Production-grade approach for Electron on Windows: use windows-ai-electron
+
+Microsoft published an official native addon that exposes Windows AI APIs directly to JavaScript (including OCR) and describes adding `systemAIModels` capability for access to local models. citeturn21view0turn9view0turn20view0  
+
+The OCR usage example (from Microsoft’s repo) looks like this:
+
+```js
+const { TextRecognizer, AIFeatureReadyResultState } = require("@microsoft/windows-ai-electron");
+
+async function recognizeTextFromImage(absImagePath) {
+  // Ensure OCR model/components are present
+  const readyResult = await TextRecognizer.EnsureReadyAsync();
+  if (readyResult.Status !== AIFeatureReadyResultState.Success) {
+    throw new Error(`OCR not ready: ${readyResult.ErrorDisplayText ?? "unknown error"}`);
+  }
+
+  const recognizer = await TextRecognizer.CreateAsync();
+  try {
+    const result = await recognizer.RecognizeTextFromImageAsync(absImagePath);
+    return result.Lines.map((l) => l.Text).join("\n");
+  } finally {
+    recognizer.Close(); // important for native resource cleanup
+  }
+}
+```
+
+This structure (EnsureReady → Create → Recognize → Close) is directly aligned with Microsoft’s documented model readiness and install flow. citeturn20view0turn2view0turn15view0turn18search1  
+
+And Microsoft’s own Electron-focused blog makes the integration strategy explicit: add the dependency, initialize winapp tooling, and add `systemAIModels` in the manifest to gain access to local Windows models. citeturn21view0turn22view0turn15view0  
+
+### Improvements beyond the question
+
+If you implement the provider model above, you can simplify and harden your current pipeline:
+
+1. **Demote heuristics to “Tesseract-only”**  
+   Right now, your worker has significant heuristic logic (filters, rescans, stage budgets). Keep that investment only where the engine is actually brittle (Tesseract), and let Windows OCR engines be treated as “authoritative output” with minimal post-processing. This reduces regression surface area immediately. citeturn2view0turn25view0turn16search6  
+
+2. **Make cache keys engine-aware**  
+   Your cache already checks language/DPI/pageSegMode/algorithmVersion/profile. Extend `algorithmVersion` to include `engineType` (e.g., `winai@1`, `winocr@winrt26100`, `tess@5.x + traineddata hash`). This prevents “silent wrong reuse” when you switch engines (a common stability killer). citeturn24view0turn2view0turn16search22  
+
+3. **Adopt MSIX packaging strategically (Windows builds only)**  
+   You don’t need to force MSIX on every platform. But on Windows, package identity unlocks exactly the class of features you’re chasing (on-device OCR, on-device AI). Microsoft even calls out that package identity unlocks on-device AI APIs and that winapp CLI can add this to Electron apps. citeturn17view0turn24view0turn22view0  
+
+4. **Benchmark the right thing**  
+   Compare:
+   - “panel OCR latency” (single region/page)  
+   - “export OCR throughput” (pages/minute)  
+   - “stability” (timeouts, retries, OOM, worker restarts)  
+   
+   PDF24’s logs reveal per-page rasterization and OCR; Snipping Tool often does region OCR. Measure apples-to-apples by rasterizing first in your pipeline if needed. citeturn27view0turn26view0

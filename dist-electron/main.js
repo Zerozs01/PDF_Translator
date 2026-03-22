@@ -328,6 +328,10 @@ const DocumentDAO = {
       sets.push("is_favorite = ?");
       values.push(data.is_favorite ? 1 : 0);
     }
+    if (data.total_pages !== void 0) {
+      sets.push("total_pages = ?");
+      values.push(data.total_pages);
+    }
     if (sets.length === 0) return;
     values.push(id);
     db.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
@@ -351,6 +355,10 @@ const DocumentDAO = {
       WHERE dt.document_id = ?
       ORDER BY t.name
     `).all(documentId);
+  },
+  touch: (id) => {
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
   },
   updateLastPage: (id, pageNum) => {
     if (!db) throw new Error("DB not initialized");
@@ -408,6 +416,11 @@ function createWindow() {
   electron.Menu.setApplicationMenu(null);
   win = new electron.BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC || "", "electron-vite.svg"),
+    show: false,
+    width: 1440,
+    height: 960,
+    minWidth: 1200,
+    minHeight: 780,
     autoHideMenuBar: true,
     // Hide menu bar
     webPreferences: {
@@ -418,6 +431,10 @@ function createWindow() {
       sandbox: true,
       webSecurity: true
     }
+  });
+  win.once("ready-to-show", () => {
+    win?.maximize();
+    win?.show();
   });
   win.webContents.on("before-input-event", (event, input) => {
     if (input.control && input.shift && input.key.toLowerCase() === "i" || input.key === "F12") {
@@ -464,7 +481,8 @@ electron.app.whenReady().then(() => {
     }
     try {
       const safePath = sanitizePath(filepath);
-      return DocumentDAO.upsert(safePath, filename, totalPages);
+      const row = DocumentDAO.upsert(safePath, filename, totalPages);
+      return row?.id ?? 0;
     } catch (error) {
       console.error("db:save-document error:", error);
       throw error;
@@ -760,6 +778,18 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:get-document-tags error:", error);
       return [];
+    }
+  });
+  electron.ipcMain.handle("db:touch-document", async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error("Invalid input: id must be a positive number");
+    }
+    try {
+      DocumentDAO.touch(id);
+      return true;
+    } catch (error) {
+      console.error("db:touch-document error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:update-last-page", async (_, { id, pageNum }) => {

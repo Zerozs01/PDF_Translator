@@ -463,7 +463,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       const { setPage } = useProjectStore.getState();
       const previousPage = useProjectStore.getState().currentPage;
 
-      setPage(pageNum);
+      setPage(pageNum, { persist: false });
 
       const startTime = Date.now();
       const maxWaitTime = 10000;
@@ -507,7 +507,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         }
       }
 
-      setPage(previousPage);
+      setPage(previousPage, { persist: false });
       throw new Error(`Timeout waiting for page ${pageNum} canvas to render`);
     };
 
@@ -882,7 +882,10 @@ export const OCRTextLayerPanel: React.FC = () => {
       .map((metric) => {
         const deltaWords = metric.wordsAfter - metric.wordsBefore;
         const deltaLines = metric.linesAfter - metric.linesBefore;
-        return `${metric.stage}:${deltaWords >= 0 ? '+' : ''}${deltaWords}w/${deltaLines >= 0 ? '+' : ''}${deltaLines}l`;
+        const replacementSuffix = metric.replacements && metric.replacements > 0
+          ? `/${metric.replacements}r`
+          : '';
+        return `${metric.stage}:${deltaWords >= 0 ? '+' : ''}${deltaWords}w/${deltaLines >= 0 ? '+' : ''}${deltaLines}l${replacementSuffix}`;
       })
       .join(', ')
     : '';

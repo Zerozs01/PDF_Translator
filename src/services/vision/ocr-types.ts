@@ -21,16 +21,28 @@ export type OCRPipelineProfile = 'panel' | 'export';
 export type OCRQualityProfile = 'fast' | 'balanced' | 'best';
 
 export interface OCRStageMetric {
-  stage: 'base' | 'rescan' | 'anchorProbe' | 'imageFilter' | 'watermark' | 'linePrune';
+  stage:
+    | 'base'
+    | 'rescan'
+    | 'anchorProbe'
+    | 'imageFilter'
+    | 'imgTile'
+    | 'bgVariance'
+    | 'isolatedCjk'
+    | 'korJamo'
+    | 'weakCjkLine'
+    | 'watermark'
+    | 'linePrune';
   wordsBefore: number;
   wordsAfter: number;
   linesBefore: number;
   linesAfter: number;
+  replacements?: number;
 }
 
 export interface OCRCandidateDebug {
   id: string;
-  stage: 'emptyLineFallback' | 'gapFallback' | 'anchorSecondLine' | 'anchorTopSparse' | 'anchorBottomSparse';
+  stage: 'emptyLineFallback' | 'gapFallback' | 'anchorSecondLine' | 'anchorTopSparse' | 'anchorBottomSparse' | 'postPruneLine';
   bbox: BBox;
   accepted: boolean;
   score?: number;

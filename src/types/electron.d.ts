@@ -55,6 +55,7 @@ export interface DocumentUpdate {
   project_id?: number | null;
   thumbnail_path?: string;
   is_favorite?: boolean;
+  total_pages?: number;
 }
 
 export interface ProjectCreate {
@@ -100,6 +101,7 @@ export interface ElectronAPI {
     addDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
     removeDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
     getDocumentTags: (documentId: number) => Promise<DBTag[]>;
+    touchDocument: (id: number) => Promise<boolean>;
     updateLastPage: (id: number, pageNum: number) => Promise<boolean>;
   };
   

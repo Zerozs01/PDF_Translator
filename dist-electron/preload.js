@@ -25,6 +25,7 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     addDocumentTag: (documentId, tagId) => electron.ipcRenderer.invoke("db:add-document-tag", { documentId, tagId }),
     removeDocumentTag: (documentId, tagId) => electron.ipcRenderer.invoke("db:remove-document-tag", { documentId, tagId }),
     getDocumentTags: (documentId) => electron.ipcRenderer.invoke("db:get-document-tags", documentId),
+    touchDocument: (id) => electron.ipcRenderer.invoke("db:touch-document", id),
     updateLastPage: (id, pageNum) => electron.ipcRenderer.invoke("db:update-last-page", { id, pageNum })
   },
   // Tag operations

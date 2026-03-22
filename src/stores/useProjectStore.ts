@@ -38,7 +38,7 @@ interface ProjectState {
   ensureDocumentId: () => Promise<number | null>;
   closeProject: () => void;
   setFileData: (data: Uint8Array | null) => void;
-  setPage: (page: number) => void;
+  setPage: (page: number, options?: { persist?: boolean }) => void;
   setTotalPages: (total: number) => void;
   setViewMode: (mode: ViewMode) => void;
   setTranslationMode: (mode: TranslationMode) => void;
@@ -50,6 +50,33 @@ interface ProjectState {
 const isImportedCachePath = (value: string | null): boolean =>
   typeof value === 'string'
   && /[\\/]imports[\\/][a-f0-9]{16,}\.[^\\/]+$/i.test(value);
+
+const touchDocumentActivity = async (documentId: number): Promise<void> => {
+  if (typeof window === 'undefined' || !window.electronAPI?.db?.touchDocument) return;
+  try {
+    await window.electronAPI.db.touchDocument(documentId);
+  } catch (error) {
+    console.warn('[DB] Failed to update recent activity:', error);
+  }
+};
+
+const persistDocumentPage = async (documentId: number, page: number): Promise<void> => {
+  if (typeof window === 'undefined' || !window.electronAPI?.db?.updateLastPage) return;
+  try {
+    await window.electronAPI.db.updateLastPage(documentId, page);
+  } catch (error) {
+    console.warn('[DB] Failed to persist page activity:', error);
+  }
+};
+
+const persistTotalPages = async (documentId: number, totalPages: number): Promise<void> => {
+  if (typeof window === 'undefined' || !window.electronAPI?.db?.updateDocument) return;
+  try {
+    await window.electronAPI.db.updateDocument(documentId, { total_pages: totalPages });
+  } catch (error) {
+    console.warn('[DB] Failed to persist total pages:', error);
+  }
+};
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   file: null,
@@ -178,7 +205,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     if (resolvedPath && dbService.isAvailable()) {
       try {
-        await get().ensureDocumentId();
+        const ensuredId = await get().ensureDocumentId();
+        if (ensuredId) {
+          await touchDocumentActivity(ensuredId);
+        }
       } catch (error) {
         console.error('[DB] Failed to ensure documentId:', error);
       }
@@ -258,8 +288,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   }),
   setFileData: (data) => set({ fileData: data }),
 
-  setPage: (page) => set({ currentPage: page }),
-  setTotalPages: (total) => set({ totalPages: total }),
+  setPage: (page, options) => {
+    set({ currentPage: page });
+    const documentId = get().documentId;
+    if (documentId && options?.persist !== false) {
+      void persistDocumentPage(documentId, page);
+    }
+  },
+  setTotalPages: (total) => {
+    set({ totalPages: total });
+    const documentId = get().documentId;
+    if (documentId && total > 0) {
+      void persistTotalPages(documentId, total);
+    }
+  },
   setViewMode: (mode) => set({ viewMode: mode }),
   setTranslationMode: (mode) => set({ translationMode: mode }),
   setSourceLanguage: (lang) => set({ sourceLanguage: lang }),

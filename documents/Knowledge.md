@@ -1,266 +1,90 @@
- workflow แบบมือโปรให้ เอาไปทำระบบ OCR ที่ **แม่น + ไม่มี text ผี + ระบุตำแหน่งได้ + แก้เอียงเฉพาะจุดได้**
+# Consolidated Research Notes
 
-อ้างอิง pipeline จากบทเรียน DIP ที่นายเรียน (ดู flow หลักหน้า 4–5 ในสไลด์) 
+This file keeps the research takeaways that still matter for the repo.
+It is not the place for exact thresholds or current file-level behavior. For that, use `ARCHITECTURE.md` and `OCR_OPTIMIZATION.md`.
 
----
+## 1. Durable Principles
 
-# TL;DR (ภาพรวมสั้นๆก่อน)
+### Text-layer-first beats OCR
 
-Pipeline ที่ดีต้องเป็นแบบนี้:
+If a PDF page already contains real text, extracting that text is more accurate and cheaper than OCR. The current repo already follows this in the export path through `SearchablePDFService`.
 
-```
-Image Acquisition
-→ Enhancement
-→ Restoration
-→ (Local) Deskew
-→ Text Detection
-→ Text Segmentation
-→ Morphological Cleanup
-→ OCR
-→ Post-processing
-```
+### Detection-first OCR is still the highest-upside future upgrade
 
-ถ้าข้ามขั้นไหน = text ผีโผล่แน่นอน
+The current repo mostly performs full-page OCR plus heuristic filtering and rescue. Research still supports region-first OCR as the strongest long-term way to reduce ghost text, especially on manga, textured pages, and mixed layouts.
 
----
+### Geometry must stay first-class
 
-# 🧠 STEP 1: Image Acquisition (ต้นทางต้องดี)
+Useful OCR output is not only text. It must keep:
 
-จากสไลด์อธิบายไว้ว่า acquisition รวม preprocessing ด้วย 
+- word and line boxes
+- confidence
+- page dimensions
+- stable cache identity
 
-ต้องทำ:
+That principle already exists in the repo and should not be weakened during tuning.
 
-* ใช้ DPI ≥ 300 สำหรับเอกสาร
-* ใช้ grayscale หรือ RGB แท้ ไม่ใช่ JPEG บีบหนัก
-* ทำ de-noise ก่อนทุกครั้ง
+### Preprocessing should be evidence-based, not globally relaxed
 
-ถ้า input แย่ ต่อให้ model เทพก็พัง
+Earlier experiments already showed that broad threshold relaxation can increase ghost text. Research and project history point in the same direction:
 
----
+- improve the exact failing stage
+- keep changes narrow
+- measure the before/after effect
 
-# 🔥 STEP 2: Noise Removal & Restoration
+### Confidence and language-aware cleanup are mandatory
 
-จากสไลด์หัวข้อ Restoration 
+Tesseract will often return something even when the visual evidence is weak. The current code correctly treats OCR as a noisy candidate stream that needs:
 
-ทำ:
+- image/text-background filtering
+- lexical or script-aware cleanup
+- line-level pruning
+- bounded rescue
 
-### ✔ Gaussian / Bilateral Filter
+### Translation, RAG, and editor workflows are downstream concerns
 
-ลด speckle noise
+Better OCR quality should happen before translation, LLM polishing, or search/retrieval. Garbage text passed downstream becomes harder and more expensive to fix later.
 
-### ✔ Non-local means (ถ้าคุณภาพต่ำมาก)
+## 2. What The Current Repo Already Implements
 
-### ✔ Shadow Removal
+- PDF text-layer skip in export mode
+- local tessdata path with CDN fallback
+- OCR quality profiles: `fast`, `balanced`, `best`
+- two runtime contexts: `panel` and `export`
+- cache persistence in SQLite
+- cache compatibility checks using language, DPI, `pageSegMode`, algorithm version, pipeline profile, and quality profile
+- debug payloads with drop counts, stage metrics, candidate traces, runtime, and skip reason
+- Korean-specific filtering for:
+  - isolated CJK noise
+  - jamo-heavy artifacts
+  - weak isolated CJK lines
 
-ใช้ illumination normalization:
+## 3. What The Repo Does Not Implement Yet
 
-```
-img = img / blur(img)
-```
+- detector-first region OCR
+- local deskew per text region
+- explicit per-region angle in OCR output
+- reproducible Korean fixture suite
+- unit-test coverage for the OCR heuristic modules
+- true editor/data model for bubble-aware replacement or PSD export
 
-ถ้าไม่ลบเงา → OCR อ่านเป็นตัวประหลาดทันที
+Those older ideas are not wrong, but they are not the current critical path.
 
----
+## 4. Research-Backed Next Upgrades After The Korean Baseline Stabilizes
 
-# 🎯 STEP 3: Adaptive Binarization (สำคัญมาก)
+1. Add Korean fixtures and saved debug payloads so tuning stops depending on memory and screenshots.
+2. Add Korean-specific stage counters so keep/drop changes can be measured, not guessed.
+3. Evaluate limited detector-first OCR only for hard pages, not as an immediate repo-wide rewrite.
+4. Add local deskew only where debug evidence shows slanted speech or rotated regions are a real failure mode.
+5. Add unit tests for the filter stages before doing deeper heuristic expansion.
 
-อย่าใช้ threshold ธรรมดา
+## 5. De-Scoped For Now
 
-ใช้:
+These ideas remain valid but are intentionally not active work right now:
 
-* Sauvola
-* Wolf
-* Niblack
-* Adaptive Gaussian
+- PSD export architecture
+- full manga editor workflow
+- RAG integration
+- YOLO / layout-model experiments
 
-เพราะพื้นหลังแต่ละจุดไม่เท่ากัน
-
----
-
-# 🧱 STEP 4: Morphological Processing (กำจัด text ผี)
-
-ในสไลด์มีหมวด Morphological Processing 
-
-ใช้:
-
-| ปัญหา         | วิธี     |
-| ------------- | -------- |
-| จุด noise     | Opening  |
-| ตัวหนังสือขาด | Closing  |
-| ตัวติดกัน     | Erosion  |
-| เส้นบาง       | Dilation |
-
-และทำ:
-
-* Connected Component Analysis
-* ลบ component ที่เล็กผิดปกติ (area filtering)
-
-นี่แหละตัวฆ่า “text ผี”
-
----
-
-# 📐 STEP 5: Detect Orientation & Deskew (ทั้งหน้า + เฉพาะจุด)
-
-แยกเป็น 2 ระดับ:
-
----
-
-## 🔹 5.1 Global Skew
-
-ใช้:
-
-* Hough Transform (หาเส้น baseline)
-* PCA บน contour text
-
-หมุนทั้งหน้าให้ตรงก่อน
-
----
-
-## 🔹 5.2 Local Skew (เฉพาะจุด)
-
-ต้อง:
-
-1. Detect text region ก่อน (เช่น CRAFT / EAST / DBNet)
-2. หา angle ของแต่ละ bounding box
-3. Rotate เฉพาะ patch นั้น
-4. ส่งเข้า OCR ทีละ region
-
-ถ้าไม่ทำ local deskew → เอียงเฉพาะจุด OCR จะพัง
-
----
-
-# 🧩 STEP 6: Text Detection (แยกข้อความออกจากภาพ)
-
-นี่คือ segmentation ที่อยู่ในสไลด์ 
-
-ใช้:
-
-* CRAFT (แม่นระดับตัวอักษร)
-* DBNet (แม่นระดับคำ)
-* YOLO-text (เร็ว)
-
-ผลลัพธ์ต้องได้:
-
-```
-Bounding Box + Confidence
-```
-
----
-
-# 🧠 STEP 7: Precise Text Segmentation
-
-หลัง detect แล้วต้อง refine:
-
-* Polygon approximation
-* Remove overlapping boxes
-* Merge boxes ที่ควรเป็นบรรทัดเดียวกัน
-* Sort by reading order (top-left → bottom-right)
-
----
-
-# 🧬 STEP 8: Representation & Feature Extraction
-
-ตาม flow ในสไลด์ Representation & Description 
-
-ก่อนเข้า OCR ต้อง normalize:
-
-* Resize height คงที่ (เช่น 32 px)
-* Contrast normalize
-* Padding ให้ aspect ratio ถูก
-
----
-
-# 🤖 STEP 9: OCR Engine
-
-เลือก:
-
-| งาน         | แนะนำ                   |
-| ----------- | ----------------------- |
-| ภาษาไทย     | EasyOCR / PaddleOCR     |
-| อังกฤษ      | Tesseract + LSTM        |
-| ความแม่นสูง | TrOCR / Transformer OCR |
-
----
-
-# 🧼 STEP 10: Post-processing (ลด text ผีจริงๆ)
-
-ขั้นตอนนี้คนชอบลืม
-
-ทำ:
-
-* Language model correction
-* Dictionary matching
-* Edit distance correction
-* Remove low confidence text
-
-ถ้า confidence < threshold → discard
-
----
-
-# 🗺 การระบุตำแหน่งแม่นๆ ทำยังไง?
-
-เก็บข้อมูล:
-
-```
-[x_min, y_min, x_max, y_max]
-angle
-confidence
-```
-
-หรือเก็บเป็น polygon 4 จุด
-
-แล้ว normalize ด้วย:
-
-```
-x_norm = x / width
-y_norm = y / height
-```
-
-แบบนี้ตำแหน่งจะ invariant ต่อขนาดภาพ
-
----
-
-# 💣 ปัญหาที่ทำให้เกิด “Text ผี”
-
-1. Noise ยังไม่สะอาด
-2. Thresholding ผิด
-3. Morphology ไม่พอ
-4. Detection box overlap
-5. OCR ไม่มี language constraint
-6. พื้นหลัง texture คล้ายตัวอักษร
-
----
-
-# 🏗 ถ้าจะทำระบบระดับ Production
-
-Pipeline แนะนำแบบจริงจัง:
-
-```
-Input
-→ CLAHE
-→ Bilateral Filter
-→ Adaptive Threshold
-→ Morphological Clean
-→ Text Detector (DBNet)
-→ Local Deskew
-→ Crop Patch
-→ Resize & Normalize
-→ OCR (Transformer-based)
-→ Language Model Correction
-→ Structured Output (JSON)
-```
-
----
-
-# 🧊 สรุปแบบไม่อ้อม
-
-ถ้านายอยากได้ OCR แม่นจริง:
-
-* อย่าพึ่งคิดว่า model สำคัญสุด
-* Preprocessing สำคัญกว่า 60%
-* Morphology สำคัญ 20%
-* Model จริงๆ แค่ 20%
-
-เข้าใจ pipeline ตาม DIP ที่เรียนให้ลึกก่อน แล้วค่อยใช้ deep learning
-
-
+The repo needs a stable OCR baseline first, especially for Korean pages.

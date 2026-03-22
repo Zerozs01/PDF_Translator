@@ -23,6 +23,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:add-document-tag',
   'db:remove-document-tag',
   'db:get-document-tags',
+  'db:touch-document',
   'db:update-last-page',
   // Tag management
   'db:get-all-tags',
@@ -58,6 +59,7 @@ interface DocumentUpdate {
   project_id?: number | null;
   thumbnail_path?: string;
   is_favorite?: boolean;
+  total_pages?: number;
 }
 
 interface ProjectCreate {
@@ -116,6 +118,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:remove-document-tag', { documentId, tagId }),
     getDocumentTags: (documentId: number) =>
       ipcRenderer.invoke('db:get-document-tags', documentId),
+    touchDocument: (id: number) =>
+      ipcRenderer.invoke('db:touch-document', id),
     updateLastPage: (id: number, pageNum: number) =>
       ipcRenderer.invoke('db:update-last-page', { id, pageNum }),
   },

@@ -1,333 +1,266 @@
-# OCR Optimization Notes
+# OCR Optimization
 
-This document focuses on performance and quality tradeoffs in the OCR pipeline.
+This file tracks the OCR plan against the current code, not against older experimental docs.
 
-## Current Baseline Decision (2026-03-21)
+## Current Baseline (2026-03-21)
 
-- Keep runtime behavior aligned with the existing `Best Quality` profile as default baseline.
-- Do not switch users to a new fast profile yet.
-- Continue with stability/timeout hardening first, then roll out speed profile as an explicit opt-in optimization phase.
+- Primary OCR logic lives in `src/services/vision/worker.ts`
+- Worker entry is `worker-boot.ts`, with `worker-stable.ts` only as fallback
+- OCR algorithm baseline is `93`
+- Runtime defaults:
+  - worker count: `1`
+  - panel pipeline: `panel`
+  - export pipeline: `export`
+  - quality default: `best`
 
-## 2026-03-21 Korean Accuracy Recovery Roadmap (Current Code Baseline: OCR v86)
+## Review Of The Previous Plan
 
-This section reflects the current code path in `src/services/vision/worker.ts` and `src/services/vision/ocr-filtering.ts`.
+The earlier plan had several good instincts:
 
-### Observed symptoms from current Korean pages
+- keep changes deterministic
+- do not fabricate text
+- add Korean-specific measurement
+- avoid broad threshold relaxation
 
-- Valid Korean phrases are partially dropped (for example, missing syllables inside otherwise valid lines).
-- Ghost fragments still survive into final text (`년 기 겨느`, `노카`, `가으` pattern).
-- Final output often mixes true lines with short low-value fragments, reducing translation quality.
+But some parts needed correction when checked against the actual code:
 
-### Root-cause map (current implementation)
+### What stays valid
 
-| Area | Current behavior | Accuracy risk |
-| ---- | ---------------- | ------------- |
-| Raw OCR input quality | Tesseract still emits many short CJK artifacts on textured/illustrated regions | Noise enters pipeline early and competes with real speech text |
-| `filterKoreanJamoNoise` | Strictly removes many jamo-heavy artifacts, but allows some mixed tokens when they do not match hard fail patterns | Some non-lexical mixed fragments survive; some valid edge tokens may be over-pruned |
-| `filterWeakIsolatedCjkLines` | Uses short-line, confidence, variance, and neighbor checks for CJK line pruning | Neighbor rescue can keep weak fragment lines; strict shape gates can drop valid short Korean lines |
-| Image/background filters | Applied before CJK-specific pruning and tuned mostly by generic thresholds | Over/under filtering shifts work to later heuristics, causing unstable keep/drop outcomes |
-| Recovery strategy | No dedicated Korean continuity rescue pass after CJK pruning | Missing syllables/joins are not recovered when line structure is partially damaged |
+- Korean work should stay profile-safe and not break Latin/document pages.
+- Telemetry is useful, especially for Korean keep/drop analysis.
+- A continuity-rescue stage should only merge OCR-detected tokens, never invented text.
 
-### Optimization principles (must keep)
+### What needed adjustment
 
-- No synthetic text injection. Every token must come from OCR detection with valid bbox.
-- Deterministic behavior over ad-hoc heuristics.
-- Profile-safe changes: avoid breaking Latin/document paths while tuning Korean.
+- A full dual-architecture fast profile is not the immediate blocker for Korean accuracy.
+  The current code already has `fast` / `balanced` / `best`; they are not fully separate pipelines yet, but they already control runtime budget and rescue caps.
 
-### Korean roadmap (execution order)
+- `worker-stable.ts` should not be treated as the main implementation.
+  Current behavior must be read from `worker.ts`.
 
-1. Stage K1 - Instrumentation first
-   - Add Korean-specific drop telemetry buckets: `korJamo`, `weakCjkLine`, `imgTile`, `bgVariance` split by line length and confidence bins.
-   - Capture per-page counters before/after each Korean filter stage.
-2. Stage K2 - Stabilize keep/drop boundaries
-   - Tighten short non-punctuation fragment rejection for low-confidence Korean lines.
-   - Add explicit keep rules for short but valid conversational tokens ending with punctuation (`?`, `!`, `~`).
-3. Stage K3 - Context-aware line validation
-   - Introduce a Korean line consistency score using nearby-line support (vertical proximity + overlap + syllable density).
-   - Drop isolated weak fragments only when local context score is below threshold.
-4. Stage K4 - Korean continuity rescue (detect-derived only)
-   - Add bounded region re-scan for damaged Korean lines where syllable ratio drops unexpectedly after pruning.
-   - Merge only OCR-detected tokens with IoU and reading-order checks; no text fabrication.
-5. Stage K5 - Regression guard and rollout
-   - Validate on two fixture classes: tall comic pages and dense technical/document pages.
-   - Bump OCR algorithm version after each approved Korean-core rule change.
+- Korean work should start with keep/drop boundaries before adding more rescans.
+  The current pipeline already has multiple recovery paths. Adding another rescue stage too early would raise regression risk and make root-cause analysis harder.
 
-### Success criteria
+## Current Korean Failure Map
 
-- Ghost fragment count per Korean page decreases without increasing empty-line rate.
-- Korean phrase completeness improves on known failure pages.
-- Runtime remains within current panel timeout budget and does not regress export stability.
+| Area | Current behavior | Main risk |
+| --- | --- | --- |
+| Image/background filters | Short Korean lines can be filtered early if they are not protected | Valid speech fragments disappear before later stages can help |
+| `filterKoreanJamoNoise` | Strong against jamo-only ghosts | Mixed edge cases can still survive or valid short tokens can become fragile |
+| `filterWeakIsolatedCjkLines` | Removes weak short CJK lines and rescues by neighbor support | A single nearby strong line can rescue bad Korean fragments too easily; short punctuated speech can also be over-pruned |
+| Recovery stages | Current Korean path relies more on cleanup than on dedicated continuity rescue | Missing syllables or damaged short lines are not always recovered |
 
-## 2026-03-21 v71 Regression Follow-up (Page 21 "ME HERE")
+## v87 Korean Tuning Pass
 
-- Added deterministic line repair to restore missing `ME` before singleton `HERE` when nearby dialogue context indicates the phrase should be `ME HERE`.
-- Increased panel recovery budget to 60s so valid dialogue pages are less likely to be truncated by stage budget cutoffs.
+This pass is intentionally low-risk and focuses on keep/drop boundaries instead of adding another heavy rescue stage.
 
-## 2026-03-21 Practical Answer: Are only required steps left?
+### Changes
 
-Short answer: no. The pipeline still contains several accuracy-oriented optional rescue stages that can be reduced or bypassed for a speed profile.
+- Protect short Korean lines with strong terminal punctuation earlier in the pipeline so image/background filters are less likely to delete valid speech.
+- Keep short punctuated Korean speech during weak-line pruning when the line has real Hangul syllables and minimum confidence.
+- Require stronger local neighbor support before weak short Korean syllable fragments without punctuation are rescued.
+- Treat large-gap Korean lines as line-rescan candidates even when raw coverage is not obviously low.
+- Korean line-rescan now evaluates multiple PSMs (`SINGLE_LINE`, `SINGLE_BLOCK`, `SPARSE_TEXT`) and keeps the best recovered Hangul-heavy result.
+- Korean gap-fallback is enabled in a bounded form so missing middle chunks such as dropped short words or syllable groups can be recovered without opening full CJK gap rescue globally.
+- Panel debug stage metrics are now split by filter family (`imgTile`, `bgVariance`, `isolatedCjk`, `korJamo`, `weakCjkLine`) instead of being merged into one opaque image-filter bucket.
 
-### Step classification (current worker)
+### Why this order is better
 
-Mandatory core (keep for all profiles):
-- PDF render to canvas
-- One primary Tesseract recognize pass
-- TSV parsing and base noise cleanup
-- Minimal line reconstruction
-- Final text-layer payload assembly
+- It fixes the most likely false drops and false keeps without increasing OCR call count.
+- It reduces the chance that Korean tuning turns into a hidden performance regression.
+- It preserves the "no synthetic text" rule.
 
-Optional heavy stages (accuracy-first, expensive):
-- Line rescan loops
-- Anchor probe / neighborhood rescue
-- Top-band sparse rescue
-- Post-prune line rescue
-- Edge-token rescue
-- Gap and empty-line fallback retries
-- Full image tile + background variance filtering on every page
+## v88 Korean Recovery Gate And Replacement Pass
 
-### What to change for pdf24-like speed while preserving baseline quality
+The next failures showed a different bottleneck:
 
-1. Introduce dual runtime profiles in worker entry.
-   - Accuracy profile: current behavior.
-   - Fast profile: single recognize pass + minimal cleanup + strict micro-rescue cap.
+- some Korean rescues were never running on real manga speech pages because the generic CJK page caps were too strict for pages with many short speech lines
+- append-only recovery could add missing words, but it could not replace overlapping bad OCR such as a wrong syllable block that already occupied the same region
 
-2. Add hard per-page rescue budget by operation count, not only time.
-   - Example: max 2 recognizeRegion calls in fast profile.
-   - This gives deterministic latency and avoids long-tail pages.
+### Changes
 
-3. Make costly filters conditional.
-   - Run image-tile and background-variance filters only when base output is sufficiently dense/noisy.
-   - Skip these filters for low-word or already-clean pages.
+- Korean heavy recovery is no longer blocked by the generic CJK line-rescan and fallback page caps on moderate speech-heavy pages.
+- Korean line-rescan now prioritizes suspicious lines with low-confidence or non-syllable short tokens, not only low-coverage lines.
+- Suspicious Korean lines use a wider rescan crop so partial lines such as `뭐지?` / `가으` can pull in nearby missed syllables more reliably.
+- When Korean line-rescan returns a materially better line, the worker can replace the overlapping bad line instead of trying to append around it.
+- Panel stage metrics now expose replacement count on the rescan stage as `/Nr`, which makes "text changed but word count did not" visible in the debug summary.
 
-4. Shrink panel defaults for interactive OCR.
-   - Keep export profile for full-quality batch generation.
-   - Keep panel profile focused on user-perceived speed and fail-fast.
+### Why this matters for page 2 and page 3
 
-5. Add telemetry per stage for auto-tuning.
-   - Track stage time and token delta.
-   - Disable stages that cost high time but rarely improve text on a given document pattern.
+- Page 2 (`잘나왔던데 왜 지워?`) is not only a filter problem. The missing `왔` sits inside a damaged line, so append-only recovery was too weak.
+- Page 3 mixes two problems:
+  - damaged lines that need Korean rescan and replacement, such as `빨리` / `싫으면`
+  - broader speech-line recovery on pages that still have many short OCR tokens, where the old generic CJK caps were shutting off the heavy rescue path too early
 
-### Suggested refactor slices
+## v89 Korean Rescan Acceptance Pass
 
-Slice A (low risk, immediate):
-- Add Fast profile toggle and operation-cap gate.
-- Disable line-rescan/top-band/post-prune in Fast profile by default.
+The next console samples showed that `rescan` was still ending at `+0w/+0l` on the failing pages. That meant the new Korean recovery paths were reaching candidate lines more often, but the recovered short Hangul syllables were still being rejected by generic CJK per-word thresholds.
 
-Slice B (medium risk):
-- Convert image-tile/background filters to conditional execution policy.
-- Apply based on base-noise signature and confidence distribution.
+### Changes
 
-Slice C (higher value):
-- Build adaptive stage scheduler from telemetry (budget-aware stage ordering).
-- Run highest ROI stage first; stop when confidence/readability target is reached.
+- Korean recovery budget is now larger than the generic CJK budget on speech-heavy manga pages.
+- Korean line-rescan uses a stricter coverage trigger than generic CJK, so damaged lines like `잘나 데왜지워?` are more likely to be rescanned.
+- Short punctuated Korean lines can also enter line-rescan, which helps cases like `뭐지?` where nearby missing text is still in the same bubble.
+- `filterRecoveredCjkWords()` now relaxes short-token acceptance specifically for Korean `lineRescan` and `gapFallback` when the token is a Hangul syllable aligned with the current line.
 
-## 2026-03-21 Timeout Follow-up (Page 1 Hostile Texture Case)
+### Why this is different from v88
 
-### What was observed
+- v88 mostly fixed gating and replacement.
+- v89 fixes the stronger blocker seen in console traces: recovered short Korean syllables were still being discarded before they could help line repair.
 
-- Many pages are now stable and no longer hit the 120s page timeout.
-- Page 4-style non-target/no-text pages are now correctly fail-fast skipped with explicit skip reason.
-- A residual Page 1 pattern could still run long in some retries because expensive rescue stages were entered before hard-skip criteria were reached in all runs.
+## v90 Korean Binarized Line-Rescan Pass
 
-### Why Page 1 could still be slow
+The next manual checks still showed the same missing glyphs while `rescan` stayed at zero gain. That meant the raw region OCR itself was often failing to see the missing syllables from the normal Korean crop.
 
-- The page produces many noisy tokens from texture/watermark-like regions.
-- Post-filter lexical signals can fluctuate between runs, so one run may classify as garbage early while another run still qualifies for line-rescan/top-band rescue.
-- Budget checks were initially missing on some late rescue branches, allowing additional heavy probes after budget warning.
+### Changes
 
-### Current mitigation in code
+- Korean line-rescan now retries against a lazily built binarized full-page input when the normal crop still looks weak.
+- Short Korean lines use a wider rescan crop, especially punctuated or suspicious lines such as `뭐지?`.
+- This is still bounded: the extra binarized rescan path only runs inside Korean line-rescan, not as a repo-wide second OCR pipeline.
 
-- Fail-fast now also uses raw-before-filter metrics (`rawWordCountBeforeNoise`, filtered-out ratio) to catch hostile texture pages earlier.
-- Added stricter panel-only texture garbage rules to skip heavy rescue when raw-noise signatures are dominant.
-- Recovery budget gate is applied to remaining heavy branches (top-band sparse probe, post-prune line rescue, edge-token rescue) to prevent stage-overrun cascades.
-- Timeout hook now tears down worker requests hard (`visionService.cancelAll`) instead of only timing out the wrapper promise.
-- UI now shows `skipReason` for fast diagnosis during tuning.
+## v91 Korean Raw-Line And Min-Conf Pass
 
-## Pipeline Overview
+The next screenshots still showed identical misses and `rescan:+0w/+0l`, which exposed a more basic blocker:
 
-1. **Render PDF → Canvas**  
-   `src/components/OCR/OCRTextLayerPanel.tsx` renders each page at target DPI.
+- Korean `lineRescan` still used a generic CJK `minConf` gate high enough to reject medium-confidence recovered syllables before the Korean-specific relaxations were even reached
+- the current rescan set still lacked a tight `RAW_LINE` pass with upscale, which the new research note explicitly calls out as a practical Tesseract lever for line OCR
 
-2. **OCR (Tesseract.js)**  
-   `src/services/vision/worker.ts` runs OCR and returns TSV, words, lines.
+### Changes
 
-3. **Filtering**  
-   - `cleanLineNoise`: remove short/noisy tokens.
-   - `filterWordsByImageTiles`: reduce OCR in image-heavy tiles.
-   - `filterWordsByBackground`: remove words on photo backgrounds.
+- Korean `lineRescan` now uses its own lower `minConf` threshold instead of the generic CJK value.
+- Korean `gapFallback` also uses a lower source threshold than generic CJK.
+- Korean `lineRescan` now adds a tight `RAW_LINE` (`psm 13`) pass with 2x upscale.
+- Korean line-rescan can inspect more candidate lines per page than before.
 
-4. **Fallback Recovery**  
-   - Re-OCR empty line boxes (`PSM.SINGLE_LINE`) to recover missed lines.
-   - Re-OCR large gaps in a line (`PSM.SINGLE_WORD`) to recover short missing tokens.
-   - Uses grayscale (non-binarized) input when available to avoid losing thin glyphs.
-   - Disabled when page has too few words to avoid slowing low-confidence pages.
+### Why this matches the new research note
 
-5. **Text Layer**  
-   `src/services/pdf/TextLayerService.ts` injects invisible text.
+- `deep-research-report2.md` is directionally right for this failure mode: use the narrowest fitting PSM, keep borders controlled, and spend extra OCR cost only on bounded regions instead of broad page-wide retries.
 
-## Performance Hotspots
+## v92 Latin Core Line-Quality Pass
 
-- **Image tile mask**: samples the full grayscale image to build a coarse image mask.
-- **Background variance**: computes per-word background variance for photo filtering.
-- **OCR itself**: Tesseract dominates CPU time (quality vs speed tradeoff).
+The next English failure showed a different class of problem from the Korean work:
 
-## Cache & Parallelism
+- false-positive Latin rescue and Latin prune were not using the same line-quality contract
+- anchor / post-prune recovery could still accept a readable-looking ghost fragment such as `Prin Le AT`
+- real sentence lines without enough dictionary hits could still be judged too weak by one rescue path while another prune path expected different signals
 
-- OCR cache auto-loads on page change when parameters match; Current Page forces re-OCR.
-- `VisionService` uses a small worker pool to enable limited parallel OCR work.
+### Changes
 
-## Current Tuning Strategy
+- Added a shared Latin line assessment helper in `ocr-latin-heuristics.ts`.
+- The new helper scores:
+  - lexical hits
+  - meaningful word count
+  - readable ratio
+  - short-token density
+  - mixed/title-case artifact patterns
+  - ghost-like short-fragment patterns
+- Anchor probes now require at least one recovered line that passes the shared Latin recovery assessment instead of relying only on the older aggregate candidate score.
+- Post-prune line rescue now uses the same shared Latin assessment for ranking and acceptance, and emits `postPruneLine` candidate debug entries.
+- Latin prune stages now honor the shared assessment earlier so readable sentence-like lines are kept more consistently and obvious short ghost profiles are dropped earlier.
 
-- Keep high-confidence, larger text (titles) even on images.
-- Only drop short tokens in image tiles when they are small + low-confidence.
-- Protect line words when they look like real text (multi-word lines).
+### Why this is phase 1 instead of another sample-specific tweak
 
-## 2026-03-09 Field Validation Notes
+- It removes a structural mismatch between rescue and prune instead of hardcoding the current bubble text.
+- It makes future Latin tuning measurable because accepted/rejected rescue candidates now carry a more direct reason.
+- It reduces the need to keep adding isolated threshold exceptions for each new English sample.
 
-Latest tuning pass focused on three goals:
-- recover real bubble text more aggressively on sparse Latin manga pages
-- reduce dark-border / scan-edge ghost text
-- keep thin strokes that were previously lost by global thresholding
+## Current Core OCR Plan
 
-### What changed in code
+1. Phase 1: shared line-quality contract and candidate telemetry
+   - done in v92 for the Latin rescue/prune path
+2. Phase 2: bounded region-recognition improvements
+   - if misses remain, improve Latin line-box rescans with tighter ROI variants, alternate PSM ordering, and optional upscale on bounded regions only
+3. Phase 3: fixture-driven tuning
+   - save failing English/Korean pages as reproducible fixtures and tune against measured before/after outputs instead of screenshots alone
 
-- Added adaptive binarization in [src/services/vision/ocr-preprocessing.ts](../src/services/vision/ocr-preprocessing.ts)
-- Added dark border cleanup in [src/services/vision/ocr-preprocessing.ts](../src/services/vision/ocr-preprocessing.ts)
-- Added lightweight binary repair to reconnect thin glyph strokes in [src/services/vision/ocr-preprocessing.ts](../src/services/vision/ocr-preprocessing.ts)
-- Relaxed high-recall Latin pruning logic in [src/services/vision/worker.ts](../src/services/vision/worker.ts)
-- Added new preprocessing / high-recall tuning constants in [src/services/vision/ocr-config.ts](../src/services/vision/ocr-config.ts)
+## v93 Latin Tail-Trim And Sparse-Probe Gate Pass
 
-### Observed improvements from manual verification
+The next screenshots showed a second structural issue that v92 did not touch:
 
-- **Page 3**: lower line **"TAKE A LOOK!"** is finally detected again. This is a meaningful recovery because it was previously one of the persistent missing-line failures.
-- **Overall**: ghost text is reduced while preserving more real bubble content.
-- **Overall**: sparse Latin manga bubbles now survive pruning better than before.
+- some real English tail words were already present in raw OCR but were deleted later by the Latin tail-cleanup stage
+- sparse top-band rescue could still admit short ghost lines because it was token-filtered but not line-assessed
 
-### Known issues still open
+### Changes
 
-- **Page 2**: last line still missing: **"Xujia town"**
-- **Page 5**:
-   - first line incomplete: **"IN THE PAST, I ONLY FOUND THE"** is truncated
-   - third line loses **"TH"** in **"WITH"**
-   - fourth line **"THIS KIND OF STUFF.."** is still missing
-- **Page 10**: last line **"THE PEOPLE HERE?"** is still missing
+- `trimTrailingNonLexicalArtifacts()` no longer drops trailing lowercase non-dictionary words just because they are lowercase.
+- trailing-token trim now requires the tail token to be weak and/or low-readability before it can be removed.
+- the worker now logs when trailing short-keep or trailing non-lexical tail trimming actually removes words.
+- Latin sparse probe additions now pass through the shared Latin line assessment before being merged into the result.
+- anchor-probe protection is now stricter so ghost-like accepted fragments are less likely to become protected and survive later cleanup.
 
-### Note on extra background boxes
+### Why this matters
 
-- Some extra background-aligned boxes may still appear around speech regions.
-- For now this is considered acceptable if they help OCR recall, segmentation, or later filtering.
-- Prefer keeping slightly noisy candidate geometry over prematurely removing useful rescue regions.
+- document lines like `... used to support` or `we will study how` should no longer lose their tail words just because the last words are lowercase and absent from the small lexicon set
+- short ghost fragments such as `Prin Le AT` are less likely to be admitted by sparse rescue paths that previously reasoned mostly at token level
 
-### Current interpretation (as of 2026-03-09)
+## What Is Already Optimized In The Current Worker
 
-- The system is now **better at recall** on hard manga speech bubbles.
-- The main remaining weakness is **line completion at bubble edges / last-line recovery**, not catastrophic ghosting.
-- Next tuning should focus on:
-   1. region padding for last-line crops
-   2. low-coverage line rescans near bubble bottoms
-   3. less aggressive post-rescue pruning for short but valid final lines
+### Stability
 
----
+- shared timeout constants
+- hard cancel on per-page timeout
+- worker recreation on timeout/crash
+- cache invalidation by algorithm version
 
-## 2026-03-10 — Ghost Text Reduction & Boot Loader
+### Performance
 
-### Architecture Changes
+- single active OCR worker
+- recovery budget by pipeline profile and quality profile
+- skip reasons for hard noisy-page fast-fail
+- conditional rescue caps for `fast` and `balanced`
 
-- **Boot Loader** (`worker-boot.ts`): Primary worker still crashes with opaque "(no message)" in Vite dev-mode. Created a tiny boot loader (~50 lines) that dynamically imports `worker.ts` in try-catch, captures the real error (message, stack, name) via `WORKER_BOOT_ERROR` postMessage, then auto-falls back to `worker-stable.ts`.
-- **VisionService** now loads `worker-boot.ts` instead of `worker.ts` for primary mode.
-- **Vite config** updated: `worker: { format: 'es' }`, `optimizeDeps: { include: ['tesseract.js'] }`.
+### Accuracy
 
-### Filtering Pipeline Overhaul (worker-stable.ts)
+- adaptive preprocessing with CJK-safe binarization behavior
+- image-tile and background variance filtering
+- CJK and Korean cleanup stages
+- Latin lexical cleanup and rescue stack
 
-Replaced the basic 4-rule `filterGarbageWords` with a comprehensive **9-step pipeline**:
+## What Is Not Solved Yet
 
-| Step | Function | Purpose |
-|------|----------|---------|
-| 0 | `splitMergedWords` | Dictionary-based word splitting (TAKEA→TAKE+A, NowI→Now+I, MAKEDO→MAKE+DO) |
-| 1 | `filterNoiseWords` | Remove garbage words (conf<20, symbols, consonant-heavy, mixed-case 3+ transitions) + watermarks |
-| 2 | `buildLines` | Group words into lines by Y proximity (threshold: pageHeight × 0.015) |
-| 3a | `pruneEdgeGhostLines` | Lines in top/bottom 16% band must have readability ≥ 0.7 or lexicalHits ≥ 2 |
-| 3a | `pruneGarbageLines` | Require proportionate lexical content; zero-lexical catch-all (conf < 90 → drop) |
-| 3a | `pruneShortFragments` | Remove single-char lines (except "I"), short non-lexical orphans |
-| 3b | `cleanNoiseWordsWithinLines` | Remove lowercase noise words from uppercase-dominant lines |
-| 3c | Density check | totalAlpha ≤ 4 + lexHits < 2 + maxConf < 85 → drop |
-| 4 | Page quality gate | avgReadability < 0.35 + lexCount < 2 + totalAlpha < 20 → clear all |
+### Korean fixture gap
 
-### Key Components
+There is still no reproducible Korean fixture pack in the repo. That means Korean tuning is currently constrained to:
 
-- **`LATIN_COMMON`** — ~260 common English words + compound words (prevent false word-splitting)
-- **`LATIN_SHORT_KEEP`** — 18 valid short words (I, A, IT, TO, IN, ON, OF, etc.) protected from short-word filters
-- **`isLexicalWord(text)`** — strips punctuation before lookup (DON'T → DONT → found)
-- **`scoreTokenReadability(word)`** — 0-1 score: vowel ratio, consonant runs, case mixing, length, confidence
-- **`countCaseTransitions(text)`** — counts upper↔lower transitions; ≥3 = gibberish
-- **`isWatermarkWord(word, pw, ph)`** — detects URLs, manga sites (LikeManga, ACloudMerge, ColaManga), standalone COM/IO/NET near edges
-- **`trySplitWord(text)`** — dictionary-based merged-word detection: tries case boundaries first, then all positions
-- **`cleanNoiseWordsWithinLines(lines)`** — drops lowercase non-lexical words on uppercase-dominant lines
+- code-path analysis
+- manual validation
+- debug overlay/drop-count inspection
 
-### Results
+That is acceptable for low-risk boundary fixes, but not for aggressive heuristic expansion.
 
-| Page | Before (ghost words) | After (total words) | Confidence | Key changes |
-|------|---------------------|---------------------|------------|-------------|
-| 2 | 59 dropped | 22 words | 68% | Main bubble text detected correctly |
-| 3 | 25 dropped | 12 words | 58% | "I'LL OVER AND / TAKEA LOOK" detected |
-| 5 | 60 dropped | 25 words | 74% | Core sentences detected with some noise |
+### True fast profile separation
 
-### Remaining Bugs (Post-Filtering)
+The repo still lacks a genuinely minimal fast OCR architecture. Today the quality profiles are mostly budget and rescue variants of the same worker.
 
-1. **Tesseract misreads** (not fixable by post-filters — the correct text never enters the pipeline):
-   - P2 L4: `XUJIA TOWN` → `AVIA TOdl CR En Se` + stray `A`
-   - P3: `TAKE A LOOK` may still be merged as `TAKEA LOOK` depending on Tesseract output
-   - P5: `NowI CAN ONLY MAKEDO WITH` → now fixed by word-splitting
+### Stage-level Korean counters
 
-2. **Ghost fragments now caught**:
-   - P3: `CREAweaErSRETHIbe` — caught by `countCaseTransitions ≥ 3` in `isGarbageWord`
-   - P5: `vided`, `Wis`, `wraphimills` — caught by zero-lexical catch-all and per-word cleanup
-   - P2: `A` standalone — caught by single-char line filter
-   - P2: `AVIA TOdl CR En Se` — caught by zero-lexical catch-all (no dictionary words)
+Current debug payload already includes dropped words and drop counts, but not a dedicated Korean stage summary such as:
 
-3. **Missing text** (Tesseract not detecting at all — needs preprocessing/detection improvements):
-   - P5: `THIS KIND OF STUFF` not detected
-   - P10: `THE PEOPLE HERE?` still missing
+- words before/after each Korean-specific stage
+- short-fragment line counts
+- punctuated short-line keeps
 
-### Next tuning priorities
+## Next Korean Plan
 
-1. Investigate primary worker crash using boot loader error output
-2. Improve Tesseract detection for missing text (P5 `THIS KIND OF STUFF`, P10 `THE PEOPLE HERE?`) — likely needs preprocessing or PSM tuning
-3. Consider expanding `LATIN_COMMON` with domain-specific vocabulary as more manga pages are tested
+1. Add reproducible Korean pages or saved debug payload fixtures.
+2. Add Korean-specific counters to the debug payload.
+3. Re-check whether the remaining failures are:
+   - early filter over-drop
+   - weak-line rescue over-keep
+   - true OCR miss from Tesseract
+4. Only after that, decide whether a separate continuity-rescue pass is still needed beyond the current bounded replacement repair.
 
-## Suggested Next Optimizations
+## Verification Checklist
 
-1. **Adaptive sampling step**  
-   Increase sample step on large images to reduce tile-mask cost.
+When validating Korean pages in the panel:
 
-2. **Text-heavy short-circuit**  
-   If page is mostly text, skip photo filter or apply it only to low-confidence tokens.
-
-3. **Config profiles**  
-   Provide "Speed" vs "Accuracy" profiles by toggling:
-   - OCR DPI
-   - Photo filters
-   - Tile sampling step
-
-4. **Offline language data**  
-   Place `.traineddata` in `public/tessdata` and set `LANG_PATH` to `/tessdata`.
-   The worker will try local first and fall back to CDN if missing.
-
-5. **Large image chunking**  
-   Pages exceeding `MAX_OCR_WIDTH/HEIGHT` are processed in vertical chunks
-   (`CHUNK_HEIGHT` with `CHUNK_OVERLAP`) to avoid Tesseract size limits.
-
-6. **DIP-Inspired Preprocessing (Targeted)**  
-   - **Adaptive threshold vs. global**: use per-page heuristics to decide when
-     Otsu binarization should be skipped (e.g., high anti-aliasing or comic fonts).
-   - **CJK safety**: skip binarization for `kor/jpn/chi_*` to preserve stroke detail.
-   - **Morphology (lightweight)**: apply small closing/opening after binarization
-     to reconnect broken strokes for thin fonts.
-   - **Quality scoring**: collect simple metrics (contrast, skew, noise) to
-     choose preprocessing paths automatically.
-
-## Files to Check When Tuning
-
-- `src/services/vision/worker.ts`
-- `src/services/pdf/SearchablePDFService.ts`
-- `src/components/OCR/OCRTextLayerPanel.tsx`
+- use `best` first
+- keep `showDebugOverlay` enabled
+- compare `dropCounts` for:
+  - `imgTile`
+  - `bgVariance`
+  - `isolatedCjk`
+  - `korJamo`
+  - `weakCjkLine`
+- inspect `skipReason`
+- record runtime and whether the result improved by keeping real short lines while dropping low-value fragments

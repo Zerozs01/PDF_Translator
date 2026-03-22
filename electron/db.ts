@@ -340,7 +340,7 @@ export const DocumentDAO = {
     `).all(tagId);
   },
 
-  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean }) => {
+  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
@@ -349,6 +349,7 @@ export const DocumentDAO = {
     if (data.project_id !== undefined) { sets.push('project_id = ?'); values.push(data.project_id); }
     if (data.thumbnail_path !== undefined) { sets.push('thumbnail_path = ?'); values.push(data.thumbnail_path); }
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
+    if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
     
     if (sets.length === 0) return;
     values.push(id);
@@ -376,6 +377,11 @@ export const DocumentDAO = {
       WHERE dt.document_id = ?
       ORDER BY t.name
     `).all(documentId);
+  },
+
+  touch: (id: number) => {
+    if (!db) throw new Error('DB not initialized');
+    db.prepare('UPDATE documents SET last_accessed = ? WHERE id = ?').run(Date.now(), id);
   },
 
   updateLastPage: (id: number, pageNum: number) => {

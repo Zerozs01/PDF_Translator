@@ -1,41 +1,63 @@
-# Offline OCR Language Data
+# Local Tessdata
 
-This project can load Tesseract language data from local files to support
-offline OCR testing.
+The OCR worker resolves language data from `public/tessdata` first and falls back to the Tesseract CDN only if a requested file is missing.
 
-## How It Works
+## Current Runtime Behavior
 
-The worker uses `LANG_PATH` in `src/services/vision/worker.ts`:
+- Config source: `src/services/vision/ocr-config.ts`
+- `LANG_PATH` is `/tessdata`
+- Worker initialization happens in `src/services/vision/worker.ts`
+- If local load fails, the worker retries without `langPath` and uses the CDN
 
-- Default: `/tessdata`
-- If local files are missing, it falls back to CDN automatically.
+## Supported UI Language Codes
 
-## Setup
+Current OCR language codes exposed in the app:
 
-1. Create folder (or use the script below):
-   - `public/tessdata`
+- `eng`
+- `jpn`
+- `jpn_vert`
+- `kor`
+- `chi_sim`
+- `chi_tra`
+- `tha`
+- `vie`
+- `deu`
+- `fra`
+- `spa`
+- `rus`
 
-2. Place language files inside:
-   - `public/tessdata/eng.traineddata`
-   - `public/tessdata/jpn.traineddata`
-   - `public/tessdata/kor.traineddata`
-   - `public/tessdata/chi_sim.traineddata`
-   - `public/tessdata/chi_tra.traineddata`
+## Folder Layout
 
-3. Restart the dev server.
+Put files in:
 
-## Auto Download Script
+```text
+public/tessdata/
+```
 
-Use the built-in script to fetch official Tesseract.js language data:
+Examples:
+
+```text
+public/tessdata/eng.traineddata
+public/tessdata/jpn.traineddata
+public/tessdata/jpn_vert.traineddata
+public/tessdata/kor.traineddata
+public/tessdata/chi_sim.traineddata
+```
+
+Both `.traineddata` and `.traineddata.gz` are usable in the current setup.
+
+## Download Script
+
+Download official language packs:
 
 ```bash
 npm run tessdata:download
 ```
 
-Download only specific languages:
+Download a specific subset:
 
 ```bash
-npm run tessdata:download -- --langs=eng,kor,chi_sim
+npm run tessdata:download -- --langs=eng,kor,jpn,jpn_vert,chi_sim,chi_tra
 ```
 
 Force re-download:
@@ -46,6 +68,6 @@ npm run tessdata:download -- --force
 
 ## Notes
 
-- File names must match language code exactly.
-- Files can be `.traineddata` or `.traineddata.gz`.
-- The worker logs which path was used during initialization.
+- Restart the dev server after adding or replacing language data.
+- The packaged app serves these files from the same `public/tessdata` path.
+- Local tessdata is strongly preferred for offline testing and for reproducible OCR behavior across sessions.

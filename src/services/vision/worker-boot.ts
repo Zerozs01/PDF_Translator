@@ -9,7 +9,12 @@
  * VisionService loads this file instead of worker.ts directly.
  */
 
-const _self = self as DedicatedWorkerGlobalScope;
+type BootWorkerScope = typeof globalThis & {
+  onmessage: ((event: MessageEvent) => void) | null;
+  postMessage: (message: unknown) => void;
+};
+
+const _self = self as unknown as BootWorkerScope;
 
 // ── Buffer incoming messages while the real worker module loads ──
 // The module worker port is enabled after this entry module evaluates,
@@ -62,8 +67,10 @@ console.log('[worker-boot] Starting module load...');
   if (_bootBuffer.length > 0) {
     console.log(`[worker-boot] Replaying ${_bootBuffer.length} buffered message(s)...`);
     const realHandler = _self.onmessage;
-    for (const msg of _bootBuffer) {
-      realHandler.call(_self, msg);
+    if (typeof realHandler === 'function') {
+      for (const msg of _bootBuffer) {
+        realHandler(msg);
+      }
     }
     _bootBuffer.length = 0;
   }

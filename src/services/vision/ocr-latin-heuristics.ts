@@ -1,4 +1,5 @@
 import type { BBox, OCRLine, OCRWord } from './ocr-types';
+import { logDrop } from './ocr-config';
 import { getAlphaNum } from './ocr-text-utils';
 
 type TextLikeMetrics = {
@@ -70,6 +71,37 @@ export interface IsLikelyLatinSpeechPageDeps {
 export interface ScoreLatinCandidateDeps {
 	latinCommonWords: Set<string>;
 	latinShortKeepForLine: Set<string>;
+}
+
+export interface AssessLatinLineDeps {
+	latinCommonWords: Set<string>;
+	latinShortKeepForLine: Set<string>;
+}
+
+export interface LatinLineAssessment {
+	alpha: string;
+	tokens: string[];
+	confidence: number;
+	quality: number;
+	chars: number;
+	commonHits: number;
+	shortKeepHits: number;
+	lexicalHits: number;
+	meaningfulWords: number;
+	readableRatio: number;
+	nonLexicalCount: number;
+	noisySingles: number;
+	avgTokenLen: number;
+	shortTokenCount: number;
+	mixedCaseWordCount: number;
+	titleCaseWordCount: number;
+	hasVowel: boolean;
+	hasDigit: boolean;
+	recoveryScore: number;
+	coreKeep: boolean;
+	recoveryAccept: boolean;
+	ghostLikely: boolean;
+	reason: string;
 }
 
 export function normalizeLatinTokenForLexicon(token: string): string {
@@ -357,16 +389,12 @@ export function pruneResidualLatinNoiseLines(
 		.map((line) => {
 			const lineWords = line.words || [];
 			if (lineWords.length < 2) return null;
-			const lineText = (line.text || '').trim();
-			const alpha = normalizeLatinTokenForLexicon(getAlphaNum(lineText));
-			if (alpha.length < 5) return null;
-			const lexicalHits = lineWords.filter((word) => {
-				const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
-				return latinCommonWords.has(token) || latinShortKeepForLine.has(token);
-			}).length;
-			if (lexicalHits === 0) return null;
-			const quality = scoreLatinLineReadability(lineWords);
-			if (quality < 0.44 && line.confidence < 64) return null;
+			const assessment = assessLatinLine(lineWords, line.text || '', line.confidence, {
+				latinCommonWords,
+				latinShortKeepForLine,
+			});
+			if (assessment.alpha.length < 5) return null;
+			if (!assessment.coreKeep && !(assessment.lexicalHits >= 1 && assessment.quality >= 0.44 && line.confidence >= 64)) return null;
 			const centerY = (line.bbox.y0 + line.bbox.y1) / 2;
 			return Number.isFinite(centerY) ? centerY : null;
 		})
@@ -376,19 +404,25 @@ export function pruneResidualLatinNoiseLines(
 		const lineWords = line.words || [];
 		if (lineWords.length === 0) return false;
 		const protectedLine = hasProtectedWord(line, protectedWordKeys);
+		const assessment = assessLatinLine(lineWords, line.text || '', line.confidence, {
+			latinCommonWords,
+			latinShortKeepForLine,
+		});
 
 		const lineText = (line.text || '').trim();
-		const alpha = normalizeLatinTokenForLexicon(getAlphaNum(lineText));
+		const alpha = assessment.alpha;
 		if (!alpha) return false;
 
-		const lexicalHits = lineWords.filter((word) => {
-			const token = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim()));
-			return latinCommonWords.has(token) || latinShortKeepForLine.has(token);
-		}).length;
-		const lineTokens = lineWords
-			.map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
-			.filter(Boolean);
-		const quality = scoreLatinLineReadability(lineWords);
+		const lexicalHits = assessment.lexicalHits;
+		const lineTokens = assessment.tokens;
+		const quality = assessment.quality;
+
+		if (assessment.coreKeep) return true;
+		if (!protectedLine && assessment.ghostLikely) {
+			const probeWord = lineWords[0];
+			if (probeWord) logDrop('latinLine', probeWord, `residual ${assessment.reason}`);
+			return false;
+		}
 
 		if (lineWords.length === 1) {
 			const lexicalSingleton = latinCommonWords.has(alpha) || latinShortKeepForLine.has(alpha);
@@ -537,6 +571,12 @@ export function trimTrailingNonLexicalArtifacts(
 		if (lineWords.length < 3) return line;
 
 		const tokens = lineWords.map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())));
+		const lineQuality = scoreLatinLineReadability(lineWords);
+		const uppercaseWords = lineWords.filter((word) => {
+			const alpha = getAlphaNum((word.text || '').trim());
+			return alpha.length >= 2 && alpha === alpha.toUpperCase();
+		}).length;
+		const upperDominant = uppercaseWords >= Math.ceil(lineWords.length * 0.5);
 		let keepCount = lineWords.length;
 
 		while (keepCount > 2) {
@@ -547,11 +587,22 @@ export function trimTrailingNonLexicalArtifacts(
 			if (latinCommonWords.has(token) || latinShortKeepForLine.has(token)) break;
 
 			const raw = (word.text || '').trim();
-			const lowerCaseTail = /[a-z]/.test(raw) && !/[A-Z]/.test(raw);
+			const lowerCaseTail = /^[a-z][a-z'’-]*$/.test(raw);
 			const shortTail = token.length <= 3;
 			const weakTail = word.confidence < 72;
-			const lowReadableTail = token.length <= 4 && !/[AEIOU]/.test(token);
-			if (!(lowerCaseTail || (shortTail && weakTail) || (lowReadableTail && weakTail))) break;
+			const readableTail = scoreLatinTokenReadability(word);
+			const lowReadableTail = readableTail < 0.58 || (token.length <= 4 && !/[AEIOU]/.test(token));
+			const strongReadableTail = token.length >= 4 && readableTail >= 0.78 && word.confidence >= 88;
+			if (strongReadableTail) break;
+
+			const suspiciousLowerCaseTail = lowerCaseTail
+				&& (upperDominant || lineQuality < 0.76)
+				&& (weakTail || lowReadableTail);
+			const suspiciousShortTail = shortTail && (weakTail || readableTail < 0.52);
+			const suspiciousConsonantTail = token.length <= 5 && !/[AEIOU]/.test(token) && (weakTail || readableTail < 0.5);
+			if (!(suspiciousLowerCaseTail || suspiciousShortTail || suspiciousConsonantTail)) break;
+
+			logDrop('latinLine', word, 'trim trailing non-lexical artifact');
 
 			keepCount -= 1;
 		}
@@ -663,6 +714,193 @@ export function scoreLatinCandidate(
 		? lines.reduce((sum, line) => sum + scoreLatinLineReadability((line.words as OCRWord[]) || []), 0) / lines.length
 		: 0;
 	return (meaningful * 2.6) + (lexicalHits * 1.6) + (avgConfidence * 0.06) + (avgLineQuality * 4.2) - (noisySingles * 1.2);
+}
+
+export function assessLatinLine(
+	lineWords: OCRWord[],
+	lineText: string,
+	lineConfidence: number,
+	deps: AssessLatinLineDeps
+): LatinLineAssessment {
+	const tokens = lineWords
+		.map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+		.filter(Boolean);
+	const fallbackText = lineWords.map((word) => (word.text || '').trim()).filter(Boolean).join(' ');
+	const alpha = normalizeLatinTokenForLexicon(getAlphaNum(lineText || fallbackText));
+	const confidence = Number.isFinite(lineConfidence) && lineConfidence > 0
+		? lineConfidence
+		: (lineWords.reduce((sum, word) => sum + word.confidence, 0) / Math.max(1, lineWords.length));
+	const quality = scoreLatinLineReadability(lineWords);
+	const chars = alpha.length;
+	const commonHits = tokens.filter((token) => deps.latinCommonWords.has(token)).length;
+	const shortKeepHits = tokens.filter((token) => deps.latinShortKeepForLine.has(token)).length;
+	const lexicalHits = commonHits + shortKeepHits;
+	const meaningfulWords = countMeaningfulLatinWords(lineWords, deps.latinCommonWords, deps.latinShortKeepForLine);
+	const readableTokens = tokens.filter((token) => {
+		if (deps.latinCommonWords.has(token) || deps.latinShortKeepForLine.has(token)) return true;
+		if (token.length < 3) return false;
+		return /[AEIOU]/.test(token);
+	}).length;
+	const readableRatio = tokens.length > 0 ? readableTokens / tokens.length : 0;
+	const nonLexicalCount = Math.max(0, tokens.length - lexicalHits);
+	const noisySingles = tokens.filter((token) => token.length === 1 && !deps.latinShortKeepForLine.has(token)).length;
+	const avgTokenLen = tokens.length > 0
+		? tokens.reduce((sum, token) => sum + token.length, 0) / tokens.length
+		: 0;
+	const shortTokenCount = tokens.filter((token) => token.length <= 2).length;
+	const mixedCaseWordCount = lineWords.filter((word) => {
+		const raw = (word.text || '').trim();
+		return /[A-Z]/.test(raw) && /[a-z]/.test(raw);
+	}).length;
+	const titleCaseWordCount = lineWords.filter((word) => /^[A-Z][a-z]{1,}$/.test((word.text || '').trim())).length;
+	const hasVowel = /[AEIOU]/.test(alpha);
+	const hasDigit = /[0-9]/.test(alpha);
+
+	let ghostLikely = false;
+	let reason = 'insufficientSignal';
+	const titleCaseShortFragments = (
+		tokens.length <= 3
+		&& commonHits === 0
+		&& shortKeepHits <= 1
+		&& titleCaseWordCount >= Math.max(1, tokens.length - 1)
+		&& avgTokenLen <= 3.35
+		&& chars <= 10
+	);
+	const shortNonLexicalPhrase = (
+		tokens.length <= 3
+		&& commonHits === 0
+		&& shortKeepHits <= 1
+		&& nonLexicalCount >= Math.max(2, tokens.length - 1)
+		&& avgTokenLen <= 3.2
+		&& meaningfulWords <= 2
+	);
+	const lowSignalShortLine = (
+		tokens.length <= 2
+		&& lexicalHits === 0
+		&& meaningfulWords <= 1
+		&& chars <= 6
+		&& quality < 0.88
+		&& confidence < 98
+	);
+	const consonantGhost = !hasVowel && chars >= 4 && quality < 0.84 && confidence < 96;
+	const repeatedShortKeepNoise = (
+		tokens.length >= 3
+		&& tokens.every((token) => deps.latinShortKeepForLine.has(token) && token.length <= 2)
+		&& new Set(tokens).size <= 2
+		&& confidence < 99
+	);
+
+	if (titleCaseShortFragments) {
+		ghostLikely = true;
+		reason = 'titleCaseShortFragments';
+	} else if (shortNonLexicalPhrase) {
+		ghostLikely = true;
+		reason = 'shortNonLexicalPhrase';
+	} else if (lowSignalShortLine) {
+		ghostLikely = true;
+		reason = 'lowSignalShortLine';
+	} else if (consonantGhost) {
+		ghostLikely = true;
+		reason = 'consonantGhost';
+	} else if (repeatedShortKeepNoise) {
+		ghostLikely = true;
+		reason = 'repeatedShortKeepNoise';
+	}
+
+	let coreKeep = false;
+	if (commonHits >= 2 && chars >= 4 && quality >= 0.28) {
+		coreKeep = true;
+		reason = 'multiCommonLexical';
+	} else if (lexicalHits >= 2 && readableRatio >= 0.72 && quality >= 0.44 && chars >= 6) {
+		coreKeep = true;
+		reason = 'multiLexicalReadable';
+	} else if (!ghostLikely && meaningfulWords >= 3 && readableRatio >= 0.84 && chars >= 10 && quality >= 0.44 && confidence >= 50) {
+		coreKeep = true;
+		reason = 'readableSentence';
+	} else if (!ghostLikely && tokens.length >= 2 && meaningfulWords >= 2 && readableRatio >= 0.92 && avgTokenLen >= 4 && chars >= 9 && quality >= 0.5 && confidence >= 68) {
+		coreKeep = true;
+		reason = 'readablePair';
+	} else if (!ghostLikely && tokens.length === 1 && chars >= 7 && hasVowel && quality >= 0.54 && confidence >= 68) {
+		coreKeep = true;
+		reason = 'strongSingleton';
+	}
+
+	let recoveryAccept = coreKeep;
+	if (
+		!recoveryAccept
+		&& !ghostLikely
+		&& commonHits >= 1
+		&& chars >= 4
+		&& quality >= 0.38
+		&& confidence >= 48
+		&& nonLexicalCount <= Math.max(1, Math.floor(tokens.length * 0.5))
+	) {
+		recoveryAccept = true;
+		reason = 'recoveryLexical';
+	}
+	if (
+		!recoveryAccept
+		&& !ghostLikely
+		&& shortKeepHits >= 2
+		&& nonLexicalCount === 0
+		&& tokens.length <= 3
+		&& chars <= 8
+		&& quality >= 0.4
+		&& confidence >= 42
+	) {
+		recoveryAccept = true;
+		reason = 'shortKeepPhrase';
+	}
+	if (
+		!recoveryAccept
+		&& !ghostLikely
+		&& meaningfulWords >= 3
+		&& readableRatio >= 0.76
+		&& chars >= 10
+		&& avgTokenLen >= 3.2
+		&& quality >= 0.4
+		&& confidence >= 50
+	) {
+		recoveryAccept = true;
+		reason = 'recoveryReadableSentence';
+	}
+
+	const recoveryScoreBase = (commonHits * 2.6)
+		+ (meaningfulWords * 2.1)
+		+ (quality * 5.1)
+		+ (readableRatio * 3.2)
+		+ (confidence * 0.045)
+		+ (hasVowel ? 0.75 : 0)
+		- (noisySingles * 1.25)
+		- (mixedCaseWordCount >= 2 && commonHits === 0 ? 0.9 : 0)
+		- (shortTokenCount >= 2 && commonHits === 0 ? 0.75 : 0);
+	const recoveryScore = recoveryScoreBase + (coreKeep ? 2.4 : 0) + (recoveryAccept ? 1.2 : 0) - (ghostLikely ? 3.2 : 0);
+
+	return {
+		alpha,
+		tokens,
+		confidence,
+		quality,
+		chars,
+		commonHits,
+		shortKeepHits,
+		lexicalHits,
+		meaningfulWords,
+		readableRatio,
+		nonLexicalCount,
+		noisySingles,
+		avgTokenLen,
+		shortTokenCount,
+		mixedCaseWordCount,
+		titleCaseWordCount,
+		hasVowel,
+		hasDigit,
+		recoveryScore,
+		coreKeep,
+		recoveryAccept,
+		ghostLikely,
+		reason,
+	};
 }
 
 export function isLikelyLatinSpeechPage(

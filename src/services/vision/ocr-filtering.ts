@@ -15,6 +15,7 @@ const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
 const KOR_JAMO_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
 const KOR_JAMO_RUN_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]{2,}/g;
 const KOR_ALLOWED_REPEAT_JAMO_RE = /^([ㅋㅎㅠㅜ])\1+$/;
+const KOR_TERMINAL_PUNCT_RE = /[?!~.…？！〜]+[)"'’”\]\s]*$/u;
 const LATIN_KEEP_SHORT_WORDS = new Set([
   'I', 'A', 'EH', 'ME', 'OH', 'AH', 'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE', 'US', 'MY', 'NO', 'GO', 'OR', 'AN'
 ]);
@@ -40,6 +41,19 @@ function isProtectedLatinToken(alphaNum: string): boolean {
   const normalized = normalizeLatinToken(alphaNum);
   if (!normalized) return false;
   return LATIN_PROTECT_WORDS.has(normalized) || LATIN_KEEP_SHORT_WORDS.has(normalized);
+}
+
+function getStableLineText(line: OCRLine): string {
+  const direct = typeof line.text === 'string' ? line.text.trim() : '';
+  if (direct) return direct;
+  const lineWords = (line.words as OCRWord[]) || [];
+  if (lineWords.length === 0) return '';
+  return joinWordsForLanguage(sortWordsByOrientation(lineWords.slice())).trim();
+}
+
+function hasKoreanTerminalPunctuation(text: string): boolean {
+  if (!text) return false;
+  return KOR_TERMINAL_PUNCT_RE.test(text.trim());
 }
 
 export interface RegionTextLikeness {
@@ -387,6 +401,7 @@ export function buildProtectedWordSet(
     const alphaNum = getAlphaNum(lineText);
     const chars = alphaNum.length;
     if (chars === 0) continue;
+    const rawLineText = lineText.trim();
 
     const syllableCount = isKorean ? (alphaNum.match(/[\uAC00-\uD7AF]/g) || []).length : 0;
     const jamoCount = isKorean ? (alphaNum.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length : 0;
@@ -394,6 +409,14 @@ export function buildProtectedWordSet(
       && syllableCount === 0
       && chars >= 2
       && KOR_ALLOWED_REPEAT_JAMO_RE.test(alphaNum);
+    const shortKoreanPunctKeep = isKorean
+      && syllableCount >= 1
+      && chars <= 4
+      && lineWords.length <= 2
+      && hasKoreanTerminalPunctuation(rawLineText)
+      && line.confidence >= CONFIG.KOR_SHORT_PUNCT_KEEP_CONF;
+    const repeatedJamoKeep = repeatedJamoOnly
+      && line.confidence >= CONFIG.KOR_REPEAT_JAMO_KEEP_CONF;
     const likelyKorGhost = isKorean && (
       (!repeatedJamoOnly && syllableCount === 0 && chars <= Math.max(CONFIG.CJK_GHOST_SHORT_CHARS, 8))
       || (jamoCount > syllableCount && chars <= 10)
@@ -402,7 +425,7 @@ export function buildProtectedWordSet(
     const strongByWordCount = lineWords.length >= CONFIG.IMG_PROTECT_LINE_WORDS && chars >= (isCjk ? 3 : 2);
     const strongByConfidence = line.confidence >= CONFIG.IMG_PROTECT_LINE_CONF + (isCjk ? 4 : 0);
 
-    if (!likelyKorGhost && (strongByWordCount || strongByConfidence)) {
+    if (!likelyKorGhost && (strongByWordCount || strongByConfidence || shortKoreanPunctKeep || repeatedJamoKeep)) {
       for (const word of lineWords) protectedWords.add(word);
     }
   }
@@ -788,6 +811,7 @@ export function filterWeakIsolatedCjkLines(
     const lineWords = (line.words as OCRWord[]) || [];
     if (lineWords.length === 0) continue;
 
+    const rawLineText = getStableLineText(line);
     const mergedAlpha = getAlphaNum(lineWords.map(w => (w.text || '').trim()).join(''));
     const totalChars = mergedAlpha.length;
     const syllables = (mergedAlpha.match(/[\uAC00-\uD7AF]/g) || []).length;
@@ -799,6 +823,19 @@ export function filterWeakIsolatedCjkLines(
     const repeatedJamoOnly = syllables === 0
       && mergedAlpha.length >= 2
       && KOR_ALLOWED_REPEAT_JAMO_RE.test(mergedAlpha);
+    const hasTerminalPunct = hasKoreanTerminalPunctuation(rawLineText);
+    const shortKoreanPunctKeep = syllables >= 1
+      && totalChars <= 4
+      && lineWords.length <= 2
+      && hasTerminalPunct
+      && line.confidence >= CONFIG.KOR_SHORT_PUNCT_KEEP_CONF;
+    const repeatedJamoKeep = repeatedJamoOnly
+      && line.confidence >= CONFIG.KOR_REPEAT_JAMO_KEEP_CONF;
+
+    if (shortKoreanPunctKeep || repeatedJamoKeep) {
+      keptLines.push(line);
+      continue;
+    }
 
     let lineVariance = CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN;
     if (gray && typeof width === 'number' && typeof height === 'number' && width > 1 && height > 1) {
@@ -835,6 +872,13 @@ export function filterWeakIsolatedCjkLines(
       && totalChars <= Math.max(CONFIG.CJK_GHOST_SHORT_CHARS, 8)
       && !repeatedJamoOnly
       && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN * 0.85;
+    const aggressiveKorShortSyllableFragment = syllables > 0
+      && syllables <= 3
+      && totalChars <= 4
+      && lineWords.length <= 2
+      && !hasTerminalPunct
+      && line.confidence < CONFIG.KOR_SHORT_FRAGMENT_CONF
+      && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN * 0.78;
     const jamoRatio = jamo / Math.max(1, syllables + jamo);
     const jamoHeavyWithSyllables = syllables > 0
       && jamoRatio >= CONFIG.CJK_GHOST_JAMO_RATIO_MIN
@@ -847,6 +891,7 @@ export function filterWeakIsolatedCjkLines(
 
     const weakByShape = noSyllableShort
       || aggressiveKorNoSyllableGhost
+      || aggressiveKorShortSyllableFragment
       || explicitKorGhostLine
       || ((weakSingle || weakShort || jamoHeavyWithSyllables)
         && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN);
@@ -858,6 +903,7 @@ export function filterWeakIsolatedCjkLines(
 
     const w = Math.max(1, line.bbox.x1 - line.bbox.x0);
     let hasNeighbor = false;
+    let neighborSupportScore = 0;
 
     for (let j = 0; j < lines.length; j++) {
       if (i === j) continue;
@@ -877,11 +923,19 @@ export function filterWeakIsolatedCjkLines(
       const overlapRatio = xOverlap / Math.min(w, ow);
       if (overlapRatio >= CONFIG.CJK_WEAK_LINE_X_OVERLAP_MIN) {
         hasNeighbor = true;
-        break;
+        neighborSupportScore += 1;
+        if (vGap <= maxNeighborGap * 0.55) neighborSupportScore += 0.45;
+        if (overlapRatio >= CONFIG.CJK_WEAK_LINE_X_OVERLAP_MIN + 0.18) neighborSupportScore += 0.35;
+        if (other.confidence >= line.confidence + 4 || otherChars >= totalChars + 2) neighborSupportScore += 0.2;
       }
     }
 
-    if (hasNeighbor && !explicitKorGhostLine) {
+    const needsStrongerNeighborSupport = aggressiveKorShortSyllableFragment;
+    const requiredNeighborScore = needsStrongerNeighborSupport
+      ? CONFIG.KOR_SHORT_FRAGMENT_NEIGHBOR_SCORE_MIN
+      : 1;
+
+    if (hasNeighbor && neighborSupportScore >= requiredNeighborScore && !explicitKorGhostLine) {
       keptLines.push(line);
     } else {
       const keyWord = lineWords[0];

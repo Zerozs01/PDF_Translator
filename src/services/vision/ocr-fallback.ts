@@ -72,11 +72,17 @@ export async function recognizeRegion(
   psm: number,
   width: number,
   height: number,
-  dpi?: number
+  dpi?: number,
+  options?: {
+    scale?: number;
+  }
 ): Promise<OCRWord[]> {
   const safe = clampBBox(bbox, width, height);
   const cropW = Math.max(1, Math.round(safe.x1 - safe.x0));
   const cropH = Math.max(1, Math.round(safe.y1 - safe.y0));
+  const scale = Math.max(1, options?.scale || 1);
+  const scaledCropW = Math.max(1, Math.round(cropW * scale));
+  const scaledCropH = Math.max(1, Math.round(cropH * scale));
 
   // Skip regions that are too small for useful OCR
   if (cropW < 8 || cropH < 8) return [];
@@ -86,7 +92,7 @@ export async function recognizeRegion(
     : imageInput;
 
   const bitmap = await createImageBitmap(blob);
-  const canvas = new OffscreenCanvas(cropW, cropH);
+  const canvas = new OffscreenCanvas(scaledCropW, scaledCropH);
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     bitmap.close();
@@ -94,8 +100,8 @@ export async function recognizeRegion(
   }
 
   ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, cropW, cropH);
-  ctx.drawImage(bitmap, safe.x0, safe.y0, cropW, cropH, 0, 0, cropW, cropH);
+  ctx.fillRect(0, 0, scaledCropW, scaledCropH);
+  ctx.drawImage(bitmap, safe.x0, safe.y0, cropW, cropH, 0, 0, scaledCropW, scaledCropH);
   bitmap.close();
 
   await worker.setParameters({
@@ -111,10 +117,10 @@ export async function recognizeRegion(
     text: w.text,
     confidence: w.confidence,
     bbox: {
-      x0: w.bbox.x0 + safe.x0,
-      y0: w.bbox.y0 + safe.y0,
-      x1: w.bbox.x1 + safe.x0,
-      y1: w.bbox.y1 + safe.y0,
+      x0: (w.bbox.x0 / scale) + safe.x0,
+      y0: (w.bbox.y0 / scale) + safe.y0,
+      x1: (w.bbox.x1 / scale) + safe.x0,
+      y1: (w.bbox.y1 / scale) + safe.y0,
     }
   }));
 }

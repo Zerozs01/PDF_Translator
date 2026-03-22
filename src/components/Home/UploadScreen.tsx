@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart,
-  AlertTriangle, RefreshCw, X
+  AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
+import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 
 type SidebarPage = 'home' | 'projects';
 
@@ -21,8 +23,8 @@ const formatFileSize = (bytes: number): string => {
 };
 
 // Format date
-const formatDate = (dateString: string): string => {
-  const date = new Date(dateString);
+const formatDate = (dateValue: string | number): string => {
+  const date = new Date(dateValue);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
   const hours = Math.floor(diff / (1000 * 60 * 60));
@@ -101,38 +103,320 @@ const getFileIcon = (fileType: string) => {
   return <FileText className="text-[#FFB45C] drop-shadow-[0_0_8px_rgba(255,145,49,0.22)]" size={20} />;
 };
 
-// Document Card Component
+const fallbackFolderColors = ['#5CC6F2', '#8B5CF6', '#F97316', '#10B981', '#EC4899', '#EAB308'];
+
+type MenuActionDialogState = {
+  isOpen: boolean;
+  name: string;
+  documentId: number | null;
+};
+
+type MenuPosition = {
+  x: number;
+  y: number;
+};
+
+type DeleteTagDialogState = {
+  isOpen: boolean;
+  tag: DBTag | null;
+  confirmation: string;
+};
+
+const getFloatingMenuPosition = (
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): MenuPosition => {
+  if (typeof window === 'undefined') {
+    return { x, y };
+  }
+
+  const padding = 12;
+  const clampedX = Math.min(
+    Math.max(padding, x),
+    Math.max(padding, window.innerWidth - width - padding)
+  );
+  const clampedY = Math.min(
+    Math.max(padding, y),
+    Math.max(padding, window.innerHeight - height - padding)
+  );
+
+  return { x: clampedX, y: clampedY };
+};
+
+const DocumentContextMenu: React.FC<{
+  doc: DBDocument;
+  position: MenuPosition;
+  documentTags: DBTag[];
+  tags: DBTag[];
+  projects: DBProject[];
+  onClose: () => void;
+  onToggleFavorite: () => void;
+  onToggleTag: (tag: DBTag) => void;
+  onMoveToProject: (projectId: number | null) => void;
+  onDelete: () => void;
+  onCreateTag: () => void;
+}> = ({
+  doc,
+  position,
+  documentTags,
+  tags,
+  projects,
+  onClose,
+  onToggleFavorite,
+  onToggleTag,
+  onMoveToProject,
+  onDelete,
+  onCreateTag
+}) => {
+  const assignedTagIds = useMemo(() => new Set(documentTags.map(tag => tag.id)), [documentTags]);
+
+  return createPortal(
+    <div
+      data-library-floating-menu="true"
+      className="fixed z-[160] w-72 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+      style={{ left: position.x, top: position.y }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="border-b border-white/10 px-2 pb-2">
+        <div className="truncate text-xs font-semibold text-slate-100">{doc.filename}</div>
+        <div className="mt-1 text-[10px] text-slate-400">{formatDate(doc.last_accessed)}</div>
+      </div>
+
+      <div className="space-y-1 px-1 py-2">
+        <button
+          onClick={() => {
+            onToggleFavorite();
+            onClose();
+          }}
+          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-200 transition-colors hover:bg-white/10"
+        >
+          <Heart size={12} fill={doc.is_favorite ? 'currentColor' : 'none'} />
+          {doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
+        </button>
+      </div>
+
+      <div className="border-t border-white/10 px-2 py-2">
+        <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <Folder size={11} />
+          Folder
+        </div>
+        <div className="max-h-28 space-y-1 overflow-y-auto custom-scrollbar">
+          <button
+            onClick={() => {
+              onMoveToProject(null);
+              onClose();
+            }}
+            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
+              doc.project_id === null
+                ? 'bg-[#2B9BFF]/18 text-[#d7efff]'
+                : 'text-slate-300 hover:bg-white/10'
+            }`}
+          >
+            <span>No Folder</span>
+            {doc.project_id === null && <Check size={12} />}
+          </button>
+          {projects.map(project => (
+            <button
+              key={project.id}
+              onClick={() => {
+                onMoveToProject(project.id);
+                onClose();
+              }}
+              className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
+                doc.project_id === project.id
+                  ? 'bg-[#2B9BFF]/18 text-[#d7efff]'
+                  : 'text-slate-300 hover:bg-white/10'
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: project.color || '#5CC6F2' }}
+                />
+                <span className="truncate">{project.name}</span>
+              </span>
+              {doc.project_id === project.id && <Check size={12} />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-white/10 px-2 py-2">
+        <div className="mb-2 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <span className="flex items-center gap-2">
+            <Tag size={11} />
+            Tags
+          </span>
+          <button
+            onClick={onCreateTag}
+            className="rounded-lg px-2 py-1 text-[10px] text-slate-300 transition-colors hover:bg-white/10"
+          >
+            New Tag
+          </button>
+        </div>
+        <div className="max-h-32 space-y-1 overflow-y-auto custom-scrollbar">
+          {tags.length > 0 ? tags.map(tag => {
+            const assigned = assignedTagIds.has(tag.id);
+            return (
+              <button
+                key={tag.id}
+                onClick={() => onToggleTag(tag)}
+                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
+                  assigned
+                    ? 'bg-[#FF8705]/18 text-[#ffe3be]'
+                    : 'text-slate-300 hover:bg-white/10'
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: tag.color || '#FF8705' }}
+                  />
+                  <span className="truncate">{tag.name}</span>
+                </span>
+                {assigned && <Check size={12} />}
+              </button>
+            );
+          }) : (
+            <div className="rounded-xl border border-white/10 bg-slate-900/50 px-3 py-2 text-xs text-slate-400">
+              No tags yet
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-white/10 px-1 pt-2">
+        <button
+          onClick={() => {
+            onDelete();
+            onClose();
+          }}
+          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
+        >
+          <Trash2 size={12} />
+          Delete
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const TagContextMenu: React.FC<{
+  tag: DBTag;
+  position: MenuPosition;
+  onClose: () => void;
+  onDelete: () => void;
+}> = ({ tag, position, onClose, onDelete }) => createPortal(
+  <div
+    data-library-floating-menu="true"
+    className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+    style={{ left: position.x, top: position.y }}
+    onClick={(e) => e.stopPropagation()}
+    onContextMenu={(e) => e.preventDefault()}
+  >
+    <div className="border-b border-white/10 px-2 pb-2">
+      <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
+        <span
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ backgroundColor: tag.color || '#FF8705' }}
+        />
+        {tag.name}
+      </div>
+      <div className="mt-1 text-[10px] text-slate-400">Deleting a tag only removes the label, not OCR data.</div>
+    </div>
+    <div className="pt-2">
+      <button
+        onClick={() => {
+          onDelete();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
+      >
+        <Trash2 size={12} />
+        Delete Tag
+      </button>
+    </div>
+  </div>,
+  document.body
+);
+
 const DocumentCard: React.FC<{
   doc: DBDocument;
   viewMode: FileBrowserViewMode;
   isSelected: boolean;
-  onSelect: () => void;
   onOpen: () => void;
   onToggleFavorite: () => void;
   onDelete: () => void;
-}> = ({ doc, viewMode, isSelected, onSelect, onOpen, onToggleFavorite, onDelete }) => {
-  const [showMenu, setShowMenu] = useState(false);
+  isMenuOpen: boolean;
+  menuPosition: MenuPosition | null;
+  documentTags: DBTag[];
+  tags: DBTag[];
+  projects: DBProject[];
+  onRequestMenu: (position: MenuPosition) => void;
+  onCloseMenu: () => void;
+  onToggleTag: (tag: DBTag) => void;
+  onMoveToProject: (projectId: number | null) => void;
+  onCreateTag: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}> = ({
+  doc,
+  viewMode,
+  isSelected,
+  onOpen,
+  onToggleFavorite,
+  onDelete,
+  isMenuOpen,
+  menuPosition,
+  documentTags,
+  tags,
+  projects,
+  onRequestMenu,
+  onCloseMenu,
+  onToggleTag,
+  onMoveToProject,
+  onCreateTag,
+  onDragStart,
+  onDragEnd
+}) => {
+  const thumbnail = doc.thumbnail_path ? (
+    <img src={doc.thumbnail_path} alt={doc.filename} className="h-full w-full object-cover" />
+  ) : (
+    <div className="text-slate-600">
+      {getFileIcon(doc.file_type)}
+    </div>
+  );
 
   if (viewMode === 'grid') {
     return (
       <div 
+        data-document-card="true"
         className={`group relative p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-xl ${
           isSelected 
             ? 'bg-gradient-to-br from-[#2B9BFF]/20 to-[#9979FF]/15 border-[#2B9BFF]/60 shadow-[0_10px_30px_rgba(43,155,255,0.2)]' 
             : 'bg-slate-900/45 border-white/10 hover:border-[#2B9BFF]/40 hover:bg-slate-900/70 hover:shadow-[0_8px_24px_rgba(43,155,255,0.12)]'
         }`}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('application/x-document-id', String(doc.id));
+          e.dataTransfer.effectAllowed = 'move';
+          onDragStart();
+        }}
+        onDragEnd={onDragEnd}
         onClick={onOpen}
-        onContextMenu={(e) => { e.preventDefault(); setShowMenu(true); }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
+        }}
       >
         {/* Thumbnail */}
         <div className="aspect-[3/4] rounded-xl bg-slate-900/80 mb-3 flex items-center justify-center overflow-hidden border border-white/5">
-          {doc.thumbnail_path ? (
-            <img src={doc.thumbnail_path} alt={doc.filename} className="w-full h-full object-cover" />
-          ) : (
-            <div className="text-slate-600">
-              {getFileIcon(doc.file_type)}
-            </div>
-          )}
+          {thumbnail}
         </div>
         
         {/* Info */}
@@ -154,24 +438,20 @@ const DocumentCard: React.FC<{
         </button>
         
         {/* Context Menu */}
-        {showMenu && (
-          <div 
-            className="absolute top-2 right-2 z-10 bg-slate-900/95 border border-white/15 rounded-lg shadow-xl py-1 min-w-[120px] backdrop-blur-xl"
-            onMouseLeave={() => setShowMenu(false)}
-          >
-            <button 
-              onClick={(e) => { e.stopPropagation(); onToggleFavorite(); setShowMenu(false); }}
-              className="w-full px-3 py-2 text-left text-xs hover:bg-white/10 flex items-center gap-2"
-            >
-              <Heart size={12} /> {doc.is_favorite ? 'Unfavorite' : 'Favorite'}
-            </button>
-            <button 
-              onClick={(e) => { e.stopPropagation(); onDelete(); setShowMenu(false); }}
-              className="w-full px-3 py-2 text-left text-xs hover:bg-white/10 flex items-center gap-2 text-red-400"
-            >
-              <Trash2 size={12} /> Delete
-            </button>
-          </div>
+        {isMenuOpen && (
+          <DocumentContextMenu
+            doc={doc}
+            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 430)}
+            documentTags={documentTags}
+            tags={tags}
+            projects={projects}
+            onClose={onCloseMenu}
+            onToggleFavorite={onToggleFavorite}
+            onToggleTag={onToggleTag}
+            onMoveToProject={onMoveToProject}
+            onDelete={onDelete}
+            onCreateTag={onCreateTag}
+          />
         )}
       </div>
     );
@@ -180,15 +460,30 @@ const DocumentCard: React.FC<{
   // Detail view
   return (
     <div 
-      className={`group flex items-center gap-4 p-3 rounded-xl border transition-all cursor-pointer backdrop-blur-xl ${
+      data-document-card="true"
+      className={`group relative flex items-center gap-4 p-3 rounded-xl border transition-all cursor-pointer backdrop-blur-xl ${
         isSelected 
           ? 'bg-gradient-to-r from-[#2B9BFF]/20 to-[#9979FF]/15 border-[#2B9BFF]/55' 
           : 'bg-slate-900/35 border-white/10 hover:border-[#2B9BFF]/40 hover:bg-slate-900/60'
       }`}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/x-document-id', String(doc.id));
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
       onClick={onOpen}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
+      }}
     >
-      <div className="p-2 rounded-lg bg-slate-900/90 border border-white/5">
-        {getFileIcon(doc.file_type)}
+      <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-slate-900/90">
+        <div className="absolute inset-0 flex items-center justify-center">
+          {thumbnail}
+        </div>
       </div>
       <div className="flex-1 min-w-0">
         <h3 className="font-medium text-sm text-slate-100 truncate">{doc.filename}</h3>
@@ -208,11 +503,30 @@ const DocumentCard: React.FC<{
         <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
       </button>
       <button 
-        onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          const rect = e.currentTarget.getBoundingClientRect();
+          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 430));
+        }}
         className="p-1.5 rounded text-slate-500 hover:text-slate-300"
       >
         <MoreHorizontal size={14} />
       </button>
+      {isMenuOpen && (
+        <DocumentContextMenu
+          doc={doc}
+          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 430)}
+          documentTags={documentTags}
+          tags={tags}
+          projects={projects}
+          onClose={onCloseMenu}
+          onToggleFavorite={onToggleFavorite}
+          onToggleTag={onToggleTag}
+          onMoveToProject={onMoveToProject}
+          onDelete={onDelete}
+          onCreateTag={onCreateTag}
+        />
+      )}
     </div>
   );
 };
@@ -222,10 +536,20 @@ const ProjectItem: React.FC<{
   project: DBProject;
   isSelected: boolean;
   onSelect: () => void;
-}> = ({ project, isSelected, onSelect }) => (
+  isDropTarget: boolean;
+  onDragOver: (event: React.DragEvent<HTMLButtonElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
+}> = ({ project, isSelected, onSelect, isDropTarget, onDragOver, onDragLeave, onDrop }) => (
   <button 
     onClick={onSelect}
+    onDragOver={onDragOver}
+    onDragLeave={onDragLeave}
+    onDrop={onDrop}
     className={`w-full p-3 rounded-xl text-left transition-all flex items-center gap-3 border ${
+      isDropTarget
+        ? 'border-[#5CC6F2]/80 bg-[#2B9BFF]/16 shadow-[0_0_0_1px_rgba(92,198,242,0.35)]'
+        : 
       isSelected 
         ? 'bg-gradient-to-r from-[#2B9BFF]/20 to-[#9979FF]/15 border-[#2B9BFF]/45' 
         : 'bg-slate-900/30 border-white/5 hover:border-white/15 hover:bg-slate-900/55'
@@ -247,9 +571,11 @@ const TagPill: React.FC<{
   tag: DBTag;
   isSelected: boolean;
   onClick: () => void;
-}> = ({ tag, isSelected, onClick }) => (
+  onContextMenu: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}> = ({ tag, isSelected, onClick, onContextMenu }) => (
   <button
     onClick={onClick}
+    onContextMenu={onContextMenu}
     className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
       isSelected 
         ? 'border-[#FFB45C]/75 bg-gradient-to-r from-[#FF8705]/32 via-[#FF8DF2]/24 to-[#FF7E67]/28 text-[#fff0da] shadow-[0_8px_20px_rgba(255,135,5,0.28)]' 
@@ -267,7 +593,7 @@ export const UploadScreen: React.FC = () => {
   const { loadProject, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
   const {
     viewMode, setViewMode,
-    filterType, setFilterType,
+    filterType,
     selectedTagId, setSelectedTagId,
     selectedProjectId, setSelectedProjectId,
     searchQuery, setSearchQuery,
@@ -275,7 +601,9 @@ export const UploadScreen: React.FC = () => {
     isLoading,
     loadRecentDocuments, loadFavoriteDocuments, loadDocumentsByTag, loadDocumentsByProject,
     searchDocuments, loadTags, loadProjects,
-    toggleFavorite, deleteDocument,
+    toggleFavorite, deleteDocument, moveToProject,
+    addTagToDocument, removeTagFromDocument,
+    createTag, createProject, deleteTag, applyDocumentPatch,
     selectedDocumentIds, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
@@ -284,6 +612,17 @@ export const UploadScreen: React.FC = () => {
   const [activePage, setActivePage] = useState<SidebarPage>('home');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileOpenError, setFileOpenError] = useState<FileOpenErrorEntry | null>(null);
+  const [activeDocumentMenuId, setActiveDocumentMenuId] = useState<number | null>(null);
+  const [activeDocumentMenuPosition, setActiveDocumentMenuPosition] = useState<MenuPosition | null>(null);
+  const [activeTagMenu, setActiveTagMenu] = useState<{ tag: DBTag; position: MenuPosition } | null>(null);
+  const [documentTagsById, setDocumentTagsById] = useState<Record<number, DBTag[]>>({});
+  const [projectDialog, setProjectDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
+  const [tagDialog, setTagDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
+  const [deleteTagDialog, setDeleteTagDialog] = useState<DeleteTagDialogState>({ isOpen: false, tag: null, confirmation: '' });
+  const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
+  const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
+  const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
+  const thumbnailJobsRef = useRef<Set<number>>(new Set());
 
   const reportFileOpenError = useCallback((
     context: FileOpenContext,
@@ -312,6 +651,36 @@ export const UploadScreen: React.FC = () => {
     loadRecentDocuments();
     loadTags();
     loadProjects();
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-library-floating-menu="true"]')) return;
+      setActiveDocumentMenuId(null);
+      setActiveDocumentMenuPosition(null);
+      setActiveTagMenu(null);
+      setLibraryMenuPosition(null);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveDocumentMenuId(null);
+        setActiveDocumentMenuPosition(null);
+        setActiveTagMenu(null);
+        setLibraryMenuPosition(null);
+        setProjectDialog((current) => ({ ...current, isOpen: false }));
+        setTagDialog((current) => ({ ...current, isOpen: false }));
+        setDeleteTagDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -381,6 +750,9 @@ export const UploadScreen: React.FC = () => {
       Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
       
       await loadProject(file, bytes);
+      if (doc.last_page > 1) {
+        useProjectStore.getState().setPage(doc.last_page);
+      }
       setFileOpenError(null);
     } catch (error) {
       reportFileOpenError('recent', error, {
@@ -399,6 +771,186 @@ export const UploadScreen: React.FC = () => {
   };
 
   const sortedDocuments = getSortedDocuments();
+
+  const openDocumentMenu = useCallback(async (docId: number, position: MenuPosition) => {
+    setActiveTagMenu(null);
+    setLibraryMenuPosition(null);
+    setActiveDocumentMenuId(docId);
+    setActiveDocumentMenuPosition(position);
+
+    if (!documentTagsById[docId] && window.electronAPI?.db?.getDocumentTags) {
+      try {
+        const documentTags = await window.electronAPI.db.getDocumentTags(docId);
+        setDocumentTagsById((current) => ({ ...current, [docId]: documentTags }));
+      } catch (error) {
+        console.error('Failed to load document tags:', error);
+      }
+    }
+  }, [documentTagsById]);
+
+  const openTagMenu = useCallback((tag: DBTag, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setLibraryMenuPosition(null);
+    setActiveTagMenu({
+      tag,
+      position: getFloatingMenuPosition(event.clientX, event.clientY, 224, 120)
+    });
+  }, []);
+
+  const handleToggleDocumentTag = useCallback(async (doc: DBDocument, tag: DBTag) => {
+    const currentTags = documentTagsById[doc.id] ?? [];
+    const hasTag = currentTags.some(item => item.id === tag.id);
+
+    try {
+      if (hasTag) {
+        await removeTagFromDocument(doc.id, tag.id);
+        setDocumentTagsById((current) => ({
+          ...current,
+          [doc.id]: (current[doc.id] ?? []).filter(item => item.id !== tag.id)
+        }));
+      } else {
+        await addTagToDocument(doc.id, tag.id);
+        setDocumentTagsById((current) => ({
+          ...current,
+          [doc.id]: [...(current[doc.id] ?? []), tag].sort((a, b) => a.name.localeCompare(b.name))
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to update document tag:', error);
+    }
+  }, [addTagToDocument, documentTagsById, removeTagFromDocument]);
+
+  const handleMoveDocumentToProject = useCallback(async (doc: DBDocument, projectId: number | null) => {
+    await moveToProject(doc.id, projectId);
+    applyDocumentPatch(doc.id, { project_id: projectId });
+  }, [applyDocumentPatch, moveToProject]);
+
+  const openProjectDialog = useCallback((documentId: number | null = null) => {
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setActiveTagMenu(null);
+    setLibraryMenuPosition(null);
+    setProjectDialog({ isOpen: true, name: '', documentId });
+  }, []);
+
+  const openTagDialog = useCallback((documentId: number | null = null) => {
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setActiveTagMenu(null);
+    setLibraryMenuPosition(null);
+    setTagDialog({ isOpen: true, name: '', documentId });
+  }, []);
+
+  const handleCreateProject = useCallback(async () => {
+    const name = projectDialog.name.trim();
+    if (!name) return;
+
+    const color = fallbackFolderColors[projects.length % fallbackFolderColors.length];
+    const parentId = selectedProjectId ?? null;
+    const project = await createProject(name, parentId, color);
+    if (!project) return;
+
+    if (projectDialog.documentId) {
+      await moveToProject(projectDialog.documentId, project.id);
+      applyDocumentPatch(projectDialog.documentId, { project_id: project.id });
+    }
+
+    setProjectDialog({ isOpen: false, name: '', documentId: null });
+  }, [applyDocumentPatch, createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
+
+  const handleCreateTag = useCallback(async () => {
+    const name = tagDialog.name.trim();
+    if (!name) return;
+
+    const color = ['#FF8705', '#2B9BFF', '#8B5CF6', '#10B981', '#EC4899'][tags.length % 5];
+    const tag = await createTag(name, color);
+    if (!tag) return;
+
+    if (tagDialog.documentId) {
+      await addTagToDocument(tagDialog.documentId, tag.id);
+      setDocumentTagsById((current) => ({
+        ...current,
+        [tagDialog.documentId!]: [...(current[tagDialog.documentId!] ?? []), tag].sort((a, b) => a.name.localeCompare(b.name))
+      }));
+    }
+
+    setTagDialog({ isOpen: false, name: '', documentId: null });
+  }, [addTagToDocument, createTag, tagDialog.documentId, tagDialog.name, tags.length]);
+
+  const handleDeleteTag = useCallback(async () => {
+    const targetTag = deleteTagDialog.tag;
+    if (!targetTag) return;
+    if (deleteTagDialog.confirmation.trim() !== targetTag.name) return;
+
+    await deleteTag(targetTag.id);
+
+    setDocumentTagsById((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([docId, docTags]) => [
+          docId,
+          docTags.filter((tag) => tag.id !== targetTag.id)
+        ])
+      )
+    );
+
+    if (selectedTagId === targetTag.id) {
+      setSelectedTagId(null);
+      void loadRecentDocuments();
+    } else {
+      void loadTags();
+    }
+
+    setActiveTagMenu(null);
+    setDeleteTagDialog({ isOpen: false, tag: null, confirmation: '' });
+  }, [deleteTag, deleteTagDialog.confirmation, deleteTagDialog.tag, loadRecentDocuments, loadTags, selectedTagId, setSelectedTagId]);
+
+  const handleProjectDrop = useCallback(async (projectId: number | null) => {
+    if (!draggedDocumentId) return;
+    const draggedDocument = sortedDocuments.find((doc) => doc.id === draggedDocumentId);
+    if (!draggedDocument) return;
+    await handleMoveDocumentToProject(draggedDocument, projectId);
+    setDraggedDocumentId(null);
+    setProjectDropTargetId(null);
+  }, [draggedDocumentId, handleMoveDocumentToProject, sortedDocuments]);
+
+  useEffect(() => {
+    const pendingDocs = sortedDocuments
+      .filter(doc => !doc.thumbnail_path)
+      .slice(0, viewMode === 'grid' ? 8 : 6);
+
+    pendingDocs.forEach((doc) => {
+      if (thumbnailJobsRef.current.has(doc.id) || !window.electronAPI?.fs?.readFile) return;
+
+      thumbnailJobsRef.current.add(doc.id);
+      void (async () => {
+        try {
+          const source = await window.electronAPI.fs.readFile(doc.filepath);
+          const thumbnail = await generateDocumentThumbnail({
+            name: source.name,
+            mimeType: source.mimeType,
+            data: source.data
+          });
+
+          await window.electronAPI.db.updateDocument(doc.id, {
+            thumbnail_path: thumbnail.dataUrl,
+            total_pages: thumbnail.totalPages ?? doc.total_pages
+          });
+
+          applyDocumentPatch(doc.id, {
+            thumbnail_path: thumbnail.dataUrl,
+            total_pages: thumbnail.totalPages ?? doc.total_pages
+          });
+        } catch (error) {
+          console.warn(`[Library] Failed to generate preview for "${doc.filename}"`, error);
+        } finally {
+          thumbnailJobsRef.current.delete(doc.id);
+        }
+      })();
+    });
+  }, [applyDocumentPatch, sortedDocuments, viewMode]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#04060f] text-slate-100">
@@ -478,7 +1030,11 @@ export const UploadScreen: React.FC = () => {
             {/* Tags */}
             <h2 className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3 flex items-center justify-between">
               Tags
-              <button className="p-1 rounded hover:bg-white/10">
+              <button
+                onClick={() => openTagDialog()}
+                className="p-1 rounded hover:bg-white/10"
+                title="Create Tag"
+              >
                 <Plus size={12} />
               </button>
             </h2>
@@ -488,7 +1044,9 @@ export const UploadScreen: React.FC = () => {
                   key={tag.id} 
                   tag={tag} 
                   isSelected={selectedTagId === tag.id}
+                  onContextMenu={(event) => openTagMenu(tag, event)}
                   onClick={() => {
+                    setActiveTagMenu(null);
                     if (selectedTagId === tag.id) {
                       setSelectedTagId(null);
                       loadRecentDocuments();
@@ -503,7 +1061,11 @@ export const UploadScreen: React.FC = () => {
             {/* Projects */}
             <h2 className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3 flex items-center justify-between">
               Projects
-              <button className="p-1 rounded hover:bg-white/10">
+              <button
+                onClick={() => openProjectDialog()}
+                className="p-1 rounded hover:bg-white/10"
+                title="Create Folder"
+              >
                 <Plus size={12} />
               </button>
             </h2>
@@ -513,6 +1075,22 @@ export const UploadScreen: React.FC = () => {
                   key={project.id}
                   project={project}
                   isSelected={selectedProjectId === project.id}
+                  isDropTarget={projectDropTargetId === project.id}
+                  onDragOver={(event) => {
+                    if (!draggedDocumentId) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    setProjectDropTargetId(project.id);
+                  }}
+                  onDragLeave={() => {
+                    if (projectDropTargetId === project.id) {
+                      setProjectDropTargetId(null);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void handleProjectDrop(project.id);
+                  }}
                   onSelect={() => {
                     if (selectedProjectId === project.id) {
                       setSelectedProjectId(null);
@@ -531,7 +1109,10 @@ export const UploadScreen: React.FC = () => {
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <FolderOpen className="text-[#5CC6F2]" size={20} /> Projects
             </h2>
-            <button className="w-full p-3 rounded-lg bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 text-white text-sm font-medium flex items-center justify-center gap-2 mb-4 shadow-[0_8px_20px_rgba(43,155,255,0.33)] transition-all">
+            <button
+              onClick={() => openProjectDialog()}
+              className="w-full p-3 rounded-lg bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 text-white text-sm font-medium flex items-center justify-center gap-2 mb-4 shadow-[0_8px_20px_rgba(43,155,255,0.33)] transition-all"
+            >
               <Plus size={16} /> New Project
             </button>
             <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
@@ -540,6 +1121,22 @@ export const UploadScreen: React.FC = () => {
                   key={project.id}
                   project={project}
                   isSelected={selectedProjectId === project.id}
+                  isDropTarget={projectDropTargetId === project.id}
+                  onDragOver={(event) => {
+                    if (!draggedDocumentId) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    setProjectDropTargetId(project.id);
+                  }}
+                  onDragLeave={() => {
+                    if (projectDropTargetId === project.id) {
+                      setProjectDropTargetId(null);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void handleProjectDrop(project.id);
+                  }}
                   onSelect={() => loadDocumentsByProject(project.id)}
                 />
               ))}
@@ -664,7 +1261,17 @@ export const UploadScreen: React.FC = () => {
           )}
 
           {/* Documents Grid/List */}
-          <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+          <div
+            className="flex-1 overflow-y-auto p-4 custom-scrollbar"
+            onContextMenu={(e) => {
+              if ((e.target as HTMLElement).closest('[data-document-card="true"]')) return;
+              e.preventDefault();
+              setActiveDocumentMenuId(null);
+              setActiveDocumentMenuPosition(null);
+              setActiveTagMenu(null);
+              setLibraryMenuPosition(getFloatingMenuPosition(e.clientX, e.clientY, 224, 156));
+            }}
+          >
             {isLoading ? (
               <div className="flex items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[#2B9BFF]"></div>
@@ -680,10 +1287,32 @@ export const UploadScreen: React.FC = () => {
                     doc={doc}
                     viewMode={viewMode}
                     isSelected={selectedDocumentIds.has(doc.id)}
-                    onSelect={() => toggleDocumentSelection(doc.id)}
                     onOpen={() => handleOpenDocument(doc)}
                     onToggleFavorite={() => toggleFavorite(doc.id)}
                     onDelete={() => deleteDocument(doc.id)}
+                    isMenuOpen={activeDocumentMenuId === doc.id}
+                    menuPosition={activeDocumentMenuPosition}
+                    documentTags={documentTagsById[doc.id] ?? []}
+                    tags={tags}
+                    projects={projects}
+                    onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
+                    onCloseMenu={() => {
+                      setActiveDocumentMenuId(null);
+                      setActiveDocumentMenuPosition(null);
+                    }}
+                    onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
+                    onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
+                    onCreateTag={() => openTagDialog(doc.id)}
+                    onDragStart={() => {
+                      setDraggedDocumentId(doc.id);
+                      setActiveDocumentMenuId(null);
+                      setActiveDocumentMenuPosition(null);
+                      setLibraryMenuPosition(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedDocumentId(null);
+                      setProjectDropTargetId(null);
+                    }}
                   />
                 ))}
               </div>
@@ -704,8 +1333,14 @@ export const UploadScreen: React.FC = () => {
                           onClick={() => handleOpenDocument(doc)}
                           className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/45 border border-white/10 hover:border-[#2B9BFF]/45 hover:bg-slate-900/70 transition-all text-left group backdrop-blur-xl"
                         >
-                          <div className="p-2 rounded-lg bg-slate-900/85 border border-white/5 group-hover:border-[#2B9BFF]/35">
-                            {getFileIcon(doc.file_type)}
+                          <div className="h-14 w-10 overflow-hidden rounded-lg bg-slate-900/85 border border-white/5 group-hover:border-[#2B9BFF]/35">
+                            {doc.thumbnail_path ? (
+                              <img src={doc.thumbnail_path} alt={doc.filename} className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center">
+                                {getFileIcon(doc.file_type)}
+                              </div>
+                            )}
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="text-sm font-medium text-slate-100 truncate">{doc.filename}</p>
@@ -752,6 +1387,7 @@ export const UploadScreen: React.FC = () => {
                 </div>
               </div>
             )}
+
           </div>
         </div>
 
@@ -845,6 +1481,194 @@ export const UploadScreen: React.FC = () => {
 
           <div className="mt-auto" />
         </div>
+
+        {libraryMenuPosition && createPortal(
+          <div
+            data-library-floating-menu="true"
+            className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+            style={{ left: libraryMenuPosition.x, top: libraryMenuPosition.y }}
+            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <button
+              onClick={() => openProjectDialog()}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-white/10"
+            >
+              <FolderPlus size={14} />
+              New Folder
+            </button>
+            <button
+              onClick={() => openTagDialog()}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-white/10"
+            >
+              <Tag size={14} />
+              New Tag
+            </button>
+            <button
+              onClick={() => {
+                loadRecentDocuments();
+                setLibraryMenuPosition(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-white/10"
+            >
+              <RefreshCw size={14} />
+              Refresh Library
+            </button>
+          </div>,
+          document.body
+        )}
+
+        {activeTagMenu && (
+          <TagContextMenu
+            tag={activeTagMenu.tag}
+            position={activeTagMenu.position}
+            onClose={() => setActiveTagMenu(null)}
+            onDelete={() => {
+              setDeleteTagDialog({
+                isOpen: true,
+                tag: activeTagMenu.tag,
+                confirmation: ''
+              });
+            }}
+          />
+        )}
+
+        {projectDialog.isOpen && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <h3 className="text-lg font-semibold text-slate-100">Create Folder</h3>
+              <p className="mt-1 text-sm text-slate-400">
+                Create a folder for organizing documents in the home library.
+              </p>
+              <input
+                autoFocus
+                type="text"
+                value={projectDialog.name}
+                onChange={(e) => setProjectDialog((current) => ({ ...current, name: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleCreateProject();
+                  }
+                }}
+                placeholder="Folder name"
+                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60"
+              />
+              <div className="mt-5 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleCreateProject()}
+                  className="rounded-xl bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tagDialog.isOpen && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <h3 className="text-lg font-semibold text-slate-100">Create Tag</h3>
+              <p className="mt-1 text-sm text-slate-400">
+                Add a reusable tag and optionally assign it to the selected document.
+              </p>
+              <input
+                autoFocus
+                type="text"
+                value={tagDialog.name}
+                onChange={(e) => setTagDialog((current) => ({ ...current, name: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleCreateTag();
+                  }
+                }}
+                placeholder="Tag name"
+                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#FF8705]/60"
+              />
+              <div className="mt-5 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setTagDialog({ isOpen: false, name: '', documentId: null })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleCreateTag()}
+                  className="rounded-xl bg-gradient-to-r from-[#FF8705] to-[#FF7E67] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(255,135,5,0.35)]"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {deleteTagDialog.isOpen && deleteTagDialog.tag && (
+          <div className="absolute inset-0 z-[175] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-red-400/25 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-2xl bg-red-500/12 p-2 text-red-300">
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-100">Delete Tag</h3>
+                  <p className="mt-1 text-sm text-slate-400">
+                    This removes the tag label from documents, but does not delete documents, OCR cache, or translated content.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-white/10 bg-slate-900/55 p-4">
+                <div className="flex items-center gap-2 text-sm text-slate-200">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: deleteTagDialog.tag.color || '#FF8705' }}
+                  />
+                  <span className="font-medium">{deleteTagDialog.tag.name}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  Type <span className="font-semibold text-slate-200">{deleteTagDialog.tag.name}</span> to confirm deletion.
+                </p>
+              </div>
+
+              <input
+                autoFocus
+                type="text"
+                value={deleteTagDialog.confirmation}
+                onChange={(e) => setDeleteTagDialog((current) => ({ ...current, confirmation: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleDeleteTag();
+                  }
+                }}
+                placeholder={deleteTagDialog.tag.name}
+                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-red-400/60"
+              />
+
+              <div className="mt-5 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteTagDialog({ isOpen: false, tag: null, confirmation: '' })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleDeleteTag()}
+                  disabled={deleteTagDialog.confirmation.trim() !== deleteTagDialog.tag.name}
+                  className="rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(239,68,68,0.28)] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Delete Tag
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <input
           ref={fileInputRef}

@@ -54,6 +54,7 @@ import { findVerticalGapRegions, recognizeRegion, recognizeInChunks } from './oc
 import { classifyRegion, groupWordsIntoRegions } from './ocr-region';
 import {
   analyzeTextLikeProbe,
+  assessLatinLine,
   type AnalyzeTextLikeProbeDeps,
   buildLatinAnchorProbes,
   cleanNoiseWordsWithinLatinLines,
@@ -89,6 +90,8 @@ let tesseractWorker: Awaited<ReturnType<typeof createWorker>> | null = null;
 let currentLang = 'eng';
 let workerInitPromise: Promise<void> | null = null;
 const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
+const KOR_JAMO_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
+const KOR_TERMINAL_PUNCT_RE = /[?!~.…？！〜]+[)"'’”\]\s]*$/u;
 const LATIN_SHORT_KEEP_FOR_LINE = new Set([
   'I', 'A', 'EH', 'ME', 'OH', 'AH', 'NO', 'GO',
   'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE',
@@ -149,7 +152,8 @@ function recordStageMetric(
   wordsBefore: OCRWord[],
   wordsAfter: OCRWord[],
   linesBefore: Array<{ words: OCRWord[] }>,
-  linesAfter: Array<{ words: OCRWord[] }>
+  linesAfter: Array<{ words: OCRWord[] }>,
+  replacements: number = 0
 ): void {
   stageMetrics.push({
     stage,
@@ -157,6 +161,7 @@ function recordStageMetric(
     wordsAfter: wordsAfter.length,
     linesBefore: linesBefore.length,
     linesAfter: linesAfter.length,
+    replacements: replacements > 0 ? replacements : undefined,
   });
 }
 
@@ -269,6 +274,153 @@ function isMeaningfulLatinToken(token: string): boolean {
   return false;
 }
 
+function hasKoreanTerminalPunctuation(text: string): boolean {
+  if (!text) return false;
+  return KOR_TERMINAL_PUNCT_RE.test(text.trim());
+}
+
+function scoreRecoveredCjkWords(candidateWords: OCRWord[], isKorean: boolean): number {
+  if (candidateWords.length === 0) return Number.NEGATIVE_INFINITY;
+  const joined = joinWordsForLanguage(candidateWords).trim();
+  const alphaNum = getAlphaNum(joined);
+  if (!alphaNum) return Number.NEGATIVE_INFINITY;
+
+  const avgConf = candidateWords.reduce((sum, word) => sum + word.confidence, 0) / Math.max(1, candidateWords.length);
+  if (!isKorean) {
+    return alphaNum.length * 2.4 + avgConf * 0.05 + Math.min(candidateWords.length, 4) * 0.25;
+  }
+
+  const syllableCount = (alphaNum.match(KOR_SYLLABLE_RE) || []).length;
+  const jamoCount = (alphaNum.match(KOR_JAMO_RE) || []).length;
+  const punctuationBonus = hasKoreanTerminalPunctuation(joined) ? 1.5 : 0;
+  const mixedPenalty = jamoCount > syllableCount ? 2.5 : 0;
+  return syllableCount * 3.2
+    + alphaNum.length * 0.7
+    + avgConf * 0.05
+    + Math.min(candidateWords.length, 5) * 0.35
+    + punctuationBonus
+    - mixedPenalty;
+}
+
+function isSuspiciousKoreanLineForRescan(lineWords: OCRWord[]): boolean {
+  return lineWords.some((word) => {
+    const alphaNum = getAlphaNum((word.text || '').trim());
+    if (!alphaNum) return true;
+    const syllables = (alphaNum.match(KOR_SYLLABLE_RE) || []).length;
+    const jamo = (alphaNum.match(KOR_JAMO_RE) || []).length;
+    return word.confidence < CONFIG.KOR_LINE_RESCAN_LOW_TOKEN_CONF
+      || (syllables === 0 && alphaNum.length <= CONFIG.KOR_NONSYLLABLE_SHORT_MAX_LEN)
+      || (jamo > syllables && alphaNum.length <= 8);
+  });
+}
+
+function getKoreanRepairStats(words: OCRWord[]): {
+  score: number;
+  syllables: number;
+  jamo: number;
+  avgConf: number;
+  lowConfTokens: number;
+  hasTerminalPunct: boolean;
+} {
+  const joined = joinWordsForLanguage(words).trim();
+  const alphaNum = getAlphaNum(joined);
+  const syllables = (alphaNum.match(KOR_SYLLABLE_RE) || []).length;
+  const jamo = (alphaNum.match(KOR_JAMO_RE) || []).length;
+  const avgConf = words.reduce((sum, word) => sum + word.confidence, 0) / Math.max(1, words.length);
+  const lowConfTokens = words.filter((word) => {
+    const token = getAlphaNum((word.text || '').trim());
+    if (!token) return true;
+    if (word.confidence < CONFIG.KOR_LINE_RESCAN_LOW_TOKEN_CONF) return true;
+    return !KOR_SYLLABLE_RE.test(token) && token.length <= CONFIG.KOR_NONSYLLABLE_SHORT_MAX_LEN;
+  }).length;
+  return {
+    score: scoreRecoveredCjkWords(words, true),
+    syllables,
+    jamo,
+    avgConf,
+    lowConfTokens,
+    hasTerminalPunct: hasKoreanTerminalPunctuation(joined),
+  };
+}
+
+function selectBestRecoveredCjkLineWords(
+  candidateWords: OCRWord[],
+  targetLineBox: BBox,
+  pageHeight: number,
+  isKorean: boolean
+): OCRWord[] {
+  if (candidateWords.length <= 1) return candidateWords;
+  const grouped = buildLinesFromWordsByY(candidateWords, pageHeight) as OCRLine[];
+  if (grouped.length <= 1) return candidateWords;
+
+  let bestWords = candidateWords;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const group of grouped) {
+    const groupWords = (group.words as OCRWord[]) || [];
+    if (groupWords.length === 0) continue;
+    const overlap = getVerticalOverlapRatio(group.bbox, targetLineBox);
+    if (overlap < 0.22) continue;
+    const candidateScore = scoreRecoveredCjkWords(groupWords, isKorean) + overlap * 2.4;
+    if (candidateScore > bestScore) {
+      bestScore = candidateScore;
+      bestWords = groupWords;
+    }
+  }
+  return bestScore > Number.NEGATIVE_INFINITY ? bestWords : candidateWords;
+}
+
+function shouldReplaceRecoveredKoreanLine(currentWords: OCRWord[], candidateWords: OCRWord[]): boolean {
+  if (currentWords.length === 0 || candidateWords.length === 0) return false;
+
+  const currentStats = getKoreanRepairStats(currentWords);
+  const candidateStats = getKoreanRepairStats(candidateWords);
+  const scoreDelta = candidateStats.score - currentStats.score;
+  const minScoreDelta = currentStats.lowConfTokens > 0
+    ? CONFIG.KOR_LINE_REPAIR_MIN_SCORE_DELTA
+    : Math.max(CONFIG.KOR_LINE_REPAIR_MIN_SCORE_DELTA, 2.2);
+
+  if (scoreDelta < minScoreDelta) return false;
+  if (candidateStats.syllables < Math.max(2, currentStats.syllables - 1)) return false;
+
+  const improvementSignals = [
+    candidateStats.syllables >= currentStats.syllables + 1,
+    candidateStats.lowConfTokens < currentStats.lowConfTokens,
+    candidateStats.jamo < currentStats.jamo,
+    candidateStats.hasTerminalPunct && !currentStats.hasTerminalPunct,
+    candidateStats.avgConf >= currentStats.avgConf + 6,
+  ].filter(Boolean).length;
+
+  return improvementSignals >= 1;
+}
+
+function replaceLineWordsInPlace(
+  allWords: OCRWord[],
+  line: OCRLine,
+  replacementWords: OCRWord[]
+): number {
+  const currentLineWords = ((line.words as OCRWord[]) || []).slice();
+  const currentWordSet = new Set(currentLineWords);
+  let removedCount = 0;
+
+  for (let i = allWords.length - 1; i >= 0; i--) {
+    if (currentWordSet.has(allWords[i])) {
+      allWords.splice(i, 1);
+      removedCount += 1;
+    }
+  }
+
+  const replacementLine = makeLineFromWords(replacementWords) as OCRLine;
+  for (const word of replacementWords) {
+    allWords.push(word);
+  }
+  line.text = replacementLine.text;
+  line.confidence = replacementLine.confidence;
+  line.bbox = replacementLine.bbox;
+  line.words = replacementLine.words;
+
+  return Math.max(0, replacementWords.length - removedCount);
+}
+
 function shouldUseLatinRawTextFallback(rawText: string): boolean {
   if (!rawText || rawText.trim().length === 0) return false;
   const rawLines = rawText
@@ -379,16 +531,48 @@ function filterRecoveredCjkWords(
         || word.bbox.x1 >= lineBox.x1 - edgeMargin
       )
     );
+    const yOverlap = lineBox
+      ? getVerticalOverlapRatio(word.bbox, lineBox)
+      : 1;
+    const minGap = lineWords && lineWords.length > 0
+      ? getMinHorizontalGap(word, lineWords)
+      : 0;
+    const hasSyllable = isKorean && KOR_SYLLABLE_RE.test(alphaNum);
+    const koreanRecoverySource = isKorean && (source === 'lineRescan' || source === 'gapFallback');
+    const inlineShortKorean = koreanRecoverySource
+      && hasSyllable
+      && alphaNum.length <= 2
+      && yOverlap >= Math.max(0.36, CONFIG.CJK_RECOVER_Y_OVERLAP_MIN - 0.04)
+      && (
+        nearLineEdge
+        || !lineWords
+        || lineWords.length === 0
+        || minGap <= maxGap * 1.6
+      );
 
     if (word.confidence < minConf) {
       logDrop('recoverCjk', word, `${source}: conf<${minConf}`);
       return false;
     }
 
-    const dynMin = Math.max(
+    let dynMin = Math.max(
       minConf,
       getRecoveredCjkMinConfidence(alphaNum) - (nearLineEdge ? CONFIG.CJK_RECOVER_EDGE_RELAX : 0)
     );
+    if (koreanRecoverySource && hasSyllable) {
+      if (source === 'lineRescan') {
+        if (alphaNum.length <= 1) dynMin = Math.min(dynMin, CONFIG.KOR_RECOVER_LINE_SINGLE_CONF);
+        else if (alphaNum.length <= 2) dynMin = Math.min(dynMin, CONFIG.KOR_RECOVER_LINE_SHORT_CONF);
+      } else if (source === 'gapFallback') {
+        if (alphaNum.length <= 1) dynMin = Math.min(dynMin, CONFIG.KOR_RECOVER_GAP_SINGLE_CONF);
+        else if (alphaNum.length <= 2) dynMin = Math.min(dynMin, CONFIG.KOR_RECOVER_GAP_SHORT_CONF);
+      }
+      if (inlineShortKorean) {
+        dynMin = Math.min(dynMin, source === 'lineRescan'
+          ? CONFIG.KOR_RECOVER_LINE_SINGLE_CONF
+          : CONFIG.KOR_RECOVER_GAP_SINGLE_CONF);
+      }
+    }
     if (word.confidence < dynMin) {
       logDrop('recoverCjk', word, `${source}: short token conf<${dynMin}`);
       return false;
@@ -409,10 +593,12 @@ function filterRecoveredCjkWords(
     }
 
     if (lineBox) {
-      const yOverlap = getVerticalOverlapRatio(word.bbox, lineBox);
-      const overlapStrictConf = nearLineEdge
+      let overlapStrictConf = nearLineEdge
         ? CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF - 5
         : CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF;
+      if (inlineShortKorean) {
+        overlapStrictConf = Math.min(overlapStrictConf, dynMin + 12);
+      }
       if (yOverlap < CONFIG.CJK_RECOVER_Y_OVERLAP_MIN && word.confidence < overlapStrictConf) {
         logDrop('recoverCjk', word, `${source}: low y-overlap ${yOverlap.toFixed(2)}`);
         return false;
@@ -422,17 +608,22 @@ function filterRecoveredCjkWords(
     if (lineWords && lineWords.length > 0 && medianHeight > 0) {
       const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
       const hRatio = h / medianHeight;
+      const abnormalHeightStrictConf = inlineShortKorean
+        ? Math.min(CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF, dynMin + 14)
+        : CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF;
       if (
         (hRatio < CONFIG.CJK_RECOVER_HEIGHT_RATIO_MIN || hRatio > CONFIG.CJK_RECOVER_HEIGHT_RATIO_MAX)
-        && word.confidence < CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF
+        && word.confidence < abnormalHeightStrictConf
       ) {
         logDrop('recoverCjk', word, `${source}: abnormal height ratio ${hRatio.toFixed(2)}`);
         return false;
       }
 
       if (alphaNum.length <= 2) {
-        const minGap = getMinHorizontalGap(word, lineWords);
-        if (!nearLineEdge && minGap > maxGap && word.confidence < CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF) {
+        const isolatedShortStrictConf = inlineShortKorean
+          ? Math.min(CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF, dynMin + 12)
+          : CONFIG.CJK_RECOVER_ISOLATED_SHORT_CONF;
+        if (!nearLineEdge && minGap > maxGap && word.confidence < isolatedShortStrictConf) {
           logDrop('recoverCjk', word, `${source}: isolated short gap=${minGap.toFixed(1)}`);
           return false;
         }
@@ -1919,6 +2110,16 @@ function pruneLatinIsolatedNoiseLines(
 
     if (neighborCount > 0) return true;
 
+    const assessment = assessLatinLine(lineWords, line.text || '', line.confidence, {
+      latinCommonWords: LATIN_COMMON_WORDS,
+      latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+    });
+    if (assessment.coreKeep) return true;
+    if (assessment.ghostLikely) {
+      if (probeWord) logDrop('latinLine', probeWord, `isolated ${assessment.reason}`);
+      return false;
+    }
+
     const quality = scoreLatinLineReadability(lineWords);
     const chars = alpha.length;
     const lineTokens = lineWords
@@ -2134,6 +2335,16 @@ function pruneLatinGarbageLines(
 
     if (lineWords.some(w => isLikelyWatermarkToken(w, pageWidth, pageHeight))) {
       if (probeWord) logDrop('latinLine', probeWord, 'watermark-like line');
+      return false;
+    }
+
+    const assessment = assessLatinLine(lineWords, line.text || '', line.confidence, {
+      latinCommonWords: LATIN_COMMON_WORDS,
+      latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+    });
+    if (assessment.coreKeep) return true;
+    if (assessment.ghostLikely) {
+      if (probeWord) logDrop('latinLine', probeWord, `garbage ${assessment.reason}`);
       return false;
     }
 
@@ -2823,7 +3034,7 @@ self.onmessage = async (e: MessageEvent) => {
           disableRawTextFallback = true;
         }
         const baseRecoveryAdded = isCjk
-          ? CONFIG.CJK_RECOVERY_MAX_ADDED_WORDS
+          ? (isKorean ? CONFIG.KOR_RECOVERY_MAX_ADDED_WORDS : CONFIG.CJK_RECOVERY_MAX_ADDED_WORDS)
           : CONFIG.LATIN_RECOVERY_MAX_ADDED_WORDS;
         const profileRecoveryCap = isFastQuality ? 8 : (isBalancedQuality ? 14 : Number.MAX_SAFE_INTEGER);
         const maxRecoveryAdded = Math.min(baseRecoveryAdded, profileRecoveryCap);
@@ -2832,6 +3043,8 @@ self.onmessage = async (e: MessageEvent) => {
           if (!Number.isFinite(maxRecoveryAdded)) return Number.MAX_SAFE_INTEGER;
           return Math.max(0, maxRecoveryAdded - recoveryAdded);
         };
+        const allowHeavyKoreanRecovery = isKorean
+          && lines.length <= CONFIG.KOR_HEAVY_RECOVERY_MAX_LINES;
 
         // ── CJK vertical gap rescan ──
         if (
@@ -2839,7 +3052,13 @@ self.onmessage = async (e: MessageEvent) => {
           && !tooLarge
           && !hasExceededRecoveryBudget()
           && lines.length > 0
-          && baseWordCountBeforeRecovery <= CONFIG.CJK_VERTICAL_GAP_ENABLE_MAX_WORDS
+          && (
+            baseWordCountBeforeRecovery <= CONFIG.CJK_VERTICAL_GAP_ENABLE_MAX_WORDS
+            || (
+              allowHeavyKoreanRecovery
+              && baseWordCountBeforeRecovery <= CONFIG.KOR_FALLBACK_ENABLE_MAX_WORDS
+            )
+          )
           && remainingRecoveryBudget() > 0
         ) {
           const gapRegions = findVerticalGapRegions(lines, actualWidth, actualHeight);
@@ -2877,18 +3096,34 @@ self.onmessage = async (e: MessageEvent) => {
         // ── Line rescan for low-coverage lines ──
         const needsUnbinarized = CONFIG.OCR_BINARIZE && !isCjk;
         let fallbackInput: Blob | string | null = null;
+        let koreanBinarizedInput: Blob | string | null = null;
         const ensureFallbackInput = async () => {
           if (fallbackInput) return;
           fallbackInput = needsUnbinarized ? imageUrl : processedInput;
+        };
+        const ensureKoreanBinarizedInput = async (): Promise<Blob | string> => {
+          if (koreanBinarizedInput) return koreanBinarizedInput;
+          const alt = await preprocessImage(imageUrl, { binarize: true });
+          koreanBinarizedInput = alt.image;
+          return koreanBinarizedInput;
         };
 
         const lineRescanWordsBefore = words.slice();
         const lineRescanLinesBefore = lines.slice();
         const lineRescanMax = isCjk
           ? (
-            baseWordCountBeforeRecovery <= CONFIG.CJK_LINE_RESCAN_ENABLE_MAX_WORDS
-            ? CONFIG.CJK_LINE_RESCAN_MAX
-            : 0
+            isKorean
+              ? (
+                  allowHeavyKoreanRecovery
+                  && baseWordCountBeforeRecovery <= CONFIG.KOR_LINE_RESCAN_ENABLE_MAX_WORDS
+                    ? CONFIG.KOR_LINE_RESCAN_MAX
+                    : 0
+                )
+              : (
+                  baseWordCountBeforeRecovery <= CONFIG.CJK_LINE_RESCAN_ENABLE_MAX_WORDS
+                    ? CONFIG.CJK_LINE_RESCAN_MAX
+                    : 0
+                )
           )
           : (
             isFastQuality
@@ -2917,12 +3152,24 @@ self.onmessage = async (e: MessageEvent) => {
           if (hasExceededRecoveryBudget()) {
             console.log('[Worker] Skipped line rescan: recovery budget exceeded');
           } else {
-          const coverageThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_COVERAGE : CONFIG.LATIN_LINE_RESCAN_COVERAGE;
-          const confThreshold = isCjk ? CONFIG.CJK_LINE_RESCAN_CONF : CONFIG.LATIN_LINE_RESCAN_CONF;
+          const coverageThreshold = isCjk
+            ? (isKorean ? CONFIG.KOR_LINE_RESCAN_COVERAGE : CONFIG.CJK_LINE_RESCAN_COVERAGE)
+            : CONFIG.LATIN_LINE_RESCAN_COVERAGE;
+          const confThreshold = isCjk
+            ? (isKorean ? CONFIG.KOR_LINE_RESCAN_CONF : CONFIG.CJK_LINE_RESCAN_CONF)
+            : CONFIG.LATIN_LINE_RESCAN_CONF;
           const padXMult = isCjk ? CONFIG.CJK_LINE_RESCAN_PAD_X : CONFIG.LATIN_LINE_RESCAN_PAD_X;
           const padYMult = isCjk ? CONFIG.CJK_LINE_RESCAN_PAD_Y : CONFIG.LATIN_LINE_RESCAN_PAD_Y;
 
-          const candidates: Array<{ line: typeof lines[number]; lineBox: BBox; coverage: number; quality: number }> = [];
+          const candidates: Array<{
+            line: typeof lines[number];
+            lineBox: BBox;
+            coverage: number;
+            quality: number;
+            priority: number;
+            suspiciousKorean: boolean;
+            shortPunctuatedKorean: boolean;
+          }> = [];
           for (const line of lines) {
             const lineWords = (line.words as OCRWord[]) || [];
             if (lineWords.length === 0) continue;
@@ -2945,13 +3192,29 @@ self.onmessage = async (e: MessageEvent) => {
               if (smallThinNoise || tinyAreaNoise) continue;
             }
             const coverage = computeLineCoverageRatio(lineWords, lineBox);
+            const hasLargeCjkGap = isCjk && findLargeGaps(lineWords, true).length > 0;
+            const suspiciousKorean = isKorean && isSuspiciousKoreanLineForRescan(lineWords);
+            const shortPunctuatedKorean = isKorean
+              && hasKoreanTerminalPunctuation((line.text || '').trim())
+              && lineWords.length <= 2;
             const quality = isCjk ? 1 : scoreLatinLineReadability(lineWords);
             const lowQualityLatin = !isCjk
               && quality < CONFIG.LATIN_LINE_RESCAN_QUALITY
               && line.confidence <= CONFIG.LATIN_LINE_RESCAN_QUALITY_CONF_MAX;
-            if (coverage < coverageThreshold || lowQualityLatin) candidates.push({ line, lineBox, coverage, quality });
+            if (coverage < coverageThreshold || lowQualityLatin || hasLargeCjkGap || suspiciousKorean || shortPunctuatedKorean) {
+              candidates.push({
+                line,
+                lineBox,
+                coverage,
+                quality,
+                priority: suspiciousKorean ? 2 : (shortPunctuatedKorean ? 1 : 0),
+                suspiciousKorean,
+                shortPunctuatedKorean,
+              });
+            }
           }
           candidates.sort((a, b) => {
+            if (a.priority !== b.priority) return b.priority - a.priority;
             if (a.coverage !== b.coverage) return a.coverage - b.coverage;
             return a.quality - b.quality;
           });
@@ -2960,6 +3223,7 @@ self.onmessage = async (e: MessageEvent) => {
           if (limited.length > 0) {
             await ensureFallbackInput();
             let rescanAdded = 0;
+            let rescanReplaced = 0;
             for (const item of limited) {
               if (hasExceededRecoveryBudget()) break;
               if (remainingRecoveryBudget() <= 0) break;
@@ -2968,33 +3232,139 @@ self.onmessage = async (e: MessageEvent) => {
               const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
               const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
               const lowCoverageLatin = !isCjk && item.coverage < CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_THRESHOLD;
-              const effectivePadX = lowCoverageLatin
+              let effectivePadX = lowCoverageLatin
                 ? Math.max(padXMult, CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_PAD_X)
                 : padXMult;
-              const effectivePadY = lowCoverageLatin
+              let effectivePadY = lowCoverageLatin
                 ? Math.max(padYMult, CONFIG.LATIN_LINE_RESCAN_LOW_COVERAGE_PAD_Y)
                 : padYMult;
+              if (isKorean && item.suspiciousKorean) {
+                effectivePadX = Math.max(effectivePadX, CONFIG.KOR_LINE_RESCAN_SUSPICIOUS_PAD_X);
+                effectivePadY = Math.max(effectivePadY, CONFIG.KOR_LINE_RESCAN_SUSPICIOUS_PAD_Y);
+              }
+              if (isKorean && (item.shortPunctuatedKorean || lineWords.length <= 2)) {
+                effectivePadX = Math.max(effectivePadX, CONFIG.KOR_LINE_RESCAN_SUSPICIOUS_PAD_X * 1.45);
+                effectivePadY = Math.max(effectivePadY, CONFIG.KOR_LINE_RESCAN_SUSPICIOUS_PAD_Y * 1.6);
+              }
               const padded: BBox = {
                 x0: item.lineBox.x0 - medianHeight * effectivePadX,
                 y0: item.lineBox.y0 - medianHeight * effectivePadY,
                 x1: item.lineBox.x1 + medianHeight * effectivePadX,
                 y1: item.lineBox.y1 + medianHeight * effectivePadY
               };
+              const rawLinePadded: BBox = {
+                x0: item.lineBox.x0 - medianHeight * (CONFIG.KOR_RAW_LINE_PAD_X * (item.shortPunctuatedKorean ? 1.18 : 1)),
+                y0: item.lineBox.y0 - medianHeight * CONFIG.KOR_RAW_LINE_PAD_Y,
+                x1: item.lineBox.x1 + medianHeight * (CONFIG.KOR_RAW_LINE_PAD_X * (item.shortPunctuatedKorean ? 1.18 : 1)),
+                y1: item.lineBox.y1 + medianHeight * CONFIG.KOR_RAW_LINE_PAD_Y,
+              };
               const boxW = Math.max(1, item.lineBox.x1 - item.lineBox.x0);
               const boxH = Math.max(1, item.lineBox.y1 - item.lineBox.y0);
               const linePsm = isCjk
                 ? (boxH > boxW * 1.25 ? Number(PSM.SPARSE_TEXT) : Number(PSM.SINGLE_LINE))
                 : (lowCoverageLatin ? Number(PSM.SINGLE_BLOCK) : Number(PSM.SINGLE_LINE));
-              const regionWords = await recognizeRegion(worker, (fallbackInput ?? processedInput) as Blob | string, padded, linePsm, actualWidth, actualHeight, dpi);
-              const validWords = isCjk
-                ? filterRecoveredCjkWords(regionWords, {
-                  source: 'lineRescan',
-                  minConf: confThreshold,
-                  lineWords,
-                  lineBox: item.lineBox,
-                  isKorean,
-                })
-                : filterLatinRescueWords(regionWords, actualWidth, actualHeight, confThreshold, 'lineRescan');
+              let validWords: OCRWord[] = [];
+              if (isCjk) {
+                const rescanPsms = isKorean
+                  ? Array.from(new Set([linePsm, Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)]))
+                  : [linePsm];
+                let bestValidWords: OCRWord[] = [];
+                let bestValidScore = Number.NEGATIVE_INFINITY;
+                const currentLineScore = isKorean
+                  ? scoreRecoveredCjkWords(lineWords, true)
+                  : Number.NEGATIVE_INFINITY;
+                const tryRescanInput = async (rescanInput: Blob | string): Promise<void> => {
+                  for (const rescanPsm of rescanPsms) {
+                    const regionWords = await recognizeRegion(
+                      worker,
+                      rescanInput,
+                      padded,
+                      rescanPsm,
+                      actualWidth,
+                      actualHeight,
+                      dpi
+                    );
+                    const candidateWords = filterRecoveredCjkWords(regionWords, {
+                      source: 'lineRescan',
+                      minConf: confThreshold,
+                      lineWords,
+                      lineBox: item.lineBox,
+                      isKorean,
+                    });
+                    const bestLineWords = selectBestRecoveredCjkLineWords(candidateWords, item.lineBox, actualHeight, isKorean);
+                    const candidateScore = scoreRecoveredCjkWords(bestLineWords, isKorean);
+                    if (candidateScore > bestValidScore) {
+                      bestValidScore = candidateScore;
+                      bestValidWords = bestLineWords;
+                    }
+                  }
+                };
+                const tryRawLineInput = async (rescanInput: Blob | string): Promise<void> => {
+                  const regionWords = await recognizeRegion(
+                    worker,
+                    rescanInput,
+                    rawLinePadded,
+                    Number(PSM.RAW_LINE),
+                    actualWidth,
+                    actualHeight,
+                    dpi,
+                    { scale: CONFIG.KOR_RAW_LINE_SCALE }
+                  );
+                  const candidateWords = filterRecoveredCjkWords(regionWords, {
+                    source: 'lineRescan',
+                    minConf: confThreshold,
+                    lineWords,
+                    lineBox: item.lineBox,
+                    isKorean,
+                  });
+                  const bestLineWords = selectBestRecoveredCjkLineWords(candidateWords, item.lineBox, actualHeight, isKorean);
+                  const candidateScore = scoreRecoveredCjkWords(bestLineWords, isKorean);
+                  if (candidateScore > bestValidScore) {
+                    bestValidScore = candidateScore;
+                    bestValidWords = bestLineWords;
+                  }
+                };
+
+                await tryRescanInput((fallbackInput ?? processedInput) as Blob | string);
+                await tryRawLineInput((fallbackInput ?? processedInput) as Blob | string);
+                if (
+                  isKorean
+                  && (
+                    bestValidWords.length === 0
+                    || bestValidScore < currentLineScore + 1.4
+                    || item.shortPunctuatedKorean
+                    || item.suspiciousKorean
+                  )
+                ) {
+                  const binarizedInput = await ensureKoreanBinarizedInput();
+                  await tryRescanInput(binarizedInput);
+                  await tryRawLineInput(binarizedInput);
+                }
+                validWords = bestValidWords;
+              } else {
+                const regionWords = await recognizeRegion(
+                  worker,
+                  (fallbackInput ?? processedInput) as Blob | string,
+                  padded,
+                  linePsm,
+                  actualWidth,
+                  actualHeight,
+                  dpi
+                );
+                validWords = filterLatinRescueWords(regionWords, actualWidth, actualHeight, confThreshold, 'lineRescan');
+              }
+              if (isKorean && validWords.length > 0) {
+                const addedByReplacement = Math.max(0, validWords.length - lineWords.length);
+                if (
+                  addedByReplacement <= remainingRecoveryBudget()
+                  && shouldReplaceRecoveredKoreanLine(lineWords, validWords)
+                ) {
+                  recoveryAdded += replaceLineWordsInPlace(words, item.line as OCRLine, validWords);
+                  rescanAdded += addedByReplacement;
+                  rescanReplaced += 1;
+                  continue;
+                }
+              }
               const capped = takeRecoveryCandidates(validWords, remainingRecoveryBudget(), 'lineRescan');
               if (capped.length === 0) continue;
               const candidateScore = !isCjk
@@ -3012,15 +3382,21 @@ self.onmessage = async (e: MessageEvent) => {
               }
               mergeWordsIntoLine(item.line, added);
             }
-            if (rescanAdded > 0) {
+            if (rescanAdded > 0 || rescanReplaced > 0) {
               lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
-              console.log(`[Worker] ${isCjk ? 'CJK' : 'Latin'} line rescan added ${rescanAdded} tokens`);
+              const rescanNotes: string[] = [];
+              if (rescanAdded > 0) rescanNotes.push(`added ${rescanAdded} tokens`);
+              if (rescanReplaced > 0) rescanNotes.push(`repaired ${rescanReplaced} Korean lines`);
+              console.log(`[Worker] ${isCjk ? 'CJK' : 'Latin'} line rescan ${rescanNotes.join(', ')}`);
+            }
+            if (isPanelProfile) {
+              recordStageMetric(stageMetrics, 'rescan', lineRescanWordsBefore, words, lineRescanLinesBefore, lines, rescanReplaced);
             }
           }
           }
           }
         }
-        if (isPanelProfile) {
+        if (isPanelProfile && stageMetrics.every((metric) => metric.stage !== 'rescan')) {
           recordStageMetric(stageMetrics, 'rescan', lineRescanWordsBefore, words, lineRescanLinesBefore, lines);
         }
 
@@ -3092,6 +3468,7 @@ self.onmessage = async (e: MessageEvent) => {
             let bestValid: OCRWord[] = [];
             let bestScore = Number.NEGATIVE_INFINITY;
             let bestReason = 'noWords';
+            let bestAssessmentReason = 'noWords';
 
             for (const probePsm of probe.psmOrder) {
               if (hasExceededRecoveryBudget()) break;
@@ -3122,14 +3499,26 @@ self.onmessage = async (e: MessageEvent) => {
               }
 
               const candidateLines = buildLinesFromWordsByY(valid, actualHeight) as OCRLine[];
+              const candidateAssessments = candidateLines
+                .map((line) => assessLatinLine((line.words as OCRWord[]) || [], line.text || '', line.confidence, {
+                  latinCommonWords: LATIN_COMMON_WORDS,
+                  latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+                }))
+                .sort((a, b) => b.recoveryScore - a.recoveryScore);
+              const bestLineAssessment = candidateAssessments[0];
+              if (!bestLineAssessment || !bestLineAssessment.recoveryAccept) {
+                bestReason = `weakRecoveredLine:${bestLineAssessment?.reason || 'noAssessment'}`;
+                continue;
+              }
               const candidateScore = scoreLatinCandidate(valid, candidateLines, {
                 latinCommonWords: LATIN_COMMON_WORDS,
                 latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
-              });
+              }) + bestLineAssessment.recoveryScore;
               if (candidateScore > bestScore) {
                 bestScore = candidateScore;
                 bestValid = valid;
                 bestReason = 'scored';
+                bestAssessmentReason = bestLineAssessment.reason;
               }
             }
 
@@ -3162,6 +3551,22 @@ self.onmessage = async (e: MessageEvent) => {
               continue;
             }
 
+            const cappedAssessment = assessLatinLine(capped, capped.map((word) => word.text).join(' '), makeLineFromWords(capped).confidence, {
+              latinCommonWords: LATIN_COMMON_WORDS,
+              latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+            });
+            if (!cappedAssessment.recoveryAccept) {
+              recordCandidateDebug(candidateDebugs, {
+                id: probe.id,
+                stage: probe.probeType,
+                bbox: probe.bbox,
+                accepted: false,
+                score: bestScore,
+                reason: `capped:${cappedAssessment.reason}`,
+              });
+              continue;
+            }
+
             const added = appendUniqueWords(words, capped, 0.5);
             if (added.length < CONFIG.LATIN_ANCHOR_PROBE_MIN_ACCEPT_WORDS) {
               recordCandidateDebug(candidateDebugs, {
@@ -3175,7 +3580,10 @@ self.onmessage = async (e: MessageEvent) => {
               continue;
             }
 
-            if (bestScore >= CONFIG.LATIN_ANCHOR_PROBE_MIN_LINE_SCORE) {
+            if (
+              !cappedAssessment.ghostLikely
+              && (cappedAssessment.coreKeep || cappedAssessment.lexicalHits >= 2 || bestScore >= CONFIG.LATIN_ANCHOR_PROBE_MIN_LINE_SCORE + 2)
+            ) {
               protectWords(protectedWordKeys, added);
             }
             recoveryAdded += added.length;
@@ -3191,7 +3599,7 @@ self.onmessage = async (e: MessageEvent) => {
               bbox: probe.bbox,
               accepted: true,
               score: bestScore,
-              reason: 'accepted',
+              reason: `accepted:${bestAssessmentReason}`,
             });
           }
 
@@ -3433,7 +3841,15 @@ self.onmessage = async (e: MessageEvent) => {
           && (words.length >= CONFIG.FALLBACK_MIN_WORDS || allowLowWordFallback)
           && (parsedData.lineBoxes.length > 0 || lines.length > 0)
           && (hasStrongLatinAnchor || allowWeakAnchorFallback)
-          && (!isCjk || baseWordCountBeforeRecovery <= CONFIG.CJK_FALLBACK_ENABLE_MAX_WORDS)
+          && (
+            !isCjk
+            || baseWordCountBeforeRecovery <= CONFIG.CJK_FALLBACK_ENABLE_MAX_WORDS
+            || (
+              isKorean
+              && lines.length <= CONFIG.KOR_HEAVY_RECOVERY_MAX_LINES
+              && baseWordCountBeforeRecovery <= CONFIG.KOR_FALLBACK_ENABLE_MAX_WORDS
+            )
+          )
           && !hasExceededRecoveryBudget()
           && allowBestHeavyRescue
           && remainingRecoveryBudget() > 0
@@ -3539,7 +3955,7 @@ self.onmessage = async (e: MessageEvent) => {
 
           // Large gaps within lines
           let gapBudget = 20;
-          const allowGapFallback = !isCjk || CONFIG.CJK_ENABLE_GAP_FALLBACK;
+          const allowGapFallback = !isCjk || CONFIG.CJK_ENABLE_GAP_FALLBACK || (isKorean && CONFIG.KOR_ENABLE_GAP_FALLBACK);
           for (const [lineIndex, line] of lines.slice().entries()) {
             if (hasExceededRecoveryBudget()) break;
             if (!allowGapFallback) break;
@@ -3547,6 +3963,17 @@ self.onmessage = async (e: MessageEvent) => {
             if (remainingRecoveryBudget() <= 0) break;
             const lineWords = (line.words as OCRWord[]) || [];
             if (lineWords.length === 0) continue;
+            if (isCjk) {
+              const rawLineText = (line.text || '').trim();
+              const mergedAlpha = getAlphaNum(rawLineText);
+              if (!mergedAlpha) continue;
+              if (isKorean) {
+                const syllableCount = (mergedAlpha.match(KOR_SYLLABLE_RE) || []).length;
+                const hasTerminalPunct = hasKoreanTerminalPunctuation(rawLineText);
+                if (lineWords.length < 2 && !hasTerminalPunct) continue;
+                if (syllableCount < 2 && !hasTerminalPunct) continue;
+              }
+            }
             if (!isCjk) {
               const lineChars = getAlphaNum((line.text || '').trim()).length;
               const lineQuality = scoreLatinLineReadability(lineWords);
@@ -3583,7 +4010,7 @@ self.onmessage = async (e: MessageEvent) => {
             const gapRegions = gaps.concat(edgeGaps);
             if (gapRegions.length === 0) continue;
             await ensureFallbackInput();
-            const limitedGaps = gapRegions.slice(0, 3);
+            const limitedGaps = gapRegions.slice(0, isKorean ? CONFIG.KOR_GAP_FALLBACK_MAX_GAPS : 3);
             for (const [gapIndex, gap] of limitedGaps.entries()) {
               if (hasExceededRecoveryBudget()) break;
               if (gapBudget <= 0) break;
@@ -3614,7 +4041,7 @@ self.onmessage = async (e: MessageEvent) => {
                   }),
                   {
                     source: 'gapFallback',
-                    minConf: CONFIG.FALLBACK_GAP_CONF_CJK,
+                    minConf: isKorean ? CONFIG.KOR_FALLBACK_GAP_CONF : CONFIG.FALLBACK_GAP_CONF_CJK,
                     lineWords,
                     lineBox: line.bbox,
                     isKorean,
@@ -3685,8 +4112,6 @@ self.onmessage = async (e: MessageEvent) => {
         }
 
         // ── Image tile & background filters ──
-        const imageFilterWordsBefore = words.slice();
-        const imageFilterLinesBefore = lines.slice();
         if (gray && words.length > 0) {
           const latinMeaningfulBeforeImage = !isCjk
             ? countMeaningfulLatinWords(words, LATIN_COMMON_WORDS, LATIN_SHORT_KEEP_FOR_LINE)
@@ -3714,6 +4139,8 @@ self.onmessage = async (e: MessageEvent) => {
           if (!isCjk) {
             extendLatinProtectedWords(lines, protectedWords);
           }
+          const imgTileWordsBefore = words.slice();
+          const imgTileLinesBefore = lines.slice();
           if (!highRecallImageMode) {
             const maskInfo = buildImageTileMask(gray, actualWidth, actualHeight, words);
             if (maskInfo && maskInfo.imageTiles > 0) {
@@ -3728,7 +4155,12 @@ self.onmessage = async (e: MessageEvent) => {
           } else {
             console.log(`[Worker] High-recall Latin mode: skipped image tile filter${latinSpeechFastPath ? ' (speech fast-path)' : ''}`);
           }
+          if (isPanelProfile) {
+            recordStageMetric(stageMetrics, 'imgTile', imgTileWordsBefore, words, imgTileLinesBefore, lines);
+          }
 
+          const bgVarianceWordsBefore = words.slice();
+          const bgVarianceLinesBefore = lines.slice();
           if (words.length > 0) {
             if (!highRecallImageMode) {
               const filteredWords = filterWordsByBackground(words, gray, actualWidth, actualHeight, protectedWords);
@@ -3741,7 +4173,12 @@ self.onmessage = async (e: MessageEvent) => {
               console.log(`[Worker] High-recall Latin mode: skipped background variance filter${latinSpeechFastPath ? ' (speech fast-path)' : ''}`);
             }
           }
+          if (isPanelProfile) {
+            recordStageMetric(stageMetrics, 'bgVariance', bgVarianceWordsBefore, words, bgVarianceLinesBefore, lines);
+          }
 
+          const isolatedCjkWordsBefore = words.slice();
+          const isolatedCjkLinesBefore = lines.slice();
           if (isCjk && words.length > 0) {
             const filteredWords = filterIsolatedCjkNoise(words, protectedWords);
             if (filteredWords.length !== words.length) {
@@ -3750,7 +4187,12 @@ self.onmessage = async (e: MessageEvent) => {
               lines = rebuildLinesFromWords(lines, filteredWords);
             }
           }
+          if (isPanelProfile && isCjk) {
+            recordStageMetric(stageMetrics, 'isolatedCjk', isolatedCjkWordsBefore, words, isolatedCjkLinesBefore, lines);
+          }
 
+          const korJamoWordsBefore = words.slice();
+          const korJamoLinesBefore = lines.slice();
           if (hasLangCode(language, 'kor') && words.length > 0) {
             const filteredWords = filterKoreanJamoNoise(words, protectedWords);
             if (filteredWords.length !== words.length) {
@@ -3759,7 +4201,12 @@ self.onmessage = async (e: MessageEvent) => {
               lines = rebuildLinesFromWords(lines, filteredWords);
             }
           }
+          if (isPanelProfile && hasLangCode(language, 'kor')) {
+            recordStageMetric(stageMetrics, 'korJamo', korJamoWordsBefore, words, korJamoLinesBefore, lines);
+          }
 
+          const weakCjkWordsBefore = words.slice();
+          const weakCjkLinesBefore = lines.slice();
           if (isCjk && lines.length > 0) {
             const pruned = filterWeakIsolatedCjkLines(lines as OCRLine[], gray, actualWidth, actualHeight);
             if (pruned.words.length !== words.length) {
@@ -3768,14 +4215,14 @@ self.onmessage = async (e: MessageEvent) => {
               lines = pruned.lines;
             }
           }
+          if (isPanelProfile && isCjk) {
+            recordStageMetric(stageMetrics, 'weakCjkLine', weakCjkWordsBefore, words, weakCjkLinesBefore, lines);
+          }
 
           // Latin retry: stylized balloon text often benefits from sparse-text pass.
           if (!isCjk) {
             console.log('[Worker] Skipped Latin sparse retry: disabled for speed/stability');
           }
-        }
-        if (isPanelProfile) {
-          recordStageMetric(stageMetrics, 'imageFilter', imageFilterWordsBefore, words, imageFilterLinesBefore, lines);
         }
 
         // ── Latin watermark suppression + targeted sparse rescues ──
@@ -3910,7 +4357,20 @@ self.onmessage = async (e: MessageEvent) => {
               .slice(0, CONFIG.LATIN_SPARSE_MAX_ADDED_PER_PROBE);
             if (limitedValid.length === 0) return 0;
 
-            const added = appendUniqueWords(words, limitedValid, 0.52);
+            const assessedProbeLines = buildLinesFromWordsByY(limitedValid, actualHeight)
+              .map((line) => ({
+                line,
+                assessment: assessLatinLine((line.words as OCRWord[]) || [], line.text || '', line.confidence, {
+                  latinCommonWords: LATIN_COMMON_WORDS,
+                  latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+                }),
+              }))
+              .filter(({ assessment }) => assessment.recoveryAccept)
+              .sort((a, b) => b.assessment.recoveryScore - a.assessment.recoveryScore);
+            const acceptedProbeWords = assessedProbeLines.flatMap(({ line }) => (line.words as OCRWord[]) || []);
+            if (acceptedProbeWords.length === 0) return 0;
+
+            const added = appendUniqueWords(words, acceptedProbeWords, 0.52);
             if (added.length === 0) return 0;
 
             if (source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse') {
@@ -4278,6 +4738,7 @@ self.onmessage = async (e: MessageEvent) => {
 
               let bestValid: OCRWord[] = [];
               let bestScore = Number.NEGATIVE_INFINITY;
+              let bestReason = 'noWords';
               for (const probe of probeInputs) {
                 if (hasExceededRecoveryBudget()) break;
                 const basePsm = lowCoverageCandidate ? Number(PSM.SINGLE_BLOCK) : Number(PSM.SINGLE_LINE);
@@ -4303,65 +4764,53 @@ self.onmessage = async (e: MessageEvent) => {
                     Math.max(30, CONFIG.FALLBACK_LINE_CONF - 34),
                     probePsm === Number(PSM.SPARSE_TEXT) ? `${probe.source}Sparse` : probe.source
                   );
-                  if (valid.length === 0) continue;
+                  if (valid.length === 0) {
+                    bestReason = 'noValidWords';
+                    continue;
+                  }
                   const ranked = valid
                     .slice()
                     .sort((a, b) => b.confidence - a.confidence)
                     .slice(0, 10);
                   const lineCandidate = makeLineFromWords(ranked);
-                  const lineAlpha = normalizeLatinTokenForLexicon(getAlphaNum((lineCandidate.text || '').trim()));
-                  if (!lineAlpha) continue;
-                  const lineQuality = scoreLatinLineReadability(ranked);
-                  const lexicalHits = ranked
-                    .map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim())))
-                    .filter(token => LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token))
-                    .length;
-                  const noisySingles = ranked.reduce((sum, w) => {
-                    const token = normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim()));
-                    return sum + (token.length === 1 && !LATIN_SHORT_KEEP_FOR_LINE.has(token) ? 1 : 0);
-                  }, 0);
-                  const score = (lexicalHits * 3.4)
-                    + (lineQuality * 4.5)
-                    + (lineCandidate.confidence * 0.04)
-                    + (/[AEIOU]/.test(lineAlpha) ? 0.9 : 0)
-                    - (noisySingles * 1.4)
-                    + (probePsm === Number(PSM.SPARSE_TEXT) ? 0.12 : 0);
+                  const assessment = assessLatinLine(ranked, lineCandidate.text || '', lineCandidate.confidence, {
+                    latinCommonWords: LATIN_COMMON_WORDS,
+                    latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+                  });
+                  if (!assessment.alpha) {
+                    bestReason = 'noAlpha';
+                    continue;
+                  }
+                  const score = assessment.recoveryScore
+                    + (probePsm === Number(PSM.SPARSE_TEXT) ? 0.12 : 0)
+                    + (assessment.coreKeep ? 0.8 : 0);
                   if (score > bestScore) {
                     bestScore = score;
                     bestValid = ranked;
+                    bestReason = assessment.reason;
                   }
                 }
               }
 
-              if (bestValid.length === 0) continue;
+              if (bestValid.length === 0) {
+                recordCandidateDebug(candidateDebugs, {
+                  id: `postPrune-${candidate.key}`,
+                  stage: 'postPruneLine',
+                  bbox: probeBox,
+                  accepted: false,
+                  score: Number.isFinite(bestScore) ? bestScore : undefined,
+                  reason: bestReason,
+                });
+                continue;
+              }
 
               let candidateWords = bestValid;
               let candidateLine = makeLineFromWords(candidateWords);
-              let candidateAlpha = normalizeLatinTokenForLexicon(getAlphaNum((candidateLine.text || '').trim()));
-              let candidateQuality = scoreLatinLineReadability(candidateWords);
-              let candidateTokens = candidateWords
-                .map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim())))
-                .filter(Boolean);
-              let candidateCommonHits = candidateTokens.filter((token) => LATIN_COMMON_WORDS.has(token)).length;
-              let candidateShortKeepHits = candidateTokens.filter((token) => LATIN_SHORT_KEEP_FOR_LINE.has(token)).length;
-              let candidateLexicalHits = candidateCommonHits + candidateShortKeepHits;
-              let candidateNonLexicalCount = Math.max(0, candidateTokens.length - candidateLexicalHits);
-              let keepLine = (
-                candidateCommonHits >= 2 && candidateAlpha.length >= 4 && candidateQuality >= 0.28
-              ) || (
-                candidateCommonHits >= 1
-                && candidateAlpha.length >= 4
-                && candidateQuality >= 0.4
-                && candidateLine.confidence >= 52
-                && candidateNonLexicalCount <= Math.max(1, Math.floor(candidateTokens.length * 0.45))
-              ) || (
-                candidateShortKeepHits >= 2
-                && candidateNonLexicalCount === 0
-                && candidateTokens.length <= 3
-                && candidateAlpha.length <= 8
-                && candidateQuality >= 0.4
-                && candidateLine.confidence >= 50
-              );
+              let candidateAssessment = assessLatinLine(candidateWords, candidateLine.text || '', candidateLine.confidence, {
+                latinCommonWords: LATIN_COMMON_WORDS,
+                latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+              });
+              let keepLine = candidateAssessment.recoveryAccept;
 
               if (!keepLine) {
                 if (hasExceededRecoveryBudget()) break;
@@ -4391,43 +4840,52 @@ self.onmessage = async (e: MessageEvent) => {
                 if (lexicalValid.length > 0) {
                   candidateWords = lexicalValid;
                   candidateLine = makeLineFromWords(candidateWords);
-                  candidateAlpha = normalizeLatinTokenForLexicon(getAlphaNum((candidateLine.text || '').trim()));
-                  candidateQuality = scoreLatinLineReadability(candidateWords);
-                  candidateTokens = candidateWords
-                    .map((w) => normalizeLatinTokenForLexicon(getAlphaNum((w.text || '').trim())))
-                    .filter(Boolean);
-                  candidateCommonHits = candidateTokens.filter((token) => LATIN_COMMON_WORDS.has(token)).length;
-                  candidateShortKeepHits = candidateTokens.filter((token) => LATIN_SHORT_KEEP_FOR_LINE.has(token)).length;
-                  candidateLexicalHits = candidateCommonHits + candidateShortKeepHits;
-                  candidateNonLexicalCount = Math.max(0, candidateTokens.length - candidateLexicalHits);
-                  keepLine = (
-                    candidateCommonHits >= 1
-                    && candidateTokens.length >= 2
-                    && candidateAlpha.length >= 3
-                    && candidateQuality >= 0.32
-                    && candidateLine.confidence >= 44
-                  ) || (
-                    candidateShortKeepHits >= 2
-                    && candidateNonLexicalCount === 0
-                    && candidateTokens.length <= 3
-                    && candidateAlpha.length <= 8
-                    && candidateLine.confidence >= 42
-                  );
+                  candidateAssessment = assessLatinLine(candidateWords, candidateLine.text || '', candidateLine.confidence, {
+                    latinCommonWords: LATIN_COMMON_WORDS,
+                    latinShortKeepForLine: LATIN_SHORT_KEEP_FOR_LINE,
+                  });
+                  keepLine = candidateAssessment.recoveryAccept;
                 }
               }
 
               if (!keepLine) {
-                if (bestValid[0]) logDrop('latinRescue', bestValid[0], 'postPruneLine: weak candidate line');
+                if (bestValid[0]) logDrop('latinRescue', bestValid[0], `postPruneLine: ${candidateAssessment.reason}`);
+                recordCandidateDebug(candidateDebugs, {
+                  id: `postPrune-${candidate.key}`,
+                  stage: 'postPruneLine',
+                  bbox: probeBox,
+                  accepted: false,
+                  score: bestScore,
+                  reason: candidateAssessment.reason,
+                });
                 continue;
               }
 
               const added = appendUniqueWords(words, candidateWords, 0.48);
-              if (added.length === 0) continue;
+              if (added.length === 0) {
+                recordCandidateDebug(candidateDebugs, {
+                  id: `postPrune-${candidate.key}`,
+                  stage: 'postPruneLine',
+                  bbox: probeBox,
+                  accepted: false,
+                  score: bestScore,
+                  reason: 'noUniqueWords',
+                });
+                continue;
+              }
 
               postPruneAdded += added.length;
               const target = findBestLineForBox(lines, candidate.bbox);
               if (target) mergeWordsIntoLine(target, added);
               else lines.push(makeLineFromWords(added));
+              recordCandidateDebug(candidateDebugs, {
+                id: `postPrune-${candidate.key}`,
+                stage: 'postPruneLine',
+                bbox: probeBox,
+                accepted: true,
+                score: bestScore,
+                reason: `accepted:${candidateAssessment.reason}`,
+              });
             }
 
             if (postPruneAdded > 0) {
@@ -4691,18 +5149,28 @@ self.onmessage = async (e: MessageEvent) => {
             if (deterministicLineFixes > 0) {
               console.log(`[Worker] Applied deterministic Latin line fixes: ${deterministicLineFixes} tokens`);
             }
+            const trailingShortKeepBefore = (lines as OCRLine[]).reduce((sum, line) => sum + (((line.words as OCRWord[]) || []).length), 0);
             lines = trimTrailingShortKeepArtifacts(
               lines as OCRLine[],
               LATIN_COMMON_WORDS,
               LATIN_SHORT_KEEP_FOR_LINE,
               makeLineFromWords
             );
+            const trailingShortKeepAfter = (lines as OCRLine[]).reduce((sum, line) => sum + (((line.words as OCRWord[]) || []).length), 0);
+            if (trailingShortKeepAfter !== trailingShortKeepBefore) {
+              console.log(`[Worker] Trimmed trailing short-keep Latin tail tokens: ${trailingShortKeepBefore - trailingShortKeepAfter} tokens`);
+            }
+            const trailingNonLexBefore = (lines as OCRLine[]).reduce((sum, line) => sum + (((line.words as OCRWord[]) || []).length), 0);
             lines = trimTrailingNonLexicalArtifacts(
               lines as OCRLine[],
               LATIN_COMMON_WORDS,
               LATIN_SHORT_KEEP_FOR_LINE,
               makeLineFromWords
             );
+            const trailingNonLexAfter = (lines as OCRLine[]).reduce((sum, line) => sum + (((line.words as OCRWord[]) || []).length), 0);
+            if (trailingNonLexAfter !== trailingNonLexBefore) {
+              console.log(`[Worker] Trimmed trailing non-lexical Latin tail tokens: ${trailingNonLexBefore - trailingNonLexAfter} tokens`);
+            }
             lines = pruneResidualLatinNoiseLines(
               lines as OCRLine[],
               protectedWordKeys,
