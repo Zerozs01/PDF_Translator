@@ -3,7 +3,7 @@
  * 
  * Features:
  * - เลือกภาษา OCR
- * - เลือก Quality Profile (DPI)
+ * - เลือก OCR model
  * - แสดง Progress
  * - แสดงผล OCR ที่สแกนได้
  * - Export PDF
@@ -16,18 +16,19 @@ import {
   RefreshCw,
   Languages,
   CheckCircle,
-  Eye
+  Eye,
+  Cpu
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import type { OCRPageResult } from '../../types';
-import { useOCRTextLayerStore, SUPPORTED_LANGUAGES } from '../../stores/useOCRTextLayerStore';
+import type { OCREngine, OCRPageResult } from '../../types';
+import { useOCRTextLayerStore, SUPPORTED_LANGUAGES, OCR_ENGINES } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
 import { dbService } from '../../services/dbService';
 import { visionService } from '../../services/vision/VisionService';
 import {
   OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT,
-  OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
+  resolvePerPageTimeoutSec,
   withPerPageOCRTimeout,
 } from '../../services/vision/ocr-timeout';
 import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
@@ -35,10 +36,38 @@ import { pdfjs } from '../../services/pdf/pdfjsWorker';
 
 // PDF.js worker is configured via pdfjsWorker
 
+type EngineWarmPhase = 'idle' | 'checking' | 'warming' | 'ready' | 'error';
+
+type EngineWarmState = {
+  phase: EngineWarmPhase;
+  progress: number;
+  runtime?: string;
+  description?: string;
+  etaSec?: number | null;
+  languageKey?: string;
+};
+
+const SESSION_ENGINE_WARM_STATES: Record<string, EngineWarmState> = {};
+const SESSION_PREWARM_REQUESTED = new Set<string>();
+const SESSION_ENGINE_WARM_PROMISES = new Map<string, Promise<boolean>>();
+
+const normalizeWarmLanguageKey = (value: string): string => value
+  .split('+')
+  .map((part) => part.trim())
+  .filter(Boolean)
+  .sort()
+  .join('+') || 'eng';
+
+const getEngineWarmSessionKey = (engine: OCREngine, language: string): string =>
+  `${engine}:${normalizeWarmLanguageKey(language)}`;
+
 export const OCRTextLayerPanel: React.FC = () => {
   const DIRECT_RENDER_TIMEOUT_MS = OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT;
+  const EXTERNAL_OCR_RENDER_MAX_SIDE = 3800;
+  const EXTERNAL_OCR_CJK_PANEL_MAX_SIDE = 11000;
+  const EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS = 34_000_000;
 
-  const { file, fileUrl, fileData, fileType, currentPage, ensureDocumentId } = useProjectStore();
+  const { file, fileUrl, fileData, fileType, currentPage, ensureDocumentId, translationMode } = useProjectStore();
   const {
     options,
     setOptions,
@@ -47,6 +76,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     setProgress,
     setIsProcessing,
     setPageOCR,
+    clearAllOCR,
     allPagesOCR,
     showDebugOverlay,
     setShowDebugOverlay
@@ -61,15 +91,35 @@ export const OCRTextLayerPanel: React.FC = () => {
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
   const fileRef = useRef<File | null>(null);
   const pdfDataRef = useRef<ArrayBuffer | null>(null);
+  const activePipelineProfile = translationMode === 'manga' ? 'panel' : 'export';
+  const normalizedWarmLanguage = normalizeWarmLanguageKey(options.language);
   const abortControllerRef = useRef<AbortController | null>(null);
   const ocrJobActiveRef = useRef(false);
   const suspendCacheReadsRef = useRef(false);
   const cacheLoadInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const [engineWarmStates, setEngineWarmStates] = useState<Record<string, EngineWarmState>>(() => ({ ...SESSION_ENGINE_WARM_STATES }));
+  const pendingEngineSelectionRef = useRef<OCREngine | null>(null);
+  const warmAnimationTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  const externalProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isAbortError = useCallback(
     (error: unknown): boolean => error instanceof Error && error.name === 'AbortError',
     []
   );
+
+  const shouldRecoverExternalEngine = useCallback((error: unknown): boolean => {
+    if (!(error instanceof Error)) return false;
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('daemon') ||
+      message.includes('stdin is unavailable') ||
+      message.includes('bridge is unavailable') ||
+      message.includes('service terminated') ||
+      message.includes('exited') ||
+      message.includes('signal=sigterm') ||
+      message.includes('external ocr canceled')
+    );
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -79,6 +129,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       fileRef.current = null;
       pdfDataRef.current = null;
       abortControllerRef.current = null;
+      for (const timer of warmAnimationTimersRef.current.values()) {
+        clearInterval(timer);
+      }
+      warmAnimationTimersRef.current.clear();
+      if (externalProgressTimerRef.current) {
+        clearInterval(externalProgressTimerRef.current);
+        externalProgressTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -88,6 +146,296 @@ export const OCRTextLayerPanel: React.FC = () => {
       setShowDebugOverlay(true);
     }
   }, [showDebugOverlay, setShowDebugOverlay]);
+
+  const setEngineWarmState = useCallback((engine: string, patch: Partial<EngineWarmState>) => {
+    setEngineWarmStates((current) => {
+      const previous = current[engine] || SESSION_ENGINE_WARM_STATES[engine] || { phase: 'idle' as EngineWarmPhase, progress: 0 };
+      const nextState = Object.assign(
+        { phase: 'idle' as EngineWarmPhase, progress: 0 },
+        previous,
+        patch
+      );
+      if (
+        (nextState.phase === 'checking' || nextState.phase === 'warming')
+        && (previous.phase === 'checking' || previous.phase === 'warming')
+      ) {
+        nextState.progress = Math.max(previous.progress || 0, nextState.progress || 0);
+      }
+      SESSION_ENGINE_WARM_STATES[engine] = nextState;
+      return {
+        ...current,
+        [engine]: nextState,
+      };
+    });
+  }, []);
+
+  const resetEngineWarmSession = useCallback((engine: OCREngine, description?: string) => {
+    for (const key of Array.from(SESSION_ENGINE_WARM_PROMISES.keys())) {
+      if (key.startsWith(`${engine}:`)) {
+        SESSION_ENGINE_WARM_PROMISES.delete(key);
+      }
+    }
+    for (const key of Array.from(SESSION_PREWARM_REQUESTED.values())) {
+      if (key.startsWith(`${engine}:`)) {
+        SESSION_PREWARM_REQUESTED.delete(key);
+      }
+    }
+    setEngineWarmState(engine, {
+      phase: 'idle',
+      progress: 0,
+      etaSec: null,
+      description,
+      languageKey: undefined,
+    });
+  }, [setEngineWarmState]);
+
+  const stopWarmAnimation = useCallback((engine: string) => {
+    const timer = warmAnimationTimersRef.current.get(engine);
+    if (!timer) return;
+    clearInterval(timer);
+    warmAnimationTimersRef.current.delete(engine);
+  }, []);
+
+  const startWarmAnimation = useCallback((engine: OCREngine, phase: EngineWarmPhase) => {
+    if (engine === 'tesseract') return;
+
+    stopWarmAnimation(engine);
+    const startedAt = Date.now();
+    const expectedMs = phase === 'checking'
+      ? 8000
+      : engine === 'paddleocr'
+        ? 45000
+        : 22000;
+    const phaseStart = phase === 'checking' ? 8 : 34;
+    const phaseCap = phase === 'checking' ? 28 : 92;
+
+    const tick = () => {
+      const elapsedMs = Date.now() - startedAt;
+      const ratio = Math.min(0.98, elapsedMs / expectedMs);
+      const progress = Math.min(phaseCap, phaseStart + ((phaseCap - phaseStart) * ratio));
+      const etaSec = Math.max(1, Math.ceil((expectedMs - elapsedMs) / 1000));
+      const description = phase === 'checking'
+        ? 'Checking local OCR runtime...'
+        : engine === 'paddleocr'
+          ? elapsedMs < 10000
+            ? 'Preparing PaddleOCR runtime...'
+            : elapsedMs < 28000
+              ? 'Loading detection/recognition models...'
+              : 'Warming PaddleOCR for selection...'
+          : elapsedMs < 7000
+            ? 'Preparing EasyOCR runtime...'
+            : 'Loading EasyOCR reader...';
+
+      setEngineWarmState(engine, {
+        phase,
+        progress,
+        etaSec,
+        description,
+      });
+    };
+
+    tick();
+    const timer = setInterval(tick, 500);
+    warmAnimationTimersRef.current.set(engine, timer);
+  }, [setEngineWarmState, stopWarmAnimation]);
+
+  const ensureEngineReady = useCallback(async (
+    engine: OCREngine,
+    config?: { selectOnReady?: boolean }
+  ) => {
+    if (engine === 'tesseract') {
+      pendingEngineSelectionRef.current = null;
+      setOptions({ engine });
+      return true;
+    }
+
+    const sessionKey = getEngineWarmSessionKey(engine, normalizedWarmLanguage);
+    const currentState = SESSION_ENGINE_WARM_STATES[engine];
+    const isReadyForCurrentLanguage =
+      currentState?.phase === 'ready' && currentState.languageKey === normalizedWarmLanguage;
+
+    if (isReadyForCurrentLanguage) {
+      pendingEngineSelectionRef.current = null;
+      if (config?.selectOnReady) {
+        setOptions({ engine });
+      }
+      return true;
+    }
+
+    const inFlight = SESSION_ENGINE_WARM_PROMISES.get(sessionKey);
+    if (inFlight) {
+      if (config?.selectOnReady) {
+        pendingEngineSelectionRef.current = engine;
+      }
+      return await inFlight;
+    }
+
+    if (!window.electronAPI?.ocr?.prewarmEngine) {
+      setEngineWarmState(engine, {
+        phase: 'error',
+        progress: 0,
+        description: 'External OCR bridge is unavailable in this runtime',
+      });
+      return false;
+    }
+
+    if (config?.selectOnReady) {
+      pendingEngineSelectionRef.current = engine;
+    }
+
+    const warmPromise = (async () => {
+      try {
+        setEngineWarmState(engine, {
+          phase: 'warming',
+          progress: 18,
+          description: engine === 'paddleocr'
+            ? 'Preparing PaddleOCR runtime...'
+            : 'Preparing EasyOCR runtime...',
+          etaSec: engine === 'paddleocr' ? 45 : 22,
+          languageKey: normalizedWarmLanguage,
+        });
+        startWarmAnimation(engine, 'warming');
+
+        const warmed = await window.electronAPI.ocr.prewarmEngine({
+          engine,
+          language: normalizedWarmLanguage,
+        });
+        stopWarmAnimation(engine);
+        setEngineWarmState(engine, {
+          phase: 'ready',
+          progress: 100,
+          runtime: warmed.runtime,
+          description: warmed.description,
+          etaSec: 0,
+          languageKey: normalizedWarmLanguage,
+        });
+
+        if (pendingEngineSelectionRef.current === engine || config?.selectOnReady) {
+          pendingEngineSelectionRef.current = null;
+          setOptions({ engine });
+        }
+        return true;
+      } catch (error) {
+        stopWarmAnimation(engine);
+        setEngineWarmState(engine, {
+          phase: 'error',
+          progress: 0,
+          description: error instanceof Error ? error.message : String(error),
+          etaSec: null,
+          languageKey: normalizedWarmLanguage,
+        });
+        if (pendingEngineSelectionRef.current === engine) {
+          pendingEngineSelectionRef.current = null;
+        }
+        return false;
+      } finally {
+        SESSION_ENGINE_WARM_PROMISES.delete(sessionKey);
+      }
+    })();
+
+    SESSION_ENGINE_WARM_PROMISES.set(sessionKey, warmPromise);
+    return await warmPromise;
+  }, [normalizedWarmLanguage, setEngineWarmState, setOptions, startWarmAnimation, stopWarmAnimation]);
+
+  useEffect(() => {
+    for (const engine of ['paddleocr', 'easyocr'] as const) {
+      const sessionKey = getEngineWarmSessionKey(engine, normalizedWarmLanguage);
+      if (SESSION_PREWARM_REQUESTED.has(sessionKey)) continue;
+      SESSION_PREWARM_REQUESTED.add(sessionKey);
+      void ensureEngineReady(engine, { selectOnReady: false });
+    }
+  }, [ensureEngineReady, normalizedWarmLanguage]);
+
+  const recoverExternalEngine = useCallback((engine: OCREngine, reason?: string) => {
+    if (engine === 'tesseract') return;
+    resetEngineWarmSession(engine, reason);
+    const sessionKey = getEngineWarmSessionKey(engine, normalizedWarmLanguage);
+    SESSION_PREWARM_REQUESTED.add(sessionKey);
+    void ensureEngineReady(engine, { selectOnReady: false });
+  }, [ensureEngineReady, normalizedWarmLanguage, resetEngineWarmSession]);
+
+  const stopExternalProgress = useCallback(() => {
+    if (externalProgressTimerRef.current) {
+      clearInterval(externalProgressTimerRef.current);
+      externalProgressTimerRef.current = null;
+    }
+  }, []);
+
+  const startExternalProgress = useCallback((pageNum: number, engine: OCREngine, imageWidth?: number, imageHeight?: number) => {
+    stopExternalProgress();
+    const startedAt = Date.now();
+    const warmState = SESSION_ENGINE_WARM_STATES[engine];
+    const engineReadyForLanguage = warmState?.phase === 'ready' && warmState.languageKey === normalizedWarmLanguage;
+    let expectedMs = engine === 'paddleocr'
+      ? (engineReadyForLanguage ? 24000 : 52000)
+      : (engineReadyForLanguage ? 12000 : 26000);
+
+    if (
+      engine === 'paddleocr'
+      && activePipelineProfile === 'panel'
+      && imageWidth
+      && imageHeight
+    ) {
+      const longest = Math.max(imageWidth, imageHeight);
+      const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
+      const aspectRatio = longest / shortest;
+      const cjkLike = options.language
+        .split('+')
+        .map(code => code.trim())
+        .filter(Boolean)
+        .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+      const koreanLike = options.language
+        .split('+')
+        .map(code => code.trim())
+        .filter(Boolean)
+        .includes('kor');
+      const chunkLikely = koreanLike
+        ? (imageHeight >= 6200 || aspectRatio >= 2.4)
+        : (!cjkLike && (imageHeight >= 5200 || aspectRatio >= 2.3));
+      if (chunkLikely) {
+        const estimatedChunkHeight = Math.min(
+          Math.max(2200, Math.round(imageWidth * 0.95)),
+          Math.max(2200, Math.round(imageHeight * 0.34)),
+        );
+        const estimatedStride = Math.max(1, estimatedChunkHeight - 220);
+        const estimatedChunks = Math.max(1, Math.ceil((imageHeight - 220) / estimatedStride));
+        expectedMs = engineReadyForLanguage
+          ? (9000 + (estimatedChunks * 8500))
+          : (22000 + (estimatedChunks * 10000));
+      }
+    }
+
+    const tick = () => {
+      const elapsedMs = Date.now() - startedAt;
+      const warmupProgress = 18 + ((Math.min(elapsedMs, expectedMs) / expectedMs) * 72);
+      const tailProgress = elapsedMs > expectedMs
+        ? Math.min(98, 90 + (Math.log1p((elapsedMs - expectedMs) / 4000) * 2.6))
+        : warmupProgress;
+      const progressValue = Math.max(18, Math.min(98, tailProgress));
+      const statusText = engine === 'paddleocr'
+        ? !engineReadyForLanguage && elapsedMs < 11000
+          ? 'Preparing PaddleOCR runtime...'
+          : !engineReadyForLanguage && elapsedMs < 28000
+            ? 'Loading PaddleOCR model...'
+            : 'Running PaddleOCR...'
+        : !engineReadyForLanguage && elapsedMs < 6000
+          ? 'Preparing EasyOCR runtime...'
+          : !engineReadyForLanguage && elapsedMs < 16000
+            ? 'Loading EasyOCR reader...'
+          : 'Running external OCR...';
+
+      setProgress({
+        stage: 'ocr',
+        currentPage: pageNum,
+        totalPages: 1,
+        message: `OCR page ${pageNum}: ${statusText}`,
+        progress: progressValue,
+      });
+    };
+
+    tick();
+    externalProgressTimerRef.current = setInterval(tick, 700);
+  }, [activePipelineProfile, normalizedWarmLanguage, options.language, setProgress, stopExternalProgress]);
 
   const getPdfDoc = useCallback(async () => {
     if (!file) {
@@ -151,18 +499,21 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.dpi !== options.dpi) return false;
     if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
-    if ((cached.pipelineProfile || 'panel') !== 'panel') return false;
-    if ((cached.ocrQualityProfile || 'best') !== options.profile) return false;
+    if ((cached.pipelineProfile || 'panel') !== activePipelineProfile) return false;
+    if ((cached.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) return false;
     return true;
-  }, [options, normalizeLanguage]);
+  }, [activePipelineProfile, options, normalizeLanguage]);
 
   // UI preview can show stale algorithm cache (marked as stale in badge) to avoid blank panel
   // while still requiring language match.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
     if (!cached || !Array.isArray(cached.words) || !Array.isArray(cached.lines)) return false;
     if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
-    return normalizeLanguage(cached.language) === normalizeLanguage(options.language);
-  }, [normalizeLanguage, options.language]);
+    if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
+    if ((cached.pipelineProfile || 'panel') !== activePipelineProfile) return false;
+    if ((cached.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) return false;
+    return true;
+  }, [activePipelineProfile, normalizeLanguage, options.engine, options.language]);
 
   const loadCachedOCR = useCallback(async (
     pageNum: number,
@@ -178,7 +529,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       pageNum,
       normalizeLanguage(options?.allowDuringSuspension ? useOCRTextLayerStore.getState().options.language : useOCRTextLayerStore.getState().options.language),
       useOCRTextLayerStore.getState().options.dpi,
+      useOCRTextLayerStore.getState().options.engine || 'tesseract',
       useOCRTextLayerStore.getState().options.pageSegMode ?? 'default',
+      activePipelineProfile,
       options?.allowDuringSuspension ? 'forced' : 'passive',
     ].join('|');
 
@@ -283,7 +636,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     } finally {
       cacheLoadInFlightRef.current.delete(requestKey);
     }
-  }, [file, isCacheCompatible, isDisplayCacheCompatible, ensureDocumentId, setPageOCR]);
+  }, [activePipelineProfile, file, isCacheCompatible, isDisplayCacheCompatible, ensureDocumentId, setPageOCR]);
 
   const syncOptionsFromLatestCache = useCallback(async (): Promise<void> => {
     if (!file) return;
@@ -301,6 +654,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (!latest?.ocr_data) return;
 
     const latestOCR = latest.ocr_data;
+    if ((latestOCR.pipelineProfile || 'panel') !== activePipelineProfile) return;
     const latestLang = normalizeLanguage(latestOCR.language || 'eng');
     const currentLang = normalizeLanguage(options.language || 'eng');
     const nextPatch: Partial<typeof options> = {};
@@ -308,17 +662,17 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (latestLang && latestLang !== currentLang) {
       nextPatch.language = latestLang;
     }
-    if (typeof latestOCR.dpi === 'number' && latestOCR.dpi > 0 && latestOCR.dpi !== options.dpi) {
-      nextPatch.dpi = latestOCR.dpi;
-    }
     if (latestOCR.pageSegMode !== options.pageSegMode) {
       nextPatch.pageSegMode = latestOCR.pageSegMode;
+    }
+    if ((latestOCR.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) {
+      nextPatch.engine = latestOCR.ocrEngine || 'tesseract';
     }
 
     if (Object.keys(nextPatch).length > 0) {
       setOptions(nextPatch);
     }
-  }, [ensureDocumentId, file, normalizeLanguage, options.dpi, options.language, options.pageSegMode, setOptions]);
+  }, [activePipelineProfile, ensureDocumentId, file, normalizeLanguage, options.engine, options.language, options.pageSegMode, setOptions]);
 
   const beginAbortableJob = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -329,19 +683,27 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   const cancelCurrentJob = useCallback(() => {
     abortControllerRef.current?.abort();
+    if (options.engine && options.engine !== 'tesseract') {
+      void window.electronAPI?.ocr?.cancelExternal?.({ engine: options.engine }).catch(() => {
+        // Best effort external OCR cancellation.
+      });
+      recoverExternalEngine(options.engine, `${options.engine} canceled - reloading model cache...`);
+    }
     visionService.cancelAll('OCR job canceled');
-  }, []);
+  }, [options.engine, recoverExternalEngine]);
 
   useEffect(() => {
     if (!file) return;
     if (isProcessing) return;
     void loadCachedOCR(currentPage);
-  }, [file, currentPage, options.language, options.dpi, options.pageSegMode, loadCachedOCR, isProcessing]);
+  }, [file, currentPage, options.language, options.dpi, options.engine, options.pageSegMode, activePipelineProfile, loadCachedOCR, isProcessing]);
 
   useEffect(() => {
     autoSyncedDocRef.current = null;
     persistedCacheRef.current.clear();
-  }, [file]);
+    setCacheStatus(null);
+    clearAllOCR();
+  }, [file, activePipelineProfile, clearAllOCR]);
 
   useEffect(() => {
     if (!file) return;
@@ -358,7 +720,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       for (const [pageNum, result] of allPagesOCR.entries()) {
         if (canceled) return;
-        const fp = `${result.algorithmVersion}|${result.dpi}|${normalizeLanguage(result.language)}|${result.words.length}|${result.text.length}`;
+        const fp = `${result.algorithmVersion}|${result.dpi}|${result.pipelineProfile || 'panel'}|${result.ocrEngine || 'tesseract'}|${normalizeLanguage(result.language)}|${result.words.length}|${result.text.length}`;
         const key = `${docId}:${pageNum}`;
         if (persistedCacheRef.current.get(key) === fp) continue;
 
@@ -377,6 +739,102 @@ export const OCRTextLayerPanel: React.FC = () => {
   // Get current page OCR result
   const currentPageOCR = allPagesOCR.get(currentPage);
 
+  const hasCjkOrThaiOcrLanguage = useCallback((language: string) => {
+    const codes = language.split('+').map(code => code.trim()).filter(Boolean);
+    return codes.some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+  }, []);
+
+  const hasKoreanOcrLanguage = useCallback((language: string) => {
+    const codes = language.split('+').map(code => code.trim()).filter(Boolean);
+    return codes.includes('kor');
+  }, []);
+
+  const resolveRenderConstraints = useCallback((engine?: string) => {
+    const cjkPanelExternal = activePipelineProfile === 'panel'
+      && engine !== 'tesseract'
+      && hasCjkOrThaiOcrLanguage(options.language);
+    const koreanPaddlePanel = activePipelineProfile === 'panel'
+      && engine === 'paddleocr'
+      && hasKoreanOcrLanguage(options.language);
+
+    if (engine === 'paddleocr') {
+      if (koreanPaddlePanel) {
+        return {
+          maxSide: 9000,
+          maxPixels: 22_000_000,
+        };
+      }
+      if (cjkPanelExternal) {
+        return {
+          maxSide: 7600,
+          maxPixels: 14_000_000,
+        };
+      }
+      if (activePipelineProfile === 'export') {
+        return {
+          maxSide: Math.min(EXTERNAL_OCR_RENDER_MAX_SIDE, 3000),
+          maxPixels: 4_600_000,
+        };
+      }
+      return {
+        maxSide: Math.min(EXTERNAL_OCR_RENDER_MAX_SIDE, 3200),
+        maxPixels: 5_200_000,
+      };
+    }
+    if (engine === 'easyocr') {
+      if (cjkPanelExternal) {
+        return {
+          maxSide: 7600,
+          maxPixels: 18_000_000,
+        };
+      }
+      return activePipelineProfile === 'export'
+        ? { maxSide: 2600, maxPixels: 3_800_000 }
+        : { maxSide: 2800, maxPixels: 4_200_000 };
+    }
+    if (activePipelineProfile === 'export') {
+      return {
+        maxSide: 12000,
+        maxPixels: 12_000_000,
+      };
+    }
+    return { maxSide: null, maxPixels: null };
+  }, [EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS, EXTERNAL_OCR_CJK_PANEL_MAX_SIDE, EXTERNAL_OCR_RENDER_MAX_SIDE, activePipelineProfile, hasCjkOrThaiOcrLanguage, hasKoreanOcrLanguage, options.language]);
+
+  const fitDimensionsToConstraints = useCallback((
+    width: number,
+    height: number,
+    constraints?: { maxSide?: number | null; maxPixels?: number | null }
+  ) => {
+    const maxSide = constraints?.maxSide ?? null;
+    const maxPixels = constraints?.maxPixels ?? null;
+    let scaleFactor = 1;
+
+    if (maxSide && maxSide > 0) {
+      const longestSide = Math.max(width, height);
+      if (longestSide > maxSide) {
+        scaleFactor = Math.min(scaleFactor, maxSide / longestSide);
+      }
+    }
+
+    if (maxPixels && maxPixels > 0) {
+      const pixelCount = width * height;
+      if (pixelCount > maxPixels) {
+        scaleFactor = Math.min(scaleFactor, Math.sqrt(maxPixels / pixelCount));
+      }
+    }
+
+    if (scaleFactor >= 1) {
+      return { width, height, scaleFactor: 1 };
+    }
+
+    return {
+      width: Math.max(1, Math.floor(width * scaleFactor)),
+      height: Math.max(1, Math.floor(height * scaleFactor)),
+      scaleFactor,
+    };
+  }, []);
+
   /**
    * Render PDF page to canvas at specified DPI
    * 
@@ -384,39 +842,40 @@ export const OCRTextLayerPanel: React.FC = () => {
    * 1) Render directly with pdf.js at target DPI (best OCR accuracy)
    * 2) Fallback to existing react-pdf canvas if pdf.js render fails
    */
-  const renderImageToCanvas = useCallback(async () => {
+  const renderImageToCanvas = useCallback(async (renderOptions?: { maxSide?: number | null; maxPixels?: number | null }) => {
     if (!file) throw new Error('No image loaded');
     const imageBlob = fileData
       ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
       : file;
 
     const imageBitmap = await createImageBitmap(imageBlob);
+    const fitted = fitDimensionsToConstraints(imageBitmap.width, imageBitmap.height, renderOptions);
     const outputCanvas = document.createElement('canvas');
-    outputCanvas.width = imageBitmap.width;
-    outputCanvas.height = imageBitmap.height;
+    outputCanvas.width = fitted.width;
+    outputCanvas.height = fitted.height;
     const ctx = outputCanvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Cannot get canvas context');
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(imageBitmap, 0, 0);
+    ctx.drawImage(imageBitmap, 0, 0, outputCanvas.width, outputCanvas.height);
     imageBitmap.close?.();
     return {
       canvas: outputCanvas,
       width: outputCanvas.width,
       height: outputCanvas.height
     };
-  }, [file, fileData]);
+  }, [file, fileData, fitDimensionsToConstraints]);
 
   const renderPageToCanvas = useCallback(async (
     pageNum: number,
     targetDpi: number,
-    renderOptions?: { allowNavigationFallback?: boolean }
+    renderOptions?: { allowNavigationFallback?: boolean; maxSide?: number | null; maxPixels?: number | null }
   ) => {
     if (!file) throw new Error('No PDF loaded');
     if (fileType !== 'pdf') {
-      return renderImageToCanvas();
+      return renderImageToCanvas(renderOptions);
     }
 
     const renderFromExistingCanvas = async () => {
@@ -430,26 +889,27 @@ export const OCRTextLayerPanel: React.FC = () => {
         const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
         const scaleFactor = Math.max(1, Math.min(targetDpi / Math.max(estimatedCurrentDpi, 72), 3.0));
 
-        const outputWidth = Math.round(currentWidth * scaleFactor);
-        const outputHeight = Math.round(currentHeight * scaleFactor);
+        const scaledWidth = Math.round(currentWidth * scaleFactor);
+        const scaledHeight = Math.round(currentHeight * scaleFactor);
+        const fitted = fitDimensionsToConstraints(scaledWidth, scaledHeight, renderOptions);
 
         const outputCanvas = document.createElement('canvas');
-        outputCanvas.width = outputWidth;
-        outputCanvas.height = outputHeight;
+        outputCanvas.width = fitted.width;
+        outputCanvas.height = fitted.height;
         const ctx = outputCanvas.getContext('2d');
 
         if (!ctx) throw new Error('Cannot get canvas context');
 
         ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, outputWidth, outputHeight);
+        ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(existingCanvas, 0, 0, outputWidth, outputHeight);
+        ctx.drawImage(existingCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
 
         return {
           canvas: outputCanvas,
-          width: outputWidth,
-          height: outputHeight
+          width: outputCanvas.width,
+          height: outputCanvas.height
         };
       }
 
@@ -483,26 +943,27 @@ export const OCRTextLayerPanel: React.FC = () => {
           const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
           const scaleFactor = targetDpi / Math.max(estimatedCurrentDpi, 72);
 
-          const outputWidth = Math.round(currentWidth * scaleFactor);
-          const outputHeight = Math.round(currentHeight * scaleFactor);
+          const scaledWidth = Math.round(currentWidth * scaleFactor);
+          const scaledHeight = Math.round(currentHeight * scaleFactor);
+          const fitted = fitDimensionsToConstraints(scaledWidth, scaledHeight, renderOptions);
 
           const outputCanvas = document.createElement('canvas');
-          outputCanvas.width = outputWidth;
-          outputCanvas.height = outputHeight;
+          outputCanvas.width = fitted.width;
+          outputCanvas.height = fitted.height;
           const ctx = outputCanvas.getContext('2d');
 
           if (!ctx) throw new Error('Cannot get canvas context');
 
           ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, outputWidth, outputHeight);
+          ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(newCanvas, 0, 0, outputWidth, outputHeight);
+          ctx.drawImage(newCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
 
           return {
             canvas: outputCanvas,
-            width: outputWidth,
-            height: outputHeight
+            width: outputCanvas.width,
+            height: outputCanvas.height
           };
         }
       }
@@ -515,7 +976,16 @@ export const OCRTextLayerPanel: React.FC = () => {
       console.log(`[OCRPanel] Direct pdf.js render start for page ${pageNum} @ ${targetDpi} DPI`);
       const pdfDoc = await getPdfDoc();
       const page = await pdfDoc.getPage(pageNum);
-      const scale = targetDpi / 72;
+      const requestedScale = targetDpi / 72;
+      const requestedViewport = page.getViewport({ scale: requestedScale });
+      const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderOptions);
+      const scale = requestedScale * fitted.scaleFactor;
+      if (fitted.scaleFactor < 1) {
+        console.log(
+          `[OCRPanel] Downscaling render for page ${pageNum}: ` +
+          `${Math.floor(requestedViewport.width)}x${Math.floor(requestedViewport.height)} -> ${fitted.width}x${fitted.height}`
+        );
+      }
       const viewport = page.getViewport({ scale });
 
       const outputCanvas = document.createElement('canvas');
@@ -547,13 +1017,21 @@ export const OCRTextLayerPanel: React.FC = () => {
       console.warn('[OCRPanel] pdf.js render failed, falling back to existing canvas:', error);
       return renderFromExistingCanvas();
     }
-  }, [file, fileType, getPdfDoc, renderImageToCanvas]);
+  }, [file, fileType, fitDimensionsToConstraints, getPdfDoc, renderImageToCanvas]);
 
   const runCurrentPageOCR = useCallback(async (
     pageNum: number,
     force: boolean,
     controller: AbortController
   ) => {
+    const activeEngine = options.engine || 'tesseract';
+    if (activeEngine !== 'tesseract') {
+      const ready = await ensureEngineReady(activeEngine, { selectOnReady: false });
+      if (!ready) {
+        throw new Error(`${activeEngine} is not ready yet`);
+      }
+    }
+
     setCacheStatus(null);
     if (!force) {
       const loaded = await loadCachedOCR(pageNum, { allowDuringSuspension: true });
@@ -579,10 +1057,12 @@ export const OCRTextLayerPanel: React.FC = () => {
       progress: 10
     });
 
+    const renderConstraints = resolveRenderConstraints(options.engine);
     console.log(`[OCRPanel] Current-page OCR rendering start for page ${pageNum}`);
 
     const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi, {
       allowNavigationFallback: true,
+      ...renderConstraints,
     });
 
     console.log(`[OCRPanel] Current-page OCR render complete for page ${pageNum}: ${imageWidth}x${imageHeight}`);
@@ -596,16 +1076,21 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     console.log(`[OCRPanel] Current-page OCR image blob ready for page ${pageNum}: ${imageBlob.size} bytes`);
 
-    visionService.setProgressCallback((ocrProgress) => {
-      const scaled = 15 + (ocrProgress.progress * 80);
-      setProgress({
-        stage: 'ocr',
-        currentPage: pageNum,
-        totalPages: 1,
-        message: `OCR page ${pageNum}: ${ocrProgress.status} (${Math.round(ocrProgress.progress * 100)}%)`,
-        progress: scaled
+    if (activeEngine === 'tesseract') {
+      visionService.setProgressCallback((ocrProgress) => {
+        const scaled = 15 + (ocrProgress.progress * 80);
+        setProgress({
+          stage: 'ocr',
+          currentPage: pageNum,
+          totalPages: 1,
+          message: `OCR page ${pageNum}: ${ocrProgress.status} (${Math.round(ocrProgress.progress * 100)}%)`,
+          progress: scaled
+        });
       });
-    });
+    } else {
+      visionService.setProgressCallback(null);
+      startExternalProgress(pageNum, activeEngine, imageWidth, imageHeight);
+    }
 
     console.log(`[OCRPanel] Dispatching OCR request for page ${pageNum}`);
 
@@ -623,16 +1108,18 @@ export const OCRTextLayerPanel: React.FC = () => {
       options.pageSegMode,
       pageSignal,
       showDebugOverlay,
-      'panel',
-      options.profile
+      activePipelineProfile,
+      'best',
+      activeEngine
     );
 
     const ocrResult: import('../../types').OCRPageResult = await (async () => {
+      const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'tesseract');
       try {
         return await withPerPageOCRTimeout(
           ocrPromise,
           pageNum,
-          options.perPageTimeoutSec,
+          effectiveTimeoutSec,
           () => {
             pageAbortController.abort();
             visionService.cancelAll(`OCR timeout on page ${pageNum}`);
@@ -640,6 +1127,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         );
       } finally {
         controller.signal.removeEventListener('abort', parentAbortHandler);
+        stopExternalProgress();
       }
     })();
 
@@ -648,8 +1136,17 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     ocrResult.language = normalizeLanguage(options.language);
     ocrResult.pageNumber = pageNum;
-    ocrResult.pipelineProfile = 'panel';
-    ocrResult.ocrQualityProfile = options.profile;
+    ocrResult.pipelineProfile = activePipelineProfile;
+    ocrResult.ocrEngine = activeEngine;
+    ocrResult.ocrQualityProfile = 'best';
+    if (activeEngine !== 'tesseract') {
+      setEngineWarmState(activeEngine, {
+        phase: 'ready',
+        progress: 100,
+        etaSec: 0,
+        languageKey: normalizedWarmLanguage,
+      });
+    }
     setPageOCR(pageNum, ocrResult);
 
     const cacheDocId = await ensureDocumentId();
@@ -667,7 +1164,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       message: `OCR complete for page ${pageNum}`,
       progress: 100
     });
-  }, [ensureDocumentId, loadCachedOCR, normalizeLanguage, options.dpi, options.language, options.pageSegMode, options.profile, renderPageToCanvas, setIsProcessing, setPageOCR, setProgress, showDebugOverlay]);
+  }, [activePipelineProfile, ensureDocumentId, ensureEngineReady, loadCachedOCR, normalizeLanguage, normalizedWarmLanguage, options.dpi, options.engine, options.language, options.pageSegMode, renderPageToCanvas, resolveRenderConstraints, setEngineWarmState, setIsProcessing, setPageOCR, setProgress, showDebugOverlay, startExternalProgress, stopExternalProgress]);
 
   /**
    * Start OCR processing
@@ -700,6 +1197,12 @@ export const OCRTextLayerPanel: React.FC = () => {
         });
       } else {
         console.error('[OCRPanel] Current page OCR failed:', error);
+        if ((options.engine || 'tesseract') !== 'tesseract' && shouldRecoverExternalEngine(error)) {
+          recoverExternalEngine(
+            options.engine || 'paddleocr',
+            error instanceof Error ? error.message : 'External OCR failed - reloading model cache...'
+          );
+        }
         setProgress({
           stage: 'complete',
           currentPage: pageNum,
@@ -710,11 +1213,12 @@ export const OCRTextLayerPanel: React.FC = () => {
       }
     } finally {
       visionService.setProgressCallback(null);
+      stopExternalProgress();
       ocrJobActiveRef.current = false;
       suspendCacheReadsRef.current = false;
       setIsProcessing(false);
     }
-  }, [beginAbortableJob, file, fileUrl, isAbortError, runCurrentPageOCR, setIsProcessing, setProgress]);
+  }, [beginAbortableJob, file, fileUrl, isAbortError, options.engine, recoverExternalEngine, runCurrentPageOCR, setIsProcessing, setProgress, shouldRecoverExternalEngine, stopExternalProgress]);
 
   const handleStartOCR = useCallback(async (targetPages?: number[], forceReOCR: boolean = false) => {
     if (!file || !fileUrl) {
@@ -729,6 +1233,13 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     try {
       console.log(`[OCRPanel] Starting batch OCR (forceReOCR=${forceReOCR}, targetPages=${targetPages?.join(',') || 'all'})`);
+      const activeEngine = options.engine || 'tesseract';
+      if (activeEngine !== 'tesseract') {
+        const ready = await ensureEngineReady(activeEngine, { selectOnReady: false });
+        if (!ready) {
+          throw new Error(`${activeEngine} is not ready yet`);
+        }
+      }
       ocrJobActiveRef.current = true;
       suspendCacheReadsRef.current = true;
       const controller = beginAbortableJob();
@@ -788,13 +1299,16 @@ export const OCRTextLayerPanel: React.FC = () => {
       const resultBytes = await searchablePDFService.createSearchablePDF(
         arrayBuffer as ArrayBuffer,
         options,
-        (pageNum, dpi) => renderPageToCanvas(pageNum, dpi, { allowNavigationFallback: false }),
+        (pageNum, dpi) => renderPageToCanvas(pageNum, dpi, {
+          allowNavigationFallback: false,
+          ...resolveRenderConstraints(options.engine),
+        }),
         targetPages,
         cacheDocId ?? undefined,
         controller.signal,
         forceReOCR,
         showDebugOverlay,
-        'panel'
+        activePipelineProfile
       );
       void resultBytes;
       
@@ -815,6 +1329,12 @@ export const OCRTextLayerPanel: React.FC = () => {
         });
       } else {
         console.error('[OCRPanel] OCR processing failed:', error);
+        if ((options.engine || 'tesseract') !== 'tesseract' && shouldRecoverExternalEngine(error)) {
+          recoverExternalEngine(
+            options.engine || 'paddleocr',
+            error instanceof Error ? error.message : 'External OCR failed - reloading model cache...'
+          );
+        }
         searchablePDFService.setOCRResultCallback(null);
         searchablePDFService.setCacheHitCallback(null);
         setProgress({
@@ -832,7 +1352,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       suspendCacheReadsRef.current = false;
       setIsProcessing(false);
     }
-  }, [beginAbortableJob, ensureDocumentId, file, fileData, fileType, fileUrl, isAbortError, options, renderPageToCanvas, runCurrentPageOCR, setIsProcessing, setPageOCR, setProgress, showDebugOverlay]);
+  }, [beginAbortableJob, ensureDocumentId, ensureEngineReady, file, fileData, fileType, fileUrl, isAbortError, options, recoverExternalEngine, renderPageToCanvas, resolveRenderConstraints, runCurrentPageOCR, setIsProcessing, setPageOCR, setProgress, shouldRecoverExternalEngine, showDebugOverlay]);
 
   /**
    * Download searchable PDF from cached OCR results
@@ -908,8 +1428,9 @@ export const OCRTextLayerPanel: React.FC = () => {
     })()
     : '';
   const currentSkipReason = currentPageOCR?.debug?.skipReason || '';
-  const currentRuntimeMs = currentPageOCR?.debug?.runtimeMs;
-  const currentQualityProfile = currentPageOCR?.ocrQualityProfile || 'best';
+  const currentRuntimeMs = currentPageOCR?.debug?.runtimeMs
+    ?? (currentPageOCR?.debug as { timingsMs?: { ocr?: number } } | undefined)?.timingsMs?.ocr;
+  const currentEngine = OCR_ENGINES.find(engine => engine.id === (currentPageOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
 
   return (
     <div className="space-y-3 p-4">
@@ -958,6 +1479,86 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
       </div>
 
+      {/* OCR Model Selector */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          <Cpu size={12} />
+          OCR Model
+        </label>
+        <div className="grid grid-cols-3 gap-2">
+          {OCR_ENGINES.map((engine) => {
+            const warmState = engine.id === 'tesseract'
+              ? {
+                  phase: 'ready' as EngineWarmPhase,
+                  progress: 100,
+                  runtime: engine.runtime,
+                  description: engine.description,
+                  etaSec: 0,
+                }
+              : engineWarmStates[engine.id] || {
+                  phase: 'idle' as EngineWarmPhase,
+                  progress: 0,
+                  runtime: engine.runtime,
+                  description: 'Click to check and warm this model',
+                  etaSec: null,
+                };
+            const isCurrent = (options.engine || 'tesseract') === engine.id;
+            const isBusy = warmState.phase === 'checking' || warmState.phase === 'warming';
+            const isReady = warmState.phase === 'ready';
+            const canSelect = engine.id === 'tesseract' || isReady;
+
+            return (
+              <button
+                key={engine.id}
+                type="button"
+                disabled={isProcessing || isBusy}
+                onClick={() => {
+                  if (engine.id === 'tesseract') {
+                    void ensureEngineReady('tesseract', { selectOnReady: true });
+                    return;
+                  }
+                  if (canSelect) {
+                    setOptions({ engine: engine.id });
+                    return;
+                  }
+                  void ensureEngineReady(engine.id, { selectOnReady: true });
+                }}
+                title={warmState.description || engine.description}
+                className={`relative overflow-hidden rounded-xl border px-2 py-2 text-left transition-all ${
+                  isCurrent
+                    ? 'border-[#5CC6F2]/70 bg-gradient-to-r from-[#2B9BFF]/25 to-[#2776FF]/20 shadow-[0_10px_24px_rgba(43,155,255,0.18)]'
+                    : 'border-white/10 bg-slate-900/45 hover:border-white/20'
+                } disabled:opacity-70`}
+              >
+                {isBusy && (
+                  <div
+                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#2B9BFF]/20 via-[#5CC6F2]/25 to-transparent transition-[width] duration-500"
+                    style={{ width: `${warmState.progress}%` }}
+                  />
+                )}
+                <div className="relative z-10 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-white">{engine.name}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-slate-950/80 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        warmState.phase === 'ready'
+                          ? 'bg-gradient-to-r from-emerald-400 to-emerald-300'
+                          : warmState.phase === 'error'
+                            ? 'bg-gradient-to-r from-rose-500 to-orange-400'
+                            : 'bg-gradient-to-r from-[#2B9BFF] via-[#5CC6F2] to-[#89E6FF]'
+                      }`}
+                      style={{ width: `${Math.max(warmState.progress, warmState.phase === 'idle' ? 4 : 8)}%` }}
+                    />
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Skip OCR if Text Exists (PDF only) */}
       {fileType === 'pdf' && (
         <div className="flex items-center justify-between bg-slate-900/45 border border-white/10 rounded-lg px-3 py-2">
@@ -972,25 +1573,6 @@ export const OCRTextLayerPanel: React.FC = () => {
           />
         </div>
       )}
-
-      {/* Per-page OCR Timeout */}
-      <div className="flex items-center justify-between bg-slate-900/45 border border-white/10 rounded-lg px-3 py-2">
-        <span className="text-xs text-slate-300">OCR Timeout (sec/page)</span>
-        <select
-          value={options.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
-          onChange={(e) => setOptions({ perPageTimeoutSec: Number(e.target.value) })}
-          disabled={isProcessing}
-          className="bg-slate-800 text-white text-xs rounded px-2 py-1 border border-white/10"
-          aria-label="OCR Timeout per page"
-        >
-          <option value={0}>No Limit</option>
-          <option value={30}>30s</option>
-          <option value={60}>60s</option>
-          <option value={120}>120s</option>
-          <option value={180}>180s</option>
-          <option value={300}>300s</option>
-        </select>
-      </div>
 
       {/* Progress Bar */}
       {isProcessing && (
@@ -1136,7 +1718,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             </span>
           </div>
           <div className="text-[11px] text-slate-400">
-            profile {currentQualityProfile}{typeof currentRuntimeMs === 'number' ? ` • runtime ${Math.round(currentRuntimeMs)}ms` : ''}
+            model {currentEngine.name}{typeof currentRuntimeMs === 'number' ? ` • runtime ${Math.round(currentRuntimeMs)}ms` : ''}
           </div>
           {showDebugOverlay && currentDroppedCount > 0 && (
             <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">

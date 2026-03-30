@@ -2,16 +2,32 @@
 
 This file tracks the OCR plan against the current code, not against older experimental docs.
 
-## Current Baseline (2026-03-21)
+## Current Baseline (2026-03-22)
 
 - Primary OCR logic lives in `src/services/vision/worker.ts`
 - Worker entry is `worker-boot.ts`, with `worker-stable.ts` only as fallback
-- OCR algorithm baseline is `93`
+- OCR algorithm baseline is `96`
 - Runtime defaults:
   - worker count: `1`
   - panel pipeline: `panel`
   - export pipeline: `export`
-  - quality default: `best`
+  - UI OCR engines: `tesseract`, `paddleocr`, `easyocr`
+  - OCR quality baseline: `best`
+
+## v96 External Paddle CPU Tuning
+
+This pass documents the current external OCR behavior after the UI moved from quality presets to model selection:
+
+- external engine prewarm is session-scoped in `OCRTextLayerPanel.tsx`, so `PaddleOCR` / `EasyOCR` are warmed once per language instead of being rechecked per document
+- the slow `CHECK` probe step was removed from the normal warm path; the app now prewarms directly through the Electron bridge
+- `PaddleOCR` now keeps one shared CPU instance per language and uses a lighter `PP-OCRv5_mobile_det` detector on that shared bridge instance
+- per-request Paddle settings now vary by pipeline profile:
+  - `panel` uses tighter detection-side limits and moderate recognition batching to keep ordinary manga pages from stalling late in inference
+  - `export` keeps a larger detection-side limit for denser document pages while still bounding CPU cost
+- renderer-side render constraints remain separate from Paddle's own internal detection limits; both are now part of the live behavior and should be considered together when tuning speed vs recall
+- external OCR cleanup now reflows words back into lines after engine detection, instead of trusting raw engine line grouping as-is
+- `export` cleanup now drops more isolated uppercase/image-label fragments before line reflow, targeting cases like ship labels and one-letter detector ghosts
+- external OCR debug now records `runtimeMs` in the same key family the UI already uses for `Tesseract`, so engine runtime comparison no longer depends on a separate debug shape
 
 ## Review Of The Previous Plan
 
@@ -23,6 +39,99 @@ The earlier plan had several good instincts:
 - avoid broad threshold relaxation
 
 But some parts needed correction when checked against the actual code:
+
+## v103 Tall-Page And Document-Clear Guard
+
+This pass fixes two active regressions seen on the live samples:
+
+- chunked long-form manga pages at roughly `2916x28779` were still missing `I THINK` / `EH?!` / `ME?!!` because the "very tall" gate never activated, so the focused tall-page probe path did not run
+- some document pages were incorrectly entering high-recall Latin speech cleanup and then hitting the late page-level low-readability clear, producing `0 words`
+
+Changes in code:
+
+- lowered the `isVeryTallPage` gate so the current long manga fixture actually enters the tall-page fast path
+- disabled high-recall Latin speech cleanup when the page already qualifies for document cleanup mode
+- disabled the late page-level low-readability clear on document-cleanup pages so sparse but legitimate document text is not wiped out
+
+## v104 Recovery-Budget Reset And Stable Document Mode
+
+This pass fixes the next two regressions seen immediately after `v103`:
+
+- recovery budget for very tall manga pages was still being consumed by preprocessing and chunk OCR before focused probes even started
+- document-like pages could still fall out of document cleanup mode mid-pipeline after earlier filters reduced the remaining word count
+
+Changes in code:
+
+- recovery-budget timing now effectively starts after base OCR setup instead of charging the whole chunk-recognition time against later rescue stages
+- base-layout document detection is retained for the rest of the pipeline, so late cleanup and page-clear logic do not flip back to speech-mode behavior
+- high-recall Latin speech cleanup is disabled on the tall-manga fast path
+- raw-text fallback is more permissive on document-like pages to avoid blank-page regressions
+
+## v105 Manga Base Retry For Weak Full-Page OCR
+
+This pass targets the remaining normal-manga failure case where the first full-page Latin OCR pass returns only numeric garbage such as `4(0)` and the later pipeline has nothing usable left to rescue.
+
+Changes in code:
+
+- when a non-CJK manga page produces almost no meaningful base words, the worker now retries full-page OCR on the original image with manga-friendly PSMs before any later cleanup stages
+- the retry compares candidates by meaningful-word count, candidate quality score, and text length, and only replaces the base result when it is clearly better
+- this path is limited to weak manga pages so the stabilized document flow from `v104` is left alone
+
+## v106 Document-Like Page Fail-Fast Guard
+
+This pass addresses the next regression after `v105`: some document pages with tables, diagrams, or sparse technical annotations were being treated as garbage/noise pages and cleared out entirely.
+
+Changes in code:
+
+- base-layout document-like pages are now protected from the Latin fail-fast / hostile-noise classifiers
+- panel noisy-page shortcuts no longer activate on document-like pages discovered from the base OCR layout
+- this keeps table-heavy and diagram-heavy document pages on the normal document path instead of wiping them to `0 words`
+
+## v107 Weak Document Base Retry
+
+This pass addresses the remaining document regression where some pages still fail at the very first OCR pass and return only numeric garbage such as `0 / 51 / 514`.
+
+Changes in code:
+
+- weak Latin base retry is now available to document pages as well as manga pages
+- document retries prefer the original image with `AUTO`, `SPARSE_TEXT`, and `SINGLE_BLOCK` before falling back to the processed image
+- the retry only replaces the base pass when it is clearly better by lexical evidence, candidate score, or recovered word count
+
+## v108 Manga Speech Over-Prune Rollback
+
+This pass addresses the remaining oscillation where document fixes were stable, but ordinary manga speech bubbles could still collapse to `0 words` after the early noise filter.
+
+Changes in code:
+
+- the worker now records whether the base OCR already looked like a readable manga speech page before early cleanup
+- if the early noise filter wipes out that page or shrinks it to a tiny fraction of the base words, the worker rolls back to the base manga snapshot instead of continuing into garbage fallback paths
+- this rollback is limited to strong manga-speech pages and does not affect document cleanup
+
+## v109 Late Speech Rollback And Weak Document Chunk Retry
+
+This pass addresses the next oscillation seen after `v108`:
+
+- ordinary manga speech pages could still survive the early noise filter, then get wiped out later by line-prune / ghost cleanup and end at `0 words`
+- weak document pages with small text could still fail the initial full-page OCR pass even when document cleanup itself was otherwise stable
+
+Changes in code:
+
+- the worker now captures a speech-safe manga snapshot after the early noise stage and can restore it later if line-prune, late Latin cleanup, or page-level low-readability clear wipes the page out
+- weak document base retry now includes a chunked `AUTO` candidate on the original image, so sparse small-text pages are not forced to rely only on one weak full-page pass
+- both changes stay bounded: the speech rollback only applies to strong manga speech pages, and the chunk retry only applies to weak document base passes
+
+## v110 Mode-Agnostic Weak Latin Retry
+
+This pass addresses the next root cause revealed by the `v109` logs:
+
+- weak document pages could still fall into manga-style cleanup when the UI mode was not enough to identify them and the base OCR was too weak to trigger document heuristics
+- the pipeline was still making a mode-first decision too early instead of letting OCR evidence choose between document-style and speech-style retries
+
+Changes in code:
+
+- weak non-CJK pages now try both speech-friendly and document-friendly Latin base-retry candidates, instead of restricting the retry set to the current UI mode
+- numeric-garbage weak pages can now try a chunked `AUTO` candidate even when they were opened under manga mode
+- the best retry result now carries a cleanup hint, so later cleanup can lock into document mode or speech mode based on the winning OCR evidence rather than the initial mode assumption alone
 
 ### What stays valid
 
@@ -40,6 +149,68 @@ But some parts needed correction when checked against the actual code:
 
 - Korean work should start with keep/drop boundaries before adding more rescans.
   The current pipeline already has multiple recovery paths. Adding another rescue stage too early would raise regression risk and make root-cause analysis harder.
+
+## v100 Stabilization Pass
+
+This pass intentionally resets focus back to the stable `v93` line-structure baseline and fixes the highest-priority structural gaps before adding more OCR heuristics.
+
+### Phase 1: Tall manga timeout mitigation
+
+- OCR text-layer now carries `documentType` through both current-page OCR and `Re-OCR All`.
+- Very tall chunked manga pages now switch chunk OCR to `SPARSE_TEXT` instead of reusing generic Latin `AUTO`.
+- Very tall chunked manga pages now prefer focused detect-only speech probes and skip the older wide sparse rescue bands that were expensive and often destabilized line layout.
+- The generic top-band sparse probe is skipped on that tall-manga fast path to avoid spending runtime on oversized broad rescues.
+
+### Phase 2: Document-only cleanup
+
+- Document OCR now gets its own cache compatibility boundary through `documentType`.
+- Added a document-only leading-artifact trim for lines such as `I To ...`, `| To ...`, and `me To ...` when they precede a strong lexical tail.
+- Added a document-only late numeric restore for heading suffixes such as `Chapter 5` using raw OCR numeric candidates aligned to the surviving heading line.
+
+### Why this pass is narrower
+
+- It does not reintroduce the later region-rebuild logic that previously caused extra line breaks on manga pages.
+- It keeps the `Current` and `Re-OCR All` worker path aligned instead of adding a second OCR architecture.
+
+## v101 Focused Recovery Pass
+
+This pass keeps the `v100` line-layout baseline but removes wasteful rescue work and patches two late-cleanup regressions that still showed up in real user traces.
+
+### Phase 1: Tall manga latency and timeout control
+
+- Empty TSV word boxes are now dropped during parse instead of entering the OCR pipeline as fake `(95)` tokens.
+- Very tall chunked manga pages now tighten the recovery budget instead of inheriting the full generic best-quality Latin budget.
+- The tall-manga fast path now skips the later heavy Latin rescue stages that were still burning time after base OCR:
+  - local neighborhood rescue
+  - top-balloon block rescue
+  - empty-line / gap fallback
+  - post-prune line-box rescue
+  - edge-token rescue
+- Focused detect-only tall-bubble probes remain enabled so missing `I THINK` / `EH?! ME?!!` style speech still has a bounded recovery path.
+
+### Phase 2: Late Latin cleanup hardening
+
+- Readable short speech heads such as `HOPE` are no longer stripped just because they are not present in the small shared lexicon.
+- The shared Latin lexicon now includes a few high-frequency speech/document words that repeatedly showed up in failures but were being treated as non-lexical.
+
+### Phase 3: Document cleanup without mode dependency
+
+- Document-only late cleanup now also auto-activates on dense document-like Latin pages even when the UI translation mode was not manually switched away from manga.
+- Heading numeric restore now checks raw numeric tokens instead of normalized short-digit aliases, which was blocking `Chapter 5` recovery when the digit survived OCR but was later normalized to a letter-like form.
+
+## v102 Layout And Heading Refinement Pass
+
+This pass targets the remaining user-facing gaps after `v101`: accepted-but-lost tall-bubble text, over-merged short bubble lines, and wrong heading digits on document pages.
+
+### Changes
+
+- Tall detect-only manga probes now score candidate text quality instead of picking the result with the most tokens.
+- When a tall detect-only probe finds a better overlapping line, it can replace the existing ghost line instead of failing with `noUniqueWords`.
+- Detect-only tall-bubble probes now upscale their crop before OCR to improve small text such as `I THINK`.
+- Latin fragmented-line normalization now avoids merging short vertically stacked bubble lines, which should preserve layouts such as:
+  - `I KNEW IT` / `NYAH`
+  - `HOW MUCH` / `FOR IT`
+- Document heading numerics now get a dedicated digit-only rescan pass near top `CHAPTER` headings so recovered suffixes are not limited to whatever raw OCR guessed first.
 
 ## Current Korean Failure Map
 
@@ -193,6 +364,70 @@ The next screenshots showed a second structural issue that v92 did not touch:
 - document lines like `... used to support` or `we will study how` should no longer lose their tail words just because the last words are lowercase and absent from the small lexicon set
 - short ghost fragments such as `Prin Le AT` are less likely to be admitted by sparse rescue paths that previously reasoned mostly at token level
 
+## v94 OCR Text-Layer Document Separation Pass
+
+The next round exposed a broader architecture gap:
+
+- OCR text-layer requests still did not carry `documentType`, so document pages were being post-processed by manga-biased Latin heuristics
+- that let document pages pick up speech-only synthetic fixes such as stray `I` insertions
+- numeric tails like `Chapter 5` were still fragile because late residual cleanup treated short numbers as generic noise
+- manga punctuation such as `?!` and `...` was still easy to lose even when the raw line text contained it
+
+### Changes
+
+- OCR text-layer and export OCR now send `documentType` (`manga` vs `document`) through the worker path.
+- OCR cache compatibility now includes `documentType`, preventing cross-mode cache reuse.
+- Manga-only deterministic Latin speech fixes are now gated to manga OCR only.
+- Aggressive manga-only late ghost filters are no longer applied to document OCR.
+- Residual numeric cleanup now preserves short numeric tokens on document pages when they have aligned lexical context.
+- Manga finalization can restore terminal punctuation from matching raw TSV line text when the alphanumeric content matches.
+- Added a deterministic reorder/fix for the `AYNAR TAKES THIS ESSENCE` line family after the new line-quality changes exposed a word-order regression.
+
+### Why this matters
+
+- document OCR should stop receiving manga speech hallucinations like `I To`
+- `Chapter 5`-style headings have a path to keep their contextual page number instead of dropping the digit as generic noise
+- manga punctuation is restored in a bounded way from real raw OCR line text instead of globally relaxing punctuation filtering
+
+## v95 Core OCR Pass
+
+### Why v94 still failed
+
+- raw TSV parsing still admitted empty level-5 "words", which polluted the Latin word graph with dozens of blank high-confidence boxes on tall manga pages
+- chunked OCR flattened all words from every chunk and rebuilt lines only from Y proximity, so tall-page bubble ordering could drift even when chunk-local OCR was reasonable
+- late Latin finalization reseeded lines from flat words again, throwing away any better line structure collected earlier
+- document cleanup still had no document-specific trim for weak leading bullet ghosts like `I To`
+
+### What changed
+
+- `parseTSV()` now skips empty level-5 words entirely
+- `recognizeInChunks()` now carries forward chunk-derived line seeds and line boxes instead of returning only a flat word list
+- the worker now preserves existing line structure when refreshing final lines, rather than always rebuilding from a fresh Y-only seed
+- document late line prune now keeps strong singleton numeric lines
+- document late cleanup adds a bounded leading-artifact trim for weak singleton ghosts in front of otherwise strong lines
+
+### Expected impact
+
+- fewer bogus blank OCR words consuming budget on very tall manga pages
+- better line separation/order retention for chunked manga OCR, especially when multiple balloons stack vertically
+- `Chapter 5`-style singleton digits have a path to survive the late line prune
+- document bullets and decorative markers should be less likely to become leading `I` / `me` ghosts
+
+## v96 Direct Follow-up
+
+### Why v95 could still look unchanged
+
+- `Chapter 5` was still vulnerable one stage earlier than expected: late tail trimming could remove the numeric heading tail before residual line prune had any chance to keep it
+- tall manga pages still used generic non-CJK chunk OCR settings, so chunk recognition itself could stay weak even after the line-assembly refactor
+- some speech lines were already collapsed into one seed line by the time deterministic fixes ran, so preserving chunk line structure alone was not enough
+
+### What changed
+
+- chunked manga OCR now runs chunk recognition with `SPARSE_TEXT`
+- late Latin trailing-artifact trim now preserves short numeric tails on document headings when they have lexical context
+- document leading-artifact trim is stricter for `I To` / `me To` style ghosts
+- late manga Latin cleanup now splits vertically staggered words back into separate lines when geometry shows the seed line actually contains multiple stacked rows
+
 ## What Is Already Optimized In The Current Worker
 
 ### Stability
@@ -264,3 +499,82 @@ When validating Korean pages in the panel:
   - `weakCjkLine`
 - inspect `skipReason`
 - record runtime and whether the result improved by keeping real short lines while dropping low-value fragments
+
+## v97 Structural Recovery
+
+### Why v96 still looked unchanged
+
+The remaining failures were not all simple keep/drop threshold misses.
+Two structural issues were still active:
+
+- stage_budget_exceeded was counting from before preprocess/base OCR, so very tall chunked pages could spend most or all rescue budget before tall-page speech probes ever ran
+- late Latin vertical-flow splitting was still too eager, so stacked manga speech could be over-split into results like AYNAR / TAKES THIS ESSENCE or I KNEW / IT NYAH
+
+Document failures also still had two path-level gaps:
+
+- short numeric heading suffixes such as Chapter 5 were not always reintroduced when the numeric token had nearby lexical context but no stable original line seed
+- pipe-like leading bullet ghosts such as | To could bypass the existing I To-style trim because the first token normalized to empty text instead of I
+
+### What changed
+
+- recovery budget now arms after base OCR and keeps only a bounded tail-budget for rescue, so tall pages can still run a few targeted probes without reopening the full runtime explosion that caused timeouts earlier
+- punctuated short manga lines from raw line boxes are protected before late Latin prune, which should help preserve detected shout/speech fragments like I THINK..., EH?!, ME?!!, and FOR IT?
+- vertical-flow Latin splitting now requires stronger geometry evidence before splitting inline text, but still allows centered lower lines like ESSENCE or NYAH to break onto their own rows
+- document numeric reintroduction now accepts nearby lexical support instead of only same-line support, and document cleanup can merge lexical heading lines with short numeric suffix lines
+- document leading-artifact trim now also handles pipe-like bullet ghosts such as | To
+
+### Validation focus after v97
+
+Re-test the same pages first and check for these signals:
+
+- OCR pipeline version: 97
+- tall manga pages should no longer hit stage_budget_exceeded before speech probes have a chance to run
+- document heading lines should recover Chapter 5 instead of dropping the numeric suffix
+- document body lines should stop keeping | To / I To ghosts at the head of strong lines
+- tall manga line order should move closer to the original visual flow instead of over-splitting into dense single-word rows
+
+## v98 Tall Region Reconstruction
+
+### Why v97 was still not enough
+
+Even after delaying recovery-budget accounting, the tall manga path was still fundamentally page-level first.
+That meant:
+
+- chunk OCR still created fragmented line seeds that later fixes had to guess how to reorder
+- broad sparse probes still added tokens into a noisy global pool instead of rebuilding bubble-local reading order
+- very long document pages could still spend extra time in cleanup/rescue stages even when the chunked base OCR was already strong enough
+
+### What changed
+
+- very tall manga pages now build speech-like regions from raw line boxes and re-OCR those regions directly
+- each tall speech region tries bounded SINGLE_BLOCK / SPARSE_TEXT recognition and is accepted by line-level quality, punctuation, and lexical evidence instead of token-only rescue rules
+- if the rebuilt region result has better structure than the global page result, it replaces the fragmented tall-page output before later normalization
+- chunked document pages with already-strong evidence now use conservative cleanup to reduce both over-pruning and wasted rescue time
+
+### Validation focus after v98
+
+- OCR pipeline version: 98
+- tall manga pages should log region reconstruction instead of only broad sparse probes
+- page 1 of the long manga should move closer to bubble-local ordering like I THINK..., EH?!, ME?!!, I KNEW IT, NYAH, HOW MUCH, FOR IT?
+- long document pages should be less likely to drift into timeout when the chunked base OCR is already readable
+
+
+
+## v99 Tall Region Execution Pass
+
+### Why v98 could still look unchanged
+
+- the tall speech-region reconstruction path still sat after earlier Latin rescue stages, so very tall manga pages could spend budget before the new region path ran
+- short punctuated shout lines such as EH?! still failed region acceptance because they had little or no lexical support
+- document headings like Chapter 5 could still lose the numeric suffix after later cleanup because the earlier contextual numeric reintroduction was not the last numeric checkpoint
+- document ghost heads like | To / I To still needed a stronger final trim path
+
+### What changed
+
+- very tall manga pages now prefer the bounded speech-region recovery path before the older empty-line / gap / top-band rescue stages consume budget
+- tall-region acceptance now keeps short punctuated shout lines with bounded confidence instead of requiring lexical support only
+- accepted tall regions now replace overlapping bad page lines instead of requiring a whole-page rebuild to win before being used
+- late manga vertical-flow splitting is skipped once tall-region reconstruction has already produced the kept line structure
+- document finalization now performs a last heading-numeric restore pass from base OCR words before the result is emitted
+- leading document TO artifacts now trim more aggressively when the tail remains readable
+

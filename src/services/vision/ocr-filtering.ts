@@ -1001,7 +1001,42 @@ export function cleanLineNoise(lines: Array<{ text: string; confidence: number; 
       if (/^[0-9]{1,2}$/.test(alphaNum) && word.confidence < 85) {
         const normalizedNumeric = normalizeLatinToken(alphaNum);
         const numericLooksLexical = isProtectedLatinToken(normalizedNumeric);
+        const hasLexicalContext = lineWords.some((neighbor) => {
+          if (neighbor === word) return false;
+          const neighborAlpha = getAlphaNum((neighbor.text || '').trim());
+          if (!neighborAlpha) return false;
+          const normalizedNeighbor = normalizeLatinToken(neighborAlpha);
+          return isProtectedLatinToken(normalizedNeighbor);
+        });
+        let strongLexicalNeighbor = false;
+        for (const neighbor of lineWords) {
+          if (neighbor === word) continue;
+          const neighborAlpha = getAlphaNum((neighbor.text || '').trim());
+          if (!neighborAlpha) continue;
+          const normalizedNeighbor = normalizeLatinToken(neighborAlpha);
+          if (!isProtectedLatinToken(normalizedNeighbor)) continue;
+          const neighborMinH = Math.max(1, Math.min(
+            neighbor.bbox.y1 - neighbor.bbox.y0,
+            word.bbox.y1 - word.bbox.y0
+          ));
+          const yOverlap = Math.max(
+            0,
+            Math.min(neighbor.bbox.y1, word.bbox.y1) - Math.max(neighbor.bbox.y0, word.bbox.y0)
+          );
+          const horizontalGap = neighbor.bbox.x0 > word.bbox.x1
+            ? neighbor.bbox.x0 - word.bbox.x1
+            : (word.bbox.x0 > neighbor.bbox.x1 ? word.bbox.x0 - neighbor.bbox.x1 : 0);
+          if (
+            (yOverlap / neighborMinH) >= 0.24
+            && horizontalGap <= Math.max(18, medianHeight * 1.8)
+          ) {
+            strongLexicalNeighbor = true;
+            break;
+          }
+        }
         if (!numericLooksLexical) {
+          if (strongLexicalNeighbor && word.confidence >= (lineWords.length <= 4 ? 60 : 68)) return true;
+          if (hasLexicalContext && word.confidence >= 72) return true;
           logDrop('noise', word, 'short numeric artifact');
           return false;
         }

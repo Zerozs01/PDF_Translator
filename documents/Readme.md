@@ -3,14 +3,14 @@
 `documents/` is the canonical working documentation for the current codebase.
 Use this folder as the source of truth before relying on older root-level notes.
 
-## Current Code Snapshot (2026-03-21)
+## Current Code Snapshot (2026-03-22)
 
 - Runtime: Electron + Vite + React 19 + Zustand
 - OCR: Tesseract.js in module workers, local `public/tessdata` first, CDN fallback
 - PDF output: `pdf-lib` searchable PDF with invisible text layer
 - Cache: SQLite via `better-sqlite3`
 - Translation: Gemini call goes through Electron main process IPC
-- OCR baseline: `OCR_ALGORITHM_VERSION = 93`
+- OCR baseline: `OCR_ALGORITHM_VERSION = 99`
 - Default OCR path: single worker, `panel` pipeline, `best` quality profile
 
 ## Canonical Docs
@@ -52,3 +52,6 @@ Use them as input when planning deeper OCR changes, but treat `ARCHITECTURE.md`,
 - Need exact code behavior: read `ARCHITECTURE.md` and `OCR_OPTIMIZATION.md`
 - Need next tasks: read `Roadmap.md`
 - Need theory or future-looking ideas: read `Knowledge.md`
+
+
+

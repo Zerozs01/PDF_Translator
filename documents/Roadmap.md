@@ -5,11 +5,12 @@ This roadmap is intentionally short. It reflects the current code path and prior
 ## Current Baseline
 
 - Canonical docs now live in `documents/`
-- OCR algorithm version: `93`
+- OCR algorithm version: `96`
 - Current OCR runtime:
-  - single worker
+  - single Tesseract worker plus external OCR bridges
+  - OCR engines: `tesseract`, `paddleocr`, `easyocr`
   - `panel` and `export` pipeline profiles
-  - `fast`, `balanced`, `best` quality profiles
+  - UI defaults to the best-quality OCR path for each engine
 - Main blocker for confident Korean work: no dedicated Korean fixtures
 
 ## P0. Documentation And Baseline Lock
@@ -38,6 +39,59 @@ Status: in progress
 - worker logging now exposes late Latin tail trimming directly
 - sparse probe rescue now uses the shared Latin line assessment before accepting new lines
 - anchor-probe protection is stricter for ghost-like Latin fragments
+
+### Done in v94
+
+- OCR text-layer now carries `documentType`, so document OCR no longer runs through the full manga-biased late Latin cleanup path
+- OCR cache compatibility includes `documentType`
+- document numeric tails such as `Chapter 5` have contextual short-number preservation in late cleanup
+- manga terminal punctuation can be restored from matching raw TSV line text
+- deterministic reorder/fix added for the `AYNAR TAKES THIS ESSENCE` line family
+
+### Done in v95
+
+- TSV parsing now drops empty level-5 words instead of letting blank high-confidence boxes pollute the OCR word graph
+- chunked OCR now keeps chunk-derived line seeds and chunk line boxes instead of rebuilding the whole tall page only from flat words
+- final Latin line rebuilding preserves existing line structure when available instead of always reseeding from a naive Y-only grouping pass
+- document OCR can keep strong singleton numeric lines during late residual line prune
+- document OCR trims weak leading singleton artifacts on otherwise strong lines, targeting `I To` / `me To` style bullet ghosts without touching manga speech
+
+### Done in v96
+
+- chunked manga OCR now forces `SPARSE_TEXT` per chunk instead of inheriting the generic dense-page Latin PSM
+- late document tail trimming no longer strips short numeric heading tails such as `Chapter 5`
+- document leading-artifact trim is stricter for `I To`-style ghosts
+- manga late Latin cleanup now splits vertically staggered words back into multiple lines when Tesseract collapses stacked speech lines into one seed line
+
+### Done in v97
+
+- recovery budget now arms after base OCR instead of being consumed by tall-page chunk OCR before rescue starts, while keeping a bounded tail-budget for panel/export stability
+- punctuated short manga lines from raw line boxes are protected before late Latin prune, so detected I THINK..., EH?!, ME?!!, and similar shout/speech fragments are harder to drop accidentally
+- vertical-flow Latin line splitting is more conservative, reducing over-splitting such as AYNAR being separated from TAKES THIS or HOW being split from MUCH FOR
+- document OCR now looks for nearby lexical heading context when reintroducing short numeric tokens and can merge numeric suffix lines such as Chapter + 5
+- document leading-artifact trim now handles pipe-like bullet ghosts such as | To
+### Done in v98
+
+- very tall manga pages no longer rely only on broad top/mid/side sparse probes; they now have a bounded speech-region OCR reconstruction path that groups raw line boxes into bubble-like regions and re-OCRs those regions directly
+- chunked document pages with already-strong evidence now use conservative cleanup, reducing over-pruning risk and avoiding extra rescue work that can push long pages toward timeout
+- the tall-page reconstruction path chooses between SINGLE_BLOCK and SPARSE_TEXT per region and accepts region output by line-level quality instead of only token-level rescue acceptance
+### Done in v99
+
+- very tall manga pages now prefer bounded speech-region reconstruction before older Latin rescue stages can consume the recovery budget
+- short punctuated shout lines like `EH?!` are accepted by tall-region OCR without requiring lexical hits
+- accepted tall regions can replace only the overlapping bad lines instead of needing a whole-page rebuild to win outright
+- late manga vertical-flow split is skipped after a tall-region rebuild to preserve the recovered bubble structure
+- document OCR performs a final heading-numeric restore from base OCR words and trims stronger `| To` / `I To` style leading artifacts
+
+### Done in v96 external-engine tuning
+
+- OCR model selection is now first-class in the UI, with `Tesseract`, `PaddleOCR`, and `EasyOCR`
+- external engines prewarm once per language/session instead of rechecking on every document
+- `PaddleOCR` CPU runtime now uses one shared bridge instance per language, a lighter detector, and per-profile detection limits to reduce late-page stalls on ordinary manga pages while keeping document recall high
+- current-page export/download remains page-scoped instead of rebuilding the full document
+- external OCR now reflows detected words back into lines after cleanup, instead of trusting raw engine grouping directly
+- `export` cleanup now drops more isolated uppercase/image-label fragments before line reflow, targeting document image ghosts such as ship labels and stray one-letter boxes
+- external engine runtimes are now written into `debug.runtimeMs`, so the OCR panel can compare model speed without special-casing bridge debug output
 
 ### Next
 
@@ -85,6 +139,8 @@ Status: in progress
 - Korean `gapFallback` also uses a lower source confidence gate
 - Korean line-rescan adds a tight `RAW_LINE` + 2x upscale attempt
 - Korean line-rescan can inspect more candidate lines per page
+
+
 
 ### Next
 
@@ -135,3 +191,10 @@ These older ideas are intentionally de-prioritized until OCR is stable:
 - bubble-aware editor mode
 - YOLO/layout-model experiments
 - RAG/document-retrieval features
+
+
+
+
+
+
+

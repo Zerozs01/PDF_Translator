@@ -134,7 +134,10 @@ export async function recognizeInChunks(
   imageInput: string | Blob,
   width: number,
   height: number,
-  overlap: number
+  overlap: number,
+  options?: {
+    startOffset?: number;
+  }
 ): Promise<{ words: OCRWord[]; lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>; text: string; confidence: number }> {
   const blob = typeof imageInput === 'string'
     ? await (await fetch(imageInput)).blob()
@@ -144,7 +147,7 @@ export async function recognizeInChunks(
 
   const chunkHeight = CONFIG.CHUNK_HEIGHT;
   const step = Math.max(1, chunkHeight - overlap);
-  const totalChunks = Math.ceil(height / step);
+  const startOffset = Math.max(0, Math.min(chunkHeight - 1, Math.round(options?.startOffset || 0)));
 
   const allWords: OCRWord[] = [];
   const wordKeySet = new Set<string>();
@@ -152,8 +155,7 @@ export async function recognizeInChunks(
   let totalConf = 0;
   let confCount = 0;
 
-  for (let i = 0; i < totalChunks; i++) {
-    const yStart = i * step;
+  for (let yStart = startOffset; yStart < height; yStart += step) {
     const currentHeight = Math.min(chunkHeight, height - yStart);
     if (currentHeight <= 0) break;
 
@@ -181,7 +183,7 @@ export async function recognizeInChunks(
         confidence: word.confidence,
         bbox: { x0: word.bbox.x0, x1: word.bbox.x1, y0: word.bbox.y0 + yStart, y1: word.bbox.y1 + yStart }
       };
-      const key = `${Math.round(adjusted.bbox.x0 / 2)}_${Math.round(adjusted.bbox.y0 / 2)}_${Math.round(adjusted.bbox.x1 / 2)}_${Math.round(adjusted.bbox.y1 / 2)}_${adjusted.text}`;
+      const key = `${Math.round(adjusted.bbox.x0)}_${Math.round(adjusted.bbox.y0)}_${Math.round(adjusted.bbox.x1)}_${Math.round(adjusted.bbox.y1)}_${adjusted.text}`;
       if (wordKeySet.has(key)) continue;
       wordKeySet.add(key);
       allWords.push(adjusted);

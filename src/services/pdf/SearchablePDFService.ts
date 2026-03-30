@@ -10,7 +10,7 @@
 import { PDFDocument } from 'pdf-lib';
 import { visionService } from '../vision/VisionService';
 import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
-import { withPerPageOCRTimeout } from '../vision/ocr-timeout';
+import { resolvePerPageTimeoutSec, withPerPageOCRTimeout } from '../vision/ocr-timeout';
 import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions, OCRPipelineProfile } from '../../types';
 import { dbService } from '../dbService';
@@ -183,7 +183,7 @@ export class SearchablePDFService {
       if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return 'pageSegMode mismatch';
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
       if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
-      if ((cached.ocrQualityProfile || 'best') !== options.profile) return 'ocrQualityProfile mismatch';
+      if ((cached.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) return 'ocrEngine mismatch';
       return null;
     };
     const isCacheCompatible = (cached: OCRPageResult): boolean => getCacheIncompatibilityReason(cached) === null;
@@ -304,14 +304,16 @@ export class SearchablePDFService {
               pageSignal,
               debugCollectDrops,
               pipelineProfile,
-              options.profile
+              'best',
+              options.engine
             );
 
             try {
+              const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'tesseract');
               ocrResult = await withPerPageOCRTimeout(
                 ocrPromise,
                 pageNum,
-                options.perPageTimeoutSec,
+                effectiveTimeoutSec,
                 () => {
                   pageAbortController.abort();
                   // Ensure the in-flight worker request is torn down immediately
@@ -327,7 +329,8 @@ export class SearchablePDFService {
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
             ocrResult.pipelineProfile = pipelineProfile;
-            ocrResult.ocrQualityProfile = options.profile;
+            ocrResult.ocrEngine = options.engine || 'tesseract';
+            ocrResult.ocrQualityProfile = 'best';
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
             if (cacheDocId && dbService.isAvailable()) {
@@ -441,12 +444,27 @@ export class SearchablePDFService {
     ocrPages: Map<number, OCRPageResult>,
     pageRange?: number[]
   ): Promise<Uint8Array> {
-    const pdfDoc = await this.textLayerService.loadPDF(pdfBytes);
-    const pages = pdfDoc.getPages();
+    const normalizedPageRange = pageRange
+      ? Array.from(new Set(pageRange)).filter((pageNum) => Number.isInteger(pageNum) && pageNum > 0)
+      : undefined;
+    let pages: ReturnType<PDFDocument['getPages']>;
+
+    if (normalizedPageRange && normalizedPageRange.length > 0) {
+      const sourcePdf = await PDFDocument.load(pdfBytes);
+      const subsetPdf = await PDFDocument.create();
+      const zeroBasedIndexes = normalizedPageRange.map((pageNum) => pageNum - 1);
+      const copiedPages = await subsetPdf.copyPages(sourcePdf, zeroBasedIndexes);
+      copiedPages.forEach((page) => subsetPdf.addPage(page));
+      await this.textLayerService.setPDFDocument(subsetPdf);
+      pages = subsetPdf.getPages();
+    } else {
+      const pdfDoc = await this.textLayerService.loadPDF(pdfBytes);
+      pages = pdfDoc.getPages();
+    }
 
     for (let i = 0; i < pages.length; i++) {
-      const pageNum = i + 1;
-      if (pageRange && !pageRange.includes(pageNum)) continue;
+      const pageNum = normalizedPageRange ? normalizedPageRange[i] : i + 1;
+      if (!pageNum) continue;
 
       const ocrResult = ocrPages.get(pageNum);
       if (!ocrResult) continue;
@@ -466,9 +484,20 @@ export class SearchablePDFService {
     imageHeight: number,
     language: string = 'eng',
     dpi: number = 300,
-    pageSegMode?: number
+    pageSegMode?: number,
+    pipelineProfile: OCRPipelineProfile = 'panel'
   ): Promise<OCRPageResult> {
-    return visionService.ocrForTextLayer(imageDataUrl, imageWidth, imageHeight, language, dpi, pageSegMode, undefined, false, 'export');
+    return visionService.ocrForTextLayer(
+      imageDataUrl,
+      imageWidth,
+      imageHeight,
+      language,
+      dpi,
+      pageSegMode,
+      undefined,
+      false,
+      pipelineProfile
+    );
   }
 }
 

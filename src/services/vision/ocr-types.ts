@@ -19,6 +19,7 @@ export interface OCRDroppedWord {
 
 export type OCRPipelineProfile = 'panel' | 'export';
 export type OCRQualityProfile = 'fast' | 'balanced' | 'best';
+export type OCREngine = 'tesseract' | 'paddleocr' | 'easyocr';
 
 export interface OCRStageMetric {
   stage:

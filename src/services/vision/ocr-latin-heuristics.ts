@@ -324,6 +324,7 @@ export function normalizeShortDigitLatinWords(
 		const alpha = getAlphaNum(raw);
 		if (!alpha) continue;
 		if (!/^[0-9]{1,2}$/.test(alpha)) continue;
+		if (alpha.length === 1) continue;
 
 		const normalized = normalizeLatinTokenForLexicon(alpha);
 		if (!(latinCommonWords.has(normalized) || latinShortKeepForLine.has(normalized))) continue;

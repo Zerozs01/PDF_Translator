@@ -25,6 +25,7 @@ import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore } from './stores/useProjectStore';
+import { useOCRTextLayerStore } from './stores/useOCRTextLayerStore';
 
 // Lazy Load Heavy Components
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
@@ -34,6 +35,11 @@ const ImageCanvas = React.lazy(() => import('./components/Image/ImageCanvas').th
 import { Region } from './types';
 import { visionService } from './services/vision/VisionService';
 import './types/electron.d'; // Import type declarations
+
+type GlobalPrewarmState = typeof globalThis & {
+  __pdfTranslatorExternalPrewarmStarted?: boolean;
+  __pdfTranslatorExternalPrewarmPromise?: Promise<void>;
+};
 
 // --- Gemini API: Secure IPC to Main Process ---
 // API key is stored securely in Main Process, not exposed to renderer
@@ -65,6 +71,7 @@ export default function App() {
   const showOCRHarness = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
   const { activeTool, setActiveTool } = useUIStore();
+  const ocrLanguage = useOCRTextLayerStore((state) => state.options.language);
   const { 
     file, 
     fileType,
@@ -106,6 +113,36 @@ export default function App() {
 
     return () => clearTimeout(timer);
   }, [showOCRHarness]);
+
+  useEffect(() => {
+    if (showOCRHarness) return undefined;
+    if (!window.electronAPI?.ocr?.prewarmEngine) return undefined;
+
+    const globalPrewarm = globalThis as GlobalPrewarmState;
+    if (globalPrewarm.__pdfTranslatorExternalPrewarmStarted) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      if (globalPrewarm.__pdfTranslatorExternalPrewarmStarted) return;
+      globalPrewarm.__pdfTranslatorExternalPrewarmStarted = true;
+      globalPrewarm.__pdfTranslatorExternalPrewarmPromise = (async () => {
+        try {
+          await window.electronAPI.ocr.prewarmEngine({ engine: 'easyocr', language: ocrLanguage || 'eng' });
+        } catch (error) {
+          console.warn('EasyOCR background prewarm failed:', error);
+        }
+        try {
+          await window.electronAPI.ocr.prewarmEngine({ engine: 'paddleocr', language: ocrLanguage || 'eng' });
+        } catch (error) {
+          console.warn('PaddleOCR background prewarm failed:', error);
+        }
+      })();
+      void globalPrewarm.__pdfTranslatorExternalPrewarmPromise;
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [ocrLanguage, showOCRHarness]);
 
   // Update editedName when file changes
   useEffect(() => {

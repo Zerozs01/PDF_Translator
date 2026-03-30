@@ -2,7 +2,7 @@
  * Type declarations for Electron APIs exposed via preload script
  */
 
-import { OCRPageResult } from './index';
+import { OCREngine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile } from './index';
 
 // Document type from database
 export interface DBDocument {
@@ -72,6 +72,42 @@ export interface ProjectUpdate {
   icon?: string;
   color?: string;
   parent_id?: number | null;
+}
+
+export interface ExternalOCREngineStatus {
+  engine: OCREngine;
+  available: boolean;
+  runtime: string;
+  description: string;
+}
+
+export interface ExternalOCRWarmupStatus {
+  ok: boolean;
+  engine: OCREngine;
+  runtime: string;
+  description: string;
+}
+
+export interface ExternalOCRRequest {
+  engine: OCREngine;
+  imageData: Uint8Array | ArrayBuffer;
+  imageMimeType: string;
+  imageWidth: number;
+  imageHeight: number;
+  language: string;
+  dpi: number;
+  pageSegMode?: number;
+  pipelineProfile?: OCRPipelineProfile;
+  ocrQualityProfile?: OCRQualityProfile;
+}
+
+export interface ExternalOCRResult {
+  words: OCRPageResult['words'];
+  lines: OCRPageResult['lines'];
+  text: string;
+  confidence: number;
+  pageSegMode?: number;
+  debug?: OCRPageResult['debug'];
 }
 
 // Electron API interface (secure whitelist-based)
@@ -147,6 +183,13 @@ export interface ElectronAPI {
       size: number;
       name: string;
     }>;
+  };
+
+  ocr: {
+    getEngineStatus: () => Promise<ExternalOCREngineStatus[]>;
+    prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
+    cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
+    runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
   };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;

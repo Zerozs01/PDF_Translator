@@ -31,6 +31,7 @@ import type {
   OCRLine,
   TesseractResult,
   DocumentType,
+  OCREngine,
   OCRPipelineProfile,
   OCRQualityProfile,
   OCRStageMetric,
@@ -104,7 +105,8 @@ const LATIN_COMMON_WORDS = new Set([
   'STUFF', 'ROOM', 'DOOR', 'LOCK', 'TAKE', 'LOOK', 'OVER', 'GO', 'STUDENTS', 'MAY', 'DOING', 'BAD', 'THINGS', 'ELDERLY', 'WEAK',
   'WOMEN', 'CHILDREN', 'TOWN', 'XUJIA', 'SIN', 'NOT', 'JUST', 'ALL', 'COME', 'ACROSS', 'POSSIBILITY', 'WHAT', 'THINK', 'BEST', 'ITS', 'ILL',
   'HERE', 'PEOPLE', 'LIVE', 'THERE', 'TIANHAIL', 'TIANHAI',
-  'WHY', 'BRO', 'OKAY', 'FINE', 'ACTING', 'MYSTERIOUS', 'WHATEVER', 'WANT', 'SAY'
+  'WHY', 'BRO', 'OKAY', 'FINE', 'ACTING', 'MYSTERIOUS', 'WHATEVER', 'WANT', 'SAY',
+  'CHAPTER', 'SECTION', 'PART', 'FIGURE', 'FIG', 'TABLE', 'UNIT', 'LESSON', 'VOLUME', 'VOL', 'APPENDIX'
 ]);
 
 function normalizeLatinLineText(text: string): string {
@@ -120,6 +122,11 @@ function normalizeQualityProfile(profile: unknown): OCRQualityProfile {
   return 'best';
 }
 
+function normalizeOcrEngine(engine: unknown): OCREngine {
+  if (engine === 'paddleocr' || engine === 'easyocr' || engine === 'tesseract') return engine;
+  return 'tesseract';
+}
+
 function makeWordDebugKey(word: OCRWord): string {
   const text = normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())) || (word.text || '').trim().toUpperCase();
   return [
@@ -129,6 +136,27 @@ function makeWordDebugKey(word: OCRWord): string {
     Math.round(word.bbox.x1),
     Math.round(word.bbox.y1),
   ].join(':');
+}
+
+function cloneBBox(bbox: BBox): BBox {
+  return { x0: bbox.x0, y0: bbox.y0, x1: bbox.x1, y1: bbox.y1 };
+}
+
+function cloneWord(word: OCRWord): OCRWord {
+  return {
+    text: word.text,
+    confidence: word.confidence,
+    bbox: cloneBBox(word.bbox),
+  };
+}
+
+function cloneLine(line: OCRLine): OCRLine {
+  return {
+    text: line.text,
+    confidence: line.confidence,
+    bbox: cloneBBox(line.bbox),
+    words: ((line.words as OCRWord[]) || []).map(cloneWord),
+  };
 }
 
 function protectWords(wordSet: Set<string>, words: OCRWord[]): void {
@@ -797,8 +825,9 @@ function filterLatinRescueWords(
     const postPruneSource = source.startsWith('postPruneLine');
     const edgeSource = source.startsWith('lineRescanEdge');
     const anchorSource = source === 'anchorSecondLine' || source === 'anchorTopSparse' || source === 'anchorBottomSparse';
-    const tallSpeechSource = source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse';
-    const speechAliasToken = normalized === 'ITG' || normalized === 'THG' || normalized === 'THNK' || normalized === 'THNKI' || normalized === 'EH' || normalized === 'ME';
+    const detectOnlySpeechSource = source === 'detectOnlyTopBubble' || source === 'detectOnlyShoutBubble';
+    const tallSpeechSource = source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse' || detectOnlySpeechSource;
+    const speechAliasToken = normalized === 'ITG' || normalized === 'THG' || normalized === 'THNK' || normalized === 'THNKI' || normalized === 'EH' || normalized === 'ME' || normalized === 'HMM' || normalized === 'HMMM';
     const lexicalRelax = (postPruneSource || anchorSource) && lexicalToken;
     const effectiveMinConf = lexicalRelax
       ? Math.max(30, minConf - (anchorSource ? 12 : (strictShortKeep ? 14 : 10)))
@@ -813,7 +842,7 @@ function filterLatinRescueWords(
     // This assumes the panelProfile (which uses this filter) passes a special source string or we can
     // infer it from the context. The caller passes 'emptyLineFallback', 'anchorTopSparse', etc.
     // For panel profile, we want to allow high-value dictionary words even at very low confidence.
-    const isPanelProfileRescue = source.includes('Fallback') || source.includes('Sparse') || source.includes('Rescan');
+    const isPanelProfileRescue = source.includes('Fallback') || source.includes('Sparse') || source.includes('Rescan') || detectOnlySpeechSource;
     if (lexicalToken && isPanelProfileRescue && word.confidence >= 25) {
       // Allow extremely low confidence for known words in specific rescue passes
     } else if (word.confidence < effectiveMinConf) {
@@ -826,7 +855,7 @@ function filterLatinRescueWords(
     const hasLatin = /[A-Za-z]/.test(alpha);
     const onlyDigits = /^[0-9]+$/.test(alpha);
     const consonantRun = /[BCDFGHJKLMNPQRSTVWXYZ]{3,}/i.test(alpha);
-    const sparseLikeSource = source.includes('Sparse') || source.includes('lineRescan') || postPruneSource || anchorSource;
+    const sparseLikeSource = source.includes('Sparse') || source.includes('lineRescan') || postPruneSource || anchorSource || detectOnlySpeechSource;
     const tallMidSource = source === 'tallMidSparse' || source === 'tallSideSparse';
     const tokenReadable = scoreLatinTokenReadability(word);
 
@@ -847,6 +876,10 @@ function filterLatinRescueWords(
     }
 
     if (tallSpeechSource && (strictShortKeep || speechAliasToken) && word.confidence >= Math.max(12, effectiveMinConf - 8)) {
+      return true;
+    }
+
+    if (detectOnlySpeechSource && (strictShortKeep || lexicalToken || speechAliasToken) && word.confidence >= Math.max(10, effectiveMinConf - 10)) {
       return true;
     }
 
@@ -1154,7 +1187,6 @@ function correctKnownSpeechLexiconArtifacts(lines: Array<{ text: string; confide
       const prevToken = tokens[i - 1] || '';
       const token = tokens[i] || '';
       if (prevToken !== 'XUJIA' || token !== 'TO') continue;
-      if (lineWords[i].confidence > 93) continue;
 
       const raw = (lineWords[i].text || '').trim();
       const replaced = raw.replace(/[A-Za-z0-9]+/, 'TOWN');
@@ -1762,6 +1794,45 @@ function repairLatinSplitAndGhostTokens(
   return { lines: nextLines, fixed };
 }
 
+function trimLeadingDocumentArtifactHeads(
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>,
+  commonWords: Set<string>,
+  shortKeep: Set<string>,
+  makeLineFromWords: (words: OCRWord[]) => OCRLine
+): { lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>; fixed: number } {
+  let fixed = 0;
+  const nextLines = lines.map((line) => {
+    const lineWords = (((line.words as OCRWord[]) || []) as OCRWord[]).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (lineWords.length < 2) return line;
+
+    const normalizedTokens = lineWords
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())));
+    const tokens = normalizedTokens.filter(Boolean);
+    if (tokens.length < 2) return line;
+
+    const firstWord = lineWords[0];
+    const firstRaw = (firstWord.text || '').trim();
+    const firstToken = normalizedTokens[0] || '';
+    const secondToken = normalizedTokens[1] || '';
+    const tailTokens = normalizedTokens.slice(1).filter(Boolean);
+    const tailLexHits = tailTokens.filter((token) => commonWords.has(token) || shortKeep.has(token)).length;
+    const tailStrongLex = tailTokens.some((token) => commonWords.has(token) && token.length >= 3);
+    const firstPipeLike = /^[|¦│┃￨︱︲!Il1]+$/u.test(firstRaw);
+    const firstGhostLike = firstPipeLike || firstToken === 'I' || firstToken === 'ME' || firstToken === 'L' || firstToken === '1';
+    const lineQuality = scoreLatinLineReadability(lineWords);
+
+    if (!(secondToken === 'TO' && firstGhostLike)) return line;
+    if (!tailStrongLex && tailLexHits < 2) return line;
+    if (lineQuality < 0.34 && line.confidence < 56) return line;
+    if (firstWord.confidence >= 98 && !firstPipeLike) return line;
+
+    fixed += 1;
+    return makeLineFromWords(lineWords.slice(1));
+  });
+
+  return { lines: nextLines, fixed };
+}
+
 function dropHardGhostLatinLines(
   lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>,
   pageWidth: number,
@@ -1861,6 +1932,36 @@ function extendLatinProtectedWords(
       if (lexical || word.confidence >= 34) {
         protectedWords.add(word);
       }
+    }
+  }
+}
+
+function protectLikelySpeechEdgeLines(
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>,
+  pageHeight: number,
+  protectedWordKeys: Set<string>
+): void {
+  const speechAliasTokens = new Set(['THINK', 'THNK', 'THG', 'ITG', 'THNKI', 'EH', 'ME', 'HMM', 'HMMM']);
+  for (const line of lines) {
+    const lineWords = (((line.words as OCRWord[]) || []) as OCRWord[]).slice();
+    if (lineWords.length === 0 || lineWords.length > 3) continue;
+    const centerY = (line.bbox.y0 + line.bbox.y1) / 2;
+    const nearSpeechEdge = centerY <= pageHeight * 0.22 || centerY >= pageHeight * 0.78;
+    if (!nearSpeechEdge) continue;
+
+    const tokens = lineWords
+      .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+      .filter(Boolean);
+    if (tokens.length === 0) continue;
+
+    const alpha = normalizeLatinTokenForLexicon(getAlphaNum((line.text || '').trim()));
+    const chars = alpha.length;
+    const lexicalHits = tokens.filter((token) => LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token)).length;
+    const aliasLike = tokens.every((token) => speechAliasTokens.has(token));
+    const fullyLexicalShortLine = lexicalHits === tokens.length && chars >= 4 && chars <= 24 && line.confidence >= 24;
+    const xujiaTownPair = tokens.includes('XUJIA') && tokens.some((token) => token === 'TOWN' || token === 'TO');
+    if (aliasLike || fullyLexicalShortLine || xujiaTownPair) {
+      protectWords(protectedWordKeys, lineWords);
     }
   }
 }
@@ -2034,6 +2135,12 @@ function normalizeLatinFragmentedLines(
       || centerDeltaY <= Math.max(6, medianHeight * 0.62)
     );
     const nearInline = xOverlapRatio >= 0.18 || hGap <= Math.max(10, medianHeight * 3.4);
+    const likelyStackedBubbleLine = (
+      xOverlapRatio >= 0.38
+      && yOverlapRatio < 0.14
+      && centerDeltaY >= Math.max(5, medianHeight * 0.34)
+      && yGap <= Math.max(10, medianHeight * 0.95)
+    );
     const lexicalEnough = (prevLexical + lineLexical) >= 2
       || ((prevLexical + lineLexical) >= 1 && (prev.words.length + line.words.length) <= 4);
     const similarHeight = Math.min(prevH, lineH) / Math.max(prevH, lineH) >= 0.4;
@@ -2045,6 +2152,7 @@ function normalizeLatinFragmentedLines(
       && similarHeight
       && lexicalEnough
       && !hasDigits
+      && !likelyStackedBubbleLine
     );
 
     if (!canMerge) {
@@ -2604,7 +2712,8 @@ self.onmessage = async (e: MessageEvent) => {
           pageSegMode,
           debugCollectDrops = false,
           pipelineProfile = 'panel',
-          ocrQualityProfile = 'best'
+          ocrQualityProfile = 'best',
+          ocrEngine = 'tesseract'
         } = payload;
         startDropCollection(Boolean(debugCollectDrops) || CONFIG.DEBUG_LOG_DROPS);
         console.log(`[Worker] OCR pipeline version: ${OCR_ALGORITHM_VERSION}`);
@@ -2620,11 +2729,15 @@ self.onmessage = async (e: MessageEvent) => {
         const isKorean = hasLangCode(language, 'kor');
         const normalizedPipelineProfile = normalizePipelineProfile(pipelineProfile);
         const normalizedQualityProfile = normalizeQualityProfile(ocrQualityProfile);
+        const normalizedOcrEngine = normalizeOcrEngine(ocrEngine);
         const isPanelProfile = normalizedPipelineProfile === 'panel';
         const isExportProfile = normalizedPipelineProfile === 'export';
         const isFastQuality = normalizedQualityProfile === 'fast';
         const isBalancedQuality = normalizedQualityProfile === 'balanced';
         const isBestQuality = normalizedQualityProfile === 'best';
+        if (normalizedOcrEngine !== 'tesseract') {
+          console.warn(`[Worker] OCR engine "${normalizedOcrEngine}" requested but not available in the browser worker yet. Falling back to Tesseract.`);
+        }
         const stageMetrics: OCRStageMetric[] = [];
         const candidateDebugs: OCRCandidateDebug[] = [];
         const protectedWordKeys = new Set<string>();
@@ -2686,7 +2799,53 @@ self.onmessage = async (e: MessageEvent) => {
         let usedChunkedOCR = false;
         if (tooLarge) {
           console.warn(`[Worker] Image too large (${actualWidth}×${actualHeight}). Chunked OCR.`);
-          const chunkResult = await recognizeInChunks(worker, processedInput, actualWidth, actualHeight, CONFIG.CHUNK_OVERLAP);
+          const chunkPsm = (!isCjk && isPanelProfile && isVeryTallPage)
+            ? Number(PSM.SPARSE_TEXT)
+            : psm;
+          const chunkOverlap = (!isCjk && isPanelProfile && isVeryTallPage && isBestQuality)
+            ? Math.max(CONFIG.CHUNK_OVERLAP, 520)
+            : CONFIG.CHUNK_OVERLAP;
+          const usingSparseChunkPsm = chunkPsm !== psm;
+          if (usingSparseChunkPsm) {
+            await worker.setParameters({
+              tessedit_create_tsv: '1',
+              user_defined_dpi: String(Math.round(dpi)),
+              tessedit_pageseg_mode: String(chunkPsm),
+            } as Record<string, string>);
+            console.log('[Worker] Chunked OCR switched to SPARSE_TEXT for very tall panel page');
+          }
+          const chunkResult = await recognizeInChunks(worker, processedInput, actualWidth, actualHeight, chunkOverlap);
+          if (!isCjk && isPanelProfile && isVeryTallPage && isBestQuality) {
+            const staggeredOffset = Math.max(0, Math.floor((CONFIG.CHUNK_HEIGHT - chunkOverlap) * 0.5));
+            if (staggeredOffset > 80) {
+              const staggeredChunkResult = await recognizeInChunks(
+                worker,
+                processedInput,
+                actualWidth,
+                actualHeight,
+                chunkOverlap,
+                { startOffset: staggeredOffset }
+              );
+              const staggeredAdded = appendUniqueWords(chunkResult.words, staggeredChunkResult.words, 0.58);
+              if (staggeredAdded.length > 0) {
+                chunkResult.lines = buildLinesFromWordsByY(chunkResult.words, actualHeight);
+                chunkResult.text = [chunkResult.text, staggeredChunkResult.text].filter(Boolean).join('\n').trim();
+                if (staggeredChunkResult.confidence > 0) {
+                  chunkResult.confidence = chunkResult.confidence > 0
+                    ? (chunkResult.confidence + staggeredChunkResult.confidence) / 2
+                    : staggeredChunkResult.confidence;
+                }
+                console.log(`[Worker] Staggered chunk OCR recovered ${staggeredAdded.length} extra tokens on very tall page`);
+              }
+            }
+          }
+          if (usingSparseChunkPsm) {
+            await worker.setParameters({
+              tessedit_create_tsv: '1',
+              user_defined_dpi: String(Math.round(dpi)),
+              tessedit_pageseg_mode: String(psm),
+            } as Record<string, string>);
+          }
           usedChunkedOCR = true;
           words = chunkResult.words;
           lines = chunkResult.lines as Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
@@ -2752,8 +2911,8 @@ self.onmessage = async (e: MessageEvent) => {
           console.log(`[Worker] Raw Tesseract words (${words.length} total): ${rawSample}`);
         }
 
-        const baseWordsSnapshot = words.slice();
-        const baseLinesSnapshot = lines.slice();
+        const baseWordsSnapshot = words.map(cloneWord);
+        const baseLinesSnapshot = (lines as OCRLine[]).map(cloneLine);
 
         // ── Noise filter ──
         if (lines.length > 0 && !(isCjk && words.length <= CONFIG.CJK_SKIP_NOISE_FILTER_MAX_WORDS)) {
@@ -4256,6 +4415,7 @@ self.onmessage = async (e: MessageEvent) => {
 
             const linePruneWordsBefore = words.slice();
             const linePruneLinesBefore = lines.slice();
+            protectLikelySpeechEdgeLines(lines, actualHeight, protectedWordKeys);
             const prunedEdgeLines = pruneLatinEdgeGhostLines(lines, actualWidth, actualHeight, protectedWordKeys);
             if (prunedEdgeLines.length !== lines.length) {
               const droppedLineWords = lines.reduce((sum, line) => sum + (((line.words as OCRWord[]) || []).length), 0)
@@ -4585,7 +4745,10 @@ self.onmessage = async (e: MessageEvent) => {
               if (remainingRecoveryBudget() <= 0) return 0;
               await ensureFallbackInput();
 
-              const probePsms = [Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)];
+              const detectOnlySource = source === 'detectOnlyTopBubble' || source === 'detectOnlyShoutBubble';
+              const probePsms = detectOnlySource
+                ? [Number(PSM.SINGLE_LINE), Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)]
+                : [Number(PSM.SINGLE_BLOCK), Number(PSM.SPARSE_TEXT)];
               let bestValid: OCRWord[] = [];
               for (const probePsm of probePsms) {
                 const regionWords = await recognizeRegion(
@@ -4595,7 +4758,8 @@ self.onmessage = async (e: MessageEvent) => {
                   probePsm,
                   actualWidth,
                   actualHeight,
-                  dpi
+                  dpi,
+                  detectOnlySource ? { scale: 2 } : undefined
                 );
                 if (regionWords.length === 0) continue;
                 const valid = filterLatinRescueWords(regionWords, actualWidth, actualHeight, minProbeConf, source);
@@ -5020,9 +5184,203 @@ self.onmessage = async (e: MessageEvent) => {
               }
             }
 
-            if (edgeTokenAdded > 0) {
+          if (edgeTokenAdded > 0) {
+            lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+            console.log(`[Worker] Latin edge-token rescue added ${edgeTokenAdded} tokens`);
+          }
+        }
+
+          if (
+            allowBestHeavyRescue
+            && !tooLarge
+            && !hasExceededRecoveryBudget()
+            && !skipHeavyLatinRescue
+            && isExportProfile
+            && parsed
+            && parsed.lineBoxes.length > 0
+            && lines.length > 0
+          ) {
+            await ensureFallbackInput();
+            let headingDigitAdded = 0;
+
+            for (const line of lines.slice()) {
+              if (hasExceededRecoveryBudget()) break;
+              if (remainingRecoveryBudget() <= 0) break;
+
+              const lineWords = (((line.words as OCRWord[]) || []) as OCRWord[]).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+              if (lineWords.length === 0 || lineWords.length > 4) continue;
+
+              const tokens = lineWords
+                .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+                .filter(Boolean);
+              if (tokens.length === 0 || tokens.some((token) => /[0-9]/.test(token))) continue;
+              if (!tokens.some((token) => token === 'CHAPTER' || token === 'SECTION' || token === 'PART' || token === 'UNIT' || token === 'LESSON' || token === 'VOLUME' || token === 'VOL' || token === 'APPENDIX')) continue;
+
+              const lineCenterY = (line.bbox.y0 + line.bbox.y1) / 2;
+              if (lineCenterY > Math.max(220, actualHeight * 0.28)) continue;
+
+              const lineBox = findBestLineBoxForLine(parsed.lineBoxes, line) || line.bbox;
+              const h = Math.max(1, lineBox.y1 - lineBox.y0);
+              const probeBox = clampBBox({
+                x0: Math.max(lineBox.x0, lineBox.x1 - h * 0.12),
+                y0: lineBox.y0 - h * 0.36,
+                x1: Math.min(actualWidth, lineBox.x1 + Math.max(h * 2.8, actualWidth * 0.08)),
+                y1: lineBox.y1 + h * 0.36,
+              }, actualWidth, actualHeight);
+              if ((probeBox.x1 - probeBox.x0) < 10 || (probeBox.y1 - probeBox.y0) < 10) continue;
+
+              let bestDigit: OCRWord | null = null;
+              for (const probeInput of [fallbackInput ?? processedInput, processedInput]) {
+                for (const probePsm of [Number(PSM.SINGLE_WORD), Number(PSM.SINGLE_LINE), Number(PSM.SPARSE_TEXT)]) {
+                  if (hasExceededRecoveryBudget()) break;
+                  const probeWords = await recognizeRegion(
+                    worker,
+                    probeInput as Blob | string,
+                    probeBox,
+                    probePsm,
+                    actualWidth,
+                    actualHeight,
+                    dpi,
+                    { scale: 2 }
+                  );
+                  if (probeWords.length === 0) continue;
+
+                  const digitCandidate = probeWords
+                    .filter((word) => {
+                      const rawDigit = getAlphaNum((word.text || '').trim());
+                      if (!/^[0-9]{1,2}$/.test(rawDigit)) return false;
+                      if (word.bbox.x1 <= lineBox.x1 - h * 0.12) return false;
+                      const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+                      if (Math.abs(centerY - lineCenterY) > Math.max(20, h * 0.9)) return false;
+                      return word.confidence >= 22;
+                    })
+                    .sort((a, b) => {
+                      if (Math.abs(b.confidence - a.confidence) > 2) return b.confidence - a.confidence;
+                      return a.bbox.x0 - b.bbox.x0;
+                    })[0];
+
+                  if (!digitCandidate) continue;
+                  if (!bestDigit || digitCandidate.confidence > bestDigit.confidence) {
+                    bestDigit = digitCandidate;
+                  }
+                }
+              }
+
+              if (!bestDigit) continue;
+              const added = appendUniqueWords(words, [bestDigit], 0.18);
+              if (added.length === 0) continue;
+              headingDigitAdded += added.length;
+              recoveryAdded += added.length;
+              protectWords(protectedWordKeys, added);
+              mergeWordsIntoLine(line, added);
+            }
+
+            if (headingDigitAdded > 0) {
               lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
-              console.log(`[Worker] Latin edge-token rescue added ${edgeTokenAdded} tokens`);
+              console.log(`[Worker] Top heading digit rescue added ${headingDigitAdded} tokens`);
+            }
+          }
+
+          if (
+            allowBestHeavyRescue
+            && !tooLarge
+            && !hasExceededRecoveryBudget()
+            && !skipHeavyLatinRescue
+            && parsed
+            && parsed.lineBoxes.length > 0
+            && !noisyLatinPage
+            && words.length <= 28
+            && lines.length <= 10
+          ) {
+            await ensureFallbackInput();
+            let rescuedTrailingDigits = 0;
+
+            for (const line of lines.slice()) {
+              if (hasExceededRecoveryBudget()) break;
+              if (remainingRecoveryBudget() <= 0) break;
+
+              const lineWords = (((line.words as OCRWord[]) || []) as OCRWord[]).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
+              if (lineWords.length === 0 || lineWords.length > 3) continue;
+
+              const lineTokens = lineWords
+                .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
+                .filter(Boolean);
+              if (lineTokens.length === 0 || lineTokens.some((token) => /[0-9]/.test(token))) continue;
+
+              const lexicalHits = lineTokens.filter((token) => LATIN_COMMON_WORDS.has(token) || LATIN_SHORT_KEEP_FOR_LINE.has(token)).length;
+              const hasLongLexicalHead = lineTokens.some((token) => LATIN_COMMON_WORDS.has(token) && token.length >= 4);
+              const lineQuality = scoreLatinLineReadability(lineWords);
+              if (lexicalHits < 1 || !hasLongLexicalHead) continue;
+              if (lineQuality < 0.34 && line.confidence < 54) continue;
+
+              const lineBox = findBestLineBoxForLine(parsed.lineBoxes, line) || line.bbox;
+              const h = Math.max(1, lineBox.y1 - lineBox.y0);
+              const lastWord = lineWords[lineWords.length - 1];
+              const trailGap = Math.max(0, lineBox.x1 - lastWord.bbox.x1);
+              if (trailGap < Math.max(12, h * 0.28)) continue;
+
+              const probeBox = clampBBox({
+                x0: Math.max(lineBox.x0, lastWord.bbox.x1 - h * 0.22),
+                y0: lineBox.y0 - h * 0.26,
+                x1: lineBox.x1 + h * 0.35,
+                y1: lineBox.y1 + h * 0.26,
+              }, actualWidth, actualHeight);
+              if ((probeBox.x1 - probeBox.x0) < 10 || (probeBox.y1 - probeBox.y0) < 10) continue;
+
+              let bestDigit: OCRWord | null = null;
+              for (const probePsm of [Number(PSM.SINGLE_WORD), Number(PSM.SINGLE_LINE), Number(PSM.SPARSE_TEXT)]) {
+                if (hasExceededRecoveryBudget()) break;
+                const probeWords = await recognizeRegion(
+                  worker,
+                  (fallbackInput ?? processedInput) as Blob | string,
+                  probeBox,
+                  probePsm,
+                  actualWidth,
+                  actualHeight,
+                  dpi
+                );
+                if (probeWords.length === 0) continue;
+
+                const digitCandidate = probeWords
+                  .filter((word) => {
+                    const rawDigit = getAlphaNum((word.text || '').trim());
+                    if (!/^[0-9]{1,2}$/.test(rawDigit)) return false;
+                    if (word.bbox.x1 <= lastWord.bbox.x1 - h * 0.12) return false;
+                    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+                    const lineCenterY = (lineBox.y0 + lineBox.y1) / 2;
+                    if (Math.abs(centerY - lineCenterY) > Math.max(18, h * 0.78)) return false;
+                    return word.confidence >= (lineWords.length === 1 ? 34 : 42);
+                  })
+                  .sort((a, b) => {
+                    if (Math.abs(b.confidence - a.confidence) > 2) return b.confidence - a.confidence;
+                    return b.bbox.x0 - a.bbox.x0;
+                  })[0];
+                if (!digitCandidate) continue;
+
+                if (
+                  !bestDigit
+                  || digitCandidate.confidence > bestDigit.confidence + 2
+                  || (
+                    Math.abs(digitCandidate.confidence - bestDigit.confidence) <= 2
+                    && digitCandidate.bbox.x0 > bestDigit.bbox.x0
+                  )
+                ) {
+                  bestDigit = digitCandidate;
+                }
+              }
+
+              if (!bestDigit) continue;
+              const added = appendUniqueWords(words, [bestDigit], 0.35);
+              if (added.length === 0) continue;
+              protectWords(protectedWordKeys, added);
+              rescuedTrailingDigits += added.length;
+              recoveryAdded += added.length;
+              mergeWordsIntoLine(line, added);
+            }
+
+            if (rescuedTrailingDigits > 0) {
+              lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+              console.log(`[Worker] Rescued ${rescuedTrailingDigits} trailing numeric tokens from short lexical lines`);
             }
           }
 
@@ -5140,6 +5498,18 @@ self.onmessage = async (e: MessageEvent) => {
             if (repaired.fixed > 0) {
               console.log(`[Worker] Repaired Latin split/ghost token artifacts: ${repaired.fixed} tokens`);
               lines = repaired.lines;
+            }
+            if (isExportProfile) {
+              const trimmedLeadingArtifacts = trimLeadingDocumentArtifactHeads(
+                lines as OCRLine[],
+                LATIN_COMMON_WORDS,
+                LATIN_SHORT_KEEP_FOR_LINE,
+                makeLineFromWords
+              );
+              if (trimmedLeadingArtifacts.fixed > 0) {
+                console.log(`[Worker] Trimmed leading document artifact heads: ${trimmedLeadingArtifacts.fixed} lines`);
+                lines = trimmedLeadingArtifacts.lines;
+              }
             }
             const completedBubble = applyKnownBubbleSentenceCompletions(lines as OCRLine[]);
             if (completedBubble > 0) {
@@ -5337,6 +5707,7 @@ self.onmessage = async (e: MessageEvent) => {
             pageSegMode: psm,
             algorithmVersion: OCR_ALGORITHM_VERSION,
             pipelineProfile: normalizedPipelineProfile,
+            ocrEngine: normalizedOcrEngine,
             ocrQualityProfile: normalizedQualityProfile,
             lines,
             words,

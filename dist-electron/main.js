@@ -4,6 +4,8 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
+const os = require("os");
+const child_process = require("child_process");
 let db = null;
 function initDB() {
   if (db) return db;
@@ -408,6 +410,311 @@ const OCRCacheDAO = {
     };
   }
 };
+const EXTERNAL_ENGINES = ["paddleocr", "easyocr"];
+const bridgeDaemons = /* @__PURE__ */ new Map();
+const BENIGN_BRIDGE_STDERR_PATTERNS = [
+  /pin_memory.*no accelerator/i,
+  /connectivity check to the model hoster has been skipped/i,
+  /creating model:/i,
+  /model files already exist/i,
+  /no ccache found/i,
+  /resized image size .* exceeds max_side_limit/i,
+  /info:\s*could not find files for the given pattern/i
+];
+function resolveBridgeScriptPath() {
+  return electron.app.isPackaged ? path.join(process.resourcesPath, "ocr-bridge", "external_ocr_bridge.py") : path.join(electron.app.getAppPath(), "scripts", "external_ocr_bridge.py");
+}
+function resolvePythonExecutable(engine) {
+  if (engine === "paddleocr" && process.env.PADDLE_OCR_PYTHON_PATH) return process.env.PADDLE_OCR_PYTHON_PATH;
+  if (engine === "easyocr" && process.env.EASY_YOLO_OCR_PYTHON_PATH) return process.env.EASY_YOLO_OCR_PYTHON_PATH;
+  if (process.env.OCR_PYTHON_PATH) return process.env.OCR_PYTHON_PATH;
+  const localVenvPython = path.join(electron.app.getAppPath(), ".venv-ocr", "Scripts", "python.exe");
+  if (fs.existsSync(localVenvPython)) return localVenvPython;
+  return "python";
+}
+function resolveBridgeEnv() {
+  return {
+    ...process.env,
+    PYTHONUNBUFFERED: "1"
+  };
+}
+function isBenignBridgeStderr(message) {
+  const trimmed = message.trim();
+  if (!trimmed) return true;
+  return BENIGN_BRIDGE_STDERR_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+async function runBridgeOnce(engine, args) {
+  const scriptPath = resolveBridgeScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`OCR bridge script not found: ${scriptPath}`);
+  }
+  const pythonCmd = resolvePythonExecutable(engine);
+  return await new Promise((resolve, reject) => {
+    const child = child_process.spawn(pythonCmd, [scriptPath, ...args], {
+      cwd: path.dirname(scriptPath),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: resolveBridgeEnv(),
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      reject(error);
+    });
+    child.on("close", (code) => {
+      const trimmed = stdout.trim();
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || trimmed || `OCR bridge exited with code ${code}`));
+        return;
+      }
+      if (!trimmed) {
+        reject(new Error(stderr.trim() || "OCR bridge returned an empty response"));
+        return;
+      }
+      try {
+        resolve(JSON.parse(trimmed));
+      } catch (error) {
+        reject(new Error(`Failed to parse OCR bridge response: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    });
+  });
+}
+function teardownDaemon(engine, reason) {
+  const daemon = bridgeDaemons.get(engine);
+  if (!daemon) return;
+  bridgeDaemons.delete(engine);
+  for (const [, pending] of daemon.pending) {
+    pending.reject(reason ?? new Error(`OCR daemon for ${engine} stopped unexpectedly`));
+  }
+  daemon.pending.clear();
+  if (!daemon.child.killed) {
+    daemon.child.kill();
+  }
+}
+function handleDaemonStdout(engine, chunk) {
+  const daemon = bridgeDaemons.get(engine);
+  if (!daemon) return;
+  daemon.stdoutBuffer += chunk.toString();
+  const lines = daemon.stdoutBuffer.split(/\r?\n/);
+  daemon.stdoutBuffer = lines.pop() ?? "";
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let payload;
+    try {
+      payload = JSON.parse(line);
+    } catch {
+      console.warn(`[ocrBridge] Ignoring non-JSON stdout from ${engine}: ${line}`);
+      continue;
+    }
+    if (!payload.id) {
+      console.warn(`[ocrBridge] Ignoring daemon response without request id from ${engine}`);
+      continue;
+    }
+    const pending = daemon.pending.get(payload.id);
+    if (!pending) {
+      console.warn(`[ocrBridge] Received orphaned daemon response ${payload.id} from ${engine}`);
+      continue;
+    }
+    daemon.pending.delete(payload.id);
+    if (payload.ok) {
+      pending.resolve(payload);
+    } else {
+      pending.reject(new Error(payload.reason || `External OCR engine "${engine}" failed`));
+    }
+  }
+}
+function ensureDaemon(engine) {
+  const existing = bridgeDaemons.get(engine);
+  if (existing && !existing.child.killed) {
+    return existing;
+  }
+  const scriptPath = resolveBridgeScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`OCR bridge script not found: ${scriptPath}`);
+  }
+  const pythonCmd = resolvePythonExecutable(engine);
+  const child = child_process.spawn(pythonCmd, [scriptPath, "--stdio-server", "--action", "ocr", "--engine", engine], {
+    cwd: path.dirname(scriptPath),
+    stdio: ["pipe", "pipe", "pipe"],
+    env: resolveBridgeEnv(),
+    windowsHide: true
+  });
+  const daemon = {
+    engine,
+    child,
+    stdoutBuffer: "",
+    pending: /* @__PURE__ */ new Map()
+  };
+  child.stdout.on("data", (chunk) => {
+    handleDaemonStdout(engine, chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    const message = chunk.toString().trim();
+    if (message && !isBenignBridgeStderr(message)) {
+      console.warn(`[ocrBridge:${engine}] ${message}`);
+    }
+  });
+  child.on("error", (error) => {
+    teardownDaemon(engine, error);
+  });
+  child.on("close", (code, signal) => {
+    teardownDaemon(
+      engine,
+      new Error(`OCR daemon for ${engine} exited (code=${code ?? "null"}, signal=${signal ?? "null"})`)
+    );
+  });
+  bridgeDaemons.set(engine, daemon);
+  return daemon;
+}
+async function requestDaemon(engine, payload) {
+  const daemon = ensureDaemon(engine);
+  const id = crypto.randomUUID();
+  return await new Promise((resolve, reject) => {
+    daemon.pending.set(id, { resolve, reject });
+    try {
+      const stdin = daemon.child.stdin;
+      if (!stdin) {
+        throw new Error(`OCR daemon stdin is unavailable for ${engine}`);
+      }
+      stdin.write(`${JSON.stringify({ id, ...payload })}
+`);
+    } catch (error) {
+      daemon.pending.delete(id);
+      reject(error instanceof Error ? error : new Error(String(error)));
+      teardownDaemon(
+        engine,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  });
+}
+function isRecoverableDaemonError(error) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("daemon") || message.includes("stdin is unavailable") || message.includes("parse ocr bridge response");
+}
+function mimeTypeToExtension(mimeType) {
+  switch ((mimeType || "").toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/tiff":
+      return ".tiff";
+    case "image/bmp":
+      return ".bmp";
+    default:
+      return ".png";
+  }
+}
+function coerceImageBuffer(raw) {
+  if (raw instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(raw));
+  }
+  if (raw instanceof Uint8Array) {
+    return Buffer.from(raw);
+  }
+  throw new Error("Invalid OCR image payload");
+}
+async function getExternalOcrEngineStatuses() {
+  return await Promise.all(EXTERNAL_ENGINES.map(async (engine) => {
+    try {
+      const response = await runBridgeOnce(engine, ["--action", "status", "--engine", engine]);
+      return {
+        engine,
+        available: Boolean(response.available),
+        runtime: response.runtime || (engine === "paddleocr" ? "Python bridge" : "REST/adapter bridge"),
+        description: response.description || response.reason || "No status details returned"
+      };
+    } catch (error) {
+      return {
+        engine,
+        available: false,
+        runtime: engine === "paddleocr" ? "Python bridge" : "REST/adapter bridge",
+        description: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }));
+}
+async function runExternalOcr(payload) {
+  if (payload.engine !== "paddleocr" && payload.engine !== "easyocr") {
+    throw new Error(`Unsupported external OCR engine: ${payload.engine}`);
+  }
+  const engine = payload.engine;
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pdf-translator-ocr-"));
+  const imagePath = path.join(tempDir, `input${mimeTypeToExtension(payload.imageMimeType)}`);
+  try {
+    await fs.promises.writeFile(imagePath, coerceImageBuffer(payload.imageData));
+    const requestPayload = {
+      action: "ocr",
+      engine,
+      image: imagePath,
+      language: payload.language,
+      width: Math.round(payload.imageWidth),
+      height: Math.round(payload.imageHeight),
+      dpi: Math.round(payload.dpi),
+      ...typeof payload.pageSegMode === "number" ? { pageSegMode: payload.pageSegMode } : {},
+      ...payload.pipelineProfile ? { pipelineProfile: payload.pipelineProfile } : {},
+      ...payload.ocrQualityProfile ? { qualityProfile: payload.ocrQualityProfile } : {}
+    };
+    let response;
+    try {
+      response = await requestDaemon(engine, requestPayload);
+    } catch (error) {
+      if (!isRecoverableDaemonError(error)) {
+        throw error;
+      }
+      teardownDaemon(
+        engine,
+        error instanceof Error ? error : new Error(String(error))
+      );
+      response = await requestDaemon(engine, requestPayload);
+    }
+    if (!response.ok) {
+      throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+    }
+    return response;
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  }
+}
+async function prewarmExternalOcrEngine(engine, language = "eng") {
+  const response = await requestDaemon(engine, {
+    action: "prewarm",
+    engine,
+    language
+  });
+  if (!response.ok) {
+    throw new Error(response.reason || `Failed to prewarm external OCR engine "${engine}"`);
+  }
+  return {
+    ok: true,
+    engine,
+    runtime: response.runtime || "Python bridge",
+    description: response.description || `${engine} warmed`
+  };
+}
+function cancelExternalOcr(engine) {
+  if (engine) {
+    teardownDaemon(engine, new Error(`External OCR canceled for ${engine}`));
+    return;
+  }
+  disposeExternalOcrDaemons();
+}
+function disposeExternalOcrDaemons() {
+  for (const engine of Array.from(bridgeDaemons.keys())) {
+    teardownDaemon(engine);
+  }
+}
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path.join(process.env.DIST, "../public");
 let win;
@@ -456,6 +763,7 @@ function createWindow() {
   }
 }
 electron.app.on("window-all-closed", () => {
+  disposeExternalOcrDaemons();
   if (process.platform !== "darwin") {
     electron.app.quit();
   }
@@ -464,6 +772,9 @@ electron.app.on("activate", () => {
   if (electron.BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }
+});
+electron.app.on("before-quit", () => {
+  disposeExternalOcrDaemons();
 });
 electron.app.whenReady().then(() => {
   initDB();
@@ -734,6 +1045,58 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("fs:import-file error:", error);
       throw error;
+    }
+  });
+  electron.ipcMain.handle("ocr:get-engine-status", async () => {
+    try {
+      return await getExternalOcrEngineStatuses();
+    } catch (error) {
+      console.error("ocr:get-engine-status error:", error);
+      return [];
+    }
+  });
+  electron.ipcMain.handle("ocr:prewarm-engine", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !isValidString(payload.engine)) {
+      throw new Error("Invalid OCR prewarm payload");
+    }
+    if (payload.engine !== "paddleocr" && payload.engine !== "easyocr") {
+      throw new Error(`Unsupported OCR engine: ${payload.engine}`);
+    }
+    try {
+      return await prewarmExternalOcrEngine(payload.engine, isValidString(payload.language) ? payload.language : "eng");
+    } catch (error) {
+      console.error("ocr:prewarm-engine error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ocr:run-external", async (_, payload) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid OCR payload");
+    }
+    if (!isValidString(payload.engine) || !isValidString(payload.imageMimeType) || !isValidString(payload.language)) {
+      throw new Error("Invalid OCR payload: engine, imageMimeType, and language are required");
+    }
+    if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight) || !isValidNumber(payload.dpi)) {
+      throw new Error("Invalid OCR payload: imageWidth, imageHeight, and dpi must be positive numbers");
+    }
+    try {
+      return await runExternalOcr(payload);
+    } catch (error) {
+      console.error("ocr:run-external error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ocr:cancel-external", async (_, payload) => {
+    try {
+      const engine = payload?.engine;
+      if (engine && engine !== "paddleocr" && engine !== "easyocr") {
+        throw new Error(`Unsupported OCR engine: ${engine}`);
+      }
+      cancelExternalOcr(engine);
+      return true;
+    } catch (error) {
+      console.error("ocr:cancel-external error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:get-documents-by-tag", async (_, tagId) => {

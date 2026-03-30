@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useOCRTextLayerStore, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { 
   FileText, 
   Settings, 
@@ -9,6 +9,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
+import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 
 interface RightSidebarProps {
   isAiProcessing?: boolean;
@@ -27,7 +28,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   } = useProjectStore();
   
   const { options, setOptions, isProcessing } = useOCRTextLayerStore();
-  const currentProfile = OCR_PROFILES.find(p => p.dpi === options.dpi) || OCR_PROFILES[2];
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   return (
@@ -105,31 +105,24 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             </div>
           </div>
 
-          {/* Quality Profile */}
+          {/* OCR Timeout */}
           <div>
             <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
-              OCR Quality Profile
+              OCR Timeout (sec/page)
             </label>
-            <div className="grid grid-cols-3 gap-1">
-              {OCR_PROFILES.map(profile => (
-                <button 
-                  key={profile.id}
-                  onClick={() => setOptions({ dpi: profile.dpi, profile: profile.id as any })}
-                  disabled={isProcessing}
-                  className={`text-[10px] p-1.5 rounded border transition-all ${
-                    currentProfile.id === profile.id 
-                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] border-[#5CC6F2]/70 text-white'
-                      : 'bg-slate-900/60 border-white/12 text-slate-400 hover:bg-slate-900 hover:border-white/25'
-                  } disabled:opacity-50`}
-                  title={profile.description}
-                >
-                  {profile.name}
-                </button>
-              ))}
-            </div>
-            <p className="text-[9px] text-slate-500 mt-1">
-              DPI: {options.dpi} • {currentProfile.description}
-            </p>
+            <select
+              value={options.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
+              onChange={(e) => setOptions({ perPageTimeoutSec: Number(e.target.value) })}
+              disabled={isProcessing}
+              className="w-full bg-slate-900/70 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#2B9BFF]/60"
+            >
+              <option value={0}>No Limit</option>
+              <option value={30}>30s</option>
+              <option value={60}>60s</option>
+              <option value={120}>120s</option>
+              <option value={180}>180s</option>
+              <option value={300}>300s</option>
+            </select>
           </div>
 
           {/* AI Translate Button */}

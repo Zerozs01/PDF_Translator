@@ -132,7 +132,9 @@ export function parseTSV(tsv: string): {
 
     // Level 5 = word
     if (level === 5) {
-      const word = { text: normalizeOcrText(text), confidence: conf, bbox };
+      const normalizedText = normalizeOcrText(text);
+      if (!normalizedText.trim()) continue;
+      const word = { text: normalizedText, confidence: conf, bbox };
       words.push(word);
 
       const key = `${cols[COL.page] || '0'}-${cols[COL.block] || '0'}-${cols[COL.par] || '0'}-${cols[COL.line] || '0'}`;
@@ -224,7 +226,9 @@ export function buildLinesFromWordsByY(
 
   const heights = sorted.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
   const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
-  const yThreshold = Math.max(4, medianHeight * 0.6, pageHeight * 0.001);
+  const baseThreshold = Math.max(4, medianHeight * 0.6, pageHeight * 0.001);
+  const maxTallThreshold = Math.max(8, medianHeight * 1.1);
+  const yThreshold = Math.min(baseThreshold, maxTallThreshold);
 
   const lines: Array<{ words: OCRWord[]; bbox: BBox; confidenceSum: number }> = [];
   for (const word of sorted) {
@@ -235,7 +239,20 @@ export function buildLinesFromWordsByY(
       continue;
     }
     const lastCenterY = (last.bbox.y0 + last.bbox.y1) / 2;
-    if (Math.abs(centerY - lastCenterY) > yThreshold) {
+    const minH = Math.max(1, Math.min(last.bbox.y1 - last.bbox.y0, word.bbox.y1 - word.bbox.y0));
+    const yOverlap = Math.max(0, Math.min(last.bbox.y1, word.bbox.y1) - Math.max(last.bbox.y0, word.bbox.y0));
+    const yOverlapRatio = yOverlap / minH;
+    const xOverlapRatio = computeXOverlapRatio(last.bbox, word.bbox);
+    const baselineDelta = Math.abs(last.bbox.y1 - word.bbox.y1);
+    const yGap = word.bbox.y0 > last.bbox.y1
+      ? word.bbox.y0 - last.bbox.y1
+      : (last.bbox.y0 > word.bbox.y1 ? last.bbox.y0 - word.bbox.y1 : 0);
+    const likelyStackedLine = (
+      yOverlapRatio < 0.14
+      && xOverlapRatio >= 0.34
+      && (yGap >= Math.max(1, minH * 0.05) || baselineDelta >= Math.max(3, medianHeight * 0.3))
+    );
+    if (Math.abs(centerY - lastCenterY) > yThreshold || likelyStackedLine) {
       lines.push({ words: [word], bbox: { ...word.bbox }, confidenceSum: word.confidence });
       continue;
     }

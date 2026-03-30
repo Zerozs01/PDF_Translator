@@ -108,11 +108,14 @@ export const OCRRegressionHarness: React.FC = () => {
           undefined,
           undefined,
           true,
-          'panel'
+          'panel',
+          'best',
+          'tesseract'
         );
 
         ocrResult.pageNumber = fixture.page;
         ocrResult.pipelineProfile = 'panel';
+        ocrResult.ocrEngine = 'tesseract';
         setResult(ocrResult);
         setStatus('done');
         setHarnessResult({

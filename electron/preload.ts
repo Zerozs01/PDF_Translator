@@ -38,6 +38,10 @@ const ALLOWED_INVOKE_CHANNELS = [
   // File system
   'fs:read-file',
   'fs:open-file',
+  'ocr:get-engine-status',
+  'ocr:prewarm-engine',
+  'ocr:run-external',
+  'ocr:cancel-external',
   'gemini:translate', // For secure Gemini API calls via main process
 ] as const;
 
@@ -156,6 +160,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openFile: () => ipcRenderer.invoke('fs:open-file'),
     importFile: (payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) =>
       ipcRenderer.invoke('fs:import-file', payload),
+  },
+
+  ocr: {
+    getEngineStatus: () => ipcRenderer.invoke('ocr:get-engine-status'),
+    prewarmEngine: (payload: { engine: string; language?: string }) =>
+      ipcRenderer.invoke('ocr:prewarm-engine', payload),
+    cancelExternal: (payload?: { engine?: string }) =>
+      ipcRenderer.invoke('ocr:cancel-external', payload),
+    runExternal: (payload: {
+      engine: string;
+      imageData: Uint8Array | ArrayBuffer;
+      imageMimeType: string;
+      imageWidth: number;
+      imageHeight: number;
+      language: string;
+      dpi: number;
+      pageSegMode?: number;
+      pipelineProfile?: string;
+      ocrQualityProfile?: string;
+    }) => ipcRenderer.invoke('ocr:run-external', payload),
   },
 
   // Message handling (restricted to allowed channels)

@@ -60,6 +60,7 @@ export interface OCRDroppedWord {
 
 export type OCRPipelineProfile = "panel" | "export";
 export type OCRQualityProfile = "fast" | "balanced" | "best";
+export type OCREngine = "tesseract" | "paddleocr" | "easyocr";
 
 export interface OCRStageMetric {
   stage:
@@ -120,6 +121,7 @@ export interface OCRPageResult {
   pageSegMode?: number;
   algorithmVersion: number;
   pipelineProfile?: OCRPipelineProfile;
+  ocrEngine?: OCREngine;
   ocrQualityProfile?: OCRQualityProfile;
   lines: OCRLine[];
   words: OCRWord[];
@@ -132,7 +134,7 @@ export interface OCRPageResult {
 export interface OCROptions {
   language: string;
   dpi: number;
-  profile: "fast" | "balanced" | "best";
+  engine: OCREngine;
   pageSegMode?: number;
   skipIfTextExists?: boolean;
   /** Per-page OCR timeout in seconds (0 = no timeout). Default: 120 */

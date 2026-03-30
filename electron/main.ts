@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import { createHash } from 'crypto'
 import { initDB, DocumentDAO, OCRCacheDAO, TagDAO, ProjectDAO } from './db'
+import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
 
 // The built directory structure
 //
@@ -73,6 +74,7 @@ function createWindow() {
 }
 
 app.on('window-all-closed', () => {
+  disposeExternalOcrDaemons()
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -82,6 +84,10 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
+})
+
+app.on('before-quit', () => {
+  disposeExternalOcrDaemons()
 })
 
 app.whenReady().then(() => {
@@ -437,6 +443,76 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('fs:import-file error:', error);
       throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:get-engine-status', async () => {
+    try {
+      return await getExternalOcrEngineStatuses();
+    } catch (error) {
+      console.error('ocr:get-engine-status error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('ocr:prewarm-engine', async (_, payload: { engine: string; language?: string }) => {
+    if (!payload || typeof payload !== 'object' || !isValidString(payload.engine)) {
+      throw new Error('Invalid OCR prewarm payload');
+    }
+
+    if (payload.engine !== 'paddleocr' && payload.engine !== 'easyocr') {
+      throw new Error(`Unsupported OCR engine: ${payload.engine}`);
+    }
+
+    try {
+      return await prewarmExternalOcrEngine(payload.engine, isValidString(payload.language) ? payload.language : 'eng');
+    } catch (error) {
+      console.error('ocr:prewarm-engine error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:run-external', async (_, payload: {
+    engine: string;
+    imageData: Uint8Array | ArrayBuffer;
+    imageMimeType: string;
+    imageWidth: number;
+    imageHeight: number;
+    language: string;
+    dpi: number;
+    pageSegMode?: number;
+    pipelineProfile?: string;
+    ocrQualityProfile?: string;
+  }) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid OCR payload');
+    }
+    if (!isValidString(payload.engine) || !isValidString(payload.imageMimeType) || !isValidString(payload.language)) {
+      throw new Error('Invalid OCR payload: engine, imageMimeType, and language are required');
+    }
+    if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight) || !isValidNumber(payload.dpi)) {
+      throw new Error('Invalid OCR payload: imageWidth, imageHeight, and dpi must be positive numbers');
+    }
+
+    try {
+      return await runExternalOcr(payload);
+    } catch (error) {
+      console.error('ocr:run-external error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:cancel-external', async (_, payload?: { engine?: string }) => {
+    try {
+      const engine = payload?.engine;
+      if (engine && engine !== 'paddleocr' && engine !== 'easyocr') {
+        throw new Error(`Unsupported OCR engine: ${engine}`);
+      }
+      cancelExternalOcr(engine as 'paddleocr' | 'easyocr' | undefined);
+      return true;
+    } catch (error) {
+      console.error('ocr:cancel-external error:', error);
+      return false;
     }
   });
 

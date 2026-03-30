@@ -52,6 +52,12 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     openFile: () => electron.ipcRenderer.invoke("fs:open-file"),
     importFile: (payload) => electron.ipcRenderer.invoke("fs:import-file", payload)
   },
+  ocr: {
+    getEngineStatus: () => electron.ipcRenderer.invoke("ocr:get-engine-status"),
+    prewarmEngine: (payload) => electron.ipcRenderer.invoke("ocr:prewarm-engine", payload),
+    cancelExternal: (payload) => electron.ipcRenderer.invoke("ocr:cancel-external", payload),
+    runExternal: (payload) => electron.ipcRenderer.invoke("ocr:run-external", payload)
+  },
   // Message handling (restricted to allowed channels)
   on: (channel, callback) => {
     if (ALLOWED_RECEIVE_CHANNELS.includes(channel)) {

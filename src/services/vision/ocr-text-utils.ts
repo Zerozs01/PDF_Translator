@@ -25,7 +25,11 @@ export function isThaiLanguage(lang: string): boolean {
 
 export const normalizeOcrText = (text: string): string => {
   try {
-    return text.normalize('NFC');
+    const normalized = text.normalize('NFC');
+    if (/^\s*[|¦│┃￨︱︲]+\s*$/u.test(normalized)) return '';
+    return normalized
+      .replace(/^\s*[|¦│┃￨︱︲]+\s*(?=[\p{L}\p{N}])/u, '')
+      .replace(/^([\s\S]*?[\p{L}\p{N}])\s*[|¦│┃￨︱︲]+\s*$/u, '$1');
   } catch {
     return text;
   }

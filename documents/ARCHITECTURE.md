@@ -47,16 +47,17 @@ That alias fallback is important: it keeps older OCR cache usable across source-
   - DPI
   - `pageSegMode`
   - `algorithmVersion`
+  - `documentType`
   - `pipelineProfile`
   - `ocrQualityProfile`
-- Current-page OCR runs through `visionService.ocrForTextLayer(..., 'panel', profile)`.
+- Current-page OCR runs through `visionService.ocrForTextLayer(..., 'panel', profile, documentType)`.
 
 ### Export OCR
 
 - `SearchablePDFService.createSearchablePDF()` runs the batch/export path.
 - It optionally skips OCR when a PDF page already has a text layer.
 - It renders each page off-screen, performs OCR, persists cache, then injects invisible text through `TextLayerService`.
-- Export uses the `export` pipeline profile and the selected quality profile.
+- Export uses the `export` pipeline profile, selected quality profile, and the current `documentType`.
 
 ## 4. Worker Pipeline Truth
 
@@ -74,6 +75,7 @@ The current OCR behavior in `src/services/vision/worker.ts` is:
 5. Run bounded rescue stages when budget allows
    - vertical-gap / line-rescan / empty-line / gap recovery for CJK and Korean
    - multiple Latin rescue paths for sparse dialogue pages
+   - very tall chunked manga pages can switch to a focused fast path that skips the older wide sparse rescue bands
 6. Apply later filter passes
    - image-tile filtering
    - background-variance filtering

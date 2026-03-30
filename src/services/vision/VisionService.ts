@@ -8,7 +8,7 @@
  * - Error recovery
  */
 
-import { Region, OCRPageResult, OCRPipelineProfile, OCRQualityProfile } from '../../types';
+import { Region, OCREngine, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
@@ -73,6 +73,27 @@ const createAbortError = (reason: string = 'OCR job canceled'): Error => {
   const error = new Error(reason);
   (error as Error & { name?: string }).name = 'AbortError';
   return error;
+};
+
+const EXTERNAL_PADDLE_CHUNK_MIN_HEIGHT = 5200;
+const EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT = 2200;
+const EXTERNAL_PADDLE_CHUNK_OVERLAP = 220;
+
+const normalizeExternalDedupText = (text: string): string =>
+  String(text || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[|¦│┃￨︱︲]+/g, '')
+    .toUpperCase();
+
+const bboxCenterX = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => (bbox.x0 + bbox.x1) / 2;
+const bboxCenterY = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => (bbox.y0 + bbox.y1) / 2;
+const bboxWidth = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => Math.max(0, bbox.x1 - bbox.x0);
+const bboxHeight = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => Math.max(0, bbox.y1 - bbox.y0);
+const verticalOverlapRatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
+  const overlap = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+  const minHeight = Math.max(1, Math.min(bboxHeight(a), bboxHeight(b)));
+  return Math.max(0, overlap) / minHeight;
 };
 
 class VisionService {
@@ -425,6 +446,391 @@ class VisionService {
     this.progressCallback = callback;
   }
 
+  private async readInputAsBytes(imageUrl: string | Blob): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    const blob = typeof imageUrl === 'string'
+      ? await (await fetch(imageUrl)).blob()
+      : imageUrl;
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      mimeType: blob.type || 'image/png',
+    };
+  }
+
+  private isCjkOrThaiLanguage(language: string): boolean {
+    return language
+      .split('+')
+      .map((code) => code.trim())
+      .filter(Boolean)
+      .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+  }
+
+  private shouldChunkExternalOcr(
+    engine: OCREngine,
+    pipelineProfile: OCRPipelineProfile,
+    width: number,
+    height: number,
+    language: string
+  ): boolean {
+    if (engine !== 'paddleocr') return false;
+    if (pipelineProfile !== 'panel') return false;
+    const languageCodes = language
+      .split('+')
+      .map((code) => code.trim())
+      .filter(Boolean);
+    const isKorean = languageCodes.includes('kor');
+    if (!isKorean && this.isCjkOrThaiLanguage(language)) return false;
+    const longest = Math.max(width, height);
+    const shortest = Math.max(1, Math.min(width, height));
+    const aspectRatio = longest / shortest;
+    if (isKorean) {
+      return height >= 6200 || aspectRatio >= 2.4;
+    }
+    return height >= EXTERNAL_PADDLE_CHUNK_MIN_HEIGHT || aspectRatio >= 2.3;
+  }
+
+  private async blobToPng(blob: Blob): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      mimeType: blob.type || 'image/png',
+    };
+  }
+
+  private async canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        reject(new Error('Failed to encode OCR chunk image'));
+      }, 'image/png');
+    });
+  }
+
+  private offsetExternalWord(word: OCRWord, yOffset: number): OCRWord {
+    return {
+      ...word,
+      bbox: {
+        x0: word.bbox.x0,
+        y0: word.bbox.y0 + yOffset,
+        x1: word.bbox.x1,
+        y1: word.bbox.y1 + yOffset,
+      },
+    };
+  }
+
+  private offsetExternalLine(line: OCRLine, yOffset: number): OCRLine {
+    return {
+      ...line,
+      bbox: {
+        x0: line.bbox.x0,
+        y0: line.bbox.y0 + yOffset,
+        x1: line.bbox.x1,
+        y1: line.bbox.y1 + yOffset,
+      },
+      words: (line.words || []).map((word) => this.offsetExternalWord(word, yOffset)),
+    };
+  }
+
+  private shouldMergeDuplicateExternalLine(existing: OCRLine, candidate: OCRLine): boolean {
+    const existingText = normalizeExternalDedupText(existing.text);
+    const candidateText = normalizeExternalDedupText(candidate.text);
+    if (!existingText || !candidateText) return false;
+
+    const sameOrSubset = existingText === candidateText
+      || existingText.includes(candidateText)
+      || candidateText.includes(existingText);
+    if (!sameOrSubset) return false;
+
+    const centerDeltaY = Math.abs(bboxCenterY(existing.bbox) - bboxCenterY(candidate.bbox));
+    const centerDeltaX = Math.abs(bboxCenterX(existing.bbox) - bboxCenterX(candidate.bbox));
+    const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(candidate.bbox)));
+    const minWidth = Math.max(24, Math.min(bboxWidth(existing.bbox), bboxWidth(candidate.bbox)));
+    const overlap = verticalOverlapRatio(existing.bbox, candidate.bbox);
+
+    return (
+      overlap >= 0.68
+      || (
+        centerDeltaY <= minHeight * 0.9
+        && centerDeltaX <= minWidth * 0.6
+      )
+    );
+  }
+
+  private mergeExternalChunkResults(
+    results: OCRPageResult[],
+    width: number,
+    height: number,
+    dpi: number,
+    language: string,
+    pageSegMode: number | undefined,
+    pipelineProfile: OCRPipelineProfile,
+    ocrQualityProfile: OCRQualityProfile,
+    ocrEngine: OCREngine
+  ): OCRPageResult {
+    const mergedLines: OCRLine[] = [];
+    let runtimeMs = 0;
+    const isPaddlePanel = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
+
+    for (const result of results) {
+      runtimeMs += (result.debug?.runtimeMs || 0);
+      for (const line of result.lines || []) {
+        const text = String(line.text || '').trim();
+        if (!text) continue;
+        const existingIndex = mergedLines.findIndex((existing) => {
+          if (!isPaddlePanel) {
+            return this.shouldMergeDuplicateExternalLine(existing, line);
+          }
+
+          const existingText = normalizeExternalDedupText(existing.text);
+          const candidateText = normalizeExternalDedupText(line.text);
+          if (!existingText || existingText != candidateText) return false;
+
+          const overlap = verticalOverlapRatio(existing.bbox, line.bbox);
+          const centerDeltaY = Math.abs(bboxCenterY(existing.bbox) - bboxCenterY(line.bbox));
+          const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(line.bbox)));
+          return overlap >= 0.82 || centerDeltaY <= minHeight * 0.45;
+        });
+        if (existingIndex < 0) {
+          mergedLines.push(line);
+          continue;
+        }
+
+        const existing = mergedLines[existingIndex];
+        const candidateScore = text.length + (line.confidence || 0);
+        const existingScore = String(existing.text || '').trim().length + (existing.confidence || 0);
+        if (candidateScore > existingScore) {
+          mergedLines[existingIndex] = line;
+        }
+      }
+    }
+
+    mergedLines.sort((a, b) => {
+      if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+      return a.bbox.x0 - b.bbox.x0;
+    });
+
+    const mergedWords = mergedLines.flatMap((line) => line.words || []);
+    const confidences = mergedWords.length > 0
+      ? mergedWords.map((word) => word.confidence || 0)
+      : mergedLines.map((line) => line.confidence || 0);
+    const confidence = confidences.length > 0
+      ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
+      : 0;
+
+    return {
+      pageNumber: 0,
+      width,
+      height,
+      dpi,
+      language,
+      pageSegMode,
+      algorithmVersion: OCR_ALGORITHM_VERSION,
+      pipelineProfile,
+      ocrEngine,
+      ocrQualityProfile,
+      lines: mergedLines,
+      words: mergedWords,
+      text: mergedLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+      confidence,
+      debug: {
+        droppedWords: [],
+        dropCounts: {},
+        runtimeMs,
+      },
+    };
+  }
+
+  private async runExternalOcrForTextLayer(
+    imageUrl: string | Blob,
+    imageWidth: number,
+    imageHeight: number,
+    language: string,
+    dpi: number,
+    pageSegMode: number | undefined,
+    signal: AbortSignal | undefined,
+    pipelineProfile: OCRPipelineProfile,
+    ocrQualityProfile: OCRQualityProfile,
+    ocrEngine: OCREngine
+  ): Promise<OCRPageResult> {
+    const bridge = window.electronAPI?.ocr;
+    if (!bridge?.runExternal) {
+      throw new Error(`External OCR engine "${ocrEngine}" is not available in this runtime`);
+    }
+
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+
+    const onAbort = () => {
+      void bridge.cancelExternal?.({ engine: ocrEngine }).catch(() => {
+        // Best effort external OCR cancellation.
+      });
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      const { bytes, mimeType } = await this.readInputAsBytes(imageUrl);
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+      if (this.shouldChunkExternalOcr(ocrEngine, pipelineProfile, imageWidth, imageHeight, language)) {
+        const sourceBytes = new Uint8Array(bytes.byteLength);
+        sourceBytes.set(bytes);
+        const sourceBlob = new Blob([sourceBytes], { type: mimeType || 'image/png' });
+        const bitmap = await createImageBitmap(sourceBlob);
+        let lastChunkError: Error | null = null;
+        try {
+          const chunkHeight = Math.min(
+            Math.max(EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT, Math.round(bitmap.width * 1.05)),
+            Math.max(EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT, Math.round(bitmap.height * 0.48)),
+          );
+          const overlap = Math.min(
+            EXTERNAL_PADDLE_CHUNK_OVERLAP,
+            Math.max(180, Math.round(chunkHeight * 0.12)),
+          );
+          const chunkResults: OCRPageResult[] = [];
+
+          for (let yOffset = 0, index = 0; yOffset < bitmap.height; index += 1) {
+            if (signal?.aborted) {
+              throw createAbortError();
+            }
+
+            const actualHeight = Math.min(chunkHeight, bitmap.height - yOffset);
+            const chunkCanvas = document.createElement('canvas');
+            chunkCanvas.width = bitmap.width;
+            chunkCanvas.height = actualHeight;
+            const chunkCtx = chunkCanvas.getContext('2d', { alpha: false });
+            if (!chunkCtx) {
+              throw new Error('Cannot get canvas context for OCR chunk');
+            }
+            chunkCtx.fillStyle = '#FFFFFF';
+            chunkCtx.fillRect(0, 0, chunkCanvas.width, chunkCanvas.height);
+            chunkCtx.imageSmoothingEnabled = true;
+            chunkCtx.imageSmoothingQuality = 'high';
+            chunkCtx.drawImage(
+              bitmap,
+              0,
+              yOffset,
+              bitmap.width,
+              actualHeight,
+              0,
+              0,
+              bitmap.width,
+              actualHeight,
+            );
+
+            const chunkBlob = await this.canvasToPngBlob(chunkCanvas);
+            const chunkImage = await this.blobToPng(chunkBlob);
+            let result;
+            try {
+              result = await bridge.runExternal({
+                engine: ocrEngine,
+                imageData: chunkImage.bytes,
+                imageMimeType: chunkImage.mimeType,
+                imageWidth: bitmap.width,
+                imageHeight: actualHeight,
+                language,
+                dpi,
+                pageSegMode,
+                pipelineProfile,
+                ocrQualityProfile,
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (message.includes('No text boxes returned from PaddleOCR')) {
+                lastChunkError = error instanceof Error ? error : new Error(message);
+                continue;
+              }
+              throw error;
+            }
+
+            chunkResults.push({
+              pageNumber: 0,
+              width: bitmap.width,
+              height: actualHeight,
+              dpi,
+              language,
+              pageSegMode: result.pageSegMode ?? pageSegMode,
+              algorithmVersion: OCR_ALGORITHM_VERSION,
+              pipelineProfile,
+              ocrEngine,
+              ocrQualityProfile,
+              lines: (result.lines || []).map((line) => this.offsetExternalLine(line, yOffset)),
+              words: [],
+              text: result.text || '',
+              confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+              debug: result.debug,
+            });
+
+            if (yOffset + actualHeight >= bitmap.height) {
+              break;
+            }
+            yOffset += Math.max(1, actualHeight - overlap);
+          }
+
+          if (chunkResults.length > 0) {
+            return this.mergeExternalChunkResults(
+              chunkResults,
+              imageWidth,
+              imageHeight,
+              dpi,
+              language,
+              pageSegMode,
+              pipelineProfile,
+              ocrQualityProfile,
+              ocrEngine,
+            );
+          }
+
+          if (lastChunkError) {
+            throw lastChunkError;
+          }
+        } finally {
+          bitmap.close?.();
+        }
+      }
+
+      const result = await bridge.runExternal({
+        engine: ocrEngine,
+        imageData: bytes,
+        imageMimeType: mimeType,
+        imageWidth,
+        imageHeight,
+        language,
+        dpi,
+        pageSegMode,
+        pipelineProfile,
+        ocrQualityProfile,
+      });
+
+      return {
+        pageNumber: 0,
+        width: imageWidth,
+        height: imageHeight,
+        dpi,
+        language,
+        pageSegMode: result.pageSegMode ?? pageSegMode,
+        algorithmVersion: OCR_ALGORITHM_VERSION,
+        pipelineProfile,
+        ocrEngine,
+        ocrQualityProfile,
+        lines: result.lines || [],
+        words: result.words || [],
+        text: result.text || '',
+        confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+        debug: result.debug,
+      };
+    } catch (error) {
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
   /**
    * OCR for Text Layer Overlay
    * Returns word-level bounding boxes for precise text positioning
@@ -439,8 +845,24 @@ class VisionService {
     signal?: AbortSignal,
     debugCollectDrops: boolean = false,
     pipelineProfile: OCRPipelineProfile = 'panel',
-    ocrQualityProfile: OCRQualityProfile = 'best'
+    ocrQualityProfile: OCRQualityProfile = 'best',
+    ocrEngine: OCREngine = 'tesseract'
   ): Promise<OCRPageResult> {
+    if (ocrEngine !== 'tesseract') {
+      return this.runExternalOcrForTextLayer(
+        imageUrl,
+        imageWidth,
+        imageHeight,
+        language,
+        dpi,
+        pageSegMode,
+        signal,
+        pipelineProfile,
+        ocrQualityProfile,
+        ocrEngine
+      );
+    }
+
     return this.sendMessage('OCR_FOR_TEXT_LAYER', {
       imageUrl,
       imageWidth,
@@ -450,7 +872,8 @@ class VisionService {
       pageSegMode,
       debugCollectDrops,
       pipelineProfile,
-      ocrQualityProfile
+      ocrQualityProfile,
+      ocrEngine
     }, { signal });
   }
 

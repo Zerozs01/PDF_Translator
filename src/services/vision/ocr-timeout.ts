@@ -4,6 +4,16 @@ export const OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT = 300000;
 export const OCR_WORKER_RETRY_ATTEMPTS_DEFAULT = 2;
 export const OCR_WORKER_RETRY_DELAY_MS_DEFAULT = 1000;
 
+export function resolvePerPageTimeoutSec(timeoutSec?: number, engine: string = 'tesseract'): number | undefined {
+  const normalized = typeof timeoutSec === 'number' && timeoutSec > 0
+    ? timeoutSec
+    : undefined;
+  if (engine !== 'tesseract') {
+    return Math.max(normalized ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT, 300);
+  }
+  return normalized;
+}
+
 export function getPerPageTimeoutMs(timeoutSec?: number): number {
   if ((timeoutSec ?? 0) <= 0) return 0;
   return Math.max(0, Math.floor(timeoutSec as number * 1000));
