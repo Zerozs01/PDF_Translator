@@ -419,10 +419,19 @@ const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /model files already exist/i,
   /no ccache found/i,
   /resized image size .* exceeds max_side_limit/i,
-  /info:\s*could not find files for the given pattern/i
+  /info:\s*could not find files for the given pattern/i,
+  /lang.*ocr_version.*will be ignored when model names/i
 ];
 function resolveBridgeScriptPath() {
   return electron.app.isPackaged ? path.join(process.resourcesPath, "ocr-bridge", "external_ocr_bridge.py") : path.join(electron.app.getAppPath(), "scripts", "external_ocr_bridge.py");
+}
+function resolveBridgeScriptSignature(scriptPath) {
+  try {
+    const stat = fs.statSync(scriptPath);
+    return `${scriptPath}:${Math.floor(stat.mtimeMs)}`;
+  } catch {
+    return `${scriptPath}:unknown`;
+  }
 }
 function resolvePythonExecutable(engine) {
   if (engine === "paddleocr" && process.env.PADDLE_OCR_PYTHON_PATH) return process.env.PADDLE_OCR_PYTHON_PATH;
@@ -531,13 +540,17 @@ function handleDaemonStdout(engine, chunk) {
   }
 }
 function ensureDaemon(engine) {
-  const existing = bridgeDaemons.get(engine);
-  if (existing && !existing.child.killed) {
-    return existing;
-  }
   const scriptPath = resolveBridgeScriptPath();
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`OCR bridge script not found: ${scriptPath}`);
+  }
+  const scriptSignature = resolveBridgeScriptSignature(scriptPath);
+  const existing = bridgeDaemons.get(engine);
+  if (existing && !existing.child.killed) {
+    if (existing.scriptPath === scriptPath && existing.scriptSignature === scriptSignature) {
+      return existing;
+    }
+    teardownDaemon(engine, new Error(`OCR bridge script changed for ${engine}; restarting daemon`));
   }
   const pythonCmd = resolvePythonExecutable(engine);
   const child = child_process.spawn(pythonCmd, [scriptPath, "--stdio-server", "--action", "ocr", "--engine", engine], {
@@ -550,7 +563,9 @@ function ensureDaemon(engine) {
     engine,
     child,
     stdoutBuffer: "",
-    pending: /* @__PURE__ */ new Map()
+    pending: /* @__PURE__ */ new Map(),
+    scriptPath,
+    scriptSignature
   };
   child.stdout.on("data", (chunk) => {
     handleDaemonStdout(engine, chunk);
@@ -599,6 +614,10 @@ function isRecoverableDaemonError(error) {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
   return message.includes("daemon") || message.includes("stdin is unavailable") || message.includes("parse ocr bridge response");
+}
+function isNoTextBoxesError(error) {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes("no text boxes returned from paddleocr");
 }
 function mimeTypeToExtension(mimeType) {
   switch ((mimeType || "").toLowerCase()) {
@@ -667,9 +686,26 @@ async function runExternalOcr(payload) {
       ...payload.ocrQualityProfile ? { qualityProfile: payload.ocrQualityProfile } : {}
     };
     let response;
+    const emptyNoTextResponse = {
+      ok: true,
+      engine,
+      words: [],
+      lines: [],
+      text: "",
+      confidence: 0,
+      ...typeof payload.pageSegMode === "number" ? { pageSegMode: payload.pageSegMode } : {},
+      debug: {
+        dropCounts: {},
+        droppedWords: [],
+        skipReason: "noTextBoxesFromPaddleOCR"
+      }
+    };
     try {
       response = await requestDaemon(engine, requestPayload);
     } catch (error) {
+      if (isNoTextBoxesError(error)) {
+        return emptyNoTextResponse;
+      }
       if (!isRecoverableDaemonError(error)) {
         throw error;
       }
@@ -677,7 +713,14 @@ async function runExternalOcr(payload) {
         engine,
         error instanceof Error ? error : new Error(String(error))
       );
-      response = await requestDaemon(engine, requestPayload);
+      try {
+        response = await requestDaemon(engine, requestPayload);
+      } catch (retryError) {
+        if (isNoTextBoxesError(retryError)) {
+          return emptyNoTextResponse;
+        }
+        throw retryError;
+      }
     }
     if (!response.ok) {
       throw new Error(response.reason || `External OCR engine "${engine}" failed`);

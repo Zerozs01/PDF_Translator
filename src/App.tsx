@@ -37,8 +37,8 @@ import { visionService } from './services/vision/VisionService';
 import './types/electron.d'; // Import type declarations
 
 type GlobalPrewarmState = typeof globalThis & {
-  __pdfTranslatorExternalPrewarmStarted?: boolean;
-  __pdfTranslatorExternalPrewarmPromise?: Promise<void>;
+  __pdfTranslatorExternalPrewarmStartedKeys?: Set<string>;
+  __pdfTranslatorExternalPrewarmInFlight?: Map<string, Promise<void>>;
 };
 
 // --- Gemini API: Secure IPC to Main Process ---
@@ -88,6 +88,13 @@ export default function App() {
     translationMode,
     setTranslationMode
   } = useProjectStore();
+
+  const normalizePrewarmLanguage = (value: string): string => value
+    .split('+')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .sort()
+    .join('+') || 'eng';
   
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [isVisionReady, setIsVisionReady] = useState(false);
@@ -117,32 +124,49 @@ export default function App() {
   useEffect(() => {
     if (showOCRHarness) return undefined;
     if (!window.electronAPI?.ocr?.prewarmEngine) return undefined;
+    // Avoid competing with document open/render.
+    // OCRTextLayerPanel handles warm-up once a file is opened.
+    if (file) return undefined;
 
     const globalPrewarm = globalThis as GlobalPrewarmState;
-    if (globalPrewarm.__pdfTranslatorExternalPrewarmStarted) {
-      return undefined;
+    if (!globalPrewarm.__pdfTranslatorExternalPrewarmStartedKeys) {
+      globalPrewarm.__pdfTranslatorExternalPrewarmStartedKeys = new Set<string>();
+    }
+    if (!globalPrewarm.__pdfTranslatorExternalPrewarmInFlight) {
+      globalPrewarm.__pdfTranslatorExternalPrewarmInFlight = new Map<string, Promise<void>>();
     }
 
+    const normalizedLanguage = normalizePrewarmLanguage(ocrLanguage || 'eng');
+    // Keep startup prewarm lightweight; warm primary engine only.
+    const targetEngines: Array<'paddleocr' | 'easyocr'> = ['paddleocr'];
+
     const timer = setTimeout(() => {
-      if (globalPrewarm.__pdfTranslatorExternalPrewarmStarted) return;
-      globalPrewarm.__pdfTranslatorExternalPrewarmStarted = true;
-      globalPrewarm.__pdfTranslatorExternalPrewarmPromise = (async () => {
-        try {
-          await window.electronAPI.ocr.prewarmEngine({ engine: 'easyocr', language: ocrLanguage || 'eng' });
-        } catch (error) {
-          console.warn('EasyOCR background prewarm failed:', error);
+      for (const engine of targetEngines) {
+        const warmKey = `${engine}:${normalizedLanguage}`;
+        if (globalPrewarm.__pdfTranslatorExternalPrewarmStartedKeys?.has(warmKey)) {
+          continue;
         }
-        try {
-          await window.electronAPI.ocr.prewarmEngine({ engine: 'paddleocr', language: ocrLanguage || 'eng' });
-        } catch (error) {
-          console.warn('PaddleOCR background prewarm failed:', error);
+        if (globalPrewarm.__pdfTranslatorExternalPrewarmInFlight?.has(warmKey)) {
+          continue;
         }
-      })();
-      void globalPrewarm.__pdfTranslatorExternalPrewarmPromise;
-    }, 1500);
+
+        const warmPromise = (async () => {
+          try {
+            await window.electronAPI.ocr.prewarmEngine({ engine, language: normalizedLanguage });
+            globalPrewarm.__pdfTranslatorExternalPrewarmStartedKeys?.add(warmKey);
+          } catch (error) {
+            console.warn(`${engine} background prewarm failed (${normalizedLanguage}):`, error);
+          } finally {
+            globalPrewarm.__pdfTranslatorExternalPrewarmInFlight?.delete(warmKey);
+          }
+        })();
+
+        globalPrewarm.__pdfTranslatorExternalPrewarmInFlight?.set(warmKey, warmPromise);
+      }
+    }, 2200);
 
     return () => clearTimeout(timer);
-  }, [ocrLanguage, showOCRHarness]);
+  }, [file, ocrLanguage, showOCRHarness]);
 
   // Update editedName when file changes
   useEffect(() => {
@@ -188,15 +212,15 @@ export default function App() {
   };
 
   return (
-    <div className="relative flex flex-col h-screen w-screen bg-[#04060f] text-slate-100 overflow-hidden font-sans">
+    <div className="relative flex flex-col h-screen w-screen bg-[#0b0f16] text-slate-100 overflow-hidden font-sans">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -left-24 -top-24 h-[22rem] w-[22rem] rounded-full bg-[#2B9BFF]/20 blur-3xl" />
         <div className="absolute -right-24 top-1/3 h-[24rem] w-[24rem] rounded-full bg-[#FF7E67]/12 blur-3xl" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(43,155,255,0.12),transparent_46%),linear-gradient(130deg,rgba(4,6,15,0.96)_0%,rgba(6,9,20,0.98)_55%,rgba(5,7,14,0.99)_100%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(43,155,255,0.08),transparent_46%),linear-gradient(130deg,rgba(11,15,22,0.96)_0%,rgba(20,23,30,0.98)_55%,rgba(12,15,20,0.99)_100%)]" />
       </div>
       
       {/* HEADER TOOLBAR - Google Docs Style */}
-      <header className="relative z-10 h-12 bg-slate-950/65 border-b border-white/10 backdrop-blur-xl flex items-center px-2 gap-1 shrink-0">
+      <header className="relative z-10 h-12 bg-[#171b23]/78 border-b border-white/10 backdrop-blur-xl flex items-center px-2 gap-1 shrink-0">
         {/* Home Button */}
         <button 
           onClick={handleBackToHome}
@@ -321,7 +345,7 @@ export default function App() {
         )}
 
         {/* 2. MAIN WORKSPACE (Canvas) */}
-        <main className="flex-1 relative overflow-hidden bg-[#050b1d]">
+        <main className="flex-1 relative overflow-hidden bg-[#313741]">
           <React.Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500">Loading Canvas...</div>}>
             {file.type === 'application/pdf' ? (
               <PDFCanvas />

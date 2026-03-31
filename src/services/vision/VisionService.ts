@@ -8,7 +8,7 @@
  * - Error recovery
  */
 
-import { Region, OCREngine, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
+import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
@@ -95,6 +95,108 @@ const verticalOverlapRatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['
   const minHeight = Math.max(1, Math.min(bboxHeight(a), bboxHeight(b)));
   return Math.max(0, overlap) / minHeight;
 };
+
+const horizontalOverlapRatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
+  const overlap = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+  const minWidth = Math.max(1, Math.min(bboxWidth(a), bboxWidth(b)));
+  return Math.max(0, overlap) / minWidth;
+};
+
+const horizontalContainmentRatio = (inner: OCRWord['bbox'] | OCRLine['bbox'], outer: OCRWord['bbox'] | OCRLine['bbox']): number => {
+  const innerWidth = Math.max(1, bboxWidth(inner));
+  const overlap = Math.min(inner.x1, outer.x1) - Math.max(inner.x0, outer.x0);
+  return Math.max(0, overlap) / innerWidth;
+};
+
+const normalizeMultilingualToken = (text: string): string =>
+  String(text || '').replace(/[^A-Za-z0-9\uAC00-\uD7A3]+/g, '').toUpperCase();
+
+const hasHangulChars = (text: string): boolean => /[\uAC00-\uD7A3]/.test(String(text || ''));
+
+const normalizeKoreanDedupToken = (text: string): string => {
+  const normalized = normalizeMultilingualToken(text);
+  const hangulOnly = normalized.replace(/[^\uAC00-\uD7A3]+/g, '');
+  return hangulOnly || normalized;
+};
+
+const buildBigrams = (value: string): Set<string> => {
+  const compact = String(value || '').trim();
+  const grams = new Set<string>();
+  if (!compact) return grams;
+  if (compact.length === 1) {
+    grams.add(compact);
+    return grams;
+  }
+  for (let i = 0; i < compact.length - 1; i += 1) {
+    grams.add(compact.slice(i, i + 2));
+  }
+  return grams;
+};
+
+const diceSimilarity = (a: string, b: string): number => {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+
+  const aBigrams = buildBigrams(a);
+  const bBigrams = buildBigrams(b);
+  if (aBigrams.size === 0 || bBigrams.size === 0) return 0;
+
+  let overlap = 0;
+  for (const gram of aBigrams) {
+    if (bBigrams.has(gram)) overlap += 1;
+  }
+
+  return (2 * overlap) / (aBigrams.size + bBigrams.size);
+};
+
+const boundedLevenshteinDistance = (a: string, b: string, maxDistance: number): number => {
+  if (a === b) return 0;
+  if (maxDistance < 0) return Number.MAX_SAFE_INTEGER;
+
+  const lenA = a.length;
+  const lenB = b.length;
+  if (Math.abs(lenA - lenB) > maxDistance) {
+    return maxDistance + 1;
+  }
+
+  let prev = new Array<number>(lenB + 1);
+  let curr = new Array<number>(lenB + 1);
+  for (let j = 0; j <= lenB; j += 1) {
+    prev[j] = j;
+  }
+
+  for (let i = 1; i <= lenA; i += 1) {
+    curr[0] = i;
+    let rowMin = curr[0];
+
+    for (let j = 1; j <= lenB; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost,
+      );
+      if (curr[j] < rowMin) {
+        rowMin = curr[j];
+      }
+    }
+
+    if (rowMin > maxDistance) {
+      return maxDistance + 1;
+    }
+
+    [prev, curr] = [curr, prev];
+  }
+
+  return prev[lenB];
+};
+
+const isCjkLikeLanguage = (language: string): boolean =>
+  String(language || '')
+    .split('+')
+    .map((code) => code.trim())
+    .filter(Boolean)
+    .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
 class VisionService {
   private workers: WorkerSlot[] = [];
@@ -520,8 +622,9 @@ class VisionService {
   }
 
   private offsetExternalLine(line: OCRLine, yOffset: number): OCRLine {
+    const lineWithHints = line as OCRLine & { _sortY?: number; _sortX?: number };
     return {
-      ...line,
+      ...lineWithHints,
       bbox: {
         x0: line.bbox.x0,
         y0: line.bbox.y0 + yOffset,
@@ -529,6 +632,8 @@ class VisionService {
         y1: line.bbox.y1 + yOffset,
       },
       words: (line.words || []).map((word) => this.offsetExternalWord(word, yOffset)),
+      ...(typeof lineWithHints._sortY === 'number' ? { _sortY: lineWithHints._sortY + yOffset } : {}),
+      ...(typeof lineWithHints._sortX === 'number' ? { _sortX: lineWithHints._sortX } : {}),
     };
   }
 
@@ -557,6 +662,228 @@ class VisionService {
     );
   }
 
+  private pruneLikelyOrphanCjkFragments(lines: OCRLine[]): OCRLine[] {
+    if (lines.length <= 1) return lines;
+
+    return lines.filter((line) => {
+      const token = normalizeMultilingualToken(line.text || '');
+      const rawText = String(line.text || '').trim();
+      const hasTerminalPunct = /[!?…\.]+$/u.test(rawText);
+      if (!hasHangulChars(rawText) || token.length > 2 || token.length === 0 || hasTerminalPunct) {
+        return true;
+      }
+      const lineConfidence = Number(line.confidence || 0);
+      if (lineConfidence > 97) {
+        return true;
+      }
+
+      const supporters = lines.filter((other) => {
+        if (other === line) return false;
+        const otherToken = normalizeMultilingualToken(other.text || '');
+        if (!hasHangulChars(other.text || '')) return false;
+        if (otherToken.length < token.length + 2) return false;
+        if (!token || token[0] !== otherToken[0]) return false;
+
+        const centerDelta = Math.abs(bboxCenterY(other.bbox) - bboxCenterY(line.bbox));
+        const minHeight = Math.max(8, Math.min(bboxHeight(other.bbox), bboxHeight(line.bbox)));
+        const nearbyBand = centerDelta <= Math.max(120, minHeight * 6.0);
+        if (!nearbyBand) return false;
+
+        const overlapX = horizontalOverlapRatio(line.bbox, other.bbox);
+        const overlapY = verticalOverlapRatio(line.bbox, other.bbox);
+        const containedX = horizontalContainmentRatio(line.bbox, other.bbox) >= 0.38;
+        const narrowFragment = bboxWidth(line.bbox) <= bboxWidth(other.bbox) * 0.62;
+
+        return narrowFragment && (containedX || overlapX >= 0.12) && overlapY >= 0.04;
+      });
+
+      return supporters.length === 0;
+    });
+  }
+
+  private dropKoreanParticleShadowLines(lines: OCRLine[]): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) {
+      return { lines, dropped: [] };
+    }
+
+    const terminalParticles = new Set(['\uC774', '\uAC00', '\uC740', '\uB294', '\uC744', '\uB97C', '\uC5D0', '\uAC8C', '\uB3C4', '\uB85C', '\uC640', '\uACFC', '\uC758', '\uC57C']);
+    const infos = lines.map((line) => {
+      const rawText = String(line.text || '').trim();
+      const token = normalizeMultilingualToken(rawText);
+      const hangulToken = token.replace(/[^\uAC00-\uD7A3]+/g, '');
+      const terminal = hangulToken.slice(-1);
+      const stem = terminalParticles.has(terminal) ? hangulToken.slice(0, -1) : hangulToken;
+      return {
+        rawText,
+        hangulToken,
+        stem,
+        terminal,
+      };
+    });
+
+    const kept: OCRLine[] = [];
+    const dropped: OCRDroppedWord[] = [];
+
+    lines.forEach((line, index) => {
+      const info = infos[index];
+      const rawText = info.rawText;
+      if (!rawText || !hasHangulChars(rawText)) {
+        kept.push(line);
+        return;
+      }
+
+      if (/[!?\u2026\.]+$/u.test(rawText)) {
+        kept.push(line);
+        return;
+      }
+
+      const tokenLength = info.hangulToken.length;
+      if (tokenLength < 2 || tokenLength > 4) {
+        kept.push(line);
+        return;
+      }
+
+      if (info.stem.length < 2) {
+        kept.push(line);
+        return;
+      }
+
+      const lineConfidence = Number(line.confidence || 0);
+      if (lineConfidence > 97) {
+        kept.push(line);
+        return;
+      }
+
+      let dropAsShadow = false;
+      for (let otherIndex = 0; otherIndex < lines.length; otherIndex += 1) {
+        if (otherIndex === index) continue;
+
+        const other = lines[otherIndex];
+        const otherInfo = infos[otherIndex];
+        if (!otherInfo.hangulToken || otherInfo.hangulToken.length < tokenLength + 2) {
+          continue;
+        }
+        if (!otherInfo.hangulToken.startsWith(info.stem)) {
+          continue;
+        }
+
+        const centerDelta = Math.abs(bboxCenterY(other.bbox) - bboxCenterY(line.bbox));
+        const minHeight = Math.max(8, Math.min(bboxHeight(other.bbox), bboxHeight(line.bbox)));
+        const nearbyBand = centerDelta <= Math.max(140, minHeight * 7.0);
+        if (!nearbyBand) {
+          continue;
+        }
+
+        const overlapX = horizontalOverlapRatio(line.bbox, other.bbox);
+        const overlapY = verticalOverlapRatio(line.bbox, other.bbox);
+        const containedX = horizontalContainmentRatio(line.bbox, other.bbox) >= 0.38;
+        const narrowFragment = bboxWidth(line.bbox) <= bboxWidth(other.bbox) * 0.7;
+
+        if (!narrowFragment || overlapY < 0.04 || (!containedX && overlapX < 0.12)) {
+          continue;
+        }
+
+        dropAsShadow = true;
+        dropped.push({
+          filter: 'externalChunkMerge',
+          reason: 'koreanParticleShadow',
+          text: rawText,
+          confidence: lineConfidence,
+          bbox: line.bbox,
+        });
+        break;
+      }
+
+      if (!dropAsShadow) {
+        kept.push(line);
+      }
+    });
+
+    return { lines: kept, dropped };
+  }
+
+  private collapseKoreanNearDuplicateLines(lines: OCRLine[]): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) {
+      return { lines, dropped: [] };
+    }
+
+    const consumed = new Array<boolean>(lines.length).fill(false);
+    const kept: OCRLine[] = [];
+    const dropped: OCRDroppedWord[] = [];
+
+    const lineScore = (line: OCRLine): number => {
+      const text = String(line.text || '').trim();
+      const confidence = Number(line.confidence || 0);
+      return (confidence * 1.8) + text.length;
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      if (consumed[i]) continue;
+
+      let winnerIndex = i;
+
+      for (let j = i + 1; j < lines.length; j += 1) {
+        if (consumed[j]) continue;
+
+        const a = lines[winnerIndex];
+        const b = lines[j];
+        const aText = String(a.text || '').trim();
+        const bText = String(b.text || '').trim();
+        if (!aText || !bText) continue;
+        if (!hasHangulChars(aText) || !hasHangulChars(bText)) continue;
+
+        const overlapY = verticalOverlapRatio(a.bbox, b.bbox);
+        if (overlapY < 0.56) continue;
+
+        const overlapX = horizontalOverlapRatio(a.bbox, b.bbox);
+        const centerDeltaY = Math.abs(bboxCenterY(a.bbox) - bboxCenterY(b.bbox));
+        const centerDeltaX = Math.abs(bboxCenterX(a.bbox) - bboxCenterX(b.bbox));
+        const minHeight = Math.max(8, Math.min(bboxHeight(a.bbox), bboxHeight(b.bbox)));
+        const minWidth = Math.max(20, Math.min(bboxWidth(a.bbox), bboxWidth(b.bbox)));
+        const sameBand = overlapX >= 0.55
+          || (centerDeltaY <= minHeight * 0.62 && centerDeltaX <= minWidth * 0.6);
+        if (!sameBand) continue;
+
+        const aToken = normalizeKoreanDedupToken(aText);
+        const bToken = normalizeKoreanDedupToken(bText);
+        if (!aToken || !bToken) continue;
+
+        const similarity = diceSimilarity(aToken, bToken);
+        const lenDelta = Math.abs(aToken.length - bToken.length);
+        const typoDistance = boundedLevenshteinDistance(aToken, bToken, 1);
+        const typoNearDuplicate = typoDistance <= 1
+          && lenDelta <= 1
+          && overlapX >= 0.7
+          && overlapY >= 0.72
+          && Math.min(aToken.length, bToken.length) >= 4;
+        const nearDuplicate = similarity >= 0.72
+          || (similarity >= 0.66 && lenDelta <= 2)
+          || typoNearDuplicate;
+        if (!nearDuplicate) continue;
+
+        const winner = lineScore(a) >= lineScore(b) ? winnerIndex : j;
+        const loser = winner === winnerIndex ? j : winnerIndex;
+        const loserLine = lines[loser];
+        const loserText = String(loserLine.text || '').trim();
+        consumed[loser] = true;
+        dropped.push({
+          filter: 'externalChunkMerge',
+          reason: 'koreanNearDuplicateLine',
+          text: loserText,
+          confidence: Number(loserLine.confidence || 0),
+          bbox: loserLine.bbox,
+        });
+        winnerIndex = winner;
+      }
+
+      if (consumed[winnerIndex]) continue;
+      consumed[winnerIndex] = true;
+      kept.push(lines[winnerIndex]);
+    }
+
+    return { lines: kept, dropped };
+  }
+
   private mergeExternalChunkResults(
     results: OCRPageResult[],
     width: number,
@@ -571,9 +898,19 @@ class VisionService {
     const mergedLines: OCRLine[] = [];
     let runtimeMs = 0;
     const isPaddlePanel = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
+    const mergedDropCounts: Record<string, number> = {};
+    const mergedDroppedWords: OCRDroppedWord[] = [];
 
     for (const result of results) {
       runtimeMs += (result.debug?.runtimeMs || 0);
+      for (const [key, value] of Object.entries(result.debug?.dropCounts || {})) {
+        const numeric = Number(value || 0);
+        if (!Number.isFinite(numeric) || numeric <= 0) continue;
+        mergedDropCounts[key] = (mergedDropCounts[key] || 0) + numeric;
+      }
+      if (Array.isArray(result.debug?.droppedWords) && result.debug!.droppedWords.length > 0) {
+        mergedDroppedWords.push(...result.debug!.droppedWords);
+      }
       for (const line of result.lines || []) {
         const text = String(line.text || '').trim();
         if (!text) continue;
@@ -606,14 +943,55 @@ class VisionService {
     }
 
     mergedLines.sort((a, b) => {
+      const aLine = a as OCRLine & { _sortY?: number; _sortX?: number };
+      const bLine = b as OCRLine & { _sortY?: number; _sortX?: number };
+      const aSortY = typeof aLine._sortY === 'number' ? aLine._sortY : a.bbox.y0;
+      const bSortY = typeof bLine._sortY === 'number' ? bLine._sortY : b.bbox.y0;
+      if (aSortY !== bSortY) return aSortY - bSortY;
+
+      const aSortX = typeof aLine._sortX === 'number' ? aLine._sortX : a.bbox.x0;
+      const bSortX = typeof bLine._sortX === 'number' ? bLine._sortX : b.bbox.x0;
+      if (aSortX !== bSortX) return aSortX - bSortX;
+
       if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
       return a.bbox.x0 - b.bbox.x0;
     });
 
-    const mergedWords = mergedLines.flatMap((line) => line.words || []);
+    const applyCjkOrphanPrune = pipelineProfile === 'panel'
+      && isCjkLikeLanguage(language)
+      && ocrEngine === 'easyocr';
+    const languageCodes = language
+      .split('+')
+      .map((code) => code.trim())
+      .filter(Boolean);
+    const applyKoreanChunkMergePrune = isPaddlePanel && languageCodes.includes('kor');
+
+    let finalLines = applyCjkOrphanPrune
+      ? this.pruneLikelyOrphanCjkFragments(mergedLines)
+      : mergedLines;
+
+    if (applyKoreanChunkMergePrune) {
+      const koreanNearDuplicateResult = this.collapseKoreanNearDuplicateLines(finalLines);
+      finalLines = koreanNearDuplicateResult.lines;
+      if (koreanNearDuplicateResult.dropped.length > 0) {
+        mergedDropCounts.koreanChunkMergeNearDuplicate =
+          (mergedDropCounts.koreanChunkMergeNearDuplicate || 0) + koreanNearDuplicateResult.dropped.length;
+        mergedDroppedWords.push(...koreanNearDuplicateResult.dropped);
+      }
+
+      const koreanPruneResult = this.dropKoreanParticleShadowLines(finalLines);
+      finalLines = koreanPruneResult.lines;
+      if (koreanPruneResult.dropped.length > 0) {
+        mergedDropCounts.koreanChunkMergeParticleShadow =
+          (mergedDropCounts.koreanChunkMergeParticleShadow || 0) + koreanPruneResult.dropped.length;
+        mergedDroppedWords.push(...koreanPruneResult.dropped);
+      }
+    }
+
+    const mergedWords = finalLines.flatMap((line) => line.words || []);
     const confidences = mergedWords.length > 0
       ? mergedWords.map((word) => word.confidence || 0)
-      : mergedLines.map((line) => line.confidence || 0);
+      : finalLines.map((line) => line.confidence || 0);
     const confidence = confidences.length > 0
       ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
       : 0;
@@ -629,13 +1007,13 @@ class VisionService {
       pipelineProfile,
       ocrEngine,
       ocrQualityProfile,
-      lines: mergedLines,
+      lines: finalLines,
       words: mergedWords,
-      text: mergedLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+      text: finalLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
       confidence,
       debug: {
-        droppedWords: [],
-        dropCounts: {},
+        droppedWords: mergedDroppedWords,
+        dropCounts: mergedDropCounts,
         runtimeMs,
       },
     };

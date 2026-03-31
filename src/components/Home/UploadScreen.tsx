@@ -98,12 +98,40 @@ const getFileOpenHint = (message: string): string => {
 // Get file icon based on type
 const getFileIcon = (fileType: string) => {
   if (fileType === 'pdf') {
-    return <FileText className="text-[#FF970F] drop-shadow-[0_0_8px_rgba(255,135,5,0.35)]" size={20} />;
+    return <FileText className="text-slate-300" size={20} />;
   }
-  return <FileText className="text-[#FFB45C] drop-shadow-[0_0_8px_rgba(255,145,49,0.22)]" size={20} />;
+  return <FileText className="text-slate-400" size={20} />;
 };
 
-const fallbackFolderColors = ['#5CC6F2', '#8B5CF6', '#F97316', '#10B981', '#EC4899', '#EAB308'];
+const fallbackFolderColors = ['#7C5CFF', '#4387FF', '#59C8F6', '#F59A3A', '#F1C85B'];
+const THEMED_LIBRARY_ACCENTS = ['#7C5CFF', '#4387FF', '#59C8F6', '#F59A3A', '#F1C85B'];
+
+const resolveThemedAccent = (index: number): string =>
+  THEMED_LIBRARY_ACCENTS[Math.abs(index) % THEMED_LIBRARY_ACCENTS.length];
+
+const hexToRgba = (hex: string, alpha: number): string => {
+  const normalized = hex.replace('#', '');
+  const full = normalized.length === 3
+    ? normalized.split('').map((char) => char + char).join('')
+    : normalized;
+  const value = Number.parseInt(full, 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const resolveStableAccent = (seed: number | string): string => {
+  if (typeof seed === 'number') {
+    return resolveThemedAccent(seed);
+  }
+
+  let hash = 0;
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return resolveThemedAccent(hash);
+};
 
 type MenuActionDialogState = {
   isOpen: boolean;
@@ -171,6 +199,14 @@ const DocumentContextMenu: React.FC<{
   onCreateTag
 }) => {
   const assignedTagIds = useMemo(() => new Set(documentTags.map(tag => tag.id)), [documentTags]);
+  const projectAccentById = useMemo(
+    () => new Map(projects.map((project, index) => [project.id, resolveThemedAccent(index)])),
+    [projects]
+  );
+  const tagAccentById = useMemo(
+    () => new Map(tags.map((tag, index) => [tag.id, resolveThemedAccent(index)])),
+    [tags]
+  );
 
   return createPortal(
     <div
@@ -211,7 +247,7 @@ const DocumentContextMenu: React.FC<{
             }}
             className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
               doc.project_id === null
-                ? 'bg-[#2B9BFF]/18 text-[#d7efff]'
+                ? 'bg-[#2a2d33] text-slate-100'
                 : 'text-slate-300 hover:bg-white/10'
             }`}
           >
@@ -225,16 +261,17 @@ const DocumentContextMenu: React.FC<{
                 onMoveToProject(project.id);
                 onClose();
               }}
+              style={doc.project_id === project.id ? { backgroundColor: hexToRgba(projectAccentById.get(project.id) || resolveStableAccent(project.id), 0.18) } : undefined}
               className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
                 doc.project_id === project.id
-                  ? 'bg-[#2B9BFF]/18 text-[#d7efff]'
+                  ? 'text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
                   : 'text-slate-300 hover:bg-white/10'
               }`}
             >
               <span className="flex min-w-0 items-center gap-2">
                 <span
                   className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: project.color || '#5CC6F2' }}
+                  style={{ backgroundColor: projectAccentById.get(project.id) || resolveStableAccent(project.id) }}
                 />
                 <span className="truncate">{project.name}</span>
               </span>
@@ -260,20 +297,22 @@ const DocumentContextMenu: React.FC<{
         <div className="max-h-32 space-y-1 overflow-y-auto custom-scrollbar">
           {tags.length > 0 ? tags.map(tag => {
             const assigned = assignedTagIds.has(tag.id);
+            const accent = tagAccentById.get(tag.id) || resolveStableAccent(tag.id);
             return (
               <button
                 key={tag.id}
                 onClick={() => onToggleTag(tag)}
                 className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
                   assigned
-                    ? 'bg-[#FF8705]/18 text-[#ffe3be]'
+                    ? 'text-slate-100'
                     : 'text-slate-300 hover:bg-white/10'
                 }`}
+                style={assigned ? { backgroundColor: hexToRgba(accent, 0.18) } : undefined}
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <span
                     className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: tag.color || '#FF8705' }}
+                    style={{ backgroundColor: accent }}
                   />
                   <span className="truncate">{tag.name}</span>
                 </span>
@@ -310,7 +349,9 @@ const TagContextMenu: React.FC<{
   position: MenuPosition;
   onClose: () => void;
   onDelete: () => void;
-}> = ({ tag, position, onClose, onDelete }) => createPortal(
+}> = ({ tag, position, onClose, onDelete }) => {
+  const accent = resolveStableAccent(tag.id);
+  return createPortal(
   <div
     data-library-floating-menu="true"
     className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
@@ -322,7 +363,7 @@ const TagContextMenu: React.FC<{
       <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
         <span
           className="h-2.5 w-2.5 rounded-full"
-          style={{ backgroundColor: tag.color || '#FF8705' }}
+          style={{ backgroundColor: accent }}
         />
         {tag.name}
       </div>
@@ -343,6 +384,7 @@ const TagContextMenu: React.FC<{
   </div>,
   document.body
 );
+};
 
 const DocumentCard: React.FC<{
   doc: DBDocument;
@@ -397,8 +439,8 @@ const DocumentCard: React.FC<{
         data-document-card="true"
         className={`group relative p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-xl ${
           isSelected 
-            ? 'bg-gradient-to-br from-[#2B9BFF]/20 to-[#9979FF]/15 border-[#2B9BFF]/60 shadow-[0_10px_30px_rgba(43,155,255,0.2)]' 
-            : 'bg-slate-900/45 border-white/10 hover:border-[#2B9BFF]/40 hover:bg-slate-900/70 hover:shadow-[0_8px_24px_rgba(43,155,255,0.12)]'
+            ? 'bg-[#090a0d] border-white/14 shadow-[0_14px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]' 
+            : 'bg-[#08090c]/96 border-white/8 hover:border-white/12 hover:bg-[#101216]'
         }`}
         draggable
         onDragStart={(e) => {
@@ -415,7 +457,7 @@ const DocumentCard: React.FC<{
         }}
       >
         {/* Thumbnail */}
-        <div className="aspect-[3/4] rounded-xl bg-slate-900/80 mb-3 flex items-center justify-center overflow-hidden border border-white/5">
+        <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5">
           {thumbnail}
         </div>
         
@@ -430,8 +472,8 @@ const DocumentCard: React.FC<{
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
           className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all ${
             doc.is_favorite 
-              ? 'bg-[#FF7E67]/20 text-[#FF9E8E]' 
-              : 'bg-slate-900/85 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100'
+              ? 'bg-white/10 text-slate-100' 
+              : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100'
           }`}
         >
           <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
@@ -463,8 +505,8 @@ const DocumentCard: React.FC<{
       data-document-card="true"
       className={`group relative flex items-center gap-4 p-3 rounded-xl border transition-all cursor-pointer backdrop-blur-xl ${
         isSelected 
-          ? 'bg-gradient-to-r from-[#2B9BFF]/20 to-[#9979FF]/15 border-[#2B9BFF]/55' 
-          : 'bg-slate-900/35 border-white/10 hover:border-[#2B9BFF]/40 hover:bg-slate-900/60'
+          ? 'bg-[#0a0b0e] border-white/14' 
+          : 'bg-[#08090c]/94 border-white/8 hover:border-white/12 hover:bg-[#101216]'
       }`}
       draggable
       onDragStart={(e) => {
@@ -480,7 +522,7 @@ const DocumentCard: React.FC<{
         onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
       }}
     >
-      <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-slate-900/90">
+      <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-[#090a0c]">
         <div className="absolute inset-0 flex items-center justify-center">
           {thumbnail}
         </div>
@@ -497,7 +539,7 @@ const DocumentCard: React.FC<{
       <button 
         onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
         className={`p-1.5 rounded transition-all ${
-          doc.is_favorite ? 'text-[#FF9E8E]' : 'text-slate-500 hover:text-slate-300'
+          doc.is_favorite ? 'text-slate-100' : 'text-slate-500 hover:text-slate-300'
         }`}
       >
         <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
@@ -536,11 +578,14 @@ const ProjectItem: React.FC<{
   project: DBProject;
   isSelected: boolean;
   onSelect: () => void;
+  displayColor?: string;
   isDropTarget: boolean;
   onDragOver: (event: React.DragEvent<HTMLButtonElement>) => void;
   onDragLeave: () => void;
   onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
-}> = ({ project, isSelected, onSelect, isDropTarget, onDragOver, onDragLeave, onDrop }) => (
+}> = ({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop }) => {
+  const accent = displayColor || resolveStableAccent(project.id);
+  return (
   <button 
     onClick={onSelect}
     onDragOver={onDragOver}
@@ -548,23 +593,25 @@ const ProjectItem: React.FC<{
     onDrop={onDrop}
     className={`w-full p-3 rounded-xl text-left transition-all flex items-center gap-3 border ${
       isDropTarget
-        ? 'border-[#5CC6F2]/80 bg-[#2B9BFF]/16 shadow-[0_0_0_1px_rgba(92,198,242,0.35)]'
+        ? 'border-white/16 bg-[#20242b] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
         : 
       isSelected 
-        ? 'bg-gradient-to-r from-[#2B9BFF]/20 to-[#9979FF]/15 border-[#2B9BFF]/45' 
-        : 'bg-slate-900/30 border-white/5 hover:border-white/15 hover:bg-slate-900/55'
+        ? 'border-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
+        : 'bg-[#16181c]/82 border-white/5 hover:border-white/12 hover:bg-[#1b1e23]'
     }`}
+    style={isSelected ? { backgroundColor: hexToRgba(accent, 0.14) } : undefined}
   >
     <div 
       className="p-2 rounded-lg border border-white/5"
-      style={{ backgroundColor: project.color + '16' }}
+      style={{ backgroundColor: hexToRgba(accent, 0.14) }}
     >
-      <Folder size={16} style={{ color: project.color }} />
+      <Folder size={16} style={{ color: accent }} />
     </div>
     <span className="flex-1 truncate text-sm text-slate-200">{project.name}</span>
     <ChevronRight size={14} className="text-slate-500" />
   </button>
-);
+  );
+};
 
 // Tag Pill Component
 const TagPill: React.FC<{
@@ -572,19 +619,21 @@ const TagPill: React.FC<{
   isSelected: boolean;
   onClick: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}> = ({ tag, isSelected, onClick, onContextMenu }) => (
+  displayColor?: string;
+}> = ({ tag, isSelected, onClick, onContextMenu, displayColor }) => (
   <button
     onClick={onClick}
     onContextMenu={onContextMenu}
     className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
       isSelected 
-        ? 'border-[#FFB45C]/75 bg-gradient-to-r from-[#FF8705]/32 via-[#FF8DF2]/24 to-[#FF7E67]/28 text-[#fff0da] shadow-[0_8px_20px_rgba(255,135,5,0.28)]' 
-        : 'border-white/12 bg-slate-900/50 text-slate-300 hover:border-[#FF9A3D]/55 hover:bg-gradient-to-r hover:from-[#FF8705]/16 hover:to-[#FF8DF2]/14 hover:text-[#ffe4c2]'
+        ? 'border-white/12 bg-[#23262b] text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
+        : 'border-white/10 bg-[#131519]/88 text-slate-300 hover:border-white/14 hover:bg-[#1a1d22]'
     }`}
+    style={isSelected ? { boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px ${hexToRgba(displayColor || tag.color || '#8B5CF6', 0.18)}` } : undefined}
   >
     <span className={`h-1.5 w-1.5 rounded-full transition-colors ${
-      isSelected ? 'bg-[#FFD091]' : 'bg-slate-500 group-hover:bg-[#FF9A3D]'
-    }`} />
+      isSelected ? '' : 'bg-slate-500 group-hover:bg-slate-300'
+    }`} style={isSelected ? { backgroundColor: displayColor || tag.color || '#8B5CF6' } : undefined} />
     {tag.name}
   </button>
 );
@@ -953,23 +1002,22 @@ export const UploadScreen: React.FC = () => {
   }, [applyDocumentPatch, sortedDocuments, viewMode]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#04060f] text-slate-100">
+    <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -left-28 -top-28 h-[26rem] w-[26rem] rounded-full bg-[#2B9BFF]/28 blur-3xl" />
-        <div className="absolute bottom-[-10rem] left-1/3 h-[26rem] w-[26rem] rounded-full bg-[#9979FF]/22 blur-3xl" />
-        <div className="absolute -right-32 top-1/3 h-[28rem] w-[28rem] rounded-full bg-[#FF7E67]/18 blur-3xl" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(43,155,255,0.16),transparent_48%),radial-gradient(circle_at_85%_30%,rgba(255,126,103,0.14),transparent_42%),linear-gradient(125deg,rgba(4,6,15,0.96)_0%,rgba(6,9,20,0.98)_55%,rgba(5,7,14,0.99)_100%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_18%,rgba(82,162,255,0.18),transparent_40%),radial-gradient(circle_at_54%_10%,rgba(94,124,255,0.16),transparent_44%),radial-gradient(circle_at_86%_24%,rgba(149,106,255,0.16),transparent_38%),linear-gradient(138deg,rgba(18,22,34,0.98)_0%,rgba(22,31,50,0.985)_38%,rgba(16,24,43,0.995)_68%,rgba(22,17,40,1)_100%)]" />
+        <div className="absolute inset-y-0 left-0 w-[24rem] bg-[linear-gradient(90deg,rgba(72,142,255,0.2),rgba(72,142,255,0))]" />
+        <div className="absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0))]" />
       </div>
 
       <div className="relative z-10 flex h-full w-full">
         {/* Left Navigation Sidebar */}
-        <div className="w-16 bg-slate-950/65 border-r border-white/10 backdrop-blur-xl flex flex-col items-center py-4">
+        <div className="w-16 bg-[#0e0f11]/86 border-r border-white/6 backdrop-blur-xl flex flex-col items-center py-4">
           <button
             onClick={() => { setActivePage('home'); loadRecentDocuments(); }}
             className={`p-3 rounded-xl mb-2 transition-all ${
               activePage === 'home'
-                ? 'bg-gradient-to-br from-[#2B9BFF] to-[#2776FF] text-white shadow-[0_8px_20px_rgba(43,155,255,0.38)]'
-                : 'text-slate-400 hover:bg-white/10 hover:text-slate-100'
+                ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+                : 'text-slate-500 hover:bg-white/[0.06] hover:text-slate-100'
             }`}
             title="Home"
           >
@@ -979,8 +1027,8 @@ export const UploadScreen: React.FC = () => {
             onClick={() => { setActivePage('projects'); }}
             className={`p-3 rounded-xl mb-2 transition-all ${
               activePage === 'projects'
-                ? 'bg-gradient-to-br from-[#2B9BFF] to-[#2776FF] text-white shadow-[0_8px_20px_rgba(43,155,255,0.38)]'
-                : 'text-slate-400 hover:bg-white/10 hover:text-slate-100'
+                ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+                : 'text-slate-500 hover:bg-white/[0.06] hover:text-slate-100'
             }`}
             title="Projects"
           >
@@ -991,7 +1039,7 @@ export const UploadScreen: React.FC = () => {
 
           <button
             onClick={() => {}}
-            className="p-3 rounded-xl text-slate-400 hover:bg-white/10 hover:text-slate-100 transition-all"
+            className="p-3 rounded-xl text-slate-500 hover:bg-white/[0.06] hover:text-slate-100 transition-all"
             title="Settings"
           >
             <Settings2 size={20} />
@@ -999,18 +1047,18 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Secondary Sidebar */}
-        <div className="w-56 border-r border-white/10 bg-slate-950/45 backdrop-blur-xl p-4 flex flex-col">
+        <div className="w-56 border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl p-4 flex flex-col">
         {activePage === 'home' ? (
           <>
             {/* Quick Filters */}
-            <h2 className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3">Library</h2>
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3">Library</h2>
             <div className="space-y-1 mb-6">
               <button
                 onClick={() => loadRecentDocuments()}
                 className={`w-full p-2.5 rounded-lg text-left text-sm flex items-center gap-3 border transition-all ${
                   filterType === 'recent'
-                    ? 'border-[#2B9BFF]/40 bg-gradient-to-r from-[#2B9BFF]/20 to-[#9979FF]/15 text-[#a8dcff]'
-                    : 'border-transparent hover:border-white/10 hover:bg-white/5 text-slate-300'
+                    ? 'border-white/12 bg-[#25282d] text-slate-100'
+                    : 'border-transparent hover:border-white/8 hover:bg-white/[0.04] text-slate-300'
                 }`}
               >
                 <Clock size={16} /> Recent
@@ -1019,8 +1067,8 @@ export const UploadScreen: React.FC = () => {
                 onClick={() => loadFavoriteDocuments()}
                 className={`w-full p-2.5 rounded-lg text-left text-sm flex items-center gap-3 border transition-all ${
                   filterType === 'favorites'
-                    ? 'border-[#2B9BFF]/40 bg-gradient-to-r from-[#2B9BFF]/20 to-[#9979FF]/15 text-[#a8dcff]'
-                    : 'border-transparent hover:border-white/10 hover:bg-white/5 text-slate-300'
+                    ? 'border-white/12 bg-[#25282d] text-slate-100'
+                    : 'border-transparent hover:border-white/8 hover:bg-white/[0.04] text-slate-300'
                 }`}
               >
                 <Star size={16} /> Favorites
@@ -1028,7 +1076,7 @@ export const UploadScreen: React.FC = () => {
             </div>
 
             {/* Tags */}
-            <h2 className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 flex items-center justify-between">
               Tags
               <button
                 onClick={() => openTagDialog()}
@@ -1039,10 +1087,11 @@ export const UploadScreen: React.FC = () => {
               </button>
             </h2>
             <div className="flex flex-wrap gap-2 mb-6">
-              {tags.map(tag => (
+              {tags.map((tag, index) => (
                 <TagPill 
                   key={tag.id} 
                   tag={tag} 
+                  displayColor={resolveThemedAccent(index)}
                   isSelected={selectedTagId === tag.id}
                   onContextMenu={(event) => openTagMenu(tag, event)}
                   onClick={() => {
@@ -1059,7 +1108,7 @@ export const UploadScreen: React.FC = () => {
             </div>
 
             {/* Projects */}
-            <h2 className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 flex items-center justify-between">
               Projects
               <button
                 onClick={() => openProjectDialog()}
@@ -1070,10 +1119,11 @@ export const UploadScreen: React.FC = () => {
               </button>
             </h2>
             <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
-              {projects.map(project => (
+              {projects.map((project, index) => (
                 <ProjectItem
                   key={project.id}
                   project={project}
+                  displayColor={resolveThemedAccent(index)}
                   isSelected={selectedProjectId === project.id}
                   isDropTarget={projectDropTargetId === project.id}
                   onDragOver={(event) => {
@@ -1107,19 +1157,20 @@ export const UploadScreen: React.FC = () => {
           <>
             {/* Projects Page Sidebar */}
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <FolderOpen className="text-[#5CC6F2]" size={20} /> Projects
+              <FolderOpen className="text-slate-300" size={20} /> Projects
             </h2>
             <button
               onClick={() => openProjectDialog()}
-              className="w-full p-3 rounded-lg bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 text-white text-sm font-medium flex items-center justify-center gap-2 mb-4 shadow-[0_8px_20px_rgba(43,155,255,0.33)] transition-all"
+              className="w-full p-3 rounded-lg bg-[#25282d] hover:bg-[#2b2f35] text-white text-sm font-medium flex items-center justify-center gap-2 mb-4 border border-white/10 transition-all"
             >
               <Plus size={16} /> New Project
             </button>
             <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
-              {projects.map(project => (
+              {projects.map((project, index) => (
                 <ProjectItem
                   key={project.id}
                   project={project}
+                  displayColor={resolveThemedAccent(index)}
                   isSelected={selectedProjectId === project.id}
                   isDropTarget={projectDropTargetId === project.id}
                   onDragOver={(event) => {
@@ -1146,45 +1197,51 @@ export const UploadScreen: React.FC = () => {
       </div>
 
         {/* Main Content Area */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-slate-950/20">
+        <div className="relative flex-1 flex flex-col overflow-hidden bg-[#25272b]">
           {/* Toolbar */}
-          <div className="p-4 border-b border-white/10 bg-slate-950/35 backdrop-blur-xl flex items-center gap-4">
-            {/* Search */}
-            <form onSubmit={handleSearch} className="flex-1 max-w-md">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                <input
-                  type="text"
-                  placeholder="Search documents..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-slate-900/65 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-[#2B9BFF]/60 focus:ring-2 focus:ring-[#2B9BFF]/25"
-                />
-              </div>
-            </form>
+          <div className="relative overflow-hidden border-b border-white/6 px-4 pt-4 pb-5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+            <div className="absolute inset-0 bg-[linear-gradient(98deg,rgba(60,134,223,0.9)_0%,rgba(58,152,224,0.86)_34%,rgba(74,120,213,0.88)_66%,rgba(112,84,194,0.88)_100%)]" />
+            <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.14)_0%,rgba(0,0,0,0.05)_18%,rgba(0,0,0,0.04)_82%,rgba(0,0,0,0.12)_100%)]" />
+            <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.03)_0%,rgba(0,0,0,0.05)_48%,rgba(0,0,0,0.09)_100%)]" />
+            <div className="absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0))]" />
+            <div className="relative z-10 flex items-center gap-4">
+              {/* Search */}
+              <form onSubmit={handleSearch} className="flex-1 max-w-md">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                  <input
+                    type="text"
+                    placeholder="Search documents..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 bg-[#1f2227]/92 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-[#5CC6F2]/30 focus:ring-2 focus:ring-[#5CC6F2]/10"
+                  />
+                </div>
+              </form>
 
-            {/* View Mode Toggle */}
-            <div className="flex items-center bg-slate-900/60 rounded-lg p-1 border border-white/10">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2 rounded-md transition-all ${
-                  viewMode === 'grid'
-                    ? 'bg-gradient-to-r from-[#2B9BFF]/25 to-[#9979FF]/25 text-[#b4e3ff]'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Grid3X3 size={16} />
-              </button>
-              <button
-                onClick={() => setViewMode('detail')}
-                className={`p-2 rounded-md transition-all ${
-                  viewMode === 'detail'
-                    ? 'bg-gradient-to-r from-[#2B9BFF]/25 to-[#9979FF]/25 text-[#b4e3ff]'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <List size={16} />
-              </button>
+              {/* View Mode Toggle */}
+              <div className="flex items-center bg-[#202329]/90 rounded-lg p-1 border border-white/8">
+                <button
+                  onClick={() => setViewMode('grid')}
+                  className={`p-2 rounded-md transition-all ${
+                    viewMode === 'grid'
+                      ? 'bg-[#353942] text-slate-100'
+                      : 'text-slate-500 hover:text-slate-200'
+                  }`}
+                >
+                  <Grid3X3 size={16} />
+                </button>
+                <button
+                  onClick={() => setViewMode('detail')}
+                  className={`p-2 rounded-md transition-all ${
+                    viewMode === 'detail'
+                      ? 'bg-[#353942] text-slate-100'
+                      : 'text-slate-500 hover:text-slate-200'
+                  }`}
+                >
+                  <List size={16} />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1274,7 +1331,7 @@ export const UploadScreen: React.FC = () => {
           >
             {isLoading ? (
               <div className="flex items-center justify-center h-full">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[#2B9BFF]"></div>
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-slate-300/80"></div>
               </div>
             ) : sortedDocuments.length > 0 ? (
               <div className={viewMode === 'grid'
@@ -1323,7 +1380,7 @@ export const UploadScreen: React.FC = () => {
                 {documents.length > 0 && (
                   <div className="mb-6">
                     <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
-                      <Clock size={14} className="text-[#5CC6F2]" />
+                      <Clock size={14} className="text-slate-300" />
                       Recent Files
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
@@ -1331,9 +1388,9 @@ export const UploadScreen: React.FC = () => {
                         <button
                           key={doc.id}
                           onClick={() => handleOpenDocument(doc)}
-                          className="flex items-center gap-3 p-3 rounded-xl bg-slate-900/45 border border-white/10 hover:border-[#2B9BFF]/45 hover:bg-slate-900/70 transition-all text-left group backdrop-blur-xl"
+                          className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl"
                         >
-                          <div className="h-14 w-10 overflow-hidden rounded-lg bg-slate-900/85 border border-white/5 group-hover:border-[#2B9BFF]/35">
+                          <div className="h-14 w-10 overflow-hidden rounded-lg bg-[#111214]/90 border border-white/5 group-hover:border-white/10">
                             {doc.thumbnail_path ? (
                               <img src={doc.thumbnail_path} alt={doc.filename} className="h-full w-full object-cover" />
                             ) : (
@@ -1360,12 +1417,12 @@ export const UploadScreen: React.FC = () => {
                     onDrop={handleDrop}
                     className={`w-full max-w-xl aspect-video rounded-3xl border-2 border-dashed flex flex-col items-center justify-center transition-all duration-300 backdrop-blur-xl ${
                       isDragging
-                        ? 'border-[#5CC6F2] bg-[#2B9BFF]/16 scale-105 shadow-[0_0_60px_rgba(43,155,255,0.28)]'
-                        : 'border-white/20 bg-slate-900/35 hover:border-[#2B9BFF]/55'
+                        ? 'border-white/20 bg-white/[0.04] scale-[1.015] shadow-[0_24px_60px_rgba(0,0,0,0.22)]'
+                        : 'border-white/12 bg-[#17191d]/68 hover:border-white/16'
                     }`}
                   >
                     <div className="p-5 rounded-full bg-slate-900/85 border border-white/10 mb-5 shadow-2xl">
-                      <Upload size={40} className="text-[#5CC6F2]" />
+                      <Upload size={40} className="text-slate-200" />
                     </div>
                     <h3 className="text-xl font-bold mb-2">
                       {documents.length === 0 ? 'No documents yet' : 'No results found'}
@@ -1379,7 +1436,7 @@ export const UploadScreen: React.FC = () => {
 
                     <button
                       onClick={handleBrowse}
-                      className="px-6 py-2.5 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 text-white rounded-xl font-bold cursor-pointer transition-all shadow-[0_10px_24px_rgba(43,155,255,0.35)] text-sm"
+                      className="px-6 py-2.5 bg-[#262a30] hover:bg-[#2d3138] text-white rounded-xl font-bold cursor-pointer transition-all border border-white/10 text-sm"
                     >
                       Browse Files
                     </button>
@@ -1392,9 +1449,9 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Right: Project Settings */}
-        <div className="w-72 bg-slate-950/60 border-l border-white/10 p-5 flex flex-col overflow-y-auto backdrop-blur-xl">
+        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl">
           <h2 className="text-base font-bold mb-5 flex items-center gap-2">
-            <Settings2 className="text-[#5CC6F2]" size={18} /> Quick Start
+            <Settings2 className="text-slate-300" size={18} /> Quick Start
           </h2>
 
           {/* Quick Upload */}
@@ -1403,7 +1460,7 @@ export const UploadScreen: React.FC = () => {
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
             className={`p-4 rounded-xl border-2 border-dashed mb-6 text-center transition-all ${
-              isDragging ? 'border-[#5CC6F2] bg-[#2B9BFF]/14' : 'border-white/15 hover:border-[#2B9BFF]/45 bg-slate-900/40'
+              isDragging ? 'border-white/18 bg-white/[0.04]' : 'border-white/10 hover:border-white/16 bg-[#13151a]/92'
             }`}
           >
             <Upload size={24} className="mx-auto mb-2 text-slate-300" />
@@ -1418,19 +1475,20 @@ export const UploadScreen: React.FC = () => {
 
           {/* Mode Selection */}
           <div className="mb-6">
-            <label className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3 block">Translation Mode</label>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Translation Mode</label>
             <div className="space-y-2">
               <button
                 onClick={() => setTranslationMode('manga')}
                 className={`w-full p-3 rounded-xl border text-left transition-all ${
                   translationMode === 'manga'
-                    ? 'bg-gradient-to-r from-[#2B9BFF]/22 to-[#5CC6F2]/16 border-[#2B9BFF]/50 shadow-[0_6px_16px_rgba(43,155,255,0.2)]'
-                    : 'bg-slate-900/55 border-white/12 hover:border-white/25'
+                    ? 'border-[#8B5CF6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
                 }`}
+                style={translationMode === 'manga' ? { background: 'linear-gradient(180deg, rgba(139,92,246,0.28) 0%, rgba(46,28,82,0.92) 100%)' } : undefined}
               >
                 <div className="flex items-center gap-2">
-                  <Sparkles size={14} className={translationMode === 'manga' ? 'text-[#5CC6F2]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'manga' ? 'text-[#d9efff]' : 'text-slate-300'}`}>Manga Style</span>
+                  <Sparkles size={14} className={translationMode === 'manga' ? 'text-[#D8B4FE]' : 'text-slate-400'} />
+                  <span className={`font-medium text-sm ${translationMode === 'manga' ? 'text-[#F4E8FF]' : 'text-slate-300'}`}>Manga Style</span>
                 </div>
               </button>
 
@@ -1438,13 +1496,14 @@ export const UploadScreen: React.FC = () => {
                 onClick={() => setTranslationMode('official')}
                 className={`w-full p-3 rounded-xl border text-left transition-all ${
                   translationMode === 'official'
-                    ? 'bg-gradient-to-r from-[#FF8705]/28 via-[#FFB45C]/20 to-[#FF7E67]/20 border-[#FF9A3D]/55 shadow-[0_8px_18px_rgba(255,135,5,0.25)]'
-                    : 'bg-slate-900/55 border-white/12 hover:border-white/25'
+                    ? 'border-[#4387FF]/42 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
                 }`}
+                style={translationMode === 'official' ? { background: 'linear-gradient(180deg, rgba(67,135,255,0.2) 0%, rgba(17,28,48,0.9) 100%)' } : undefined}
               >
                 <div className="flex items-center gap-2">
-                  <ScrollText size={14} className={translationMode === 'official' ? 'text-[#FFD091]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'official' ? 'text-[#fff0da]' : 'text-slate-300'}`}>Official Doc</span>
+                  <ScrollText size={14} className={translationMode === 'official' ? 'text-[#A8CFFF]' : 'text-slate-400'} />
+                  <span className={`font-medium text-sm ${translationMode === 'official' ? 'text-[#EDF4FF]' : 'text-slate-300'}`}>Official Doc</span>
                 </div>
               </button>
             </div>
@@ -1452,7 +1511,7 @@ export const UploadScreen: React.FC = () => {
 
           {/* Safety Settings (Collapsed by default) */}
           <details className="mb-6">
-            <summary className="text-xs font-bold text-slate-400/85 uppercase tracking-wider mb-3 cursor-pointer flex items-center gap-2">
+            <summary className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 cursor-pointer flex items-center gap-2">
               <Shield size={12} /> Safety Filters
             </summary>
             <div className="space-y-4 mt-3">

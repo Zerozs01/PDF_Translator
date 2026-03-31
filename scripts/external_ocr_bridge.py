@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import json
+import math
 import os
 import socket
 import subprocess
@@ -23,8 +24,16 @@ WATERMARK_TOKENS = {
     "LIKEMANGA", "MANGA", "MANGAIO", "COLAMANGA", "CLOUDMERGE", "ACLOUDMERGE",
     "ASURASCANS", "MANHWAS", "SCANS", "ASURASCANSCOM", "LIKEMANGAIO",
 }
+WATERMARK_PHRASE_MARKERS = {
+    "ASURASCANS", "LIKEMANGA", "CLOUDMERGE", "COLAMANGA", "NEWTOKI", "FNSTINASCENS",
+}
+KOREAN_WATERMARK_MARKERS = {
+    "가장빠른입문제공사이트", "입문제공사이트", "웹툰왕국", "뉴토끼",
+}
 DOMAIN_SUFFIX_TOKENS = {"COM", "NET", "ORG", "IO", "GG", "CO"}
 HEADING_KEEP_TOKENS = {"CHAPTER", "SECTION", "PART", "OBJECTIVES", "CONDITIONS", "FIG"}
+SHORT_SPEECH_TOKENS = {"EH", "ME", "I", "OH", "AH", "NO", "A"}
+KOREAN_PARTICLE_SUFFIXES = {"이", "가", "은", "는", "을", "를", "의"}
 
 
 def respond(payload: Dict[str, Any], exit_code: int = 0) -> None:
@@ -42,6 +51,53 @@ def bbox_from_points(points: Any) -> Dict[str, float]:
     if not xs or not ys:
         return {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
     return {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
+
+
+def sort_hint_from_points(points: Any) -> Tuple[float | None, float | None]:
+    normalized_points: List[Tuple[float, float]] = []
+    for point in points or []:
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            normalized_points.append((float(point[0]), float(point[1])))
+    if not normalized_points:
+        return None, None
+
+    baseline_dx = 1.0
+    baseline_dy = 0.0
+    longest_length = 0.0
+    point_count = len(normalized_points)
+    for index in range(point_count):
+        next_index = (index + 1) % point_count
+        x0, y0 = normalized_points[index]
+        x1, y1 = normalized_points[next_index]
+        dx = x1 - x0
+        dy = y1 - y0
+        length = math.hypot(dx, dy)
+        if length > longest_length:
+            longest_length = length
+            baseline_dx = dx / length
+            baseline_dy = dy / length
+
+    if baseline_dx < 0 or (abs(baseline_dx) < 0.15 and baseline_dy < 0):
+        baseline_dx *= -1
+        baseline_dy *= -1
+
+    normal_x = -baseline_dy
+    normal_y = baseline_dx
+    if normal_y < 0 or (abs(normal_y) < 0.15 and normal_x < 0):
+        normal_x *= -1
+        normal_y *= -1
+
+    normal_projections = [(x * normal_x) + (y * normal_y) for x, y in normalized_points]
+    baseline_projections = [(x * baseline_dx) + (y * baseline_dy) for x, y in normalized_points]
+    primary = min(normal_projections)
+    normal_band_tolerance = max(8.0, longest_length * 0.12)
+    edge_points = [
+        baseline_projection
+        for baseline_projection, normal_projection in zip(baseline_projections, normal_projections)
+        if abs(normal_projection - primary) <= normal_band_tolerance
+    ]
+    secondary = min(edge_points or baseline_projections)
+    return primary, secondary
 
 
 def split_text_tokens(text: str) -> List[str]:
@@ -75,6 +131,10 @@ def normalize_pipeline_profile(value: str) -> str:
     return "panel" if str(value or "").strip().lower() == "panel" else "export"
 
 
+def has_terminal_sentence_punct(text: str) -> bool:
+    return bool(re.search(r"[!?…\.]+$", str(text or "").strip()))
+
+
 def explode_line_to_words(text: str, confidence: float, bbox: Dict[str, float]) -> List[Dict[str, Any]]:
     tokens = split_text_tokens(text)
     if not tokens:
@@ -105,9 +165,16 @@ def explode_line_to_words(text: str, confidence: float, bbox: Dict[str, float]) 
     return words
 
 
-def make_line(text: str, confidence: float, bbox: Dict[str, float], words: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+def make_line(
+    text: str,
+    confidence: float,
+    bbox: Dict[str, float],
+    words: List[Dict[str, Any]] | None = None,
+    sort_y: float | None = None,
+    sort_x: float | None = None,
+) -> Dict[str, Any]:
     normalized_text = normalize_text(text)
-    return {
+    line = {
         "text": normalized_text,
         "confidence": normalize_confidence(confidence),
         "bbox": {
@@ -118,6 +185,11 @@ def make_line(text: str, confidence: float, bbox: Dict[str, float], words: List[
         },
         "words": words or explode_line_to_words(normalized_text, normalize_confidence(confidence), bbox),
     }
+    if sort_y is not None:
+        line["_sortY"] = float(sort_y)
+    if sort_x is not None:
+        line["_sortX"] = float(sort_x)
+    return line
 
 
 def make_text_result(lines: List[Dict[str, Any]], words: List[Dict[str, Any]], page_seg_mode: int | None = None) -> Dict[str, Any]:
@@ -150,6 +222,504 @@ def bbox_center_y(bbox: Dict[str, Any]) -> float:
     return (float(bbox.get("y0", 0.0)) + float(bbox.get("y1", 0.0))) / 2.0
 
 
+def line_sort_y(line: Dict[str, Any]) -> float:
+    return float(line.get("_sortY", line.get("bbox", {}).get("y0", 0.0)))
+
+
+def line_sort_x(line: Dict[str, Any]) -> float:
+    return float(line.get("_sortX", line.get("bbox", {}).get("x0", 0.0)))
+
+
+def line_sort_key(line: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    bbox = line.get("bbox") or {}
+    return (
+        line_sort_y(line),
+        line_sort_x(line),
+        bbox_center_y(bbox),
+        bbox_center_x(bbox),
+    )
+
+
+def source_sequence_key(line: Dict[str, Any]) -> Tuple[float, float, float, float, float]:
+    bbox = line.get("bbox") or {}
+    source_index = line.get("_sourceIndex")
+    if source_index is not None:
+        return (
+            0.0,
+            float(source_index),
+            line_sort_y(line),
+            bbox_center_y(bbox),
+            bbox_center_x(bbox),
+        )
+    return (
+        1.0,
+        line_sort_y(line),
+        line_sort_x(line),
+        bbox_center_y(bbox),
+        bbox_center_x(bbox),
+    )
+
+
+def visual_line_key(line: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    bbox = line.get("bbox") or {}
+    return (
+        float(bbox.get("y0", 0.0)),
+        float(bbox.get("x0", 0.0)),
+        bbox_center_y(bbox),
+        bbox_center_x(bbox),
+    )
+
+
+def visual_band_key(line: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    bbox = line.get("bbox") or {}
+    return (
+        bbox_center_y(bbox),
+        float(bbox.get("y0", 0.0)),
+        bbox_center_x(bbox),
+        float(bbox.get("x0", 0.0)),
+    )
+
+
+def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return list(lines)
+
+    ordered = sorted(lines, key=visual_band_key)
+    merged: List[Dict[str, Any]] = []
+    current = ordered[0]
+
+    for candidate in ordered[1:]:
+        current_bbox = current.get("bbox") or {}
+        candidate_bbox = candidate.get("bbox") or {}
+        current_text = str(current.get("text") or "")
+        candidate_text = str(candidate.get("text") or "")
+        is_cjk_like = has_non_latin_characters(current_text) or has_non_latin_characters(candidate_text)
+        current_has_terminal_punct = has_terminal_sentence_punct(current_text)
+        candidate_has_terminal_punct = has_terminal_sentence_punct(candidate_text)
+        min_height = max(8.0, min(bbox_height(current_bbox), bbox_height(candidate_bbox)))
+        center_delta = abs(line_sort_y(current) - line_sort_y(candidate))
+        overlap_y = vertical_overlap_ratio(current_bbox, candidate_bbox)
+        overlap_x = horizontal_overlap_ratio(current_bbox, candidate_bbox)
+        gap_x = float(candidate_bbox.get("x0", 0.0)) - float(current_bbox.get("x1", 0.0))
+        current_text_len = len(normalize_multilingual_token(current_text))
+        candidate_text_len = len(normalize_multilingual_token(candidate_text))
+        fragment_like = (
+            current_text_len <= 7
+            or candidate_text_len <= 7
+            or bbox_width(current_bbox) <= bbox_width(candidate_bbox) * 0.62
+            or bbox_width(candidate_bbox) <= bbox_width(current_bbox) * 0.62
+        )
+        if is_cjk_like:
+            fragment_like = (
+                current_text_len <= 5
+                or candidate_text_len <= 5
+                or bbox_width(current_bbox) <= bbox_width(candidate_bbox) * 0.52
+                or bbox_width(candidate_bbox) <= bbox_width(current_bbox) * 0.52
+            )
+            if current_has_terminal_punct and current_text_len > 2 and not (candidate_has_terminal_punct and min(current_text_len, candidate_text_len) <= 2):
+                merged.append(current)
+                current = candidate
+                continue
+            same_band = (
+                center_delta <= min_height * 0.22
+                or (overlap_y >= 0.78 and center_delta <= min_height * 0.34)
+            )
+            close_enough = (
+                gap_x <= max(26.0, min_height * 1.6)
+                and gap_x >= -max(10.0, min_height * 0.65)
+                and overlap_x <= 0.28
+            )
+        else:
+            same_band = (
+                center_delta <= min_height * 0.34
+                or (overlap_y >= 0.62 and center_delta <= min_height * 0.56)
+            )
+            close_enough = gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34
+
+        if same_band and close_enough and fragment_like:
+            merged_words = list(current.get("words") or []) + list(candidate.get("words") or [])
+            merged_line = make_line_from_words(
+                merged_words,
+                min(line_sort_y(current), line_sort_y(candidate)),
+                min(line_sort_x(current), line_sort_x(candidate)),
+            )
+            source_index = min(
+                float(current.get("_sourceIndex", float("inf"))),
+                float(candidate.get("_sourceIndex", float("inf"))),
+            )
+            if math.isfinite(source_index):
+                merged_line["_sourceIndex"] = int(source_index)
+            current = merged_line
+            continue
+
+        merged.append(current)
+        current = candidate
+
+    merged.append(current)
+    return merged
+
+
+def merge_cjk_diagonal_continuations(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return list(lines)
+
+    ordered = sorted(lines, key=visual_line_key)
+    merged: List[Dict[str, Any]] = []
+    index = 0
+
+    while index < len(ordered):
+        current = ordered[index]
+        current_text = str(current.get("text") or "").strip()
+        current_bbox = current.get("bbox") or {}
+        current_token = normalize_multilingual_token(current_text)
+
+        if index + 1 < len(ordered) and has_hangul_characters(current_text):
+            next_line = ordered[index + 1]
+            next_text = str(next_line.get("text") or "").strip()
+            next_bbox = next_line.get("bbox") or {}
+            next_token = normalize_multilingual_token(next_text)
+
+            if has_hangul_characters(next_text) and current_token and next_token:
+                min_height = max(8.0, min(bbox_height(current_bbox), bbox_height(next_bbox)))
+                center_delta = abs(bbox_center_y(current_bbox) - bbox_center_y(next_bbox))
+                overlap_y = vertical_overlap_ratio(current_bbox, next_bbox)
+                overlap_x = horizontal_overlap_ratio(current_bbox, next_bbox)
+                gap_lr = float(next_bbox.get("x0", 0.0)) - float(current_bbox.get("x1", 0.0))
+                gap_rl = float(current_bbox.get("x0", 0.0)) - float(next_bbox.get("x1", 0.0))
+                max_gap = max(84.0, min_height * 3.8)
+                close_horizontal = abs(gap_lr) <= max_gap or abs(gap_rl) <= max_gap
+                same_line_band = center_delta <= min_height * 1.15 or overlap_y >= 0.24
+                current_terminal = has_terminal_sentence_punct(current_text)
+                next_terminal = has_terminal_sentence_punct(next_text)
+                continuation_like = (
+                    (not current_terminal)
+                    and (
+                        next_terminal
+                        or len(current_token) <= 12
+                        or len(next_token) <= 10
+                    )
+                )
+                non_duplicate = not are_near_duplicate_tokens(current_token, next_token)
+                non_nested = overlap_x <= 0.9
+                forward_progress = float(next_bbox.get("x0", 0.0)) >= float(current_bbox.get("x0", 0.0)) - max(14.0, min_height * 0.5)
+
+                if same_line_band and close_horizontal and continuation_like and non_duplicate and non_nested and forward_progress:
+                    merged_words = list(current.get("words") or []) + list(next_line.get("words") or [])
+                    merged_words.sort(key=lambda item: (float(item["bbox"].get("x0", 0.0)), float(item["bbox"].get("y0", 0.0))))
+                    merged_line = make_line_from_words(
+                        merged_words,
+                        min(line_sort_y(current), line_sort_y(next_line)),
+                        min(line_sort_x(current), line_sort_x(next_line)),
+                    )
+                    source_index = min(
+                        float(current.get("_sourceIndex", float("inf"))),
+                        float(next_line.get("_sourceIndex", float("inf"))),
+                    )
+                    if math.isfinite(source_index):
+                        merged_line["_sourceIndex"] = int(source_index)
+                    merged.append(merged_line)
+                    index += 2
+                    continue
+
+        merged.append(current)
+        index += 1
+
+    return merged
+
+
+def merge_cjk_terminal_left_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return list(lines)
+
+    ordered = reorder_tilted_line_clusters(lines)
+    consumed: set[int] = set()
+    merged: List[Dict[str, Any]] = []
+
+    for index, line in enumerate(ordered):
+        if index in consumed:
+            continue
+
+        text = str(line.get("text") or "").strip()
+        token = normalize_multilingual_token(text)
+        bbox = line.get("bbox") or {}
+
+        if not has_hangul_characters(text) or not has_terminal_sentence_punct(text):
+            merged.append(line)
+            continue
+
+        best_index: int | None = None
+        best_score = float("inf")
+
+        for candidate_index, candidate in enumerate(ordered):
+            if candidate_index == index or candidate_index in consumed:
+                continue
+
+            candidate_text = str(candidate.get("text") or "").strip()
+            candidate_token = normalize_multilingual_token(candidate_text)
+            candidate_bbox = candidate.get("bbox") or {}
+
+            if not has_hangul_characters(candidate_text):
+                continue
+            if has_terminal_sentence_punct(candidate_text):
+                continue
+            if len(candidate_token) < 2 or len(candidate_token) > 12:
+                continue
+            if are_near_duplicate_tokens(token, candidate_token):
+                continue
+
+            min_height = max(8.0, min(bbox_height(bbox), bbox_height(candidate_bbox)))
+            center_delta = abs(bbox_center_y(bbox) - bbox_center_y(candidate_bbox))
+            overlap_y = vertical_overlap_ratio(bbox, candidate_bbox)
+            overlap_x = horizontal_overlap_ratio(bbox, candidate_bbox)
+            left_gap = float(bbox.get("x0", 0.0)) - float(candidate_bbox.get("x1", 0.0))
+
+            same_band = center_delta <= min_height * 1.45 or overlap_y >= 0.18
+            if not same_band:
+                continue
+            if overlap_x > 0.45:
+                continue
+            if left_gap < -max(24.0, min_height * 1.5):
+                continue
+            if left_gap > max(96.0, min_height * 4.4):
+                continue
+
+            score = center_delta + max(0.0, left_gap) * 0.35 - overlap_y * 8.0
+            if score < best_score:
+                best_score = score
+                best_index = candidate_index
+
+        if best_index is None:
+            merged.append(line)
+            continue
+
+        candidate = ordered[best_index]
+        candidate_bbox = candidate.get("bbox") or {}
+        if float(candidate_bbox.get("x0", 0.0)) <= float(bbox.get("x0", 0.0)):
+            merged_words = list(candidate.get("words") or []) + list(line.get("words") or [])
+        else:
+            merged_words = list(line.get("words") or []) + list(candidate.get("words") or [])
+        merged_words.sort(key=lambda item: (float(item["bbox"].get("x0", 0.0)), float(item["bbox"].get("y0", 0.0))))
+        merged_line = make_line_from_words(
+            merged_words,
+            min(line_sort_y(line), line_sort_y(candidate)),
+            min(line_sort_x(line), line_sort_x(candidate)),
+        )
+        source_index = min(
+            float(line.get("_sourceIndex", float("inf"))),
+            float(candidate.get("_sourceIndex", float("inf"))),
+        )
+        if math.isfinite(source_index):
+            merged_line["_sourceIndex"] = int(source_index)
+        merged.append(merged_line)
+        consumed.add(best_index)
+
+    return reorder_tilted_line_clusters(merged)
+
+
+def suppress_contained_hangul_fragments(
+    lines: List[Dict[str, Any]],
+    drop_reasons: List[Dict[str, Any]] | None = None,
+    source: str = "generic",
+) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return list(lines)
+
+    filtered: List[Dict[str, Any]] = []
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        raw_compact = re.sub(r"\s+", "", text)
+        has_symbol_noise = bool(re.search(r"[=~`|]+", raw_compact))
+        token = normalize_multilingual_token(text)
+        raw_token = raw_compact
+        particle_stem = ""
+        is_particle_candidate = False
+        if len(token) >= 3 and raw_token and raw_token[-1] in KOREAN_PARTICLE_SUFFIXES:
+            particle_stem = normalize_multilingual_token(raw_token[:-1])
+            is_particle_candidate = len(particle_stem) >= 2
+        if not has_hangul_characters(text) or not token or len(token) > 4:
+            filtered.append(line)
+            continue
+        if has_terminal_sentence_punct(text) and not has_symbol_noise and not is_particle_candidate:
+            filtered.append(line)
+            continue
+
+        bbox = line.get("bbox") or {}
+        confidence = float(line.get("confidence", 0.0) or 0.0)
+        line_center_x = bbox_center_x(bbox)
+        should_drop = False
+        drop_meta: Dict[str, Any] | None = None
+
+        for other in lines:
+            if other is line:
+                continue
+            other_text = str(other.get("text") or "").strip()
+            other_token = normalize_multilingual_token(other_text)
+            if len(other_token) < len(token) + 2:
+                continue
+            if token == other_token:
+                continue
+            token_shadow = token in other_token or are_near_duplicate_tokens(token, other_token[:len(token) + 1])
+            stem_shadow_hint = is_particle_candidate and (
+                particle_stem in other_token
+                or other_token.startswith(particle_stem)
+                or are_near_duplicate_tokens(particle_stem, other_token[:len(particle_stem)])
+            )
+            if not token_shadow and not stem_shadow_hint:
+                continue
+
+            other_bbox = other.get("bbox") or {}
+            other_conf = float(other.get("confidence", 0.0) or 0.0)
+            overlap_y = vertical_overlap_ratio(bbox, other_bbox)
+            overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+            contained_x = horizontal_containment_ratio(bbox, other_bbox)
+            center_delta = abs(bbox_center_y(bbox) - bbox_center_y(other_bbox))
+            center_dx = abs(line_center_x - bbox_center_x(other_bbox))
+            min_height = max(8.0, min(bbox_height(bbox), bbox_height(other_bbox)))
+            min_width = max(8.0, min(bbox_width(bbox), bbox_width(other_bbox)))
+            narrow_fragment = bbox_width(bbox) <= bbox_width(other_bbox) * 0.58
+            same_band = center_delta <= max(52.0, min_height * 2.4)
+            prefix_shadow = (
+                bool(token)
+                and bool(other_token)
+                and token[:1] == other_token[:1]
+                and narrow_fragment
+                and contained_x >= 0.62
+                and center_delta <= max(120.0, min_height * 5.6)
+            )
+            particle_shadow = False
+            if is_particle_candidate:
+                stem_shadow = (
+                    particle_stem in other_token
+                    or other_token.startswith(particle_stem)
+                    or are_near_duplicate_tokens(particle_stem, other_token[:len(particle_stem)])
+                )
+                particle_shadow = (
+                    stem_shadow
+                    and (narrow_fragment or len(token) <= 3)
+                    and center_delta <= max(420.0, min_height * 16.0)
+                    and (contained_x >= 0.1 or overlap_x >= 0.02 or center_dx <= max(380.0, min_width * 3.5))
+                    and confidence <= other_conf + 12.0
+                )
+            overlap_shadow = same_band and narrow_fragment and overlap_y >= 0.22 and (contained_x >= 0.55 or overlap_x >= 0.42)
+            particle_prefix_clone = False
+            if is_particle_candidate and len(token) <= 4:
+                stem_in_other = particle_stem in other_token or other_token.startswith(particle_stem)
+                longer_other = len(other_token) >= len(particle_stem) + 3
+                same_cluster = center_delta <= max(560.0, min_height * 22.0)
+                particle_prefix_clone = stem_in_other and longer_other and same_cluster
+            symbol_shadow = (
+                has_symbol_noise
+                and len(token) <= 3
+                and narrow_fragment
+                and (token in other_token or are_near_duplicate_tokens(token, other_token[:len(token) + 1]))
+                and (contained_x >= 0.34 or overlap_x >= 0.08 or center_dx <= max(170.0, min_width * 1.5))
+                and center_delta <= max(260.0, min_height * 10.0)
+            )
+            if particle_prefix_clone:
+                should_drop = True
+                drop_meta = {
+                    "reason": "particle_prefix_clone",
+                    "source": source,
+                    "text": text,
+                    "shadowWith": other_text,
+                }
+                break
+            if (overlap_shadow or prefix_shadow or particle_shadow or symbol_shadow) and confidence <= 98.0:
+                should_drop = True
+                if particle_shadow:
+                    reason = "particle_shadow"
+                elif symbol_shadow:
+                    reason = "symbol_shadow"
+                elif prefix_shadow:
+                    reason = "prefix_shadow"
+                else:
+                    reason = "overlap_shadow"
+                drop_meta = {
+                    "reason": reason,
+                    "source": source,
+                    "text": text,
+                    "shadowWith": other_text,
+                }
+                break
+
+        if should_drop:
+            if drop_reasons is not None:
+                drop_reasons.append(drop_meta or {
+                    "reason": "hangul_fragment_suppression",
+                    "source": source,
+                    "text": text,
+                })
+        else:
+            filtered.append(line)
+
+    return filtered
+
+
+def drop_final_particle_shadow_lines(
+    lines: List[Dict[str, Any]],
+    source: str = "paddle_korean_panel",
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 1:
+        return list(lines), []
+
+    filtered: List[Dict[str, Any]] = []
+    drops: List[Dict[str, Any]] = []
+
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        token = normalize_multilingual_token(text)
+        raw_compact = re.sub(r"\s+", "", text)
+
+        if not has_hangul_characters(text) or not token or len(token) > 4:
+            filtered.append(line)
+            continue
+        if has_terminal_sentence_punct(text):
+            filtered.append(line)
+            continue
+        if not raw_compact or raw_compact[-1] not in KOREAN_PARTICLE_SUFFIXES:
+            filtered.append(line)
+            continue
+
+        stem = normalize_multilingual_token(raw_compact[:-1])
+        if len(stem) < 2:
+            filtered.append(line)
+            continue
+
+        line_conf = float(line.get("confidence", 0.0) or 0.0)
+        shadow_other: Dict[str, Any] | None = None
+        for other in lines:
+            if other is line:
+                continue
+            other_text = str(other.get("text") or "").strip()
+            other_token = normalize_multilingual_token(other_text)
+            if len(other_token) < len(token) + 2:
+                continue
+            stem_match = (
+                stem in other_token
+                or other_token.startswith(stem)
+                or are_near_duplicate_tokens(stem, other_token[:len(stem)])
+            )
+            if not stem_match:
+                continue
+            other_conf = float(other.get("confidence", 0.0) or 0.0)
+            if line_conf <= other_conf + 40.0:
+                shadow_other = other
+                break
+
+        if shadow_other is None:
+            filtered.append(line)
+            continue
+
+        drops.append({
+            "reason": "lexical_particle_shadow_final",
+            "source": source,
+            "text": text,
+            "shadowWith": str(shadow_other.get("text") or "").strip(),
+        })
+
+    return filtered, drops
+
+
 def bbox_union(items: List[Dict[str, Any]]) -> Dict[str, float]:
     if not items:
         return {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
@@ -161,12 +731,17 @@ def bbox_union(items: List[Dict[str, Any]]) -> Dict[str, float]:
     }
 
 
-def make_line_from_words(words: List[Dict[str, Any]]) -> Dict[str, Any]:
+def make_line_from_words(words: List[Dict[str, Any]], sort_y: float | None = None, sort_x: float | None = None) -> Dict[str, Any]:
     normalized_words = sorted(words, key=lambda item: (float(item["bbox"].get("x0", 0.0)), float(item["bbox"].get("y0", 0.0))))
     text = " ".join(str(word.get("text") or "").strip() for word in normalized_words).strip()
     confidences = [normalize_confidence(word.get("confidence", 0.0)) for word in normalized_words]
     confidence = sum(confidences) / len(confidences) if confidences else 0.0
-    return make_line(text, confidence, bbox_union(normalized_words), normalized_words)
+    bbox = bbox_union(normalized_words)
+    if sort_y is None:
+        sort_y = min(float(word["bbox"].get("y0", 0.0)) for word in normalized_words) if normalized_words else None
+    if sort_x is None:
+        sort_x = min(float(word["bbox"].get("x0", 0.0)) for word in normalized_words) if normalized_words else None
+    return make_line(text, confidence, bbox, normalized_words, sort_y, sort_x)
 
 
 def looks_mostly_upper(text: str) -> bool:
@@ -205,6 +780,8 @@ def is_advertisement_brand_token(text: str) -> bool:
         return True
     if any(marker in alpha for marker in WATERMARK_TOKENS if len(marker) >= 6):
         return True
+    if any(marker in alpha for marker in WATERMARK_PHRASE_MARKERS if len(marker) >= 6):
+        return True
     if any(marker in alpha for marker in ("ASCENS", "SCENS", "ASURA", "NEWTOKI", "NSTINASCENS", "TINASCENS", "SCANSCOM")):
         return True
     if alpha.endswith("SCANS") and len(alpha) >= 6:
@@ -239,6 +816,40 @@ def is_domain_like_token(text: str) -> bool:
     if any(marker in domain for marker in WATERMARK_TOKENS if len(marker) >= 6):
         return True
     return False
+
+
+def contains_known_watermark_phrase(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    compact_upper = re.sub(r"[^A-Za-z0-9]+", "", raw).upper()
+    compact_hangul = re.sub(r"\s+", "", raw)
+    if any(marker in compact_upper for marker in WATERMARK_PHRASE_MARKERS):
+        return True
+    if any(marker in compact_hangul for marker in KOREAN_WATERMARK_MARKERS):
+        return True
+    return False
+
+
+def is_probable_korean_watermark_noise(text: str, bbox: Dict[str, Any], width: int, height: int) -> bool:
+    raw = str(text or "").strip()
+    if not raw or not has_hangul_characters(raw):
+        return False
+    compact = re.sub(r"\s+", "", raw)
+    y0 = float(bbox.get("y0", 0.0))
+    y1 = float(bbox.get("y1", 0.0))
+    x0 = float(bbox.get("x0", 0.0))
+    x1 = float(bbox.get("x1", 0.0))
+    edge_band = y1 <= height * 0.16 or y0 >= height * 0.84 or x1 <= width * 0.15 or x0 >= width * 0.85
+    marker_hit = (
+        any(marker in compact for marker in KOREAN_WATERMARK_MARKERS)
+        or (
+            "입문" in compact
+            and any(token in compact for token in ("사이트", "권", "뉴토끼", "미트", "웹툰"))
+        )
+    )
+    symbol_noise = sum(1 for char in raw if char in "'[]-_`|")
+    return edge_band and marker_hit and symbol_noise >= 1
 
 
 def strip_inline_ad_words(words: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
@@ -372,13 +983,14 @@ def reflow_external_words(words: List[Dict[str, Any]], pipeline_profile: str, wi
         )
         if float(row["bbox"].get("y1", 0.0)) <= height * 0.22:
             row_gap_threshold *= 1.35
-
         current_group: List[Dict[str, Any]] = [row_words[0]]
         for word in row_words[1:]:
             previous = current_group[-1]
             gap = float(word["bbox"].get("x0", 0.0)) - float(previous["bbox"].get("x1", 0.0))
             overlap = vertical_overlap_ratio(previous["bbox"], word["bbox"])
-            if gap <= row_gap_threshold or overlap >= 0.35:
+            lead_token = normalize_alpha_token(str(current_group[0].get("text") or ""))
+            leading_short_speech = len(current_group) == 1 and lead_token in SHORT_SPEECH_TOKENS and gap <= row_gap_threshold * 2.4
+            if gap <= row_gap_threshold or overlap >= 0.35 or leading_short_speech:
                 current_group.append(word)
                 continue
             line = make_line_from_words(current_group)
@@ -394,6 +1006,94 @@ def reflow_external_words(words: List[Dict[str, Any]], pipeline_profile: str, wi
                 output_words.extend(line["words"])
 
     return lines, output_words
+
+
+def merge_short_lead_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return lines
+
+    merged: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        current = lines[index]
+        token = normalize_alpha_token(str(current.get("text") or ""))
+        if token in SHORT_SPEECH_TOKENS and index + 1 < len(lines):
+            next_line = lines[index + 1]
+            current_bbox = current.get("bbox") or {}
+            next_bbox = next_line.get("bbox") or {}
+            center_delta = abs(bbox_center_y(current_bbox) - bbox_center_y(next_bbox))
+            min_height = max(8.0, min(bbox_height(current_bbox), bbox_height(next_bbox)))
+            gap = float(next_bbox.get("x0", 0.0)) - float(current_bbox.get("x1", 0.0))
+            overlap = vertical_overlap_ratio(current_bbox, next_bbox)
+            if (center_delta <= min_height * 1.2 or overlap >= 0.15) and gap <= max(64.0, min_height * 5.0):
+                merged_words = list(current.get("words") or []) + list(next_line.get("words") or [])
+                merged_line = make_line_from_words(
+                    merged_words,
+                    min(line_sort_y(current), line_sort_y(next_line)),
+                    min(line_sort_x(current), line_sort_x(next_line)),
+                )
+                source_index = min(
+                    float(current.get("_sourceIndex", float("inf"))),
+                    float(next_line.get("_sourceIndex", float("inf"))),
+                )
+                if math.isfinite(source_index):
+                    merged_line["_sourceIndex"] = int(source_index)
+                merged.append(merged_line)
+                index += 2
+                continue
+
+        merged.append(current)
+        index += 1
+
+    return merged
+
+
+def reorder_tilted_line_clusters(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return list(lines)
+    return sorted(lines, key=line_sort_key)
+
+
+def levenshtein_distance(left: str, right: str, max_distance: int = 2) -> int:
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+    if abs(len(left) - len(right)) > max_distance:
+        return max_distance + 1
+
+    previous = list(range(len(right) + 1))
+    for i, left_char in enumerate(left, start=1):
+        current = [i]
+        row_min = current[0]
+        for j, right_char in enumerate(right, start=1):
+            cost = 0 if left_char == right_char else 1
+            current.append(min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + cost,
+            ))
+            row_min = min(row_min, current[j])
+        if row_min > max_distance:
+            return max_distance + 1
+        previous = current
+    return previous[-1]
+
+
+def are_near_duplicate_tokens(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if left in right or right in left:
+        return True
+    max_len = max(len(left), len(right))
+    if max_len > 16:
+        return False
+    distance = levenshtein_distance(left, right, max_distance=2)
+    return distance <= 1 if max_len <= 8 else distance <= 2
 
 
 def minimal_cleanup_external_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -431,25 +1131,31 @@ def minimal_cleanup_external_result(result: Dict[str, Any]) -> Dict[str, Any]:
         if not normalized_words:
             continue
 
-        candidate_line = make_line_from_words(normalized_words) if removed_ad_words else make_line(text, confidence, bbox, normalized_words)
+        candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if removed_ad_words else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
         if is_probable_ascii_ghost(candidate_line["text"]):
+            continue
+        if contains_known_watermark_phrase(candidate_line["text"]):
             continue
         lines.append(candidate_line)
         words.extend(candidate_line["words"])
 
-    lines.sort(key=lambda item: (float(item["bbox"].get("y0", 0.0)), float(item["bbox"].get("x0", 0.0))))
-    words.sort(key=lambda item: (float(item["bbox"].get("y0", 0.0)), float(item["bbox"].get("x0", 0.0))))
+    lines = reorder_tilted_line_clusters(lines)
+    words = []
+    for line in lines:
+        words.extend(line.get("words") or [])
     return make_text_result(lines, words, result.get("pageSegMode"))
 
 
 def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, height: int) -> Dict[str, Any]:
     candidate_lines: List[Dict[str, Any]] = []
 
-    for line in result.get("lines", []) or []:
+    for source_index, line in enumerate(result.get("lines", []) or []):
         text = normalize_text(str(line.get("text") or ""))
         if not text:
             continue
         bbox = line.get("bbox") or {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
+        if is_probable_korean_watermark_noise(text, bbox, width, height):
+            continue
         confidence = normalize_confidence(line.get("confidence", 0.0))
         line_words = line.get("words") or explode_line_to_words(text, confidence, bbox)
         normalized_words: List[Dict[str, Any]] = []
@@ -493,9 +1199,14 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
         if not line_kept_words:
             continue
 
-        candidate_lines.append(make_line_from_words(line_kept_words))
+        candidate_line = make_line_from_words(
+            line_kept_words,
+            line.get("_sortY"),
+            line.get("_sortX"),
+        )
+        candidate_line["_sourceIndex"] = source_index
+        candidate_lines.append(candidate_line)
 
-    candidate_lines.sort(key=lambda item: (bbox_center_y(item["bbox"]), float(item["bbox"].get("x0", 0.0))))
     filtered_candidates: List[Dict[str, Any]] = []
 
     for line in candidate_lines:
@@ -513,6 +1224,10 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
         punctuation_ghost = bool(re.fullmatch(r"[\W_]+", text)) or text in {"—", "——", "-", "--", "–", "— —"}
 
         if punctuation_ghost:
+            continue
+        if is_probable_korean_watermark_noise(text, line_bbox, width, height):
+            continue
+        if contains_known_watermark_phrase(text):
             continue
         if not has_hangul and len(alpha_num) <= 4:
             continue
@@ -541,7 +1256,7 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
         for index, existing in enumerate(deduped_lines):
             existing_text = str(existing.get("text") or "").strip()
             existing_alpha = normalize_multilingual_token(existing_text)
-            center_delta = abs(bbox_center_y(existing["bbox"]) - bbox_center_y(line_bbox))
+            center_delta = abs(line_sort_y(existing) - line_sort_y(line))
             min_height = max(8.0, min(bbox_height(existing["bbox"]), bbox_height(line_bbox)))
             overlap_x = horizontal_overlap_ratio(existing["bbox"], line_bbox)
             same_band = center_delta <= min_height * 0.9 and (
@@ -559,6 +1274,7 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
                 existing_alpha == alpha_num
                 or (alpha_num and alpha_num in existing_alpha)
                 or (existing_alpha and existing_alpha in alpha_num)
+                or are_near_duplicate_tokens(existing_alpha, alpha_num)
                 )
             )
             if not same_or_subset:
@@ -574,42 +1290,239 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
         if not replaced:
             deduped_lines.append(line)
 
+    hangul_fragment_drops: List[Dict[str, Any]] = []
+    deduped_lines = suppress_contained_hangul_fragments(
+        deduped_lines,
+        drop_reasons=hangul_fragment_drops,
+        source="paddle_korean_panel",
+    )
+
+    post_filtered_lines: List[Dict[str, Any]] = []
+    for line in deduped_lines:
+        text = str(line.get("text") or "").strip()
+        alpha_num = normalize_multilingual_token(text)
+        line_bbox = line["bbox"]
+        has_terminal_punct = bool(re.search(r"[!?…\.]+$", text))
+        is_short_hangul = has_hangul_characters(text) and len(alpha_num) <= 2
+        should_drop = False
+        if not should_drop and has_hangul_characters(text) and len(alpha_num) <= 3:
+            raw_compact = re.sub(r"\s+", "", text)
+            if raw_compact and raw_compact[-1] in KOREAN_PARTICLE_SUFFIXES:
+                stem = normalize_multilingual_token(raw_compact[:-1])
+                if len(stem) >= 2:
+                    line_conf = float(line.get("confidence", 0.0) or 0.0)
+                    for other in deduped_lines:
+                        if other is line:
+                            continue
+                        other_text = str(other.get("text") or "").strip()
+                        other_alpha = normalize_multilingual_token(other_text)
+                        if len(other_alpha) <= len(stem) + 1:
+                            continue
+                        stem_match = (
+                            stem in other_alpha
+                            or other_alpha.startswith(stem)
+                            or are_near_duplicate_tokens(stem, other_alpha[:len(stem)])
+                        )
+                        if not stem_match:
+                            continue
+                        other_conf = float(other.get("confidence", 0.0) or 0.0)
+                        if line_conf <= other_conf + 22.0:
+                            should_drop = True
+                            hangul_fragment_drops.append({
+                                "reason": "lexical_particle_shadow_hard",
+                                "source": "paddle_korean_panel",
+                                "text": text,
+                                "shadowWith": other_text,
+                            })
+                            break
+        if is_short_hangul and not has_terminal_punct:
+            for other in deduped_lines:
+                if other is line:
+                    continue
+                other_text = str(other.get("text") or "").strip()
+                other_alpha = normalize_multilingual_token(other_text)
+                if len(other_alpha) <= len(alpha_num):
+                    continue
+                center_delta = abs(line_sort_y(other) - line_sort_y(line))
+                min_height = max(8.0, min(bbox_height(other["bbox"]), bbox_height(line_bbox)))
+                contained = horizontal_containment_ratio(line_bbox, other["bbox"]) >= 0.72
+                overlap_x = horizontal_overlap_ratio(line_bbox, other["bbox"])
+                shared_edge = bool(alpha_num) and bool(other_alpha) and (
+                    alpha_num[:1] == other_alpha[:1]
+                    or alpha_num[-1:] == other_alpha[-1:]
+                )
+                if (
+                    (center_delta <= min_height * 3.2 and contained)
+                    or (center_delta <= min_height * 2.6 and overlap_x >= 0.52 and shared_edge)
+                    or (len(alpha_num) <= 2 and center_delta <= min_height * 3.4 and contained)
+                    or (len(alpha_num) <= 3 and center_delta <= min_height * 3.8 and overlap_x >= 0.35 and bbox_width(line_bbox) <= bbox_width(other["bbox"]) * 0.58)
+                    or (len(alpha_num) <= 3 and center_delta <= min_height * 2.2 and overlap_x >= 0.4 and bbox_width(line_bbox) <= bbox_width(other["bbox"]) * 0.45)
+                    or (len(alpha_num) <= 4 and center_delta <= min_height * 3.0 and overlap_x >= 0.35 and bbox_width(line_bbox) <= bbox_width(other["bbox"]) * 0.5 and shared_edge)
+                ):
+                    should_drop = True
+                    break
+        if not should_drop and has_hangul_characters(text) and len(alpha_num) <= 4:
+            for other in deduped_lines:
+                if other is line:
+                    continue
+                other_text = str(other.get("text") or "").strip()
+                other_alpha = normalize_multilingual_token(other_text)
+                if len(other_alpha) <= len(alpha_num):
+                    continue
+                overlap_x = horizontal_overlap_ratio(line_bbox, other["bbox"])
+                overlap_y = vertical_overlap_ratio(line_bbox, other["bbox"])
+                starts_similar = bool(alpha_num) and bool(other_alpha) and alpha_num[:1] == other_alpha[:1]
+                narrow_fragment = bbox_width(line_bbox) <= bbox_width(other["bbox"]) * 0.55
+                if starts_similar and overlap_x >= 0.28 and overlap_y >= 0.1 and narrow_fragment:
+                    should_drop = True
+                    break
+        if not should_drop and has_hangul_characters(text) and len(alpha_num) <= 2 and not has_terminal_punct:
+            for other in deduped_lines:
+                if other is line:
+                    continue
+                other_text = str(other.get("text") or "").strip()
+                other_alpha = normalize_multilingual_token(other_text)
+                if len(other_alpha) < len(alpha_num) + 2:
+                    continue
+                if not alpha_num or alpha_num not in other_alpha:
+                    continue
+                other_bbox = other["bbox"]
+                overlap_x = horizontal_overlap_ratio(line_bbox, other_bbox)
+                overlap_y = vertical_overlap_ratio(line_bbox, other_bbox)
+                contained_x = horizontal_containment_ratio(line_bbox, other_bbox) >= 0.52
+                center_delta = abs(line_sort_y(other) - line_sort_y(line))
+                min_height = max(8.0, min(bbox_height(other_bbox), bbox_height(line_bbox)))
+                nearby_band = center_delta <= min_height * 3.0
+                narrower = bbox_width(line_bbox) <= bbox_width(other_bbox) * 0.62
+                if narrower and nearby_band and (contained_x or overlap_x >= 0.24) and overlap_y >= 0.06:
+                    should_drop = True
+                    break
+        if not should_drop and has_hangul_characters(text) and len(alpha_num) <= 2 and not has_terminal_punct:
+            for other in deduped_lines:
+                if other is line:
+                    continue
+                other_text = str(other.get("text") or "").strip()
+                other_alpha = normalize_multilingual_token(other_text)
+                if len(other_alpha) <= len(alpha_num):
+                    continue
+                other_bbox = other["bbox"]
+                center_delta = abs(line_sort_y(other) - line_sort_y(line))
+                min_height = max(8.0, min(bbox_height(other_bbox), bbox_height(line_bbox)))
+                nearby_band = center_delta <= min_height * 4.0
+                overlap_x = horizontal_overlap_ratio(line_bbox, other_bbox)
+                overlap_y = vertical_overlap_ratio(line_bbox, other_bbox)
+                narrow_fragment = bbox_width(line_bbox) <= bbox_width(other_bbox) * 0.52
+                same_head = bool(alpha_num) and bool(other_alpha) and alpha_num[:1] == other_alpha[:1]
+                similar_short = bool(alpha_num) and bool(other_alpha) and are_near_duplicate_tokens(alpha_num, other_alpha[:len(alpha_num) + 1])
+                if nearby_band and narrow_fragment and (overlap_x >= 0.14 or overlap_y >= 0.08) and (same_head or similar_short):
+                    should_drop = True
+                    break
+        if not should_drop and has_hangul_characters(text) and len(alpha_num) <= 2:
+            for other in deduped_lines:
+                if other is line:
+                    continue
+                other_text = str(other.get("text") or "").strip()
+                other_alpha = normalize_multilingual_token(other_text)
+                if len(other_alpha) < len(alpha_num) + 2:
+                    continue
+                other_bbox = other["bbox"]
+                center_delta = abs(line_sort_y(other) - line_sort_y(line))
+                min_height = max(8.0, min(bbox_height(other_bbox), bbox_height(line_bbox)))
+                nearby_band = center_delta <= min_height * 4.2
+                overlap_x = horizontal_overlap_ratio(line_bbox, other_bbox)
+                overlap_y = vertical_overlap_ratio(line_bbox, other_bbox)
+                contained_x = horizontal_containment_ratio(line_bbox, other_bbox) >= 0.42
+                share_head = bool(alpha_num) and bool(other_alpha) and alpha_num[:1] == other_alpha[:1]
+                if not share_head:
+                    continue
+                near_prefix = are_near_duplicate_tokens(alpha_num, other_alpha[:len(alpha_num)])
+                if nearby_band and (contained_x or overlap_x >= 0.12) and overlap_y >= 0.04 and near_prefix:
+                    should_drop = True
+                    break
+        if not should_drop and has_hangul_characters(text) and len(alpha_num) <= 2 and not has_terminal_punct:
+            line_conf = float(line.get("confidence", 0.0) or 0.0)
+            for other in deduped_lines:
+                if other is line:
+                    continue
+                other_text = str(other.get("text") or "").strip()
+                other_alpha = normalize_multilingual_token(other_text)
+                if len(other_alpha) <= len(alpha_num) + 1:
+                    continue
+                if not alpha_num or alpha_num[0] != other_alpha[0]:
+                    continue
+                if alpha_num not in other_alpha and not are_near_duplicate_tokens(alpha_num, other_alpha[:len(alpha_num)]):
+                    continue
+                other_bbox = other["bbox"]
+                center_delta = abs(bbox_center_y(other_bbox) - bbox_center_y(line_bbox))
+                min_height = max(8.0, min(bbox_height(other_bbox), bbox_height(line_bbox)))
+                overlap_x = horizontal_overlap_ratio(line_bbox, other_bbox)
+                contained_x = horizontal_containment_ratio(line_bbox, other_bbox) >= 0.38
+                narrow_fragment = bbox_width(line_bbox) <= bbox_width(other_bbox) * 0.6
+                nearby_band = center_delta <= max(140.0, min_height * 7.0)
+                if nearby_band and narrow_fragment and (contained_x or overlap_x >= 0.2) and line_conf <= 96.0:
+                    should_drop = True
+                    break
+        if not should_drop:
+            post_filtered_lines.append(line)
+
+    post_filtered_lines = reorder_tilted_line_clusters(post_filtered_lines)
+
     filtered_lines: List[Dict[str, Any]] = []
     filtered_words: List[Dict[str, Any]] = []
-    for line in deduped_lines:
+    for line in post_filtered_lines:
         filtered_lines.append(line)
         filtered_words.extend(line.get("words") or [])
 
-    return make_text_result(filtered_lines, filtered_words, result.get("pageSegMode"))
+    final_lines, final_particle_drops = drop_final_particle_shadow_lines(
+        filtered_lines,
+        source="paddle_korean_panel",
+    )
+    final_words: List[Dict[str, Any]] = []
+    for line in final_lines:
+        final_words.extend(line.get("words") or [])
+
+    output = make_text_result(final_lines, final_words, result.get("pageSegMode"))
+    output["debug"] = {
+        "cleanupRoute": "paddle_korean_panel",
+        "dropCounts": {
+            "hangulFragmentSuppression": len(hangul_fragment_drops),
+            "finalParticleShadowSuppression": len(final_particle_drops),
+        },
+        "droppedWords": list(hangul_fragment_drops) + list(final_particle_drops),
+    }
+    return output
 
 
 def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profile: str, width: int, height: int, language: str = "") -> Dict[str, Any]:
-    if engine == "paddleocr" and pipeline_profile == "panel" and "kor" in str(language or "").split("+"):
+    language_codes = [code.strip() for code in str(language or "").split("+") if code.strip()]
+    is_korean_panel = pipeline_profile == "panel" and "kor" in language_codes
+    if engine == "paddleocr" and is_korean_panel:
         return cleanup_paddle_korean_panel_result(result, width, height)
     if engine == "paddleocr" and pipeline_profile == "panel":
         return minimal_cleanup_external_result(result)
 
     candidate_lines: List[Dict[str, Any]] = []
     candidate_words: List[Dict[str, Any]] = []
-    short_speech_tokens = {"EH", "ME", "I", "OH", "AH", "NO"}
-
-    for line in result.get("lines", []) or []:
+    for source_index, line in enumerate(result.get("lines", []) or []):
         text = normalize_text(str(line.get("text") or ""))
         if not text:
             continue
         bbox = line.get("bbox") or {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
+        if is_korean_panel and is_probable_korean_watermark_noise(text, bbox, width, height):
+            continue
         confidence = normalize_confidence(line.get("confidence", 0.0))
         alpha = re.sub(r"[^A-Za-z0-9]+", "", text).upper()
         tokens = [re.sub(r"[^A-Za-z0-9]+", "", part).upper() for part in text.split()]
         tokens = [token for token in tokens if token]
 
         if engine == "easyocr" and pipeline_profile == "panel":
+            is_latin_like = not has_non_latin_characters(text)
             near_edge = float(bbox.get("y1", 0.0)) <= height * 0.16 or float(bbox.get("y0", 0.0)) >= height * 0.84
             if len(tokens) == 1 and tokens[0].isdigit() and confidence < 85:
                 continue
-            if confidence < 24 and near_edge and len(tokens) <= 2 and not any(token in short_speech_tokens for token in tokens):
+            if is_latin_like and confidence < 24 and near_edge and len(tokens) <= 2 and not any(token in SHORT_SPEECH_TOKENS for token in tokens):
                 continue
-            if confidence < 18 and len(alpha) <= 3 and not any(token in short_speech_tokens for token in tokens):
+            if is_latin_like and confidence < 18 and len(alpha) <= 3 and not any(token in SHORT_SPEECH_TOKENS for token in tokens):
                 continue
 
         line_words = line.get("words") or explode_line_to_words(text, confidence, bbox)
@@ -634,7 +1547,8 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
         normalized_words, removed_ad_words = strip_inline_ad_words(normalized_words)
         if not normalized_words:
             continue
-        candidate_line = make_line_from_words(normalized_words) if removed_ad_words else make_line(text, confidence, bbox, normalized_words)
+        candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if removed_ad_words else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
+        candidate_line["_sourceIndex"] = source_index
         candidate_lines.append(candidate_line)
         candidate_words.extend(candidate_line["words"])
 
@@ -683,7 +1597,34 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
 
         candidate_words = filtered_words
 
+    if engine == "easyocr" and pipeline_profile == "panel":
+        is_cjk_panel = any(code in {"kor", "jpn", "jpn_vert", "chi_sim", "chi_tra", "tha"} for code in language_codes)
+        if is_cjk_panel:
+            cleaned_lines = reorder_tilted_line_clusters(candidate_lines)
+            cleaned_lines = merge_same_band_fragments(cleaned_lines)
+            cleaned_lines = merge_cjk_terminal_left_fragments(cleaned_lines)
+            cleaned_lines = merge_cjk_diagonal_continuations(cleaned_lines)
+            cleaned_lines = merge_same_band_fragments(cleaned_lines)
+            if "kor" in language_codes:
+                cleaned_lines = suppress_contained_hangul_fragments(cleaned_lines)
+            cleaned_lines = merge_short_lead_lines(cleaned_lines)
+            cleaned_lines = reorder_tilted_line_clusters(cleaned_lines)
+        else:
+            cleaned_lines = merge_same_band_fragments(reorder_tilted_line_clusters(candidate_lines))
+            cleaned_lines = merge_short_lead_lines(cleaned_lines)
+            cleaned_lines = reorder_tilted_line_clusters(cleaned_lines)
+        cleaned_words: List[Dict[str, Any]] = []
+        for line in cleaned_lines:
+            cleaned_words.extend(line.get("words") or [])
+        return make_text_result(cleaned_lines, cleaned_words, result.get("pageSegMode"))
+
     cleaned_lines, cleaned_words = reflow_external_words(candidate_words, pipeline_profile, width, height)
+    if pipeline_profile == "panel":
+        cleaned_lines = merge_short_lead_lines(cleaned_lines)
+        cleaned_lines.sort(key=line_sort_key)
+        cleaned_words = []
+        for line in cleaned_lines:
+            cleaned_words.extend(line.get("words") or [])
     return make_text_result(cleaned_lines, cleaned_words, result.get("pageSegMode"))
 
 
@@ -899,6 +1840,10 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
     shortest = min(width, height)
     longest = max(width, height)
     aspect_ratio = longest / max(1, shortest)
+    det_thresh: float | None = None
+    det_box_thresh: float | None = None
+    det_unclip_ratio: float | None = None
+    rec_score_thresh: float | None = None
 
     if pipeline == "panel":
         if profile_key == "cpu_panel_fast":
@@ -909,8 +1854,6 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
             else:
                 det_limit = 1536
             rec_batch = 8
-        elif profile_key == "cpu_korean_default":
-            return {}
         if is_cjk_like:
             if profile_key != "cpu_panel_fast":
                 if aspect_ratio >= 2.3 or longest >= 7000:
@@ -928,6 +1871,13 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = 2000
                     rec_batch = 8
+            if lang == "korean":
+                # Keep detector thresholds near Paddle defaults to avoid dropping short valid text
+                # and rely on deterministic fragment suppression for ghosts.
+                det_thresh = 0.30
+                det_box_thresh = 0.62
+                det_unclip_ratio = 1.50
+                rec_score_thresh = 0.32
         else:
             if profile_key != "cpu_panel_fast":
                 if shortest <= 420:
@@ -944,11 +1894,20 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
             det_limit = 2200 if shortest <= 900 else 1800
         rec_batch = 10
 
-    return {
+    predict_kwargs: Dict[str, Any] = {
         "text_det_limit_type": "max",
         "text_det_limit_side_len": det_limit,
         "text_recognition_batch_size": rec_batch,
     }
+    if det_thresh is not None:
+        predict_kwargs["text_det_thresh"] = det_thresh
+    if det_box_thresh is not None:
+        predict_kwargs["text_det_box_thresh"] = det_box_thresh
+    if det_unclip_ratio is not None:
+        predict_kwargs["text_det_unclip_ratio"] = det_unclip_ratio
+    if rec_score_thresh is not None:
+        predict_kwargs["text_rec_score_thresh"] = rec_score_thresh
+    return predict_kwargs
 
 
 def build_paddle_legacy_predict_kwargs(predict_kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -963,28 +1922,32 @@ def build_paddle_legacy_predict_kwargs(predict_kwargs: Dict[str, Any]) -> Dict[s
 
 
 def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
-    candidate_kwargs: List[Dict[str, Any]] = [
-        dict(predict_kwargs),
-        {k: v for k, v in predict_kwargs.items() if k != "text_det_limit_type"},
-        {k: v for k, v in predict_kwargs.items() if k == "text_det_limit_side_len"},
-        {},
-    ]
-
-    seen: set[Tuple[Tuple[str, Any], ...]] = set()
+    adaptive_kwargs = dict(predict_kwargs)
     last_error: Exception | None = None
 
-    for kwargs in candidate_kwargs:
-        key = tuple(sorted(kwargs.items()))
-        if key in seen:
-            continue
-        seen.add(key)
+    while True:
         try:
-            return ocr.predict(input=image_path, **kwargs), kwargs
+            return ocr.predict(input=image_path, **adaptive_kwargs), adaptive_kwargs
         except TypeError as exc:
             message = str(exc)
-            if "unexpected keyword argument" not in message.lower():
+            lowered = message.lower()
+            if "unexpected keyword argument" not in lowered:
                 raise
             last_error = exc
+            match = re.search(r"unexpected keyword argument ['\"]([^'\"]+)['\"]", message, flags=re.IGNORECASE)
+            if not match:
+                break
+            bad_key = match.group(1)
+            if bad_key not in adaptive_kwargs:
+                break
+            adaptive_kwargs.pop(bad_key, None)
+            if not adaptive_kwargs:
+                break
+
+    try:
+        return ocr.predict(input=image_path), {}
+    except TypeError as exc:
+        last_error = exc
 
     if last_error is not None:
         raise last_error
@@ -1011,8 +1974,9 @@ def normalize_paddle_v2_output(raw_result: Any) -> Dict[str, Any]:
         if not text:
             continue
         bbox = bbox_from_points(points)
+        sort_y, sort_x = sort_hint_from_points(points)
         line_words = explode_line_to_words(text, confidence, bbox)
-        lines.append(make_line(text, confidence, bbox, line_words))
+        lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x))
         words.extend(line_words)
 
     return make_text_result(lines, words)
@@ -1062,13 +2026,15 @@ def normalize_paddle_v3_output(raw_result: Any) -> Dict[str, Any]:
             text_value = str("" if text is None else text).strip()
             if not text_value:
                 continue
-            bbox = bbox_from_points(polys[index] if index < len(polys) else [])
+            points = polys[index] if index < len(polys) else []
+            bbox = bbox_from_points(points)
+            sort_y, sort_x = sort_hint_from_points(points)
             raw_score = scores[index] if index < len(scores) else 0.0
             if hasattr(raw_score, "item"):
                 raw_score = raw_score.item()
             confidence = float(raw_score or 0.0)
             line_words = explode_line_to_words(text_value, confidence, bbox)
-            lines.append(make_line(text_value, confidence, bbox, line_words))
+            lines.append(make_line(text_value, confidence, bbox, line_words, sort_y, sort_x))
             words.extend(line_words)
 
     if not lines and not words:
@@ -1121,11 +2087,12 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             args.height,
             args.language,
         )
+        cleanup_debug = cleaned.get("debug") or {}
         cleaned["debug"] = {
             "profile": profile_key,
             "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
-            "dropCounts": {},
-            "droppedWords": [],
+            "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
+            "droppedWords": list(cleanup_debug.get("droppedWords") or []),
             "timingsMs": {
                 "ocr": round((time.perf_counter() - started_at) * 1000, 1),
             },
@@ -1151,11 +2118,12 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                 args.height,
                 args.language,
             )
+        cleanup_debug = cleaned.get("debug") or {}
         cleaned["debug"] = {
             "profile": profile_key,
             "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
-            "dropCounts": {},
-            "droppedWords": [],
+            "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
+            "droppedWords": list(cleanup_debug.get("droppedWords") or []),
             "timingsMs": {
                 "ocr": round((time.perf_counter() - started_at) * 1000, 1),
             },
@@ -1263,6 +2231,8 @@ def generic_item_to_line(item: Any) -> Dict[str, Any] | None:
         text = str(item.get("text") or item.get("label") or item.get("value") or "").strip()
         confidence = float(item.get("confidence") or item.get("score") or item.get("probability") or 0.0)
         bbox_value = item.get("bbox") or item.get("box") or item.get("points") or item.get("polygon")
+        sort_y = None
+        sort_x = None
         if isinstance(bbox_value, dict):
             bbox = {
                 "x0": float(bbox_value.get("x0", 0.0)),
@@ -1272,14 +2242,17 @@ def generic_item_to_line(item: Any) -> Dict[str, Any] | None:
             }
         else:
             bbox = bbox_from_points(bbox_value)
+            sort_y, sort_x = sort_hint_from_points(bbox_value)
         if text:
-            return make_line(text, confidence, bbox)
+            return make_line(text, confidence, bbox, None, sort_y, sort_x)
     if isinstance(item, (list, tuple)) and len(item) >= 3:
-        bbox = bbox_from_points(item[0])
+        points = item[0]
+        bbox = bbox_from_points(points)
+        sort_y, sort_x = sort_hint_from_points(points)
         text = str(item[1] or "").strip()
         confidence = float(item[2] or 0.0)
         if text:
-            return make_line(text, confidence, bbox)
+            return make_line(text, confidence, bbox, None, sort_y, sort_x)
     return None
 
 
@@ -1329,13 +2302,15 @@ def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
     for item in raw_result:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
-        bbox = bbox_from_points(item[0])
+        points = item[0]
+        bbox = bbox_from_points(points)
+        sort_y, sort_x = sort_hint_from_points(points)
         text = str(item[1] or "").strip()
         confidence = float(item[2] or 0.0)
         if not text:
             continue
         line_words = explode_line_to_words(text, confidence, bbox)
-        lines.append(make_line(text, confidence, bbox, line_words))
+        lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x))
         words.extend(line_words)
 
     if not lines and not words:

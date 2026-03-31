@@ -9,7 +9,7 @@ export function resolvePerPageTimeoutSec(timeoutSec?: number, engine: string = '
     ? timeoutSec
     : undefined;
   if (engine !== 'tesseract') {
-    return Math.max(normalized ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT, 300);
+    return normalized ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT;
   }
   return normalized;
 }

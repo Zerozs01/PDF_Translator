@@ -15,7 +15,6 @@ import {
   Download, 
   RefreshCw,
   Languages,
-  CheckCircle,
   Eye,
   Cpu
 } from 'lucide-react';
@@ -50,6 +49,7 @@ type EngineWarmState = {
 const SESSION_ENGINE_WARM_STATES: Record<string, EngineWarmState> = {};
 const SESSION_PREWARM_REQUESTED = new Set<string>();
 const SESSION_ENGINE_WARM_PROMISES = new Map<string, Promise<boolean>>();
+const SESSION_ENGINE_READY_KEYS = new Set<string>();
 
 const normalizeWarmLanguageKey = (value: string): string => value
   .split('+')
@@ -83,7 +83,6 @@ export const OCRTextLayerPanel: React.FC = () => {
   } = useOCRTextLayerStore();
 
   const [isExporting, setIsExporting] = useState(false);
-  const [cacheStatus, setCacheStatus] = useState<{ page: number; source: 'memory' | 'db'; stale?: boolean } | null>(null);
   const autoSyncedDocRef = useRef<number | null>(null);
   const persistedCacheRef = useRef<Map<string, string>>(new Map());
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -175,6 +174,11 @@ export const OCRTextLayerPanel: React.FC = () => {
         SESSION_ENGINE_WARM_PROMISES.delete(key);
       }
     }
+    for (const key of Array.from(SESSION_ENGINE_READY_KEYS.values())) {
+      if (key.startsWith(`${engine}:`)) {
+        SESSION_ENGINE_READY_KEYS.delete(key);
+      }
+    }
     for (const key of Array.from(SESSION_PREWARM_REQUESTED.values())) {
       if (key.startsWith(`${engine}:`)) {
         SESSION_PREWARM_REQUESTED.delete(key);
@@ -251,11 +255,22 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     const sessionKey = getEngineWarmSessionKey(engine, normalizedWarmLanguage);
     const currentState = SESSION_ENGINE_WARM_STATES[engine];
+    const isReadyForCurrentSession = SESSION_ENGINE_READY_KEYS.has(sessionKey);
     const isReadyForCurrentLanguage =
       currentState?.phase === 'ready' && currentState.languageKey === normalizedWarmLanguage;
 
-    if (isReadyForCurrentLanguage) {
+    if (isReadyForCurrentLanguage || isReadyForCurrentSession) {
       pendingEngineSelectionRef.current = null;
+      if (!isReadyForCurrentLanguage) {
+        setEngineWarmState(engine, {
+          phase: 'ready',
+          progress: 100,
+          etaSec: 0,
+          runtime: currentState?.runtime,
+          description: currentState?.description,
+          languageKey: normalizedWarmLanguage,
+        });
+      }
       if (config?.selectOnReady) {
         setOptions({ engine });
       }
@@ -309,6 +324,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           etaSec: 0,
           languageKey: normalizedWarmLanguage,
         });
+        SESSION_ENGINE_READY_KEYS.add(sessionKey);
 
         if (pendingEngineSelectionRef.current === engine || config?.selectOnReady) {
           pendingEngineSelectionRef.current = null;
@@ -324,6 +340,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           etaSec: null,
           languageKey: normalizedWarmLanguage,
         });
+        SESSION_ENGINE_READY_KEYS.delete(sessionKey);
         if (pendingEngineSelectionRef.current === engine) {
           pendingEngineSelectionRef.current = null;
         }
@@ -337,14 +354,55 @@ export const OCRTextLayerPanel: React.FC = () => {
     return await warmPromise;
   }, [normalizedWarmLanguage, setEngineWarmState, setOptions, startWarmAnimation, stopWarmAnimation]);
 
+  // External engines are warmed on-demand when selected or when OCR starts.
+  // This keeps first-open latency lower on slower machines.
   useEffect(() => {
-    for (const engine of ['paddleocr', 'easyocr'] as const) {
-      const sessionKey = getEngineWarmSessionKey(engine, normalizedWarmLanguage);
-      if (SESSION_PREWARM_REQUESTED.has(sessionKey)) continue;
-      SESSION_PREWARM_REQUESTED.add(sessionKey);
-      void ensureEngineReady(engine, { selectOnReady: false });
-    }
-  }, [ensureEngineReady, normalizedWarmLanguage]);
+    if (!file) return undefined;
+    let disposed = false;
+
+    const scheduleWarm = (engine: OCREngine, delayMs: number) => {
+      const timer = setTimeout(() => {
+        if (disposed) return;
+        if (isProcessing) return;
+        const sessionKey = getEngineWarmSessionKey(engine, normalizedWarmLanguage);
+        if (SESSION_ENGINE_READY_KEYS.has(sessionKey)) return;
+        if (SESSION_PREWARM_REQUESTED.has(sessionKey)) return;
+        SESSION_PREWARM_REQUESTED.add(sessionKey);
+
+        const idleApi = (window as Window & {
+          requestIdleCallback?: (callback: () => void, opts?: { timeout: number }) => number;
+        }).requestIdleCallback;
+
+        const runWarm = () => {
+          if (disposed) return;
+          if (isProcessing) return;
+          void ensureEngineReady(engine, { selectOnReady: false });
+        };
+
+        if (typeof idleApi === 'function') {
+          idleApi(runWarm, { timeout: 3000 });
+        } else {
+          runWarm();
+        }
+      }, delayMs);
+      return timer;
+    };
+
+    // Warm quickly after file open so first OCR click doesn't pay the cold-start cost.
+    const preferredEngine = options.engine === 'paddleocr' || options.engine === 'easyocr'
+      ? options.engine
+      : 'paddleocr';
+    const secondaryEngine: OCREngine = preferredEngine === 'paddleocr' ? 'easyocr' : 'paddleocr';
+
+    const preferredTimer = scheduleWarm(preferredEngine, 900);
+    const secondaryTimer = scheduleWarm(secondaryEngine, 7000);
+
+    return () => {
+      disposed = true;
+      clearTimeout(preferredTimer);
+      clearTimeout(secondaryTimer);
+    };
+  }, [ensureEngineReady, file, isProcessing, normalizedWarmLanguage, options.engine]);
 
   const recoverExternalEngine = useCallback((engine: OCREngine, reason?: string) => {
     if (engine === 'tesseract') return;
@@ -365,7 +423,9 @@ export const OCRTextLayerPanel: React.FC = () => {
     stopExternalProgress();
     const startedAt = Date.now();
     const warmState = SESSION_ENGINE_WARM_STATES[engine];
-    const engineReadyForLanguage = warmState?.phase === 'ready' && warmState.languageKey === normalizedWarmLanguage;
+    const engineReadyForLanguage = (
+      warmState?.phase === 'ready' && warmState.languageKey === normalizedWarmLanguage
+    ) || SESSION_ENGINE_READY_KEYS.has(getEngineWarmSessionKey(engine, normalizedWarmLanguage));
     let expectedMs = engine === 'paddleocr'
       ? (engineReadyForLanguage ? 24000 : 52000)
       : (engineReadyForLanguage ? 12000 : 26000);
@@ -541,15 +601,12 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
 
     const loadPromise = (async (): Promise<boolean> => {
-      setCacheStatus(null);
       const activeFile = file;
       const state = useOCRTextLayerStore.getState();
       const memoryCached = state.allPagesOCR.get(pageNum);
       if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
         if (useProjectStore.getState().file !== activeFile) return false;
         setPageOCR(pageNum, memoryCached);
-        const stale = !isCacheCompatible(memoryCached);
-        setCacheStatus({ page: pageNum, source: 'memory', stale });
         return true;
       }
 
@@ -568,8 +625,6 @@ export const OCRTextLayerPanel: React.FC = () => {
         if (useProjectStore.getState().file !== activeFile) return false;
         cached.pageNumber = pageNum;
         setPageOCR(pageNum, cached);
-        const stale = !isCacheCompatible(cached);
-        setCacheStatus({ page: pageNum, source: 'db', stale });
         return true;
       }
 
@@ -592,8 +647,6 @@ export const OCRTextLayerPanel: React.FC = () => {
 
           aliasCached.pageNumber = pageNum;
           setPageOCR(pageNum, aliasCached);
-          const stale = !isCacheCompatible(aliasCached);
-          setCacheStatus({ page: pageNum, source: 'db', stale });
 
           const currentProject = useProjectStore.getState();
           if (currentProject.documentId !== candidate.id) {
@@ -701,7 +754,6 @@ export const OCRTextLayerPanel: React.FC = () => {
   useEffect(() => {
     autoSyncedDocRef.current = null;
     persistedCacheRef.current.clear();
-    setCacheStatus(null);
     clearAllOCR();
   }, [file, activePipelineProfile, clearAllOCR]);
 
@@ -1032,7 +1084,6 @@ export const OCRTextLayerPanel: React.FC = () => {
       }
     }
 
-    setCacheStatus(null);
     if (!force) {
       const loaded = await loadCachedOCR(pageNum, { allowDuringSuspension: true });
       if (loaded) {
@@ -1132,6 +1183,15 @@ export const OCRTextLayerPanel: React.FC = () => {
     })();
 
     console.log(`[OCRPanel] OCR request resolved for page ${pageNum} with ${ocrResult.words.length} words`);
+    const debugDrops = ocrResult.debug?.dropCounts || {};
+    const debugDropWords = ocrResult.debug?.droppedWords || [];
+    console.log(
+      `[OCRPanel] OCR debug page ${pageNum}: engine=${activeEngine} pipeline=${activePipelineProfile} lang=${options.language} ` +
+      `drops=${JSON.stringify(debugDrops)} droppedWords=${debugDropWords.length}`
+    );
+    if (debugDropWords.length > 0) {
+      console.log('[OCRPanel] OCR droppedWords sample:', debugDropWords.slice(0, 8));
+    }
     visionService.setProgressCallback(null);
 
     ocrResult.language = normalizeLanguage(options.language);
@@ -1243,7 +1303,6 @@ export const OCRTextLayerPanel: React.FC = () => {
       ocrJobActiveRef.current = true;
       suspendCacheReadsRef.current = true;
       const controller = beginAbortableJob();
-      setCacheStatus(null);
       if (fileType !== 'pdf') {
         await runCurrentPageOCR(1, true, controller);
         return;
@@ -1283,9 +1342,6 @@ export const OCRTextLayerPanel: React.FC = () => {
       const activeFile = file;
       searchablePDFService.setCacheHitCallback(forceReOCR ? null : (pageNum) => {
         if (useProjectStore.getState().file !== activeFile) return;
-        if (pageNum === useProjectStore.getState().currentPage) {
-          setCacheStatus({ page: pageNum, source: 'db' });
-        }
       });
 
       // Read file as ArrayBuffer
@@ -1430,27 +1486,32 @@ export const OCRTextLayerPanel: React.FC = () => {
   const currentSkipReason = currentPageOCR?.debug?.skipReason || '';
   const currentRuntimeMs = currentPageOCR?.debug?.runtimeMs
     ?? (currentPageOCR?.debug as { timingsMs?: { ocr?: number } } | undefined)?.timingsMs?.ocr;
+  const currentRuntimeSecLabel = typeof currentRuntimeMs === 'number'
+    ? `${(currentRuntimeMs / 1000).toFixed(currentRuntimeMs >= 10000 ? 1 : 2)}s`
+    : '-';
   const currentEngine = OCR_ENGINES.find(engine => engine.id === (currentPageOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
 
   return (
     <div className="space-y-3 p-4">
       {/* Language Selector (Multi-select) */}
       <div className="space-y-2">
-        <label className="flex items-center gap-2 text-xs text-slate-300">
+        <div className="flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-xs text-slate-300">
           <Languages size={12} />
           OCR Languages
-        </label>
-        <div className="text-[10px] text-slate-500">
-          Selected: {options.language.split('+').filter(Boolean).map(code => {
+          </label>
+          <div className="text-[11px] text-[#B68CFF] text-right">
+            {options.language.split('+').filter(Boolean).map(code => {
             const found = SUPPORTED_LANGUAGES.find(l => l.code === code);
             return found ? found.name : code;
-          }).join(' + ') || 'English'}
+            }).join(' + ') || 'English'}
+          </div>
         </div>
-        <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-900/45 p-2 space-y-1">
+        <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-900/45 p-2 grid grid-cols-2 gap-x-3 gap-y-1">
           {SUPPORTED_LANGUAGES.map(lang => {
             const selected = options.language.split('+').filter(Boolean).includes(lang.code);
             return (
-              <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer">
+              <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer min-w-0">
                 <input
                   type="checkbox"
                   checked={selected}
@@ -1472,7 +1533,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                   }}
                   className="accent-[#2B9BFF]"
                 />
-                <span>{lang.name}</span>
+                <span className="truncate">{lang.name}</span>
               </label>
             );
           })}
@@ -1559,21 +1620,6 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Skip OCR if Text Exists (PDF only) */}
-      {fileType === 'pdf' && (
-        <div className="flex items-center justify-between bg-slate-900/45 border border-white/10 rounded-lg px-3 py-2">
-          <span className="text-xs text-slate-300">Skip OCR if Text Exists</span>
-          <input
-            type="checkbox"
-            checked={options.skipIfTextExists !== false}
-            onChange={(e) => setOptions({ skipIfTextExists: e.target.checked })}
-            disabled={isProcessing}
-            className="accent-[#2B9BFF]"
-            aria-label="Skip OCR if Text Exists"
-          />
-        </div>
-      )}
-
       {/* Progress Bar */}
       {isProcessing && (
         <div className="space-y-2 bg-slate-900/55 rounded-lg p-3 border border-white/10">
@@ -1606,56 +1652,49 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
       )}
 
-      {cacheStatus && cacheStatus.page === currentPage && !isProcessing && (
-        <div className="text-xs text-emerald-300 bg-emerald-900/25 border border-emerald-700/70 rounded-lg px-3 py-2">
-          Loaded from cache ({cacheStatus.source === 'memory' ? 'memory' : 'disk'}{cacheStatus.stale ? ', stale' : ''})
-        </div>
-      )}
-
       {/* Action Buttons */}
       <div className="space-y-2">
         <div className="flex gap-2">
-          {/* Main Button */}
-          <button
-            onClick={() => handleStartOCR()}
-            disabled={isProcessing || !file}
-            className="flex-1 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
-            title={fileType === 'pdf' ? 'Process all pages' : 'Process image'}
-          >
-            {isProcessing ? (
-              <>
-                <RefreshCw size={16} className="animate-spin" />
-                Processing...
-              </>
-            ) : (
-              <>
-                <Play size={16} fill="currentColor" />
-                {fileType === 'pdf' ? 'All Pages' : 'Run OCR'}
-              </>
-            )}
-          </button>
-
-          {/* Current Page Button (PDF only) */}
           {fileType === 'pdf' && (
             <button
               onClick={() => handleCurrentPageOCR(useProjectStore.getState().currentPage, true)}
               disabled={isProcessing || !file}
-              className="flex-[0.35] bg-slate-900/70 hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg flex items-center justify-center transition-all shadow-lg border border-white/12"
+              className="flex-[0.32] bg-gradient-to-r from-[#7C5CFF]/88 to-[#9A6BFF]/82 hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg flex items-center justify-center transition-all shadow-[0_5px_14px_rgba(124,92,255,0.18)] border border-[#A992FF]/35"
               title="Process current page only"
             >
-              <span className="text-xs font-bold">Current</span>
+              <span className="text-[10px] font-semibold">Current</span>
             </button>
           )}
+
+          {/* Main Button */}
+          <button
+            onClick={() => handleStartOCR()}
+            disabled={isProcessing || !file}
+            className="flex-1 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(43,155,255,0.24)]"
+            title={fileType === 'pdf' ? 'Process all pages' : 'Process image'}
+          >
+            {isProcessing ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Play size={14} fill="currentColor" />
+                {fileType === 'pdf' ? 'All Pages' : 'Run OCR'}
+              </>
+            )}
+          </button>
         </div>
 
         {fileType === 'pdf' && !isProcessing && (
           <button
             onClick={() => handleStartOCR(undefined, true)}
             disabled={!file}
-            className="w-full bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-[0_10px_24px_rgba(255,135,5,0.28)]"
+            className="w-full bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(255,135,5,0.2)]"
             title="Force re-run OCR for all pages (ignore cache)"
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={13} />
             Re-OCR All (Ignore Cache)
           </button>
         )}
@@ -1675,37 +1714,24 @@ export const OCRTextLayerPanel: React.FC = () => {
             <button
               onClick={() => handleDownloadFromCache('current')}
               disabled={isExporting || !allPagesOCR.get(currentPage)}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+              className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(5,150,105,0.18)]"
               title="Download current page"
             >
-              <Download size={16} />
+              <Download size={13} />
               Current Page
             </button>
             <button
               onClick={() => handleDownloadFromCache('all')}
               disabled={isExporting}
-              className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+              className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(34,197,94,0.18)]"
               title="Download all OCR pages"
             >
-              <Download size={16} />
+              <Download size={13} />
               All Pages
             </button>
           </div>
         )}
       </div>
-
-      {/* Success Message */}
-      {totalOCRPages > 0 && !isProcessing && (
-        <div className="flex items-start gap-2 bg-green-900/25 border border-green-700/70 rounded-lg p-3">
-          <CheckCircle size={16} className="text-green-400 shrink-0 mt-0.5" />
-          <div className="text-xs">
-            <p className="text-green-300 font-medium">OCR สำเร็จ!</p>
-            <p className="text-green-400/70 mt-1">
-              OCR {totalOCRPages} หน้า • พบ {totalWords} คำ
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* OCR Results Preview */}
       {currentPageOCR && !isProcessing && (
@@ -1713,12 +1739,12 @@ export const OCRTextLayerPanel: React.FC = () => {
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
             <Eye size={12} className="text-[#5CC6F2]" />
             OCR Result - หน้า {currentPage}
-            <span className="ml-auto text-slate-500 font-normal">
-              {currentPageOCR.words.length} คำ • {currentPageOCR.confidence.toFixed(0)}%
+            <span className="ml-auto text-[11px] font-medium text-sky-300/95">
+              {`runtime ${currentRuntimeSecLabel}`}
             </span>
           </div>
-          <div className="text-[11px] text-slate-400">
-            model {currentEngine.name}{typeof currentRuntimeMs === 'number' ? ` • runtime ${Math.round(currentRuntimeMs)}ms` : ''}
+          <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
+            model {currentEngine.name} • พบ {currentPageOCR.words.length} คำ • accuracy {currentPageOCR.confidence.toFixed(0)}%
           </div>
           {showDebugOverlay && currentDroppedCount > 0 && (
             <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">

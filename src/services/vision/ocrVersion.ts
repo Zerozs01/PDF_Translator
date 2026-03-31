@@ -1,4 +1,4 @@
-export const OCR_ALGORITHM_VERSION = 111;
+export const OCR_ALGORITHM_VERSION = 144;
 
 // Increment this when OCR preprocessing/logic changes
 // to invalidate cached OCR results.

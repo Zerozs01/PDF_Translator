@@ -60,6 +60,7 @@ const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /no ccache found/i,
   /resized image size .* exceeds max_side_limit/i,
   /info:\s*could not find files for the given pattern/i,
+  /lang.*ocr_version.*will be ignored when model names/i,
 ];
 
 interface BridgeDaemonRequest {
@@ -72,12 +73,23 @@ interface BridgeDaemon {
   child: ReturnType<typeof spawn>;
   stdoutBuffer: string;
   pending: Map<string, BridgeDaemonRequest>;
+  scriptPath: string;
+  scriptSignature: string;
 }
 
 function resolveBridgeScriptPath(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'ocr-bridge', 'external_ocr_bridge.py')
     : path.join(app.getAppPath(), 'scripts', 'external_ocr_bridge.py');
+}
+
+function resolveBridgeScriptSignature(scriptPath: string): string {
+  try {
+    const stat = fs.statSync(scriptPath);
+    return `${scriptPath}:${Math.floor(stat.mtimeMs)}`;
+  } catch {
+    return `${scriptPath}:unknown`;
+  }
 }
 
 function resolvePythonExecutable(engine: ExternalBridgeEngine): string {
@@ -206,14 +218,18 @@ function handleDaemonStdout(engine: ExternalBridgeEngine, chunk: Buffer): void {
 }
 
 function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
-  const existing = bridgeDaemons.get(engine);
-  if (existing && !existing.child.killed) {
-    return existing;
-  }
-
   const scriptPath = resolveBridgeScriptPath();
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`OCR bridge script not found: ${scriptPath}`);
+  }
+  const scriptSignature = resolveBridgeScriptSignature(scriptPath);
+
+  const existing = bridgeDaemons.get(engine);
+  if (existing && !existing.child.killed) {
+    if (existing.scriptPath === scriptPath && existing.scriptSignature === scriptSignature) {
+      return existing;
+    }
+    teardownDaemon(engine, new Error(`OCR bridge script changed for ${engine}; restarting daemon`));
   }
 
   const pythonCmd = resolvePythonExecutable(engine);
@@ -229,6 +245,8 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
     child,
     stdoutBuffer: '',
     pending: new Map(),
+    scriptPath,
+    scriptSignature,
   };
 
   child.stdout.on('data', (chunk: Buffer) => {
@@ -289,6 +307,11 @@ function isRecoverableDaemonError(error: unknown): boolean {
     message.includes('stdin is unavailable') ||
     message.includes('parse ocr bridge response')
   );
+}
+
+function isNoTextBoxesError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes('no text boxes returned from paddleocr');
 }
 
 function mimeTypeToExtension(mimeType: string): string {
@@ -365,9 +388,27 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
     };
 
     let response: ExternalOcrBridgeResponse;
+    const emptyNoTextResponse: ExternalOcrBridgeResponse = {
+      ok: true,
+      engine,
+      words: [],
+      lines: [],
+      text: '',
+      confidence: 0,
+      ...(typeof payload.pageSegMode === 'number' ? { pageSegMode: payload.pageSegMode } : {}),
+      debug: {
+        dropCounts: {},
+        droppedWords: [],
+        skipReason: 'noTextBoxesFromPaddleOCR',
+      },
+    };
+
     try {
       response = await requestDaemon(engine, requestPayload);
     } catch (error) {
+      if (isNoTextBoxesError(error)) {
+        return emptyNoTextResponse;
+      }
       if (!isRecoverableDaemonError(error)) {
         throw error;
       }
@@ -375,7 +416,14 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
         engine,
         error instanceof Error ? error : new Error(String(error))
       );
-      response = await requestDaemon(engine, requestPayload);
+      try {
+        response = await requestDaemon(engine, requestPayload);
+      } catch (retryError) {
+        if (isNoTextBoxesError(retryError)) {
+          return emptyNoTextResponse;
+        }
+        throw retryError;
+      }
     }
 
     if (!response.ok) {
