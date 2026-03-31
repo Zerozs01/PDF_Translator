@@ -2,17 +2,35 @@
 
 This file tracks the OCR plan against the current code, not against older experimental docs.
 
-## Current Baseline (2026-03-22)
+## Current Baseline (2026-03-31)
 
 - Primary OCR logic lives in `src/services/vision/worker.ts`
 - Worker entry is `worker-boot.ts`, with `worker-stable.ts` only as fallback
-- OCR algorithm baseline is `96`
+- OCR algorithm baseline is `146`
 - Runtime defaults:
   - worker count: `1`
   - panel pipeline: `panel`
   - export pipeline: `export`
   - UI OCR engines: `tesseract`, `paddleocr`, `easyocr`
   - OCR quality baseline: `best`
+
+## v146 External Panel Cleanup And Residual Guard
+
+This pass documents the current external OCR behavior used by manga page tuning in the live code path:
+
+- `PaddleOCR` panel cleanup in the bridge now restores spacing from compact merged Latin tokens by splitting high-confidence lexical runs (`mergedLatinSplit`).
+- Panel watermark suppression is now deterministic and color-agnostic:
+  - geometry and edge placement
+  - lexical/domain pattern evidence
+  - confidence and compact-token heuristics
+- `VisionService` applies a second external pass after bridge cleanup:
+  - Latin ghost-line suppression (`externalLatinGhostLine`)
+  - residual panel singleton suppression (`externalResidualSingleton`) for numeric / CJK / punctuation one-token noise on non-CJK pages
+- External model warm-up in `OCRTextLayerPanel` now starts preferred engine quickly after file open (`160ms`, non-idle) and warms secondary engine later (`2200ms`, idle-aware).
+
+Known note from current traces:
+
+- Most watermark/corner ghosts are now suppressed, but rare numeric singleton leakage (for example `15`) can still appear on specific pages and should be tuned with per-page debug evidence.
 
 ## v96 External Paddle CPU Tuning
 

@@ -742,7 +742,7 @@ function isLikelyWatermarkToken(word: OCRWord, pageWidth: number, pageHeight: nu
     return true;
   }
 
-  if ((alpha === 'IO' || alpha === 'COM') && heightRatio <= 0.02 && cx >= pageWidth * 0.2 && cx <= pageWidth * 0.95) {
+  if ((alpha === 'IO' || alpha === 'LO' || alpha === 'COM') && heightRatio <= 0.03 && cx >= pageWidth * 0.2 && cx <= pageWidth * 0.95) {
     return true;
   }
 

@@ -141,6 +141,12 @@ export function countCaseTransitions(text: string): number {
 	return transitions;
 }
 
+const LATIN_DOMAIN_TAIL_TOKENS = new Set(['IO', 'LO', 'COM', 'WWW', 'NET']);
+
+function isLikelyDomainTailToken(token: string): boolean {
+	return LATIN_DOMAIN_TAIL_TOKENS.has(token);
+}
+
 function preserveReplacementCase(source: string, replacement: string): string {
 	if (source === source.toUpperCase()) return replacement;
 	if (source === source.toLowerCase()) return replacement.toLowerCase();
@@ -417,6 +423,19 @@ export function pruneResidualLatinNoiseLines(
 		const lexicalHits = assessment.lexicalHits;
 		const lineTokens = assessment.tokens;
 		const quality = assessment.quality;
+		const trailingArtifactCount = (() => {
+			let count = 0;
+			for (let i = lineTokens.length - 1; i >= 0; i--) {
+				const token = lineTokens[i];
+				if (!token) break;
+				if (isLikelyDomainTailToken(token) || token.length <= 3) {
+					count += 1;
+					continue;
+				}
+				break;
+			}
+			return count;
+		})();
 
 		if (assessment.coreKeep) return true;
 		if (!protectedLine && assessment.ghostLikely) {
@@ -427,6 +446,11 @@ export function pruneResidualLatinNoiseLines(
 
 		if (lineWords.length === 1) {
 			const lexicalSingleton = latinCommonWords.has(alpha) || latinShortKeepForLine.has(alpha);
+			if (isLikelyDomainTailToken(alpha) && line.confidence < 99) {
+				const probeWord = lineWords[0];
+				if (probeWord) logDrop('latinLine', probeWord, 'contextual domain tail singleton');
+				return false;
+			}
 			if (alpha.length === 1) {
 				// In manga OCR these are almost always residual artifacts.
 				return false;
@@ -437,6 +461,19 @@ export function pruneResidualLatinNoiseLines(
 			if (alpha.length <= 3 && !lexicalSingleton && line.confidence < 98 && quality < 0.86) {
 				return false;
 			}
+		}
+
+		if (
+			trailingArtifactCount >= 2
+			&& lexicalHits === 0
+			&& !latinCommonWords.has(lineTokens[0])
+			&& !latinShortKeepForLine.has(lineTokens[0])
+			&& quality < 0.92
+			&& line.confidence < 98
+		) {
+			const probeWord = lineWords[0];
+			if (probeWord) logDrop('latinLine', probeWord, 'contextual trailing artifact ghost line');
+			return false;
 		}
 
 		if (lexicalHits === 0 && lineTokens.length > 0 && lineTokens.length <= 2) {
@@ -594,6 +631,7 @@ export function trimTrailingNonLexicalArtifacts(
 			const readableTail = scoreLatinTokenReadability(word);
 			const lowReadableTail = readableTail < 0.58 || (token.length <= 4 && !/[AEIOU]/.test(token));
 			const strongReadableTail = token.length >= 4 && readableTail >= 0.78 && word.confidence >= 88;
+			const domainTailToken = isLikelyDomainTailToken(token);
 			if (strongReadableTail) break;
 
 			const suspiciousLowerCaseTail = lowerCaseTail
@@ -601,7 +639,8 @@ export function trimTrailingNonLexicalArtifacts(
 				&& (weakTail || lowReadableTail);
 			const suspiciousShortTail = shortTail && (weakTail || readableTail < 0.52);
 			const suspiciousConsonantTail = token.length <= 5 && !/[AEIOU]/.test(token) && (weakTail || readableTail < 0.5);
-			if (!(suspiciousLowerCaseTail || suspiciousShortTail || suspiciousConsonantTail)) break;
+			const suspiciousDomainTail = domainTailToken && (lineWords.length >= 3 || weakTail || lineQuality < 0.9 || shortTail);
+			if (!(suspiciousLowerCaseTail || suspiciousShortTail || suspiciousConsonantTail || suspiciousDomainTail)) break;
 
 			logDrop('latinLine', word, 'trim trailing non-lexical artifact');
 

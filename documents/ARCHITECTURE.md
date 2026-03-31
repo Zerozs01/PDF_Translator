@@ -47,6 +47,7 @@ That alias fallback is important: it keeps older OCR cache usable across source-
   - DPI
   - `pageSegMode`
   - `algorithmVersion`
+  - `ocrEngine`
   - `documentType`
   - `pipelineProfile`
   - `ocrQualityProfile`
@@ -85,6 +86,19 @@ The current OCR behavior in `src/services/vision/worker.ts` is:
    - Latin watermark / line-prune passes
 7. Normalize final lines and emit debug payload
 
+### External OCR Path (`PaddleOCR` / `EasyOCR`)
+
+- External inference runs through `scripts/external_ocr_bridge.py` via Electron bridge IPC.
+- For panel profile, the bridge now applies deterministic cleanup before returning OCR text:
+  - inline ad/domain token removal
+  - merged Latin token split for compact outputs (for example `INTHEPAST...` -> spaced tokens)
+  - panel watermark suppression using geometry + lexical evidence (not text color)
+- In `VisionService`, external results then receive service-side post-cleanup:
+  - Latin ghost-line pruning (`externalLatinGhostLine`)
+  - residual singleton pruning for panel non-CJK pages (`externalResidualSingleton`)
+
+This two-stage external cleanup keeps the bridge deterministic while allowing runtime-aware line filtering in the renderer service.
+
 Profiles in current code:
 
 - `pipelineProfile`
@@ -101,6 +115,7 @@ Today these profiles mainly change DPI, stage caps, and recovery budget. They do
 
 - Worker request timeout, retry defaults, and per-page OCR timeout live in `src/services/vision/ocr-timeout.ts`.
 - Both panel and export paths abort page-scoped OCR and also call `visionService.cancelAll(...)` to tear down in-flight work on timeout/cancel.
+- External engine prewarm in `OCRTextLayerPanel` now warms preferred engine almost immediately after file-open (`160ms`, non-idle) and warms the secondary engine later (`2200ms`, idle-aware).
 - The worker emits debug data:
   - dropped words
   - drop counts by filter

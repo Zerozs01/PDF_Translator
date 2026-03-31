@@ -198,6 +198,18 @@ const isCjkLikeLanguage = (language: string): boolean =>
     .filter(Boolean)
     .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
+const EXTERNAL_SINGLETON_CJK_RE = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]/;
+
+const EXTERNAL_LATIN_DOMAIN_TAIL_TOKENS = new Set(['IO', 'LO', 'COM']);
+
+const normalizeExternalLatinToken = (value: string): string =>
+  String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/5/g, 'S');
+
 class VisionService {
   private workers: WorkerSlot[] = [];
   private workerCrashCounts: number[] = [];
@@ -884,6 +896,198 @@ class VisionService {
     return { lines: kept, dropped };
   }
 
+  private pruneLikelyLatinGhostExternalLines(
+    lines: OCRLine[],
+    pageHeight: number,
+    pipelineProfile: OCRPipelineProfile,
+    language: string
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length === 0) return { lines, dropped: [] };
+    if (pipelineProfile !== 'panel') return { lines, dropped: [] };
+    if (isCjkLikeLanguage(language)) return { lines, dropped: [] };
+
+    const dropped: OCRDroppedWord[] = [];
+    const edgeBand = Math.max(120, pageHeight * 0.18);
+
+    const kept = lines.filter((line) => {
+      const rawText = String(line.text || '').trim();
+      if (!rawText) return false;
+      if (!/[A-Za-z]/.test(rawText)) return true;
+
+      const tokens = rawText
+        .split(/\s+/)
+        .map((token) => normalizeExternalLatinToken(token))
+        .filter(Boolean);
+      if (tokens.length === 0) return true;
+
+      const centerY = bboxCenterY(line.bbox);
+      const nearEdge = centerY <= edgeBand || centerY >= (pageHeight - edgeBand);
+      const confidence = Number(line.confidence || 0);
+      const trailingShortCount = (() => {
+        let count = 0;
+        for (let i = tokens.length - 1; i >= 0; i -= 1) {
+          const token = tokens[i];
+          if (!token) break;
+          if (token.length <= 2 || EXTERNAL_LATIN_DOMAIN_TAIL_TOKENS.has(token)) {
+            count += 1;
+            continue;
+          }
+          break;
+        }
+        return count;
+      })();
+
+      if (tokens.length === 1) {
+        const token = tokens[0];
+        if (EXTERNAL_LATIN_DOMAIN_TAIL_TOKENS.has(token) && (nearEdge || confidence < 99)) {
+          dropped.push({
+            filter: 'externalLatinCleanup',
+            reason: 'latinDomainTailSingleton',
+            text: rawText,
+            confidence,
+            bbox: line.bbox,
+          });
+          return false;
+        }
+        if (token.length <= 2 && nearEdge && confidence < 96) {
+          dropped.push({
+            filter: 'externalLatinCleanup',
+            reason: 'latinEdgeSingleton',
+            text: rawText,
+            confidence,
+            bbox: line.bbox,
+          });
+          return false;
+        }
+        return true;
+      }
+
+      if (tokens.length === 2 && tokens.every((token) => EXTERNAL_LATIN_DOMAIN_TAIL_TOKENS.has(token)) && confidence < 99) {
+        dropped.push({
+          filter: 'externalLatinCleanup',
+          reason: 'latinDomainTailPair',
+          text: rawText,
+          confidence,
+          bbox: line.bbox,
+        });
+        return false;
+      }
+
+      const oneCharCount = tokens.filter((token) => token.length === 1).length;
+      const trailingOneCharCount = (() => {
+        let count = 0;
+        for (let i = tokens.length - 1; i >= 0; i -= 1) {
+          if (tokens[i].length === 1) {
+            count += 1;
+            continue;
+          }
+          break;
+        }
+        return count;
+      })();
+      const hasDomainTail = tokens.some((token) => EXTERNAL_LATIN_DOMAIN_TAIL_TOKENS.has(token));
+      const suspiciousTrailingNoise = trailingShortCount >= 2 && (trailingOneCharCount >= 2 || hasDomainTail || oneCharCount >= 2);
+      if (!suspiciousTrailingNoise) {
+        return true;
+      }
+
+      const head = tokens[0] || '';
+      const headVowels = (head.match(/[AEIOU]/g) || []).length;
+      const headLooksReadable = head.length >= 4 && headVowels >= 2;
+
+      if ((nearEdge || confidence < 97) && (!headLooksReadable || trailingOneCharCount >= 2 || hasDomainTail)) {
+        dropped.push({
+          filter: 'externalLatinCleanup',
+          reason: 'latinTrailingNoiseLine',
+          text: rawText,
+          confidence,
+          bbox: line.bbox,
+        });
+        return false;
+      }
+
+      return true;
+    });
+
+    return { lines: kept, dropped };
+  }
+
+  private pruneLikelyExternalResidualSingletons(
+    lines: OCRLine[],
+    pageWidth: number,
+    pageHeight: number,
+    pipelineProfile: OCRPipelineProfile,
+    language: string
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length === 0) return { lines, dropped: [] };
+    if (pipelineProfile !== 'panel') return { lines, dropped: [] };
+    if (isCjkLikeLanguage(language)) return { lines, dropped: [] };
+
+    const dropped: OCRDroppedWord[] = [];
+    const edgeBandY = Math.max(120, pageHeight * 0.18);
+    const edgeBandX = Math.max(110, pageWidth * 0.14);
+
+    const kept = lines.filter((line) => {
+      const rawText = String(line.text || '').trim();
+      if (!rawText) return false;
+
+      const tokens = rawText.split(/\s+/).filter(Boolean);
+      if (tokens.length !== 1) return true;
+
+      const token = tokens[0];
+      const confidence = Number(line.confidence || 0);
+      const centerX = bboxCenterX(line.bbox);
+      const centerY = bboxCenterY(line.bbox);
+      const nearEdge = centerY <= edgeBandY
+        || centerY >= (pageHeight - edgeBandY)
+        || centerX <= edgeBandX
+        || centerX >= (pageWidth - edgeBandX);
+      const tinyToken = bboxHeight(line.bbox) <= pageHeight * 0.028
+        || bboxWidth(line.bbox) <= pageWidth * 0.06;
+
+      const alphaNumeric = token.replace(/[^A-Za-z0-9]/g, '');
+      const numericSingleton = /^[0-9]{1,2}$/.test(alphaNumeric);
+      if (numericSingleton && nearEdge && (tinyToken || confidence < 95)) {
+        dropped.push({
+          filter: 'externalSingletonCleanup',
+          reason: 'numericEdgeSingleton',
+          text: rawText,
+          confidence,
+          bbox: line.bbox,
+        });
+        return false;
+      }
+
+      const cjkSingleton = EXTERNAL_SINGLETON_CJK_RE.test(token) && token.length <= 2;
+      if (cjkSingleton && (nearEdge || tinyToken) && confidence < 98.5) {
+        dropped.push({
+          filter: 'externalSingletonCleanup',
+          reason: 'cjkSingletonOnLatinPage',
+          text: rawText,
+          confidence,
+          bbox: line.bbox,
+        });
+        return false;
+      }
+
+      const punctuationSingleton = !alphaNumeric && /^[^\p{L}\p{N}]+$/u.test(token);
+      if (punctuationSingleton && nearEdge && tinyToken && confidence < 96) {
+        dropped.push({
+          filter: 'externalSingletonCleanup',
+          reason: 'punctuationEdgeSingleton',
+          text: rawText,
+          confidence,
+          bbox: line.bbox,
+        });
+        return false;
+      }
+
+      return true;
+    });
+
+    return { lines: kept, dropped };
+  }
+
   private mergeExternalChunkResults(
     results: OCRPageResult[],
     width: number,
@@ -986,6 +1190,33 @@ class VisionService {
           (mergedDropCounts.koreanChunkMergeParticleShadow || 0) + koreanPruneResult.dropped.length;
         mergedDroppedWords.push(...koreanPruneResult.dropped);
       }
+    }
+
+    const latinGhostResult = this.pruneLikelyLatinGhostExternalLines(
+      finalLines,
+      height,
+      pipelineProfile,
+      language
+    );
+    finalLines = latinGhostResult.lines;
+    if (latinGhostResult.dropped.length > 0) {
+      mergedDropCounts.externalLatinGhostLine =
+        (mergedDropCounts.externalLatinGhostLine || 0) + latinGhostResult.dropped.length;
+      mergedDroppedWords.push(...latinGhostResult.dropped);
+    }
+
+    const singletonResult = this.pruneLikelyExternalResidualSingletons(
+      finalLines,
+      width,
+      height,
+      pipelineProfile,
+      language
+    );
+    finalLines = singletonResult.lines;
+    if (singletonResult.dropped.length > 0) {
+      mergedDropCounts.externalResidualSingleton =
+        (mergedDropCounts.externalResidualSingleton || 0) + singletonResult.dropped.length;
+      mergedDroppedWords.push(...singletonResult.dropped);
     }
 
     const mergedWords = finalLines.flatMap((line) => line.words || []);
@@ -1182,6 +1413,54 @@ class VisionService {
         ocrQualityProfile,
       });
 
+      const latinGhostResult = this.pruneLikelyLatinGhostExternalLines(
+        result.lines || [],
+        imageHeight,
+        pipelineProfile,
+        language
+      );
+      const finalLines = latinGhostResult.lines;
+      const finalWords = finalLines.flatMap((line) => line.words || []);
+      const confidences = finalWords.length > 0
+        ? finalWords.map((word) => word.confidence || 0)
+        : finalLines.map((line) => line.confidence || 0);
+      const finalConfidence = confidences.length > 0
+        ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
+        : (typeof result.confidence === 'number' ? result.confidence : 0);
+      const debugDropCounts: Record<string, number> = {
+        ...(result.debug?.dropCounts || {}),
+      };
+      const debugDroppedWords: OCRDroppedWord[] = [
+        ...(result.debug?.droppedWords || []),
+      ];
+      if (latinGhostResult.dropped.length > 0) {
+        debugDropCounts.externalLatinGhostLine =
+          (debugDropCounts.externalLatinGhostLine || 0) + latinGhostResult.dropped.length;
+        debugDroppedWords.push(...latinGhostResult.dropped);
+      }
+
+      const singletonResult = this.pruneLikelyExternalResidualSingletons(
+        finalLines,
+        imageWidth,
+        imageHeight,
+        pipelineProfile,
+        language
+      );
+      const singletonCleanedLines = singletonResult.lines;
+      if (singletonResult.dropped.length > 0) {
+        debugDropCounts.externalResidualSingleton =
+          (debugDropCounts.externalResidualSingleton || 0) + singletonResult.dropped.length;
+        debugDroppedWords.push(...singletonResult.dropped);
+      }
+
+      const singletonCleanedWords = singletonCleanedLines.flatMap((line) => line.words || []);
+      const finalConfidences = singletonCleanedWords.length > 0
+        ? singletonCleanedWords.map((word) => word.confidence || 0)
+        : singletonCleanedLines.map((line) => line.confidence || 0);
+      const finalLineConfidence = finalConfidences.length > 0
+        ? finalConfidences.reduce((sum, value) => sum + value, 0) / finalConfidences.length
+        : finalConfidence;
+
       return {
         pageNumber: 0,
         width: imageWidth,
@@ -1193,11 +1472,15 @@ class VisionService {
         pipelineProfile,
         ocrEngine,
         ocrQualityProfile,
-        lines: result.lines || [],
-        words: result.words || [],
-        text: result.text || '',
-        confidence: typeof result.confidence === 'number' ? result.confidence : 0,
-        debug: result.debug,
+        lines: singletonCleanedLines,
+        words: singletonCleanedWords,
+        text: singletonCleanedLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+        confidence: finalLineConfidence,
+        debug: {
+          ...(result.debug || {}),
+          droppedWords: debugDroppedWords,
+          dropCounts: debugDropCounts,
+        },
       };
     } catch (error) {
       if (signal?.aborted) {

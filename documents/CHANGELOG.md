@@ -17,9 +17,17 @@ This file tracks documentation changes inside `documents/` only.
 
 ## 2026-03-21
 
-- Rewrote the documentation set around the current code truth instead of older speculative plans.
+
+## 2026-03-31
+
+- Updated canonical docs to match current OCR baseline: `OCR_ALGORITHM_VERSION = 146`.
+- Documented external OCR panel cleanup behavior now active in code:
+  - bridge-side merged Latin spacing recovery (`mergedLatinSplit`)
+  - bridge-side deterministic panel watermark suppression (geometry + lexical evidence, no text-color dependency)
+  - service-side residual singleton suppression (`externalResidualSingleton`) for panel non-CJK pages
+- Updated architecture notes to reflect cache compatibility keys including `ocrEngine`.
+- Updated warm-up notes for external models: preferred engine warm starts almost immediately after open, secondary engine remains deferred/idle-aware.
 - Declared `documents/` as the canonical working documentation folder.
-- Updated architecture notes for:
   - single-worker OCR runtime
   - `worker-boot.ts` primary entry with `worker-stable.ts` fallback
   - cache aliasing by filename

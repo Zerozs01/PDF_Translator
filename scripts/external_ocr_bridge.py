@@ -34,6 +34,20 @@ DOMAIN_SUFFIX_TOKENS = {"COM", "NET", "ORG", "IO", "GG", "CO"}
 HEADING_KEEP_TOKENS = {"CHAPTER", "SECTION", "PART", "OBJECTIVES", "CONDITIONS", "FIG"}
 SHORT_SPEECH_TOKENS = {"EH", "ME", "I", "OH", "AH", "NO", "A"}
 KOREAN_PARTICLE_SUFFIXES = {"이", "가", "은", "는", "을", "를", "의"}
+LATIN_SHORT_KEEP_TOKENS = {
+    "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH",
+    "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE",
+}
+LATIN_COMMON_WORDS = {
+    "THE", "YOU", "HE", "SHE", "WE", "THEY", "TO", "OF", "IN", "ON", "AT", "FOR", "AND", "OR", "ARE",
+    "THAT", "THIS", "THOSE", "THESE", "PAST", "ONLY", "FOUND", "TOP", "GIRLS", "CITY", "BUT", "NOW",
+    "CAN", "MAKE", "WITH", "KIND", "STUFF", "ROOM", "DOOR", "LOCK", "TAKE", "LOOK", "OVER", "GO",
+    "STUDENTS", "MAY", "DOING", "BAD", "THINGS", "ELDERLY", "WEAK", "WOMEN", "CHILDREN", "TOWN",
+    "NOT", "JUST", "ALL", "COME", "ACROSS", "POSSIBILITY", "WHAT", "THINK", "BEST", "ITS", "ILL",
+    "HERE", "PEOPLE", "LIVE", "THERE", "WHY", "OKAY", "FINE", "ACTING", "MYSTERIOUS", "WHATEVER",
+    "WANT", "SAY", "TIANHAI", "CHAPTER", "SECTION", "PART", "FIGURE", "FIG", "TABLE", "UNIT",
+    "LESSON", "VOLUME", "VOL", "APPENDIX",
+}
 
 
 def respond(payload: Dict[str, Any], exit_code: int = 0) -> None:
@@ -756,6 +770,20 @@ def normalize_alpha_token(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "", str(text or "")).upper()
 
 
+def normalize_latin_token_for_lexicon(text: str) -> str:
+    token = normalize_alpha_token(text)
+    if not token:
+        return ""
+    return (
+        token.replace("0", "O")
+        .replace("1", "I")
+        .replace("5", "S")
+        .replace("6", "G")
+        .replace("7", "T")
+        .replace("8", "B")
+    )
+
+
 def normalize_multilingual_token(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9\uAC00-\uD7A3]+", "", str(text or "")).upper()
 
@@ -788,6 +816,12 @@ def is_advertisement_brand_token(text: str) -> bool:
         return True
     if alpha.endswith("MANGA") and len(alpha) >= 6:
         return True
+    fuzzy_markers = [marker for marker in (WATERMARK_TOKENS | WATERMARK_PHRASE_MARKERS) if len(marker) >= 6]
+    for marker in fuzzy_markers:
+        if abs(len(alpha) - len(marker)) > 2:
+            continue
+        if levenshtein_distance(alpha, marker, max_distance=2) <= 2:
+            return True
     return False
 
 
@@ -923,6 +957,175 @@ def is_probable_ascii_ghost(text: str) -> bool:
     if any(marker in raw for marker in ("\\", "{", "}", "[", "]", "|")) and len(alpha_num) <= 4:
         return True
     if len(alpha_num) <= 2 and any(marker in raw for marker in ("\\", "/", "{", "}", "[", "]", "_", "|", "~", "`")):
+        return True
+    return False
+
+
+def split_compact_latin_token(token: str) -> List[str] | None:
+    normalized = normalize_latin_token_for_lexicon(token)
+    if not normalized:
+        return None
+    if len(normalized) < 8:
+        return None
+    if not re.fullmatch(r"[A-Z0-9]+", normalized):
+        return None
+    if normalized in LATIN_COMMON_WORDS or normalized in LATIN_SHORT_KEEP_TOKENS:
+        return None
+
+    max_piece = 13
+    n = len(normalized)
+    best_score: List[float] = [-1e9] * (n + 1)
+    best_parts: List[List[str] | None] = [None] * (n + 1)
+    best_lex_hits: List[int] = [0] * (n + 1)
+    best_score[0] = 0.0
+    best_parts[0] = []
+
+    for i in range(n):
+        if best_parts[i] is None:
+            continue
+        for j in range(i + 1, min(n, i + max_piece) + 1):
+            piece = normalized[i:j]
+            is_common = piece in LATIN_COMMON_WORDS
+            is_short_keep = piece in LATIN_SHORT_KEEP_TOKENS
+            if is_short_keep and len(piece) > 4:
+                is_short_keep = False
+            if not is_common and not is_short_keep and len(piece) <= 2:
+                continue
+
+            if is_common:
+                delta = 5.0
+            elif is_short_keep:
+                delta = 3.0
+            elif len(piece) >= 5:
+                # Keep one unknown chunk as fallback for names/rare words.
+                delta = -1.5
+            else:
+                continue
+
+            next_score = best_score[i] + delta
+            next_lex_hits = best_lex_hits[i] + (1 if (is_common or is_short_keep) else 0)
+            next_parts = list(best_parts[i] or [])
+            next_parts.append(piece)
+
+            replace = False
+            if next_score > best_score[j]:
+                replace = True
+            elif math.isclose(next_score, best_score[j], rel_tol=1e-9, abs_tol=1e-9):
+                if next_lex_hits > best_lex_hits[j]:
+                    replace = True
+                elif next_lex_hits == best_lex_hits[j] and best_parts[j] is not None and len(next_parts) < len(best_parts[j] or []):
+                    replace = True
+
+            if replace:
+                best_score[j] = next_score
+                best_parts[j] = next_parts
+                best_lex_hits[j] = next_lex_hits
+
+    parts = best_parts[n]
+    if not parts or len(parts) <= 1:
+        return None
+    if best_lex_hits[n] < 2:
+        return None
+
+    reconstructed = "".join(parts)
+    if reconstructed != normalized:
+        return None
+    return parts
+
+
+def split_merged_latin_words(words: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    if not words:
+        return [], 0
+
+    output: List[Dict[str, Any]] = []
+    split_count = 0
+    for word in words:
+        text = str(word.get("text") or "").strip()
+        if not text or has_non_latin_characters(text):
+            output.append(word)
+            continue
+
+        parts = split_compact_latin_token(text)
+        if not parts:
+            output.append(word)
+            continue
+
+        bbox = word.get("bbox") or {}
+        x0 = float(bbox.get("x0", 0.0))
+        x1 = float(bbox.get("x1", 0.0))
+        y0 = float(bbox.get("y0", 0.0))
+        y1 = float(bbox.get("y1", 0.0))
+        total_width = max(1.0, x1 - x0)
+        total_weight = max(1, sum(max(1, len(part)) for part in parts))
+        cursor = x0
+
+        for index, part in enumerate(parts):
+            weight = max(1, len(part))
+            remaining = max(0.0, x1 - cursor)
+            part_width = remaining if index == len(parts) - 1 else total_width * (weight / total_weight)
+            next_cursor = min(x1, cursor + part_width)
+            output.append({
+                "text": part,
+                "confidence": normalize_confidence(word.get("confidence", 0.0)),
+                "bbox": {
+                    "x0": round(cursor, 2),
+                    "y0": round(y0, 2),
+                    "x1": round(next_cursor, 2),
+                    "y1": round(y1, 2),
+                },
+            })
+            cursor = next_cursor
+        split_count += len(parts) - 1
+
+    return output, split_count
+
+
+def is_probable_panel_watermark_line(
+    line: Dict[str, Any],
+    width: int,
+    height: int,
+    pipeline_profile: str,
+) -> bool:
+    if pipeline_profile != "panel":
+        return False
+
+    text = str(line.get("text") or "").strip()
+    if not text:
+        return False
+    if contains_known_watermark_phrase(text) or is_advertisement_brand_token(text) or is_domain_like_token(text):
+        return True
+
+    if has_non_latin_characters(text):
+        return False
+
+    bbox = line.get("bbox") or {}
+    confidence = normalize_confidence(line.get("confidence", 0.0))
+    x0 = float(bbox.get("x0", 0.0))
+    y0 = float(bbox.get("y0", 0.0))
+    x1 = float(bbox.get("x1", 0.0))
+    y1 = float(bbox.get("y1", 0.0))
+    line_h = bbox_height(bbox)
+    line_w = bbox_width(bbox)
+
+    near_bottom = y0 >= height * 0.78
+    near_top = y1 <= height * 0.22
+    near_side = x0 >= width * 0.55 or x1 <= width * 0.45
+    cornerish = near_side and (near_bottom or near_top)
+    tiny_label = line_h <= height * 0.03 and line_w <= width * 0.58
+
+    if not cornerish or not tiny_label:
+        return False
+
+    tokens = [normalize_latin_token_for_lexicon(part) for part in re.split(r"\s+", text)]
+    tokens = [token for token in tokens if token]
+    alpha = normalize_latin_token_for_lexicon(text)
+    lexical_hits = sum(1 for token in tokens if token in LATIN_COMMON_WORDS or token in LATIN_SHORT_KEEP_TOKENS)
+    compact_long = len(tokens) == 1 and len(alpha) >= 8
+    symbol_noise = bool(re.search(r"[\\/|_{}\[\]~`]+", text))
+    low_confidence = confidence < 88
+    likely_garbage_line = compact_long and lexical_hits == 0
+
+    if low_confidence and (likely_garbage_line or symbol_noise):
         return True
     return False
 
@@ -1096,9 +1299,15 @@ def are_near_duplicate_tokens(left: str, right: str) -> bool:
     return distance <= 1 if max_len <= 8 else distance <= 2
 
 
-def minimal_cleanup_external_result(result: Dict[str, Any]) -> Dict[str, Any]:
+def minimal_cleanup_external_result(result: Dict[str, Any], width: int, height: int, pipeline_profile: str) -> Dict[str, Any]:
     lines: List[Dict[str, Any]] = []
     words: List[Dict[str, Any]] = []
+    drop_counts: Dict[str, int] = {
+        "inlineAdWord": 0,
+        "watermarkLine": 0,
+        "mergedLatinSplit": 0,
+    }
+    dropped_words: List[Dict[str, Any]] = []
 
     for line in result.get("lines", []) or []:
         text = normalize_text(str(line.get("text") or ""))
@@ -1127,14 +1336,29 @@ def minimal_cleanup_external_result(result: Dict[str, Any]) -> Dict[str, Any]:
                 },
             })
 
+        before_ad = len(normalized_words)
         normalized_words, removed_ad_words = strip_inline_ad_words(normalized_words)
+        removed_ad_count = max(0, before_ad - len(normalized_words))
+        if removed_ad_count > 0:
+            drop_counts["inlineAdWord"] = drop_counts.get("inlineAdWord", 0) + removed_ad_count
         if not normalized_words:
             continue
 
-        candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if removed_ad_words else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
+        normalized_words, split_count = split_merged_latin_words(normalized_words)
+        if split_count > 0:
+            drop_counts["mergedLatinSplit"] = drop_counts.get("mergedLatinSplit", 0) + split_count
+
+        candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if (removed_ad_words or split_count > 0) else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
         if is_probable_ascii_ghost(candidate_line["text"]):
             continue
-        if contains_known_watermark_phrase(candidate_line["text"]):
+        if is_probable_panel_watermark_line(candidate_line, width, height, pipeline_profile):
+            drop_counts["watermarkLine"] = drop_counts.get("watermarkLine", 0) + 1
+            dropped_words.append({
+                "reason": "panel_watermark_suppression",
+                "source": "paddle_panel",
+                "text": candidate_line.get("text", ""),
+                "confidence": normalize_confidence(candidate_line.get("confidence", 0.0)),
+            })
             continue
         lines.append(candidate_line)
         words.extend(candidate_line["words"])
@@ -1143,7 +1367,13 @@ def minimal_cleanup_external_result(result: Dict[str, Any]) -> Dict[str, Any]:
     words = []
     for line in lines:
         words.extend(line.get("words") or [])
-    return make_text_result(lines, words, result.get("pageSegMode"))
+    output = make_text_result(lines, words, result.get("pageSegMode"))
+    output["debug"] = {
+        "cleanupRoute": "paddle_panel_minimal",
+        "dropCounts": {key: int(value) for key, value in drop_counts.items() if int(value) > 0},
+        "droppedWords": dropped_words,
+    }
+    return output
 
 
 def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, height: int) -> Dict[str, Any]:
@@ -1499,7 +1729,7 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
     if engine == "paddleocr" and is_korean_panel:
         return cleanup_paddle_korean_panel_result(result, width, height)
     if engine == "paddleocr" and pipeline_profile == "panel":
-        return minimal_cleanup_external_result(result)
+        return minimal_cleanup_external_result(result, width, height, pipeline_profile)
 
     candidate_lines: List[Dict[str, Any]] = []
     candidate_words: List[Dict[str, Any]] = []

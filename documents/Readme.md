@@ -3,15 +3,16 @@
 `documents/` is the canonical working documentation for the current codebase.
 Use this folder as the source of truth before relying on older root-level notes.
 
-## Current Code Snapshot (2026-03-22)
+## Current Code Snapshot (2026-03-31)
 
 - Runtime: Electron + Vite + React 19 + Zustand
 - OCR: Tesseract.js in module workers, local `public/tessdata` first, CDN fallback
 - PDF output: `pdf-lib` searchable PDF with invisible text layer
 - Cache: SQLite via `better-sqlite3`
 - Translation: Gemini call goes through Electron main process IPC
-- OCR baseline: `OCR_ALGORITHM_VERSION = 99`
+- OCR baseline: `OCR_ALGORITHM_VERSION = 146`
 - Default OCR path: single worker, `panel` pipeline, `best` quality profile
+- External OCR panel hygiene now includes bridge-side merged Latin spacing recovery, deterministic watermark suppression, and service-side residual singleton cleanup (`externalResidualSingleton`)
 
 ## Canonical Docs
 
@@ -46,6 +47,7 @@ Use them as input when planning deeper OCR changes, but treat `ARCHITECTURE.md`,
 - Korean tuning still lacks a dedicated reproducible fixture bundle.
 - The manga OCR regression harness still needs real fixture images under `public/fixtures/ocr/manga`.
 - `fast` / `balanced` / `best` share one core OCR pipeline today; they mostly differ by DPI, rescue caps, and runtime budget, not by a fully separate fast architecture.
+- A rare panel residual singleton (for example `15`) can still leak on some watermark-heavy pages; use dropped-word debug reasons to tune thresholds case-by-case.
 
 ## Working Rule
 

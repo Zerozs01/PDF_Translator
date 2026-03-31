@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.14] - 2026-03-31
+
+### Fixed — OCR Algorithm v146 (External Panel Cleanup + Residual Singleton Guard)
+
+- External `PaddleOCR` panel cleanup now repairs compact merged Latin lines into spaced tokens (for example `INTHEPAST...` -> `IN THE PAST ...`) and reports `mergedLatinSplit` in debug drop counts.
+- Added deterministic panel watermark suppression in the external bridge using geometry + lexical/domain evidence (no text-color based filtering), reducing false retention of corner watermark text.
+- Added external post-cleanup residual singleton suppression in `VisionService` (`externalResidualSingleton`) for panel non-CJK pages to target one-token numeric/CJK/punctuation ghosts.
+- External engine prewarm now starts preferred model almost immediately after file-open (`160ms`, non-idle), with secondary model still deferred/idle-aware (`2200ms`).
+
 ## [1.2.13] - 2026-03-21
 
 ### Fixed — OCR Algorithm v71 (Page 21 ME Recovery)

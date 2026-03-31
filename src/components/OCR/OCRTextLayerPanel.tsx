@@ -360,7 +360,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (!file) return undefined;
     let disposed = false;
 
-    const scheduleWarm = (engine: OCREngine, delayMs: number) => {
+    const scheduleWarm = (engine: OCREngine, delayMs: number, useIdle: boolean) => {
       const timer = setTimeout(() => {
         if (disposed) return;
         if (isProcessing) return;
@@ -379,7 +379,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           void ensureEngineReady(engine, { selectOnReady: false });
         };
 
-        if (typeof idleApi === 'function') {
+        if (useIdle && typeof idleApi === 'function') {
           idleApi(runWarm, { timeout: 3000 });
         } else {
           runWarm();
@@ -394,8 +394,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       : 'paddleocr';
     const secondaryEngine: OCREngine = preferredEngine === 'paddleocr' ? 'easyocr' : 'paddleocr';
 
-    const preferredTimer = scheduleWarm(preferredEngine, 900);
-    const secondaryTimer = scheduleWarm(secondaryEngine, 7000);
+    const preferredTimer = scheduleWarm(preferredEngine, 160, false);
+    const secondaryTimer = scheduleWarm(secondaryEngine, 2200, true);
 
     return () => {
       disposed = true;
