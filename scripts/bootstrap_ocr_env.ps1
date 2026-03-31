@@ -30,7 +30,8 @@ function Get-PythonRuntimeInfo {
     [Parameter()][string[]]$PrefixArgs = @()
   )
 
-  $raw = & $Executable @PrefixArgs -c "import sys,struct; print(f'{sys.version_info.major}.{sys.version_info.minor}|{struct.calcsize(\"P\") * 8}')"
+  $probeCode = "import sys,struct; print(str(sys.version_info.major)+'.'+str(sys.version_info.minor)+'|'+str(struct.calcsize('P')*8))"
+  $raw = & $Executable @PrefixArgs -c $probeCode
   if ($LASTEXITCODE -ne 0) {
     return $null
   }
