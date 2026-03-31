@@ -7,8 +7,11 @@ import { ipcRenderer, contextBridge } from 'electron'
 const ALLOWED_INVOKE_CHANNELS = [
   'db:save-document',
   'db:get-document',
+  'db:find-documents-by-filename',
   'db:save-ocr',
   'db:get-ocr',
+  'db:clear-ocr',
+  'db:get-latest-ocr',
   // Document management
   'db:get-recent-documents',
   'db:get-documents-by-project',
@@ -21,6 +24,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:add-document-tag',
   'db:remove-document-tag',
   'db:get-document-tags',
+  'db:touch-document',
   'db:update-last-page',
   // Tag management
   'db:get-all-tags',
@@ -35,6 +39,10 @@ const ALLOWED_INVOKE_CHANNELS = [
   // File system
   'fs:read-file',
   'fs:open-file',
+  'ocr:get-engine-status',
+  'ocr:prewarm-engine',
+  'ocr:run-external',
+  'ocr:cancel-external',
   'gemini:translate', // For secure Gemini API calls via main process
 ] as const;
 
@@ -56,6 +64,7 @@ interface DocumentUpdate {
   project_id?: number | null;
   thumbnail_path?: string;
   is_favorite?: boolean;
+  total_pages?: number;
 }
 
 interface ProjectCreate {
@@ -82,10 +91,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:save-document', { filepath, filename, totalPages }),
     getDocument: (filepath: string) =>
       ipcRenderer.invoke('db:get-document', filepath),
-    saveOCR: (docId: number, pageNum: number, data: unknown) =>
-      ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data }),
-    getOCR: (docId: number, pageNum: number) =>
-      ipcRenderer.invoke('db:get-ocr', { docId, pageNum }),
+    findDocumentsByFilename: (filename: string) =>
+      ipcRenderer.invoke('db:find-documents-by-filename', filename),
+    saveOCR: (docId: number, pageNum: number, data: unknown, engine?: string) =>
+      ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data, engine }),
+    getOCR: (docId: number, pageNum: number, engine?: string) =>
+      ipcRenderer.invoke('db:get-ocr', { docId, pageNum, engine }),
+    clearOCR: (docId: number, pageNum: number, engine?: string) =>
+      ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }),
+    getLatestOCR: (docId: number) =>
+      ipcRenderer.invoke('db:get-latest-ocr', { docId }),
     
     // Document management
     getRecentDocuments: (limit?: number) =>
@@ -110,6 +125,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:remove-document-tag', { documentId, tagId }),
     getDocumentTags: (documentId: number) =>
       ipcRenderer.invoke('db:get-document-tags', documentId),
+    touchDocument: (id: number) =>
+      ipcRenderer.invoke('db:touch-document', id),
     updateLastPage: (id: number, pageNum: number) =>
       ipcRenderer.invoke('db:update-last-page', { id, pageNum }),
   },
@@ -144,6 +161,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fs: {
     readFile: (filepath: string) => ipcRenderer.invoke('fs:read-file', filepath),
     openFile: () => ipcRenderer.invoke('fs:open-file'),
+    importFile: (payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) =>
+      ipcRenderer.invoke('fs:import-file', payload),
+  },
+
+  ocr: {
+    getEngineStatus: () => ipcRenderer.invoke('ocr:get-engine-status'),
+    prewarmEngine: (payload: { engine: string; language?: string }) =>
+      ipcRenderer.invoke('ocr:prewarm-engine', payload),
+    cancelExternal: (payload?: { engine?: string }) =>
+      ipcRenderer.invoke('ocr:cancel-external', payload),
+    runExternal: (payload: {
+      engine: string;
+      imageData: Uint8Array | ArrayBuffer;
+      imageMimeType: string;
+      imageWidth: number;
+      imageHeight: number;
+      language: string;
+      dpi: number;
+      pageSegMode?: number;
+      pipelineProfile?: string;
+      ocrQualityProfile?: string;
+    }) => ipcRenderer.invoke('ocr:run-external', payload),
   },
 
   // Message handling (restricted to allowed channels)

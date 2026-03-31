@@ -1,7 +1,9 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import { createHash } from 'crypto'
 import { initDB, DocumentDAO, OCRCacheDAO, TagDAO, ProjectDAO } from './db'
+import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
 
 // The built directory structure
 //
@@ -25,6 +27,11 @@ function createWindow() {
   
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
+    show: false,
+    width: 1440,
+    height: 960,
+    minWidth: 1200,
+    minHeight: 780,
     autoHideMenuBar: true, // Hide menu bar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -36,10 +43,19 @@ function createWindow() {
     },
   })
 
-  // Enable DevTools shortcut (Ctrl+Shift+I or F12)
+  win.once('ready-to-show', () => {
+    win?.maximize();
+    win?.show();
+  });
+
+  // Enable DevTools shortcut (Ctrl+Shift+I or F12) and page refresh (Ctrl+R / F5) in dev mode
   win.webContents.on('before-input-event', (event, input) => {
     if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
       win?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+    if (VITE_DEV_SERVER_URL && ((input.control && input.key.toLowerCase() === 'r') || input.key === 'F5')) {
+      win?.webContents.reload();
       event.preventDefault();
     }
   });
@@ -58,6 +74,7 @@ function createWindow() {
 }
 
 app.on('window-all-closed', () => {
+  disposeExternalOcrDaemons()
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -67,6 +84,10 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
+})
+
+app.on('before-quit', () => {
+  disposeExternalOcrDaemons()
 })
 
 app.whenReady().then(() => {
@@ -81,6 +102,9 @@ app.whenReady().then(() => {
   
   const isValidNumber = (value: unknown): value is number => 
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+  const isValidEngine = (value: unknown): value is string =>
+    typeof value === 'string' && ['tesseract', 'paddleocr', 'easyocr'].includes(value);
 
   const sanitizePath = (filepath: string): string => {
     // Remove dangerous path traversal patterns
@@ -101,7 +125,8 @@ app.whenReady().then(() => {
 
     try {
       const safePath = sanitizePath(filepath);
-      return DocumentDAO.upsert(safePath, filename, totalPages);
+      const row = DocumentDAO.upsert(safePath, filename, totalPages) as { id?: number } | undefined;
+      return row?.id ?? 0;
     } catch (error) {
       console.error('db:save-document error:', error);
       throw error;
@@ -122,13 +147,31 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('db:save-ocr', async (_, { docId, pageNum, data }) => {
+  ipcMain.handle('db:find-documents-by-filename', async (_, filename) => {
+    if (!isValidString(filename)) {
+      throw new Error('Invalid input: filename must be a non-empty string');
+    }
+
+    try {
+      return DocumentDAO.findByFilenameWithCacheStats(filename);
+    } catch (error) {
+      console.error('db:find-documents-by-filename error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:save-ocr', async (_, { docId, pageNum, data, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');
     }
 
     try {
-      OCRCacheDAO.save(docId, pageNum, data);
+      const selectedEngine = isValidEngine(engine)
+        ? engine
+        : isValidEngine((data as { ocrEngine?: unknown } | null)?.ocrEngine)
+          ? (data as { ocrEngine: string }).ocrEngine
+          : 'tesseract';
+      OCRCacheDAO.save(docId, pageNum, data, selectedEngine);
       return true;
     } catch (error) {
       console.error('db:save-ocr error:', error);
@@ -136,15 +179,43 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('db:get-ocr', async (_, { docId, pageNum }) => {
+  ipcMain.handle('db:get-ocr', async (_, { docId, pageNum, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');
     }
 
     try {
-      return OCRCacheDAO.get(docId, pageNum);
+      const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
+      return OCRCacheDAO.get(docId, pageNum, selectedEngine);
     } catch (error) {
       console.error('db:get-ocr error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('db:clear-ocr', async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid input: docId and pageNum must be positive numbers');
+    }
+
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
+      return OCRCacheDAO.clear(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error('db:clear-ocr error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-latest-ocr', async (_, { docId }) => {
+    if (!isValidNumber(docId)) {
+      throw new Error('Invalid input: docId must be a positive number');
+    }
+
+    try {
+      return OCRCacheDAO.getLatestForDocument(docId);
+    } catch (error) {
+      console.error('db:get-latest-ocr error:', error);
       return null;
     }
   });
@@ -235,7 +306,7 @@ app.whenReady().then(() => {
       const result = await dialog.showOpenDialog({
         properties: ['openFile'],
         filters: [
-          { name: 'Documents', extensions: ['pdf', 'png', 'jpg', 'jpeg'] },
+          { name: 'Documents', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff'] },
           { name: 'All Files', extensions: ['*'] },
         ],
       });
@@ -251,17 +322,18 @@ app.whenReady().then(() => {
         throw new Error('File not found');
       }
 
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === '.pdf' ? 'application/pdf' :
                        ext === '.png' ? 'image/png' :
                        ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
+                       ext === '.tif' || ext === '.tiff' ? 'image/tiff' :
                        'application/octet-stream';
 
       return {
         filepath: safePath,
-        data: buffer.toString('base64'),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath),
@@ -283,16 +355,17 @@ app.whenReady().then(() => {
         throw new Error('File not found');
       }
       // Read file as buffer and return base64
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
       const mimeType = ext === '.pdf' ? 'application/pdf' : 
                        ext === '.png' ? 'image/png' :
-                       ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 
+                       ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
+                       ext === '.tif' || ext === '.tiff' ? 'image/tiff' :
                        'application/octet-stream';
       
       return {
-        data: buffer.toString('base64'),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath)
@@ -300,6 +373,169 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('fs:read-file error:', error);
       throw error;
+    }
+  });
+
+  ipcMain.handle('fs:import-file', async (_event, payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) => {
+    try {
+      if (!payload || typeof payload.name !== 'string' || !payload.name) {
+        throw new Error('Invalid payload: name is required');
+      }
+
+      const rawData = payload.data instanceof ArrayBuffer
+        ? new Uint8Array(payload.data)
+        : payload.data;
+
+      if (!(rawData instanceof Uint8Array)) {
+        throw new Error('Invalid payload: data must be Uint8Array or ArrayBuffer');
+      }
+
+      const safeName = payload.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const ext = path.extname(safeName);
+      const fallbackExt = payload.mimeType === 'application/pdf'
+        ? '.pdf'
+        : payload.mimeType === 'image/png'
+        ? '.png'
+        : payload.mimeType === 'image/jpeg'
+        ? '.jpg'
+        : '';
+
+      const finalName = ext ? safeName : `${safeName}${fallbackExt}`;
+      const userDataDir = app.getPath('userData');
+      const importDir = path.join(userDataDir, 'imports');
+      await fs.promises.mkdir(importDir, { recursive: true });
+
+      // Use deterministic content-hash path so repeated imports hit the same DB document_id/cache key.
+      const contentHash = createHash('sha256').update(Buffer.from(rawData)).digest('hex').slice(0, 24);
+      const finalExt = ext || fallbackExt || path.extname(finalName) || '';
+      const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
+      let targetPath = hashedPath;
+
+      if (!fs.existsSync(hashedPath)) {
+        // Backward-compat: try to reuse previously imported UUID-style file with identical content
+        // so existing document_id/OCR cache keeps working.
+        try {
+          const entries = await fs.promises.readdir(importDir, { withFileTypes: true });
+          const candidates = entries
+            .filter((entry) => entry.isFile())
+            .map((entry) => entry.name)
+            .filter((name) => {
+              if (name === path.basename(hashedPath)) return false;
+              if (name.endsWith(`-${finalName}`)) return true;
+              if (!finalExt) return true;
+              return path.extname(name).toLowerCase() === finalExt.toLowerCase();
+            });
+
+          for (const name of candidates) {
+            const candidatePath = path.join(importDir, name);
+            let stats: fs.Stats;
+            try {
+              stats = await fs.promises.stat(candidatePath);
+            } catch {
+              continue;
+            }
+            if (stats.size !== rawData.byteLength) continue;
+
+            try {
+              const candidateBytes = await fs.promises.readFile(candidatePath);
+              const candidateHash = createHash('sha256').update(candidateBytes).digest('hex').slice(0, 24);
+              if (candidateHash === contentHash) {
+                targetPath = candidatePath;
+                break;
+              }
+            } catch {
+              // Ignore unreadable candidate files and continue searching.
+            }
+          }
+        } catch {
+          // Ignore migration scan failures and fall back to hashed path write.
+        }
+      }
+
+      if (!fs.existsSync(targetPath)) {
+        await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      }
+      const stats = await fs.promises.stat(targetPath);
+
+      return {
+        filepath: targetPath,
+        mimeType: payload.mimeType,
+        size: stats.size,
+        name: finalName
+      };
+    } catch (error) {
+      console.error('fs:import-file error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:get-engine-status', async () => {
+    try {
+      return await getExternalOcrEngineStatuses();
+    } catch (error) {
+      console.error('ocr:get-engine-status error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('ocr:prewarm-engine', async (_, payload: { engine: string; language?: string }) => {
+    if (!payload || typeof payload !== 'object' || !isValidString(payload.engine)) {
+      throw new Error('Invalid OCR prewarm payload');
+    }
+
+    if (payload.engine !== 'paddleocr' && payload.engine !== 'easyocr') {
+      throw new Error(`Unsupported OCR engine: ${payload.engine}`);
+    }
+
+    try {
+      return await prewarmExternalOcrEngine(payload.engine, isValidString(payload.language) ? payload.language : 'eng');
+    } catch (error) {
+      console.error('ocr:prewarm-engine error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:run-external', async (_, payload: {
+    engine: string;
+    imageData: Uint8Array | ArrayBuffer;
+    imageMimeType: string;
+    imageWidth: number;
+    imageHeight: number;
+    language: string;
+    dpi: number;
+    pageSegMode?: number;
+    pipelineProfile?: string;
+    ocrQualityProfile?: string;
+  }) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid OCR payload');
+    }
+    if (!isValidString(payload.engine) || !isValidString(payload.imageMimeType) || !isValidString(payload.language)) {
+      throw new Error('Invalid OCR payload: engine, imageMimeType, and language are required');
+    }
+    if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight) || !isValidNumber(payload.dpi)) {
+      throw new Error('Invalid OCR payload: imageWidth, imageHeight, and dpi must be positive numbers');
+    }
+
+    try {
+      return await runExternalOcr(payload);
+    } catch (error) {
+      console.error('ocr:run-external error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:cancel-external', async (_, payload?: { engine?: string }) => {
+    try {
+      const engine = payload?.engine;
+      if (engine && engine !== 'paddleocr' && engine !== 'easyocr') {
+        throw new Error(`Unsupported OCR engine: ${engine}`);
+      }
+      cancelExternalOcr(engine as 'paddleocr' | 'easyocr' | undefined);
+      return true;
+    } catch (error) {
+      console.error('ocr:cancel-external error:', error);
+      return false;
     }
   });
 
@@ -348,6 +584,19 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:get-document-tags error:', error);
       return [];
+    }
+  });
+
+  ipcMain.handle('db:touch-document', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      DocumentDAO.touch(id);
+      return true;
+    } catch (error) {
+      console.error('db:touch-document error:', error);
+      return false;
     }
   });
 

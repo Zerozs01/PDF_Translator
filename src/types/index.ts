@@ -50,6 +50,67 @@ export interface OCRLine {
   words: OCRWord[];
 }
 
+export interface OCRDroppedWord {
+  filter: string;
+  reason: string;
+  text: string;
+  confidence: number;
+  bbox?: BBox;
+}
+
+export type OCRPipelineProfile = "panel" | "export";
+export type OCRQualityProfile = "fast" | "balanced" | "best";
+export type OCREngine = "tesseract" | "paddleocr" | "easyocr";
+
+export interface OCRStageMetric {
+  stage:
+    | "base"
+    | "rescan"
+    | "anchorProbe"
+    | "imageFilter"
+    | "imgTile"
+    | "bgVariance"
+    | "isolatedCjk"
+    | "korJamo"
+    | "weakCjkLine"
+    | "watermark"
+    | "linePrune";
+  wordsBefore: number;
+  wordsAfter: number;
+  linesBefore: number;
+  linesAfter: number;
+  replacements?: number;
+}
+
+export interface OCRCandidateDebug {
+  id: string;
+  stage: "emptyLineFallback" | "gapFallback" | "anchorSecondLine" | "anchorTopSparse" | "anchorBottomSparse" | "postPruneLine";
+  bbox: BBox;
+  accepted: boolean;
+  score?: number;
+  reason: string;
+}
+
+export interface OCRDebugInfo {
+  droppedWords: OCRDroppedWord[];
+  dropCounts: Record<string, number>;
+  stageMetrics?: OCRStageMetric[];
+  candidates?: OCRCandidateDebug[];
+  skipReason?: string;
+  runtimeMs?: number;
+  qualityProfile?: OCRQualityProfile;
+}
+
+export interface OCRFixtureExpectation {
+  page: number;
+  minLines: number;
+  minMeaningfulWords: number;
+  mustContainAny: string[][];
+  mustNotContainNormalized: string[];
+  maxStandaloneShortTokens: number;
+  maxSuspiciousRatio: number;
+}
+
 /** Page-level OCR result */
 export interface OCRPageResult {
   pageNumber: number;
@@ -58,18 +119,26 @@ export interface OCRPageResult {
   dpi: number;
   language: string;
   pageSegMode?: number;
+  algorithmVersion: number;
+  pipelineProfile?: OCRPipelineProfile;
+  ocrEngine?: OCREngine;
+  ocrQualityProfile?: OCRQualityProfile;
   lines: OCRLine[];
   words: OCRWord[];
   text: string;
   confidence: number;
+  debug?: OCRDebugInfo;
 }
 
 /** OCR Processing Options */
 export interface OCROptions {
   language: string;
   dpi: number;
-  profile: "fast" | "balanced" | "best";
+  engine: OCREngine;
   pageSegMode?: number;
+  skipIfTextExists?: boolean;
+  /** Per-page OCR timeout in seconds (0 = no timeout). Default: 120 */
+  perPageTimeoutSec?: number;
 }
 
 /** Text Layer Generation Options */

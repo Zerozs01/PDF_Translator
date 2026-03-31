@@ -29,6 +29,15 @@ Thumbs.db
 # Build artifacts
 *.tsbuildinfo
 
+# Python / local OCR env
+.venv-ocr/
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.tmp-ocr-*
+
 
 *storybook.log
 storybook-static

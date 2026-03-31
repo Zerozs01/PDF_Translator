@@ -2,7 +2,10 @@
 const electron = require("electron");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const Database = require("better-sqlite3");
+const os = require("os");
+const child_process = require("child_process");
 let db = null;
 function initDB() {
   if (db) return db;
@@ -10,9 +13,11 @@ function initDB() {
   console.log("[SQLite] Database path:", dbPath);
   try {
     db = new Database(dbPath);
+    db.pragma("page_size = 4096");
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
     db.pragma("cache_size = -64000");
+    db.pragma("mmap_size = 134217728");
     const schema = `
       -- Table for Tags
       CREATE TABLE IF NOT EXISTS tags (
@@ -50,11 +55,19 @@ function initDB() {
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       );
 
-      -- Junction table for Document-Tags (Many-to-Many)
+      -- Table for Document-Tags (Many-to-Many)
       CREATE TABLE IF NOT EXISTS document_tags (
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
         PRIMARY KEY (document_id, tag_id)
+      );
+
+      -- 🚀 FTS5 Search Table (Crow Explorer Pattern)
+      -- This table stores a denormalized text blob of (filename + tags) for instant search
+      CREATE VIRTUAL TABLE IF NOT EXISTS document_search USING fts5(
+        document_id UNINDEXED,
+        search_text,
+        tokenize='unicode61'
       );
 
       -- Table for OCR Cache
@@ -67,6 +80,17 @@ function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for OCR Cache (per engine, v2)
+      CREATE TABLE IF NOT EXISTS ocr_cache_engine (
+        document_id INTEGER,
+        page_number INTEGER,
+        ocr_engine TEXT NOT NULL,
+        ocr_data TEXT,
+        updated_at INTEGER,
+        PRIMARY KEY (document_id, page_number, ocr_engine),
+        FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
@@ -74,7 +98,32 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_documents_favorite ON documents(is_favorite);
       CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
+      CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
+      CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+
+      -- 🚀 Automatic Search Sync Triggers
+      -- Keeps document_search in sync with documents table
+      CREATE TRIGGER IF NOT EXISTS trg_documents_insert AFTER INSERT ON documents
+      BEGIN
+        INSERT INTO document_search(document_id, search_text) 
+        VALUES (new.id, new.filename);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_update AFTER UPDATE ON documents
+      BEGIN
+        UPDATE document_search SET search_text = new.filename WHERE document_id = old.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_delete AFTER DELETE ON documents
+      BEGIN
+        DELETE FROM document_search WHERE document_id = old.id;
+      END;
+
+      -- Initial populate of search table if empty (one-time migration)
+      INSERT INTO document_search(document_id, search_text)
+      SELECT id, filename FROM documents 
+      WHERE id NOT IN (SELECT document_id FROM document_search);
 
       -- Insert default tags if not exists
       INSERT OR IGNORE INTO tags (name, color) VALUES 
@@ -86,7 +135,7 @@ function initDB() {
         ('Personal', '#ec4899');
     `;
     db.exec(schema);
-    console.log("[SQLite] Database initialized successfully with WAL & Indexes");
+    console.log("[SQLite] Database initialized successfully with WAL, FTS5 & MMap");
     return db;
   } catch (err) {
     console.error("[SQLite] Failed to initialize database:", err);
@@ -193,6 +242,33 @@ const DocumentDAO = {
     if (!db) throw new Error("DB not initialized");
     return db.prepare("SELECT * FROM documents WHERE filepath = ?").get(filepath);
   },
+  findByFilenameWithCacheStats: (filename, limit = 20) => {
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
+      SELECT
+        d.id,
+        d.filepath,
+        d.filename,
+        d.total_pages,
+        d.last_accessed,
+        CAST(COUNT(o.page_number) AS INTEGER) AS cache_pages,
+        MAX(o.updated_at) AS last_cache_update
+      FROM documents d
+      LEFT JOIN (
+        SELECT document_id, page_number, MAX(updated_at) AS updated_at
+        FROM (
+          SELECT document_id, page_number, updated_at FROM ocr_cache
+          UNION ALL
+          SELECT document_id, page_number, updated_at FROM ocr_cache_engine
+        ) merged_cache
+        GROUP BY document_id, page_number
+      ) o ON o.document_id = d.id
+      WHERE d.filename = ?
+      GROUP BY d.id
+      ORDER BY cache_pages DESC, last_cache_update DESC, d.last_accessed DESC
+      LIMIT ?
+    `).all(filename, limit);
+  },
   getById: (id) => {
     if (!db) throw new Error("DB not initialized");
     return db.prepare("SELECT * FROM documents WHERE id = ?").get(id);
@@ -246,15 +322,19 @@ const DocumentDAO = {
   },
   search: (query) => {
     if (!db) throw new Error("DB not initialized");
+    const trimmed = query.trim();
+    if (!trimmed) return DocumentDAO.getRecent(50);
+    const sanitized = trimmed.replace(/"/g, '""');
     return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
+      JOIN document_search ds ON d.id = ds.document_id
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
-      WHERE d.filename LIKE ?
+      WHERE ds.search_text MATCH '"' || ? || '"*'
       GROUP BY d.id
-      ORDER BY d.last_accessed DESC
-    `).all(`%${query}%`);
+      ORDER BY rank, d.last_accessed DESC
+    `).all(sanitized);
   },
   updateLastAccessed: (id, lastPage = 1) => {
     if (!db) throw new Error("DB not initialized");
@@ -308,6 +388,10 @@ const DocumentDAO = {
       sets.push("is_favorite = ?");
       values.push(data.is_favorite ? 1 : 0);
     }
+    if (data.total_pages !== void 0) {
+      sets.push("total_pages = ?");
+      values.push(data.total_pages);
+    }
     if (sets.length === 0) return;
     values.push(id);
     db.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
@@ -332,6 +416,10 @@ const DocumentDAO = {
       ORDER BY t.name
     `).all(documentId);
   },
+  touch: (id) => {
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
+  },
   updateLastPage: (id, pageNum) => {
     if (!db) throw new Error("DB not initialized");
     db.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
@@ -342,28 +430,437 @@ const DocumentDAO = {
   }
 };
 const OCRCacheDAO = {
-  save: (documentId, pageNumber, data) => {
+  save: (documentId, pageNumber, data, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
     const stmt = db.prepare(`
-      INSERT INTO ocr_cache (document_id, page_number, ocr_data, updated_at)
-      VALUES (@documentId, @pageNumber, @json, @now)
-      ON CONFLICT(document_id, page_number) DO UPDATE SET
+      INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
+      VALUES (@documentId, @pageNumber, @engine, @json, @now)
+      ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
         ocr_data = @json,
         updated_at = @now
     `);
     stmt.run({
       documentId,
       pageNumber,
+      engine: normalizedEngine,
       json: JSON.stringify(data),
       now: Date.now()
     });
   },
-  get: (documentId, pageNumber) => {
+  get: (documentId, pageNumber, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
-    const row = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
-    return row ? JSON.parse(row.ocr_data) : null;
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
+    const row = db.prepare("SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").get(documentId, pageNumber, normalizedEngine);
+    if (row) {
+      return JSON.parse(row.ocr_data);
+    }
+    const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    if (!legacyRow) return null;
+    const parsed = JSON.parse(legacyRow.ocr_data);
+    const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
+    if (legacyEngine !== normalizedEngine) return null;
+    return parsed;
+  },
+  clear: (documentId, pageNumber, engine = "tesseract") => {
+    if (!db) throw new Error("DB not initialized");
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
+    const res1 = db.prepare("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    let res2 = { changes: 0 };
+    if (legacyRow) {
+      try {
+        const parsed = JSON.parse(legacyRow.ocr_data);
+        const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
+        if (legacyEngine === normalizedEngine) {
+          res2 = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+        }
+      } catch {
+        if (normalizedEngine === "tesseract") {
+          res2 = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+        }
+      }
+    }
+    return res1.changes > 0 || res2.changes > 0;
+  },
+  getLatestForDocument: (documentId) => {
+    if (!db) throw new Error("DB not initialized");
+    const engineRow = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache_engine
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId);
+    const legacyRow = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId);
+    const row = (() => {
+      if (!engineRow && !legacyRow) return null;
+      if (!engineRow) return legacyRow;
+      if (!legacyRow) return engineRow;
+      return engineRow.updated_at >= legacyRow.updated_at ? engineRow : legacyRow;
+    })();
+    if (!row) return null;
+    return {
+      page_number: row.page_number,
+      updated_at: row.updated_at,
+      ocr_data: JSON.parse(row.ocr_data)
+    };
   }
 };
+const EXTERNAL_ENGINES = ["paddleocr", "easyocr"];
+const bridgeDaemons = /* @__PURE__ */ new Map();
+const BENIGN_BRIDGE_STDERR_PATTERNS = [
+  /pin_memory.*no accelerator/i,
+  /connectivity check to the model hoster has been skipped/i,
+  /creating model:/i,
+  /model files already exist/i,
+  /no ccache found/i,
+  /resized image size .* exceeds max_side_limit/i,
+  /info:\s*could not find files for the given pattern/i,
+  /lang.*ocr_version.*will be ignored when model names/i
+];
+function resolveBridgeScriptPath() {
+  return electron.app.isPackaged ? path.join(process.resourcesPath, "ocr-bridge", "external_ocr_bridge.py") : path.join(electron.app.getAppPath(), "scripts", "external_ocr_bridge.py");
+}
+function resolveBridgeScriptSignature(scriptPath) {
+  try {
+    const stat = fs.statSync(scriptPath);
+    return `${scriptPath}:${Math.floor(stat.mtimeMs)}`;
+  } catch {
+    return `${scriptPath}:unknown`;
+  }
+}
+function resolvePythonExecutable(engine) {
+  if (engine === "paddleocr" && process.env.PADDLE_OCR_PYTHON_PATH) return process.env.PADDLE_OCR_PYTHON_PATH;
+  if (engine === "easyocr" && process.env.EASY_YOLO_OCR_PYTHON_PATH) return process.env.EASY_YOLO_OCR_PYTHON_PATH;
+  if (process.env.OCR_PYTHON_PATH) return process.env.OCR_PYTHON_PATH;
+  const localVenvPython = path.join(electron.app.getAppPath(), ".venv-ocr", "Scripts", "python.exe");
+  if (fs.existsSync(localVenvPython)) return localVenvPython;
+  return "python";
+}
+function resolveBridgeEnv() {
+  return {
+    ...process.env,
+    PYTHONUNBUFFERED: "1"
+  };
+}
+function isBenignBridgeStderr(message) {
+  const trimmed = message.trim();
+  if (!trimmed) return true;
+  return BENIGN_BRIDGE_STDERR_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+async function runBridgeOnce(engine, args) {
+  const scriptPath = resolveBridgeScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`OCR bridge script not found: ${scriptPath}`);
+  }
+  const pythonCmd = resolvePythonExecutable(engine);
+  return await new Promise((resolve, reject) => {
+    const child = child_process.spawn(pythonCmd, [scriptPath, ...args], {
+      cwd: path.dirname(scriptPath),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: resolveBridgeEnv(),
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      reject(error);
+    });
+    child.on("close", (code) => {
+      const trimmed = stdout.trim();
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || trimmed || `OCR bridge exited with code ${code}`));
+        return;
+      }
+      if (!trimmed) {
+        reject(new Error(stderr.trim() || "OCR bridge returned an empty response"));
+        return;
+      }
+      try {
+        resolve(JSON.parse(trimmed));
+      } catch (error) {
+        reject(new Error(`Failed to parse OCR bridge response: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    });
+  });
+}
+function teardownDaemon(engine, reason) {
+  const daemon = bridgeDaemons.get(engine);
+  if (!daemon) return;
+  bridgeDaemons.delete(engine);
+  for (const [, pending] of daemon.pending) {
+    pending.reject(reason ?? new Error(`OCR daemon for ${engine} stopped unexpectedly`));
+  }
+  daemon.pending.clear();
+  if (!daemon.child.killed) {
+    daemon.child.kill();
+  }
+}
+function handleDaemonStdout(engine, chunk) {
+  const daemon = bridgeDaemons.get(engine);
+  if (!daemon) return;
+  daemon.stdoutBuffer += chunk.toString();
+  const lines = daemon.stdoutBuffer.split(/\r?\n/);
+  daemon.stdoutBuffer = lines.pop() ?? "";
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let payload;
+    try {
+      payload = JSON.parse(line);
+    } catch {
+      console.warn(`[ocrBridge] Ignoring non-JSON stdout from ${engine}: ${line}`);
+      continue;
+    }
+    if (!payload.id) {
+      console.warn(`[ocrBridge] Ignoring daemon response without request id from ${engine}`);
+      continue;
+    }
+    const pending = daemon.pending.get(payload.id);
+    if (!pending) {
+      console.warn(`[ocrBridge] Received orphaned daemon response ${payload.id} from ${engine}`);
+      continue;
+    }
+    daemon.pending.delete(payload.id);
+    if (payload.ok) {
+      pending.resolve(payload);
+    } else {
+      pending.reject(new Error(payload.reason || `External OCR engine "${engine}" failed`));
+    }
+  }
+}
+function ensureDaemon(engine) {
+  const scriptPath = resolveBridgeScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`OCR bridge script not found: ${scriptPath}`);
+  }
+  const scriptSignature = resolveBridgeScriptSignature(scriptPath);
+  const existing = bridgeDaemons.get(engine);
+  if (existing && !existing.child.killed) {
+    if (existing.scriptPath === scriptPath && existing.scriptSignature === scriptSignature) {
+      return existing;
+    }
+    teardownDaemon(engine, new Error(`OCR bridge script changed for ${engine}; restarting daemon`));
+  }
+  const pythonCmd = resolvePythonExecutable(engine);
+  const child = child_process.spawn(pythonCmd, [scriptPath, "--stdio-server", "--action", "ocr", "--engine", engine], {
+    cwd: path.dirname(scriptPath),
+    stdio: ["pipe", "pipe", "pipe"],
+    env: resolveBridgeEnv(),
+    windowsHide: true
+  });
+  const daemon = {
+    engine,
+    child,
+    stdoutBuffer: "",
+    pending: /* @__PURE__ */ new Map(),
+    scriptPath,
+    scriptSignature
+  };
+  child.stdout.on("data", (chunk) => {
+    handleDaemonStdout(engine, chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    const message = chunk.toString().trim();
+    if (message && !isBenignBridgeStderr(message)) {
+      console.warn(`[ocrBridge:${engine}] ${message}`);
+    }
+  });
+  child.on("error", (error) => {
+    teardownDaemon(engine, error);
+  });
+  child.on("close", (code, signal) => {
+    teardownDaemon(
+      engine,
+      new Error(`OCR daemon for ${engine} exited (code=${code ?? "null"}, signal=${signal ?? "null"})`)
+    );
+  });
+  bridgeDaemons.set(engine, daemon);
+  return daemon;
+}
+async function requestDaemon(engine, payload) {
+  const daemon = ensureDaemon(engine);
+  const id = crypto.randomUUID();
+  return await new Promise((resolve, reject) => {
+    daemon.pending.set(id, { resolve, reject });
+    try {
+      const stdin = daemon.child.stdin;
+      if (!stdin) {
+        throw new Error(`OCR daemon stdin is unavailable for ${engine}`);
+      }
+      stdin.write(`${JSON.stringify({ id, ...payload })}
+`);
+    } catch (error) {
+      daemon.pending.delete(id);
+      reject(error instanceof Error ? error : new Error(String(error)));
+      teardownDaemon(
+        engine,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  });
+}
+function isRecoverableDaemonError(error) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("daemon") || message.includes("stdin is unavailable") || message.includes("parse ocr bridge response");
+}
+function isNoTextBoxesError(error) {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes("no text boxes returned from paddleocr");
+}
+function mimeTypeToExtension(mimeType) {
+  switch ((mimeType || "").toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/tiff":
+      return ".tiff";
+    case "image/bmp":
+      return ".bmp";
+    default:
+      return ".png";
+  }
+}
+function coerceImageBuffer(raw) {
+  if (raw instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(raw));
+  }
+  if (raw instanceof Uint8Array) {
+    return Buffer.from(raw);
+  }
+  throw new Error("Invalid OCR image payload");
+}
+async function getExternalOcrEngineStatuses() {
+  return await Promise.all(EXTERNAL_ENGINES.map(async (engine) => {
+    try {
+      const response = await runBridgeOnce(engine, ["--action", "status", "--engine", engine]);
+      return {
+        engine,
+        available: Boolean(response.available),
+        runtime: response.runtime || (engine === "paddleocr" ? "Python bridge" : "REST/adapter bridge"),
+        description: response.description || response.reason || "No status details returned"
+      };
+    } catch (error) {
+      return {
+        engine,
+        available: false,
+        runtime: engine === "paddleocr" ? "Python bridge" : "REST/adapter bridge",
+        description: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }));
+}
+async function runExternalOcr(payload) {
+  if (payload.engine !== "paddleocr" && payload.engine !== "easyocr") {
+    throw new Error(`Unsupported external OCR engine: ${payload.engine}`);
+  }
+  const engine = payload.engine;
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pdf-translator-ocr-"));
+  const imagePath = path.join(tempDir, `input${mimeTypeToExtension(payload.imageMimeType)}`);
+  try {
+    await fs.promises.writeFile(imagePath, coerceImageBuffer(payload.imageData));
+    const requestPayload = {
+      action: "ocr",
+      engine,
+      image: imagePath,
+      language: payload.language,
+      width: Math.round(payload.imageWidth),
+      height: Math.round(payload.imageHeight),
+      dpi: Math.round(payload.dpi),
+      ...typeof payload.pageSegMode === "number" ? { pageSegMode: payload.pageSegMode } : {},
+      ...payload.pipelineProfile ? { pipelineProfile: payload.pipelineProfile } : {},
+      ...payload.ocrQualityProfile ? { qualityProfile: payload.ocrQualityProfile } : {}
+    };
+    let response;
+    const emptyNoTextResponse = {
+      ok: true,
+      engine,
+      words: [],
+      lines: [],
+      text: "",
+      confidence: 0,
+      ...typeof payload.pageSegMode === "number" ? { pageSegMode: payload.pageSegMode } : {},
+      debug: {
+        dropCounts: {},
+        droppedWords: [],
+        skipReason: "noTextBoxesFromPaddleOCR"
+      }
+    };
+    try {
+      response = await requestDaemon(engine, requestPayload);
+    } catch (error) {
+      if (isNoTextBoxesError(error)) {
+        return emptyNoTextResponse;
+      }
+      if (!isRecoverableDaemonError(error)) {
+        throw error;
+      }
+      teardownDaemon(
+        engine,
+        error instanceof Error ? error : new Error(String(error))
+      );
+      try {
+        response = await requestDaemon(engine, requestPayload);
+      } catch (retryError) {
+        if (isNoTextBoxesError(retryError)) {
+          return emptyNoTextResponse;
+        }
+        throw retryError;
+      }
+    }
+    if (!response.ok) {
+      throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+    }
+    return response;
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  }
+}
+async function prewarmExternalOcrEngine(engine, language = "eng") {
+  const response = await requestDaemon(engine, {
+    action: "prewarm",
+    engine,
+    language
+  });
+  if (!response.ok) {
+    throw new Error(response.reason || `Failed to prewarm external OCR engine "${engine}"`);
+  }
+  return {
+    ok: true,
+    engine,
+    runtime: response.runtime || "Python bridge",
+    description: response.description || `${engine} warmed`
+  };
+}
+function cancelExternalOcr(engine) {
+  if (engine) {
+    teardownDaemon(engine, new Error(`External OCR canceled for ${engine}`));
+    return;
+  }
+  disposeExternalOcrDaemons();
+}
+function disposeExternalOcrDaemons() {
+  for (const engine of Array.from(bridgeDaemons.keys())) {
+    teardownDaemon(engine);
+  }
+}
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path.join(process.env.DIST, "../public");
 let win;
@@ -372,6 +869,11 @@ function createWindow() {
   electron.Menu.setApplicationMenu(null);
   win = new electron.BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC || "", "electron-vite.svg"),
+    show: false,
+    width: 1440,
+    height: 960,
+    minWidth: 1200,
+    minHeight: 780,
     autoHideMenuBar: true,
     // Hide menu bar
     webPreferences: {
@@ -383,9 +885,17 @@ function createWindow() {
       webSecurity: true
     }
   });
+  win.once("ready-to-show", () => {
+    win?.maximize();
+    win?.show();
+  });
   win.webContents.on("before-input-event", (event, input) => {
     if (input.control && input.shift && input.key.toLowerCase() === "i" || input.key === "F12") {
       win?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+    if (VITE_DEV_SERVER_URL && (input.control && input.key.toLowerCase() === "r" || input.key === "F5")) {
+      win?.webContents.reload();
       event.preventDefault();
     }
   });
@@ -399,6 +909,7 @@ function createWindow() {
   }
 }
 electron.app.on("window-all-closed", () => {
+  disposeExternalOcrDaemons();
   if (process.platform !== "darwin") {
     electron.app.quit();
   }
@@ -408,10 +919,14 @@ electron.app.on("activate", () => {
     createWindow();
   }
 });
+electron.app.on("before-quit", () => {
+  disposeExternalOcrDaemons();
+});
 electron.app.whenReady().then(() => {
   initDB();
   const isValidString = (value) => typeof value === "string" && value.length > 0 && value.length < 1e4;
   const isValidNumber = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  const isValidEngine = (value) => typeof value === "string" && ["tesseract", "paddleocr", "easyocr"].includes(value);
   const sanitizePath = (filepath) => {
     return filepath.replace(/\.\.\//g, "").replace(/\.\.\\/g, "");
   };
@@ -424,7 +939,8 @@ electron.app.whenReady().then(() => {
     }
     try {
       const safePath = sanitizePath(filepath);
-      return DocumentDAO.upsert(safePath, filename, totalPages);
+      const row = DocumentDAO.upsert(safePath, filename, totalPages);
+      return row?.id ?? 0;
     } catch (error) {
       console.error("db:save-document error:", error);
       throw error;
@@ -442,26 +958,62 @@ electron.app.whenReady().then(() => {
       return null;
     }
   });
-  electron.ipcMain.handle("db:save-ocr", async (_, { docId, pageNum, data }) => {
+  electron.ipcMain.handle("db:find-documents-by-filename", async (_, filename) => {
+    if (!isValidString(filename)) {
+      throw new Error("Invalid input: filename must be a non-empty string");
+    }
+    try {
+      return DocumentDAO.findByFilenameWithCacheStats(filename);
+    } catch (error) {
+      console.error("db:find-documents-by-filename error:", error);
+      return [];
+    }
+  });
+  electron.ipcMain.handle("db:save-ocr", async (_, { docId, pageNum, data, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error("Invalid input: docId and pageNum must be positive numbers");
     }
     try {
-      OCRCacheDAO.save(docId, pageNum, data);
+      const selectedEngine = isValidEngine(engine) ? engine : isValidEngine(data?.ocrEngine) ? data.ocrEngine : "tesseract";
+      OCRCacheDAO.save(docId, pageNum, data, selectedEngine);
       return true;
     } catch (error) {
       console.error("db:save-ocr error:", error);
       return false;
     }
   });
-  electron.ipcMain.handle("db:get-ocr", async (_, { docId, pageNum }) => {
+  electron.ipcMain.handle("db:get-ocr", async (_, { docId, pageNum, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error("Invalid input: docId and pageNum must be positive numbers");
     }
     try {
-      return OCRCacheDAO.get(docId, pageNum);
+      const selectedEngine = isValidEngine(engine) ? engine : "tesseract";
+      return OCRCacheDAO.get(docId, pageNum, selectedEngine);
     } catch (error) {
       console.error("db:get-ocr error:", error);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("db:clear-ocr", async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : "tesseract";
+      return OCRCacheDAO.clear(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error("db:clear-ocr error:", error);
+      return false;
+    }
+  });
+  electron.ipcMain.handle("db:get-latest-ocr", async (_, { docId }) => {
+    if (!isValidNumber(docId)) {
+      throw new Error("Invalid input: docId must be a positive number");
+    }
+    try {
+      return OCRCacheDAO.getLatestForDocument(docId);
+    } catch (error) {
+      console.error("db:get-latest-ocr error:", error);
       return null;
     }
   });
@@ -538,7 +1090,7 @@ electron.app.whenReady().then(() => {
       const result = await electron.dialog.showOpenDialog({
         properties: ["openFile"],
         filters: [
-          { name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg"] },
+          { name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff"] },
           { name: "All Files", extensions: ["*"] }
         ]
       });
@@ -550,13 +1102,13 @@ electron.app.whenReady().then(() => {
       if (!fs.existsSync(safePath)) {
         throw new Error("File not found");
       }
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
+      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
       return {
         filepath: safePath,
-        data: buffer.toString("base64"),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath)
@@ -575,12 +1127,12 @@ electron.app.whenReady().then(() => {
       if (!fs.existsSync(safePath)) {
         throw new Error("File not found");
       }
-      const buffer = fs.readFileSync(safePath);
-      const stats = fs.statSync(safePath);
+      const buffer = await fs.promises.readFile(safePath);
+      const stats = await fs.promises.stat(safePath);
       const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "application/octet-stream";
+      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
       return {
-        data: buffer.toString("base64"),
+        data: buffer,
         mimeType,
         size: stats.size,
         name: path.basename(safePath)
@@ -588,6 +1140,124 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("fs:read-file error:", error);
       throw error;
+    }
+  });
+  electron.ipcMain.handle("fs:import-file", async (_event, payload) => {
+    try {
+      if (!payload || typeof payload.name !== "string" || !payload.name) {
+        throw new Error("Invalid payload: name is required");
+      }
+      const rawData = payload.data instanceof ArrayBuffer ? new Uint8Array(payload.data) : payload.data;
+      if (!(rawData instanceof Uint8Array)) {
+        throw new Error("Invalid payload: data must be Uint8Array or ArrayBuffer");
+      }
+      const safeName = payload.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const ext = path.extname(safeName);
+      const fallbackExt = payload.mimeType === "application/pdf" ? ".pdf" : payload.mimeType === "image/png" ? ".png" : payload.mimeType === "image/jpeg" ? ".jpg" : "";
+      const finalName = ext ? safeName : `${safeName}${fallbackExt}`;
+      const userDataDir = electron.app.getPath("userData");
+      const importDir = path.join(userDataDir, "imports");
+      await fs.promises.mkdir(importDir, { recursive: true });
+      const contentHash = crypto.createHash("sha256").update(Buffer.from(rawData)).digest("hex").slice(0, 24);
+      const finalExt = ext || fallbackExt || path.extname(finalName) || "";
+      const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
+      let targetPath = hashedPath;
+      if (!fs.existsSync(hashedPath)) {
+        try {
+          const entries = await fs.promises.readdir(importDir, { withFileTypes: true });
+          const candidates = entries.filter((entry) => entry.isFile()).map((entry) => entry.name).filter((name) => {
+            if (name === path.basename(hashedPath)) return false;
+            if (name.endsWith(`-${finalName}`)) return true;
+            if (!finalExt) return true;
+            return path.extname(name).toLowerCase() === finalExt.toLowerCase();
+          });
+          for (const name of candidates) {
+            const candidatePath = path.join(importDir, name);
+            let stats2;
+            try {
+              stats2 = await fs.promises.stat(candidatePath);
+            } catch {
+              continue;
+            }
+            if (stats2.size !== rawData.byteLength) continue;
+            try {
+              const candidateBytes = await fs.promises.readFile(candidatePath);
+              const candidateHash = crypto.createHash("sha256").update(candidateBytes).digest("hex").slice(0, 24);
+              if (candidateHash === contentHash) {
+                targetPath = candidatePath;
+                break;
+              }
+            } catch {
+            }
+          }
+        } catch {
+        }
+      }
+      if (!fs.existsSync(targetPath)) {
+        await fs.promises.writeFile(targetPath, Buffer.from(rawData));
+      }
+      const stats = await fs.promises.stat(targetPath);
+      return {
+        filepath: targetPath,
+        mimeType: payload.mimeType,
+        size: stats.size,
+        name: finalName
+      };
+    } catch (error) {
+      console.error("fs:import-file error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ocr:get-engine-status", async () => {
+    try {
+      return await getExternalOcrEngineStatuses();
+    } catch (error) {
+      console.error("ocr:get-engine-status error:", error);
+      return [];
+    }
+  });
+  electron.ipcMain.handle("ocr:prewarm-engine", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !isValidString(payload.engine)) {
+      throw new Error("Invalid OCR prewarm payload");
+    }
+    if (payload.engine !== "paddleocr" && payload.engine !== "easyocr") {
+      throw new Error(`Unsupported OCR engine: ${payload.engine}`);
+    }
+    try {
+      return await prewarmExternalOcrEngine(payload.engine, isValidString(payload.language) ? payload.language : "eng");
+    } catch (error) {
+      console.error("ocr:prewarm-engine error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ocr:run-external", async (_, payload) => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid OCR payload");
+    }
+    if (!isValidString(payload.engine) || !isValidString(payload.imageMimeType) || !isValidString(payload.language)) {
+      throw new Error("Invalid OCR payload: engine, imageMimeType, and language are required");
+    }
+    if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight) || !isValidNumber(payload.dpi)) {
+      throw new Error("Invalid OCR payload: imageWidth, imageHeight, and dpi must be positive numbers");
+    }
+    try {
+      return await runExternalOcr(payload);
+    } catch (error) {
+      console.error("ocr:run-external error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("ocr:cancel-external", async (_, payload) => {
+    try {
+      const engine = payload?.engine;
+      if (engine && engine !== "paddleocr" && engine !== "easyocr") {
+        throw new Error(`Unsupported OCR engine: ${engine}`);
+      }
+      cancelExternalOcr(engine);
+      return true;
+    } catch (error) {
+      console.error("ocr:cancel-external error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:get-documents-by-tag", async (_, tagId) => {
@@ -632,6 +1302,18 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:get-document-tags error:", error);
       return [];
+    }
+  });
+  electron.ipcMain.handle("db:touch-document", async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error("Invalid input: id must be a positive number");
+    }
+    try {
+      DocumentDAO.touch(id);
+      return true;
+    } catch (error) {
+      console.error("db:touch-document error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:update-last-page", async (_, { id, pageNum }) => {

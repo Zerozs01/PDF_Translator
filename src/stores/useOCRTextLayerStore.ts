@@ -3,8 +3,9 @@
  */
 
 import { create } from 'zustand';
-import { OCRPageResult, OCROptions } from '../types';
+import { OCRPageResult, OCROptions, OCREngine } from '../types';
 import { ProcessingProgress } from '../services/pdf';
+import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout';
 
 interface OCRTextLayerState {
   // OCR Options
@@ -20,6 +21,7 @@ interface OCRTextLayerState {
   // Results - All pages OCR data
   allPagesOCR: Map<number, OCRPageResult>;
   setPageOCR: (pageNum: number, result: OCRPageResult) => void;
+  removePageOCR: (pageNum: number) => void;
   getPageOCR: (pageNum: number) => OCRPageResult | undefined;
   clearAllOCR: () => void;
 
@@ -55,10 +57,34 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'rus', name: 'Russian' },
 ] as const;
 
-export const OCR_PROFILES = [
-  { id: 'fast', name: 'Fast', dpi: 150, description: 'Quick scan, lower accuracy' },
-  { id: 'balanced', name: 'Balanced', dpi: 200, description: 'Good balance of speed and accuracy' },
-  { id: 'best', name: 'Best Quality', dpi: 300, description: 'Highest accuracy, slower' },
+export const OCR_ENGINES: Array<{
+  id: OCREngine;
+  name: string;
+  runtime: string;
+  description: string;
+  available: boolean;
+}> = [
+  {
+    id: 'tesseract',
+    name: 'Tesseract',
+    runtime: 'Built-in WASM',
+    description: 'Current in-app OCR engine running the best-quality pipeline by default.',
+    available: true,
+  },
+  {
+    id: 'paddleocr',
+    name: 'PaddleOCR',
+    runtime: 'Python bridge',
+    description: 'Python-side bridge for PaddleOCR. Availability depends on the local Python runtime and model environment.',
+    available: false,
+  },
+  {
+    id: 'easyocr',
+    name: 'EasyOCR',
+    runtime: 'Python/adapter bridge',
+    description: 'Runs EasyOCR directly from a local Python env, with optional Easy-Yolo adapter/service fallback.',
+    available: false,
+  },
 ] as const;
 
 export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
@@ -66,7 +92,9 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   options: {
     language: 'eng',
     dpi: 300,
-    profile: 'best',
+    engine: 'tesseract',
+    skipIfTextExists: true,
+    perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
   },
   
   setOptions: (newOptions) => set((state) => ({
@@ -86,6 +114,11 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     newMap.set(pageNum, result);
     return { allPagesOCR: newMap };
   }),
+  removePageOCR: (pageNum) => set((state) => {
+    const newMap = new Map(state.allPagesOCR);
+    newMap.delete(pageNum);
+    return { allPagesOCR: newMap };
+  }),
   getPageOCR: (pageNum) => get().allPagesOCR.get(pageNum),
   clearAllOCR: () => set({ allPagesOCR: new Map() }),
 
@@ -98,7 +131,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   setSearchablePDFBlob: (blob) => set({ searchablePDFBlob: blob }),
 
   // Debug overlay
-  showDebugOverlay: false,
+  showDebugOverlay: true,
   setShowDebugOverlay: (show) => set({ showDebugOverlay: show }),
 
   // Actions
@@ -107,7 +140,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     progress: null,
     currentPageOCR: null,
     searchablePDFBlob: null,
-    showDebugOverlay: false,
+    showDebugOverlay: true,
     allPagesOCR: new Map(),
   }),
 }));

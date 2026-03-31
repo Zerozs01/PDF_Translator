@@ -2,7 +2,7 @@
  * Type declarations for Electron APIs exposed via preload script
  */
 
-import { OCRPageResult } from './index';
+import { OCREngine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile } from './index';
 
 // Document type from database
 export interface DBDocument {
@@ -39,12 +39,23 @@ export interface DBProject {
   created_at: string;
 }
 
+export interface DBDocumentCacheCandidate {
+  id: number;
+  filepath: string;
+  filename: string;
+  total_pages: number;
+  last_accessed: number | null;
+  cache_pages: number;
+  last_cache_update: number | null;
+}
+
 // Update types
 export interface DocumentUpdate {
   filename?: string;
   project_id?: number | null;
   thumbnail_path?: string;
   is_favorite?: boolean;
+  total_pages?: number;
 }
 
 export interface ProjectCreate {
@@ -63,14 +74,57 @@ export interface ProjectUpdate {
   parent_id?: number | null;
 }
 
+export interface ExternalOCREngineStatus {
+  engine: OCREngine;
+  available: boolean;
+  runtime: string;
+  description: string;
+}
+
+export interface ExternalOCRWarmupStatus {
+  ok: boolean;
+  engine: OCREngine;
+  runtime: string;
+  description: string;
+}
+
+export interface ExternalOCRRequest {
+  engine: OCREngine;
+  imageData: Uint8Array | ArrayBuffer;
+  imageMimeType: string;
+  imageWidth: number;
+  imageHeight: number;
+  language: string;
+  dpi: number;
+  pageSegMode?: number;
+  pipelineProfile?: OCRPipelineProfile;
+  ocrQualityProfile?: OCRQualityProfile;
+}
+
+export interface ExternalOCRResult {
+  words: OCRPageResult['words'];
+  lines: OCRPageResult['lines'];
+  text: string;
+  confidence: number;
+  pageSegMode?: number;
+  debug?: OCRPageResult['debug'];
+}
+
 // Electron API interface (secure whitelist-based)
 export interface ElectronAPI {
   db: {
     // Basic operations
     saveDocument: (filepath: string, filename: string, totalPages: number) => Promise<number>;
     getDocument: (filepath: string) => Promise<{ id: number; total_pages: number } | null>;
-    saveOCR: (docId: number, pageNum: number, data: OCRPageResult) => Promise<boolean>;
-    getOCR: (docId: number, pageNum: number) => Promise<OCRPageResult | null>;
+    findDocumentsByFilename: (filename: string) => Promise<DBDocumentCacheCandidate[]>;
+    saveOCR: (docId: number, pageNum: number, data: OCRPageResult, engine?: OCREngine) => Promise<boolean>;
+    getOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<OCRPageResult | null>;
+    clearOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
+    getLatestOCR: (docId: number) => Promise<{
+      page_number: number;
+      updated_at: number;
+      ocr_data: OCRPageResult;
+    } | null>;
     
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;
@@ -84,6 +138,7 @@ export interface ElectronAPI {
     addDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
     removeDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
     getDocumentTags: (documentId: number) => Promise<DBTag[]>;
+    touchDocument: (id: number) => Promise<boolean>;
     updateLastPage: (id: number, pageNum: number) => Promise<boolean>;
   };
   
@@ -107,18 +162,35 @@ export interface ElectronAPI {
   
   fs: {
     readFile: (filepath: string) => Promise<{
-      data: string;
+      data: Uint8Array | ArrayBuffer | string;
       mimeType: string;
       size: number;
       name: string;
     }>;
     openFile: () => Promise<{
       filepath: string;
-      data: string;
+      data: Uint8Array | ArrayBuffer | string;
       mimeType: string;
       size: number;
       name: string;
     } | null>;
+    importFile: (payload: {
+      name: string;
+      mimeType: string;
+      data: Uint8Array | ArrayBuffer;
+    }) => Promise<{
+      filepath: string;
+      mimeType: string;
+      size: number;
+      name: string;
+    }>;
+  };
+
+  ocr: {
+    getEngineStatus: () => Promise<ExternalOCREngineStatus[]>;
+    prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
+    cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
+    runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
   };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;

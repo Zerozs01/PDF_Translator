@@ -9,8 +9,11 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     // Basic operations
     saveDocument: (filepath, filename, totalPages) => electron.ipcRenderer.invoke("db:save-document", { filepath, filename, totalPages }),
     getDocument: (filepath) => electron.ipcRenderer.invoke("db:get-document", filepath),
-    saveOCR: (docId, pageNum, data) => electron.ipcRenderer.invoke("db:save-ocr", { docId, pageNum, data }),
-    getOCR: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum }),
+    findDocumentsByFilename: (filename) => electron.ipcRenderer.invoke("db:find-documents-by-filename", filename),
+    saveOCR: (docId, pageNum, data, engine) => electron.ipcRenderer.invoke("db:save-ocr", { docId, pageNum, data, engine }),
+    getOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum, engine }),
+    clearOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-ocr", { docId, pageNum, engine }),
+    getLatestOCR: (docId) => electron.ipcRenderer.invoke("db:get-latest-ocr", { docId }),
     // Document management
     getRecentDocuments: (limit) => electron.ipcRenderer.invoke("db:get-recent-documents", limit),
     getDocumentsByProject: (projectId) => electron.ipcRenderer.invoke("db:get-documents-by-project", projectId),
@@ -23,6 +26,7 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     addDocumentTag: (documentId, tagId) => electron.ipcRenderer.invoke("db:add-document-tag", { documentId, tagId }),
     removeDocumentTag: (documentId, tagId) => electron.ipcRenderer.invoke("db:remove-document-tag", { documentId, tagId }),
     getDocumentTags: (documentId) => electron.ipcRenderer.invoke("db:get-document-tags", documentId),
+    touchDocument: (id) => electron.ipcRenderer.invoke("db:touch-document", id),
     updateLastPage: (id, pageNum) => electron.ipcRenderer.invoke("db:update-last-page", { id, pageNum })
   },
   // Tag operations
@@ -46,7 +50,14 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   // File system operations (SECURE: validated in main process)
   fs: {
     readFile: (filepath) => electron.ipcRenderer.invoke("fs:read-file", filepath),
-    openFile: () => electron.ipcRenderer.invoke("fs:open-file")
+    openFile: () => electron.ipcRenderer.invoke("fs:open-file"),
+    importFile: (payload) => electron.ipcRenderer.invoke("fs:import-file", payload)
+  },
+  ocr: {
+    getEngineStatus: () => electron.ipcRenderer.invoke("ocr:get-engine-status"),
+    prewarmEngine: (payload) => electron.ipcRenderer.invoke("ocr:prewarm-engine", payload),
+    cancelExternal: (payload) => electron.ipcRenderer.invoke("ocr:cancel-external", payload),
+    runExternal: (payload) => electron.ipcRenderer.invoke("ocr:run-external", payload)
   },
   // Message handling (restricted to allowed channels)
   on: (channel, callback) => {

@@ -1,0 +1,85 @@
+{
+  "cases": [
+    {
+      "id": "page-02-students",
+      "page": 2,
+      "image": "fixtures/ocr/manga/page-02-students.png",
+      "language": "eng",
+      "dpi": 300
+    },
+    {
+      "id": "page-03-take-a-look",
+      "page": 3,
+      "image": "fixtures/ocr/manga/page-03-take-a-look.png",
+      "language": "eng",
+      "dpi": 300
+    },
+    {
+      "id": "page-05-tianhai",
+      "page": 5,
+      "image": "fixtures/ocr/manga/page-05-tianhai.png",
+      "language": "eng",
+      "dpi": 300
+    }
+  ],
+  "expectations": [
+    {
+      "page": 2,
+      "minLines": 4,
+      "minMeaningfulWords": 10,
+      "mustContainAny": [
+        ["those"],
+        ["students"],
+        ["bad"],
+        ["things"],
+        ["elderly"],
+        ["weak"],
+        ["women"],
+        ["children"],
+        ["xujita"],
+        ["town"]
+      ],
+      "mustNotContainNormalized": [],
+      "maxStandaloneShortTokens": 1,
+      "maxSuspiciousRatio": 0.18
+    },
+    {
+      "page": 3,
+      "minLines": 2,
+      "minMeaningfulWords": 6,
+      "mustContainAny": [
+        ["i", "ill", "itll"],
+        ["go"],
+        ["over"],
+        ["and"],
+        ["take"],
+        ["look"]
+      ],
+      "mustNotContainNormalized": [],
+      "maxStandaloneShortTokens": 1,
+      "maxSuspiciousRatio": 0.16
+    },
+    {
+      "page": 5,
+      "minLines": 4,
+      "minMeaningfulWords": 14,
+      "mustContainAny": [
+        ["past"],
+        ["only"],
+        ["found"],
+        ["top"],
+        ["girls"],
+        ["tianhai"],
+        ["city"],
+        ["now"],
+        ["make"],
+        ["with"],
+        ["kind"],
+        ["stuff"]
+      ],
+      "mustNotContainNormalized": [],
+      "maxStandaloneShortTokens": 1,
+      "maxSuspiciousRatio": 0.18
+    }
+  ]
+}

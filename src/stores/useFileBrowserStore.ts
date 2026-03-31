@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DBDocument, DBTag, DBProject } from '../types/electron.d';
+import type { DBDocument, DBTag, DBProject, DocumentUpdate } from '../types/electron.d';
 
 const isVirtualPath = (filepath: string): boolean => filepath.startsWith('virtual://');
 const filterVirtualDocuments = (documents: DBDocument[]): DBDocument[] =>
@@ -68,6 +68,7 @@ interface FileBrowserState {
   moveToProject: (documentId: number, projectId: number | null) => Promise<void>;
   addTagToDocument: (documentId: number, tagId: number) => Promise<void>;
   removeTagFromDocument: (documentId: number, tagId: number) => Promise<void>;
+  applyDocumentPatch: (documentId: number, updates: Partial<DBDocument> & DocumentUpdate) => void;
   
   // Actions - Tag Operations
   createTag: (name: string, color?: string) => Promise<DBTag | null>;
@@ -217,13 +218,18 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   // Document Operations
   toggleFavorite: async (id) => {
     try {
+      let nextFavorite = false;
+      set((state) => {
+        const target = state.documents.find(doc => doc.id === id);
+        nextFavorite = target ? !target.is_favorite : false;
+        const nextDocuments = state.filterType === 'favorites' && !nextFavorite
+          ? state.documents.filter(doc => doc.id !== id)
+          : state.documents.map(doc =>
+              doc.id === id ? { ...doc, is_favorite: nextFavorite } : doc
+            );
+        return { documents: nextDocuments };
+      });
       await window.electronAPI.db.toggleFavorite(id);
-      // Update local state
-      set((state) => ({
-        documents: state.documents.map(doc => 
-          doc.id === id ? { ...doc, is_favorite: !doc.is_favorite } : doc
-        )
-      }));
     } catch (error) {
       console.error('Failed to toggle favorite:', error);
     }
@@ -249,9 +255,11 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     try {
       await window.electronAPI.db.updateDocument(documentId, { project_id: projectId });
       set((state) => ({
-        documents: state.documents.map(doc => 
-          doc.id === documentId ? { ...doc, project_id: projectId } : doc
-        )
+        documents: state.filterType === 'project' && state.selectedProjectId !== projectId
+          ? state.documents.filter(doc => doc.id !== documentId)
+          : state.documents.map(doc =>
+              doc.id === documentId ? { ...doc, project_id: projectId } : doc
+            )
       }));
     } catch (error) {
       console.error('Failed to move document:', error);
@@ -269,10 +277,21 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   removeTagFromDocument: async (documentId, tagId) => {
     try {
       await window.electronAPI.db.removeDocumentTag(documentId, tagId);
+      set((state) => ({
+        documents: state.filterType === 'tag' && state.selectedTagId === tagId
+          ? state.documents.filter(doc => doc.id !== documentId)
+          : state.documents
+      }));
     } catch (error) {
       console.error('Failed to remove tag:', error);
     }
   },
+
+  applyDocumentPatch: (documentId, updates) => set((state) => ({
+    documents: state.documents.map(doc =>
+      doc.id === documentId ? { ...doc, ...updates } : doc
+    )
+  })),
   
   // Tag Operations
   createTag: async (name, color) => {

@@ -34,6 +34,15 @@ export class TextLayerService {
   }
 
   /**
+   * Adopt an existing PDFDocument instance as the active working document.
+   */
+  async setPDFDocument(pdfDoc: PDFDocument): Promise<PDFDocument> {
+    this.pdfDoc = pdfDoc;
+    this.font = await this.pdfDoc.embedFont(StandardFonts.Helvetica);
+    return this.pdfDoc;
+  }
+
+  /**
    * Add invisible text layer to a specific page
    * 
    * @param pageIndex - 0-based page index

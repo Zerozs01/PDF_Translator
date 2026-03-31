@@ -1,0 +1,1102 @@
+/**
+ * OCR Filtering — noise cleanup, image tile mask, background variance filter
+ *
+ * Phase A changes:
+ * - Added logDrop() calls at every filter drop point (A6)
+ * - Thresholds tuned in ocr-config.ts (A2, A3)
+ */
+
+import { CONFIG, logDrop } from './ocr-config';
+import type { BBox, OCRWord, OCRLine } from './ocr-types';
+import { getAlphaNum, isNonLatinToken, joinWordsForLanguage } from './ocr-text-utils';
+import { sortWordsByOrientation } from './ocr-parsing';
+
+const KOR_SYLLABLE_RE = /[\uAC00-\uD7AF]/;
+const KOR_JAMO_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
+const KOR_JAMO_RUN_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]{2,}/g;
+const KOR_ALLOWED_REPEAT_JAMO_RE = /^([ㅋㅎㅠㅜ])\1+$/;
+const KOR_TERMINAL_PUNCT_RE = /[?!~.…？！〜]+[)"'’”\]\s]*$/u;
+const LATIN_KEEP_SHORT_WORDS = new Set([
+  'I', 'A', 'EH', 'ME', 'OH', 'AH', 'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE', 'US', 'MY', 'NO', 'GO', 'OR', 'AN'
+]);
+const LATIN_PROTECT_WORDS = new Set([
+  'I', 'A', 'IT', 'ITS', 'ILL', 'GO', 'OVER', 'AND', 'TAKE', 'LOOK', 'BEST', 'IF', 'THINK', 'ME', 'EH',
+  'THOSE', 'STUDENTS', 'MAY', 'DOING', 'BAD', 'THINGS', 'ELDERLY', 'WEAK', 'WOMEN', 'CHILDREN', 'IN', 'TOWN',
+  'AYNAR', 'ESSENCE', 'KNEW', 'NYAH', 'HOW', 'MUCH', 'FOR'
+]);
+
+function normalizeLatinToken(token: string): string {
+  if (!token) return '';
+  return token
+    .toUpperCase()
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/5/g, 'S')
+    .replace(/6/g, 'G')
+    .replace(/7/g, 'T')
+    .replace(/8/g, 'B');
+}
+
+function isProtectedLatinToken(alphaNum: string): boolean {
+  const normalized = normalizeLatinToken(alphaNum);
+  if (!normalized) return false;
+  return LATIN_PROTECT_WORDS.has(normalized) || LATIN_KEEP_SHORT_WORDS.has(normalized);
+}
+
+function getStableLineText(line: OCRLine): string {
+  const direct = typeof line.text === 'string' ? line.text.trim() : '';
+  if (direct) return direct;
+  const lineWords = (line.words as OCRWord[]) || [];
+  if (lineWords.length === 0) return '';
+  return joinWordsForLanguage(sortWordsByOrientation(lineWords.slice())).trim();
+}
+
+function hasKoreanTerminalPunctuation(text: string): boolean {
+  if (!text) return false;
+  return KOR_TERMINAL_PUNCT_RE.test(text.trim());
+}
+
+export interface RegionTextLikeness {
+  edgeDarkRatio: number;
+  interiorDarkRatio: number;
+  centerBandDarkRatio: number;
+  connectedComponentCount: number;
+  horizontalPeakCount: number;
+  textLikeScore: number;
+  threshold: number;
+  patchWidth: number;
+  patchHeight: number;
+}
+
+function clampRegionBBox(bbox: BBox, width: number, height: number): BBox {
+  return {
+    x0: Math.max(0, Math.min(width - 1, Math.floor(bbox.x0))),
+    y0: Math.max(0, Math.min(height - 1, Math.floor(bbox.y0))),
+    x1: Math.max(1, Math.min(width, Math.ceil(bbox.x1))),
+    y1: Math.max(1, Math.min(height, Math.ceil(bbox.y1))),
+  };
+}
+
+function computePatchOtsuThreshold(samples: Uint8Array): number {
+  if (samples.length === 0) return 128;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < samples.length; i++) hist[samples[i]] += 1;
+  const total = samples.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0;
+  let wB = 0;
+  let maxVar = 0;
+  let threshold = 128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) {
+      maxVar = between;
+      threshold = i;
+    }
+  }
+  return threshold;
+}
+
+function countConnectedComponents(binary: Uint8Array, width: number, height: number): number {
+  const visited = new Uint8Array(binary.length);
+  let components = 0;
+  const stack = new Int32Array(Math.max(8, binary.length));
+
+  for (let idx = 0; idx < binary.length; idx++) {
+    if (binary[idx] === 0 || visited[idx] === 1) continue;
+
+    let area = 0;
+    let top = 0;
+    stack[top++] = idx;
+    visited[idx] = 1;
+
+    while (top > 0) {
+      const current = stack[--top];
+      area += 1;
+      const x = current % width;
+      const y = (current / width) | 0;
+
+      const neighbors = [
+        x > 0 ? current - 1 : -1,
+        x + 1 < width ? current + 1 : -1,
+        y > 0 ? current - width : -1,
+        y + 1 < height ? current + width : -1,
+      ];
+
+      for (const next of neighbors) {
+        if (next < 0 || binary[next] === 0 || visited[next] === 1) continue;
+        visited[next] = 1;
+        stack[top++] = next;
+      }
+    }
+
+    if (area >= 2) components += 1;
+  }
+
+  return components;
+}
+
+function countHorizontalPeaks(binary: Uint8Array, width: number, height: number): number {
+  if (width <= 0 || height <= 0) return 0;
+  const rowRatios = new Array<number>(height).fill(0);
+  for (let y = 0; y < height; y++) {
+    let dark = 0;
+    const rowOffset = y * width;
+    for (let x = 0; x < width; x++) dark += binary[rowOffset + x];
+    rowRatios[y] = dark / Math.max(1, width);
+  }
+
+  let peaks = 0;
+  let inRun = false;
+  for (let y = 0; y < height; y++) {
+    const ratio = rowRatios[y];
+    const active = ratio >= 0.08;
+    if (active && !inRun) {
+      peaks += 1;
+      inRun = true;
+      continue;
+    }
+    if (!active) inRun = false;
+  }
+  return peaks;
+}
+
+export function analyzeRegionTextLikeness(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  bbox: BBox
+): RegionTextLikeness {
+  const box = clampRegionBBox(bbox, width, height);
+  const sourceW = Math.max(1, box.x1 - box.x0);
+  const sourceH = Math.max(1, box.y1 - box.y0);
+  const patchWidth = Math.max(8, Math.min(96, sourceW));
+  const patchHeight = Math.max(8, Math.min(96, sourceH));
+  const samples = new Uint8Array(patchWidth * patchHeight);
+
+  for (let py = 0; py < patchHeight; py++) {
+    const sy = Math.min(height - 1, box.y0 + Math.floor((py / patchHeight) * sourceH));
+    for (let px = 0; px < patchWidth; px++) {
+      const sx = Math.min(width - 1, box.x0 + Math.floor((px / patchWidth) * sourceW));
+      samples[py * patchWidth + px] = gray[sy * width + sx] || 0;
+    }
+  }
+
+  const threshold = computePatchOtsuThreshold(samples);
+  const binary = new Uint8Array(samples.length);
+  let edgeDark = 0;
+  let edgeCount = 0;
+  let interiorDark = 0;
+  let interiorCount = 0;
+  let centerBandDark = 0;
+  let centerBandCount = 0;
+  const edgeX = Math.max(1, Math.round(patchWidth * 0.18));
+  const edgeY = Math.max(1, Math.round(patchHeight * 0.18));
+  const interiorX0 = Math.floor(patchWidth * 0.18);
+  const interiorX1 = Math.ceil(patchWidth * 0.82);
+  const interiorY0 = Math.floor(patchHeight * 0.18);
+  const interiorY1 = Math.ceil(patchHeight * 0.82);
+  const centerY0 = Math.floor(patchHeight * 0.3);
+  const centerY1 = Math.ceil(patchHeight * 0.7);
+
+  for (let py = 0; py < patchHeight; py++) {
+    for (let px = 0; px < patchWidth; px++) {
+      const index = py * patchWidth + px;
+      const dark = samples[index] <= threshold ? 1 : 0;
+      binary[index] = dark;
+
+      const isEdge = px < edgeX || px >= patchWidth - edgeX || py < edgeY || py >= patchHeight - edgeY;
+      if (isEdge) {
+        edgeDark += dark;
+        edgeCount += 1;
+      }
+
+      const isInterior = px >= interiorX0 && px < interiorX1 && py >= interiorY0 && py < interiorY1;
+      if (isInterior) {
+        interiorDark += dark;
+        interiorCount += 1;
+      }
+
+      const isCenterBand = py >= centerY0 && py < centerY1;
+      if (isCenterBand) {
+        centerBandDark += dark;
+        centerBandCount += 1;
+      }
+    }
+  }
+
+  const edgeDarkRatio = edgeDark / Math.max(1, edgeCount);
+  const interiorDarkRatio = interiorDark / Math.max(1, interiorCount);
+  const centerBandDarkRatio = centerBandDark / Math.max(1, centerBandCount);
+  const connectedComponentCount = countConnectedComponents(binary, patchWidth, patchHeight);
+  const horizontalPeakCount = countHorizontalPeaks(binary, patchWidth, patchHeight);
+  const edgePenalty = Math.max(0, edgeDarkRatio - interiorDarkRatio * 1.2);
+  const textLikeScore = Math.max(
+    0,
+    Math.min(
+      1,
+      (centerBandDarkRatio * 18)
+      + Math.min(connectedComponentCount / 6, 1) * 0.28
+      + Math.min(horizontalPeakCount / 3, 1) * 0.28
+      + Math.min(interiorDarkRatio * 3.2, 0.24)
+      - (edgePenalty * 1.5)
+    )
+  );
+
+  return {
+    edgeDarkRatio,
+    interiorDarkRatio,
+    centerBandDarkRatio,
+    connectedComponentCount,
+    horizontalPeakCount,
+    textLikeScore,
+    threshold,
+    patchWidth,
+    patchHeight,
+  };
+}
+
+export function isLikelyTextRegion(metrics: RegionTextLikeness): boolean {
+  if (metrics.centerBandDarkRatio < CONFIG.BORDER_ARTIFACT_CENTER_DARK_RATIO_MIN) return false;
+  if (metrics.connectedComponentCount < CONFIG.BORDER_ARTIFACT_COMPONENT_MIN) return false;
+  if (metrics.horizontalPeakCount < CONFIG.BORDER_ARTIFACT_HORIZONTAL_PEAKS_MIN) return false;
+  if (metrics.edgeDarkRatio >= metrics.interiorDarkRatio * CONFIG.BORDER_ARTIFACT_EDGE_BAND_RATIO) return false;
+  return true;
+}
+
+// ============================================
+// Background variance
+// ============================================
+
+export function computeBackgroundVariance(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  rect: { x0: number; y0: number; x1: number; y1: number },
+  inner: { x0: number; y0: number; x1: number; y1: number },
+  grid: number = 5
+): number {
+  const x0 = Math.max(0, Math.min(width - 1, Math.round(rect.x0)));
+  const y0 = Math.max(0, Math.min(height - 1, Math.round(rect.y0)));
+  const x1 = Math.max(0, Math.min(width - 1, Math.round(rect.x1)));
+  const y1 = Math.max(0, Math.min(height - 1, Math.round(rect.y1)));
+  if (x1 <= x0 || y1 <= y0) return 0;
+
+  const inX0 = Math.max(0, Math.min(width - 1, Math.round(inner.x0)));
+  const inY0 = Math.max(0, Math.min(height - 1, Math.round(inner.y0)));
+  const inX1 = Math.max(0, Math.min(width - 1, Math.round(inner.x1)));
+  const inY1 = Math.max(0, Math.min(height - 1, Math.round(inner.y1)));
+
+  const stepX = (x1 - x0) / (grid + 1);
+  const stepY = (y1 - y0) / (grid + 1);
+
+  let count = 0, sum = 0, sumSq = 0;
+  for (let gy = 1; gy <= grid; gy++) {
+    for (let gx = 1; gx <= grid; gx++) {
+      const x = Math.round(x0 + stepX * gx);
+      const y = Math.round(y0 + stepY * gy);
+      if (x >= inX0 && x <= inX1 && y >= inY0 && y <= inY1) continue;
+      const v = gray[y * width + x] || 0;
+      count++; sum += v; sumSq += v * v;
+    }
+  }
+  if (count === 0) return 0;
+  const mean = sum / count;
+  return (sumSq / count) - (mean * mean);
+}
+
+export function getWordBackgroundVariance(
+  word: OCRWord, gray: Uint8ClampedArray, width: number, height: number
+): number {
+  const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+  const pad = Math.max(2, Math.round(h * 0.6));
+  const rect = { x0: word.bbox.x0 - pad, y0: word.bbox.y0 - pad, x1: word.bbox.x1 + pad, y1: word.bbox.y1 + pad };
+  const innerPad = Math.max(1, Math.round(h * 0.15));
+  const inner = { x0: word.bbox.x0 - innerPad, y0: word.bbox.y0 - innerPad, x1: word.bbox.x1 + innerPad, y1: word.bbox.y1 + innerPad };
+  return computeBackgroundVariance(gray, width, height, rect, inner);
+}
+
+// ============================================
+// Photo background filter
+// ============================================
+
+export function filterWordsByBackground(
+  words: Array<OCRWord>,
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  protectedWords?: Set<OCRWord>
+): Array<OCRWord> {
+  return words.filter(word => {
+    if (protectedWords?.has(word)) return true;
+    const h = word.bbox.y1 - word.bbox.y0;
+    const heightRatio = h / Math.max(1, height);
+    const rawAlpha = getAlphaNum(word.text.trim());
+    const nonLatin = isNonLatinToken(rawAlpha);
+    const protectedLatin = !nonLatin && isProtectedLatinToken(rawAlpha);
+    if (protectedLatin && heightRatio >= 0.0038 && word.confidence >= 34) return true;
+
+    const pad = Math.max(2, Math.round(h * 0.6));
+    const rect = { x0: word.bbox.x0 - pad, y0: word.bbox.y0 - pad, x1: word.bbox.x1 + pad, y1: word.bbox.y1 + pad };
+    const innerPad = Math.max(1, Math.round(h * 0.15));
+    const inner = { x0: word.bbox.x0 - innerPad, y0: word.bbox.y0 - innerPad, x1: word.bbox.x1 + innerPad, y1: word.bbox.y1 + innerPad };
+    const variance = computeBackgroundVariance(gray, width, height, rect, inner);
+
+    const alphaNum = rawAlpha;
+
+    // Keep larger words (titles) even on photo backgrounds
+    if (heightRatio >= 0.06) return true;
+
+    if (variance > CONFIG.PHOTO_BG_VARIANCE) {
+      const small = heightRatio < CONFIG.PHOTO_FILTER_MIN_HEIGHT_RATIO;
+      const lowConf = word.confidence < CONFIG.PHOTO_FILTER_MIN_CONFIDENCE;
+      const shortToken = alphaNum.length > 0 && alphaNum.length <= 3;
+      if (small && lowConf) {
+        logDrop('bgVariance', word, `small(${heightRatio.toFixed(3)}) + lowConf + variance=${variance.toFixed(0)}`);
+        return false;
+      }
+      if (nonLatin) {
+        // CJK false positives often come as short tokens on detailed/photo backgrounds.
+        if ((small || shortToken) && word.confidence < CONFIG.PHOTO_FILTER_MIN_CONFIDENCE_CJK) {
+          logDrop('bgVariance', word, `CJK short/small + conf<${CONFIG.PHOTO_FILTER_MIN_CONFIDENCE_CJK} + variance=${variance.toFixed(0)}`);
+          return false;
+        }
+        if (variance > CONFIG.PHOTO_BG_VARIANCE * 1.35 && shortToken && word.confidence < CONFIG.IMG_TILE_DROP_CONF_CJK) {
+          logDrop('bgVariance', word, `CJK high-variance short token conf=${word.confidence.toFixed(0)}`);
+          return false;
+        }
+      }
+    }
+    return true;
+  });
+}
+
+// ============================================
+// Protected words
+// ============================================
+
+export function buildProtectedWordSet(
+  lines: Array<OCRLine>,
+  options: {
+    isCjk?: boolean;
+    isKorean?: boolean;
+  } = {}
+): Set<OCRWord> {
+  const protectedWords = new Set<OCRWord>();
+  const { isCjk = false, isKorean = false } = options;
+
+  for (const line of lines) {
+    const lineWords = (line.words as OCRWord[]) || [];
+    if (lineWords.length === 0) continue;
+
+    const lineText = joinWordsForLanguage(sortWordsByOrientation(lineWords.slice()));
+    const alphaNum = getAlphaNum(lineText);
+    const chars = alphaNum.length;
+    if (chars === 0) continue;
+    const rawLineText = lineText.trim();
+
+    const syllableCount = isKorean ? (alphaNum.match(/[\uAC00-\uD7AF]/g) || []).length : 0;
+    const jamoCount = isKorean ? (alphaNum.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length : 0;
+    const repeatedJamoOnly = isKorean
+      && syllableCount === 0
+      && chars >= 2
+      && KOR_ALLOWED_REPEAT_JAMO_RE.test(alphaNum);
+    const shortKoreanPunctKeep = isKorean
+      && syllableCount >= 1
+      && chars <= 4
+      && lineWords.length <= 2
+      && hasKoreanTerminalPunctuation(rawLineText)
+      && line.confidence >= CONFIG.KOR_SHORT_PUNCT_KEEP_CONF;
+    const repeatedJamoKeep = repeatedJamoOnly
+      && line.confidence >= CONFIG.KOR_REPEAT_JAMO_KEEP_CONF;
+    const likelyKorGhost = isKorean && (
+      (!repeatedJamoOnly && syllableCount === 0 && chars <= Math.max(CONFIG.CJK_GHOST_SHORT_CHARS, 8))
+      || (jamoCount > syllableCount && chars <= 10)
+    );
+
+    const strongByWordCount = lineWords.length >= CONFIG.IMG_PROTECT_LINE_WORDS && chars >= (isCjk ? 3 : 2);
+    const strongByConfidence = line.confidence >= CONFIG.IMG_PROTECT_LINE_CONF + (isCjk ? 4 : 0);
+
+    if (!likelyKorGhost && (strongByWordCount || strongByConfidence || shortKoreanPunctKeep || repeatedJamoKeep)) {
+      for (const word of lineWords) protectedWords.add(word);
+    }
+  }
+  return protectedWords;
+}
+
+// ============================================
+// Image tile mask
+// ============================================
+
+export function buildImageTileMask(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number,
+  words: Array<OCRWord>
+): { mask: Uint8Array; tileSize: number; cols: number; rows: number; imageTiles: number; totalTiles: number } | null {
+  if (!gray || gray.length < width * height) return null;
+
+  const baseSize = Math.round(Math.min(width, height) / 40);
+  const tileSize = Math.max(CONFIG.IMG_TILE_SIZE_MIN, Math.min(CONFIG.IMG_TILE_SIZE_MAX, baseSize));
+  const cols = Math.ceil(width / tileSize);
+  const rows = Math.ceil(height / tileSize);
+  const totalTiles = cols * rows;
+
+  const sum = new Float64Array(totalTiles);
+  const sumSq = new Float64Array(totalTiles);
+  const edge = new Float64Array(totalTiles);
+  const mid = new Uint32Array(totalTiles);
+  const samples = new Uint32Array(totalTiles);
+
+  const step = Math.max(1, CONFIG.IMG_TILE_SAMPLE_STEP);
+  for (let y = 0; y < height; y += step) {
+    const row = Math.min(rows - 1, (y / tileSize) | 0);
+    const yIdx = y * width;
+    for (let x = 0; x < width; x += step) {
+      const col = Math.min(cols - 1, (x / tileSize) | 0);
+      const idx = row * cols + col;
+      const v = gray[yIdx + x] || 0;
+      sum[idx] += v;
+      sumSq[idx] += v * v;
+      samples[idx] += 1;
+      if (v >= CONFIG.IMG_TILE_MID_LOW && v <= CONFIG.IMG_TILE_MID_HIGH) mid[idx] += 1;
+      if (x + step < width) edge[idx] += Math.abs(v - (gray[yIdx + x + step] || 0));
+      if (y + step < height) edge[idx] += Math.abs(v - (gray[(y + step) * width + x] || 0));
+    }
+  }
+
+  const wordCount = new Uint16Array(totalTiles);
+  const confSum = new Float32Array(totalTiles);
+  const areaSum = new Float32Array(totalTiles);
+
+  for (const word of words) {
+    const cx = (word.bbox.x0 + word.bbox.x1) / 2;
+    const cy = (word.bbox.y0 + word.bbox.y1) / 2;
+    if (cx < 0 || cy < 0 || cx > width || cy > height) continue;
+    const col = Math.min(cols - 1, Math.max(0, (cx / tileSize) | 0));
+    const row = Math.min(rows - 1, Math.max(0, (cy / tileSize) | 0));
+    const idx = row * cols + col;
+    wordCount[idx] += 1;
+    confSum[idx] += word.confidence;
+    areaSum[idx] += Math.max(0, (word.bbox.x1 - word.bbox.x0) * (word.bbox.y1 - word.bbox.y0));
+  }
+
+  let mask = new Uint8Array(totalTiles);
+  let imageTiles = 0;
+
+  for (let idx = 0; idx < totalTiles; idx++) {
+    if (samples[idx] === 0) continue;
+    const mean = sum[idx] / samples[idx];
+    const variance = (sumSq[idx] / samples[idx]) - (mean * mean);
+    const midRatio = mid[idx] / samples[idx];
+    const edgeAvg = edge[idx] / samples[idx];
+
+    const wc = wordCount[idx];
+    const avgConf = wc > 0 ? confSum[idx] / wc : 0;
+    const coverage = areaSum[idx] / (tileSize * tileSize);
+
+    // Don't let a single weak token mark a tile as text-likely.
+    const textLikely = wc >= (CONFIG.IMG_TEXT_WORDS_MIN + 1)
+      || (wc >= CONFIG.IMG_TEXT_WORDS_MIN
+        && (coverage >= CONFIG.IMG_TEXT_COVERAGE_MIN || avgConf >= CONFIG.IMG_TEXT_CONF_MIN));
+
+    const imageLikely = (midRatio >= CONFIG.IMG_MID_RATIO && variance >= CONFIG.IMG_VARIANCE)
+      || (edgeAvg >= CONFIG.IMG_EDGE && variance >= CONFIG.IMG_EDGE_VARIANCE);
+
+    if (imageLikely && !textLikely) {
+      mask[idx] = 1;
+      imageTiles += 1;
+    }
+  }
+
+  if (CONFIG.IMG_HOLE_FILL_MIN > 0) {
+    const filled = mask.slice();
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c;
+        if (mask[idx] === 1) continue;
+        if (wordCount[idx] > 0) continue;
+        let neighbors = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nr = r + dy, nc = c + dx;
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+            if (mask[nr * cols + nc] === 1) neighbors += 1;
+          }
+        }
+        if (neighbors >= CONFIG.IMG_HOLE_FILL_MIN) {
+          filled[idx] = 1;
+          imageTiles += 1;
+        }
+      }
+    }
+    mask = filled;
+  }
+
+  return { mask, tileSize, cols, rows, imageTiles, totalTiles };
+}
+
+// ============================================
+// Image tile word filter
+// ============================================
+
+export function filterWordsByImageTiles(
+  words: Array<OCRWord>,
+  maskInfo: { mask: Uint8Array; tileSize: number; cols: number; rows: number },
+  width: number,
+  height: number,
+  protectedWords?: Set<OCRWord>,
+  gray?: Uint8ClampedArray
+): Array<OCRWord> {
+  const { mask, tileSize, cols, rows } = maskInfo;
+  return words.filter(word => {
+    const h = word.bbox.y1 - word.bbox.y0;
+    const heightRatio = h / Math.max(1, height);
+    if (heightRatio >= CONFIG.IMG_KEEP_LARGE_TEXT_RATIO && word.confidence >= CONFIG.IMG_KEEP_LARGE_TEXT_CONF) return true;
+    if (protectedWords?.has(word)) return true;
+
+    const col0 = Math.min(cols - 1, Math.max(0, Math.floor(word.bbox.x0 / tileSize)));
+    const col1 = Math.min(cols - 1, Math.max(0, Math.floor(word.bbox.x1 / tileSize)));
+    const row0 = Math.min(rows - 1, Math.max(0, Math.floor(word.bbox.y0 / tileSize)));
+    const row1 = Math.min(rows - 1, Math.max(0, Math.floor(word.bbox.y1 / tileSize)));
+
+    let inImageTile = false;
+    for (let r = row0; r <= row1 && !inImageTile; r++) {
+      for (let c = col0; c <= col1; c++) {
+        if (mask[r * cols + c] === 1) { inImageTile = true; break; }
+      }
+    }
+
+    const raw = word.text.trim();
+    const alphaNum = getAlphaNum(raw);
+    const len = alphaNum.length;
+    const nonLatin = isNonLatinToken(alphaNum);
+    const protectedLatin = !nonLatin && isProtectedLatinToken(alphaNum);
+    const boxW = Math.max(1, word.bbox.x1 - word.bbox.x0);
+    const boxH = Math.max(1, word.bbox.y1 - word.bbox.y0);
+    const aspect = boxW / boxH;
+
+    if (inImageTile) {
+      if (protectedLatin) {
+        if ((len >= 3 && word.confidence >= 34) || (len <= 2 && word.confidence >= 42)) {
+          return true;
+        }
+      }
+      if (!nonLatin) {
+        const upper = alphaNum.toUpperCase();
+        const keepShortLatin = len <= 2 && LATIN_KEEP_SHORT_WORDS.has(upper);
+        const hasVowel = /[AEIOU]/i.test(alphaNum);
+        const consonantRun = /[BCDFGHJKLMNPQRSTVWXYZ]{3,}/i.test(alphaNum);
+        if (gray && len >= 2) {
+          const variance = getWordBackgroundVariance(word, gray, width, height);
+          // Keep stylized bubble text that happens to overlap image-tile mask
+          // but sits on low-variance (clean) local background.
+          if (variance <= CONFIG.PHOTO_BG_VARIANCE * 0.62) {
+            return true;
+          }
+        }
+        if (!keepShortLatin && len <= 3 && heightRatio <= 0.03 && word.confidence < 74) {
+          logDrop('imgTile', word, `latin short sparse len=${len} hr=${heightRatio.toFixed(3)}`);
+          return false;
+        }
+        if (!keepShortLatin && consonantRun && len <= 6 && word.confidence < 90) {
+          logDrop('imgTile', word, `latin consonant-run len=${len}`);
+          return false;
+        }
+        if (!keepShortLatin && !hasVowel && len >= 4 && word.confidence < 88 && heightRatio <= 0.035) {
+          logDrop('imgTile', word, `latin no-vowel image tile len=${len}`);
+          return false;
+        }
+      }
+      if (!nonLatin && len > 0 && len <= CONFIG.IMG_TILE_DROP_MAX_LEN
+        && heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO
+        && word.confidence < CONFIG.IMG_TILE_DROP_CONF) {
+        logDrop('imgTile', word, `latin short len=${len} hr=${heightRatio.toFixed(3)}`);
+        return false;
+      }
+      if (nonLatin && !protectedWords?.has(word)) {
+        if (gray) {
+          const variance = getWordBackgroundVariance(word, gray, width, height);
+          if (variance <= CONFIG.PHOTO_BG_VARIANCE) return true; // clean background → keep
+        }
+        const shortToken = len > 0 && len <= 3;
+        if (word.confidence < CONFIG.IMG_TILE_DROP_CONF_CJK
+          && (heightRatio <= CONFIG.IMG_TILE_DROP_HEIGHT_RATIO_CJK || shortToken)) {
+          logDrop('imgTile', word, `CJK low conf=${word.confidence.toFixed(0)} hr=${heightRatio.toFixed(3)} len=${len}`);
+          return false;
+        }
+        if (aspect >= CONFIG.IMG_TILE_DROP_AR_CJK && word.confidence < CONFIG.IMG_TILE_DROP_CONF_CJK) {
+          logDrop('imgTile', word, `CJK wide aspect=${aspect.toFixed(1)}`);
+          return false;
+        }
+      }
+      return true;
+    }
+    return true;
+  });
+}
+
+// ============================================
+// Isolated CJK false-positive cleanup
+// ============================================
+
+export function filterIsolatedCjkNoise(
+  words: Array<OCRWord>,
+  protectedWords?: Set<OCRWord>
+): Array<OCRWord> {
+  if (words.length <= 2) return words;
+
+  const heights = words.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const maxGap = medianHeight * CONFIG.ISOLATED_NEIGHBOR_GAP_MULT;
+
+  return words.filter(word => {
+    if (protectedWords?.has(word)) return true;
+
+    const alphaNum = getAlphaNum(word.text.trim());
+    if (!alphaNum) return false;
+    if (!isNonLatinToken(alphaNum)) return true;
+    if (alphaNum.length > CONFIG.ISOLATED_CJK_MAX_LEN) return true;
+
+    const strictConf = alphaNum.length === 1
+      ? CONFIG.ISOLATED_CJK_SINGLE_CHAR_STRICT_CONF
+      : CONFIG.ISOLATED_CJK_MIN_CONF;
+    if (word.confidence >= strictConf) return true;
+
+    const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+    const w = Math.max(1, word.bbox.x1 - word.bbox.x0);
+    let hasNeighbor = false;
+
+    for (const other of words) {
+      if (other === word) continue;
+      const otherAlpha = getAlphaNum(other.text.trim());
+      if (!otherAlpha) continue;
+
+      const oh = Math.max(1, other.bbox.y1 - other.bbox.y0);
+      const ow = Math.max(1, other.bbox.x1 - other.bbox.x0);
+      const yOverlap = Math.max(0, Math.min(word.bbox.y1, other.bbox.y1) - Math.max(word.bbox.y0, other.bbox.y0));
+      const xOverlap = Math.max(0, Math.min(word.bbox.x1, other.bbox.x1) - Math.max(word.bbox.x0, other.bbox.x0));
+
+      const hGap = other.bbox.x0 > word.bbox.x1
+        ? other.bbox.x0 - word.bbox.x1
+        : (word.bbox.x0 > other.bbox.x1 ? word.bbox.x0 - other.bbox.x1 : 0);
+      const vGap = other.bbox.y0 > word.bbox.y1
+        ? other.bbox.y0 - word.bbox.y1
+        : (word.bbox.y0 > other.bbox.y1 ? word.bbox.y0 - other.bbox.y1 : 0);
+
+      const sameRow = yOverlap / Math.min(h, oh) >= CONFIG.ISOLATED_NEIGHBOR_Y_OVERLAP && hGap <= maxGap;
+      const sameColumn = xOverlap / Math.min(w, ow) >= CONFIG.ISOLATED_NEIGHBOR_Y_OVERLAP && vGap <= maxGap;
+      if (sameRow || sameColumn) {
+        hasNeighbor = true;
+        break;
+      }
+    }
+
+    if (!hasNeighbor) {
+      logDrop('isolatedCjk', word, `isolated len=${alphaNum.length} conf=${word.confidence.toFixed(0)} < ${strictConf}`);
+      return false;
+    }
+    return true;
+  });
+}
+
+// ============================================
+// Korean jamo ghost suppression
+// ============================================
+
+export function filterKoreanJamoNoise(
+  words: Array<OCRWord>,
+  _protectedWords?: Set<OCRWord>
+): Array<OCRWord> {
+  return words.filter(word => {
+    // Don't hard-bypass with protectedWords here; otherwise ghost jamo tokens survive too easily.
+    const alphaNum = getAlphaNum(word.text.trim());
+    if (!alphaNum) return false;
+
+    const hasSyllable = KOR_SYLLABLE_RE.test(alphaNum);
+    const hasJamo = KOR_JAMO_RE.test(alphaNum);
+    const hasDigit = /[0-9]/.test(alphaNum);
+    const hasAscii = /[A-Za-z]/.test(alphaNum);
+    const len = alphaNum.length;
+
+    // Suppress OCR artifacts like "62", "L", "0", "226" on non-text areas.
+    if (!hasSyllable && hasDigit && word.confidence < CONFIG.KOR_NONSYLLABLE_DIGIT_CONF) {
+      logDrop('korGhost', word, `digit non-syllable len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+    if (!hasSyllable && hasAscii && len <= CONFIG.KOR_NONSYLLABLE_SHORT_MAX_LEN
+      && word.confidence < CONFIG.KOR_NONSYLLABLE_ASCII_SHORT_CONF) {
+      logDrop('korGhost', word, `ascii non-syllable len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+    if (!hasSyllable && hasJamo && (hasDigit || hasAscii)) {
+      logDrop('korGhost', word, 'mixed jamo+digit/ascii non-syllable');
+      return false;
+    }
+    if (!hasJamo) return true;
+
+    const repeatedJamo = /^([\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF])\1+$/.test(alphaNum);
+    const allowedRepeatedJamo = KOR_ALLOWED_REPEAT_JAMO_RE.test(alphaNum);
+
+    // Keep high-confidence laughter/emphasis tokens only (e.g. "ㅋㅋ", "ㅎㅎ", "ㅠㅠ", "ㅜㅜ")
+    if (!hasSyllable && repeatedJamo && allowedRepeatedJamo && len >= 2 && word.confidence >= 90) return true;
+
+    if (!hasSyllable) {
+      if (repeatedJamo && !allowedRepeatedJamo) {
+        logDrop('korJamo', word, `disallowed repeated jamo len=${len}`);
+        return false;
+      }
+      if (word.confidence < CONFIG.KOR_JAMO_STRICT_CONF) {
+        logDrop('korJamo', word, `jamo-only len=${len} conf=${word.confidence.toFixed(0)}`);
+        return false;
+      }
+      return true;
+    }
+
+    // Mixed jamo+syllable token like "ㄴ내" is usually OCR artifact.
+    const edgeJamo = KOR_JAMO_RE.test(alphaNum[0] || '') || KOR_JAMO_RE.test(alphaNum[alphaNum.length - 1] || '');
+    if (edgeJamo && len <= 4 && word.confidence < CONFIG.KOR_JAMO_MIXED_STRICT_CONF) {
+      logDrop('korJamo', word, `mixed edge-jamo len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+    const jamoRuns = alphaNum.match(KOR_JAMO_RUN_RE) || [];
+    const hasDisallowedJamoRun = jamoRuns.some(run => !KOR_ALLOWED_REPEAT_JAMO_RE.test(run));
+    if (hasSyllable && hasDisallowedJamoRun && len <= 10 && word.confidence < 99) {
+      logDrop('korJamo', word, `mixed disallowed jamo-run len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+    const syllableCount = (alphaNum.match(/[\uAC00-\uD7AF]/g) || []).length;
+    const jamoCount = (alphaNum.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length;
+    if (jamoCount > syllableCount && len <= 6 && word.confidence < 98) {
+      logDrop('korJamo', word, `jamo-heavy mixed token len=${len} conf=${word.confidence.toFixed(0)}`);
+      return false;
+    }
+
+    return true;
+  });
+}
+
+// ============================================
+// Weak isolated CJK line suppression
+// ============================================
+
+export function filterWeakIsolatedCjkLines(
+  lines: Array<OCRLine>,
+  gray?: Uint8ClampedArray,
+  width?: number,
+  height?: number
+): {
+  lines: Array<OCRLine>;
+  words: Array<OCRWord>;
+} {
+  if (lines.length === 0) return { lines: [], words: [] };
+
+  const heights = lines.map(line => Math.max(1, line.bbox.y1 - line.bbox.y0)).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+  const maxNeighborGap = medianHeight * CONFIG.CJK_WEAK_LINE_NEIGHBOR_GAP_MULT;
+
+  const keptLines: OCRLine[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineWords = (line.words as OCRWord[]) || [];
+    if (lineWords.length === 0) continue;
+
+    const rawLineText = getStableLineText(line);
+    const mergedAlpha = getAlphaNum(lineWords.map(w => (w.text || '').trim()).join(''));
+    const totalChars = mergedAlpha.length;
+    const syllables = (mergedAlpha.match(/[\uAC00-\uD7AF]/g) || []).length;
+    const jamo = (mergedAlpha.match(/[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/g) || []).length;
+    const digits = (mergedAlpha.match(/[0-9]/g) || []).length;
+    const ascii = (mergedAlpha.match(/[A-Za-z]/g) || []).length;
+    const jamoRuns = mergedAlpha.match(KOR_JAMO_RUN_RE) || [];
+    const hasDisallowedJamoRun = jamoRuns.some(run => !KOR_ALLOWED_REPEAT_JAMO_RE.test(run));
+    const repeatedJamoOnly = syllables === 0
+      && mergedAlpha.length >= 2
+      && KOR_ALLOWED_REPEAT_JAMO_RE.test(mergedAlpha);
+    const hasTerminalPunct = hasKoreanTerminalPunctuation(rawLineText);
+    const shortKoreanPunctKeep = syllables >= 1
+      && totalChars <= 4
+      && lineWords.length <= 2
+      && hasTerminalPunct
+      && line.confidence >= CONFIG.KOR_SHORT_PUNCT_KEEP_CONF;
+    const repeatedJamoKeep = repeatedJamoOnly
+      && line.confidence >= CONFIG.KOR_REPEAT_JAMO_KEEP_CONF;
+
+    if (shortKoreanPunctKeep || repeatedJamoKeep) {
+      keptLines.push(line);
+      continue;
+    }
+
+    let lineVariance = CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN;
+    if (gray && typeof width === 'number' && typeof height === 'number' && width > 1 && height > 1) {
+      const h = Math.max(1, line.bbox.y1 - line.bbox.y0);
+      const pad = Math.max(2, Math.round(h * 0.55));
+      const innerPad = Math.max(1, Math.round(h * 0.1));
+      const rect = {
+        x0: line.bbox.x0 - pad,
+        y0: line.bbox.y0 - pad,
+        x1: line.bbox.x1 + pad,
+        y1: line.bbox.y1 + pad
+      };
+      const inner = {
+        x0: line.bbox.x0 - innerPad,
+        y0: line.bbox.y0 - innerPad,
+        x1: line.bbox.x1 + innerPad,
+        y1: line.bbox.y1 + innerPad
+      };
+      lineVariance = computeBackgroundVariance(gray, width, height, rect, inner);
+    }
+
+    const weakSingle = lineWords.length === 1 && totalChars <= 2 && line.confidence < CONFIG.CJK_WEAK_LINE_SINGLE_CONF;
+    const weakShort = lineWords.length <= CONFIG.CJK_WEAK_LINE_MAX_WORDS
+      && totalChars <= CONFIG.CJK_WEAK_LINE_MAX_CHARS
+      && line.confidence < CONFIG.CJK_WEAK_LINE_CONF;
+    const noSyllableShort = syllables === 0
+      && totalChars > 0
+      && totalChars <= CONFIG.CJK_GHOST_SHORT_CHARS
+      && line.confidence < CONFIG.CJK_GHOST_NO_SYLLABLE_CONF
+      && !repeatedJamoOnly;
+    const aggressiveKorNoSyllableGhost = syllables === 0
+      && jamo > 0
+      && totalChars >= 2
+      && totalChars <= Math.max(CONFIG.CJK_GHOST_SHORT_CHARS, 8)
+      && !repeatedJamoOnly
+      && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN * 0.85;
+    const aggressiveKorShortSyllableFragment = syllables > 0
+      && syllables <= 3
+      && totalChars <= 4
+      && lineWords.length <= 2
+      && !hasTerminalPunct
+      && line.confidence < CONFIG.KOR_SHORT_FRAGMENT_CONF
+      && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN * 0.78;
+    const jamoRatio = jamo / Math.max(1, syllables + jamo);
+    const jamoHeavyWithSyllables = syllables > 0
+      && jamoRatio >= CONFIG.CJK_GHOST_JAMO_RATIO_MIN
+      && line.confidence < CONFIG.CJK_GHOST_LINE_CONF;
+    const explicitKorGhostLine = !repeatedJamoOnly && (
+      (syllables === 0 && totalChars > 0 && (jamo + digits + ascii) >= 2 && totalChars <= 12)
+      || (syllables > 0 && hasDisallowedJamoRun && totalChars <= 12 && line.confidence < 99)
+      || (syllables > 0 && digits >= 2 && jamo >= 1 && totalChars <= 10 && line.confidence < 99)
+    );
+
+    const weakByShape = noSyllableShort
+      || aggressiveKorNoSyllableGhost
+      || aggressiveKorShortSyllableFragment
+      || explicitKorGhostLine
+      || ((weakSingle || weakShort || jamoHeavyWithSyllables)
+        && lineVariance >= CONFIG.CJK_WEAK_LINE_DROP_BG_VARIANCE_MIN);
+
+    if (!weakByShape) {
+      keptLines.push(line);
+      continue;
+    }
+
+    const w = Math.max(1, line.bbox.x1 - line.bbox.x0);
+    let hasNeighbor = false;
+    let neighborSupportScore = 0;
+
+    for (let j = 0; j < lines.length; j++) {
+      if (i === j) continue;
+      const other = lines[j];
+      const otherWords = (other.words as OCRWord[]) || [];
+      const otherChars = otherWords.reduce((sum, w) => sum + getAlphaNum((w.text || '').trim()).length, 0);
+      const otherStrong = other.confidence >= CONFIG.CJK_WEAK_LINE_CONF || otherChars > CONFIG.CJK_WEAK_LINE_MAX_CHARS;
+      if (!otherStrong) continue;
+      const ow = Math.max(1, other.bbox.x1 - other.bbox.x0);
+
+      const vGap = other.bbox.y0 > line.bbox.y1
+        ? other.bbox.y0 - line.bbox.y1
+        : (line.bbox.y0 > other.bbox.y1 ? line.bbox.y0 - other.bbox.y1 : 0);
+      if (vGap > maxNeighborGap) continue;
+
+      const xOverlap = Math.max(0, Math.min(line.bbox.x1, other.bbox.x1) - Math.max(line.bbox.x0, other.bbox.x0));
+      const overlapRatio = xOverlap / Math.min(w, ow);
+      if (overlapRatio >= CONFIG.CJK_WEAK_LINE_X_OVERLAP_MIN) {
+        hasNeighbor = true;
+        neighborSupportScore += 1;
+        if (vGap <= maxNeighborGap * 0.55) neighborSupportScore += 0.45;
+        if (overlapRatio >= CONFIG.CJK_WEAK_LINE_X_OVERLAP_MIN + 0.18) neighborSupportScore += 0.35;
+        if (other.confidence >= line.confidence + 4 || otherChars >= totalChars + 2) neighborSupportScore += 0.2;
+      }
+    }
+
+    const needsStrongerNeighborSupport = aggressiveKorShortSyllableFragment;
+    const requiredNeighborScore = needsStrongerNeighborSupport
+      ? CONFIG.KOR_SHORT_FRAGMENT_NEIGHBOR_SCORE_MIN
+      : 1;
+
+    if (hasNeighbor && neighborSupportScore >= requiredNeighborScore && !explicitKorGhostLine) {
+      keptLines.push(line);
+    } else {
+      const keyWord = lineWords[0];
+      if (keyWord) {
+        logDrop('weakCjkLine', keyWord, `isolated weak line words=${lineWords.length} chars=${totalChars} conf=${line.confidence.toFixed(0)} var=${lineVariance.toFixed(0)}`);
+      }
+    }
+  }
+
+  const keptWords = keptLines.flatMap(line => (line.words as OCRWord[]) || []);
+  return { lines: keptLines, words: keptWords };
+}
+
+// ============================================
+// Line noise cleanup
+// ============================================
+
+export function cleanLineNoise(lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>): {
+  lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
+  words: Array<OCRWord>;
+} {
+  const cleanedLines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }> = [];
+  const cleanedWords: Array<OCRWord> = [];
+
+  for (const line of lines) {
+    const lineWords = sortWordsByOrientation((line.words as OCRWord[]).slice());
+    if (lineWords.length === 0) continue;
+    const denseLine = lineWords.length >= 4;
+
+    const heights = lineWords.map(w => Math.max(1, w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
+    const medianHeight = heights[Math.floor(heights.length / 2)] || heights[0] || 1;
+
+    const filtered = lineWords.filter((word, index) => {
+      const raw = word.text.trim();
+      const alphaNum = getAlphaNum(raw);
+      if (alphaNum.length === 0) return false;
+      const upperAlpha = alphaNum.toUpperCase();
+
+      const nonLatin = isNonLatinToken(alphaNum);
+      const hasUpper = /[A-Z]/.test(alphaNum);
+      const hasLower = /[a-z]/.test(alphaNum);
+
+      const h = Math.max(1, word.bbox.y1 - word.bbox.y0);
+      const shortHeight = h < medianHeight * CONFIG.NOISE_SHORT_HEIGHT_RATIO;
+      const mixedHeight = h < medianHeight * CONFIG.NOISE_MIXEDCASE_HEIGHT_RATIO;
+      const keepSingle = alphaNum.length === 1
+        && CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(upperAlpha)
+        && lineWords.length >= 2
+        && h >= medianHeight * CONFIG.NOISE_KEEP_SINGLE_HEIGHT_RATIO;
+      const normalizedAlpha = normalizeLatinToken(alphaNum);
+      const keepShortLatinWord = alphaNum.length <= 2 && LATIN_KEEP_SHORT_WORDS.has(normalizedAlpha);
+
+      if (keepSingle) return true;
+      if (keepShortLatinWord) return true;
+      // Keep non-Latin tokens to avoid dropping valid syllables
+      if (nonLatin) return true;
+
+      if (/^([A-Za-z])\1{1,2}$/.test(alphaNum) && word.confidence < 92 && lineWords.length >= 3) {
+        logDrop('noise', word, 'repeated-letter short artifact');
+        return false;
+      }
+
+      if (/^[0-9]{1,2}$/.test(alphaNum) && word.confidence < 85) {
+        const normalizedNumeric = normalizeLatinToken(alphaNum);
+        const numericLooksLexical = isProtectedLatinToken(normalizedNumeric);
+        const hasLexicalContext = lineWords.some((neighbor) => {
+          if (neighbor === word) return false;
+          const neighborAlpha = getAlphaNum((neighbor.text || '').trim());
+          if (!neighborAlpha) return false;
+          const normalizedNeighbor = normalizeLatinToken(neighborAlpha);
+          return isProtectedLatinToken(normalizedNeighbor);
+        });
+        let strongLexicalNeighbor = false;
+        for (const neighbor of lineWords) {
+          if (neighbor === word) continue;
+          const neighborAlpha = getAlphaNum((neighbor.text || '').trim());
+          if (!neighborAlpha) continue;
+          const normalizedNeighbor = normalizeLatinToken(neighborAlpha);
+          if (!isProtectedLatinToken(normalizedNeighbor)) continue;
+          const neighborMinH = Math.max(1, Math.min(
+            neighbor.bbox.y1 - neighbor.bbox.y0,
+            word.bbox.y1 - word.bbox.y0
+          ));
+          const yOverlap = Math.max(
+            0,
+            Math.min(neighbor.bbox.y1, word.bbox.y1) - Math.max(neighbor.bbox.y0, word.bbox.y0)
+          );
+          const horizontalGap = neighbor.bbox.x0 > word.bbox.x1
+            ? neighbor.bbox.x0 - word.bbox.x1
+            : (word.bbox.x0 > neighbor.bbox.x1 ? word.bbox.x0 - neighbor.bbox.x1 : 0);
+          if (
+            (yOverlap / neighborMinH) >= 0.24
+            && horizontalGap <= Math.max(18, medianHeight * 1.8)
+          ) {
+            strongLexicalNeighbor = true;
+            break;
+          }
+        }
+        if (!numericLooksLexical) {
+          if (strongLexicalNeighbor && word.confidence >= (lineWords.length <= 4 ? 60 : 68)) return true;
+          if (hasLexicalContext && word.confidence >= 72) return true;
+          logDrop('noise', word, 'short numeric artifact');
+          return false;
+        }
+      }
+
+      // Drop mixed-case short noise like "rE" or "Bm"
+      if (alphaNum.length <= 3 && hasUpper && hasLower && word.confidence < CONFIG.NOISE_MIXEDCASE_CONF && mixedHeight) {
+        logDrop('noise', word, 'mixed-case short');
+        return false;
+      }
+
+      if (alphaNum.length === 1 && word.confidence < CONFIG.NOISE_MIN_CONF_SINGLE && shortHeight && (!denseLine || index === 0)) {
+        logDrop('noise', word, 'single low-conf short');
+        return false;
+      }
+      if (alphaNum.length === 1 && !CONFIG.NOISE_KEEP_SINGLE_CHARS.includes(upperAlpha) && lineWords.length >= 2) {
+        logDrop('noise', word, 'single-char non-keep token');
+        return false;
+      }
+      if (alphaNum.length === 2 && word.confidence < CONFIG.NOISE_MIN_CONF_SHORT && shortHeight && (!denseLine || index === 0)) {
+        logDrop('noise', word, 'two-char low-conf short');
+        return false;
+      }
+
+      // Leading bullet-like noise
+      if (index === 0 && alphaNum.length <= 2 && word.confidence < CONFIG.NOISE_LEADING_CONF) {
+        if (h < medianHeight * CONFIG.NOISE_LEADING_HEIGHT_RATIO) {
+          logDrop('noise', word, 'leading short');
+          return false;
+        }
+        if (/^[mMbB]+$/.test(alphaNum)) {
+          logDrop('noise', word, 'leading mMbB');
+          return false;
+        }
+        if (/^[iIl1]+$/.test(alphaNum) && word.confidence < 80) {
+          logDrop('noise', word, 'leading iIl1');
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    if (filtered.length === 0) continue;
+
+    const bbox = filtered.reduce((acc, w) => ({
+      x0: Math.min(acc.x0, w.bbox.x0),
+      y0: Math.min(acc.y0, w.bbox.y0),
+      x1: Math.max(acc.x1, w.bbox.x1),
+      y1: Math.max(acc.y1, w.bbox.y1),
+    }), { ...filtered[0].bbox });
+
+    cleanedLines.push({
+      text: joinWordsForLanguage(filtered),
+      confidence: filtered.reduce((s, w) => s + w.confidence, 0) / filtered.length,
+      bbox,
+      words: filtered
+    });
+    cleanedWords.push(...filtered);
+  }
+
+  return { lines: cleanedLines, words: cleanedWords };
+}

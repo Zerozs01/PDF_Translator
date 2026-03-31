@@ -1,16 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useOCRTextLayerStore, OCR_PROFILES } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { 
   FileText, 
   Settings, 
-  ChevronDown, 
-  ChevronUp,
   Languages,
   Sparkles,
   RefreshCw
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
+import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 
 interface RightSidebarProps {
   isAiProcessing?: boolean;
@@ -22,7 +21,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   onAiTranslate 
 }) => {
   const { 
-    fileType,
     targetLanguage,
     setTargetLanguage,
     translationMode,
@@ -30,14 +28,15 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   } = useProjectStore();
   
   const { options, setOptions, isProcessing } = useOCRTextLayerStore();
-  const currentProfile = OCR_PROFILES.find(p => p.dpi === options.dpi) || OCR_PROFILES[2];
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   return (
-    <aside className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col h-full shrink-0">
+    <aside className="w-80 bg-slate-950/60 border-l border-white/10 backdrop-blur-xl flex flex-col h-full shrink-0">
       {/* Header */}
-      <div className="p-3 border-b border-slate-700 bg-slate-900/30 flex items-center justify-between">
-        <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+      <div className="relative p-3 border-b border-white/10 flex items-center justify-between overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(94deg,rgba(18,44,94,0.96)_0%,rgba(27,76,156,0.82)_46%,rgba(92,66,175,0.8)_100%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.1)_0%,rgba(0,0,0,0.05)_52%,rgba(0,0,0,0.1)_100%)]" />
+        <h3 className="relative z-10 text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
           <FileText size={14} />
           OCR Text Layer
         </h3>
@@ -45,8 +44,11 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
         {/* Settings Toggle */}
         <button 
           onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-          className={`p-1.5 rounded-lg transition-colors ${
-            isSettingsOpen ? 'bg-cyan-600 text-white' : 'hover:bg-slate-700 text-slate-400'
+          type="button"
+          className={`relative z-10 p-1.5 rounded-lg transition-colors ${
+            isSettingsOpen
+              ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white'
+              : 'hover:bg-white/10 text-slate-400'
           }`}
           title="Settings"
         >
@@ -56,16 +58,16 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
       {/* Collapsible Settings Panel */}
       {isSettingsOpen && (
-        <div className="border-b border-slate-700 bg-slate-900/50 p-3 space-y-4">
+        <div className="border-b border-white/10 bg-slate-950/45 p-3 space-y-4">
           {/* Translate To */}
           <div>
-            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+            <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
               Translate To
             </label>
             <select
               value={targetLanguage}
               onChange={(e) => setTargetLanguage(e.target.value)}
-              className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+              className="w-full bg-slate-900/70 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#2B9BFF]/60"
             >
               <option value="th">Thai (ไทย)</option>
               <option value="en">English</option>
@@ -77,7 +79,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
           {/* Translation Context */}
           <div>
-            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+            <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
               Translation Context
             </label>
             <div className="grid grid-cols-2 gap-2">
@@ -85,8 +87,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 onClick={() => setTranslationMode('manga')}
                 className={`text-xs p-2 rounded-lg border flex items-center justify-center gap-1 transition-all ${
                   translationMode === 'manga' 
-                    ? 'bg-blue-600 border-blue-400 text-white' 
-                    : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600'
+                    ? 'bg-gradient-to-r from-[#FF8705]/28 via-[#FFB45C]/20 to-[#FF7E67]/20 border-[#FF9A3D]/55 text-[#fff0da] shadow-[0_8px_18px_rgba(255,135,5,0.25)]'
+                    : 'bg-slate-900/60 border-white/12 text-slate-300 hover:bg-slate-900 hover:border-white/25'
                 }`}
               >
                 <Sparkles size={12} />
@@ -96,8 +98,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 onClick={() => setTranslationMode('official')}
                 className={`text-xs p-2 rounded-lg border flex items-center justify-center gap-1 transition-all ${
                   translationMode === 'official' 
-                    ? 'bg-emerald-600 border-emerald-400 text-white' 
-                    : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600'
+                    ? 'bg-gradient-to-r from-[#2B9BFF]/30 to-[#5CC6F2]/20 border-[#2B9BFF]/60 text-[#d7edff] shadow-[0_6px_16px_rgba(43,155,255,0.2)]'
+                    : 'bg-slate-900/60 border-white/12 text-slate-300 hover:bg-slate-900 hover:border-white/25'
                 }`}
               >
                 <FileText size={12} />
@@ -106,42 +108,51 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             </div>
           </div>
 
-          {/* Quality Profile */}
+          {/* OCR Timeout */}
           <div>
-            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
-              OCR Quality Profile
-            </label>
-            <div className="grid grid-cols-3 gap-1">
-              {OCR_PROFILES.map(profile => (
-                <button 
-                  key={profile.id}
-                  onClick={() => setOptions({ dpi: profile.dpi, profile: profile.id as any })}
-                  disabled={isProcessing}
-                  className={`text-[10px] p-1.5 rounded border transition-all ${
-                    currentProfile.id === profile.id 
-                      ? 'bg-cyan-600 border-cyan-400 text-white' 
-                      : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600'
-                  } disabled:opacity-50`}
-                  title={profile.description}
-                >
-                  {profile.name}
-                </button>
-              ))}
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider">
+                OCR Timeout (sec/page)
+              </label>
+              <select
+                value={options.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
+                onChange={(e) => setOptions({ perPageTimeoutSec: Number(e.target.value) })}
+                disabled={isProcessing}
+                className="w-28 bg-slate-900/70 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#2B9BFF]/60"
+              >
+                <option value={0}>No Limit</option>
+                <option value={30}>30s</option>
+                <option value={60}>60s</option>
+                <option value={120}>120s</option>
+                <option value={180}>180s</option>
+                <option value={300}>300s</option>
+              </select>
             </div>
-            <p className="text-[9px] text-slate-500 mt-1 italic">
-              DPI: {options.dpi} • {currentProfile.description}
-            </p>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-900/40 px-3 py-2">
+            <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider">
+              Skip OCR if Text Exists
+            </label>
+            <input
+              type="checkbox"
+              checked={options.skipIfTextExists !== false}
+              onChange={(e) => setOptions({ skipIfTextExists: e.target.checked })}
+              disabled={isProcessing}
+              className="accent-[#2B9BFF]"
+              aria-label="Skip OCR if Text Exists"
+            />
           </div>
 
           {/* AI Translate Button */}
           <div>
-            <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-2">
+            <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
               Gemini Intelligence
             </label>
             <button 
               onClick={onAiTranslate}
               disabled={isAiProcessing}
-              className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
+              className="w-full bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
             >
               {isAiProcessing ? (
                 <>
@@ -155,9 +166,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 </>
               )}
             </button>
-            <p className="text-[9px] text-slate-500 mt-1.5 text-center">
-              Powered by Gemini 2.5 Flash
-            </p>
           </div>
         </div>
       )}

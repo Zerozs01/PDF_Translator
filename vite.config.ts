@@ -12,6 +12,12 @@ const dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(file
 
 // More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
 export default defineConfig({
+  worker: {
+    format: 'es',
+  },
+  optimizeDeps: {
+    include: ['tesseract.js'],
+  },
   plugins: [react(), electron([{
     entry: 'electron/main.ts',
     vite: {

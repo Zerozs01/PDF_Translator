@@ -15,6 +15,9 @@ export function initDB() {
     db = new Database(dbPath);
     
     // 🚀 Performance Optimization (The "Locus" Magic)
+    // 0. Page Size: 4KB is optimal for modern SSD/Filesystems
+    db.pragma('page_size = 4096');
+    
     // 1. WAL Mode: Write-Ahead Logging (Concurrency)
     db.pragma('journal_mode = WAL');
     
@@ -23,6 +26,9 @@ export function initDB() {
     
     // 3. Cache Size: -64000 pages (~64MB RAM)
     db.pragma('cache_size = -64000');
+
+    // 4. Memory-Mapped I/O: Map up to 128MB of DB into RAM for instant reads
+    db.pragma('mmap_size = 134217728');
 
     // Create Tables with comprehensive schema
     const schema = `
@@ -62,11 +68,19 @@ export function initDB() {
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       );
 
-      -- Junction table for Document-Tags (Many-to-Many)
+      -- Table for Document-Tags (Many-to-Many)
       CREATE TABLE IF NOT EXISTS document_tags (
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
         PRIMARY KEY (document_id, tag_id)
+      );
+
+      -- 🚀 FTS5 Search Table (Crow Explorer Pattern)
+      -- This table stores a denormalized text blob of (filename + tags) for instant search
+      CREATE VIRTUAL TABLE IF NOT EXISTS document_search USING fts5(
+        document_id UNINDEXED,
+        search_text,
+        tokenize='unicode61'
       );
 
       -- Table for OCR Cache
@@ -79,6 +93,17 @@ export function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for OCR Cache (per engine, v2)
+      CREATE TABLE IF NOT EXISTS ocr_cache_engine (
+        document_id INTEGER,
+        page_number INTEGER,
+        ocr_engine TEXT NOT NULL,
+        ocr_data TEXT,
+        updated_at INTEGER,
+        PRIMARY KEY (document_id, page_number, ocr_engine),
+        FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
@@ -86,7 +111,32 @@ export function initDB() {
       CREATE INDEX IF NOT EXISTS idx_documents_favorite ON documents(is_favorite);
       CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
+      CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
+      CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+
+      -- 🚀 Automatic Search Sync Triggers
+      -- Keeps document_search in sync with documents table
+      CREATE TRIGGER IF NOT EXISTS trg_documents_insert AFTER INSERT ON documents
+      BEGIN
+        INSERT INTO document_search(document_id, search_text) 
+        VALUES (new.id, new.filename);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_update AFTER UPDATE ON documents
+      BEGIN
+        UPDATE document_search SET search_text = new.filename WHERE document_id = old.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_delete AFTER DELETE ON documents
+      BEGIN
+        DELETE FROM document_search WHERE document_id = old.id;
+      END;
+
+      -- Initial populate of search table if empty (one-time migration)
+      INSERT INTO document_search(document_id, search_text)
+      SELECT id, filename FROM documents 
+      WHERE id NOT IN (SELECT document_id FROM document_search);
 
       -- Insert default tags if not exists
       INSERT OR IGNORE INTO tags (name, color) VALUES 
@@ -99,7 +149,7 @@ export function initDB() {
     `;
 
     db.exec(schema);
-    console.log('[SQLite] Database initialized successfully with WAL & Indexes');
+    console.log('[SQLite] Database initialized successfully with WAL, FTS5 & MMap');
     
     return db;
   } catch (err) {
@@ -214,6 +264,34 @@ export const DocumentDAO = {
     return db.prepare('SELECT * FROM documents WHERE filepath = ?').get(filepath);
   },
 
+  findByFilenameWithCacheStats: (filename: string, limit: number = 20) => {
+    if (!db) throw new Error('DB not initialized');
+    return db.prepare(`
+      SELECT
+        d.id,
+        d.filepath,
+        d.filename,
+        d.total_pages,
+        d.last_accessed,
+        CAST(COUNT(o.page_number) AS INTEGER) AS cache_pages,
+        MAX(o.updated_at) AS last_cache_update
+      FROM documents d
+      LEFT JOIN (
+        SELECT document_id, page_number, MAX(updated_at) AS updated_at
+        FROM (
+          SELECT document_id, page_number, updated_at FROM ocr_cache
+          UNION ALL
+          SELECT document_id, page_number, updated_at FROM ocr_cache_engine
+        ) merged_cache
+        GROUP BY document_id, page_number
+      ) o ON o.document_id = d.id
+      WHERE d.filename = ?
+      GROUP BY d.id
+      ORDER BY cache_pages DESC, last_cache_update DESC, d.last_accessed DESC
+      LIMIT ?
+    `).all(filename, limit);
+  },
+
   getById: (id: number) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare('SELECT * FROM documents WHERE id = ?').get(id);
@@ -271,15 +349,23 @@ export const DocumentDAO = {
 
   search: (query: string) => {
     if (!db) throw new Error('DB not initialized');
+    const trimmed = query.trim();
+    if (!trimmed) return DocumentDAO.getRecent(50);
+    
+    // FTS5 requires special characters to be quoted. 
+    // We sanitize by doubling existing quotes and wrapping the whole term.
+    const sanitized = trimmed.replace(/"/g, '""');
+    
     return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
+      JOIN document_search ds ON d.id = ds.document_id
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
-      WHERE d.filename LIKE ?
+      WHERE ds.search_text MATCH '"' || ? || '"*'
       GROUP BY d.id
-      ORDER BY d.last_accessed DESC
-    `).all(`%${query}%`);
+      ORDER BY rank, d.last_accessed DESC
+    `).all(sanitized);
   },
 
   updateLastAccessed: (id: number, lastPage: number = 1) => {
@@ -320,7 +406,7 @@ export const DocumentDAO = {
     `).all(tagId);
   },
 
-  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean }) => {
+  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
@@ -329,6 +415,7 @@ export const DocumentDAO = {
     if (data.project_id !== undefined) { sets.push('project_id = ?'); values.push(data.project_id); }
     if (data.thumbnail_path !== undefined) { sets.push('thumbnail_path = ?'); values.push(data.thumbnail_path); }
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
+    if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
     
     if (sets.length === 0) return;
     values.push(id);
@@ -358,6 +445,11 @@ export const DocumentDAO = {
     `).all(documentId);
   },
 
+  touch: (id: number) => {
+    if (!db) throw new Error('DB not initialized');
+    db.prepare('UPDATE documents SET last_accessed = ? WHERE id = ?').run(Date.now(), id);
+  },
+
   updateLastPage: (id: number, pageNum: number) => {
     if (!db) throw new Error('DB not initialized');
     db.prepare('UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?').run(pageNum, Date.now(), id);
@@ -370,26 +462,112 @@ export const DocumentDAO = {
 };
 
 export const OCRCacheDAO = {
-  save: (documentId: number, pageNumber: number, data: any) => {
+  save: (documentId: number, pageNumber: number, data: any, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
+    const normalizedEngine = String(engine || 'tesseract').toLowerCase();
     const stmt = db.prepare(`
-      INSERT INTO ocr_cache (document_id, page_number, ocr_data, updated_at)
-      VALUES (@documentId, @pageNumber, @json, @now)
-      ON CONFLICT(document_id, page_number) DO UPDATE SET
+      INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
+      VALUES (@documentId, @pageNumber, @engine, @json, @now)
+      ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
         ocr_data = @json,
         updated_at = @now
     `);
     stmt.run({
       documentId,
       pageNumber,
+      engine: normalizedEngine,
       json: JSON.stringify(data),
       now: Date.now()
     });
   },
 
-  get: (documentId: number, pageNumber: number) => {
+  get: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
-    const row = db.prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?').get(documentId, pageNumber) as { ocr_data: string } | undefined;
-    return row ? JSON.parse(row.ocr_data) : null;
+    const normalizedEngine = String(engine || 'tesseract').toLowerCase();
+    const row = db
+      .prepare('SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+      .get(documentId, pageNumber, normalizedEngine) as { ocr_data: string } | undefined;
+
+    if (row) {
+      return JSON.parse(row.ocr_data);
+    }
+
+    // Legacy fallback (single cache row per page).
+    const legacyRow = db
+      .prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
+      .get(documentId, pageNumber) as { ocr_data: string } | undefined;
+
+    if (!legacyRow) return null;
+    const parsed = JSON.parse(legacyRow.ocr_data);
+    const legacyEngine = String(parsed?.ocrEngine || 'tesseract').toLowerCase();
+    if (legacyEngine !== normalizedEngine) return null;
+    return parsed;
+  },
+
+  clear: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
+    if (!db) throw new Error('DB not initialized');
+    const normalizedEngine = String(engine || 'tesseract').toLowerCase();
+    
+    // 1. Clear new engine-specific cache
+    const res1 = db
+      .prepare('DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+      .run(documentId, pageNumber, normalizedEngine);
+      
+    // 2. Clear legacy cache if it matches the current engine
+    const legacyRow = db
+      .prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
+      .get(documentId, pageNumber) as { ocr_data: string } | undefined;
+
+    let res2 = { changes: 0 };
+    if (legacyRow) {
+      try {
+        const parsed = JSON.parse(legacyRow.ocr_data);
+        const legacyEngine = String(parsed?.ocrEngine || 'tesseract').toLowerCase();
+        if (legacyEngine === normalizedEngine) {
+          res2 = db.prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
+        }
+      } catch {
+        // If unparseable but we are clearing tesseract (default), assume it's okay to delete
+        if (normalizedEngine === 'tesseract') {
+          res2 = db.prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
+        }
+      }
+    }
+    
+    return res1.changes > 0 || res2.changes > 0;
+  },
+
+  getLatestForDocument: (documentId: number) => {
+    if (!db) throw new Error('DB not initialized');
+    const engineRow = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache_engine
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId) as { page_number: number; ocr_data: string; updated_at: number } | undefined;
+
+    const legacyRow = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId) as { page_number: number; ocr_data: string; updated_at: number } | undefined;
+
+    const row = (() => {
+      if (!engineRow && !legacyRow) return null;
+      if (!engineRow) return legacyRow!;
+      if (!legacyRow) return engineRow;
+      return engineRow.updated_at >= legacyRow.updated_at ? engineRow : legacyRow;
+    })();
+
+    if (!row) return null;
+
+    return {
+      page_number: row.page_number,
+      updated_at: row.updated_at,
+      ocr_data: JSON.parse(row.ocr_data)
+    };
   }
 };
