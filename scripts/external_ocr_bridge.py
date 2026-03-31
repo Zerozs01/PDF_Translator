@@ -346,11 +346,15 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 and overlap_x <= 0.28
             )
         else:
+            # Tightened: prevent vertically stacked short words (EH/ME) from merging
             same_band = (
-                center_delta <= min_height * 0.34
-                or (overlap_y >= 0.62 and center_delta <= min_height * 0.56)
+                center_delta <= min_height * 0.24
+                or (overlap_y >= 0.82 and center_delta <= min_height * 0.38)
             )
-            close_enough = gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34
+            close_enough = (
+                (gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34)
+                and overlap_x <= 0.88  # block near-full vertical stacking
+            )
 
         if same_band and close_enough and fragment_like:
             merged_words = list(current.get("words") or []) + list(candidate.get("words") or [])
@@ -1151,8 +1155,8 @@ def reflow_external_words(words: List[Dict[str, Any]], pipeline_profile: str, wi
             row_height = max(10.0, bbox_height(row_bbox))
             center_delta = abs(word_center_y - row["centerY"])
             overlap = vertical_overlap_ratio(word_bbox, row_bbox)
-            center_tolerance = max(10.0, min(word_height, row_height) * (0.58 if pipeline_profile == "export" else 0.52))
-            overlap_threshold = 0.5 if pipeline_profile == "export" else 0.48
+            center_tolerance = max(10.0, min(word_height, row_height) * (0.50 if pipeline_profile == "export" else 0.35))
+            overlap_threshold = 0.60 if pipeline_profile == "export" else 0.65
             same_band = center_delta <= center_tolerance or overlap >= overlap_threshold
             if not same_band:
                 continue

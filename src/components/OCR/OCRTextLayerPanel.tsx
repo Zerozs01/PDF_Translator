@@ -1054,57 +1054,49 @@ export const OCRTextLayerPanel: React.FC = () => {
       && engine === 'paddleocr'
       && hasKoreanOcrLanguage(options.language);
 
+    // PaddleOCR: no minWidth — handles low resolution well, speed is priority
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
-        return {
-          maxSide: 9000,
-          maxPixels: 22_000_000,
-        };
+        return { maxSide: 16000, maxPixels: 22_000_000, minWidth: null };
       }
       if (cjkPanelExternal) {
-        return {
-          maxSide: 7600,
-          maxPixels: 14_000_000,
-        };
+        return { maxSide: 16000, maxPixels: 14_000_000, minWidth: null };
       }
       if (activePipelineProfile === 'export') {
-        return {
-          maxSide: Math.min(EXTERNAL_OCR_RENDER_MAX_SIDE, 3000),
-          maxPixels: 4_600_000,
-        };
+        return { maxSide: 16000, maxPixels: 4_600_000, minWidth: null };
       }
-      return {
-        maxSide: Math.min(EXTERNAL_OCR_RENDER_MAX_SIDE, 3200),
-        maxPixels: 5_200_000,
-      };
+      return { maxSide: 16000, maxPixels: 5_200_000, minWidth: null };
     }
+    // EasyOCR: moderate minWidth (650px) for readable text
     if (engine === 'easyocr') {
       if (cjkPanelExternal) {
-        return {
-          maxSide: 7600,
-          maxPixels: 18_000_000,
-        };
+        return { maxSide: 16000, maxPixels: 18_000_000, minWidth: null };
       }
       return activePipelineProfile === 'export'
-        ? { maxSide: 2600, maxPixels: 3_800_000 }
-        : { maxSide: 2800, maxPixels: 4_200_000 };
+        ? { maxSide: 16000, maxPixels: 3_800_000, minWidth: 650 }
+        : { maxSide: 16000, maxPixels: 4_200_000, minWidth: 650 };
+    }
+    // Tesseract: highest minWidth (800px) but lower pixel budget for manga panels
+    // to reduce ghost text from artwork textures and speed up processing.
+    if (engine === 'tesseract') {
+      return activePipelineProfile === 'export'
+        ? { maxSide: 16000, maxPixels: 3_800_000, minWidth: 800 }
+        : { maxSide: 16000, maxPixels: 2_800_000, minWidth: 800 };
     }
     if (activePipelineProfile === 'export') {
-      return {
-        maxSide: 12000,
-        maxPixels: 12_000_000,
-      };
+      return { maxSide: 16000, maxPixels: 12_000_000, minWidth: null };
     }
-    return { maxSide: null, maxPixels: null };
+    return { maxSide: null, maxPixels: null, minWidth: null };
   }, [EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS, EXTERNAL_OCR_CJK_PANEL_MAX_SIDE, EXTERNAL_OCR_RENDER_MAX_SIDE, activePipelineProfile, hasCjkOrThaiOcrLanguage, hasKoreanOcrLanguage, options.language]);
 
   const fitDimensionsToConstraints = useCallback((
     width: number,
     height: number,
-    constraints?: { maxSide?: number | null; maxPixels?: number | null }
+    constraints?: { maxSide?: number | null; maxPixels?: number | null; minWidth?: number | null }
   ) => {
     const maxSide = constraints?.maxSide ?? null;
     const maxPixels = constraints?.maxPixels ?? null;
+    const minWidth = constraints?.minWidth ?? null;
     let scaleFactor = 1;
 
     if (maxSide && maxSide > 0) {
@@ -1119,6 +1111,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       if (pixelCount > maxPixels) {
         scaleFactor = Math.min(scaleFactor, Math.sqrt(maxPixels / pixelCount));
       }
+    }
+
+    // Engine-specific minimum width guarantee for tall webtoon pages.
+    // Only applies when the engine explicitly requests it (Tesseract=800, EasyOCR=650).
+    // PaddleOCR sets minWidth=null so pixel budget controls everything → stays fast.
+    if (minWidth && minWidth > 0 && scaleFactor < 1 && width * scaleFactor < minWidth && width > minWidth) {
+      scaleFactor = minWidth / width;
     }
 
     if (scaleFactor >= 1) {
