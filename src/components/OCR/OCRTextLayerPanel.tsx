@@ -1767,7 +1767,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             </div>
           )}
           
-          <div className="bg-slate-900/55 border border-white/10 rounded-lg p-2 max-h-48 overflow-y-auto">
+          <div className="bg-slate-900/55 border border-white/10 rounded-lg p-2 min-h-56 max-h-[40vh] overflow-y-auto">
             {currentPageOCR.words.length > 0 ? (
               <div className="space-y-1">
                 {/* Show text grouped by lines for better readability */}

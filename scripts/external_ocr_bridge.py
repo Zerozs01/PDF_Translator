@@ -1251,6 +1251,190 @@ def merge_short_lead_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return merged
 
 
+def prune_easyocr_panel_weak_singletons(
+    lines: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    language_codes: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 1:
+        return list(lines), []
+
+    # Keep CJK/Thai panel behavior separate; this guard targets Latin-like EasyOCR panel noise.
+    if any(code in {"kor", "jpn", "jpn_vert", "chi_sim", "chi_tra", "tha"} for code in language_codes):
+        return list(lines), []
+
+    kept: List[Dict[str, Any]] = []
+    drops: List[Dict[str, Any]] = []
+
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        if has_non_latin_characters(text):
+            kept.append(line)
+            continue
+
+        parts = [part for part in re.split(r"\s+", text) if part]
+        if len(parts) != 1:
+            kept.append(line)
+            continue
+
+        token_raw = parts[0]
+        token = normalize_latin_token_for_lexicon(token_raw)
+        if not token:
+            kept.append(line)
+            continue
+
+        bbox = line.get("bbox") or {}
+        confidence = normalize_confidence(line.get("confidence", 0.0))
+        line_h = max(1.0, bbox_height(bbox))
+        line_w = max(1.0, bbox_width(bbox))
+        center_x = bbox_center_x(bbox)
+        center_y = bbox_center_y(bbox)
+        near_edge = (
+            float(bbox.get("y1", 0.0)) <= height * 0.20
+            or float(bbox.get("y0", 0.0)) >= height * 0.76
+            or float(bbox.get("x0", 0.0)) <= width * 0.10
+            or float(bbox.get("x1", 0.0)) >= width * 0.90
+        )
+        tiny = line_h <= height * 0.03 or line_w <= width * 0.08
+        numeric_short = token.isdigit() and len(token) <= 2
+
+        letters = [char for char in token_raw if char.isalpha()]
+        lower_ratio = (sum(1 for char in letters if char.islower()) / len(letters)) if letters else 0.0
+        mostly_lower = len(letters) >= 3 and lower_ratio >= 0.8
+
+        # Preserve short/high-confidence speech-style keep tokens.
+        if token in LATIN_SHORT_KEEP_TOKENS and confidence >= 90:
+            kept.append(line)
+            continue
+
+        neighbor_support = 0
+        for other in lines:
+            if other is line:
+                continue
+            other_text = str(other.get("text") or "").strip()
+            if not other_text:
+                continue
+            other_bbox = other.get("bbox") or {}
+            other_h = max(1.0, bbox_height(other_bbox))
+            center_delta = abs(center_y - bbox_center_y(other_bbox))
+            center_dx = abs(center_x - bbox_center_x(other_bbox))
+            overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+            min_height = max(8.0, min(line_h, other_h))
+            if center_delta <= min_height * 2.2 and (overlap_x >= 0.18 or center_dx <= max(130.0, line_w * 1.8)):
+                neighbor_support += 1
+                if neighbor_support >= 2:
+                    break
+
+        drop_reason = ""
+        if numeric_short and (near_edge or confidence < 88):
+            drop_reason = "easyNumericSingleton"
+        elif mostly_lower and len(token) <= 8 and confidence < 92 and neighbor_support == 0:
+            drop_reason = "easyLowercaseSingleton"
+        elif len(token) <= 4 and confidence < 86 and tiny and near_edge and neighbor_support == 0:
+            drop_reason = "easyShortEdgeSingleton"
+
+        if drop_reason:
+            drops.append({
+                "reason": drop_reason,
+                "source": "easyocr_panel",
+                "text": text,
+                "confidence": confidence,
+            })
+            continue
+
+        kept.append(line)
+
+    return kept, drops
+
+
+def prune_easyocr_panel_shadow_singletons(
+    lines: List[Dict[str, Any]],
+    language_codes: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 1:
+        return list(lines), []
+
+    if any(code in {"kor", "jpn", "jpn_vert", "chi_sim", "chi_tra", "tha"} for code in language_codes):
+        return list(lines), []
+
+    kept: List[Dict[str, Any]] = []
+    drops: List[Dict[str, Any]] = []
+
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        if has_non_latin_characters(text):
+            kept.append(line)
+            continue
+
+        tokens = [normalize_latin_token_for_lexicon(part) for part in re.split(r"\s+", text)]
+        tokens = [token for token in tokens if token]
+        if len(tokens) != 1:
+            kept.append(line)
+            continue
+
+        token = tokens[0]
+        if len(token) <= 2:
+            kept.append(line)
+            continue
+
+        bbox = line.get("bbox") or {}
+        confidence = normalize_confidence(line.get("confidence", 0.0))
+        center_y = bbox_center_y(bbox)
+        line_h = max(1.0, bbox_height(bbox))
+
+        shadowed_by_longer_line = False
+        shadow_line_text = ""
+        for other in lines:
+            if other is line:
+                continue
+            other_text = str(other.get("text") or "").strip()
+            if not other_text or has_non_latin_characters(other_text):
+                continue
+
+            other_tokens = [normalize_latin_token_for_lexicon(part) for part in re.split(r"\s+", other_text)]
+            other_tokens = [part for part in other_tokens if part]
+            if len(other_tokens) < 4:
+                continue
+            if token not in other_tokens:
+                continue
+
+            other_bbox = other.get("bbox") or {}
+            other_h = max(1.0, bbox_height(other_bbox))
+            overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+            overlap_y = vertical_overlap_ratio(bbox, other_bbox)
+            contained_x = horizontal_containment_ratio(bbox, other_bbox)
+            center_delta = abs(center_y - bbox_center_y(other_bbox))
+            min_height = max(8.0, min(line_h, other_h))
+
+            if (
+                (overlap_x >= 0.32 or contained_x >= 0.45)
+                and (overlap_y >= 0.08 or center_delta <= min_height * 4.5)
+                and confidence <= normalize_confidence(other.get("confidence", 0.0)) + 10.0
+            ):
+                shadowed_by_longer_line = True
+                shadow_line_text = other_text
+                break
+
+        if shadowed_by_longer_line:
+            drops.append({
+                "reason": "easyShadowSingleton",
+                "source": "easyocr_panel",
+                "text": text,
+                "confidence": confidence,
+                "shadowWith": shadow_line_text,
+            })
+            continue
+
+        kept.append(line)
+
+    return kept, drops
+
+
 def reorder_tilted_line_clusters(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if len(lines) <= 1:
         return list(lines)
@@ -1843,10 +2027,32 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
             cleaned_lines = merge_same_band_fragments(reorder_tilted_line_clusters(candidate_lines))
             cleaned_lines = merge_short_lead_lines(cleaned_lines)
             cleaned_lines = reorder_tilted_line_clusters(cleaned_lines)
+
+        cleaned_lines, singleton_drops = prune_easyocr_panel_weak_singletons(
+            cleaned_lines,
+            width,
+            height,
+            language_codes,
+        )
+        cleaned_lines, shadow_drops = prune_easyocr_panel_shadow_singletons(
+            cleaned_lines,
+            language_codes,
+        )
+        all_easy_drops = singleton_drops + shadow_drops
         cleaned_words: List[Dict[str, Any]] = []
         for line in cleaned_lines:
             cleaned_words.extend(line.get("words") or [])
-        return make_text_result(cleaned_lines, cleaned_words, result.get("pageSegMode"))
+        cleaned_result = make_text_result(cleaned_lines, cleaned_words, result.get("pageSegMode"))
+        if all_easy_drops:
+            cleaned_result["debug"] = {
+                "cleanupRoute": "easyocr_panel",
+                "dropCounts": {
+                    "easyPanelSingleton": len(singleton_drops),
+                    "easyShadowSingleton": len(shadow_drops),
+                },
+                "droppedWords": all_easy_drops,
+            }
+        return cleaned_result
 
     cleaned_lines, cleaned_words = reflow_external_words(candidate_words, pipeline_profile, width, height)
     if pipeline_profile == "panel":
@@ -2574,11 +2780,12 @@ def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
         args.height,
         args.language,
     )
+    cleanup_debug = cleaned.get("debug") or {}
     cleaned["debug"] = {
         "profile": "+".join(langs),
         "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
-        "dropCounts": {},
-        "droppedWords": [],
+        "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
+        "droppedWords": list(cleanup_debug.get("droppedWords") or []),
         "timingsMs": {
             "ocr": round((time.perf_counter() - started_at) * 1000, 1),
         },
@@ -2626,11 +2833,12 @@ def run_easy_yolo(args: argparse.Namespace) -> Dict[str, Any]:
         args.height,
         args.language,
     )
+    cleanup_debug = cleaned.get("debug") or {}
     cleaned["debug"] = {
         "profile": "easy-yolo",
         "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
-        "dropCounts": {},
-        "droppedWords": [],
+        "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
+        "droppedWords": list(cleanup_debug.get("droppedWords") or []),
         "timingsMs": {
             "ocr": round((time.perf_counter() - started_at) * 1000, 1),
         },
