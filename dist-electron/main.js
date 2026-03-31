@@ -70,6 +70,17 @@ function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for OCR Cache (per engine, v2)
+      CREATE TABLE IF NOT EXISTS ocr_cache_engine (
+        document_id INTEGER,
+        page_number INTEGER,
+        ocr_engine TEXT NOT NULL,
+        ocr_data TEXT,
+        updated_at INTEGER,
+        PRIMARY KEY (document_id, page_number, ocr_engine),
+        FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
@@ -77,6 +88,8 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_documents_favorite ON documents(is_favorite);
       CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
+      CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
+      CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
       -- Insert default tags if not exists
@@ -208,7 +221,15 @@ const DocumentDAO = {
         CAST(COUNT(o.page_number) AS INTEGER) AS cache_pages,
         MAX(o.updated_at) AS last_cache_update
       FROM documents d
-      LEFT JOIN ocr_cache o ON o.document_id = d.id
+      LEFT JOIN (
+        SELECT document_id, page_number, MAX(updated_at) AS updated_at
+        FROM (
+          SELECT document_id, page_number, updated_at FROM ocr_cache
+          UNION ALL
+          SELECT document_id, page_number, updated_at FROM ocr_cache_engine
+        ) merged_cache
+        GROUP BY document_id, page_number
+      ) o ON o.document_id = d.id
       WHERE d.filename = ?
       GROUP BY d.id
       ORDER BY cache_pages DESC, last_cache_update DESC, d.last_accessed DESC
@@ -372,36 +393,79 @@ const DocumentDAO = {
   }
 };
 const OCRCacheDAO = {
-  save: (documentId, pageNumber, data) => {
+  save: (documentId, pageNumber, data, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
     const stmt = db.prepare(`
-      INSERT INTO ocr_cache (document_id, page_number, ocr_data, updated_at)
-      VALUES (@documentId, @pageNumber, @json, @now)
-      ON CONFLICT(document_id, page_number) DO UPDATE SET
+      INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
+      VALUES (@documentId, @pageNumber, @engine, @json, @now)
+      ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
         ocr_data = @json,
         updated_at = @now
     `);
     stmt.run({
       documentId,
       pageNumber,
+      engine: normalizedEngine,
       json: JSON.stringify(data),
       now: Date.now()
     });
   },
-  get: (documentId, pageNumber) => {
+  get: (documentId, pageNumber, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
-    const row = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
-    return row ? JSON.parse(row.ocr_data) : null;
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
+    const row = db.prepare("SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").get(documentId, pageNumber, normalizedEngine);
+    if (row) {
+      return JSON.parse(row.ocr_data);
+    }
+    const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    if (!legacyRow) return null;
+    const parsed = JSON.parse(legacyRow.ocr_data);
+    const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
+    if (legacyEngine !== normalizedEngine) return null;
+    return parsed;
+  },
+  clear: (documentId, pageNumber, engine = "tesseract") => {
+    if (!db) throw new Error("DB not initialized");
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
+    const removed = db.prepare("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    if (removed.changes > 0) {
+      return true;
+    }
+    const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    if (!legacyRow) return false;
+    try {
+      const parsed = JSON.parse(legacyRow.ocr_data);
+      const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
+      if (legacyEngine !== normalizedEngine) return false;
+    } catch {
+      if (normalizedEngine !== "tesseract") return false;
+    }
+    const legacyRemoved = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+    return legacyRemoved.changes > 0;
   },
   getLatestForDocument: (documentId) => {
     if (!db) throw new Error("DB not initialized");
-    const row = db.prepare(`
+    const engineRow = db.prepare(`
+      SELECT page_number, ocr_data, updated_at
+      FROM ocr_cache_engine
+      WHERE document_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(documentId);
+    const legacyRow = db.prepare(`
       SELECT page_number, ocr_data, updated_at
       FROM ocr_cache
       WHERE document_id = ?
       ORDER BY updated_at DESC
       LIMIT 1
     `).get(documentId);
+    const row = (() => {
+      if (!engineRow && !legacyRow) return null;
+      if (!engineRow) return legacyRow;
+      if (!legacyRow) return engineRow;
+      return engineRow.updated_at >= legacyRow.updated_at ? engineRow : legacyRow;
+    })();
     if (!row) return null;
     return {
       page_number: row.page_number,
@@ -823,6 +887,7 @@ electron.app.whenReady().then(() => {
   initDB();
   const isValidString = (value) => typeof value === "string" && value.length > 0 && value.length < 1e4;
   const isValidNumber = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  const isValidEngine = (value) => typeof value === "string" && ["tesseract", "paddleocr", "easyocr"].includes(value);
   const sanitizePath = (filepath) => {
     return filepath.replace(/\.\.\//g, "").replace(/\.\.\\/g, "");
   };
@@ -865,27 +930,41 @@ electron.app.whenReady().then(() => {
       return [];
     }
   });
-  electron.ipcMain.handle("db:save-ocr", async (_, { docId, pageNum, data }) => {
+  electron.ipcMain.handle("db:save-ocr", async (_, { docId, pageNum, data, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error("Invalid input: docId and pageNum must be positive numbers");
     }
     try {
-      OCRCacheDAO.save(docId, pageNum, data);
+      const selectedEngine = isValidEngine(engine) ? engine : isValidEngine(data?.ocrEngine) ? data.ocrEngine : "tesseract";
+      OCRCacheDAO.save(docId, pageNum, data, selectedEngine);
       return true;
     } catch (error) {
       console.error("db:save-ocr error:", error);
       return false;
     }
   });
-  electron.ipcMain.handle("db:get-ocr", async (_, { docId, pageNum }) => {
+  electron.ipcMain.handle("db:get-ocr", async (_, { docId, pageNum, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error("Invalid input: docId and pageNum must be positive numbers");
     }
     try {
-      return OCRCacheDAO.get(docId, pageNum);
+      const selectedEngine = isValidEngine(engine) ? engine : "tesseract";
+      return OCRCacheDAO.get(docId, pageNum, selectedEngine);
     } catch (error) {
       console.error("db:get-ocr error:", error);
       return null;
+    }
+  });
+  electron.ipcMain.handle("db:clear-ocr", async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : "tesseract";
+      return OCRCacheDAO.clear(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error("db:clear-ocr error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:get-latest-ocr", async (_, { docId }) => {

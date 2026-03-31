@@ -19,7 +19,8 @@ import {
   Underline,
   AlignLeft,
   AlignCenter,
-  AlignRight
+  AlignRight,
+  BarChart3
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
@@ -72,6 +73,7 @@ export default function App() {
     && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
   const { activeTool, setActiveTool } = useUIStore();
   const ocrLanguage = useOCRTextLayerStore((state) => state.options.language);
+  const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
   const { 
     file, 
     fileType,
@@ -244,6 +246,9 @@ export default function App() {
                 if (e.key === 'Enter') setIsEditingName(false);
                 if (e.key === 'Escape') { setEditedName(file?.name || ''); setIsEditingName(false); }
               }}
+              aria-label="Document name"
+              title="Document name"
+              placeholder="Document name"
               className="bg-slate-900/70 border border-[#2B9BFF]/60 rounded px-2 py-1 text-sm text-white focus:outline-none min-w-[120px]"
               autoFocus
             />
@@ -325,6 +330,18 @@ export default function App() {
         </button>
         <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Right">
           <AlignRight size={16} />
+        </button>
+
+        <div className="w-px h-6 bg-white/10 mx-1" />
+
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent('ocr:benchmark-current-page'))}
+          disabled={isOCRProcessing}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+          title="Benchmark current page using OCR cache + missing-engine run"
+        >
+          <BarChart3 size={13} />
+          Benchmark หน้านี้
         </button>
 
         {/* Spacer - balance tools to center */}

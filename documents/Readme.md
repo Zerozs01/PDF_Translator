@@ -31,6 +31,21 @@ Use this folder as the source of truth before relying on older root-level notes.
 - `CHANGELOG.md`  
   Documentation-only changelog for this folder.
 
+## OCR Validation Commands
+
+- `npm run ocr:regression`
+  - Runs harness with default engine (`tesseract`) and writes `.tmp-ocr-report.json`.
+- `npm run ocr:regression:paddle`
+  - Runs panel regression for `paddleocr` and writes `.tmp-ocr-report-paddle.json`.
+- `npm run ocr:regression:easy`
+  - Runs panel regression for `easyocr` and writes `.tmp-ocr-report-easy.json`.
+- `npm run ocr:benchmark`
+  - Runs matrix benchmark across `tesseract`, `paddleocr`, `easyocr` and emits:
+    - `.tmp-ocr-benchmark.json`
+    - `.tmp-ocr-benchmark.md`
+- `npm run ocr:benchmark:ci`
+  - Same matrix run, exits non-zero when risky pages or expectation failures are present.
+
 ## Research
 
 - `Knowledge.md`  
@@ -54,6 +69,3 @@ Use them as input when planning deeper OCR changes, but treat `ARCHITECTURE.md`,
 - Need exact code behavior: read `ARCHITECTURE.md` and `OCR_OPTIMIZATION.md`
 - Need next tasks: read `Roadmap.md`
 - Need theory or future-looking ideas: read `Knowledge.md`
-
-
-

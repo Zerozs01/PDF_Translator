@@ -10,8 +10,9 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     saveDocument: (filepath, filename, totalPages) => electron.ipcRenderer.invoke("db:save-document", { filepath, filename, totalPages }),
     getDocument: (filepath) => electron.ipcRenderer.invoke("db:get-document", filepath),
     findDocumentsByFilename: (filename) => electron.ipcRenderer.invoke("db:find-documents-by-filename", filename),
-    saveOCR: (docId, pageNum, data) => electron.ipcRenderer.invoke("db:save-ocr", { docId, pageNum, data }),
-    getOCR: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum }),
+    saveOCR: (docId, pageNum, data, engine) => electron.ipcRenderer.invoke("db:save-ocr", { docId, pageNum, data, engine }),
+    getOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum, engine }),
+    clearOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-ocr", { docId, pageNum, engine }),
     getLatestOCR: (docId) => electron.ipcRenderer.invoke("db:get-latest-ocr", { docId }),
     // Document management
     getRecentDocuments: (limit) => electron.ipcRenderer.invoke("db:get-recent-documents", limit),

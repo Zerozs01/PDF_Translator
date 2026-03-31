@@ -13,6 +13,10 @@
     "ocr:bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap_ocr_env.ps1",
     "ocr:regression": "node scripts/run-ocr-regression.mjs --out .tmp-ocr-current.json && node scripts/ocr-regression-report.js --cand .tmp-ocr-current.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report.json",
     "ocr:regression:partial": "node scripts/run-ocr-regression.mjs --skip-missing --out .tmp-ocr-current.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report.json",
+    "ocr:regression:paddle": "node scripts/run-ocr-regression.mjs --skip-missing --engine paddleocr --out .tmp-ocr-current-paddle.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current-paddle.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report-paddle.json",
+    "ocr:regression:easy": "node scripts/run-ocr-regression.mjs --skip-missing --engine easyocr --out .tmp-ocr-current-easy.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current-easy.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report-easy.json",
+    "ocr:benchmark": "node scripts/ocr-benchmark-matrix.mjs",
+    "ocr:benchmark:ci": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
     "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/postinstall-ocr.js"
   },
   "repository": {

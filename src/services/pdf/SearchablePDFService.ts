@@ -253,7 +253,7 @@ export class SearchablePDFService {
           }
 
           if (canUseCache && cacheDocId) {
-            const cached = await dbService.getOCR(cacheDocId, pageNum);
+            const cached = await dbService.getOCR(cacheDocId, pageNum, options.engine || 'tesseract');
             if (cached && isCacheCompatible(cached)) {
               ocrResult = cached;
               usedCache = true;
@@ -334,7 +334,7 @@ export class SearchablePDFService {
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
             if (cacheDocId && dbService.isAvailable()) {
-              const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+              const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult, options.engine || 'tesseract');
               if (!saved) {
                 console.warn(`[SearchablePDF] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
               }

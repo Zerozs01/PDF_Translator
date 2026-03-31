@@ -10,6 +10,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:find-documents-by-filename',
   'db:save-ocr',
   'db:get-ocr',
+  'db:clear-ocr',
   'db:get-latest-ocr',
   // Document management
   'db:get-recent-documents',
@@ -92,10 +93,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:get-document', filepath),
     findDocumentsByFilename: (filename: string) =>
       ipcRenderer.invoke('db:find-documents-by-filename', filename),
-    saveOCR: (docId: number, pageNum: number, data: unknown) =>
-      ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data }),
-    getOCR: (docId: number, pageNum: number) =>
-      ipcRenderer.invoke('db:get-ocr', { docId, pageNum }),
+    saveOCR: (docId: number, pageNum: number, data: unknown, engine?: string) =>
+      ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data, engine }),
+    getOCR: (docId: number, pageNum: number, engine?: string) =>
+      ipcRenderer.invoke('db:get-ocr', { docId, pageNum, engine }),
+    clearOCR: (docId: number, pageNum: number, engine?: string) =>
+      ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }),
     getLatestOCR: (docId: number) =>
       ipcRenderer.invoke('db:get-latest-ocr', { docId }),
     

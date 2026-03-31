@@ -10,13 +10,17 @@
  */
 
 import React, { useCallback, useRef, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Play, 
   Download, 
   RefreshCw,
   Languages,
   Eye,
-  Cpu
+  Cpu,
+  Trash2,
+  X,
+  Trophy
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { OCREngine, OCRPageResult } from '../../types';
@@ -61,13 +65,172 @@ const normalizeWarmLanguageKey = (value: string): string => value
 const getEngineWarmSessionKey = (engine: OCREngine, language: string): string =>
   `${engine}:${normalizeWarmLanguageKey(language)}`;
 
+type BenchmarkRow = {
+  engine: OCREngine;
+  engineName: string;
+  status: 'idle' | 'running' | 'done' | 'error';
+  cacheHit: boolean;
+  runtimeMs: number | null;
+  confidence: number | null;
+  compositeScore: number | null;
+  wordCount: number;
+  lineCount: number;
+  suspiciousCount: number;
+  suspiciousRatio: number;
+  droppedCount: number;
+  message?: string;
+};
+
+const BENCHMARK_SHORT_KEEP = new Set(['i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it']);
+const BENCHMARK_DOMAIN_TOKENS = new Set(['io', 'com', 'net', 'org', 'gg', 'tv']);
+
+const normalizeBenchmarkToken = (token: string): string =>
+  String(token || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .trim();
+
+const toBenchmarkTokens = (result: OCRPageResult): string[] => {
+  if (Array.isArray(result.words) && result.words.length > 0) {
+    return result.words
+      .map((word) => String(word?.text || '').trim())
+      .filter(Boolean);
+  }
+  if (Array.isArray(result.lines) && result.lines.length > 0) {
+    return result.lines
+      .flatMap((line) => String(line?.text || '').split(/\s+/g))
+      .map((text) => text.trim())
+      .filter(Boolean);
+  }
+  if (typeof result.text === 'string') {
+    return result.text
+      .split(/\s+/g)
+      .map((text) => text.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const isCjkLikeLanguage = (language: string): boolean => {
+  const lang = String(language || '').toLowerCase();
+  return lang.includes('kor') || lang.includes('jpn') || lang.includes('chi') || lang.includes('tha');
+};
+
+const computeSuspiciousCount = (tokens: string[], language: string): number => {
+  const cjkLike = isCjkLikeLanguage(language);
+  const jamoRe = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
+  const syllableRe = /[\uAC00-\uD7AF]/;
+  const edgeJamoRe = /^[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]|[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]$/;
+  let suspicious = 0;
+
+  for (const token of tokens) {
+    const clean = token.trim();
+    if (!clean) continue;
+    const normalized = normalizeBenchmarkToken(clean);
+    const hasJamo = jamoRe.test(clean);
+    const hasSyllable = syllableRe.test(clean);
+
+    if (hasJamo && !hasSyllable) suspicious += 1;
+    if (/^[0-9]{1,3}$/.test(clean)) suspicious += 1;
+    if (cjkLike && /^[A-Za-z]{1,2}$/.test(clean)) suspicious += 1;
+    if (hasSyllable && edgeJamoRe.test(clean) && clean.length <= 4) suspicious += 1;
+    if (!cjkLike && normalized.length === 1 && !BENCHMARK_SHORT_KEEP.has(normalized)) suspicious += 1;
+  }
+
+  return suspicious;
+};
+
+const clampUnit = (value: number): number => {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+};
+
+const computeLexicalQuality = (tokens: string[], language: string): number => {
+  if (tokens.length === 0) return 0;
+  if (isCjkLikeLanguage(language)) {
+    return 1;
+  }
+
+  const vowelLike = /[aeiouy]/i;
+  let considered = 0;
+  let strong = 0;
+  let artifact = 0;
+
+  for (const rawToken of tokens) {
+    const normalized = normalizeBenchmarkToken(rawToken);
+    if (!normalized) continue;
+
+    considered += 1;
+
+    if (BENCHMARK_DOMAIN_TOKENS.has(normalized)) {
+      artifact += 1;
+      continue;
+    }
+
+    if (/^[0-9]{1,4}$/.test(normalized)) {
+      artifact += 1;
+      continue;
+    }
+
+    if (BENCHMARK_SHORT_KEEP.has(normalized)) {
+      strong += 1;
+      continue;
+    }
+
+    if (normalized.length >= 5 || vowelLike.test(normalized)) {
+      strong += 1;
+    }
+  }
+
+  if (considered === 0) return 0;
+
+  const strongRatio = strong / considered;
+  const artifactRatio = artifact / considered;
+  return clampUnit(strongRatio - (artifactRatio * 0.45));
+};
+
+const computeCompositeScore = (summary: {
+  confidence: number;
+  suspiciousRatio: number;
+  droppedCount: number;
+  wordCount: number;
+  lexicalQuality: number;
+}): number => {
+  const confidenceScore = clampUnit(summary.confidence / 100);
+  const cleanTokenScore = clampUnit(1 - summary.suspiciousRatio);
+  const dropSafetyScore = clampUnit(1 - (summary.droppedCount / Math.max(summary.wordCount, 1)));
+  const lexicalScore = clampUnit(summary.lexicalQuality);
+
+  const composite = (
+    (confidenceScore * 0.35)
+    + (cleanTokenScore * 0.35)
+    + (dropSafetyScore * 0.20)
+    + (lexicalScore * 0.10)
+  ) * 100;
+
+  return Number(composite.toFixed(2));
+};
+
+const readRuntimeMs = (result: OCRPageResult): number | null => {
+  const debug = result.debug as { runtimeMs?: number; timingsMs?: { ocr?: number } } | undefined;
+  if (typeof debug?.runtimeMs === 'number' && Number.isFinite(debug.runtimeMs)) {
+    return debug.runtimeMs;
+  }
+  if (typeof debug?.timingsMs?.ocr === 'number' && Number.isFinite(debug.timingsMs.ocr)) {
+    return debug.timingsMs.ocr;
+  }
+  return null;
+};
+
 export const OCRTextLayerPanel: React.FC = () => {
   const DIRECT_RENDER_TIMEOUT_MS = OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT;
   const EXTERNAL_OCR_RENDER_MAX_SIDE = 3800;
   const EXTERNAL_OCR_CJK_PANEL_MAX_SIDE = 11000;
   const EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS = 34_000_000;
 
-  const { file, fileUrl, fileData, fileType, currentPage, ensureDocumentId, translationMode } = useProjectStore();
+  const { file, fileUrl, fileData, fileType, currentPage, totalPages, ensureDocumentId, translationMode } = useProjectStore();
   const {
     options,
     setOptions,
@@ -76,6 +239,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     setProgress,
     setIsProcessing,
     setPageOCR,
+    removePageOCR,
     clearAllOCR,
     allPagesOCR,
     showDebugOverlay,
@@ -96,10 +260,35 @@ export const OCRTextLayerPanel: React.FC = () => {
   const ocrJobActiveRef = useRef(false);
   const suspendCacheReadsRef = useRef(false);
   const cacheLoadInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  // Tracks page+engine combos that were explicitly cleared by the user.
+  // Alias probing is blocked for these keys until the file/pipeline resets.
+  const clearedCacheKeysRef = useRef<Set<string>>(new Set());
   const [engineWarmStates, setEngineWarmStates] = useState<Record<string, EngineWarmState>>(() => ({ ...SESSION_ENGINE_WARM_STATES }));
   const pendingEngineSelectionRef = useRef<OCREngine | null>(null);
   const warmAnimationTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const externalProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const benchmarkAbortRef = useRef<AbortController | null>(null);
+  const [benchmarkOpen, setBenchmarkOpen] = useState(false);
+  const [benchmarkRunning, setBenchmarkRunning] = useState(false);
+  const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
+  const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
+  const [benchmarkRows, setBenchmarkRows] = useState<BenchmarkRow[]>(() =>
+    OCR_ENGINES.map((engine) => ({
+      engine: engine.id,
+      engineName: engine.name,
+      status: 'idle',
+      cacheHit: false,
+      runtimeMs: null,
+      confidence: null,
+      compositeScore: null,
+      wordCount: 0,
+      lineCount: 0,
+      suspiciousCount: 0,
+      suspiciousRatio: 0,
+      droppedCount: 0,
+      message: '',
+    }))
+  );
 
   const isAbortError = useCallback(
     (error: unknown): boolean => error instanceof Error && error.name === 'AbortError',
@@ -136,6 +325,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         clearInterval(externalProgressTimerRef.current);
         externalProgressTimerRef.current = null;
       }
+      benchmarkAbortRef.current?.abort();
+      benchmarkAbortRef.current = null;
     };
   }, []);
 
@@ -358,6 +549,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   // This keeps first-open latency lower on slower machines.
   useEffect(() => {
     if (!file) return undefined;
+    const canWarmAfterOpen = fileType !== 'pdf' || totalPages > 0;
+    if (!canWarmAfterOpen) return undefined;
     let disposed = false;
 
     const scheduleWarm = (engine: OCREngine, delayMs: number, useIdle: boolean) => {
@@ -379,30 +572,33 @@ export const OCRTextLayerPanel: React.FC = () => {
           void ensureEngineReady(engine, { selectOnReady: false });
         };
 
-        if (useIdle && typeof idleApi === 'function') {
-          idleApi(runWarm, { timeout: 3000 });
+        if (typeof idleApi === 'function') {
+          idleApi(runWarm, { timeout: useIdle ? 6500 : 3200 });
         } else {
-          runWarm();
+          const fallback = setTimeout(runWarm, useIdle ? 900 : 300);
+          if (disposed) {
+            clearTimeout(fallback);
+          }
         }
       }, delayMs);
       return timer;
     };
 
-    // Warm quickly after file open so first OCR click doesn't pay the cold-start cost.
+    // Warm after document is visibly ready. Keep open/render responsiveness first.
     const preferredEngine = options.engine === 'paddleocr' || options.engine === 'easyocr'
       ? options.engine
       : 'paddleocr';
     const secondaryEngine: OCREngine = preferredEngine === 'paddleocr' ? 'easyocr' : 'paddleocr';
 
-    const preferredTimer = scheduleWarm(preferredEngine, 160, false);
-    const secondaryTimer = scheduleWarm(secondaryEngine, 2200, true);
+    const preferredTimer = scheduleWarm(preferredEngine, 1900, true);
+    const secondaryTimer = scheduleWarm(secondaryEngine, 6200, true);
 
     return () => {
       disposed = true;
       clearTimeout(preferredTimer);
       clearTimeout(secondaryTimer);
     };
-  }, [ensureEngineReady, file, isProcessing, normalizedWarmLanguage, options.engine]);
+  }, [ensureEngineReady, file, fileType, isProcessing, normalizedWarmLanguage, options.engine, totalPages]);
 
   const recoverExternalEngine = useCallback((engine: OCREngine, reason?: string) => {
     if (engine === 'tesseract') return;
@@ -564,6 +760,16 @@ export const OCRTextLayerPanel: React.FC = () => {
     return true;
   }, [activePipelineProfile, options, normalizeLanguage]);
 
+  const isCacheCompatibleForEngine = useCallback((cached: OCRPageResult, engine: OCREngine): boolean => {
+    if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
+    if (cached.dpi !== options.dpi) return false;
+    if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
+    if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.pipelineProfile || 'panel') !== activePipelineProfile) return false;
+    if ((cached.ocrEngine || 'tesseract') !== engine) return false;
+    return true;
+  }, [activePipelineProfile, normalizeLanguage, options.dpi, options.language, options.pageSegMode]);
+
   // UI preview can show stale algorithm cache (marked as stale in badge) to avoid blank panel
   // while still requiring language match.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
@@ -584,12 +790,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       return false;
     }
 
+    const activeEngine = (useOCRTextLayerStore.getState().options.engine || 'tesseract') as OCREngine;
+
     const requestKey = [
       file?.name || 'no-file',
       pageNum,
       normalizeLanguage(options?.allowDuringSuspension ? useOCRTextLayerStore.getState().options.language : useOCRTextLayerStore.getState().options.language),
       useOCRTextLayerStore.getState().options.dpi,
-      useOCRTextLayerStore.getState().options.engine || 'tesseract',
+      activeEngine,
       useOCRTextLayerStore.getState().options.pageSegMode ?? 'default',
       activePipelineProfile,
       options?.allowDuringSuspension ? 'forced' : 'passive',
@@ -603,6 +811,18 @@ export const OCRTextLayerPanel: React.FC = () => {
     const loadPromise = (async (): Promise<boolean> => {
       const activeFile = file;
       const state = useOCRTextLayerStore.getState();
+
+      // If the user explicitly cleared cache for this page+engine, block ALL
+      // DB reads (primary + alias) so the cache can't resurrect from any docId.
+      // The user must re-run OCR to populate this slot again.
+      const clearedKey = `${pageNum}:${activeEngine}`;
+      if (clearedCacheKeysRef.current.has(clearedKey)) {
+        console.log(
+          `[OCRPanel] All cache reads blocked for page ${pageNum} engine=${activeEngine} (recently cleared)`
+        );
+        return false;
+      }
+
       const memoryCached = state.allPagesOCR.get(pageNum);
       if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
         if (useProjectStore.getState().file !== activeFile) return false;
@@ -620,7 +840,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       if (!cacheDocId) return false;
       console.log(`[OCRPanel] Checking DB cache for page ${pageNum} (docId=${cacheDocId})`);
 
-      const cached = await dbService.getOCR(cacheDocId, pageNum);
+      const cached = await dbService.getOCR(cacheDocId, pageNum, activeEngine);
       if (cached && isDisplayCacheCompatible(cached)) {
         if (useProjectStore.getState().file !== activeFile) return false;
         cached.pageNumber = pageNum;
@@ -641,7 +861,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           console.log(
             `[OCRPanel] Cache miss on docId=${cacheDocId}, probing alias docId=${candidate.id} for page ${pageNum}`
           );
-          const aliasCached = await dbService.getOCR(candidate.id, pageNum);
+          const aliasCached = await dbService.getOCR(candidate.id, pageNum, activeEngine);
           if (!aliasCached || !isDisplayCacheCompatible(aliasCached)) continue;
           if (useProjectStore.getState().file !== activeFile) return false;
 
@@ -754,6 +974,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   useEffect(() => {
     autoSyncedDocRef.current = null;
     persistedCacheRef.current.clear();
+    clearedCacheKeysRef.current.clear();
     clearAllOCR();
   }, [file, activePipelineProfile, clearAllOCR]);
 
@@ -772,11 +993,18 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       for (const [pageNum, result] of allPagesOCR.entries()) {
         if (canceled) return;
-        const fp = `${result.algorithmVersion}|${result.dpi}|${result.pipelineProfile || 'panel'}|${result.ocrEngine || 'tesseract'}|${normalizeLanguage(result.language)}|${result.words.length}|${result.text.length}`;
-        const key = `${docId}:${pageNum}`;
+        const activeEngine = result.ocrEngine || 'tesseract';
+
+        // Don't re-persist data for page+engine combos the user explicitly cleared.
+        // Otherwise self-healing would immediately undo the clear.
+        const clearedKey = `${pageNum}:${activeEngine}`;
+        if (clearedCacheKeysRef.current.has(clearedKey)) continue;
+
+        const fp = `${result.algorithmVersion}|${result.dpi}|${result.pipelineProfile || 'panel'}|${activeEngine}|${normalizeLanguage(result.language)}|${result.words.length}|${result.text.length}`;
+        const key = `${docId}:${pageNum}:${activeEngine}`;
         if (persistedCacheRef.current.get(key) === fp) continue;
 
-        const saved = await dbService.saveOCR(docId, pageNum, result);
+        const saved = await dbService.saveOCR(docId, pageNum, result, activeEngine);
         if (saved) {
           persistedCacheRef.current.set(key, fp);
         }
@@ -1211,7 +1439,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     const cacheDocId = await ensureDocumentId();
     if (cacheDocId) {
-      const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult);
+      const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult, activeEngine);
       if (!saved) {
         console.warn(`[OCRPanel] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
       }
@@ -1330,7 +1558,8 @@ export const OCRTextLayerPanel: React.FC = () => {
             if (activeFileNow !== activeFile) return;
             const docId = await ensureDocumentId();
             if (!docId) return;
-            const saved = await dbService.saveOCR(docId, pageNum, result);
+            const resultEngine = (result.ocrEngine || activeEngine) as OCREngine;
+            const saved = await dbService.saveOCR(docId, pageNum, result, resultEngine);
             if (!saved) {
               console.warn(`[OCRPanel] Background cache persist failed for page ${pageNum} (docId=${docId})`);
             }
@@ -1442,6 +1671,267 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [file, allPagesOCR, currentPage]);
 
+  const updateBenchmarkRow = useCallback((engine: OCREngine, patch: Partial<BenchmarkRow>) => {
+    setBenchmarkRows((current) => current.map((row) => {
+      if (row.engine !== engine) return row;
+      return { ...row, ...patch };
+    }));
+  }, []);
+
+  const resetBenchmarkRows = useCallback(() => {
+    setBenchmarkRows(
+      OCR_ENGINES.map((engine) => ({
+        engine: engine.id,
+        engineName: engine.name,
+        status: 'idle',
+        cacheHit: false,
+        runtimeMs: null,
+        confidence: null,
+        compositeScore: null,
+        wordCount: 0,
+        lineCount: 0,
+        suspiciousCount: 0,
+        suspiciousRatio: 0,
+        droppedCount: 0,
+        message: '',
+      }))
+    );
+  }, []);
+
+  const summarizeBenchmarkResult = useCallback((result: OCRPageResult) => {
+    const tokens = toBenchmarkTokens(result);
+    const suspiciousCount = computeSuspiciousCount(tokens, result.language || options.language);
+    const droppedWords = (result.debug as { droppedWords?: unknown[] } | undefined)?.droppedWords;
+    const runtimeMs = readRuntimeMs(result);
+    const lineCount = Array.isArray(result.lines) ? result.lines.length : 0;
+    const confidence = Number(result.confidence.toFixed(2));
+    const wordCount = Array.isArray(result.words) ? result.words.length : tokens.length;
+    const suspiciousRatio = tokens.length > 0 ? suspiciousCount / tokens.length : 0;
+    const droppedCount = Array.isArray(droppedWords) ? droppedWords.length : 0;
+    const lexicalQuality = computeLexicalQuality(tokens, result.language || options.language);
+    const compositeScore = computeCompositeScore({
+      confidence,
+      suspiciousRatio,
+      droppedCount,
+      wordCount,
+      lexicalQuality,
+    });
+
+    return {
+      runtimeMs,
+      confidence,
+      compositeScore,
+      wordCount,
+      lineCount,
+      suspiciousCount,
+      suspiciousRatio,
+      droppedCount,
+    };
+  }, [options.language]);
+
+  const handleBenchmarkCurrentPage = useCallback(async () => {
+    if (!file || !fileUrl) return;
+    if (isProcessing || benchmarkRunning || ocrJobActiveRef.current) return;
+
+    setBenchmarkOpen(true);
+    setBenchmarkTargetPage(currentPage);
+    resetBenchmarkRows();
+    setBenchmarkRunning(true);
+
+    const controller = new AbortController();
+    benchmarkAbortRef.current = controller;
+    ocrJobActiveRef.current = true;
+    const cacheDocId = await ensureDocumentId().catch(() => null);
+
+    try {
+      for (const engine of OCR_ENGINES) {
+        if (controller.signal.aborted) break;
+        updateBenchmarkRow(engine.id, {
+          status: 'running',
+          cacheHit: false,
+          message: 'Running OCR...',
+        });
+
+        try {
+          if (cacheDocId) {
+            const cached = await dbService.getOCR(cacheDocId, currentPage, engine.id);
+            if (cached && isCacheCompatibleForEngine(cached, engine.id)) {
+              const summary = summarizeBenchmarkResult(cached);
+              updateBenchmarkRow(engine.id, {
+                status: 'done',
+                cacheHit: true,
+                ...summary,
+                message: summary.runtimeMs != null
+                  ? `Cache hit ${(summary.runtimeMs / 1000).toFixed(summary.runtimeMs >= 10000 ? 1 : 2)}s`
+                  : 'Cache hit',
+              });
+
+              if ((options.engine || 'tesseract') === engine.id) {
+                cached.pageNumber = currentPage;
+                setPageOCR(currentPage, cached);
+              }
+              continue;
+            }
+          }
+
+          if (engine.id !== 'tesseract') {
+            const ready = await ensureEngineReady(engine.id, { selectOnReady: false });
+            if (!ready) {
+              throw new Error(`${engine.name} is not ready`);
+            }
+          }
+
+          const renderConstraints = resolveRenderConstraints(engine.id);
+          const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(currentPage, options.dpi, {
+            allowNavigationFallback: true,
+            ...renderConstraints,
+          });
+
+          const imageBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((blob) => {
+              if (blob) resolve(blob);
+              else reject(new Error('Failed to convert benchmark canvas to Blob'));
+            }, 'image/png');
+          });
+
+          const result = await visionService.ocrForTextLayer(
+            imageBlob,
+            imageWidth,
+            imageHeight,
+            options.language,
+            options.dpi,
+            options.pageSegMode,
+            controller.signal,
+            showDebugOverlay,
+            activePipelineProfile,
+            'best',
+            engine.id
+          );
+
+          result.language = normalizeLanguage(options.language);
+          result.pageNumber = currentPage;
+          result.pipelineProfile = activePipelineProfile;
+          result.ocrEngine = engine.id;
+          result.ocrQualityProfile = 'best';
+
+          const summary = summarizeBenchmarkResult(result);
+
+          updateBenchmarkRow(engine.id, {
+            status: 'done',
+            cacheHit: false,
+            ...summary,
+            message: summary.runtimeMs != null ? `Done in ${(summary.runtimeMs / 1000).toFixed(summary.runtimeMs >= 10000 ? 1 : 2)}s` : 'Done',
+          });
+
+          if (cacheDocId) {
+            const saved = await dbService.saveOCR(cacheDocId, currentPage, result, engine.id);
+            if (!saved) {
+              console.warn(`[OCRPanel] Failed to persist benchmark cache for page ${currentPage} (docId=${cacheDocId}, engine=${engine.id})`);
+            }
+          }
+
+          if ((options.engine || 'tesseract') === engine.id) {
+            setPageOCR(currentPage, result);
+          }
+        } catch (error) {
+          const aborted = controller.signal.aborted || isAbortError(error);
+          updateBenchmarkRow(engine.id, {
+            status: 'error',
+            cacheHit: false,
+            message: aborted
+              ? 'Canceled'
+              : (error instanceof Error ? error.message : 'Benchmark failed'),
+          });
+          if (aborted) {
+            break;
+          }
+        }
+      }
+    } finally {
+      benchmarkAbortRef.current = null;
+      setBenchmarkRunning(false);
+      ocrJobActiveRef.current = false;
+      visionService.setProgressCallback(null);
+      stopExternalProgress();
+    }
+  }, [activePipelineProfile, benchmarkRunning, currentPage, ensureDocumentId, ensureEngineReady, file, fileUrl, isAbortError, isCacheCompatibleForEngine, isProcessing, normalizeLanguage, options.dpi, options.engine, options.language, options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints, setPageOCR, showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
+
+  const handleCancelBenchmark = useCallback(() => {
+    benchmarkAbortRef.current?.abort();
+  }, []);
+
+  const handleClearCurrentModelCache = useCallback(async () => {
+    if (!file) return;
+    if (isProcessing || benchmarkRunning || ocrJobActiveRef.current) return;
+
+    const docId = await ensureDocumentId().catch(() => null);
+    if (!docId) {
+      setCacheActionMessage('Cache clear failed: document is not ready');
+      return;
+    }
+
+    const engine = (options.engine || 'tesseract') as OCREngine;
+
+    // Clear cache for the current docId
+    let anyCleared = await dbService.clearOCR(docId, currentPage, engine);
+
+    // Also clear ALL alias docIds sharing the same filename so the cache
+    // can't resurrect via alias fallback probing.
+    if (file.name) {
+      try {
+        const candidates = await dbService.findDocumentsByFilename(file.name);
+        for (const candidate of candidates) {
+          if (candidate.id === docId) continue;
+          const aliasCleared = await dbService.clearOCR(candidate.id, currentPage, engine);
+          if (aliasCleared) {
+            console.log(
+              `[OCRPanel] Also cleared alias cache: docId=${candidate.id}, page=${currentPage}, engine=${engine}`
+            );
+            anyCleared = true;
+          }
+          persistedCacheRef.current.delete(`${candidate.id}:${currentPage}:${engine}`);
+        }
+      } catch (error) {
+        console.warn('[OCRPanel] Failed to clear alias caches:', error);
+      }
+    }
+
+    if (!anyCleared) {
+      setCacheActionMessage(`No cache found for page ${currentPage} (${engine})`);
+      return;
+    }
+
+    // Block alias probing for this page+engine until the file/pipeline resets
+    clearedCacheKeysRef.current.add(`${currentPage}:${engine}`);
+
+    const existing = allPagesOCR.get(currentPage);
+    if (existing && (existing.ocrEngine || 'tesseract') === engine) {
+      removePageOCR(currentPage);
+    }
+    persistedCacheRef.current.delete(`${docId}:${currentPage}:${engine}`);
+    setCacheActionMessage(`Cleared cache page ${currentPage} (${engine})`);
+  }, [allPagesOCR, benchmarkRunning, currentPage, ensureDocumentId, file, isProcessing, options.engine, removePageOCR]);
+
+  useEffect(() => {
+    if (!cacheActionMessage) return undefined;
+    const timer = setTimeout(() => setCacheActionMessage(''), 2600);
+    return () => clearTimeout(timer);
+  }, [cacheActionMessage]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (benchmarkRunning) {
+        setBenchmarkOpen(true);
+        return;
+      }
+      void handleBenchmarkCurrentPage();
+    };
+    window.addEventListener('ocr:benchmark-current-page', handler);
+    return () => {
+      window.removeEventListener('ocr:benchmark-current-page', handler);
+    };
+  }, [benchmarkRunning, handleBenchmarkCurrentPage]);
+
   // Total OCR stats
   const totalOCRPages = allPagesOCR.size;
   const totalWords = Array.from(allPagesOCR.values()).reduce((sum, r) => sum + r.words.length, 0);
@@ -1490,6 +1980,18 @@ export const OCRTextLayerPanel: React.FC = () => {
     ? `${(currentRuntimeMs / 1000).toFixed(currentRuntimeMs >= 10000 ? 1 : 2)}s`
     : '-';
   const currentEngine = OCR_ENGINES.find(engine => engine.id === (currentPageOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
+  const benchmarkDoneRows = benchmarkRows.filter((row) => row.status === 'done');
+  const benchmarkFastest = benchmarkDoneRows
+    .filter((row) => typeof row.runtimeMs === 'number')
+    .sort((a, b) => (a.runtimeMs || Number.MAX_SAFE_INTEGER) - (b.runtimeMs || Number.MAX_SAFE_INTEGER))[0];
+  const benchmarkMostAccurate = benchmarkDoneRows
+    .filter((row) => typeof row.confidence === 'number')
+    .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
+  const benchmarkBestOverall = benchmarkDoneRows
+    .filter((row) => typeof row.compositeScore === 'number')
+    .sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0))[0];
+  const benchmarkLeastGhost = benchmarkDoneRows
+    .sort((a, b) => a.suspiciousRatio - b.suspiciousRatio)[0];
 
   return (
     <div className="space-y-3 p-4">
@@ -1688,15 +2190,33 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
 
         {fileType === 'pdf' && !isProcessing && (
-          <button
-            onClick={() => handleStartOCR(undefined, true)}
-            disabled={!file}
-            className="w-full bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(255,135,5,0.2)]"
-            title="Force re-run OCR for all pages (ignore cache)"
-          >
-            <RefreshCw size={13} />
-            Re-OCR All (Ignore Cache)
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleStartOCR(undefined, true)}
+              disabled={!file}
+              className="flex-[1.2] bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(255,135,5,0.2)]"
+              title="Force re-run OCR for all pages (ignore cache)"
+            >
+              <RefreshCw size={13} />
+              Re-OCR All (Ignore Cache)
+            </button>
+
+            <button
+              onClick={() => void handleClearCurrentModelCache()}
+              disabled={!file}
+              className="flex-1 border border-rose-400/45 bg-rose-500/12 text-rose-100 py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              title="Clear cache only for current page and selected OCR model"
+            >
+              <Trash2 size={12} />
+              Clear Cache P{currentPage}
+            </button>
+          </div>
+        )}
+
+        {cacheActionMessage && (
+          <div className="rounded-md border border-cyan-500/35 bg-cyan-500/12 px-2 py-1 text-[10px] text-cyan-100">
+            {cacheActionMessage}
+          </div>
         )}
 
         {isProcessing && (
@@ -1744,7 +2264,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             </span>
           </div>
           <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
-            model {currentEngine.name} • พบ {currentPageOCR.words.length} คำ • accuracy {currentPageOCR.confidence.toFixed(0)}%
+            model {currentEngine.name} • พบ {currentPageOCR.words.length} คำ • raw conf {currentPageOCR.confidence.toFixed(0)}%
           </div>
           {showDebugOverlay && currentDroppedCount > 0 && (
             <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">
@@ -1795,6 +2315,158 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* Hidden canvas for rendering */}
       <canvas ref={canvasRef} className="hidden" />
+
+      {benchmarkOpen && createPortal(
+        <div className="fixed inset-0 z-190 flex items-center justify-center bg-black/72 backdrop-blur-md px-4 py-6">
+          <div className="flex max-h-[90vh] w-[min(96vw,1240px)] flex-col rounded-2xl border border-white/15 bg-slate-950/95 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-100">OCR Benchmark Summary</h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  page {benchmarkTargetPage ?? currentPage} • pipeline {activePipelineProfile} • lang {options.language} • dpi {options.dpi}
+                </p>
+                <p className="mt-1 text-[11px] text-amber-200/90">
+                  confidence เป็น raw score ของแต่ละ engine (ยังไม่ calibrated ข้าม model)
+                </p>
+                <p className="mt-1 text-[11px] text-cyan-200/90">
+                  composite score = 35% raw conf + 35% clean token + 20% drop-safe + 10% lexical quality
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!benchmarkRunning) setBenchmarkOpen(false);
+                }}
+                disabled={benchmarkRunning}
+                className="rounded-lg border border-white/10 p-1.5 text-slate-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                title={benchmarkRunning ? 'Wait for benchmark to finish or cancel first' : 'Close benchmark summary'}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="mt-4 flex-1 overflow-auto rounded-xl border border-white/10">
+              <table className="min-w-full table-fixed text-xs text-slate-200">
+                <thead className="bg-slate-900/85 text-slate-300">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Engine</th>
+                    <th className="px-3 py-2 text-right">Runtime</th>
+                    <th className="px-3 py-2 text-right">Raw Conf</th>
+                    <th className="px-3 py-2 text-right">Composite</th>
+                    <th className="px-3 py-2 text-right">Words</th>
+                    <th className="px-3 py-2 text-right">Lines</th>
+                    <th className="px-3 py-2 text-right">Ghost Ratio</th>
+                    <th className="px-3 py-2 text-right">Dropped</th>
+                    <th className="px-3 py-2 text-left">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {benchmarkRows.map((row) => (
+                    <tr key={row.engine} className="border-t border-white/10 bg-slate-900/35">
+                      <td className="px-3 py-2 font-semibold text-slate-100">{row.engineName}</td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.runtimeMs != null ? `${(row.runtimeMs / 1000).toFixed(row.runtimeMs >= 10000 ? 1 : 2)}s` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.confidence != null ? `${row.confidence.toFixed(0)}%` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.compositeScore != null ? `${row.compositeScore.toFixed(1)}` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">{row.wordCount || '-'}</td>
+                      <td className="px-3 py-2 text-right text-slate-200">{row.lineCount || '-'}</td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.wordCount > 0 ? `${(row.suspiciousRatio * 100).toFixed(1)}%` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">{row.droppedCount || '-'}</td>
+                      <td className="px-3 py-2 text-left">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          row.status === 'done'
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : row.status === 'running'
+                              ? 'bg-sky-500/20 text-sky-300'
+                              : row.status === 'error'
+                                ? 'bg-rose-500/20 text-rose-300'
+                                : 'bg-slate-500/20 text-slate-300'
+                        }`}>
+                          {row.message || row.status}
+                        </span>
+                        {row.cacheHit && (
+                          <span className="ml-1.5 inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">
+                            cache
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <Trophy size={12} />
+                  Fastest
+                </div>
+                <div className="mt-1">{benchmarkFastest ? `${benchmarkFastest.engineName} (${((benchmarkFastest.runtimeMs || 0) / 1000).toFixed(2)}s)` : '-'}</div>
+              </div>
+              <div className="rounded-lg border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <Trophy size={12} />
+                  Best Overall (Composite)
+                </div>
+                <div className="mt-1">{benchmarkBestOverall ? `${benchmarkBestOverall.engineName} (${(benchmarkBestOverall.compositeScore || 0).toFixed(1)})` : '-'}</div>
+              </div>
+              <div className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <Trophy size={12} />
+                  Highest Raw Conf
+                </div>
+                <div className="mt-1">{benchmarkMostAccurate ? `${benchmarkMostAccurate.engineName} (${(benchmarkMostAccurate.confidence || 0).toFixed(0)}%)` : '-'}</div>
+              </div>
+              <div className="rounded-lg border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <Trophy size={12} />
+                  Lowest Ghost Ratio
+                </div>
+                <div className="mt-1">{benchmarkLeastGhost ? `${benchmarkLeastGhost.engineName} (${(benchmarkLeastGhost.suspiciousRatio * 100).toFixed(1)}%)` : '-'}</div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              {benchmarkRunning ? (
+                <button
+                  type="button"
+                  onClick={handleCancelBenchmark}
+                  className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
+                >
+                  Stop Benchmark
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setBenchmarkOpen(false)}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBenchmarkCurrentPage()}
+                    disabled={isProcessing || benchmarkRunning || !file}
+                    className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Re-run
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

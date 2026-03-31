@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import type { OCRPageResult } from '../../types';
+import type { OCREngine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile } from '../../types';
 import { visionService } from '../../services/vision/VisionService';
 
 type HarnessStatus = 'idle' | 'loading' | 'running' | 'done' | 'error';
@@ -31,6 +31,31 @@ interface HarnessWindow extends Window {
   __OCR_REGRESSION_RESULT__?: unknown;
 }
 
+const HARNESS_ENGINES: readonly OCREngine[] = ['tesseract', 'paddleocr', 'easyocr'];
+const HARNESS_PIPELINES: readonly OCRPipelineProfile[] = ['panel', 'export'];
+const HARNESS_QUALITY: readonly OCRQualityProfile[] = ['fast', 'balanced', 'best'];
+
+function normalizeHarnessEngine(value: string | null): OCREngine {
+  const normalized = String(value || 'tesseract').toLowerCase();
+  return HARNESS_ENGINES.includes(normalized as OCREngine)
+    ? (normalized as OCREngine)
+    : 'tesseract';
+}
+
+function normalizeHarnessPipeline(value: string | null): OCRPipelineProfile {
+  const normalized = String(value || 'panel').toLowerCase();
+  return HARNESS_PIPELINES.includes(normalized as OCRPipelineProfile)
+    ? (normalized as OCRPipelineProfile)
+    : 'panel';
+}
+
+function normalizeHarnessQuality(value: string | null): OCRQualityProfile {
+  const normalized = String(value || 'best').toLowerCase();
+  return HARNESS_QUALITY.includes(normalized as OCRQualityProfile)
+    ? (normalized as OCRQualityProfile)
+    : 'best';
+}
+
 async function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -56,6 +81,9 @@ export const OCRRegressionHarness: React.FC = () => {
   const [result, setResult] = useState<OCRPageResult | null>(null);
   const [manifest, setManifest] = useState<OCRFixtureManifest | null>(null);
   const [expectation, setExpectation] = useState<OCRFixtureExpectation | null>(null);
+  const [engine, setEngine] = useState<OCREngine>('tesseract');
+  const [pipelineProfile, setPipelineProfile] = useState<OCRPipelineProfile>('panel');
+  const [qualityProfile, setQualityProfile] = useState<OCRQualityProfile>('best');
 
   useEffect(() => {
     const target = window as HarnessWindow;
@@ -66,9 +94,21 @@ export const OCRRegressionHarness: React.FC = () => {
     const run = async () => {
       const params = new URLSearchParams(window.location.search);
       const requestedFixture = params.get('fixture') || '';
+      const selectedEngine = normalizeHarnessEngine(params.get('engine'));
+      const selectedPipeline = normalizeHarnessPipeline(params.get('pipeline'));
+      const selectedQuality = normalizeHarnessQuality(params.get('quality'));
+      setEngine(selectedEngine);
+      setPipelineProfile(selectedPipeline);
+      setQualityProfile(selectedQuality);
       setFixtureId(requestedFixture);
       setStatus('loading');
-      setHarnessResult({ status: 'loading', fixture: requestedFixture });
+      setHarnessResult({
+        status: 'loading',
+        fixture: requestedFixture,
+        engine: selectedEngine,
+        pipelineProfile: selectedPipeline,
+        qualityProfile: selectedQuality,
+      });
 
       try {
         await visionService.initialize();
@@ -94,7 +134,14 @@ export const OCRRegressionHarness: React.FC = () => {
         }
 
         setStatus('running');
-        setHarnessResult({ status: 'running', fixture: fixture.id, page: fixture.page });
+        setHarnessResult({
+          status: 'running',
+          fixture: fixture.id,
+          page: fixture.page,
+          engine: selectedEngine,
+          pipelineProfile: selectedPipeline,
+          qualityProfile: selectedQuality,
+        });
 
         const imageBlob = await imageResponse.blob();
         const imageUrl = await blobToDataUrl(imageBlob);
@@ -108,20 +155,24 @@ export const OCRRegressionHarness: React.FC = () => {
           undefined,
           undefined,
           true,
-          'panel',
-          'best',
-          'tesseract'
+          selectedPipeline,
+          selectedQuality,
+          selectedEngine
         );
 
         ocrResult.pageNumber = fixture.page;
-        ocrResult.pipelineProfile = 'panel';
-        ocrResult.ocrEngine = 'tesseract';
+        ocrResult.pipelineProfile = selectedPipeline;
+        ocrResult.ocrEngine = selectedEngine;
+        ocrResult.ocrQualityProfile = selectedQuality;
         setResult(ocrResult);
         setStatus('done');
         setHarnessResult({
           status: 'done',
           fixture: fixture.id,
           page: fixture.page,
+          engine: selectedEngine,
+          pipelineProfile: selectedPipeline,
+          qualityProfile: selectedQuality,
           expectation: expectationEntry,
           ocr: ocrResult,
         });
@@ -132,6 +183,9 @@ export const OCRRegressionHarness: React.FC = () => {
         setHarnessResult({
           status: 'error',
           fixture: requestedFixture,
+          engine: selectedEngine,
+          pipelineProfile: selectedPipeline,
+          qualityProfile: selectedQuality,
           error: message,
         });
       }
@@ -150,6 +204,9 @@ export const OCRRegressionHarness: React.FC = () => {
           </p>
           <p className="text-sm text-slate-400">
             status: <span className="text-slate-200">{status}</span>
+          </p>
+          <p className="text-sm text-slate-400">
+            engine: <span className="text-slate-200">{engine}</span> / pipeline: <span className="text-slate-200">{pipelineProfile}</span> / quality: <span className="text-slate-200">{qualityProfile}</span>
           </p>
           {error && <p className="text-sm text-red-300 mt-2">{error}</p>}
         </div>

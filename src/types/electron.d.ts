@@ -117,8 +117,9 @@ export interface ElectronAPI {
     saveDocument: (filepath: string, filename: string, totalPages: number) => Promise<number>;
     getDocument: (filepath: string) => Promise<{ id: number; total_pages: number } | null>;
     findDocumentsByFilename: (filename: string) => Promise<DBDocumentCacheCandidate[]>;
-    saveOCR: (docId: number, pageNum: number, data: OCRPageResult) => Promise<boolean>;
-    getOCR: (docId: number, pageNum: number) => Promise<OCRPageResult | null>;
+    saveOCR: (docId: number, pageNum: number, data: OCRPageResult, engine?: OCREngine) => Promise<boolean>;
+    getOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<OCRPageResult | null>;
+    clearOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
     getLatestOCR: (docId: number) => Promise<{
       page_number: number;
       updated_at: number;

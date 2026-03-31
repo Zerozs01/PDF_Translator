@@ -10,6 +10,9 @@ function parseArgs(argv) {
     manifest: 'public/fixtures/ocr/manga/expectations.json',
     out: '.tmp-ocr-current.json',
     skipMissing: false,
+    engine: 'tesseract',
+    pipeline: 'panel',
+    quality: 'best',
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -18,6 +21,9 @@ function parseArgs(argv) {
     if (arg === '--manifest') args.manifest = argv[i + 1] || args.manifest;
     if (arg === '--out') args.out = argv[i + 1] || args.out;
     if (arg === '--skip-missing') args.skipMissing = true;
+    if (arg === '--engine') args.engine = argv[i + 1] || args.engine;
+    if (arg === '--pipeline') args.pipeline = argv[i + 1] || args.pipeline;
+    if (arg === '--quality') args.quality = argv[i + 1] || args.quality;
   }
 
   return args;
@@ -83,6 +89,20 @@ function logMissingFixtureWarning(result) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const engine = String(args.engine || 'tesseract').toLowerCase();
+  const pipeline = String(args.pipeline || 'panel').toLowerCase();
+  const quality = String(args.quality || 'best').toLowerCase();
+
+  if (!['tesseract', 'paddleocr', 'easyocr'].includes(engine)) {
+    throw new Error(`Invalid --engine "${args.engine}". Use tesseract, paddleocr, or easyocr.`);
+  }
+  if (!['panel', 'export'].includes(pipeline)) {
+    throw new Error(`Invalid --pipeline "${args.pipeline}". Use panel or export.`);
+  }
+  if (!['fast', 'balanced', 'best'].includes(quality)) {
+    throw new Error(`Invalid --quality "${args.quality}". Use fast, balanced, or best.`);
+  }
+
   const manifest = loadManifest(args.manifest);
   const fixtureResolution = resolveFixtureImages(manifest, args.manifest);
 
@@ -105,7 +125,7 @@ async function main() {
 
   try {
     for (const fixture of fixtures) {
-      const url = `${args.baseUrl}/?ocr_harness=1&fixture=${encodeURIComponent(fixture.id)}`;
+      const url = `${args.baseUrl}/?ocr_harness=1&fixture=${encodeURIComponent(fixture.id)}&engine=${encodeURIComponent(engine)}&pipeline=${encodeURIComponent(pipeline)}&quality=${encodeURIComponent(quality)}`;
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.waitForFunction(
         () => {
@@ -147,6 +167,9 @@ async function main() {
     generatedAt: new Date().toISOString(),
     baseUrl: args.baseUrl,
     manifest: args.manifest,
+    engine,
+    pipeline,
+    quality,
     skippedFixtures: fixtureResolution.missing,
     pages,
     errors,

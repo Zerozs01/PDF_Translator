@@ -103,6 +103,9 @@ app.whenReady().then(() => {
   const isValidNumber = (value: unknown): value is number => 
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
+  const isValidEngine = (value: unknown): value is string =>
+    typeof value === 'string' && ['tesseract', 'paddleocr', 'easyocr'].includes(value);
+
   const sanitizePath = (filepath: string): string => {
     // Remove dangerous path traversal patterns
     return filepath.replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
@@ -157,13 +160,18 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('db:save-ocr', async (_, { docId, pageNum, data }) => {
+  ipcMain.handle('db:save-ocr', async (_, { docId, pageNum, data, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');
     }
 
     try {
-      OCRCacheDAO.save(docId, pageNum, data);
+      const selectedEngine = isValidEngine(engine)
+        ? engine
+        : isValidEngine((data as { ocrEngine?: unknown } | null)?.ocrEngine)
+          ? (data as { ocrEngine: string }).ocrEngine
+          : 'tesseract';
+      OCRCacheDAO.save(docId, pageNum, data, selectedEngine);
       return true;
     } catch (error) {
       console.error('db:save-ocr error:', error);
@@ -171,16 +179,31 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('db:get-ocr', async (_, { docId, pageNum }) => {
+  ipcMain.handle('db:get-ocr', async (_, { docId, pageNum, engine }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');
     }
 
     try {
-      return OCRCacheDAO.get(docId, pageNum);
+      const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
+      return OCRCacheDAO.get(docId, pageNum, selectedEngine);
     } catch (error) {
       console.error('db:get-ocr error:', error);
       return null;
+    }
+  });
+
+  ipcMain.handle('db:clear-ocr', async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid input: docId and pageNum must be positive numbers');
+    }
+
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
+      return OCRCacheDAO.clear(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error('db:clear-ocr error:', error);
+      return false;
     }
   });
 

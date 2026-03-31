@@ -1,4 +1,4 @@
-import { OCRPageResult } from '../types';
+import { OCREngine, OCRPageResult } from '../types';
 import type { DBDocumentCacheCandidate } from '../types/electron.d';
 import '../types/electron.d'; // Import type declarations
 
@@ -190,27 +190,28 @@ export const dbService = {
   /**
    * Save OCR result for a specific page
    */
-  async saveOCR(docId: number, pageNum: number, data: OCRPageResult): Promise<boolean> {
+  async saveOCR(docId: number, pageNum: number, data: OCRPageResult, engine?: OCREngine): Promise<boolean> {
     try {
       if (!isDbAvailable()) {
         console.warn('[DB] saveOCR skipped: DB not available');
         return false;
       }
+      const selectedEngine = engine || data.ocrEngine || 'tesseract';
       if (window.electronAPI?.db) {
-        const ok = await window.electronAPI.db.saveOCR(docId, pageNum, data);
+        const ok = await window.electronAPI.db.saveOCR(docId, pageNum, data, selectedEngine);
         if (!ok) {
-          console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId})`);
+          console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
           return false;
         }
-        console.log(`[DB] Saved OCR for page ${pageNum} (docId=${docId})`);
+        console.log(`[DB] Saved OCR for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
         return true;
       }
-      const ok = await window.ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data }) as boolean;
+      const ok = await window.ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data, engine: selectedEngine }) as boolean;
       if (!ok) {
-        console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId})`);
+        console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
         return false;
       }
-      console.log(`[DB] Saved OCR for page ${pageNum} (docId=${docId})`);
+      console.log(`[DB] Saved OCR for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
       return true;
     } catch (error) {
       console.error('Failed to save OCR:', error);
@@ -221,31 +222,55 @@ export const dbService = {
   /**
    * Retrieve cached OCR result (returns null if not found)
    */
-  async getOCR(docId: number, pageNum: number): Promise<OCRPageResult | null> {
+  async getOCR(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<OCRPageResult | null> {
     try {
       if (!isDbAvailable()) {
         console.warn('[DB] getOCR skipped: DB not available');
         return null;
       }
       if (window.electronAPI?.db) {
-        const data = await window.electronAPI.db.getOCR(docId, pageNum);
+        const data = await window.electronAPI.db.getOCR(docId, pageNum, engine);
         if (data) {
-          console.log(`[DB] cache hit for page ${pageNum}`);
+          console.log(`[DB] cache hit for page ${pageNum} (engine=${engine})`);
           return data;
         }
-        console.log(`[DB] cache miss for page ${pageNum} (docId=${docId})`);
+        console.log(`[DB] cache miss for page ${pageNum} (docId=${docId}, engine=${engine})`);
         return null;
       }
-      const data = await window.ipcRenderer.invoke('db:get-ocr', { docId, pageNum }) as OCRPageResult | null;
+      const data = await window.ipcRenderer.invoke('db:get-ocr', { docId, pageNum, engine }) as OCRPageResult | null;
       if (data) {
-        console.log(`[DB] cache hit for page ${pageNum}`);
+        console.log(`[DB] cache hit for page ${pageNum} (engine=${engine})`);
         return data;
       }
-      console.log(`[DB] cache miss for page ${pageNum} (docId=${docId})`);
+      console.log(`[DB] cache miss for page ${pageNum} (docId=${docId}, engine=${engine})`);
       return null;
     } catch (error) {
       console.error('Failed to get OCR:', error);
       return null;
+    }
+  },
+
+  async clearOCR(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] clearOCR skipped: DB not available');
+        return false;
+      }
+      if (window.electronAPI?.db?.clearOCR) {
+        const ok = await window.electronAPI.db.clearOCR(docId, pageNum, engine);
+        if (ok) {
+          console.log(`[DB] Cleared OCR cache for page ${pageNum} (docId=${docId}, engine=${engine})`);
+        }
+        return ok;
+      }
+      const ok = await window.ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }) as boolean;
+      if (ok) {
+        console.log(`[DB] Cleared OCR cache for page ${pageNum} (docId=${docId}, engine=${engine})`);
+      }
+      return ok;
+    } catch (error) {
+      console.error('Failed to clear OCR:', error);
+      return false;
     }
   },
 

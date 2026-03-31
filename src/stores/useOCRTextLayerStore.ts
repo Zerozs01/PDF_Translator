@@ -21,6 +21,7 @@ interface OCRTextLayerState {
   // Results - All pages OCR data
   allPagesOCR: Map<number, OCRPageResult>;
   setPageOCR: (pageNum: number, result: OCRPageResult) => void;
+  removePageOCR: (pageNum: number) => void;
   getPageOCR: (pageNum: number) => OCRPageResult | undefined;
   clearAllOCR: () => void;
 
@@ -111,6 +112,11 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   setPageOCR: (pageNum, result) => set((state) => {
     const newMap = new Map(state.allPagesOCR);
     newMap.set(pageNum, result);
+    return { allPagesOCR: newMap };
+  }),
+  removePageOCR: (pageNum) => set((state) => {
+    const newMap = new Map(state.allPagesOCR);
+    newMap.delete(pageNum);
     return { allPagesOCR: newMap };
   }),
   getPageOCR: (pageNum) => get().allPagesOCR.get(pageNum),
