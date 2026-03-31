@@ -334,16 +334,6 @@ export default function App() {
 
         <div className="w-px h-6 bg-white/10 mx-1" />
 
-        <button
-          onClick={() => window.dispatchEvent(new CustomEvent('ocr:benchmark-current-page'))}
-          disabled={isOCRProcessing}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-          title="Benchmark current page using OCR cache + missing-engine run"
-        >
-          <BarChart3 size={13} />
-          Benchmark หน้านี้
-        </button>
-
         {/* Spacer - balance tools to center */}
         <div className="flex-1" />
       </header>

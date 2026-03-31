@@ -15,6 +15,9 @@ export function initDB() {
     db = new Database(dbPath);
     
     // 🚀 Performance Optimization (The "Locus" Magic)
+    // 0. Page Size: 4KB is optimal for modern SSD/Filesystems
+    db.pragma('page_size = 4096');
+    
     // 1. WAL Mode: Write-Ahead Logging (Concurrency)
     db.pragma('journal_mode = WAL');
     
@@ -23,6 +26,9 @@ export function initDB() {
     
     // 3. Cache Size: -64000 pages (~64MB RAM)
     db.pragma('cache_size = -64000');
+
+    // 4. Memory-Mapped I/O: Map up to 128MB of DB into RAM for instant reads
+    db.pragma('mmap_size = 134217728');
 
     // Create Tables with comprehensive schema
     const schema = `
@@ -62,11 +68,19 @@ export function initDB() {
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       );
 
-      -- Junction table for Document-Tags (Many-to-Many)
+      -- Table for Document-Tags (Many-to-Many)
       CREATE TABLE IF NOT EXISTS document_tags (
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
         PRIMARY KEY (document_id, tag_id)
+      );
+
+      -- 🚀 FTS5 Search Table (Crow Explorer Pattern)
+      -- This table stores a denormalized text blob of (filename + tags) for instant search
+      CREATE VIRTUAL TABLE IF NOT EXISTS document_search USING fts5(
+        document_id UNINDEXED,
+        search_text,
+        tokenize='unicode61'
       );
 
       -- Table for OCR Cache
@@ -101,6 +115,29 @@ export function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
+      -- 🚀 Automatic Search Sync Triggers
+      -- Keeps document_search in sync with documents table
+      CREATE TRIGGER IF NOT EXISTS trg_documents_insert AFTER INSERT ON documents
+      BEGIN
+        INSERT INTO document_search(document_id, search_text) 
+        VALUES (new.id, new.filename);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_update AFTER UPDATE ON documents
+      BEGIN
+        UPDATE document_search SET search_text = new.filename WHERE document_id = old.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_delete AFTER DELETE ON documents
+      BEGIN
+        DELETE FROM document_search WHERE document_id = old.id;
+      END;
+
+      -- Initial populate of search table if empty (one-time migration)
+      INSERT INTO document_search(document_id, search_text)
+      SELECT id, filename FROM documents 
+      WHERE id NOT IN (SELECT document_id FROM document_search);
+
       -- Insert default tags if not exists
       INSERT OR IGNORE INTO tags (name, color) VALUES 
         ('Manga', '#ef4444'),
@@ -112,7 +149,7 @@ export function initDB() {
     `;
 
     db.exec(schema);
-    console.log('[SQLite] Database initialized successfully with WAL & Indexes');
+    console.log('[SQLite] Database initialized successfully with WAL, FTS5 & MMap');
     
     return db;
   } catch (err) {
@@ -312,15 +349,23 @@ export const DocumentDAO = {
 
   search: (query: string) => {
     if (!db) throw new Error('DB not initialized');
+    const trimmed = query.trim();
+    if (!trimmed) return DocumentDAO.getRecent(50);
+    
+    // FTS5 requires special characters to be quoted. 
+    // We sanitize by doubling existing quotes and wrapping the whole term.
+    const sanitized = trimmed.replace(/"/g, '""');
+    
     return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
+      JOIN document_search ds ON d.id = ds.document_id
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
-      WHERE d.filename LIKE ?
+      WHERE ds.search_text MATCH '"' || ? || '"*'
       GROUP BY d.id
-      ORDER BY d.last_accessed DESC
-    `).all(`%${query}%`);
+      ORDER BY rank, d.last_accessed DESC
+    `).all(sanitized);
   },
 
   updateLastAccessed: (id: number, lastPage: number = 1) => {
@@ -462,33 +507,34 @@ export const OCRCacheDAO = {
   clear: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
-    const removed = db
+    
+    // 1. Clear new engine-specific cache
+    const res1 = db
       .prepare('DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
       .run(documentId, pageNumber, normalizedEngine);
-
-    if (removed.changes > 0) {
-      return true;
-    }
-
-    // Legacy fallback delete.
+      
+    // 2. Clear legacy cache if it matches the current engine
     const legacyRow = db
       .prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
       .get(documentId, pageNumber) as { ocr_data: string } | undefined;
 
-    if (!legacyRow) return false;
-
-    try {
-      const parsed = JSON.parse(legacyRow.ocr_data);
-      const legacyEngine = String(parsed?.ocrEngine || 'tesseract').toLowerCase();
-      if (legacyEngine !== normalizedEngine) return false;
-    } catch {
-      if (normalizedEngine !== 'tesseract') return false;
+    let res2 = { changes: 0 };
+    if (legacyRow) {
+      try {
+        const parsed = JSON.parse(legacyRow.ocr_data);
+        const legacyEngine = String(parsed?.ocrEngine || 'tesseract').toLowerCase();
+        if (legacyEngine === normalizedEngine) {
+          res2 = db.prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
+        }
+      } catch {
+        // If unparseable but we are clearing tesseract (default), assume it's okay to delete
+        if (normalizedEngine === 'tesseract') {
+          res2 = db.prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
+        }
+      }
     }
-
-    const legacyRemoved = db
-      .prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?')
-      .run(documentId, pageNumber);
-    return legacyRemoved.changes > 0;
+    
+    return res1.changes > 0 || res2.changes > 0;
   },
 
   getLatestForDocument: (documentId: number) => {

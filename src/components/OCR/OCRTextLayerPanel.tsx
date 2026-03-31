@@ -20,7 +20,8 @@ import {
   Cpu,
   Trash2,
   X,
-  Trophy
+  Trophy,
+  BarChart3
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { OCREngine, OCRPageResult } from '../../types';
@@ -838,11 +839,19 @@ export const OCRTextLayerPanel: React.FC = () => {
         return false;
       }
       if (!cacheDocId) return false;
-      console.log(`[OCRPanel] Checking DB cache for page ${pageNum} (docId=${cacheDocId})`);
+      console.log(`[OCRPanel] Checking DB cache for page ${pageNum} (docId=${cacheDocId}, engine=${activeEngine})`);
 
       const cached = await dbService.getOCR(cacheDocId, pageNum, activeEngine);
       if (cached && isDisplayCacheCompatible(cached)) {
         if (useProjectStore.getState().file !== activeFile) return false;
+        
+        // Final sanity check: ensure the engine in the data matches what we asked for
+        const dataEngine = (cached.ocrEngine || 'tesseract').toLowerCase();
+        if (dataEngine !== activeEngine.toLowerCase()) {
+          console.warn(`[OCRPanel] Cache engine mismatch: requested ${activeEngine}, got ${dataEngine}`);
+          return false;
+        }
+
         cached.pageNumber = pageNum;
         setPageOCR(pageNum, cached);
         return true;
@@ -980,6 +989,9 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   useEffect(() => {
     if (!file) return;
+    // Only auto-sync options if we haven't done it for this doc session yet.
+    // This prevents engine/language choices from bouncing back after being changed.
+    if (autoSyncedDocRef.current) return;
     void syncOptionsFromLatestCache();
   }, [file, syncOptionsFromLatestCache]);
 
@@ -1007,6 +1019,11 @@ export const OCRTextLayerPanel: React.FC = () => {
         const saved = await dbService.saveOCR(docId, pageNum, result, activeEngine);
         if (saved) {
           persistedCacheRef.current.set(key, fp);
+          // 🚀 Stability: once successfully saved, this page+engine combo is no longer 
+          // considered "cleared", allowing the UI to read it normally again.
+          if (clearedCacheKeysRef.current.has(clearedKey)) {
+            clearedCacheKeysRef.current.delete(clearedKey);
+          }
         }
       }
     })();
@@ -2044,10 +2061,22 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* OCR Model Selector */}
       <div className="space-y-2">
-        <label className="flex items-center gap-2 text-xs text-slate-300">
-          <Cpu size={12} />
-          OCR Model
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <Cpu size={12} />
+            OCR Model
+          </label>
+          <button
+            type="button"
+            onClick={() => void handleBenchmarkCurrentPage()}
+            disabled={isProcessing || !file}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-2 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Benchmark current page using OCR cache + missing-engine run"
+          >
+            <BarChart3 size={12} />
+            Benchmark หน้านี้
+          </button>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           {OCR_ENGINES.map((engine) => {
             const warmState = engine.id === 'tesseract'

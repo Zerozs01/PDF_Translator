@@ -13,9 +13,11 @@ function initDB() {
   console.log("[SQLite] Database path:", dbPath);
   try {
     db = new Database(dbPath);
+    db.pragma("page_size = 4096");
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
     db.pragma("cache_size = -64000");
+    db.pragma("mmap_size = 134217728");
     const schema = `
       -- Table for Tags
       CREATE TABLE IF NOT EXISTS tags (
@@ -53,11 +55,19 @@ function initDB() {
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       );
 
-      -- Junction table for Document-Tags (Many-to-Many)
+      -- Table for Document-Tags (Many-to-Many)
       CREATE TABLE IF NOT EXISTS document_tags (
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
         PRIMARY KEY (document_id, tag_id)
+      );
+
+      -- 🚀 FTS5 Search Table (Crow Explorer Pattern)
+      -- This table stores a denormalized text blob of (filename + tags) for instant search
+      CREATE VIRTUAL TABLE IF NOT EXISTS document_search USING fts5(
+        document_id UNINDEXED,
+        search_text,
+        tokenize='unicode61'
       );
 
       -- Table for OCR Cache
@@ -92,6 +102,29 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
+      -- 🚀 Automatic Search Sync Triggers
+      -- Keeps document_search in sync with documents table
+      CREATE TRIGGER IF NOT EXISTS trg_documents_insert AFTER INSERT ON documents
+      BEGIN
+        INSERT INTO document_search(document_id, search_text) 
+        VALUES (new.id, new.filename);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_update AFTER UPDATE ON documents
+      BEGIN
+        UPDATE document_search SET search_text = new.filename WHERE document_id = old.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_documents_delete AFTER DELETE ON documents
+      BEGIN
+        DELETE FROM document_search WHERE document_id = old.id;
+      END;
+
+      -- Initial populate of search table if empty (one-time migration)
+      INSERT INTO document_search(document_id, search_text)
+      SELECT id, filename FROM documents 
+      WHERE id NOT IN (SELECT document_id FROM document_search);
+
       -- Insert default tags if not exists
       INSERT OR IGNORE INTO tags (name, color) VALUES 
         ('Manga', '#ef4444'),
@@ -102,7 +135,7 @@ function initDB() {
         ('Personal', '#ec4899');
     `;
     db.exec(schema);
-    console.log("[SQLite] Database initialized successfully with WAL & Indexes");
+    console.log("[SQLite] Database initialized successfully with WAL, FTS5 & MMap");
     return db;
   } catch (err) {
     console.error("[SQLite] Failed to initialize database:", err);
@@ -289,15 +322,19 @@ const DocumentDAO = {
   },
   search: (query) => {
     if (!db) throw new Error("DB not initialized");
+    const trimmed = query.trim();
+    if (!trimmed) return DocumentDAO.getRecent(50);
+    const sanitized = trimmed.replace(/"/g, '""');
     return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
+      JOIN document_search ds ON d.id = ds.document_id
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
-      WHERE d.filename LIKE ?
+      WHERE ds.search_text MATCH '"' || ? || '"*'
       GROUP BY d.id
-      ORDER BY d.last_accessed DESC
-    `).all(`%${query}%`);
+      ORDER BY rank, d.last_accessed DESC
+    `).all(sanitized);
   },
   updateLastAccessed: (id, lastPage = 1) => {
     if (!db) throw new Error("DB not initialized");
@@ -428,21 +465,23 @@ const OCRCacheDAO = {
   clear: (documentId, pageNumber, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const removed = db.prepare("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
-    if (removed.changes > 0) {
-      return true;
-    }
+    const res1 = db.prepare("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
     const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
-    if (!legacyRow) return false;
-    try {
-      const parsed = JSON.parse(legacyRow.ocr_data);
-      const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
-      if (legacyEngine !== normalizedEngine) return false;
-    } catch {
-      if (normalizedEngine !== "tesseract") return false;
+    let res2 = { changes: 0 };
+    if (legacyRow) {
+      try {
+        const parsed = JSON.parse(legacyRow.ocr_data);
+        const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
+        if (legacyEngine === normalizedEngine) {
+          res2 = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+        }
+      } catch {
+        if (normalizedEngine === "tesseract") {
+          res2 = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+        }
+      }
     }
-    const legacyRemoved = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
-    return legacyRemoved.changes > 0;
+    return res1.changes > 0 || res2.changes > 0;
   },
   getLatestForDocument: (documentId) => {
     if (!db) throw new Error("DB not initialized");
