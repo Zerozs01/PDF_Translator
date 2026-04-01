@@ -9,7 +9,7 @@ Use this folder as the source of truth before relying on older root-level notes.
 - OCR: Tesseract.js in module workers, local `public/tessdata` first, CDN fallback
 - PDF output: `pdf-lib` searchable PDF with invisible text layer
 - Cache: SQLite via `better-sqlite3`
-- Translation: Gemini call goes through Electron main process IPC
+- Translation: offline-first Argos Translate via Electron main process IPC, with Gemini fallback when offline translation is unavailable
 - OCR baseline: `OCR_ALGORITHM_VERSION = 146`
 - Default OCR path: single worker, `panel` pipeline, `best` quality profile
 - External OCR panel hygiene now includes bridge-side merged Latin spacing recovery, deterministic watermark suppression, and service-side residual singleton cleanup (`externalResidualSingleton`)
@@ -45,6 +45,22 @@ Use this folder as the source of truth before relying on older root-level notes.
     - `.tmp-ocr-benchmark.md`
 - `npm run ocr:benchmark:ci`
   - Same matrix run, exits non-zero when risky pages or expectation failures are present.
+
+## Translation Commands
+
+- `npm run translate:argos:install`
+  - Installs the Argos Translate Python package into the active Python environment.
+- `npm run translate:argos:doctor`
+  - Prints installed Argos language codes visible to the active Python executable.
+- `npm run translate:argos:install-model`
+  - Installs the default Argos model pair `en -> th`.
+- `npm run translate:argos:install-model:ko-th`
+  - Installs `ko -> en` for Korean OCR translation via pivot (with `en -> th` already installed).
+- `npm run translate:argos:install-model:es-th`
+  - Installs `es -> en` for Spanish OCR translation via pivot (with `en -> th` already installed).
+
+Argos model packages for each language pair must still be installed in that same Python environment.
+Some language pairs (for example `es -> th`) are not published as direct Argos packages, so a pivot chain is required.
 
 ## Research
 

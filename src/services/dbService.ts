@@ -1,5 +1,5 @@
 import { OCREngine, OCRPageResult } from '../types';
-import type { DBDocumentCacheCandidate } from '../types/electron.d';
+import type { DBDocumentCacheCandidate, DBOCRTranslationCacheEntry } from '../types/electron.d';
 import '../types/electron.d'; // Import type declarations
 
 type LooseDocumentRecord = {
@@ -270,6 +270,61 @@ export const dbService = {
       return ok;
     } catch (error) {
       console.error('Failed to clear OCR:', error);
+      return false;
+    }
+  },
+
+  async saveTranslationCache(
+    docId: number,
+    pageNum: number,
+    cacheKey: string,
+    entry: DBOCRTranslationCacheEntry
+  ): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] saveTranslationCache skipped: DB not available');
+        return false;
+      }
+      if (window.electronAPI?.db?.saveTranslationCache) {
+        return await window.electronAPI.db.saveTranslationCache(docId, pageNum, cacheKey, entry);
+      }
+      return await window.ipcRenderer.invoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }) as boolean;
+    } catch (error) {
+      console.error('Failed to save translation cache:', error);
+      return false;
+    }
+  },
+
+  async getTranslationCachePage(docId: number, pageNum: number): Promise<DBOCRTranslationCacheEntry[]> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] getTranslationCachePage skipped: DB not available');
+        return [];
+      }
+      if (window.electronAPI?.db?.getTranslationCachePage) {
+        const rows = await window.electronAPI.db.getTranslationCachePage(docId, pageNum);
+        return Array.isArray(rows) ? rows : [];
+      }
+      const rows = await window.ipcRenderer.invoke('db:get-translation-cache-page', { docId, pageNum }) as DBOCRTranslationCacheEntry[] | null;
+      return Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      console.error('Failed to get translation cache page:', error);
+      return [];
+    }
+  },
+
+  async clearTranslationCacheByEngine(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] clearTranslationCacheByEngine skipped: DB not available');
+        return false;
+      }
+      if (window.electronAPI?.db?.clearTranslationCacheByEngine) {
+        return await window.electronAPI.db.clearTranslationCacheByEngine(docId, pageNum, engine);
+      }
+      return await window.ipcRenderer.invoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }) as boolean;
+    } catch (error) {
+      console.error('Failed to clear translation cache:', error);
       return false;
     }
   },

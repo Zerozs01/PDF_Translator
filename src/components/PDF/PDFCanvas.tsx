@@ -6,12 +6,37 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { visionService } from '../../services/vision/VisionService';
+import {
+  clampOverlayRect,
+  computeOverlayTypography,
+  DEFAULT_OVERLAY_PALETTE,
+  estimateLineRotationDeg,
+  resolveTranslationOverlayContext,
+  sampleOverlayPaletteFromLine,
+} from '../OCR/translationOverlayUtils';
 
 export const PDFCanvas: React.FC = () => {
-  const { fileUrl, fileData, currentPage, totalPages, setTotalPages, viewMode, sourceLanguage } = useProjectStore();
+  const {
+    fileUrl,
+    fileData,
+    currentPage,
+    totalPages,
+    setTotalPages,
+    viewMode,
+    sourceLanguage,
+    targetLanguage,
+    translationMode,
+  } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
-  const { allPagesOCR, showDebugOverlay } = useOCRTextLayerStore();
+  const {
+    allPagesOCR,
+    showDebugOverlay,
+    options,
+    translationPreviewMode,
+    translationCacheByPage,
+    activeTranslationKeyByPage,
+  } = useOCRTextLayerStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -24,17 +49,81 @@ export const PDFCanvas: React.FC = () => {
     offsetX: 0,
     offsetY: 0
   });
+  const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, { backgroundColor: string; textColor: string }>>(new Map());
 
-  const currentPageOCR = showDebugOverlay ? allPagesOCR.get(currentPage) : undefined;
+  const currentPageOCR = allPagesOCR.get(currentPage);
+  const currentPageTranslationMap = translationCacheByPage.get(currentPage);
+  const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
+  const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
+    currentPageOCR,
+    optionsEngine: options.engine || 'tesseract',
+    optionsLanguage: options.language || 'eng',
+    translationMode,
+    sourceLanguage,
+    targetLanguage,
+    translationPreviewMode,
+    currentPageTranslationMap,
+    activeTranslationKey,
+  }), [
+    activeTranslationKey,
+    currentPageOCR,
+    currentPageTranslationMap,
+    options.engine,
+    options.language,
+    sourceLanguage,
+    targetLanguage,
+    translationMode,
+    translationPreviewMode,
+  ]);
+  const debugPageOCR = showDebugOverlay ? currentPageOCR : undefined;
   const droppedDebugWords = useMemo(() => {
-    if (!showDebugOverlay || !currentPageOCR?.debug?.droppedWords) return [];
-    return currentPageOCR.debug.droppedWords.filter(item => {
+    if (!showDebugOverlay || !debugPageOCR?.debug?.droppedWords) return [];
+    return debugPageOCR.debug.droppedWords.filter(item => {
       if (!item.bbox) return false;
       const w = item.bbox.x1 - item.bbox.x0;
       const h = item.bbox.y1 - item.bbox.y0;
       return w > 0 && h > 0;
     });
-  }, [showDebugOverlay, currentPageOCR]);
+  }, [showDebugOverlay, debugPageOCR]);
+
+  useEffect(() => {
+    if (!translationOverlayContext.shouldRender || !currentPageOCR || !pageRef.current) {
+      setTranslatedLinePalette(new Map());
+      return;
+    }
+
+    const canvas = pageRef.current.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!canvas) {
+      setTranslatedLinePalette(new Map());
+      return;
+    }
+
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) {
+      setTranslatedLinePalette(new Map());
+      return;
+    }
+
+    const next = new Map<number, { backgroundColor: string; textColor: string }>();
+    currentPageOCR.lines.forEach((line, index) => {
+      if (!translationOverlayContext.translatedByIndex.has(index)) return;
+      next.set(index, sampleOverlayPaletteFromLine(
+        context,
+        line,
+        currentPageOCR.width,
+        currentPageOCR.height,
+        canvas.width,
+        canvas.height
+      ));
+    });
+    setTranslatedLinePalette(next);
+  }, [
+    currentPage,
+    currentPageOCR,
+    translationOverlayContext.entry?.key,
+    translationOverlayContext.shouldRender,
+    translationOverlayContext.translatedByIndex,
+  ]);
 
   // State Ref for Event Listeners to avoid stale closures
   const stateRef = useRef({ zoom, pan });
@@ -332,9 +421,55 @@ export const PDFCanvas: React.FC = () => {
                     </div>
                   ))}
                 {/* OCR Debug Overlay */}
-                {showDebugOverlay && currentPageOCR && (
+                {translationOverlayContext.shouldRender && currentPageOCR && (
                   <div className="absolute inset-0 pointer-events-none">
-                    {currentPageOCR.words.map((word, idx) => {
+                    {currentPageOCR.lines.map((line, idx) => {
+                      const translatedText = translationOverlayContext.translatedByIndex.get(idx);
+                      if (!translatedText) return null;
+
+                      const rawLeft = ocrOverlayTransform.offsetX + line.bbox.x0 * ocrOverlayTransform.scaleX;
+                      const rawTop = ocrOverlayTransform.offsetY + line.bbox.y0 * ocrOverlayTransform.scaleY;
+                      const rawWidth = Math.max(1, (line.bbox.x1 - line.bbox.x0) * ocrOverlayTransform.scaleX);
+                      const rawHeight = Math.max(1, (line.bbox.y1 - line.bbox.y0) * ocrOverlayTransform.scaleY);
+                      const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
+                        x0: ocrOverlayTransform.offsetX,
+                        y0: ocrOverlayTransform.offsetY,
+                        x1: ocrOverlayTransform.offsetX + currentPageOCR.width * ocrOverlayTransform.scaleX,
+                        y1: ocrOverlayTransform.offsetY + currentPageOCR.height * ocrOverlayTransform.scaleY,
+                      });
+                      const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
+                      const typography = computeOverlayTypography(translatedText, rect.width, rect.height);
+                      const rotationDeg = estimateLineRotationDeg(line);
+
+                      return (
+                        <div
+                          key={`ocr-translation-line-${idx}`}
+                          style={{
+                            left: rect.left,
+                            top: rect.top,
+                            width: rect.width,
+                            height: rect.height,
+                            padding: `${typography.padY}px ${typography.padX}px`,
+                            backgroundColor: palette.backgroundColor,
+                            color: palette.textColor,
+                            fontSize: typography.fontSize,
+                            lineHeight: typography.lineHeight,
+                            wordBreak: 'break-word',
+                            overflowWrap: 'anywhere',
+                            transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
+                            transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
+                          }}
+                          className="absolute rounded-xs overflow-hidden font-semibold shadow-[0_1px_1px_rgba(0,0,0,0.24)] whitespace-normal"
+                        >
+                          {translatedText}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {showDebugOverlay && debugPageOCR && (
+                  <div className="absolute inset-0 pointer-events-none">
+                    {debugPageOCR.words.map((word, idx) => {
                       const left = ocrOverlayTransform.offsetX + word.bbox.x0 * ocrOverlayTransform.scaleX;
                       const top = ocrOverlayTransform.offsetY + word.bbox.y0 * ocrOverlayTransform.scaleY;
                       const width = (word.bbox.x1 - word.bbox.x0) * ocrOverlayTransform.scaleX;

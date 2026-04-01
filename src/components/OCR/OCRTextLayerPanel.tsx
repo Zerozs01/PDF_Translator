@@ -25,7 +25,12 @@ import {
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { OCREngine, OCRPageResult } from '../../types';
-import { useOCRTextLayerStore, SUPPORTED_LANGUAGES, OCR_ENGINES } from '../../stores/useOCRTextLayerStore';
+import {
+  OCR_ENGINES,
+  OCRTranslationCacheEntry,
+  SUPPORTED_LANGUAGES,
+  useOCRTextLayerStore,
+} from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
 import { dbService } from '../../services/dbService';
@@ -225,13 +230,114 @@ const readRuntimeMs = (result: OCRPageResult): number | null => {
   return null;
 };
 
+const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
+
+const buildOCRSourceFingerprint = (result: OCRPageResult, fallbackEngine: OCREngine): string => {
+  const effectiveEngine = result.ocrEngine || fallbackEngine;
+  return [
+    result.algorithmVersion,
+    effectiveEngine,
+    result.pipelineProfile || 'panel',
+    result.language || 'eng',
+    result.words.length,
+    result.lines.length,
+    normalizePreviewText(result.text || '').length,
+  ].join('|');
+};
+
+const buildTranslationCacheSignature = (entry: OCRTranslationCacheEntry): string => [
+  entry.key,
+  entry.sourceFingerprint,
+  entry.ocrEngine,
+  entry.ocrLanguage,
+  entry.sourceLanguage,
+  entry.targetLanguage,
+  entry.translationMode,
+  entry.translatorEngine,
+  entry.lineCount,
+  entry.groupCount,
+  entry.createdAt,
+  entry.translatedByIndex.length,
+  normalizePreviewText(entry.translatedText || '').length,
+].join('|');
+
+const normalizeCacheLanguageKey = (value: string): string =>
+  String(value || '')
+    .split('+')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join('+') || 'eng';
+
+const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
+  en: 'en',
+  eng: 'en',
+  english: 'en',
+  th: 'th',
+  tha: 'th',
+  thai: 'th',
+  ja: 'ja',
+  jpn: 'ja',
+  jpn_vert: 'ja',
+  ko: 'ko',
+  kor: 'ko',
+  zh: 'zh',
+  chi: 'zh',
+  chi_sim: 'zh',
+  chi_tra: 'zh',
+  vi: 'vi',
+  vie: 'vi',
+  de: 'de',
+  deu: 'de',
+  fr: 'fr',
+  fra: 'fr',
+  ru: 'ru',
+  rus: 'ru',
+  es: 'es',
+  spa: 'es',
+};
+
+const normalizeTranslationLanguageKey = (value: string, fallback: string): string => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (TRANSLATION_LANGUAGE_ALIASES[raw]) return TRANSLATION_LANGUAGE_ALIASES[raw];
+  const primary = raw.split('-')[0].trim();
+  if (!primary) return fallback;
+  return TRANSLATION_LANGUAGE_ALIASES[primary] || primary;
+};
+
+const resolveTranslationSourceFromOCRKey = (ocrLanguageKey: string, fallback: string): string => {
+  const candidates = String(ocrLanguageKey || '')
+    .split('+')
+    .map((part) => normalizeTranslationLanguageKey(part, ''))
+    .filter(Boolean);
+
+  if (candidates.length === 0) {
+    return fallback;
+  }
+
+  const nonEnglish = candidates.find((lang) => lang !== 'en');
+  return nonEnglish || candidates[0] || fallback;
+};
+
 export const OCRTextLayerPanel: React.FC = () => {
   const DIRECT_RENDER_TIMEOUT_MS = OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT;
   const EXTERNAL_OCR_RENDER_MAX_SIDE = 3800;
   const EXTERNAL_OCR_CJK_PANEL_MAX_SIDE = 11000;
   const EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS = 34_000_000;
 
-  const { file, fileUrl, fileData, fileType, currentPage, totalPages, ensureDocumentId, translationMode } = useProjectStore();
+  const {
+    file,
+    fileUrl,
+    fileData,
+    fileType,
+    currentPage,
+    totalPages,
+    ensureDocumentId,
+    translationMode,
+    sourceLanguage,
+    targetLanguage,
+  } = useProjectStore();
   const {
     options,
     setOptions,
@@ -240,9 +346,17 @@ export const OCRTextLayerPanel: React.FC = () => {
     setProgress,
     setIsProcessing,
     setPageOCR,
-    removePageOCR,
+    removePageOCRForEngine,
     clearAllOCR,
     allPagesOCR,
+    ocrByPageEngine,
+    translationPreviewMode,
+    setTranslationPreviewMode,
+    translationCacheByPage,
+    activeTranslationKeyByPage,
+    setTranslationCacheEntry,
+    setActiveTranslationCacheKey,
+    clearTranslationCacheForEngine,
     showDebugOverlay,
     setShowDebugOverlay
   } = useOCRTextLayerStore();
@@ -250,6 +364,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const autoSyncedDocRef = useRef<number | null>(null);
   const persistedCacheRef = useRef<Map<string, string>>(new Map());
+  const persistedTranslationCacheRef = useRef<Map<string, string>>(new Map());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
@@ -269,6 +384,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const warmAnimationTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const externalProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const benchmarkAbortRef = useRef<AbortController | null>(null);
+  const translationContextKeyRef = useRef<string>('');
   const [benchmarkOpen, setBenchmarkOpen] = useState(false);
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
@@ -824,6 +940,13 @@ export const OCRTextLayerPanel: React.FC = () => {
         return false;
       }
 
+      const memoryCachedByEngine = state.ocrByPageEngine.get(pageNum)?.get(activeEngine);
+      if (memoryCachedByEngine && isDisplayCacheCompatible(memoryCachedByEngine)) {
+        if (useProjectStore.getState().file !== activeFile) return false;
+        setPageOCR(pageNum, memoryCachedByEngine);
+        return true;
+      }
+
       const memoryCached = state.allPagesOCR.get(pageNum);
       if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
         if (useProjectStore.getState().file !== activeFile) return false;
@@ -983,6 +1106,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   useEffect(() => {
     autoSyncedDocRef.current = null;
     persistedCacheRef.current.clear();
+    persistedTranslationCacheRef.current.clear();
     clearedCacheKeysRef.current.clear();
     clearAllOCR();
   }, [file, activePipelineProfile, clearAllOCR]);
@@ -994,6 +1118,85 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (autoSyncedDocRef.current) return;
     void syncOptionsFromLatestCache();
   }, [file, syncOptionsFromLatestCache]);
+
+  useEffect(() => {
+    if (!file) return;
+    let canceled = false;
+
+    void (async () => {
+      const docId = await ensureDocumentId().catch(() => null);
+      if (!docId || canceled) return;
+
+      const rows = await dbService.getTranslationCachePage(docId, currentPage);
+      if (canceled || rows.length === 0) return;
+
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (canceled) return;
+        const row = rows[i];
+        const normalizedEntry: OCRTranslationCacheEntry = {
+          ...row,
+          pageNum: currentPage,
+          ocrEngine: (row.ocrEngine || 'tesseract') as OCREngine,
+          translationMode: row.translationMode === 'official' ? 'official' : 'manga',
+          translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
+          translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
+        };
+
+        const existing = useOCRTextLayerStore
+          .getState()
+          .getTranslationCacheEntry(currentPage, normalizedEntry.key);
+
+        if (existing && existing.createdAt >= normalizedEntry.createdAt) {
+          persistedTranslationCacheRef.current.set(
+            `${docId}:${currentPage}:${normalizedEntry.key}`,
+            buildTranslationCacheSignature(existing)
+          );
+          continue;
+        }
+
+        setTranslationCacheEntry(currentPage, normalizedEntry.key, normalizedEntry);
+        persistedTranslationCacheRef.current.set(
+          `${docId}:${currentPage}:${normalizedEntry.key}`,
+          buildTranslationCacheSignature(normalizedEntry)
+        );
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [currentPage, ensureDocumentId, file, setTranslationCacheEntry]);
+
+  useEffect(() => {
+    if (!file || translationCacheByPage.size === 0) return;
+    let canceled = false;
+
+    void (async () => {
+      const docId = await ensureDocumentId().catch(() => null);
+      if (!docId || canceled) return;
+
+      for (const [pageNum, pageMap] of translationCacheByPage.entries()) {
+        if (canceled) return;
+        for (const [cacheKey, entry] of pageMap.entries()) {
+          if (canceled) return;
+          const signature = buildTranslationCacheSignature(entry);
+          const persistKey = `${docId}:${pageNum}:${cacheKey}`;
+          if (persistedTranslationCacheRef.current.get(persistKey) === signature) {
+            continue;
+          }
+
+          const saved = await dbService.saveTranslationCache(docId, pageNum, cacheKey, entry);
+          if (saved) {
+            persistedTranslationCacheRef.current.set(persistKey, signature);
+          }
+        }
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [translationCacheByPage, ensureDocumentId, file]);
 
   // Self-healing persistence: if OCR results exist in memory, ensure they are flushed to DB.
   useEffect(() => {
@@ -1035,6 +1238,156 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   // Get current page OCR result
   const currentPageOCR = allPagesOCR.get(currentPage);
+  const currentPageTranslationMap = translationCacheByPage.get(currentPage);
+  const currentPageTranslationEntries = currentPageTranslationMap
+    ? Array.from(currentPageTranslationMap.values()).sort((a, b) => b.createdAt - a.createdAt)
+    : [];
+  const selectedOcrEngine = (options.engine || 'tesseract') as OCREngine;
+  const modelScopedOriginalOCR = ocrByPageEngine.get(currentPage)?.get(selectedOcrEngine) || currentPageOCR;
+  const modelScopedFingerprint = modelScopedOriginalOCR
+    ? buildOCRSourceFingerprint(modelScopedOriginalOCR, selectedOcrEngine)
+    : '';
+  const translationContextOCRLanguage = modelScopedOriginalOCR?.language || options.language || 'eng';
+  const normalizedContextOCRLanguage = normalizeCacheLanguageKey(translationContextOCRLanguage);
+  const normalizedContextSourceLanguage = resolveTranslationSourceFromOCRKey(
+    translationContextOCRLanguage,
+    normalizeTranslationLanguageKey(sourceLanguage || '', 'en')
+  );
+  const normalizedContextTargetLanguage = normalizeTranslationLanguageKey(targetLanguage || '', 'th');
+  const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
+  const activeTranslationEntry = activeTranslationKey && currentPageTranslationMap?.has(activeTranslationKey)
+    ? currentPageTranslationMap.get(activeTranslationKey)
+    : currentPageTranslationEntries[0];
+
+  const matchesTranslationEntryContext = (entry: OCRTranslationCacheEntry): boolean => {
+    if (entry.ocrEngine !== selectedOcrEngine) return false;
+    if (entry.translationMode !== translationMode) return false;
+    if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedContextSourceLanguage) return false;
+    if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedContextTargetLanguage) return false;
+
+    const normalizedEntryLanguage = normalizeCacheLanguageKey(entry.ocrLanguage);
+    if (normalizedEntryLanguage === normalizedContextOCRLanguage) return true;
+
+    // Language option can drift across sessions; fingerprint is the deterministic truth.
+    if (modelScopedFingerprint && entry.sourceFingerprint === modelScopedFingerprint) return true;
+    return false;
+  };
+
+  const activeTranslationEntryMatchesContext = Boolean(
+    activeTranslationEntry
+    && matchesTranslationEntryContext(activeTranslationEntry)
+  );
+  const preferredEntryForCurrentModel = currentPageTranslationEntries.find(matchesTranslationEntryContext);
+  const resolvedTranslationEntry = activeTranslationEntryMatchesContext
+    ? activeTranslationEntry
+    : preferredEntryForCurrentModel;
+  const previewSourceOCR = translationPreviewMode === 'translated'
+    ? (resolvedTranslationEntry
+      ? (ocrByPageEngine.get(currentPage)?.get(resolvedTranslationEntry.ocrEngine) || modelScopedOriginalOCR)
+      : modelScopedOriginalOCR)
+    : modelScopedOriginalOCR;
+
+  useEffect(() => {
+    if (!currentPageTranslationMap || currentPageTranslationMap.size === 0) {
+      if (activeTranslationKey) {
+        setActiveTranslationCacheKey(currentPage, null);
+      }
+      return;
+    }
+    if (activeTranslationKey && currentPageTranslationMap.has(activeTranslationKey)) {
+      return;
+    }
+    const newest = currentPageTranslationEntries[0];
+    if (newest) {
+      setActiveTranslationCacheKey(currentPage, newest.key);
+    }
+  }, [
+    activeTranslationKey,
+    currentPage,
+    currentPageTranslationEntries,
+    currentPageTranslationMap,
+    setActiveTranslationCacheKey,
+  ]);
+
+  useEffect(() => {
+    if (!preferredEntryForCurrentModel) return;
+    if (activeTranslationKey === preferredEntryForCurrentModel.key) return;
+    if (activeTranslationEntryMatchesContext) return;
+    setActiveTranslationCacheKey(currentPage, preferredEntryForCurrentModel.key);
+  }, [
+    activeTranslationEntryMatchesContext,
+    activeTranslationKey,
+    currentPage,
+    preferredEntryForCurrentModel,
+    setActiveTranslationCacheKey,
+  ]);
+
+  useEffect(() => {
+    const contextKey = [
+      currentPage,
+      selectedOcrEngine,
+      normalizedContextOCRLanguage,
+      translationMode,
+      normalizedContextSourceLanguage,
+      normalizedContextTargetLanguage,
+    ].join('|');
+
+    if (translationContextKeyRef.current === contextKey) return;
+    translationContextKeyRef.current = contextKey;
+
+    if (preferredEntryForCurrentModel) {
+      setActiveTranslationCacheKey(currentPage, preferredEntryForCurrentModel.key);
+      setTranslationPreviewMode('translated');
+      return;
+    }
+
+    setTranslationPreviewMode('original');
+  }, [
+    currentPage,
+    normalizedContextOCRLanguage,
+    normalizedContextSourceLanguage,
+    normalizedContextTargetLanguage,
+    selectedOcrEngine,
+    preferredEntryForCurrentModel,
+    setActiveTranslationCacheKey,
+    setTranslationPreviewMode,
+    translationMode,
+  ]);
+
+  const currentOcrFingerprint = previewSourceOCR
+    ? buildOCRSourceFingerprint(previewSourceOCR, (options.engine || 'tesseract') as OCREngine)
+    : '';
+  const activeTranslationMatchesCurrentOCR = Boolean(
+    resolvedTranslationEntry
+    && currentOcrFingerprint
+    && resolvedTranslationEntry.sourceFingerprint === currentOcrFingerprint
+  );
+  const effectivePreviewMode = (
+    translationPreviewMode === 'translated'
+    && Boolean(resolvedTranslationEntry)
+    && activeTranslationMatchesCurrentOCR
+  )
+    ? 'translated'
+    : 'original';
+
+  const translatedByIndexMap = resolvedTranslationEntry
+    ? new Map(resolvedTranslationEntry.translatedByIndex.map((item) => [item.index, item.text]))
+    : new Map<number, string>();
+
+  const previewLines = previewSourceOCR?.lines?.length
+    ? previewSourceOCR.lines.map((line, index) => {
+      if (effectivePreviewMode !== 'translated') return line;
+      const translated = translatedByIndexMap.get(index);
+      if (!translated) return line;
+      return { ...line, text: translated };
+    })
+    : [];
+  const previewWordsLength = previewSourceOCR?.words?.length || 0;
+  const previewText = previewLines.length > 0
+    ? previewLines.map((line) => line.text).join('\n').trim()
+    : effectivePreviewMode === 'translated'
+      ? normalizePreviewText(resolvedTranslationEntry?.translatedText || '')
+      : normalizePreviewText(previewSourceOCR?.text || '');
 
   const hasCjkOrThaiOcrLanguage = useCallback((language: string) => {
     const codes = language.split('+').map(code => code.trim()).filter(Boolean);
@@ -1876,6 +2229,15 @@ export const OCRTextLayerPanel: React.FC = () => {
     benchmarkAbortRef.current?.abort();
   }, []);
 
+  const forgetPersistedTranslationCacheForPage = useCallback((docId: number, pageNum: number) => {
+    const prefix = `${docId}:${pageNum}:`;
+    for (const key of Array.from(persistedTranslationCacheRef.current.keys())) {
+      if (key.startsWith(prefix)) {
+        persistedTranslationCacheRef.current.delete(key);
+      }
+    }
+  }, []);
+
   const handleClearCurrentModelCache = useCallback(async () => {
     if (!file) return;
     if (isProcessing || benchmarkRunning || ocrJobActiveRef.current) return;
@@ -1890,6 +2252,9 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     // Clear cache for the current docId
     let anyCleared = await dbService.clearOCR(docId, currentPage, engine);
+    const translationClearedCurrent = await dbService.clearTranslationCacheByEngine(docId, currentPage, engine);
+    anyCleared = anyCleared || translationClearedCurrent;
+    forgetPersistedTranslationCacheForPage(docId, currentPage);
 
     // Also clear ALL alias docIds sharing the same filename so the cache
     // can't resurrect via alias fallback probing.
@@ -1899,13 +2264,18 @@ export const OCRTextLayerPanel: React.FC = () => {
         for (const candidate of candidates) {
           if (candidate.id === docId) continue;
           const aliasCleared = await dbService.clearOCR(candidate.id, currentPage, engine);
+          const aliasTranslationCleared = await dbService.clearTranslationCacheByEngine(candidate.id, currentPage, engine);
           if (aliasCleared) {
             console.log(
               `[OCRPanel] Also cleared alias cache: docId=${candidate.id}, page=${currentPage}, engine=${engine}`
             );
             anyCleared = true;
           }
+          if (aliasTranslationCleared) {
+            anyCleared = true;
+          }
           persistedCacheRef.current.delete(`${candidate.id}:${currentPage}:${engine}`);
+          forgetPersistedTranslationCacheForPage(candidate.id, currentPage);
         }
       } catch (error) {
         console.warn('[OCRPanel] Failed to clear alias caches:', error);
@@ -1920,13 +2290,23 @@ export const OCRTextLayerPanel: React.FC = () => {
     // Block alias probing for this page+engine until the file/pipeline resets
     clearedCacheKeysRef.current.add(`${currentPage}:${engine}`);
 
-    const existing = allPagesOCR.get(currentPage);
-    if (existing && (existing.ocrEngine || 'tesseract') === engine) {
-      removePageOCR(currentPage);
-    }
+    removePageOCRForEngine(currentPage, engine);
+    clearTranslationCacheForEngine(currentPage, engine);
     persistedCacheRef.current.delete(`${docId}:${currentPage}:${engine}`);
+    forgetPersistedTranslationCacheForPage(docId, currentPage);
     setCacheActionMessage(`Cleared cache page ${currentPage} (${engine})`);
-  }, [allPagesOCR, benchmarkRunning, currentPage, ensureDocumentId, file, isProcessing, options.engine, removePageOCR]);
+  }, [
+    allPagesOCR,
+    benchmarkRunning,
+    clearTranslationCacheForEngine,
+    currentPage,
+    ensureDocumentId,
+    file,
+    isProcessing,
+    options.engine,
+    forgetPersistedTranslationCacheForPage,
+    removePageOCRForEngine,
+  ]);
 
   useEffect(() => {
     if (!cacheActionMessage) return undefined;
@@ -1951,16 +2331,16 @@ export const OCRTextLayerPanel: React.FC = () => {
   // Total OCR stats
   const totalOCRPages = allPagesOCR.size;
   const totalWords = Array.from(allPagesOCR.values()).reduce((sum, r) => sum + r.words.length, 0);
-  const currentDroppedCount = currentPageOCR?.debug?.droppedWords?.length ?? 0;
-  const currentDropSummary = currentPageOCR?.debug?.dropCounts
-    ? Object.entries(currentPageOCR.debug.dropCounts)
+  const currentDroppedCount = previewSourceOCR?.debug?.droppedWords?.length ?? 0;
+  const currentDropSummary = previewSourceOCR?.debug?.dropCounts
+    ? Object.entries(previewSourceOCR.debug.dropCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([filter, count]) => `${filter}:${count}`)
       .join(', ')
     : '';
-  const currentStageSummary = currentPageOCR?.debug?.stageMetrics
-    ? currentPageOCR.debug.stageMetrics
+  const currentStageSummary = previewSourceOCR?.debug?.stageMetrics
+    ? previewSourceOCR.debug.stageMetrics
       .map((metric) => {
         const deltaWords = metric.wordsAfter - metric.wordsBefore;
         const deltaLines = metric.linesAfter - metric.linesBefore;
@@ -1971,10 +2351,10 @@ export const OCRTextLayerPanel: React.FC = () => {
       })
       .join(', ')
     : '';
-  const currentCandidateSummary = currentPageOCR?.debug?.candidates
+  const currentCandidateSummary = previewSourceOCR?.debug?.candidates
     ? (() => {
-      const rejected = currentPageOCR.debug.candidates.filter(candidate => !candidate.accepted);
-      const accepted = currentPageOCR.debug.candidates.filter(candidate => candidate.accepted).length;
+      const rejected = previewSourceOCR.debug.candidates.filter(candidate => !candidate.accepted);
+      const accepted = previewSourceOCR.debug.candidates.filter(candidate => candidate.accepted).length;
       const rejectReasons = rejected.reduce<Record<string, number>>((acc, candidate) => {
         const key = candidate.reason || 'unknown';
         acc[key] = (acc[key] || 0) + 1;
@@ -1989,13 +2369,17 @@ export const OCRTextLayerPanel: React.FC = () => {
       return `candidates accepted:${accepted}${topRejects ? ` | reject ${topRejects}` : ''}`;
     })()
     : '';
-  const currentSkipReason = currentPageOCR?.debug?.skipReason || '';
-  const currentRuntimeMs = currentPageOCR?.debug?.runtimeMs
-    ?? (currentPageOCR?.debug as { timingsMs?: { ocr?: number } } | undefined)?.timingsMs?.ocr;
+  const currentSkipReason = previewSourceOCR?.debug?.skipReason || '';
+  const currentRuntimeMs = previewSourceOCR?.debug?.runtimeMs
+    ?? (previewSourceOCR?.debug as { timingsMs?: { ocr?: number } } | undefined)?.timingsMs?.ocr;
   const currentRuntimeSecLabel = typeof currentRuntimeMs === 'number'
     ? `${(currentRuntimeMs / 1000).toFixed(currentRuntimeMs >= 10000 ? 1 : 2)}s`
     : '-';
-  const currentEngine = OCR_ENGINES.find(engine => engine.id === (currentPageOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
+  const currentEngine = OCR_ENGINES.find(engine => engine.id === (previewSourceOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
+  const translatedCacheSlotCount = currentPageTranslationEntries.length;
+  const canToggleToTranslated = Boolean(preferredEntryForCurrentModel || resolvedTranslationEntry);
+  const previewToggleLabel = effectivePreviewMode === 'translated' ? 'Original OCR' : 'Translated Result';
+  const previewToggleDisabled = effectivePreviewMode === 'translated' ? false : !canToggleToTranslated;
   const benchmarkDoneRows = benchmarkRows.filter((row) => row.status === 'done');
   const benchmarkFastest = benchmarkDoneRows
     .filter((row) => typeof row.runtimeMs === 'number')
@@ -2282,7 +2666,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       </div>
 
       {/* OCR Results Preview */}
-      {currentPageOCR && !isProcessing && (
+      {previewSourceOCR && !isProcessing && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
             <Eye size={12} className="text-[#5CC6F2]" />
@@ -2292,8 +2676,13 @@ export const OCRTextLayerPanel: React.FC = () => {
             </span>
           </div>
           <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
-            model {currentEngine.name} • พบ {currentPageOCR.words.length} คำ • raw conf {currentPageOCR.confidence.toFixed(0)}%
+            model {currentEngine.name} • พบ {previewSourceOCR.words.length} คำ • raw conf {previewSourceOCR.confidence.toFixed(0)}%
           </div>
+          {translationPreviewMode === 'translated' && !activeTranslationMatchesCurrentOCR && translatedCacheSlotCount > 0 && (
+            <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+              translated cache is stale for current OCR source, showing original OCR
+            </div>
+          )}
           {showDebugOverlay && currentDroppedCount > 0 && (
             <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">
               dropped {currentDroppedCount} คำ{currentDropSummary ? ` (${currentDropSummary})` : ''}
@@ -2315,28 +2704,57 @@ export const OCRTextLayerPanel: React.FC = () => {
             </div>
           )}
           
-          <div className="bg-slate-900/55 border border-white/10 rounded-lg p-2 min-h-56 max-h-[40vh] overflow-y-auto">
-            {currentPageOCR.words.length > 0 ? (
-              <div className="space-y-1">
-                {/* Show text grouped by lines for better readability */}
-                {currentPageOCR.lines && currentPageOCR.lines.length > 0 ? (
-                  currentPageOCR.lines.map((line, i) => (
-                    <p key={i} className="text-xs text-slate-300 leading-relaxed">
-                      {line.text}
+          <div className="relative bg-slate-900/55 border border-white/10 rounded-lg min-h-56 max-h-[40vh] overflow-hidden">
+            <div className="h-full max-h-[40vh] overflow-y-auto p-2 pb-12">
+              {previewWordsLength > 0 ? (
+                <div className="space-y-1">
+                  {/* Show text grouped by lines for better readability */}
+                  {previewLines && previewLines.length > 0 ? (
+                    previewLines.map((line, i) => (
+                      <p key={i} className="text-xs text-slate-300 leading-relaxed">
+                        {line.text}
+                      </p>
+                    ))
+                  ) : (
+                    // Fallback: show words joined
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      {previewText || previewSourceOCR.words.map(w => w.text).join(' ')}
                     </p>
-                  ))
-                ) : (
-                  // Fallback: show words joined
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {currentPageOCR.words.map(w => w.text).join(' ')}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500 italic text-center py-2">
-                ไม่พบข้อความในหน้านี้
-              </p>
-            )}
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 italic text-center py-2">
+                  ไม่พบข้อความในหน้านี้
+                </p>
+              )}
+            </div>
+
+            <div className="absolute bottom-2 right-2 flex items-center rounded-md border border-white/10 bg-slate-950/90 px-2 py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (effectivePreviewMode === 'translated') {
+                    setTranslationPreviewMode('original');
+                    return;
+                  }
+                  if (!canToggleToTranslated) return;
+                  const preferredKey = preferredEntryForCurrentModel?.key || resolvedTranslationEntry?.key;
+                  if (preferredKey) {
+                    setActiveTranslationCacheKey(currentPage, preferredKey);
+                  }
+                  setTranslationPreviewMode('translated');
+                }}
+                disabled={previewToggleDisabled}
+                className={`rounded border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                  effectivePreviewMode === 'translated'
+                    ? 'border-cyan-400/55 bg-cyan-500/20 text-cyan-100 hover:border-cyan-300/70 hover:bg-cyan-500/28'
+                    : 'border-emerald-400/55 bg-emerald-500/18 text-emerald-100 hover:border-emerald-300/70 hover:bg-emerald-500/28'
+                } disabled:cursor-not-allowed disabled:opacity-45`}
+                title={previewToggleDisabled ? 'No translated cache available for this context' : (effectivePreviewMode === 'translated' ? 'Show original OCR cache' : 'Show translated result cache')}
+              >
+                {previewToggleLabel}
+              </button>
+            </div>
           </div>
         </div>
       )}

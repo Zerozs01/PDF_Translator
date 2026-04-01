@@ -12,8 +12,9 @@ function parseArgs(argv) {
     expect: 'public/fixtures/ocr/manga/expectations.json',
     outJson: '.tmp-ocr-benchmark.json',
     outMd: '.tmp-ocr-benchmark.md',
-    skipMissing: true,
+    skipMissing: false,
     failOnRisk: false,
+    requireLanguages: [],
     pipeline: 'panel',
     quality: 'best',
     engines: ['tesseract', 'paddleocr', 'easyocr'],
@@ -34,10 +35,23 @@ function parseArgs(argv) {
       const items = raw.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
       if (items.length > 0) args.engines = items;
     }
-    if (arg === '--skip-missing') args.skipMissing = true;
+    if (arg === '--require-language') {
+      const raw = String(argv[i + 1] || '').trim().toLowerCase();
+      if (raw) args.requireLanguages.push(raw);
+    }
+    if (arg === '--require-languages') {
+      const raw = String(argv[i + 1] || '').trim().toLowerCase();
+      if (!raw) continue;
+      for (const lang of raw.split(',').map((item) => item.trim()).filter(Boolean)) {
+        args.requireLanguages.push(lang);
+      }
+    }
+    if (arg === '--skip-missing' || arg === '--partial') args.skipMissing = true;
     if (arg === '--no-skip-missing') args.skipMissing = false;
     if (arg === '--fail-on-risk') args.failOnRisk = true;
   }
+
+  args.requireLanguages = Array.from(new Set(args.requireLanguages));
 
   return args;
 }
@@ -141,6 +155,8 @@ function buildMarkdown(summary) {
   lines.push(`- quality: ${summary.config.quality}`);
   lines.push(`- baseUrl: ${summary.config.baseUrl}`);
   lines.push(`- manifest: ${summary.config.manifest}`);
+  lines.push(`- partialMode: ${summary.config.skipMissing ? 'enabled (--skip-missing)' : 'disabled (strict fixtures required)'}`);
+  lines.push(`- requiredLanguages: ${(summary.config.requireLanguages || []).length > 0 ? summary.config.requireLanguages.join(', ') : '(none)'}`);
   lines.push('');
   lines.push('| Engine | Pages | Expect Fail | Risky Pages | Words | Suspicious | Avg ms | P50 ms | P90 ms | Status |');
   lines.push('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |');
@@ -172,6 +188,20 @@ function buildMarkdown(summary) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   assertOptions(args);
+
+  if (!args.skipMissing) {
+    const fixtureAuditArgs = ['--manifest', args.manifest];
+    for (const language of args.requireLanguages) {
+      fixtureAuditArgs.push('--require-language', language);
+    }
+
+    console.log('[OCR Benchmark] Fixture preflight check');
+    const fixtureCheck = runNodeScript('scripts/ocr-fixture-audit.mjs', fixtureAuditArgs);
+    if (!fixtureCheck.ok) {
+      console.error(`[OCR Benchmark] Fixture preflight failed (exit=${fixtureCheck.exitCode}). Use --skip-missing for partial mode.`);
+      process.exit(fixtureCheck.exitCode || 2);
+    }
+  }
 
   const stamp = Date.now();
   const results = [];
@@ -297,6 +327,7 @@ async function main() {
       quality: args.quality,
       engines: args.engines,
       skipMissing: args.skipMissing,
+      requireLanguages: args.requireLanguages,
     },
     overallStatus,
     failures,

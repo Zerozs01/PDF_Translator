@@ -14,6 +14,9 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     getOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum, engine }),
     clearOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-ocr", { docId, pageNum, engine }),
     getLatestOCR: (docId) => electron.ipcRenderer.invoke("db:get-latest-ocr", { docId }),
+    saveTranslationCache: (docId, pageNum, cacheKey, entry) => electron.ipcRenderer.invoke("db:save-translation-cache", { docId, pageNum, cacheKey, entry }),
+    getTranslationCachePage: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-translation-cache-page", { docId, pageNum }),
+    clearTranslationCacheByEngine: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-translation-cache-by-engine", { docId, pageNum, engine }),
     // Document management
     getRecentDocuments: (limit) => electron.ipcRenderer.invoke("db:get-recent-documents", limit),
     getDocumentsByProject: (projectId) => electron.ipcRenderer.invoke("db:get-documents-by-project", projectId),
@@ -46,6 +49,10 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
     translate: (text, context) => electron.ipcRenderer.invoke("gemini:translate", { text, context })
+  },
+  translate: {
+    offline: (text, context) => electron.ipcRenderer.invoke("translate:offline", { text, context }),
+    offlineBatch: (texts, context) => electron.ipcRenderer.invoke("translate:offline-batch", { texts, context })
   },
   // File system operations (SECURE: validated in main process)
   fs: {

@@ -34,25 +34,29 @@ function loadManifest(filePath) {
   return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
 }
 
-function resolveFixtureImages(manifest, manifestPath) {
+function resolveFixtureAssets(manifest, manifestPath) {
   const fixtures = Array.isArray(manifest.cases) ? manifest.cases : [];
   const repoRoot = process.cwd();
   const missing = [];
   const available = [];
 
   for (const fixture of fixtures) {
+    const fixtureId = fixture?.id || '(unknown-fixture)';
     const relativeImage = String(fixture?.image || '').replace(/^\/+/, '');
-    if (!relativeImage) {
+    const relativePdf = String(fixture?.pdf || '').replace(/^\/+/, '');
+    const selectedAsset = relativeImage || relativePdf;
+
+    if (!selectedAsset) {
       missing.push({
-        id: fixture?.id || '(unknown-fixture)',
-        path: '(missing image path in manifest)',
+        id: fixtureId,
+        path: '(missing image/pdf path in manifest)',
       });
       continue;
     }
 
-    const absolutePath = path.resolve(repoRoot, 'public', relativeImage.replace(/^fixtures\//, 'fixtures/'));
+    const absolutePath = path.resolve(repoRoot, 'public', selectedAsset.replace(/^fixtures\//, 'fixtures/'));
     if (!fs.existsSync(absolutePath)) {
-      missing.push({ id: fixture.id || '(unknown-fixture)', path: absolutePath });
+      missing.push({ id: fixtureId, path: absolutePath });
       continue;
     }
 
@@ -71,10 +75,10 @@ function throwMissingFixtureError(result) {
   const lines = result.missing.map((item) => `- ${item.id}: ${item.path}`);
   throw new Error(
     [
-      `Fixture image preflight failed for manifest: ${result.manifestPath}`,
-      'Missing files:',
+      `Fixture asset preflight failed for manifest: ${result.manifestPath}`,
+      'Missing fixture assets:',
       ...lines,
-      'Add real fixture images to public/fixtures/ocr/manga before running OCR regression.',
+      'Add real fixture assets (PNG/JPEG/PDF) to public/fixtures/ocr/manga before running OCR regression.',
     ].join('\n')
   );
 }
@@ -104,7 +108,7 @@ async function main() {
   }
 
   const manifest = loadManifest(args.manifest);
-  const fixtureResolution = resolveFixtureImages(manifest, args.manifest);
+  const fixtureResolution = resolveFixtureAssets(manifest, args.manifest);
 
   if (!args.skipMissing) {
     throwMissingFixtureError(fixtureResolution);

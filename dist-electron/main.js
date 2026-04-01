@@ -3,9 +3,9 @@ const electron = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const child_process = require("child_process");
 const Database = require("better-sqlite3");
 const os = require("os");
-const child_process = require("child_process");
 let db = null;
 function initDB() {
   if (db) return db;
@@ -91,6 +91,28 @@ function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for Translation Cache (per page/context/engine)
+      CREATE TABLE IF NOT EXISTS translation_cache (
+        document_id INTEGER NOT NULL,
+        page_number INTEGER NOT NULL,
+        cache_key TEXT NOT NULL,
+        ocr_engine TEXT NOT NULL,
+        ocr_language TEXT NOT NULL,
+        source_language TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        translation_mode TEXT NOT NULL,
+        translator_engine TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        translated_by_index TEXT NOT NULL,
+        translated_text TEXT NOT NULL,
+        line_count INTEGER DEFAULT 0,
+        group_count INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (document_id, page_number, cache_key),
+        FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
@@ -100,6 +122,7 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup ON translation_cache(document_id, page_number, ocr_engine, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
       -- 🚀 Automatic Search Sync Triggers
@@ -511,6 +534,142 @@ const OCRCacheDAO = {
       updated_at: row.updated_at,
       ocr_data: JSON.parse(row.ocr_data)
     };
+  }
+};
+const TranslationCacheDAO = {
+  save: (documentId, pageNumber, cacheKey, entry) => {
+    if (!db) throw new Error("DB not initialized");
+    const now = Date.now();
+    const normalizedEngine = String(entry.ocrEngine || "tesseract").toLowerCase();
+    const stmt = db.prepare(`
+      INSERT INTO translation_cache (
+        document_id,
+        page_number,
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @documentId,
+        @pageNumber,
+        @cacheKey,
+        @ocrEngine,
+        @ocrLanguage,
+        @sourceLanguage,
+        @targetLanguage,
+        @translationMode,
+        @translatorEngine,
+        @sourceFingerprint,
+        @translatedByIndex,
+        @translatedText,
+        @lineCount,
+        @groupCount,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(document_id, page_number, cache_key) DO UPDATE SET
+        ocr_engine = @ocrEngine,
+        ocr_language = @ocrLanguage,
+        source_language = @sourceLanguage,
+        target_language = @targetLanguage,
+        translation_mode = @translationMode,
+        translator_engine = @translatorEngine,
+        source_fingerprint = @sourceFingerprint,
+        translated_by_index = @translatedByIndex,
+        translated_text = @translatedText,
+        line_count = @lineCount,
+        group_count = @groupCount,
+        created_at = @createdAt,
+        updated_at = @updatedAt
+    `);
+    stmt.run({
+      documentId,
+      pageNumber,
+      cacheKey,
+      ocrEngine: normalizedEngine,
+      ocrLanguage: String(entry.ocrLanguage || "eng"),
+      sourceLanguage: String(entry.sourceLanguage || "eng").toLowerCase(),
+      targetLanguage: String(entry.targetLanguage || "th").toLowerCase(),
+      translationMode: String(entry.translationMode || "manga").toLowerCase(),
+      translatorEngine: String(entry.translatorEngine || "offline").toLowerCase(),
+      sourceFingerprint: String(entry.sourceFingerprint || ""),
+      translatedByIndex: JSON.stringify(Array.isArray(entry.translatedByIndex) ? entry.translatedByIndex : []),
+      translatedText: String(entry.translatedText || ""),
+      lineCount: Number(entry.lineCount || 0),
+      groupCount: Number(entry.groupCount || 0),
+      createdAt: Number(entry.createdAt || now),
+      updatedAt: now
+    });
+  },
+  getByPage: (documentId, pageNumber) => {
+    if (!db) throw new Error("DB not initialized");
+    const rows = db.prepare(`
+      SELECT
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at
+      FROM translation_cache
+      WHERE document_id = ?
+        AND page_number = ?
+      ORDER BY created_at DESC, updated_at DESC
+    `).all(documentId, pageNumber);
+    return rows.map((row) => {
+      let translatedByIndex = [];
+      try {
+        const parsed = JSON.parse(row.translated_by_index);
+        if (Array.isArray(parsed)) {
+          translatedByIndex = parsed.map((item) => ({
+            index: Number(item.index || 0),
+            text: String(item.text || "")
+          })).filter((item) => Number.isFinite(item.index));
+        }
+      } catch {
+        translatedByIndex = [];
+      }
+      return {
+        key: row.cache_key,
+        pageNum: pageNumber,
+        ocrEngine: row.ocr_engine,
+        ocrLanguage: row.ocr_language,
+        sourceLanguage: row.source_language,
+        targetLanguage: row.target_language,
+        translationMode: row.translation_mode,
+        translatorEngine: row.translator_engine,
+        sourceFingerprint: row.source_fingerprint,
+        translatedByIndex,
+        translatedText: row.translated_text,
+        lineCount: Number(row.line_count || 0),
+        groupCount: Number(row.group_count || 0),
+        createdAt: Number(row.created_at || Date.now())
+      };
+    });
+  },
+  clearByEngine: (documentId, pageNumber, engine = "tesseract") => {
+    if (!db) throw new Error("DB not initialized");
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
+    const result = db.prepare("DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    return result.changes > 0;
   }
 };
 const EXTERNAL_ENGINES = ["paddleocr", "easyocr"];
@@ -930,6 +1089,145 @@ electron.app.whenReady().then(() => {
   const sanitizePath = (filepath) => {
     return filepath.replace(/\.\.\//g, "").replace(/\.\.\\/g, "");
   };
+  const ARGOS_LANG_ALIASES = {
+    en: "en",
+    eng: "en",
+    english: "en",
+    th: "th",
+    tha: "th",
+    thai: "th",
+    ja: "ja",
+    jpn: "ja",
+    ko: "ko",
+    kor: "ko",
+    zh: "zh",
+    chi: "zh",
+    chi_sim: "zh",
+    chi_tra: "zh",
+    vi: "vi",
+    vie: "vi",
+    de: "de",
+    deu: "de",
+    fr: "fr",
+    fra: "fr",
+    ru: "ru",
+    rus: "ru",
+    es: "es",
+    spa: "es"
+  };
+  const LANGUAGE_DISPLAY_NAMES = {
+    en: "English",
+    th: "Thai",
+    ja: "Japanese",
+    ko: "Korean",
+    zh: "Chinese",
+    vi: "Vietnamese",
+    de: "German",
+    fr: "French",
+    ru: "Russian",
+    es: "Spanish"
+  };
+  const normalizeArgosLanguage = (value, fallback) => {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return fallback;
+    return ARGOS_LANG_ALIASES[raw] || raw.split("-")[0] || fallback;
+  };
+  const resolvePythonExecutable2 = () => {
+    if (isValidString(process.env.PDF_TRANSLATOR_PYTHON)) {
+      return process.env.PDF_TRANSLATOR_PYTHON;
+    }
+    const virtualEnv = process.env.VIRTUAL_ENV;
+    if (virtualEnv) {
+      const windowsPython = path.join(virtualEnv, "Scripts", "python.exe");
+      if (fs.existsSync(windowsPython)) return windowsPython;
+      const posixPython = path.join(virtualEnv, "bin", "python");
+      if (fs.existsSync(posixPython)) return posixPython;
+    }
+    return process.platform === "win32" ? "python" : "python3";
+  };
+  const resolveArgosBridgePath = () => {
+    const candidates = [
+      path.join(process.cwd(), "scripts", "argos_translate_bridge.py"),
+      path.join(__dirname, "../scripts/argos_translate_bridge.py"),
+      path.join(process.resourcesPath, "ocr-bridge", "argos_translate_bridge.py")
+    ];
+    const found = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!found) {
+      throw new Error("Argos bridge script not found. Expected scripts/argos_translate_bridge.py");
+    }
+    return found;
+  };
+  const runArgosTranslateBatch = async (texts, context) => {
+    if (!Array.isArray(texts)) {
+      throw new Error("Invalid input: texts must be an array");
+    }
+    if (texts.length === 0) return [];
+    const timeoutMs = Math.max(3e3, Math.min(12e4, Number(context?.timeoutMs || 45e3)));
+    const sourceLanguage = normalizeArgosLanguage(context?.sourceLanguage, "en");
+    const targetLanguage = normalizeArgosLanguage(context?.targetLanguage, "th");
+    if (sourceLanguage === targetLanguage) {
+      return texts.map((text) => String(text || ""));
+    }
+    const pythonExecutable = resolvePythonExecutable2();
+    const bridgePath = resolveArgosBridgePath();
+    const payload = {
+      texts: texts.map((text) => String(text || "")),
+      sourceLanguage,
+      targetLanguage,
+      mode: String(context?.mode || "manga"),
+      sourceType: String(context?.sourceType || "text")
+    };
+    return new Promise((resolve, reject) => {
+      const child = child_process.spawn(pythonExecutable, [bridgePath], {
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          PYTHONUTF8: "1"
+        }
+      });
+      let stdout = "";
+      let stderr = "";
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Argos translation timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", (error) => {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to launch Python for Argos translation: ${error.message}`));
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        if (code !== 0) {
+          reject(new Error(`Argos translation bridge failed (${code}): ${(stderr || stdout).trim() || "Unknown error"}`));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout || "{}");
+          if (!Array.isArray(parsed.translations)) {
+            reject(new Error("Argos translation bridge returned invalid payload"));
+            return;
+          }
+          const translations = parsed.translations.map((item) => String(item ?? ""));
+          if (translations.length !== texts.length) {
+            reject(new Error(`Argos translation count mismatch: expected ${texts.length}, got ${translations.length}`));
+            return;
+          }
+          resolve(translations);
+        } catch (error) {
+          reject(new Error(`Failed to parse Argos translation payload: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      });
+      child.stdin.write(JSON.stringify(payload));
+      child.stdin.end();
+    });
+  };
   electron.ipcMain.handle("db:save-document", async (_, { filepath, filename, totalPages }) => {
     if (!isValidString(filepath) || !isValidString(filename)) {
       throw new Error("Invalid input: filepath and filename must be non-empty strings");
@@ -1015,6 +1313,44 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:get-latest-ocr error:", error);
       return null;
+    }
+  });
+  electron.ipcMain.handle("db:save-translation-cache", async (_, { docId, pageNum, cacheKey, entry }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    if (!isValidString(cacheKey) || !entry || typeof entry !== "object") {
+      throw new Error("Invalid input: cacheKey and entry are required");
+    }
+    try {
+      TranslationCacheDAO.save(docId, pageNum, cacheKey, entry);
+      return true;
+    } catch (error) {
+      console.error("db:save-translation-cache error:", error);
+      return false;
+    }
+  });
+  electron.ipcMain.handle("db:get-translation-cache-page", async (_, { docId, pageNum }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    try {
+      return TranslationCacheDAO.getByPage(docId, pageNum);
+    } catch (error) {
+      console.error("db:get-translation-cache-page error:", error);
+      return [];
+    }
+  });
+  electron.ipcMain.handle("db:clear-translation-cache-by-engine", async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : "tesseract";
+      return TranslationCacheDAO.clearByEngine(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error("db:clear-translation-cache-by-engine error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:get-recent-documents", async (_, limit = 50) => {
@@ -1406,6 +1742,33 @@ electron.app.whenReady().then(() => {
       return false;
     }
   });
+  electron.ipcMain.handle("translate:offline", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !isValidString(payload.text)) {
+      throw new Error("Invalid input: text must be a non-empty string");
+    }
+    try {
+      const translated = await runArgosTranslateBatch([payload.text], payload.context);
+      return translated[0] || "";
+    } catch (error) {
+      console.error("translate:offline error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("translate:offline-batch", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.texts)) {
+      throw new Error("Invalid input: texts must be an array");
+    }
+    const hasInvalidText = payload.texts.some((text) => typeof text !== "string");
+    if (hasInvalidText) {
+      throw new Error("Invalid input: all texts must be strings");
+    }
+    try {
+      return await runArgosTranslateBatch(payload.texts, payload.context);
+    } catch (error) {
+      console.error("translate:offline-batch error:", error);
+      throw error;
+    }
+  });
   electron.ipcMain.handle("gemini:translate", async (_, { text, context }) => {
     if (!isValidString(text)) {
       throw new Error("Invalid input: text must be a non-empty string");
@@ -1413,14 +1776,23 @@ electron.app.whenReady().then(() => {
     if (!context || typeof context !== "object") {
       throw new Error("Invalid input: context must be an object");
     }
-    const { mode = "manga", sourceType = "text" } = context;
+    const {
+      mode = "manga",
+      sourceType = "text",
+      sourceLanguage,
+      targetLanguage
+    } = context;
+    const normalizedSource = normalizeArgosLanguage(sourceLanguage, "en");
+    const normalizedTarget = normalizeArgosLanguage(targetLanguage, "th");
+    const sourceName = LANGUAGE_DISPLAY_NAMES[normalizedSource] || normalizedSource;
+    const targetName = LANGUAGE_DISPLAY_NAMES[normalizedTarget] || normalizedTarget;
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY not configured. Please set it in .env file.");
     }
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    const systemPrompt = mode === "manga" ? `You are a professional manga translator. Translate to Thai. Use informal, emotional language with particles like "นะ", "โว้ย". If the type is "sfx", explain the sound in brackets like [เสียงสั่นสะเทือน].` : `You are a professional document translator. Translate to Thai. Use formal, polite language suitable for official documents.`;
+    const systemPrompt = mode === "manga" ? `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.` : `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.`;
     const payload = {
       contents: [{ parts: [{ text: `Translate this text: "${text}" (Type: ${sourceType})` }] }],
       systemInstruction: { parts: [{ text: systemPrompt }] }

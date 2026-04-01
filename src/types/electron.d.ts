@@ -49,6 +49,23 @@ export interface DBDocumentCacheCandidate {
   last_cache_update: number | null;
 }
 
+export interface DBOCRTranslationCacheEntry {
+  key: string;
+  pageNum: number;
+  ocrEngine: OCREngine;
+  ocrLanguage: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationMode: 'manga' | 'official';
+  translatorEngine: 'offline' | 'ai';
+  sourceFingerprint: string;
+  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedText: string;
+  lineCount: number;
+  groupCount: number;
+  createdAt: number;
+}
+
 // Update types
 export interface DocumentUpdate {
   filename?: string;
@@ -110,6 +127,14 @@ export interface ExternalOCRResult {
   debug?: OCRPageResult['debug'];
 }
 
+export interface OfflineTranslationContext {
+  mode?: string;
+  sourceType?: string;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  timeoutMs?: number;
+}
+
 // Electron API interface (secure whitelist-based)
 export interface ElectronAPI {
   db: {
@@ -125,6 +150,14 @@ export interface ElectronAPI {
       updated_at: number;
       ocr_data: OCRPageResult;
     } | null>;
+    saveTranslationCache: (
+      docId: number,
+      pageNum: number,
+      cacheKey: string,
+      entry: DBOCRTranslationCacheEntry
+    ) => Promise<boolean>;
+    getTranslationCachePage: (docId: number, pageNum: number) => Promise<DBOCRTranslationCacheEntry[]>;
+    clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
     
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;
@@ -157,7 +190,17 @@ export interface ElectronAPI {
   };
   
   gemini: {
-    translate: (text: string, context: { mode: string; sourceType: string }) => Promise<string>;
+    translate: (text: string, context: {
+      mode: string;
+      sourceType: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+    }) => Promise<string>;
+  };
+
+  translate: {
+    offline: (text: string, context?: OfflineTranslationContext) => Promise<string>;
+    offlineBatch: (texts: string[], context?: OfflineTranslationContext) => Promise<string[]>;
   };
   
   fs: {

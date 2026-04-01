@@ -104,6 +104,28 @@ export function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for Translation Cache (per page/context/engine)
+      CREATE TABLE IF NOT EXISTS translation_cache (
+        document_id INTEGER NOT NULL,
+        page_number INTEGER NOT NULL,
+        cache_key TEXT NOT NULL,
+        ocr_engine TEXT NOT NULL,
+        ocr_language TEXT NOT NULL,
+        source_language TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        translation_mode TEXT NOT NULL,
+        translator_engine TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        translated_by_index TEXT NOT NULL,
+        translated_text TEXT NOT NULL,
+        line_count INTEGER DEFAULT 0,
+        group_count INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (document_id, page_number, cache_key),
+        FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
@@ -113,6 +135,7 @@ export function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup ON translation_cache(document_id, page_number, ocr_engine, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
       -- 🚀 Automatic Search Sync Triggers
@@ -570,4 +593,186 @@ export const OCRCacheDAO = {
       ocr_data: JSON.parse(row.ocr_data)
     };
   }
+};
+
+type TranslationCacheEntryRecord = {
+  key: string;
+  pageNum: number;
+  ocrEngine: string;
+  ocrLanguage: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationMode: string;
+  translatorEngine: string;
+  sourceFingerprint: string;
+  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedText: string;
+  lineCount: number;
+  groupCount: number;
+  createdAt: number;
+};
+
+export const TranslationCacheDAO = {
+  save: (
+    documentId: number,
+    pageNumber: number,
+    cacheKey: string,
+    entry: TranslationCacheEntryRecord
+  ) => {
+    if (!db) throw new Error('DB not initialized');
+    const now = Date.now();
+    const normalizedEngine = String(entry.ocrEngine || 'tesseract').toLowerCase();
+    const stmt = db.prepare(`
+      INSERT INTO translation_cache (
+        document_id,
+        page_number,
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @documentId,
+        @pageNumber,
+        @cacheKey,
+        @ocrEngine,
+        @ocrLanguage,
+        @sourceLanguage,
+        @targetLanguage,
+        @translationMode,
+        @translatorEngine,
+        @sourceFingerprint,
+        @translatedByIndex,
+        @translatedText,
+        @lineCount,
+        @groupCount,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(document_id, page_number, cache_key) DO UPDATE SET
+        ocr_engine = @ocrEngine,
+        ocr_language = @ocrLanguage,
+        source_language = @sourceLanguage,
+        target_language = @targetLanguage,
+        translation_mode = @translationMode,
+        translator_engine = @translatorEngine,
+        source_fingerprint = @sourceFingerprint,
+        translated_by_index = @translatedByIndex,
+        translated_text = @translatedText,
+        line_count = @lineCount,
+        group_count = @groupCount,
+        created_at = @createdAt,
+        updated_at = @updatedAt
+    `);
+
+    stmt.run({
+      documentId,
+      pageNumber,
+      cacheKey,
+      ocrEngine: normalizedEngine,
+      ocrLanguage: String(entry.ocrLanguage || 'eng'),
+      sourceLanguage: String(entry.sourceLanguage || 'eng').toLowerCase(),
+      targetLanguage: String(entry.targetLanguage || 'th').toLowerCase(),
+      translationMode: String(entry.translationMode || 'manga').toLowerCase(),
+      translatorEngine: String(entry.translatorEngine || 'offline').toLowerCase(),
+      sourceFingerprint: String(entry.sourceFingerprint || ''),
+      translatedByIndex: JSON.stringify(Array.isArray(entry.translatedByIndex) ? entry.translatedByIndex : []),
+      translatedText: String(entry.translatedText || ''),
+      lineCount: Number(entry.lineCount || 0),
+      groupCount: Number(entry.groupCount || 0),
+      createdAt: Number(entry.createdAt || now),
+      updatedAt: now,
+    });
+  },
+
+  getByPage: (documentId: number, pageNumber: number) => {
+    if (!db) throw new Error('DB not initialized');
+    const rows = db.prepare(`
+      SELECT
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at
+      FROM translation_cache
+      WHERE document_id = ?
+        AND page_number = ?
+      ORDER BY created_at DESC, updated_at DESC
+    `).all(documentId, pageNumber) as Array<{
+      cache_key: string;
+      ocr_engine: string;
+      ocr_language: string;
+      source_language: string;
+      target_language: string;
+      translation_mode: string;
+      translator_engine: string;
+      source_fingerprint: string;
+      translated_by_index: string;
+      translated_text: string;
+      line_count: number;
+      group_count: number;
+      created_at: number;
+    }>;
+
+    return rows.map((row) => {
+      let translatedByIndex: Array<{ index: number; text: string }> = [];
+      try {
+        const parsed = JSON.parse(row.translated_by_index);
+        if (Array.isArray(parsed)) {
+          translatedByIndex = parsed
+            .map((item) => ({
+              index: Number((item as { index?: unknown }).index || 0),
+              text: String((item as { text?: unknown }).text || ''),
+            }))
+            .filter((item) => Number.isFinite(item.index));
+        }
+      } catch {
+        translatedByIndex = [];
+      }
+
+      return {
+        key: row.cache_key,
+        pageNum: pageNumber,
+        ocrEngine: row.ocr_engine,
+        ocrLanguage: row.ocr_language,
+        sourceLanguage: row.source_language,
+        targetLanguage: row.target_language,
+        translationMode: row.translation_mode,
+        translatorEngine: row.translator_engine,
+        sourceFingerprint: row.source_fingerprint,
+        translatedByIndex,
+        translatedText: row.translated_text,
+        lineCount: Number(row.line_count || 0),
+        groupCount: Number(row.group_count || 0),
+        createdAt: Number(row.created_at || Date.now()),
+      };
+    });
+  },
+
+  clearByEngine: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
+    if (!db) throw new Error('DB not initialized');
+    const normalizedEngine = String(engine || 'tesseract').toLowerCase();
+    const result = db
+      .prepare('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+      .run(documentId, pageNumber, normalizedEngine);
+    return result.changes > 0;
+  },
 };

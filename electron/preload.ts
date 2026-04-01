@@ -12,6 +12,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:get-ocr',
   'db:clear-ocr',
   'db:get-latest-ocr',
+  'db:save-translation-cache',
+  'db:get-translation-cache-page',
+  'db:clear-translation-cache-by-engine',
   // Document management
   'db:get-recent-documents',
   'db:get-documents-by-project',
@@ -43,6 +46,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   'ocr:prewarm-engine',
   'ocr:run-external',
   'ocr:cancel-external',
+  'translate:offline',
+  'translate:offline-batch',
   'gemini:translate', // For secure Gemini API calls via main process
 ] as const;
 
@@ -101,6 +106,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }),
     getLatestOCR: (docId: number) =>
       ipcRenderer.invoke('db:get-latest-ocr', { docId }),
+    saveTranslationCache: (docId: number, pageNum: number, cacheKey: string, entry: unknown) =>
+      ipcRenderer.invoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
+    getTranslationCachePage: (docId: number, pageNum: number) =>
+      ipcRenderer.invoke('db:get-translation-cache-page', { docId, pageNum }),
+    clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: string) =>
+      ipcRenderer.invoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }),
     
     // Document management
     getRecentDocuments: (limit?: number) =>
@@ -153,8 +164,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
-    translate: (text: string, context: { mode: string; sourceType: string }) =>
+    translate: (text: string, context: {
+      mode: string;
+      sourceType: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+    }) =>
       ipcRenderer.invoke('gemini:translate', { text, context }),
+  },
+
+  translate: {
+    offline: (text: string, context?: {
+      mode?: string;
+      sourceType?: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('translate:offline', { text, context }),
+    offlineBatch: (texts: string[], context?: {
+      mode?: string;
+      sourceType?: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('translate:offline-batch', { texts, context }),
   },
 
   // File system operations (SECURE: validated in main process)

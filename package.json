@@ -15,7 +15,18 @@
     "ocr:regression:partial": "node scripts/run-ocr-regression.mjs --skip-missing --out .tmp-ocr-current.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report.json",
     "ocr:regression:paddle": "node scripts/run-ocr-regression.mjs --skip-missing --engine paddleocr --out .tmp-ocr-current-paddle.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current-paddle.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report-paddle.json",
     "ocr:regression:easy": "node scripts/run-ocr-regression.mjs --skip-missing --engine easyocr --out .tmp-ocr-current-easy.json && node scripts/ocr-regression-report.js --partial --cand .tmp-ocr-current-easy.json --base public/fixtures/ocr/baseline/ocr-v38-panel.json --expect public/fixtures/ocr/manga/expectations.json --out .tmp-ocr-report-easy.json",
+    "ocr:fixtures:check": "node scripts/ocr-fixture-audit.mjs --manifest public/fixtures/ocr/manga/expectations.json",
+    "ocr:fixtures:check:kor": "node scripts/ocr-fixture-audit.mjs --manifest public/fixtures/ocr/manga/expectations.json --require-language kor",
+    "translate:argos:install": "python -m pip install argostranslate",
+    "translate:argos:doctor": "python -c \"import argostranslate.translate as t; print('installed_languages=', [l.code for l in t.get_installed_languages()])\"",
+    "translate:argos:install-model": "python scripts/argos_install_pair.py --from en --to th",
+    "translate:argos:install-model:ko-th": "python scripts/argos_install_pair.py --from ko --to en",
+    "translate:argos:install-model:es-th": "python scripts/argos_install_pair.py --from es --to en",
+    "ocr:benchmark:strict": "node scripts/ocr-benchmark-matrix.mjs",
     "ocr:benchmark": "node scripts/ocr-benchmark-matrix.mjs",
+    "ocr:benchmark:partial": "node scripts/ocr-benchmark-matrix.mjs --skip-missing",
+    "ocr:gate": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
+    "ocr:gate:kor": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk --require-language kor",
     "ocr:benchmark:ci": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
     "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/postinstall-ocr.js"
   },
@@ -44,6 +55,10 @@
       {
         "from": "scripts/external_ocr_bridge.py",
         "to": "ocr-bridge/external_ocr_bridge.py"
+      },
+      {
+        "from": "scripts/argos_translate_bridge.py",
+        "to": "ocr-bridge/argos_translate_bridge.py"
       }
     ],
     "win": {

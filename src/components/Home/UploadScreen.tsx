@@ -7,9 +7,11 @@ import {
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
+import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 
 type SidebarPage = 'home' | 'projects';
 
@@ -640,6 +642,8 @@ const TagPill: React.FC<{
 
 export const UploadScreen: React.FC = () => {
   const { loadProject, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
+  const ocrOptions = useOCRTextLayerStore((state) => state.options);
+  const setOCROptions = useOCRTextLayerStore((state) => state.setOptions);
   const {
     viewMode, setViewMode,
     filterType,
@@ -1506,6 +1510,40 @@ export const UploadScreen: React.FC = () => {
                   <span className={`font-medium text-sm ${translationMode === 'official' ? 'text-[#EDF4FF]' : 'text-slate-300'}`}>Official Doc</span>
                 </div>
               </button>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">OCR Runtime</label>
+            <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
+              <div className="grid grid-cols-12 items-center gap-2">
+                <label className="col-span-5 text-[11px] font-semibold text-slate-300">Timeout</label>
+                <select
+                  value={ocrOptions.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
+                  onChange={(e) => setOCROptions({ perPageTimeoutSec: Number(e.target.value) })}
+                  aria-label="OCR timeout seconds per page"
+                  title="OCR timeout seconds per page"
+                  className="col-span-7 rounded-lg border border-white/12 bg-slate-900/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                >
+                  <option value={0}>No Limit</option>
+                  <option value={30}>30s</option>
+                  <option value={60}>60s</option>
+                  <option value={120}>120s</option>
+                  <option value={180}>180s</option>
+                  <option value={300}>300s</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2">
+                <span className="text-[11px] font-semibold text-slate-300">Skip if text exists</span>
+                <input
+                  type="checkbox"
+                  checked={ocrOptions.skipIfTextExists !== false}
+                  onChange={(e) => setOCROptions({ skipIfTextExists: e.target.checked })}
+                  className="accent-[#2B9BFF]"
+                  aria-label="Skip OCR if Text Exists"
+                />
+              </div>
             </div>
           </div>
 

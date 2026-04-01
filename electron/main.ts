@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { createHash } from 'crypto'
-import { initDB, DocumentDAO, OCRCacheDAO, TagDAO, ProjectDAO } from './db'
+import { spawn } from 'child_process'
+import { initDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO } from './db'
 import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
 
 // The built directory structure
@@ -111,6 +112,173 @@ app.whenReady().then(() => {
     return filepath.replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
   };
 
+  type TranslationContext = {
+    mode?: string;
+    sourceType?: string;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+    timeoutMs?: number;
+  };
+
+  const ARGOS_LANG_ALIASES: Record<string, string> = {
+    en: 'en',
+    eng: 'en',
+    english: 'en',
+    th: 'th',
+    tha: 'th',
+    thai: 'th',
+    ja: 'ja',
+    jpn: 'ja',
+    ko: 'ko',
+    kor: 'ko',
+    zh: 'zh',
+    chi: 'zh',
+    chi_sim: 'zh',
+    chi_tra: 'zh',
+    vi: 'vi',
+    vie: 'vi',
+    de: 'de',
+    deu: 'de',
+    fr: 'fr',
+    fra: 'fr',
+    ru: 'ru',
+    rus: 'ru',
+    es: 'es',
+    spa: 'es',
+  };
+
+  const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
+    en: 'English',
+    th: 'Thai',
+    ja: 'Japanese',
+    ko: 'Korean',
+    zh: 'Chinese',
+    vi: 'Vietnamese',
+    de: 'German',
+    fr: 'French',
+    ru: 'Russian',
+    es: 'Spanish',
+  };
+
+  const normalizeArgosLanguage = (value: unknown, fallback: string): string => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return fallback;
+    return ARGOS_LANG_ALIASES[raw] || raw.split('-')[0] || fallback;
+  };
+
+  const resolvePythonExecutable = (): string => {
+    if (isValidString(process.env.PDF_TRANSLATOR_PYTHON)) {
+      return process.env.PDF_TRANSLATOR_PYTHON;
+    }
+    const virtualEnv = process.env.VIRTUAL_ENV;
+    if (virtualEnv) {
+      const windowsPython = path.join(virtualEnv, 'Scripts', 'python.exe');
+      if (fs.existsSync(windowsPython)) return windowsPython;
+      const posixPython = path.join(virtualEnv, 'bin', 'python');
+      if (fs.existsSync(posixPython)) return posixPython;
+    }
+    return process.platform === 'win32' ? 'python' : 'python3';
+  };
+
+  const resolveArgosBridgePath = (): string => {
+    const candidates = [
+      path.join(process.cwd(), 'scripts', 'argos_translate_bridge.py'),
+      path.join(__dirname, '../scripts/argos_translate_bridge.py'),
+      path.join(process.resourcesPath, 'ocr-bridge', 'argos_translate_bridge.py'),
+    ];
+    const found = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!found) {
+      throw new Error('Argos bridge script not found. Expected scripts/argos_translate_bridge.py');
+    }
+    return found;
+  };
+
+  const runArgosTranslateBatch = async (
+    texts: string[],
+    context?: TranslationContext
+  ): Promise<string[]> => {
+    if (!Array.isArray(texts)) {
+      throw new Error('Invalid input: texts must be an array');
+    }
+    if (texts.length === 0) return [];
+
+    const timeoutMs = Math.max(3000, Math.min(120000, Number(context?.timeoutMs || 45000)));
+    const sourceLanguage = normalizeArgosLanguage(context?.sourceLanguage, 'en');
+    const targetLanguage = normalizeArgosLanguage(context?.targetLanguage, 'th');
+    if (sourceLanguage === targetLanguage) {
+      return texts.map((text) => String(text || ''));
+    }
+
+    const pythonExecutable = resolvePythonExecutable();
+    const bridgePath = resolveArgosBridgePath();
+    const payload = {
+      texts: texts.map((text) => String(text || '')),
+      sourceLanguage,
+      targetLanguage,
+      mode: String(context?.mode || 'manga'),
+      sourceType: String(context?.sourceType || 'text'),
+    };
+
+    return new Promise<string[]>((resolve, reject) => {
+      const child = spawn(pythonExecutable, [bridgePath], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          PYTHONUTF8: '1',
+        },
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Argos translation timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to launch Python for Argos translation: ${error.message}`));
+      });
+
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code !== 0) {
+          reject(new Error(`Argos translation bridge failed (${code}): ${(stderr || stdout).trim() || 'Unknown error'}`));
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(stdout || '{}') as { translations?: unknown };
+          if (!Array.isArray(parsed.translations)) {
+            reject(new Error('Argos translation bridge returned invalid payload'));
+            return;
+          }
+          const translations = parsed.translations.map((item) => String(item ?? ''));
+          if (translations.length !== texts.length) {
+            reject(new Error(`Argos translation count mismatch: expected ${texts.length}, got ${translations.length}`));
+            return;
+          }
+          resolve(translations);
+        } catch (error) {
+          reject(new Error(`Failed to parse Argos translation payload: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      });
+
+      child.stdin.write(JSON.stringify(payload));
+      child.stdin.end();
+    });
+  };
+
   // ============================================
   // Database IPC Handlers (with validation)
   // ============================================
@@ -217,6 +385,65 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:get-latest-ocr error:', error);
       return null;
+    }
+  });
+
+  ipcMain.handle('db:save-translation-cache', async (_, { docId, pageNum, cacheKey, entry }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid input: docId and pageNum must be positive numbers');
+    }
+    if (!isValidString(cacheKey) || !entry || typeof entry !== 'object') {
+      throw new Error('Invalid input: cacheKey and entry are required');
+    }
+
+    try {
+      TranslationCacheDAO.save(docId, pageNum, cacheKey, entry as {
+        key: string;
+        pageNum: number;
+        ocrEngine: string;
+        ocrLanguage: string;
+        sourceLanguage: string;
+        targetLanguage: string;
+        translationMode: string;
+        translatorEngine: string;
+        sourceFingerprint: string;
+        translatedByIndex: Array<{ index: number; text: string }>;
+        translatedText: string;
+        lineCount: number;
+        groupCount: number;
+        createdAt: number;
+      });
+      return true;
+    } catch (error) {
+      console.error('db:save-translation-cache error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-translation-cache-page', async (_, { docId, pageNum }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid input: docId and pageNum must be positive numbers');
+    }
+
+    try {
+      return TranslationCacheDAO.getByPage(docId, pageNum);
+    } catch (error) {
+      console.error('db:get-translation-cache-page error:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle('db:clear-translation-cache-by-engine', async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid input: docId and pageNum must be positive numbers');
+    }
+
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
+      return TranslationCacheDAO.clearByEngine(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error('db:clear-translation-cache-by-engine error:', error);
+      return false;
     }
   });
 
@@ -706,6 +933,40 @@ app.whenReady().then(() => {
   });
 
   // ============================================
+  // Offline Translation IPC Handlers (Argos Translate)
+  // ============================================
+  ipcMain.handle('translate:offline', async (_, payload: { text: string; context?: TranslationContext }) => {
+    if (!payload || typeof payload !== 'object' || !isValidString(payload.text)) {
+      throw new Error('Invalid input: text must be a non-empty string');
+    }
+
+    try {
+      const translated = await runArgosTranslateBatch([payload.text], payload.context);
+      return translated[0] || '';
+    } catch (error) {
+      console.error('translate:offline error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('translate:offline-batch', async (_, payload: { texts: string[]; context?: TranslationContext }) => {
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.texts)) {
+      throw new Error('Invalid input: texts must be an array');
+    }
+    const hasInvalidText = payload.texts.some((text) => typeof text !== 'string');
+    if (hasInvalidText) {
+      throw new Error('Invalid input: all texts must be strings');
+    }
+
+    try {
+      return await runArgosTranslateBatch(payload.texts, payload.context);
+    } catch (error) {
+      console.error('translate:offline-batch error:', error);
+      throw error;
+    }
+  });
+
+  // ============================================
   // Gemini API Handler (SECURE: API key in main process only)
   // ============================================
   ipcMain.handle('gemini:translate', async (_, { text, context }) => {
@@ -717,7 +978,22 @@ app.whenReady().then(() => {
       throw new Error('Invalid input: context must be an object');
     }
 
-    const { mode = 'manga', sourceType = 'text' } = context as { mode?: string; sourceType?: string };
+    const {
+      mode = 'manga',
+      sourceType = 'text',
+      sourceLanguage,
+      targetLanguage,
+    } = context as {
+      mode?: string;
+      sourceType?: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+    };
+
+    const normalizedSource = normalizeArgosLanguage(sourceLanguage, 'en');
+    const normalizedTarget = normalizeArgosLanguage(targetLanguage, 'th');
+    const sourceName = LANGUAGE_DISPLAY_NAMES[normalizedSource] || normalizedSource;
+    const targetName = LANGUAGE_DISPLAY_NAMES[normalizedTarget] || normalizedTarget;
 
     // Get API key from environment (NEVER expose to renderer)
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
@@ -728,9 +1004,9 @@ app.whenReady().then(() => {
     const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-    const systemPrompt = mode === 'manga' 
-      ? `You are a professional manga translator. Translate to Thai. Use informal, emotional language with particles like "นะ", "โว้ย". If the type is "sfx", explain the sound in brackets like [เสียงสั่นสะเทือน].`
-      : `You are a professional document translator. Translate to Thai. Use formal, polite language suitable for official documents.`;
+    const systemPrompt = mode === 'manga'
+      ? `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`
+      : `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.`;
 
     const payload = {
       contents: [{ parts: [{ text: `Translate this text: "${text}" (Type: ${sourceType})` }] }],
