@@ -88,7 +88,7 @@ type ResolveTranslationOverlayArgs = {
   currentPageOCR?: OCRPageResult;
   optionsEngine: OCREngine;
   optionsLanguage: string;
-  translationMode: 'manga' | 'official';
+  translationMode: 'manga' | 'manhwa' | 'official';
   sourceLanguage: string;
   targetLanguage: string;
   translationPreviewMode: OCRPreviewMode;

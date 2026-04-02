@@ -2,18 +2,50 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { 
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
-  Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus,
+  Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
+import {
+  OVERLAY_FONT_OPTIONS,
+  OverlayFontPreset,
+  getOverlayPrimaryFontName,
+} from '../../constants/overlayFonts';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 
-type SidebarPage = 'home' | 'projects';
+type SidebarPage = 'home' | 'projects' | 'settings';
+
+const SAFETY_LEVEL_PREVIEW: Record<keyof SafetySettings, Record<'off' | 'low' | 'medium' | 'high', string>> = {
+  harassment: {
+    off: 'อนุญาตโทนกระทบกระทั่งตามบริบท เช่น "แกมันบ้าไปแล้ว"',
+    low: 'ลดคำโจมตีตรงๆ แต่ยังคงอารมณ์เผ็ดได้',
+    medium: 'ตัดการเหยียด/ด่ารุนแรง ให้ใช้โทนโต้เถียงสุภาพขึ้น',
+    high: 'บังคับโทนปลอดภัยสูงสุด หลีกเลี่ยงการโจมตีตัวบุคคล',
+  },
+  hate: {
+    off: 'คงเนื้อหาเข้มตามต้นฉบับ (ถ้ามี)',
+    low: 'ลดคำล่อแหลมเชิงอคติ แต่ยังคงความหมายหลัก',
+    medium: 'แทนถ้อยคำเกลียดชังด้วยคำกลางที่ปลอดภัย',
+    high: 'บังคับกรองเข้มงวด หลีกเลี่ยงถ้อยคำแบ่งแยกทั้งหมด',
+  },
+  sexual: {
+    off: 'โทนตรงไปตรงมา เหมาะงานผู้ใหญ่/manhwa',
+    low: 'ลดความ explicit ลงเล็กน้อย',
+    medium: 'ใช้คำกลางมากขึ้น ลดรายละเอียดทางเพศ',
+    high: 'หลีกเลี่ยงถ้อยคำเชิงเพศชัดเจน',
+  },
+  dangerous: {
+    off: 'เก็บโทนขู่/รุนแรงตามบทสนทนา',
+    low: 'ลดคำชี้นำรุนแรงโดยตรง',
+    medium: 'แทนคำอันตรายด้วยถ้อยคำทั่วไป',
+    high: 'กรองเข้ม ปลอดภัยสูงสุดสำหรับงานทั่วไป',
+  },
+};
 
 // Format file size
 const formatFileSize = (bytes: number): string => {
@@ -641,7 +673,19 @@ const TagPill: React.FC<{
 );
 
 export const UploadScreen: React.FC = () => {
-  const { loadProject, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
+  const {
+    loadProject,
+    translationMode,
+    setTranslationMode,
+    safetySettings,
+    updateSafetySettings,
+    geminiApiKey,
+    setGeminiApiKey,
+    overlayThaiFontEnabled,
+    setOverlayThaiFontEnabled,
+    overlayFontPreset,
+    setOverlayFontPreset,
+  } = useProjectStore();
   const ocrOptions = useOCRTextLayerStore((state) => state.options);
   const setOCROptions = useOCRTextLayerStore((state) => state.setOptions);
   const {
@@ -675,7 +719,37 @@ export const UploadScreen: React.FC = () => {
   const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
+  const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
+  const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
   const thumbnailJobsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkFont = async () => {
+      if (typeof document === 'undefined' || !('fonts' in document)) {
+        if (mounted) setSelectedFontAvailable(null);
+        return;
+      }
+
+      try {
+        await document.fonts.ready;
+      } catch {
+        // Ignore font-set readiness failures.
+      }
+
+      const primaryFont = getOverlayPrimaryFontName(overlayFontPreset);
+      const available = document.fonts.check(`16px "${primaryFont}"`);
+      if (mounted) {
+        setSelectedFontAvailable(available);
+      }
+    };
+
+    void checkFont();
+    return () => {
+      mounted = false;
+    };
+  }, [overlayFontPreset]);
 
   const reportFileOpenError = useCallback((
     context: FileOpenContext,
@@ -1042,8 +1116,12 @@ export const UploadScreen: React.FC = () => {
           <div className="flex-1" />
 
           <button
-            onClick={() => {}}
-            className="p-3 rounded-xl text-slate-500 hover:bg-white/[0.06] hover:text-slate-100 transition-all"
+            onClick={() => { setActivePage('settings'); }}
+            className={`p-3 rounded-xl transition-all ${
+              activePage === 'settings'
+                ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+                : 'text-slate-500 hover:bg-white/[0.06] hover:text-slate-100'
+            }`}
             title="Settings"
           >
             <Settings2 size={20} />
@@ -1157,7 +1235,7 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
           </>
-        ) : (
+        ) : activePage === 'projects' ? (
           <>
             {/* Projects Page Sidebar */}
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
@@ -1195,6 +1273,112 @@ export const UploadScreen: React.FC = () => {
                   onSelect={() => loadDocumentsByProject(project.id)}
                 />
               ))}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Settings Page Sidebar */}
+            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <Settings2 className="text-slate-300" size={20} /> Settings
+            </h2>
+
+            <div className="flex-1 overflow-y-auto space-y-5 custom-scrollbar pr-1">
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2">
+                <label className="text-[11px] font-semibold text-slate-300">Gemini API Key</label>
+                <div className="relative">
+                  <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type={showGeminiApiKey ? 'text' : 'password'}
+                    value={geminiApiKey}
+                    onChange={(e) => setGeminiApiKey(e.target.value)}
+                    placeholder="AIza..."
+                    className="w-full rounded-lg border border-white/12 bg-slate-900/85 pl-7 pr-8 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGeminiApiKey((prev) => !prev)}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-white/10"
+                    title={showGeminiApiKey ? 'Hide API key' : 'Show API key'}
+                  >
+                    {showGeminiApiKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
+                <label className="text-[11px] font-semibold text-slate-300">Thai Overlay Font</label>
+                <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2 text-[11px] text-slate-300">
+                  <span className="font-semibold">Enable Thai font styling</span>
+                  <input
+                    type="checkbox"
+                    checked={overlayThaiFontEnabled}
+                    onChange={(e) => setOverlayThaiFontEnabled(e.target.checked)}
+                    className="accent-[#2B9BFF]"
+                    aria-label="Enable Thai overlay font"
+                  />
+                </label>
+
+                <select
+                  value={overlayFontPreset}
+                  onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
+                  disabled={!overlayThaiFontEnabled}
+                  className="w-full rounded-lg border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Thai overlay font preset"
+                  title="Thai overlay font preset"
+                >
+                  {OVERLAY_FONT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+
+                <p className={`text-[10px] leading-relaxed ${
+                  selectedFontAvailable === false
+                    ? 'text-amber-300/90'
+                    : selectedFontAvailable === true
+                      ? 'text-emerald-300/85'
+                      : 'text-slate-500'
+                }`}>
+                  Font status: {
+                    selectedFontAvailable === false
+                      ? 'fallback in use (font not detected)'
+                      : selectedFontAvailable === true
+                        ? 'detected and ready'
+                        : 'unknown'
+                  }
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
+                <label className="text-[11px] font-semibold text-slate-300">OCR Runtime</label>
+                <div className="grid grid-cols-12 items-center gap-2">
+                  <label className="col-span-5 text-[11px] font-semibold text-slate-300">Timeout</label>
+                  <select
+                    value={ocrOptions.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
+                    onChange={(e) => setOCROptions({ perPageTimeoutSec: Number(e.target.value) })}
+                    aria-label="OCR timeout seconds per page"
+                    title="OCR timeout seconds per page"
+                    className="col-span-7 rounded-lg border border-white/12 bg-slate-900/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                  >
+                    <option value={0}>No Limit</option>
+                    <option value={30}>30s</option>
+                    <option value={60}>60s</option>
+                    <option value={120}>120s</option>
+                    <option value={180}>180s</option>
+                    <option value={300}>300s</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2">
+                  <span className="text-[11px] font-semibold text-slate-300">Skip if text exists</span>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.skipIfTextExists !== false}
+                    onChange={(e) => setOCROptions({ skipIfTextExists: e.target.checked })}
+                    className="accent-[#2B9BFF]"
+                    aria-label="Skip OCR if Text Exists"
+                  />
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -1497,6 +1681,21 @@ export const UploadScreen: React.FC = () => {
               </button>
 
               <button
+                onClick={() => setTranslationMode('manhwa')}
+                className={`w-full p-3 rounded-xl border text-left transition-all ${
+                  translationMode === 'manhwa'
+                    ? 'border-[#EC4899]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
+                }`}
+                style={translationMode === 'manhwa' ? { background: 'linear-gradient(180deg, rgba(236,72,153,0.24) 0%, rgba(66,24,44,0.92) 100%)' } : undefined}
+              >
+                <div className="flex items-center gap-2">
+                  <Flame size={14} className={translationMode === 'manhwa' ? 'text-[#F9A8D4]' : 'text-slate-400'} />
+                  <span className={`font-medium text-sm ${translationMode === 'manhwa' ? 'text-[#FFE7F3]' : 'text-slate-300'}`}>Manhwa 18+ Style</span>
+                </div>
+              </button>
+
+              <button
                 onClick={() => setTranslationMode('official')}
                 className={`w-full p-3 rounded-xl border text-left transition-all ${
                   translationMode === 'official'
@@ -1513,40 +1712,6 @@ export const UploadScreen: React.FC = () => {
             </div>
           </div>
 
-          <div className="mb-6">
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">OCR Runtime</label>
-            <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
-              <div className="grid grid-cols-12 items-center gap-2">
-                <label className="col-span-5 text-[11px] font-semibold text-slate-300">Timeout</label>
-                <select
-                  value={ocrOptions.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
-                  onChange={(e) => setOCROptions({ perPageTimeoutSec: Number(e.target.value) })}
-                  aria-label="OCR timeout seconds per page"
-                  title="OCR timeout seconds per page"
-                  className="col-span-7 rounded-lg border border-white/12 bg-slate-900/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
-                >
-                  <option value={0}>No Limit</option>
-                  <option value={30}>30s</option>
-                  <option value={60}>60s</option>
-                  <option value={120}>120s</option>
-                  <option value={180}>180s</option>
-                  <option value={300}>300s</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2">
-                <span className="text-[11px] font-semibold text-slate-300">Skip if text exists</span>
-                <input
-                  type="checkbox"
-                  checked={ocrOptions.skipIfTextExists !== false}
-                  onChange={(e) => setOCROptions({ skipIfTextExists: e.target.checked })}
-                  className="accent-[#2B9BFF]"
-                  aria-label="Skip OCR if Text Exists"
-                />
-              </div>
-            </div>
-          </div>
-
           {/* Safety Settings (Collapsed by default) */}
           <details className="mb-6">
             <summary className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 cursor-pointer flex items-center gap-2">
@@ -1559,6 +1724,9 @@ export const UploadScreen: React.FC = () => {
                     <span className="text-xs capitalize text-slate-300">{key}</span>
                     <span className="text-[10px] px-1.5 py-0.5 bg-slate-900/85 border border-white/10 rounded text-slate-400 uppercase">{value}</span>
                   </div>
+                  <p className="text-[10px] text-slate-500 mb-1.5 leading-relaxed">
+                    {SAFETY_LEVEL_PREVIEW[key as keyof SafetySettings][value as 'off' | 'low' | 'medium' | 'high']}
+                  </p>
                   <input
                     type="range"
                     min="0"

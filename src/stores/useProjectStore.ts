@@ -1,9 +1,81 @@
 import { create } from 'zustand';
 import { dbService } from '../services/dbService';
 import { useOCRTextLayerStore } from './useOCRTextLayerStore';
+import {
+  DEFAULT_OVERLAY_FONT_PRESET,
+  OverlayFontPreset,
+  isOverlayFontPreset,
+} from '../constants/overlayFonts';
 
-export type TranslationMode = 'manga' | 'official';
+export type TranslationMode = 'manga' | 'manhwa' | 'official';
 export type ViewMode = 'single' | 'continuous';
+
+const GEMINI_API_KEY_STORAGE_KEY = 'pdf_translator.gemini_api_key';
+const OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY = 'pdf_translator.overlay_thai_font_enabled';
+const OVERLAY_FONT_PRESET_STORAGE_KEY = 'pdf_translator.overlay_font_preset';
+
+const readPersistedGeminiApiKey = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    return String(window.localStorage.getItem(GEMINI_API_KEY_STORAGE_KEY) || '');
+  } catch {
+    return '';
+  }
+};
+
+const persistGeminiApiKey = (value: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed = String(value || '').trim();
+    if (trimmed) {
+      window.localStorage.setItem(GEMINI_API_KEY_STORAGE_KEY, trimmed);
+    } else {
+      window.localStorage.removeItem(GEMINI_API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const readPersistedOverlayThaiFontEnabled = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  try {
+    const raw = String(window.localStorage.getItem(OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY) || '').trim().toLowerCase();
+    if (!raw) return true;
+    if (raw === '0' || raw === 'false') return false;
+    return true;
+  } catch {
+    return true;
+  }
+};
+
+const persistOverlayThaiFontEnabled = (enabled: boolean): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const readPersistedOverlayFontPreset = (): OverlayFontPreset => {
+  if (typeof window === 'undefined') return DEFAULT_OVERLAY_FONT_PRESET;
+  try {
+    const raw = String(window.localStorage.getItem(OVERLAY_FONT_PRESET_STORAGE_KEY) || '').trim();
+    return isOverlayFontPreset(raw) ? raw : DEFAULT_OVERLAY_FONT_PRESET;
+  } catch {
+    return DEFAULT_OVERLAY_FONT_PRESET;
+  }
+};
+
+const persistOverlayFontPreset = (preset: OverlayFontPreset): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OVERLAY_FONT_PRESET_STORAGE_KEY, preset);
+  } catch {
+    // Ignore local storage failures.
+  }
+};
 
 export interface SafetySettings {
   harassment: 'off' | 'low' | 'medium' | 'high';
@@ -11,6 +83,31 @@ export interface SafetySettings {
   sexual: 'off' | 'low' | 'medium' | 'high';
   dangerous: 'off' | 'low' | 'medium' | 'high';
 }
+
+const DEFAULT_SAFETY_SETTINGS_BY_MODE: Record<TranslationMode, SafetySettings> = {
+  manga: {
+    harassment: 'low',
+    hate: 'low',
+    sexual: 'low',
+    dangerous: 'low',
+  },
+  manhwa: {
+    harassment: 'low',
+    hate: 'low',
+    sexual: 'off',
+    dangerous: 'low',
+  },
+  official: {
+    harassment: 'medium',
+    hate: 'medium',
+    sexual: 'medium',
+    dangerous: 'medium',
+  },
+};
+
+const getDefaultSafetySettingsForMode = (mode: TranslationMode): SafetySettings => ({
+  ...DEFAULT_SAFETY_SETTINGS_BY_MODE[mode],
+});
 
 interface ProjectState {
   // File Data
@@ -32,6 +129,9 @@ interface ProjectState {
   safetySettings: SafetySettings;
   sourceLanguage: string;
   targetLanguage: string;
+  geminiApiKey: string;
+  overlayThaiFontEnabled: boolean;
+  overlayFontPreset: OverlayFontPreset;
 
   // Actions
   loadProject: (file: File, fileData?: Uint8Array | null) => Promise<void>;
@@ -44,6 +144,9 @@ interface ProjectState {
   setTranslationMode: (mode: TranslationMode) => void;
   setSourceLanguage: (lang: string) => void;
   setTargetLanguage: (lang: string) => void;
+  setGeminiApiKey: (apiKey: string) => void;
+  setOverlayThaiFontEnabled: (enabled: boolean) => void;
+  setOverlayFontPreset: (preset: OverlayFontPreset) => void;
   updateSafetySettings: (settings: Partial<SafetySettings>) => void;
 }
 
@@ -92,14 +195,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   viewMode: 'single',
 
   translationMode: 'manga',
-  safetySettings: {
-    harassment: 'off',
-    hate: 'off',
-    sexual: 'off',
-    dangerous: 'off'
-  },
+  safetySettings: getDefaultSafetySettingsForMode('manga'),
   sourceLanguage: 'eng',
   targetLanguage: 'th',
+  geminiApiKey: readPersistedGeminiApiKey(),
+  overlayThaiFontEnabled: readPersistedOverlayThaiFontEnabled(),
+  overlayFontPreset: readPersistedOverlayFontPreset(),
 
   loadProject: async (file, fileData) => {
     // Clear OCR cache when loading a new file to avoid cross-file reuse
@@ -303,9 +404,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
   setViewMode: (mode) => set({ viewMode: mode }),
-  setTranslationMode: (mode) => set({ translationMode: mode }),
+  setTranslationMode: (mode) => set({
+    translationMode: mode,
+    safetySettings: getDefaultSafetySettingsForMode(mode),
+  }),
   setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
   setTargetLanguage: (lang) => set({ targetLanguage: lang }),
+  setGeminiApiKey: (apiKey) => {
+    persistGeminiApiKey(apiKey);
+    set({ geminiApiKey: String(apiKey || '').trim() });
+  },
+  setOverlayThaiFontEnabled: (enabled) => {
+    persistOverlayThaiFontEnabled(enabled);
+    set({ overlayThaiFontEnabled: Boolean(enabled) });
+  },
+  setOverlayFontPreset: (preset) => {
+    persistOverlayFontPreset(preset);
+    set({ overlayFontPreset: preset });
+  },
   updateSafetySettings: (newSettings) => set((state) => ({
     safetySettings: { ...state.safetySettings, ...newSettings }
   }))

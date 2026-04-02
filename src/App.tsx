@@ -24,8 +24,9 @@ import {
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
+import type { AiExecutionMode } from './components/Layout/RightSidebar';
 import { useUIStore } from './stores/useUIStore';
-import { useProjectStore } from './stores/useProjectStore';
+import { useProjectStore, type SafetySettings, type TranslationMode } from './stores/useProjectStore';
 import { buildOCRTranslationCacheKey, useOCRTextLayerStore } from './stores/useOCRTextLayerStore';
 import { OCRLine, OCREngine, OCRPageResult } from './types';
 
@@ -43,6 +44,8 @@ type GlobalPrewarmState = typeof globalThis & {
   __pdfTranslatorExternalPrewarmInFlight?: Map<string, Promise<void>>;
 };
 
+const AI_EXECUTION_MODE_STORAGE_KEY = 'pdf_translator.ai_execution_mode';
+
 // --- Translation APIs: Secure IPC to Main Process ---
 // Offline Argos and Gemini fallback are both resolved in main process bridges
 
@@ -55,9 +58,13 @@ type GlobalPrewarmState = typeof globalThis & {
 async function translateWithGemini(
   text: string,
   type: string,
-  mode: 'manga' | 'official',
+  mode: TranslationMode,
   sourceLanguage: string,
-  targetLanguage: string
+  targetLanguage: string,
+  contextOverrides?: {
+    apiKey?: string;
+    baseSystemPrompt?: string;
+  }
 ): Promise<string> {
   try {
     // Use secure electronAPI instead of direct API call
@@ -65,7 +72,9 @@ async function translateWithGemini(
       mode,
       sourceType: type,
       sourceLanguage,
-      targetLanguage
+      targetLanguage,
+      apiKey: contextOverrides?.apiKey,
+      baseSystemPrompt: contextOverrides?.baseSystemPrompt,
     });
     return result;
   } catch (error) {
@@ -77,7 +86,7 @@ async function translateWithGemini(
 async function translateBatchOffline(
   texts: string[],
   type: string,
-  mode: 'manga' | 'official',
+  mode: TranslationMode,
   sourceLanguage: string,
   targetLanguage: string
 ): Promise<string[]> {
@@ -104,13 +113,17 @@ async function translateBatchOffline(
 async function translateBatchGemini(
   texts: string[],
   type: string,
-  mode: 'manga' | 'official',
+  mode: TranslationMode,
   sourceLanguage: string,
-  targetLanguage: string
+  targetLanguage: string,
+  contextOverrides?: {
+    apiKey?: string;
+    baseSystemPrompt?: string;
+  }
 ): Promise<string[]> {
   if (texts.length === 0) return [];
   return Promise.all(
-    texts.map((text) => translateWithGemini(text, type, mode, sourceLanguage, targetLanguage))
+    texts.map((text) => translateWithGemini(text, type, mode, sourceLanguage, targetLanguage, contextOverrides))
   );
 }
 
@@ -127,6 +140,136 @@ type TranslatableLine = {
 
 type TranslationGroup = {
   lines: TranslatableLine[];
+};
+
+type BatchPageTranslationPlan = {
+  pageNum: number;
+  ocr: OCRPageResult;
+  ocrEngine: OCREngine;
+  ocrLanguageKey: string;
+  sourceLanguage: string;
+  lines: TranslatableLine[];
+};
+
+const GEMINI_MODE_STYLE_HINTS: Record<TranslationMode, string> = {
+  manga: 'Use lively natural Thai for manga dialogue. Keep character personality, pacing, and emotional beats.',
+  manhwa: 'Use natural Thai for mature manhwa dialogue. Keep intensity and chemistry, avoid robotic wording.',
+  official: 'Use formal, clear, and precise Thai for documents. Prefer consistency and professional wording.',
+};
+
+const buildSafetyDirective = (safetySettings: SafetySettings): string => {
+  const parts = [
+    `harassment=${safetySettings.harassment}`,
+    `hate=${safetySettings.hate}`,
+    `sexual=${safetySettings.sexual}`,
+    `dangerous=${safetySettings.dangerous}`,
+  ];
+  return `Safety profile: ${parts.join(', ')}. Respect the selected levels while preserving intent.`;
+};
+
+const buildGeminiBasePrompt = (
+  mode: TranslationMode,
+  sourceLanguage: string,
+  targetLanguage: string,
+  safetySettings: SafetySettings
+): string => {
+  const styleHint = GEMINI_MODE_STYLE_HINTS[mode] || GEMINI_MODE_STYLE_HINTS.manga;
+  return [
+    `You are an expert translator from ${sourceLanguage} to ${targetLanguage}.`,
+    styleHint,
+    buildSafetyDirective(safetySettings),
+    'Do not summarize or skip lines. Preserve names, references, and narrative continuity.',
+  ].join(' ');
+};
+
+const buildBatchMarkdownPayload = (
+  plans: BatchPageTranslationPlan[],
+  translationMode: TranslationMode,
+  sourceLanguage: string,
+  targetLanguage: string
+): string => {
+  const lines: string[] = [];
+  lines.push('# OCR Translation Batch');
+  lines.push('');
+  lines.push('## Metadata');
+  lines.push(`- translationMode: ${translationMode}`);
+  lines.push(`- sourceLanguage: ${sourceLanguage}`);
+  lines.push(`- targetLanguage: ${targetLanguage}`);
+  lines.push(`- pageCount: ${plans.length}`);
+  lines.push('');
+  lines.push('## Required Output Format');
+  lines.push('Return ONLY valid JSON with this exact schema:');
+  lines.push('```json');
+  lines.push('{');
+  lines.push('  "pages": [');
+  lines.push('    { "page": 1, "lines": [ { "index": 0, "text": "..." } ] }');
+  lines.push('  ]');
+  lines.push('}');
+  lines.push('```');
+  lines.push('Rules:');
+  lines.push('- Every input line index must appear once in output for the same page.');
+  lines.push('- Keep index values unchanged.');
+  lines.push('- Translate text only; do not include notes, markdown, or extra fields.');
+  lines.push('');
+  lines.push('## OCR Input');
+
+  for (const plan of plans) {
+    lines.push('');
+    lines.push(`### Page ${plan.pageNum}`);
+    lines.push(`- ocrEngine: ${plan.ocrEngine}`);
+    lines.push(`- ocrLanguage: ${plan.ocrLanguageKey}`);
+    lines.push(`- sourceLanguage: ${plan.sourceLanguage}`);
+    lines.push('- lines:');
+    for (const line of plan.lines) {
+      const clean = String(line.text || '').replace(/\r?\n+/g, ' ').trim();
+      lines.push(`  - [${line.index}] ${clean}`);
+    }
+  }
+
+  return lines.join('\n');
+};
+
+const extractJsonObjectText = (raw: string): string => {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fenced?.[1] || raw || '').trim();
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) {
+    throw new Error('Gemini batch response does not contain a valid JSON object.');
+  }
+  return candidate.slice(start, end + 1);
+};
+
+const parseBatchJsonResponse = (raw: string): Map<number, Map<number, string>> => {
+  const jsonText = extractJsonObjectText(raw);
+  const parsed = JSON.parse(jsonText) as {
+    pages?: Array<{
+      page?: number;
+      pageNumber?: number;
+      lines?: Array<{ index?: number; text?: string }>;
+    }>;
+  };
+
+  if (!Array.isArray(parsed.pages)) {
+    throw new Error('Gemini batch response JSON is missing pages array.');
+  }
+
+  const byPage = new Map<number, Map<number, string>>();
+  parsed.pages.forEach((pageEntry) => {
+    const pageNum = Number(pageEntry.page ?? pageEntry.pageNumber);
+    if (!Number.isFinite(pageNum)) return;
+    const lineMap = new Map<number, string>();
+    if (Array.isArray(pageEntry.lines)) {
+      pageEntry.lines.forEach((line) => {
+        const index = Number(line.index);
+        if (!Number.isFinite(index)) return;
+        lineMap.set(index, String(line.text || '').trim());
+      });
+    }
+    byPage.set(pageNum, lineMap);
+  });
+
+  return byPage;
 };
 
 const SENTENCE_END_REGEX = /[.!?\u2026\u3002\uFF01\uFF1F]$/;
@@ -606,7 +749,9 @@ export default function App() {
     targetLanguage,
     setTargetLanguage,
     translationMode,
-    setTranslationMode
+    setTranslationMode,
+    safetySettings,
+    geminiApiKey,
   } = useProjectStore();
 
   const normalizePrewarmLanguage = (value: string): string => value
@@ -618,11 +763,29 @@ export default function App() {
   
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [isOfflineProcessing, setIsOfflineProcessing] = useState(false);
+  const [aiExecutionMode, setAiExecutionMode] = useState<AiExecutionMode>(() => {
+    if (typeof window === 'undefined') return 'batch-document';
+    try {
+      const stored = String(window.localStorage.getItem(AI_EXECUTION_MODE_STORAGE_KEY) || '').trim();
+      return stored === 'current-page' ? 'current-page' : 'batch-document';
+    } catch {
+      return 'batch-document';
+    }
+  });
   const [isVisionReady, setIsVisionReady] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(AI_EXECUTION_MODE_STORAGE_KEY, aiExecutionMode);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [aiExecutionMode]);
 
   const handleBackToHome = () => {
     visionService.cancelAll('Project closed');
@@ -729,6 +892,185 @@ export default function App() {
     return collected;
   };
 
+  const buildGeminiContextOverrides = (
+    mode: TranslationMode,
+    source: string,
+    target: string
+  ): { apiKey?: string; baseSystemPrompt?: string } => {
+    const apiKey = String(geminiApiKey || '').trim();
+    const baseSystemPrompt = buildGeminiBasePrompt(mode, source, target, safetySettings);
+    return {
+      apiKey: apiKey || undefined,
+      baseSystemPrompt,
+    };
+  };
+
+  const runAiBatchDocumentTranslation = async () => {
+    const ocrState = useOCRTextLayerStore.getState();
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
+    const normalizedUserSourceLanguage = normalizeTranslationLanguage(sourceLanguage, 'en');
+
+    const pageCandidates = new Set<number>();
+    ocrState.ocrByPageEngine.forEach((_value, pageNum) => pageCandidates.add(pageNum));
+    ocrState.allPagesOCR.forEach((_value, pageNum) => pageCandidates.add(pageNum));
+
+    const sortedPageNums = Array.from(pageCandidates.values()).sort((a, b) => a - b);
+    const plans: BatchPageTranslationPlan[] = [];
+    let skippedNoModelCache = 0;
+    let skippedNoText = 0;
+    let deferredByPayloadBudget = 0;
+    const maxPayloadChars = 120000;
+    let runningPayloadEstimate = 1400;
+
+    for (const pageNum of sortedPageNums) {
+      const pageOCRFromEngine = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+      const fallbackOCR = ocrState.allPagesOCR.get(pageNum);
+      const fallbackEngine = (fallbackOCR?.ocrEngine || selectedEngine) as OCREngine;
+      const pageOCR = pageOCRFromEngine || (fallbackEngine === selectedEngine ? fallbackOCR : undefined);
+
+      if (!pageOCR) {
+        skippedNoModelCache += 1;
+        continue;
+      }
+
+      const lines = collectTranslatableLines(pageOCR.lines || []);
+      if (lines.length === 0) {
+        skippedNoText += 1;
+        continue;
+      }
+
+      const ocrLanguageKey = pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
+      const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
+
+      const plan: BatchPageTranslationPlan = {
+        pageNum,
+        ocr: pageOCR,
+        ocrEngine: (pageOCR.ocrEngine || selectedEngine) as OCREngine,
+        ocrLanguageKey,
+        sourceLanguage: resolvedSourceFromOCR,
+        lines,
+      };
+
+      const pageEstimate = 220 + lines.reduce((sum, line) => sum + String(line.text || '').length + 20, 0);
+      if (runningPayloadEstimate + pageEstimate > maxPayloadChars && plans.length > 0) {
+        deferredByPayloadBudget += 1;
+        continue;
+      }
+
+      runningPayloadEstimate += pageEstimate;
+      plans.push(plan);
+    }
+
+    if (plans.length === 0) {
+      await runCurrentPageTranslation('ai');
+      return;
+    }
+
+    const sourceFrequency = new Map<string, number>();
+    plans.forEach((plan) => {
+      sourceFrequency.set(plan.sourceLanguage, (sourceFrequency.get(plan.sourceLanguage) || 0) + plan.lines.length);
+    });
+    const dominantSourceLanguage = Array.from(sourceFrequency.entries())
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || normalizedUserSourceLanguage;
+
+    const markdownPayload = buildBatchMarkdownPayload(
+      plans,
+      translationMode,
+      dominantSourceLanguage,
+      normalizedTargetLanguage
+    );
+
+    const geminiResponse = await translateWithGemini(
+      markdownPayload,
+      'batch-markdown',
+      translationMode,
+      dominantSourceLanguage,
+      normalizedTargetLanguage,
+      buildGeminiContextOverrides(translationMode, dominantSourceLanguage, normalizedTargetLanguage)
+    );
+
+    const translatedByPage = parseBatchJsonResponse(geminiResponse);
+    const cacheDocId = await ensureDocumentId().catch(() => null);
+
+    let translatedPages = 0;
+    let translatedLines = 0;
+    let fallbackLines = 0;
+
+    for (const plan of plans) {
+      const translatedLineMap = translatedByPage.get(plan.pageNum) || new Map<number, string>();
+      const translatedByIndex = new Map<number, string>();
+
+      plan.lines.forEach((line) => {
+        const candidate = normalizeWhitespace(String(translatedLineMap.get(line.index) || ''));
+        const fallback = line.text;
+        const nextText = candidate || fallback;
+        if (!candidate) {
+          fallbackLines += 1;
+        }
+        translatedByIndex.set(
+          line.index,
+          normalizedTargetLanguage === 'th' ? normalizeThaiTranslationText(nextText) : nextText
+        );
+      });
+
+      const updatedLines = (plan.ocr.lines || []).map((line, lineIndex) => {
+        const translatedText = translatedByIndex.get(lineIndex);
+        if (!translatedText) return line;
+        return {
+          ...line,
+          text: translatedText,
+        };
+      });
+
+      const cacheKey = buildOCRTranslationCacheKey({
+        ocrEngine: plan.ocrEngine,
+        ocrLanguage: plan.ocrLanguageKey,
+        sourceLanguage: plan.sourceLanguage,
+        targetLanguage: normalizedTargetLanguage,
+        translationMode,
+        translatorEngine: 'ai',
+      });
+
+      const translationEntry = {
+        key: cacheKey,
+        pageNum: plan.pageNum,
+        ocrEngine: plan.ocrEngine,
+        ocrLanguage: plan.ocrLanguageKey,
+        sourceLanguage: plan.sourceLanguage,
+        targetLanguage: normalizedTargetLanguage,
+        translationMode,
+        translatorEngine: 'ai' as const,
+        sourceFingerprint: buildOCRSourceFingerprint(plan.ocr, plan.ocrEngine),
+        translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
+        translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
+        lineCount: translatedByIndex.size,
+        groupCount: plan.lines.length,
+        createdAt: Date.now(),
+      };
+
+      setTranslationCacheEntry(plan.pageNum, cacheKey, translationEntry);
+
+      if (cacheDocId) {
+        await dbService.saveTranslationCache(cacheDocId, plan.pageNum, cacheKey, translationEntry);
+      }
+
+      translatedPages += 1;
+      translatedLines += translatedByIndex.size;
+    }
+
+    const notes: string[] = [];
+    if (fallbackLines > 0) notes.push(`fallback lines ${fallbackLines}`);
+    if (deferredByPayloadBudget > 0) notes.push(`deferred pages ${deferredByPayloadBudget}`);
+    if (skippedNoModelCache > 0) notes.push(`no-model-cache pages ${skippedNoModelCache}`);
+    if (skippedNoText > 0) notes.push(`no-text pages ${skippedNoText}`);
+
+    setTranslationStatus({
+      kind: 'success',
+      message: `ai batch | ${dominantSourceLanguage}->${normalizedTargetLanguage} | engine ${selectedEngine} translated ${translatedLines} lines across ${translatedPages} pages in one request.${notes.length ? ` notes: ${notes.join(', ')}` : ''}`,
+    });
+  };
+
   const runCurrentPageTranslation = async (engine: 'offline' | 'ai') => {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
@@ -774,7 +1116,14 @@ export default function App() {
     const textsForTranslation = protectedGroups.map((item) => item.protectedText);
     const translatedGroupsRaw = engine === 'offline'
       ? await translateBatchOffline(textsForTranslation, 'text', translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
-      : await translateBatchGemini(textsForTranslation, 'text', translationMode, effectiveSourceLanguage, normalizedTargetLanguage);
+      : await translateBatchGemini(
+        textsForTranslation,
+        'text',
+        translationMode,
+        effectiveSourceLanguage,
+        normalizedTargetLanguage,
+        buildGeminiContextOverrides(translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
+      );
     const translatedGroups = translatedGroupsRaw.map((text, index) => {
       const restored = restoreProtectedTokens(text, protectedGroups[index]?.replacements || []);
       if (normalizedTargetLanguage === 'th') {
@@ -803,7 +1152,14 @@ export default function App() {
       const retryInputs = retryCandidates.map((item) => normalizeSourceForTranslation(item.sourceText));
       const retryRaw = engine === 'offline'
         ? await translateBatchOffline(retryInputs, 'text', translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
-        : await translateBatchGemini(retryInputs, 'text', translationMode, effectiveSourceLanguage, normalizedTargetLanguage);
+        : await translateBatchGemini(
+          retryInputs,
+          'text',
+          translationMode,
+          effectiveSourceLanguage,
+          normalizedTargetLanguage,
+          buildGeminiContextOverrides(translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
+        );
       const retryOutputs = retryRaw.map((text) => (
         normalizedTargetLanguage === 'th'
           ? normalizeThaiTranslationText(text)
@@ -898,9 +1254,18 @@ export default function App() {
   const handleAiTranslate = async () => {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsAiProcessing(true);
-    setTranslationStatus({ kind: 'info', message: 'Running Gemini translation on current page...' });
+    setTranslationStatus({
+      kind: 'info',
+      message: aiExecutionMode === 'current-page'
+        ? 'Running Gemini translation on current page (test mode)...'
+        : 'Running Gemini batch translation across OCR pages...',
+    });
     try {
-      await runCurrentPageTranslation('ai');
+      if (aiExecutionMode === 'current-page') {
+        await runCurrentPageTranslation('ai');
+      } else {
+        await runAiBatchDocumentTranslation();
+      }
     } catch (err) {
       console.error('AI Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -1067,6 +1432,8 @@ export default function App() {
             onAiTranslate={handleAiTranslate}
             onOfflineTranslate={handleOfflineTranslate}
             translationStatus={translationStatus}
+            aiExecutionMode={aiExecutionMode}
+            onAiExecutionModeChange={setAiExecutionMode}
           />
         </React.Suspense>
       </div>

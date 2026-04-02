@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
+import {
+  OVERLAY_FONT_OPTIONS,
+  OverlayFontPreset,
+} from '../../constants/overlayFonts';
 import { 
   FileText, 
   Settings, 
   Languages,
   Sparkles,
+  Flame,
   RefreshCw
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
+
+export type AiExecutionMode = 'batch-document' | 'current-page';
 
 interface RightSidebarProps {
   isAiProcessing?: boolean;
@@ -15,6 +22,8 @@ interface RightSidebarProps {
   onAiTranslate?: () => void;
   onOfflineTranslate?: () => void;
   translationStatus?: { kind: 'info' | 'success' | 'error'; message: string } | null;
+  aiExecutionMode?: AiExecutionMode;
+  onAiExecutionModeChange?: (mode: AiExecutionMode) => void;
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({ 
@@ -22,13 +31,19 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   isOfflineProcessing = false,
   onAiTranslate,
   onOfflineTranslate,
-  translationStatus = null
+  translationStatus = null,
+  aiExecutionMode = 'batch-document',
+  onAiExecutionModeChange,
 }) => {
   const { 
     targetLanguage,
     setTargetLanguage,
     translationMode,
-    setTranslationMode
+    setTranslationMode,
+    overlayThaiFontEnabled,
+    setOverlayThaiFontEnabled,
+    overlayFontPreset,
+    setOverlayFontPreset,
   } = useProjectStore();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -107,7 +122,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 onClick={onAiTranslate}
                 disabled={isTranslateBusy}
                 className="col-span-3 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 py-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all"
-                title="Use Gemini cloud model"
+                title={aiExecutionMode === 'current-page'
+                  ? 'Use Gemini cloud model on current page only (test mode)'
+                  : 'Use Gemini cloud model (batch all OCR pages in one request)'}
               >
                 {isAiProcessing ? (
                   <RefreshCw className="animate-spin" size={12} />
@@ -117,6 +134,33 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 AI
               </button>
             </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onAiExecutionModeChange?.('batch-document')}
+                className={`rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-all ${
+                  aiExecutionMode === 'batch-document'
+                    ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100'
+                    : 'border-white/12 bg-slate-900/60 text-slate-300 hover:border-white/25'
+                }`}
+                title="Send OCR from all cached pages in one Gemini request"
+              >
+                AI Batch (All Pages)
+              </button>
+              <button
+                type="button"
+                onClick={() => onAiExecutionModeChange?.('current-page')}
+                className={`rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-all ${
+                  aiExecutionMode === 'current-page'
+                    ? 'border-amber-300/65 bg-amber-500/18 text-amber-100'
+                    : 'border-white/12 bg-slate-900/60 text-slate-300 hover:border-white/25'
+                }`}
+                title="Translate only current page with Gemini (for quick testing)"
+              >
+                AI Current Page
+              </button>
+            </div>
           </div>
 
           {/* Translation Context */}
@@ -124,7 +168,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
               Translation Context
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button 
                 onClick={() => setTranslationMode('manga')}
                 className={`text-[11px] px-2 py-1.5 rounded-lg border flex items-center justify-center gap-1 transition-all ${
@@ -137,6 +181,17 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 Manga
               </button>
               <button 
+                onClick={() => setTranslationMode('manhwa')}
+                className={`text-[11px] px-2 py-1.5 rounded-lg border flex items-center justify-center gap-1 transition-all ${
+                  translationMode === 'manhwa' 
+                    ? 'bg-gradient-to-r from-[#EC4899]/28 to-[#FB7185]/22 border-[#EC4899]/60 text-[#ffe3ef] shadow-[0_8px_18px_rgba(236,72,153,0.24)]'
+                    : 'bg-slate-900/60 border-white/12 text-slate-300 hover:bg-slate-900 hover:border-white/25'
+                }`}
+              >
+                <Flame size={12} />
+                Manhwa
+              </button>
+              <button 
                 onClick={() => setTranslationMode('official')}
                 className={`text-[11px] px-2 py-1.5 rounded-lg border flex items-center justify-center gap-1 transition-all ${
                   translationMode === 'official' 
@@ -147,6 +202,36 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 <FileText size={12} />
                 Official
               </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
+              Thai Overlay Font
+            </label>
+            <div className="rounded-lg border border-white/12 bg-slate-900/55 p-2.5 space-y-2">
+              <label className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-slate-950/70 px-2.5 py-1.5 text-[11px] text-slate-300">
+                <span className="font-semibold">Enable Thai font styling</span>
+                <input
+                  type="checkbox"
+                  checked={overlayThaiFontEnabled}
+                  onChange={(e) => setOverlayThaiFontEnabled(e.target.checked)}
+                  className="accent-[#2B9BFF]"
+                  aria-label="Enable Thai overlay font"
+                />
+              </label>
+
+              <select
+                value={overlayFontPreset}
+                onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
+                disabled={!overlayThaiFontEnabled}
+                className="w-full rounded-md border border-white/12 bg-slate-950/85 px-2.5 py-1.5 text-[11px] text-slate-100 focus:outline-none focus:border-[#2B9BFF]/60 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Thai overlay font preset"
+              >
+                {OVERLAY_FONT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
             </div>
           </div>
 

@@ -113,7 +113,7 @@ async function renderPdfFixturePageToDataUrl(
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Failed to create canvas context for PDF fixture render');
 
-    await page.render({ canvasContext: context, viewport, intent: 'print' }).promise;
+    await page.render({ canvas, canvasContext: context, viewport, intent: 'print' }).promise;
 
     return {
       imageUrl: canvas.toDataURL('image/png'),

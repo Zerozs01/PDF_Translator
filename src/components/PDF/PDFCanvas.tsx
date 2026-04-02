@@ -14,6 +14,7 @@ import {
   resolveTranslationOverlayContext,
   sampleOverlayPaletteFromLine,
 } from '../OCR/translationOverlayUtils';
+import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 
 export const PDFCanvas: React.FC = () => {
   const {
@@ -26,6 +27,8 @@ export const PDFCanvas: React.FC = () => {
     sourceLanguage,
     targetLanguage,
     translationMode,
+    overlayThaiFontEnabled,
+    overlayFontPreset,
   } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
@@ -49,11 +52,17 @@ export const PDFCanvas: React.FC = () => {
     offsetX: 0,
     offsetY: 0
   });
+  const [pageRenderTick, setPageRenderTick] = useState(0);
   const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, { backgroundColor: string; textColor: string }>>(new Map());
 
   const currentPageOCR = allPagesOCR.get(currentPage);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
+  const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
+    preset: overlayFontPreset,
+    enabled: overlayThaiFontEnabled,
+    targetLanguage,
+  }), [overlayFontPreset, overlayThaiFontEnabled, targetLanguage]);
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
     optionsEngine: options.engine || 'tesseract',
@@ -120,6 +129,7 @@ export const PDFCanvas: React.FC = () => {
   }, [
     currentPage,
     currentPageOCR,
+    pageRenderTick,
     translationOverlayContext.entry?.key,
     translationOverlayContext.shouldRender,
     translationOverlayContext.translatedByIndex,
@@ -217,6 +227,10 @@ export const PDFCanvas: React.FC = () => {
     }
   }, [setZoom, setPan]);
 
+  const onPageRenderSuccess = React.useCallback(() => {
+    setPageRenderTick((prev) => prev + 1);
+  }, []);
+
   // Listen for Process Request
   useEffect(() => {
     if (processRequest > 0) {
@@ -261,7 +275,7 @@ export const PDFCanvas: React.FC = () => {
       // Determine document type based on translation mode
       // manga mode = comic/manga, official mode = document
       const translationMode = useProjectStore.getState().translationMode;
-      const documentType = translationMode === 'manga' ? 'manga' : 'document';
+      const documentType = translationMode === 'official' ? 'document' : 'manga';
       
       console.log(`[PDFCanvas] Document type: ${documentType}`);
       
@@ -401,6 +415,7 @@ export const PDFCanvas: React.FC = () => {
                   className="border border-slate-700 bg-white"
                   width={800}
                   onLoadSuccess={onPageLoadSuccess}
+                  onRenderSuccess={onPageRenderSuccess}
                 />
                 {/* Regions Overlay */}
                 {regions.map(reg => (
@@ -454,6 +469,7 @@ export const PDFCanvas: React.FC = () => {
                             color: palette.textColor,
                             fontSize: typography.fontSize,
                             lineHeight: typography.lineHeight,
+                            fontFamily: overlayFontFamily,
                             wordBreak: 'break-word',
                             overflowWrap: 'anywhere',
                             transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,

@@ -983,12 +983,18 @@ app.whenReady().then(() => {
       sourceType = 'text',
       sourceLanguage,
       targetLanguage,
+      apiKey: apiKeyOverride,
+      baseSystemPrompt,
     } = context as {
       mode?: string;
       sourceType?: string;
       sourceLanguage?: string;
       targetLanguage?: string;
+      apiKey?: string;
+      baseSystemPrompt?: string;
     };
+
+    const normalizedMode = mode === 'official' ? 'official' : mode === 'manhwa' ? 'manhwa' : 'manga';
 
     const normalizedSource = normalizeArgosLanguage(sourceLanguage, 'en');
     const normalizedTarget = normalizeArgosLanguage(targetLanguage, 'th');
@@ -996,7 +1002,8 @@ app.whenReady().then(() => {
     const targetName = LANGUAGE_DISPLAY_NAMES[normalizedTarget] || normalizedTarget;
 
     // Get API key from environment (NEVER expose to renderer)
-    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    const apiKeyFromContext = String(apiKeyOverride || '').trim();
+    const apiKey = apiKeyFromContext || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY not configured. Please set it in .env file.');
     }
@@ -1004,12 +1011,22 @@ app.whenReady().then(() => {
     const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-    const systemPrompt = mode === 'manga'
-      ? `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`
-      : `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.`;
+    const modePrompt = normalizedMode === 'official'
+      ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.`
+      : normalizedMode === 'manhwa'
+        ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep mature dialogue natural and emotionally accurate while preserving intent and relationship dynamics.`
+        : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`;
+
+    const systemPrompt = isValidString(baseSystemPrompt)
+      ? baseSystemPrompt
+      : modePrompt;
+
+    const promptText = sourceType === 'batch-markdown'
+      ? String(text)
+      : `Translate this text: "${text}" (Type: ${sourceType})`;
 
     const payload = {
-      contents: [{ parts: [{ text: `Translate this text: "${text}" (Type: ${sourceType})` }] }],
+      contents: [{ parts: [{ text: promptText }] }],
       systemInstruction: { parts: [{ text: systemPrompt }] }
     };
 

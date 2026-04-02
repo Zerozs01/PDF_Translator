@@ -10,9 +10,18 @@ import {
   resolveTranslationOverlayContext,
   sampleOverlayPaletteFromLine,
 } from '../OCR/translationOverlayUtils';
+import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 
 export const ImageCanvas: React.FC = () => {
-  const { fileUrl, currentPage, sourceLanguage, targetLanguage, translationMode } = useProjectStore();
+  const {
+    fileUrl,
+    currentPage,
+    sourceLanguage,
+    targetLanguage,
+    translationMode,
+    overlayThaiFontEnabled,
+    overlayFontPreset,
+  } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const {
     allPagesOCR,
@@ -25,6 +34,11 @@ export const ImageCanvas: React.FC = () => {
   const currentPageOCR = allPagesOCR.get(currentPage) || allPagesOCR.get(1);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage) || translationCacheByPage.get(1);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage) || activeTranslationKeyByPage.get(1);
+  const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
+    preset: overlayFontPreset,
+    enabled: overlayThaiFontEnabled,
+    targetLanguage,
+  }), [overlayFontPreset, overlayThaiFontEnabled, targetLanguage]);
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
     optionsEngine: options.engine || 'tesseract',
@@ -252,6 +266,7 @@ export const ImageCanvas: React.FC = () => {
                         color: palette.textColor,
                         fontSize: typography.fontSize,
                         lineHeight: typography.lineHeight,
+                        fontFamily: overlayFontFamily,
                         wordBreak: 'break-word',
                         overflowWrap: 'anywhere',
                         transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,

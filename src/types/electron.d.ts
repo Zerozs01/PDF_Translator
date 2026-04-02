@@ -56,7 +56,7 @@ export interface DBOCRTranslationCacheEntry {
   ocrLanguage: string;
   sourceLanguage: string;
   targetLanguage: string;
-  translationMode: 'manga' | 'official';
+  translationMode: 'manga' | 'manhwa' | 'official';
   translatorEngine: 'offline' | 'ai';
   sourceFingerprint: string;
   translatedByIndex: Array<{ index: number; text: string }>;
@@ -135,6 +135,15 @@ export interface OfflineTranslationContext {
   timeoutMs?: number;
 }
 
+export interface GeminiTranslationContext {
+  mode: 'manga' | 'manhwa' | 'official';
+  sourceType: string;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  apiKey?: string;
+  baseSystemPrompt?: string;
+}
+
 // Electron API interface (secure whitelist-based)
 export interface ElectronAPI {
   db: {
@@ -190,12 +199,7 @@ export interface ElectronAPI {
   };
   
   gemini: {
-    translate: (text: string, context: {
-      mode: string;
-      sourceType: string;
-      sourceLanguage?: string;
-      targetLanguage?: string;
-    }) => Promise<string>;
+    translate: (text: string, context: GeminiTranslationContext) => Promise<string>;
   };
 
   translate: {

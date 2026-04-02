@@ -165,10 +165,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
     translate: (text: string, context: {
-      mode: string;
+      mode: 'manga' | 'manhwa' | 'official';
       sourceType: string;
       sourceLanguage?: string;
       targetLanguage?: string;
+      apiKey?: string;
+      baseSystemPrompt?: string;
     }) =>
       ipcRenderer.invoke('gemini:translate', { text, context }),
   },

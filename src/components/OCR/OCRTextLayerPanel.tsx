@@ -370,7 +370,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
   const fileRef = useRef<File | null>(null);
   const pdfDataRef = useRef<ArrayBuffer | null>(null);
-  const activePipelineProfile = translationMode === 'manga' ? 'panel' : 'export';
+  const activePipelineProfile = translationMode === 'official' ? 'export' : 'panel';
   const normalizedWarmLanguage = normalizeWarmLanguageKey(options.language);
   const abortControllerRef = useRef<AbortController | null>(null);
   const ocrJobActiveRef = useRef(false);
@@ -1137,7 +1137,11 @@ export const OCRTextLayerPanel: React.FC = () => {
           ...row,
           pageNum: currentPage,
           ocrEngine: (row.ocrEngine || 'tesseract') as OCREngine,
-          translationMode: row.translationMode === 'official' ? 'official' : 'manga',
+          translationMode: row.translationMode === 'official'
+            ? 'official'
+            : row.translationMode === 'manhwa'
+              ? 'manhwa'
+              : 'manga',
           translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
           translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
         };
