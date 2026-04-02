@@ -147,6 +147,13 @@ def normalize_pipeline_profile(value: str) -> str:
     return "panel" if str(value or "").strip().lower() == "panel" else "export"
 
 
+def normalize_quality_profile(value: Any) -> str:
+    normalized = str(value or "best").strip().lower()
+    if normalized in {"fast", "balanced", "best"}:
+        return normalized
+    return "best"
+
+
 def has_terminal_sentence_punct(text: str) -> bool:
     return bool(re.search(r"[!?…\.]+$", str(text or "").strip()))
 
@@ -2274,6 +2281,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
 
 def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
     pipeline = normalize_pipeline_profile(args.pipeline_profile)
+    quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
     lang = select_paddle_lang(args.language)
     profile_key = get_paddle_profile_key(args)
     is_cjk_like = lang in {"korean", "japan", "ch", "chinese_cht", "th"}
@@ -2290,36 +2298,53 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
     if pipeline == "panel":
         if profile_key == "cpu_panel_fast":
             if shortest <= 420:
-                det_limit = 2300
+                det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300
             elif shortest <= 720:
-                det_limit = 1900
+                det_limit = 1400 if quality_profile == "fast" else 1728 if quality_profile == "balanced" else 1900
             else:
-                det_limit = 1536
-            rec_batch = 8
+                det_limit = 1280 if quality_profile == "fast" else 1536 if quality_profile == "balanced" else 1800
+            rec_batch = 12 if quality_profile == "fast" else 10 if quality_profile == "balanced" else 8
+            det_thresh = 0.34 if quality_profile == "fast" else 0.31 if quality_profile == "balanced" else 0.28
+            det_box_thresh = 0.66 if quality_profile == "fast" else 0.62 if quality_profile == "balanced" else 0.58
+            rec_score_thresh = 0.38 if quality_profile == "fast" else 0.35 if quality_profile == "balanced" else 0.30
         if is_cjk_like:
             if profile_key != "cpu_panel_fast":
                 if aspect_ratio >= 2.3 or longest >= 7000:
                     det_limit = 2560
-                    rec_batch = 8
                 elif longest >= 5000:
                     det_limit = 2300
-                    rec_batch = 8
                 elif shortest <= 900:
                     det_limit = 2400
-                    rec_batch = 8
                 elif shortest <= 1600:
                     det_limit = 2200
-                    rec_batch = 8
                 else:
                     det_limit = 2000
-                    rec_batch = 8
+                if quality_profile == "fast":
+                    det_limit = max(1536, int(det_limit * 0.88))
+                    rec_batch = 12
+                elif quality_profile == "balanced":
+                    rec_batch = 9
+                else:
+                    det_limit = min(3200, int(det_limit * 1.08))
+                    rec_batch = 7
             if lang == "korean":
-                # Keep detector thresholds near Paddle defaults to avoid dropping short valid text
-                # and rely on deterministic fragment suppression for ghosts.
-                det_thresh = 0.30
-                det_box_thresh = 0.62
-                det_unclip_ratio = 1.50
-                rec_score_thresh = 0.32
+                if quality_profile == "fast":
+                    det_thresh = 0.34
+                    det_box_thresh = 0.66
+                    det_unclip_ratio = 1.45
+                    rec_score_thresh = 0.38
+                elif quality_profile == "balanced":
+                    det_thresh = 0.31
+                    det_box_thresh = 0.64
+                    det_unclip_ratio = 1.48
+                    rec_score_thresh = 0.35
+                else:
+                    # Keep detector thresholds near Paddle defaults to avoid dropping short valid text
+                    # and rely on deterministic fragment suppression for ghosts.
+                    det_thresh = 0.28
+                    det_box_thresh = 0.60
+                    det_unclip_ratio = 1.55
+                    rec_score_thresh = 0.30
         else:
             if profile_key != "cpu_panel_fast":
                 if shortest <= 420:
@@ -2328,13 +2353,27 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     det_limit = 1900
                 else:
                     det_limit = 1536
-                rec_batch = 8
+                if quality_profile == "fast":
+                    det_limit = max(1280, int(det_limit * 0.85))
+                    rec_batch = 12
+                elif quality_profile == "balanced":
+                    rec_batch = 10
+                else:
+                    det_limit = min(2300, int(det_limit * 1.08))
+                    rec_batch = 8
     else:
         if is_cjk_like:
             det_limit = 2800 if shortest <= 1200 else 3200
         else:
             det_limit = 2200 if shortest <= 900 else 1800
-        rec_batch = 10
+        if quality_profile == "fast":
+            det_limit = max(1280, int(det_limit * 0.85))
+            rec_batch = 12
+        elif quality_profile == "balanced":
+            rec_batch = 10
+        else:
+            det_limit = min(3600, int(det_limit * 1.08))
+            rec_batch = 8
 
     predict_kwargs: Dict[str, Any] = {
         "text_det_limit_type": "max",
@@ -2360,7 +2399,26 @@ def build_paddle_legacy_predict_kwargs(predict_kwargs: Dict[str, Any]) -> Dict[s
         legacy["det_limit_side_len"] = predict_kwargs["text_det_limit_side_len"]
     if "text_recognition_batch_size" in predict_kwargs:
         legacy["rec_batch_num"] = predict_kwargs["text_recognition_batch_size"]
+    if "text_det_thresh" in predict_kwargs:
+        legacy["det_db_thresh"] = predict_kwargs["text_det_thresh"]
+    if "text_det_box_thresh" in predict_kwargs:
+        legacy["det_db_box_thresh"] = predict_kwargs["text_det_box_thresh"]
+    if "text_det_unclip_ratio" in predict_kwargs:
+        legacy["det_db_unclip_ratio"] = predict_kwargs["text_det_unclip_ratio"]
+    if "text_rec_score_thresh" in predict_kwargs:
+        legacy["rec_score_thresh"] = predict_kwargs["text_rec_score_thresh"]
     return legacy
+
+
+PADDLE_PREDICT_KEY_ALIASES: Dict[str, str] = {
+    "text_det_limit_type": "det_limit_type",
+    "text_det_limit_side_len": "det_limit_side_len",
+    "text_recognition_batch_size": "rec_batch_num",
+    "text_det_thresh": "det_db_thresh",
+    "text_det_box_thresh": "det_db_box_thresh",
+    "text_det_unclip_ratio": "det_db_unclip_ratio",
+    "text_rec_score_thresh": "rec_score_thresh",
+}
 
 
 def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
@@ -2382,7 +2440,10 @@ def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any
             bad_key = match.group(1)
             if bad_key not in adaptive_kwargs:
                 break
-            adaptive_kwargs.pop(bad_key, None)
+            bad_value = adaptive_kwargs.pop(bad_key, None)
+            alias_key = PADDLE_PREDICT_KEY_ALIASES.get(bad_key)
+            if alias_key and alias_key not in adaptive_kwargs and bad_value is not None:
+                adaptive_kwargs[alias_key] = bad_value
             if not adaptive_kwargs:
                 break
 
@@ -2485,6 +2546,13 @@ def normalize_paddle_v3_output(raw_result: Any) -> Dict[str, Any]:
     return make_text_result(lines, words)
 
 
+def normalize_paddle_output(raw_result: Any) -> Dict[str, Any]:
+    try:
+        return normalize_paddle_v3_output(raw_result)
+    except Exception:
+        return normalize_paddle_v2_output(raw_result)
+
+
 def get_paddle_ocr(lang: str, profile_key: str) -> Any:
     cache_key = (lang, profile_key)
     cached = PADDLE_OCR_CACHE.get(cache_key)
@@ -2514,6 +2582,7 @@ def get_paddle_ocr(lang: str, profile_key: str) -> Any:
 def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     lang = select_paddle_lang(args.language)
     profile_key = get_paddle_profile_key(args)
+    quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
     ocr = get_paddle_ocr(lang, profile_key)
     predict_kwargs = build_paddle_predict_kwargs(args)
     started_at = time.perf_counter()
@@ -2522,7 +2591,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
         raw_result, applied_predict_kwargs = call_paddle_predict(ocr, args.image, predict_kwargs)
 
         cleaned = cleanup_external_result(
-            normalize_paddle_v3_output(raw_result),
+            normalize_paddle_output(raw_result),
             "paddleocr",
             args.pipeline_profile,
             args.width,
@@ -2531,7 +2600,8 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
         )
         cleanup_debug = cleaned.get("debug") or {}
         cleaned["debug"] = {
-            "profile": profile_key,
+            "profile": f"{profile_key}:{quality_profile}",
+            "qualityProfile": quality_profile,
             "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
             "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
             "droppedWords": list(cleanup_debug.get("droppedWords") or []),
@@ -2562,7 +2632,8 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             )
         cleanup_debug = cleaned.get("debug") or {}
         cleaned["debug"] = {
-            "profile": profile_key,
+            "profile": f"{profile_key}:{quality_profile}",
+            "qualityProfile": quality_profile,
             "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
             "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
             "droppedWords": list(cleanup_debug.get("droppedWords") or []),

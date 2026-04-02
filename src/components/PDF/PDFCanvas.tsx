@@ -11,6 +11,7 @@ import {
   computeOverlayTypography,
   DEFAULT_OVERLAY_PALETTE,
   estimateLineRotationDeg,
+  normalizeOverlayInlineText,
   resolveTranslationOverlayContext,
   sampleOverlayPaletteFromLine,
 } from '../OCR/translationOverlayUtils';
@@ -34,6 +35,7 @@ export const PDFCanvas: React.FC = () => {
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const {
     allPagesOCR,
+    ocrByPageEngine,
     showDebugOverlay,
     options,
     translationPreviewMode,
@@ -55,7 +57,8 @@ export const PDFCanvas: React.FC = () => {
   const [pageRenderTick, setPageRenderTick] = useState(0);
   const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, { backgroundColor: string; textColor: string }>>(new Map());
 
-  const currentPageOCR = allPagesOCR.get(currentPage);
+  const selectedEngine = (options.engine || 'tesseract');
+  const currentPageOCR = ocrByPageEngine.get(currentPage)?.get(selectedEngine) || allPagesOCR.get(currentPage);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
@@ -193,7 +196,7 @@ export const PDFCanvas: React.FC = () => {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateTransform);
     };
-  }, [currentPageOCR, currentPage]);
+  }, [currentPageOCR, currentPage, pageRenderTick]);
 
   // Handle Document Load
   const onDocumentLoadSuccess = React.useCallback(({ numPages }: { numPages: number }) => {
@@ -453,7 +456,14 @@ export const PDFCanvas: React.FC = () => {
                         y1: ocrOverlayTransform.offsetY + currentPageOCR.height * ocrOverlayTransform.scaleY,
                       });
                       const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
-                      const typography = computeOverlayTypography(translatedText, rect.width, rect.height);
+                      const typography = computeOverlayTypography(translatedText, rect.width, rect.height, {
+                        sourceText: line.text,
+                        sourceBoxWidth: Math.max(1, line.bbox.x1 - line.bbox.x0),
+                        sourceBoxHeight: Math.max(1, line.bbox.y1 - line.bbox.y0),
+                      });
+                      const overlayText = typography.forceSingleLine
+                        ? normalizeOverlayInlineText(translatedText)
+                        : translatedText;
                       const rotationDeg = estimateLineRotationDeg(line);
 
                       return (
@@ -462,22 +472,27 @@ export const PDFCanvas: React.FC = () => {
                           style={{
                             left: rect.left,
                             top: rect.top,
-                            width: rect.width,
-                            height: rect.height,
-                            padding: `${typography.padY}px ${typography.padX}px`,
+                            width: typography.forceSingleLine ? 'max-content' : rect.width,
+                            minWidth: rect.width,
+                            minHeight: rect.height,
+                            height: 'auto',
+                            padding: `${typography.padY}px ${typography.padX}px ${Math.max(typography.padY + 1, Math.round(typography.fontSize * 0.18))}px ${typography.padX}px`,
                             backgroundColor: palette.backgroundColor,
                             color: palette.textColor,
                             fontSize: typography.fontSize,
                             lineHeight: typography.lineHeight,
                             fontFamily: overlayFontFamily,
-                            wordBreak: 'break-word',
-                            overflowWrap: 'anywhere',
+                            textAlign: 'left',
+                            whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                            wordBreak: 'normal',
+                            overflowWrap: typography.forceSingleLine ? 'normal' : 'break-word',
+                            overflow: 'visible',
                             transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
                             transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
                           }}
-                          className="absolute rounded-xs overflow-hidden font-semibold shadow-[0_1px_1px_rgba(0,0,0,0.24)] whitespace-normal"
+                          className="absolute rounded-xs font-normal shadow-[0_1px_1px_rgba(0,0,0,0.24)] whitespace-normal"
                         >
-                          {translatedText}
+                          {overlayText}
                         </div>
                       );
                     })}

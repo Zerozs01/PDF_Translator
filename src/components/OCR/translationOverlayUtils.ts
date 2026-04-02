@@ -129,7 +129,7 @@ export const resolveTranslationOverlayContext = ({
 
   const matchesContext = (entry: OCRTranslationCacheEntry): boolean => {
     if (entry.ocrEngine !== currentEngine) return false;
-    if (entry.translationMode !== translationMode) return false;
+    if (entry.translatorEngine === 'ai' && entry.translationMode !== translationMode) return false;
     if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedSource) return false;
     if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
 
@@ -165,9 +165,17 @@ export const resolveTranslationOverlayContext = ({
       .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
       .map((item) => [item.index, item.text])
   );
+  const staleButReusable = Boolean(
+    isStale
+    && resolvedEntry.ocrEngine === currentEngine
+    && resolvedEntry.lineCount > 0
+    && (currentPageOCR.lines?.length || 0) > 0
+    && resolvedEntry.lineCount === (currentPageOCR.lines?.length || 0)
+    && translatedByIndex.size >= Math.max(1, Math.floor(resolvedEntry.lineCount * 0.7))
+  );
 
   return {
-    shouldRender: translationPreviewMode === 'translated' && !isStale && translatedByIndex.size > 0,
+    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && (!isStale || staleButReusable),
     isStale,
     sourceLanguage: normalizedSource,
     targetLanguage: normalizedTarget,
@@ -188,6 +196,13 @@ export type OverlayTypography = {
   lineHeight: number;
   padX: number;
   padY: number;
+  forceSingleLine: boolean;
+};
+
+export type OverlayTypographyHints = {
+  sourceText?: string;
+  sourceBoxWidth?: number;
+  sourceBoxHeight?: number;
 };
 
 export type OverlayRect = {
@@ -209,6 +224,7 @@ const DEFAULT_OVERLAY_TYPOGRAPHY: OverlayTypography = {
   lineHeight: 1.12,
   padX: 3,
   padY: 2,
+  forceSingleLine: false,
 };
 
 const blendRgb = (base: RGB, target: RGB, ratio: number): RGB => ({
@@ -216,6 +232,13 @@ const blendRgb = (base: RGB, target: RGB, ratio: number): RGB => ({
   g: Math.round(base.g + (target.g - base.g) * ratio),
   b: Math.round(base.b + (target.b - base.b) * ratio),
 });
+
+const rgbDistance = (a: RGB, b: RGB): number => {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+};
 
 const srgbToLinear = (value: number): number => {
   const normalized = value / 255;
@@ -484,6 +507,118 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
   return resolved;
 };
 
+const sampleForegroundRgbFromLine = (
+  context: CanvasRenderingContext2D,
+  line: OCRLine,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number,
+  background: RGB
+): RGB | null => {
+  if (!sourceWidth || !sourceHeight || !sampleWidth || !sampleHeight) return null;
+
+  const wordBoxes = Array.isArray(line.words)
+    ? line.words.map((word) => word.bbox).filter(hasPositiveBBox)
+    : [];
+
+  const regions = wordBoxes.length > 0
+    ? wordBoxes
+    : (hasPositiveBBox(line.bbox) ? [line.bbox] : []);
+
+  if (regions.length === 0) return null;
+
+  const stats = createPaletteSampleStats();
+
+  regions.forEach((bbox) => {
+    const mappedX0 = Math.floor((bbox.x0 / sourceWidth) * sampleWidth);
+    const mappedX1 = Math.ceil((bbox.x1 / sourceWidth) * sampleWidth);
+    const mappedY0 = Math.floor((bbox.y0 / sourceHeight) * sampleHeight);
+    const mappedY1 = Math.ceil((bbox.y1 / sourceHeight) * sampleHeight);
+
+    const x0 = clamp(mappedX0, 0, sampleWidth - 1);
+    const y0 = clamp(mappedY0, 0, sampleHeight - 1);
+    const x1 = clamp(mappedX1, x0 + 1, sampleWidth);
+    const y1 = clamp(mappedY1, y0 + 1, sampleHeight);
+
+    const readW = Math.max(1, x1 - x0);
+    const readH = Math.max(1, y1 - y0);
+    let imageData: ImageData;
+    try {
+      imageData = context.getImageData(x0, y0, readW, readH);
+    } catch {
+      return;
+    }
+
+    const pixels = imageData.data;
+    const stride = Math.max(1, Math.floor(Math.sqrt((readW * readH) / 260)));
+    const centerX = (readW - 1) / 2;
+    const centerY = (readH - 1) / 2;
+
+    for (let y = 0; y < readH; y += stride) {
+      for (let x = 0; x < readW; x += stride) {
+        const idx = (y * readW + x) * 4;
+        const alpha = pixels[idx + 3] / 255;
+        if (alpha <= 0.08) continue;
+
+        const rgb: RGB = { r: pixels[idx], g: pixels[idx + 1], b: pixels[idx + 2] };
+        const distance = rgbDistance(rgb, background);
+        if (distance < 34) continue;
+
+        const contrast = contrastRatio(rgb, background);
+        if (contrast < 1.35) continue;
+
+        const saturation = computeSaturation(rgb.r, rgb.g, rgb.b);
+        const dx = (x - centerX) / Math.max(1, readW * 0.5);
+        const dy = (y - centerY) / Math.max(1, readH * 0.5);
+        const radialDistance = Math.min(1, Math.sqrt(dx * dx + dy * dy));
+        const centerWeight = clamp(1 - radialDistance * 0.55, 0.3, 1);
+        let weight = alpha * centerWeight * clamp(distance / 160, 0.28, 1.36) * clamp(contrast / 2.8, 0.52, 1.32);
+
+        // Prefer colorful non-black text when available (e.g., blue headers).
+        if (saturation >= 0.16) {
+          weight *= 1.25;
+        }
+
+        registerPaletteSample(stats, rgb.r, rgb.g, rgb.b, weight, radialDistance);
+      }
+    }
+  });
+
+  if (stats.totalWeight <= 0) return null;
+  const candidate = resolveSampleRgb(stats);
+  if (rgbDistance(candidate, background) < 26) return null;
+  return candidate;
+};
+
+const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB): RGB => {
+  const dark: RGB = { r: 12, g: 14, b: 18 };
+  const light: RGB = { r: 248, g: 250, b: 252 };
+  const saturation = computeSaturation(candidate.r, candidate.g, candidate.b);
+  const initialContrast = contrastRatio(candidate, background);
+  const colorSpread = Math.max(candidate.r, candidate.g, candidate.b) - Math.min(candidate.r, candidate.g, candidate.b);
+
+  // If candidate is basically neutral/black-ish, fallback keeps readability stable.
+  if (saturation < 0.08 && colorSpread < 18) {
+    return fallback;
+  }
+
+  if (initialContrast >= 2.55) {
+    return candidate;
+  }
+
+  const target = contrastRatio(dark, background) >= contrastRatio(light, background) ? dark : light;
+  let adjusted = candidate;
+  for (let i = 0; i < 4; i += 1) {
+    adjusted = blendRgb(adjusted, target, 0.22);
+    if (contrastRatio(adjusted, background) >= 2.55) {
+      return adjusted;
+    }
+  }
+
+  return fallback;
+};
+
 const sampleDominantRgb = (
   context: CanvasRenderingContext2D,
   bbox: BBox,
@@ -589,9 +724,26 @@ export const sampleOverlayPaletteFromLine = (
 ): OverlayPalette => {
   const sample = sampleDominantRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
   const pair = chooseReadablePair(sample);
+  const foregroundCandidate = sampleForegroundRgbFromLine(
+    context,
+    line,
+    sourceWidth,
+    sourceHeight,
+    sampleWidth,
+    sampleHeight,
+    pair.bg
+  );
+  const resolvedText = foregroundCandidate
+    ? ensureReadableTextColor(
+      foregroundCandidate,
+      pair.bg,
+      pair.text
+    )
+    : pair.text;
+
   return {
     backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
-    textColor: `rgb(${pair.text.r}, ${pair.text.g}, ${pair.text.b})`,
+    textColor: `rgb(${resolvedText.r}, ${resolvedText.g}, ${resolvedText.b})`,
   };
 };
 
@@ -642,28 +794,128 @@ const estimateLineCount = (text: string, width: number, fontSize: number): numbe
   return Math.max(1, Math.ceil(compact.length / charsPerLine));
 };
 
-export const computeOverlayTypography = (text: string, width: number, height: number): OverlayTypography => {
+const compactTextLength = (value: string): number =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .length;
+
+const tightenBracketSpacing = (value: string): string =>
+  String(value || '')
+    .replace(/([\(\[\{])\s+/g, '$1')
+    .replace(/\s+([\)\]\}])/g, '$1');
+
+export const normalizeOverlayInlineText = (value: string): string =>
+  tightenBracketSpacing(String(value || ''))
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+const LABEL_TOKEN_REGEX = /^[\(\[\{]?[A-Za-z0-9\u0E00-\u0E7F]{1,8}[\)\]\}]?$/;
+const SHORT_SYMBOLIC_LINE_REGEX = /^[A-Za-z0-9\u0E00-\u0E7F\(\)\[\]\{\}\.,:;+\-_/=<>]+$/;
+
+const isSingleLineLabelCandidate = (text: string, sourceText?: string): boolean => {
+  const normalized = normalizeOverlayInlineText(text);
+  const sourceNormalized = normalizeOverlayInlineText(sourceText || '');
+  const compact = normalized.replace(/\s+/g, '');
+  const sourceCompact = sourceNormalized.replace(/\s+/g, '');
+
+  if (!compact) return false;
+  if (LABEL_TOKEN_REGEX.test(compact)) return true;
+  if (sourceCompact && LABEL_TOKEN_REGEX.test(sourceCompact) && compact.length <= 20) return true;
+
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  if (
+    compact.length <= 14
+    && words.length <= 3
+    && SHORT_SYMBOLIC_LINE_REGEX.test(compact)
+    && !/[\u0E00-\u0E7F]{5,}/.test(compact)
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
+const estimateSingleLineWidth = (text: string, fontSize: number): number => {
+  const normalized = normalizeOverlayInlineText(text);
+  if (!normalized) return fontSize;
+
+  let total = 0;
+  for (const ch of normalized) {
+    if (/\s/.test(ch)) {
+      total += fontSize * 0.28;
+    } else if (/[A-Z]/.test(ch)) {
+      total += fontSize * 0.58;
+    } else if (/[a-z0-9]/.test(ch)) {
+      total += fontSize * 0.54;
+    } else if (/[\u0E00-\u0E7F]/.test(ch)) {
+      total += fontSize * 0.64;
+    } else if (/[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(ch)) {
+      total += fontSize * 0.9;
+    } else if (/[\(\)\[\]\{\}\.,:;]/.test(ch)) {
+      total += fontSize * 0.34;
+    } else {
+      total += fontSize * 0.5;
+    }
+  }
+  return total;
+};
+
+export const computeOverlayTypography = (
+  text: string,
+  width: number,
+  height: number,
+  hints?: OverlayTypographyHints
+): OverlayTypography => {
   const safeWidth = Math.max(8, width);
   const safeHeight = Math.max(8, height);
-  let fontSize = clamp(Math.min(safeHeight * 0.96, safeWidth * 0.34), 11, 34);
-  const lineHeight = 1.12;
+  const sourceWidth = Math.max(8, hints?.sourceBoxWidth ?? safeWidth);
+  const sourceHeight = Math.max(8, hints?.sourceBoxHeight ?? safeHeight);
+  const sourceLength = compactTextLength(hints?.sourceText || '');
+  const targetLength = compactTextLength(text);
+  const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
+  const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
+  const forceSingleLine = isSingleLineLabelCandidate(text, hints?.sourceText) || severeWrapRisk;
+  const normalizedText = forceSingleLine ? normalizeOverlayInlineText(text) : text;
+  const ratio = sourceLength > 0 && targetLength > 0
+    ? clamp(Math.sqrt(sourceLength / targetLength), 0.84, 1.08)
+    : 1;
+
+  const sourceDriven = sourceHeight * (forceSingleLine ? 0.75 : 0.78) * ratio;
+  const minFontSize = clamp(sourceHeight * (forceSingleLine ? 0.5 : 0.54), 6, 14);
+  let fontSize = clamp(
+    Math.min(
+      sourceDriven,
+      safeHeight * (forceSingleLine ? 0.88 : 0.92),
+      safeWidth * (forceSingleLine ? 0.42 : 0.44),
+      sourceWidth * (forceSingleLine ? 0.4 : 0.42)
+    ),
+    minFontSize,
+    34
+  );
+  fontSize *= forceSingleLine ? 0.95 : 0.97;
+  const lineHeight = 1.18;
 
   for (let i = 0; i < 32; i += 1) {
-    const padX = Math.max(2, Math.round(fontSize * 0.18));
-    const padY = Math.max(1, Math.round(fontSize * 0.08));
+    const snappedFont = Math.round(fontSize * 4) / 4;
+    const padX = Math.max(2, Math.round(snappedFont * 0.16));
+    const padY = Math.max(2, Math.round(snappedFont * 0.14));
     const usableWidth = Math.max(4, safeWidth - padX * 2);
     const usableHeight = Math.max(4, safeHeight - padY * 2);
-    const estimatedLines = estimateLineCount(text, usableWidth, fontSize);
-    const requiredHeight = estimatedLines * fontSize * lineHeight;
-    if (requiredHeight <= usableHeight || fontSize <= 9) {
+    const estimatedLines = forceSingleLine ? 1 : estimateLineCount(normalizedText, usableWidth, snappedFont);
+    const descenderSafety = Math.max(1, Math.round(snappedFont * 0.16));
+    const requiredHeight = estimatedLines * snappedFont * lineHeight + descenderSafety;
+    const widthFits = !forceSingleLine || estimateSingleLineWidth(normalizedText, snappedFont) <= usableWidth;
+    if ((requiredHeight <= usableHeight && widthFits) || fontSize <= minFontSize) {
       return {
-        fontSize,
+        fontSize: snappedFont,
         lineHeight,
         padX,
         padY,
+        forceSingleLine,
       };
     }
-    fontSize -= 0.9;
+    fontSize -= fontSize >= 16 ? 0.9 : 0.55;
   }
 
   return DEFAULT_OVERLAY_TYPOGRAPHY;

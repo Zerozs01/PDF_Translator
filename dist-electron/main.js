@@ -1183,7 +1183,9 @@ electron.app.whenReady().then(() => {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
-          PYTHONUTF8: "1"
+          PYTHONUTF8: "1",
+          // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
+          ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || "MINISBD"
         }
       });
       let stdout = "";
@@ -1579,7 +1581,12 @@ electron.app.whenReady().then(() => {
     try {
       return await runExternalOcr(payload);
     } catch (error) {
-      console.error("ocr:run-external error:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (/External OCR canceled for (paddleocr|easyocr)/i.test(message)) {
+        console.warn(`ocr:run-external canceled: ${message}`);
+      } else {
+        console.error("ocr:run-external error:", error);
+      }
       throw error;
     }
   });

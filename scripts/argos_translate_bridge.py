@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 import json
+import os
 import sys
 from typing import Any, Dict, List
 
@@ -59,9 +60,78 @@ def load_payload() -> Dict[str, Any]:
     return data
 
 
-def main() -> None:
+def reset_argos_caches(argos_translate_module: Any) -> None:
+    """Clear argostranslate language/translation caches for deterministic retries."""
     try:
-        import argostranslate.translate
+        argos_translate_module.get_installed_languages.cache_clear()
+    except Exception:
+        pass
+    try:
+        argos_translate_module.installed_translates.clear()
+    except Exception:
+        pass
+
+
+def install_noop_sentencizers(argos_translate_module: Any) -> None:
+    """Disable sentence boundary dependencies for fallback mode."""
+
+    class NoOpSentencizer:
+        def __init__(self, _pkg: Any):
+            self.pkg = _pkg
+
+        def split_sentences(self, text: str) -> List[str]:
+            compact = str(text or "")
+            return [compact] if compact else [""]
+
+        def __str__(self) -> str:
+            return "NoOpSentencizer"
+
+    argos_translate_module.StanzaSentencizer = NoOpSentencizer
+    argos_translate_module.MiniSBDSentencizer = NoOpSentencizer
+    argos_translate_module.SpacySentencizerSmall = NoOpSentencizer
+
+
+def is_sentence_split_network_error(error: Exception) -> bool:
+    message = str(error or "").lower()
+    markers = [
+        "resources_1.10.0.json",
+        "too many requests",
+        "429 client error",
+        "stanfordnlp/stanza-resources",
+        "stanza",
+    ]
+    return any(marker in message for marker in markers)
+
+
+def translate_texts(
+    argos_translate_module: Any,
+    texts: List[str],
+    source_language: str,
+    target_language: str,
+    force_noop_sentencizer: bool = False,
+) -> List[str]:
+    if force_noop_sentencizer:
+        install_noop_sentencizers(argos_translate_module)
+
+    reset_argos_caches(argos_translate_module)
+    translation = argos_translate_module.get_translation_from_codes(source_language, target_language)
+
+    translations: List[str] = []
+    for text in texts:
+        if not text.strip():
+            translations.append("")
+            continue
+        translated = translation.translate(text)
+        translations.append(str(translated or ""))
+    return translations
+
+
+def main() -> None:
+    # Avoid forcing Stanza downloads at runtime. Allow explicit override if user sets this env var.
+    os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
+
+    try:
+        import argostranslate.translate as argos_translate
     except Exception as exc:
         print(
             "Argos Translate Python package is not available. "
@@ -79,7 +149,7 @@ def main() -> None:
     source_language = normalize_language(payload.get("sourceLanguage"), "en")
     target_language = normalize_language(payload.get("targetLanguage"), "th")
 
-    installed_languages = argostranslate.translate.get_installed_languages()
+    installed_languages = argos_translate.get_installed_languages()
     installed_codes = sorted({str(language.code).lower() for language in installed_languages})
 
     if source_language not in installed_codes:
@@ -101,13 +171,27 @@ def main() -> None:
         print(json.dumps(output, ensure_ascii=False))
         return
 
-    translations: List[str] = []
-    for text in texts:
-        if not text.strip():
-            translations.append("")
-            continue
-        translated = argostranslate.translate.translate(text, source_language, target_language)
-        translations.append(str(translated or ""))
+    fallback_reason: str | None = None
+    try:
+        translations = translate_texts(
+            argos_translate,
+            texts,
+            source_language,
+            target_language,
+            force_noop_sentencizer=False,
+        )
+    except Exception as primary_error:
+        if not is_sentence_split_network_error(primary_error):
+            raise
+
+        fallback_reason = str(primary_error)
+        translations = translate_texts(
+            argos_translate,
+            texts,
+            source_language,
+            target_language,
+            force_noop_sentencizer=True,
+        )
 
     output = {
         "engine": "argos",
@@ -115,6 +199,9 @@ def main() -> None:
         "targetLanguage": target_language,
         "translations": translations,
     }
+    if fallback_reason:
+        output["warning"] = "Recovered from Stanza/network sentence-splitting error by using local no-op sentence splitting."
+        output["fallbackReason"] = fallback_reason
     print(json.dumps(output, ensure_ascii=False))
 
 

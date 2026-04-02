@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { dbService } from '../services/dbService';
 import { useOCRTextLayerStore } from './useOCRTextLayerStore';
+import { useUIStore } from './useUIStore';
 import {
   DEFAULT_OVERLAY_FONT_PRESET,
   OverlayFontPreset,
@@ -13,6 +14,12 @@ export type ViewMode = 'single' | 'continuous';
 const GEMINI_API_KEY_STORAGE_KEY = 'pdf_translator.gemini_api_key';
 const OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY = 'pdf_translator.overlay_thai_font_enabled';
 const OVERLAY_FONT_PRESET_STORAGE_KEY = 'pdf_translator.overlay_font_preset';
+const THAI_TARGET_LANGUAGE_KEYS = new Set(['th', 'tha', 'thai']);
+
+const isThaiTargetLanguage = (value: string): boolean => {
+  const normalized = String(value || '').trim().toLowerCase().split('-')[0];
+  return THAI_TARGET_LANGUAGE_KEYS.has(normalized);
+};
 
 const readPersistedGeminiApiKey = (): string => {
   if (typeof window === 'undefined') return '';
@@ -199,12 +206,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   sourceLanguage: 'eng',
   targetLanguage: 'th',
   geminiApiKey: readPersistedGeminiApiKey(),
-  overlayThaiFontEnabled: readPersistedOverlayThaiFontEnabled(),
+  overlayThaiFontEnabled: true,
   overlayFontPreset: readPersistedOverlayFontPreset(),
 
   loadProject: async (file, fileData) => {
     // Clear OCR cache when loading a new file to avoid cross-file reuse
     useOCRTextLayerStore.getState().reset();
+    useUIStore.getState().resetView();
     // Save document to database for recent files tracking.
     // Use a canonical imported filepath when possible so OCR cache keys are stable
     // across open methods (browse, drag/drop, recent list).
@@ -375,6 +383,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       setTimeout(() => URL.revokeObjectURL(state.fileUrl!), 0);
     }
     useOCRTextLayerStore.getState().reset();
+    useUIStore.getState().resetView();
     return { 
       file: null,
       fileUrl: null,
@@ -409,7 +418,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     safetySettings: getDefaultSafetySettingsForMode(mode),
   }),
   setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
-  setTargetLanguage: (lang) => set({ targetLanguage: lang }),
+  setTargetLanguage: (lang) => {
+    const shouldEnableThaiOverlay = isThaiTargetLanguage(lang);
+    persistOverlayThaiFontEnabled(shouldEnableThaiOverlay);
+    set({
+      targetLanguage: lang,
+      overlayThaiFontEnabled: shouldEnableThaiOverlay,
+    });
+  },
   setGeminiApiKey: (apiKey) => {
     persistGeminiApiKey(apiKey);
     set({ geminiApiKey: String(apiKey || '').trim() });

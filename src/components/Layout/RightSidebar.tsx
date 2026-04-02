@@ -4,9 +4,12 @@ import {
   OVERLAY_FONT_OPTIONS,
   OverlayFontPreset,
 } from '../../constants/overlayFonts';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { 
   FileText, 
   Settings, 
+  Eye,
+  EyeOff,
   Languages,
   Sparkles,
   Flame,
@@ -40,14 +43,17 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
     setTargetLanguage,
     translationMode,
     setTranslationMode,
-    overlayThaiFontEnabled,
-    setOverlayThaiFontEnabled,
     overlayFontPreset,
     setOverlayFontPreset,
   } = useProjectStore();
+  const {
+    showDebugOverlay,
+    setShowDebugOverlay,
+  } = useOCRTextLayerStore();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const isTranslateBusy = isAiProcessing || isOfflineProcessing;
+  const isThaiTargetLanguage = targetLanguage === 'th';
 
   const translationStatusClass = translationStatus?.kind === 'success'
     ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-100'
@@ -66,19 +72,35 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
           OCR Text Layer
         </h3>
         
-        {/* Settings Toggle */}
-        <button 
-          onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-          type="button"
-          className={`relative z-10 p-1.5 rounded-lg transition-colors ${
-            isSettingsOpen
-              ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white'
-              : 'hover:bg-white/10 text-slate-400'
-          }`}
-          title="Settings"
-        >
-          <Settings size={14} />
-        </button>
+        <div className="relative z-10 flex items-center gap-1.5">
+          <button
+            onClick={() => setShowDebugOverlay(!showDebugOverlay)}
+            type="button"
+            className={`p-1.5 rounded-lg transition-colors ${
+              showDebugOverlay
+                ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white'
+                : 'hover:bg-white/10 text-slate-400'
+            }`}
+            title={showDebugOverlay ? 'Hide OCR borders' : 'Show OCR borders'}
+            aria-label={showDebugOverlay ? 'Hide OCR borders' : 'Show OCR borders'}
+          >
+            {showDebugOverlay ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>
+
+          {/* Settings Toggle */}
+          <button 
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            type="button"
+            className={`p-1.5 rounded-lg transition-colors ${
+              isSettingsOpen
+                ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white'
+                : 'hover:bg-white/10 text-slate-400'
+            }`}
+            title="Settings"
+          >
+            <Settings size={14} />
+          </button>
+        </div>
       </div>
 
       {/* Collapsible Settings Panel */}
@@ -205,35 +227,25 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
-              Thai Overlay Font
-            </label>
-            <div className="rounded-lg border border-white/12 bg-slate-900/55 p-2.5 space-y-2">
-              <label className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-slate-950/70 px-2.5 py-1.5 text-[11px] text-slate-300">
-                <span className="font-semibold">Enable Thai font styling</span>
-                <input
-                  type="checkbox"
-                  checked={overlayThaiFontEnabled}
-                  onChange={(e) => setOverlayThaiFontEnabled(e.target.checked)}
-                  className="accent-[#2B9BFF]"
-                  aria-label="Enable Thai overlay font"
-                />
+          {isThaiTargetLanguage && (
+            <div>
+              <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
+                Thai Overlay Font
               </label>
-
-              <select
-                value={overlayFontPreset}
-                onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
-                disabled={!overlayThaiFontEnabled}
-                className="w-full rounded-md border border-white/12 bg-slate-950/85 px-2.5 py-1.5 text-[11px] text-slate-100 focus:outline-none focus:border-[#2B9BFF]/60 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Thai overlay font preset"
-              >
-                {OVERLAY_FONT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+              <div className="rounded-lg border border-white/12 bg-slate-900/55 p-2.5 space-y-2">
+                <select
+                  value={overlayFontPreset}
+                  onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
+                  className="w-full rounded-md border border-white/12 bg-slate-950/85 px-2.5 py-1.5 text-[11px] text-slate-100 focus:outline-none focus:border-[#2B9BFF]/60"
+                  aria-label="Thai overlay font preset"
+                >
+                  {OVERLAY_FONT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
-          </div>
+          )}
 
           {translationStatus && (
             <div className={`rounded-lg border px-2.5 py-2 text-[11px] ${translationStatusClass}`}>

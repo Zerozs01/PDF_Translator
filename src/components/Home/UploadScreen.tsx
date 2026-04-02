@@ -679,10 +679,9 @@ export const UploadScreen: React.FC = () => {
     setTranslationMode,
     safetySettings,
     updateSafetySettings,
+    targetLanguage,
     geminiApiKey,
     setGeminiApiKey,
-    overlayThaiFontEnabled,
-    setOverlayThaiFontEnabled,
     overlayFontPreset,
     setOverlayFontPreset,
   } = useProjectStore();
@@ -722,11 +721,17 @@ export const UploadScreen: React.FC = () => {
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
   const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
   const thumbnailJobsRef = useRef<Set<number>>(new Set());
+  const isThaiTargetLanguage = targetLanguage === 'th';
 
   useEffect(() => {
     let mounted = true;
 
     const checkFont = async () => {
+      if (!isThaiTargetLanguage) {
+        if (mounted) setSelectedFontAvailable(null);
+        return;
+      }
+
       if (typeof document === 'undefined' || !('fonts' in document)) {
         if (mounted) setSelectedFontAvailable(null);
         return;
@@ -749,7 +754,7 @@ export const UploadScreen: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [overlayFontPreset]);
+  }, [isThaiTargetLanguage, overlayFontPreset]);
 
   const reportFileOpenError = useCallback((
     context: FileOpenContext,
@@ -1305,48 +1310,39 @@ export const UploadScreen: React.FC = () => {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
-                <label className="text-[11px] font-semibold text-slate-300">Thai Overlay Font</label>
-                <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2 text-[11px] text-slate-300">
-                  <span className="font-semibold">Enable Thai font styling</span>
-                  <input
-                    type="checkbox"
-                    checked={overlayThaiFontEnabled}
-                    onChange={(e) => setOverlayThaiFontEnabled(e.target.checked)}
-                    className="accent-[#2B9BFF]"
-                    aria-label="Enable Thai overlay font"
-                  />
-                </label>
+              {isThaiTargetLanguage && (
+                <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
+                  <label className="text-[11px] font-semibold text-slate-300">Thai Overlay Font</label>
 
-                <select
-                  value={overlayFontPreset}
-                  onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
-                  disabled={!overlayThaiFontEnabled}
-                  className="w-full rounded-lg border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55 disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-label="Thai overlay font preset"
-                  title="Thai overlay font preset"
-                >
-                  {OVERLAY_FONT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                  <select
+                    value={overlayFontPreset}
+                    onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
+                    className="w-full rounded-lg border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                    aria-label="Thai overlay font preset"
+                    title="Thai overlay font preset"
+                  >
+                    {OVERLAY_FONT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
 
-                <p className={`text-[10px] leading-relaxed ${
-                  selectedFontAvailable === false
-                    ? 'text-amber-300/90'
-                    : selectedFontAvailable === true
-                      ? 'text-emerald-300/85'
-                      : 'text-slate-500'
-                }`}>
-                  Font status: {
+                  <p className={`text-[10px] leading-relaxed ${
                     selectedFontAvailable === false
-                      ? 'fallback in use (font not detected)'
+                      ? 'text-amber-300/90'
                       : selectedFontAvailable === true
-                        ? 'detected and ready'
-                        : 'unknown'
-                  }
-                </p>
-              </div>
+                        ? 'text-emerald-300/85'
+                        : 'text-slate-500'
+                  }`}>
+                    Font status: {
+                      selectedFontAvailable === false
+                        ? 'fallback in use (font not detected)'
+                        : selectedFontAvailable === true
+                          ? 'detected and ready'
+                          : 'unknown'
+                    }
+                  </p>
+                </div>
+              )}
 
               <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
                 <label className="text-[11px] font-semibold text-slate-300">OCR Runtime</label>
