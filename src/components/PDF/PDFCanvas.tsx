@@ -9,10 +9,15 @@ import { visionService } from '../../services/vision/VisionService';
 import {
   clampOverlayRect,
   computeOverlayTypography,
+  computeOverlayLayoutMap,
   DEFAULT_OVERLAY_PALETTE,
   estimateLineRotationDeg,
   normalizeOverlayInlineText,
+  resolveOverlayMaskExpansion,
+  type OverlayLayout,
+  type OverlayLayoutProfile,
   resolveTranslationOverlayContext,
+  resolveOverlaySourceBBox,
   sampleOverlayPaletteFromLine,
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
@@ -66,6 +71,11 @@ export const PDFCanvas: React.FC = () => {
     enabled: overlayThaiFontEnabled,
     targetLanguage,
   }), [overlayFontPreset, overlayThaiFontEnabled, targetLanguage]);
+  const overlayLayoutProfile: OverlayLayoutProfile = translationMode === 'official'
+    ? 'official'
+    : translationMode === 'manhwa'
+      ? 'manhwa'
+      : 'manga';
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
     optionsEngine: options.engine || 'tesseract',
@@ -97,6 +107,62 @@ export const PDFCanvas: React.FC = () => {
       return w > 0 && h > 0;
     });
   }, [showDebugOverlay, debugPageOCR]);
+  const overlayLayoutByIndex = useMemo(() => {
+    if (!translationOverlayContext.shouldRender || !currentPageOCR) {
+      return new Map<number, OverlayLayout>();
+    }
+
+    return computeOverlayLayoutMap(
+      currentPageOCR.lines.flatMap((line, index) => {
+        const translatedText = translationOverlayContext.translatedByIndex.get(index);
+        if (!translatedText) return [];
+
+        const sourceBbox = resolveOverlaySourceBBox(line);
+        const baseWidth = Math.max(1, (sourceBbox.x1 - sourceBbox.x0) * ocrOverlayTransform.scaleX);
+        const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrOverlayTransform.scaleY);
+        const expansion = resolveOverlayMaskExpansion(line);
+        const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
+        const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
+        const maskExpandBottom = Math.min(expansion.maxExpandBottom, Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)));
+        const rawLeft = ocrOverlayTransform.offsetX + sourceBbox.x0 * ocrOverlayTransform.scaleX - maskExpandX;
+        const rawTop = ocrOverlayTransform.offsetY + sourceBbox.y0 * ocrOverlayTransform.scaleY - maskExpandTop;
+        const rawWidth = baseWidth + maskExpandX * 2;
+        const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
+        const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
+          x0: ocrOverlayTransform.offsetX,
+          y0: ocrOverlayTransform.offsetY,
+          x1: ocrOverlayTransform.offsetX + currentPageOCR.width * ocrOverlayTransform.scaleX,
+          y1: ocrOverlayTransform.offsetY + currentPageOCR.height * ocrOverlayTransform.scaleY,
+        });
+
+        return [{
+          index,
+          text: translatedText,
+          width: rect.width,
+          height: rect.height,
+          bbox: sourceBbox,
+          line,
+          hints: {
+            sourceText: line.text,
+            sourceBoxWidth: Math.max(1, sourceBbox.x1 - sourceBbox.x0),
+            sourceBoxHeight: Math.max(1, sourceBbox.y1 - sourceBbox.y0),
+            fontFamily: overlayFontFamily,
+          },
+        }];
+      }),
+      { profile: overlayLayoutProfile }
+    );
+  }, [
+    currentPageOCR,
+    ocrOverlayTransform.offsetX,
+    ocrOverlayTransform.offsetY,
+    ocrOverlayTransform.scaleX,
+    ocrOverlayTransform.scaleY,
+    overlayLayoutProfile,
+    overlayFontFamily,
+    translationOverlayContext.shouldRender,
+    translationOverlayContext.translatedByIndex,
+  ]);
 
   useEffect(() => {
     if (!translationOverlayContext.shouldRender || !currentPageOCR || !pageRef.current) {
@@ -445,10 +511,28 @@ export const PDFCanvas: React.FC = () => {
                       const translatedText = translationOverlayContext.translatedByIndex.get(idx);
                       if (!translatedText) return null;
 
-                      const rawLeft = ocrOverlayTransform.offsetX + line.bbox.x0 * ocrOverlayTransform.scaleX;
-                      const rawTop = ocrOverlayTransform.offsetY + line.bbox.y0 * ocrOverlayTransform.scaleY;
-                      const rawWidth = Math.max(1, (line.bbox.x1 - line.bbox.x0) * ocrOverlayTransform.scaleX);
-                      const rawHeight = Math.max(1, (line.bbox.y1 - line.bbox.y0) * ocrOverlayTransform.scaleY);
+                      const layout = overlayLayoutByIndex.get(idx);
+                      const sourceBbox = resolveOverlaySourceBBox(line);
+                      const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
+                        ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
+                        : sourceBbox.x0;
+                      const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * ocrOverlayTransform.scaleX);
+                      const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrOverlayTransform.scaleY);
+                      const hasThaiText = /[\u0E00-\u0E7F]/.test(translatedText);
+                      const expansion = resolveOverlayMaskExpansion(line);
+                      const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
+                      const maskExpandLeft = Math.min(1, maskExpandX);
+                      const maskExpandRight = maskExpandX;
+                      const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
+                      const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(baseHeight * 0.08))) : 0;
+                      const maskExpandBottom = Math.min(
+                        expansion.maxExpandBottom + thaiBottomBoost,
+                        Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)) + thaiBottomBoost
+                      );
+                      const rawLeft = ocrOverlayTransform.offsetX + renderSourceLeft * ocrOverlayTransform.scaleX - maskExpandLeft;
+                      const rawTop = ocrOverlayTransform.offsetY + sourceBbox.y0 * ocrOverlayTransform.scaleY - maskExpandTop;
+                      const rawWidth = baseWidth + maskExpandLeft + maskExpandRight;
+                      const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
                       const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
                         x0: ocrOverlayTransform.offsetX,
                         y0: ocrOverlayTransform.offsetY,
@@ -456,15 +540,42 @@ export const PDFCanvas: React.FC = () => {
                         y1: ocrOverlayTransform.offsetY + currentPageOCR.height * ocrOverlayTransform.scaleY,
                       });
                       const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
-                      const typography = computeOverlayTypography(translatedText, rect.width, rect.height, {
+                      const typography = layout?.typography || computeOverlayTypography(translatedText, rect.width, rect.height, {
                         sourceText: line.text,
-                        sourceBoxWidth: Math.max(1, line.bbox.x1 - line.bbox.x0),
-                        sourceBoxHeight: Math.max(1, line.bbox.y1 - line.bbox.y0),
+                        sourceBoxWidth: Math.max(1, sourceBbox.x1 - sourceBbox.x0),
+                        sourceBoxHeight: Math.max(1, sourceBbox.y1 - sourceBbox.y0),
+                        fontFamily: overlayFontFamily,
                       });
+                      const extraTopPad = hasThaiText ? Math.max(2, Math.round(typography.fontSize * 0.11)) : 0;
+                      const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
+                      const textStartOffset = layout?.sharedTextStartX !== undefined
+                        ? Math.max(0, (layout.sharedTextStartX - renderSourceLeft) * ocrOverlayTransform.scaleX)
+                        : 0;
+                      const centerOffset = layout?.sharedCenterX !== undefined
+                        ? ((layout.sharedCenterX - renderSourceLeft) * ocrOverlayTransform.scaleX) - (rect.width * 0.5)
+                        : 0;
+                      const innerLeft = layout?.alignment === 'center'
+                        ? Math.max(0, Math.min(rect.width * 0.12, centerOffset))
+                        : Math.max(0, Math.min(rect.width - 1, maskExpandLeft + textStartOffset));
+                      const innerWidth = layout?.alignment === 'center'
+                        ? rect.width
+                        : Math.max(1, rect.width - innerLeft);
                       const overlayText = typography.forceSingleLine
                         ? normalizeOverlayInlineText(translatedText)
                         : translatedText;
                       const rotationDeg = estimateLineRotationDeg(line);
+                      const minFillRatio = typography.estimatedLines > 1 ? 0.74 : 0.5;
+                      const paintHeight = Math.min(
+                        rect.height,
+                        Math.max(
+                          typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
+                          rect.height * minFillRatio
+                        )
+                      );
+                      const paintOffsetTop = Math.max(
+                        hasThaiText ? 1 : 0,
+                        Math.min(rect.height - paintHeight, Math.round(rect.height * 0.08))
+                      );
 
                       return (
                         <div
@@ -472,27 +583,48 @@ export const PDFCanvas: React.FC = () => {
                           style={{
                             left: rect.left,
                             top: rect.top,
-                            width: typography.forceSingleLine ? 'max-content' : rect.width,
+                            width: rect.width,
+                            maxWidth: rect.width,
                             minWidth: rect.width,
+                            height: rect.height,
+                            maxHeight: rect.height,
                             minHeight: rect.height,
-                            height: 'auto',
-                            padding: `${typography.padY}px ${typography.padX}px ${Math.max(typography.padY + 1, Math.round(typography.fontSize * 0.18))}px ${typography.padX}px`,
                             backgroundColor: palette.backgroundColor,
-                            color: palette.textColor,
-                            fontSize: typography.fontSize,
-                            lineHeight: typography.lineHeight,
-                            fontFamily: overlayFontFamily,
-                            textAlign: 'left',
-                            whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
-                            wordBreak: 'normal',
-                            overflowWrap: typography.forceSingleLine ? 'normal' : 'break-word',
-                            overflow: 'visible',
+                            overflow: 'hidden',
+                            zIndex: Math.max(1, 100000 - Math.round(rect.top)),
                             transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
                             transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
                           }}
-                          className="absolute rounded-xs font-normal shadow-[0_1px_1px_rgba(0,0,0,0.24)] whitespace-normal"
+                          className="absolute"
                         >
-                          {overlayText}
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: innerLeft,
+                              top: paintOffsetTop,
+                              width: innerWidth,
+                              maxWidth: innerWidth,
+                              minWidth: innerWidth,
+                              height: paintHeight,
+                              maxHeight: paintHeight,
+                              minHeight: paintHeight,
+                              padding: `${typography.padY + extraTopPad}px ${typography.padX}px ${typography.padY + extraBottomPad}px ${typography.padX}px`,
+                              color: palette.textColor,
+                              fontSize: typography.fontSize,
+                              lineHeight: typography.lineHeight,
+                              fontFamily: overlayFontFamily,
+                              boxSizing: 'border-box',
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              textAlign: layout?.alignment === 'center' ? 'center' : 'left',
+                              whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                              wordBreak: 'normal',
+                              overflowWrap: typography.forceSingleLine ? 'normal' : 'break-word',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            {overlayText}
+                          </div>
                         </div>
                       );
                     })}

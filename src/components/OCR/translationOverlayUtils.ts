@@ -1,5 +1,6 @@
 import { BBox, OCRLine, OCREngine, OCRPageResult } from '../../types';
 import { OCRPreviewMode, OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
+import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 
 const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
@@ -60,19 +61,6 @@ const resolveTranslationSourceFromOCRKey = (ocrLanguageKey: string, fallback: st
 
   const nonEnglish = candidates.find((lang) => lang !== 'en');
   return nonEnglish || candidates[0] || fallback;
-};
-
-const buildOCRSourceFingerprint = (result: OCRPageResult, fallbackEngine: OCREngine): string => {
-  const effectiveEngine = result.ocrEngine || fallbackEngine;
-  return [
-    result.algorithmVersion,
-    effectiveEngine,
-    result.pipelineProfile || 'panel',
-    result.language || 'eng',
-    result.words.length,
-    result.lines.length,
-    String(result.text || '').replace(/\s+/g, ' ').trim().length,
-  ].join('|');
 };
 
 export type TranslationOverlayContext = {
@@ -165,17 +153,9 @@ export const resolveTranslationOverlayContext = ({
       .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
       .map((item) => [item.index, item.text])
   );
-  const staleButReusable = Boolean(
-    isStale
-    && resolvedEntry.ocrEngine === currentEngine
-    && resolvedEntry.lineCount > 0
-    && (currentPageOCR.lines?.length || 0) > 0
-    && resolvedEntry.lineCount === (currentPageOCR.lines?.length || 0)
-    && translatedByIndex.size >= Math.max(1, Math.floor(resolvedEntry.lineCount * 0.7))
-  );
 
   return {
-    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && (!isStale || staleButReusable),
+    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && !isStale,
     isStale,
     sourceLanguage: normalizedSource,
     targetLanguage: normalizedTarget,
@@ -197,12 +177,35 @@ export type OverlayTypography = {
   padX: number;
   padY: number;
   forceSingleLine: boolean;
+  estimatedLines: number;
+  contentHeight: number;
 };
 
 export type OverlayTypographyHints = {
   sourceText?: string;
   sourceBoxWidth?: number;
   sourceBoxHeight?: number;
+  fontFamily?: string;
+};
+
+export type OverlayTypographyInput = {
+  index: number;
+  text: string;
+  width: number;
+  height: number;
+  bbox: BBox;
+  line?: OCRLine;
+  hints?: OverlayTypographyHints;
+};
+
+export type OverlayLayoutProfile = 'official' | 'manga' | 'manhwa';
+
+export type OverlayLayout = {
+  typography: OverlayTypography;
+  alignment?: 'left' | 'center';
+  sharedTextStartX?: number;
+  sharedCenterX?: number;
+  sharedBoxLeftX?: number;
 };
 
 export type OverlayRect = {
@@ -210,6 +213,15 @@ export type OverlayRect = {
   top: number;
   width: number;
   height: number;
+};
+
+export type OverlayMaskExpansion = {
+  expandXRatio: number;
+  expandTopRatio: number;
+  expandBottomRatio: number;
+  maxExpandX: number;
+  maxExpandTop: number;
+  maxExpandBottom: number;
 };
 
 const DEFAULT_SAMPLE_RGB: RGB = { r: 255, g: 255, b: 255 };
@@ -225,6 +237,8 @@ const DEFAULT_OVERLAY_TYPOGRAPHY: OverlayTypography = {
   padX: 3,
   padY: 2,
   forceSingleLine: false,
+  estimatedLines: 1,
+  contentHeight: 18,
 };
 
 const blendRgb = (base: RGB, target: RGB, ratio: number): RGB => ({
@@ -305,6 +319,42 @@ const computeSaturation = (r: number, g: number, b: number): number => {
 const hasPositiveBBox = (bbox?: BBox): bbox is BBox => {
   if (!bbox) return false;
   return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
+};
+
+export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
+  if (!Array.isArray(line.words) || line.words.length === 0) {
+    return line.bbox;
+  }
+
+  const validWords = line.words.filter((word) => hasPositiveBBox(word?.bbox));
+  const meaningfulWords = validWords.filter((word) => MEANINGFUL_WORD_REGEX.test(String(word.text || '').trim()));
+  const wordSource = meaningfulWords.length > 0 ? meaningfulWords : validWords;
+  const validWordBoxes = wordSource.map((word) => word.bbox);
+
+  if (validWordBoxes.length === 0) {
+    return line.bbox;
+  }
+
+  return validWordBoxes.reduce<BBox>((acc, bbox) => ({
+    x0: Math.min(acc.x0, bbox.x0),
+    y0: Math.min(acc.y0, bbox.y0),
+    x1: Math.max(acc.x1, bbox.x1),
+    y1: Math.max(acc.y1, bbox.y1),
+  }), {
+    ...validWordBoxes[0],
+  });
+};
+
+const MEANINGFUL_WORD_REGEX = /[\p{L}\p{N}]/u;
+
+const resolveOverlayTextStartX = (line: OCRLine, bbox: BBox): number => {
+  if (!Array.isArray(line.words) || line.words.length === 0) return bbox.x0;
+
+  const validWords = line.words.filter((word) => hasPositiveBBox(word?.bbox));
+  if (validWords.length === 0) return bbox.x0;
+
+  const meaningful = validWords.find((word) => MEANINGFUL_WORD_REGEX.test(String(word.text || '').trim()));
+  return (meaningful || validWords[0]).bbox.x0;
 };
 
 type PaletteSampleBucket = {
@@ -786,7 +836,7 @@ export const estimateLineRotationDeg = (line: OCRLine): number => {
   return clamp(degrees, -28, 28);
 };
 
-const estimateLineCount = (text: string, width: number, fontSize: number): number => {
+const estimateLineCountHeuristic = (text: string, width: number, fontSize: number): number => {
   const compact = String(text || '').replace(/\s+/g, ' ').trim();
   if (!compact) return 1;
   const averageCharWidth = fontSize * 0.56;
@@ -812,6 +862,69 @@ export const normalizeOverlayInlineText = (value: string): string =>
 
 const LABEL_TOKEN_REGEX = /^[\(\[\{]?[A-Za-z0-9\u0E00-\u0E7F]{1,8}[\)\]\}]?$/;
 const SHORT_SYMBOLIC_LINE_REGEX = /^[A-Za-z0-9\u0E00-\u0E7F\(\)\[\]\{\}\.,:;+\-_/=<>]+$/;
+const THAI_CHAR_REGEX = /[\u0E00-\u0E7F]/;
+const CJK_CHAR_REGEX = /[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
+
+type TextMeasureContext = Pick<CanvasRenderingContext2D, 'font' | 'measureText'>;
+
+let textMeasureContext: TextMeasureContext | null | undefined;
+
+const getTextMeasureContext = (): TextMeasureContext | null => {
+  if (textMeasureContext !== undefined) return textMeasureContext;
+
+  try {
+    if (typeof document !== 'undefined') {
+      textMeasureContext = document.createElement('canvas').getContext('2d');
+      return textMeasureContext;
+    }
+    if (typeof OffscreenCanvas !== 'undefined') {
+      const context = new OffscreenCanvas(1, 1).getContext('2d');
+      textMeasureContext = context ? context as unknown as TextMeasureContext : null;
+      return textMeasureContext;
+    }
+  } catch {
+    // Fall back to heuristic-only sizing when canvas measurement is unavailable.
+  }
+
+  textMeasureContext = null;
+  return textMeasureContext;
+};
+
+const buildMeasureFont = (fontSize: number, fontFamily?: string): string =>
+  `400 ${fontSize}px ${fontFamily || 'sans-serif'}`;
+
+const resolveOverlayLineHeight = (text: string): number => (
+  THAI_CHAR_REGEX.test(text) ? 1.14 : CJK_CHAR_REGEX.test(text) ? 1.08 : 1.11
+);
+
+const resolveOverlayPadding = (fontSize: number, text: string): { padX: number; padY: number } => {
+  const containsThai = THAI_CHAR_REGEX.test(text);
+  return {
+    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.08 : 0.1))),
+    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.08 : 0.09))),
+  };
+};
+
+export const resolveOverlayMaskExpansion = (line: OCRLine): OverlayMaskExpansion => {
+  const compactLabel = isSingleLineLabelCandidate(line.text, line.text) || (line.words?.length ?? 0) <= 3;
+  return compactLabel
+    ? {
+        expandXRatio: 0.04,
+        expandTopRatio: 0.02,
+        expandBottomRatio: 0.02,
+        maxExpandX: 4,
+        maxExpandTop: 3,
+        maxExpandBottom: 3,
+      }
+    : {
+        expandXRatio: 0.05,
+        expandTopRatio: 0.025,
+        expandBottomRatio: 0.03,
+        maxExpandX: 5,
+        maxExpandTop: 3,
+        maxExpandBottom: 4,
+      };
+};
 
 const isSingleLineLabelCandidate = (text: string, sourceText?: string): boolean => {
   const normalized = normalizeOverlayInlineText(text);
@@ -836,7 +949,7 @@ const isSingleLineLabelCandidate = (text: string, sourceText?: string): boolean 
   return false;
 };
 
-const estimateSingleLineWidth = (text: string, fontSize: number): number => {
+const estimateSingleLineWidthHeuristic = (text: string, fontSize: number): number => {
   const normalized = normalizeOverlayInlineText(text);
   if (!normalized) return fontSize;
 
@@ -861,6 +974,58 @@ const estimateSingleLineWidth = (text: string, fontSize: number): number => {
   return total;
 };
 
+const measureSingleLineWidth = (text: string, fontSize: number, fontFamily?: string): number => {
+  const normalized = normalizeOverlayInlineText(text);
+  if (!normalized) return fontSize;
+
+  const context = getTextMeasureContext();
+  if (!context) {
+    return estimateSingleLineWidthHeuristic(normalized, fontSize);
+  }
+
+  context.font = buildMeasureFont(fontSize, fontFamily);
+  return context.measureText(normalized).width;
+};
+
+const countWrappedLines = (
+  text: string,
+  width: number,
+  fontSize: number,
+  fontFamily?: string
+): number => {
+  const normalized = normalizeOverlayInlineText(text);
+  if (!normalized) return 1;
+
+  const context = getTextMeasureContext();
+  if (!context) {
+    return estimateLineCountHeuristic(normalized, width, fontSize);
+  }
+
+  context.font = buildMeasureFont(fontSize, fontFamily);
+  if (!/\s/.test(normalized)) {
+    return Math.max(1, Math.ceil(context.measureText(normalized).width / Math.max(1, width)));
+  }
+
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  if (words.length === 0) return 1;
+
+  let lines = 1;
+  let currentLine = '';
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (!currentLine || context.measureText(candidate).width <= width) {
+      currentLine = candidate;
+      continue;
+    }
+
+    lines += 1;
+    currentLine = word;
+  }
+
+  return Math.max(1, lines);
+};
+
 export const computeOverlayTypography = (
   text: string,
   width: number,
@@ -873,52 +1038,246 @@ export const computeOverlayTypography = (
   const sourceHeight = Math.max(8, hints?.sourceBoxHeight ?? safeHeight);
   const sourceLength = compactTextLength(hints?.sourceText || '');
   const targetLength = compactTextLength(text);
+  const containsThai = THAI_CHAR_REGEX.test(text);
+  const containsCjk = CJK_CHAR_REGEX.test(text);
   const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
   const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
-  const forceSingleLine = isSingleLineLabelCandidate(text, hints?.sourceText) || severeWrapRisk;
-  const normalizedText = forceSingleLine ? normalizeOverlayInlineText(text) : text;
+  const preferSingleLine = isSingleLineLabelCandidate(text, hints?.sourceText)
+    || severeWrapRisk
+    || (sourceLength > 0 && safeHeight <= sourceHeight * 1.42);
+  const normalizedInlineText = normalizeOverlayInlineText(text);
   const ratio = sourceLength > 0 && targetLength > 0
-    ? clamp(Math.sqrt(sourceLength / targetLength), 0.84, 1.08)
+    ? clamp(
+      Math.pow(sourceLength / targetLength, containsThai ? 0.72 : containsCjk ? 0.68 : 0.76),
+      containsThai ? 0.66 : containsCjk ? 0.7 : 0.58,
+      1.08
+    )
     : 1;
+  const scriptScale = containsThai ? 0.95 : containsCjk ? 0.93 : 0.94;
 
-  const sourceDriven = sourceHeight * (forceSingleLine ? 0.75 : 0.78) * ratio;
-  const minFontSize = clamp(sourceHeight * (forceSingleLine ? 0.5 : 0.54), 6, 14);
+  const sourceDriven = sourceHeight * (preferSingleLine ? 0.7 : 0.63) * ratio * scriptScale;
+  const minFontSize = clamp(
+    sourceHeight * (preferSingleLine ? 0.43 : 0.38) * (containsThai ? 0.94 : 1),
+    6,
+    16
+  );
   let fontSize = clamp(
     Math.min(
       sourceDriven,
-      safeHeight * (forceSingleLine ? 0.88 : 0.92),
-      safeWidth * (forceSingleLine ? 0.42 : 0.44),
-      sourceWidth * (forceSingleLine ? 0.4 : 0.42)
+      safeHeight * (preferSingleLine ? 0.74 : 0.76),
+      safeWidth * (preferSingleLine ? 0.36 : 0.4),
+      sourceWidth * (preferSingleLine ? 0.31 : 0.34)
     ),
     minFontSize,
-    34
+    30
   );
-  fontSize *= forceSingleLine ? 0.95 : 0.97;
-  const lineHeight = 1.18;
+  fontSize *= preferSingleLine ? 0.88 : 0.84;
+  const lineHeight = resolveOverlayLineHeight(text);
 
   for (let i = 0; i < 32; i += 1) {
     const snappedFont = Math.round(fontSize * 4) / 4;
-    const padX = Math.max(2, Math.round(snappedFont * 0.16));
-    const padY = Math.max(2, Math.round(snappedFont * 0.14));
+    const { padX, padY } = resolveOverlayPadding(snappedFont, text);
     const usableWidth = Math.max(4, safeWidth - padX * 2);
     const usableHeight = Math.max(4, safeHeight - padY * 2);
-    const estimatedLines = forceSingleLine ? 1 : estimateLineCount(normalizedText, usableWidth, snappedFont);
-    const descenderSafety = Math.max(1, Math.round(snappedFont * 0.16));
-    const requiredHeight = estimatedLines * snappedFont * lineHeight + descenderSafety;
-    const widthFits = !forceSingleLine || estimateSingleLineWidth(normalizedText, snappedFont) <= usableWidth;
+    const singleLineWidth = measureSingleLineWidth(normalizedInlineText, snappedFont, hints?.fontFamily);
+    const effectiveSingleLine = preferSingleLine
+      && singleLineWidth <= usableWidth * (containsThai ? 1.02 : 1);
+    const estimatedLines = effectiveSingleLine
+      ? 1
+      : countWrappedLines(text, usableWidth, snappedFont, hints?.fontFamily);
+    const ascenderSafety = Math.max(1, Math.round(snappedFont * (containsThai ? 0.1 : 0.05)));
+    const descenderSafety = Math.max(1, Math.round(snappedFont * (containsThai ? 0.18 : 0.14)));
+    const requiredHeight = estimatedLines * snappedFont * lineHeight + ascenderSafety + descenderSafety;
+    const widthFits = effectiveSingleLine || estimatedLines > 1 || singleLineWidth <= usableWidth;
     if ((requiredHeight <= usableHeight && widthFits) || fontSize <= minFontSize) {
       return {
         fontSize: snappedFont,
         lineHeight,
         padX,
         padY,
-        forceSingleLine,
+        forceSingleLine: effectiveSingleLine,
+        estimatedLines,
+        contentHeight: requiredHeight,
       };
     }
     fontSize -= fontSize >= 16 ? 0.9 : 0.55;
   }
 
   return DEFAULT_OVERLAY_TYPOGRAPHY;
+};
+
+const resolveHorizontalOverlapRatio = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  return overlap / Math.max(1, Math.min(a.x1 - a.x0, b.x1 - b.x0));
+};
+
+const isParagraphLikeOverlayInput = (input: OverlayTypographyInput): boolean => {
+  const wordCount = input.line?.words?.length || 0;
+  return wordCount >= 4 || compactTextLength(input.text) >= 24;
+};
+
+const resolveMedian = (values: number[]): number | undefined => {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) * 0.5;
+};
+
+const resolveLowerBandAverage = (values: number[]): number | undefined => {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const bandSize = Math.max(1, Math.ceil(sorted.length / 2));
+  const band = sorted.slice(0, bandSize);
+  return band.reduce((sum, value) => sum + value, 0) / band.length;
+};
+
+const resolveRange = (values: number[]): number => {
+  if (values.length === 0) return 0;
+  return Math.max(...values) - Math.min(...values);
+};
+
+const shouldHarmonizeOverlayBlock = (
+  previous: OverlayTypographyInput,
+  current: OverlayTypographyInput
+): boolean => {
+  const prevHeight = Math.max(1, previous.bbox.y1 - previous.bbox.y0);
+  const currHeight = Math.max(1, current.bbox.y1 - current.bbox.y0);
+  const avgHeight = (prevHeight + currHeight) * 0.5;
+  const heightRatio = Math.max(prevHeight, currHeight) / Math.max(1, Math.min(prevHeight, currHeight));
+  const verticalGap = current.bbox.y0 - previous.bbox.y1;
+  const leftDelta = Math.abs(current.bbox.x0 - previous.bbox.x0);
+  const overlapRatio = resolveHorizontalOverlapRatio(previous.bbox, current.bbox);
+  const bothParagraphLike = isParagraphLikeOverlayInput(previous) && isParagraphLikeOverlayInput(current);
+
+  if (
+    bothParagraphLike
+    && heightRatio <= 1.24
+    && verticalGap >= -avgHeight * 0.18
+    && verticalGap <= Math.max(22, avgHeight * 1.05)
+  ) {
+    return true;
+  }
+
+  return (
+    heightRatio <= 1.15
+    && verticalGap >= -avgHeight * 0.22
+    && verticalGap <= Math.max(18, avgHeight * 0.78)
+    && (overlapRatio >= 0.24 || leftDelta <= Math.max(18, avgHeight * 1.8))
+  );
+};
+
+export const computeOverlayLayoutMap = (
+  inputs: OverlayTypographyInput[],
+  options?: { profile?: OverlayLayoutProfile }
+): Map<number, OverlayLayout> => {
+  const profile = options?.profile || 'official';
+  const isDocumentProfile = profile === 'official';
+  const computed = inputs.map((input) => ({
+    ...input,
+    typography: computeOverlayTypography(input.text, input.width, input.height, input.hints),
+  }));
+  const result = new Map<number, OverlayLayout>();
+
+  let groupStart = 0;
+  const flushGroup = (endExclusive: number) => {
+    const group = computed.slice(groupStart, endExclusive);
+    if (group.length === 0) return;
+
+    const fontSizes = group.map((item) => item.typography.fontSize);
+    const minFontSize = Math.min(...fontSizes);
+    const maxFontSize = Math.max(...fontSizes);
+    const normalizedFontSize = resolveLowerBandAverage(fontSizes) ?? minFontSize;
+    const shouldNormalize = isDocumentProfile
+      ? (group.length >= 3 ? true : group.length >= 2 && (maxFontSize - minFontSize) >= 0.35)
+      : (group.length >= 2 && (maxFontSize - minFontSize) >= 0.5);
+    const startXs = group.map((item) => item.line ? resolveOverlayTextStartX(item.line, item.bbox) : item.bbox.x0);
+    const centerXs = group.map((item) => item.bbox.x0 + ((item.bbox.x1 - item.bbox.x0) * 0.5));
+    const boxHeights = group.map((item) => item.bbox.y1 - item.bbox.y0);
+    const maxHeight = Math.max(...boxHeights);
+    const minStartX = Math.min(...startXs);
+    const leftEdgeTolerance = Math.max(4, maxHeight * 0.22);
+    const sharedLeftEdgeCount = startXs.filter((value) => Math.abs(value - minStartX) <= leftEdgeTolerance).length;
+    const hasSharedLeftEdge = group.length >= 2
+      && sharedLeftEdgeCount >= Math.max(2, Math.ceil(group.length * 0.6));
+    const sharedCenterX = group.length >= 2 ? resolveMedian(centerXs) : undefined;
+    const centerRangeLimit = profile === 'manga'
+      ? Math.max(20, maxHeight * 1.5)
+      : profile === 'manhwa'
+        ? Math.max(18, maxHeight * 1.38)
+        : Math.max(18, maxHeight * 1.25);
+    const startVarianceLimit = profile === 'manga'
+      ? Math.max(4, maxHeight * 0.16)
+      : profile === 'manhwa'
+        ? Math.max(5, maxHeight * 0.22)
+        : Math.max(6, maxHeight * 0.35);
+    const isCenteredBlock = group.length >= 2
+      && resolveRange(centerXs) <= centerRangeLimit
+      && (
+        isDocumentProfile
+          ? (!hasSharedLeftEdge && resolveRange(startXs) >= startVarianceLimit)
+          : resolveRange(startXs) >= startVarianceLimit
+      );
+    const alignment: 'left' | 'center' = isCenteredBlock ? 'center' : 'left';
+    const sharedTextStartX = group.length >= 2
+      ? (alignment === 'left' && isDocumentProfile ? minStartX : resolveMedian(startXs))
+      : undefined;
+    const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && isDocumentProfile
+      ? minStartX
+      : undefined;
+
+    for (const item of group) {
+      if (!shouldNormalize) {
+        result.set(item.index, {
+          typography: item.typography,
+          alignment,
+          sharedTextStartX,
+          sharedCenterX,
+          sharedBoxLeftX,
+        });
+        continue;
+      }
+
+      const lineHeight = resolveOverlayLineHeight(item.text);
+      const { padX, padY } = resolveOverlayPadding(normalizedFontSize, item.text);
+      const estimatedLines = item.typography.estimatedLines;
+      const ascenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(item.text) ? 0.1 : 0.05)));
+      const descenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(item.text) ? 0.18 : 0.14)));
+      result.set(item.index, {
+        typography: {
+          fontSize: normalizedFontSize,
+          lineHeight,
+          padX,
+          padY,
+          forceSingleLine: item.typography.forceSingleLine,
+          estimatedLines,
+          contentHeight: estimatedLines * normalizedFontSize * lineHeight + ascenderSafety + descenderSafety,
+        },
+        alignment,
+        sharedTextStartX,
+        sharedCenterX,
+        sharedBoxLeftX,
+      });
+    }
+  };
+
+  for (let i = 1; i < computed.length; i += 1) {
+    if (!shouldHarmonizeOverlayBlock(computed[i - 1], computed[i])) {
+      flushGroup(i);
+      groupStart = i;
+    }
+  }
+  flushGroup(computed.length);
+
+  return result;
+};
+
+export const computeOverlayTypographyMap = (
+  inputs: OverlayTypographyInput[]
+): Map<number, OverlayTypography> => {
+  const layoutMap = computeOverlayLayoutMap(inputs);
+  return new Map(Array.from(layoutMap.entries()).map(([index, layout]) => [index, layout.typography]));
 };
 
 export const clampOverlayRect = (

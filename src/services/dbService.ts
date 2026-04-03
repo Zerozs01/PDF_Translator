@@ -1,5 +1,5 @@
 import { OCREngine, OCRPageResult } from '../types';
-import type { DBDocumentCacheCandidate, DBOCRTranslationCacheEntry } from '../types/electron.d';
+import type { DBDocumentCacheCandidate, DBOCRTranslationCacheEntry, DocumentUpdate } from '../types/electron.d';
 import '../types/electron.d'; // Import type declarations
 
 type LooseDocumentRecord = {
@@ -12,7 +12,7 @@ type LooseDocumentRecord = {
 
 const isDbAvailable = (): boolean => {
   if (typeof window === 'undefined') return false;
-  return Boolean(window.electronAPI?.db || window.ipcRenderer?.invoke);
+  return Boolean(window.electronAPI?.db);
 };
 
 const normalizeFilename = (value: string): string => value.trim().toLowerCase();
@@ -44,12 +44,7 @@ export const dbService = {
         console.warn('[DB] saveDocument skipped: DB not available');
         return 0;
       }
-      // Prefer new typed API, fallback to legacy for compatibility
-      if (window.electronAPI?.db) {
-        return await window.electronAPI.db.saveDocument(filepath, filename, totalPages);
-      }
-      // Legacy fallback (will be deprecated)
-      return await window.ipcRenderer.invoke('db:save-document', { filepath, filename, totalPages }) as number;
+      return await window.electronAPI.db.saveDocument(filepath, filename, totalPages);
     } catch (error) {
       console.error('Failed to save document:', error);
       throw error;
@@ -65,10 +60,7 @@ export const dbService = {
         console.warn('[DB] getDocument skipped: DB not available');
         return null;
       }
-      if (window.electronAPI?.db) {
-        return await window.electronAPI.db.getDocument(filepath);
-      }
-      return await window.ipcRenderer.invoke('db:get-document', filepath) as { id: number; total_pages: number } | null;
+      return await window.electronAPI.db.getDocument(filepath);
     } catch (error) {
       console.error('Failed to get document:', error);
       return null;
@@ -107,24 +99,17 @@ export const dbService = {
         });
     };
 
-    // Preferred path: dedicated main-process query.
     try {
-      if (window.electronAPI?.db?.findDocumentsByFilename) {
-        const rows = await window.electronAPI.db.findDocumentsByFilename(filename);
-        if (Array.isArray(rows) && rows.length > 0) {
-          return normalizeAndSort(rows);
-        }
-      }
-      const data = await window.ipcRenderer.invoke('db:find-documents-by-filename', filename) as DBDocumentCacheCandidate[] | null;
-      if (Array.isArray(data) && data.length > 0) {
-        return normalizeAndSort(data);
+      const rows = await window.electronAPI.db.findDocumentsByFilename(filename);
+      if (Array.isArray(rows) && rows.length > 0) {
+        return normalizeAndSort(rows);
       }
     } catch (error) {
       console.warn('[DB] findDocumentsByFilename primary query failed, using fallback:', error);
     }
 
-    // Fallback path: build candidates from existing channels so cache aliasing still works
-    // even if main/preload has not picked up the new handler yet.
+    // Fallback path: build candidates from existing typed channels so cache aliasing
+    // still works even if the dedicated lookup query is unavailable.
     try {
       const merged = new Map<number, LooseDocumentRecord>();
       const pushDocs = (docs: LooseDocumentRecord[] | null | undefined) => {
@@ -135,30 +120,10 @@ export const dbService = {
         }
       };
 
-      if (window.electronAPI?.db?.getRecentDocuments) {
-        const recent = await window.electronAPI.db.getRecentDocuments(500) as unknown as LooseDocumentRecord[];
-        pushDocs(recent);
-      }
-      if (window.electronAPI?.db?.searchDocuments) {
-        const searched = await window.electronAPI.db.searchDocuments(filename) as unknown as LooseDocumentRecord[];
-        pushDocs(searched);
-      }
-
-      // Legacy IPC fallback
-      if (merged.size === 0 && window.ipcRenderer?.invoke) {
-        try {
-          const recentLegacy = await window.ipcRenderer.invoke('db:get-recent-documents', 500) as LooseDocumentRecord[] | null;
-          pushDocs(recentLegacy ?? []);
-        } catch {
-          // ignore
-        }
-        try {
-          const searchLegacy = await window.ipcRenderer.invoke('db:search-documents', filename) as LooseDocumentRecord[] | null;
-          pushDocs(searchLegacy ?? []);
-        } catch {
-          // ignore
-        }
-      }
+      const recent = await window.electronAPI.db.getRecentDocuments(500) as unknown as LooseDocumentRecord[];
+      pushDocs(recent);
+      const searched = await window.electronAPI.db.searchDocuments(filename) as unknown as LooseDocumentRecord[];
+      pushDocs(searched);
 
       const candidates = Array.from(merged.values())
         .filter((doc) => normalizeFilename(doc.filename) === target);
@@ -197,16 +162,7 @@ export const dbService = {
         return false;
       }
       const selectedEngine = engine || data.ocrEngine || 'tesseract';
-      if (window.electronAPI?.db) {
-        const ok = await window.electronAPI.db.saveOCR(docId, pageNum, data, selectedEngine);
-        if (!ok) {
-          console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
-          return false;
-        }
-        console.log(`[DB] Saved OCR for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
-        return true;
-      }
-      const ok = await window.ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data, engine: selectedEngine }) as boolean;
+      const ok = await window.electronAPI.db.saveOCR(docId, pageNum, data, selectedEngine);
       if (!ok) {
         console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
         return false;
@@ -228,16 +184,7 @@ export const dbService = {
         console.warn('[DB] getOCR skipped: DB not available');
         return null;
       }
-      if (window.electronAPI?.db) {
-        const data = await window.electronAPI.db.getOCR(docId, pageNum, engine);
-        if (data) {
-          console.log(`[DB] cache hit for page ${pageNum} (engine=${engine})`);
-          return data;
-        }
-        console.log(`[DB] cache miss for page ${pageNum} (docId=${docId}, engine=${engine})`);
-        return null;
-      }
-      const data = await window.ipcRenderer.invoke('db:get-ocr', { docId, pageNum, engine }) as OCRPageResult | null;
+      const data = await window.electronAPI.db.getOCR(docId, pageNum, engine);
       if (data) {
         console.log(`[DB] cache hit for page ${pageNum} (engine=${engine})`);
         return data;
@@ -256,14 +203,7 @@ export const dbService = {
         console.warn('[DB] clearOCR skipped: DB not available');
         return false;
       }
-      if (window.electronAPI?.db?.clearOCR) {
-        const ok = await window.electronAPI.db.clearOCR(docId, pageNum, engine);
-        if (ok) {
-          console.log(`[DB] Cleared OCR cache for page ${pageNum} (docId=${docId}, engine=${engine})`);
-        }
-        return ok;
-      }
-      const ok = await window.ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }) as boolean;
+      const ok = await window.electronAPI.db.clearOCR(docId, pageNum, engine);
       if (ok) {
         console.log(`[DB] Cleared OCR cache for page ${pageNum} (docId=${docId}, engine=${engine})`);
       }
@@ -285,10 +225,7 @@ export const dbService = {
         console.warn('[DB] saveTranslationCache skipped: DB not available');
         return false;
       }
-      if (window.electronAPI?.db?.saveTranslationCache) {
-        return await window.electronAPI.db.saveTranslationCache(docId, pageNum, cacheKey, entry);
-      }
-      return await window.ipcRenderer.invoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }) as boolean;
+      return await window.electronAPI.db.saveTranslationCache(docId, pageNum, cacheKey, entry);
     } catch (error) {
       console.error('Failed to save translation cache:', error);
       return false;
@@ -301,11 +238,7 @@ export const dbService = {
         console.warn('[DB] getTranslationCachePage skipped: DB not available');
         return [];
       }
-      if (window.electronAPI?.db?.getTranslationCachePage) {
-        const rows = await window.electronAPI.db.getTranslationCachePage(docId, pageNum);
-        return Array.isArray(rows) ? rows : [];
-      }
-      const rows = await window.ipcRenderer.invoke('db:get-translation-cache-page', { docId, pageNum }) as DBOCRTranslationCacheEntry[] | null;
+      const rows = await window.electronAPI.db.getTranslationCachePage(docId, pageNum);
       return Array.isArray(rows) ? rows : [];
     } catch (error) {
       console.error('Failed to get translation cache page:', error);
@@ -319,12 +252,48 @@ export const dbService = {
         console.warn('[DB] clearTranslationCacheByEngine skipped: DB not available');
         return false;
       }
-      if (window.electronAPI?.db?.clearTranslationCacheByEngine) {
-        return await window.electronAPI.db.clearTranslationCacheByEngine(docId, pageNum, engine);
-      }
-      return await window.ipcRenderer.invoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }) as boolean;
+      return await window.electronAPI.db.clearTranslationCacheByEngine(docId, pageNum, engine);
     } catch (error) {
       console.error('Failed to clear translation cache:', error);
+      return false;
+    }
+  },
+
+  async touchDocument(docId: number): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] touchDocument skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.touchDocument(docId);
+    } catch (error) {
+      console.error('Failed to touch document:', error);
+      return false;
+    }
+  },
+
+  async updateLastPage(docId: number, pageNum: number): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] updateLastPage skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.updateLastPage(docId, pageNum);
+    } catch (error) {
+      console.error('Failed to update document page:', error);
+      return false;
+    }
+  },
+
+  async updateDocument(docId: number, updates: DocumentUpdate): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] updateDocument skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.updateDocument(docId, updates);
+    } catch (error) {
+      console.error('Failed to update document:', error);
       return false;
     }
   },
@@ -342,15 +311,7 @@ export const dbService = {
         console.warn('[DB] getLatestOCR skipped: DB not available');
         return null;
       }
-      if (window.electronAPI?.db?.getLatestOCR) {
-        return await window.electronAPI.db.getLatestOCR(docId);
-      }
-      const data = await window.ipcRenderer.invoke('db:get-latest-ocr', { docId }) as {
-        page_number: number;
-        updated_at: number;
-        ocr_data: OCRPageResult;
-      } | null;
-      return data;
+      return await window.electronAPI.db.getLatestOCR(docId);
     } catch (error) {
       console.error('Failed to get latest OCR:', error);
       return null;

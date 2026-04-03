@@ -48,6 +48,9 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   },
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
+    getApiKeyStatus: () => electron.ipcRenderer.invoke("gemini:get-api-key-status"),
+    setApiKey: (apiKey) => electron.ipcRenderer.invoke("gemini:set-api-key", { apiKey }),
+    clearApiKey: () => electron.ipcRenderer.invoke("gemini:clear-api-key"),
     translate: (text, context) => electron.ipcRenderer.invoke("gemini:translate", { text, context })
   },
   translate: {
@@ -76,23 +79,5 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     console.warn(`[Preload] Blocked subscription to unauthorized channel: ${channel}`);
     return () => {
     };
-  }
-});
-electron.contextBridge.exposeInMainWorld("ipcRenderer", {
-  on(...args) {
-    const [channel, listener] = args;
-    return electron.ipcRenderer.on(channel, (event, ...args2) => listener(event, ...args2));
-  },
-  off(...args) {
-    const [channel, ...omit] = args;
-    return electron.ipcRenderer.off(channel, ...omit);
-  },
-  send(...args) {
-    const [channel, ...omit] = args;
-    return electron.ipcRenderer.send(channel, ...omit);
-  },
-  invoke(...args) {
-    const [channel, ...omit] = args;
-    return electron.ipcRenderer.invoke(channel, ...omit);
   }
 });

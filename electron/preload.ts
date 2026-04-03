@@ -46,6 +46,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   'ocr:prewarm-engine',
   'ocr:run-external',
   'ocr:cancel-external',
+  'gemini:get-api-key-status',
+  'gemini:set-api-key',
+  'gemini:clear-api-key',
   'translate:offline',
   'translate:offline-batch',
   'gemini:translate', // For secure Gemini API calls via main process
@@ -164,12 +167,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
+    getApiKeyStatus: () => ipcRenderer.invoke('gemini:get-api-key-status'),
+    setApiKey: (apiKey: string) =>
+      ipcRenderer.invoke('gemini:set-api-key', { apiKey }),
+    clearApiKey: () => ipcRenderer.invoke('gemini:clear-api-key'),
     translate: (text: string, context: {
       mode: 'manga' | 'manhwa' | 'official';
       sourceType: string;
       sourceLanguage?: string;
       targetLanguage?: string;
-      apiKey?: string;
       baseSystemPrompt?: string;
     }) =>
       ipcRenderer.invoke('gemini:translate', { text, context }),
@@ -232,24 +238,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 });
 
-// Legacy support: Keep ipcRenderer for backward compatibility during migration
-// TODO: Remove this after migrating all code to use electronAPI
-contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(...args: Parameters<typeof ipcRenderer.on>) {
-    const [channel, listener] = args
-    return ipcRenderer.on(channel, (event, ...args) => listener(event, ...args))
-  },
-  off(...args: Parameters<typeof ipcRenderer.off>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.off(channel, ...omit)
-  },
-  send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
-  },
-  invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
-  },
-})
 

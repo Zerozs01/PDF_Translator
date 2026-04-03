@@ -17,6 +17,9 @@ import {
   RefreshCw,
   Languages,
   Eye,
+  Info,
+  Copy,
+  Check,
   Cpu,
   Trash2,
   X,
@@ -34,6 +37,7 @@ import {
 import { useProjectStore } from '../../stores/useProjectStore';
 import { searchablePDFService } from '../../services/pdf';
 import { dbService } from '../../services/dbService';
+import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 import { visionService } from '../../services/vision/VisionService';
 import {
   OCR_DIRECT_RENDER_TIMEOUT_MS_DEFAULT,
@@ -115,6 +119,41 @@ const toBenchmarkTokens = (result: OCRPageResult): string[] => {
       .filter(Boolean);
   }
   return [];
+};
+
+const copyTextToClipboard = async (value: string): Promise<boolean> => {
+  const normalized = String(value || '');
+  if (!normalized.trim()) return false;
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(normalized);
+      return true;
+    } catch {
+      // Fall back to execCommand for Electron/file contexts that reject clipboard API.
+    }
+  }
+
+  if (typeof document === 'undefined') return false;
+
+  const textarea = document.createElement('textarea');
+  textarea.value = normalized;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-1000px';
+  textarea.style.left = '-1000px';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
 };
 
 const isCjkLikeLanguage = (language: string): boolean => {
@@ -231,19 +270,6 @@ const readRuntimeMs = (result: OCRPageResult): number | null => {
 };
 
 const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
-
-const buildOCRSourceFingerprint = (result: OCRPageResult, fallbackEngine: OCREngine): string => {
-  const effectiveEngine = result.ocrEngine || fallbackEngine;
-  return [
-    result.algorithmVersion,
-    effectiveEngine,
-    result.pipelineProfile || 'panel',
-    result.language || 'eng',
-    result.words.length,
-    result.lines.length,
-    normalizePreviewText(result.text || '').length,
-  ].join('|');
-};
 
 const buildTranslationCacheSignature = (entry: OCRTranslationCacheEntry): string => [
   entry.key,
@@ -369,6 +395,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const pdfLoadingRef = useRef<Promise<PDFDocumentProxy> | null>(null);
   const fileRef = useRef<File | null>(null);
   const pdfDataRef = useRef<ArrayBuffer | null>(null);
+  const statusRefreshInFlightRef = useRef<Promise<void> | null>(null);
   // Keep OCR cache profile stable across translation context switches.
   // Translation mode should affect translation prompt/tone, not OCR cache identity.
   const activePipelineProfile: 'panel' | 'export' = 'panel';
@@ -390,6 +417,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
+  const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied'>('idle');
   const [benchmarkRows, setBenchmarkRows] = useState<BenchmarkRow[]>(() =>
     OCR_ENGINES.map((engine) => ({
       engine: engine.id,
@@ -501,6 +530,64 @@ export const OCRTextLayerPanel: React.FC = () => {
     clearInterval(timer);
     warmAnimationTimersRef.current.delete(engine);
   }, []);
+
+  const refreshExternalEngineStatuses = useCallback(async () => {
+    if (!window.electronAPI?.ocr?.getEngineStatus) return;
+    if (statusRefreshInFlightRef.current) {
+      return await statusRefreshInFlightRef.current;
+    }
+
+    const run = (async () => {
+      try {
+        const statuses = await window.electronAPI.ocr.getEngineStatus();
+        statuses.forEach((status) => {
+          const engine = status.engine;
+          if (engine === 'tesseract') return;
+
+          setEngineWarmStates((current) => {
+            const previous = current[engine] || SESSION_ENGINE_WARM_STATES[engine] || { phase: 'idle' as EngineWarmPhase, progress: 0 };
+            const nextState: EngineWarmState = status.available
+              ? {
+                  ...previous,
+                  phase: previous.phase === 'ready' ? 'ready' : 'idle',
+                  progress: previous.phase === 'ready' ? 100 : Math.max(previous.progress || 0, 12),
+                  runtime: status.runtime,
+                  description: status.description,
+                  etaSec: previous.phase === 'ready' ? 0 : null,
+                }
+              : {
+                  ...previous,
+                  phase: 'error',
+                  progress: 0,
+                  runtime: status.runtime,
+                  description: status.description,
+                  etaSec: null,
+                };
+            SESSION_ENGINE_WARM_STATES[engine] = nextState;
+            return {
+              ...current,
+              [engine]: nextState,
+            };
+          });
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        (['paddleocr', 'easyocr'] as const).forEach((engine) => {
+          setEngineWarmState(engine, {
+            phase: 'error',
+            progress: 0,
+            description: message,
+            etaSec: null,
+          });
+        });
+      } finally {
+        statusRefreshInFlightRef.current = null;
+      }
+    })();
+
+    statusRefreshInFlightRef.current = run;
+    return await run;
+  }, [setEngineWarmState]);
 
   const startWarmAnimation = useCallback((engine: OCREngine, phase: EngineWarmPhase) => {
     if (engine === 'tesseract') return;
@@ -655,6 +742,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     SESSION_ENGINE_WARM_PROMISES.set(sessionKey, warmPromise);
     return await warmPromise;
   }, [normalizedWarmLanguage, setEngineWarmState, setOptions, startWarmAnimation, stopWarmAnimation]);
+
+  useEffect(() => {
+    void refreshExternalEngineStatuses();
+  }, [refreshExternalEngineStatuses]);
 
   // External engines are warmed on-demand when selected or when OCR starts.
   // This keeps first-open latency lower on slower machines.
@@ -1359,20 +1450,10 @@ export const OCRTextLayerPanel: React.FC = () => {
   const currentOcrFingerprint = previewSourceOCR
     ? buildOCRSourceFingerprint(previewSourceOCR, (options.engine || 'tesseract') as OCREngine)
     : '';
-  const staleButReusableInPanel = Boolean(
-    resolvedTranslationEntry
-    && (previewSourceOCR?.lines?.length || 0) > 0
-    && resolvedTranslationEntry.lineCount > 0
-    && resolvedTranslationEntry.lineCount === (previewSourceOCR?.lines?.length || 0)
-    && resolvedTranslationEntry.translatedByIndex.length >= Math.max(1, Math.floor(resolvedTranslationEntry.lineCount * 0.7))
-  );
   const activeTranslationMatchesCurrentOCR = Boolean(
     resolvedTranslationEntry
     && currentOcrFingerprint
-    && (
-      resolvedTranslationEntry.sourceFingerprint === currentOcrFingerprint
-      || staleButReusableInPanel
-    )
+    && resolvedTranslationEntry.sourceFingerprint === currentOcrFingerprint
   );
   const effectivePreviewMode = (
     translationPreviewMode === 'translated'
@@ -1400,6 +1481,28 @@ export const OCRTextLayerPanel: React.FC = () => {
     : effectivePreviewMode === 'translated'
       ? normalizePreviewText(resolvedTranslationEntry?.translatedText || '')
       : normalizePreviewText(previewSourceOCR?.text || '');
+  const previewCopyText = previewText || previewSourceOCR?.words.map((word) => word.text).join(' ') || '';
+  const hasPreviewCopyText = Boolean(previewCopyText.trim());
+
+  const handleCopyPreviewText = useCallback(async () => {
+    if (!hasPreviewCopyText) {
+      setCacheActionMessage('No OCR text to copy');
+      return;
+    }
+
+    const copied = await copyTextToClipboard(previewCopyText);
+    if (!copied) {
+      setCacheActionMessage('Copy failed');
+      return;
+    }
+
+    setCopyFeedback('copied');
+    setCacheActionMessage(
+      effectivePreviewMode === 'translated'
+        ? 'Copied translated result'
+        : 'Copied OCR result'
+    );
+  }, [effectivePreviewMode, hasPreviewCopyText, previewCopyText]);
 
   const hasCjkOrThaiOcrLanguage = useCallback((language: string) => {
     const codes = language.split('+').map(code => code.trim()).filter(Boolean);
@@ -2355,6 +2458,12 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, [cacheActionMessage]);
 
   useEffect(() => {
+    if (copyFeedback !== 'copied') return undefined;
+    const timer = setTimeout(() => setCopyFeedback('idle'), 1600);
+    return () => clearTimeout(timer);
+  }, [copyFeedback]);
+
+  useEffect(() => {
     const handler = () => {
       if (benchmarkRunning) {
         setBenchmarkOpen(true);
@@ -2410,6 +2519,13 @@ export const OCRTextLayerPanel: React.FC = () => {
     })()
     : '';
   const currentSkipReason = previewSourceOCR?.debug?.skipReason || '';
+  const hasProcessInfo = Boolean(
+    currentDroppedCount
+    || currentDropSummary
+    || currentStageSummary
+    || currentCandidateSummary
+    || currentSkipReason
+  );
   const currentRuntimeMs = previewSourceOCR?.debug?.runtimeMs
     ?? (previewSourceOCR?.debug as { timingsMs?: { ocr?: number } } | undefined)?.timingsMs?.ocr;
   const currentRuntimeSecLabel = typeof currentRuntimeMs === 'number'
@@ -2552,8 +2668,23 @@ export const OCRTextLayerPanel: React.FC = () => {
                   />
                 )}
                 <div className="relative z-10 space-y-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-semibold text-white">{engine.name}</span>
+                    <span className={`text-[9px] font-medium ${
+                      warmState.phase === 'ready'
+                        ? 'text-emerald-300'
+                        : warmState.phase === 'error'
+                          ? 'text-rose-300'
+                          : 'text-slate-400'
+                    }`}>
+                      {warmState.phase === 'ready'
+                        ? 'Ready'
+                        : warmState.phase === 'error'
+                          ? 'Unavailable'
+                          : warmState.phase === 'warming'
+                            ? 'Loading'
+                            : 'Check'}
+                    </span>
                   </div>
                   <div className="h-1.5 rounded-full bg-slate-950/80 overflow-hidden">
                     <div
@@ -2711,9 +2842,19 @@ export const OCRTextLayerPanel: React.FC = () => {
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
             <Eye size={12} className="text-[#5CC6F2]" />
             OCR Result - หน้า {currentPage}
-            <span className="ml-auto text-[11px] font-medium text-sky-300/95">
-              {`runtime ${currentRuntimeSecLabel}`}
-            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setOcrInfoOpen(true)}
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-slate-900/70 text-slate-300 transition-colors hover:border-sky-400/40 hover:text-sky-100"
+                title="Open OCR process info"
+              >
+                <Info size={12} />
+              </button>
+              <span className="text-[11px] font-medium text-sky-300/95">
+                {`runtime ${currentRuntimeSecLabel}`}
+              </span>
+            </div>
           </div>
           <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
             model {currentEngine.name} • พบ {previewSourceOCR.words.length} คำ • raw conf {previewSourceOCR.confidence.toFixed(0)}%
@@ -2721,26 +2862,6 @@ export const OCRTextLayerPanel: React.FC = () => {
           {translationPreviewMode === 'translated' && !activeTranslationMatchesCurrentOCR && translatedCacheSlotCount > 0 && (
             <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
               translated cache is stale for current OCR source, showing original OCR
-            </div>
-          )}
-          {showDebugOverlay && currentDroppedCount > 0 && (
-            <div className="text-[11px] text-orange-300 bg-orange-900/20 border border-orange-700/40 rounded px-2 py-1">
-              dropped {currentDroppedCount} คำ{currentDropSummary ? ` (${currentDropSummary})` : ''}
-            </div>
-          )}
-          {showDebugOverlay && currentStageSummary && (
-            <div className="text-[11px] text-sky-200 bg-sky-900/20 border border-sky-700/40 rounded px-2 py-1">
-              stages {currentStageSummary}
-            </div>
-          )}
-          {showDebugOverlay && currentCandidateSummary && (
-            <div className="text-[11px] text-fuchsia-200 bg-fuchsia-900/20 border border-fuchsia-700/40 rounded px-2 py-1">
-              {currentCandidateSummary}
-            </div>
-          )}
-          {showDebugOverlay && currentSkipReason && (
-            <div className="text-[11px] text-amber-200 bg-amber-900/20 border border-amber-700/40 rounded px-2 py-1">
-              skipReason {currentSkipReason}
             </div>
           )}
           
@@ -2767,6 +2888,19 @@ export const OCRTextLayerPanel: React.FC = () => {
                   ไม่พบข้อความในหน้านี้
                 </p>
               )}
+            </div>
+
+            <div className="absolute bottom-2 left-2 flex items-center">
+              <button
+                type="button"
+                onClick={() => void handleCopyPreviewText()}
+                disabled={!hasPreviewCopyText}
+                className="flex items-center gap-1.5 rounded-md border border-white/10 bg-slate-950/90 px-2.5 py-1 text-[10px] font-semibold text-slate-100 transition-colors hover:border-cyan-300/60 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+                title={hasPreviewCopyText ? 'Copy all OCR text in the current preview' : 'No OCR text to copy'}
+              >
+                {copyFeedback === 'copied' ? <Check size={12} /> : <Copy size={12} />}
+                {copyFeedback === 'copied' ? 'Copied' : 'Copy All'}
+              </button>
             </div>
 
             <div className="absolute bottom-2 right-2 flex items-center rounded-md border border-white/10 bg-slate-950/90 px-2 py-1">
@@ -2801,6 +2935,97 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* Hidden canvas for rendering */}
       <canvas ref={canvasRef} className="hidden" />
+
+      {ocrInfoOpen && previewSourceOCR && createPortal(
+        <div className="fixed inset-0 z-[195] flex items-center justify-center bg-black/72 backdrop-blur-md px-4 py-6">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-[#081321]/95 shadow-[0_24px_60px_rgba(0,0,0,0.42)]">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div>
+                <h3 className="text-sm font-semibold text-white">OCR Process Info</h3>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  หน้า {currentPage} • {currentEngine.name} • runtime {currentRuntimeSecLabel}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOcrInfoOpen(false)}
+                className="rounded-lg border border-white/10 bg-white/5 p-2 text-slate-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white"
+                title="Close OCR process info"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] space-y-3 overflow-y-auto px-5 py-4">
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-4 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300/85">
+                  Summary
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-200">
+                  <div className="rounded-lg border border-white/8 bg-white/5 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Mode</div>
+                    <div className="mt-1 font-medium text-white">
+                      {effectivePreviewMode === 'translated' ? 'Translated Preview' : 'Original OCR'}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-white/5 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Words</div>
+                    <div className="mt-1 font-medium text-white">{previewSourceOCR.words.length}</div>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-white/5 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Raw Conf</div>
+                    <div className="mt-1 font-medium text-white">{previewSourceOCR.confidence.toFixed(0)}%</div>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-white/5 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Cache Slots</div>
+                    <div className="mt-1 font-medium text-white">{translatedCacheSlotCount}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-slate-900/65 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300/90">
+                    Process Log
+                  </div>
+                  {!hasProcessInfo && (
+                    <span className="text-[10px] text-slate-500">No extra diagnostics for this page</span>
+                  )}
+                </div>
+
+                <div className="mt-3 space-y-2 text-[11px] text-slate-200">
+                  {currentDroppedCount > 0 && (
+                    <div className="rounded-lg border border-orange-500/20 bg-orange-500/8 px-3 py-2 text-orange-100">
+                      dropped {currentDroppedCount} คำ{currentDropSummary ? ` (${currentDropSummary})` : ''}
+                    </div>
+                  )}
+                  {currentStageSummary && (
+                    <div className="rounded-lg border border-sky-500/20 bg-sky-500/8 px-3 py-2 text-sky-100">
+                      stages {currentStageSummary}
+                    </div>
+                  )}
+                  {currentCandidateSummary && (
+                    <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/8 px-3 py-2 text-fuchsia-100">
+                      {currentCandidateSummary}
+                    </div>
+                  )}
+                  {currentSkipReason && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-amber-100">
+                      skipReason {currentSkipReason}
+                    </div>
+                  )}
+                  {showDebugOverlay && (
+                    <div className="rounded-lg border border-white/8 bg-white/5 px-3 py-2 text-slate-300">
+                      visual debug overlay is currently enabled
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {benchmarkOpen && createPortal(
         <div className="fixed inset-0 z-190 flex items-center justify-center bg-black/72 backdrop-blur-md px-4 py-6">

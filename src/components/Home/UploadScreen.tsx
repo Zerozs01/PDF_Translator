@@ -680,8 +680,15 @@ export const UploadScreen: React.FC = () => {
     safetySettings,
     updateSafetySettings,
     targetLanguage,
-    geminiApiKey,
-    setGeminiApiKey,
+    geminiApiKeyDraft,
+    hasGeminiApiKey,
+    geminiApiKeySource,
+    isGeminiApiKeyLoaded,
+    isGeminiApiKeySaving,
+    geminiApiKeyError,
+    setGeminiApiKeyDraft,
+    saveGeminiApiKey,
+    clearGeminiApiKey,
     overlayFontPreset,
     setOverlayFontPreset,
   } = useProjectStore();
@@ -699,7 +706,7 @@ export const UploadScreen: React.FC = () => {
     searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
-    createTag, createProject, deleteTag, applyDocumentPatch,
+    createTag, createProject, deleteTag, loadDocumentTags, persistDocumentPatch,
     selectedDocumentIds, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
@@ -722,6 +729,21 @@ export const UploadScreen: React.FC = () => {
   const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
   const thumbnailJobsRef = useRef<Set<number>>(new Set());
   const isThaiTargetLanguage = targetLanguage === 'th';
+  const geminiStatusLabel = !isGeminiApiKeyLoaded
+    ? 'Loading secure key status...'
+    : geminiApiKeySource === 'secure-storage'
+      ? 'Gemini key is stored securely on this device.'
+      : geminiApiKeySource === 'environment'
+        ? 'Gemini key is currently provided by local environment variables.'
+        : 'No Gemini key saved yet.';
+  const geminiInputPlaceholder = geminiApiKeySource === 'secure-storage'
+    ? 'Stored securely. Enter a new key to replace it.'
+    : geminiApiKeySource === 'environment'
+      ? 'Loaded from environment. Enter a key here to store it securely instead.'
+      : 'AIza...';
+  const geminiStatusClass = hasGeminiApiKey
+    ? 'text-emerald-300/85'
+    : 'text-slate-500';
 
   useEffect(() => {
     let mounted = true;
@@ -910,15 +932,15 @@ export const UploadScreen: React.FC = () => {
     setActiveDocumentMenuId(docId);
     setActiveDocumentMenuPosition(position);
 
-    if (!documentTagsById[docId] && window.electronAPI?.db?.getDocumentTags) {
+    if (!documentTagsById[docId]) {
       try {
-        const documentTags = await window.electronAPI.db.getDocumentTags(docId);
+        const documentTags = await loadDocumentTags(docId);
         setDocumentTagsById((current) => ({ ...current, [docId]: documentTags }));
       } catch (error) {
         console.error('Failed to load document tags:', error);
       }
     }
-  }, [documentTagsById]);
+  }, [documentTagsById, loadDocumentTags]);
 
   const openTagMenu = useCallback((tag: DBTag, event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -957,8 +979,7 @@ export const UploadScreen: React.FC = () => {
 
   const handleMoveDocumentToProject = useCallback(async (doc: DBDocument, projectId: number | null) => {
     await moveToProject(doc.id, projectId);
-    applyDocumentPatch(doc.id, { project_id: projectId });
-  }, [applyDocumentPatch, moveToProject]);
+  }, [moveToProject]);
 
   const openProjectDialog = useCallback((documentId: number | null = null) => {
     setActiveDocumentMenuId(null);
@@ -987,11 +1008,10 @@ export const UploadScreen: React.FC = () => {
 
     if (projectDialog.documentId) {
       await moveToProject(projectDialog.documentId, project.id);
-      applyDocumentPatch(projectDialog.documentId, { project_id: project.id });
     }
 
     setProjectDialog({ isOpen: false, name: '', documentId: null });
-  }, [applyDocumentPatch, createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
+  }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
 
   const handleCreateTag = useCallback(async () => {
     const name = tagDialog.name.trim();
@@ -1066,15 +1086,13 @@ export const UploadScreen: React.FC = () => {
             data: source.data
           });
 
-          await window.electronAPI.db.updateDocument(doc.id, {
+          const persisted = await persistDocumentPatch(doc.id, {
             thumbnail_path: thumbnail.dataUrl,
             total_pages: thumbnail.totalPages ?? doc.total_pages
           });
-
-          applyDocumentPatch(doc.id, {
-            thumbnail_path: thumbnail.dataUrl,
-            total_pages: thumbnail.totalPages ?? doc.total_pages
-          });
+          if (!persisted) {
+            console.warn(`[Library] Failed to persist preview for "${doc.filename}"`);
+          }
         } catch (error) {
           console.warn(`[Library] Failed to generate preview for "${doc.filename}"`, error);
         } finally {
@@ -1082,7 +1100,7 @@ export const UploadScreen: React.FC = () => {
         }
       })();
     });
-  }, [applyDocumentPatch, sortedDocuments, viewMode]);
+  }, [persistDocumentPatch, sortedDocuments, viewMode]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
@@ -1294,10 +1312,17 @@ export const UploadScreen: React.FC = () => {
                   <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     type={showGeminiApiKey ? 'text' : 'password'}
-                    value={geminiApiKey}
-                    onChange={(e) => setGeminiApiKey(e.target.value)}
-                    placeholder="AIza..."
+                    value={geminiApiKeyDraft}
+                    onChange={(e) => setGeminiApiKeyDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void saveGeminiApiKey();
+                      }
+                    }}
+                    placeholder={geminiInputPlaceholder}
                     className="w-full rounded-lg border border-white/12 bg-slate-900/85 pl-7 pr-8 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                    disabled={!isGeminiApiKeyLoaded || isGeminiApiKeySaving}
                   />
                   <button
                     type="button"
@@ -1308,6 +1333,34 @@ export const UploadScreen: React.FC = () => {
                     {showGeminiApiKey ? <EyeOff size={12} /> : <Eye size={12} />}
                   </button>
                 </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveGeminiApiKey()}
+                    disabled={!geminiApiKeyDraft.trim() || isGeminiApiKeySaving || !isGeminiApiKeyLoaded}
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Check size={12} />
+                    Save Securely
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void clearGeminiApiKey()}
+                    disabled={(!hasGeminiApiKey && geminiApiKeySource !== 'environment') || isGeminiApiKeySaving || !isGeminiApiKeyLoaded}
+                    className="inline-flex items-center gap-1 rounded-lg border border-white/12 bg-slate-900/70 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:border-white/20 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <X size={12} />
+                    Clear Saved Key
+                  </button>
+                </div>
+                <p className={`text-[10px] leading-relaxed ${geminiStatusClass}`}>
+                  {geminiStatusLabel}
+                </p>
+                {geminiApiKeyError && (
+                  <p className="text-[10px] leading-relaxed text-rose-300/90">
+                    {geminiApiKeyError}
+                  </p>
+                )}
               </div>
 
               {isThaiTargetLanguage && (

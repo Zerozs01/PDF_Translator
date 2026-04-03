@@ -135,12 +135,19 @@ export interface OfflineTranslationContext {
   timeoutMs?: number;
 }
 
+export type GeminiApiKeySource = 'secure-storage' | 'environment' | 'none';
+
+export interface GeminiApiKeyStatus {
+  configured: boolean;
+  source: GeminiApiKeySource;
+  supportsSecureStorage: boolean;
+}
+
 export interface GeminiTranslationContext {
   mode: 'manga' | 'manhwa' | 'official';
   sourceType: string;
   sourceLanguage?: string;
   targetLanguage?: string;
-  apiKey?: string;
   baseSystemPrompt?: string;
 }
 
@@ -199,6 +206,9 @@ export interface ElectronAPI {
   };
   
   gemini: {
+    getApiKeyStatus: () => Promise<GeminiApiKeyStatus>;
+    setApiKey: (apiKey: string) => Promise<GeminiApiKeyStatus>;
+    clearApiKey: () => Promise<GeminiApiKeyStatus>;
     translate: (text: string, context: GeminiTranslationContext) => Promise<string>;
   };
 
@@ -243,19 +253,10 @@ export interface ElectronAPI {
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
-// Legacy IPC interface (for backward compatibility, will be deprecated)
-export interface LegacyIpcRenderer {
-  on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void;
-  off: (channel: string, listener?: (...args: unknown[]) => void) => void;
-  send: (channel: string, ...args: unknown[]) => void;
-  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
-}
-
 // Extend Window interface
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
-    ipcRenderer: LegacyIpcRenderer;
   }
 }
 

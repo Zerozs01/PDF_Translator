@@ -1451,6 +1451,8 @@ def prune_easyocr_panel_shadow_singletons(
 def reorder_tilted_line_clusters(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if len(lines) <= 1:
         return list(lines)
+    if any(line.get("_sourceIndex") is not None for line in lines):
+        return sorted(lines, key=source_sequence_key)
     return sorted(lines, key=line_sort_key)
 
 

@@ -28,6 +28,7 @@ import type { AiExecutionMode } from './components/Layout/RightSidebar';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore, type SafetySettings, type TranslationMode } from './stores/useProjectStore';
 import { buildOCRTranslationCacheKey, useOCRTextLayerStore } from './stores/useOCRTextLayerStore';
+import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
 
 // Lazy Load Heavy Components
@@ -62,7 +63,6 @@ async function translateWithGemini(
   sourceLanguage: string,
   targetLanguage: string,
   contextOverrides?: {
-    apiKey?: string;
     baseSystemPrompt?: string;
   }
 ): Promise<string> {
@@ -73,7 +73,6 @@ async function translateWithGemini(
       sourceType: type,
       sourceLanguage,
       targetLanguage,
-      apiKey: contextOverrides?.apiKey,
       baseSystemPrompt: contextOverrides?.baseSystemPrompt,
     });
     return result;
@@ -117,7 +116,6 @@ async function translateBatchGemini(
   sourceLanguage: string,
   targetLanguage: string,
   contextOverrides?: {
-    apiKey?: string;
     baseSystemPrompt?: string;
   }
 ): Promise<string[]> {
@@ -421,7 +419,14 @@ const normalizeSourceForTranslation = (text: string): string => {
   normalized = normalized.replace(/([,.;:!?])(\S)/g, '$1 $2');
 
   const latinOnly = normalized.replace(/[^A-Za-z]/g, '');
-  if (latinOnly.length >= 12) {
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  const hasMixedCaseWord = words.some((word) => /[A-Z]/.test(word) && /[a-z]/.test(word));
+  const looksLikeAcronymSequence = words.length > 0 && words.every((word) => {
+    const lettersOnly = word.replace(/[^A-Za-z]/g, '');
+    if (!lettersOnly) return true;
+    return lettersOnly.length <= 3 && lettersOnly === lettersOnly.toUpperCase();
+  });
+  if (latinOnly.length >= 5 && !hasMixedCaseWord && !looksLikeAcronymSequence) {
     const uppercaseCount = latinOnly.replace(/[^A-Z]/g, '').length;
     const upperRatio = uppercaseCount / latinOnly.length;
     if (upperRatio >= 0.72) {
@@ -485,6 +490,17 @@ const shouldRetryLineTranslation = (
     const latinRatio = latinChars.length / Math.max(1, letterChars.length);
     const looksUntranslatedLatin = letterChars.length >= 10 && latinRatio >= 0.62 && thaiChars.length <= 2;
     if (looksUntranslatedLatin) {
+      return true;
+    }
+
+    const sourceLatinChars = source.match(/[A-Za-z]/g) || [];
+    const translatedAlphaChars = translated.match(/[A-Za-z\u0E00-\u0E7F]/g) || [];
+    const translatedHasNoThai = thaiChars.length === 0;
+    const mostlyLatinShortCarryOver = translatedHasNoThai
+      && sourceLatinChars.length >= 4
+      && translatedAlphaChars.length >= Math.min(4, sourceLatinChars.length)
+      && latinRatio >= 0.78;
+    if (mostlyLatinShortCarryOver) {
       return true;
     }
 
@@ -1174,19 +1190,6 @@ const restoreProtectedTokens = (text: string, replacements: ProtectedTokenReplac
   return restored;
 };
 
-const buildOCRSourceFingerprint = (result: OCRPageResult, fallbackEngine: OCREngine): string => {
-  const effectiveEngine = result.ocrEngine || fallbackEngine;
-  return [
-    result.algorithmVersion,
-    effectiveEngine,
-    result.pipelineProfile || 'panel',
-    result.language || 'eng',
-    result.words.length,
-    result.lines.length,
-    normalizeWhitespace(result.text || '').length,
-  ].join('|');
-};
-
 const computeOverlapRatio = (a: TranslatableLine, b: TranslatableLine): number => {
   const overlap = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
   const baseWidth = Math.max(1, Math.min(a.right - a.left, b.right - b.left));
@@ -1492,7 +1495,7 @@ export default function App() {
     translationMode,
     setTranslationMode,
     safetySettings,
-    geminiApiKey,
+    hydrateGeminiApiKey,
   } = useProjectStore();
 
   const normalizePrewarmLanguage = (value: string): string => value
@@ -1518,6 +1521,10 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    void hydrateGeminiApiKey();
+  }, [hydrateGeminiApiKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1652,11 +1659,9 @@ export default function App() {
     mode: TranslationMode,
     source: string,
     target: string
-  ): { apiKey?: string; baseSystemPrompt?: string } => {
-    const apiKey = String(geminiApiKey || '').trim();
+  ): { baseSystemPrompt?: string } => {
     const baseSystemPrompt = buildGeminiBasePrompt(mode, source, target, safetySettings);
     return {
-      apiKey: apiKey || undefined,
       baseSystemPrompt,
     };
   };

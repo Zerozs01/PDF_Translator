@@ -672,6 +672,79 @@ const TranslationCacheDAO = {
     return result.changes > 0;
   }
 };
+const SUPPORTED_DOCUMENT_EXTENSIONS = /* @__PURE__ */ new Map([
+  [".pdf", "application/pdf"],
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".tif", "image/tiff"],
+  [".tiff", "image/tiff"]
+]);
+const SUPPORTED_IMPORT_MIME_TYPES = /* @__PURE__ */ new Map([
+  ["application/pdf", ".pdf"],
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/tiff", ".tiff"]
+]);
+const getRequestedDocumentPath = (filepath) => {
+  if (!path.isAbsolute(filepath)) {
+    throw new Error("Filepath must be absolute");
+  }
+  if (filepath.includes("\0")) {
+    throw new Error("Invalid filepath");
+  }
+  return path.resolve(filepath);
+};
+const tryResolveRealDocumentPath = async (filepath) => {
+  try {
+    return await fs.promises.realpath(filepath);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return filepath;
+    }
+    throw error;
+  }
+};
+const getDocumentMimeType = (filepath) => SUPPORTED_DOCUMENT_EXTENSIONS.get(path.extname(filepath).toLowerCase()) ?? null;
+const isPathWithinDirectory = (parentPath, childPath) => {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === "" || !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+};
+const inspectExistingDocumentFile = async (filepath) => {
+  const requestedPath = getRequestedDocumentPath(filepath);
+  const canonicalPath = await tryResolveRealDocumentPath(requestedPath);
+  const mimeType = getDocumentMimeType(canonicalPath);
+  if (!mimeType) {
+    throw new Error("Unsupported file type");
+  }
+  const stats = await fs.promises.stat(canonicalPath);
+  if (!stats.isFile()) {
+    throw new Error("Path is not a file");
+  }
+  return {
+    canonicalPath,
+    mimeType,
+    size: stats.size,
+    name: path.basename(canonicalPath)
+  };
+};
+const resolveImportedDocumentName = (name, mimeType) => {
+  const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_").trim();
+  const extFromName = path.extname(safeName).toLowerCase();
+  const normalizedMimeType = String(mimeType || "").toLowerCase();
+  const fallbackExt = SUPPORTED_IMPORT_MIME_TYPES.get(normalizedMimeType) ?? "";
+  const finalExt = SUPPORTED_DOCUMENT_EXTENSIONS.has(extFromName) ? extFromName : fallbackExt;
+  const resolvedMimeType = SUPPORTED_DOCUMENT_EXTENSIONS.get(finalExt);
+  if (!finalExt || !resolvedMimeType) {
+    throw new Error("Unsupported file type");
+  }
+  const baseName = extFromName ? safeName.slice(0, safeName.length - extFromName.length) : safeName;
+  return {
+    finalName: `${baseName || "document"}${finalExt}`,
+    finalExt,
+    resolvedMimeType
+  };
+};
 const EXTERNAL_ENGINES = ["paddleocr", "easyocr"];
 const bridgeDaemons = /* @__PURE__ */ new Map();
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
@@ -695,12 +768,47 @@ function resolveBridgeScriptSignature(scriptPath) {
     return `${scriptPath}:unknown`;
   }
 }
+function normalizePythonOverride(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
+    const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
+    return fs.existsSync(resolved) ? resolved : null;
+  }
+  return trimmed;
+}
+function findLocalPythonExecutable(roots) {
+  const pythonRelativePath = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+  const seen = /* @__PURE__ */ new Set();
+  for (const root of roots) {
+    if (!root) continue;
+    const resolvedRoot = path.resolve(root);
+    if (seen.has(resolvedRoot)) continue;
+    seen.add(resolvedRoot);
+    for (const venvDir of [".venv-ocr", ".venv"]) {
+      const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
 function resolvePythonExecutable(engine) {
-  if (engine === "paddleocr" && process.env.PADDLE_OCR_PYTHON_PATH) return process.env.PADDLE_OCR_PYTHON_PATH;
-  if (engine === "easyocr" && process.env.EASY_YOLO_OCR_PYTHON_PATH) return process.env.EASY_YOLO_OCR_PYTHON_PATH;
-  if (process.env.OCR_PYTHON_PATH) return process.env.OCR_PYTHON_PATH;
-  const localVenvPython = path.join(electron.app.getAppPath(), ".venv-ocr", "Scripts", "python.exe");
-  if (fs.existsSync(localVenvPython)) return localVenvPython;
+  const engineOverride = engine === "paddleocr" ? normalizePythonOverride(process.env.PADDLE_OCR_PYTHON_PATH) : normalizePythonOverride(process.env.EASY_YOLO_OCR_PYTHON_PATH);
+  if (engineOverride) return engineOverride;
+  const sharedOverride = normalizePythonOverride(process.env.OCR_PYTHON_PATH);
+  if (sharedOverride) return sharedOverride;
+  const localVenvPython = findLocalPythonExecutable([
+    process.cwd(),
+    electron.app.getAppPath(),
+    path.resolve(electron.app.getAppPath(), ".."),
+    path.resolve(__dirname, ".."),
+    path.dirname(process.execPath),
+    process.resourcesPath,
+    process.resourcesPath ? path.resolve(process.resourcesPath, "..") : null
+  ]);
+  if (localVenvPython) return localVenvPython;
   return "python";
 }
 function resolveBridgeEnv() {
@@ -1020,6 +1128,84 @@ function disposeExternalOcrDaemons() {
     teardownDaemon(engine);
   }
 }
+const SECURE_SETTINGS_DIR = "secure-settings";
+const GEMINI_API_KEY_FILE = "gemini-api-key.bin";
+const getSecureSettingsDir = () => {
+  return path.join(electron.app.getPath("userData"), SECURE_SETTINGS_DIR);
+};
+const getGeminiApiKeyFilePath = () => {
+  return path.join(getSecureSettingsDir(), GEMINI_API_KEY_FILE);
+};
+const getEnvironmentGeminiApiKey = () => {
+  return String(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "").trim();
+};
+const ensureSecureSettingsDir = () => {
+  fs.mkdirSync(getSecureSettingsDir(), { recursive: true });
+};
+const getGeminiApiKeyStatus = () => {
+  const secureFilePath = getGeminiApiKeyFilePath();
+  if (fs.existsSync(secureFilePath)) {
+    return {
+      configured: true,
+      source: "secure-storage",
+      supportsSecureStorage: electron.safeStorage.isEncryptionAvailable()
+    };
+  }
+  if (getEnvironmentGeminiApiKey()) {
+    return {
+      configured: true,
+      source: "environment",
+      supportsSecureStorage: electron.safeStorage.isEncryptionAvailable()
+    };
+  }
+  return {
+    configured: false,
+    source: "none",
+    supportsSecureStorage: electron.safeStorage.isEncryptionAvailable()
+  };
+};
+const readStoredGeminiApiKey = () => {
+  const secureFilePath = getGeminiApiKeyFilePath();
+  if (!fs.existsSync(secureFilePath)) {
+    return null;
+  }
+  if (!electron.safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS-level secure storage is not available.");
+  }
+  const encrypted = fs.readFileSync(secureFilePath);
+  if (!encrypted || encrypted.length === 0) {
+    return null;
+  }
+  return electron.safeStorage.decryptString(encrypted).trim() || null;
+};
+const resolveGeminiApiKey = () => {
+  const storedKey = readStoredGeminiApiKey();
+  if (storedKey) {
+    return storedKey;
+  }
+  const envKey = getEnvironmentGeminiApiKey();
+  return envKey || null;
+};
+const setStoredGeminiApiKey = (apiKey) => {
+  const trimmed = String(apiKey || "").trim();
+  if (!trimmed) {
+    throw new Error("Gemini API key cannot be empty.");
+  }
+  if (!electron.safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS-level secure storage is not available on this device.");
+  }
+  ensureSecureSettingsDir();
+  const encrypted = electron.safeStorage.encryptString(trimmed);
+  fs.writeFileSync(getGeminiApiKeyFilePath(), encrypted);
+  return getGeminiApiKeyStatus();
+};
+const clearStoredGeminiApiKey = () => {
+  const secureFilePath = getGeminiApiKeyFilePath();
+  if (fs.existsSync(secureFilePath)) {
+    fs.unlinkSync(secureFilePath);
+  }
+  return getGeminiApiKeyStatus();
+};
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path.join(process.env.DIST, "../public");
 let win;
@@ -1086,8 +1272,17 @@ electron.app.whenReady().then(() => {
   const isValidString = (value) => typeof value === "string" && value.length > 0 && value.length < 1e4;
   const isValidNumber = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const isValidEngine = (value) => typeof value === "string" && ["tesseract", "paddleocr", "easyocr"].includes(value);
-  const sanitizePath = (filepath) => {
-    return filepath.replace(/\.\.\//g, "").replace(/\.\.\\/g, "");
+  const getImportsDirectory = () => path.join(electron.app.getPath("userData"), "imports");
+  const assertAuthorizedDocumentRead = async (requestedPath, canonicalPath) => {
+    const importDir = getImportsDirectory();
+    const normalizedImportDir = await fs.promises.realpath(importDir).catch(() => path.resolve(importDir));
+    if (isPathWithinDirectory(normalizedImportDir, canonicalPath)) {
+      return;
+    }
+    if (DocumentDAO.get(requestedPath) || DocumentDAO.get(canonicalPath)) {
+      return;
+    }
+    throw new Error("File access denied");
   };
   const ARGOS_LANG_ALIASES = {
     en: "en",
@@ -1238,8 +1433,11 @@ electron.app.whenReady().then(() => {
       throw new Error("Invalid input: totalPages must be a positive number");
     }
     try {
-      const safePath = sanitizePath(filepath);
-      const row = DocumentDAO.upsert(safePath, filename, totalPages);
+      const requestedPath = getRequestedDocumentPath(filepath);
+      const documentFile = await inspectExistingDocumentFile(requestedPath);
+      const storagePath = DocumentDAO.get(requestedPath) ? requestedPath : documentFile.canonicalPath;
+      const fileType = documentFile.mimeType === "application/pdf" ? "pdf" : "image";
+      const row = DocumentDAO.upsert(storagePath, filename, totalPages, documentFile.size, fileType);
       return row?.id ?? 0;
     } catch (error) {
       console.error("db:save-document error:", error);
@@ -1251,8 +1449,8 @@ electron.app.whenReady().then(() => {
       throw new Error("Invalid input: filepath must be a non-empty string");
     }
     try {
-      const safePath = sanitizePath(filepath);
-      return DocumentDAO.get(safePath);
+      const requestedPath = getRequestedDocumentPath(filepath);
+      return DocumentDAO.get(requestedPath) ?? DocumentDAO.get(await tryResolveRealDocumentPath(requestedPath));
     } catch (error) {
       console.error("db:get-document error:", error);
       return null;
@@ -1436,20 +1634,14 @@ electron.app.whenReady().then(() => {
         return null;
       }
       const filepath = result.filePaths[0];
-      const safePath = sanitizePath(filepath);
-      if (!fs.existsSync(safePath)) {
-        throw new Error("File not found");
-      }
-      const buffer = await fs.promises.readFile(safePath);
-      const stats = await fs.promises.stat(safePath);
-      const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
+      const documentFile = await inspectExistingDocumentFile(filepath);
+      const buffer = await fs.promises.readFile(documentFile.canonicalPath);
       return {
-        filepath: safePath,
+        filepath: documentFile.canonicalPath,
         data: buffer,
-        mimeType,
-        size: stats.size,
-        name: path.basename(safePath)
+        mimeType: documentFile.mimeType,
+        size: documentFile.size,
+        name: documentFile.name
       };
     } catch (error) {
       console.error("fs:open-file error:", error);
@@ -1461,19 +1653,15 @@ electron.app.whenReady().then(() => {
       throw new Error("Invalid filepath");
     }
     try {
-      const safePath = sanitizePath(filepath);
-      if (!fs.existsSync(safePath)) {
-        throw new Error("File not found");
-      }
-      const buffer = await fs.promises.readFile(safePath);
-      const stats = await fs.promises.stat(safePath);
-      const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
+      const requestedPath = getRequestedDocumentPath(filepath);
+      const documentFile = await inspectExistingDocumentFile(requestedPath);
+      await assertAuthorizedDocumentRead(requestedPath, documentFile.canonicalPath);
+      const buffer = await fs.promises.readFile(documentFile.canonicalPath);
       return {
         data: buffer,
-        mimeType,
-        size: stats.size,
-        name: path.basename(safePath)
+        mimeType: documentFile.mimeType,
+        size: documentFile.size,
+        name: documentFile.name
       };
     } catch (error) {
       console.error("fs:read-file error:", error);
@@ -1489,15 +1677,13 @@ electron.app.whenReady().then(() => {
       if (!(rawData instanceof Uint8Array)) {
         throw new Error("Invalid payload: data must be Uint8Array or ArrayBuffer");
       }
-      const safeName = payload.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const ext = path.extname(safeName);
-      const fallbackExt = payload.mimeType === "application/pdf" ? ".pdf" : payload.mimeType === "image/png" ? ".png" : payload.mimeType === "image/jpeg" ? ".jpg" : "";
-      const finalName = ext ? safeName : `${safeName}${fallbackExt}`;
-      const userDataDir = electron.app.getPath("userData");
-      const importDir = path.join(userDataDir, "imports");
+      const { finalName, finalExt, resolvedMimeType } = resolveImportedDocumentName(
+        payload.name,
+        payload.mimeType
+      );
+      const importDir = getImportsDirectory();
       await fs.promises.mkdir(importDir, { recursive: true });
       const contentHash = crypto.createHash("sha256").update(Buffer.from(rawData)).digest("hex").slice(0, 24);
-      const finalExt = ext || fallbackExt || path.extname(finalName) || "";
       const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
       let targetPath = hashedPath;
       if (!fs.existsSync(hashedPath)) {
@@ -1537,7 +1723,7 @@ electron.app.whenReady().then(() => {
       const stats = await fs.promises.stat(targetPath);
       return {
         filepath: targetPath,
-        mimeType: payload.mimeType,
+        mimeType: resolvedMimeType,
         size: stats.size,
         name: finalName
       };
@@ -1776,6 +1962,18 @@ electron.app.whenReady().then(() => {
       throw error;
     }
   });
+  electron.ipcMain.handle("gemini:get-api-key-status", async () => {
+    return getGeminiApiKeyStatus();
+  });
+  electron.ipcMain.handle("gemini:set-api-key", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !isValidString(payload.apiKey)) {
+      throw new Error("Invalid input: apiKey must be a non-empty string");
+    }
+    return setStoredGeminiApiKey(payload.apiKey);
+  });
+  electron.ipcMain.handle("gemini:clear-api-key", async () => {
+    return clearStoredGeminiApiKey();
+  });
   electron.ipcMain.handle("gemini:translate", async (_, { text, context }) => {
     if (!isValidString(text)) {
       throw new Error("Invalid input: text must be a non-empty string");
@@ -1788,7 +1986,6 @@ electron.app.whenReady().then(() => {
       sourceType = "text",
       sourceLanguage,
       targetLanguage,
-      apiKey: apiKeyOverride,
       baseSystemPrompt
     } = context;
     const normalizedMode = mode === "official" ? "official" : mode === "manhwa" ? "manhwa" : "manga";
@@ -1796,10 +1993,9 @@ electron.app.whenReady().then(() => {
     const normalizedTarget = normalizeArgosLanguage(targetLanguage, "th");
     const sourceName = LANGUAGE_DISPLAY_NAMES[normalizedSource] || normalizedSource;
     const targetName = LANGUAGE_DISPLAY_NAMES[normalizedTarget] || normalizedTarget;
-    const apiKeyFromContext = String(apiKeyOverride || "").trim();
-    const apiKey = apiKeyFromContext || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    const apiKey = resolveGeminiApiKey();
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY not configured. Please set it in .env file.");
+      throw new Error("Gemini API key is not configured. Save it once in Settings or provide GEMINI_API_KEY locally.");
     }
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;

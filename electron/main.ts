@@ -4,7 +4,9 @@ import fs from 'fs'
 import { createHash } from 'crypto'
 import { spawn } from 'child_process'
 import { initDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO } from './db'
+import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
+import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
 
 // The built directory structure
 //
@@ -107,10 +109,24 @@ app.whenReady().then(() => {
   const isValidEngine = (value: unknown): value is string =>
     typeof value === 'string' && ['tesseract', 'paddleocr', 'easyocr'].includes(value);
 
-  const sanitizePath = (filepath: string): string => {
-    // Remove dangerous path traversal patterns
-    return filepath.replace(/\.\.\//g, '').replace(/\.\.\\/g, '');
-  };
+  const getImportsDirectory = (): string => path.join(app.getPath('userData'), 'imports')
+
+  const assertAuthorizedDocumentRead = async (requestedPath: string, canonicalPath: string): Promise<void> => {
+    const importDir = getImportsDirectory()
+    const normalizedImportDir = await fs.promises
+      .realpath(importDir)
+      .catch(() => path.resolve(importDir))
+
+    if (isPathWithinDirectory(normalizedImportDir, canonicalPath)) {
+      return
+    }
+
+    if (DocumentDAO.get(requestedPath) || DocumentDAO.get(canonicalPath)) {
+      return
+    }
+
+    throw new Error('File access denied')
+  }
 
   type TranslationContext = {
     mode?: string;
@@ -294,8 +310,11 @@ app.whenReady().then(() => {
     }
 
     try {
-      const safePath = sanitizePath(filepath);
-      const row = DocumentDAO.upsert(safePath, filename, totalPages) as { id?: number } | undefined;
+      const requestedPath = getRequestedDocumentPath(filepath)
+      const documentFile = await inspectExistingDocumentFile(requestedPath)
+      const storagePath = DocumentDAO.get(requestedPath) ? requestedPath : documentFile.canonicalPath
+      const fileType = documentFile.mimeType === 'application/pdf' ? 'pdf' : 'image'
+      const row = DocumentDAO.upsert(storagePath, filename, totalPages, documentFile.size, fileType) as { id?: number } | undefined;
       return row?.id ?? 0;
     } catch (error) {
       console.error('db:save-document error:', error);
@@ -309,8 +328,8 @@ app.whenReady().then(() => {
     }
 
     try {
-      const safePath = sanitizePath(filepath);
-      return DocumentDAO.get(safePath);
+      const requestedPath = getRequestedDocumentPath(filepath)
+      return DocumentDAO.get(requestedPath) ?? DocumentDAO.get(await tryResolveRealDocumentPath(requestedPath));
     } catch (error) {
       console.error('db:get-document error:', error);
       return null;
@@ -545,27 +564,15 @@ app.whenReady().then(() => {
       }
 
       const filepath = result.filePaths[0];
-      const safePath = sanitizePath(filepath);
-
-      if (!fs.existsSync(safePath)) {
-        throw new Error('File not found');
-      }
-
-      const buffer = await fs.promises.readFile(safePath);
-      const stats = await fs.promises.stat(safePath);
-      const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === '.pdf' ? 'application/pdf' :
-                       ext === '.png' ? 'image/png' :
-                       ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
-                       ext === '.tif' || ext === '.tiff' ? 'image/tiff' :
-                       'application/octet-stream';
+      const documentFile = await inspectExistingDocumentFile(filepath)
+      const buffer = await fs.promises.readFile(documentFile.canonicalPath)
 
       return {
-        filepath: safePath,
+        filepath: documentFile.canonicalPath,
         data: buffer,
-        mimeType,
-        size: stats.size,
-        name: path.basename(safePath),
+        mimeType: documentFile.mimeType,
+        size: documentFile.size,
+        name: documentFile.name,
       };
     } catch (error) {
       console.error('fs:open-file error:', error);
@@ -578,26 +585,16 @@ app.whenReady().then(() => {
       throw new Error('Invalid filepath');
     }
     try {
-      const safePath = sanitizePath(filepath);
-      // Check if file exists
-      if (!fs.existsSync(safePath)) {
-        throw new Error('File not found');
-      }
-      // Read file as buffer and return base64
-      const buffer = await fs.promises.readFile(safePath);
-      const stats = await fs.promises.stat(safePath);
-      const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === '.pdf' ? 'application/pdf' : 
-                       ext === '.png' ? 'image/png' :
-                       ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
-                       ext === '.tif' || ext === '.tiff' ? 'image/tiff' :
-                       'application/octet-stream';
+      const requestedPath = getRequestedDocumentPath(filepath)
+      const documentFile = await inspectExistingDocumentFile(requestedPath)
+      await assertAuthorizedDocumentRead(requestedPath, documentFile.canonicalPath)
+      const buffer = await fs.promises.readFile(documentFile.canonicalPath)
       
       return {
         data: buffer,
-        mimeType,
-        size: stats.size,
-        name: path.basename(safePath)
+        mimeType: documentFile.mimeType,
+        size: documentFile.size,
+        name: documentFile.name
       };
     } catch (error) {
       console.error('fs:read-file error:', error);
@@ -619,24 +616,15 @@ app.whenReady().then(() => {
         throw new Error('Invalid payload: data must be Uint8Array or ArrayBuffer');
       }
 
-      const safeName = payload.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const ext = path.extname(safeName);
-      const fallbackExt = payload.mimeType === 'application/pdf'
-        ? '.pdf'
-        : payload.mimeType === 'image/png'
-        ? '.png'
-        : payload.mimeType === 'image/jpeg'
-        ? '.jpg'
-        : '';
-
-      const finalName = ext ? safeName : `${safeName}${fallbackExt}`;
-      const userDataDir = app.getPath('userData');
-      const importDir = path.join(userDataDir, 'imports');
+      const { finalName, finalExt, resolvedMimeType } = resolveImportedDocumentName(
+        payload.name,
+        payload.mimeType,
+      )
+      const importDir = getImportsDirectory()
       await fs.promises.mkdir(importDir, { recursive: true });
 
       // Use deterministic content-hash path so repeated imports hit the same DB document_id/cache key.
       const contentHash = createHash('sha256').update(Buffer.from(rawData)).digest('hex').slice(0, 24);
-      const finalExt = ext || fallbackExt || path.extname(finalName) || '';
       const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
       let targetPath = hashedPath;
 
@@ -688,7 +676,7 @@ app.whenReady().then(() => {
 
       return {
         filepath: targetPath,
-        mimeType: payload.mimeType,
+        mimeType: resolvedMimeType,
         size: stats.size,
         name: finalName
       };
@@ -976,6 +964,22 @@ app.whenReady().then(() => {
   // ============================================
   // Gemini API Handler (SECURE: API key in main process only)
   // ============================================
+  ipcMain.handle('gemini:get-api-key-status', async () => {
+    return getGeminiApiKeyStatus();
+  });
+
+  ipcMain.handle('gemini:set-api-key', async (_, payload: { apiKey: string }) => {
+    if (!payload || typeof payload !== 'object' || !isValidString(payload.apiKey)) {
+      throw new Error('Invalid input: apiKey must be a non-empty string');
+    }
+
+    return setStoredGeminiApiKey(payload.apiKey);
+  });
+
+  ipcMain.handle('gemini:clear-api-key', async () => {
+    return clearStoredGeminiApiKey();
+  });
+
   ipcMain.handle('gemini:translate', async (_, { text, context }) => {
     // Input validation
     if (!isValidString(text)) {
@@ -990,14 +994,12 @@ app.whenReady().then(() => {
       sourceType = 'text',
       sourceLanguage,
       targetLanguage,
-      apiKey: apiKeyOverride,
       baseSystemPrompt,
     } = context as {
       mode?: string;
       sourceType?: string;
       sourceLanguage?: string;
       targetLanguage?: string;
-      apiKey?: string;
       baseSystemPrompt?: string;
     };
 
@@ -1008,11 +1010,10 @@ app.whenReady().then(() => {
     const sourceName = LANGUAGE_DISPLAY_NAMES[normalizedSource] || normalizedSource;
     const targetName = LANGUAGE_DISPLAY_NAMES[normalizedTarget] || normalizedTarget;
 
-    // Get API key from environment (NEVER expose to renderer)
-    const apiKeyFromContext = String(apiKeyOverride || '').trim();
-    const apiKey = apiKeyFromContext || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    // Resolve API key from secure local storage first, then local environment.
+    const apiKey = resolveGeminiApiKey();
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY not configured. Please set it in .env file.');
+      throw new Error('Gemini API key is not configured. Save it once in Settings or provide GEMINI_API_KEY locally.');
     }
 
     const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
