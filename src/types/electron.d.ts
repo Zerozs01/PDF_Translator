@@ -56,7 +56,7 @@ export interface DBOCRTranslationCacheEntry {
   ocrLanguage: string;
   sourceLanguage: string;
   targetLanguage: string;
-  translationMode: 'manga' | 'manhwa' | 'official';
+  translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   translatorEngine: 'offline' | 'ai';
   sourceFingerprint: string;
   translatedByIndex: Array<{ index: number; text: string }>;
@@ -144,7 +144,7 @@ export interface GeminiApiKeyStatus {
 }
 
 export interface GeminiTranslationContext {
-  mode: 'manga' | 'manhwa' | 'official';
+  mode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   sourceType: string;
   sourceLanguage?: string;
   targetLanguage?: string;

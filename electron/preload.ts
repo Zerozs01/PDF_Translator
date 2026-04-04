@@ -172,7 +172,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('gemini:set-api-key', { apiKey }),
     clearApiKey: () => ipcRenderer.invoke('gemini:clear-api-key'),
     translate: (text: string, context: {
-      mode: 'manga' | 'manhwa' | 'official';
+      mode: 'adaptive' | 'manga' | 'manhwa' | 'official';
       sourceType: string;
       sourceLanguage?: string;
       targetLanguage?: string;

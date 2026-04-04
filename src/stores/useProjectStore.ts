@@ -16,7 +16,7 @@ import {
 } from '../constants/overlayFonts';
 import type { GeminiApiKeySource } from '../types/electron.d';
 
-export type TranslationMode = 'manga' | 'manhwa' | 'official';
+export type TranslationMode = 'adaptive' | 'manga' | 'manhwa' | 'official';
 export type ViewMode = 'single' | 'continuous';
 
 const LEGACY_GEMINI_API_KEY_STORAGE_KEY = 'pdf_translator.gemini_api_key';
@@ -95,6 +95,12 @@ export interface SafetySettings {
 }
 
 const DEFAULT_SAFETY_SETTINGS_BY_MODE: Record<TranslationMode, SafetySettings> = {
+  adaptive: {
+    harassment: 'low',
+    hate: 'low',
+    sexual: 'medium',
+    dangerous: 'low',
+  },
   manga: {
     harassment: 'low',
     hate: 'low',
@@ -181,8 +187,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   totalPages: 0,
   viewMode: 'single',
 
-  translationMode: 'manga',
-  safetySettings: getDefaultSafetySettingsForMode('manga'),
+  translationMode: 'adaptive',
+  safetySettings: getDefaultSafetySettingsForMode('adaptive'),
   sourceLanguage: 'eng',
   targetLanguage: 'th',
   geminiApiKeyDraft: '',

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { 
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
-  Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart,
+  Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
@@ -1714,6 +1714,21 @@ export const UploadScreen: React.FC = () => {
           <div className="mb-6">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Translation Mode</label>
             <div className="space-y-2">
+              <button
+                onClick={() => setTranslationMode('adaptive')}
+                className={`w-full p-3 rounded-xl border text-left transition-all ${
+                  translationMode === 'adaptive'
+                    ? 'border-[#14B8A6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
+                }`}
+                style={translationMode === 'adaptive' ? { background: 'linear-gradient(180deg, rgba(20,184,166,0.22) 0%, rgba(19,48,58,0.92) 100%)' } : undefined}
+              >
+                <div className="flex items-center gap-2">
+                  <Compass size={14} className={translationMode === 'adaptive' ? 'text-[#99F6E4]' : 'text-slate-400'} />
+                  <span className={`font-medium text-sm ${translationMode === 'adaptive' ? 'text-[#E6FFF9]' : 'text-slate-300'}`}>Orbit Adaptive</span>
+                </div>
+              </button>
+
               <button
                 onClick={() => setTranslationMode('manga')}
                 className={`w-full p-3 rounded-xl border text-left transition-all ${

@@ -13,7 +13,8 @@ import {
   Languages,
   Sparkles,
   Flame,
-  RefreshCw
+  RefreshCw,
+  Compass
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
@@ -190,7 +191,18 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             <label className="text-[10px] uppercase font-bold text-slate-400/85 tracking-wider block mb-2">
               Translation Context
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                onClick={() => setTranslationMode('adaptive')}
+                className={`text-[11px] px-2 py-1.5 rounded-lg border flex items-center justify-center gap-1 transition-all ${
+                  translationMode === 'adaptive' 
+                    ? 'bg-gradient-to-r from-[#22c55e]/26 via-[#14b8a6]/22 to-[#38bdf8]/18 border-[#38bdf8]/55 text-[#e8fff8] shadow-[0_8px_18px_rgba(20,184,166,0.22)]'
+                    : 'bg-slate-900/60 border-white/12 text-slate-300 hover:bg-slate-900 hover:border-white/25'
+                }`}
+              >
+                <Compass size={12} />
+                Orbit
+              </button>
               <button 
                 onClick={() => setTranslationMode('manga')}
                 className={`text-[11px] px-2 py-1.5 rounded-lg border flex items-center justify-center gap-1 transition-all ${

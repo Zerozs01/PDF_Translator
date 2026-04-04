@@ -162,6 +162,7 @@ type BatchPageTranslationPlan = {
 };
 
 const GEMINI_MODE_STYLE_HINTS: Record<TranslationMode, string> = {
+  adaptive: 'Use natural Thai that adapts to the source layout: keep document structure tidy when the source is document-like, and keep dialogue balanced and centered when the source is comic-like.',
   manga: 'Use lively natural Thai for manga dialogue. Keep character personality, pacing, and emotional beats.',
   manhwa: 'Use natural Thai for mature manhwa dialogue. Keep intensity and chemistry, avoid robotic wording.',
   official: 'Use formal, clear, and precise Thai for documents. Prefer consistency and professional wording.',
@@ -1206,6 +1207,48 @@ const normalizeThaiTechnicalTerms = (sourceText: string, translatedText: string)
   return normalizeWhitespace(normalized);
 };
 
+const preserveSourceTrailingPunctuation = (sourceText: string, replacement: string): string => {
+  const punctuation = String(sourceText || '').trim().match(/([.!?…]+)$/)?.[1] || '';
+  const cleanReplacement = normalizeWhitespace(String(replacement || '')).replace(/[.!?…]+$/g, '').trim();
+  return `${cleanReplacement}${punctuation}`.trim();
+};
+
+const applyThaiConversationalGlossary = (
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string
+): string => {
+  if (normalizeTranslationLanguage(targetLanguage, 'th') !== 'th') {
+    return translatedText;
+  }
+
+  const source = normalizeWhitespace(String(sourceText || ''));
+  const translated = normalizeWhitespace(String(translatedText || ''));
+  if (!source) return translated;
+
+  const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
+  const translatedLower = translated.toLowerCase();
+
+  if (/^hm+$/.test(compactSource) || /^hmm+$/.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อืมม');
+  }
+
+  if (compactSource === 'yet') {
+    if (!translated || /^(yet|เย็ต|เยท)$/i.test(translated)) {
+      return preserveSourceTrailingPunctuation(source, 'ยัง');
+    }
+    if (translatedLower === 'yet') {
+      return preserveSourceTrailingPunctuation(source, 'ยัง');
+    }
+  }
+
+  if ((/^เอชเอ็ม$/i.test(translated) || /^เอชเอ็มเอ็ม$/i.test(translated)) && /^hm+$/.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อืมม');
+  }
+
+  return translated;
+};
+
 const finalizeTranslatedLine = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   const source = normalizeWhitespace(String(sourceText || ''));
   let resolved = normalizeWhitespace(String(translatedText || ''));
@@ -1216,6 +1259,7 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
   resolved = applyThaiTechnicalGlossary(source, resolved, targetLanguage);
   resolved = preserveTechnicalTokensInTranslation(source, resolved);
   resolved = normalizeThaiTechnicalTerms(source, resolved);
+  resolved = applyThaiConversationalGlossary(source, resolved, targetLanguage);
 
   if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
     return normalizeThaiTranslationText(resolved);
@@ -1339,6 +1383,7 @@ const computeOverlapRatio = (a: TranslatableLine, b: TranslatableLine): number =
 };
 
 const shouldUseDenseDialogueGrouping = (
+  lines: TranslatableLine[],
   sourceLanguage: string,
   targetLanguage: string,
   mode: TranslationMode
@@ -1346,6 +1391,17 @@ const shouldUseDenseDialogueGrouping = (
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
   if (normalizedTarget !== 'th') return false;
+  const avgLength = lines.reduce((sum, line) => sum + line.text.length, 0) / Math.max(1, lines.length);
+  const technicalHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
+  const longSentenceLines = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    return normalized.length >= 44 || normalized.split(/\s+/g).filter(Boolean).length >= 8;
+  }).length;
+  const looksDocumentLike = technicalHits >= 2 || longSentenceLines >= 3 || avgLength >= 24;
+
+  if (mode === 'adaptive' && looksDocumentLike) {
+    return false;
+  }
 
   if (mode === 'manga') {
     return ['en', 'ja', 'ko', 'zh', 'es'].includes(normalizedSource);
@@ -1353,6 +1409,10 @@ const shouldUseDenseDialogueGrouping = (
 
   if (mode === 'manhwa') {
     return normalizedSource === 'ko' || normalizedSource === 'en';
+  }
+
+  if (mode === 'adaptive') {
+    return ['en', 'ja', 'ko', 'zh', 'es'].includes(normalizedSource);
   }
 
   return normalizedSource === 'ko' || normalizedSource === 'es';
@@ -1371,8 +1431,6 @@ const shouldUseLineByLineGrouping = (
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
   if (normalizedSource !== 'en' || normalizedTarget !== 'th') return false;
   if (lines.length <= 4) return false;
-  const isDocumentMode = mode === 'official';
-  if (!isDocumentMode) return false;
 
   const markerHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
   const avgLength = lines.reduce((sum, line) => sum + line.text.length, 0) / Math.max(1, lines.length);
@@ -1394,7 +1452,11 @@ const shouldUseLineByLineGrouping = (
   const looksLikeDocument = markerHits >= 2
     || longSentenceLines >= 3
     || avgLength >= 24
-    || (isDocumentMode && uppercaseHeadingLines >= 2 && lines.length >= 8);
+    || (mode === 'official' && uppercaseHeadingLines >= 2 && lines.length >= 8)
+    || (mode === 'adaptive' && uppercaseHeadingLines >= 2 && lines.length >= 9);
+
+  const isDocumentMode = mode === 'official' || (mode === 'adaptive' && looksLikeDocument);
+  if (!isDocumentMode) return false;
 
   if (looksLikeDocument) return true;
 
@@ -1873,7 +1935,18 @@ export default function App() {
         continue;
       }
 
-      const alternativePages = translationMode === 'official'
+      const ocrLanguageKey = pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
+      const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
+
+      const shouldUseCrossEngineAssist = translationMode === 'official'
+        || (translationMode === 'adaptive' && shouldUseLineByLineGrouping(
+          baseLines,
+          resolvedSourceFromOCR,
+          normalizedTargetLanguage,
+          'ai',
+          translationMode
+        ));
+      const alternativePages = shouldUseCrossEngineAssist
         ? Array.from(ocrState.ocrByPageEngine.get(pageNum)?.entries() || [])
           .filter(([engineKey, candidate]) => {
             if (engineKey === selectedEngine) return false;
@@ -1894,8 +1967,6 @@ export default function App() {
       );
       sourceAssistLines += pageAssistLines;
 
-      const ocrLanguageKey = pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
-      const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
       const groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
         lines,
         resolvedSourceFromOCR,
@@ -1905,6 +1976,7 @@ export default function App() {
       )
         ? 'line-by-line'
         : (shouldUseDenseDialogueGrouping(
+          lines,
           resolvedSourceFromOCR,
           normalizedTargetLanguage,
           translationMode
@@ -2127,7 +2199,22 @@ export default function App() {
       return;
     }
 
-    const alternativePages = translationMode === 'official'
+    const ocrEngine = pageEngine;
+    const ocrLanguageKey = pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
+    const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
+    const normalizedUserSourceLanguage = normalizeTranslationLanguage(sourceLanguage, 'en');
+    const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
+    const effectiveSourceLanguage = resolvedSourceFromOCR;
+
+    const shouldUseCrossEngineAssist = translationMode === 'official'
+      || (translationMode === 'adaptive' && shouldUseLineByLineGrouping(
+        baseTranslatableLines,
+        resolvedSourceFromOCR,
+        normalizedTargetLanguage,
+        engine,
+        translationMode
+      ));
+    const alternativePages = shouldUseCrossEngineAssist
       ? Array.from(ocrState.ocrByPageEngine.get(currentPage)?.entries() || [])
         .filter(([engineKey, candidate]) => {
           if (engineKey === pageEngine) return false;
@@ -2146,13 +2233,6 @@ export default function App() {
       alternativePages,
       pageEngine
     );
-
-    const ocrEngine = pageEngine;
-    const ocrLanguageKey = pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
-    const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
-    const normalizedUserSourceLanguage = normalizeTranslationLanguage(sourceLanguage, 'en');
-    const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
-    const effectiveSourceLanguage = resolvedSourceFromOCR;
     const groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
       translatableLines,
       effectiveSourceLanguage,
@@ -2162,6 +2242,7 @@ export default function App() {
     )
       ? 'line-by-line'
       : (shouldUseDenseDialogueGrouping(
+        translatableLines,
         effectiveSourceLanguage,
         normalizedTargetLanguage,
         translationMode

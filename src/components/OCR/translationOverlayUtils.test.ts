@@ -44,6 +44,57 @@ describe('translationOverlayUtils typography', () => {
     expect(typography.fontSize).toBeLessThanOrEqual(16);
   });
 
+  test('keeps elongated manga dialogue on a single line when the translation still fits', () => {
+    const typography = computeOverlayTypography('หรือคุณต้องการ', 220, 32, {
+      sourceText: 'OR DO YOU',
+      sourceBoxWidth: 220,
+      sourceBoxHeight: 32,
+      fontFamily: 'TH Sarabun',
+      profile: 'manga',
+      styleKind: 'comic-line',
+    });
+
+    expect(typography.forceSingleLine).toBe(true);
+  });
+
+  test('adds wrap safety for dense thai manga bubbles to avoid line overlap', () => {
+    const typography = computeOverlayTypography(
+      'ตอนนั้นทั้งหมดลองของเขาศพไหม้เหมือนน้ำแข็ง',
+      150,
+      72,
+      {
+        sourceText: 'BACK THEN HIS WHOLE BODY WAS BURNING UP LIKE A FURNACE... BUT NOW HE’S COLD AS ICE...',
+        sourceBoxWidth: 150,
+        sourceBoxHeight: 72,
+        fontFamily: 'TH Sarabun',
+        profile: 'manga',
+        styleKind: 'comic-bubble',
+      }
+    );
+
+    expect(typography.estimatedLines).toBeGreaterThanOrEqual(3);
+    expect(typography.lineHeight).toBeGreaterThan(1.2);
+  });
+
+  test('respects source line count for dense thai manga bubbles to avoid collapsing lines', () => {
+    const typography = computeOverlayTypography(
+      'ตอนนั้นทั้งหมดลองของเขา ตอนนี้เขาศพกำลังไหม้ ตอนนี้เขาขาวนาเหมือนน้ำแข็ง เหมือนเตาหลอม.... แต่',
+      170,
+      94,
+      {
+        sourceText: 'BACK THEN HIS WHOLE BODY WAS BURNING UP LIKE A FURNACE... BUT NOW HE’S COLD AS ICE... BUT',
+        sourceBoxWidth: 170,
+        sourceBoxHeight: 94,
+        sourceLineCount: 4,
+        fontFamily: 'TH Sarabun',
+        profile: 'manga',
+        styleKind: 'comic-bubble',
+      }
+    );
+
+    expect(typography.estimatedLines).toBeGreaterThanOrEqual(4);
+  });
+
   test('keeps document paragraph lines independently sized from their own boxes', () => {
     const typographyByIndex = computeOverlayTypographyMap([
       {
@@ -88,6 +139,46 @@ describe('translationOverlayUtils typography', () => {
     ]);
 
     expect(typographyByIndex.get(1)?.fontSize).not.toBe(typographyByIndex.get(2)?.fontSize);
+  });
+
+  test('keeps document body text close to source size instead of over-shrinking grouped lines', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'ในส่วนนี้เราจะพัฒนาทั้งเงื่อนไขที่จำเป็นและเงื่อนไขที่เพียงพอ',
+        width: 420,
+        height: 22,
+        bbox: { x0: 100, y0: 132, x1: 520, y1: 154 },
+        hints: {
+          sourceText: 'In this section, we will develop both the necessary and sufficient conditions',
+          sourceBoxWidth: 420,
+          sourceBoxHeight: 22,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'official',
+          styleKind: 'document-body',
+        },
+      },
+      {
+        index: 1,
+        text: 'สำหรับสมดุลของวัตถุแข็งในรูป',
+        width: 330,
+        height: 22,
+        bbox: { x0: 100, y0: 156, x1: 430, y1: 178 },
+        hints: {
+          sourceText: 'for the equilibrium of the rigid body in Fig.',
+          sourceBoxWidth: 330,
+          sourceBoxHeight: 22,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'official',
+          styleKind: 'document-body',
+        },
+      },
+    ], { profile: 'official' });
+
+    expect(layoutMap.get(0)?.typography.fontSize ?? 0).toBeGreaterThan(10);
+    expect(layoutMap.get(1)?.typography.fontSize ?? 0).toBeGreaterThan(10);
   });
 
   test('prefers the tighter union of word boxes over a loose line bbox', () => {
@@ -310,6 +401,163 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(1)?.hidden).not.toBe(true);
   });
 
+  test('treats lowercase document-like source lines as official even under adaptive profile', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เงื่อนไขสำหรับสมดุลของวัตถุแข็ง',
+        width: 420,
+        height: 30,
+        bbox: { x0: 120, y0: 260, x1: 540, y1: 290 },
+        line: {
+          text: 'Conditions for Rigid-Body Equilibrium',
+          confidence: 95,
+          bbox: { x0: 118, y0: 260, x1: 542, y1: 290 },
+          words: [
+            { text: 'Conditions', confidence: 95, bbox: { x0: 120, y0: 260, x1: 220, y1: 290 } },
+            { text: 'for', confidence: 95, bbox: { x0: 228, y0: 260, x1: 256, y1: 290 } },
+          ],
+        },
+        hints: {
+          sourceText: 'Conditions for Rigid-Body Equilibrium',
+          sourceBoxWidth: 422,
+          sourceBoxHeight: 30,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 1,
+        text: 'ในส่วนนี้เราจะพัฒนาทั้งเงื่อนไขที่จำเป็นและเงื่อนไขที่เพียงพอ',
+        width: 430,
+        height: 24,
+        bbox: { x0: 120, y0: 298, x1: 550, y1: 322 },
+        line: {
+          text: 'In this section, we will develop both the necessary and sufficient conditions',
+          confidence: 95,
+          bbox: { x0: 118, y0: 298, x1: 552, y1: 322 },
+          words: [
+            { text: 'In', confidence: 95, bbox: { x0: 120, y0: 298, x1: 138, y1: 322 } },
+            { text: 'this', confidence: 95, bbox: { x0: 146, y0: 298, x1: 178, y1: 322 } },
+          ],
+        },
+        hints: {
+          sourceText: 'In this section, we will develop both the necessary and sufficient conditions',
+          sourceBoxWidth: 434,
+          sourceBoxHeight: 24,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.alignment).toBe('left');
+    expect(layoutMap.get(1)?.alignment).toBe('left');
+    expect(layoutMap.get(0)?.effectiveProfile).toBe('official');
+    expect(layoutMap.get(1)?.effectiveProfile).toBe('official');
+  });
+
+  test('treats short document headings as official under adaptive profile', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'วัตถุประสงค์ของบทนี้',
+        width: 220,
+        height: 26,
+        bbox: { x0: 90, y0: 110, x1: 310, y1: 136 },
+        line: {
+          text: 'CHAPTER OBJECTIVES',
+          confidence: 95,
+          bbox: { x0: 88, y0: 110, x1: 314, y1: 136 },
+          words: [
+            { text: 'CHAPTER', confidence: 95, bbox: { x0: 92, y0: 110, x1: 176, y1: 136 } },
+            { text: 'OBJECTIVES', confidence: 95, bbox: { x0: 184, y0: 110, x1: 304, y1: 136 } },
+          ],
+        },
+        hints: {
+          sourceText: 'CHAPTER OBJECTIVES',
+          sourceBoxWidth: 226,
+          sourceBoxHeight: 26,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.effectiveProfile).toBe('official');
+    expect(layoutMap.get(0)?.styleKind).toBe('document-heading');
+  });
+
+  test('keeps document headings larger than document body text in official typography', () => {
+    const heading = computeOverlayTypography('วัตถุประสงค์ของบทนี้', 210, 24, {
+      sourceText: 'CHAPTER OBJECTIVES',
+      sourceBoxWidth: 210,
+      sourceBoxHeight: 24,
+      fontFamily: 'TH Sarabun',
+      profile: 'official',
+    });
+    const body = computeOverlayTypography('เพื่อพัฒนาสมการสมดุลสำหรับวัตถุแข็ง', 260, 20, {
+      sourceText: 'To develop the equations of equilibrium for a rigid body,',
+      sourceBoxWidth: 260,
+      sourceBoxHeight: 20,
+      fontFamily: 'TH Sarabun',
+      profile: 'official',
+    });
+
+    expect(heading.fontSize).toBeGreaterThan(body.fontSize);
+  });
+
+  test('keeps official document body text within a readable size band', () => {
+    const body = computeOverlayTypography('ในส่วนนี้เราจะพัฒนาทั้งเงื่อนไขที่จำเป็นและเงื่อนไขที่เพียงพอ', 430, 24, {
+      sourceText: 'In this section, we will develop both the necessary and sufficient conditions',
+      sourceBoxWidth: 430,
+      sourceBoxHeight: 24,
+      fontFamily: 'TH Sarabun',
+      profile: 'official',
+      styleKind: 'document-body',
+    });
+
+    expect(body.fontSize).toBeGreaterThan(8);
+  });
+
+  test('keeps separate manga balloons on the same row from being harmonized as one block', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'หรือคุณต้องการ',
+        width: 160,
+        height: 20,
+        bbox: { x0: 80, y0: 100, x1: 240, y1: 120 },
+        line: {
+          text: 'OR DO YOU',
+          confidence: 95,
+          bbox: { x0: 78, y0: 100, x1: 242, y1: 120 },
+          words: [{ text: 'OR', confidence: 95, bbox: { x0: 120, y0: 100, x1: 142, y1: 120 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+      {
+        index: 1,
+        text: 'ฉันไม่สน',
+        width: 150,
+        height: 20,
+        bbox: { x0: 320, y0: 128, x1: 470, y1: 148 },
+        line: {
+          text: "I DON'T CARE.",
+          confidence: 95,
+          bbox: { x0: 318, y0: 128, x1: 472, y1: 148 },
+          words: [{ text: 'I', confidence: 95, bbox: { x0: 364, y0: 128, x1: 372, y1: 148 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.mergedBBox).toBeUndefined();
+    expect(layoutMap.get(1)?.mergedBBox).toBeUndefined();
+  });
+
   test('merges centered manga dialogue blocks into a single rendered overlay', () => {
     const layoutMap = computeOverlayLayoutMap([
       {
@@ -361,6 +609,7 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(1)?.hidden).toBe(true);
     expect(layoutMap.get(2)?.hidden).toBe(true);
     expect(layoutMap.get(0)?.mergedBBox).toEqual({ x0: 150, y0: 100, x1: 348, y1: 178 });
+    expect(layoutMap.get(0)?.mergedMaskBBox).toEqual({ x0: 140, y0: 100, x1: 360, y1: 178 });
   });
 
   test('merges short centered manga lines even with larger vertical gaps', () => {
@@ -399,6 +648,44 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(1)?.hidden).toBe(true);
     expect(layoutMap.get(0)?.renderText).toContain('หรือคุณต้องการ');
     expect(layoutMap.get(0)?.renderText).toContain('ให้สาระสำคัญนี้');
+  });
+
+  test('treats left-aligned stacked manga box text as a comic box block', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เปิดตู้เก็บรองเท้า',
+        width: 130,
+        height: 18,
+        bbox: { x0: 360, y0: 200, x1: 490, y1: 218 },
+        line: {
+          text: 'OPEN A SHOE LOCKER',
+          confidence: 95,
+          bbox: { x0: 360, y0: 200, x1: 490, y1: 218 },
+          words: [{ text: 'OPEN', confidence: 95, bbox: { x0: 366, y0: 200, x1: 410, y1: 218 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+      {
+        index: 1,
+        text: 'และออกจากอาคาร',
+        width: 130,
+        height: 18,
+        bbox: { x0: 360, y0: 222, x1: 490, y1: 240 },
+        line: {
+          text: 'AND LEAVE THE BUILDING',
+          confidence: 95,
+          bbox: { x0: 360, y0: 222, x1: 490, y1: 240 },
+          words: [{ text: 'AND', confidence: 95, bbox: { x0: 366, y0: 222, x1: 400, y1: 240 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.styleKind).toBe('comic-box');
+    expect(layoutMap.get(1)?.styleKind).toBe('comic-box');
+    expect(layoutMap.get(0)?.alignment).toBe('left');
+    expect(layoutMap.get(0)?.typography.fontSize).toBe(layoutMap.get(1)?.typography.fontSize);
   });
 
   test('keeps paragraph-like stacked lines left aligned when they share a left edge', () => {

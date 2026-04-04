@@ -76,7 +76,7 @@ type ResolveTranslationOverlayArgs = {
   currentPageOCR?: OCRPageResult;
   optionsEngine: OCREngine;
   optionsLanguage: string;
-  translationMode: 'manga' | 'manhwa' | 'official';
+  translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   sourceLanguage: string;
   targetLanguage: string;
   translationPreviewMode: OCRPreviewMode;
@@ -186,8 +186,10 @@ export type OverlayTypographyHints = {
   sourceText?: string;
   sourceBoxWidth?: number;
   sourceBoxHeight?: number;
+  sourceLineCount?: number;
   fontFamily?: string;
   profile?: OverlayLayoutProfile;
+  styleKind?: OverlayStyleKind;
 };
 
 export type OverlayTypographyInput = {
@@ -200,16 +202,21 @@ export type OverlayTypographyInput = {
   hints?: OverlayTypographyHints;
 };
 
-export type OverlayLayoutProfile = 'official' | 'manga' | 'manhwa';
+export type OverlayLayoutProfile = 'official' | 'adaptive' | 'manga' | 'manhwa';
+
+export type OverlayStyleKind = 'document-heading' | 'document-body' | 'comic-bubble' | 'comic-box' | 'comic-line';
 
 export type OverlayLayout = {
   typography: OverlayTypography;
   alignment?: 'left' | 'center';
+  effectiveProfile?: OverlayLayoutProfile;
+  styleKind?: OverlayStyleKind;
   sharedTextStartX?: number;
   sharedCenterX?: number;
   sharedBoxLeftX?: number;
   renderText?: string;
   mergedBBox?: BBox;
+  mergedMaskBBox?: BBox;
   hidden?: boolean;
 };
 
@@ -883,10 +890,12 @@ const LABEL_TOKEN_REGEX = /^[\(\[\{]?[A-Za-z0-9\u0E00-\u0E7F]{1,8}[\)\]\}]?$/;
 const SHORT_SYMBOLIC_LINE_REGEX = /^[A-Za-z0-9\u0E00-\u0E7F\(\)\[\]\{\}\.,:;+\-_/=<>]+$/;
 const THAI_CHAR_REGEX = /[\u0E00-\u0E7F]/;
 const CJK_CHAR_REGEX = /[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
+const HEADING_SOURCE_HINT_REGEX = /\b(chapter|objective|objectives|condition|conditions|equilibrium|rigid(?:-body)?|body|summary|introduction|appendix|section|support|diagram)\b/i;
 
 type TextMeasureContext = Pick<CanvasRenderingContext2D, 'font' | 'measureText'>;
 
 let textMeasureContext: TextMeasureContext | null | undefined;
+const textSegmenterCache = new Map<string, Intl.Segmenter | null>();
 
 const getTextMeasureContext = (): TextMeasureContext | null => {
   if (textMeasureContext !== undefined) return textMeasureContext;
@@ -912,6 +921,63 @@ const getTextMeasureContext = (): TextMeasureContext | null => {
 const buildMeasureFont = (fontSize: number, fontFamily?: string): string =>
   `400 ${fontSize}px ${fontFamily || 'sans-serif'}`;
 
+const getTextSegmenter = (locale: string): Intl.Segmenter | null => {
+  const key = locale || 'default';
+  if (textSegmenterCache.has(key)) {
+    return textSegmenterCache.get(key) || null;
+  }
+
+  try {
+    const SegmenterCtor = (Intl as typeof Intl & { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    if (!SegmenterCtor) {
+      textSegmenterCache.set(key, null);
+      return null;
+    }
+    const segmenter = new SegmenterCtor(locale || undefined, { granularity: 'word' });
+    textSegmenterCache.set(key, segmenter);
+    return segmenter;
+  } catch {
+    textSegmenterCache.set(key, null);
+    return null;
+  }
+};
+
+const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boolean } => {
+  const normalized = normalizeOverlayInlineText(text);
+  if (!normalized) return { tokens: [], joinWithSpace: true };
+
+  const containsThai = THAI_CHAR_REGEX.test(normalized);
+  const containsCjk = CJK_CHAR_REGEX.test(normalized);
+  if (!containsThai && !containsCjk) {
+    return {
+      tokens: normalized.split(/\s+/g).filter(Boolean),
+      joinWithSpace: true,
+    };
+  }
+
+  const locale = containsThai ? 'th' : 'ja';
+  const segmenter = getTextSegmenter(locale);
+  if (!segmenter) {
+    return {
+      tokens: normalized.split(/\s+/g).filter(Boolean),
+      joinWithSpace: !containsThai && !containsCjk,
+    };
+  }
+
+  const tokens = Array.from(segmenter.segment(normalized))
+    .map((segment) => segment.segment.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) {
+    return {
+      tokens: normalized.split(/\s+/g).filter(Boolean),
+      joinWithSpace: !containsThai && !containsCjk,
+    };
+  }
+
+  return { tokens, joinWithSpace: false };
+};
+
 const countWords = (value: string): number =>
   normalizeOverlayInlineText(value)
     .split(/\s+/g)
@@ -926,6 +992,58 @@ const looksDocumentLikeSourceText = (value: string): boolean => {
   return /[a-z]/.test(normalized);
 };
 
+const looksHeadingLikeSourceLine = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(value);
+  if (!normalized) return false;
+  if (/[.!?]$/.test(normalized)) return false;
+
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  if (words.length === 0 || words.length > 10) return false;
+
+  const uppercaseWords = words.filter((word) => {
+    const letters = word.replace(/[^A-Za-z]/g, '');
+    return letters.length >= 2 && letters === letters.toUpperCase();
+  }).length;
+  const titleCaseWords = words.filter((word) => /^[A-Z][A-Za-z0-9-]+$/.test(word)).length;
+
+  return (
+    HEADING_SOURCE_HINT_REGEX.test(normalized)
+    || uppercaseWords >= Math.max(1, Math.ceil(words.length * 0.45))
+    || titleCaseWords >= Math.max(2, Math.floor(words.length * 0.55))
+  );
+};
+
+const resolveDocumentHeadingBoost = (
+  sourceText: string,
+  sourceBoxWidth: number,
+  sourceBoxHeight: number
+): number => {
+  if (!looksHeadingLikeSourceLine(sourceText)) return 1;
+  const width = Math.max(1, sourceBoxWidth);
+  const height = Math.max(1, sourceBoxHeight);
+  const aspectRatio = width / height;
+  if (aspectRatio >= 8.5) return 1.4;
+  if (aspectRatio >= 6.5) return 1.34;
+  return 1.28;
+};
+
+const resolveDocumentStyleKind = (sourceText: string): OverlayStyleKind => (
+  looksHeadingLikeSourceLine(sourceText) ? 'document-heading' : 'document-body'
+);
+
+const resolveOverlayStyleKind = (
+  effectiveProfile: OverlayLayoutProfile,
+  sourceText: string,
+  options?: { merged?: boolean; boxed?: boolean }
+): OverlayStyleKind => {
+  if (effectiveProfile === 'official') {
+    return resolveDocumentStyleKind(sourceText);
+  }
+  if (options?.merged) return 'comic-bubble';
+  if (options?.boxed) return 'comic-box';
+  return 'comic-line';
+};
+
 const shouldUseDocumentTypographyProfile = (
   profile: OverlayLayoutProfile,
   text: string,
@@ -936,13 +1054,22 @@ const shouldUseDocumentTypographyProfile = (
   const sourceBoxWidth = Math.max(1, hints?.sourceBoxWidth ?? 0);
   const sourceBoxHeight = Math.max(1, hints?.sourceBoxHeight ?? 0);
   const elongatedLine = sourceBoxWidth / sourceBoxHeight >= 6.2;
+  const headingElongatedLine = sourceBoxWidth / sourceBoxHeight >= 4.4;
   const longSource = compactTextLength(sourceText) >= 18;
   const paragraphish = countWords(sourceText) >= 4 || countWords(text) >= 4;
-  return looksDocumentLikeSourceText(sourceText) && elongatedLine && longSource && paragraphish;
+  const headingLike = looksHeadingLikeSourceLine(sourceText) && headingElongatedLine && countWords(sourceText) >= 2;
+  const bodyLike = looksDocumentLikeSourceText(sourceText) && elongatedLine && longSource && paragraphish;
+  if (profile === 'adaptive') {
+    return headingLike || bodyLike;
+  }
+  if (profile === 'manga' || profile === 'manhwa') {
+    return bodyLike;
+  }
+  return headingLike || bodyLike;
 };
 
 const resolveOverlayLineHeight = (text: string): number => (
-  THAI_CHAR_REGEX.test(text) ? 1.14 : CJK_CHAR_REGEX.test(text) ? 1.08 : 1.11
+  THAI_CHAR_REGEX.test(text) ? 1.16 : CJK_CHAR_REGEX.test(text) ? 1.08 : 1.11
 );
 
 const resolveOverlayPadding = (fontSize: number, text: string): { padX: number; padY: number } => {
@@ -1050,18 +1177,20 @@ const countWrappedLines = (
   }
 
   context.font = buildMeasureFont(fontSize, fontFamily);
-  if (!/\s/.test(normalized)) {
+  if (!/\s/.test(normalized) && !THAI_CHAR_REGEX.test(normalized) && !CJK_CHAR_REGEX.test(normalized)) {
     return Math.max(1, Math.ceil(context.measureText(normalized).width / Math.max(1, width)));
   }
 
-  const words = normalized.split(/\s+/g).filter(Boolean);
+  const { tokens: words, joinWithSpace } = tokenizeForWrap(normalized);
   if (words.length === 0) return 1;
 
   let lines = 1;
   let currentLine = '';
 
   for (const word of words) {
-    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    const candidate = currentLine
+      ? (joinWithSpace ? `${currentLine} ${word}` : `${currentLine}${word}`)
+      : word;
     if (!currentLine || context.measureText(candidate).width <= width) {
       currentLine = candidate;
       continue;
@@ -1072,6 +1201,81 @@ const countWrappedLines = (
   }
 
   return Math.max(1, lines);
+};
+
+const resolveWrappedLineEstimate = (
+  text: string,
+  width: number,
+  fontSize: number,
+  fontFamily: string | undefined,
+  styleKind: OverlayStyleKind,
+  boxWidth: number,
+  boxHeight: number
+): number => {
+  const baseLines = countWrappedLines(text, width, fontSize, fontFamily);
+  if (baseLines <= 1) return 1;
+
+  const normalized = normalizeOverlayInlineText(text);
+  const containsThai = THAI_CHAR_REGEX.test(normalized);
+  const containsLatinLike = /[A-Za-z\u00C0-\u024F]/.test(normalized);
+  const tokenCount = countWords(normalized);
+  const compactLength = compactTextLength(normalized);
+  const aspectRatio = boxWidth / Math.max(1, boxHeight);
+
+  let extraLines = 0;
+
+  if (containsThai) {
+    if (styleKind === 'comic-bubble') {
+      if (tokenCount >= 4 || compactLength >= 18) extraLines += 1.15;
+      if (aspectRatio <= 3.6) extraLines += 0.45;
+    } else if (styleKind === 'comic-box') {
+      if (tokenCount >= 4 || compactLength >= 16) extraLines += 0.82;
+      if (aspectRatio <= 3) extraLines += 0.3;
+    } else if (styleKind === 'comic-line' && compactLength >= 16) {
+      extraLines += 0.35;
+    }
+  } else if (containsLatinLike && (styleKind === 'comic-bubble' || styleKind === 'comic-box')) {
+    if (tokenCount >= 6 && compactLength >= 20) extraLines += 0.42;
+    if (aspectRatio <= 3.4) extraLines += 0.22;
+  }
+
+  return Math.max(baseLines, Math.ceil(baseLines + extraLines - 0.001));
+};
+
+const resolveSourceLineFloor = (
+  styleKind: OverlayStyleKind,
+  sourceLineCount: number,
+  sourceLength: number,
+  targetLength: number,
+  containsThai: boolean,
+  containsCjk: boolean,
+  preferSingleLine: boolean
+): number => {
+  if (preferSingleLine || sourceLineCount <= 1) return 1;
+  if (styleKind !== 'comic-bubble' && styleKind !== 'comic-box') return 1;
+
+  const densityRatio = sourceLength > 0 && targetLength > 0
+    ? clamp(targetLength / sourceLength, containsThai ? 0.54 : containsCjk ? 0.58 : 0.6, 1.25)
+    : 1;
+  const baseRatio = styleKind === 'comic-bubble'
+    ? (containsThai ? 0.9 : containsCjk ? 0.86 : 0.84)
+    : (containsThai ? 0.84 : containsCjk ? 0.8 : 0.78);
+  const densityBoost = densityRatio >= 0.88
+    ? 1
+    : densityRatio >= 0.72
+      ? 0.94
+      : densityRatio >= 0.58
+        ? 0.86
+        : 0.76;
+
+  const computedFloor = Math.max(1, Math.ceil(sourceLineCount * baseRatio * densityBoost));
+  if (containsThai && styleKind === 'comic-bubble' && sourceLineCount >= 3) {
+    return Math.max(computedFloor, sourceLineCount);
+  }
+  if (containsThai && styleKind === 'comic-box' && sourceLineCount >= 3) {
+    return Math.max(computedFloor, sourceLineCount - 1);
+  }
+  return computedFloor;
 };
 
 export const computeOverlayTypography = (
@@ -1086,48 +1290,104 @@ export const computeOverlayTypography = (
   const sourceHeight = Math.max(8, hints?.sourceBoxHeight ?? safeHeight);
   const sourceLength = compactTextLength(hints?.sourceText || '');
   const targetLength = compactTextLength(text);
+  const sourceWordCount = countWords(hints?.sourceText || '');
+  const sourceLineCount = Math.max(1, hints?.sourceLineCount ?? 1);
   const containsThai = THAI_CHAR_REGEX.test(text);
   const containsCjk = CJK_CHAR_REGEX.test(text);
+  const sourceAspectRatio = sourceWidth / Math.max(1, sourceHeight);
   const profile = hints?.profile || 'official';
-  const useDocumentTypographyProfile = shouldUseDocumentTypographyProfile(profile, text, hints);
-  const isMangaProfile = !useDocumentTypographyProfile && (profile === 'manga' || profile === 'manhwa');
+  const styleKind = hints?.styleKind || (
+    shouldUseDocumentTypographyProfile(profile, text, hints)
+      ? resolveDocumentStyleKind(hints?.sourceText || text)
+      : 'comic-line'
+  );
+  const useDocumentTypographyProfile = styleKind === 'document-heading' || styleKind === 'document-body';
+  const isAdaptiveProfile = profile === 'adaptive';
+  const isComicLikeProfile = styleKind === 'comic-bubble' || styleKind === 'comic-box' || styleKind === 'comic-line';
+  const isComicBubble = styleKind === 'comic-bubble';
+  const isComicBox = styleKind === 'comic-box';
+  const sourceLooksHeading = styleKind === 'document-heading';
+  const documentBodyLike = styleKind === 'document-body' && countWords(hints?.sourceText || text) >= 7;
+  const documentBodyBoost = styleKind === 'document-body'
+    ? (documentBodyLike ? (containsThai ? 1.16 : 1.1) : (containsThai ? 1.11 : 1.07))
+    : 1;
+  const comicProfileScale = isComicBubble
+    ? (profile === 'manga' ? 1.12 : profile === 'manhwa' ? 1.08 : 1.04)
+    : isComicBox
+      ? (profile === 'manga' ? 1.06 : profile === 'manhwa' ? 1.04 : 1)
+      : (profile === 'manga' ? 1 : profile === 'manhwa' ? 0.98 : 0.95);
   const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
   const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
-  const preferSingleLine = isSingleLineLabelCandidate(text, hints?.sourceText)
+  const sourceSingleLineHint = !useDocumentTypographyProfile
+    && sourceAspectRatio >= (profile === 'manga' || profile === 'manhwa' ? 2.8 : 3.2)
+    && sourceWordCount >= 2
+    && sourceLength >= 8;
+  const preferSingleLine = !isComicBubble && (
+    isSingleLineLabelCandidate(text, hints?.sourceText)
     || severeWrapRisk
-    || (sourceLength > 0 && safeHeight <= sourceHeight * 1.42);
+    || (sourceSingleLineHint && targetLength <= Math.max(sourceLength * 1.6, 28))
+    || (sourceLength > 0 && safeHeight <= sourceHeight * 1.42)
+  );
   const normalizedInlineText = normalizeOverlayInlineText(text);
   const ratio = sourceLength > 0 && targetLength > 0
     ? clamp(
       Math.pow(sourceLength / targetLength, containsThai ? 0.72 : containsCjk ? 0.68 : 0.76),
       containsThai ? 0.66 : containsCjk ? 0.7 : 0.58,
-      isMangaProfile ? 1.16 : 1.08
+      isComicBubble ? (isAdaptiveProfile ? 1.18 : 1.22) : isComicBox ? (isAdaptiveProfile ? 1.14 : 1.18) : isComicLikeProfile ? (isAdaptiveProfile ? 1.12 : 1.16) : 1.08
     )
     : 1;
-  const scriptScale = isMangaProfile
-    ? (containsThai ? 1.04 : containsCjk ? 1.01 : 1)
-    : (containsThai ? 0.89 : containsCjk ? 0.9 : 0.9);
+  const scriptScale = isComicLikeProfile
+    ? ((containsThai ? (isComicBubble ? 1.08 : isComicBox ? 1.06 : 1.04) : containsCjk ? 1.01 : (isComicBubble ? 1.04 : isComicBox ? 1.02 : 1)) * comicProfileScale)
+    : (containsThai ? (sourceLooksHeading ? 1 : 0.96) : containsCjk ? 0.95 : (sourceLooksHeading ? 0.98 : 0.95));
+  const documentHeadingBoost = sourceLooksHeading
+    ? resolveDocumentHeadingBoost(hints?.sourceText || '', sourceWidth, sourceHeight)
+    : documentBodyBoost;
 
-  const sourceDriven = sourceHeight * (preferSingleLine ? 0.7 : 0.63) * ratio * scriptScale;
+  const sourceDriven = sourceHeight
+    * (preferSingleLine ? (isComicBubble ? 0.8 : isComicBox ? 0.75 : useDocumentTypographyProfile ? 0.72 : 0.7) : (isComicBubble ? 0.76 : isComicBox ? 0.7 : useDocumentTypographyProfile ? 0.66 : 0.63))
+    * ratio
+    * scriptScale
+    * documentHeadingBoost;
   const minFontSize = clamp(
-    sourceHeight * (preferSingleLine ? (isMangaProfile ? 0.47 : 0.39) : (isMangaProfile ? 0.41 : 0.36)) * (containsThai ? (isMangaProfile ? 0.94 : 0.92) : 1),
+    sourceHeight * (
+      preferSingleLine
+        ? (isComicBubble ? 0.58 : isComicLikeProfile ? 0.48 : (sourceLooksHeading ? 0.43 : 0.39))
+        : (isComicBubble ? 0.54 : isComicBox ? 0.46 : isComicLikeProfile ? 0.41 : (sourceLooksHeading ? 0.4 : 0.38))
+    ) * (containsThai ? (isComicLikeProfile ? 0.94 : 0.92) : 1),
     6,
-    isMangaProfile ? 18 : 16
+    isComicBubble ? 22 : isComicBox ? 20 : isComicLikeProfile ? 18 : (sourceLooksHeading ? 20 : 16)
   );
   let fontSize = clamp(
     Math.min(
       sourceDriven,
-      safeHeight * (preferSingleLine ? (isMangaProfile ? 0.8 : 0.6) : (isMangaProfile ? 0.8 : 0.64)),
-      safeWidth * (preferSingleLine ? (isMangaProfile ? 0.4 : 0.3) : (isMangaProfile ? 0.44 : 0.34)),
-      sourceWidth * (preferSingleLine ? (isMangaProfile ? 0.35 : 0.25) : (isMangaProfile ? 0.38 : 0.28))
+      safeHeight * (
+        preferSingleLine
+          ? (isComicBubble ? 0.88 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.74 : 0.6))
+          : (isComicBubble ? 0.88 : isComicBox ? 0.84 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.78 : 0.68))
+      ),
+      safeWidth * (
+        preferSingleLine
+          ? (isComicBubble ? 0.48 : isComicBox ? 0.43 : isComicLikeProfile ? 0.4 : (sourceLooksHeading ? 0.38 : 0.3))
+          : (isComicBubble ? 0.52 : isComicBox ? 0.47 : isComicLikeProfile ? 0.44 : (sourceLooksHeading ? 0.44 : 0.36))
+      ),
+      sourceWidth * (
+        preferSingleLine
+          ? (isComicBubble ? 0.43 : isComicBox ? 0.38 : isComicLikeProfile ? 0.35 : (sourceLooksHeading ? 0.33 : 0.25))
+          : (isComicBubble ? 0.46 : isComicBox ? 0.41 : isComicLikeProfile ? 0.38 : (sourceLooksHeading ? 0.38 : 0.3))
+      )
     ),
     minFontSize,
-    30
+    sourceLooksHeading ? 34 : 30
   );
   fontSize *= preferSingleLine
-    ? (isMangaProfile ? 1 : 0.8)
-    : (isMangaProfile ? 0.96 : 0.78);
-  const lineHeight = resolveOverlayLineHeight(text);
+    ? (isComicBubble ? (isAdaptiveProfile ? 1.12 : 1.14) : isComicBox ? (isAdaptiveProfile ? 1.04 : 1.06) : isComicLikeProfile ? (isAdaptiveProfile ? 0.98 : 1) : (sourceLooksHeading ? 1.02 : 0.8))
+    : (isComicBubble ? (isAdaptiveProfile ? 1.04 : 1.08) : isComicBox ? (isAdaptiveProfile ? 0.98 : 1) : isComicLikeProfile ? (isAdaptiveProfile ? 0.94 : 0.96) : (sourceLooksHeading ? 1 : styleKind === 'document-body' ? (containsThai ? 0.95 : 0.92) : 0.89));
+  const lineHeight = resolveOverlayLineHeight(text)
+    + (
+      containsThai
+        ? (isComicBubble ? 0.08 : isComicBox ? 0.05 : isComicLikeProfile ? 0.03 : styleKind === 'document-body' ? 0.02 : 0)
+        : 0
+    );
 
   for (let i = 0; i < 32; i += 1) {
     const snappedFont = Math.round(fontSize * 4) / 4;
@@ -1137,11 +1397,30 @@ export const computeOverlayTypography = (
     const singleLineWidth = measureSingleLineWidth(normalizedInlineText, snappedFont, hints?.fontFamily);
     const effectiveSingleLine = preferSingleLine
       && singleLineWidth <= usableWidth * (containsThai ? 1.02 : 1);
-    const estimatedLines = effectiveSingleLine
+    const estimatedLines = Math.max(
+      effectiveSingleLine
       ? 1
-      : countWrappedLines(text, usableWidth, snappedFont, hints?.fontFamily);
-    const ascenderSafety = Math.max(1, Math.round(snappedFont * (containsThai ? 0.1 : 0.05)));
-    const descenderSafety = Math.max(1, Math.round(snappedFont * (containsThai ? 0.18 : 0.14)));
+      : resolveWrappedLineEstimate(
+          text,
+          usableWidth,
+          snappedFont,
+          hints?.fontFamily,
+          styleKind,
+          safeWidth,
+          safeHeight
+        ),
+      resolveSourceLineFloor(
+        styleKind,
+        sourceLineCount,
+        sourceLength,
+        targetLength,
+        containsThai,
+        containsCjk,
+        effectiveSingleLine
+      )
+    );
+    const ascenderSafety = Math.max(1, Math.round(snappedFont * (containsThai ? (useDocumentTypographyProfile ? 0.14 : isComicBubble ? 0.12 : 0.1) : 0.05)));
+    const descenderSafety = Math.max(1, Math.round(snappedFont * (containsThai ? (useDocumentTypographyProfile ? 0.22 : isComicBubble ? 0.2 : 0.18) : 0.14)));
     const requiredHeight = estimatedLines * snappedFont * lineHeight + ascenderSafety + descenderSafety;
     const widthFits = effectiveSingleLine || estimatedLines > 1 || singleLineWidth <= usableWidth;
     if ((requiredHeight <= usableHeight && widthFits) || fontSize <= minFontSize) {
@@ -1222,18 +1501,37 @@ const shouldHarmonizeOverlayBlock = (
   const previousDocumentLike = looksDocumentLikeSourceText(previous.hints?.sourceText || previous.line?.text || '');
   const currentDocumentLike = looksDocumentLikeSourceText(current.hints?.sourceText || current.line?.text || '');
   const effectiveDocumentProfile = isDocumentProfile || (previousDocumentLike && currentDocumentLike);
+  const centeredStackContinuity = overlapRatio >= 0.08 || leftDelta <= Math.max(12, avgHeight * 0.92);
+  const shortComicFragmentPair = !effectiveDocumentProfile
+    && !bothParagraphLike
+    && countWords(previous.text) <= 5
+    && countWords(current.text) <= 5
+    && compactTextLength(previous.text) <= 26
+    && compactTextLength(current.text) <= 26;
 
   if (effectiveDocumentProfile && previousParagraphLike !== currentParagraphLike) {
     return false;
   }
 
   if (!effectiveDocumentProfile) {
-    const centeredStack = centerDelta <= Math.max(18, avgHeight * (profile === 'manga' ? 1.55 : 1.4));
+    const centeredStack = centerDelta <= Math.max(18, avgHeight * (profile === 'manga' ? 1.55 : profile === 'adaptive' ? 1.42 : 1.4));
+    const centeredFragmentContinuity = shortComicFragmentPair
+      && centerDelta <= Math.max(24, avgHeight * 1.9);
+    const centeredFragmentMerge = centeredFragmentContinuity
+      && centeredStack
+      && heightRatio <= 2.8
+      && verticalGap >= -avgHeight * 0.34
+      && verticalGap <= Math.max(34, avgHeight * 2.4);
+    if (centeredFragmentMerge) {
+      return true;
+    }
     if (
-      centeredStack
+      centeredStackContinuity
+      && overlapRatio >= 0.04
+      && centeredStack
       && heightRatio <= 2.5
       && verticalGap >= -avgHeight * 0.28
-      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 2.1 : 1.8))
+      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 2.1 : profile === 'adaptive' ? 1.9 : 1.8))
     ) {
       return true;
     }
@@ -1260,14 +1558,17 @@ const isDocumentLikeOverlayGroup = (
   group: Array<OverlayTypographyInput & { typography: OverlayTypography }>,
   hasSharedLeftEdge: boolean,
   maxHeight: number,
-  startXs: number[]
+  startXs: number[],
+  profile: OverlayLayoutProfile
 ): boolean => {
   if (group.length < 2) return false;
   const paragraphLikeCount = group.filter((item) => isParagraphLikeOverlayInput(item)).length;
-  if (paragraphLikeCount === 0) return false;
   const sourceTexts = group.map((item) => item.hints?.sourceText || item.line?.text || '');
   const documentLikeSourceCount = sourceTexts.filter((value) => looksDocumentLikeSourceText(value)).length;
-  if (documentLikeSourceCount === 0) return false;
+  const headingLikeCount = sourceTexts.filter((value) => looksHeadingLikeSourceLine(value)).length;
+  const allowHeadingPromotion = profile === 'adaptive' || profile === 'official';
+  if (paragraphLikeCount === 0 && (!allowHeadingPromotion || headingLikeCount === 0)) return false;
+  if (documentLikeSourceCount === 0 && (!allowHeadingPromotion || headingLikeCount === 0)) return false;
   const startRange = resolveRange(startXs);
   return hasSharedLeftEdge && startRange <= Math.max(8, maxHeight * 0.26);
 };
@@ -1301,8 +1602,12 @@ export const computeOverlayLayoutMap = (
     const sharedLeftEdgeCount = startXs.filter((value) => Math.abs(value - minStartX) <= leftEdgeTolerance).length;
     const hasSharedLeftEdge = group.length >= 2
       && sharedLeftEdgeCount >= Math.max(2, Math.ceil(group.length * 0.6));
+    const documentLikeItemCount = group.filter((item) => shouldUseDocumentTypographyProfile(profile, item.text, item.hints)).length;
     const effectiveProfile: OverlayLayoutProfile = (
-      profile !== 'official' && isDocumentLikeOverlayGroup(group, hasSharedLeftEdge, maxHeight, startXs)
+      profile !== 'official' && (
+        isDocumentLikeOverlayGroup(group, hasSharedLeftEdge, maxHeight, startXs, profile)
+        || (group.length === 1 && documentLikeItemCount === 1)
+      )
     )
       ? 'official'
       : profile;
@@ -1310,11 +1615,15 @@ export const computeOverlayLayoutMap = (
     const sharedCenterX = group.length >= 2 ? resolveMedian(centerXs) : undefined;
     const centerRangeLimit = effectiveProfile === 'manga'
       ? Math.max(20, maxHeight * 1.5)
+      : effectiveProfile === 'adaptive'
+        ? Math.max(19, maxHeight * 1.35)
       : effectiveProfile === 'manhwa'
         ? Math.max(18, maxHeight * 1.38)
         : Math.max(18, maxHeight * 1.25);
     const startVarianceLimit = effectiveProfile === 'manga'
       ? Math.max(4, maxHeight * 0.16)
+      : effectiveProfile === 'adaptive'
+        ? Math.max(5, maxHeight * 0.2)
       : effectiveProfile === 'manhwa'
         ? Math.max(5, maxHeight * 0.22)
         : Math.max(6, maxHeight * 0.35);
@@ -1325,12 +1634,30 @@ export const computeOverlayLayoutMap = (
           ? (!hasSharedLeftEdge && resolveRange(startXs) >= startVarianceLimit)
           : resolveRange(startXs) >= startVarianceLimit
       );
+    const defaultStyleKind = resolveOverlayStyleKind(
+      effectiveProfile,
+      group.map((item) => item.hints?.sourceText || item.line?.text || item.text).filter(Boolean).join(' '),
+      {
+        boxed: !effectiveDocumentProfile && hasSharedLeftEdge && group.length >= 2 && !isCenteredBlock,
+      }
+    );
+    const groupStyleKinds = group.map((item) => effectiveDocumentProfile
+      ? resolveDocumentStyleKind(item.hints?.sourceText || item.line?.text || item.text)
+      : defaultStyleKind
+    );
+    const allDocumentBody = effectiveDocumentProfile && groupStyleKinds.every((kind) => kind === 'document-body');
     const normalizedFontSize = effectiveDocumentProfile
-      ? Math.max(6, (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 0.88)
-      : (resolveMedian(fontSizes) ?? resolveLowerBandAverage(fontSizes) ?? minFontSize);
+      ? (
+        allDocumentBody
+          ? Math.max(6, (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 0.99)
+          : Math.max(6, (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 0.96)
+      )
+      : defaultStyleKind === 'comic-box'
+        ? Math.max(resolveMedian(fontSizes) ?? minFontSize, (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 1.08)
+        : (resolveMedian(fontSizes) ?? resolveLowerBandAverage(fontSizes) ?? minFontSize);
     const shouldNormalize = effectiveDocumentProfile
-      ? false
-      : (group.length >= 2 && (isCenteredBlock || (maxFontSize - minFontSize) >= 0.35));
+      ? (allDocumentBody && group.length >= 2 && (maxFontSize - minFontSize) >= 0.18)
+      : (group.length >= 2 && (isCenteredBlock || defaultStyleKind === 'comic-box' || (maxFontSize - minFontSize) >= 0.35));
     const alignment: 'left' | 'center' = isCenteredBlock ? 'center' : 'left';
     const sharedTextStartX = group.length >= 2
       ? (alignment === 'left' && effectiveDocumentProfile ? minStartX : resolveMedian(startXs))
@@ -1338,28 +1665,49 @@ export const computeOverlayLayoutMap = (
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile
       ? minStartX
       : undefined;
-
     const shouldMergeAsBubbleBlock = !effectiveDocumentProfile && isCenteredBlock && group.length >= 2;
     if (shouldMergeAsBubbleBlock) {
+      const mergedSourceText = group
+        .map((item) => item.hints?.sourceText || item.line?.text || '')
+        .filter(Boolean)
+        .join(' ');
+      const firstMaskSource = group[0].line ? resolveOverlayMaskBBox(group[0].line) : group[0].bbox;
       const mergedBBox: BBox = {
         x0: Math.min(...group.map((item) => item.bbox.x0)),
         y0: Math.min(...group.map((item) => item.bbox.y0)),
         x1: Math.max(...group.map((item) => item.bbox.x1)),
         y1: Math.max(...group.map((item) => item.bbox.y1)),
       };
+      const mergedMaskBBox: BBox = group.reduce<BBox>((acc, item) => {
+        const source = item.line ? resolveOverlayMaskBBox(item.line) : item.bbox;
+        return {
+          x0: Math.min(acc.x0, source.x0),
+          y0: Math.min(acc.y0, source.y0),
+          x1: Math.max(acc.x1, source.x1),
+          y1: Math.max(acc.y1, source.y1),
+        };
+      }, firstMaskSource);
       const mergedText = joinOverlayGroupText(group);
-      const mergedWidth = Math.max(1, mergedBBox.x1 - mergedBBox.x0);
-      const mergedHeight = Math.max(1, mergedBBox.y1 - mergedBBox.y0);
+      const mergedScaleX = resolveMedian(
+        group.map((item) => item.width / Math.max(1, item.bbox.x1 - item.bbox.x0))
+      ) ?? 1;
+      const mergedScaleY = resolveMedian(
+        group.map((item) => item.height / Math.max(1, item.bbox.y1 - item.bbox.y0))
+      ) ?? 1;
+      const mergedWidth = Math.max(1, (mergedBBox.x1 - mergedBBox.x0) * mergedScaleX);
+      const mergedHeight = Math.max(1, (mergedBBox.y1 - mergedBBox.y0) * mergedScaleY);
       const mergedTypography = computeOverlayTypography(
         mergedText,
         mergedWidth,
         mergedHeight,
         {
-          sourceText: group.map((item) => item.hints?.sourceText || item.line?.text || '').filter(Boolean).join(' '),
-          sourceBoxWidth: Math.max(1, mergedBBox.x1 - mergedBBox.x0),
+          sourceText: mergedSourceText,
+          sourceBoxWidth: mergedWidth,
           sourceBoxHeight: mergedHeight,
+          sourceLineCount: group.length,
           fontFamily: group[0]?.hints?.fontFamily,
           profile,
+          styleKind: 'comic-bubble',
         }
       );
       const mergedBaselineFont = resolveMedian(fontSizes) ?? mergedTypography.fontSize;
@@ -1369,26 +1717,45 @@ export const computeOverlayLayoutMap = (
       const mergedTextContainsThai = THAI_CHAR_REGEX.test(mergedText);
       const mergedTextContainsCjk = CJK_CHAR_REGEX.test(mergedText);
       const mergedSourceDrivenFont = sourceLineHeightMedian
-        * (mergedTextContainsThai ? 1.02 : mergedTextContainsCjk ? 0.94 : 0.92)
+        * (mergedTextContainsThai ? 1.14 : mergedTextContainsCjk ? 1.02 : 1)
         * Math.sqrt(group.length / Math.max(1, mergedTypography.estimatedLines));
+      const mergedPromotionFactor = mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 1.12 : 1.34;
       const promotedMergedFont = Math.min(
         32,
         Math.max(
           mergedTypography.fontSize,
-          mergedBaselineFont * 1.16,
-          mergedSourceDrivenFont
+          mergedBaselineFont * mergedPromotionFactor,
+          mergedSourceDrivenFont * (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 0.94 : 1)
         )
       );
       const mergedTypographyAdjusted = (() => {
         if (promotedMergedFont <= mergedTypography.fontSize + 0.01) return mergedTypography;
-        const lineHeight = resolveOverlayLineHeight(mergedText);
+        const lineHeight = resolveOverlayLineHeight(mergedText) + (mergedTextContainsThai ? 0.08 : 0);
         const { padX, padY } = resolveOverlayPadding(promotedMergedFont, mergedText);
         const usableWidth = Math.max(4, mergedWidth - padX * 2);
-        const estimatedLines = countWrappedLines(mergedText, usableWidth, promotedMergedFont, group[0]?.hints?.fontFamily);
+        const estimatedLines = resolveWrappedLineEstimate(
+          mergedText,
+          usableWidth,
+          promotedMergedFont,
+          group[0]?.hints?.fontFamily,
+          'comic-bubble',
+          mergedWidth,
+          mergedHeight
+        );
+        const sourceLineFloor = resolveSourceLineFloor(
+          'comic-bubble',
+          group.length,
+          compactTextLength(mergedSourceText),
+          compactTextLength(mergedText),
+          mergedTextContainsThai,
+          mergedTextContainsCjk,
+          false
+        );
+        const adjustedEstimatedLines = Math.max(estimatedLines, sourceLineFloor);
         const ascenderSafety = Math.max(1, Math.round(promotedMergedFont * (THAI_CHAR_REGEX.test(mergedText) ? 0.1 : 0.05)));
         const descenderSafety = Math.max(1, Math.round(promotedMergedFont * (THAI_CHAR_REGEX.test(mergedText) ? 0.18 : 0.14)));
-        const contentHeight = estimatedLines * promotedMergedFont * lineHeight + ascenderSafety + descenderSafety;
-        if (contentHeight > mergedHeight * 0.96) {
+        const contentHeight = adjustedEstimatedLines * promotedMergedFont * lineHeight + ascenderSafety + descenderSafety;
+        if (contentHeight > mergedHeight * 0.9) {
           return mergedTypography;
         }
         return {
@@ -1396,13 +1763,14 @@ export const computeOverlayLayoutMap = (
           lineHeight,
           padX,
           padY,
-          forceSingleLine: estimatedLines <= 1,
-          estimatedLines,
+          forceSingleLine: adjustedEstimatedLines <= 1,
+          estimatedLines: adjustedEstimatedLines,
           contentHeight,
         };
       })();
 
-      const mergeIsUseful = mergedTypographyAdjusted.estimatedLines >= Math.min(2, group.length);
+      const mergeIsUseful = mergedTypographyAdjusted.estimatedLines >= 1
+        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * 0.9;
       if (!mergeIsUseful) {
         // Fall back to per-line rendering when the merged block would collapse into one line
         // and hide the rest of the bubble content behind a large mask.
@@ -1411,8 +1779,11 @@ export const computeOverlayLayoutMap = (
           result.set(item.index, {
             typography: mergedTypographyAdjusted,
             alignment: 'center',
+            effectiveProfile,
+            styleKind: 'comic-bubble',
             sharedCenterX: sharedCenterX ?? (mergedBBox.x0 + mergedBBox.x1) * 0.5,
             mergedBBox,
+            mergedMaskBBox,
             renderText: index === 0 ? mergedText : '',
             hidden: index !== 0,
           });
@@ -1426,6 +1797,8 @@ export const computeOverlayLayoutMap = (
         result.set(item.index, {
           typography: item.typography,
           alignment,
+          effectiveProfile,
+          styleKind: groupStyleKinds[group.indexOf(item)],
           sharedTextStartX,
           sharedCenterX,
           sharedBoxLeftX,
@@ -1450,6 +1823,8 @@ export const computeOverlayLayoutMap = (
           contentHeight: estimatedLines * normalizedFontSize * lineHeight + ascenderSafety + descenderSafety,
         },
         alignment,
+        effectiveProfile,
+        styleKind: groupStyleKinds[group.indexOf(item)],
         sharedTextStartX,
         sharedCenterX,
         sharedBoxLeftX,

@@ -1247,6 +1247,8 @@ export const OCRTextLayerPanel: React.FC = () => {
           ocrEngine: (row.ocrEngine || 'tesseract') as OCREngine,
           translationMode: row.translationMode === 'official'
             ? 'official'
+            : row.translationMode === 'adaptive'
+              ? 'adaptive'
             : row.translationMode === 'manhwa'
               ? 'manhwa'
               : 'manga',

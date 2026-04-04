@@ -15,7 +15,7 @@ export type OCRTranslationCacheKeyParts = {
   ocrLanguage: string;
   sourceLanguage: string;
   targetLanguage: string;
-  translationMode: 'manga' | 'manhwa' | 'official';
+  translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   translatorEngine: TranslatorEngine;
 };
 
@@ -26,7 +26,7 @@ export interface OCRTranslationCacheEntry {
   ocrLanguage: string;
   sourceLanguage: string;
   targetLanguage: string;
-  translationMode: 'manga' | 'manhwa' | 'official';
+  translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   translatorEngine: TranslatorEngine;
   sourceFingerprint: string;
   translatedByIndex: Array<{ index: number; text: string }>;

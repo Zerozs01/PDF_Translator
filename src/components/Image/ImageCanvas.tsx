@@ -19,6 +19,8 @@ import {
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 
+const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
+
 export const ImageCanvas: React.FC = () => {
   const {
     fileUrl,
@@ -217,6 +219,8 @@ export const ImageCanvas: React.FC = () => {
     : 1;
   const overlayLayoutProfile: OverlayLayoutProfile = translationMode === 'official'
     ? 'official'
+    : translationMode === 'adaptive'
+      ? 'adaptive'
     : translationMode === 'manhwa'
       ? 'manhwa'
       : 'manga';
@@ -259,8 +263,9 @@ export const ImageCanvas: React.FC = () => {
           line,
           hints: {
             sourceText: line.text,
-            sourceBoxWidth: Math.max(1, sourceBbox.x1 - sourceBbox.x0),
-            sourceBoxHeight: Math.max(1, sourceBbox.y1 - sourceBbox.y0),
+            sourceBoxWidth: baseWidth,
+            sourceBoxHeight: baseHeight,
+            sourceLineCount: 1,
             fontFamily: overlayFontFamily,
             profile: overlayLayoutProfile,
           },
@@ -318,7 +323,13 @@ export const ImageCanvas: React.FC = () => {
                   const layout = overlayLayoutByIndex.get(idx);
                   const isMaskOnlyLine = Boolean(layout?.hidden);
                   const renderText = layout?.renderText || translatedText;
-                  const maskBbox = resolveOverlayMaskBBox(line);
+                  const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
+                  const styleKind = layout?.styleKind;
+                  const isDocumentLikeOverlay = styleKind
+                    ? styleKind === 'document-heading' || styleKind === 'document-body'
+                    : effectiveProfile === 'official';
+                  const isComicLikeOverlay = !isDocumentLikeOverlay;
+                  const maskBbox = (!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
                   const sourceBbox = isMaskOnlyLine
                     ? resolveOverlaySourceBBox(line)
                     : (layout?.mergedBBox || resolveOverlaySourceBBox(line));
@@ -332,14 +343,24 @@ export const ImageCanvas: React.FC = () => {
                   const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrScaleY);
                   const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
                   const expansion = resolveOverlayMaskExpansion(line);
-                  const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)));
-                  const maskExpandLeft = Math.min(1, maskExpandX);
+                  const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
+                  const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
+                  const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
+                  const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
+                  const maskExpandX = Math.min(
+                    expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
+                    Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
+                  );
+                  const maskExpandLeft = Math.min(isComicLikeOverlay ? 4 : 1, maskExpandX);
                   const maskExpandRight = maskExpandX;
-                  const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)));
+                  const maskExpandTop = Math.min(
+                    expansion.maxExpandTop + mergedMaskBoost + comicMaskBoostTop,
+                    Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
+                  );
                   const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
                   const maskExpandBottom = Math.min(
-                    expansion.maxExpandBottom + thaiBottomBoost,
-                    Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost
+                    expansion.maxExpandBottom + thaiBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
+                    Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + mergedMaskBoost + comicMaskBoostBottom
                   );
                   const rawMaskLeft = maskRenderSourceLeft * ocrScaleX - maskExpandLeft;
                   const rawMaskTop = maskBbox.y0 * ocrScaleY - maskExpandTop;
@@ -351,10 +372,15 @@ export const ImageCanvas: React.FC = () => {
                     x1: imageDisplaySize.width,
                     y1: imageDisplaySize.height,
                   });
-                  const rawTextLeft = renderSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
-                  const rawTextTop = sourceBbox.y0 * ocrScaleY - maskExpandTop;
-                  const rawTextWidth = baseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
-                  const rawTextHeight = baseHeight + maskExpandTop + maskExpandBottom;
+                  const useMergedComicTextRect = styleKind === 'comic-bubble' && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
+                  const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
+                  const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+                  const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
+                  const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
+                  const rawTextLeft = textSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
+                  const rawTextTop = textSourceTop * ocrScaleY - maskExpandTop;
+                  const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
+                  const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom;
                   const textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
                     x0: 0,
                     y0: 0,
@@ -362,14 +388,22 @@ export const ImageCanvas: React.FC = () => {
                     y1: imageDisplaySize.height,
                   });
                   const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
-                  const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : textRect.width;
-                  const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : textRect.height;
+                  const maskBackgroundColor = palette.backgroundColor;
+                  const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
+                    ? Math.max(2, Math.round(baseHeight * 0.18))
+                    : 0;
+                  const typographyWidth = isDocumentLikeOverlay ? baseWidth : textRect.width;
+                  const typographyHeight = isDocumentLikeOverlay
+                    ? Math.min(textRect.height, baseHeight + thaiDocumentHeadroom)
+                    : textRect.height;
                   const typography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
-                    sourceText: line.text,
-                    sourceBoxWidth: Math.max(1, sourceBbox.x1 - sourceBbox.x0),
-                    sourceBoxHeight: Math.max(1, sourceBbox.y1 - sourceBbox.y0),
-                    fontFamily: overlayFontFamily,
-                    profile: overlayLayoutProfile,
+                  sourceText: line.text,
+                  sourceBoxWidth: baseWidth,
+                  sourceBoxHeight: baseHeight,
+                  sourceLineCount: 1,
+                  fontFamily: overlayFontFamily,
+                  profile: effectiveProfile,
+                  styleKind,
                   });
                   const extraTopPad = hasThaiText ? Math.max(2, Math.round(typography.fontSize * 0.11)) : 0;
                   const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
@@ -402,6 +436,9 @@ export const ImageCanvas: React.FC = () => {
                     Math.min(textRect.height - paintHeight, Math.round(textRect.height * 0.08))
                   );
 
+                  const widthRatio = textRect.width / Math.max(1, baseWidth);
+                  const heightRatio = paintHeight / Math.max(1, baseHeight);
+
                   return (
                     <React.Fragment key={`ocr-translation-line-${idx}`}>
                       <div
@@ -414,7 +451,7 @@ export const ImageCanvas: React.FC = () => {
                           height: maskRect.height,
                           maxHeight: maskRect.height,
                           minHeight: maskRect.height,
-                          backgroundColor: palette.backgroundColor,
+                              backgroundColor: maskBackgroundColor,
                           overflow: 'hidden',
                           zIndex: Math.max(1, Math.round(maskRect.top)),
                           transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
@@ -468,6 +505,37 @@ export const ImageCanvas: React.FC = () => {
                           >
                             {overlayText}
                           </div>
+                          {showDebugOverlay ? (
+                            <>
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  left: 0,
+                                  top: 0,
+                                  width: textRect.width,
+                                  height: textRect.height,
+                                  border: '1px solid rgba(34, 211, 238, 0.8)',
+                                  boxSizing: 'border-box',
+                                }}
+                              />
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  left: 2,
+                                  top: -16,
+                                  padding: '1px 4px',
+                                  borderRadius: 4,
+                                  background: 'rgba(8, 19, 33, 0.9)',
+                                  color: '#67e8f9',
+                                  fontSize: 9,
+                                  lineHeight: 1.1,
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {`W ${formatOverlayRatioLabel(widthRatio)} · H ${formatOverlayRatioLabel(heightRatio)}`}
+                              </div>
+                            </>
+                          ) : null}
                         </div>
                       )}
                     </React.Fragment>
