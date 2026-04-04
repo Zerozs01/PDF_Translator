@@ -36,6 +36,8 @@ export interface OCRTranslationCacheEntry {
   createdAt: number;
 }
 
+export const OCR_TRANSLATION_CACHE_VERSION = 'v4';
+
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
     .trim()
@@ -50,6 +52,7 @@ export const buildOCRTranslationCacheKey = (parts: OCRTranslationCacheKeyParts):
     .sort()
     .join('+') || 'eng';
   return [
+    `ver:${OCR_TRANSLATION_CACHE_VERSION}`,
     `ocr:${normalizeKeyPart(parts.ocrEngine)}`,
     `ocrLang:${normalizedOcrLanguage}`,
     `src:${normalizeKeyPart(parts.sourceLanguage)}`,
@@ -58,6 +61,9 @@ export const buildOCRTranslationCacheKey = (parts: OCRTranslationCacheKeyParts):
     `translator:${normalizeKeyPart(parts.translatorEngine)}`,
   ].join('|');
 };
+
+export const hasCurrentOCRTranslationCacheVersion = (key: string): boolean =>
+  String(key || '').includes(`ver:${OCR_TRANSLATION_CACHE_VERSION}`);
 
 interface OCRTextLayerState {
   // OCR Options

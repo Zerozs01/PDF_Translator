@@ -29,6 +29,7 @@ import {
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { OCREngine, OCRPageResult, OCRQualityProfile } from '../../types';
 import {
+  hasCurrentOCRTranslationCacheVersion,
   OCR_ENGINES,
   OCRTranslationCacheEntry,
   SUPPORTED_LANGUAGES,
@@ -1216,7 +1217,25 @@ export const OCRTextLayerPanel: React.FC = () => {
       const docId = await ensureDocumentId().catch(() => null);
       if (!docId || canceled) return;
 
-      const rows = await dbService.getTranslationCachePage(docId, currentPage);
+      let cacheOwnerDocId = docId;
+      let rows = await dbService.getTranslationCachePage(docId, currentPage);
+
+      if ((!rows || rows.length === 0) && file?.name) {
+        const candidates = await dbService.findDocumentsByFilename(file.name);
+        const aliasCandidates = candidates
+          .filter((candidate) => candidate.id !== docId && (candidate.cache_pages ?? 0) > 0)
+          .slice(0, 8);
+
+        for (const candidate of aliasCandidates) {
+          if (canceled) return;
+          const aliasRows = await dbService.getTranslationCachePage(candidate.id, currentPage);
+          if (!aliasRows || aliasRows.length === 0) continue;
+          rows = aliasRows;
+          cacheOwnerDocId = candidate.id;
+          break;
+        }
+      }
+
       if (canceled || rows.length === 0) return;
 
       for (let i = rows.length - 1; i >= 0; i -= 1) {
@@ -1241,7 +1260,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
         if (existing && existing.createdAt >= normalizedEntry.createdAt) {
           persistedTranslationCacheRef.current.set(
-            `${docId}:${currentPage}:${normalizedEntry.key}`,
+            `${cacheOwnerDocId}:${currentPage}:${normalizedEntry.key}`,
             buildTranslationCacheSignature(existing)
           );
           continue;
@@ -1249,7 +1268,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
         setTranslationCacheEntry(currentPage, normalizedEntry.key, normalizedEntry);
         persistedTranslationCacheRef.current.set(
-          `${docId}:${currentPage}:${normalizedEntry.key}`,
+          `${cacheOwnerDocId}:${currentPage}:${normalizedEntry.key}`,
           buildTranslationCacheSignature(normalizedEntry)
         );
       }
@@ -1353,8 +1372,9 @@ export const OCRTextLayerPanel: React.FC = () => {
     : currentPageTranslationEntries[0];
 
   const matchesTranslationEntryContext = (entry: OCRTranslationCacheEntry): boolean => {
+    if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
     if (entry.ocrEngine !== selectedOcrEngine) return false;
-    if (entry.translatorEngine === 'ai' && entry.translationMode !== translationMode) return false;
+    if (entry.translationMode !== translationMode) return false;
     if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedContextSourceLanguage) return false;
     if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedContextTargetLanguage) return false;
 
@@ -1370,7 +1390,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     activeTranslationEntry
     && matchesTranslationEntryContext(activeTranslationEntry)
   );
-  const preferredEntryForCurrentModel = currentPageTranslationEntries.find(matchesTranslationEntryContext);
+  const preferredEntryForCurrentModel = currentPageTranslationEntries.find((entry) => matchesTranslationEntryContext(entry));
   const resolvedTranslationEntry = activeTranslationEntryMatchesContext
     ? activeTranslationEntry
     : preferredEntryForCurrentModel;
@@ -1403,10 +1423,11 @@ export const OCRTextLayerPanel: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!preferredEntryForCurrentModel) return;
-    if (activeTranslationKey === preferredEntryForCurrentModel.key) return;
+    const nextPreferred = preferredEntryForCurrentModel;
+    if (!nextPreferred) return;
+    if (activeTranslationKey === nextPreferred.key) return;
     if (activeTranslationEntryMatchesContext) return;
-    setActiveTranslationCacheKey(currentPage, preferredEntryForCurrentModel.key);
+    setActiveTranslationCacheKey(currentPage, nextPreferred.key);
   }, [
     activeTranslationEntryMatchesContext,
     activeTranslationKey,
@@ -1428,8 +1449,9 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (translationContextKeyRef.current === contextKey) return;
     translationContextKeyRef.current = contextKey;
 
-    if (preferredEntryForCurrentModel) {
-      setActiveTranslationCacheKey(currentPage, preferredEntryForCurrentModel.key);
+    const nextPreferred = preferredEntryForCurrentModel;
+    if (nextPreferred) {
+      setActiveTranslationCacheKey(currentPage, nextPreferred.key);
       setTranslationPreviewMode('translated');
       return;
     }

@@ -2,6 +2,19 @@
 
 This file tracks documentation changes inside `documents/` only.
 
+## 2026-04-04
+
+- Added a renderer-side translation overlay checkpoint to `OCR_OPTIMIZATION.md` covering the current split-mask/split-text architecture, translation cache hydration behavior, and effective profile fallback between `official` and `manga` style rendering.
+- Updated the canonical OCR/document baseline to match live code:
+  - `OCR_ALGORITHM_VERSION = 146`
+  - translation cache version is `v4`
+  - translation cache keys include translation mode and translator engine
+- Recorded the current known overlay issues instead of treating the latest renderer tuning as finished:
+  - document heading/body hierarchy is still not stable enough
+  - Thai upper/lower diacritics can still clip on fitted document text
+  - manga pages with multiple balloons on the same row can still produce inconsistent text sizing or partial mask coverage
+- Refreshed roadmap priorities so the next OCR/product work is anchored to the current document/manga overlay state instead of the older v96 baseline notes.
+
 ## 2026-03-29
 
 - Updated the canonical docs to match the current external OCR architecture:

@@ -44,7 +44,7 @@ describe('translationOverlayUtils typography', () => {
     expect(typography.fontSize).toBeLessThanOrEqual(16);
   });
 
-  test('harmonizes font size for neighboring lines in the same paragraph block', () => {
+  test('keeps document paragraph lines independently sized from their own boxes', () => {
     const typographyByIndex = computeOverlayTypographyMap([
       {
         index: 0,
@@ -87,7 +87,7 @@ describe('translationOverlayUtils typography', () => {
       },
     ]);
 
-    expect(typographyByIndex.get(1)?.fontSize).toBe(typographyByIndex.get(2)?.fontSize);
+    expect(typographyByIndex.get(1)?.fontSize).not.toBe(typographyByIndex.get(2)?.fontSize);
   });
 
   test('prefers the tighter union of word boxes over a loose line bbox', () => {
@@ -204,11 +204,11 @@ describe('translationOverlayUtils typography', () => {
       },
     ]);
 
-    expect(layoutMap.get(0)?.alignment).toBe('center');
-    expect(layoutMap.get(1)?.alignment).toBe('center');
+    expect(layoutMap.get(0)?.alignment).toBe('left');
+    expect(layoutMap.get(1)?.alignment).toBe('left');
   });
 
-  test('keeps official document lists left aligned but allows manga dialogue centering by profile', () => {
+  test('keeps official document lists left aligned while manga dialogue can still center', () => {
     const inputs = [
       {
         index: 0,
@@ -247,11 +247,158 @@ describe('translationOverlayUtils typography', () => {
     const officialLayout = computeOverlayLayoutMap(inputs, { profile: 'official' });
     const mangaLayout = computeOverlayLayoutMap(inputs, { profile: 'manga' });
 
-    expect(officialLayout.get(0)?.alignment).toBe('center');
-    expect(officialLayout.get(1)?.alignment).toBe('center');
+    expect(officialLayout.get(0)?.alignment).toBe('left');
+    expect(officialLayout.get(1)?.alignment).toBe('left');
     expect(mangaLayout.get(0)?.alignment).toBe('center');
     expect(mangaLayout.get(1)?.alignment).toBe('center');
     expect(mangaLayout.get(0)?.sharedBoxLeftX).toBeUndefined();
+  });
+
+  test('treats lowercase document-like source lines as official even under manga profile', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เงื่อนไขสำหรับสมดุลของวัตถุแข็ง',
+        width: 420,
+        height: 30,
+        bbox: { x0: 120, y0: 260, x1: 540, y1: 290 },
+        line: {
+          text: 'Conditions for Rigid-Body Equilibrium',
+          confidence: 95,
+          bbox: { x0: 118, y0: 260, x1: 542, y1: 290 },
+          words: [
+            { text: 'Conditions', confidence: 95, bbox: { x0: 120, y0: 260, x1: 220, y1: 290 } },
+            { text: 'for', confidence: 95, bbox: { x0: 228, y0: 260, x1: 256, y1: 290 } },
+          ],
+        },
+        hints: {
+          sourceText: 'Conditions for Rigid-Body Equilibrium',
+          sourceBoxWidth: 422,
+          sourceBoxHeight: 30,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+      {
+        index: 1,
+        text: 'ในส่วนนี้เราจะพัฒนาทั้งเงื่อนไขที่จำเป็นและเงื่อนไขที่เพียงพอ',
+        width: 430,
+        height: 24,
+        bbox: { x0: 120, y0: 298, x1: 550, y1: 322 },
+        line: {
+          text: 'In this section, we will develop both the necessary and sufficient conditions',
+          confidence: 95,
+          bbox: { x0: 118, y0: 298, x1: 552, y1: 322 },
+          words: [
+            { text: 'In', confidence: 95, bbox: { x0: 120, y0: 298, x1: 138, y1: 322 } },
+            { text: 'this', confidence: 95, bbox: { x0: 146, y0: 298, x1: 178, y1: 322 } },
+          ],
+        },
+        hints: {
+          sourceText: 'In this section, we will develop both the necessary and sufficient conditions',
+          sourceBoxWidth: 434,
+          sourceBoxHeight: 24,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.alignment).toBe('left');
+    expect(layoutMap.get(1)?.alignment).toBe('left');
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('merges centered manga dialogue blocks into a single rendered overlay', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'นั่น',
+        width: 120,
+        height: 22,
+        bbox: { x0: 180, y0: 100, x1: 300, y1: 122 },
+        line: {
+          text: "THAT'S",
+          confidence: 96,
+          bbox: { x0: 170, y0: 100, x1: 310, y1: 122 },
+          words: [{ text: "THAT'S", confidence: 96, bbox: { x0: 180, y0: 100, x1: 300, y1: 122 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+      {
+        index: 1,
+        text: 'เป็นไปได้แน่นอน....',
+        width: 180,
+        height: 22,
+        bbox: { x0: 150, y0: 128, x1: 330, y1: 150 },
+        line: {
+          text: 'DEFINITELY A POSSIBILITY...',
+          confidence: 96,
+          bbox: { x0: 140, y0: 128, x1: 340, y1: 150 },
+          words: [{ text: 'DEFINITELY', confidence: 96, bbox: { x0: 150, y0: 128, x1: 242, y1: 150 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+      {
+        index: 2,
+        text: 'คิดว่าไง ริฟรีด',
+        width: 180,
+        height: 22,
+        bbox: { x0: 168, y0: 156, x1: 348, y1: 178 },
+        line: {
+          text: 'WHAT DO YOU THINK, URIGFRIED?',
+          confidence: 96,
+          bbox: { x0: 156, y0: 156, x1: 360, y1: 178 },
+          words: [{ text: 'WHAT', confidence: 96, bbox: { x0: 168, y0: 156, x1: 208, y1: 178 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(false);
+    expect(layoutMap.get(0)?.renderText).toBe('นั่น เป็นไปได้แน่นอน.... คิดว่าไง ริฟรีด');
+    expect(layoutMap.get(1)?.hidden).toBe(true);
+    expect(layoutMap.get(2)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.mergedBBox).toEqual({ x0: 150, y0: 100, x1: 348, y1: 178 });
+  });
+
+  test('merges short centered manga lines even with larger vertical gaps', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'หรือคุณต้องการ',
+        width: 150,
+        height: 18,
+        bbox: { x0: 160, y0: 100, x1: 310, y1: 118 },
+        line: {
+          text: 'OR DO YOU',
+          confidence: 95,
+          bbox: { x0: 150, y0: 100, x1: 320, y1: 118 },
+          words: [{ text: 'OR', confidence: 95, bbox: { x0: 178, y0: 100, x1: 198, y1: 118 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+      {
+        index: 1,
+        text: 'ให้สาระสำคัญนี้ เป็นสิ่งเดียวที่เรา เอาออกไปจากที่นี่',
+        width: 220,
+        height: 40,
+        bbox: { x0: 136, y0: 132, x1: 356, y1: 172 },
+        line: {
+          text: 'WANT THIS ESSENCE TO BE THE ONE THING WE TAKE OUT OF HERE?',
+          confidence: 95,
+          bbox: { x0: 126, y0: 132, x1: 366, y1: 172 },
+          words: [{ text: 'WANT', confidence: 95, bbox: { x0: 150, y0: 132, x1: 198, y1: 152 } }],
+        },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(false);
+    expect(layoutMap.get(1)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.renderText).toContain('หรือคุณต้องการ');
+    expect(layoutMap.get(0)?.renderText).toContain('ให้สาระสำคัญนี้');
   });
 
   test('keeps paragraph-like stacked lines left aligned when they share a left edge', () => {

@@ -2,7 +2,7 @@
 
 This file tracks the OCR plan against the current code, not against older experimental docs.
 
-## Current Baseline (2026-03-31)
+## Current Baseline (2026-04-04)
 
 - Primary OCR logic lives in `src/services/vision/worker.ts`
 - Worker entry is `worker-boot.ts`, with `worker-stable.ts` only as fallback
@@ -13,6 +13,73 @@ This file tracks the OCR plan against the current code, not against older experi
   - export pipeline: `export`
   - UI OCR engines: `tesseract`, `paddleocr`, `easyocr`
   - OCR quality baseline: `best`
+
+## 2026-04-04 Translation Overlay Checkpoint
+
+This checkpoint captures the current renderer-side translation overlay state after the recent document / manga tuning passes.
+
+### Current behavior now in code
+
+- Translation cache keys are versioned (`v4`) and include:
+  - OCR engine
+  - OCR language
+  - source / target language
+  - translation mode (`manga`, `manhwa`, `official`)
+  - translator engine (`offline`, `ai`)
+- Translation cache hydration now has document-alias fallback similar to OCR cache hydration, so reopening a file can recover translation cache rows from a compatible document alias.
+- Overlay rendering now separates:
+  - `maskRect`: the background layer used to cover original OCR text
+  - `textRect`: the translated text placement layer
+- `maskRect` and `textRect` are no longer forced to use the same geometry.
+- Manga / manhwa merged bubble rendering now keeps per-line mask coverage while allowing one merged translated text block above it.
+- Overlay source geometry now distinguishes:
+  - tighter word-union text geometry for translated text sizing
+  - broader line-aware mask geometry for hiding original text
+- Effective overlay profile is no longer driven only by the UI mode:
+  - document-like OCR source blocks can auto-fallback to `official` overlay rules even if the active translation mode is still `manga`
+
+### What is working better than before
+
+- Ordinary manga and long-page manga overlays now usually land much closer to the original source scale than the earlier tiny-text passes.
+- Document pages no longer blow up as aggressively as the earlier over-expanded heading/body regressions.
+- Offline Argos translation coverage is better than the earlier partial-translation state where many uppercase lines were incorrectly skipped.
+- Reopened files are less likely to lose translation cache purely because the file resolved to a sibling document alias.
+
+### Known issues at this checkpoint
+
+- Thai diacritics and lower descenders can still clip on some document lines when the fitted font is close to the OCR box height limit.
+- Document heading hierarchy is still imperfect:
+  - some headings that should stay clearly larger than body text collapse too close to the paragraph size
+  - some document blocks still depend too heavily on OCR line height quality from `PaddleOCR`
+- Manga bubbles with several balloons aligned on the same row can still size inconsistently or feel unstable from balloon to balloon.
+- Some merged manga bubble masks still need per-balloon tuning:
+  - certain headers or upper lines may not fully cover the original text
+  - some bubbles can still leave small background artifacts near the border
+- Translation cache persistence should now save and hydrate correctly in the normal flow, but reopen behavior still needs more real-user verification before declaring it fully stable.
+
+### Immediate next renderer priorities
+
+- preserve heading-vs-body size hierarchy on document pages without reintroducing oversized paragraph regressions
+- improve Thai ascender / descender safety for document text without inflating mask size too much
+- stabilize font sizing for manga pages that have multiple balloons or multi-block dialogue on the same row
+- keep mask coverage complete on merged manga bubbles while avoiding oversized white rectangles
+
+### 2026-04-04 Working checkpoint before the next tuning pass
+
+The current practical checkpoint is:
+
+- ordinary document pages are much closer to the original OCR source scale than the earlier oversized regression
+- ordinary manga and long-page manga are also much closer to the original source size than the earlier tiny-text state
+- however the renderer is not yet "locked"
+
+The main issues still open right now are:
+
+- document headings can still collapse too close to body text or fail to preserve the original visual hierarchy
+- Thai diacritics and descenders can still clip on fitted document text
+- some manga pages with several balloons on the same row still produce unstable sizing from balloon to balloon
+- merged manga bubble masks can still miss parts of the original line or leave visible white artifacts at the edge
+
+This section exists as a revert/checkpoint marker before the next renderer iteration so future passes can compare against the current "mostly usable but not yet stable" behavior instead of against older tiny-text or oversized-text regressions.
 
 ## v146 External Panel Cleanup And Residual Guard
 

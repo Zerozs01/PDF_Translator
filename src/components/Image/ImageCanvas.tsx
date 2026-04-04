@@ -9,6 +9,7 @@ import {
   DEFAULT_OVERLAY_PALETTE,
   estimateLineRotationDeg,
   normalizeOverlayInlineText,
+  resolveOverlayMaskBBox,
   resolveOverlayMaskExpansion,
   type OverlayLayout,
   type OverlayLayoutProfile,
@@ -246,12 +247,14 @@ export const ImageCanvas: React.FC = () => {
           x1: imageDisplaySize.width,
           y1: imageDisplaySize.height,
         });
+        const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
+        const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
 
         return [{
           index,
           text: translatedText,
-          width: rect.width,
-          height: rect.height,
+          width: typographyWidth,
+          height: typographyHeight,
           bbox: sourceBbox,
           line,
           hints: {
@@ -259,6 +262,7 @@ export const ImageCanvas: React.FC = () => {
             sourceBoxWidth: Math.max(1, sourceBbox.x1 - sourceBbox.x0),
             sourceBoxHeight: Math.max(1, sourceBbox.y1 - sourceBbox.y0),
             fontFamily: overlayFontFamily,
+            profile: overlayLayoutProfile,
           },
         }];
       }),
@@ -312,39 +316,60 @@ export const ImageCanvas: React.FC = () => {
                   if (!translatedText) return null;
 
                   const layout = overlayLayoutByIndex.get(idx);
-                  const sourceBbox = resolveOverlaySourceBBox(line);
+                  const isMaskOnlyLine = Boolean(layout?.hidden);
+                  const renderText = layout?.renderText || translatedText;
+                  const maskBbox = resolveOverlayMaskBBox(line);
+                  const sourceBbox = isMaskOnlyLine
+                    ? resolveOverlaySourceBBox(line)
+                    : (layout?.mergedBBox || resolveOverlaySourceBBox(line));
+                  const maskRenderSourceLeft = maskBbox.x0;
                   const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
                     ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
                     : sourceBbox.x0;
+                  const maskBaseWidth = Math.max(1, (maskBbox.x1 - maskRenderSourceLeft) * ocrScaleX);
+                  const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * ocrScaleY);
                   const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * ocrScaleX);
                   const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrScaleY);
-                  const hasThaiText = /[\u0E00-\u0E7F]/.test(translatedText);
+                  const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
                   const expansion = resolveOverlayMaskExpansion(line);
-                  const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
+                  const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)));
                   const maskExpandLeft = Math.min(1, maskExpandX);
                   const maskExpandRight = maskExpandX;
-                  const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
-                  const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(baseHeight * 0.08))) : 0;
+                  const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)));
+                  const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
                   const maskExpandBottom = Math.min(
                     expansion.maxExpandBottom + thaiBottomBoost,
-                    Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)) + thaiBottomBoost
+                    Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost
                   );
-                  const rawLeft = renderSourceLeft * ocrScaleX - maskExpandLeft;
-                  const rawTop = sourceBbox.y0 * ocrScaleY - maskExpandTop;
-                  const rawWidth = baseWidth + maskExpandLeft + maskExpandRight;
-                  const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
-                  const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
+                  const rawMaskLeft = maskRenderSourceLeft * ocrScaleX - maskExpandLeft;
+                  const rawMaskTop = maskBbox.y0 * ocrScaleY - maskExpandTop;
+                  const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
+                  const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
+                  const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
+                    x0: 0,
+                    y0: 0,
+                    x1: imageDisplaySize.width,
+                    y1: imageDisplaySize.height,
+                  });
+                  const rawTextLeft = renderSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
+                  const rawTextTop = sourceBbox.y0 * ocrScaleY - maskExpandTop;
+                  const rawTextWidth = baseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
+                  const rawTextHeight = baseHeight + maskExpandTop + maskExpandBottom;
+                  const textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
                     x0: 0,
                     y0: 0,
                     x1: imageDisplaySize.width,
                     y1: imageDisplaySize.height,
                   });
                   const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
-                  const typography = layout?.typography || computeOverlayTypography(translatedText, rect.width, rect.height, {
+                  const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : textRect.width;
+                  const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : textRect.height;
+                  const typography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
                     sourceText: line.text,
                     sourceBoxWidth: Math.max(1, sourceBbox.x1 - sourceBbox.x0),
                     sourceBoxHeight: Math.max(1, sourceBbox.y1 - sourceBbox.y0),
                     fontFamily: overlayFontFamily,
+                    profile: overlayLayoutProfile,
                   });
                   const extraTopPad = hasThaiText ? Math.max(2, Math.round(typography.fontSize * 0.11)) : 0;
                   const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
@@ -352,80 +377,100 @@ export const ImageCanvas: React.FC = () => {
                     ? Math.max(0, (layout.sharedTextStartX - renderSourceLeft) * ocrScaleX)
                     : 0;
                   const centerOffset = layout?.sharedCenterX !== undefined
-                    ? ((layout.sharedCenterX - renderSourceLeft) * ocrScaleX) - (rect.width * 0.5)
+                    ? ((layout.sharedCenterX - renderSourceLeft) * ocrScaleX) - (textRect.width * 0.5)
                     : 0;
                   const innerLeft = layout?.alignment === 'center'
-                    ? Math.max(0, Math.min(rect.width * 0.12, centerOffset))
-                    : Math.max(0, Math.min(rect.width - 1, maskExpandLeft + textStartOffset));
+                    ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+                    : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
                   const innerWidth = layout?.alignment === 'center'
-                    ? rect.width
-                    : Math.max(1, rect.width - innerLeft);
+                    ? textRect.width
+                    : Math.max(1, textRect.width - innerLeft);
                   const overlayText = typography.forceSingleLine
-                    ? normalizeOverlayInlineText(translatedText)
-                    : translatedText;
+                    ? normalizeOverlayInlineText(renderText)
+                    : renderText;
                   const rotationDeg = estimateLineRotationDeg(line);
                   const minFillRatio = typography.estimatedLines > 1 ? 0.74 : 0.5;
                   const paintHeight = Math.min(
-                    rect.height,
+                    textRect.height,
                     Math.max(
                       typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
-                      rect.height * minFillRatio
+                      textRect.height * minFillRatio
                     )
                   );
                   const paintOffsetTop = Math.max(
                     hasThaiText ? 1 : 0,
-                    Math.min(rect.height - paintHeight, Math.round(rect.height * 0.08))
+                    Math.min(textRect.height - paintHeight, Math.round(textRect.height * 0.08))
                   );
 
                   return (
-                    <div
-                      key={`ocr-translation-line-${idx}`}
-                      style={{
-                        left: rect.left,
-                        top: rect.top,
-                        width: rect.width,
-                        maxWidth: rect.width,
-                        minWidth: rect.width,
-                        height: rect.height,
-                        maxHeight: rect.height,
-                        minHeight: rect.height,
-                        backgroundColor: palette.backgroundColor,
-                        overflow: 'hidden',
-                        zIndex: Math.max(1, 100000 - Math.round(rect.top)),
-                        transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
-                        transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
-                      }}
-                      className="absolute"
-                    >
+                    <React.Fragment key={`ocr-translation-line-${idx}`}>
                       <div
                         style={{
-                          position: 'absolute',
-                          left: innerLeft,
-                          top: paintOffsetTop,
-                          width: innerWidth,
-                          maxWidth: innerWidth,
-                          minWidth: innerWidth,
-                          height: paintHeight,
-                          maxHeight: paintHeight,
-                          minHeight: paintHeight,
-                          padding: `${typography.padY + extraTopPad}px ${typography.padX}px ${typography.padY + extraBottomPad}px ${typography.padX}px`,
-                          boxSizing: 'border-box',
-                          display: 'flex',
-                          alignItems: 'flex-start',
-                          color: palette.textColor,
-                          fontSize: typography.fontSize,
-                          lineHeight: typography.lineHeight,
-                          fontFamily: overlayFontFamily,
-                          textAlign: layout?.alignment === 'center' ? 'center' : 'left',
-                          whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
-                          wordBreak: 'normal',
-                          overflowWrap: typography.forceSingleLine ? 'normal' : 'break-word',
+                          left: maskRect.left,
+                          top: maskRect.top,
+                          width: maskRect.width,
+                          maxWidth: maskRect.width,
+                          minWidth: maskRect.width,
+                          height: maskRect.height,
+                          maxHeight: maskRect.height,
+                          minHeight: maskRect.height,
+                          backgroundColor: palette.backgroundColor,
                           overflow: 'hidden',
+                          zIndex: Math.max(1, Math.round(maskRect.top)),
+                          transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
+                          transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
                         }}
-                      >
-                        {overlayText}
-                      </div>
-                    </div>
+                        className="absolute"
+                      />
+                      {isMaskOnlyLine ? null : (
+                        <div
+                          style={{
+                            left: textRect.left,
+                            top: textRect.top,
+                            width: textRect.width,
+                            maxWidth: textRect.width,
+                            minWidth: textRect.width,
+                            height: textRect.height,
+                            maxHeight: textRect.height,
+                            minHeight: textRect.height,
+                            overflow: 'hidden',
+                            zIndex: 1000 + Math.max(1, Math.round(textRect.top)),
+                            transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
+                            transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
+                          }}
+                          className="absolute"
+                        >
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: innerLeft,
+                              top: paintOffsetTop,
+                              width: innerWidth,
+                              maxWidth: innerWidth,
+                              minWidth: innerWidth,
+                              height: paintHeight,
+                              maxHeight: paintHeight,
+                              minHeight: paintHeight,
+                              padding: `${typography.padY + extraTopPad}px ${typography.padX}px ${typography.padY + extraBottomPad}px ${typography.padX}px`,
+                              boxSizing: 'border-box',
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              color: palette.textColor,
+                              fontSize: typography.fontSize,
+                              lineHeight: typography.lineHeight,
+                              fontFamily: overlayFontFamily,
+                              textAlign: layout?.alignment === 'center' ? 'center' : 'left',
+                              whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                              wordBreak: 'normal',
+                              overflowWrap: typography.forceSingleLine ? 'normal' : 'break-word',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            {overlayText}
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </div>

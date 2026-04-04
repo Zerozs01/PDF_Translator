@@ -5,13 +5,18 @@ This roadmap is intentionally short. It reflects the current code path and prior
 ## Current Baseline
 
 - Canonical docs now live in `documents/`
-- OCR algorithm version: `96`
+- OCR algorithm version: `146`
 - Current OCR runtime:
   - single Tesseract worker plus external OCR bridges
   - OCR engines: `tesseract`, `paddleocr`, `easyocr`
   - `panel` and `export` pipeline profiles
   - UI defaults to the best-quality OCR path for each engine
 - Main blocker for confident Korean work: no dedicated Korean fixtures
+- Translation overlay/cache baseline:
+  - translation cache version `v4`
+  - translation cache keys include translation mode and translator engine
+  - renderer overlay now separates `maskRect` from `textRect`
+  - document-like OCR blocks can auto-fallback to `official` sizing rules even while the UI profile stays on `manga`
 
 ## P0. Documentation And Baseline Lock
 
@@ -182,6 +187,15 @@ Status: later
 - stronger manual OCR correction flow
 - better translation/editor workflow
 - any detector-first or editor-heavy work only after OCR baseline is trustworthy
+
+## Immediate Overlay Follow-up
+
+Status: active
+
+- preserve heading-vs-body size hierarchy on document pages without reintroducing oversized paragraph regressions
+- improve Thai ascender / descender safety for document text without inflating mask size too far beyond the OCR source box
+- stabilize font sizing for manga pages that contain several balloons or dialogue blocks on the same row
+- keep merged manga bubble masks large enough to fully hide original text while preventing oversized white rectangles near the bubble edge
 
 ## Not On The Immediate Critical Path
 

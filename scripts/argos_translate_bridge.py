@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import traceback
+from pathlib import Path
 from typing import Any, Dict, List
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -58,6 +60,43 @@ def load_payload() -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Payload must be a JSON object")
     return data
+
+
+def configure_runtime_dirs() -> None:
+    local_app_data = os.getenv("LOCALAPPDATA")
+
+    def ensure_writable_dir(candidates: List[Path]) -> Path:
+        last_error: Exception | None = None
+        for candidate in candidates:
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate
+            except Exception as exc:
+                last_error = exc
+                continue
+        if last_error:
+            raise last_error
+        raise RuntimeError("No writable Argos runtime directory candidates were available")
+
+    if not os.getenv("XDG_CONFIG_HOME"):
+        config_candidates = [
+            Path.cwd() / ".argos-runtime" / "config",
+            Path.home() / ".local" / "state" / "pdf-translator" / "argos-config",
+        ]
+        if local_app_data:
+            config_candidates.insert(0, Path(local_app_data) / "PDF_Translator" / "argos-config")
+        config_root = ensure_writable_dir(config_candidates)
+        os.environ["XDG_CONFIG_HOME"] = str(config_root)
+
+    if not os.getenv("XDG_CACHE_HOME"):
+        cache_candidates = [
+            Path.cwd() / ".argos-runtime" / "cache",
+            Path.home() / ".local" / "cache" / "pdf-translator" / "argos-cache",
+        ]
+        if local_app_data:
+            cache_candidates.insert(0, Path(local_app_data) / "PDF_Translator" / "argos-cache")
+        cache_root = ensure_writable_dir(cache_candidates)
+        os.environ["XDG_CACHE_HOME"] = str(cache_root)
 
 
 def reset_argos_caches(argos_translate_module: Any) -> None:
@@ -129,15 +168,20 @@ def translate_texts(
 def main() -> None:
     # Avoid forcing Stanza downloads at runtime. Allow explicit override if user sets this env var.
     os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
+    configure_runtime_dirs()
 
     try:
         import argostranslate.translate as argos_translate
-    except Exception as exc:
+    except ModuleNotFoundError as exc:
         print(
             "Argos Translate Python package is not available. "
             "Install it in the active Python environment: python -m pip install argostranslate",
             file=sys.stderr,
         )
+        raise SystemExit(3) from exc
+    except Exception as exc:
+        print(f"Failed to initialize Argos Translate runtime: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         raise SystemExit(3) from exc
 
     payload = load_payload()

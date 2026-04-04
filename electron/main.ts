@@ -182,10 +182,60 @@ app.whenReady().then(() => {
     return ARGOS_LANG_ALIASES[raw] || raw.split('-')[0] || fallback;
   };
 
-  const resolvePythonExecutable = (): string => {
-    if (isValidString(process.env.PDF_TRANSLATOR_PYTHON)) {
-      return process.env.PDF_TRANSLATOR_PYTHON;
+  const normalizePythonOverride = (value: string | undefined): string | null => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return null;
+    if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
+      const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
+      return fs.existsSync(resolved) ? resolved : null;
     }
+    return trimmed;
+  };
+
+  const findLocalPythonExecutable = (roots: Array<string | null | undefined>): string | null => {
+    const pythonRelativePath = process.platform === 'win32'
+      ? ['Scripts', 'python.exe']
+      : ['bin', 'python'];
+    const seen = new Set<string>();
+
+    for (const root of roots) {
+      if (!root) continue;
+      const resolvedRoot = path.resolve(root);
+      if (seen.has(resolvedRoot)) continue;
+      seen.add(resolvedRoot);
+
+      for (const venvDir of ['.venv-ocr', '.venv']) {
+        const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const resolvePythonExecutable = (): string => {
+    const argosOverride = normalizePythonOverride(process.env.ARGOS_PYTHON_PATH);
+    if (argosOverride) return argosOverride;
+
+    const appOverride = normalizePythonOverride(process.env.PDF_TRANSLATOR_PYTHON);
+    if (appOverride) return appOverride;
+
+    const sharedOverride = normalizePythonOverride(process.env.OCR_PYTHON_PATH);
+    if (sharedOverride) return sharedOverride;
+
+    const localVenvPython = findLocalPythonExecutable([
+      process.cwd(),
+      app.getAppPath(),
+      path.resolve(app.getAppPath(), '..'),
+      path.resolve(__dirname, '..'),
+      path.dirname(process.execPath),
+      process.resourcesPath,
+      process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
+    ]);
+    if (localVenvPython) return localVenvPython;
+
     const virtualEnv = process.env.VIRTUAL_ENV;
     if (virtualEnv) {
       const windowsPython = path.join(virtualEnv, 'Scripts', 'python.exe');
@@ -207,6 +257,40 @@ app.whenReady().then(() => {
       throw new Error('Argos bridge script not found. Expected scripts/argos_translate_bridge.py');
     }
     return found;
+  };
+
+  const resolveArgosBridgeEnv = (): NodeJS.ProcessEnv => {
+    const userDataRoot = path.join(app.getPath('userData'), 'argos-runtime');
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(userDataRoot, 'config');
+    const cacheHome = process.env.XDG_CACHE_HOME || path.join(userDataRoot, 'cache');
+    fs.mkdirSync(configHome, { recursive: true });
+    fs.mkdirSync(cacheHome, { recursive: true });
+
+    const packageDirCandidates = [
+      process.env.ARGOS_PACKAGES_DIR,
+      process.env.ARGOS_TRANSLATE_PACKAGE_DIR,
+      path.join(app.getPath('home'), '.local', 'share', 'argos-translate', 'packages'),
+      path.join(userDataRoot, 'packages'),
+    ].filter((candidate): candidate is string => Boolean(candidate));
+
+    const packageDir = packageDirCandidates.find((candidate) => {
+      try {
+        return fs.existsSync(candidate);
+      } catch {
+        return false;
+      }
+    });
+
+    return {
+      ...process.env,
+      PYTHONUTF8: '1',
+      XDG_CONFIG_HOME: configHome,
+      XDG_CACHE_HOME: cacheHome,
+      ...(packageDir ? {
+        ARGOS_PACKAGES_DIR: packageDir,
+        ARGOS_TRANSLATE_PACKAGE_DIR: packageDir,
+      } : {}),
+    };
   };
 
   const runArgosTranslateBatch = async (
@@ -240,8 +324,7 @@ app.whenReady().then(() => {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
-          ...process.env,
-          PYTHONUTF8: '1',
+          ...resolveArgosBridgeEnv(),
           // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
           ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
         },
