@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { initDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
@@ -21,6 +21,7 @@ process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public')
 
 let win: BrowserWindow | null
+let disposeArgosTranslateRuntime: (() => void) | null = null
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
@@ -78,6 +79,7 @@ function createWindow() {
 
 app.on('window-all-closed', () => {
   disposeExternalOcrDaemons()
+  disposeArgosTranslateRuntime?.()
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -91,6 +93,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   disposeExternalOcrDaemons()
+  disposeArgosTranslateRuntime?.()
 })
 
 app.whenReady().then(() => {
@@ -293,6 +296,190 @@ app.whenReady().then(() => {
     };
   };
 
+  interface ArgosBridgeResponse {
+    ok?: boolean;
+    id?: string;
+    translations?: unknown;
+    reason?: string;
+    warning?: string;
+    fallbackReason?: string;
+  }
+
+  interface ArgosPendingRequest {
+    resolve: (response: ArgosBridgeResponse) => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }
+
+  interface ArgosBridgeDaemon {
+    child: ReturnType<typeof spawn>;
+    stdoutBuffer: string;
+    pending: Map<string, ArgosPendingRequest>;
+    pythonExecutable: string;
+    bridgePath: string;
+    bridgeSignature: string;
+  }
+
+  const argosBridgeScriptSignature = (bridgePath: string): string => {
+    try {
+      const stat = fs.statSync(bridgePath);
+      return `${bridgePath}:${Math.floor(stat.mtimeMs)}`;
+    } catch {
+      return `${bridgePath}:unknown`;
+    }
+  };
+
+  let argosBridgeDaemon: ArgosBridgeDaemon | null = null;
+
+  const teardownArgosDaemon = (reason?: Error): void => {
+    const daemon = argosBridgeDaemon;
+    if (!daemon) return;
+    argosBridgeDaemon = null;
+    for (const [, pending] of daemon.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(reason ?? new Error('Argos translation daemon stopped unexpectedly'));
+    }
+    daemon.pending.clear();
+    if (!daemon.child.killed) {
+      daemon.child.kill();
+    }
+  };
+
+  disposeArgosTranslateRuntime = () => {
+    teardownArgosDaemon(new Error('Argos translation runtime disposed'));
+  };
+
+  const handleArgosDaemonStdout = (chunk: Buffer): void => {
+    const daemon = argosBridgeDaemon;
+    if (!daemon) return;
+
+    daemon.stdoutBuffer += chunk.toString();
+    const lines = daemon.stdoutBuffer.split(/\r?\n/);
+    daemon.stdoutBuffer = lines.pop() ?? '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      let payload: ArgosBridgeResponse;
+      try {
+        payload = JSON.parse(line) as ArgosBridgeResponse;
+      } catch {
+        console.warn(`[argosBridge] Ignoring non-JSON stdout: ${line}`);
+        continue;
+      }
+
+      if (!payload.id) {
+        console.warn('[argosBridge] Ignoring daemon response without request id');
+        continue;
+      }
+
+      const pending = daemon.pending.get(payload.id);
+      if (!pending) {
+        console.warn(`[argosBridge] Received orphaned daemon response ${payload.id}`);
+        continue;
+      }
+
+      daemon.pending.delete(payload.id);
+      clearTimeout(pending.timeout);
+      if (payload.ok === false) {
+        pending.reject(new Error(payload.reason || 'Argos translation bridge failed'));
+        continue;
+      }
+      pending.resolve(payload);
+    }
+  };
+
+  const ensureArgosDaemon = (): ArgosBridgeDaemon => {
+    const pythonExecutable = resolvePythonExecutable();
+    const bridgePath = resolveArgosBridgePath();
+    const bridgeSignature = argosBridgeScriptSignature(bridgePath);
+    const env = {
+      ...resolveArgosBridgeEnv(),
+      // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
+      ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
+    };
+
+    if (
+      argosBridgeDaemon
+      && !argosBridgeDaemon.child.killed
+      && argosBridgeDaemon.pythonExecutable === pythonExecutable
+      && argosBridgeDaemon.bridgePath === bridgePath
+      && argosBridgeDaemon.bridgeSignature === bridgeSignature
+    ) {
+      return argosBridgeDaemon;
+    }
+
+    if (argosBridgeDaemon) {
+      teardownArgosDaemon(new Error('Argos bridge runtime changed; restarting daemon'));
+    }
+
+    const child = spawn(pythonExecutable, [bridgePath, '--stdio-server'], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+
+    const daemon: ArgosBridgeDaemon = {
+      child,
+      stdoutBuffer: '',
+      pending: new Map(),
+      pythonExecutable,
+      bridgePath,
+      bridgeSignature,
+    };
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      handleArgosDaemonStdout(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      const message = chunk.toString().trim();
+      if (message) {
+        console.warn(`[argosBridge] ${message}`);
+      }
+    });
+    child.on('error', (error) => {
+      teardownArgosDaemon(error);
+    });
+    child.on('close', (code, signal) => {
+      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
+    });
+
+    argosBridgeDaemon = daemon;
+    return daemon;
+  };
+
+  const requestArgosDaemon = async (
+    payload: Record<string, unknown>,
+    requestTimeoutMs: number
+  ): Promise<ArgosBridgeResponse> => {
+    const daemon = ensureArgosDaemon();
+    const id = randomUUID();
+
+    return await new Promise<ArgosBridgeResponse>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        daemon.pending.delete(id);
+        teardownArgosDaemon(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
+        reject(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
+      }, requestTimeoutMs);
+
+      daemon.pending.set(id, { resolve, reject, timeout });
+
+      try {
+        const stdin = daemon.child.stdin;
+        if (!stdin) {
+          throw new Error('Argos daemon stdin is unavailable');
+        }
+        stdin.write(`${JSON.stringify({ id, ...payload })}\n`);
+      } catch (error) {
+        daemon.pending.delete(id);
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error(String(error)));
+        teardownArgosDaemon(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
   const runArgosTranslateBatch = async (
     texts: string[],
     context?: TranslationContext
@@ -309,8 +496,6 @@ app.whenReady().then(() => {
       return texts.map((text) => String(text || ''));
     }
 
-    const pythonExecutable = resolvePythonExecutable();
-    const bridgePath = resolveArgosBridgePath();
     const payload = {
       texts: texts.map((text) => String(text || '')),
       sourceLanguage,
@@ -319,65 +504,47 @@ app.whenReady().then(() => {
       sourceType: String(context?.sourceType || 'text'),
     };
 
-    return new Promise<string[]>((resolve, reject) => {
-      const child = spawn(pythonExecutable, [bridgePath], {
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...resolveArgosBridgeEnv(),
-          // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
-          ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
-        },
-      });
+    const dedupedTexts: string[] = [];
+    const dedupeIndexByText = new Map<string, number>();
+    const textOrder: number[] = [];
+    for (const text of payload.texts) {
+      const key = String(text);
+      const existing = dedupeIndexByText.get(key);
+      if (existing !== undefined) {
+        textOrder.push(existing);
+        continue;
+      }
+      const nextIndex = dedupedTexts.length;
+      dedupeIndexByText.set(key, nextIndex);
+      dedupedTexts.push(key);
+      textOrder.push(nextIndex);
+    }
 
-      let stdout = '';
-      let stderr = '';
+    const dedupedPayload = {
+      ...payload,
+      texts: dedupedTexts,
+    };
 
-      const timeout = setTimeout(() => {
-        child.kill();
-        reject(new Error(`Argos translation timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+    let response: ArgosBridgeResponse;
+    try {
+      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
+    } catch (error) {
+      teardownArgosDaemon(
+        error instanceof Error ? error : new Error(String(error))
+      );
+      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
+    }
 
-      child.stdout.on('data', (chunk) => {
-        stdout += chunk.toString();
-      });
+    if (!Array.isArray(response.translations)) {
+      throw new Error('Argos translation bridge returned invalid payload');
+    }
 
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
-      });
+    const dedupedTranslations = response.translations.map((item) => String(item ?? ''));
+    if (dedupedTranslations.length !== dedupedTexts.length) {
+      throw new Error(`Argos translation count mismatch: expected ${dedupedTexts.length}, got ${dedupedTranslations.length}`);
+    }
 
-      child.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(new Error(`Failed to launch Python for Argos translation: ${error.message}`));
-      });
-
-      child.on('close', (code) => {
-        clearTimeout(timeout);
-        if (code !== 0) {
-          reject(new Error(`Argos translation bridge failed (${code}): ${(stderr || stdout).trim() || 'Unknown error'}`));
-          return;
-        }
-
-        try {
-          const parsed = JSON.parse(stdout || '{}') as { translations?: unknown };
-          if (!Array.isArray(parsed.translations)) {
-            reject(new Error('Argos translation bridge returned invalid payload'));
-            return;
-          }
-          const translations = parsed.translations.map((item) => String(item ?? ''));
-          if (translations.length !== texts.length) {
-            reject(new Error(`Argos translation count mismatch: expected ${texts.length}, got ${translations.length}`));
-            return;
-          }
-          resolve(translations);
-        } catch (error) {
-          reject(new Error(`Failed to parse Argos translation payload: ${error instanceof Error ? error.message : String(error)}`));
-        }
-      });
-
-      child.stdin.write(JSON.stringify(payload));
-      child.stdin.end();
-    });
+    return textOrder.map((index) => dedupedTranslations[index] ?? '');
   };
 
   // ============================================

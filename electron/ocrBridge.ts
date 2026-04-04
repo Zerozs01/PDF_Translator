@@ -52,6 +52,7 @@ interface ExternalOcrBridgeResponse {
 
 const EXTERNAL_ENGINES: ExternalBridgeEngine[] = ['paddleocr', 'easyocr'];
 const bridgeDaemons = new Map<ExternalBridgeEngine, BridgeDaemon>();
+let externalOcrTempRoot: string | null = null;
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /pin_memory.*no accelerator/i,
   /connectivity check to the model hoster has been skipped/i,
@@ -153,6 +154,17 @@ function resolveBridgeEnv(): NodeJS.ProcessEnv {
     ...process.env,
     PYTHONUNBUFFERED: '1',
   };
+}
+
+function getExternalOcrTempRoot(): string {
+  if (externalOcrTempRoot) {
+    return externalOcrTempRoot;
+  }
+
+  const tempRoot = path.join(os.tmpdir(), 'pdf-translator-ocr');
+  fs.mkdirSync(tempRoot, { recursive: true });
+  externalOcrTempRoot = tempRoot;
+  return tempRoot;
 }
 
 function isBenignBridgeStderr(message: string): boolean {
@@ -415,8 +427,10 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
   }
 
   const engine = payload.engine;
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pdf-translator-ocr-'));
-  const imagePath = path.join(tempDir, `input${mimeTypeToExtension(payload.imageMimeType)}`);
+  const imagePath = path.join(
+    getExternalOcrTempRoot(),
+    `${engine}-${randomUUID()}${mimeTypeToExtension(payload.imageMimeType)}`
+  );
 
   try {
     await fs.promises.writeFile(imagePath, coerceImageBuffer(payload.imageData));
@@ -479,7 +493,7 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
 
     return response;
   } finally {
-    await fs.promises.rm(tempDir, { recursive: true, force: true });
+    await fs.promises.rm(imagePath, { force: true });
   }
 }
 
