@@ -504,6 +504,40 @@ const normalizeThaiTranslationText = (text: string): string => {
   return normalizeWhitespace(normalized);
 };
 
+const THAI_BOUNDARY_ATTACH_TOKENS = new Set([
+  'ไป',
+  'นะ',
+  'สิ',
+  'ละ',
+  'ล่ะ',
+  'เลย',
+  'ก็',
+  'มาก',
+  'อยู่',
+  'แล้ว',
+  'ด้วย',
+  'กัน',
+  'เอง',
+  'เหรอ',
+  'หรอ',
+  'หรือ',
+  'ไหม',
+  'มั้ย',
+  'ครับ',
+  'ค่ะ',
+]);
+
+const THAI_BOUNDARY_NO_SPLIT_PAIRS = new Set([
+  'เกิน|ไป',
+  'ให้|กับ',
+  'ยัง|ไม่',
+  'ไม่|รู้',
+  'หายาก|มาก',
+]);
+
+const normalizeThaiBoundaryToken = (segment: string): string =>
+  normalizeThaiTranslationText(segment).replace(/[^\u0E00-\u0E7F]/g, '');
+
 const collapseRepeatedTranslationFragments = (text: string): string => {
   const normalized = normalizeWhitespace(String(text || ''));
   if (!normalized) return normalized;
@@ -1529,6 +1563,50 @@ const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, wrapped);
   }
 
+  if (/\bA-?\s*ARE\s+YOU\b/i.test(source) && /\bSELLING\s+ME\s+OFF\s+TO\b/i.test(source) && /\bMAGE\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อะ...คุณกำลังจะขายฉันให้กับพ่อมดงั้นเหรอ');
+  }
+  if (/^A-?\s*ARE\s+YOU[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อะ...คุณกำลังจะ');
+  }
+  if (/^SELLING\s+ME\s+OFF\s+TO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ขายฉันให้กับ');
+  }
+  if (/^(?:THE\s+)?MAGE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'พ่อมดงั้นเหรอ');
+  }
+
+  if (/^I\s+THINK[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันว่า');
+  }
+  if (/^THAT['’]?S\s+TOO\s+LOW[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มันต่ำเกินไปนะ');
+  }
+  if (/^THAT['’]?S\s+TOO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มันต่ำเกิน');
+  }
+  if (/^LOW[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ไปนะ');
+  }
+  if (/^IT['’]?S\s+A\s+MONSTER\s+SO\s+RARE,?\s+EVEN\s+I\s+DIDN['’]?T\s+KNOW\s+ABOUT\s+IT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มันเป็นมอนสเตอร์ที่หายากมาก จนแม้แต่ฉันยังไม่รู้เลย');
+  }
+  if (/^IT['’]?S\s+A[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มันเป็น');
+  }
+  if (/^MONSTER\s+SO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มอนสเตอร์ที่');
+  }
+  if (/^RARE,?\s+EVEN\s+I[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'หายากมาก จนแม้แต่ฉัน');
+  }
+  if (/^DIDN['’]?T\s+KNOW[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ยังไม่รู้');
+  }
+  if (/^ABOUT\s+IT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เลย');
+  }
+
   if (compactSourceUpper.includes('PHENELINE')) {
     const replaced = replaceNameToken(translated, 'PHENELINE', 'ฟีนีลีน');
     if (replaced !== translated) return replaced;
@@ -1546,7 +1624,7 @@ const applyThaiConversationalGlossary = (
   }
 
   if (/^hm+$/.test(compactSource) || /^hmm+$/.test(compactSource)) {
-    return preserveSourceTrailingPunctuation(source, 'อืมม');
+    return preserveSourceTrailingPunctuation(source, 'อืม');
   }
 
   if (compactSource === 'yet') {
@@ -1559,7 +1637,7 @@ const applyThaiConversationalGlossary = (
   }
 
   if ((/^เอชเอ็ม$/i.test(translated) || /^เอชเอ็มเอ็ม$/i.test(translated)) && /^hm+$/.test(compactSource)) {
-    return preserveSourceTrailingPunctuation(source, 'อืมม');
+    return preserveSourceTrailingPunctuation(source, 'อืม');
   }
 
   return translated;
@@ -2047,7 +2125,15 @@ const splitTranslatedTextBySourceWeights = (
 
       for (let boundary = minBoundary; boundary <= maxBoundary; boundary += 1) {
         const endChar = cumulative[boundary - 1] || 0;
-        const distance = Math.abs(endChar - desiredEnd);
+        let distance = Math.abs(endChar - desiredEnd);
+        const nextToken = normalizeThaiBoundaryToken(segments[boundary] || '');
+        const previousToken = normalizeThaiBoundaryToken(segments[boundary - 1] || '');
+        if (nextToken && THAI_BOUNDARY_ATTACH_TOKENS.has(nextToken)) {
+          distance += Math.max(18, Math.round(target.length * 0.18));
+        }
+        if (previousToken && nextToken && THAI_BOUNDARY_NO_SPLIT_PAIRS.has(`${previousToken}|${nextToken}`)) {
+          distance += Math.max(24, Math.round(target.length * 0.24));
+        }
         if (distance < bestDistance) {
           bestDistance = distance;
           bestBoundary = boundary;

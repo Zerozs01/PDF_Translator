@@ -381,10 +381,11 @@ const shouldCollapsePanelSafetyDuplicate = (
   const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= minHeight * 1.35;
   const localStackedDuplicate = (
     exactKeyMatch
+    && candidateKey.length >= 4
     && nearSizeMatch
-    && centerDeltaY <= Math.max(56, minHeight * 2.0)
-    && centerDeltaX <= Math.max(72, minWidth * 1.25)
-    && overlapX >= 0.62
+    && centerDeltaY <= Math.max(88, minHeight * 3.2)
+    && centerDeltaX <= Math.max(96, minWidth * 1.7)
+    && overlapX >= 0.5
     && nearStackedBand
   );
 
@@ -516,24 +517,84 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
 };
 
 const collectResidualRepeatedPanelKeys = (lines: OCRLine[]): Array<{ key: string; count: number; samples: string[] }> => {
-  const counts = new Map<string, { count: number; samples: string[] }>();
+  const grouped = new Map<string, OCRLine[]>();
   for (const line of lines) {
     const key = normalizePanelDedupTextKey(line.text || '');
     if (!key) continue;
-    const current = counts.get(key) || { count: 0, samples: [] };
-    current.count += 1;
-    if (current.samples.length < 3) {
-      const bbox = line.bbox;
-      current.samples.push(`${String(line.text || '').trim()} @ (${Math.round(Number(bbox?.x0 || 0))},${Math.round(Number(bbox?.y0 || 0))})-(${Math.round(Number(bbox?.x1 || 0))},${Math.round(Number(bbox?.y1 || 0))})`);
-    }
-    counts.set(key, current);
+    const current = grouped.get(key) || [];
+    current.push(line);
+    grouped.set(key, current);
   }
 
-  return Array.from(counts.entries())
-    .filter(([, value]) => value.count > 1)
-    .sort((a, b) => b[1].count - a[1].count)
+  const suspicious = Array.from(grouped.entries())
+    .map(([key, keyLines]) => {
+      if (keyLines.length <= 1) {
+        return null;
+      }
+
+      const ordered = [...keyLines].sort((a, b) => {
+        if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+        if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+        return 0;
+      });
+      const involved = new Set<number>();
+
+      for (let i = 0; i < ordered.length; i += 1) {
+        for (let j = i + 1; j < ordered.length; j += 1) {
+          const a = ordered[i];
+          const b = ordered[j];
+          const minHeight = Math.max(8, Math.min(panelLineHeight(a), panelLineHeight(b)));
+          const minWidth = Math.max(24, Math.min(panelLineWidth(a), panelLineWidth(b)));
+          const centerDeltaY = Math.abs(panelLineCenterY(a) - panelLineCenterY(b));
+          const centerDeltaX = Math.abs(panelLineCenterX(a) - panelLineCenterX(b));
+          if (centerDeltaY > Math.max(110, minHeight * 2.8)) {
+            break;
+          }
+          if (centerDeltaX > Math.max(120, minWidth * 2.2)) {
+            continue;
+          }
+
+          const overlapX = panelOverlapRatioX(a, b);
+          const overlapY = panelOverlapRatioY(a, b);
+          const iou = panelIoURatio(a, b);
+          const likelyResidualDuplicate = (
+            iou >= 0.3
+            || (overlapY >= 0.42 && overlapX >= 0.52)
+            || (overlapX >= 0.6 && centerDeltaY <= minHeight * 1.8)
+          );
+          if (!likelyResidualDuplicate) {
+            continue;
+          }
+
+          involved.add(i);
+          involved.add(j);
+        }
+      }
+
+      if (involved.size <= 1) {
+        return null;
+      }
+
+      const samples = Array.from(involved)
+        .slice(0, 3)
+        .map((index) => {
+          const line = ordered[index];
+          const bbox = line.bbox;
+          return `${String(line.text || '').trim()} @ (${Math.round(Number(bbox?.x0 || 0))},${Math.round(Number(bbox?.y0 || 0))})-(${Math.round(Number(bbox?.x1 || 0))},${Math.round(Number(bbox?.y1 || 0))})`;
+        });
+
+      return {
+        key,
+        count: involved.size,
+        samples,
+      };
+    })
+    .filter((item): item is { key: string; count: number; samples: string[] } => Boolean(item));
+
+  return suspicious
+    .sort((a, b) => b.count - a.count)
     .slice(0, 8)
-    .map(([key, value]) => ({ key, count: value.count, samples: value.samples }));
+    .map((item) => ({ key: item.key, count: item.count, samples: item.samples }));
 };
 
 const buildTranslationCacheSignature = (entry: OCRTranslationCacheEntry): string => [
@@ -1820,7 +1881,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       if (cjkPanelExternal) {
         return { maxSide: 16000, maxPixels: 14_000_000, minWidth: null };
       }
-      return { maxSide: 16000, maxPixels: 5_200_000, minWidth: null };
+      // Keep document-like pages close to native render size to improve bbox recall/coverage.
+      return { maxSide: 16000, maxPixels: 9_000_000, minWidth: null };
     }
     // EasyOCR: moderate minWidth (650px) for readable text
     if (engine === 'easyocr') {

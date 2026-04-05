@@ -20,6 +20,16 @@ import {
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
+const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
+
+const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
+  const normalized = normalizeOverlayInlineText(String(sourceText || ''));
+  if (!normalized) return false;
+  const wordCount = normalized.split(/\s+/g).filter(Boolean).length;
+  const technicalLike = DOCUMENT_SOURCE_HINT_REGEX.test(normalized);
+  const numericDocumentLike = wordCount >= 6 && /[0-9()\-]/.test(normalized);
+  return technicalLike || numericDocumentLike;
+};
 
 export const ImageCanvas: React.FC = () => {
   const {
@@ -235,14 +245,27 @@ export const ImageCanvas: React.FC = () => {
         if (!translatedText) return [];
 
         const sourceBbox = resolveOverlaySourceBBox(line);
-        const baseWidth = Math.max(1, (sourceBbox.x1 - sourceBbox.x0) * ocrScaleX);
-        const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrScaleY);
+        const maskBbox = resolveOverlayMaskBBox(line);
+        const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
+        const sourceHeightRaw = Math.max(1, sourceBbox.y1 - sourceBbox.y0);
+        const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
+        const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
+        const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
+        const maskAreaRaw = maskWidthRaw * maskHeightRaw;
+        const widthCoverage = sourceWidthRaw / maskWidthRaw;
+        const areaCoverage = sourceAreaRaw / maskAreaRaw;
+        const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
+          && widthCoverage < 0.76
+          && areaCoverage < 0.82;
+        const effectiveSourceBbox = lowCoverageSource ? maskBbox : sourceBbox;
+        const baseWidth = Math.max(1, (effectiveSourceBbox.x1 - effectiveSourceBbox.x0) * ocrScaleX);
+        const baseHeight = Math.max(1, (effectiveSourceBbox.y1 - effectiveSourceBbox.y0) * ocrScaleY);
         const expansion = resolveOverlayMaskExpansion(line);
         const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
         const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
         const maskExpandBottom = Math.min(expansion.maxExpandBottom, Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)));
-        const rawLeft = sourceBbox.x0 * ocrScaleX - maskExpandX;
-        const rawTop = sourceBbox.y0 * ocrScaleY - maskExpandTop;
+        const rawLeft = effectiveSourceBbox.x0 * ocrScaleX - maskExpandX;
+        const rawTop = effectiveSourceBbox.y0 * ocrScaleY - maskExpandTop;
         const rawWidth = baseWidth + maskExpandX * 2;
         const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
         const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
@@ -259,7 +282,7 @@ export const ImageCanvas: React.FC = () => {
           text: translatedText,
           width: typographyWidth,
           height: typographyHeight,
-          bbox: sourceBbox,
+          bbox: effectiveSourceBbox,
           line,
           hints: {
             sourceText: line.text,
@@ -330,9 +353,21 @@ export const ImageCanvas: React.FC = () => {
                     : effectiveProfile === 'official';
                   const isComicLikeOverlay = !isDocumentLikeOverlay;
                   const maskBbox = (!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
+                  const resolvedSourceBbox = resolveOverlaySourceBBox(line);
+                  const sourceWidthRaw = Math.max(1, resolvedSourceBbox.x1 - resolvedSourceBbox.x0);
+                  const sourceHeightRaw = Math.max(1, resolvedSourceBbox.y1 - resolvedSourceBbox.y0);
+                  const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
+                  const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
+                  const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
+                  const maskAreaRaw = maskWidthRaw * maskHeightRaw;
+                  const widthCoverage = sourceWidthRaw / maskWidthRaw;
+                  const areaCoverage = sourceAreaRaw / maskAreaRaw;
+                  const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
+                    && widthCoverage < 0.76
+                    && areaCoverage < 0.82;
                   const sourceBbox = isMaskOnlyLine
-                    ? resolveOverlaySourceBBox(line)
-                    : (layout?.mergedBBox || resolveOverlaySourceBBox(line));
+                    ? resolvedSourceBbox
+                    : (layout?.mergedBBox || (lowCoverageSource ? maskBbox : resolvedSourceBbox));
                   const maskRenderSourceLeft = maskBbox.x0;
                   const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
                     ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
@@ -383,25 +418,41 @@ export const ImageCanvas: React.FC = () => {
                   const rawTextTop = textSourceTop * ocrScaleY - maskExpandTop - mergedComicTextTopLift;
                   const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
                   const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
-                  const textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
+                  let textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
                     x0: 0,
                     y0: 0,
                     x1: imageDisplaySize.width,
                     y1: imageDisplaySize.height,
                   });
+                  if (!isDocumentLikeOverlay) {
+                    textRect = clampOverlayRect(textRect.left, textRect.top, textRect.width, textRect.height, {
+                      x0: Math.max(0, maskRect.left - 1),
+                      y0: Math.max(0, maskRect.top - 1),
+                      x1: Math.min(imageDisplaySize.width, maskRect.left + maskRect.width + 1),
+                      y1: Math.min(imageDisplaySize.height, maskRect.top + maskRect.height + 1),
+                    });
+                  }
                   const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
                   const maskBackgroundColor = palette.backgroundColor;
                   const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
-                    ? Math.max(3, Math.round(baseHeight * 0.34))
+                    ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
                     : 0;
-                  const typographyWidth = isDocumentLikeOverlay ? baseWidth : textRect.width;
+                  const documentTypographyWidth = lowCoverageSource
+                    ? Math.max(baseWidth, maskBaseWidth)
+                    : Math.max(baseWidth, textRect.width * 0.96);
+                  const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
                   const typographyHeight = isDocumentLikeOverlay
-                    ? Math.min(textRect.height, baseHeight + thaiDocumentHeadroom)
+                    ? Math.min(
+                      textRect.height,
+                      Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
+                    )
                     : textRect.height;
                   const typography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
                   sourceText: line.text,
-                  sourceBoxWidth: baseWidth,
-                  sourceBoxHeight: isDocumentLikeOverlay ? baseHeight + thaiDocumentHeadroom : baseHeight,
+                  sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
+                  sourceBoxHeight: isDocumentLikeOverlay
+                    ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+                    : baseHeight,
                   sourceLineCount: 1,
                   fontFamily: overlayFontFamily,
                   profile: effectiveProfile,

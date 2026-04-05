@@ -333,6 +333,8 @@ const hasPositiveBBox = (bbox?: BBox): bbox is BBox => {
   return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
 };
 
+const DOCUMENT_SOURCE_FALLBACK_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
+
 export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
   if (!Array.isArray(line.words) || line.words.length === 0) {
     return line.bbox;
@@ -347,7 +349,7 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     return line.bbox;
   }
 
-  return validWordBoxes.reduce<BBox>((acc, bbox) => ({
+  const unionWordBox = validWordBoxes.reduce<BBox>((acc, bbox) => ({
     x0: Math.min(acc.x0, bbox.x0),
     y0: Math.min(acc.y0, bbox.y0),
     x1: Math.max(acc.x1, bbox.x1),
@@ -355,6 +357,46 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
   }), {
     ...validWordBoxes[0],
   });
+
+  if (!hasPositiveBBox(line.bbox)) {
+    return unionWordBox;
+  }
+
+  const lineWidth = Math.max(1, line.bbox.x1 - line.bbox.x0);
+  const lineHeight = Math.max(1, line.bbox.y1 - line.bbox.y0);
+  const lineArea = lineWidth * lineHeight;
+  const wordWidth = Math.max(1, unionWordBox.x1 - unionWordBox.x0);
+  const wordHeight = Math.max(1, unionWordBox.y1 - unionWordBox.y0);
+  const wordArea = wordWidth * wordHeight;
+  const widthCoverage = wordWidth / lineWidth;
+  const heightCoverage = wordHeight / lineHeight;
+  const areaCoverage = wordArea / lineArea;
+  const normalizedLineText = normalizeOverlayInlineText(String(line.text || ''));
+  const sourceWordCount = normalizedLineText.split(/\s+/g).filter(Boolean).length;
+  const technicalSourceLike = DOCUMENT_SOURCE_FALLBACK_HINT_REGEX.test(normalizedLineText);
+  const numericDocumentLike = sourceWordCount >= 6 && /[0-9()\-]/.test(normalizedLineText);
+  const allowLineFallback = technicalSourceLike || numericDocumentLike;
+  const longLineText = normalizedLineText.length >= 18;
+  const sparseWordBoxes = validWordBoxes.length <= 3;
+  const severeCoverageLoss = (
+    (widthCoverage < 0.62 && areaCoverage < 0.5)
+    || (widthCoverage < 0.72 && heightCoverage < 0.38)
+  );
+  const moderateCoverageLoss = longLineText && sparseWordBoxes && widthCoverage < 0.86 && areaCoverage < 0.78;
+  const shortDocumentCoverageLoss = (
+    sourceWordCount >= 3
+    && sourceWordCount <= 7
+    && validWordBoxes.length <= 2
+    && widthCoverage < 0.78
+    && areaCoverage < 0.8
+    && heightCoverage < 0.9
+  );
+
+  if (allowLineFallback && (severeCoverageLoss || moderateCoverageLoss || shortDocumentCoverageLoss)) {
+    return line.bbox;
+  }
+
+  return unionWordBox;
 };
 
 export const resolveOverlayMaskBBox = (line: OCRLine): BBox => {
@@ -1843,7 +1885,13 @@ export const computeOverlayLayoutMap = (
     const normalizedFontSize = effectiveDocumentProfile
       ? (
         allDocumentBody
-          ? Math.max(6, (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 1.04)
+          ? Math.max(
+            6,
+            Math.max(
+              (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 1.08,
+              (resolveMedian(fontSizes) ?? minFontSize) * 1.02
+            )
+          )
           : Math.max(6, (resolveLowerBandAverage(fontSizes) ?? minFontSize) * 1.0)
       )
       : defaultStyleKind === 'comic-box'
@@ -1997,8 +2045,10 @@ export const computeOverlayLayoutMap = (
         };
       })();
 
+      const mergedFillRatio = mergedTypographyAdjusted.contentHeight / Math.max(1, mergedHeightBudget);
       const mergeIsUseful = mergedTypographyAdjusted.estimatedLines >= 1
-        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88);
+        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
+        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52);
       if (mergeIsUseful) {
         const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';
         const mergedCenterX = mergedBBox.x0 + (mergedBBox.x1 - mergedBBox.x0) * 0.5;
