@@ -27,7 +27,7 @@ import {
   BarChart3
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import type { OCREngine, OCRPageResult, OCRQualityProfile } from '../../types';
+import type { OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile } from '../../types';
 import {
   hasCurrentOCRTranslationCacheVersion,
   OCR_ENGINES,
@@ -271,6 +271,270 @@ const readRuntimeMs = (result: OCRPageResult): number | null => {
 };
 
 const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
+
+const normalizePanelDedupTextKey = (value: string): string =>
+  String(value || '')
+    .toUpperCase()
+    .replace(/[|¦│┃￨︱︲]+/g, '')
+    .replace(/[^A-Z0-9\uAC00-\uD7A3\u3040-\u30FF\u3400-\u9FFF]+/g, '')
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/5/g, 'S');
+
+const panelLineWidth = (line: OCRLine): number => Math.max(0, Number(line.bbox?.x1 || 0) - Number(line.bbox?.x0 || 0));
+const panelLineHeight = (line: OCRLine): number => Math.max(0, Number(line.bbox?.y1 || 0) - Number(line.bbox?.y0 || 0));
+const panelLineArea = (line: OCRLine): number => Math.max(1, panelLineWidth(line) * panelLineHeight(line));
+const panelLineCenterX = (line: OCRLine): number => (Number(line.bbox?.x0 || 0) + Number(line.bbox?.x1 || 0)) * 0.5;
+const panelLineCenterY = (line: OCRLine): number => (Number(line.bbox?.y0 || 0) + Number(line.bbox?.y1 || 0)) * 0.5;
+
+const panelOverlapRatioX = (a: OCRLine, b: OCRLine): number => {
+  const overlap = Math.max(0, Math.min(Number(a.bbox?.x1 || 0), Number(b.bbox?.x1 || 0)) - Math.max(Number(a.bbox?.x0 || 0), Number(b.bbox?.x0 || 0)));
+  const minWidth = Math.max(1, Math.min(panelLineWidth(a), panelLineWidth(b)));
+  return overlap / minWidth;
+};
+
+const panelOverlapRatioY = (a: OCRLine, b: OCRLine): number => {
+  const overlap = Math.max(0, Math.min(Number(a.bbox?.y1 || 0), Number(b.bbox?.y1 || 0)) - Math.max(Number(a.bbox?.y0 || 0), Number(b.bbox?.y0 || 0)));
+  const minHeight = Math.max(1, Math.min(panelLineHeight(a), panelLineHeight(b)));
+  return overlap / minHeight;
+};
+
+const panelIoURatio = (a: OCRLine, b: OCRLine): number => {
+  const overlapWidth = Math.max(0, Math.min(Number(a.bbox?.x1 || 0), Number(b.bbox?.x1 || 0)) - Math.max(Number(a.bbox?.x0 || 0), Number(b.bbox?.x0 || 0)));
+  const overlapHeight = Math.max(0, Math.min(Number(a.bbox?.y1 || 0), Number(b.bbox?.y1 || 0)) - Math.max(Number(a.bbox?.y0 || 0), Number(b.bbox?.y0 || 0)));
+  const intersection = overlapWidth * overlapHeight;
+  if (intersection <= 0) return 0;
+
+  const union = panelLineArea(a) + panelLineArea(b) - intersection;
+  return union > 0 ? (intersection / union) : 0;
+};
+
+const buildPanelDedupBigrams = (value: string): Set<string> => {
+  const compact = String(value || '').trim();
+  const grams = new Set<string>();
+  if (!compact) return grams;
+  if (compact.length === 1) {
+    grams.add(compact);
+    return grams;
+  }
+  for (let i = 0; i < compact.length - 1; i += 1) {
+    grams.add(compact.slice(i, i + 2));
+  }
+  return grams;
+};
+
+const panelDedupDiceSimilarity = (a: string, b: string): number => {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+
+  const aBigrams = buildPanelDedupBigrams(a);
+  const bBigrams = buildPanelDedupBigrams(b);
+  if (aBigrams.size === 0 || bBigrams.size === 0) return 0;
+
+  let overlap = 0;
+  for (const gram of aBigrams) {
+    if (bBigrams.has(gram)) overlap += 1;
+  }
+  return (2 * overlap) / (aBigrams.size + bBigrams.size);
+};
+
+const shouldCollapsePanelSafetyDuplicate = (
+  existingLine: OCRLine,
+  existingKey: string,
+  candidateLine: OCRLine,
+  candidateKey: string
+): boolean => {
+  if (!existingKey || !candidateKey) return false;
+
+  const minLength = Math.min(existingKey.length, candidateKey.length);
+  const sameOrSubset = existingKey === candidateKey
+    || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
+  if (!sameOrSubset) {
+    const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
+    if (similarity < 0.96) return false;
+    if (minLength < 8 && similarity < 0.99) return false;
+  }
+
+  const overlapY = panelOverlapRatioY(existingLine, candidateLine);
+  const overlapX = panelOverlapRatioX(existingLine, candidateLine);
+  const iou = panelIoURatio(existingLine, candidateLine);
+  const centerDeltaY = Math.abs(panelLineCenterY(existingLine) - panelLineCenterY(candidateLine));
+  const centerDeltaX = Math.abs(panelLineCenterX(existingLine) - panelLineCenterX(candidateLine));
+  const minHeight = Math.max(8, Math.min(panelLineHeight(existingLine), panelLineHeight(candidateLine)));
+  const minWidth = Math.max(24, Math.min(panelLineWidth(existingLine), panelLineWidth(candidateLine)));
+  const existingArea = Math.max(1, panelLineArea(existingLine));
+  const candidateArea = Math.max(1, panelLineArea(candidateLine));
+  const areaRatio = existingArea / candidateArea;
+  const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
+  const strongSpatialMatch = (
+    iou >= 0.58
+    || (overlapY >= 0.86 && overlapX >= 0.74)
+    || (
+      overlapY >= 0.68
+      && overlapX >= 0.46
+      && centerDeltaY <= minHeight * 0.72
+      && centerDeltaX <= minWidth * 0.62
+    )
+  );
+
+  const exactKeyMatch = existingKey === candidateKey;
+  const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= minHeight * 1.35;
+  const localStackedDuplicate = (
+    exactKeyMatch
+    && nearSizeMatch
+    && centerDeltaY <= Math.max(56, minHeight * 2.0)
+    && centerDeltaX <= Math.max(72, minWidth * 1.25)
+    && overlapX >= 0.62
+    && nearStackedBand
+  );
+
+  if (sameOrSubset) {
+    return strongSpatialMatch || localStackedDuplicate;
+  }
+
+  return (
+    iou >= 0.72
+    || (overlapY >= 0.9 && overlapX >= 0.8)
+    || (
+      strongSpatialMatch
+      && centerDeltaY <= minHeight * 0.6
+      && centerDeltaX <= minWidth * 0.55
+    )
+  );
+};
+
+const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
+  const inputLines = Array.isArray(result.lines) ? result.lines : [];
+  if ((result.pipelineProfile || 'panel') !== 'panel') {
+    return result;
+  }
+  if ((result.ocrEngine || 'tesseract') !== 'paddleocr') {
+    return result;
+  }
+  if (inputLines.length <= 1) {
+    return result;
+  }
+
+  const orderedLines = inputLines
+    .map((line, index) => ({ line, index }))
+    .sort((a, b) => {
+      const ay = Number(a.line.bbox?.y0 || 0);
+      const by = Number(b.line.bbox?.y0 || 0);
+      if (ay !== by) return ay - by;
+      const ax = Number(a.line.bbox?.x0 || 0);
+      const bx = Number(b.line.bbox?.x0 || 0);
+      if (ax !== bx) return ax - bx;
+      return a.index - b.index;
+    });
+
+  const kept: OCRLine[] = [];
+  const keptKeys: string[] = [];
+  const dropped: OCRDroppedWord[] = [];
+
+  const lineScore = (line: OCRLine): number => {
+    const confidence = Number(line.confidence || 0);
+    const textLength = String(line.text || '').trim().length;
+    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8);
+  };
+
+  for (const item of orderedLines) {
+    const candidateLine = item.line;
+    const candidateKey = normalizePanelDedupTextKey(candidateLine.text || '');
+    if (!candidateKey) {
+      kept.push(candidateLine);
+      keptKeys.push('');
+      continue;
+    }
+
+    const existingIndex = kept.findIndex((existingLine, index) =>
+      shouldCollapsePanelSafetyDuplicate(existingLine, keptKeys[index], candidateLine, candidateKey)
+    );
+    if (existingIndex < 0) {
+      kept.push(candidateLine);
+      keptKeys.push(candidateKey);
+      continue;
+    }
+
+    const existingLine = kept[existingIndex];
+    const keepCandidate = lineScore(candidateLine) > lineScore(existingLine);
+    const loserLine = keepCandidate ? existingLine : candidateLine;
+    dropped.push({
+      filter: 'panelSafetyDedup',
+      reason: 'samePositionDuplicateLine',
+      text: String(loserLine.text || '').trim(),
+      confidence: Number(loserLine.confidence || 0),
+      bbox: loserLine.bbox,
+    });
+
+    if (keepCandidate) {
+      kept[existingIndex] = candidateLine;
+      keptKeys[existingIndex] = candidateKey;
+    }
+  }
+
+  if (dropped.length === 0) {
+    return result;
+  }
+
+  const dedupedLines = kept.sort((a, b) => {
+    const ay = Number(a.bbox?.y0 || 0);
+    const by = Number(b.bbox?.y0 || 0);
+    if (ay !== by) return ay - by;
+    const ax = Number(a.bbox?.x0 || 0);
+    const bx = Number(b.bbox?.x0 || 0);
+    return ax - bx;
+  });
+  const dedupedWords = dedupedLines.flatMap((line) => line.words || []);
+  const confidenceSource = dedupedWords.length > 0
+    ? dedupedWords.map((word) => Number(word.confidence || 0))
+    : dedupedLines.map((line) => Number(line.confidence || 0));
+  const dedupedConfidence = confidenceSource.length > 0
+    ? (confidenceSource.reduce((sum, value) => sum + value, 0) / confidenceSource.length)
+    : Number(result.confidence || 0);
+
+  const dropCounts = {
+    ...(result.debug?.dropCounts || {}),
+    panelSafetyDuplicate: ((result.debug?.dropCounts?.panelSafetyDuplicate || 0) + dropped.length),
+  };
+  const droppedWords = [
+    ...(result.debug?.droppedWords || []),
+    ...dropped,
+  ];
+
+  return {
+    ...result,
+    lines: dedupedLines,
+    words: dedupedWords,
+    text: dedupedLines.map((line) => String(line.text || '')).filter(Boolean).join('\n').trim(),
+    confidence: dedupedConfidence,
+    debug: {
+      ...(result.debug || {}),
+      dropCounts,
+      droppedWords,
+    },
+  };
+};
+
+const collectResidualRepeatedPanelKeys = (lines: OCRLine[]): Array<{ key: string; count: number; samples: string[] }> => {
+  const counts = new Map<string, { count: number; samples: string[] }>();
+  for (const line of lines) {
+    const key = normalizePanelDedupTextKey(line.text || '');
+    if (!key) continue;
+    const current = counts.get(key) || { count: 0, samples: [] };
+    current.count += 1;
+    if (current.samples.length < 3) {
+      const bbox = line.bbox;
+      current.samples.push(`${String(line.text || '').trim()} @ (${Math.round(Number(bbox?.x0 || 0))},${Math.round(Number(bbox?.y0 || 0))})-(${Math.round(Number(bbox?.x1 || 0))},${Math.round(Number(bbox?.y1 || 0))})`);
+    }
+    counts.set(key, current);
+  }
+
+  return Array.from(counts.entries())
+    .filter(([, value]) => value.count > 1)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 8)
+    .map(([key, value]) => ({ key, count: value.count, samples: value.samples }));
+};
 
 const buildTranslationCacheSignature = (entry: OCRTranslationCacheEntry): string => [
   entry.key,
@@ -954,11 +1218,13 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, []);
 
   const normalizeCacheProfile = useCallback((cached: OCRPageResult): OCRPageResult => {
-    if ((cached.pipelineProfile || 'panel') === 'panel') return cached;
-    return {
-      ...cached,
-      pipelineProfile: 'panel',
-    };
+    const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+      ? cached
+      : {
+        ...cached,
+        pipelineProfile: 'panel' as const,
+      };
+    return applyPanelSafetyLineDedup(normalizedProfile);
   }, []);
 
   const isCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
@@ -1946,6 +2212,10 @@ export const OCRTextLayerPanel: React.FC = () => {
       stopExternalProgress();
     }
 
+    if (activePipelineProfile === 'panel') {
+      ocrResult = applyPanelSafetyLineDedup(ocrResult);
+    }
+
     console.log(`[OCRPanel] OCR request resolved for page ${pageNum} with ${ocrResult.words.length} words`);
     const debugDrops = ocrResult.debug?.dropCounts || {};
     const debugDropWords = ocrResult.debug?.droppedWords || [];
@@ -1955,6 +2225,14 @@ export const OCRTextLayerPanel: React.FC = () => {
     );
     if (debugDropWords.length > 0) {
       console.log('[OCRPanel] OCR droppedWords sample:', debugDropWords.slice(0, 8));
+    }
+    if (activePipelineProfile === 'panel') {
+      const repeatedKeys = collectResidualRepeatedPanelKeys(ocrResult.lines || []);
+      if (repeatedKeys.length > 0) {
+        console.warn(
+          `[OCRPanel] Residual repeated OCR keys on page ${pageNum}: ${JSON.stringify(repeatedKeys)}`
+        );
+      }
     }
     visionService.setProgressCallback(null);
 

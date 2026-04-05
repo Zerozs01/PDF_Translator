@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +16,8 @@ import urllib.request
 import uuid
 from typing import Any, Dict, Iterable, List, Tuple
 import re
+
+from PIL import Image, ImageOps
 
 os.environ.setdefault("FLAGS_enable_pir_api", "0")
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
@@ -383,6 +386,82 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
         current = candidate
 
     merged.append(current)
+    return merged
+
+
+def merge_near_duplicate_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(lines) <= 1:
+        return list(lines)
+
+    ordered = sorted(lines, key=visual_band_key)
+    merged: List[Dict[str, Any]] = []
+
+    for line in ordered:
+        text = normalize_text(str(line.get("text") or ""))
+        if not text:
+            continue
+
+        alpha = normalize_multilingual_token(text)
+        if not alpha:
+            continue
+
+        line_bbox = line.get("bbox") or {}
+        candidate_score = len(text) + normalize_confidence(line.get("confidence", 0.0))
+        replaced = False
+
+        for index, existing in enumerate(merged):
+            existing_text = normalize_text(str(existing.get("text") or ""))
+            existing_alpha = normalize_multilingual_token(existing_text)
+            if not existing_alpha:
+                continue
+
+            same_or_subset = (
+                existing_alpha == alpha
+                or existing_alpha in alpha
+                or alpha in existing_alpha
+                or are_near_duplicate_tokens(existing_alpha, alpha)
+            )
+            if not same_or_subset:
+                continue
+
+            existing_bbox = existing.get("bbox") or {}
+            min_height = max(8.0, min(bbox_height(existing_bbox), bbox_height(line_bbox)))
+            center_delta = abs(line_sort_y(existing) - line_sort_y(line))
+            overlap_x = horizontal_overlap_ratio(existing_bbox, line_bbox)
+            overlap_y = vertical_overlap_ratio(existing_bbox, line_bbox)
+            contained = (
+                horizontal_containment_ratio(existing_bbox, line_bbox) >= 0.65
+                or horizontal_containment_ratio(line_bbox, existing_bbox) >= 0.65
+            )
+            iou = bbox_iou_ratio(existing_bbox, line_bbox)
+            near_same_box = (
+                iou >= 0.56
+                or (overlap_y >= 0.82 and overlap_x >= 0.62)
+                or (
+                    center_delta <= min_height * 0.72
+                    and overlap_y >= 0.62
+                    and (overlap_x >= 0.42 or contained)
+                )
+            )
+            if not near_same_box:
+                continue
+
+            if existing_alpha != alpha:
+                min_token_len = min(len(existing_alpha), len(alpha))
+                if min_token_len < 6:
+                    continue
+                if iou < 0.64 and not (overlap_y >= 0.86 and overlap_x >= 0.72):
+                    continue
+
+            existing_score = len(existing_text) + normalize_confidence(existing.get("confidence", 0.0))
+            if candidate_score > existing_score:
+                merged[index] = line
+            replaced = True
+            break
+
+        if not replaced:
+            merged.append(line)
+
     return merged
 
 
@@ -958,6 +1037,17 @@ def horizontal_containment_ratio(inner: Dict[str, Any], outer: Dict[str, Any]) -
     inner_width = max(1.0, bbox_width(inner))
     overlap = min(float(inner.get("x1", 0.0)), float(outer.get("x1", 0.0))) - max(float(inner.get("x0", 0.0)), float(outer.get("x0", 0.0)))
     return max(0.0, overlap) / inner_width
+
+
+def bbox_iou_ratio(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    overlap_w = min(float(a.get("x1", 0.0)), float(b.get("x1", 0.0))) - max(float(a.get("x0", 0.0)), float(b.get("x0", 0.0)))
+    overlap_h = min(float(a.get("y1", 0.0)), float(b.get("y1", 0.0))) - max(float(a.get("y0", 0.0)), float(b.get("y0", 0.0)))
+    if overlap_w <= 0 or overlap_h <= 0:
+        return 0.0
+
+    intersection = overlap_w * overlap_h
+    union = max(1.0, bbox_width(a) * bbox_height(a) + bbox_width(b) * bbox_height(b) - intersection)
+    return intersection / union
 
 
 def is_probable_ascii_ghost(text: str) -> bool:
@@ -1577,7 +1667,7 @@ def minimal_cleanup_external_result(
 
         candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if (removed_ad_words or split_count > 0) else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
         candidate_line["_sourceIndex"] = source_index
-        if is_probable_ascii_ghost(candidate_line["text"]):
+        if is_probable_ascii_ghost(candidate_line.get("text", "")):
             continue
         if is_probable_panel_watermark_line(candidate_line, width, height, pipeline_profile):
             drop_counts["watermarkLine"] = drop_counts.get("watermarkLine", 0) + 1
@@ -1595,8 +1685,10 @@ def minimal_cleanup_external_result(
         lines = merge_same_band_fragments(reorder_tilted_line_clusters(lines))
         lines = merge_short_lead_lines(lines)
         lines = reorder_tilted_line_clusters(lines)
+        lines = merge_near_duplicate_lines(lines)
     else:
         lines = reorder_tilted_line_clusters(lines)
+        lines = merge_near_duplicate_lines(lines)
     words = []
     for line in lines:
         words.extend(line.get("words") or [])
@@ -1759,6 +1851,7 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
         drop_reasons=hangul_fragment_drops,
         source="paddle_korean_panel",
     )
+    deduped_lines = merge_near_duplicate_lines(deduped_lines)
 
     post_filtered_lines: List[Dict[str, Any]] = []
     for line in deduped_lines:
@@ -2087,6 +2180,7 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
             cleaned_lines,
             language_codes,
         )
+        cleaned_lines = merge_near_duplicate_lines(cleaned_lines)
         all_easy_drops = singleton_drops + shadow_drops
         cleaned_words: List[Dict[str, Any]] = []
         for line in cleaned_lines:
@@ -2615,16 +2709,89 @@ def get_paddle_ocr(lang: str, profile_key: str) -> Any:
     return ocr
 
 
-def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
-    lang = select_paddle_lang(args.language)
-    profile_key = get_paddle_profile_key(args)
-    quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
-    ocr = get_paddle_ocr(lang, profile_key)
-    predict_kwargs = build_paddle_predict_kwargs(args)
+def analyze_image_polarity(image_path: str) -> Dict[str, float]:
+    with Image.open(image_path) as image:
+        preview = image.convert("RGB")
+        preview.thumbnail((640, 640), Image.BILINEAR)
+        gray = preview.convert("L")
+
+    histogram = gray.histogram()
+    total = float(sum(histogram)) or 1.0
+    average = sum(index * count for index, count in enumerate(histogram)) / total
+    dark_ratio = sum(histogram[:88]) / total
+    bright_ratio = sum(histogram[176:]) / total
+    mid_ratio = max(0.0, 1.0 - dark_ratio - bright_ratio)
+
+    return {
+        "averageLuma": round(average, 2),
+        "darkRatio": round(dark_ratio, 4),
+        "brightRatio": round(bright_ratio, 4),
+        "midRatio": round(mid_ratio, 4),
+    }
+
+
+def should_try_inverted_paddle_pass(
+    polarity: Dict[str, float],
+    original_result: Dict[str, Any],
+    pipeline_profile: str,
+    quality_profile: str,
+) -> bool:
+    if pipeline_profile != "panel":
+        return False
+
+    average_luma = float(polarity.get("averageLuma", 255.0) or 255.0)
+    dark_ratio = float(polarity.get("darkRatio", 0.0) or 0.0)
+    bright_ratio = float(polarity.get("brightRatio", 0.0) or 0.0)
+    result_lines = list(original_result.get("lines") or [])
+    result_words = list(original_result.get("words") or [])
+    result_confidence = normalize_confidence(original_result.get("confidence", 0.0))
+
+    if len(result_lines) >= 8 and result_confidence >= 84.0:
+        return False
+
+    strong_dark_page = average_luma <= 156.0 and dark_ratio >= 0.36
+    mixed_polarity_page = average_luma <= 172.0 and dark_ratio >= 0.26 and bright_ratio >= 0.08
+    weak_original_pass = len(result_lines) <= 2 or len(result_words) <= 12 or result_confidence < 68.0
+
+    if quality_profile == "fast":
+        return strong_dark_page and weak_original_pass
+
+    if strong_dark_page and weak_original_pass:
+        return True
+    if mixed_polarity_page and weak_original_pass and result_confidence < 76.0:
+        return True
+
+    return False
+
+
+def create_inverted_image_variant(image_path: str) -> str:
+    variant_dir = os.path.join(tempfile.gettempdir(), "pdf-translator-ocr", "paddle-variants")
+    os.makedirs(variant_dir, exist_ok=True)
+    variant_path = os.path.join(variant_dir, f"{uuid.uuid4().hex}.png")
+
+    with Image.open(image_path) as image:
+        rgba = image.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        background.alpha_composite(rgba)
+        inverted = ImageOps.invert(background.convert("RGB"))
+        inverted.save(variant_path, format="PNG")
+
+    return variant_path
+
+
+def run_paddleocr_pass(
+    ocr: Any,
+    image_path: str,
+    args: argparse.Namespace,
+    predict_kwargs: Dict[str, Any],
+    profile_key: str,
+    quality_profile: str,
+    pass_label: str,
+) -> Dict[str, Any]:
     started_at = time.perf_counter()
 
     if hasattr(ocr, "predict"):
-        raw_result, applied_predict_kwargs = call_paddle_predict(ocr, args.image, predict_kwargs)
+        raw_result, applied_predict_kwargs = call_paddle_predict(ocr, image_path, predict_kwargs)
 
         cleaned = cleanup_external_result(
             normalize_paddle_output(raw_result),
@@ -2645,12 +2812,14 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                 "ocr": round((time.perf_counter() - started_at) * 1000, 1),
             },
             "predictConfig": applied_predict_kwargs,
+            "paddlePass": pass_label,
         }
         return cleaned
+
     if hasattr(ocr, "ocr"):
         try:
             cleaned = cleanup_external_result(
-                normalize_paddle_v2_output(ocr.ocr(args.image, cls=False)),
+                normalize_paddle_v2_output(ocr.ocr(image_path, cls=False)),
                 "paddleocr",
                 args.pipeline_profile,
                 args.width,
@@ -2659,7 +2828,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             )
         except TypeError:
             cleaned = cleanup_external_result(
-                normalize_paddle_v2_output(ocr.ocr(args.image)),
+                normalize_paddle_v2_output(ocr.ocr(image_path)),
                 "paddleocr",
                 args.pipeline_profile,
                 args.width,
@@ -2677,10 +2846,101 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                 "ocr": round((time.perf_counter() - started_at) * 1000, 1),
             },
             "predictConfig": predict_kwargs,
+            "paddlePass": pass_label,
         }
         return cleaned
 
     raise RuntimeError("Unsupported PaddleOCR API: neither ocr() nor predict() is available")
+
+
+def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
+    lang = select_paddle_lang(args.language)
+    profile_key = get_paddle_profile_key(args)
+    quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
+    ocr = get_paddle_ocr(lang, profile_key)
+    predict_kwargs = build_paddle_predict_kwargs(args)
+    started_at = time.perf_counter()
+    polarity = analyze_image_polarity(args.image)
+    original_result = run_paddleocr_pass(
+        ocr,
+        args.image,
+        args,
+        predict_kwargs,
+        profile_key,
+        quality_profile,
+        "original",
+    )
+
+    if not should_try_inverted_paddle_pass(polarity, original_result, args.pipeline_profile, quality_profile):
+        original_debug = original_result.get("debug") or {}
+        original_debug["imagePolarity"] = polarity
+        original_debug["paddlePass"] = "original"
+        original_debug["runtimeMs"] = round((time.perf_counter() - started_at) * 1000, 1)
+        original_debug.setdefault("timingsMs", {})["ocr"] = round((time.perf_counter() - started_at) * 1000, 1)
+        original_result["debug"] = original_debug
+        return original_result
+
+    inverted_path = create_inverted_image_variant(args.image)
+    try:
+        inverted_result = run_paddleocr_pass(
+            ocr,
+            inverted_path,
+            args,
+            predict_kwargs,
+            profile_key,
+            quality_profile,
+            "inverted",
+        )
+
+        merged_input = {
+            "lines": list(original_result.get("lines") or []) + list(inverted_result.get("lines") or []),
+            "words": list(original_result.get("words") or []) + list(inverted_result.get("words") or []),
+            "pageSegMode": original_result.get("pageSegMode") or inverted_result.get("pageSegMode"),
+        }
+        merged = cleanup_external_result(
+            merged_input,
+            "paddleocr",
+            args.pipeline_profile,
+            args.width,
+            args.height,
+            args.language,
+        )
+        merged_debug = merged.get("debug") or {}
+        merged["debug"] = {
+            **merged_debug,
+            "profile": f"{profile_key}:{quality_profile}",
+            "qualityProfile": quality_profile,
+            "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
+            "dropCounts": dict(merged_debug.get("dropCounts") or {}),
+            "droppedWords": list(merged_debug.get("droppedWords") or []),
+            "timingsMs": {
+                "ocr": round((time.perf_counter() - started_at) * 1000, 1),
+                "originalPassMs": float((original_result.get("debug") or {}).get("runtimeMs") or 0.0),
+                "invertedPassMs": float((inverted_result.get("debug") or {}).get("runtimeMs") or 0.0),
+            },
+            "predictConfig": merged_debug.get("predictConfig") or (original_result.get("debug") or {}).get("predictConfig") or predict_kwargs,
+            "imagePolarity": polarity,
+            "paddlePass": {
+                "mode": "dual",
+                "usedInverted": True,
+                "original": {
+                    "lines": len(original_result.get("lines") or []),
+                    "words": len(original_result.get("words") or []),
+                    "confidence": normalize_confidence(original_result.get("confidence", 0.0)),
+                },
+                "inverted": {
+                    "lines": len(inverted_result.get("lines") or []),
+                    "words": len(inverted_result.get("words") or []),
+                    "confidence": normalize_confidence(inverted_result.get("confidence", 0.0)),
+                },
+            },
+        }
+        return merged
+    finally:
+        try:
+            os.remove(inverted_path)
+        except OSError:
+            pass
 
 
 def run_adapter(adapter_path: str, args: argparse.Namespace) -> Dict[str, Any]:

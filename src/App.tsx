@@ -452,8 +452,17 @@ const normalizeTechnicalArtifactsForTranslation = (text: string): string => {
   return normalized;
 };
 
+const normalizePossessiveCompoundsForTranslation = (text: string): string => {
+  let normalized = normalizeWhitespace(String(text || ''));
+  normalized = normalized.replace(/\b([A-Za-z]{3,})['’]S([A-Za-z]{3,})\b/g, "$1'S $2");
+  normalized = normalized.replace(/\[\s*([A-Za-z]{3,})['’]S([A-Za-z]{3,})\s*\]/g, "[$1'S $2]");
+  normalized = normalized.replace(/\b([A-Za-z]{3,})([\-_/])([A-Za-z]{3,})\b/g, '$1 $2 $3');
+  return normalizeWhitespace(normalized);
+};
+
 const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   let normalized = normalizeTechnicalArtifactsForTranslation(text);
+  normalized = normalizePossessiveCompoundsForTranslation(normalized);
   normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
   if (normalizeTranslationLanguage(sourceLanguage, '') === 'es') {
     normalized = normalizeSpanishOcrNoiseForTranslation(normalized);
@@ -493,6 +502,28 @@ const normalizeThaiTranslationText = (text: string): string => {
     .replace(/\s+([\)\]\}])/g, '$1');
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   return normalizeWhitespace(normalized);
+};
+
+const collapseRepeatedTranslationFragments = (text: string): string => {
+  const normalized = normalizeWhitespace(String(text || ''));
+  if (!normalized) return normalized;
+
+  const repeatedChunk = normalized.match(/^(.{4,}?)(?:\s+\1)+$/u);
+  if (repeatedChunk?.[1]) {
+    return normalizeWhitespace(repeatedChunk[1]);
+  }
+
+  const tokens = normalized.split(/\s+/g).filter(Boolean);
+  if (tokens.length >= 4 && tokens.length % 2 === 0) {
+    const half = tokens.length / 2;
+    const firstHalf = tokens.slice(0, half).join(' ');
+    const secondHalf = tokens.slice(half).join(' ');
+    if (firstHalf === secondHalf) {
+      return firstHalf;
+    }
+  }
+
+  return normalized;
 };
 
 const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
@@ -728,6 +759,51 @@ const resolveSourceLanguageFromOCR = (ocrLanguageKey: string, fallback: string):
   return nonEnglish || candidates[0] || fallback;
 };
 
+const SPANISH_HINT_WORDS = new Set([
+  'que', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'por', 'para', 'con', 'sin', 'como', 'pero',
+  'si', 'ya', 'me', 'mi', 'se', 'lo', 'le', 'del', 'al', 'es', 'son', 'fue', 'esta', 'este', 'eso',
+]);
+
+const ENGLISH_HINT_WORDS = new Set([
+  'the', 'and', 'you', 'your', 'this', 'that', 'with', 'from', 'for', 'are', 'was', 'were',
+  'have', 'has', 'had', 'will', 'would', 'there', 'here', 'what', 'when', 'where', 'who',
+]);
+
+const inferSourceLanguageFromTextHints = (
+  lines: TranslatableLine[],
+  fallbackLanguage: string
+): string => {
+  const fallback = normalizeTranslationLanguage(fallbackLanguage, 'en');
+  if (fallback !== 'en' && fallback !== 'es') return fallback;
+  if (lines.length === 0) return fallback;
+
+  const sampleText = lines
+    .slice(0, 40)
+    .map((line) => normalizeWhitespace(String(line.text || '')))
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (!sampleText) return fallback;
+
+  const tokens = sampleText.split(/\s+/g).map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase()).filter(Boolean);
+  if (tokens.length === 0) return fallback;
+
+  const spanishHits = tokens.filter((token) => SPANISH_HINT_WORDS.has(token)).length;
+  const englishHits = tokens.filter((token) => ENGLISH_HINT_WORDS.has(token)).length;
+  const spanishAccentHits = (sampleText.match(/[áéíóúüñ¿¡]/g) || []).length;
+  const spanishScore = spanishHits + (spanishAccentHits * 1.8);
+  const englishScore = englishHits;
+
+  if (spanishScore >= 6 && spanishScore > englishScore * 1.35) {
+    return 'es';
+  }
+  if (englishScore >= 6 && englishScore > spanishScore * 1.35) {
+    return 'en';
+  }
+
+  return fallback;
+};
+
 const ENGLISH_TECH_HINT_WORDS = new Set([
   'chapter', 'table', 'continued', 'reaction', 'connection', 'unknowns', 'unknown',
   'force', 'forces', 'moment', 'components', 'component', 'magnitude', 'direction',
@@ -842,6 +918,115 @@ const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number =>
   const overlap = intervalOverlap(a0, a1, b0, b1);
   const base = Math.max(1, Math.min(Math.max(1, a1 - a0), Math.max(1, b1 - b0)));
   return overlap / base;
+};
+
+const normalizeTranslatableDedupKey = (text: string): string =>
+  normalizeWhitespace(String(text || ''))
+    .toUpperCase()
+    .replace(/[^A-Z0-9\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '')
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/5/g, 'S');
+
+const translatableDedupSimilarity = (a: string, b: string): number => {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const grams = (value: string): Set<string> => {
+    const set = new Set<string>();
+    if (value.length < 2) {
+      set.add(value);
+      return set;
+    }
+    for (let i = 0; i < value.length - 1; i += 1) {
+      set.add(value.slice(i, i + 2));
+    }
+    return set;
+  };
+  const aSet = grams(a);
+  const bSet = grams(b);
+  if (aSet.size === 0 || bSet.size === 0) return 0;
+  let overlap = 0;
+  for (const gram of aSet) {
+    if (bSet.has(gram)) overlap += 1;
+  }
+  return (2 * overlap) / (aSet.size + bSet.size);
+};
+
+const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): TranslatableLine[] => {
+  if (lines.length <= 1) return lines;
+
+  const ordered = [...lines].sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    if (a.left !== b.left) return a.left - b.left;
+    return a.index - b.index;
+  });
+
+  const kept: TranslatableLine[] = [];
+  const keptKeys: string[] = [];
+  const lineScore = (line: TranslatableLine): number => {
+    const width = Math.max(1, line.right - line.left);
+    const height = Math.max(1, line.bottom - line.top);
+    return (line.sourceLength * 1.7) + (height * 0.42) + (Math.log10(width * height) * 2.2);
+  };
+
+  for (const candidate of ordered) {
+    const candidateKey = normalizeTranslatableDedupKey(candidate.text);
+    if (!candidateKey) {
+      kept.push(candidate);
+      keptKeys.push('');
+      continue;
+    }
+
+    const existingIndex = kept.findIndex((existing, index) => {
+      const existingKey = keptKeys[index];
+      if (!existingKey) return false;
+
+      const minLength = Math.min(existingKey.length, candidateKey.length);
+      const sameOrSubset = existingKey === candidateKey
+        || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
+      const similar = translatableDedupSimilarity(existingKey, candidateKey) >= 0.9;
+      if (!sameOrSubset && !similar) return false;
+
+      const existingWidth = Math.max(1, existing.right - existing.left);
+      const candidateWidth = Math.max(1, candidate.right - candidate.left);
+      const existingHeight = Math.max(1, existing.bottom - existing.top);
+      const candidateHeight = Math.max(1, candidate.bottom - candidate.top);
+      const minWidth = Math.max(24, Math.min(existingWidth, candidateWidth));
+      const minHeight = Math.max(8, Math.min(existingHeight, candidateHeight));
+      const existingCenterX = (existing.left + existing.right) * 0.5;
+      const candidateCenterX = (candidate.left + candidate.right) * 0.5;
+      const existingCenterY = (existing.top + existing.bottom) * 0.5;
+      const candidateCenterY = (candidate.top + candidate.bottom) * 0.5;
+      const centerDeltaX = Math.abs(existingCenterX - candidateCenterX);
+      const centerDeltaY = Math.abs(existingCenterY - candidateCenterY);
+      const overlapX = overlapRatio(existing.left, existing.right, candidate.left, candidate.right);
+      const overlapY = overlapRatio(existing.top, existing.bottom, candidate.top, candidate.bottom);
+
+      return (
+        (centerDeltaY <= Math.max(92, minHeight * 2.6) && centerDeltaX <= Math.max(118, minWidth * 2.3))
+        || (centerDeltaY <= Math.max(136, minHeight * 3.4) && overlapX >= 0.52)
+        || (overlapY >= 0.68 && overlapX >= 0.56)
+      );
+    });
+
+    if (existingIndex < 0) {
+      kept.push(candidate);
+      keptKeys.push(candidateKey);
+      continue;
+    }
+
+    const existing = kept[existingIndex];
+    if (lineScore(candidate) > lineScore(existing)) {
+      kept[existingIndex] = candidate;
+      keptKeys[existingIndex] = candidateKey;
+    }
+  }
+
+  return kept.sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    if (a.left !== b.left) return a.left - b.left;
+    return a.index - b.index;
+  });
 };
 
 const computeAlignmentScore = (base: BBox, candidate: BBox): number | null => {
@@ -968,18 +1153,42 @@ const chooseBestSourceTextForLine = (
         if (/\s/.test(candidateText) && candidateCompactLength > 12 && baseCompactLength <= 10) continue;
       }
 
+      const keepStableWideThinBBox = wideThinBase
+        && xOverlap >= 0.72
+        && normalizedXGap <= 0.16
+        && yOverlap >= 0.42
+        && baseWidth < 140;
+      const keepStableNarrowBBox = narrowLabelLikeBase
+        && xOverlap >= 0.4
+        && normalizedXGap <= 0.32
+        && yOverlap >= 0.28;
+      const keepCompactStableBBox = (
+        baseCompactLength <= 18
+        && baseWidth <= 180
+        && baseHeight <= 64
+        && xOverlap >= 0.34
+        && normalizedXGap <= 0.5
+        && yOverlap >= 0.24
+      );
+      const shouldKeepBaseBBox = baseLooksStable
+        || keepStableWideThinBBox
+        || keepStableNarrowBBox
+        || keepCompactStableBBox;
+
       if (significantlyBetter && (candidateScore > baseReadability + 1.4 || (isLongerUseful && !baseLooksStable))) {
         bestCombinedScore = combinedScore;
         bestText = candidateText;
         bestCandidateId = candidateId;
-        bestCandidateBBox = candidate.bbox
-          ? {
-            x0: candidate.bbox.x0,
-            y0: candidate.bbox.y0,
-            x1: candidate.bbox.x1,
-            y1: candidate.bbox.y1,
-          }
-          : undefined;
+        bestCandidateBBox = shouldKeepBaseBBox
+          ? undefined
+          : candidate.bbox
+            ? {
+              x0: candidate.bbox.x0,
+              y0: candidate.bbox.y0,
+              x1: candidate.bbox.x1,
+              y1: candidate.bbox.y1,
+            }
+            : undefined;
       }
     }
   }
@@ -1300,7 +1509,41 @@ const applyThaiConversationalGlossary = (
   if (!source) return translated;
 
   const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
+  const compactSourceUpper = source.toUpperCase().replace(/[^A-Z]/g, '');
   const translatedLower = translated.toLowerCase();
+  const replaceNameToken = (input: string, token: string, replacement: string): string =>
+    input.replace(new RegExp(`\\b${token}\\b`, 'ig'), replacement);
+
+  if (/^AYNAR[.!?…]*$/i.test(source.replace(/\s+/g, ''))) {
+    return preserveSourceTrailingPunctuation(source, 'ไอนาร์');
+  }
+
+  if (/\bPHENELINE\b/i.test(source) && /\bHAS\s+ABSORBED\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฟีนีลีนได้ดูดซับ');
+  }
+
+  if (/\bVERTAR\b/i.test(source) && /\bESSENCE\b/i.test(source)) {
+    const wrapped = /\[[^\]]*\]/.test(source)
+      ? '[แก่นแท้ของเวอร์ทาร์]'
+      : 'แก่นแท้ของเวอร์ทาร์';
+    return preserveSourceTrailingPunctuation(source, wrapped);
+  }
+
+  if (compactSourceUpper.includes('PHENELINE')) {
+    const replaced = replaceNameToken(translated, 'PHENELINE', 'ฟีนีลีน');
+    if (replaced !== translated) return replaced;
+    return preserveSourceTrailingPunctuation(source, 'ฟีนีลีน');
+  }
+  if (compactSourceUpper.includes('VERTAR')) {
+    const replaced = replaceNameToken(translated, 'VERTAR', 'เวอร์ทาร์');
+    if (replaced !== translated) return replaced;
+    return preserveSourceTrailingPunctuation(source, 'เวอร์ทาร์');
+  }
+  if (compactSourceUpper.includes('AYNAR')) {
+    const replaced = replaceNameToken(translated, 'AYNAR', 'ไอนาร์');
+    if (replaced !== translated) return replaced;
+    return preserveSourceTrailingPunctuation(source, 'ไอนาร์');
+  }
 
   if (/^hm+$/.test(compactSource) || /^hmm+$/.test(compactSource)) {
     return preserveSourceTrailingPunctuation(source, 'อืมม');
@@ -1333,6 +1576,7 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
   resolved = preserveTechnicalTokensInTranslation(source, resolved);
   resolved = normalizeThaiTechnicalTerms(source, resolved);
   resolved = applyThaiConversationalGlossary(source, resolved, targetLanguage);
+  resolved = collapseRepeatedTranslationFragments(resolved);
 
   if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
     return normalizeThaiTranslationText(resolved);
@@ -1361,10 +1605,19 @@ const isScientificSymbolLikeLine = (text: string): boolean => {
       return true;
     }
   }
+
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  const alphaWordCount = words.filter((token) => token.replace(/[^A-Za-z]/g, '').length >= 2).length;
+  const hasMathSignals = /[0-9=<>%^]/.test(normalized);
+  const naturalLanguageLike = alphaWordCount >= 3 && !hasMathSignals;
+  if (naturalLanguageLike) {
+    return false;
+  }
+
   if (normalized.length > 28) return false;
   if (!SCI_SYMBOL_ALLOWED_REGEX.test(normalized)) return false;
 
-  const tokens = normalized.split(/\s+/g).filter(Boolean);
+  const tokens = words;
   if (tokens.length > 5) return false;
 
   const alnum = normalized.replace(/[^A-Za-z0-9\u0391-\u03C9]/g, '');
@@ -1491,6 +1744,59 @@ const shouldUseDenseDialogueGrouping = (
   return normalizedSource === 'ko' || normalizedSource === 'es';
 };
 
+const isLikelyComicDialogueLayout = (lines: TranslatableLine[]): boolean => {
+  if (lines.length < 4) return false;
+
+  const widths = lines.map((line) => Math.max(1, line.right - line.left));
+  const heights = lines.map((line) => Math.max(1, line.height));
+  const medianWidth = computeMedian(widths);
+  const medianHeight = computeMedian(heights);
+  const shortLineCount = lines.filter((line) => normalizeWhitespace(String(line.text || '')).length <= 34).length;
+  const narrowOrBubbleLikeCount = lines.filter((line) => {
+    const width = Math.max(1, line.right - line.left);
+    const height = Math.max(1, line.height);
+    const aspect = width / Math.max(1, height);
+    return aspect <= 4.4 || width <= medianWidth * 0.9 || height >= medianHeight * 1.15;
+  }).length;
+  const longPunctuatedCount = lines.filter((line) => {
+    const text = normalizeWhitespace(String(line.text || ''));
+    return text.length >= 20 && /[.,;:]/.test(text);
+  }).length;
+
+  return (
+    shortLineCount >= Math.ceil(lines.length * 0.62)
+    && narrowOrBubbleLikeCount >= Math.ceil(lines.length * 0.58)
+    && longPunctuatedCount <= Math.max(1, Math.floor(lines.length * 0.24))
+  );
+};
+
+const shouldForceLineByLineForOfflinePanel = (lines: TranslatableLine[]): boolean => {
+  if (lines.length < 3) return false;
+
+  const normalizedLines = lines.map((line) => normalizeWhitespace(String(line.text || ''))).filter(Boolean);
+  if (normalizedLines.length < 3) return false;
+
+  const avgLength = normalizedLines.reduce((sum, text) => sum + text.length, 0) / normalizedLines.length;
+  const technicalHits = normalizedLines.filter((text) => TECHNICAL_SOURCE_HINT_REGEX.test(text)).length;
+  if (technicalHits < 3) return false;
+  const shortLineCount = normalizedLines.filter((text) => text.length <= 34).length;
+  const uppercaseDominantCount = normalizedLines.filter((text) => {
+    const letters = text.replace(/[^A-Za-z]/g, '');
+    if (letters.length < 5) return false;
+    return letters === letters.toUpperCase();
+  }).length;
+  const hasBracketNarration = normalizedLines.some((text) => /\[[^\]]{4,}\]/.test(text));
+  const hasPossessiveCompound = normalizedLines.some((text) => /\b[A-Za-z]{3,}['’]S[A-Za-z]{3,}\b/.test(text));
+
+  const mostlyShort = shortLineCount >= Math.ceil(normalizedLines.length * 0.7);
+  const mostlyUppercase = uppercaseDominantCount >= Math.ceil(normalizedLines.length * 0.5);
+  if (normalizedLines.length >= 5 && mostlyShort && avgLength >= 18 && avgLength <= 38 && technicalHits >= 4) {
+    return true;
+  }
+
+  return mostlyShort && mostlyUppercase && (hasBracketNarration || hasPossessiveCompound);
+};
+
 const TECHNICAL_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|conditions?|equilibrium|rigid|body|reaction|moment|force|free[-\s]?body|unknowns?|support|collinear|diagram|objectives?)\b/i;
 
 const shouldUseLineByLineGrouping = (
@@ -1503,7 +1809,13 @@ const shouldUseLineByLineGrouping = (
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
   if (normalizedSource !== 'en' || normalizedTarget !== 'th') return false;
+  if (mode !== 'official' && mode !== 'adaptive') return false;
   if (lines.length <= 4) return false;
+
+  const comicDialogueLike = isLikelyComicDialogueLayout(lines);
+  if (mode === 'adaptive' && comicDialogueLike) {
+    return false;
+  }
 
   const markerHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
   const avgLength = lines.reduce((sum, line) => sum + line.text.length, 0) / Math.max(1, lines.length);
@@ -1522,20 +1834,23 @@ const shouldUseLineByLineGrouping = (
     return upperRatio >= 0.72;
   }).length;
 
-  const looksLikeDocument = markerHits >= 2
-    || longSentenceLines >= 3
-    || avgLength >= 24
-    || (mode === 'official' && uppercaseHeadingLines >= 2 && lines.length >= 8)
-    || (mode === 'adaptive' && uppercaseHeadingLines >= 2 && lines.length >= 9);
+  if (mode === 'adaptive') {
+    const strongTechnicalDocument = markerHits >= 3
+      && longSentenceLines >= 3
+      && avgLength >= 21
+      && uppercaseHeadingLines >= 1;
+    return strongTechnicalDocument;
+  }
 
-  const isDocumentMode = mode === 'official' || (mode === 'adaptive' && looksLikeDocument);
-  if (!isDocumentMode) return false;
+  const officialDocumentSignals = (
+    (markerHits >= 2 && (longSentenceLines >= 2 || avgLength >= 20))
+    || (markerHits >= 1 && uppercaseHeadingLines >= 2 && lines.length >= 8)
+  );
+  if (officialDocumentSignals) {
+    return true;
+  }
 
-  if (looksLikeDocument) return true;
-
-  // Offline technical translation suffers the most from aggressive merge+redistribute
-  // when OCR text is noisy; keep lines independent in this case.
-  if (engine === 'offline' && markerHits >= 1 && (noisyLines >= 2 || lines.length >= 8)) {
+  if (engine === 'offline' && markerHits >= 2 && noisyLines >= 3 && longSentenceLines >= 2) {
     return true;
   }
 
@@ -2011,14 +2326,16 @@ export default function App() {
       const ocrLanguageKey = pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
       const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
 
-      const shouldUseCrossEngineAssist = translationMode === 'official'
+      const shouldUseCrossEngineAssist = selectedEngine !== 'paddleocr' && (
+        translationMode === 'official'
         || (translationMode === 'adaptive' && shouldUseLineByLineGrouping(
           baseLines,
           resolvedSourceFromOCR,
           normalizedTargetLanguage,
           'ai',
           translationMode
-        ));
+        ))
+      );
       const alternativePages = shouldUseCrossEngineAssist
         ? Array.from(ocrState.ocrByPageEngine.get(pageNum)?.entries() || [])
           .filter(([engineKey, candidate]) => {
@@ -2030,7 +2347,7 @@ export default function App() {
         : [];
 
       const {
-        lines,
+        lines: assistedLines,
         adoptedCount: pageAssistLines,
       } = buildTranslationLinesWithCrossEngineFallback(
         baseLines,
@@ -2038,11 +2355,13 @@ export default function App() {
         alternativePages,
         (pageOCR.ocrEngine || selectedEngine) as OCREngine
       );
+      const lines = dedupeTranslatableLinesForTranslation(assistedLines);
+      const inferredSourceLanguage = inferSourceLanguageFromTextHints(lines, resolvedSourceFromOCR);
       sourceAssistLines += pageAssistLines;
 
       const groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
         lines,
-        resolvedSourceFromOCR,
+        inferredSourceLanguage,
         normalizedTargetLanguage,
         'ai',
         translationMode
@@ -2050,7 +2369,7 @@ export default function App() {
         ? 'line-by-line'
         : (shouldUseDenseDialogueGrouping(
           lines,
-          resolvedSourceFromOCR,
+          inferredSourceLanguage,
           normalizedTargetLanguage,
           translationMode
         )
@@ -2063,7 +2382,7 @@ export default function App() {
               .filter((line) => !isScientificSymbolLikeLine(line.text))
               .map((line) => line.text)
               .join(' '),
-            resolvedSourceFromOCR
+            inferredSourceLanguage
           );
           const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
           return {
@@ -2086,7 +2405,7 @@ export default function App() {
         ocr: pageOCR,
         ocrEngine: (pageOCR.ocrEngine || selectedEngine) as OCREngine,
         ocrLanguageKey,
-        sourceLanguage: resolvedSourceFromOCR,
+        sourceLanguage: inferredSourceLanguage,
         lines,
         groups,
         groupingProfile,
@@ -2280,14 +2599,16 @@ export default function App() {
     const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
     const effectiveSourceLanguage = resolvedSourceFromOCR;
 
-    const shouldUseCrossEngineAssist = translationMode === 'official'
+    const shouldUseCrossEngineAssist = pageEngine !== 'paddleocr' && (
+      translationMode === 'official'
       || (translationMode === 'adaptive' && shouldUseLineByLineGrouping(
         baseTranslatableLines,
         resolvedSourceFromOCR,
         normalizedTargetLanguage,
         engine,
         translationMode
-      ));
+      ))
+    );
     const alternativePages = shouldUseCrossEngineAssist
       ? Array.from(ocrState.ocrByPageEngine.get(currentPage)?.entries() || [])
         .filter(([engineKey, candidate]) => {
@@ -2299,7 +2620,7 @@ export default function App() {
       : [];
 
     const {
-      lines: translatableLines,
+      lines: assistedLines,
       adoptedCount: crossEngineAssistCount,
     } = buildTranslationLinesWithCrossEngineFallback(
       baseTranslatableLines,
@@ -2307,9 +2628,12 @@ export default function App() {
       alternativePages,
       pageEngine
     );
-    const groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
+    const translatableLines = dedupeTranslatableLinesForTranslation(assistedLines);
+    const inferredSourceLanguage = inferSourceLanguageFromTextHints(translatableLines, effectiveSourceLanguage);
+    const translationSourceLanguage = inferredSourceLanguage;
+    let groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
       translatableLines,
-      effectiveSourceLanguage,
+      translationSourceLanguage,
       normalizedTargetLanguage,
       engine,
       translationMode
@@ -2317,12 +2641,21 @@ export default function App() {
       ? 'line-by-line'
       : (shouldUseDenseDialogueGrouping(
         translatableLines,
-        effectiveSourceLanguage,
+        translationSourceLanguage,
         normalizedTargetLanguage,
         translationMode
       )
         ? 'dense-dialogue'
         : 'default');
+
+    if (
+      engine === 'offline'
+      && pageEngine === 'paddleocr'
+      && groupingProfile === 'dense-dialogue'
+      && shouldForceLineByLineForOfflinePanel(translatableLines)
+    ) {
+      groupingProfile = 'line-by-line';
+    }
 
     const groups = buildTranslationGroups(translatableLines, groupingProfile);
 
@@ -2331,19 +2664,19 @@ export default function App() {
         .filter((line) => !isScientificSymbolLikeLine(line.text))
         .map((line) => line.text)
         .join(' '),
-      effectiveSourceLanguage
+      translationSourceLanguage
     ));
     const protectedGroups = groupTexts.map((text) => protectTranslationTokens(text, targetLanguage));
     const textsForTranslation = protectedGroups.map((item) => item.protectedText);
     const translatedGroupsRaw = engine === 'offline'
-      ? await translateBatchOffline(textsForTranslation, 'text', translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
+      ? await translateBatchOffline(textsForTranslation, 'text', translationMode, translationSourceLanguage, normalizedTargetLanguage)
       : await translateBatchGemini(
         textsForTranslation,
         'text',
         translationMode,
-        effectiveSourceLanguage,
+        translationSourceLanguage,
         normalizedTargetLanguage,
-        buildGeminiContextOverrides(translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
+        buildGeminiContextOverrides(translationMode, translationSourceLanguage, normalizedTargetLanguage)
       );
     const translatedGroups = translatedGroupsRaw.map((text, index) => {
       const restored = restoreProtectedTokens(text, protectedGroups[index]?.replacements || []);
@@ -2364,7 +2697,7 @@ export default function App() {
         if (!shouldRetryGroupTranslation(
           sourceGroupText,
           initialTranslated,
-          effectiveSourceLanguage,
+          translationSourceLanguage,
           normalizedTargetLanguage
         )) {
           continue;
@@ -2378,7 +2711,7 @@ export default function App() {
           },
         ];
 
-        const retrySourceText = buildOfflineGroupRetrySourceText(group.lines, effectiveSourceLanguage);
+        const retrySourceText = buildOfflineGroupRetrySourceText(group.lines, translationSourceLanguage);
         if (
           retrySourceText
           && buildTranslationComparisonKey(retrySourceText) !== buildTranslationComparisonKey(sourceGroupText)
@@ -2388,7 +2721,7 @@ export default function App() {
             [retryProtected.protectedText],
             'text',
             translationMode,
-            effectiveSourceLanguage,
+            translationSourceLanguage,
             normalizedTargetLanguage
           );
           const retryGroupRestored = restoreProtectedTokens(
@@ -2405,13 +2738,13 @@ export default function App() {
           });
         }
 
-        const retryLineInputs = group.lines.map((line) => normalizeSourceForTranslation(line.text, effectiveSourceLanguage));
+        const retryLineInputs = group.lines.map((line) => normalizeSourceForTranslation(line.text, translationSourceLanguage));
         const retryLineProtected = retryLineInputs.map((text) => protectTranslationTokens(text, targetLanguage));
         const retryLineRaw = await translateBatchOffline(
           retryLineProtected.map((item) => item.protectedText),
           'text',
           translationMode,
-          effectiveSourceLanguage,
+          translationSourceLanguage,
           normalizedTargetLanguage
         );
         const retryLineOutputs = group.lines.map((line, lineIndex) => {
@@ -2461,7 +2794,7 @@ export default function App() {
 
           const overrideText = directLineOverride[lineIndex] || sourceLineText;
           translatedByIndex.set(line.index, overrideText || sourceLineText);
-          if (shouldRetryLineTranslation(line.text, overrideText, effectiveSourceLanguage, normalizedTargetLanguage)) {
+          if (shouldRetryLineTranslation(line.text, overrideText, translationSourceLanguage, normalizedTargetLanguage)) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text });
           }
         });
@@ -2480,7 +2813,7 @@ export default function App() {
         const redistributedLine = redistributed[lineIndex] || sourceLineText;
         const finalizedLine = finalizeTranslatedLine(sourceLineText, redistributedLine, normalizedTargetLanguage);
         translatedByIndex.set(line.index, finalizedLine || sourceLineText);
-        if (shouldRetryLineTranslation(line.text, finalizedLine, effectiveSourceLanguage, normalizedTargetLanguage)) {
+        if (shouldRetryLineTranslation(line.text, finalizedLine, translationSourceLanguage, normalizedTargetLanguage)) {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text });
         }
       });
@@ -2490,7 +2823,7 @@ export default function App() {
     const retryCandidates = Array.from(retryLineMap.values());
     if (retryCandidates.length > 0) {
       const retryPrepared = retryCandidates.map((item) => {
-        const sourceText = normalizeSourceForTranslation(item.sourceText, effectiveSourceLanguage);
+        const sourceText = normalizeSourceForTranslation(item.sourceText, translationSourceLanguage);
         const protectedRetry = protectTranslationTokens(sourceText, targetLanguage);
         return {
           ...item,
@@ -2501,14 +2834,14 @@ export default function App() {
       });
       const retryInputs = retryPrepared.map((item) => item.protectedText);
       const retryRaw = engine === 'offline'
-        ? await translateBatchOffline(retryInputs, 'text', translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
+        ? await translateBatchOffline(retryInputs, 'text', translationMode, translationSourceLanguage, normalizedTargetLanguage)
         : await translateBatchGemini(
           retryInputs,
           'text',
           translationMode,
-          effectiveSourceLanguage,
+          translationSourceLanguage,
           normalizedTargetLanguage,
-          buildGeminiContextOverrides(translationMode, effectiveSourceLanguage, normalizedTargetLanguage)
+          buildGeminiContextOverrides(translationMode, translationSourceLanguage, normalizedTargetLanguage)
         );
       const retryOutputs = retryRaw.map((text, idx) => {
         const restored = restoreProtectedTokens(text, retryPrepared[idx]?.replacements || []);
@@ -2522,7 +2855,7 @@ export default function App() {
         if (!retried) return;
 
         const finalizedRetry = finalizeTranslatedLine(item.sourceText, retried, normalizedTargetLanguage);
-        if (shouldRetryLineTranslation(item.sourceText, finalizedRetry, effectiveSourceLanguage, normalizedTargetLanguage)) {
+        if (shouldRetryLineTranslation(item.sourceText, finalizedRetry, translationSourceLanguage, normalizedTargetLanguage)) {
           return;
         }
         translatedByIndex.set(item.index, finalizedRetry);
@@ -2544,7 +2877,7 @@ export default function App() {
     const cacheKey = buildOCRTranslationCacheKey({
       ocrEngine,
       ocrLanguage: ocrLanguageKey,
-      sourceLanguage: effectiveSourceLanguage,
+      sourceLanguage: translationSourceLanguage,
       targetLanguage: normalizedTargetLanguage,
       translationMode: cacheTranslationMode,
       translatorEngine: engine,
@@ -2555,7 +2888,7 @@ export default function App() {
       pageNum: currentPage,
       ocrEngine,
       ocrLanguage: ocrLanguageKey,
-      sourceLanguage: effectiveSourceLanguage,
+      sourceLanguage: translationSourceLanguage,
       targetLanguage: normalizedTargetLanguage,
       translationMode: cacheTranslationMode,
       translatorEngine: engine,
@@ -2580,7 +2913,7 @@ export default function App() {
     const totalPageCaches = useOCRTextLayerStore.getState().getTranslationCacheEntries(currentPage).length;
     const lowQualityOfflinePath = engine === 'offline'
       && normalizedTargetLanguage === 'th'
-      && (effectiveSourceLanguage === 'ko' || effectiveSourceLanguage === 'es');
+      && (translationSourceLanguage === 'ko' || translationSourceLanguage === 'es');
     const qualityHint = lowQualityOfflinePath
       ? ' note: offline Argos quality for this language pair is limited; AI usually gives better Thai phrasing.'
       : '';
@@ -2593,7 +2926,7 @@ export default function App() {
 
     setTranslationStatus({
       kind: 'success',
-      message: `${engine} | ${effectiveSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${groups.length} grouped segments on page ${currentPage}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${qualityHint}`,
+      message: `${engine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${groups.length} grouped segments on page ${currentPage}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${qualityHint}`,
     });
   };
 
@@ -2801,6 +3134,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 

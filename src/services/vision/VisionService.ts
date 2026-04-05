@@ -83,6 +83,7 @@ const normalizeExternalDedupText = (text: string): string =>
   String(text || '')
     .trim()
     .replace(/\s+/g, ' ')
+    .replace(/[.,!?;:'"`~^]+/g, '')
     .replace(/[|¦│┃￨︱︲]+/g, '')
     .toUpperCase();
 
@@ -106,6 +107,19 @@ const horizontalContainmentRatio = (inner: OCRWord['bbox'] | OCRLine['bbox'], ou
   const innerWidth = Math.max(1, bboxWidth(inner));
   const overlap = Math.min(inner.x1, outer.x1) - Math.max(inner.x0, outer.x0);
   return Math.max(0, overlap) / innerWidth;
+};
+
+const bboxArea = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number =>
+  Math.max(1, bboxWidth(bbox) * bboxHeight(bbox));
+
+const bboxIoURatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
+  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const intersection = overlapWidth * overlapHeight;
+  if (intersection <= 0) return 0;
+
+  const union = bboxArea(a) + bboxArea(b) - intersection;
+  return union > 0 ? (intersection / union) : 0;
 };
 
 const normalizeMultilingualToken = (text: string): string =>
@@ -674,6 +688,166 @@ class VisionService {
     );
   }
 
+  private shouldMergePaddlePanelDuplicateExternalLine(
+    existing: OCRLine,
+    candidate: OCRLine,
+    languageCodes: string[]
+  ): boolean {
+    const existingText = normalizeExternalDedupText(existing.text);
+    const candidateText = normalizeExternalDedupText(candidate.text);
+    if (!existingText || !candidateText) return false;
+
+    const existingToken = normalizeExternalLatinToken(existingText);
+    const candidateToken = normalizeExternalLatinToken(candidateText);
+    const exactTokenMatch = Boolean(existingToken && candidateToken && existingToken === candidateToken);
+
+    const overlapY = verticalOverlapRatio(existing.bbox, candidate.bbox);
+    const overlapX = horizontalOverlapRatio(existing.bbox, candidate.bbox);
+    const iou = bboxIoURatio(existing.bbox, candidate.bbox);
+    const centerDeltaY = Math.abs(bboxCenterY(existing.bbox) - bboxCenterY(candidate.bbox));
+    const centerDeltaX = Math.abs(bboxCenterX(existing.bbox) - bboxCenterX(candidate.bbox));
+    const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(candidate.bbox)));
+    const minWidth = Math.max(24, Math.min(bboxWidth(existing.bbox), bboxWidth(candidate.bbox)));
+    const existingArea = Math.max(1, bboxArea(existing.bbox));
+    const candidateArea = Math.max(1, bboxArea(candidate.bbox));
+    const areaRatio = existingArea / candidateArea;
+    const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
+
+    const sameOrSubset = existingText === candidateText
+      || existingText.includes(candidateText)
+      || candidateText.includes(existingText);
+    if (sameOrSubset) {
+      const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= minHeight * 1.35;
+      const localStackedDuplicate = (
+        exactTokenMatch
+        && nearSizeMatch
+        && centerDeltaY <= Math.max(56, minHeight * 2.0)
+        && centerDeltaX <= Math.max(72, minWidth * 1.25)
+        && overlapX >= 0.62
+        && nearStackedBand
+      );
+      return (
+        iou >= 0.56
+        || (overlapY >= 0.82 && overlapX >= 0.62)
+        || (
+          centerDeltaY <= minHeight * 0.72
+          && centerDeltaX <= minWidth * 0.68
+          && overlapY >= 0.62
+          && overlapX >= 0.38
+        )
+        || (
+          exactTokenMatch
+          && overlapY >= 0.88
+          && overlapX >= 0.4
+          && centerDeltaY <= minHeight * 1.2
+        )
+        || localStackedDuplicate
+      );
+    }
+
+    if (languageCodes.includes('kor')) {
+      return false;
+    }
+
+    if (!existingToken || !candidateToken) return false;
+
+    const similarity = diceSimilarity(existingToken, candidateToken);
+    const lenDelta = Math.abs(existingToken.length - candidateToken.length);
+    const typoDistance = boundedLevenshteinDistance(existingToken, candidateToken, 2);
+    const nearDuplicateToken = similarity >= 0.9
+      || (similarity >= 0.84 && lenDelta <= 2)
+      || (
+        typoDistance <= 1
+        && lenDelta <= 1
+        && Math.min(existingToken.length, candidateToken.length) >= 5
+      );
+    if (!nearDuplicateToken) {
+      return false;
+    }
+
+    return (
+      iou >= 0.62
+      || (
+        overlapY >= 0.76
+        && overlapX >= 0.56
+        && centerDeltaY <= minHeight * 0.9
+        && centerDeltaX <= minWidth * 0.9
+      )
+    );
+  }
+
+  private shouldCollapseResidualSpatialDuplicateExternalLine(
+    existing: OCRLine,
+    candidate: OCRLine,
+    languageCodes: string[]
+  ): boolean {
+    if (this.shouldMergePaddlePanelDuplicateExternalLine(existing, candidate, languageCodes)) {
+      return true;
+    }
+
+    const existingText = normalizeExternalDedupText(existing.text);
+    const candidateText = normalizeExternalDedupText(candidate.text);
+    if (!existingText || !candidateText) return false;
+
+    const overlapY = verticalOverlapRatio(existing.bbox, candidate.bbox);
+    const overlapX = horizontalOverlapRatio(existing.bbox, candidate.bbox);
+    const iou = bboxIoURatio(existing.bbox, candidate.bbox);
+    const centerDeltaY = Math.abs(bboxCenterY(existing.bbox) - bboxCenterY(candidate.bbox));
+    const centerDeltaX = Math.abs(bboxCenterX(existing.bbox) - bboxCenterX(candidate.bbox));
+    const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(candidate.bbox)));
+    const minWidth = Math.max(24, Math.min(bboxWidth(existing.bbox), bboxWidth(candidate.bbox)));
+
+    if (centerDeltaY > Math.max(84, minHeight * 2.8)) return false;
+    if (centerDeltaX > Math.max(120, minWidth * 2.6)) return false;
+
+    const nearSameBox = (
+      iou >= 0.66
+      || (overlapY >= 0.88 && overlapX >= 0.76)
+      || (
+        overlapY >= 0.74
+        && overlapX >= 0.58
+        && centerDeltaY <= minHeight * 0.72
+        && centerDeltaX <= minWidth * 0.7
+      )
+    );
+    if (!nearSameBox) {
+      return false;
+    }
+
+    const latinExistingToken = normalizeExternalLatinToken(existingText);
+    const latinCandidateToken = normalizeExternalLatinToken(candidateText);
+    const existingToken = latinExistingToken || normalizeMultilingualToken(existingText);
+    const candidateToken = latinCandidateToken || normalizeMultilingualToken(candidateText);
+    if (!existingToken || !candidateToken) return false;
+
+    const minLength = Math.min(existingToken.length, candidateToken.length);
+    const sameOrSubset = existingToken === candidateToken
+      || (minLength >= 4 && (existingToken.includes(candidateToken) || candidateToken.includes(existingToken)));
+    if (sameOrSubset) {
+      return true;
+    }
+
+    if (languageCodes.includes('kor') && (latinExistingToken || latinCandidateToken)) {
+      return false;
+    }
+
+    const similarity = diceSimilarity(existingToken, candidateToken);
+    const prefixMatch = minLength >= 4 && existingToken.slice(0, 4) === candidateToken.slice(0, 4);
+    const suffixMatch = minLength >= 4 && existingToken.slice(-4) === candidateToken.slice(-4);
+    if ((prefixMatch || suffixMatch) && similarity >= 0.82) {
+      return true;
+    }
+    if (iou >= 0.8 && minLength >= 4 && similarity >= 0.7) {
+      return true;
+    }
+
+    return (
+      iou >= 0.82
+      && minLength >= 6
+      && boundedLevenshteinDistance(existingToken, candidateToken, 3) <= 2
+    );
+  }
+
   private pruneLikelyOrphanCjkFragments(lines: OCRLine[]): OCRLine[] {
     if (lines.length <= 1) return lines;
 
@@ -882,6 +1056,143 @@ class VisionService {
           filter: 'externalChunkMerge',
           reason: 'koreanNearDuplicateLine',
           text: loserText,
+          confidence: Number(loserLine.confidence || 0),
+          bbox: loserLine.bbox,
+        });
+        winnerIndex = winner;
+      }
+
+      if (consumed[winnerIndex]) continue;
+      consumed[winnerIndex] = true;
+      kept.push(lines[winnerIndex]);
+    }
+
+    return { lines: kept, dropped };
+  }
+
+  private collapseLatinNearDuplicateExternalLines(
+    lines: OCRLine[],
+    languageCodes: string[]
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) {
+      return { lines, dropped: [] };
+    }
+
+    const consumed = new Array<boolean>(lines.length).fill(false);
+    const kept: OCRLine[] = [];
+    const dropped: OCRDroppedWord[] = [];
+
+    const lineScore = (line: OCRLine): number => {
+      const text = String(line.text || '').trim();
+      const confidence = Number(line.confidence || 0);
+      const area = Math.max(1, bboxWidth(line.bbox) * bboxHeight(line.bbox));
+      return (confidence * 1.8) + (text.length * 1.2) + (Math.log10(area) * 2.0);
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      if (consumed[i]) continue;
+
+      let winnerIndex = i;
+
+      for (let j = i + 1; j < lines.length; j += 1) {
+        if (consumed[j]) continue;
+
+        const a = lines[winnerIndex];
+        const b = lines[j];
+        const centerDeltaY = Math.abs(bboxCenterY(a.bbox) - bboxCenterY(b.bbox));
+        const maxBandDistance = Math.max(72, Math.max(bboxHeight(a.bbox), bboxHeight(b.bbox)) * 2.6);
+        if (centerDeltaY > maxBandDistance) {
+          break;
+        }
+
+        if (!this.shouldMergePaddlePanelDuplicateExternalLine(a, b, languageCodes)) continue;
+
+        const winner = lineScore(a) >= lineScore(b) ? winnerIndex : j;
+        const loser = winner === winnerIndex ? j : winnerIndex;
+        const loserLine = lines[loser];
+        const loserText = String(loserLine.text || '').trim();
+        consumed[loser] = true;
+        dropped.push({
+          filter: 'externalChunkMerge',
+          reason: 'latinNearDuplicateLine',
+          text: loserText,
+          confidence: Number(loserLine.confidence || 0),
+          bbox: loserLine.bbox,
+        });
+        winnerIndex = winner;
+      }
+
+      if (consumed[winnerIndex]) continue;
+      consumed[winnerIndex] = true;
+      kept.push(lines[winnerIndex]);
+    }
+
+    return { lines: kept, dropped };
+  }
+
+  private collapseResidualSpatialDuplicateExternalLines(
+    lines: OCRLine[],
+    languageCodes: string[]
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) {
+      return { lines, dropped: [] };
+    }
+
+    const consumed = new Array<boolean>(lines.length).fill(false);
+    const dropped: OCRDroppedWord[] = [];
+    const kept: OCRLine[] = [];
+    const orderedIndices = lines
+      .map((_line, index) => index)
+      .sort((a, b) => {
+        const aLine = lines[a];
+        const bLine = lines[b];
+        if (aLine.bbox.y0 !== bLine.bbox.y0) return aLine.bbox.y0 - bLine.bbox.y0;
+        if (aLine.bbox.x0 !== bLine.bbox.x0) return aLine.bbox.x0 - bLine.bbox.x0;
+        return a - b;
+      });
+
+    const lineScore = (line: OCRLine): number => {
+      const text = String(line.text || '').trim();
+      const confidence = Number(line.confidence || 0);
+      return (confidence * 2.2) + text.length + (Math.log10(bboxArea(line.bbox)) * 2.8);
+    };
+
+    for (let i = 0; i < orderedIndices.length; i += 1) {
+      const baseIndex = orderedIndices[i];
+      if (consumed[baseIndex]) continue;
+
+      let winnerIndex = baseIndex;
+
+      for (let j = i + 1; j < orderedIndices.length; j += 1) {
+        const candidateIndex = orderedIndices[j];
+        if (consumed[candidateIndex]) continue;
+
+        const winnerLine = lines[winnerIndex];
+        const candidateLine = lines[candidateIndex];
+        const centerDeltaY = Math.abs(bboxCenterY(winnerLine.bbox) - bboxCenterY(candidateLine.bbox));
+        const centerDeltaX = Math.abs(bboxCenterX(winnerLine.bbox) - bboxCenterX(candidateLine.bbox));
+        const minWidth = Math.max(24, Math.min(bboxWidth(winnerLine.bbox), bboxWidth(candidateLine.bbox)));
+        const maxBandDistance = Math.max(92, Math.max(bboxHeight(winnerLine.bbox), bboxHeight(candidateLine.bbox)) * 3.1);
+        if (centerDeltaY > maxBandDistance) {
+          break;
+        }
+        if (centerDeltaX > Math.max(132, minWidth * 2.8)) {
+          continue;
+        }
+
+        if (!this.shouldCollapseResidualSpatialDuplicateExternalLine(winnerLine, candidateLine, languageCodes)) {
+          continue;
+        }
+
+        const winner = lineScore(winnerLine) >= lineScore(candidateLine) ? winnerIndex : candidateIndex;
+        const loser = winner === winnerIndex ? candidateIndex : winnerIndex;
+        const loserLine = lines[loser];
+
+        consumed[loser] = true;
+        dropped.push({
+          filter: 'externalChunkMerge',
+          reason: 'residualSpatialDuplicateLine',
+          text: String(loserLine.text || '').trim(),
           confidence: Number(loserLine.confidence || 0),
           bbox: loserLine.bbox,
         });
@@ -1118,6 +1429,10 @@ class VisionService {
     const mergedLines: OCRLine[] = [];
     let runtimeMs = 0;
     const isPaddlePanel = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
+    const languageCodes = String(language || '')
+      .split('+')
+      .map((code) => code.trim().toLowerCase())
+      .filter(Boolean);
     const mergedDropCounts: Record<string, number> = {};
     const mergedDroppedWords: OCRDroppedWord[] = [];
 
@@ -1139,14 +1454,7 @@ class VisionService {
             return this.shouldMergeDuplicateExternalLine(existing, line);
           }
 
-          const existingText = normalizeExternalDedupText(existing.text);
-          const candidateText = normalizeExternalDedupText(line.text);
-          if (!existingText || existingText != candidateText) return false;
-
-          const overlap = verticalOverlapRatio(existing.bbox, line.bbox);
-          const centerDeltaY = Math.abs(bboxCenterY(existing.bbox) - bboxCenterY(line.bbox));
-          const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(line.bbox)));
-          return overlap >= 0.82 || centerDeltaY <= minHeight * 0.45;
+          return this.shouldMergePaddlePanelDuplicateExternalLine(existing, line, languageCodes);
         });
         if (existingIndex < 0) {
           mergedLines.push(line);
@@ -1180,11 +1488,12 @@ class VisionService {
     const applyCjkOrphanPrune = pipelineProfile === 'panel'
       && isCjkLikeLanguage(language)
       && ocrEngine === 'easyocr';
-    const languageCodes = language
-      .split('+')
-      .map((code) => code.trim())
-      .filter(Boolean);
     const applyKoreanChunkMergePrune = isPaddlePanel && languageCodes.includes('kor');
+    const applyLatinChunkMergePrune = isPaddlePanel
+      && !isCjkLikeLanguage(language)
+      && this.shouldApplyAggressiveLatinPanelCleanup(language);
+    const shouldApplyAggressiveLatinPrune = this.shouldApplyAggressiveLatinPanelCleanup(language)
+      && !(isPaddlePanel && pipelineProfile === 'panel');
 
     let finalLines = applyCjkOrphanPrune
       ? this.pruneLikelyOrphanCjkFragments(mergedLines)
@@ -1208,12 +1517,24 @@ class VisionService {
       }
     }
 
-    const latinGhostResult = this.pruneLikelyLatinGhostExternalLines(
-      finalLines,
-      height,
-      pipelineProfile,
-      language
-    );
+    if (applyLatinChunkMergePrune) {
+      const latinNearDuplicateResult = this.collapseLatinNearDuplicateExternalLines(finalLines, languageCodes);
+      finalLines = latinNearDuplicateResult.lines;
+      if (latinNearDuplicateResult.dropped.length > 0) {
+        mergedDropCounts.latinChunkMergeNearDuplicate =
+          (mergedDropCounts.latinChunkMergeNearDuplicate || 0) + latinNearDuplicateResult.dropped.length;
+        mergedDroppedWords.push(...latinNearDuplicateResult.dropped);
+      }
+    }
+
+    const latinGhostResult = shouldApplyAggressiveLatinPrune
+      ? this.pruneLikelyLatinGhostExternalLines(
+        finalLines,
+        height,
+        pipelineProfile,
+        language
+      )
+      : { lines: finalLines, dropped: [] };
     finalLines = latinGhostResult.lines;
     if (latinGhostResult.dropped.length > 0) {
       mergedDropCounts.externalLatinGhostLine =
@@ -1221,18 +1542,30 @@ class VisionService {
       mergedDroppedWords.push(...latinGhostResult.dropped);
     }
 
-    const singletonResult = this.pruneLikelyExternalResidualSingletons(
-      finalLines,
-      width,
-      height,
-      pipelineProfile,
-      language
-    );
+    const singletonResult = shouldApplyAggressiveLatinPrune
+      ? this.pruneLikelyExternalResidualSingletons(
+        finalLines,
+        width,
+        height,
+        pipelineProfile,
+        language
+      )
+      : { lines: finalLines, dropped: [] };
     finalLines = singletonResult.lines;
     if (singletonResult.dropped.length > 0) {
       mergedDropCounts.externalResidualSingleton =
         (mergedDropCounts.externalResidualSingleton || 0) + singletonResult.dropped.length;
       mergedDroppedWords.push(...singletonResult.dropped);
+    }
+
+    if (isPaddlePanel) {
+      const residualSpatialResult = this.collapseResidualSpatialDuplicateExternalLines(finalLines, languageCodes);
+      finalLines = residualSpatialResult.lines;
+      if (residualSpatialResult.dropped.length > 0) {
+        mergedDropCounts.externalResidualSpatialDuplicate =
+          (mergedDropCounts.externalResidualSpatialDuplicate || 0) + residualSpatialResult.dropped.length;
+        mergedDroppedWords.push(...residualSpatialResult.dropped);
+      }
     }
 
     const mergedWords = finalLines.flatMap((line) => line.words || []);
@@ -1429,12 +1762,18 @@ class VisionService {
         ocrQualityProfile,
       });
 
-      const latinGhostResult = this.pruneLikelyLatinGhostExternalLines(
-        result.lines || [],
-        imageHeight,
-        pipelineProfile,
-        language
-      );
+      const isPaddlePanelPath = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
+      const shouldApplyAggressiveLatinPrune = this.shouldApplyAggressiveLatinPanelCleanup(language)
+        && !isPaddlePanelPath;
+
+      const latinGhostResult = shouldApplyAggressiveLatinPrune
+        ? this.pruneLikelyLatinGhostExternalLines(
+          result.lines || [],
+          imageHeight,
+          pipelineProfile,
+          language
+        )
+        : { lines: result.lines || [], dropped: [] };
       const finalLines = latinGhostResult.lines;
       const finalWords = finalLines.flatMap((line) => line.words || []);
       const confidences = finalWords.length > 0
@@ -1455,13 +1794,15 @@ class VisionService {
         debugDroppedWords.push(...latinGhostResult.dropped);
       }
 
-      const singletonResult = this.pruneLikelyExternalResidualSingletons(
-        finalLines,
-        imageWidth,
-        imageHeight,
-        pipelineProfile,
-        language
-      );
+      const singletonResult = shouldApplyAggressiveLatinPrune
+        ? this.pruneLikelyExternalResidualSingletons(
+          finalLines,
+          imageWidth,
+          imageHeight,
+          pipelineProfile,
+          language
+        )
+        : { lines: finalLines, dropped: [] };
       const singletonCleanedLines = singletonResult.lines;
       if (singletonResult.dropped.length > 0) {
         debugDropCounts.externalResidualSingleton =
@@ -1469,10 +1810,26 @@ class VisionService {
         debugDroppedWords.push(...singletonResult.dropped);
       }
 
-      const singletonCleanedWords = singletonCleanedLines.flatMap((line) => line.words || []);
+      const languageCodes = String(language || '')
+        .split('+')
+        .map((code) => code.trim().toLowerCase())
+        .filter(Boolean);
+      const isExternalPanel = pipelineProfile === 'panel' && (ocrEngine === 'paddleocr' || ocrEngine === 'easyocr');
+      const shouldApplyResidualSpatial = isExternalPanel
+        && (isCjkLikeLanguage(language) || this.shouldApplyAggressiveLatinPanelCleanup(language));
+      const finalResidualSpatialResult = shouldApplyResidualSpatial
+        ? this.collapseResidualSpatialDuplicateExternalLines(singletonCleanedLines, languageCodes)
+        : { lines: singletonCleanedLines, dropped: [] };
+      if (finalResidualSpatialResult.dropped.length > 0) {
+        debugDropCounts.externalResidualSpatialDuplicate =
+          (debugDropCounts.externalResidualSpatialDuplicate || 0) + finalResidualSpatialResult.dropped.length;
+        debugDroppedWords.push(...finalResidualSpatialResult.dropped);
+      }
+
+      const singletonCleanedWords = finalResidualSpatialResult.lines.flatMap((line) => line.words || []);
       const finalConfidences = singletonCleanedWords.length > 0
         ? singletonCleanedWords.map((word) => word.confidence || 0)
-        : singletonCleanedLines.map((line) => line.confidence || 0);
+        : finalResidualSpatialResult.lines.map((line) => line.confidence || 0);
       const finalLineConfidence = finalConfidences.length > 0
         ? finalConfidences.reduce((sum, value) => sum + value, 0) / finalConfidences.length
         : finalConfidence;
@@ -1488,9 +1845,9 @@ class VisionService {
         pipelineProfile,
         ocrEngine,
         ocrQualityProfile,
-        lines: singletonCleanedLines,
+        lines: finalResidualSpatialResult.lines,
         words: singletonCleanedWords,
-        text: singletonCleanedLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+        text: finalResidualSpatialResult.lines.map((line) => line.text).filter(Boolean).join('\n').trim(),
         confidence: finalLineConfidence,
         debug: {
           ...(result.debug || {}),

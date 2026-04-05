@@ -494,11 +494,13 @@ const accumulateRegionSamples = (
       const centerWeight = clamp(1 - distance * 0.7, 0.16, 1);
 
       const lum = luminance({ r, g, b });
+      const sat = computeSaturation(r, g, b);
       let weight = alpha * centerWeight * regionWeight;
-      if (lum < 0.15) {
-        weight *= 0.06;
-      } else if (lum < 0.28) {
-        weight *= 0.42;
+      // Preserve dark panel backgrounds instead of collapsing toward white.
+      if (lum < 0.08) {
+        weight *= 0.82;
+      } else if (lum > 0.94 && sat < 0.08) {
+        weight *= 0.88;
       }
 
       registerPaletteSample(stats, r, g, b, weight, distance);
@@ -566,8 +568,7 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
     const shouldUseNeutral = (
       (dominantBlueish && neutralWeightRatio >= 0.24 && neutralCloser)
       || (dominantSat >= 0.24 && neutralWeightRatio >= 0.5 && neutralCloser)
-      || (dominantLum < 0.24 && neutralWeightRatio >= 0.22)
-      || (neutralWeightRatio >= 0.75 && neutralCloser)
+      || (neutralWeightRatio >= 0.9 && neutralCloser && dominantLum >= 0.24)
     );
 
     if (shouldUseNeutral) {
@@ -605,6 +606,7 @@ const sampleForegroundRgbFromLine = (
   if (regions.length === 0) return null;
 
   const stats = createPaletteSampleStats();
+  const backgroundLum = luminance(background);
 
   regions.forEach((bbox) => {
     const mappedX0 = Math.floor((bbox.x0 / sourceWidth) * sampleWidth);
@@ -639,12 +641,19 @@ const sampleForegroundRgbFromLine = (
 
         const rgb: RGB = { r: pixels[idx], g: pixels[idx + 1], b: pixels[idx + 2] };
         const distance = rgbDistance(rgb, background);
-        if (distance < 34) continue;
+        const minDistance = backgroundLum < 0.35 ? 14 : 34;
+        if (distance < minDistance) continue;
 
         const contrast = contrastRatio(rgb, background);
-        if (contrast < 1.35) continue;
-
         const saturation = computeSaturation(rgb.r, rgb.g, rgb.b);
+        const allowColoredFallback = contrast >= 1.2
+          && saturation >= 0.24
+          && (backgroundLum <= 0.52 || luminance(rgb) >= 0.62);
+        const allowBrightOnDarkFallback = contrast >= 1.15
+          && backgroundLum <= 0.42
+          && luminance(rgb) >= 0.72;
+        if (contrast < 1.35 && !allowColoredFallback && !allowBrightOnDarkFallback) continue;
+
         const dx = (x - centerX) / Math.max(1, readW * 0.5);
         const dy = (y - centerY) / Math.max(1, readH * 0.5);
         const radialDistance = Math.min(1, Math.sqrt(dx * dx + dy * dy));
@@ -653,7 +662,16 @@ const sampleForegroundRgbFromLine = (
 
         // Prefer colorful non-black text when available (e.g., blue headers).
         if (saturation >= 0.16) {
+          weight *= 1.28;
+        }
+        if (saturation >= 0.26) {
+          weight *= 1.32;
+        }
+        if (saturation >= 0.34 && backgroundLum <= 0.62) {
           weight *= 1.25;
+        }
+        if (luminance(rgb) >= 0.72 && backgroundLum <= 0.45) {
+          weight *= 1.14;
         }
 
         registerPaletteSample(stats, rgb.r, rgb.g, rgb.b, weight, radialDistance);
@@ -663,7 +681,8 @@ const sampleForegroundRgbFromLine = (
 
   if (stats.totalWeight <= 0) return null;
   const candidate = resolveSampleRgb(stats);
-  if (rgbDistance(candidate, background) < 26) return null;
+  const finalMinDistance = backgroundLum < 0.35 ? 14 : 26;
+  if (rgbDistance(candidate, background) < finalMinDistance) return null;
   return candidate;
 };
 
@@ -674,22 +693,32 @@ const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB)
   const initialContrast = contrastRatio(candidate, background);
   const colorSpread = Math.max(candidate.r, candidate.g, candidate.b) - Math.min(candidate.r, candidate.g, candidate.b);
 
-  // If candidate is basically neutral/black-ish, fallback keeps readability stable.
+  // Keep neutral bright text on dark backgrounds when it is already readable.
   if (saturation < 0.08 && colorSpread < 18) {
+    if (initialContrast >= 3.2) {
+      return candidate;
+    }
     return fallback;
   }
 
-  if (initialContrast >= 2.55) {
+  const minContrast = saturation >= 0.22 ? 2.05 : 2.55;
+
+  if (initialContrast >= minContrast) {
     return candidate;
   }
 
   const target = contrastRatio(dark, background) >= contrastRatio(light, background) ? dark : light;
   let adjusted = candidate;
+  const blendStep = saturation >= 0.22 ? 0.14 : 0.22;
   for (let i = 0; i < 4; i += 1) {
-    adjusted = blendRgb(adjusted, target, 0.22);
-    if (contrastRatio(adjusted, background) >= 2.55) {
+    adjusted = blendRgb(adjusted, target, blendStep);
+    if (contrastRatio(adjusted, background) >= minContrast) {
       return adjusted;
     }
+  }
+
+  if (saturation >= 0.22 && contrastRatio(adjusted, background) >= 1.85) {
+    return adjusted;
   }
 
   return fallback;
@@ -735,6 +764,23 @@ const sampleDominantRgbFromLine = (
     ? line.words.map((word) => word.bbox).filter(hasPositiveBBox)
     : [];
 
+  if (hasPositiveBBox(line.bbox)) {
+    accumulateRegionSamples(
+      context,
+      line.bbox,
+      sourceWidth,
+      sourceHeight,
+      sampleWidth,
+      sampleHeight,
+      0.42,
+      0.62,
+      58,
+      62,
+      1.35,
+      stats
+    );
+  }
+
   if (wordBoxes.length > 0) {
     wordBoxes.forEach((bbox) => {
       accumulateRegionSamples(
@@ -744,11 +790,11 @@ const sampleDominantRgbFromLine = (
         sourceHeight,
         sampleWidth,
         sampleHeight,
+        0.08,
+        0.12,
+        8,
+        10,
         0.2,
-        0.28,
-        20,
-        24,
-        1,
         stats
       );
     });
@@ -766,7 +812,7 @@ const sampleDominantRgbFromLine = (
       0.18,
       16,
       18,
-      wordBoxes.length > 0 ? 0.38 : 1,
+      wordBoxes.length > 0 ? 0.45 : 1,
       stats
     );
   }
@@ -948,7 +994,16 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
 
   const containsThai = THAI_CHAR_REGEX.test(normalized);
   const containsCjk = CJK_CHAR_REGEX.test(normalized);
+  const hasWhitespaceBoundaries = /\s/.test(normalized);
   if (!containsThai && !containsCjk) {
+    return {
+      tokens: normalized.split(/\s+/g).filter(Boolean),
+      joinWithSpace: true,
+    };
+  }
+
+  // Keep explicit spacing for Thai when present to avoid breaking semantic phrase boundaries.
+  if (containsThai && hasWhitespaceBoundaries) {
     return {
       tokens: normalized.split(/\s+/g).filter(Boolean),
       joinWithSpace: true,
@@ -1075,8 +1130,8 @@ const resolveOverlayLineHeight = (text: string): number => (
 const resolveOverlayPadding = (fontSize: number, text: string): { padX: number; padY: number } => {
   const containsThai = THAI_CHAR_REGEX.test(text);
   return {
-    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.08 : 0.1))),
-    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.08 : 0.09))),
+    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.07 : 0.1))),
+    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.07 : 0.09))),
   };
 };
 
@@ -1226,13 +1281,13 @@ const resolveWrappedLineEstimate = (
 
   if (containsThai) {
     if (styleKind === 'comic-bubble') {
-      if (tokenCount >= 4 || compactLength >= 18) extraLines += 1.35;
-      if (aspectRatio <= 3.6) extraLines += 0.6;
+      if (tokenCount >= 4 || compactLength >= 18) extraLines += 0.92;
+      if (aspectRatio <= 3.6) extraLines += 0.36;
     } else if (styleKind === 'comic-box') {
-      if (tokenCount >= 4 || compactLength >= 16) extraLines += 0.98;
-      if (aspectRatio <= 3) extraLines += 0.42;
+      if (tokenCount >= 4 || compactLength >= 16) extraLines += 0.72;
+      if (aspectRatio <= 3) extraLines += 0.28;
     } else if (styleKind === 'comic-line' && compactLength >= 16) {
-      extraLines += 0.35;
+      extraLines += 0.24;
     }
   } else if (containsLatinLike && (styleKind === 'comic-bubble' || styleKind === 'comic-box')) {
     if (tokenCount >= 6 && compactLength >= 20) extraLines += 0.42;
@@ -1270,15 +1325,25 @@ const resolveSourceLineFloor = (
 
   const computedFloor = Math.max(1, Math.ceil(sourceLineCount * baseRatio * densityBoost));
   if (containsThai && styleKind === 'comic-bubble' && sourceLineCount >= 2) {
-    const thaiBubbleFloor = targetLength >= Math.max(sourceLength * 0.9, sourceLength + 4) && sourceLineCount >= 3
+    const preserveSourceLines = (
+      targetLength >= Math.max(sourceLength * 0.84, sourceLength - 2)
+      && densityRatio >= 0.84
+      && sourceLineCount >= 3
+    );
+    const thaiBubbleFloor = preserveSourceLines
       ? sourceLineCount
-      : sourceLineCount;
+      : Math.max(2, sourceLineCount - 1);
     return Math.max(computedFloor, thaiBubbleFloor);
   }
   if (containsThai && styleKind === 'comic-box' && sourceLineCount >= 2) {
-    const thaiBoxFloor = targetLength >= Math.max(sourceLength * 0.95, sourceLength + 3) && sourceLineCount >= 2
+    const preserveSourceLines = (
+      targetLength >= Math.max(sourceLength * 0.9, sourceLength - 1)
+      && densityRatio >= 0.9
+      && sourceLineCount >= 3
+    );
+    const thaiBoxFloor = preserveSourceLines
       ? sourceLineCount
-      : sourceLineCount;
+      : Math.max(2, sourceLineCount - 1);
     return Math.max(computedFloor, thaiBoxFloor);
   }
   return computedFloor;
@@ -1315,7 +1380,7 @@ export const computeOverlayTypography = (
   const sourceLooksHeading = styleKind === 'document-heading';
   const documentBodyLike = styleKind === 'document-body' && countWords(hints?.sourceText || text) >= 7;
   const documentBodyBoost = styleKind === 'document-body'
-    ? (documentBodyLike ? (containsThai ? 1.6 : 1.18) : (containsThai ? 1.48 : 1.12))
+    ? (documentBodyLike ? (containsThai ? 1.72 : 1.18) : (containsThai ? 1.58 : 1.12))
     : 1;
   const comicProfileScale = isComicBubble
     ? (profile === 'manga' ? 1.12 : profile === 'manhwa' ? 1.08 : 1.04)
@@ -1334,6 +1399,11 @@ export const computeOverlayTypography = (
     || (sourceSingleLineHint && targetLength <= Math.max(sourceLength * 1.6, 28))
     || (sourceLength > 0 && safeHeight <= sourceHeight * 1.42)
   );
+  const singleLineComicEmphasis = preferSingleLine
+    && !useDocumentTypographyProfile
+    && sourceLineCount <= 1
+    && sourceAspectRatio >= 1.45
+    && targetLength <= 34;
   const normalizedInlineText = normalizeOverlayInlineText(text);
   const ratio = sourceLength > 0 && targetLength > 0
     ? clamp(
@@ -1386,8 +1456,28 @@ export const computeOverlayTypography = (
     sourceLooksHeading ? 34 : 30
   );
   fontSize *= preferSingleLine
-    ? (isComicBubble ? (isAdaptiveProfile ? 1.12 : 1.14) : isComicBox ? (isAdaptiveProfile ? 1.04 : 1.06) : isComicLikeProfile ? (isAdaptiveProfile ? 0.98 : 1) : (sourceLooksHeading ? 1.02 : 0.82))
-    : (isComicBubble ? (isAdaptiveProfile ? 1.04 : 1.08) : isComicBox ? (isAdaptiveProfile ? 0.98 : 1) : isComicLikeProfile ? (isAdaptiveProfile ? 0.94 : 0.96) : (sourceLooksHeading ? 1.01 : styleKind === 'document-body' ? (containsThai ? 1.12 : 1.0) : 0.92));
+    ? (
+      isComicBubble
+        ? (isAdaptiveProfile ? 1.12 : 1.14)
+        : isComicBox
+          ? (isAdaptiveProfile ? 1.04 : 1.06)
+          : isComicLikeProfile
+            ? (
+              singleLineComicEmphasis
+                ? (
+                  isAdaptiveProfile
+                    ? 1.12
+                    : profile === 'manga'
+                      ? 1.2
+                      : profile === 'manhwa'
+                        ? 1.16
+                        : 1.14
+                )
+                : (isAdaptiveProfile ? 1.02 : 1.04)
+            )
+            : (sourceLooksHeading ? 1.02 : 0.82)
+    )
+    : (isComicBubble ? (isAdaptiveProfile ? 1.04 : 1.08) : isComicBox ? (isAdaptiveProfile ? 0.98 : 1) : isComicLikeProfile ? (isAdaptiveProfile ? 0.94 : 0.96) : (sourceLooksHeading ? 1.01 : styleKind === 'document-body' ? (containsThai ? 1.18 : 1.0) : 0.92));
   const lineHeight = resolveOverlayLineHeight(text)
     + (
       containsThai
@@ -1478,12 +1568,92 @@ const resolveRange = (values: number[]): number => {
   return Math.max(...values) - Math.min(...values);
 };
 
-const joinOverlayGroupText = (group: OverlayTypographyInput[]): string => normalizeOverlayInlineText(
-  group
+const CJK_TEXT_REGEX = /[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
+const OVERLAY_NEXT_NO_SPACE_PUNCT_REGEX = /^[,.;:!?\)\]\}\u3001\u3002\uFF0C\uFF01\uFF1F]/;
+const OVERLAY_PREV_NO_SPACE_TRAILING_REGEX = /[(\[\{'"“‘/-]$/;
+
+const joinOverlayGroupSegments = (segments: string[]): string => {
+  if (segments.length === 0) return '';
+
+  let merged = '';
+  for (const rawSegment of segments) {
+    const segment = String(rawSegment || '').trim();
+    if (!segment) continue;
+    if (!merged) {
+      merged = segment;
+      continue;
+    }
+
+    const compactScript = CJK_TEXT_REGEX.test(merged) || CJK_TEXT_REGEX.test(segment);
+    const needsNoSpace = compactScript
+      || OVERLAY_NEXT_NO_SPACE_PUNCT_REGEX.test(segment)
+      || OVERLAY_PREV_NO_SPACE_TRAILING_REGEX.test(merged);
+
+    merged += `${needsNoSpace ? '' : ' '}${segment}`;
+  }
+
+  return normalizeOverlayInlineText(merged);
+};
+
+const joinOverlayGroupText = (group: OverlayTypographyInput[]): string => {
+  const segments = group
     .map((item) => String(item.text || '').trim())
-    .filter(Boolean)
-    .join(' ')
-);
+    .filter(Boolean);
+  return joinOverlayGroupSegments(segments);
+};
+
+const computeOverlayGroupGeometry = (
+  group: Array<OverlayTypographyInput & { typography: OverlayTypography }>
+): {
+  maxGap: number;
+  totalGap: number;
+  spanHeight: number;
+  stackedHeight: number;
+  compactness: number;
+} => {
+  if (group.length <= 1) {
+    const singleHeight = Math.max(1, (group[0]?.bbox.y1 ?? 1) - (group[0]?.bbox.y0 ?? 0));
+    return {
+      maxGap: 0,
+      totalGap: 0,
+      spanHeight: singleHeight,
+      stackedHeight: singleHeight,
+      compactness: 1,
+    };
+  }
+
+  const ordered = [...group].sort((a, b) => {
+    if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+    if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+    return a.index - b.index;
+  });
+
+  let maxGap = 0;
+  let totalGap = 0;
+  for (let i = 1; i < ordered.length; i += 1) {
+    const gap = ordered[i].bbox.y0 - ordered[i - 1].bbox.y1;
+    if (gap > 0) {
+      totalGap += gap;
+      maxGap = Math.max(maxGap, gap);
+    }
+  }
+
+  const minY = Math.min(...ordered.map((item) => item.bbox.y0));
+  const maxY = Math.max(...ordered.map((item) => item.bbox.y1));
+  const spanHeight = Math.max(1, maxY - minY);
+  const stackedHeight = Math.max(
+    1,
+    ordered.reduce((sum, item) => sum + Math.max(1, item.bbox.y1 - item.bbox.y0), 0)
+  );
+
+  return {
+    maxGap,
+    totalGap,
+    spanHeight,
+    stackedHeight,
+    compactness: spanHeight / stackedHeight,
+  };
+};
 
 const shouldHarmonizeOverlayBlock = (
   previous: OverlayTypographyInput,
@@ -1601,11 +1771,16 @@ export const computeOverlayLayoutMap = (
     ...input,
     typography: computeOverlayTypography(input.text, input.width, input.height, input.hints),
   }));
+  const orderedComputed = [...computed].sort((a, b) => {
+    if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+    if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+    return a.index - b.index;
+  });
   const result = new Map<number, OverlayLayout>();
 
   let groupStart = 0;
   const flushGroup = (endExclusive: number) => {
-    const group = computed.slice(groupStart, endExclusive);
+    const group = orderedComputed.slice(groupStart, endExclusive);
     if (group.length === 0) return;
 
     const fontSizes = group.map((item) => item.typography.fontSize);
@@ -1684,19 +1859,31 @@ export const computeOverlayLayoutMap = (
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
       : undefined;
-    const allowBubbleMerge = effectiveProfile === 'manga'
+    const allowSectionMerge = effectiveProfile === 'manga'
       || effectiveProfile === 'manhwa'
-      || (effectiveProfile === 'adaptive' && !hasSharedLeftEdge);
-    const shouldMergeAsBubbleBlock = !effectiveDocumentProfile
-      && allowBubbleMerge
-      && isCenteredBlock
-      && group.length >= 2;
+      || effectiveProfile === 'adaptive';
+    const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
+      ? (isCenteredBlock ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      : undefined;
+    const mergedText = joinOverlayGroupText(group);
+    const groupGeometry = computeOverlayGroupGeometry(group);
+    const mergeGapLimit = mergedStyleKind === 'comic-bubble'
+      ? Math.max(34, maxHeight * (effectiveProfile === 'manga' ? 2.8 : 2.5))
+      : Math.max(30, maxHeight * (effectiveProfile === 'manga' ? 2.35 : 2.15));
+    const mergeCompactnessLimit = mergedStyleKind === 'comic-bubble' ? 2.95 : 2.65;
+    const shouldMergeAsSectionBlock = !effectiveDocumentProfile
+      && allowSectionMerge
+      && group.length >= 2
+      && mergedStyleKind === 'comic-bubble'
+      && compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
+      && groupGeometry.maxGap <= mergeGapLimit
+      && groupGeometry.compactness <= mergeCompactnessLimit;
 
-    if (shouldMergeAsBubbleBlock) {
+    if (shouldMergeAsSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
         .map((item) => item.hints?.sourceText || item.line?.text || '')
-        .filter(Boolean)
-        .join(' ');
+        .filter(Boolean);
+      const mergedSourceTextJoined = joinOverlayGroupSegments(mergedSourceText);
       const firstMaskSource = group[0].line ? resolveOverlayMaskBBox(group[0].line) : group[0].bbox;
       const mergedBBox: BBox = {
         x0: Math.min(...group.map((item) => item.bbox.x0)),
@@ -1713,7 +1900,6 @@ export const computeOverlayLayoutMap = (
           y1: Math.max(acc.y1, source.y1),
         };
       }, firstMaskSource);
-      const mergedText = joinOverlayGroupText(group);
       const mergedScaleX = resolveMedian(
         group.map((item) => item.width / Math.max(1, item.bbox.x1 - item.bbox.x0))
       ) ?? 1;
@@ -1728,8 +1914,10 @@ export const computeOverlayLayoutMap = (
       const mergedHeightBudget = Math.max(
         mergedHeight,
         mergedHeight + Math.max(
-          mergedLineHeightMedian * Math.min(1.2, Math.max(0.45, group.length * 0.22)),
-          mergedHeight * 0.1
+          mergedLineHeightMedian * (mergedStyleKind === 'comic-bubble'
+            ? Math.min(1.2, Math.max(0.45, group.length * 0.22))
+            : Math.min(0.85, Math.max(0.3, group.length * 0.16))),
+          mergedHeight * (mergedStyleKind === 'comic-bubble' ? 0.1 : 0.06)
         )
       );
       const mergedTypography = computeOverlayTypography(
@@ -1737,13 +1925,13 @@ export const computeOverlayLayoutMap = (
         mergedWidth,
         mergedHeightBudget,
         {
-          sourceText: mergedSourceText,
+          sourceText: mergedSourceTextJoined,
           sourceBoxWidth: mergedWidth,
           sourceBoxHeight: mergedHeightBudget,
           sourceLineCount: group.length,
           fontFamily: group[0]?.hints?.fontFamily,
           profile,
-          styleKind: 'comic-bubble',
+          styleKind: mergedStyleKind,
         }
       );
       const mergedBaselineFont = resolveMedian(fontSizes) ?? mergedTypography.fontSize;
@@ -1751,11 +1939,17 @@ export const computeOverlayLayoutMap = (
       const mergedTextContainsThai = THAI_CHAR_REGEX.test(mergedText);
       const mergedTextContainsCjk = CJK_CHAR_REGEX.test(mergedText);
       const mergedSourceDrivenFont = sourceLineHeightMedian
-        * (mergedTextContainsThai ? 1.14 : mergedTextContainsCjk ? 1.02 : 1)
+        * (mergedTextContainsThai
+          ? (mergedStyleKind === 'comic-bubble' ? 1.14 : 1.08)
+          : mergedTextContainsCjk
+            ? (mergedStyleKind === 'comic-bubble' ? 1.02 : 1)
+            : 1)
         * Math.sqrt(group.length / Math.max(1, mergedTypography.estimatedLines));
-      const mergedPromotionFactor = mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 1.08 : 1.24;
+      const mergedPromotionFactor = mergedStyleKind === 'comic-bubble'
+        ? (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 1.08 : 1.24)
+        : (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 1.05 : 1.12);
       const promotedMergedFont = Math.min(
-        32,
+        mergedStyleKind === 'comic-bubble' ? 32 : 28,
         Math.max(
           mergedTypography.fontSize,
           mergedBaselineFont * mergedPromotionFactor,
@@ -1764,7 +1958,7 @@ export const computeOverlayLayoutMap = (
       );
       const mergedTypographyAdjusted = (() => {
         if (promotedMergedFont <= mergedTypography.fontSize + 0.01) return mergedTypography;
-        const lineHeight = resolveOverlayLineHeight(mergedText) + (mergedTextContainsThai ? 0.08 : 0);
+        const lineHeight = resolveOverlayLineHeight(mergedText) + (mergedTextContainsThai ? (mergedStyleKind === 'comic-bubble' ? 0.08 : 0.04) : 0);
         const { padX, padY } = resolveOverlayPadding(promotedMergedFont, mergedText);
         const usableWidth = Math.max(4, mergedWidth - padX * 2);
         const estimatedLines = resolveWrappedLineEstimate(
@@ -1772,14 +1966,14 @@ export const computeOverlayLayoutMap = (
           usableWidth,
           promotedMergedFont,
           group[0]?.hints?.fontFamily,
-          'comic-bubble',
+          mergedStyleKind,
           mergedWidth,
           mergedHeightBudget
         );
         const sourceLineFloor = resolveSourceLineFloor(
-          'comic-bubble',
+          mergedStyleKind,
           group.length,
-          compactTextLength(mergedSourceText),
+          compactTextLength(mergedSourceTextJoined),
           compactTextLength(mergedText),
           mergedTextContainsThai,
           mergedTextContainsCjk,
@@ -1789,7 +1983,7 @@ export const computeOverlayLayoutMap = (
         const ascenderSafety = Math.max(1, Math.round(promotedMergedFont * (THAI_CHAR_REGEX.test(mergedText) ? 0.1 : 0.05)));
         const descenderSafety = Math.max(1, Math.round(promotedMergedFont * (THAI_CHAR_REGEX.test(mergedText) ? 0.18 : 0.14)));
         const contentHeight = adjustedEstimatedLines * promotedMergedFont * lineHeight + ascenderSafety + descenderSafety;
-        if (contentHeight > mergedHeightBudget * 0.9) {
+        if (contentHeight > mergedHeightBudget * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.92)) {
           return mergedTypography;
         }
         return {
@@ -1804,15 +1998,19 @@ export const computeOverlayLayoutMap = (
       })();
 
       const mergeIsUseful = mergedTypographyAdjusted.estimatedLines >= 1
-        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * 0.9;
+        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88);
       if (mergeIsUseful) {
+        const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';
+        const mergedCenterX = mergedBBox.x0 + (mergedBBox.x1 - mergedBBox.x0) * 0.5;
         group.forEach((item, index) => {
           result.set(item.index, {
             typography: mergedTypographyAdjusted,
-            alignment: 'center',
+            alignment: mergedAlignment,
             effectiveProfile,
-            styleKind: 'comic-bubble',
-            sharedCenterX: sharedCenterX ?? (mergedBBox.x0 + mergedBBox.x1) * 0.5,
+            styleKind: mergedStyleKind,
+            sharedCenterX: mergedAlignment === 'center' ? (sharedCenterX ?? mergedCenterX) : undefined,
+            sharedTextStartX: mergedAlignment === 'left' ? minStartX : undefined,
+            sharedBoxLeftX: mergedAlignment === 'left' ? minStartX : undefined,
             mergedBBox,
             mergedMaskBBox,
             renderText: index === 0 ? mergedText : '',
@@ -1826,15 +2024,26 @@ export const computeOverlayLayoutMap = (
     for (const item of group) {
       const groupIndex = group.indexOf(item);
       const styleKind = groupStyleKinds[groupIndex];
+      const singleLineCenterCandidate = group.length === 1
+        && !effectiveDocumentProfile
+        && item.typography.forceSingleLine
+        && compactTextLength(item.text) <= 36
+        && ((item.bbox.x1 - item.bbox.x0) / Math.max(1, item.bbox.y1 - item.bbox.y0)) >= 1.35;
+      const itemAlignment: 'left' | 'center' = singleLineCenterCandidate ? 'center' : alignment;
+      const itemSharedCenterX = singleLineCenterCandidate
+        ? (item.bbox.x0 + item.bbox.x1) * 0.5
+        : sharedCenterX;
+      const itemSharedTextStartX = itemAlignment === 'left' ? sharedTextStartX : undefined;
+      const itemSharedBoxLeftX = itemAlignment === 'left' ? sharedBoxLeftX : undefined;
       if (!shouldNormalize) {
         result.set(item.index, {
           typography: item.typography,
-          alignment,
+          alignment: itemAlignment,
           effectiveProfile,
           styleKind,
-          sharedTextStartX,
-          sharedCenterX,
-          sharedBoxLeftX,
+          sharedTextStartX: itemSharedTextStartX,
+          sharedCenterX: itemSharedCenterX,
+          sharedBoxLeftX: itemSharedBoxLeftX,
           renderText: item.text,
         });
         continue;
@@ -1855,24 +2064,24 @@ export const computeOverlayLayoutMap = (
           estimatedLines,
           contentHeight: estimatedLines * normalizedFontSize * lineHeight + ascenderSafety + descenderSafety,
         },
-        alignment,
+        alignment: itemAlignment,
         effectiveProfile,
         styleKind,
-        sharedTextStartX,
-        sharedCenterX,
-        sharedBoxLeftX,
+        sharedTextStartX: itemSharedTextStartX,
+        sharedCenterX: itemSharedCenterX,
+        sharedBoxLeftX: itemSharedBoxLeftX,
         renderText: item.text,
       });
     }
   };
 
-  for (let i = 1; i < computed.length; i += 1) {
-    if (!shouldHarmonizeOverlayBlock(computed[i - 1], computed[i], profile)) {
+  for (let i = 1; i < orderedComputed.length; i += 1) {
+    if (!shouldHarmonizeOverlayBlock(orderedComputed[i - 1], orderedComputed[i], profile)) {
       flushGroup(i);
       groupStart = i;
     }
   }
-  flushGroup(computed.length);
+  flushGroup(orderedComputed.length);
 
   return result;
 };
@@ -1905,6 +2114,7 @@ export const clampOverlayRect = (
     height: Math.max(minHeight, Math.min(height, maxHeight)),
   };
 };
+
 
 
 

@@ -607,8 +607,8 @@ export const PDFCanvas: React.FC = () => {
                         profile: effectiveProfile,
                         styleKind,
                       });
-                      const extraTopPad = hasThaiText ? Math.max(2, Math.round(typography.fontSize * 0.11)) : 0;
-                      const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
+                      const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
+                      const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
                       const textStartOffset = layout?.sharedTextStartX !== undefined
                         ? Math.max(0, (layout.sharedTextStartX - renderSourceLeft) * ocrOverlayTransform.scaleX)
                         : 0;
@@ -625,7 +625,10 @@ export const PDFCanvas: React.FC = () => {
                         ? normalizeOverlayInlineText(renderText)
                         : renderText;
                       const rotationDeg = estimateLineRotationDeg(line);
-                      const minFillRatio = typography.estimatedLines > 1 ? 0.74 : 0.5;
+                      const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+                      const minFillRatio = typography.estimatedLines > 1
+                        ? (thaiComicLine ? 0.82 : 0.74)
+                        : (thaiComicLine ? 0.58 : 0.5);
                       const paintHeight = Math.min(
                         textRect.height,
                         Math.max(
@@ -635,7 +638,7 @@ export const PDFCanvas: React.FC = () => {
                       );
                       const paintOffsetTop = Math.max(
                         hasThaiText ? 1 : 0,
-                        Math.min(textRect.height - paintHeight, Math.round(textRect.height * 0.08))
+                        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
                       );
 
                       const widthRatio = textRect.width / Math.max(1, baseWidth);
@@ -701,7 +704,10 @@ export const PDFCanvas: React.FC = () => {
                                   textAlign: layout?.alignment === 'center' ? 'center' : 'left',
                                   whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
                                   wordBreak: 'normal',
-                                  overflowWrap: typography.forceSingleLine ? 'normal' : 'break-word',
+                                  lineBreak: hasThaiText ? 'auto' : 'normal',
+                                  overflowWrap: typography.forceSingleLine
+                                    ? 'normal'
+                                    : (hasThaiText ? 'normal' : 'break-word'),
                                   overflow: 'hidden',
                                 }}
                               >

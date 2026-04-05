@@ -656,3 +656,5 @@ export function findLargeGaps(lineWords: OCRWord[], isCjk: boolean = false): Arr
   return regions;
 }
 
+
+
