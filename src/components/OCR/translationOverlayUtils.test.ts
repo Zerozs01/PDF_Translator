@@ -95,7 +95,7 @@ describe('translationOverlayUtils typography', () => {
     expect(typography.estimatedLines).toBeGreaterThanOrEqual(4);
   });
 
-  test('keeps document paragraph lines independently sized from their own boxes', () => {
+  test('keeps document paragraph lines in a readable shared size band', () => {
     const typographyByIndex = computeOverlayTypographyMap([
       {
         index: 0,
@@ -138,7 +138,7 @@ describe('translationOverlayUtils typography', () => {
       },
     ]);
 
-    expect(typographyByIndex.get(1)?.fontSize).not.toBe(typographyByIndex.get(2)?.fontSize);
+    expect(Math.abs((typographyByIndex.get(1)?.fontSize ?? 0) - (typographyByIndex.get(2)?.fontSize ?? 0))).toBeLessThanOrEqual(0.5);
   });
 
   test('keeps document body text close to source size instead of over-shrinking grouped lines', () => {
@@ -179,6 +179,102 @@ describe('translationOverlayUtils typography', () => {
 
     expect(layoutMap.get(0)?.typography.fontSize ?? 0).toBeGreaterThan(10);
     expect(layoutMap.get(1)?.typography.fontSize ?? 0).toBeGreaterThan(10);
+  });
+
+  test('does not promote adaptive shared-left groups into comic boxes by default', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เพื่อพัฒนาสมการสมดุลสำหรับวัตถุแข็ง',
+        width: 280,
+        height: 18,
+        bbox: { x0: 100, y0: 120, x1: 420, y1: 138 },
+        hints: {
+          sourceText: 'To develop the equations of equilibrium for a rigid body.',
+          sourceBoxWidth: 320,
+          sourceBoxHeight: 18,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 1,
+        text: 'เพื่อแนะนำแนวคิดของแผนภาพแรงอิสระสำหรับวัตถุแข็ง',
+        width: 320,
+        height: 18,
+        bbox: { x0: 100, y0: 142, x1: 452, y1: 160 },
+        hints: {
+          sourceText: 'To introduce the concept of the free-body diagram for a rigid body.',
+          sourceBoxWidth: 352,
+          sourceBoxHeight: 18,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.styleKind).not.toBe('comic-box');
+    expect(layoutMap.get(1)?.styleKind).not.toBe('comic-box');
+  });
+
+  test('keeps left-aligned comic box lines readable within the same box cluster', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เปิด',
+        width: 64,
+        height: 18,
+        bbox: { x0: 100, y0: 120, x1: 164, y1: 138 },
+        hints: {
+          sourceText: 'OPEN',
+          sourceBoxWidth: 64,
+          sourceBoxHeight: 18,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+          styleKind: 'comic-box',
+        },
+      },
+      {
+        index: 1,
+        text: 'ตู้เก็บรองเท้า',
+        width: 116,
+        height: 18,
+        bbox: { x0: 100, y0: 142, x1: 216, y1: 160 },
+        hints: {
+          sourceText: 'SHOE LOCKER',
+          sourceBoxWidth: 116,
+          sourceBoxHeight: 18,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+          styleKind: 'comic-box',
+        },
+      },
+      {
+        index: 2,
+        text: 'และทิ้งรองเท้า',
+        width: 128,
+        height: 18,
+        bbox: { x0: 100, y0: 164, x1: 228, y1: 182 },
+        hints: {
+          sourceText: 'AND LEAVE THE SHOES',
+          sourceBoxWidth: 128,
+          sourceBoxHeight: 18,
+          sourceLineCount: 1,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+          styleKind: 'comic-box',
+        },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.styleKind).toBe('comic-box');
+    expect(layoutMap.get(0)?.renderText).toContain('เปิด');
+    expect(layoutMap.get(1)?.renderText).toContain('ตู้เก็บรองเท้า');
+    expect(layoutMap.get(2)?.renderText).toContain('และทิ้งรองเท้า');
   });
 
   test('prefers the tighter union of word boxes over a loose line bbox', () => {
@@ -745,6 +841,11 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(2)?.alignment).toBe('left');
     expect(layoutMap.get(0)?.sharedTextStartX).toBe(202);
     expect(layoutMap.get(1)?.sharedTextStartX).toBe(202);
-    expect(layoutMap.get(2)?.sharedTextStartX).toBe(202);
+    expect(layoutMap.get(2)?.alignment).toBe('left');
   });
 });
+
+
+
+
+

@@ -905,6 +905,7 @@ class VisionService {
     if (lines.length === 0) return { lines, dropped: [] };
     if (pipelineProfile !== 'panel') return { lines, dropped: [] };
     if (isCjkLikeLanguage(language)) return { lines, dropped: [] };
+    if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
 
     const dropped: OCRDroppedWord[] = [];
     const edgeBand = Math.max(120, pageHeight * 0.18);
@@ -1022,6 +1023,7 @@ class VisionService {
     if (lines.length === 0) return { lines, dropped: [] };
     if (pipelineProfile !== 'panel') return { lines, dropped: [] };
     if (isCjkLikeLanguage(language)) return { lines, dropped: [] };
+    if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
 
     const dropped: OCRDroppedWord[] = [];
     const edgeBandY = Math.max(120, pageHeight * 0.18);
@@ -1086,6 +1088,20 @@ class VisionService {
     });
 
     return { lines: kept, dropped };
+  }
+
+  private shouldApplyAggressiveLatinPanelCleanup(language: string): boolean {
+    const normalizedCodes = String(language || '')
+      .split('+')
+      .map((code) => String(code || '').trim().toLowerCase())
+      .filter(Boolean);
+
+    if (normalizedCodes.length === 0) return true;
+    if (normalizedCodes.some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code))) {
+      return false;
+    }
+
+    return normalizedCodes.every((code) => code === 'eng' || code === 'en');
   }
 
   private mergeExternalChunkResults(

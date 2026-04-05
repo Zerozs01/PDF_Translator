@@ -1410,6 +1410,33 @@ function applyDeterministicLatinLineFixes(
     .slice()
     .sort((a, b) => a.bbox.y0 - b.bbox.y0);
 
+  const looksDetachedAliasStrip = (candidate: OCRLine, contextLines: OCRLine[]): boolean => {
+    const nearby = contextLines
+      .filter((line) => line !== candidate)
+      .filter((line) => (((line.words as OCRWord[]) || []).length > 0));
+    if (nearby.length === 0) return false;
+
+    const candidateWidth = Math.max(1, candidate.bbox.x1 - candidate.bbox.x0);
+    const candidateHeight = Math.max(1, candidate.bbox.y1 - candidate.bbox.y0);
+    const candidateCenterX = (candidate.bbox.x0 + candidate.bbox.x1) * 0.5;
+    const candidateCenterY = (candidate.bbox.y0 + candidate.bbox.y1) * 0.5;
+
+    const refWidths = nearby.map((line) => Math.max(1, line.bbox.x1 - line.bbox.x0));
+    const refHeights = nearby.map((line) => Math.max(1, line.bbox.y1 - line.bbox.y0));
+    const refWidth = refWidths.reduce((sum, value) => sum + value, 0) / refWidths.length;
+    const refHeight = refHeights.reduce((sum, value) => sum + value, 0) / refHeights.length;
+    const refCenterX = nearby.reduce((sum, line) => sum + ((line.bbox.x0 + line.bbox.x1) * 0.5), 0) / nearby.length;
+    const refCenterY = nearby.reduce((sum, line) => sum + ((line.bbox.y0 + line.bbox.y1) * 0.5), 0) / nearby.length;
+
+    const centerDeltaX = Math.abs(candidateCenterX - refCenterX);
+    const centerDeltaY = Math.abs(candidateCenterY - refCenterY);
+    const wideStrip = candidateWidth >= refWidth * 1.28 && candidateHeight <= refHeight * 0.8;
+    const detachedHorizontally = centerDeltaX >= Math.max(refWidth * 0.95, candidateWidth * 0.92);
+    const detachedVertically = centerDeltaY >= Math.max(refHeight * 1.8, candidateHeight * 2.6);
+
+    return wideStrip || detachedHorizontally || detachedVertically;
+  };
+
   for (let i = 0; i < ordered.length; i++) {
     const line = ordered[i];
     const lineWords = ((line.words as OCRWord[]) || []).slice().sort((a, b) => a.bbox.x0 - b.bbox.x0);
@@ -1419,7 +1446,7 @@ function applyDeterministicLatinLineFixes(
       .filter(Boolean);
     if (!(lineTokens.length === 2 && lineTokens[0] === 'BEST' && lineTokens[1] === 'IF')) continue;
 
-    const nearby = ordered.slice(i, Math.min(ordered.length, i + 3));
+    const nearby = ordered.slice(Math.max(0, i - 1), Math.min(ordered.length, i + 3));
     const nearbyTokens = nearby.flatMap((nearLine) => (((nearLine.words as OCRWord[]) || [])
       .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
       .filter(Boolean)));
@@ -1427,7 +1454,7 @@ function applyDeterministicLatinLineFixes(
       || nearbyTokens.includes('TAKES')
       || nearbyTokens.includes('ESSENCE');
     const hasItsAlready = nearbyTokens.includes('ITS');
-    if (!hasSpeechContext || hasItsAlready) continue;
+    if (!hasSpeechContext || hasItsAlready || looksDetachedAliasStrip(line as OCRLine, nearby)) continue;
 
     lineWords.unshift(synthesizeWordFromLine("IT'S", line as OCRLine, 'left'));
     const rebuilt = makeLineFromWords(lineWords);
@@ -1444,16 +1471,14 @@ function applyDeterministicLatinLineFixes(
     if (lineWords.length === 1) {
       const token = normalizeLatinTokenForLexicon(getAlphaNum((lineWords[0].text || '').trim()));
       if (token === 'ITG' || token === 'THG' || token === 'THNK') {
-        const nearby = ordered.slice(i, Math.min(ordered.length, i + 3));
-        const nearbyTokens = nearby.flatMap((nearLine) => (((nearLine.words as OCRWord[]) || [])
+        const nearby = ordered.slice(Math.max(0, i - 1), Math.min(ordered.length, i + 3));        const nearbyTokens = nearby.flatMap((nearLine) => (((nearLine.words as OCRWord[]) || [])
           .map((word) => normalizeLatinTokenForLexicon(getAlphaNum((word.text || '').trim())))
           .filter(Boolean)));
         const hasContext = nearbyTokens.includes('BEST')
           || nearbyTokens.includes('IF')
           || nearbyTokens.includes('AYNAR')
           || nearbyTokens.includes('ESSENCE');
-        if (hasContext) {
-          lineWords[0].text = 'THINK';
+        if (hasContext && !looksDetachedAliasStrip(line as OCRLine, nearby)) {          lineWords[0].text = 'THINK';
           lineWords.unshift(synthesizeWordFromLine('I', line as OCRLine, 'left'));
           const rebuilt = makeLineFromWords(lineWords);
           line.text = rebuilt.text;
@@ -4539,7 +4564,19 @@ self.onmessage = async (e: MessageEvent) => {
 
             const addedLines = buildLinesFromWordsByY(added, actualHeight);
             for (const rl of addedLines) {
-              const target = findBestLineForBox(lines, rl.bbox);
+              let target = findBestLineForBox(lines, rl.bbox);
+              if (target && (source === 'tallSpeechTopSparse' || source === 'tallSpeechMidSparse')) {
+                const rescuedWidth = Math.max(1, rl.bbox.x1 - rl.bbox.x0);
+                const targetWidth = Math.max(1, target.bbox.x1 - target.bbox.x0);
+                const overlapWidth = Math.max(0, Math.min(target.bbox.x1, rl.bbox.x1) - Math.max(target.bbox.x0, rl.bbox.x0));
+                const overlapRatioX = overlapWidth / Math.max(1, Math.min(rescuedWidth, targetWidth));
+                const rescuedCenterX = (rl.bbox.x0 + rl.bbox.x1) * 0.5;
+                const targetCenterX = (target.bbox.x0 + target.bbox.x1) * 0.5;
+                const normalizedCenterGap = Math.abs(rescuedCenterX - targetCenterX) / Math.max(1, (rescuedWidth + targetWidth) * 0.5);
+                if (overlapRatioX < 0.24 && normalizedCenterGap > 0.62) {
+                  target = null;
+                }
+              }
               if (target) mergeWordsIntoLine(target, rl.words as OCRWord[]);
               else lines.push(rl);
             }
@@ -4774,7 +4811,42 @@ self.onmessage = async (e: MessageEvent) => {
               const added = appendUniqueWords(words, capped, 0.55);
               if (added.length === 0) return 0;
               protectWords(protectedWordKeys, added);
-              lines = buildLinesFromWordsByY(words, actualHeight);
+              const addedLines = buildLinesFromWordsByY(added, actualHeight);
+              const shouldMergeDetectOnlyLine = (target: OCRLine | undefined, rescuedLine: OCRLine): target is OCRLine => {
+                if (!target) return false;
+                if (!detectOnlySource) return true;
+                const targetWidth = Math.max(1, target.bbox.x1 - target.bbox.x0);
+                const targetHeight = Math.max(1, target.bbox.y1 - target.bbox.y0);
+                const rescuedWidth = Math.max(1, rescuedLine.bbox.x1 - rescuedLine.bbox.x0);
+                const rescuedHeight = Math.max(1, rescuedLine.bbox.y1 - rescuedLine.bbox.y0);
+                const targetArea = targetWidth * targetHeight;
+                const rescuedArea = rescuedWidth * rescuedHeight;
+                const xOverlap = Math.max(0, Math.min(target.bbox.x1, rescuedLine.bbox.x1) - Math.max(target.bbox.x0, rescuedLine.bbox.x0))
+                  / Math.max(1, Math.min(targetWidth, rescuedWidth));
+                const yOverlap = getVerticalOverlapRatio(target.bbox, rescuedLine.bbox);
+                const targetCenterX = (target.bbox.x0 + target.bbox.x1) * 0.5;
+                const rescuedCenterX = (rescuedLine.bbox.x0 + rescuedLine.bbox.x1) * 0.5;
+                const targetCenterY = (target.bbox.y0 + target.bbox.y1) * 0.5;
+                const rescuedCenterY = (rescuedLine.bbox.y0 + rescuedLine.bbox.y1) * 0.5;
+                const normalizedCenterXGap = Math.abs(targetCenterX - rescuedCenterX) / Math.max(1, (targetWidth + rescuedWidth) * 0.5);
+                const normalizedCenterYGap = Math.abs(targetCenterY - rescuedCenterY) / Math.max(1, (targetHeight + rescuedHeight) * 0.5);
+                const areaRatio = rescuedArea / Math.max(1, targetArea);
+                const targetLooksWideStrip = targetWidth >= rescuedWidth * 1.6 && targetHeight <= rescuedHeight * 0.78;
+                return (
+                  yOverlap >= 0.4
+                  && (xOverlap >= 0.22 || normalizedCenterXGap <= 0.38)
+                  && normalizedCenterYGap <= 0.42
+                  && areaRatio >= 0.32
+                  && areaRatio <= 3.4
+                  && !targetLooksWideStrip
+                );
+              };
+              for (const rescuedLine of addedLines) {
+                const target = findBestLineForBox(lines, rescuedLine.bbox);
+                if (target && shouldMergeDetectOnlyLine(target, rescuedLine)) mergeWordsIntoLine(target, rescuedLine.words as OCRWord[]);
+                else lines.push(rescuedLine);
+              }
+              lines.sort((a, b) => a.bbox.y0 - b.bbox.y0);
               return added.length;
             };
 
@@ -5821,3 +5893,8 @@ self.onmessage = async (e: MessageEvent) => {
 };
 
 export {};
+
+
+
+
+

@@ -372,15 +372,17 @@ export const ImageCanvas: React.FC = () => {
                     x1: imageDisplaySize.width,
                     y1: imageDisplaySize.height,
                   });
-                  const useMergedComicTextRect = styleKind === 'comic-bubble' && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
+                  const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
                   const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
                   const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
                   const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
                   const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
+                  const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
+                  const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
                   const rawTextLeft = textSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
-                  const rawTextTop = textSourceTop * ocrScaleY - maskExpandTop;
+                  const rawTextTop = textSourceTop * ocrScaleY - maskExpandTop - mergedComicTextTopLift;
                   const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
-                  const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom;
+                  const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
                   const textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
                     x0: 0,
                     y0: 0,
@@ -390,7 +392,7 @@ export const ImageCanvas: React.FC = () => {
                   const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
                   const maskBackgroundColor = palette.backgroundColor;
                   const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
-                    ? Math.max(2, Math.round(baseHeight * 0.18))
+                    ? Math.max(3, Math.round(baseHeight * 0.34))
                     : 0;
                   const typographyWidth = isDocumentLikeOverlay ? baseWidth : textRect.width;
                   const typographyHeight = isDocumentLikeOverlay
@@ -399,7 +401,7 @@ export const ImageCanvas: React.FC = () => {
                   const typography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
                   sourceText: line.text,
                   sourceBoxWidth: baseWidth,
-                  sourceBoxHeight: baseHeight,
+                  sourceBoxHeight: isDocumentLikeOverlay ? baseHeight + thaiDocumentHeadroom : baseHeight,
                   sourceLineCount: 1,
                   fontFamily: overlayFontFamily,
                   profile: effectiveProfile,

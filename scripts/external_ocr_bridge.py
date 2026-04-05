@@ -1093,6 +1093,24 @@ def split_merged_latin_words(words: List[Dict[str, Any]]) -> Tuple[List[Dict[str
     return output, split_count
 
 
+def is_cjk_or_thai_language_codes(language_codes: List[str]) -> bool:
+    return any(code in {"kor", "jpn", "jpn_vert", "chi_sim", "chi_tra", "tha"} for code in language_codes)
+
+
+def is_english_like_language_codes(language_codes: List[str]) -> bool:
+    if not language_codes:
+        return True
+    return all(code in {"eng", "en"} for code in language_codes)
+
+
+def is_non_english_latin_language_codes(language_codes: List[str]) -> bool:
+    if not language_codes:
+        return False
+    if is_cjk_or_thai_language_codes(language_codes):
+        return False
+    return not is_english_like_language_codes(language_codes)
+
+
 def is_probable_panel_watermark_line(
     line: Dict[str, Any],
     width: int,
@@ -1498,7 +1516,14 @@ def are_near_duplicate_tokens(left: str, right: str) -> bool:
     return distance <= 1 if max_len <= 8 else distance <= 2
 
 
-def minimal_cleanup_external_result(result: Dict[str, Any], width: int, height: int, pipeline_profile: str) -> Dict[str, Any]:
+def minimal_cleanup_external_result(
+    result: Dict[str, Any],
+    width: int,
+    height: int,
+    pipeline_profile: str,
+    language_codes: List[str] | None = None,
+) -> Dict[str, Any]:
+    language_codes = list(language_codes or [])
     lines: List[Dict[str, Any]] = []
     words: List[Dict[str, Any]] = []
     drop_counts: Dict[str, int] = {
@@ -1507,8 +1532,9 @@ def minimal_cleanup_external_result(result: Dict[str, Any], width: int, height: 
         "mergedLatinSplit": 0,
     }
     dropped_words: List[Dict[str, Any]] = []
+    is_non_english_latin_panel = pipeline_profile == "panel" and is_non_english_latin_language_codes(language_codes)
 
-    for line in result.get("lines", []) or []:
+    for source_index, line in enumerate(result.get("lines", []) or []):
         text = normalize_text(str(line.get("text") or ""))
         if not text:
             continue
@@ -1543,11 +1569,14 @@ def minimal_cleanup_external_result(result: Dict[str, Any], width: int, height: 
         if not normalized_words:
             continue
 
-        normalized_words, split_count = split_merged_latin_words(normalized_words)
-        if split_count > 0:
-            drop_counts["mergedLatinSplit"] = drop_counts.get("mergedLatinSplit", 0) + split_count
+        split_count = 0
+        if not is_non_english_latin_panel:
+            normalized_words, split_count = split_merged_latin_words(normalized_words)
+            if split_count > 0:
+                drop_counts["mergedLatinSplit"] = drop_counts.get("mergedLatinSplit", 0) + split_count
 
         candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if (removed_ad_words or split_count > 0) else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
+        candidate_line["_sourceIndex"] = source_index
         if is_probable_ascii_ghost(candidate_line["text"]):
             continue
         if is_probable_panel_watermark_line(candidate_line, width, height, pipeline_profile):
@@ -1562,7 +1591,12 @@ def minimal_cleanup_external_result(result: Dict[str, Any], width: int, height: 
         lines.append(candidate_line)
         words.extend(candidate_line["words"])
 
-    lines = reorder_tilted_line_clusters(lines)
+    if is_non_english_latin_panel:
+        lines = merge_same_band_fragments(reorder_tilted_line_clusters(lines))
+        lines = merge_short_lead_lines(lines)
+        lines = reorder_tilted_line_clusters(lines)
+    else:
+        lines = reorder_tilted_line_clusters(lines)
     words = []
     for line in lines:
         words.extend(line.get("words") or [])
@@ -1928,7 +1962,7 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
     if engine == "paddleocr" and is_korean_panel:
         return cleanup_paddle_korean_panel_result(result, width, height)
     if engine == "paddleocr" and pipeline_profile == "panel":
-        return minimal_cleanup_external_result(result, width, height, pipeline_profile)
+        return minimal_cleanup_external_result(result, width, height, pipeline_profile, language_codes)
 
     candidate_lines: List[Dict[str, Any]] = []
     candidate_words: List[Dict[str, Any]] = []
@@ -2027,7 +2061,7 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
         candidate_words = filtered_words
 
     if engine == "easyocr" and pipeline_profile == "panel":
-        is_cjk_panel = any(code in {"kor", "jpn", "jpn_vert", "chi_sim", "chi_tra", "tha"} for code in language_codes)
+        is_cjk_panel = is_cjk_or_thai_language_codes(language_codes)
         if is_cjk_panel:
             cleaned_lines = reorder_tilted_line_clusters(candidate_lines)
             cleaned_lines = merge_same_band_fragments(cleaned_lines)

@@ -136,6 +136,13 @@ type TranslatableLine = {
   height: number;
 };
 
+type AdoptedSourceCandidate = {
+  text: string;
+  adopted: boolean;
+  candidateId?: string;
+  bbox?: BBox;
+};
+
 type TranslationGroup = {
   lines: TranslatableLine[];
 };
@@ -400,6 +407,35 @@ const normalizeEnglishOcrNoiseForTranslation = (text: string): string => {
   return normalizeWhitespace(normalized);
 };
 
+const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\bQUE ?ME\b/gi, replacement: 'QUE ME' },
+  { pattern: /\bQUEME\b/gi, replacement: 'QUE ME' },
+  { pattern: /\bSI ?ME\b/gi, replacement: 'SI ME' },
+  { pattern: /\bSIME\b/gi, replacement: 'SI ME' },
+  { pattern: /\bS[- ]?SIENTO\b/gi, replacement: 'SIENTO' },
+  { pattern: /\bDE ?LO\b/gi, replacement: 'DE LO' },
+  { pattern: /\bDELO\b/gi, replacement: 'DE LO' },
+  { pattern: /\bTO ?DO\b/gi, replacement: 'TODO' },
+  { pattern: /\bTODOLOQUE\b/gi, replacement: 'TODO LO QUE' },
+  { pattern: /\bLOQUE\b/gi, replacement: 'LO QUE' },
+  { pattern: /\bLISTO ?CON\b/gi, replacement: 'LISTO CON' },
+  { pattern: /\bLISTOCON\b/gi, replacement: 'LISTO CON' },
+  { pattern: /\bPOR ?DENTRO\b/gi, replacement: 'POR DENTRO' },
+  { pattern: /\bPORDENTRO\b/gi, replacement: 'POR DENTRO' },
+  { pattern: /\bYA ?QUEDO\b/gi, replacement: 'YA QUEDO' },
+  { pattern: /\bYAQUEDO\b/gi, replacement: 'YA QUEDO' },
+  { pattern: /\bRAPIDOPR\b/gi, replacement: 'RAPIDO PR' },
+];
+
+const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
+  let normalized = normalizeWhitespace(String(text || ''));
+  SPANISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
+    normalized = normalized.replace(pattern, replacement);
+  });
+  normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\s*,\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1, $2');
+  return normalizeWhitespace(normalized);
+};
+
 const normalizeTechnicalArtifactsForTranslation = (text: string): string => {
   let normalized = normalizeWhitespace(String(text || ''));
   TECHNICAL_OCR_NORMALIZERS.forEach(({ pattern, replacement }) => {
@@ -416,9 +452,12 @@ const normalizeTechnicalArtifactsForTranslation = (text: string): string => {
   return normalized;
 };
 
-const normalizeSourceForTranslation = (text: string): string => {
+const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   let normalized = normalizeTechnicalArtifactsForTranslation(text);
   normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
+  if (normalizeTranslationLanguage(sourceLanguage, '') === 'es') {
+    normalized = normalizeSpanishOcrNoiseForTranslation(normalized);
+  }
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   normalized = normalized.replace(/([,.;:!?])(\S)/g, '$1 $2');
 
@@ -612,9 +651,9 @@ const scoreTranslationCandidate = (
   return score;
 };
 
-const buildOfflineGroupRetrySourceText = (lines: TranslatableLine[]): string => {
+const buildOfflineGroupRetrySourceText = (lines: TranslatableLine[], sourceLanguage = ''): string => {
   const prepared = lines
-    .map((line) => normalizeSourceForTranslation(line.text))
+    .map((line) => normalizeSourceForTranslation(line.text, sourceLanguage))
     .map((line) => normalizeWhitespace(line))
     .filter(Boolean);
 
@@ -806,22 +845,32 @@ const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number =>
 };
 
 const computeAlignmentScore = (base: BBox, candidate: BBox): number | null => {
+  const baseCenterX = (base.x0 + base.x1) / 2;
   const baseCenterY = (base.y0 + base.y1) / 2;
+  const candidateCenterX = (candidate.x0 + candidate.x1) / 2;
   const candidateCenterY = (candidate.y0 + candidate.y1) / 2;
+  const baseWidth = Math.max(1, base.x1 - base.x0);
   const baseHeight = Math.max(1, base.y1 - base.y0);
+  const candidateWidth = Math.max(1, candidate.x1 - candidate.x0);
   const candidateHeight = Math.max(1, candidate.y1 - candidate.y0);
+  const avgWidth = Math.max(1, (baseWidth + candidateWidth) / 2);
   const avgHeight = Math.max(1, (baseHeight + candidateHeight) / 2);
+  const normalizedXGap = Math.abs(candidateCenterX - baseCenterX) / avgWidth;
   const normalizedYGap = Math.abs(candidateCenterY - baseCenterY) / avgHeight;
 
   const yOverlap = overlapRatio(base.y0, base.y1, candidate.y0, candidate.y1);
   const xOverlap = overlapRatio(base.x0, base.x1, candidate.x0, candidate.x1);
 
   const sameBand = yOverlap >= 0.14 || normalizedYGap <= 1.55;
-  if (!sameBand) return null;
+  const sameColumn = xOverlap >= 0.08 || normalizedXGap <= 1.35;
+  if (!sameBand || !sameColumn) return null;
+  if (normalizedXGap >= 1.8 && xOverlap < 0.18) return null;
 
-  let score = yOverlap * 6.4 + xOverlap * 2.2 - normalizedYGap * 1.5;
+  let score = yOverlap * 6.4 + xOverlap * 2.6 - normalizedYGap * 1.5 - normalizedXGap * 1.35;
   if (yOverlap >= 0.42) score += 1.8;
   if (xOverlap >= 0.3) score += 0.9;
+  if (xOverlap >= 0.5) score += 1.1;
+  if (normalizedXGap <= 0.55) score += 1.0;
   return score;
 };
 
@@ -830,11 +879,12 @@ const chooseBestSourceTextForLine = (
   baseRawLine: OCRLine | undefined,
   alternativePages: OCRPageResult[],
   usedCandidateIds: Set<string>
-): { text: string; adopted: boolean; candidateId?: string } => {
+): AdoptedSourceCandidate => {
   let bestText = baseLine.text;
   const baseReadability = scoreSourceLineReadability(baseLine.text);
   let bestCombinedScore = baseReadability;
   let bestCandidateId: string | undefined;
+  let bestCandidateBBox: BBox | undefined;
 
   const baseBBox: BBox = baseRawLine?.bbox
     ? baseRawLine.bbox
@@ -854,6 +904,7 @@ const chooseBestSourceTextForLine = (
     (baseWidth <= 44 || baseAspect < 1.35)
     && baseCompactLength <= 24
   );
+  const wideThinBase = baseWidth >= 56 && baseHeight <= 18 && baseAspect >= 2.9;
   const baseTechnicalTokens = collectTechnicalTokens(baseLine.text);
   const baseHasTechnicalTokens = baseTechnicalTokens.length > 0;
   const baseHasKnownNoise = /\b(?:submaie|ureat|ydoot|falinth|willtudhow|chapte|chapt)\b/i.test(baseLine.text);
@@ -877,15 +928,23 @@ const chooseBestSourceTextForLine = (
       const alignmentScore = computeAlignmentScore(baseBBox, candidate.bbox);
       if (alignmentScore === null || alignmentScore < 1.1) continue;
 
-      const candidateWidth = Math.max(1, candidate.bbox.x1 - candidate.bbox.x0);
+            const candidateWidth = Math.max(1, candidate.bbox.x1 - candidate.bbox.x0);
       const candidateHeight = Math.max(1, candidate.bbox.y1 - candidate.bbox.y0);
       const candidateArea = candidateWidth * candidateHeight;
       const candidateAspect = candidateWidth / Math.max(1, candidateHeight);
       const areaRatio = candidateArea / Math.max(1, baseArea);
       const aspectRatioDelta = Math.abs(Math.log(Math.max(0.1, candidateAspect) / Math.max(0.1, baseAspect)));
-
+      const candidateCenterX = (candidate.bbox.x0 + candidate.bbox.x1) * 0.5;
+      const baseCenterX = (baseBBox.x0 + baseBBox.x1) * 0.5;
+      const avgWidth = Math.max(1, (baseWidth + candidateWidth) * 0.5);
+      const xOverlap = overlapRatio(baseBBox.x0, baseBBox.x1, candidate.bbox.x0, candidate.bbox.x1);
+      const yOverlap = overlapRatio(baseBBox.y0, baseBBox.y1, candidate.bbox.y0, candidate.bbox.y1);
+      const normalizedXGap = Math.abs(candidateCenterX - baseCenterX) / avgWidth;
       if (areaRatio < 0.18 || areaRatio > 5.5) continue;
       if (aspectRatioDelta > 1.6) continue;
+      if (wideThinBase && (xOverlap < 0.52 || yOverlap < 0.34) && normalizedXGap > 0.18) continue;
+      if (narrowLabelLikeBase && xOverlap < 0.18 && normalizedXGap > 0.9) continue;
+      if (narrowLabelLikeBase && yOverlap < 0.2 && normalizedXGap > 0.75) continue;
 
       const candidateScore = scoreSourceLineReadability(candidateText);
       const combinedScore = candidateScore + alignmentScore * 2.1;
@@ -913,6 +972,14 @@ const chooseBestSourceTextForLine = (
         bestCombinedScore = combinedScore;
         bestText = candidateText;
         bestCandidateId = candidateId;
+        bestCandidateBBox = candidate.bbox
+          ? {
+            x0: candidate.bbox.x0,
+            y0: candidate.bbox.y0,
+            x1: candidate.bbox.x1,
+            y1: candidate.bbox.y1,
+          }
+          : undefined;
       }
     }
   }
@@ -921,6 +988,7 @@ const chooseBestSourceTextForLine = (
     text: bestText,
     adopted: bestText !== baseLine.text,
     candidateId: bestText !== baseLine.text ? bestCandidateId : undefined,
+    bbox: bestText !== baseLine.text ? bestCandidateBBox : undefined,
   };
 };
 
@@ -956,7 +1024,7 @@ const buildTranslationLinesWithCrossEngineFallback = (
 
   const usedCandidateIds = new Set<string>();
   const adoptedTextCounts = new Map<string, number>();
-  const acceptedByIndex = new Map<number, { text: string; adopted: boolean }>();
+  const acceptedByIndex = new Map<number, AdoptedSourceCandidate>();
   const adoptionRatio = medianReadability >= 9 ? 0.18 : 0.28;
   const maxAdoptable = Math.max(2, Math.floor(baseLines.length * adoptionRatio));
   let acceptedCount = 0;
@@ -985,7 +1053,7 @@ const buildTranslationLinesWithCrossEngineFallback = (
     usedCandidateIds.add(picked.candidateId);
     adoptedTextCounts.set(normalizedPicked, repeatCount + 1);
     acceptedCount += 1;
-    acceptedByIndex.set(line.index, { text: picked.text, adopted: true });
+    acceptedByIndex.set(line.index, picked);
   }
 
   let adoptedCount = 0;
@@ -997,6 +1065,11 @@ const buildTranslationLinesWithCrossEngineFallback = (
       ...line,
       text: picked.text,
       sourceLength: countReadableLength(picked.text),
+      top: picked.bbox?.y0 ?? line.top,
+      bottom: picked.bbox?.y1 ?? line.bottom,
+      left: picked.bbox?.x0 ?? line.left,
+      right: picked.bbox?.x1 ?? line.right,
+      height: picked.bbox ? Math.max(1, picked.bbox.y1 - picked.bbox.y0) : line.height,
     };
   });
 
@@ -1989,7 +2062,8 @@ export default function App() {
             group.lines
               .filter((line) => !isScientificSymbolLikeLine(line.text))
               .map((line) => line.text)
-              .join(' ')
+              .join(' '),
+            resolvedSourceFromOCR
           );
           const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
           return {
@@ -2256,7 +2330,8 @@ export default function App() {
       group.lines
         .filter((line) => !isScientificSymbolLikeLine(line.text))
         .map((line) => line.text)
-        .join(' ')
+        .join(' '),
+      effectiveSourceLanguage
     ));
     const protectedGroups = groupTexts.map((text) => protectTranslationTokens(text, targetLanguage));
     const textsForTranslation = protectedGroups.map((item) => item.protectedText);
@@ -2303,7 +2378,7 @@ export default function App() {
           },
         ];
 
-        const retrySourceText = buildOfflineGroupRetrySourceText(group.lines);
+        const retrySourceText = buildOfflineGroupRetrySourceText(group.lines, effectiveSourceLanguage);
         if (
           retrySourceText
           && buildTranslationComparisonKey(retrySourceText) !== buildTranslationComparisonKey(sourceGroupText)
@@ -2330,7 +2405,7 @@ export default function App() {
           });
         }
 
-        const retryLineInputs = group.lines.map((line) => normalizeSourceForTranslation(line.text));
+        const retryLineInputs = group.lines.map((line) => normalizeSourceForTranslation(line.text, effectiveSourceLanguage));
         const retryLineProtected = retryLineInputs.map((text) => protectTranslationTokens(text, targetLanguage));
         const retryLineRaw = await translateBatchOffline(
           retryLineProtected.map((item) => item.protectedText),
@@ -2415,7 +2490,7 @@ export default function App() {
     const retryCandidates = Array.from(retryLineMap.values());
     if (retryCandidates.length > 0) {
       const retryPrepared = retryCandidates.map((item) => {
-        const sourceText = normalizeSourceForTranslation(item.sourceText);
+        const sourceText = normalizeSourceForTranslation(item.sourceText, effectiveSourceLanguage);
         const protectedRetry = protectTranslationTokens(sourceText, targetLanguage);
         return {
           ...item,
@@ -2726,3 +2801,6 @@ export default function App() {
     </div>
   );
 }
+
+
+
