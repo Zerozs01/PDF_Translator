@@ -25,13 +25,13 @@ export const OVERLAY_FONT_OPTIONS: OverlayFontOption[] = [
   {
     value: 'supermarket',
     label: 'Supermarket',
-    description: 'Casual manga/manhwa vibe (requires local Supermarket font install).',
+    description: 'Casual manga/manhwa vibe (bundled via npm postinstall font bootstrap).',
     fontFamily: "'Supermarket', 'Mitr', 'Sarabun', 'Noto Sans Thai', 'Tahoma', sans-serif",
   },
   {
     value: 'fc-iconic',
     label: 'FC Iconic',
-    description: 'Stylized display look (requires local FC Iconic font install).',
+    description: 'Stylized display look (bundled via npm postinstall font bootstrap).',
     fontFamily: "'FC Iconic', 'Mitr', 'Sarabun', 'Noto Sans Thai', 'Tahoma', sans-serif",
   },
   {

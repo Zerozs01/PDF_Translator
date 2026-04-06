@@ -1365,14 +1365,14 @@ export const UploadScreen: React.FC = () => {
 
               {isThaiTargetLanguage && (
                 <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
-                  <label className="text-[11px] font-semibold text-slate-300">Thai Overlay Font</label>
+                  <label className="text-[11px] font-semibold text-slate-300">Overlay Font</label>
 
                   <select
                     value={overlayFontPreset}
                     onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
                     className="w-full rounded-lg border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
-                    aria-label="Thai overlay font preset"
-                    title="Thai overlay font preset"
+                    aria-label="Overlay font preset"
+                    title="Overlay font preset"
                   >
                     {OVERLAY_FONT_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -1710,9 +1710,9 @@ export const UploadScreen: React.FC = () => {
             </button>
           </div>
 
-          {/* Mode Selection */}
+          {/* Profile Selection */}
           <div className="mb-6">
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Translation Mode</label>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Profile</label>
             <div className="space-y-2">
               <button
                 onClick={() => setTranslationMode('adaptive')}

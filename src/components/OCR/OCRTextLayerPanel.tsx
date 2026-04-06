@@ -13,10 +13,11 @@ import React, { useCallback, useRef, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Play, 
-  Download, 
   RefreshCw,
   Languages,
   Eye,
+  ChevronDown,
+  ChevronRight,
   Info,
   Copy,
   Check,
@@ -75,6 +76,34 @@ const normalizeWarmLanguageKey = (value: string): string => value
 
 const getEngineWarmSessionKey = (engine: OCREngine, language: string): string =>
   `${engine}:${normalizeWarmLanguageKey(language)}`;
+
+const AUTO_OCR_REQUEST_EVENT = 'pdf-translator:auto-ocr-request';
+const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
+const OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_languages_section_open';
+const OCR_MODEL_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_model_section_open';
+
+type AutoOCRScope = 'current' | 'all';
+
+const readPersistedSectionOpen = (storageKey: string, defaultValue: boolean): boolean => {
+  if (typeof window === 'undefined') return defaultValue;
+  try {
+    const raw = String(window.localStorage.getItem(storageKey) || '').trim().toLowerCase();
+    if (raw === '1' || raw === 'true') return true;
+    if (raw === '0' || raw === 'false') return false;
+    return defaultValue;
+  } catch {
+    return defaultValue;
+  }
+};
+
+const persistSectionOpen = (storageKey: string, value: boolean): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(storageKey, value ? '1' : '0');
+  } catch {
+    // Ignore storage failures.
+  }
+};
 
 type BenchmarkRow = {
   engine: OCREngine;
@@ -378,19 +407,28 @@ const shouldCollapsePanelSafetyDuplicate = (
   );
 
   const exactKeyMatch = existingKey === candidateKey;
-  const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= minHeight * 1.35;
+  const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= Math.max(96, minHeight * 4.2);
+  const shortExactPhrase = exactKeyMatch && candidateKey.length >= 4 && candidateKey.length <= 14;
+  const looseAreaRatio = areaRatio >= 0.32 && areaRatio <= 3.2;
+  const shortPhraseDuplicate = (
+    shortExactPhrase
+    && looseAreaRatio
+    && centerDeltaY <= Math.max(126, minHeight * 6.2)
+    && centerDeltaX <= Math.max(132, minWidth * 2.6)
+    && (iou >= 0.12 || overlapY >= 0.24)
+  );
   const localStackedDuplicate = (
     exactKeyMatch
     && candidateKey.length >= 4
     && nearSizeMatch
-    && centerDeltaY <= Math.max(88, minHeight * 3.2)
-    && centerDeltaX <= Math.max(96, minWidth * 1.7)
-    && overlapX >= 0.5
+    && centerDeltaY <= Math.max(112, minHeight * 4.8)
+    && centerDeltaX <= Math.max(108, minWidth * 1.9)
+    && overlapX >= 0.44
     && nearStackedBand
   );
 
   if (sameOrSubset) {
-    return strongSpatialMatch || localStackedDuplicate;
+    return strongSpatialMatch || localStackedDuplicate || shortPhraseDuplicate;
   }
 
   return (
@@ -712,7 +750,6 @@ export const OCRTextLayerPanel: React.FC = () => {
     showDebugOverlay
   } = useOCRTextLayerStore();
 
-  const [isExporting, setIsExporting] = useState(false);
   const autoSyncedDocRef = useRef<number | null>(null);
   const persistedCacheRef = useRef<Map<string, string>>(new Map());
   const persistedTranslationCacheRef = useRef<Map<string, string>>(new Map());
@@ -744,6 +781,12 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
+  const [isLanguagesSectionOpen, setIsLanguagesSectionOpen] = useState<boolean>(() =>
+    readPersistedSectionOpen(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY, true)
+  );
+  const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
+    readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
+  );
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied'>('idle');
   const [benchmarkRows, setBenchmarkRows] = useState<BenchmarkRow[]>(() =>
     OCR_ENGINES.map((engine) => ({
@@ -802,6 +845,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       benchmarkAbortRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    persistSectionOpen(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY, isLanguagesSectionOpen);
+  }, [isLanguagesSectionOpen]);
+
+  useEffect(() => {
+    persistSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, isModelSectionOpen);
+  }, [isModelSectionOpen]);
 
   const setEngineWarmState = useCallback((engine: string, patch: Partial<EngineWarmState>) => {
     setEngineWarmStates((current) => {
@@ -1882,7 +1933,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         return { maxSide: 16000, maxPixels: 14_000_000, minWidth: null };
       }
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
-      return { maxSide: 16000, maxPixels: 9_000_000, minWidth: null };
+      return { maxSide: 16000, maxPixels: 16_000_000, minWidth: null };
     }
     // EasyOCR: moderate minWidth (650px) for readable text
     if (engine === 'easyocr') {
@@ -2515,37 +2566,68 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [beginAbortableJob, ensureDocumentId, ensureEngineReady, file, fileData, fileType, fileUrl, isAbortError, options, recoverExternalEngine, renderPageToCanvas, resolveRenderConstraints, runCurrentPageOCR, setIsProcessing, setPageOCR, setProgress, shouldRecoverExternalEngine, showDebugOverlay]);
 
-  /**
-   * Download searchable PDF from cached OCR results
-   */
-  const handleDownloadFromCache = useCallback(async (mode: 'current' | 'all') => {
-    if (!file || allPagesOCR.size === 0) return;
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
 
-    const pageRange = mode === 'current' ? [currentPage] : undefined;
-    if (mode === 'current' && !allPagesOCR.get(currentPage)) return;
+    const dispatchAutoOCRResult = (scope: AutoOCRScope, ok: boolean, error?: string) => {
+      window.dispatchEvent(new CustomEvent(AUTO_OCR_RESULT_EVENT, { detail: { scope, ok, error } }));
+    };
 
-    try {
-      setIsExporting(true);
-      const arrayBuffer = await file.arrayBuffer();
-      const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
-        arrayBuffer,
-        allPagesOCR,
-        pageRange
-      );
+    const handleAutoOCRRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ scope?: AutoOCRScope }>).detail;
+      const scope: AutoOCRScope = detail?.scope === 'all' ? 'all' : 'current';
 
-      const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
-      const a = document.createElement('a');
-      a.href = url;
-      const suffix = mode === 'current' ? `_page_${currentPage}_searchable.pdf` : '_searchable.pdf';
-      a.download = file.name.replace('.pdf', suffix);
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } finally {
-      setIsExporting(false);
-    }
-  }, [file, allPagesOCR, currentPage]);
+      void (async () => {
+        if (!file || !fileUrl) {
+          dispatchAutoOCRResult(scope, false, 'No file is open for OCR.');
+          return;
+        }
+
+        if (isProcessing || ocrJobActiveRef.current) {
+          dispatchAutoOCRResult(scope, false, 'OCR is already running.');
+          return;
+        }
+
+        const selectedEngine = (options.engine || 'tesseract') as OCREngine;
+
+        if (scope === 'all' && fileType === 'pdf') {
+          await handleStartOCR(undefined, false);
+          const state = useOCRTextLayerStore.getState();
+          let cachedPages = 0;
+          state.ocrByPageEngine.forEach((engineMap) => {
+            if (engineMap.has(selectedEngine)) {
+              cachedPages += 1;
+            }
+          });
+          const expectedPages = Math.max(1, totalPages);
+          const ok = cachedPages >= expectedPages;
+          dispatchAutoOCRResult(
+            scope,
+            ok,
+            ok ? undefined : `OCR finished but model cache is incomplete (${cachedPages}/${expectedPages}).`
+          );
+          return;
+        }
+
+        await handleCurrentPageOCR(currentPage, false);
+        const state = useOCRTextLayerStore.getState();
+        const hasCurrentPageCache = Boolean(state.ocrByPageEngine.get(currentPage)?.get(selectedEngine));
+        dispatchAutoOCRResult(
+          scope,
+          hasCurrentPageCache,
+          hasCurrentPageCache ? undefined : `OCR finished but no model cache was produced for page ${currentPage}.`
+        );
+      })().catch((error) => {
+        const message = error instanceof Error ? error.message : 'Unknown OCR error';
+        dispatchAutoOCRResult(scope, false, message);
+      });
+    };
+
+    window.addEventListener(AUTO_OCR_REQUEST_EVENT, handleAutoOCRRequest as EventListener);
+    return () => {
+      window.removeEventListener(AUTO_OCR_REQUEST_EVENT, handleAutoOCRRequest as EventListener);
+    };
+  }, [currentPage, file, fileType, fileUrl, handleCurrentPageOCR, handleStartOCR, isProcessing, options.engine, totalPages]);
 
   const updateBenchmarkRow = useCallback((engine: OCREngine, patch: Partial<BenchmarkRow>) => {
     setBenchmarkRows((current) => current.map((row) => {
@@ -2914,159 +2996,195 @@ export const OCRTextLayerPanel: React.FC = () => {
     .sort((a, b) => a.suspiciousRatio - b.suspiciousRatio)[0];
 
   return (
-    <div className="space-y-3 p-4">
+    <div className="space-y-2 p-4">
       {/* Language Selector (Multi-select) */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-xs text-slate-300">
-          <Languages size={12} />
-          OCR Languages
-          </label>
-          <div className="text-[11px] text-[#B68CFF] text-right">
+      <div className="-mx-4 space-y-1">
+        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(122,28,210,0.34)_0%,rgba(219,39,119,0.24)_52%,rgba(17,24,39,0.92)_100%)] px-4 py-2">
+          <div className="min-w-0 flex-1">
+            <label className="flex items-center gap-2 text-xs font-semibold text-white">
+              <Languages size={12} />
+              OCR Languages
+            </label>
+          </div>
+
+          <div className="min-w-0 max-w-[56%] truncate text-right text-[11px] text-slate-200/85">
             {options.language.split('+').filter(Boolean).map(code => {
-            const found = SUPPORTED_LANGUAGES.find(l => l.code === code);
-            return found ? found.name : code;
+              const found = SUPPORTED_LANGUAGES.find(l => l.code === code);
+              return found ? found.name : code;
             }).join(' + ') || 'English'}
           </div>
+
+          <button
+            type="button"
+            onClick={() => setIsLanguagesSectionOpen((current) => !current)}
+            className="flex h-5 w-6 items-center justify-center rounded-md border border-fuchsia-200/45 bg-slate-950/60 text-fuchsia-100 transition-colors hover:border-fuchsia-100/60"
+            title={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
+            aria-label={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
+          >
+            {isLanguagesSectionOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
         </div>
-        <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-900/45 p-2 grid grid-cols-2 gap-x-3 gap-y-1">
-          {SUPPORTED_LANGUAGES.map(lang => {
-            const selected = options.language.split('+').filter(Boolean).includes(lang.code);
-            return (
-              <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer min-w-0">
-                <input
-                  type="checkbox"
-                  checked={selected}
-                  disabled={isProcessing}
-                  onChange={() => {
-                    const current = new Set(options.language.split('+').filter(Boolean));
-                    if (current.has(lang.code)) {
-                      current.delete(lang.code);
-                    } else {
-                      current.add(lang.code);
-                    }
-                    if (current.size === 0) {
-                      current.add('eng');
-                    }
-                    const ordered = SUPPORTED_LANGUAGES
-                      .map(l => l.code)
-                      .filter(code => current.has(code));
-                    setOptions({ language: ordered.join('+') });
-                  }}
-                  className="accent-[#2B9BFF]"
-                />
-                <span className="truncate">{lang.name}</span>
-              </label>
-            );
-          })}
-        </div>
+
+        {isLanguagesSectionOpen && (
+          <div className="px-4">
+            <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-950/65 p-2 grid grid-cols-2 gap-x-3 gap-y-1">
+              {SUPPORTED_LANGUAGES.map(lang => {
+                const selected = options.language.split('+').filter(Boolean).includes(lang.code);
+                return (
+                  <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-100 cursor-pointer min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={isProcessing}
+                      onChange={() => {
+                        const current = new Set(options.language.split('+').filter(Boolean));
+                        if (current.has(lang.code)) {
+                          current.delete(lang.code);
+                        } else {
+                          current.add(lang.code);
+                        }
+                        if (current.size === 0) {
+                          current.add('eng');
+                        }
+                        const ordered = SUPPORTED_LANGUAGES
+                          .map(l => l.code)
+                          .filter(code => current.has(code));
+                        setOptions({ language: ordered.join('+') });
+                      }}
+                      className="accent-[#2B9BFF]"
+                    />
+                    <span className="truncate">{lang.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* OCR Model Selector */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="flex items-center gap-2 text-xs text-slate-300">
+      <div className="-mx-4 space-y-1">
+        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(234,179,8,0.30)_0%,rgba(249,115,22,0.24)_56%,rgba(17,24,39,0.92)_100%)] px-4 py-2">
+          <label className="flex items-center gap-2 text-xs font-semibold text-white">
             <Cpu size={12} />
             OCR Model
           </label>
-          <button
-            type="button"
-            onClick={() => void handleBenchmarkCurrentPage()}
-            disabled={isProcessing || !file}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-2 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Benchmark current page using OCR cache + missing-engine run"
-          >
-            <BarChart3 size={12} />
-            Benchmark หน้านี้
-          </button>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {OCR_ENGINES.map((engine) => {
-            const warmState = engine.id === 'tesseract'
-              ? {
-                  phase: 'ready' as EngineWarmPhase,
-                  progress: 100,
-                  runtime: engine.runtime,
-                  description: engine.description,
-                  etaSec: 0,
-                }
-              : engineWarmStates[engine.id] || {
-                  phase: 'idle' as EngineWarmPhase,
-                  progress: 0,
-                  runtime: engine.runtime,
-                  description: 'Click to check and warm this model',
-                  etaSec: null,
-                };
-            const isCurrent = (options.engine || 'tesseract') === engine.id;
-            const isBusy = warmState.phase === 'checking' || warmState.phase === 'warming';
-            const isReady = warmState.phase === 'ready';
-            const canSelect = engine.id === 'tesseract' || isReady;
 
-            return (
-              <button
-                key={engine.id}
-                type="button"
-                disabled={isProcessing || isBusy}
-                onClick={() => {
-                  if (engine.id === 'tesseract') {
-                    void ensureEngineReady('tesseract', { selectOnReady: true });
-                    return;
-                  }
-                  if (canSelect) {
-                    setOptions({ engine: engine.id });
-                    return;
-                  }
-                  void ensureEngineReady(engine.id, { selectOnReady: true });
-                }}
-                title={warmState.description || engine.description}
-                className={`relative overflow-hidden rounded-xl border px-2 py-2 text-left transition-all ${
-                  isCurrent
-                    ? 'border-[#5CC6F2]/70 bg-gradient-to-r from-[#2B9BFF]/25 to-[#2776FF]/20 shadow-[0_10px_24px_rgba(43,155,255,0.18)]'
-                    : 'border-white/10 bg-slate-900/45 hover:border-white/20'
-                } disabled:opacity-70`}
-              >
-                {isBusy && (
-                  <div
-                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#2B9BFF]/20 via-[#5CC6F2]/25 to-transparent transition-[width] duration-500"
-                    style={{ width: `${warmState.progress}%` }}
-                  />
-                )}
-                <div className="relative z-10 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-white">{engine.name}</span>
-                    <span className={`text-[9px] font-medium ${
-                      warmState.phase === 'ready'
-                        ? 'text-emerald-300'
-                        : warmState.phase === 'error'
-                          ? 'text-rose-300'
-                          : 'text-slate-400'
-                    }`}>
-                      {warmState.phase === 'ready'
-                        ? 'Ready'
-                        : warmState.phase === 'error'
-                          ? 'Unavailable'
-                          : warmState.phase === 'warming'
-                            ? 'Loading'
-                            : 'Check'}
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-slate-950/80 overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-500 ${
-                        warmState.phase === 'ready'
-                          ? 'bg-gradient-to-r from-emerald-400 to-emerald-300'
-                          : warmState.phase === 'error'
-                            ? 'bg-gradient-to-r from-rose-500 to-orange-400'
-                            : 'bg-gradient-to-r from-[#2B9BFF] via-[#5CC6F2] to-[#89E6FF]'
-                      }`}
-                      style={{ width: `${Math.max(warmState.progress, warmState.phase === 'idle' ? 4 : 8)}%` }}
-                    />
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleBenchmarkCurrentPage()}
+              disabled={isProcessing || !file}
+              className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-black/70 px-2 py-1 text-[10px] font-semibold text-white transition-colors hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Benchmark current page using OCR cache + missing-engine run"
+            >
+              <BarChart3 size={11} />
+              Benchmark
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsModelSectionOpen((current) => !current)}
+              className="flex h-6 w-6 items-center justify-center rounded-md border border-amber-200/45 bg-slate-950/60 text-amber-100 transition-colors hover:border-amber-100/60"
+              title={isModelSectionOpen ? 'Collapse OCR model section' : 'Expand OCR model section'}
+              aria-label={isModelSectionOpen ? 'Collapse OCR model section' : 'Expand OCR model section'}
+            >
+              {isModelSectionOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            </button>
+          </div>
         </div>
+
+        {isModelSectionOpen && (
+          <div className="px-4">
+            <div className="grid grid-cols-3 gap-2">
+              {OCR_ENGINES.map((engine) => {
+                const warmState = engine.id === 'tesseract'
+                  ? {
+                      phase: 'ready' as EngineWarmPhase,
+                      progress: 100,
+                      runtime: engine.runtime,
+                      description: engine.description,
+                      etaSec: 0,
+                    }
+                  : engineWarmStates[engine.id] || {
+                      phase: 'idle' as EngineWarmPhase,
+                      progress: 0,
+                      runtime: engine.runtime,
+                      description: 'Click to check and warm this model',
+                      etaSec: null,
+                    };
+                const isCurrent = (options.engine || 'tesseract') === engine.id;
+                const isBusy = warmState.phase === 'checking' || warmState.phase === 'warming';
+                const isReady = warmState.phase === 'ready';
+                const canSelect = engine.id === 'tesseract' || isReady;
+
+                return (
+                  <button
+                    key={engine.id}
+                    type="button"
+                    disabled={isProcessing || isBusy}
+                    onClick={() => {
+                      if (engine.id === 'tesseract') {
+                        void ensureEngineReady('tesseract', { selectOnReady: true });
+                        return;
+                      }
+                      if (canSelect) {
+                        setOptions({ engine: engine.id });
+                        return;
+                      }
+                      void ensureEngineReady(engine.id, { selectOnReady: true });
+                    }}
+                    title={warmState.description || engine.description}
+                    className={`relative overflow-hidden rounded-xl border px-2 py-2 text-left transition-all ${
+                      isCurrent
+                        ? 'border-[#5CC6F2]/70 bg-gradient-to-r from-[#2B9BFF]/25 to-[#2776FF]/20 shadow-[0_10px_24px_rgba(43,155,255,0.18)]'
+                        : 'border-white/10 bg-slate-900/45 hover:border-white/20'
+                    } disabled:opacity-70`}
+                  >
+                    {isBusy && (
+                      <div
+                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#2B9BFF]/20 via-[#5CC6F2]/25 to-transparent transition-[width] duration-500"
+                        style={{ width: `${warmState.progress}%` }}
+                      />
+                    )}
+                    <div className="relative z-10 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-white">{engine.name}</span>
+                        <span className={`text-[9px] font-medium ${
+                          warmState.phase === 'ready'
+                            ? 'text-emerald-300'
+                            : warmState.phase === 'error'
+                              ? 'text-rose-300'
+                              : 'text-slate-400'
+                        }`}>
+                          {warmState.phase === 'ready'
+                            ? 'Ready'
+                            : warmState.phase === 'error'
+                              ? 'Unavailable'
+                              : warmState.phase === 'warming'
+                                ? 'Loading'
+                                : 'Check'}
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-slate-950/80 overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-500 ${
+                            warmState.phase === 'ready'
+                              ? 'bg-gradient-to-r from-emerald-400 to-emerald-300'
+                              : warmState.phase === 'error'
+                                ? 'bg-gradient-to-r from-rose-500 to-orange-400'
+                                : 'bg-gradient-to-r from-[#2B9BFF] via-[#5CC6F2] to-[#89E6FF]'
+                          }`}
+                          style={{ width: `${Math.max(warmState.progress, warmState.phase === 'idle' ? 4 : 8)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Progress Bar */}
@@ -3102,7 +3220,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       )}
 
       {/* Action Buttons */}
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <div className="flex gap-2">
           {fileType === 'pdf' && (
             <button
@@ -3176,33 +3294,11 @@ export const OCRTextLayerPanel: React.FC = () => {
           </button>
         )}
 
-        {fileType === 'pdf' && totalOCRPages > 0 && !isProcessing && (
-          <div className="flex gap-2">
-            <button
-              onClick={() => handleDownloadFromCache('current')}
-              disabled={isExporting || !allPagesOCR.get(currentPage)}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(5,150,105,0.18)]"
-              title="Download current page"
-            >
-              <Download size={13} />
-              Current Page
-            </button>
-            <button
-              onClick={() => handleDownloadFromCache('all')}
-              disabled={isExporting}
-              className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(34,197,94,0.18)]"
-              title="Download all OCR pages"
-            >
-              <Download size={13} />
-              All Pages
-            </button>
-          </div>
-        )}
       </div>
 
       {/* OCR Results Preview */}
       {previewSourceOCR && !isProcessing && (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
             <Eye size={12} className="text-[#5CC6F2]" />
             OCR Result - หน้า {currentPage}
@@ -3218,6 +3314,40 @@ export const OCRTextLayerPanel: React.FC = () => {
               <span className="text-[11px] font-medium text-sky-300/95">
                 {`runtime ${currentRuntimeSecLabel}`}
               </span>
+              <button
+                type="button"
+                onClick={() => void handleCopyPreviewText()}
+                disabled={!hasPreviewCopyText}
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-slate-900/70 text-slate-300 transition-colors hover:border-cyan-300/60 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+                title={hasPreviewCopyText ? 'Copy all OCR text in the current preview' : 'No OCR text to copy'}
+                aria-label={copyFeedback === 'copied' ? 'Copied OCR text' : 'Copy all OCR text'}
+              >
+                {copyFeedback === 'copied' ? <Check size={12} /> : <Copy size={12} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (effectivePreviewMode === 'translated') {
+                    setTranslationPreviewMode('original');
+                    return;
+                  }
+                  if (!canToggleToTranslated) return;
+                  const preferredKey = preferredEntryForCurrentModel?.key || resolvedTranslationEntry?.key;
+                  if (preferredKey) {
+                    setActiveTranslationCacheKey(currentPage, preferredKey);
+                  }
+                  setTranslationPreviewMode('translated');
+                }}
+                disabled={previewToggleDisabled}
+                className={`rounded-md border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                  effectivePreviewMode === 'translated'
+                    ? 'border-cyan-400/55 bg-cyan-500/20 text-cyan-100 hover:border-cyan-300/70 hover:bg-cyan-500/28'
+                    : 'border-emerald-400/55 bg-emerald-500/18 text-emerald-100 hover:border-emerald-300/70 hover:bg-emerald-500/28'
+                } disabled:cursor-not-allowed disabled:opacity-45`}
+                title={previewToggleDisabled ? 'No translated cache available for this context' : (effectivePreviewMode === 'translated' ? 'Show original OCR cache' : 'Show translated result cache')}
+              >
+                {previewToggleLabel}
+              </button>
             </div>
           </div>
           <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
@@ -3230,7 +3360,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           )}
           
           <div className="relative bg-slate-900/55 border border-white/10 rounded-lg min-h-56 max-h-[40vh] overflow-hidden">
-            <div className="h-full max-h-[40vh] overflow-y-auto p-2 pb-12">
+            <div className="h-full max-h-[40vh] overflow-y-auto p-2 pb-4">
               {previewWordsLength > 0 ? (
                 <div className="space-y-1">
                   {/* Show text grouped by lines for better readability */}
@@ -3252,46 +3382,6 @@ export const OCRTextLayerPanel: React.FC = () => {
                   ไม่พบข้อความในหน้านี้
                 </p>
               )}
-            </div>
-
-            <div className="absolute bottom-2 left-2 flex items-center">
-              <button
-                type="button"
-                onClick={() => void handleCopyPreviewText()}
-                disabled={!hasPreviewCopyText}
-                className="flex items-center gap-1.5 rounded-md border border-white/10 bg-slate-950/90 px-2.5 py-1 text-[10px] font-semibold text-slate-100 transition-colors hover:border-cyan-300/60 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
-                title={hasPreviewCopyText ? 'Copy all OCR text in the current preview' : 'No OCR text to copy'}
-              >
-                {copyFeedback === 'copied' ? <Check size={12} /> : <Copy size={12} />}
-                {copyFeedback === 'copied' ? 'Copied' : 'Copy All'}
-              </button>
-            </div>
-
-            <div className="absolute bottom-2 right-2 flex items-center rounded-md border border-white/10 bg-slate-950/90 px-2 py-1">
-              <button
-                type="button"
-                onClick={() => {
-                  if (effectivePreviewMode === 'translated') {
-                    setTranslationPreviewMode('original');
-                    return;
-                  }
-                  if (!canToggleToTranslated) return;
-                  const preferredKey = preferredEntryForCurrentModel?.key || resolvedTranslationEntry?.key;
-                  if (preferredKey) {
-                    setActiveTranslationCacheKey(currentPage, preferredKey);
-                  }
-                  setTranslationPreviewMode('translated');
-                }}
-                disabled={previewToggleDisabled}
-                className={`rounded border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
-                  effectivePreviewMode === 'translated'
-                    ? 'border-cyan-400/55 bg-cyan-500/20 text-cyan-100 hover:border-cyan-300/70 hover:bg-cyan-500/28'
-                    : 'border-emerald-400/55 bg-emerald-500/18 text-emerald-100 hover:border-emerald-300/70 hover:bg-emerald-500/28'
-                } disabled:cursor-not-allowed disabled:opacity-45`}
-                title={previewToggleDisabled ? 'No translated cache available for this context' : (effectivePreviewMode === 'translated' ? 'Show original OCR cache' : 'Show translated result cache')}
-              >
-                {previewToggleLabel}
-              </button>
             </div>
           </div>
         </div>

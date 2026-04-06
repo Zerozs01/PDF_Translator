@@ -374,7 +374,7 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
   const normalizedLineText = normalizeOverlayInlineText(String(line.text || ''));
   const sourceWordCount = normalizedLineText.split(/\s+/g).filter(Boolean).length;
   const technicalSourceLike = DOCUMENT_SOURCE_FALLBACK_HINT_REGEX.test(normalizedLineText);
-  const numericDocumentLike = sourceWordCount >= 6 && /[0-9()\-]/.test(normalizedLineText);
+  const numericDocumentLike = sourceWordCount >= 5 && /[0-9()\-]/.test(normalizedLineText);
   const allowLineFallback = technicalSourceLike || numericDocumentLike;
   const longLineText = normalizedLineText.length >= 18;
   const sparseWordBoxes = validWordBoxes.length <= 3;
@@ -391,8 +391,15 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     && areaCoverage < 0.8
     && heightCoverage < 0.9
   );
+  const longDocumentCoverageLoss = (
+    sourceWordCount >= 7
+    && longLineText
+    && widthCoverage < 0.84
+    && areaCoverage < 0.84
+    && heightCoverage < 0.95
+  );
 
-  if (allowLineFallback && (severeCoverageLoss || moderateCoverageLoss || shortDocumentCoverageLoss)) {
+  if (allowLineFallback && (severeCoverageLoss || moderateCoverageLoss || shortDocumentCoverageLoss || longDocumentCoverageLoss)) {
     return line.bbox;
   }
 
@@ -1447,10 +1454,17 @@ export const computeOverlayTypography = (
     && sourceAspectRatio >= 1.45
     && targetLength <= 34;
   const normalizedInlineText = normalizeOverlayInlineText(text);
+  const thaiComicMinRatio = isComicBubble
+    ? 0.5
+    : isComicBox
+      ? 0.52
+      : isComicLikeProfile
+        ? 0.54
+        : 0.66;
   const ratio = sourceLength > 0 && targetLength > 0
     ? clamp(
       Math.pow(sourceLength / targetLength, containsThai ? 0.72 : containsCjk ? 0.68 : 0.76),
-      containsThai ? 0.66 : containsCjk ? 0.7 : 0.58,
+      containsThai ? thaiComicMinRatio : containsCjk ? 0.7 : 0.58,
       isComicBubble ? (isAdaptiveProfile ? 1.18 : 1.22) : isComicBox ? (isAdaptiveProfile ? 1.14 : 1.18) : isComicLikeProfile ? (isAdaptiveProfile ? 1.12 : 1.16) : 1.08
     )
     : 1;
@@ -1520,6 +1534,10 @@ export const computeOverlayTypography = (
             : (sourceLooksHeading ? 1.02 : 0.82)
     )
     : (isComicBubble ? (isAdaptiveProfile ? 1.04 : 1.08) : isComicBox ? (isAdaptiveProfile ? 0.98 : 1) : isComicLikeProfile ? (isAdaptiveProfile ? 0.94 : 0.96) : (sourceLooksHeading ? 1.01 : styleKind === 'document-body' ? (containsThai ? 1.18 : 1.0) : 0.92));
+  if (containsThai && isComicLikeProfile && sourceLength > 0 && targetLength > sourceLength * 1.55) {
+    const overflowPressure = Math.min(0.18, (targetLength / Math.max(1, sourceLength) - 1.55) * 0.06);
+    fontSize *= (1 - overflowPressure);
+  }
   const lineHeight = resolveOverlayLineHeight(text)
     + (
       containsThai

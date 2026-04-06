@@ -17,6 +17,7 @@ import {
   resolveOverlayMaskExpansion,
   type OverlayLayout,
   type OverlayLayoutProfile,
+  type OverlayTypography,
   resolveTranslationOverlayContext,
   resolveOverlaySourceBBox,
   sampleOverlayPaletteFromLine,
@@ -35,6 +36,27 @@ const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
   return technicalLike || numericDocumentLike;
 };
 
+const clampOverlayTypographyScale = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  if (value < 0.7) return 0.7;
+  if (value > 1.6) return 1.6;
+  return value;
+};
+
+const scaleOverlayTypography = (typography: OverlayTypography, scale: number): OverlayTypography => {
+  const normalizedScale = clampOverlayTypographyScale(scale);
+  if (Math.abs(normalizedScale - 1) < 0.0001) return typography;
+
+  return {
+    ...typography,
+    fontSize: Math.max(8, Number((typography.fontSize * normalizedScale).toFixed(2))),
+    lineHeight: Number((typography.lineHeight * normalizedScale).toFixed(3)),
+    padX: Math.max(1, Math.round(typography.padX * normalizedScale)),
+    padY: Math.max(1, Math.round(typography.padY * normalizedScale)),
+    contentHeight: Math.max(1, Number((typography.contentHeight * normalizedScale).toFixed(2))),
+  };
+};
+
 export const PDFCanvas: React.FC = () => {
   const {
     fileUrl,
@@ -48,6 +70,7 @@ export const PDFCanvas: React.FC = () => {
     translationMode,
     overlayThaiFontEnabled,
     overlayFontPreset,
+    overlayFontSizeScale,
   } = useProjectStore();
   const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
@@ -143,8 +166,9 @@ export const PDFCanvas: React.FC = () => {
         const widthCoverage = sourceWidthRaw / maskWidthRaw;
         const areaCoverage = sourceAreaRaw / maskAreaRaw;
         const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
-          && widthCoverage < 0.76
-          && areaCoverage < 0.82;
+          && widthCoverage < 0.84
+          && areaCoverage < 0.86;
+        const severeCoverageSource = widthCoverage < 0.42 && areaCoverage < 0.3;
         const effectiveSourceBbox = lowCoverageSource ? maskBbox : sourceBbox;
         const baseWidth = Math.max(1, (effectiveSourceBbox.x1 - effectiveSourceBbox.x0) * ocrOverlayTransform.scaleX);
         const baseHeight = Math.max(1, (effectiveSourceBbox.y1 - effectiveSourceBbox.y0) * ocrOverlayTransform.scaleY);
@@ -170,7 +194,7 @@ export const PDFCanvas: React.FC = () => {
           text: translatedText,
           width: typographyWidth,
           height: typographyHeight,
-          bbox: effectiveSourceBbox,
+          bbox: (overlayLayoutProfile === 'official' || severeCoverageSource) ? maskBbox : effectiveSourceBbox,
           line,
           hints: {
             sourceText: line.text,
@@ -563,11 +587,14 @@ export const PDFCanvas: React.FC = () => {
                       const widthCoverage = sourceWidthRaw / maskWidthRaw;
                       const areaCoverage = sourceAreaRaw / maskAreaRaw;
                       const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
-                        && widthCoverage < 0.76
-                        && areaCoverage < 0.82;
+                        && widthCoverage < 0.84
+                        && areaCoverage < 0.86;
+                      const severeCoverageSource = !isDocumentLikeOverlay
+                        && widthCoverage < 0.42
+                        && areaCoverage < 0.3;
                       const sourceBbox = isMaskOnlyLine
                         ? resolvedSourceBbox
-                        : (layout?.mergedBBox || (lowCoverageSource ? maskBbox : resolvedSourceBbox));
+                        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource || severeCoverageSource ? maskBbox : resolvedSourceBbox));
                       const maskRenderSourceLeft = maskBbox.x0;
                       const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
                         ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
@@ -593,9 +620,12 @@ export const PDFCanvas: React.FC = () => {
                         Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
                       );
                       const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
+                      const documentBottomBoost = isDocumentLikeOverlay
+                        ? Math.min(8, Math.max(2, Math.round(maskBaseHeight * 0.16)))
+                        : 0;
                       const maskExpandBottom = Math.min(
-                        expansion.maxExpandBottom + thaiBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
-                        Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + mergedMaskBoost + comicMaskBoostBottom
+                        expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
+                        Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
                       );
                       const rawMaskLeft = ocrOverlayTransform.offsetX + maskRenderSourceLeft * ocrOverlayTransform.scaleX - maskExpandLeft;
                       const rawMaskTop = ocrOverlayTransform.offsetY + maskBbox.y0 * ocrOverlayTransform.scaleY - maskExpandTop;
@@ -647,7 +677,7 @@ export const PDFCanvas: React.FC = () => {
                           Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
                         )
                         : textRect.height;
-                      const typography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
+                      const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
                         sourceText: line.text,
                         sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
                         sourceBoxHeight: isDocumentLikeOverlay
@@ -658,6 +688,7 @@ export const PDFCanvas: React.FC = () => {
                         profile: effectiveProfile,
                         styleKind,
                       });
+                      const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
                       const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
                       const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
                       const textStartOffset = layout?.sharedTextStartX !== undefined

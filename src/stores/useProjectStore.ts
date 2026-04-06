@@ -22,7 +22,17 @@ export type ViewMode = 'single' | 'continuous';
 const LEGACY_GEMINI_API_KEY_STORAGE_KEY = 'pdf_translator.gemini_api_key';
 const OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY = 'pdf_translator.overlay_thai_font_enabled';
 const OVERLAY_FONT_PRESET_STORAGE_KEY = 'pdf_translator.overlay_font_preset';
+const OVERLAY_FONT_SIZE_SCALE_STORAGE_KEY = 'pdf_translator.overlay_font_size_scale';
+const OVERLAY_FONT_SIZE_SCALE_MIN = 0.7;
+const OVERLAY_FONT_SIZE_SCALE_MAX = 1.6;
 const THAI_TARGET_LANGUAGE_KEYS = new Set(['th', 'tha', 'thai']);
+
+const clampOverlayFontSizeScale = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  if (value < OVERLAY_FONT_SIZE_SCALE_MIN) return OVERLAY_FONT_SIZE_SCALE_MIN;
+  if (value > OVERLAY_FONT_SIZE_SCALE_MAX) return OVERLAY_FONT_SIZE_SCALE_MAX;
+  return Math.round(value * 100) / 100;
+};
 
 const isThaiTargetLanguage = (value: string): boolean => {
   const normalized = String(value || '').trim().toLowerCase().split('-')[0];
@@ -82,6 +92,26 @@ const persistOverlayFontPreset = (preset: OverlayFontPreset): void => {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(OVERLAY_FONT_PRESET_STORAGE_KEY, preset);
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const readPersistedOverlayFontSizeScale = (): number => {
+  if (typeof window === 'undefined') return 1;
+  try {
+    const raw = Number.parseFloat(String(window.localStorage.getItem(OVERLAY_FONT_SIZE_SCALE_STORAGE_KEY) || '').trim());
+    if (!Number.isFinite(raw)) return 1;
+    return clampOverlayFontSizeScale(raw);
+  } catch {
+    return 1;
+  }
+};
+
+const persistOverlayFontSizeScale = (scale: number): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OVERLAY_FONT_SIZE_SCALE_STORAGE_KEY, String(clampOverlayFontSizeScale(scale)));
   } catch {
     // Ignore local storage failures.
   }
@@ -153,6 +183,7 @@ interface ProjectState {
   geminiApiKeyError: string | null;
   overlayThaiFontEnabled: boolean;
   overlayFontPreset: OverlayFontPreset;
+  overlayFontSizeScale: number;
 
   // Actions
   hydrateGeminiApiKey: () => Promise<void>;
@@ -171,6 +202,7 @@ interface ProjectState {
   clearGeminiApiKey: () => Promise<boolean>;
   setOverlayThaiFontEnabled: (enabled: boolean) => void;
   setOverlayFontPreset: (preset: OverlayFontPreset) => void;
+  setOverlayFontSizeScale: (scale: number) => void;
   updateSafetySettings: (settings: Partial<SafetySettings>) => void;
 }
 
@@ -199,6 +231,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   geminiApiKeyError: null,
   overlayThaiFontEnabled: true,
   overlayFontPreset: readPersistedOverlayFontPreset(),
+  overlayFontSizeScale: readPersistedOverlayFontSizeScale(),
 
   hydrateGeminiApiKey: async () => {
     if (typeof window === 'undefined' || !window.electronAPI?.gemini?.getApiKeyStatus) {
@@ -444,6 +477,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setOverlayFontPreset: (preset) => {
     persistOverlayFontPreset(preset);
     set({ overlayFontPreset: preset });
+  },
+  setOverlayFontSizeScale: (scale) => {
+    const normalized = clampOverlayFontSizeScale(scale);
+    persistOverlayFontSizeScale(normalized);
+    set({ overlayFontSizeScale: normalized });
   },
   updateSafetySettings: (newSettings) => set((state) => ({
     safetySettings: { ...state.safetySettings, ...newSettings }

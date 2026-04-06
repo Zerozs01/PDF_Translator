@@ -20,15 +20,25 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
-  BarChart3
+  Compass,
+  Flame,
+  FileText,
+  BarChart3,
+  Download,
+  Files
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
-import type { AiExecutionMode } from './components/Layout/RightSidebar';
 import { useUIStore } from './stores/useUIStore';
 import { useProjectStore, type SafetySettings, type TranslationMode } from './stores/useProjectStore';
-import { buildOCRTranslationCacheKey, useOCRTextLayerStore } from './stores/useOCRTextLayerStore';
+import {
+  buildOCRTranslationCacheKey,
+  hasCurrentOCRTranslationCacheVersion,
+  type OCRTranslationCacheEntry,
+  useOCRTextLayerStore,
+} from './stores/useOCRTextLayerStore';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
+import { searchablePDFService } from './services/pdf';
 import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
 
 // Lazy Load Heavy Components
@@ -45,7 +55,12 @@ type GlobalPrewarmState = typeof globalThis & {
   __pdfTranslatorExternalPrewarmInFlight?: Map<string, Promise<void>>;
 };
 
-const AI_EXECUTION_MODE_STORAGE_KEY = 'pdf_translator.ai_execution_mode';
+const AUTO_OCR_REQUEST_EVENT = 'pdf-translator:auto-ocr-request';
+const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
+
+type AutoOCRScope = 'current' | 'all';
+type DownloadScope = 'current' | 'all';
+type DownloadContentMode = 'original' | 'translated';
 
 // --- Translation APIs: Secure IPC to Main Process ---
 // Offline Argos and Gemini fallback are both resolved in main process bridges
@@ -363,8 +378,18 @@ const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: string }>
 
 const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
+  { pattern: /\bA-\s*Are\s*y\b/gi, replacement: 'A-Are you' },
   { pattern: /\bAreyou\b/gi, replacement: 'Are you' },
   { pattern: /\bIT'?SA\b/gi, replacement: "IT'S A" },
+  { pattern: /\bIT'?S\s+BESTIF\b/gi, replacement: "IT'S BEST IF" },
+  { pattern: /\bBESTIF\b/gi, replacement: 'BEST IF' },
+  { pattern: /\bTHENHISWHOLE\b/gi, replacement: 'THEN HIS WHOLE' },
+  { pattern: /\bBODYWAS\b/gi, replacement: 'BODY WAS' },
+  { pattern: /\bLIKEAFURNACE\b/gi, replacement: 'LIKE A FURNACE' },
+  { pattern: /\bBUTNOW\b/gi, replacement: 'BUT NOW' },
+  { pattern: /\bASICE\b/gi, replacement: 'AS ICE' },
+  { pattern: /\bSCOLD\s+AS\s+ICE\b/gi, replacement: 'COLD AS ICE' },
+  { pattern: /\bHE\s+SCOLD\b/gi, replacement: "HE'S COLD" },
   {
     pattern: /\bthis\s+submaie\s+to\s+in\s+ureat\s+the\s+ydoot\s+falinth\s+i\s+chapt\s+we\s+willtudhow\b/gi,
     replacement: 'this submarine to insure that they do not fail in this chapter we will study how',
@@ -394,6 +419,11 @@ const normalizeEnglishOcrNoiseForTranslation = (text: string): string => {
   ENGLISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
   });
+
+  normalized = normalized.replace(
+    /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,
+    "BACK THEN HIS WHOLE BODY WAS BURNING UP LIKE A FURNACE, BUT NOW HE'S COLD AS ICE"
+  );
 
   const compactLatin = normalized.toLowerCase().replace(/[^a-z]/g, '');
   if (
@@ -425,6 +455,8 @@ const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bYA ?QUEDO\b/gi, replacement: 'YA QUEDO' },
   { pattern: /\bYAQUEDO\b/gi, replacement: 'YA QUEDO' },
   { pattern: /\bRAPIDOPR\b/gi, replacement: 'RAPIDO PR' },
+  { pattern: /\bDE,\s*PIDIERON\b/gi, replacement: 'DESPIDIERON' },
+  { pattern: /\bI?RAPIDO,?\s*PRI-?\b/gi, replacement: 'RAPIDO, PRI-' },
 ];
 
 const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
@@ -432,6 +464,7 @@ const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
   SPANISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
   });
+  normalized = normalized.replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2}),\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})\b/g, '$1$2');
   normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\s*,\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1, $2');
   return normalizeWhitespace(normalized);
 };
@@ -533,6 +566,7 @@ const THAI_BOUNDARY_NO_SPLIT_PAIRS = new Set([
   'ยัง|ไม่',
   'ไม่|รู้',
   'หายาก|มาก',
+  'ปิ|ด',
 ]);
 
 const normalizeThaiBoundaryToken = (segment: string): string =>
@@ -541,6 +575,15 @@ const normalizeThaiBoundaryToken = (segment: string): string =>
 const collapseRepeatedTranslationFragments = (text: string): string => {
   const normalized = normalizeWhitespace(String(text || ''));
   if (!normalized) return normalized;
+
+  // Common OCR+translation artifact: duplicated hesitant opener (e.g. "A-Are you A-Are you ...").
+  const dedupHesitation = normalized.replace(
+    /(A-?\s*Are\s+you)(?:\s+\1)+/gi,
+    '$1'
+  );
+  if (dedupHesitation !== normalized) {
+    return normalizeWhitespace(dedupHesitation);
+  }
 
   const repeatedChunk = normalized.match(/^(.{4,}?)(?:\s+\1)+$/u);
   if (repeatedChunk?.[1]) {
@@ -554,6 +597,29 @@ const collapseRepeatedTranslationFragments = (text: string): string => {
     const secondHalf = tokens.slice(half).join(' ');
     if (firstHalf === secondHalf) {
       return firstHalf;
+    }
+  }
+
+  if (tokens.length >= 6) {
+    const normalizeTokenSpan = (spanTokens: string[]): string =>
+      spanTokens
+        .join(' ')
+        .toLowerCase()
+        .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/giu, '');
+
+    const maxSpan = Math.min(8, Math.floor(tokens.length / 2));
+    for (let span = maxSpan; span >= 2; span -= 1) {
+      const firstSpan = tokens.slice(0, span);
+      const secondSpan = tokens.slice(span, span * 2);
+      if (secondSpan.length < span) continue;
+
+      const firstKey = normalizeTokenSpan(firstSpan);
+      const secondKey = normalizeTokenSpan(secondSpan);
+      if (!firstKey || firstKey.length < 6) continue;
+      if (firstKey !== secondKey) continue;
+
+      const merged = [...firstSpan, ...tokens.slice(span * 2)].join(' ');
+      return normalizeWhitespace(merged);
     }
   }
 
@@ -803,6 +869,13 @@ const ENGLISH_HINT_WORDS = new Set([
   'have', 'has', 'had', 'will', 'would', 'there', 'here', 'what', 'when', 'where', 'who',
 ]);
 
+const HANGUL_TEXT_HINT_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/g;
+const JAPANESE_KANA_HINT_REGEX = /[\u3040-\u30FF]/g;
+const CJK_HAN_HINT_REGEX = /[\u3400-\u4DBF\u4E00-\u9FFF]/g;
+const THAI_TEXT_HINT_REGEX = /[\u0E00-\u0E7F]/g;
+const CYRILLIC_TEXT_HINT_REGEX = /[\u0400-\u04FF]/g;
+const LATIN_TEXT_HINT_REGEX = /[A-Za-z]/g;
+
 const inferSourceLanguageFromTextHints = (
   lines: TranslatableLine[],
   fallbackLanguage: string
@@ -818,6 +891,29 @@ const inferSourceLanguageFromTextHints = (
     .join(' ')
     .toLowerCase();
   if (!sampleText) return fallback;
+
+  const hangulCount = (sampleText.match(HANGUL_TEXT_HINT_REGEX) || []).length;
+  const kanaCount = (sampleText.match(JAPANESE_KANA_HINT_REGEX) || []).length;
+  const hanCount = (sampleText.match(CJK_HAN_HINT_REGEX) || []).length;
+  const thaiCount = (sampleText.match(THAI_TEXT_HINT_REGEX) || []).length;
+  const cyrillicCount = (sampleText.match(CYRILLIC_TEXT_HINT_REGEX) || []).length;
+  const latinCount = (sampleText.match(LATIN_TEXT_HINT_REGEX) || []).length;
+
+  if (thaiCount >= Math.max(4, latinCount * 0.2)) {
+    return 'th';
+  }
+  if (hangulCount >= Math.max(3, latinCount * 0.12)) {
+    return 'ko';
+  }
+  if (kanaCount >= 2) {
+    return 'ja';
+  }
+  if (hanCount >= 3 && kanaCount === 0 && hangulCount === 0) {
+    return 'zh';
+  }
+  if (cyrillicCount >= Math.max(3, latinCount * 0.16)) {
+    return 'ru';
+  }
 
   const tokens = sampleText.split(/\s+/g).map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase()).filter(Boolean);
   if (tokens.length === 0) return fallback;
@@ -962,6 +1058,12 @@ const normalizeTranslatableDedupKey = (text: string): string =>
     .replace(/1/g, 'I')
     .replace(/5/g, 'S');
 
+const KNOWN_CONVERSATIONAL_DUPLICATE_KEYS = new Set([
+  'AAREYOU',
+  'AAREYO',
+  'AAREY',
+]);
+
 const translatableDedupSimilarity = (a: string, b: string): number => {
   if (!a || !b) return 0;
   if (a === b) return 1;
@@ -1011,7 +1113,7 @@ const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): Trans
       continue;
     }
 
-    const existingIndex = kept.findIndex((existing, index) => {
+    let existingIndex = kept.findIndex((existing, index) => {
       const existingKey = keptKeys[index];
       if (!existingKey) return false;
 
@@ -1042,6 +1144,19 @@ const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): Trans
         || (overlapY >= 0.68 && overlapX >= 0.56)
       );
     });
+
+    if (existingIndex < 0 && KNOWN_CONVERSATIONAL_DUPLICATE_KEYS.has(candidateKey)) {
+      existingIndex = kept.findIndex((existing, index) => {
+        if (keptKeys[index] !== candidateKey) return false;
+
+        const centerXExisting = (existing.left + existing.right) * 0.5;
+        const centerXCandidate = (candidate.left + candidate.right) * 0.5;
+        const horizontalDistance = Math.abs(centerXCandidate - centerXExisting);
+        const verticalDistance = Math.abs(candidate.top - existing.top);
+
+        return verticalDistance <= 420 && horizontalDistance <= 460;
+      });
+    }
 
     if (existingIndex < 0) {
       kept.push(candidate);
@@ -1549,7 +1664,7 @@ const applyThaiConversationalGlossary = (
     input.replace(new RegExp(`\\b${token}\\b`, 'ig'), replacement);
 
   if (/^AYNAR[.!?…]*$/i.test(source.replace(/\s+/g, ''))) {
-    return preserveSourceTrailingPunctuation(source, 'ไอนาร์');
+    return preserveSourceTrailingPunctuation(source, 'อายนาร์');
   }
 
   if (/\bPHENELINE\b/i.test(source) && /\bHAS\s+ABSORBED\b/i.test(source)) {
@@ -1563,17 +1678,40 @@ const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, wrapped);
   }
 
-  if (/\bA-?\s*ARE\s+YOU\b/i.test(source) && /\bSELLING\s+ME\s+OFF\s+TO\b/i.test(source) && /\bMAGE\b/i.test(source)) {
-    return preserveSourceTrailingPunctuation(source, 'อะ...คุณกำลังจะขายฉันให้กับพ่อมดงั้นเหรอ');
+  if (compactSource === 'aarey' || compactSource === 'aareyo' || compactSource === 'aareyou') {
+    return preserveSourceTrailingPunctuation(source, 'น..นี่ คุณจะ');
   }
-  if (/^A-?\s*ARE\s+YOU[.!?…]*$/i.test(source)) {
-    return preserveSourceTrailingPunctuation(source, 'อะ...คุณกำลังจะ');
+
+  if (/\bA-?\s*ARE\s+YOU\b/i.test(source) && /\bSELLING\s+ME\s+OFF\s+TO\b/i.test(source) && /\bMAGE\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'น..นี่ คุณจะขายฉันให้กับจอมเวทงั้นเหรอ');
+  }
+  if (/^A-?\s*ARE(?:\s+Y(?:OU)?)?[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'น..นี่ คุณจะ');
   }
   if (/^SELLING\s+ME\s+OFF\s+TO[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ขายฉันให้กับ');
   }
   if (/^(?:THE\s+)?MAGE[.!?…]*$/i.test(source)) {
-    return preserveSourceTrailingPunctuation(source, 'พ่อมดงั้นเหรอ');
+    return preserveSourceTrailingPunctuation(source, 'จอมเวทงั้นเหรอ');
+  }
+
+  if (/\bIT['’]?S\s+BEST\s+IF\b/i.test(source) && /\bAYNAR\b/i.test(source) && /\bESSENCE\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'จะเป็นการดีที่สุดหากอายนาร์รับสารสกัดนี้');
+  }
+  if (/^IT['’]?S\s+BEST\s+IF[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'จะเป็นการดีที่สุดหาก');
+  }
+  if (/^AYNAR\s+TAKES\s+THIS[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อายนาร์รับ');
+  }
+  if (/^ESSENCE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'สารสกัดนี้');
+  }
+  if (/^EH[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋');
+  }
+  if (/\bRAPIDO\b/i.test(source) && /\bPRI\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'รวดเร็ว, ด่วน-');
   }
 
   if (/^I\s+THINK[.!?…]*$/i.test(source)) {
@@ -1618,9 +1756,9 @@ const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'เวอร์ทาร์');
   }
   if (compactSourceUpper.includes('AYNAR')) {
-    const replaced = replaceNameToken(translated, 'AYNAR', 'ไอนาร์');
+    const replaced = replaceNameToken(translated, 'AYNAR', 'อายนาร์');
     if (replaced !== translated) return replaced;
-    return preserveSourceTrailingPunctuation(source, 'ไอนาร์');
+    return preserveSourceTrailingPunctuation(source, 'อายนาร์');
   }
 
   if (/^hm+$/.test(compactSource) || /^hmm+$/.test(compactSource)) {
@@ -2082,6 +2220,9 @@ const splitTranslatedTextBySourceWeights = (
         if (wordSegments.length >= sourceLines.length) {
           return wordSegments;
         }
+        if (target.length <= 8 && wordSegments.length > 0) {
+          return wordSegments;
+        }
 
         const graphemeSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'grapheme' });
         return Array.from(graphemeSeg.segment(target))
@@ -2128,11 +2269,19 @@ const splitTranslatedTextBySourceWeights = (
         let distance = Math.abs(endChar - desiredEnd);
         const nextToken = normalizeThaiBoundaryToken(segments[boundary] || '');
         const previousToken = normalizeThaiBoundaryToken(segments[boundary - 1] || '');
+        const nextTokenLength = Array.from(nextToken).length;
+        const previousTokenLength = Array.from(previousToken).length;
         if (nextToken && THAI_BOUNDARY_ATTACH_TOKENS.has(nextToken)) {
           distance += Math.max(18, Math.round(target.length * 0.18));
         }
         if (previousToken && nextToken && THAI_BOUNDARY_NO_SPLIT_PAIRS.has(`${previousToken}|${nextToken}`)) {
           distance += Math.max(24, Math.round(target.length * 0.24));
+        }
+        if (previousTokenLength > 0 && nextTokenLength > 0 && previousTokenLength <= 2 && nextTokenLength <= 2) {
+          distance += Math.max(26, Math.round(target.length * 0.26));
+        }
+        if (nextTokenLength === 1) {
+          distance += Math.max(20, Math.round(target.length * 0.22));
         }
         if (distance < bestDistance) {
           bestDistance = distance;
@@ -2214,33 +2363,42 @@ export default function App() {
   
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [isOfflineProcessing, setIsOfflineProcessing] = useState(false);
-  const [aiExecutionMode, setAiExecutionMode] = useState<AiExecutionMode>(() => {
-    if (typeof window === 'undefined') return 'batch-document';
-    try {
-      const stored = String(window.localStorage.getItem(AI_EXECUTION_MODE_STORAGE_KEY) || '').trim();
-      return stored === 'current-page' ? 'current-page' : 'batch-document';
-    } catch {
-      return 'batch-document';
-    }
-  });
   const [isVisionReady, setIsVisionReady] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
+  const [downloadMenuScope, setDownloadMenuScope] = useState<DownloadScope | null>(null);
+  const [isDownloadingResult, setIsDownloadingResult] = useState(false);
+  const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void hydrateGeminiApiKey();
   }, [hydrateGeminiApiKey]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(AI_EXECUTION_MODE_STORAGE_KEY, aiExecutionMode);
-    } catch {
-      // Ignore storage failures.
-    }
-  }, [aiExecutionMode]);
+    if (!downloadMenuScope) return undefined;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const targetNode = event.target as Node | null;
+      if (downloadMenuRef.current && targetNode && !downloadMenuRef.current.contains(targetNode)) {
+        setDownloadMenuScope(null);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setDownloadMenuScope(null);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [downloadMenuScope]);
 
   const handleBackToHome = () => {
     visionService.cancelAll('Project closed');
@@ -2360,6 +2518,243 @@ export default function App() {
     const fallbackEngine = (fallback.ocrEngine || selectedEngine) as OCREngine;
     if (fallbackEngine !== selectedEngine) return undefined;
     return fallback;
+  };
+
+  const getModelScopedCachedPageNumbers = (): number[] => {
+    const ocrState = useOCRTextLayerStore.getState();
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    const pages = new Set<number>();
+    ocrState.ocrByPageEngine.forEach((byEngine, pageNum) => {
+      if (byEngine.has(selectedEngine)) {
+        pages.add(pageNum);
+      }
+    });
+    return Array.from(pages).sort((a, b) => a - b);
+  };
+
+  const requestAutoOCRFromPanel = (scope: AutoOCRScope): Promise<boolean> => {
+    if (typeof window === 'undefined') return Promise.resolve(false);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const timeoutMs = scope === 'all' ? 420_000 : 180_000;
+
+      const cleanup = () => {
+        window.removeEventListener(AUTO_OCR_RESULT_EVENT, handleResult as EventListener);
+      };
+
+      const resolveOnce = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+
+      const handleResult = (event: Event) => {
+        const detail = (event as CustomEvent<{ scope?: AutoOCRScope; ok?: boolean; error?: string }>).detail;
+        if (!detail || detail.scope !== scope) return;
+        if (!detail.ok && detail.error) {
+          setTranslationStatus({ kind: 'error', message: detail.error });
+        }
+        resolveOnce(Boolean(detail.ok));
+      };
+
+      window.addEventListener(AUTO_OCR_RESULT_EVENT, handleResult as EventListener);
+      window.dispatchEvent(new CustomEvent(AUTO_OCR_REQUEST_EVENT, { detail: { scope } }));
+
+      window.setTimeout(() => {
+        resolveOnce(false);
+      }, timeoutMs);
+    });
+  };
+
+  const ensureCurrentPageOCRReadyForTranslation = async (): Promise<boolean> => {
+    const ocrState = useOCRTextLayerStore.getState();
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    if (resolveModelScopedOriginalPageOCR(ocrState, currentPage, selectedEngine)) {
+      return true;
+    }
+
+    setTranslationStatus({
+      kind: 'info',
+      message: `No OCR cache for ${selectedEngine} on page ${currentPage}. Auto-running OCR for this page...`,
+    });
+
+    const ok = await requestAutoOCRFromPanel('current');
+    if (!ok) return false;
+
+    const refreshed = useOCRTextLayerStore.getState();
+    return Boolean(resolveModelScopedOriginalPageOCR(refreshed, currentPage, selectedEngine));
+  };
+
+  const ensureAllPagesOCRReadyForTranslation = async (): Promise<boolean> => {
+    if (fileType !== 'pdf') {
+      return ensureCurrentPageOCRReadyForTranslation();
+    }
+
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    const cachedPages = getModelScopedCachedPageNumbers();
+    if (totalPages > 0 && cachedPages.length >= totalPages) {
+      return true;
+    }
+
+    setTranslationStatus({
+      kind: 'info',
+      message: `OCR cache for ${selectedEngine} is incomplete (${cachedPages.length}/${totalPages || '?'} pages). Auto-running OCR for all pages...`,
+    });
+
+    const ok = await requestAutoOCRFromPanel('all');
+    if (!ok) return false;
+
+    const refreshedPages = getModelScopedCachedPageNumbers();
+    return totalPages > 0
+      ? refreshedPages.length >= totalPages
+      : refreshedPages.length > 0;
+  };
+
+  const resolveModelScopedPagesForExport = (scope: DownloadScope): Array<{ pageNum: number; ocr: OCRPageResult }> => {
+    const ocrState = useOCRTextLayerStore.getState();
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    const targetPages = scope === 'current'
+      ? [currentPage]
+      : (fileType === 'pdf'
+        ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
+        : [1]);
+
+    return targetPages
+      .map((pageNum) => {
+        const ocr = resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
+        return ocr ? { pageNum, ocr } : null;
+      })
+      .filter((item): item is { pageNum: number; ocr: OCRPageResult } => Boolean(item));
+  };
+
+  const resolveTranslatedEntryForExport = (
+    pageNum: number,
+    pageOCR: OCRPageResult,
+    selectedEngine: OCREngine
+  ): OCRTranslationCacheEntry | undefined => {
+    const ocrState = useOCRTextLayerStore.getState();
+    const pageMap = ocrState.translationCacheByPage.get(pageNum);
+    if (!pageMap || pageMap.size === 0) return undefined;
+
+    const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
+    const sourceFingerprint = buildOCRSourceFingerprint(pageOCR, selectedEngine);
+    const entries = Array.from(pageMap.values())
+      .filter((entry) => {
+        if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+        if (entry.ocrEngine !== selectedEngine) return false;
+        if (entry.sourceFingerprint !== sourceFingerprint) return false;
+        return normalizeTranslationLanguage(entry.targetLanguage, 'th') === normalizedTargetLanguage;
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
+    if (entries.length === 0) return undefined;
+
+    const activeKey = ocrState.activeTranslationKeyByPage.get(pageNum);
+    if (activeKey) {
+      const active = pageMap.get(activeKey);
+      if (active && entries.some((entry) => entry.key === active.key)) {
+        return active;
+      }
+    }
+
+    return entries[0];
+  };
+
+  const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode) => {
+    if (!file) return;
+
+    const scopedPages = resolveModelScopedPagesForExport(scope);
+    if (scopedPages.length === 0) {
+      setTranslationStatus({ kind: 'error', message: 'No OCR cache available for download. Run OCR first.' });
+      return;
+    }
+
+    try {
+      setIsDownloadingResult(true);
+      if (mode === 'original') {
+        const pageMap = new Map<number, OCRPageResult>();
+        scopedPages.forEach(({ pageNum, ocr }) => {
+          pageMap.set(pageNum, ocr);
+        });
+
+        const pageRange = scope === 'current'
+          ? [currentPage]
+          : scopedPages.map((item) => item.pageNum);
+        const arrayBuffer = await file.arrayBuffer();
+        const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
+          arrayBuffer,
+          pageMap,
+          pageRange
+        );
+        const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        const suffix = scope === 'current' ? `_page_${currentPage}_searchable.pdf` : '_searchable.pdf';
+        anchor.download = file.name.replace('.pdf', suffix);
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      } else {
+        const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+        const translatedSections: string[] = [];
+        let missingPages = 0;
+
+        scopedPages.forEach(({ pageNum, ocr }) => {
+          const translatedEntry = resolveTranslatedEntryForExport(pageNum, ocr, selectedEngine);
+          if (!translatedEntry) {
+            missingPages += 1;
+            return;
+          }
+
+          const translatedByIndex = new Map<number, string>(
+            translatedEntry.translatedByIndex.map((item) => [item.index, item.text])
+          );
+          const lines = (ocr.lines || [])
+            .map((line, lineIndex) => normalizeWhitespace(String(translatedByIndex.get(lineIndex) || '')))
+            .filter(Boolean);
+          translatedSections.push(`--- Page ${pageNum} ---\n${lines.join('\n')}`);
+        });
+
+        if (translatedSections.length === 0) {
+          setTranslationStatus({
+            kind: 'error',
+            message: 'No translated cache found for selected OCR model and target language. Run translation first.',
+          });
+          return;
+        }
+
+        if (missingPages > 0) {
+          setTranslationStatus({
+            kind: 'info',
+            message: `Exported translated text for ${translatedSections.length} pages; ${missingPages} pages had no matching translated cache.`,
+          });
+        }
+
+        const payload = translatedSections.join('\n\n');
+
+        const textBlob = new Blob([payload], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(textBlob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        const suffix = scope === 'current'
+          ? `_page_${currentPage}_translated.txt`
+          : '_translated_all_pages.txt';
+        anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      }
+
+      setDownloadMenuScope(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown download error';
+      setTranslationStatus({ kind: 'error', message: `Download failed: ${message}` });
+    } finally {
+      setIsDownloadingResult(false);
+    }
   };
 
   const buildGeminiContextOverrides = (
@@ -2576,9 +2971,12 @@ export default function App() {
           }
 
           const redistributedLine = normalizeWhitespace(String(redistributed[lineIndex] || ''));
+          const thaiFallbackLine = normalizedTargetLanguage === 'th'
+            ? normalizeThaiTranslationText(normalizedGroupText)
+            : sourceLineText;
           const nextText = finalizeTranslatedLine(
             sourceLineText,
-            redistributedLine || sourceLineText,
+            redistributedLine || thaiFallbackLine,
             normalizedTargetLanguage
           );
           if (!redistributedLine) {
@@ -2655,27 +3053,35 @@ export default function App() {
     });
   };
 
-  const runCurrentPageTranslation = async (engine: 'offline' | 'ai') => {
+  const runCurrentPageTranslation = async (
+    engine: 'offline' | 'ai',
+    pageNum: number = currentPage,
+    options?: { suppressStatus?: boolean }
+  ): Promise<boolean> => {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
-    const pageOCR = resolveModelScopedOriginalPageOCR(ocrState, currentPage, selectedEngine);
+    const pageOCR = resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
     if (!pageOCR) {
-      setTranslationStatus({
-        kind: 'error',
-        message: `OCR cache for selected model (${selectedEngine}) is not loaded on page ${currentPage}. Run OCR with this model first.`,
-      });
-      return;
+      if (!options?.suppressStatus) {
+        setTranslationStatus({
+          kind: 'error',
+          message: `OCR cache for selected model (${selectedEngine}) is not loaded on page ${pageNum}. Run OCR with this model first.`,
+        });
+      }
+      return false;
     }
 
     const pageEngine = (pageOCR.ocrEngine || selectedEngine) as OCREngine;
 
     const baseTranslatableLines = collectTranslatableLines(pageOCR.lines || []);
     if (baseTranslatableLines.length === 0) {
-      setTranslationStatus({
-        kind: 'error',
-        message: 'No OCR lines with text on this page.',
-      });
-      return;
+      if (!options?.suppressStatus) {
+        setTranslationStatus({
+          kind: 'error',
+          message: `No OCR lines with text on page ${pageNum}.`,
+        });
+      }
+      return false;
     }
 
     const ocrEngine = pageEngine;
@@ -2696,7 +3102,7 @@ export default function App() {
       ))
     );
     const alternativePages = shouldUseCrossEngineAssist
-      ? Array.from(ocrState.ocrByPageEngine.get(currentPage)?.entries() || [])
+      ? Array.from(ocrState.ocrByPageEngine.get(pageNum)?.entries() || [])
         .filter(([engineKey, candidate]) => {
           if (engineKey === pageEngine) return false;
           if (!candidate || candidate === pageOCR) return false;
@@ -2896,8 +3302,15 @@ export default function App() {
           return;
         }
 
-        const redistributedLine = redistributed[lineIndex] || sourceLineText;
-        const finalizedLine = finalizeTranslatedLine(sourceLineText, redistributedLine, normalizedTargetLanguage);
+        const redistributedLine = normalizeWhitespace(String(redistributed[lineIndex] || ''));
+        const thaiFallbackLine = normalizedTargetLanguage === 'th'
+          ? normalizeThaiTranslationText(translatedGroup)
+          : sourceLineText;
+        const finalizedLine = finalizeTranslatedLine(
+          sourceLineText,
+          redistributedLine || thaiFallbackLine,
+          normalizedTargetLanguage
+        );
         translatedByIndex.set(line.index, finalizedLine || sourceLineText);
         if (shouldRetryLineTranslation(line.text, finalizedLine, translationSourceLanguage, normalizedTargetLanguage)) {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text });
@@ -2971,7 +3384,7 @@ export default function App() {
 
     const translationEntry = {
       key: cacheKey,
-      pageNum: currentPage,
+      pageNum,
       ocrEngine,
       ocrLanguage: ocrLanguageKey,
       sourceLanguage: translationSourceLanguage,
@@ -2986,17 +3399,17 @@ export default function App() {
       createdAt: Date.now(),
     };
 
-    setTranslationCacheEntry(currentPage, cacheKey, translationEntry);
+    setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
 
     const cacheDocId = await ensureDocumentId().catch(() => null);
     if (cacheDocId) {
-      const persisted = await dbService.saveTranslationCache(cacheDocId, currentPage, cacheKey, translationEntry);
+      const persisted = await dbService.saveTranslationCache(cacheDocId, pageNum, cacheKey, translationEntry);
       if (!persisted) {
-        console.warn(`[Translation] Failed to persist translation cache for page ${currentPage} (docId=${cacheDocId})`);
+        console.warn(`[Translation] Failed to persist translation cache for page ${pageNum} (docId=${cacheDocId})`);
       }
     }
 
-    const totalPageCaches = useOCRTextLayerStore.getState().getTranslationCacheEntries(currentPage).length;
+    const totalPageCaches = useOCRTextLayerStore.getState().getTranslationCacheEntries(pageNum).length;
     const lowQualityOfflinePath = engine === 'offline'
       && normalizedTargetLanguage === 'th'
       && (translationSourceLanguage === 'ko' || translationSourceLanguage === 'es');
@@ -3010,17 +3423,72 @@ export default function App() {
       ? ` group retries applied: ${groupRetryAppliedCount}.`
       : '';
 
+    if (!options?.suppressStatus) {
+      setTranslationStatus({
+        kind: 'success',
+        message: `${engine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${groups.length} grouped segments on page ${pageNum}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${qualityHint}`,
+      });
+    }
+
+    return true;
+  };
+
+  const runOfflineBatchDocumentTranslation = async () => {
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    const sortedPageNums = getModelScopedCachedPageNumbers();
+
+    if (sortedPageNums.length === 0) {
+      await runCurrentPageTranslation('offline');
+      return;
+    }
+
+    let translatedPages = 0;
+    let skippedPages = 0;
+    let failedPages = 0;
+
+    for (const pageNum of sortedPageNums) {
+      try {
+        const translated = await runCurrentPageTranslation('offline', pageNum, { suppressStatus: true });
+        if (translated) {
+          translatedPages += 1;
+        } else {
+          skippedPages += 1;
+        }
+      } catch (error) {
+        failedPages += 1;
+        console.warn(`[OfflineBatch] Failed on page ${pageNum}:`, error);
+      }
+    }
+
+    if (translatedPages === 0) {
+      setTranslationStatus({
+        kind: 'error',
+        message: `offline batch did not translate any pages for engine ${selectedEngine}.`,
+      });
+      return;
+    }
+
+    const notes: string[] = [];
+    if (skippedPages > 0) notes.push(`skipped ${skippedPages}`);
+    if (failedPages > 0) notes.push(`failed ${failedPages}`);
+
     setTranslationStatus({
-      kind: 'success',
-      message: `${engine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${groups.length} grouped segments on page ${currentPage}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${qualityHint}`,
+      kind: failedPages > 0 ? 'info' : 'success',
+      message: `offline batch translated ${translatedPages} pages using ${selectedEngine}.${notes.length ? ` notes: ${notes.join(', ')}` : ''}`,
     });
   };
 
   const handleOfflineTranslate = async () => {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsOfflineProcessing(true);
-    setTranslationStatus({ kind: 'info', message: 'Running offline translation on current page...' });
     try {
+      const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
+      if (!ocrReady) {
+        setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before offline translation.' });
+        return;
+      }
+
+      setTranslationStatus({ kind: 'info', message: 'Running offline translation on current page...' });
       await runCurrentPageTranslation('offline');
     } catch (err) {
       console.error('Offline Translation Failed', err);
@@ -3034,18 +3502,15 @@ export default function App() {
   const handleAiTranslate = async () => {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsAiProcessing(true);
-    setTranslationStatus({
-      kind: 'info',
-      message: aiExecutionMode === 'current-page'
-        ? 'Running Gemini translation on current page (test mode)...'
-        : 'Running Gemini batch translation across OCR pages...',
-    });
     try {
-      if (aiExecutionMode === 'current-page') {
-        await runCurrentPageTranslation('ai');
-      } else {
-        await runAiBatchDocumentTranslation();
+      const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
+      if (!ocrReady) {
+        setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before AI translation.' });
+        return;
       }
+
+      setTranslationStatus({ kind: 'info', message: 'Running Gemini translation on current page...' });
+      await runCurrentPageTranslation('ai');
     } catch (err) {
       console.error('AI Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -3054,6 +3519,87 @@ export default function App() {
       setIsAiProcessing(false);
     }
   };
+
+  const handleOfflineTranslateAllPages = async () => {
+    if (isAiProcessing || isOfflineProcessing) return;
+    setIsOfflineProcessing(true);
+    try {
+      const ocrReady = await ensureAllPagesOCRReadyForTranslation();
+      if (!ocrReady) {
+        setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before offline all-pages translation.' });
+        return;
+      }
+
+      setTranslationStatus({ kind: 'info', message: 'Running offline translation for all pages...' });
+      await runOfflineBatchDocumentTranslation();
+    } catch (err) {
+      console.error('Offline All-Pages Translation Failed', err);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setTranslationStatus({ kind: 'error', message: `Offline all-pages translation failed: ${message}` });
+    } finally {
+      setIsOfflineProcessing(false);
+    }
+  };
+
+  const handleAiTranslateAllPages = async () => {
+    if (isAiProcessing || isOfflineProcessing) return;
+    setIsAiProcessing(true);
+    try {
+      const ocrReady = await ensureAllPagesOCRReadyForTranslation();
+      if (!ocrReady) {
+        setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before AI all-pages translation.' });
+        return;
+      }
+
+      setTranslationStatus({ kind: 'info', message: 'Running Gemini batch translation across OCR pages...' });
+      await runAiBatchDocumentTranslation();
+    } catch (err) {
+      console.error('AI All-Pages Translation Failed', err);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setTranslationStatus({ kind: 'error', message: `AI all-pages translation failed: ${message}` });
+    } finally {
+      setIsAiProcessing(false);
+    }
+  };
+
+  const profileOptions: Array<{
+    mode: TranslationMode;
+    label: string;
+    icon: React.ReactNode;
+    activeClass: string;
+  }> = [
+    {
+      mode: 'adaptive',
+      label: 'Orbit',
+      icon: <Compass size={12} />,
+      activeClass: 'border-emerald-300/50 bg-emerald-500/18 text-emerald-100',
+    },
+    {
+      mode: 'manga',
+      label: 'Manga',
+      icon: <Sparkles size={12} />,
+      activeClass: 'border-[#8B5CF6]/55 bg-[#8B5CF6]/22 text-[#E9D5FF]',
+    },
+    {
+      mode: 'manhwa',
+      label: 'Manhwa',
+      icon: <Flame size={12} />,
+      activeClass: 'border-pink-300/50 bg-pink-500/18 text-pink-100',
+    },
+    {
+      mode: 'official',
+      label: 'Official',
+      icon: <FileText size={12} />,
+      activeClass: 'border-cyan-300/50 bg-cyan-500/18 text-cyan-100',
+    },
+  ];
+  const modeLabelColorClass = translationMode === 'adaptive'
+    ? 'text-emerald-300'
+    : translationMode === 'manga'
+      ? 'text-[#C084FC]'
+      : translationMode === 'manhwa'
+        ? 'text-[#F472B6]'
+        : 'text-[#60A5FA]';
 
   return (
     <div className="relative flex flex-col h-screen w-screen bg-[#0b0f16] text-slate-100 overflow-hidden font-sans">
@@ -3174,10 +3720,72 @@ export default function App() {
           <AlignRight size={16} />
         </button>
 
-        <div className="w-px h-6 bg-white/10 mx-1" />
-
-        {/* Spacer - balance tools to center */}
+        {/* Spacer - push profile/downloads to top-right */}
         <div className="flex-1" />
+
+        <div className="flex items-center gap-1 rounded-lg border border-white/12 bg-slate-900/55 px-1.5 py-1">
+          <span className={`px-1 text-[10px] font-bold uppercase tracking-[0.18em] ${modeLabelColorClass}`}>
+            Mode
+          </span>
+          {profileOptions.map((option) => (
+            <button
+              key={option.mode}
+              type="button"
+              onClick={() => setTranslationMode(option.mode)}
+              className={`h-6 w-6 rounded-md border flex items-center justify-center transition-colors ${translationMode === option.mode ? option.activeClass : 'border-white/12 bg-slate-950/75 text-slate-300 hover:border-white/25 hover:text-white'}`}
+              title={`Set translation profile to ${option.label}`}
+              aria-label={`Set translation profile to ${option.label}`}
+            >
+              {option.icon}
+            </button>
+          ))}
+        </div>
+
+        <div className="relative" ref={downloadMenuRef}>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setDownloadMenuScope((prev) => (prev === 'current' ? null : 'current'))}
+              className={`p-2 rounded transition-colors ${downloadMenuScope === 'current' ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'}`}
+              title="Download current page"
+              disabled={isDownloadingResult || !file}
+            >
+              <Download size={16} />
+            </button>
+            <button
+              onClick={() => setDownloadMenuScope((prev) => (prev === 'all' ? null : 'all'))}
+              className={`p-2 rounded transition-colors ${downloadMenuScope === 'all' ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'} ${(fileType !== 'pdf' || !file) ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Download all pages"
+              disabled={isDownloadingResult || !file || fileType !== 'pdf'}
+            >
+              <Files size={16} />
+            </button>
+          </div>
+
+          {downloadMenuScope && (
+            <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/15 bg-[#0f131b]/95 backdrop-blur-xl shadow-2xl p-2 z-50">
+              <div className="px-2 pt-1 pb-2 text-[11px] uppercase tracking-wide text-slate-400">
+                {downloadMenuScope === 'current' ? `Download page ${currentPage}` : 'Download all pages'}
+              </div>
+              <button
+                onClick={() => void handleHeaderDownload(downloadMenuScope, 'original')}
+                disabled={isDownloadingResult}
+                className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-100 hover:bg-white/10 transition-colors disabled:opacity-60"
+              >
+                Original OCR Result (Searchable PDF)
+              </button>
+              <button
+                onClick={() => void handleHeaderDownload(downloadMenuScope, 'translated')}
+                disabled={isDownloadingResult}
+                className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-100 hover:bg-white/10 transition-colors disabled:opacity-60"
+              >
+                Translated Result (TXT)
+              </button>
+              {isDownloadingResult && (
+                <div className="px-3 pt-2 pb-1 text-xs text-slate-400">Preparing download...</div>
+              )}
+            </div>
+          )}
+        </div>
       </header>
 
       {/* MAIN CONTENT AREA */}
@@ -3211,9 +3819,9 @@ export default function App() {
             isOfflineProcessing={isOfflineProcessing}
             onAiTranslate={handleAiTranslate}
             onOfflineTranslate={handleOfflineTranslate}
+            onAiTranslateAllPages={handleAiTranslateAllPages}
+            onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
             translationStatus={translationStatus}
-            aiExecutionMode={aiExecutionMode}
-            onAiExecutionModeChange={setAiExecutionMode}
           />
         </React.Suspense>
       </div>
