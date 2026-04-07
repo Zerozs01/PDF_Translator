@@ -2067,6 +2067,36 @@ const isScientificSymbolLikeLine = (text: string): boolean => {
   return tokens.length <= 2 && alnum.length <= 6;
 };
 
+const shouldSkipLineTranslationByScript = (text: string, sourceLanguage: string): boolean => {
+  const normalized = normalizeWhitespace(String(text || ''));
+  if (!normalized) return true;
+
+  const resolvedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  if (resolvedSource === 'ko' || resolvedSource === 'ja' || resolvedSource === 'zh' || resolvedSource === 'th') {
+    return false;
+  }
+
+  const hasLatin = /[A-Za-z]/.test(normalized);
+  const hasHangul = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(normalized);
+  const hasKana = /[\u3040-\u30FF]/.test(normalized);
+  const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(normalized);
+  const hasThai = /[\u0E00-\u0E7F]/.test(normalized);
+  const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+  const compactLength = normalized.replace(/\s+/g, '').length;
+  const shortTokenLike = compactLength <= 10 || tokenCount <= 2;
+
+  if (!hasLatin && shortTokenLike && (hasHangul || hasKana || hasHan || hasThai)) {
+    return true;
+  }
+
+  return false;
+};
+
+export const shouldPreserveSourceLineForTranslation = (text: string, sourceLanguage: string): boolean => {
+  if (isScientificSymbolLikeLine(text)) return true;
+  return shouldSkipLineTranslationByScript(text, sourceLanguage);
+};
+
 const protectLocationPhrases = (
   text: string,
   targetLanguage: string,
@@ -2453,19 +2483,14 @@ export const buildTranslationGroups = (
   profile: TranslationGroupingProfile = 'default'
 ): TranslationGroup[] => {
   if (lines.length === 0) return [];
-  const sorted = [...lines].sort((a, b) => {
-    if (a.top !== b.top) return a.top - b.top;
-    if (a.left !== b.left) return a.left - b.left;
-    return a.index - b.index;
-  });
+
+  const heights = lines.map((line) => Math.max(1, line.height));
+  const medianHeight = computeMedian(heights);
+  const orderedForGrouping = orderLinesForGrouping(lines, medianHeight);
 
   if (profile === 'line-by-line') {
-    return sorted.map((line) => ({ lines: [line] }));
+    return orderedForGrouping.map((line) => ({ lines: [line] }));
   }
-
-  const heights = sorted.map((line) => Math.max(1, line.height));
-  const medianHeight = computeMedian(heights);
-  const orderedForGrouping = orderLinesForGrouping(sorted, medianHeight);
 
   const groups: TranslationGroup[] = [];
   let currentGroup: TranslatableLine[] = [orderedForGrouping[0]];
@@ -3204,7 +3229,7 @@ export default function App() {
         .map((group, groupIndex) => {
           const sourceText = normalizeSourceForTranslation(
             group.lines
-              .filter((line) => !isScientificSymbolLikeLine(line.text))
+              .filter((line) => !shouldPreserveSourceLineForTranslation(line.text, inferredSourceLanguage))
               .map((line) => line.text)
               .join(' '),
             inferredSourceLanguage
@@ -3301,20 +3326,32 @@ export default function App() {
           ? normalizeThaiTranslationText(restoredGroupText)
           : normalizeWhitespace(restoredGroupText);
 
+        const preservedLineIndices = new Set<number>();
+        group.lines.forEach((line) => {
+          const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
+          if (shouldPreserveSourceLineForTranslation(sourceLineText, plan.sourceLanguage)) {
+            preservedLineIndices.add(line.index);
+            translatedByIndex.set(line.index, sourceLineText);
+          }
+        });
+
+        const eligibleLines = group.lines.filter((line) => !preservedLineIndices.has(line.index));
+
         const redistributed = splitTranslatedTextBySourceWeights(
           normalizedGroupText,
-          group.lines,
+          eligibleLines,
           normalizedTargetLanguage
         );
 
-        group.lines.forEach((line, lineIndex) => {
-          const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-          if (isScientificSymbolLikeLine(sourceLineText)) {
-            translatedByIndex.set(line.index, sourceLineText);
+        let redistributedCursor = 0;
+        group.lines.forEach((line) => {
+          if (preservedLineIndices.has(line.index)) {
             return;
           }
 
-          const redistributedLine = normalizeWhitespace(String(redistributed[lineIndex] || ''));
+          const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
+          const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
+          redistributedCursor += 1;
           const thaiFallbackLine = normalizedTargetLanguage === 'th'
             ? normalizeThaiTranslationText(normalizedGroupText)
             : sourceLineText;
@@ -3497,7 +3534,7 @@ export default function App() {
 
     const groupTexts = groups.map((group) => normalizeSourceForTranslation(
       group.lines
-        .filter((line) => !isScientificSymbolLikeLine(line.text))
+        .filter((line) => !shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage))
         .map((line) => line.text)
         .join(' '),
       translationSourceLanguage
@@ -3547,7 +3584,10 @@ export default function App() {
           },
         ];
 
-        const retrySourceText = buildOfflineGroupRetrySourceText(group.lines, translationSourceLanguage);
+        const retrySourceText = buildOfflineGroupRetrySourceText(
+          group.lines.filter((line) => !shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)),
+          translationSourceLanguage
+        );
         if (
           retrySourceText
           && buildTranslationComparisonKey(retrySourceText) !== buildTranslationComparisonKey(sourceGroupText)
@@ -3619,15 +3659,23 @@ export default function App() {
     const translatedByIndex = new Map<number, string>();
     const retryLineMap = new Map<number, { index: number; sourceText: string }>();
     groups.forEach((group, groupIndex) => {
+      const preservedLineIndices = new Set<number>();
+      group.lines.forEach((line) => {
+        const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
+        if (shouldPreserveSourceLineForTranslation(sourceLineText, translationSourceLanguage)) {
+          preservedLineIndices.add(line.index);
+          translatedByIndex.set(line.index, sourceLineText);
+        }
+      });
+
       const directLineOverride = groupLineOverrides.get(groupIndex);
       if (directLineOverride && directLineOverride.length > 0) {
         group.lines.forEach((line, lineIndex) => {
-          const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-          if (isScientificSymbolLikeLine(sourceLineText)) {
-            translatedByIndex.set(line.index, sourceLineText);
+          if (preservedLineIndices.has(line.index)) {
             return;
           }
 
+          const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const overrideText = directLineOverride[lineIndex] || sourceLineText;
           translatedByIndex.set(line.index, overrideText || sourceLineText);
           if (shouldRetryLineTranslation(line.text, overrideText, translationSourceLanguage, normalizedTargetLanguage)) {
@@ -3638,15 +3686,17 @@ export default function App() {
       }
 
       const translatedGroup = translatedGroups[groupIndex] || groupTexts[groupIndex] || '';
-      const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, group.lines, normalizedTargetLanguage);
-      group.lines.forEach((line, lineIndex) => {
-        const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-        if (isScientificSymbolLikeLine(sourceLineText)) {
-          translatedByIndex.set(line.index, sourceLineText);
+      const eligibleLines = group.lines.filter((line) => !preservedLineIndices.has(line.index));
+      const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, eligibleLines, normalizedTargetLanguage);
+      let redistributedCursor = 0;
+      group.lines.forEach((line) => {
+        if (preservedLineIndices.has(line.index)) {
           return;
         }
 
-        const redistributedLine = normalizeWhitespace(String(redistributed[lineIndex] || ''));
+        const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
+        const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
+        redistributedCursor += 1;
         const thaiFallbackLine = normalizedTargetLanguage === 'th'
           ? normalizeThaiTranslationText(translatedGroup)
           : sourceLineText;

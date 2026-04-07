@@ -443,7 +443,7 @@ export function findBestLineForBox(
     const normalizedCenterXGap = Math.abs(lineCenterX - boxCenterX) / avgWidth;
     const normalizedCenterYGap = Math.abs(lineCenterY - boxCenterY) / avgHeight;
 
-    if (yOverlap < 0.38) continue;
+    if (yOverlap < 0.24) continue;
     if (xOverlap < 0.08 && normalizedCenterXGap > 0.55) continue;
     if (normalizedCenterYGap > 1.4) continue;
 
@@ -458,7 +458,7 @@ export function findBestLineForBox(
     }
   }
 
-  return bestScore >= 1.1 ? best : null;
+  return bestScore >= 0.9 ? best : null;
 }
 
 export function findBestLineBoxForLine(
@@ -493,7 +493,7 @@ export function findBestLineBoxForLine(
     const normalizedCenterXGap = Math.abs(lineCenterX - boxCenterX) / avgWidth;
     const normalizedCenterYGap = Math.abs(lineCenterY - boxCenterY) / avgHeight;
 
-    if (yOverlap < 0.4) continue;
+    if (yOverlap < 0.3) continue;
     if (xOverlap < 0.08 && normalizedCenterXGap > 0.58) continue;
     if (normalizedCenterYGap > 1.45) continue;
 
@@ -508,7 +508,7 @@ export function findBestLineBoxForLine(
     }
   }
 
-  return bestScore >= 1.12 ? best : null;
+  return bestScore >= 0.92 ? best : null;
 }
 
 export function appendUniqueWords(existing: OCRWord[], incoming: OCRWord[], iouThreshold: number = 0.6): OCRWord[] {

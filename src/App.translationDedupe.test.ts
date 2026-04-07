@@ -34,6 +34,10 @@ let applyThaiConversationalGlossary: (
   translatedText: string,
   targetLanguage: string
 ) => string;
+let shouldPreserveSourceLineForTranslation: (
+  text: string,
+  sourceLanguage: string
+) => boolean;
 
 beforeAll(async () => {
   if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix === 'undefined') {
@@ -78,6 +82,7 @@ beforeAll(async () => {
   buildTranslationGroups = appModule.buildTranslationGroups;
   shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
   applyThaiConversationalGlossary = appModule.applyThaiConversationalGlossary;
+  shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
 });
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
@@ -288,5 +293,17 @@ describe('applyThaiConversationalGlossary', () => {
 
     expect(hHow).toBe('ด-ได้ไง?');
     expect(uUh).toBe('อ-อา...');
+  });
+});
+
+describe('shouldPreserveSourceLineForTranslation', () => {
+  test('preserves short non-Latin SFX-like tokens when source is English', () => {
+    expect(shouldPreserveSourceLineForTranslation('헉', 'en')).toBe(true);
+    expect(shouldPreserveSourceLineForTranslation('えっ', 'en')).toBe(true);
+  });
+
+  test('does not force preserve when source language matches the script', () => {
+    expect(shouldPreserveSourceLineForTranslation('헉', 'ko')).toBe(false);
+    expect(shouldPreserveSourceLineForTranslation('えっ', 'ja')).toBe(false);
   });
 });
