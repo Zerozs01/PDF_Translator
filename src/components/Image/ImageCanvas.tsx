@@ -78,10 +78,18 @@ export const ImageCanvas: React.FC = () => {
     activeTranslationKeyByPage,
   } = useOCRTextLayerStore();
   const selectedEngine = (options.engine || 'tesseract');
-  const currentPageOCR = ocrByPageEngine.get(currentPage)?.get(selectedEngine)
-    || ocrByPageEngine.get(1)?.get(selectedEngine)
-    || allPagesOCR.get(currentPage)
-    || allPagesOCR.get(1);
+  const resolveEngineScopedPageOCR = (pageNum: number) => {
+    const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+    if (byEngine) return byEngine;
+
+    const fallback = allPagesOCR.get(pageNum);
+    if (!fallback) return undefined;
+    const fallbackEngine = (fallback.ocrEngine || selectedEngine);
+    return fallbackEngine === selectedEngine ? fallback : undefined;
+  };
+
+  const currentPageOCR = resolveEngineScopedPageOCR(currentPage)
+    || resolveEngineScopedPageOCR(1);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage) || translationCacheByPage.get(1);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage) || activeTranslationKeyByPage.get(1);
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({

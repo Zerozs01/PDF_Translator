@@ -102,7 +102,17 @@ export const PDFCanvas: React.FC = () => {
   const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, { backgroundColor: string; textColor: string }>>(new Map());
 
   const selectedEngine = (options.engine || 'tesseract');
-  const currentPageOCR = ocrByPageEngine.get(currentPage)?.get(selectedEngine) || allPagesOCR.get(currentPage);
+  const resolveEngineScopedPageOCR = (pageNum: number) => {
+    const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+    if (byEngine) return byEngine;
+
+    const fallback = allPagesOCR.get(pageNum);
+    if (!fallback) return undefined;
+    const fallbackEngine = (fallback.ocrEngine || selectedEngine);
+    return fallbackEngine === selectedEngine ? fallback : undefined;
+  };
+
+  const currentPageOCR = resolveEngineScopedPageOCR(currentPage);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
@@ -235,11 +245,26 @@ export const PDFCanvas: React.FC = () => {
       return;
     }
 
-    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const sourceWidth = Math.max(1, canvas.width);
+    const sourceHeight = Math.max(1, canvas.height);
+    if (!sourceWidth || !sourceHeight) {
+      setTranslatedLinePalette(new Map());
+      return;
+    }
+
+    const maxSampleSide = 2400;
+    const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
+    sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
+
+    const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
     if (!context) {
       setTranslatedLinePalette(new Map());
       return;
     }
+
+    context.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
     const next = new Map<number, { backgroundColor: string; textColor: string }>();
     currentPageOCR.lines.forEach((line, index) => {
@@ -249,8 +274,8 @@ export const PDFCanvas: React.FC = () => {
         line,
         currentPageOCR.width,
         currentPageOCR.height,
-        canvas.width,
-        canvas.height
+        sampleCanvas.width,
+        sampleCanvas.height
       ));
     });
     setTranslatedLinePalette(next);

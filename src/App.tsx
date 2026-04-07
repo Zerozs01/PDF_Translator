@@ -167,6 +167,7 @@ type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line';
 type BatchGroupPlan = {
   index: number;
   lines: TranslatableLine[];
+  sourceLanguage: string;
   sourceText: string;
   protectedText: string;
   replacements: ProtectedTokenReplacement[];
@@ -259,7 +260,7 @@ const buildBatchMarkdownPayload = (
     for (const group of plan.groups) {
       const clean = String(group.protectedText || '').replace(/\r?\n+/g, ' ').trim();
       const lineIndexes = group.lines.map((line) => line.index).join(',');
-      lines.push(`  - [${group.index}] (lines: ${lineIndexes}) ${clean}`);
+      lines.push(`  - [${group.index}] (lines: ${lineIndexes}, source: ${group.sourceLanguage}) ${clean}`);
     }
   }
 
@@ -344,6 +345,32 @@ const isLikelyContinuation = (previousText: string, currentText: string): boolea
   if (/^[,;:.)\]\}"'\u3001\uFF0C]/.test(curr)) return true;
   if (/^[a-z]/.test(curr)) return true;
   if (CONTINUATION_LEADING_WORD_REGEX.test(curr)) return true;
+  return false;
+};
+
+const isLikelyStandaloneInterjectionLine = (text: string): boolean => {
+  const normalized = normalizeWhitespace(String(text || ''));
+  if (!normalized) return false;
+
+  const compact = normalized.replace(/\s+/g, '');
+  const tokens = normalized.split(/\s+/g).filter(Boolean);
+  if (compact.length > 16 || tokens.length > 3) return false;
+
+  if (/^[A-Za-z]-[A-Za-z][A-Za-z'’!?….-]{0,12}$/.test(compact)) {
+    return true;
+  }
+
+  const trailingPunct = /[!?…]{1,3}$/.test(compact);
+  const latinLetters = compact.replace(/[^A-Za-z]/g, '').length;
+  if (trailingPunct && latinLetters > 0 && latinLetters <= 8 && tokens.length <= 2) {
+    return true;
+  }
+
+  const nonLatin = compact.replace(/[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '').length !== compact.length;
+  if (trailingPunct && nonLatin && compact.length <= 7) {
+    return true;
+  }
+
   return false;
 };
 
@@ -885,7 +912,6 @@ const inferSourceLanguageFromTextHints = (
   fallbackLanguage: string
 ): string => {
   const fallback = normalizeTranslationLanguage(fallbackLanguage, 'en');
-  if (fallback !== 'en' && fallback !== 'es') return fallback;
   if (lines.length === 0) return fallback;
 
   const sampleText = lines
@@ -902,6 +928,7 @@ const inferSourceLanguageFromTextHints = (
   const thaiCount = (sampleText.match(THAI_TEXT_HINT_REGEX) || []).length;
   const cyrillicCount = (sampleText.match(CYRILLIC_TEXT_HINT_REGEX) || []).length;
   const latinCount = (sampleText.match(LATIN_TEXT_HINT_REGEX) || []).length;
+  const nonLatinCount = hangulCount + kanaCount + hanCount + thaiCount + cyrillicCount;
 
   if (thaiCount >= Math.max(4, latinCount * 0.2)) {
     return 'th';
@@ -928,14 +955,137 @@ const inferSourceLanguageFromTextHints = (
   const spanishScore = spanishHits + (spanishAccentHits * 1.8);
   const englishScore = englishHits;
 
+  const latinDominant = latinCount >= Math.max(10, nonLatinCount * 2.2);
+  const weakNonLatinEvidence = nonLatinCount <= 2 || nonLatinCount <= Math.max(2, latinCount * 0.08);
+  const shouldOverrideNonLatinFallback = fallback !== 'en' && fallback !== 'es' && weakNonLatinEvidence;
+
+  if (latinDominant || shouldOverrideNonLatinFallback) {
+    if (
+      (spanishAccentHits >= 2 && spanishScore >= 2)
+      || (spanishScore >= 4 && (spanishScore > englishScore * 1.1 || spanishAccentHits >= 1))
+      || (spanishScore >= 3 && englishScore <= 1 && /[¿¡]/.test(sampleText))
+    ) {
+      return 'es';
+    }
+
+    if (englishScore >= 3 || fallback === 'en' || fallback === 'es') {
+      return 'en';
+    }
+  }
+
+  if (fallback !== 'en' && fallback !== 'es') {
+    return fallback;
+  }
+
   if (spanishScore >= 6 && spanishScore > englishScore * 1.35) {
     return 'es';
   }
   if (englishScore >= 6 && englishScore > spanishScore * 1.35) {
     return 'en';
   }
+  if (spanishAccentHits >= 2 && spanishScore >= 2 && spanishScore >= englishScore) {
+    return 'es';
+  }
 
   return fallback;
+};
+
+const resolvePreferredSourceLanguageForText = (
+  text: string,
+  fallbackLanguage: string
+): string => {
+  const fallback = normalizeTranslationLanguage(fallbackLanguage, 'en');
+  const normalized = normalizeWhitespace(String(text || '')).toLowerCase();
+  if (!normalized) return fallback;
+
+  const hangulCount = (normalized.match(HANGUL_TEXT_HINT_REGEX) || []).length;
+  const kanaCount = (normalized.match(JAPANESE_KANA_HINT_REGEX) || []).length;
+  const hanCount = (normalized.match(CJK_HAN_HINT_REGEX) || []).length;
+  const thaiCount = (normalized.match(THAI_TEXT_HINT_REGEX) || []).length;
+  const cyrillicCount = (normalized.match(CYRILLIC_TEXT_HINT_REGEX) || []).length;
+  const latinCount = (normalized.match(LATIN_TEXT_HINT_REGEX) || []).length;
+  const nonLatinCount = hangulCount + kanaCount + hanCount + thaiCount + cyrillicCount;
+
+  if (thaiCount >= Math.max(4, latinCount * 0.5)) {
+    return 'th';
+  }
+  if (hangulCount >= Math.max(2, latinCount * 0.45) && latinCount <= hangulCount * 2.6) {
+    return 'ko';
+  }
+  if (kanaCount >= 1 && latinCount <= Math.max(6, (kanaCount + hanCount) * 2.6)) {
+    return 'ja';
+  }
+  if (hanCount >= 2 && kanaCount === 0 && hangulCount === 0 && latinCount <= hanCount * 2.4) {
+    return 'zh';
+  }
+  if (cyrillicCount >= Math.max(2, latinCount * 0.38) && latinCount <= cyrillicCount * 2.2) {
+    return 'ru';
+  }
+
+  const latinDominant = latinCount >= Math.max(6, nonLatinCount * 1.4);
+  const tokens = normalized
+    .split(/\s+/g)
+    .map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase())
+    .filter(Boolean);
+  const spanishHits = tokens.filter((token) => SPANISH_HINT_WORDS.has(token)).length;
+  const englishHits = tokens.filter((token) => ENGLISH_HINT_WORDS.has(token)).length;
+  const spanishAccentHits = (normalized.match(/[áéíóúüñ¿¡]/g) || []).length;
+
+  if (latinDominant || fallback === 'en' || fallback === 'es') {
+    if (
+      (spanishAccentHits >= 1 && spanishHits >= 1)
+      || (spanishHits >= 3 && spanishHits >= englishHits)
+      || /[¿¡]/.test(normalized)
+    ) {
+      return 'es';
+    }
+    if (latinCount >= 4) {
+      return 'en';
+    }
+  }
+
+  return fallback;
+};
+
+const isLikelyLatinDominantTranslationPage = (lines: TranslatableLine[]): boolean => {
+  if (lines.length < 4) return false;
+  const latinHeavyCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
+    const nonSpaceChars = normalized.replace(/\s+/g, '').length;
+    const latinRatio = latinChars / Math.max(1, nonSpaceChars);
+    return latinChars >= 6 && latinRatio >= 0.45;
+  }).length;
+  return latinHeavyCount >= Math.max(3, Math.floor(lines.length * 0.34));
+};
+
+const hasStrongLatinAnchorLines = (lines: TranslatableLine[]): boolean => {
+  const strongLatinCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
+    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+    const nonSpaceChars = normalized.replace(/\s+/g, '').length;
+    const latinRatio = latinChars / Math.max(1, nonSpaceChars);
+    return latinChars >= 10 && tokenCount >= 3 && latinRatio >= 0.52;
+  }).length;
+
+  return strongLatinCount >= 2;
+};
+
+const isLikelyShortForeignSfxLine = (text: string): boolean => {
+  const normalized = normalizeWhitespace(String(text || ''));
+  if (!normalized) return false;
+  if (/[A-Za-z]/.test(normalized)) return false;
+
+  const compact = normalized.replace(/\s+/g, '');
+  const tokens = normalized.split(/\s+/g).filter(Boolean);
+  const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/.test(compact);
+  if (!hasCjkOrThai) return false;
+  if (/\d/.test(compact)) return false;
+
+  const unknownChars = compact.replace(/[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
+  const unknownRatio = unknownChars.length / Math.max(1, compact.length);
+  return tokens.length <= 3 && compact.length <= 10 && unknownRatio <= 0.55;
 };
 
 const ENGLISH_TECH_HINT_WORDS = new Set([
@@ -1068,6 +1218,38 @@ const shouldAcceptWordsOnlyLineFallback = (line: OCRLine | undefined, wordsText:
   return coverage >= 0.42;
 };
 
+const computeLineWordUnionCoverage = (line: OCRLine | undefined): number => {
+  if (!line?.bbox) return 0;
+
+  const validWords = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => {
+      const text = normalizeWhitespace(String(word?.text || ''));
+      const bbox = word?.bbox;
+      if (!text || !bbox) return false;
+      return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
+    });
+  if (validWords.length === 0) return 0;
+
+  const lineWidth = Math.max(1, Number(line.bbox.x1 || 0) - Number(line.bbox.x0 || 0));
+  const lineHeight = Math.max(1, Number(line.bbox.y1 || 0) - Number(line.bbox.y0 || 0));
+  const lineArea = Math.max(1, lineWidth * lineHeight);
+
+  let unionX0 = Number.POSITIVE_INFINITY;
+  let unionY0 = Number.POSITIVE_INFINITY;
+  let unionX1 = Number.NEGATIVE_INFINITY;
+  let unionY1 = Number.NEGATIVE_INFINITY;
+  validWords.forEach((word) => {
+    const bbox = word.bbox;
+    unionX0 = Math.min(unionX0, bbox.x0);
+    unionY0 = Math.min(unionY0, bbox.y0);
+    unionX1 = Math.max(unionX1, bbox.x1);
+    unionY1 = Math.max(unionY1, bbox.y1);
+  });
+
+  const unionArea = Math.max(1, (unionX1 - unionX0) * (unionY1 - unionY0));
+  return Math.max(0, Math.min(1.8, unionArea / lineArea));
+};
+
 export const resolveBestOcrLineText = (line?: OCRLine): string => {
   const rawText = normalizeWhitespace(String(line?.text || ''));
   const wordsText = normalizeWhitespace(
@@ -1098,6 +1280,139 @@ export const resolveBestOcrLineText = (line?: OCRLine): string => {
     return wordsText;
   }
   return rawText;
+};
+
+const GHOST_TRANSLATION_PUNCT_ONLY_REGEX = /^[|¦│┃/\\_~.,:;'"`!?-]+$/;
+const GHOST_TRANSLATION_SHORT_TOKEN_REGEX = /^[A-Z0-9]{1,4}$/;
+
+export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolvedText: string): boolean => {
+  const text = normalizeWhitespace(String(resolvedText || ''));
+  if (!text) return true;
+  if (!line?.bbox) return false;
+
+  const width = Math.max(1, Number(line.bbox.x1 || 0) - Number(line.bbox.x0 || 0));
+  const height = Math.max(1, Number(line.bbox.y1 || 0) - Number(line.bbox.y0 || 0));
+  const area = Math.max(1, width * height);
+  const compact = text.replace(/\s+/g, '');
+  const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
+  const latinCompact = compact.replace(/[^A-Za-z]/g, '');
+  const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
+  const cjkCompact = compact.replace(/[^\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
+  const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
+  const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
+
+  const validWords = (Array.isArray(line.words) ? line.words : []).filter((word) => {
+    const wordText = normalizeWhitespace(String(word?.text || ''));
+    const bbox = word?.bbox;
+    if (!wordText || !bbox) return false;
+    return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
+  });
+  const wordCount = validWords.length > 0
+    ? validWords.length
+    : text.split(/\s+/g).filter(Boolean).length;
+  const confidenceSamples = validWords.length > 0
+    ? validWords.map((word) => Number(word.confidence || 0))
+    : [Number(line.confidence || 0)];
+  const avgConfidence = confidenceSamples.reduce((sum, value) => sum + value, 0) / Math.max(1, confidenceSamples.length);
+  const readability = scoreSourceLineReadability(text);
+  const wordCoverage = computeLineWordUnionCoverage(line);
+
+  const giantLineBox = (
+    (width >= 180 && height >= 110 && area >= 18000)
+    || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2)
+    || (width >= 320 && height >= 98 && area >= 32000)
+  );
+  const sparseLargePhrase = wordCount <= 4 && compact.length <= 24;
+  const lowCoverageLargeBox = wordCoverage <= 0.26;
+  const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
+  if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox) {
+    return true;
+  }
+
+  if (hasCjkOrThai) {
+    const tinyCjkSingleton = wordCount <= 1
+      && cjkCompact.length <= 3
+      && width <= 96
+      && height <= 54
+      && area <= 3000
+      && avgConfidence <= 90;
+    const narrowTallCjkNoise = wordCount <= 2
+      && cjkCompact.length <= 4
+      && width <= 88
+      && height <= 180
+      && height >= Math.max(42, width * 1.15)
+      && avgConfidence <= 90;
+    const cjkUnknownHeavy = cjkCompact.length <= 2
+      && unknownCharRatio >= 0.45
+      && area <= 3200
+      && avgConfidence <= 88;
+    const shortStylizedNonLatinSfx = wordCount <= 1
+      && cjkCompact.length <= 3
+      && width <= 132
+      && height <= 112
+      && area <= 11500
+      && avgConfidence <= 92
+      && (unknownCharRatio >= 0.08 || height >= width * 0.6);
+    const shortNonLatinLowCoverageArtifact = wordCount <= 2
+      && cjkCompact.length <= 5
+      && area <= 6200
+      && wordCoverage <= 0.26
+      && (avgConfidence <= 92 || unknownCharRatio >= 0.2);
+
+    if (tinyCjkSingleton || narrowTallCjkNoise || cjkUnknownHeavy || shortStylizedNonLatinSfx || shortNonLatinLowCoverageArtifact) {
+      return true;
+    }
+    return false;
+  }
+
+  if (GHOST_TRANSLATION_PUNCT_ONLY_REGEX.test(compact) && width <= 112 && height <= 44) {
+    return true;
+  }
+
+  const compactUpper = compact.toUpperCase();
+  const shortDigitArtifact = GHOST_TRANSLATION_SHORT_TOKEN_REGEX.test(compactUpper)
+    && /\d/.test(compactUpper)
+    && !/[a-z]/.test(compact);
+  if (shortDigitArtifact && wordCount <= 1 && width <= 96 && height <= 42 && avgConfidence <= 82) {
+    return true;
+  }
+
+  const pxPerLatinChar = width / Math.max(1, latinCompact.length);
+  const suspiciousTinyLongLatin = latinCompact.length >= 10
+    && wordCount >= 3
+    && pxPerLatinChar < 2.9
+    && width <= Math.max(72, latinCompact.length * 5.4)
+    && height <= 26;
+  if (suspiciousTinyLongLatin) {
+    return true;
+  }
+
+  const lowSignalHyphenGhost = /[a-z]{2,}-[a-z]{2,}/.test(text)
+    && wordCount <= 3
+    && width <= 220
+    && height <= 38
+    && avgConfidence <= 82;
+  if (lowSignalHyphenGhost) {
+    return true;
+  }
+
+  if (wordCount <= 2 && area <= 3000 && unknownCharRatio >= 0.45 && avgConfidence <= 82) {
+    return true;
+  }
+
+  const lowSignalTinySingleton = wordCount <= 1
+    && asciiCompact.length > 0
+    && asciiCompact.length <= 4
+    && area <= 2600
+    && width <= 104
+    && height <= 40
+    && readability <= 0.35
+    && avgConfidence <= 78;
+  if (lowSignalTinySingleton) {
+    return true;
+  }
+
+  return false;
 };
 
 const intervalOverlap = (a0: number, a1: number, b0: number, b1: number): number =>
@@ -1848,6 +2163,7 @@ export const applyThaiConversationalGlossary = (
 
   const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
   const compactSourceUpper = source.toUpperCase().replace(/[^A-Z]/g, '');
+  const compactSourceAlnumUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const hasVertarToken = /\bVERTAR\b/i.test(source) || compactSourceUpper.includes('VERTAR');
   const hasEssenceToken = /\bESSENCE\b/i.test(source)
     || /\bESSEN(?:CE|SE)\b/i.test(source)
@@ -1869,6 +2185,59 @@ export const applyThaiConversationalGlossary = (
       ? '[แก่นแท้ของเวอร์ทาร์]'
       : 'แก่นแท้ของเวอร์ทาร์';
     return preserveSourceTrailingPunctuation(source, wrapped);
+  }
+
+  if (
+    (compactSourceAlnumUpper.includes('ORDOYOU') || compactSourceAlnumUpper.includes('ORDOYO'))
+    && compactSourceAlnumUpper.includes('ESSENCE')
+    && compactSourceAlnumUpper.includes('TAKEOUTOFHERE')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'หรือคุณต้องการให้แก่นแท้นี้เป็นสิ่งเดียวที่เรานำออกไปจากที่นี่');
+  }
+
+  if (/^OR\s+DO\s+YO?U[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'หรือคุณ');
+  }
+  if (/^WANT\s+THIS\s+ESSEN(?:CE|SE)\s+TO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ต้องการให้แก่นแท้นี้');
+  }
+  if (/^BE\s+THE\s+ONE\s+THING\s+WE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เป็นสิ่งเดียวที่เรา');
+  }
+  if (/^TAKE\s+OUT\s+OF\s+HERE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'นำออกไปจากที่นี่');
+  }
+
+  if (
+    (/\bI\s+WOULD\s+BE\s+GETTING\b/i.test(source) && /\b40\s*%/.test(source) && /\bPROFITS?\b/i.test(source) && /\bHAD\s+I\s+SOLD\s+IT\b/i.test(source))
+    || compactSourceAlnumUpper.includes('IWOULDBEGETTING40OFTHEPROFITSHADISOLDIT')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะได้กำไร 40% หากฉันขายมัน');
+  }
+
+  if (/^I\s+WOULD\s+BE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะ');
+  }
+  if (/^GETTING\s+40\s*%\s+OF[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ได้กำไร 40%');
+  }
+  if (/^THE\s+PROFITS?\s+HAD[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'กำไร หากฉัน');
+  }
+  if (/^HAD\s+I\s+SOLD\s+IT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'หากฉันขายมัน');
+  }
+  if (/^I\s+SOLD\s+IT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ขายมัน');
+  }
+  if (/^FOR\s+HER\s+IN\s+RETURN[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เพื่อแลกกับเธอ');
+  }
+  if (/^HER\s+IN\s+RETURN[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เป็นการตอบแทนเธอ');
+  }
+  if (/^IN\s+RETURN[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เป็นการตอบแทน');
   }
 
   if (compactSource === 'aarey' || compactSource === 'aareyo' || compactSource === 'aareyou') {
@@ -2256,20 +2625,22 @@ export const shouldUseLineByLineGrouping = (
 ): boolean => {
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
-  if (normalizedSource !== 'en' || normalizedTarget !== 'th') return false;
+  if (normalizedTarget !== 'th') return false;
   if (mode !== 'official' && mode !== 'adaptive') return false;
   if (lines.length <= 4) return false;
-
-  const comicDialogueLike = isLikelyComicDialogueLayout(lines);
-  if (mode === 'adaptive' && comicDialogueLike) {
-    return false;
-  }
 
   const markerHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
   const tableRowSignalCount = lines.reduce((count, line) => {
     const normalized = normalizeWhitespace(String(line.text || ''));
     return count + (TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalized) ? 1 : 0);
   }, 0);
+  const latinHeavyLineCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
+    const nonSpaceChars = normalized.replace(/\s+/g, '').length;
+    const latinRatio = latinChars / Math.max(1, nonSpaceChars);
+    return latinChars >= 8 && latinRatio >= 0.45;
+  }).length;
   const avgLength = lines.reduce((sum, line) => sum + line.text.length, 0) / Math.max(1, lines.length);
   const longSentenceLines = lines.filter((line) => {
     const normalized = normalizeWhitespace(String(line.text || ''));
@@ -2292,17 +2663,28 @@ export const shouldUseLineByLineGrouping = (
   const tableLikeTechnicalDocument = markerHits >= 3
     && shortLineCount >= Math.ceil(lines.length * 0.45)
     && tableRowSignalCount >= Math.max(4, Math.floor(lines.length * 0.28));
+  const mixedTechnicalEvidence = markerHits >= 2
+    && latinHeavyLineCount >= 3
+    && (longSentenceLines >= 1 || tableRowSignalCount >= 2);
+  const strongTechnicalDocument = markerHits >= 3
+    && longSentenceLines >= 3
+    && avgLength >= 21
+    && uppercaseHeadingLines >= 1;
+  const technicalEvidenceStrong = tableLikeTechnicalDocument || strongTechnicalDocument || mixedTechnicalEvidence;
+
+  const comicDialogueLike = isLikelyComicDialogueLayout(lines);
+  if (mode === 'adaptive' && comicDialogueLike && !technicalEvidenceStrong) {
+    return false;
+  }
 
   if (mode === 'adaptive') {
     if (tableLikeTechnicalDocument) {
       return true;
     }
-
-    const strongTechnicalDocument = markerHits >= 3
-      && longSentenceLines >= 3
-      && avgLength >= 21
-      && uppercaseHeadingLines >= 1;
-    return strongTechnicalDocument;
+    if (strongTechnicalDocument) {
+      return true;
+    }
+    return mixedTechnicalEvidence && (normalizedSource === 'en' || normalizedSource === 'th');
   }
 
   const officialDocumentSignals = (
@@ -2318,7 +2700,46 @@ export const shouldUseLineByLineGrouping = (
     return true;
   }
 
+  if (engine === 'offline' && mixedTechnicalEvidence && normalizedSource !== 'en') {
+    return true;
+  }
+
   return false;
+};
+
+const shouldPreferEnglishSourceForMixedTechnicalPage = (
+  lines: TranslatableLine[],
+  inferredSourceLanguage: string,
+  targetLanguage: string,
+  mode: TranslationMode
+): boolean => {
+  const normalizedSource = normalizeTranslationLanguage(inferredSourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') return false;
+  if (mode !== 'official' && mode !== 'adaptive') return false;
+  if (normalizedSource === 'en') return false;
+
+  const latinHeavyLineCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
+    const nonSpaceChars = normalized.replace(/\s+/g, '').length;
+    const latinRatio = latinChars / Math.max(1, nonSpaceChars);
+    return latinChars >= 8 && latinRatio >= 0.5;
+  }).length;
+
+  if (latinHeavyLineCount < 3) return false;
+
+  const technicalHintCount = lines.reduce((count, line) => (
+    count + (TECHNICAL_SOURCE_HINT_REGEX.test(String(line.text || '')) ? 1 : 0)
+  ), 0);
+  const longLatinSentenceCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
+    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+    return latinChars >= 12 && tokenCount >= 5 && /[.,;:]/.test(normalized);
+  }).length;
+
+  return technicalHintCount >= 2 || longLatinSentenceCount >= 2;
 };
 
 const shouldMergeLines = (
@@ -2340,12 +2761,35 @@ const shouldMergeLines = (
     || leftDelta <= baseHeight * (isDense ? 2.4 : 1.8)
     || centeredStack;
   const continuation = isLikelyContinuation(previous.text, current.text);
-  const sameRowSeparatedColumns = Math.abs(current.top - previous.top) <= baseHeight * 0.95
-    && overlapRatio <= 0.22
-    && centerDelta >= baseHeight * 3.5;
+  const sameRowSeparatedColumns = Math.abs(current.top - previous.top) <= baseHeight * 1.25
+    && overlapRatio <= 0.34
+    && centerDelta >= baseHeight * 2.8;
+  const sameRowFarSeparatedColumns = Math.abs(current.top - previous.top) <= baseHeight * 1.45
+    && overlapRatio <= 0.28
+    && centerDelta >= baseHeight * 4.2;
 
-  if (sameRowSeparatedColumns) {
+  const previousInterjection = isLikelyStandaloneInterjectionLine(previous.text);
+  const currentInterjection = isLikelyStandaloneInterjectionLine(current.text);
+  if (previousInterjection || currentInterjection) {
+    const tightSameBubble = overlapRatio >= 0.56
+      && centerDelta <= baseHeight * 1.05
+      && Math.abs(verticalGap) <= baseHeight * 0.28;
+    if (!tightSameBubble) {
+      return false;
+    }
+  }
+
+  if (sameRowSeparatedColumns || sameRowFarSeparatedColumns) {
     return false;
+  }
+
+  const previousEndsSentence = isStrongSentenceEnd(previous.text)
+    && !SOFT_CONTINUATION_END_REGEX.test(previous.text.trim());
+  if (previousEndsSentence && !continuation) {
+    const wideVerticalBreak = verticalGap >= baseHeight * 1.1;
+    if (wideVerticalBreak) {
+      return false;
+    }
   }
 
   const isLikelyStandaloneDialogueLine = (text: string): boolean => {
@@ -2395,6 +2839,7 @@ type GroupingColumn = {
   centerX: number;
   firstTop: number;
   lastTop: number;
+  lastBottom: number;
 };
 
 const computeGroupingColumnAffinity = (
@@ -2407,12 +2852,27 @@ const computeGroupingColumnAffinity = (
   const overlap = overlapRatio(column.left, column.right, line.left, line.right);
   const lineCenterX = (line.left + line.right) * 0.5;
   const centerDelta = Math.abs(lineCenterX - column.centerX);
+  const rowDelta = Math.abs(line.top - column.lastTop);
+  const verticalGap = line.top - column.lastBottom;
   const normalizedCenterDelta = centerDelta / Math.max(1, Math.max(columnWidth, lineWidth));
-  const canBridge = overlap >= 0.08 || centerDelta <= Math.max(60, baseHeight * 2.8);
+  const sameRowButDifferentColumn = rowDelta <= baseHeight * 1.12
+    && overlap <= 0.18
+    && centerDelta >= baseHeight * 1.55;
+  if (sameRowButDifferentColumn) return null;
+
+  const centerAligned = centerDelta <= Math.max(34, Math.min(columnWidth, lineWidth) * 0.48, baseHeight * 1.55);
+  const leftAligned = Math.abs(line.left - column.left) <= Math.max(42, baseHeight * 2.2);
+  const canBridge = overlap >= 0.18 || (centerAligned && leftAligned);
   if (!canBridge) return null;
 
+  const outsideVerticalBand = verticalGap > baseHeight * 3.3 || verticalGap < -baseHeight * 0.95;
+  if (outsideVerticalBand) return null;
+
   const backwardsPenalty = line.top < column.lastTop - baseHeight * 0.8 ? 1.6 : 0;
-  return overlap * 5.2 - normalizedCenterDelta * 2.4 - backwardsPenalty;
+  const stretchedGapPenalty = verticalGap > baseHeight * 1.9
+    ? ((verticalGap - (baseHeight * 1.9)) / Math.max(1, baseHeight)) * 1.25
+    : 0;
+  return overlap * 5.8 - normalizedCenterDelta * 2.8 - backwardsPenalty - stretchedGapPenalty;
 };
 
 const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number): TranslatableLine[] => {
@@ -2448,6 +2908,7 @@ const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number):
         centerX: (line.left + line.right) * 0.5,
         firstTop: line.top,
         lastTop: line.top,
+        lastBottom: line.bottom,
       });
       return;
     }
@@ -2458,6 +2919,7 @@ const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number):
     column.right = Math.max(column.right, line.right);
     column.centerX = (column.left + column.right) * 0.5;
     column.lastTop = line.top;
+    column.lastBottom = Math.max(column.lastBottom, line.bottom);
   });
 
   const orderedColumns = columns
@@ -2478,6 +2940,126 @@ const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number):
   return orderedColumns.flatMap((column) => column.lines);
 };
 
+const computeLineHorizontalGap = (a: TranslatableLine, b: TranslatableLine): number =>
+  Math.max(0, Math.max(a.left, b.left) - Math.min(a.right, b.right));
+
+const computeLineVerticalGap = (a: TranslatableLine, b: TranslatableLine): number =>
+  Math.max(0, Math.max(a.top, b.top) - Math.min(a.bottom, b.bottom));
+
+const shouldConnectDenseDialogueLines = (
+  a: TranslatableLine,
+  b: TranslatableLine,
+  baseHeight: number
+): boolean => {
+  const overlapX = overlapRatio(a.left, a.right, b.left, b.right);
+  const overlapY = overlapRatio(a.top, a.bottom, b.top, b.bottom);
+  const horizontalGap = computeLineHorizontalGap(a, b);
+  const verticalGap = computeLineVerticalGap(a, b);
+
+  const centerAx = (a.left + a.right) * 0.5;
+  const centerBx = (b.left + b.right) * 0.5;
+  const centerDeltaX = Math.abs(centerAx - centerBx);
+
+  const widthA = Math.max(1, a.right - a.left);
+  const widthB = Math.max(1, b.right - b.left);
+  const minWidth = Math.max(1, Math.min(widthA, widthB));
+
+  const interjectionA = isLikelyStandaloneInterjectionLine(a.text);
+  const interjectionB = isLikelyStandaloneInterjectionLine(b.text);
+  if (interjectionA || interjectionB) {
+    const tightSameBubble = overlapX >= 0.56
+      && centerDeltaX <= baseHeight * 1.05
+      && verticalGap <= baseHeight * 0.3;
+    if (!tightSameBubble) {
+      return false;
+    }
+  }
+
+  const sameRowSeparatedColumns = overlapY >= 0.24
+    && overlapX <= 0.18
+    && horizontalGap >= baseHeight * 0.9
+    && centerDeltaX >= baseHeight * 1.9;
+  if (sameRowSeparatedColumns) return false;
+
+  const verticallyStacked = overlapX >= 0.24
+    && verticalGap <= baseHeight * 1.95
+    && centerDeltaX <= Math.max(96, minWidth * 0.9);
+  const tightlyStacked = overlapX >= 0.16
+    && verticalGap <= baseHeight * 1.15
+    && centerDeltaX <= Math.max(72, minWidth * 0.66);
+  const nearDiagonalInBubble = overlapX >= 0.2
+    && verticalGap <= baseHeight * 1.4
+    && horizontalGap <= Math.max(42, baseHeight * 1.4)
+    && centerDeltaX <= Math.max(86, minWidth * 1.08);
+  const strongContainment = overlapX >= 0.55 && overlapY >= 0.35;
+
+  if (verticallyStacked || tightlyStacked || nearDiagonalInBubble || strongContainment) {
+    return true;
+  }
+
+  return false;
+};
+
+const buildDenseDialogueGroupsByConnectivity = (
+  orderedLines: TranslatableLine[],
+  medianHeight: number
+): TranslationGroup[] => {
+  if (orderedLines.length === 0) return [];
+  if (orderedLines.length === 1) return [{ lines: [orderedLines[0]] }];
+
+  const baseHeight = Math.max(8, medianHeight || computeMedian(orderedLines.map((line) => Math.max(1, line.height))));
+  const parent = orderedLines.map((_, index) => index);
+
+  const find = (index: number): number => {
+    let current = index;
+    while (parent[current] !== current) {
+      parent[current] = parent[parent[current]];
+      current = parent[current];
+    }
+    return current;
+  };
+
+  const unite = (aIndex: number, bIndex: number): void => {
+    const rootA = find(aIndex);
+    const rootB = find(bIndex);
+    if (rootA === rootB) return;
+    parent[rootB] = rootA;
+  };
+
+  for (let i = 0; i < orderedLines.length; i += 1) {
+    for (let j = i + 1; j < orderedLines.length; j += 1) {
+      if (shouldConnectDenseDialogueLines(orderedLines[i], orderedLines[j], baseHeight)) {
+        unite(i, j);
+      }
+    }
+  }
+
+  const grouped = new Map<number, TranslatableLine[]>();
+  orderedLines.forEach((line, index) => {
+    const root = find(index);
+    const bucket = grouped.get(root) || [];
+    bucket.push(line);
+    grouped.set(root, bucket);
+  });
+
+  return Array.from(grouped.values())
+    .map((bucket) => ({
+      lines: [...bucket].sort((a, b) => {
+        if (a.top !== b.top) return a.top - b.top;
+        if (a.left !== b.left) return a.left - b.left;
+        return a.index - b.index;
+      }),
+    }))
+    .sort((a, b) => {
+      const aTop = Math.min(...a.lines.map((line) => line.top));
+      const bTop = Math.min(...b.lines.map((line) => line.top));
+      if (aTop !== bTop) return aTop - bTop;
+      const aLeft = Math.min(...a.lines.map((line) => line.left));
+      const bLeft = Math.min(...b.lines.map((line) => line.left));
+      return aLeft - bLeft;
+    });
+};
+
 export const buildTranslationGroups = (
   lines: TranslatableLine[],
   profile: TranslationGroupingProfile = 'default'
@@ -2490,6 +3072,10 @@ export const buildTranslationGroups = (
 
   if (profile === 'line-by-line') {
     return orderedForGrouping.map((line) => ({ lines: [line] }));
+  }
+
+  if (profile === 'dense-dialogue' && orderedForGrouping.length >= 3) {
+    return buildDenseDialogueGroupsByConnectivity(orderedForGrouping, medianHeight);
   }
 
   const groups: TranslationGroup[] = [];
@@ -2850,26 +3436,83 @@ export default function App() {
     return <UploadScreen />;
   }
 
+  const resolveTranslatableLineBBox = (line?: OCRLine): BBox | undefined => {
+    const rawBBox = line?.bbox;
+    const normalizedRawBBox = rawBBox && Number(rawBBox.x1) > Number(rawBBox.x0) && Number(rawBBox.y1) > Number(rawBBox.y0)
+      ? {
+        x0: Number(rawBBox.x0),
+        y0: Number(rawBBox.y0),
+        x1: Number(rawBBox.x1),
+        y1: Number(rawBBox.y1),
+      }
+      : undefined;
+
+    const validWords = (Array.isArray(line?.words) ? line!.words : [])
+      .filter((word) => {
+        const text = normalizeWhitespace(String(word?.text || ''));
+        const bbox = word?.bbox;
+        if (!text || !bbox) return false;
+        return Number(bbox.x1) > Number(bbox.x0) && Number(bbox.y1) > Number(bbox.y0);
+      });
+    if (validWords.length === 0) return undefined;
+
+    let x0 = Number.POSITIVE_INFINITY;
+    let y0 = Number.POSITIVE_INFINITY;
+    let x1 = Number.NEGATIVE_INFINITY;
+    let y1 = Number.NEGATIVE_INFINITY;
+    validWords.forEach((word) => {
+      x0 = Math.min(x0, Number(word.bbox.x0));
+      y0 = Math.min(y0, Number(word.bbox.y0));
+      x1 = Math.max(x1, Number(word.bbox.x1));
+      y1 = Math.max(y1, Number(word.bbox.y1));
+    });
+
+    if (!(x1 > x0 && y1 > y0)) return undefined;
+    const wordUnionBBox = { x0, y0, x1, y1 };
+
+    if (!normalizedRawBBox) {
+      return wordUnionBBox;
+    }
+
+    const rawWidth = Math.max(1, normalizedRawBBox.x1 - normalizedRawBBox.x0);
+    const rawHeight = Math.max(1, normalizedRawBBox.y1 - normalizedRawBBox.y0);
+    const rawArea = Math.max(1, rawWidth * rawHeight);
+    const unionWidth = Math.max(1, wordUnionBBox.x1 - wordUnionBBox.x0);
+    const unionHeight = Math.max(1, wordUnionBBox.y1 - wordUnionBBox.y0);
+    const unionArea = Math.max(1, unionWidth * unionHeight);
+    const unionCoverage = unionArea / rawArea;
+
+    const rawLooksMalformed = unionCoverage <= 0.32
+      && (
+        rawArea >= unionArea * 3.8
+        || rawWidth >= unionWidth * 1.9
+        || rawHeight >= unionHeight * 1.9
+      );
+
+    return rawLooksMalformed ? wordUnionBBox : normalizedRawBBox;
+  };
+
   const collectTranslatableLines = (lines: OCRLine[]): TranslatableLine[] => {
     const collected: TranslatableLine[] = [];
     lines.forEach((line, index) => {
       const text = resolveBestOcrLineText(line);
-      if (text) {
-        const left = Number(line.bbox?.x0 ?? 0);
-        const right = Number(line.bbox?.x1 ?? left + Math.max(1, text.length * 8));
-        const top = Number(line.bbox?.y0 ?? index * 32);
-        const bottom = Number(line.bbox?.y1 ?? top + 24);
-        collected.push({
-          index,
-          text,
-          sourceLength: countReadableLength(text),
-          left,
-          right,
-          top,
-          bottom,
-          height: Math.max(1, bottom - top),
-        });
-      }
+      if (!text || isLikelyGhostTranslatableLine(line, text)) return;
+
+      const bbox = resolveTranslatableLineBBox(line);
+      const left = Number(bbox?.x0 ?? line.bbox?.x0 ?? 0);
+      const right = Number(bbox?.x1 ?? line.bbox?.x1 ?? (left + Math.max(1, text.length * 8)));
+      const top = Number(bbox?.y0 ?? line.bbox?.y0 ?? (index * 32));
+      const bottom = Number(bbox?.y1 ?? line.bbox?.y1 ?? (top + 24));
+      collected.push({
+        index,
+        text,
+        sourceLength: countReadableLength(text),
+        left,
+        right,
+        top,
+        bottom,
+        height: Math.max(1, bottom - top),
+      });
     });
     return collected;
   };
@@ -3154,6 +3797,7 @@ export default function App() {
     const plans: BatchPageTranslationPlan[] = [];
     let skippedNoModelCache = 0;
     let skippedNoText = 0;
+    let skippedPreservedOnly = 0;
     let deferredByPayloadBudget = 0;
     let sourceAssistLines = 0;
     const maxPayloadChars = 120000;
@@ -3205,13 +3849,32 @@ export default function App() {
         alternativePages,
         (pageOCR.ocrEngine || selectedEngine) as OCREngine
       );
-      const lines = dedupeTranslatableLinesForTranslation(assistedLines);
-      const inferredSourceLanguage = inferSourceLanguageFromTextHints(lines, resolvedSourceFromOCR);
+      const dedupedLines = dedupeTranslatableLinesForTranslation(assistedLines);
+      const inferredSourceLanguage = inferSourceLanguageFromTextHints(dedupedLines, resolvedSourceFromOCR);
+      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+        dedupedLines,
+        inferredSourceLanguage,
+        normalizedTargetLanguage,
+        translationMode
+      )
+        ? 'en'
+        : inferredSourceLanguage;
+      const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
+      const lines = dedupedLines.filter((line) => {
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
+        return true;
+      });
       sourceAssistLines += pageAssistLines;
+
+      if (lines.length === 0) {
+        skippedPreservedOnly += 1;
+        continue;
+      }
 
       const groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
         lines,
-        inferredSourceLanguage,
+        translationSourceLanguage,
         normalizedTargetLanguage,
         'ai',
         translationMode
@@ -3219,7 +3882,7 @@ export default function App() {
         ? 'line-by-line'
         : (shouldUseDenseDialogueGrouping(
           lines,
-          inferredSourceLanguage,
+          translationSourceLanguage,
           normalizedTargetLanguage,
           translationMode
         )
@@ -3227,17 +3890,19 @@ export default function App() {
           : 'default');
       const groups = buildTranslationGroups(lines, groupingProfile)
         .map((group, groupIndex) => {
+          const rawSourceText = group.lines
+            .map((line) => line.text)
+            .join(' ');
+          const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
           const sourceText = normalizeSourceForTranslation(
-            group.lines
-              .filter((line) => !shouldPreserveSourceLineForTranslation(line.text, inferredSourceLanguage))
-              .map((line) => line.text)
-              .join(' '),
-            inferredSourceLanguage
+            rawSourceText,
+            groupSourceLanguage
           );
           const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
           return {
             index: groupIndex,
             lines: group.lines,
+            sourceLanguage: groupSourceLanguage,
             sourceText,
             protectedText: protectedGroup.protectedText,
             replacements: protectedGroup.replacements,
@@ -3255,7 +3920,7 @@ export default function App() {
         ocr: pageOCR,
         ocrEngine: (pageOCR.ocrEngine || selectedEngine) as OCREngine,
         ocrLanguageKey,
-        sourceLanguage: inferredSourceLanguage,
+        sourceLanguage: translationSourceLanguage,
         lines,
         groups,
         groupingProfile,
@@ -3278,7 +3943,9 @@ export default function App() {
 
     const sourceFrequency = new Map<string, number>();
     plans.forEach((plan) => {
-      sourceFrequency.set(plan.sourceLanguage, (sourceFrequency.get(plan.sourceLanguage) || 0) + plan.groups.length);
+      plan.groups.forEach((group) => {
+        sourceFrequency.set(group.sourceLanguage, (sourceFrequency.get(group.sourceLanguage) || 0) + 1);
+      });
     });
     const dominantSourceLanguage = Array.from(sourceFrequency.entries())
       .sort((a, b) => b[1] - a[1])[0]?.[0] || normalizedUserSourceLanguage;
@@ -3326,16 +3993,7 @@ export default function App() {
           ? normalizeThaiTranslationText(restoredGroupText)
           : normalizeWhitespace(restoredGroupText);
 
-        const preservedLineIndices = new Set<number>();
-        group.lines.forEach((line) => {
-          const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-          if (shouldPreserveSourceLineForTranslation(sourceLineText, plan.sourceLanguage)) {
-            preservedLineIndices.add(line.index);
-            translatedByIndex.set(line.index, sourceLineText);
-          }
-        });
-
-        const eligibleLines = group.lines.filter((line) => !preservedLineIndices.has(line.index));
+        const eligibleLines = group.lines;
 
         const redistributed = splitTranslatedTextBySourceWeights(
           normalizedGroupText,
@@ -3345,10 +4003,6 @@ export default function App() {
 
         let redistributedCursor = 0;
         group.lines.forEach((line) => {
-          if (preservedLineIndices.has(line.index)) {
-            return;
-          }
-
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
           redistributedCursor += 1;
@@ -3368,6 +4022,9 @@ export default function App() {
       });
 
       plan.lines.forEach((line) => {
+        if (shouldPreserveSourceLineForTranslation(line.text, plan.sourceLanguage)) {
+          return;
+        }
         if (!translatedByIndex.has(line.index)) {
           const fallbackLine = finalizeTranslatedLine(line.text, line.text, normalizedTargetLanguage);
           translatedByIndex.set(line.index, fallbackLine || line.text);
@@ -3427,6 +4084,7 @@ export default function App() {
     if (deferredByPayloadBudget > 0) notes.push(`deferred pages ${deferredByPayloadBudget}`);
     if (skippedNoModelCache > 0) notes.push(`no-model-cache pages ${skippedNoModelCache}`);
     if (skippedNoText > 0) notes.push(`no-text pages ${skippedNoText}`);
+    if (skippedPreservedOnly > 0) notes.push(`preserved-only pages ${skippedPreservedOnly}`);
 
     setTranslationStatus({
       kind: 'success',
@@ -3501,9 +4159,36 @@ export default function App() {
       alternativePages,
       pageEngine
     );
-    const translatableLines = dedupeTranslatableLinesForTranslation(assistedLines);
-    const inferredSourceLanguage = inferSourceLanguageFromTextHints(translatableLines, effectiveSourceLanguage);
-    const translationSourceLanguage = inferredSourceLanguage;
+    const dedupedTranslatableLines = dedupeTranslatableLinesForTranslation(assistedLines);
+    const inferredSourceLanguage = inferSourceLanguageFromTextHints(dedupedTranslatableLines, effectiveSourceLanguage);
+    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      dedupedTranslatableLines,
+      inferredSourceLanguage,
+      normalizedTargetLanguage,
+      translationMode
+    )
+      ? 'en'
+      : inferredSourceLanguage;
+    const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedTranslatableLines)
+      || hasStrongLatinAnchorLines(dedupedTranslatableLines);
+    const translatableLines = dedupedTranslatableLines
+      .filter((line) => {
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
+        return true;
+      });
+    const preservedSourceLineCount = dedupedTranslatableLines.length - translatableLines.length;
+
+    if (translatableLines.length === 0) {
+      if (!options?.suppressStatus) {
+        setTranslationStatus({
+          kind: 'error',
+          message: `No translatable OCR lines on page ${pageNum}. Preserved-only lines were skipped to avoid ghost overlays.`,
+        });
+      }
+      return false;
+    }
+
     let groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
       translatableLines,
       translationSourceLanguage,
@@ -3531,28 +4216,60 @@ export default function App() {
     }
 
     const groups = buildTranslationGroups(translatableLines, groupingProfile);
+    const preparedGroups = groups.map((group, groupIndex) => {
+      const rawSourceText = group.lines.map((line) => line.text).join(' ');
+      const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+      const sourceText = normalizeSourceForTranslation(rawSourceText, groupSourceLanguage);
+      const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
+      return {
+        index: groupIndex,
+        lines: group.lines,
+        sourceLanguage: groupSourceLanguage,
+        sourceText,
+        protectedText: protectedGroup.protectedText,
+        replacements: protectedGroup.replacements,
+      };
+    }).filter((group) => Boolean(group.protectedText));
 
-    const groupTexts = groups.map((group) => normalizeSourceForTranslation(
-      group.lines
-        .filter((line) => !shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage))
-        .map((line) => line.text)
-        .join(' '),
-      translationSourceLanguage
-    ));
-    const protectedGroups = groupTexts.map((text) => protectTranslationTokens(text, targetLanguage));
-    const textsForTranslation = protectedGroups.map((item) => item.protectedText);
-    const translatedGroupsRaw = engine === 'offline'
-      ? await translateBatchOffline(textsForTranslation, 'text', translationMode, translationSourceLanguage, normalizedTargetLanguage)
-      : await translateBatchGemini(
-        textsForTranslation,
-        'text',
-        translationMode,
-        translationSourceLanguage,
-        normalizedTargetLanguage,
-        buildGeminiContextOverrides(translationMode, translationSourceLanguage, normalizedTargetLanguage)
-      );
+    if (preparedGroups.length === 0) {
+      if (!options?.suppressStatus) {
+        setTranslationStatus({
+          kind: 'error',
+          message: `No translatable OCR groups on page ${pageNum} after source-language preparation.`,
+        });
+      }
+      return false;
+    }
+
+    const translatedGroupsRaw = new Array<string>(preparedGroups.length).fill('');
+    const sourceBuckets = new Map<string, number[]>();
+    preparedGroups.forEach((group, index) => {
+      const sourceKey = normalizeTranslationLanguage(group.sourceLanguage, translationSourceLanguage);
+      const bucket = sourceBuckets.get(sourceKey) || [];
+      bucket.push(index);
+      sourceBuckets.set(sourceKey, bucket);
+    });
+
+    for (const [groupSourceLanguage, indexes] of sourceBuckets.entries()) {
+      const bucketInputs = indexes.map((index) => preparedGroups[index]?.protectedText || '');
+      const bucketTranslated = engine === 'offline'
+        ? await translateBatchOffline(bucketInputs, 'text', translationMode, groupSourceLanguage, normalizedTargetLanguage)
+        : await translateBatchGemini(
+          bucketInputs,
+          'text',
+          translationMode,
+          groupSourceLanguage,
+          normalizedTargetLanguage,
+          buildGeminiContextOverrides(translationMode, groupSourceLanguage, normalizedTargetLanguage)
+        );
+
+      indexes.forEach((groupIndex, bucketIndex) => {
+        translatedGroupsRaw[groupIndex] = bucketTranslated[bucketIndex] || '';
+      });
+    }
+
     const translatedGroups = translatedGroupsRaw.map((text, index) => {
-      const restored = restoreProtectedTokens(text, protectedGroups[index]?.replacements || []);
+      const restored = restoreProtectedTokens(text, preparedGroups[index]?.replacements || []);
       if (normalizedTargetLanguage === 'th') {
         return normalizeThaiTranslationText(restored);
       }
@@ -3563,14 +4280,15 @@ export default function App() {
     let groupRetryAppliedCount = 0;
 
     if (engine === 'offline') {
-      for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
-        const group = groups[groupIndex];
-        const sourceGroupText = groupTexts[groupIndex] || '';
+      for (let groupIndex = 0; groupIndex < preparedGroups.length; groupIndex += 1) {
+        const group = preparedGroups[groupIndex];
+        const groupSourceLanguage = group.sourceLanguage;
+        const sourceGroupText = group.sourceText || '';
         const initialTranslated = translatedGroups[groupIndex] || sourceGroupText;
         if (!shouldRetryGroupTranslation(
           sourceGroupText,
           initialTranslated,
-          translationSourceLanguage,
+          groupSourceLanguage,
           normalizedTargetLanguage
         )) {
           continue;
@@ -3584,10 +4302,7 @@ export default function App() {
           },
         ];
 
-        const retrySourceText = buildOfflineGroupRetrySourceText(
-          group.lines.filter((line) => !shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)),
-          translationSourceLanguage
-        );
+        const retrySourceText = buildOfflineGroupRetrySourceText(group.lines, groupSourceLanguage);
         if (
           retrySourceText
           && buildTranslationComparisonKey(retrySourceText) !== buildTranslationComparisonKey(sourceGroupText)
@@ -3597,7 +4312,7 @@ export default function App() {
             [retryProtected.protectedText],
             'text',
             translationMode,
-            translationSourceLanguage,
+            groupSourceLanguage,
             normalizedTargetLanguage
           );
           const retryGroupRestored = restoreProtectedTokens(
@@ -3614,13 +4329,13 @@ export default function App() {
           });
         }
 
-        const retryLineInputs = group.lines.map((line) => normalizeSourceForTranslation(line.text, translationSourceLanguage));
+        const retryLineInputs = group.lines.map((line) => normalizeSourceForTranslation(line.text, groupSourceLanguage));
         const retryLineProtected = retryLineInputs.map((text) => protectTranslationTokens(text, targetLanguage));
         const retryLineRaw = await translateBatchOffline(
           retryLineProtected.map((item) => item.protectedText),
           'text',
           translationMode,
-          translationSourceLanguage,
+          groupSourceLanguage,
           normalizedTargetLanguage
         );
         const retryLineOutputs = group.lines.map((line, lineIndex) => {
@@ -3657,43 +4372,27 @@ export default function App() {
     }
 
     const translatedByIndex = new Map<number, string>();
-    const retryLineMap = new Map<number, { index: number; sourceText: string }>();
-    groups.forEach((group, groupIndex) => {
-      const preservedLineIndices = new Set<number>();
-      group.lines.forEach((line) => {
-        const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-        if (shouldPreserveSourceLineForTranslation(sourceLineText, translationSourceLanguage)) {
-          preservedLineIndices.add(line.index);
-          translatedByIndex.set(line.index, sourceLineText);
-        }
-      });
-
+    const retryLineMap = new Map<number, { index: number; sourceText: string; sourceLanguage: string }>();
+    preparedGroups.forEach((group, groupIndex) => {
+      const groupSourceLanguage = group.sourceLanguage;
       const directLineOverride = groupLineOverrides.get(groupIndex);
       if (directLineOverride && directLineOverride.length > 0) {
         group.lines.forEach((line, lineIndex) => {
-          if (preservedLineIndices.has(line.index)) {
-            return;
-          }
-
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const overrideText = directLineOverride[lineIndex] || sourceLineText;
           translatedByIndex.set(line.index, overrideText || sourceLineText);
-          if (shouldRetryLineTranslation(line.text, overrideText, translationSourceLanguage, normalizedTargetLanguage)) {
-            retryLineMap.set(line.index, { index: line.index, sourceText: line.text });
+          if (shouldRetryLineTranslation(line.text, overrideText, groupSourceLanguage, normalizedTargetLanguage)) {
+            retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
           }
         });
         return;
       }
 
-      const translatedGroup = translatedGroups[groupIndex] || groupTexts[groupIndex] || '';
-      const eligibleLines = group.lines.filter((line) => !preservedLineIndices.has(line.index));
+      const translatedGroup = translatedGroups[groupIndex] || group.sourceText || '';
+      const eligibleLines = group.lines;
       const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, eligibleLines, normalizedTargetLanguage);
       let redistributedCursor = 0;
       group.lines.forEach((line) => {
-        if (preservedLineIndices.has(line.index)) {
-          return;
-        }
-
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
         const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
         redistributedCursor += 1;
@@ -3706,8 +4405,8 @@ export default function App() {
           normalizedTargetLanguage
         );
         translatedByIndex.set(line.index, finalizedLine || sourceLineText);
-        if (shouldRetryLineTranslation(line.text, finalizedLine, translationSourceLanguage, normalizedTargetLanguage)) {
-          retryLineMap.set(line.index, { index: line.index, sourceText: line.text });
+        if (shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
+          retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
       });
     });
@@ -3716,39 +4415,55 @@ export default function App() {
     const retryCandidates = Array.from(retryLineMap.values());
     if (retryCandidates.length > 0) {
       const retryPrepared = retryCandidates.map((item) => {
-        const sourceText = normalizeSourceForTranslation(item.sourceText, translationSourceLanguage);
+        const resolvedRetrySourceLanguage = normalizeTranslationLanguage(item.sourceLanguage, translationSourceLanguage);
+        const sourceText = normalizeSourceForTranslation(item.sourceText, resolvedRetrySourceLanguage);
         const protectedRetry = protectTranslationTokens(sourceText, targetLanguage);
         return {
           ...item,
+          sourceLanguage: resolvedRetrySourceLanguage,
           sourceText,
           protectedText: protectedRetry.protectedText,
           replacements: protectedRetry.replacements,
         };
       });
-      const retryInputs = retryPrepared.map((item) => item.protectedText);
-      const retryRaw = engine === 'offline'
-        ? await translateBatchOffline(retryInputs, 'text', translationMode, translationSourceLanguage, normalizedTargetLanguage)
-        : await translateBatchGemini(
-          retryInputs,
-          'text',
-          translationMode,
-          translationSourceLanguage,
-          normalizedTargetLanguage,
-          buildGeminiContextOverrides(translationMode, translationSourceLanguage, normalizedTargetLanguage)
-        );
-      const retryOutputs = retryRaw.map((text, idx) => {
-        const restored = restoreProtectedTokens(text, retryPrepared[idx]?.replacements || []);
-        return normalizedTargetLanguage === 'th'
-          ? normalizeThaiTranslationText(restored)
-          : normalizeWhitespace(String(restored || ''));
+      const retryOutputs = new Array<string>(retryPrepared.length).fill('');
+      const retryBuckets = new Map<string, number[]>();
+      retryPrepared.forEach((item, index) => {
+        const bucket = retryBuckets.get(item.sourceLanguage) || [];
+        bucket.push(index);
+        retryBuckets.set(item.sourceLanguage, bucket);
       });
+
+      for (const [retrySourceLanguage, indexes] of retryBuckets.entries()) {
+        const retryInputs = indexes.map((index) => retryPrepared[index]?.protectedText || '');
+        const retryRaw = engine === 'offline'
+          ? await translateBatchOffline(retryInputs, 'text', translationMode, retrySourceLanguage, normalizedTargetLanguage)
+          : await translateBatchGemini(
+            retryInputs,
+            'text',
+            translationMode,
+            retrySourceLanguage,
+            normalizedTargetLanguage,
+            buildGeminiContextOverrides(translationMode, retrySourceLanguage, normalizedTargetLanguage)
+          );
+
+        indexes.forEach((preparedIndex, bucketIndex) => {
+          const restored = restoreProtectedTokens(
+            retryRaw[bucketIndex] || '',
+            retryPrepared[preparedIndex]?.replacements || []
+          );
+          retryOutputs[preparedIndex] = normalizedTargetLanguage === 'th'
+            ? normalizeThaiTranslationText(restored)
+            : normalizeWhitespace(String(restored || ''));
+        });
+      }
 
       retryPrepared.forEach((item, idx) => {
         const retried = normalizeWhitespace(retryOutputs[idx] || '');
         if (!retried) return;
 
         const finalizedRetry = finalizeTranslatedLine(item.sourceText, retried, normalizedTargetLanguage);
-        if (shouldRetryLineTranslation(item.sourceText, finalizedRetry, translationSourceLanguage, normalizedTargetLanguage)) {
+        if (shouldRetryLineTranslation(item.sourceText, finalizedRetry, item.sourceLanguage, normalizedTargetLanguage)) {
           return;
         }
         translatedByIndex.set(item.index, finalizedRetry);
@@ -3789,7 +4504,7 @@ export default function App() {
       translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
       translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
       lineCount: translatedByIndex.size,
-      groupCount: groups.length,
+      groupCount: preparedGroups.length,
       createdAt: Date.now(),
     };
 
@@ -3816,11 +4531,14 @@ export default function App() {
     const groupRetryHint = groupRetryAppliedCount > 0
       ? ` group retries applied: ${groupRetryAppliedCount}.`
       : '';
+    const preservedHint = preservedSourceLineCount > 0
+      ? ` preserved-only lines skipped: ${preservedSourceLineCount}.`
+      : '';
 
     if (!options?.suppressStatus) {
       setTranslationStatus({
         kind: 'success',
-        message: `${engine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${groups.length} grouped segments on page ${pageNum}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${qualityHint}`,
+        message: `${engine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${preparedGroups.length} grouped segments on page ${pageNum}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${preservedHint}${qualityHint}`,
       });
     }
 

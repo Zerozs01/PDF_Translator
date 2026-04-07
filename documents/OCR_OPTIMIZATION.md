@@ -780,8 +780,6 @@ That meant:
 - page 1 of the long manga should move closer to bubble-local ordering like I THINK..., EH?!, ME?!!, I KNEW IT, NYAH, HOW MUCH, FOR IT?
 - long document pages should be less likely to drift into timeout when the chunked base OCR is already readable
 
-
-
 ## v99 Tall Region Execution Pass
 
 ### Why v98 could still look unchanged
@@ -799,4 +797,3 @@ That meant:
 - late manga vertical-flow splitting is skipped once tall-region reconstruction has already produced the kept line structure
 - document finalization now performs a last heading-numeric restore pass from base OCR words before the result is emitted
 - leading document TO artifacts now trim more aggressively when the tail remains readable
-

@@ -1443,6 +1443,25 @@ class VisionService {
     return veryNarrowForText && (tinyRelativeToPage || thinStrip);
   }
 
+  private isSevereMalformedPaddleLatinLine(line: OCRLine, pageWidth: number): boolean {
+    const text = String(line.text || '').trim();
+    if (!text) return false;
+
+    const alpha = normalizeExternalLatinToken(text);
+    if (alpha.length < 14) return false;
+
+    const words = (line.words || []).filter((word) => String(word.text || '').trim().length > 0);
+    if (words.length < 4) return false;
+
+    const width = Math.max(1, bboxWidth(line.bbox));
+    const height = Math.max(1, bboxHeight(line.bbox));
+    const pxPerChar = width / Math.max(1, alpha.length);
+    const tinyRelativeToPage = width <= Math.max(52, pageWidth * 0.028);
+    const veryCompressed = pxPerChar < 2.2 && height <= 24;
+
+    return tinyRelativeToPage && veryCompressed;
+  }
+
   private collectPaddlePanelGeometryAnomalies(result: OCRPageResult): OCRLine[] {
     if ((result.pipelineProfile || 'panel') !== 'panel') return [];
     if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') return [];
@@ -1451,14 +1470,189 @@ class VisionService {
     return (result.lines || []).filter((line) => this.isLikelyMalformedPaddleLatinLine(line, pageWidth));
   }
 
+  private isLikelyDenseLatinDocumentPanelResult(result: OCRPageResult, language: string): boolean {
+    if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return false;
+    if ((result.pipelineProfile || 'panel') !== 'panel') return false;
+    if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') return false;
+
+    const lines = Array.isArray(result.lines) ? result.lines : [];
+    if (lines.length < 36) return false;
+
+    const width = Math.max(1, Number(result.width || 0));
+    const height = Math.max(1, Number(result.height || 0));
+    const aspectRatio = Math.max(width, height) / Math.max(1, Math.min(width, height));
+    if (aspectRatio > 2.2) return false;
+
+    let wordCountSum = 0;
+    let longLatinLines = 0;
+    lines.forEach((line) => {
+      const validWords = (line.words || []).filter((word) => String(word.text || '').trim().length > 0);
+      const fallbackWords = String(line.text || '').trim().split(/\s+/g).filter(Boolean);
+      wordCountSum += validWords.length > 0 ? validWords.length : fallbackWords.length;
+      if (normalizeExternalLatinToken(String(line.text || '')).length >= 18) {
+        longLatinLines += 1;
+      }
+    });
+
+    const avgWordsPerLine = wordCountSum / Math.max(1, lines.length);
+    return avgWordsPerLine >= 2.15 && longLatinLines >= 10;
+  }
+
   private shouldFallbackMalformedPaddlePanelResult(result: OCRPageResult, language: string): boolean {
     if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return false;
 
     const anomalies = this.collectPaddlePanelGeometryAnomalies(result);
     if (anomalies.length === 0) return false;
 
-    if (anomalies.some((line) => bboxWidth(line.bbox) <= 48)) return true;
-    return anomalies.length >= 2;
+    const pageWidth = Math.max(1, Number(result.width || 0));
+    const severeAnomalies = anomalies.filter((line) => this.isSevereMalformedPaddleLatinLine(line, pageWidth));
+    if (severeAnomalies.length > 0) {
+      return true;
+    }
+
+    const totalLines = Math.max(1, Array.isArray(result.lines) ? result.lines.length : 0);
+    const anomalyRatio = anomalies.length / totalLines;
+    const pageHeight = Math.max(1, Number(result.height || 0));
+    const aspectRatio = Math.max(pageWidth, pageHeight) / Math.max(1, Math.min(pageWidth, pageHeight));
+    const veryTallPanelPage = pageHeight >= 4200 && aspectRatio >= 2.6;
+
+    if (this.isLikelyDenseLatinDocumentPanelResult(result, language)) {
+      if (anomalies.length <= 2 && anomalyRatio <= 0.09) {
+        return false;
+      }
+    }
+
+    if (veryTallPanelPage && anomalies.length <= 3 && anomalyRatio <= 0.08) {
+      return false;
+    }
+
+    if (anomalies.some((line) => bboxWidth(line.bbox) <= 40)) return true;
+    return anomalies.length >= 3;
+  }
+
+  private dropMinorPaddleGeometryAnomalies(
+    externalResult: OCRPageResult,
+    anomalies: OCRLine[],
+    skipReason: string,
+  ): OCRPageResult {
+    if (anomalies.length === 0) return externalResult;
+
+    const anomalySet = new Set<OCRLine>(anomalies);
+    const preservedLines = (externalResult.lines || []).filter((line) => !anomalySet.has(line));
+    if (preservedLines.length === (externalResult.lines || []).length) {
+      return externalResult;
+    }
+
+    const preservedWords = preservedLines.flatMap((line) => line.words || []);
+    const preservedConfidences = preservedWords.length > 0
+      ? preservedWords.map((word) => Number(word.confidence || 0))
+      : preservedLines.map((line) => Number(line.confidence || 0));
+    const preservedConfidence = preservedConfidences.length > 0
+      ? preservedConfidences.reduce((sum, value) => sum + value, 0) / preservedConfidences.length
+      : Number(externalResult.confidence || 0);
+
+    const droppedWords: OCRDroppedWord[] = anomalies.slice(0, 12).map((line) => ({
+      filter: 'externalPaddleFallback',
+      reason: 'malformedTinyBboxForLongLine',
+      text: String(line.text || '').trim(),
+      confidence: Number(line.confidence || 0),
+      bbox: line.bbox,
+    }));
+
+    return {
+      ...externalResult,
+      lines: preservedLines,
+      words: preservedWords,
+      text: preservedLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+      confidence: preservedConfidence,
+      debug: {
+        ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
+        droppedWords: [
+          ...(externalResult.debug?.droppedWords || []),
+          ...droppedWords,
+        ],
+        dropCounts: {
+          ...(externalResult.debug?.dropCounts || {}),
+          externalPaddleGeometryAnomalyDrop:
+            (externalResult.debug?.dropCounts?.externalPaddleGeometryAnomalyDrop || 0) + anomalies.length,
+        },
+        skipReason,
+      },
+    };
+  }
+
+  private mergePaddleGeometryFallbackResult(
+    externalResult: OCRPageResult,
+    fallbackResult: OCRPageResult,
+    anomalies: OCRLine[],
+    width: number,
+    height: number,
+    dpi: number,
+    language: string,
+    pageSegMode: number | undefined,
+    pipelineProfile: OCRPipelineProfile,
+    ocrQualityProfile: OCRQualityProfile,
+  ): OCRPageResult {
+    const anomalySet = new Set<OCRLine>(anomalies);
+    const preservedExternalLines = (externalResult.lines || []).filter((line) => !anomalySet.has(line));
+    const preservedExternalWords = preservedExternalLines.flatMap((line) => line.words || []);
+    const preservedConfidences = preservedExternalWords.length > 0
+      ? preservedExternalWords.map((word) => Number(word.confidence || 0))
+      : preservedExternalLines.map((line) => Number(line.confidence || 0));
+    const preservedConfidence = preservedConfidences.length > 0
+      ? preservedConfidences.reduce((sum, value) => sum + value, 0) / preservedConfidences.length
+      : 0;
+
+    const preservedExternalResult: OCRPageResult = {
+      ...externalResult,
+      lines: preservedExternalLines,
+      words: preservedExternalWords,
+      text: preservedExternalLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+      confidence: preservedConfidence,
+    };
+
+    const hybridMerged = this.mergeExternalChunkResults(
+      [preservedExternalResult, fallbackResult],
+      width,
+      height,
+      dpi,
+      language,
+      pageSegMode ?? externalResult.pageSegMode ?? fallbackResult.pageSegMode,
+      pipelineProfile,
+      ocrQualityProfile,
+      'paddleocr',
+    );
+
+    const fallbackDebugDrops: OCRDroppedWord[] = anomalies.slice(0, 8).map((line) => ({
+      filter: 'externalPaddleFallback',
+      reason: 'malformedTinyBboxForLongLine',
+      text: String(line.text || '').trim(),
+      confidence: Number(line.confidence || 0),
+      bbox: line.bbox,
+    }));
+
+    const hybridDropCounts = {
+      ...(hybridMerged.debug?.dropCounts || {}),
+      externalPaddleGeometryFallback: anomalies.length,
+      externalPaddleGeometryFallbackPreserved: preservedExternalLines.length,
+    };
+
+    const hybridDroppedWords = [
+      ...(hybridMerged.debug?.droppedWords || []),
+      ...fallbackDebugDrops,
+    ];
+
+    return {
+      ...hybridMerged,
+      pageNumber: externalResult.pageNumber || fallbackResult.pageNumber || 0,
+      ocrEngine: 'paddleocr',
+      debug: {
+        ...(hybridMerged.debug || { droppedWords: [], dropCounts: {} }),
+        droppedWords: hybridDroppedWords,
+        dropCounts: hybridDropCounts,
+        skipReason: 'paddleGeometryHybridFallbackToTesseract',
+      },
+    };
   }
 
   private mergeExternalChunkResults(
@@ -1942,56 +2136,102 @@ class VisionService {
         ocrEngine
       );
 
-      const shouldFallbackToTesseract = ocrEngine === 'paddleocr'
+      const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
         && pipelineProfile === 'panel'
+        && this.shouldApplyAggressiveLatinPanelCleanup(language);
+      const anomalies = canApplyPaddleLatinGeometryGuard
+        ? this.collectPaddlePanelGeometryAnomalies(externalResult)
+        : [];
+      const severeAnomalyCount = anomalies.filter((line) =>
+        this.isSevereMalformedPaddleLatinLine(line, Math.max(1, Number(externalResult.width || 0)))
+      ).length;
+
+      const shouldFallbackToTesseract = canApplyPaddleLatinGeometryGuard
         && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
       if (!shouldFallbackToTesseract) {
+        if (anomalies.length > 0) {
+          return this.dropMinorPaddleGeometryAnomalies(
+            externalResult,
+            anomalies,
+            'paddleGeometryMinorAnomalyDropNoFallback'
+          );
+        }
         return externalResult;
       }
 
-      const anomalies = this.collectPaddlePanelGeometryAnomalies(externalResult);
+      const denseLatinDocument = this.isLikelyDenseLatinDocumentPanelResult(externalResult, language);
+      const fallbackDpi = denseLatinDocument && severeAnomalyCount === 0 && anomalies.length <= 4
+        ? Math.max(220, Math.min(dpi, 260))
+        : dpi;
+      const fallbackQualityProfile: OCRQualityProfile = severeAnomalyCount > 0
+        ? ocrQualityProfile
+        : 'fast';
       try {
         const fallbackResult = await this.sendMessage<OCRPageResult>('OCR_FOR_TEXT_LAYER', {
           imageUrl,
           imageWidth,
           imageHeight,
           language,
-          dpi,
+          dpi: fallbackDpi,
           pageSegMode,
           debugCollectDrops,
           pipelineProfile,
-          ocrQualityProfile,
+          ocrQualityProfile: fallbackQualityProfile,
           ocrEngine: 'tesseract',
         }, { signal });
 
-        const fallbackDebugDrops: OCRDroppedWord[] = anomalies.slice(0, 8).map((line) => ({
-          filter: 'externalPaddleFallback',
-          reason: 'malformedTinyBboxForLongLine',
-          text: String(line.text || '').trim(),
-          confidence: Number(line.confidence || 0),
-          bbox: line.bbox,
-        }));
-        const fallbackDropCounts = {
-          ...(fallbackResult.debug?.dropCounts || {}),
-          externalPaddleGeometryFallback: anomalies.length,
-        };
-        const fallbackDroppedWords = [
-          ...(fallbackResult.debug?.droppedWords || []),
-          ...fallbackDebugDrops,
-        ];
+        const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
+          externalResult,
+          fallbackResult,
+          anomalies,
+          imageWidth,
+          imageHeight,
+          dpi,
+          language,
+          pageSegMode,
+          pipelineProfile,
+          ocrQualityProfile,
+        );
 
-        return {
-          ...fallbackResult,
-          ocrEngine,
-          debug: {
-            ...(fallbackResult.debug || { droppedWords: [], dropCounts: {} }),
-            droppedWords: fallbackDroppedWords,
-            dropCounts: fallbackDropCounts,
-            skipReason: 'paddleGeometryFallbackToTesseract',
-          },
-        };
+        if (fallbackDpi !== dpi) {
+          return {
+            ...mergedFallbackResult,
+            debug: {
+              ...(mergedFallbackResult.debug || { droppedWords: [], dropCounts: {} }),
+              dropCounts: {
+                ...(mergedFallbackResult.debug?.dropCounts || {}),
+                externalPaddleGeometryFallbackDpiDownshift: 1,
+              },
+            },
+          };
+        }
+
+        return mergedFallbackResult;
       } catch (fallbackError) {
+        if ((fallbackError as Error | undefined)?.name === 'AbortError' || signal?.aborted) {
+          if (severeAnomalyCount === 0 && anomalies.length > 0) {
+            return this.dropMinorPaddleGeometryAnomalies(
+              externalResult,
+              anomalies,
+              'paddleGeometryFallbackAbortedMinorAnomalyDrop'
+            );
+          }
+          return {
+            ...externalResult,
+            debug: {
+              ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
+              skipReason: 'paddleGeometryFallbackAborted',
+            },
+          };
+        }
         console.warn('[VisionService] Paddle geometry fallback to tesseract failed:', fallbackError);
+        if (severeAnomalyCount === 0 && anomalies.length > 0) {
+          return this.dropMinorPaddleGeometryAnomalies(
+            externalResult,
+            anomalies,
+            'paddleGeometryFallbackFailedMinorAnomalyDrop'
+          );
+        }
         return externalResult;
       }
     }

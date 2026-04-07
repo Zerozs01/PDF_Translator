@@ -28,7 +28,7 @@ import {
   BarChart3
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import type { OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile } from '../../types';
+import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile } from '../../types';
 import type { DBDocumentCacheCandidate } from '../../types/electron.d';
 import {
   hasCurrentOCRTranslationCacheVersion,
@@ -201,6 +201,18 @@ type LanguageScriptAllowance = {
   cyrillic: boolean;
 };
 
+type ScriptCharStats = {
+  latin: number;
+  hangul: number;
+  kana: number;
+  han: number;
+  thai: number;
+  cyrillic: number;
+  total: number;
+  allowed: number;
+  disallowed: number;
+};
+
 const buildLanguageScriptAllowance = (language: string): LanguageScriptAllowance => {
   const codes = String(language || 'eng')
     .split('+')
@@ -209,16 +221,97 @@ const buildLanguageScriptAllowance = (language: string): LanguageScriptAllowance
 
   const hasCode = (value: string): boolean => codes.includes(value);
   const hasPrefix = (value: string): boolean => codes.some((code) => code.startsWith(value));
+  const hasNonLatinRequested = hasCode('kor')
+    || hasCode('jpn')
+    || hasCode('jpn_vert')
+    || hasPrefix('chi')
+    || hasCode('tha')
+    || hasCode('rus');
+  const englishRequested = hasCode('eng') || hasCode('en');
 
   return {
-    // Keep Latin allowed in all profiles because proper nouns/acronyms often mix in.
-    latin: true,
+    // Keep Latin only when explicitly requested (eng) or when no non-Latin OCR language is selected.
+    latin: englishRequested || !hasNonLatinRequested,
     hangul: hasCode('kor'),
     kana: hasCode('jpn') || hasCode('jpn_vert'),
     han: hasPrefix('chi') || hasCode('jpn') || hasCode('jpn_vert'),
     thai: hasCode('tha'),
     cyrillic: hasCode('rus'),
   };
+};
+
+const collectScriptCharStats = (text: string, allowance: LanguageScriptAllowance): ScriptCharStats => {
+  const stats: ScriptCharStats = {
+    latin: 0,
+    hangul: 0,
+    kana: 0,
+    han: 0,
+    thai: 0,
+    cyrillic: 0,
+    total: 0,
+    allowed: 0,
+    disallowed: 0,
+  };
+
+  for (const ch of String(text || '')) {
+    let bucket: keyof Pick<ScriptCharStats, 'latin' | 'hangul' | 'kana' | 'han' | 'thai' | 'cyrillic'> | null = null;
+    if (/[A-Za-z\u00C0-\u024F]/.test(ch)) bucket = 'latin';
+    else if (/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(ch)) bucket = 'hangul';
+    else if (/[\u3040-\u30FF]/.test(ch)) bucket = 'kana';
+    else if (/[\u3400-\u4DBF\u4E00-\u9FFF]/.test(ch)) bucket = 'han';
+    else if (/[\u0E00-\u0E7F]/.test(ch)) bucket = 'thai';
+    else if (/[\u0400-\u04FF]/.test(ch)) bucket = 'cyrillic';
+
+    if (!bucket) continue;
+
+    stats[bucket] += 1;
+    stats.total += 1;
+    const allowed = (
+      (bucket === 'latin' && allowance.latin)
+      || (bucket === 'hangul' && allowance.hangul)
+      || (bucket === 'kana' && allowance.kana)
+      || (bucket === 'han' && allowance.han)
+      || (bucket === 'thai' && allowance.thai)
+      || (bucket === 'cyrillic' && allowance.cyrillic)
+    );
+    if (allowed) {
+      stats.allowed += 1;
+    } else {
+      stats.disallowed += 1;
+    }
+  }
+
+  return stats;
+};
+
+const isStrictSingleLanguageScriptGate = (allowance: LanguageScriptAllowance): boolean => {
+  const nonLatinAllowed = [allowance.hangul, allowance.kana, allowance.han, allowance.thai, allowance.cyrillic]
+    .filter(Boolean)
+    .length;
+  return nonLatinAllowed <= 1;
+};
+
+const isLineLikelyScriptMismatch = (
+  text: string,
+  allowance: LanguageScriptAllowance,
+  averageConfidence: number
+): boolean => {
+  const stats = collectScriptCharStats(text, allowance);
+  if (stats.total === 0 || stats.disallowed <= 0) return false;
+
+  const allowedRatio = stats.allowed / Math.max(1, stats.total);
+  if (isStrictSingleLanguageScriptGate(allowance)) {
+    const minAllowedChars = allowance.latin ? 1 : 2;
+    const minAllowedRatio = allowance.latin ? 0.62 : 0.8;
+    const lowConfidenceThreshold = allowance.latin ? 76 : 82;
+    if (stats.allowed <= minAllowedChars && stats.disallowed >= 2) return true;
+    if (allowedRatio < minAllowedRatio) return true;
+    if (averageConfidence < lowConfidenceThreshold && stats.disallowed >= stats.allowed) return true;
+    return false;
+  }
+
+  if (stats.allowed <= 1 && stats.disallowed >= 3) return true;
+  return averageConfidence < 72 && stats.disallowed > (stats.allowed * 1.4);
 };
 
 const isWordAllowedByScriptGate = (text: string, allowance: LanguageScriptAllowance): boolean => {
@@ -247,7 +340,21 @@ const isWordAllowedByScriptGate = (text: string, allowance: LanguageScriptAllowa
     || (allowance.cyrillic && hasCyrillic)
   );
 
-  return matchesAllowedScript;
+  if (!matchesAllowedScript) {
+    return false;
+  }
+
+  const strictGate = isStrictSingleLanguageScriptGate(allowance);
+  if (strictGate) {
+    const stats = collectScriptCharStats(normalized, allowance);
+    if (stats.disallowed <= 0) return true;
+    if (!allowance.latin && stats.allowed < 2) return false;
+    if (stats.allowed <= 1) return false;
+    const allowedRatio = stats.allowed / Math.max(1, stats.total);
+    return allowedRatio >= (allowance.latin ? 0.72 : 0.84);
+  }
+
+  return true;
 };
 
 const applyPanelLanguageScriptGate = (result: OCRPageResult, requestedLanguage: string): OCRPageResult => {
@@ -303,12 +410,38 @@ const applyPanelLanguageScriptGate = (result: OCRPageResult, requestedLanguage: 
         return null;
       }
 
-      if (keptWords.length !== lineWords.length || resolvedLineText !== rawLineText) {
+      const confidenceSamples = keptWords.length > 0
+        ? keptWords.map((word) => Number(word.confidence || 0))
+        : [Number(line.confidence || 0)];
+      const averageLineConfidence = confidenceSamples.reduce((sum, value) => sum + value, 0) / Math.max(1, confidenceSamples.length);
+      if (isLineLikelyScriptMismatch(resolvedLineText, allowance, averageLineConfidence)) {
+        changed = true;
+        dropped.push({
+          filter: 'panelLanguageScriptGate',
+          reason: 'lineLanguageMismatch',
+          text: resolvedLineText,
+          confidence: averageLineConfidence,
+          bbox: line.bbox,
+        });
+        return null;
+      }
+
+      const resolvedWords = keptWords.length > 0
+        ? keptWords
+        : (hasPositivePanelBBox(line.bbox)
+          ? [{
+            text: resolvedLineText,
+            confidence: Number(line.confidence || 0),
+            bbox: line.bbox,
+          }]
+          : []);
+
+      if (resolvedWords.length !== lineWords.length || resolvedLineText !== rawLineText) {
         changed = true;
         return {
           ...line,
           text: resolvedLineText,
-          words: keptWords,
+          words: resolvedWords,
         } satisfies OCRLine;
       }
 
@@ -456,6 +589,84 @@ const hasPositivePanelBBox = (bbox?: { x0: number; y0: number; x1: number; y1: n
     && (Number(bbox.y1 || 0) - Number(bbox.y0 || 0)) > 0;
 };
 
+const normalizePanelBBox = (bbox?: { x0?: number; y0?: number; x1?: number; y1?: number }): BBox | undefined => {
+  const x0 = Number(bbox?.x0);
+  const y0 = Number(bbox?.y0);
+  const x1 = Number(bbox?.x1);
+  const y1 = Number(bbox?.y1);
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return undefined;
+  if (!(x1 > x0 && y1 > y0)) return undefined;
+  return { x0, y0, x1, y1 };
+};
+
+const isSamePanelBBox = (a?: BBox, b?: BBox): boolean => {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
+};
+
+const resolvePanelLineBBoxForSafety = (line: OCRLine): BBox | undefined => {
+  const normalizedRawBBox = normalizePanelBBox(line?.bbox);
+
+  const validWords: Array<{ bbox: BBox }> = [];
+  for (const word of Array.isArray(line.words) ? line.words : []) {
+    const text = normalizePreviewText(String(word?.text || ''));
+    if (!text) continue;
+    const bbox = normalizePanelBBox(word?.bbox);
+    if (!bbox) continue;
+    validWords.push({ bbox });
+  }
+
+  if (validWords.length === 0) {
+    return normalizedRawBBox;
+  }
+
+  let x0 = Number.POSITIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
+  for (const word of validWords) {
+    x0 = Math.min(x0, word.bbox.x0);
+    y0 = Math.min(y0, word.bbox.y0);
+    x1 = Math.max(x1, word.bbox.x1);
+    y1 = Math.max(y1, word.bbox.y1);
+  }
+
+  if (!(x1 > x0 && y1 > y0)) {
+    return normalizedRawBBox;
+  }
+
+  const wordUnionBBox: BBox = { x0, y0, x1, y1 };
+  if (!normalizedRawBBox) {
+    return wordUnionBBox;
+  }
+
+  const rawWidth = Math.max(1, normalizedRawBBox.x1 - normalizedRawBBox.x0);
+  const rawHeight = Math.max(1, normalizedRawBBox.y1 - normalizedRawBBox.y0);
+  const rawArea = Math.max(1, rawWidth * rawHeight);
+  const unionWidth = Math.max(1, wordUnionBBox.x1 - wordUnionBBox.x0);
+  const unionHeight = Math.max(1, wordUnionBBox.y1 - wordUnionBBox.y0);
+  const unionArea = Math.max(1, unionWidth * unionHeight);
+  const unionCoverage = unionArea / rawArea;
+
+  const rawLooksOversized = unionCoverage <= 0.32
+    && (
+      rawArea >= unionArea * 3.8
+      || rawWidth >= unionWidth * 1.9
+      || rawHeight >= unionHeight * 1.9
+    );
+
+  const rawLooksClipped = validWords.length >= 2
+    && unionCoverage >= 2.2
+    && unionCoverage <= 4.6
+    && (
+      unionWidth >= rawWidth * 1.8
+      || unionHeight >= rawHeight * 1.8
+    );
+
+  return (rawLooksOversized || rawLooksClipped) ? wordUnionBBox : normalizedRawBBox;
+};
+
 const resolvePanelLineTextForSafety = (line: OCRLine): string => {
   const rawText = normalizePreviewText(String(line.text || ''));
   if (rawText) return rawText;
@@ -506,6 +717,333 @@ const resolvePanelLineTextForSafety = (line: OCRLine): string => {
     return (coverage >= 0.24 || avgConfidence >= 58) ? wordsText : '';
   }
   return coverage >= 0.42 ? wordsText : '';
+};
+
+const PANEL_GHOST_PUNCT_ONLY_REGEX = /^[|¦│┃/\\_~.,:;'"`!?-]+$/;
+const PANEL_GHOST_SHORT_TOKEN_REGEX = /^[A-Z0-9]{1,4}$/;
+
+const isLikelyDocumentLikePanelPage = (result: OCRPageResult): boolean => {
+  const lines = Array.isArray(result.lines) ? result.lines : [];
+  if (lines.length < 28) return false;
+
+  const width = Math.max(1, Number(result.width || 0));
+  const height = Math.max(1, Number(result.height || 0));
+  const aspectRatio = Math.max(width, height) / Math.max(1, Math.min(width, height));
+  if (aspectRatio > 2.25) return false;
+
+  let wordCount = 0;
+  for (const line of lines) {
+    const lineWords = Array.isArray(line.words) ? line.words : [];
+    if (lineWords.length > 0) {
+      wordCount += lineWords.filter((word) => normalizePreviewText(String(word?.text || '')).length > 0).length;
+      continue;
+    }
+    wordCount += normalizePreviewText(String(line.text || '')).split(/\s+/g).filter(Boolean).length;
+  }
+
+  const avgWordsPerLine = wordCount / Math.max(1, lines.length);
+  return avgWordsPerLine >= 1.7;
+};
+
+const isLikelyLatinDominantPanelPage = (result: OCRPageResult): boolean => {
+  const lines = Array.isArray(result.lines) ? result.lines : [];
+  if (lines.length < 8) return false;
+
+  let latinChars = 0;
+  let nonLatinChars = 0;
+  let latinHeavyLines = 0;
+
+  for (const line of lines) {
+    const text = normalizePreviewText(String(line?.text || ''));
+    if (!text) continue;
+
+    const lineLatin = (text.match(/[A-Za-z]/g) || []).length;
+    const lineNonLatin = (text.match(/[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g) || []).length;
+    const nonSpace = text.replace(/\s+/g, '').length;
+    const latinRatio = lineLatin / Math.max(1, nonSpace);
+
+    latinChars += lineLatin;
+    nonLatinChars += lineNonLatin;
+    if (lineLatin >= 6 && latinRatio >= 0.45) {
+      latinHeavyLines += 1;
+    }
+  }
+
+  if (latinChars < 18) return false;
+  if (latinChars < Math.max(18, nonLatinChars * 0.9)) return false;
+  if (latinHeavyLines < Math.max(3, Math.floor(lines.length * 0.24))) return false;
+  return true;
+};
+
+const computePanelLineAverageConfidence = (line: OCRLine): number => {
+  const validWords = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+  if (validWords.length === 0) {
+    return Number(line.confidence || 0);
+  }
+  return validWords.reduce((sum, word) => sum + Number(word.confidence || 0), 0) / validWords.length;
+};
+
+const computePanelLineWordUnionCoverage = (line: OCRLine): number => {
+  const validWords = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+  if (validWords.length === 0) return 0;
+
+  let unionX0 = Number.POSITIVE_INFINITY;
+  let unionY0 = Number.POSITIVE_INFINITY;
+  let unionX1 = Number.NEGATIVE_INFINITY;
+  let unionY1 = Number.NEGATIVE_INFINITY;
+  validWords.forEach((word) => {
+    const bbox = word.bbox;
+    unionX0 = Math.min(unionX0, Number(bbox.x0 || 0));
+    unionY0 = Math.min(unionY0, Number(bbox.y0 || 0));
+    unionX1 = Math.max(unionX1, Number(bbox.x1 || 0));
+    unionY1 = Math.max(unionY1, Number(bbox.y1 || 0));
+  });
+
+  const lineWidth = Math.max(1, Number(line.bbox?.x1 || 0) - Number(line.bbox?.x0 || 0));
+  const lineHeight = Math.max(1, Number(line.bbox?.y1 || 0) - Number(line.bbox?.y0 || 0));
+  const lineArea = Math.max(1, lineWidth * lineHeight);
+  const unionArea = Math.max(1, (unionX1 - unionX0) * (unionY1 - unionY0));
+  return Math.max(0, Math.min(1.8, unionArea / lineArea));
+};
+
+const isLikelyLargeBorderEffectLineForSafety = (
+  line: OCRLine,
+  resolvedText: string,
+  pageWidth: number,
+  pageHeight: number,
+): boolean => {
+  const text = normalizePreviewText(String(resolvedText || ''));
+  if (!text || !line?.bbox) return false;
+
+  const width = Math.max(1, Number(line.bbox?.x1 || 0) - Number(line.bbox?.x0 || 0));
+  const height = Math.max(1, Number(line.bbox?.y1 || 0) - Number(line.bbox?.y0 || 0));
+  const area = Math.max(1, width * height);
+  const pageArea = Math.max(1, pageWidth * pageHeight);
+  const widthRatio = width / Math.max(1, pageWidth);
+  const heightRatio = height / Math.max(1, pageHeight);
+  const areaRatio = area / pageArea;
+
+  const compact = text.replace(/\s+/g, '');
+  const alphaNum = compact.replace(/[^A-Za-z0-9]/g, '');
+  const hasLatin = /[A-Za-z\u00C0-\u024F]/.test(compact);
+  const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/.test(compact);
+  const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
+  const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
+
+  const validWords = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+  const wordCount = validWords.length > 0
+    ? validWords.length
+    : text.split(/\s+/g).filter(Boolean).length;
+  const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+  const avgConfidence = computePanelLineAverageConfidence(line);
+  const wordCoverage = computePanelLineWordUnionCoverage(line);
+
+  const looksLikeWideDocumentRow = widthRatio >= 0.66
+    && heightRatio <= 0.085
+    && tokenCount >= 4
+    && compact.length >= 16;
+  if (looksLikeWideDocumentRow) return false;
+
+  const hugeBorderBox = areaRatio >= 0.038
+    || (widthRatio >= 0.34 && heightRatio >= 0.16)
+    || (widthRatio >= 0.2 && heightRatio >= 0.24);
+  const mediumBorderBox = areaRatio >= 0.026
+    && (widthRatio >= 0.18 || heightRatio >= 0.16)
+    && (width >= 120 || height >= 92);
+  if (!hugeBorderBox && !mediumBorderBox) return false;
+
+  const sparsePhrase = wordCount <= 3 || compact.length <= 16;
+  const sparseCjk = hasCjkOrThai && compact.length <= 8 && wordCount <= 3;
+  const sparseLatin = hasLatin && alphaNum.length <= 18 && wordCount <= 4;
+  const veryLowCoverage = wordCoverage <= 0.22;
+  const lowCoverage = wordCoverage <= 0.30;
+  const lowSignal = avgConfidence <= 92 || unknownCharRatio >= 0.25;
+
+  if (veryLowCoverage && sparsePhrase && (sparseCjk || sparseLatin || unknownCharRatio >= 0.32)) {
+    return true;
+  }
+
+  if (lowCoverage && (sparseCjk || sparseLatin) && lowSignal && areaRatio >= 0.05) {
+    return true;
+  }
+
+  if (lowCoverage && sparsePhrase && (sparseCjk || sparseLatin || unknownCharRatio >= 0.28) && areaRatio >= 0.026) {
+    return true;
+  }
+
+  return false;
+};
+
+const isLikelyPanelGhostLineForSafety = (
+  line: OCRLine,
+  resolvedText: string,
+  pageWidth: number
+): boolean => {
+  const text = normalizePreviewText(String(resolvedText || ''));
+  if (!text) return true;
+
+  const width = Math.max(1, Number(line.bbox?.x1 || 0) - Number(line.bbox?.x0 || 0));
+  const height = Math.max(1, Number(line.bbox?.y1 || 0) - Number(line.bbox?.y0 || 0));
+  const area = Math.max(1, width * height);
+  const compact = text.replace(/\s+/g, '');
+  const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
+  const latinCompact = compact.replace(/[^A-Za-z]/g, '');
+  const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
+  if (hasCjkOrThai) return false;
+
+  const validWords = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+  const wordCount = validWords.length > 0
+    ? validWords.length
+    : text.split(/\s+/g).filter(Boolean).length;
+  const avgConfidence = computePanelLineAverageConfidence(line);
+
+  if (PANEL_GHOST_PUNCT_ONLY_REGEX.test(compact) && width <= 112 && height <= 44) {
+    return true;
+  }
+
+  const compactUpper = compact.toUpperCase();
+  const shortDigitArtifact = PANEL_GHOST_SHORT_TOKEN_REGEX.test(compactUpper)
+    && /\d/.test(compactUpper)
+    && !/[a-z]/.test(compact);
+  if (shortDigitArtifact && wordCount <= 1 && width <= 96 && height <= 42 && avgConfidence <= 82) {
+    return true;
+  }
+
+  const pxPerLatinChar = width / Math.max(1, latinCompact.length);
+  const suspiciousTinyLongLatin = latinCompact.length >= 10
+    && wordCount >= 3
+    && pxPerLatinChar < 2.85
+    && width <= Math.max(72, latinCompact.length * 5.4)
+    && width <= Math.max(96, pageWidth * 0.06)
+    && height <= 28
+    && avgConfidence <= 84;
+  if (suspiciousTinyLongLatin) {
+    return true;
+  }
+
+  const pxPerAsciiChar = width / Math.max(1, asciiCompact.length);
+  const tinyDenseAsciiArtifact = wordCount <= 2
+    && asciiCompact.length >= 6
+    && asciiCompact.length <= 14
+    && pxPerAsciiChar < 2.9
+    && width <= Math.max(118, pageWidth * 0.07)
+    && height <= 30
+    && avgConfidence <= 82;
+  if (tinyDenseAsciiArtifact) {
+    return true;
+  }
+
+  const lowSignalTinySingleton = wordCount <= 1
+    && asciiCompact.length > 0
+    && asciiCompact.length <= 4
+    && area <= 2600
+    && width <= 104
+    && height <= 40
+    && avgConfidence <= 78;
+  if (lowSignalTinySingleton) {
+    return true;
+  }
+
+  return false;
+};
+
+const isLikelyTinyMangaArtifactLineForSafety = (
+  line: OCRLine,
+  resolvedText: string,
+  pageWidth: number,
+  pageHeight: number,
+  latinDominantPage: boolean,
+): boolean => {
+  const text = normalizePreviewText(String(resolvedText || ''));
+  if (!text) return true;
+  if (!line?.bbox) return false;
+
+  const width = Math.max(1, Number(line.bbox?.x1 || 0) - Number(line.bbox?.x0 || 0));
+  const height = Math.max(1, Number(line.bbox?.y1 || 0) - Number(line.bbox?.y0 || 0));
+  const area = Math.max(1, width * height);
+  const compact = text.replace(/\s+/g, '');
+  const confidence = Number(line.confidence || 0);
+  const words = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+  const wordCount = words.length > 0
+    ? words.length
+    : text.split(/\s+/g).filter(Boolean).length;
+
+  const hasLatin = /[A-Za-z\u00C0-\u024F]/.test(compact);
+  const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
+  const alphaNum = compact.replace(/[^A-Za-z0-9]/g, '');
+  const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
+  const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
+  const wordCoverage = computePanelLineWordUnionCoverage(line);
+
+  if (wordCount <= 1 && width <= 68 && height <= 34 && area <= 1700) {
+    if (hasCjkOrThai && compact.length <= 2 && confidence <= 90) {
+      return true;
+    }
+    if (hasLatin && alphaNum.length <= 2 && confidence <= 84) {
+      return true;
+    }
+  }
+
+  if (wordCount <= 2 && width <= 84 && height <= 38 && area <= 2200) {
+    if (hasCjkOrThai && compact.length <= 3 && confidence <= 80) {
+      return true;
+    }
+    if (hasLatin && alphaNum.length <= 3 && confidence <= 76) {
+      return true;
+    }
+  }
+
+  const narrowTallLowSignalArtifact = wordCount <= 2
+    && width <= Math.max(52, pageWidth * 0.03)
+    && height <= Math.max(188, pageHeight * 0.08)
+    && height >= Math.max(44, width * 1.2)
+    && confidence <= 86;
+  if (narrowTallLowSignalArtifact) {
+    if (hasCjkOrThai && compact.length <= 2) return true;
+    if (hasLatin && alphaNum.length <= 3) return true;
+  }
+
+  if (wordCount <= 2 && area <= 2800 && unknownCharRatio >= 0.45 && confidence <= 88) {
+    return true;
+  }
+
+  const shortStylizedNonLatinSfx = hasCjkOrThai
+    && wordCount <= 1
+    && compact.length <= 3
+    && width <= Math.max(132, pageWidth * 0.085)
+    && height <= Math.max(112, pageHeight * 0.12)
+    && area <= Math.max(11500, pageWidth * pageHeight * 0.008)
+    && confidence <= 92
+    && (unknownCharRatio >= 0.08 || height >= width * 0.6);
+  if (shortStylizedNonLatinSfx) {
+    return true;
+  }
+
+  if (hasCjkOrThai && wordCount <= 2 && compact.length <= 5 && area <= 6200 && wordCoverage <= 0.26) {
+    if (confidence <= 92 || unknownCharRatio >= 0.2) {
+      return true;
+    }
+  }
+
+  const shortForeignSfxOnLatinPage = latinDominantPage
+    && hasCjkOrThai
+    && !hasLatin
+    && wordCount <= 3
+    && compact.length <= 12
+    && width <= Math.max(220, pageWidth * 0.18)
+    && height <= Math.max(220, pageHeight * 0.22)
+    && area <= Math.max(26000, pageWidth * pageHeight * 0.015)
+    && confidence <= 96;
+  if (shortForeignSfxOnLatinPage) {
+    return true;
+  }
+
+  return false;
 };
 
 const normalizePanelDedupTextKey = (value: string): string =>
@@ -684,16 +1222,68 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   }
   const dropped: OCRDroppedWord[] = [];
   let normalizedTextChanges = 0;
+  let normalizedGeometryChanges = 0;
+  const pageWidth = Math.max(1, Number(result.width || 0));
+  const pageHeight = Math.max(1, Number(result.height || 0));
+  const documentLikePage = isLikelyDocumentLikePanelPage(result);
+  const latinDominantPage = isLikelyLatinDominantPanelPage(result);
   const preparedLines = inputLines
     .map((line, index) => {
-      const resolvedText = resolvePanelLineTextForSafety(line);
+      const rawBBox = normalizePanelBBox(line.bbox);
+      const resolvedBBox = resolvePanelLineBBoxForSafety(line);
+      const bboxChanged = !isSamePanelBBox(rawBBox, resolvedBBox);
+      const lineWithResolvedGeometry = bboxChanged && resolvedBBox
+        ? {
+          ...line,
+          bbox: resolvedBBox,
+        }
+        : line;
+
+      if (bboxChanged) {
+        normalizedGeometryChanges += 1;
+      }
+
+      const resolvedText = resolvePanelLineTextForSafety(lineWithResolvedGeometry);
       if (!resolvedText) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostEmptyLine',
           text: normalizePreviewText(String(line.text || '')),
           confidence: Number(line.confidence || 0),
-          bbox: line.bbox,
+          bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      if (documentLikePage && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth)) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostLowSignalLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      if (!documentLikePage && isLikelyLargeBorderEffectLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight)) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostLargeBorderEffectLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      if (!documentLikePage && isLikelyTinyMangaArtifactLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, latinDominantPage)) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostTinyArtifactLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: lineWithResolvedGeometry.bbox,
         });
         return null;
       }
@@ -702,10 +1292,10 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
         normalizedTextChanges += 1;
       }
 
-      const normalizedLine = resolvedText === line.text
-        ? line
+      const normalizedLine = resolvedText === line.text && !bboxChanged
+        ? lineWithResolvedGeometry
         : {
-          ...line,
+          ...lineWithResolvedGeometry,
           text: resolvedText,
         };
 
@@ -788,7 +1378,7 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
     }
   }
 
-  if (dropped.length === 0 && normalizedTextChanges === 0 && preparedLines.length === inputLines.length) {
+  if (dropped.length === 0 && normalizedTextChanges === 0 && normalizedGeometryChanges === 0 && preparedLines.length === inputLines.length) {
     return result;
   }
 
@@ -1534,6 +2124,12 @@ export const OCRTextLayerPanel: React.FC = () => {
         expectedMs = engineReadyForLanguage
           ? (9000 + (estimatedChunks * 8500))
           : (22000 + (estimatedChunks * 10000));
+      } else {
+        const pixelCount = Math.max(1, imageWidth * imageHeight);
+        const basePixels = 5_200_000;
+        const pixelScale = Math.min(4.5, Math.max(1, pixelCount / basePixels));
+        const latencyFactor = 1 + ((pixelScale - 1) * 1.6);
+        expectedMs = Math.round(expectedMs * latencyFactor);
       }
     }
 
@@ -2302,7 +2898,21 @@ export const OCRTextLayerPanel: React.FC = () => {
     return codes.includes('kor');
   }, []);
 
-  const resolveRenderConstraints = useCallback((engine?: string) => {
+  type TallPageBoost = {
+    minAspectRatio: number;
+    minLongSide: number;
+    boostedMaxSide: number;
+    boostedMaxPixels: number;
+  };
+
+  type RenderConstraints = {
+    maxSide?: number | null;
+    maxPixels?: number | null;
+    minWidth?: number | null;
+    tallPageBoost?: TallPageBoost | null;
+  };
+
+  const resolveRenderConstraints = useCallback((engine?: string): RenderConstraints => {
     const cjkPanelExternal = activePipelineProfile === 'panel'
       && engine !== 'tesseract'
       && hasCjkOrThaiOcrLanguage(options.language);
@@ -2313,18 +2923,58 @@ export const OCRTextLayerPanel: React.FC = () => {
     // PaddleOCR: no minWidth — handles low resolution well, speed is priority
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
-        return { maxSide: 16000, maxPixels: 22_000_000, minWidth: null };
+        return {
+          maxSide: 16000,
+          maxPixels: 22_000_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 20000,
+            boostedMaxPixels: 34_000_000,
+          },
+        };
       }
       if (cjkPanelExternal) {
-        return { maxSide: 16000, maxPixels: 14_000_000, minWidth: null };
+        return {
+          maxSide: 16000,
+          maxPixels: 14_000_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 20000,
+            boostedMaxPixels: 28_000_000,
+          },
+        };
       }
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
-      return { maxSide: 16000, maxPixels: 16_000_000, minWidth: null };
+      return {
+        maxSide: 16000,
+        maxPixels: 16_000_000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 20000,
+          boostedMaxPixels: 30_000_000,
+        },
+      };
     }
     // EasyOCR: moderate minWidth (650px) for readable text
     if (engine === 'easyocr') {
       if (cjkPanelExternal) {
-        return { maxSide: 16000, maxPixels: 18_000_000, minWidth: null };
+        return {
+          maxSide: 16000,
+          maxPixels: 18_000_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 19000,
+            boostedMaxPixels: 24_000_000,
+          },
+        };
       }
       return { maxSide: 16000, maxPixels: 4_200_000, minWidth: 650 };
     }
@@ -2339,24 +2989,46 @@ export const OCRTextLayerPanel: React.FC = () => {
   const fitDimensionsToConstraints = useCallback((
     width: number,
     height: number,
-    constraints?: { maxSide?: number | null; maxPixels?: number | null; minWidth?: number | null }
+    constraints?: RenderConstraints
   ) => {
     const maxSide = constraints?.maxSide ?? null;
     const maxPixels = constraints?.maxPixels ?? null;
     const minWidth = constraints?.minWidth ?? null;
-    let scaleFactor = 1;
+    const tallPageBoost = constraints?.tallPageBoost ?? null;
+    let effectiveMaxSide = maxSide;
+    let effectiveMaxPixels = maxPixels;
+    let appliedTallPageBoost = false;
 
-    if (maxSide && maxSide > 0) {
-      const longestSide = Math.max(width, height);
-      if (longestSide > maxSide) {
-        scaleFactor = Math.min(scaleFactor, maxSide / longestSide);
+    if (tallPageBoost) {
+      const longSide = Math.max(width, height);
+      const shortSide = Math.max(1, Math.min(width, height));
+      const aspectRatio = longSide / shortSide;
+      const qualifiesTallPage = longSide >= Math.max(1, tallPageBoost.minLongSide)
+        && aspectRatio >= Math.max(1, tallPageBoost.minAspectRatio);
+      if (qualifiesTallPage) {
+        appliedTallPageBoost = true;
+        if (tallPageBoost.boostedMaxSide > 0) {
+          effectiveMaxSide = Math.max(effectiveMaxSide || 0, tallPageBoost.boostedMaxSide);
+        }
+        if (tallPageBoost.boostedMaxPixels > 0) {
+          effectiveMaxPixels = Math.max(effectiveMaxPixels || 0, tallPageBoost.boostedMaxPixels);
+        }
       }
     }
 
-    if (maxPixels && maxPixels > 0) {
+    let scaleFactor = 1;
+
+    if (effectiveMaxSide && effectiveMaxSide > 0) {
+      const longestSide = Math.max(width, height);
+      if (longestSide > effectiveMaxSide) {
+        scaleFactor = Math.min(scaleFactor, effectiveMaxSide / longestSide);
+      }
+    }
+
+    if (effectiveMaxPixels && effectiveMaxPixels > 0) {
       const pixelCount = width * height;
-      if (pixelCount > maxPixels) {
-        scaleFactor = Math.min(scaleFactor, Math.sqrt(maxPixels / pixelCount));
+      if (pixelCount > effectiveMaxPixels) {
+        scaleFactor = Math.min(scaleFactor, Math.sqrt(effectiveMaxPixels / pixelCount));
       }
     }
 
@@ -2368,13 +3040,14 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
 
     if (scaleFactor >= 1) {
-      return { width, height, scaleFactor: 1 };
+      return { width, height, scaleFactor: 1, appliedTallPageBoost };
     }
 
     return {
       width: Math.max(1, Math.floor(width * scaleFactor)),
       height: Math.max(1, Math.floor(height * scaleFactor)),
       scaleFactor,
+      appliedTallPageBoost,
     };
   }, []);
 
@@ -2385,7 +3058,7 @@ export const OCRTextLayerPanel: React.FC = () => {
    * 1) Render directly with pdf.js at target DPI (best OCR accuracy)
    * 2) Fallback to existing react-pdf canvas if pdf.js render fails
    */
-  const renderImageToCanvas = useCallback(async (renderOptions?: { maxSide?: number | null; maxPixels?: number | null }) => {
+  const renderImageToCanvas = useCallback(async (renderOptions?: RenderConstraints) => {
     if (!file) throw new Error('No image loaded');
     const imageBlob = fileData
       ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
@@ -2414,7 +3087,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const renderPageToCanvas = useCallback(async (
     pageNum: number,
     targetDpi: number,
-    renderOptions?: { allowNavigationFallback?: boolean; maxSide?: number | null; maxPixels?: number | null }
+    renderOptions?: RenderConstraints & { allowNavigationFallback?: boolean }
   ) => {
     if (!file) throw new Error('No PDF loaded');
     if (fileType !== 'pdf') {
@@ -2524,9 +3197,10 @@ export const OCRTextLayerPanel: React.FC = () => {
       const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderOptions);
       const scale = requestedScale * fitted.scaleFactor;
       if (fitted.scaleFactor < 1) {
+        const boostMarker = fitted.appliedTallPageBoost ? ' [tallBoost]' : '';
         console.log(
           `[OCRPanel] Downscaling render for page ${pageNum}: ` +
-          `${Math.floor(requestedViewport.width)}x${Math.floor(requestedViewport.height)} -> ${fitted.width}x${fitted.height}`
+          `${Math.floor(requestedViewport.width)}x${Math.floor(requestedViewport.height)} -> ${fitted.width}x${fitted.height}${boostMarker}`
         );
       }
       const viewport = page.getViewport({ scale });
@@ -2685,17 +3359,34 @@ export const OCRTextLayerPanel: React.FC = () => {
     );
 
     const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'tesseract');
-    // Paddle starts in balanced mode to keep current-page latency predictable.
-    let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr' ? 'balanced' : 'best';
+    const shouldPreferFastPaddleProfile = (() => {
+      if (activeEngine !== 'paddleocr') return false;
+      if (activePipelineProfile !== 'panel') return false;
+
+      const isCjkLike = options.language
+        .split('+')
+        .map(code => code.trim())
+        .filter(Boolean)
+        .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+      if (isCjkLike) return false;
+
+      const longest = Math.max(imageWidth, imageHeight);
+      const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
+      const aspectRatio = longest / shortest;
+      const pixelCount = imageWidth * imageHeight;
+      return aspectRatio <= 1.95 && pixelCount >= 6_400_000;
+    })();
+
+    let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
+      ? (shouldPreferFastPaddleProfile ? 'fast' : 'balanced')
+      : 'best';
     let ocrResult: import('../../types').OCRPageResult;
     try {
       ocrResult = await runAttemptWithTimeout(effectiveTimeoutSec, resolvedQualityProfile);
     } catch (error) {
       if (activeEngine !== 'tesseract' && isTimeoutError(error) && !controller.signal.aborted) {
         const boostedTimeoutSec = Math.max((effectiveTimeoutSec || 180) + 120, 300);
-        resolvedQualityProfile = activeEngine === 'paddleocr'
-          ? (resolvedQualityProfile === 'balanced' ? 'fast' : 'balanced')
-          : 'balanced';
+        resolvedQualityProfile = activeEngine === 'paddleocr' ? 'fast' : 'balanced';
         setProgress({
           stage: 'ocr',
           currentPage: pageNum,

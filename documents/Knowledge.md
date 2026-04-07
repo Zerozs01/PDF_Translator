@@ -3,8 +3,7 @@
 This file keeps the research takeaways that still matter for the repo.
 It is not the place for exact thresholds or current file-level behavior. For that, use `ARCHITECTURE.md` and `OCR_OPTIMIZATION.md`.
 
-## 1. Durable Principles
-
+tr
 ### Text-layer-first beats OCR
 
 If a PDF page already contains real text, extracting that text is more accurate and cheaper than OCR. The current repo already follows this in the export path through `SearchablePDFService`.
