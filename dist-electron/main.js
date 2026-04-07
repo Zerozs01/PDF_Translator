@@ -534,6 +534,33 @@ const OCRCacheDAO = {
       updated_at: row.updated_at,
       ocr_data: JSON.parse(row.ocr_data)
     };
+  },
+  /** One round-trip: distinct cached pages + latest update per document (matches findByFilenameWithCacheStats semantics). */
+  getAggregatedCacheStatsByDocumentIds: (documentIds) => {
+    if (!db) throw new Error("DB not initialized");
+    const ids = documentIds.filter((id) => Number.isFinite(id) && id > 0);
+    if (ids.length === 0) {
+      return [];
+    }
+    const placeholders = ids.map(() => "?").join(", ");
+    return db.prepare(
+      `
+      SELECT document_id,
+        CAST(COUNT(*) AS INTEGER) AS cache_pages,
+        MAX(updated_at) AS last_cache_update
+      FROM (
+        SELECT document_id, page_number, MAX(updated_at) AS updated_at
+        FROM (
+          SELECT document_id, page_number, updated_at FROM ocr_cache
+          UNION ALL
+          SELECT document_id, page_number, updated_at FROM ocr_cache_engine
+        ) merged_cache
+        GROUP BY document_id, page_number
+      ) per_page
+      WHERE document_id IN (${placeholders})
+      GROUP BY document_id
+    `
+    ).all(...ids);
   }
 };
 const TranslationCacheDAO = {
@@ -1709,6 +1736,23 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:get-latest-ocr error:", error);
       return null;
+    }
+  });
+  const MAX_OCR_CACHE_STATS_DOC_IDS = 500;
+  electron.ipcMain.handle("db:get-ocr-cache-stats-for-document-ids", async (_, payload) => {
+    const raw = payload?.documentIds;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return [];
+    }
+    const ids = raw.map((id) => typeof id === "number" ? id : Number(id)).filter((id) => Number.isFinite(id) && id > 0).slice(0, MAX_OCR_CACHE_STATS_DOC_IDS);
+    if (ids.length === 0) {
+      return [];
+    }
+    try {
+      return OCRCacheDAO.getAggregatedCacheStatsByDocumentIds(ids);
+    } catch (error) {
+      console.error("db:get-ocr-cache-stats-for-document-ids error:", error);
+      return [];
     }
   });
   electron.ipcMain.handle("db:save-translation-cache", async (_, { docId, pageNum, cacheKey, entry }) => {

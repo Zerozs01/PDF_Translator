@@ -109,6 +109,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }),
     getLatestOCR: (docId: number) =>
       ipcRenderer.invoke('db:get-latest-ocr', { docId }),
+    getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
+      ipcRenderer.invoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
     saveTranslationCache: (docId: number, pageNum: number, cacheKey: string, entry: unknown) =>
       ipcRenderer.invoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
     getTranslationCachePage: (docId: number, pageNum: number) =>

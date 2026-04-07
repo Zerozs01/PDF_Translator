@@ -1,6 +1,26 @@
 import { OCREngine, OCRPageResult } from '../types';
-import type { DBDocumentCacheCandidate, DBOCRTranslationCacheEntry, DocumentUpdate } from '../types/electron.d';
+import type {
+  DBDocumentCacheCandidate,
+  DBOCRTranslationCacheEntry,
+  DBOcrCacheStatsRow,
+  DocumentUpdate,
+} from '../types/electron.d';
 import '../types/electron.d'; // Import type declarations
+
+function isDbVerboseLoggingEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage?.getItem('pdfTranslator.debugDb') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function dbLog(...args: unknown[]): void {
+  if (isDbVerboseLoggingEnabled()) {
+    console.log(...args);
+  }
+}
 
 type LooseDocumentRecord = {
   id: number;
@@ -130,20 +150,45 @@ export const dbService = {
 
       if (candidates.length === 0) return [];
 
-      const enriched = await Promise.all(
-        candidates.map(async (doc): Promise<DBDocumentCacheCandidate> => {
-          const latest = await dbService.getLatestOCR(doc.id);
-          return {
-            id: doc.id,
-            filepath: doc.filepath,
-            filename: doc.filename,
-            total_pages: toNumberOrNull(doc.total_pages) ?? 0,
-            last_accessed: toNumberOrNull(doc.last_accessed),
-            cache_pages: latest ? 1 : 0,
-            last_cache_update: latest?.updated_at ?? null
-          };
-        })
-      );
+      const ids = candidates.map((doc) => doc.id);
+      const batchStats = window.electronAPI.db.getOcrCacheStatsForDocumentIds;
+      let statsById = new Map<number, DBOcrCacheStatsRow>();
+
+      if (typeof batchStats === 'function') {
+        const statsRows = (await batchStats(ids)) as DBOcrCacheStatsRow[];
+        if (Array.isArray(statsRows)) {
+          statsById = new Map(statsRows.map((row) => [row.document_id, row]));
+        }
+      } else {
+        const legacy = await Promise.all(
+          candidates.map(async (doc): Promise<DBDocumentCacheCandidate> => {
+            const latest = await dbService.getLatestOCR(doc.id);
+            return {
+              id: doc.id,
+              filepath: doc.filepath,
+              filename: doc.filename,
+              total_pages: toNumberOrNull(doc.total_pages) ?? 0,
+              last_accessed: toNumberOrNull(doc.last_accessed),
+              cache_pages: latest ? 1 : 0,
+              last_cache_update: latest?.updated_at ?? null,
+            };
+          })
+        );
+        return normalizeAndSort(legacy);
+      }
+
+      const enriched: DBDocumentCacheCandidate[] = candidates.map((doc) => {
+        const row = statsById.get(doc.id);
+        return {
+          id: doc.id,
+          filepath: doc.filepath,
+          filename: doc.filename,
+          total_pages: toNumberOrNull(doc.total_pages) ?? 0,
+          last_accessed: toNumberOrNull(doc.last_accessed),
+          cache_pages: toNumberOrNull(row?.cache_pages) ?? 0,
+          last_cache_update: toNumberOrNull(row?.last_cache_update),
+        };
+      });
 
       return normalizeAndSort(enriched);
     } catch (error) {
@@ -167,7 +212,7 @@ export const dbService = {
         console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
         return false;
       }
-      console.log(`[DB] Saved OCR for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
+      dbLog(`[DB] Saved OCR for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
       return true;
     } catch (error) {
       console.error('Failed to save OCR:', error);
@@ -186,10 +231,10 @@ export const dbService = {
       }
       const data = await window.electronAPI.db.getOCR(docId, pageNum, engine);
       if (data) {
-        console.log(`[DB] cache hit for page ${pageNum} (engine=${engine})`);
+        dbLog(`[DB] cache hit for page ${pageNum} (engine=${engine})`);
         return data;
       }
-      console.log(`[DB] cache miss for page ${pageNum} (docId=${docId}, engine=${engine})`);
+      dbLog(`[DB] cache miss for page ${pageNum} (docId=${docId}, engine=${engine})`);
       return null;
     } catch (error) {
       console.error('Failed to get OCR:', error);
@@ -205,7 +250,7 @@ export const dbService = {
       }
       const ok = await window.electronAPI.db.clearOCR(docId, pageNum, engine);
       if (ok) {
-        console.log(`[DB] Cleared OCR cache for page ${pageNum} (docId=${docId}, engine=${engine})`);
+        dbLog(`[DB] Cleared OCR cache for page ${pageNum} (docId=${docId}, engine=${engine})`);
       }
       return ok;
     } catch (error) {

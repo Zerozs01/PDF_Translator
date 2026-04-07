@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile } from '../../types';
+import type { DBDocumentCacheCandidate } from '../../types/electron.d';
 import {
   hasCurrentOCRTranslationCacheVersion,
   OCR_ENGINES,
@@ -767,6 +768,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   const ocrJobActiveRef = useRef(false);
   const suspendCacheReadsRef = useRef(false);
   const cacheLoadInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const aliasCandidateCacheRef = useRef<Map<string, DBDocumentCacheCandidate[]>>(new Map());
+  const aliasCandidateInFlightRef = useRef<Map<string, Promise<DBDocumentCacheCandidate[]>>>(new Map());
   // Tracks page+engine combos that were explicitly cleared by the user.
   // Alias probing is blocked for these keys until the file/pipeline resets.
   const clearedCacheKeysRef = useRef<Set<string>>(new Set());
@@ -1367,6 +1370,52 @@ export const OCRTextLayerPanel: React.FC = () => {
     return true;
   }, [normalizeLanguage, options.engine, options.language]);
 
+  const getFilenameCandidates = useCallback(async (
+    filename: string,
+    options?: { excludeDocId?: number; requireCachePages?: boolean; limit?: number }
+  ): Promise<DBDocumentCacheCandidate[]> => {
+    const normalizedName = String(filename || '').trim().toLowerCase();
+    if (!normalizedName) return [];
+
+    const applyFilters = (rows: DBDocumentCacheCandidate[]): DBDocumentCacheCandidate[] => {
+      const requireCachePages = options?.requireCachePages ?? false;
+      const excluded = options?.excludeDocId;
+      const filtered = rows.filter((candidate) => {
+        if (typeof excluded === 'number' && candidate.id === excluded) return false;
+        if (requireCachePages && (candidate.cache_pages ?? 0) <= 0) return false;
+        return true;
+      });
+      if (typeof options?.limit === 'number' && options.limit > 0) {
+        return filtered.slice(0, options.limit);
+      }
+      return filtered;
+    };
+
+    const cached = aliasCandidateCacheRef.current.get(normalizedName);
+    if (cached) {
+      return applyFilters(cached);
+    }
+
+    let inFlight = aliasCandidateInFlightRef.current.get(normalizedName);
+    if (!inFlight) {
+      inFlight = dbService.findDocumentsByFilename(filename)
+        .then((rows) => (Array.isArray(rows) ? rows : []))
+        .catch((error) => {
+          console.warn(`[OCRPanel] Failed to load filename alias candidates for "${filename}":`, error);
+          return [];
+        });
+      aliasCandidateInFlightRef.current.set(normalizedName, inFlight);
+    }
+
+    try {
+      const rows = await inFlight;
+      aliasCandidateCacheRef.current.set(normalizedName, rows);
+      return applyFilters(rows);
+    } finally {
+      aliasCandidateInFlightRef.current.delete(normalizedName);
+    }
+  }, []);
+
   const loadCachedOCR = useCallback(async (
     pageNum: number,
     options?: { allowDuringSuspension?: boolean }
@@ -1453,34 +1502,48 @@ export const OCRTextLayerPanel: React.FC = () => {
       // (legacy source path vs imported hash path). If current doc misses, probe
       // OCR-backed candidates and switch doc binding once a hit is found.
       if (file?.name) {
-        const candidates = await dbService.findDocumentsByFilename(file.name);
-        const aliasCandidates = candidates
-          .filter(candidate => candidate.id !== cacheDocId && (candidate.cache_pages ?? 0) > 0)
-          .slice(0, 8);
+        const aliasLookupStart = Date.now();
+        const aliasCandidates = await getFilenameCandidates(file.name, {
+          excludeDocId: cacheDocId,
+          requireCachePages: true,
+          limit: 8,
+        });
 
-        for (const candidate of aliasCandidates) {
+        if (aliasCandidates.length > 0) {
           console.log(
-            `[OCRPanel] Cache miss on docId=${cacheDocId}, probing alias docId=${candidate.id} for page ${pageNum}`
+            `[OCRPanel] Alias OCR probe candidates=${aliasCandidates.length} page=${pageNum} resolved in ${Date.now() - aliasLookupStart}ms`
           );
-          const aliasCached = await dbService.getOCR(candidate.id, pageNum, activeEngine);
-          if (!aliasCached || !isDisplayCacheCompatible(aliasCached)) continue;
-          if (useProjectStore.getState().file !== activeFile) return false;
 
-          aliasCached.pageNumber = pageNum;
-          setPageOCR(pageNum, normalizeCacheProfile(aliasCached));
+          const aliasProbeResults = await Promise.all(
+            aliasCandidates.map(async (candidate) => ({
+              candidate,
+              aliasCached: await dbService.getOCR(candidate.id, pageNum, activeEngine).catch(() => null),
+            }))
+          );
 
-          const currentProject = useProjectStore.getState();
-          if (currentProject.documentId !== candidate.id) {
-            useProjectStore.setState({
-              documentId: candidate.id,
-              filePath: candidate.filepath
-            });
-            autoSyncedDocRef.current = candidate.id;
-            console.log(
-              `[OCRPanel] Switched OCR cache binding: docId=${cacheDocId} -> docId=${candidate.id}`
-            );
+          const matchedAlias = aliasProbeResults.find((probe) => (
+            probe.aliasCached && isDisplayCacheCompatible(probe.aliasCached)
+          ));
+
+          if (matchedAlias?.aliasCached) {
+            if (useProjectStore.getState().file !== activeFile) return false;
+
+            matchedAlias.aliasCached.pageNumber = pageNum;
+            setPageOCR(pageNum, normalizeCacheProfile(matchedAlias.aliasCached));
+
+            const currentProject = useProjectStore.getState();
+            if (currentProject.documentId !== matchedAlias.candidate.id) {
+              useProjectStore.setState({
+                documentId: matchedAlias.candidate.id,
+                filePath: matchedAlias.candidate.filepath
+              });
+              autoSyncedDocRef.current = matchedAlias.candidate.id;
+              console.log(
+                `[OCRPanel] Switched OCR cache binding: docId=${cacheDocId} -> docId=${matchedAlias.candidate.id}`
+              );
+            }
+            return true;
           }
-          return true;
         }
 
         // Even when this page misses, keep the OCR cache binding on the only
@@ -1510,7 +1573,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     } finally {
       cacheLoadInFlightRef.current.delete(requestKey);
     }
-  }, [activePipelineProfile, file, isCacheCompatible, isDisplayCacheCompatible, ensureDocumentId, normalizeCacheProfile, setPageOCR]);
+  }, [activePipelineProfile, ensureDocumentId, file, getFilenameCandidates, isCacheCompatible, isDisplayCacheCompatible, normalizeCacheProfile, setPageOCR]);
 
   const syncOptionsFromLatestCache = useCallback(async (): Promise<void> => {
     if (!file) return;
@@ -1575,6 +1638,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     autoSyncedDocRef.current = null;
     persistedCacheRef.current.clear();
     persistedTranslationCacheRef.current.clear();
+    aliasCandidateCacheRef.current.clear();
+    aliasCandidateInFlightRef.current.clear();
     clearedCacheKeysRef.current.clear();
     clearAllOCR();
   }, [file, activePipelineProfile, clearAllOCR]);
@@ -1599,18 +1664,30 @@ export const OCRTextLayerPanel: React.FC = () => {
       let rows = await dbService.getTranslationCachePage(docId, currentPage);
 
       if ((!rows || rows.length === 0) && file?.name) {
-        const candidates = await dbService.findDocumentsByFilename(file.name);
-        const aliasCandidates = candidates
-          .filter((candidate) => candidate.id !== docId && (candidate.cache_pages ?? 0) > 0)
-          .slice(0, 8);
+        const aliasLookupStart = Date.now();
+        const aliasCandidates = await getFilenameCandidates(file.name, {
+          excludeDocId: docId,
+          requireCachePages: true,
+          limit: 8,
+        });
 
-        for (const candidate of aliasCandidates) {
-          if (canceled) return;
-          const aliasRows = await dbService.getTranslationCachePage(candidate.id, currentPage);
-          if (!aliasRows || aliasRows.length === 0) continue;
-          rows = aliasRows;
-          cacheOwnerDocId = candidate.id;
-          break;
+        if (aliasCandidates.length > 0) {
+          console.log(
+            `[OCRPanel] Alias translation probe candidates=${aliasCandidates.length} page=${currentPage} resolved in ${Date.now() - aliasLookupStart}ms`
+          );
+
+          const aliasRowsByCandidate = await Promise.all(
+            aliasCandidates.map(async (candidate) => ({
+              candidate,
+              rows: await dbService.getTranslationCachePage(candidate.id, currentPage).catch(() => []),
+            }))
+          );
+
+          const matched = aliasRowsByCandidate.find((item) => Array.isArray(item.rows) && item.rows.length > 0);
+          if (matched) {
+            rows = matched.rows;
+            cacheOwnerDocId = matched.candidate.id;
+          }
         }
       }
 
@@ -1657,7 +1734,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     return () => {
       canceled = true;
     };
-  }, [currentPage, ensureDocumentId, file, setTranslationCacheEntry]);
+  }, [currentPage, ensureDocumentId, file, getFilenameCandidates, setTranslationCacheEntry]);
 
   useEffect(() => {
     if (!file || translationCacheByPage.size === 0) return;
@@ -2849,7 +2926,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     // can't resurrect via alias fallback probing.
     if (file.name) {
       try {
-        const candidates = await dbService.findDocumentsByFilename(file.name);
+        const candidates = await getFilenameCandidates(file.name);
         for (const candidate of candidates) {
           if (candidate.id === docId) continue;
           const aliasCleared = await dbService.clearOCR(candidate.id, currentPage, engine);
@@ -2893,6 +2970,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     file,
     isProcessing,
     options.engine,
+    getFilenameCandidates,
     forgetPersistedTranslationCacheForPage,
     removePageOCRForEngine,
   ]);

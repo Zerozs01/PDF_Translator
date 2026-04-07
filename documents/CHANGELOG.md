@@ -2,6 +2,22 @@
 
 This file tracks documentation changes inside `documents/` only.
 
+## 2026-04-07
+
+- Added a pre-rollback incident memo to `OCR_OPTIMIZATION.md` to preserve the latest manga OCR failure patterns and fix guidance before code rollback.
+- Captured explicit regression cases from live usage:
+  - `AYNAR TAKE THIS` split artifacts (`S THIS` + `AYNAR TAKES`)
+  - same-row multi-balloon section interleaving
+  - PaddleOCR tiny icon/SFX ghost detections
+  - repeated signage duplicates (`SHOE LOCKER` pattern)
+- Added deterministic recovery order for future re-introduction:
+  - source normalization before grouping
+  - section-safe dense dialogue grouping
+  - panel ghost suppression before cache write
+  - dual-stage duplicate collapse (panel + overlay)
+  - `I THINK` conversational guard verification
+- Added required regression fixture set and acceptance metrics to block unstable re-rollout.
+
 ## 2026-04-04
 
 - Added a renderer-side translation overlay checkpoint to `OCR_OPTIMIZATION.md` covering the current split-mask/split-text architecture, translation cache hydration behavior, and effective profile fallback between `official` and `manga` style rendering.
@@ -14,6 +30,25 @@ This file tracks documentation changes inside `documents/` only.
   - Thai upper/lower diacritics can still clip on fitted document text
   - manga pages with multiple balloons on the same row can still produce inconsistent text sizing or partial mask coverage
 - Refreshed roadmap priorities so the next OCR/product work is anchored to the current document/manga overlay state instead of the older v96 baseline notes.
+
+## 2026-04-06
+
+- Added rollback-focused postmortem notes to `OCR_OPTIMIZATION.md` for the latest unstable OCR tuning wave.
+- Documented concrete failure patterns that triggered rollback:
+  - repeated OCR duplicates in manga multi-section same-band rows
+  - persistent border/mask instability on manga + technical pages
+  - malformed inflated line bbox propagation causing stretched overlay regions
+- Added explicit rollback anchor in docs: `1.2.14` / `OCR_ALGORITHM_VERSION = 146` as the known stable checkpoint before this failed tuning wave.
+- Documented root causes and lessons learned:
+  - dedup/normalization path inconsistency between current-page and batch/cache flows
+  - over-reliance on noisy line-level bbox in duplicate decisions
+  - renderer-side guards mitigating symptoms but not upstream duplicate OCR data
+  - recall-oriented parser relaxations increasing ambiguous line-box assignments
+- Added re-introduction policy after rollback:
+  - single canonical dedup before all `setPageOCR`/`saveOCR` paths
+  - profile-scoped threshold tuning
+  - mandatory parity checks (current-page vs all-pages)
+  - fixture-based regression gates for tall manga and dense document pages
 
 ## 2026-03-29
 

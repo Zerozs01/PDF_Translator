@@ -49,6 +49,12 @@ export interface DBDocumentCacheCandidate {
   last_cache_update: number | null;
 }
 
+export interface DBOcrCacheStatsRow {
+  document_id: number;
+  cache_pages: number;
+  last_cache_update: number | null;
+}
+
 export interface DBOCRTranslationCacheEntry {
   key: string;
   pageNum: number;
@@ -166,6 +172,7 @@ export interface ElectronAPI {
       updated_at: number;
       ocr_data: OCRPageResult;
     } | null>;
+    getOcrCacheStatsForDocumentIds: (documentIds: number[]) => Promise<DBOcrCacheStatsRow[]>;
     saveTranslationCache: (
       docId: number,
       pageNum: number,

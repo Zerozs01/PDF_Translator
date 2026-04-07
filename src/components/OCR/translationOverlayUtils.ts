@@ -368,14 +368,20 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
   const wordWidth = Math.max(1, unionWordBox.x1 - unionWordBox.x0);
   const wordHeight = Math.max(1, unionWordBox.y1 - unionWordBox.y0);
   const wordArea = wordWidth * wordHeight;
+  const leftTrimRatio = Math.max(0, unionWordBox.x0 - line.bbox.x0) / lineWidth;
+  const rightTrimRatio = Math.max(0, line.bbox.x1 - unionWordBox.x1) / lineWidth;
+  const horizontalTrimRatio = leftTrimRatio + rightTrimRatio;
   const widthCoverage = wordWidth / lineWidth;
   const heightCoverage = wordHeight / lineHeight;
   const areaCoverage = wordArea / lineArea;
   const normalizedLineText = normalizeOverlayInlineText(String(line.text || ''));
   const sourceWordCount = normalizedLineText.split(/\s+/g).filter(Boolean).length;
+  const thaiCharCount = (normalizedLineText.match(/[\u0E00-\u0E7F]/g) || []).length;
   const technicalSourceLike = DOCUMENT_SOURCE_FALLBACK_HINT_REGEX.test(normalizedLineText);
   const numericDocumentLike = sourceWordCount >= 5 && /[0-9()\-]/.test(normalizedLineText);
-  const allowLineFallback = technicalSourceLike || numericDocumentLike;
+  const thaiDocumentLike = thaiCharCount >= 12
+    && (sourceWordCount >= 3 || /[0-9()\[\].,:;\-]/.test(normalizedLineText));
+  const allowLineFallback = technicalSourceLike || numericDocumentLike || thaiDocumentLike;
   const longLineText = normalizedLineText.length >= 18;
   const sparseWordBoxes = validWordBoxes.length <= 3;
   const severeCoverageLoss = (
@@ -398,8 +404,35 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     && areaCoverage < 0.84
     && heightCoverage < 0.95
   );
+  const sparseWordCoverage = (
+    sourceWordCount >= 5
+    && validWordBoxes.length <= Math.max(2, Math.floor(sourceWordCount * 0.45))
+  );
+  const technicalSparseCoverageLoss = (
+    allowLineFallback
+    && sparseWordCoverage
+    && widthCoverage < 0.9
+    && areaCoverage < 0.88
+    && heightCoverage < 0.95
+  );
+  const technicalEdgeTrimLoss = (
+    allowLineFallback
+    && sourceWordCount >= 3
+    && widthCoverage < 0.92
+    && areaCoverage >= 0.46
+    && areaCoverage < 0.9
+    && heightCoverage >= 0.62
+    && horizontalTrimRatio > 0.2
+  );
 
-  if (allowLineFallback && (severeCoverageLoss || moderateCoverageLoss || shortDocumentCoverageLoss || longDocumentCoverageLoss)) {
+  if (allowLineFallback && (
+    severeCoverageLoss
+    || moderateCoverageLoss
+    || shortDocumentCoverageLoss
+    || longDocumentCoverageLoss
+    || technicalSparseCoverageLoss
+    || technicalEdgeTrimLoss
+  )) {
     return line.bbox;
   }
 
@@ -1088,12 +1121,50 @@ const countWords = (value: string): number =>
     .filter(Boolean)
     .length;
 
+const countThaiCharacters = (value: string): number => {
+  const matches = normalizeOverlayInlineText(value).match(/[\u0E00-\u0E7F]/g);
+  return matches ? matches.length : 0;
+};
+
 const looksDocumentLikeSourceText = (value: string): boolean => {
   const normalized = normalizeOverlayInlineText(value);
   if (!normalized) return false;
   const wordCount = countWords(normalized);
-  if (wordCount < 3) return false;
-  return /[a-z]/.test(normalized);
+  if (wordCount >= 3 && /[a-z]/.test(normalized)) return true;
+
+  const thaiCharCount = countThaiCharacters(normalized);
+  const hasStructuralMarkers = /[0-9()\[\].,:;\-]/.test(normalized);
+  const thaiTokenLike = normalized.split(/\s+/g).filter(Boolean).length;
+  if (thaiCharCount >= 10 && thaiTokenLike >= 3) return true;
+  if (thaiCharCount >= 16 && hasStructuralMarkers) return true;
+
+  return false;
+};
+
+const looksStructuredDocumentSourceLine = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(value);
+  if (!normalized) return false;
+  const wordCount = countWords(normalized);
+  const thaiCharCount = countThaiCharacters(normalized);
+  const hasOrdinalMarker = /(?:^|\s)[\[(]?[0-9]{1,2}[\])].?:?/.test(normalized);
+  const hasTechnicalMarker = /[0-9()\[\].,:;\-]/.test(normalized);
+
+  if (hasOrdinalMarker && (wordCount >= 2 || thaiCharCount >= 10)) return true;
+  if (thaiCharCount >= 14 && hasTechnicalMarker) return true;
+
+  return false;
+};
+
+const TECHNICAL_DOCUMENT_SOURCE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|weld(?:ed|ing)?|pin|hinge|member|utility|floor|bridge|building|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
+
+const looksTechnicalDocumentSourceLine = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(value);
+  if (!normalized) return false;
+  if (TECHNICAL_DOCUMENT_SOURCE_HINT_REGEX.test(normalized)) return true;
+
+  const wordCount = countWords(normalized);
+  const hasEquationLabel = /\([0-9]{1,3}\)/.test(normalized);
+  return wordCount >= 3 && hasEquationLabel && /[A-Za-z]/.test(normalized);
 };
 
 const looksHeadingLikeSourceLine = (value: string): boolean => {
@@ -1933,12 +2004,43 @@ export const computeOverlayLayoutMap = (
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
+    const documentLikeMergeSignalCount = group
+      .map((item) => normalizeOverlayInlineText(item.hints?.sourceText || item.line?.text || ''))
+      .filter(Boolean)
+      .filter((sourceText) =>
+        looksDocumentLikeSourceText(sourceText)
+        || looksHeadingLikeSourceLine(sourceText)
+        || looksStructuredDocumentSourceLine(sourceText)
+      ).length;
+    const structuredDocumentSignalCount = group
+      .map((item) => normalizeOverlayInlineText(item.hints?.sourceText || item.line?.text || ''))
+      .filter(Boolean)
+      .filter((sourceText) => looksStructuredDocumentSourceLine(sourceText))
+      .length;
+    const technicalDocumentSignalCount = group
+      .map((item) => normalizeOverlayInlineText(item.hints?.sourceText || item.line?.text || ''))
+      .filter(Boolean)
+      .filter((sourceText) => looksTechnicalDocumentSourceLine(sourceText))
+      .length;
+    const shouldBlockSectionMergeForDocumentLike = (
+      documentLikeMergeSignalCount >= Math.max(2, Math.ceil(group.length * 0.5))
+      || (
+        effectiveProfile === 'adaptive'
+        && (
+          (structuredDocumentSignalCount >= 1 && documentLikeMergeSignalCount >= 2)
+          || (structuredDocumentSignalCount >= 1 && technicalDocumentSignalCount >= 1)
+          || (technicalDocumentSignalCount >= Math.max(2, Math.floor(group.length * 0.45)))
+          || (documentLikeMergeSignalCount >= 2 && hasSharedLeftEdge)
+        )
+      )
+    );
     const mergeGapLimit = mergedStyleKind === 'comic-bubble'
       ? Math.max(34, maxHeight * (effectiveProfile === 'manga' ? 2.8 : 2.5))
       : Math.max(30, maxHeight * (effectiveProfile === 'manga' ? 2.35 : 2.15));
     const mergeCompactnessLimit = mergedStyleKind === 'comic-bubble' ? 2.95 : 2.65;
     const shouldMergeAsSectionBlock = !effectiveDocumentProfile
       && allowSectionMerge
+      && !shouldBlockSectionMergeForDocumentLike
       && group.length >= 2
       && mergedStyleKind === 'comic-bubble'
       && compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))

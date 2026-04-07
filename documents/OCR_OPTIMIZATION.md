@@ -14,6 +14,143 @@ This file tracks the OCR plan against the current code, not against older experi
   - UI OCR engines: `tesseract`, `paddleocr`, `easyocr`
   - OCR quality baseline: `best`
 
+## 2026-04-07 Pre-Rollback Incident Memo (Must Keep)
+
+This memo preserves the practical lessons from the latest user-reported manga regressions before code rollback.
+
+### User-reported symptoms (snapshot)
+
+| ID | Symptom | Practical impact |
+| --- | --- | --- |
+| R1 | `AYNAR TAKE THIS` split into `S THIS` + `AYNAR TAKES` | translation becomes semantically wrong |
+| R2 | Same-row multi-balloon OCR interleaves section order (box2 line1 then box1 line2, etc.) | translation group leaks across balloons |
+| R3 | PaddleOCR detects tiny icon/SFX fragments (ghost text) | extra overlay boxes and wrong mask |
+| R4 | duplicate text like `SHOE LOCKER` repeated | duplicate translated lines on overlay |
+| R5 | must retain `I THINK` handling behavior | dialogue intent degrades if lost |
+
+### Root-cause map (deterministic view)
+
+1. Fragment normalization gap:
+   - source text normalization must happen before grouping.
+   - if not, fragmented tokens (for example `S THIS`) survive into translation planning.
+
+2. Section clustering ambiguity:
+   - same-row bubbles require section-aware ordering, not pure top-to-bottom sort.
+   - x-overlap + center continuity must gate whether two lines are in the same balloon section.
+
+3. Ghost token over-recall:
+   - icon/effect micro-boxes are legitimate detections for OCR but not useful for translation overlay.
+   - panel pipeline needs strict low-signal rejection for tiny singleton tokens.
+
+4. Duplicate collapse split across stages:
+   - dedupe must run consistently in panel ingest and overlay translation mapping.
+   - if one stage misses, duplicates leak through (`SHOE LOCKER` pattern).
+
+### Memory anchors to keep after rollback
+
+- `AYNAR/S THIS` family normalization lives in translation source normalization rules.
+- `I THINK` conversational handling is currently preserved at translation post-process level (Thai glossary mapping for `I THINK`).
+- section-aware dense dialogue ordering is required to prevent cross-balloon text blending.
+- panel ghost suppression and panel dedupe should remain upstream, before cache save.
+
+### Quick code anchors (for post-rollback recovery)
+
+- `src/App.tsx`
+  - `ENGLISH_OCR_NOISE_REPAIRS` keeps `AYNAR TAKE THIS` / `S THIS` normalization patterns.
+  - `applyThaiConversationalGlossary` keeps direct `I THINK` conversational mapping.
+- `src/components/OCR/OCRTextLayerPanel.tsx`
+  - `shouldDropPanelGhostLine` and `applyPanelSafetyLineDedup` are the ghost/duplicate upstream guards.
+- `src/App.tsx`
+  - `buildSectionAwareDenseDialogueOrder` and `buildTranslationGroups` define section-safe line ordering/grouping.
+
+### Re-introduction order (safe sequence)
+
+1. Source normalization first:
+   - restore OCR noise repairs for fragmented phrase families (`S THIS`, `AYNAR TAKES ...`).
+   - run before any grouping/translation batching.
+
+2. Section-safe grouping:
+   - enable/restore section-aware dense dialogue ordering for same-row multi-bubble pages.
+   - reject merges when horizontal overlap is weak and column separation is high.
+
+3. Ghost filter in panel ingest:
+   - keep tiny singleton/icon-like text out of OCR line cache.
+   - preserve only whitelisted short tokens that are semantically meaningful.
+
+4. Duplicate collapse at two boundaries:
+   - panel line dedupe before persistence.
+   - translated overlay dedupe before rendering.
+
+5. `I THINK` guard verification:
+   - assert the phrase still survives OCR-to-translation pipeline and maps to intended Thai dialogue tone.
+
+### Regression fixtures required before next rollout
+
+- Tall comic page with sparse balloons (long vertical scroll).
+- Same-row dual/multi-bubble manga page (section separation stress).
+- Icon/SFX-heavy manga page (ghost-token stress).
+- Repeated signage page (`SHOE LOCKER`-style duplicate stress).
+- Dense technical/document page with labels and numerics.
+
+### Acceptance metrics (must pass)
+
+- section crossing rate: `0` for manually labeled dual-bubble fixture.
+- duplicate translated line count per page: `<= 1` for repeated-sign fixture.
+- ghost token drop precision: no meaningful dialogue loss in sampled manga pages.
+- `I THINK` recall: phrase detected and translated with intended conversational meaning.
+
+## 2026-04-06 Rollback Postmortem (Why The Latest Pass Failed)
+
+This section captures why the latest tuning wave did not produce stable behavior and why rollback to a known stable version is justified.
+
+### Observed failures
+
+- Duplicate OCR lines still appeared in manga multi-section rows (example pattern: same short phrase duplicated in the same visual band).
+- Border/mask placement remained unstable on both manga and technical document pages.
+- Some pages still showed long stretched overlay boxes caused by malformed line-level bbox propagation.
+
+### Why the fixes were not enough
+
+1. Dedup was not applied consistently across all ingest paths.
+   - Current-page OCR path was deduped.
+   - Batch/all-pages and benchmark-related store/cache write paths could still persist non-normalized OCR results.
+   - Result: duplicate lines re-entered from cache and looked like "fix did not work".
+
+2. Duplicate checks depended too much on line-level bbox quality.
+   - In hard pages, line bboxes can be inflated or shifted after chunk merge / line matching.
+   - Even exact repeated text can bypass spatial dedup if geometry is noisy.
+
+3. Renderer-side border guards only reduced symptoms.
+   - Mask/source bbox outlier guards helped visual containment.
+   - But they cannot eliminate duplicated OCR lines already present in upstream OCR data.
+
+4. Recall-oriented parser relaxations increased ambiguity.
+   - Relaxing line-box matching thresholds improved recall in some pages.
+   - Side effect: more ambiguous assignments and occasional oversized line boxes.
+   - This amplified downstream mask drift in mixed-layout pages.
+
+5. Cache invalidation happened, but behavioral parity across paths was still incomplete.
+   - Version bumps alone do not guarantee stability if logic differs between current-page and batch pipelines.
+
+### Lessons locked for the next attempt
+
+- Enforce one canonical dedup/normalization pipeline before ANY `setPageOCR` or `saveOCR` call.
+- Treat word-union geometry as the default anchor for duplicate decisions when line bbox is suspicious.
+- Keep parser-threshold changes profile-scoped and evidence-scoped (manga/document split), not global.
+- Validate parity explicitly: current-page vs all-pages must produce equivalent dedup behavior.
+- Use fixture-based regression before rollout:
+  - tall manga page with sparse balloons
+  - dense technical/document page with repeated labels and numeric fragments
+
+### Rollback guidance
+
+- Recommended rollback anchor for this cycle: `1.2.14` behavior baseline (`OCR_ALGORITHM_VERSION = 146`) before the latest unstable tuning wave.
+- If user-facing OCR quality is the top priority, rollback to the last known stable checkpoint first.
+- Re-apply improvements only in small slices with measurable acceptance checks:
+  - duplicate count per page
+  - dropped-word reason distribution
+  - border/mask outlier incidence
+
 ## 2026-04-04 Translation Overlay Checkpoint
 
 This checkpoint captures the current renderer-side translation overlay state after the recent document / manga tuning passes.

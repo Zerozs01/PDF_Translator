@@ -592,7 +592,37 @@ export const OCRCacheDAO = {
       updated_at: row.updated_at,
       ocr_data: JSON.parse(row.ocr_data)
     };
-  }
+  },
+
+  /** One round-trip: distinct cached pages + latest update per document (matches findByFilenameWithCacheStats semantics). */
+  getAggregatedCacheStatsByDocumentIds: (documentIds: number[]) => {
+    if (!db) throw new Error('DB not initialized');
+    const ids = documentIds.filter((id) => Number.isFinite(id) && id > 0);
+    if (ids.length === 0) {
+      return [] as Array<{ document_id: number; cache_pages: number; last_cache_update: number | null }>;
+    }
+    const placeholders = ids.map(() => '?').join(', ');
+    return db
+      .prepare(
+        `
+      SELECT document_id,
+        CAST(COUNT(*) AS INTEGER) AS cache_pages,
+        MAX(updated_at) AS last_cache_update
+      FROM (
+        SELECT document_id, page_number, MAX(updated_at) AS updated_at
+        FROM (
+          SELECT document_id, page_number, updated_at FROM ocr_cache
+          UNION ALL
+          SELECT document_id, page_number, updated_at FROM ocr_cache_engine
+        ) merged_cache
+        GROUP BY document_id, page_number
+      ) per_page
+      WHERE document_id IN (${placeholders})
+      GROUP BY document_id
+    `
+      )
+      .all(...ids) as Array<{ document_id: number; cache_pages: number; last_cache_update: number | null }>;
+  },
 };
 
 type TranslationCacheEntryRecord = {

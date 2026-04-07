@@ -292,6 +292,35 @@ describe('translationOverlayUtils typography', () => {
     expect(bbox).toEqual({ x0: 82, y0: 48, x1: 366, y1: 114 });
   });
 
+  test('falls back to line bbox for thai structured lines when word coverage is sparse', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: 'ข้อ (1) แรงลัพธ์ ในแกน x เท่ากับศูนย์',
+      confidence: 95,
+      bbox: { x0: 100, y0: 200, x1: 420, y1: 240 },
+      words: [
+        { text: 'ข้อ', confidence: 95, bbox: { x0: 108, y0: 206, x1: 142, y1: 238 } },
+        { text: 'แรงลัพธ์', confidence: 95, bbox: { x0: 170, y0: 206, x1: 238, y1: 238 } },
+      ],
+    });
+
+    expect(bbox).toEqual({ x0: 100, y0: 200, x1: 420, y1: 240 });
+  });
+
+  test('falls back to line bbox for technical document lines with aggressively trimmed word boxes', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: 'The reactions in the x and y directions together and thus form fixed connections. (10)',
+      confidence: 95,
+      bbox: { x0: 80, y0: 260, x1: 520, y1: 292 },
+      words: [
+        { text: 'reactions', confidence: 95, bbox: { x0: 152, y0: 262, x1: 218, y1: 290 } },
+        { text: 'directions', confidence: 95, bbox: { x0: 248, y0: 262, x1: 324, y1: 290 } },
+        { text: 'connections', confidence: 95, bbox: { x0: 352, y0: 262, x1: 438, y1: 290 } },
+      ],
+    });
+
+    expect(bbox).toEqual({ x0: 80, y0: 260, x1: 520, y1: 292 });
+  });
+
   test('uses tighter mask expansion for compact labels than paragraph lines', () => {
     const label = resolveOverlayMaskExpansion({
       text: 'YD-193',
@@ -582,6 +611,210 @@ describe('translationOverlayUtils typography', () => {
 
     expect(layoutMap.get(0)?.effectiveProfile).toBe('official');
     expect(layoutMap.get(0)?.styleKind).toBe('document-heading');
+  });
+
+  test('keeps thai structured adaptive blocks as per-line overlays instead of section merge-hide', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'สมการข้อหนึ่ง',
+        width: 160,
+        height: 22,
+        bbox: { x0: 180, y0: 100, x1: 340, y1: 122 },
+        line: {
+          text: 'ข้อ (1) แรงลัพธ์ ในแกน x เท่ากับศูนย์',
+          confidence: 95,
+          bbox: { x0: 176, y0: 100, x1: 344, y1: 122 },
+          words: [{ text: 'ข้อ', confidence: 95, bbox: { x0: 186, y0: 100, x1: 212, y1: 122 } }],
+        },
+        hints: {
+          sourceText: 'ข้อ (1) แรงลัพธ์ ในแกน x เท่ากับศูนย์',
+          sourceBoxWidth: 168,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 1,
+        text: 'สมการข้อสอง',
+        width: 200,
+        height: 22,
+        bbox: { x0: 160, y0: 128, x1: 360, y1: 150 },
+        line: {
+          text: 'ข้อ (2) แรงลัพธ์ ในแกน y เท่ากับศูนย์',
+          confidence: 95,
+          bbox: { x0: 156, y0: 128, x1: 364, y1: 150 },
+          words: [{ text: 'ข้อ', confidence: 95, bbox: { x0: 166, y0: 128, x1: 192, y1: 150 } }],
+        },
+        hints: {
+          sourceText: 'ข้อ (2) แรงลัพธ์ ในแกน y เท่ากับศูนย์',
+          sourceBoxWidth: 208,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 2,
+        text: 'สมการข้อสาม',
+        width: 180,
+        height: 22,
+        bbox: { x0: 170, y0: 156, x1: 350, y1: 178 },
+        line: {
+          text: 'ข้อ (3) โมเมนต์ รอบจุดอ้างอิง เท่ากับศูนย์',
+          confidence: 95,
+          bbox: { x0: 166, y0: 156, x1: 354, y1: 178 },
+          words: [{ text: 'ข้อ', confidence: 95, bbox: { x0: 176, y0: 156, x1: 202, y1: 178 } }],
+        },
+        hints: {
+          sourceText: 'ข้อ (3) โมเมนต์ รอบจุดอ้างอิง เท่ากับศูนย์',
+          sourceBoxWidth: 188,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(2)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.renderText).toBe('สมการข้อหนึ่ง');
+    expect(layoutMap.get(1)?.renderText).toBe('สมการข้อสอง');
+    expect(layoutMap.get(2)?.renderText).toBe('สมการข้อสาม');
+  });
+
+  test('keeps adaptive mixed technical blocks per-line when document and equation cues are mixed', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'สองตัวแปรไม่ทราบค่า',
+        width: 210,
+        height: 22,
+        bbox: { x0: 100, y0: 100, x1: 310, y1: 122 },
+        line: {
+          text: 'Two unknowns.',
+          confidence: 95,
+          bbox: { x0: 98, y0: 100, x1: 314, y1: 122 },
+          words: [{ text: 'Two', confidence: 95, bbox: { x0: 108, y0: 100, x1: 138, y1: 122 } }],
+        },
+        hints: {
+          sourceText: 'Two unknowns.',
+          sourceBoxWidth: 216,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 1,
+        text: 'แรงปฏิกิริยาที่ A และ B ยังไม่ทราบค่า',
+        width: 260,
+        height: 22,
+        bbox: { x0: 250, y0: 128, x1: 510, y1: 150 },
+        line: {
+          text: 'The reactions at A and B are unknown.',
+          confidence: 95,
+          bbox: { x0: 246, y0: 128, x1: 514, y1: 150 },
+          words: [{ text: 'The', confidence: 95, bbox: { x0: 258, y0: 128, x1: 286, y1: 150 } }],
+        },
+        hints: {
+          sourceText: 'The reactions at A and B are unknown.',
+          sourceBoxWidth: 268,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 2,
+        text: 'Fx',
+        width: 70,
+        height: 22,
+        bbox: { x0: 160, y0: 156, x1: 230, y1: 178 },
+        line: {
+          text: 'Fx',
+          confidence: 95,
+          bbox: { x0: 158, y0: 156, x1: 232, y1: 178 },
+          words: [{ text: 'Fx', confidence: 95, bbox: { x0: 174, y0: 156, x1: 212, y1: 178 } }],
+        },
+        hints: {
+          sourceText: 'Fx',
+          sourceBoxWidth: 74,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 3,
+        text: 'Fy',
+        width: 70,
+        height: 22,
+        bbox: { x0: 170, y0: 184, x1: 240, y1: 206 },
+        line: {
+          text: 'Fy',
+          confidence: 95,
+          bbox: { x0: 168, y0: 184, x1: 242, y1: 206 },
+          words: [{ text: 'Fy', confidence: 95, bbox: { x0: 184, y0: 184, x1: 222, y1: 206 } }],
+        },
+        hints: {
+          sourceText: 'Fy',
+          sourceBoxWidth: 74,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 4,
+        text: 'สมการ (8)',
+        width: 110,
+        height: 22,
+        bbox: { x0: 155, y0: 212, x1: 265, y1: 234 },
+        line: {
+          text: '(8)',
+          confidence: 95,
+          bbox: { x0: 153, y0: 212, x1: 267, y1: 234 },
+          words: [{ text: '(8)', confidence: 95, bbox: { x0: 188, y0: 212, x1: 230, y1: 234 } }],
+        },
+        hints: {
+          sourceText: '(8)',
+          sourceBoxWidth: 114,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 5,
+        text: 'สามตัวแปรไม่ทราบค่า',
+        width: 230,
+        height: 22,
+        bbox: { x0: 248, y0: 240, x1: 478, y1: 262 },
+        line: {
+          text: 'Three unknowns.',
+          confidence: 95,
+          bbox: { x0: 244, y0: 240, x1: 482, y1: 262 },
+          words: [{ text: 'Three', confidence: 95, bbox: { x0: 258, y0: 240, x1: 304, y1: 262 } }],
+        },
+        hints: {
+          sourceText: 'Three unknowns.',
+          sourceBoxWidth: 238,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(2)?.hidden).not.toBe(true);
+    expect(layoutMap.get(3)?.hidden).not.toBe(true);
+    expect(layoutMap.get(4)?.hidden).not.toBe(true);
+    expect(layoutMap.get(5)?.hidden).not.toBe(true);
   });
 
   test('keeps document headings larger than document body text in official typography', () => {

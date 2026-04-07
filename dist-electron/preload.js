@@ -14,6 +14,7 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     getOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:get-ocr", { docId, pageNum, engine }),
     clearOCR: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-ocr", { docId, pageNum, engine }),
     getLatestOCR: (docId) => electron.ipcRenderer.invoke("db:get-latest-ocr", { docId }),
+    getOcrCacheStatsForDocumentIds: (documentIds) => electron.ipcRenderer.invoke("db:get-ocr-cache-stats-for-document-ids", { documentIds }),
     saveTranslationCache: (docId, pageNum, cacheKey, entry) => electron.ipcRenderer.invoke("db:save-translation-cache", { docId, pageNum, cacheKey, entry }),
     getTranslationCachePage: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-translation-cache-page", { docId, pageNum }),
     clearTranslationCacheByEngine: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-translation-cache-by-engine", { docId, pageNum, engine }),

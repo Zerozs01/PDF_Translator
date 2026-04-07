@@ -31,9 +31,12 @@ const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
   const normalized = normalizeOverlayInlineText(String(sourceText || ''));
   if (!normalized) return false;
   const wordCount = normalized.split(/\s+/g).filter(Boolean).length;
+  const thaiCharCount = (normalized.match(/[\u0E00-\u0E7F]/g) || []).length;
   const technicalLike = DOCUMENT_SOURCE_HINT_REGEX.test(normalized);
   const numericDocumentLike = wordCount >= 6 && /[0-9()\-]/.test(normalized);
-  return technicalLike || numericDocumentLike;
+  const thaiDocumentLike = thaiCharCount >= 12
+    && (wordCount >= 3 || /[0-9()\[\].,:;\-]/.test(normalized));
+  return technicalLike || numericDocumentLike || thaiDocumentLike;
 };
 
 const clampOverlayTypographyScale = (value: number): number => {

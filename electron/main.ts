@@ -659,6 +659,31 @@ app.whenReady().then(() => {
     }
   });
 
+  const MAX_OCR_CACHE_STATS_DOC_IDS = 500;
+
+  ipcMain.handle('db:get-ocr-cache-stats-for-document-ids', async (_, payload: { documentIds?: unknown }) => {
+    const raw = payload?.documentIds;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return [];
+    }
+
+    const ids = raw
+      .map((id) => (typeof id === 'number' ? id : Number(id)))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .slice(0, MAX_OCR_CACHE_STATS_DOC_IDS);
+
+    if (ids.length === 0) {
+      return [];
+    }
+
+    try {
+      return OCRCacheDAO.getAggregatedCacheStatsByDocumentIds(ids);
+    } catch (error) {
+      console.error('db:get-ocr-cache-stats-for-document-ids error:', error);
+      return [];
+    }
+  });
+
   ipcMain.handle('db:save-translation-cache', async (_, { docId, pageNum, cacheKey, entry }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');

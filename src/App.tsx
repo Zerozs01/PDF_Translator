@@ -140,7 +140,7 @@ async function translateBatchGemini(
   );
 }
 
-type TranslatableLine = {
+export type TranslatableLine = {
   index: number;
   text: string;
   sourceLength: number;
@@ -1058,6 +1058,89 @@ const normalizeTranslatableDedupKey = (text: string): string =>
     .replace(/1/g, 'I')
     .replace(/5/g, 'S');
 
+const TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
+const UNKNOWNS_COUNT_REGEX = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+unknowns?\b/i;
+const AXIS_SYMBOL_REGEX = /\b(?:fx|fy|fz|mx|my|mz|rx|ry|rz)\b/gi;
+const EQUATION_LABEL_REGEX = /\([0-9]{1,3}\)/;
+
+const UNKNOWN_COUNT_WORD_TO_NUMBER: Record<string, string> = {
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+  ten: '10',
+};
+
+const normalizeUnknownCountToken = (value: string): string => {
+  const normalized = normalizeWhitespace(String(value || '')).toLowerCase();
+  if (!normalized) return '';
+  return UNKNOWN_COUNT_WORD_TO_NUMBER[normalized] || normalized;
+};
+
+const collectUniqueRegexMatches = (value: string, regex: RegExp): string[] => {
+  const normalized = normalizeWhitespace(String(value || '')).toLowerCase();
+  if (!normalized) return [];
+  const flags = regex.flags.includes('g') ? regex.flags : `${regex.flags}g`;
+  const matcher = new RegExp(regex.source, flags);
+  const matches = normalized.match(matcher) || [];
+  return Array.from(new Set(matches.map((item) => item.trim()).filter(Boolean)));
+};
+
+const shouldPreserveDistinctTechnicalLines = (a: string, b: string): boolean => {
+  const normalizedA = normalizeWhitespace(String(a || '')).toLowerCase();
+  const normalizedB = normalizeWhitespace(String(b || '')).toLowerCase();
+  if (!normalizedA || !normalizedB || normalizedA === normalizedB) return false;
+
+  const hasTechnicalA = (
+    TECHNICAL_LINE_HINT_REGEX.test(normalizedA)
+    || UNKNOWNS_COUNT_REGEX.test(normalizedA)
+    || EQUATION_LABEL_REGEX.test(normalizedA)
+  );
+  const hasTechnicalB = (
+    TECHNICAL_LINE_HINT_REGEX.test(normalizedB)
+    || UNKNOWNS_COUNT_REGEX.test(normalizedB)
+    || EQUATION_LABEL_REGEX.test(normalizedB)
+  );
+  if (!hasTechnicalA || !hasTechnicalB) return false;
+
+  const unknownCountA = normalizeUnknownCountToken(normalizedA.match(UNKNOWNS_COUNT_REGEX)?.[1] || '');
+  const unknownCountB = normalizeUnknownCountToken(normalizedB.match(UNKNOWNS_COUNT_REGEX)?.[1] || '');
+  if (unknownCountA && unknownCountB && unknownCountA !== unknownCountB) {
+    return true;
+  }
+
+  const axisTokensA = new Set(collectUniqueRegexMatches(normalizedA, AXIS_SYMBOL_REGEX));
+  const axisTokensB = new Set(collectUniqueRegexMatches(normalizedB, AXIS_SYMBOL_REGEX));
+  if (axisTokensA.size > 0 || axisTokensB.size > 0) {
+    let shared = 0;
+    for (const token of axisTokensA) {
+      if (axisTokensB.has(token)) shared += 1;
+    }
+    if (shared < Math.min(axisTokensA.size, axisTokensB.size)) {
+      return true;
+    }
+  }
+
+  const equationTagsA = new Set(collectUniqueRegexMatches(normalizedA, EQUATION_LABEL_REGEX));
+  const equationTagsB = new Set(collectUniqueRegexMatches(normalizedB, EQUATION_LABEL_REGEX));
+  if (equationTagsA.size > 0 && equationTagsB.size > 0) {
+    let shared = 0;
+    for (const token of equationTagsA) {
+      if (equationTagsB.has(token)) shared += 1;
+    }
+    if (shared === 0) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const KNOWN_CONVERSATIONAL_DUPLICATE_KEYS = new Set([
   'AAREYOU',
   'AAREYO',
@@ -1088,7 +1171,7 @@ const translatableDedupSimilarity = (a: string, b: string): number => {
   return (2 * overlap) / (aSet.size + bSet.size);
 };
 
-const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): TranslatableLine[] => {
+export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): TranslatableLine[] => {
   if (lines.length <= 1) return lines;
 
   const ordered = [...lines].sort((a, b) => {
@@ -1122,6 +1205,7 @@ const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): Trans
         || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
       const similar = translatableDedupSimilarity(existingKey, candidateKey) >= 0.9;
       if (!sameOrSubset && !similar) return false;
+      if (shouldPreserveDistinctTechnicalLines(existing.text, candidate.text)) return false;
 
       const existingWidth = Math.max(1, existing.right - existing.left);
       const candidateWidth = Math.max(1, candidate.right - candidate.left);
@@ -1138,11 +1222,18 @@ const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): Trans
       const overlapX = overlapRatio(existing.left, existing.right, candidate.left, candidate.right);
       const overlapY = overlapRatio(existing.top, existing.bottom, candidate.top, candidate.bottom);
 
-      return (
-        (centerDeltaY <= Math.max(92, minHeight * 2.6) && centerDeltaX <= Math.max(118, minWidth * 2.3))
-        || (centerDeltaY <= Math.max(136, minHeight * 3.4) && overlapX >= 0.52)
-        || (overlapY >= 0.68 && overlapX >= 0.56)
+      const nearByCenter = (
+        centerDeltaY <= Math.max(58, minHeight * 2.15)
+        && centerDeltaX <= Math.max(96, minWidth * 1.95)
       );
+      const nearByOverlap = overlapY >= 0.64 && overlapX >= 0.54;
+      const nearBySharedColumn = (
+        centerDeltaY <= Math.max(72, minHeight * 2.7)
+        && centerDeltaX <= Math.max(84, minWidth * 1.5)
+        && overlapX >= 0.7
+      );
+
+      return nearByCenter || nearByOverlap || nearBySharedColumn;
     });
 
     if (existingIndex < 0 && KNOWN_CONVERSATIONAL_DUPLICATE_KEYS.has(candidateKey)) {

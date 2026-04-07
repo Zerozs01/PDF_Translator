@@ -36,6 +36,7 @@ const createDbClient = (overrides?: Partial<ElectronAPI['db']>): Pick<ElectronAP
     getOCR: vi.fn(async () => null),
     clearOCR: vi.fn(async () => true),
     getLatestOCR: vi.fn(async () => null),
+    getOcrCacheStatsForDocumentIds: vi.fn(async () => []),
     saveTranslationCache: vi.fn(async () => true),
     getTranslationCachePage: vi.fn(async () => []),
     clearTranslationCacheByEngine: vi.fn(async () => true),
