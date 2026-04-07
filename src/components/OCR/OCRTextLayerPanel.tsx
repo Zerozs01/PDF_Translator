@@ -381,8 +381,8 @@ const shouldCollapsePanelSafetyDuplicate = (
     || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
   if (!sameOrSubset) {
     const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
-    if (similarity < 0.96) return false;
-    if (minLength < 8 && similarity < 0.99) return false;
+    if (similarity < 0.72) return false;
+    if (minLength < 8 && similarity < 0.86) return false;
   }
 
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
@@ -418,6 +418,14 @@ const shouldCollapsePanelSafetyDuplicate = (
     && centerDeltaX <= Math.max(132, minWidth * 2.6)
     && (iou >= 0.12 || overlapY >= 0.24)
   );
+  const stackedSameColumnShortDuplicate = (
+    shortExactPhrase
+    && candidateKey.length >= 10
+    && looseAreaRatio
+    && centerDeltaY <= Math.max(170, minHeight * 7.5)
+    && centerDeltaX <= Math.max(64, minWidth * 1.25)
+    && overlapX >= 0.7
+  );
   const localStackedDuplicate = (
     exactKeyMatch
     && candidateKey.length >= 4
@@ -429,7 +437,7 @@ const shouldCollapsePanelSafetyDuplicate = (
   );
 
   if (sameOrSubset) {
-    return strongSpatialMatch || localStackedDuplicate || shortPhraseDuplicate;
+    return strongSpatialMatch || localStackedDuplicate || shortPhraseDuplicate || stackedSameColumnShortDuplicate;
   }
 
   return (

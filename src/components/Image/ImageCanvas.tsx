@@ -466,6 +466,9 @@ export const ImageCanvas: React.FC = () => {
                     });
                   }
                   const palette = translatedLinePalette.get(idx) || DEFAULT_OVERLAY_PALETTE;
+                  const continuationPalette = layout?.highlightTextColorSourceIndex !== undefined
+                    ? (translatedLinePalette.get(layout.highlightTextColorSourceIndex) || palette)
+                    : palette;
                   const maskBackgroundColor = palette.backgroundColor;
                   const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
                     ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
@@ -509,6 +512,39 @@ export const ImageCanvas: React.FC = () => {
                   const overlayText = typography.forceSingleLine
                     ? normalizeOverlayInlineText(renderText)
                     : renderText;
+                  const highlightContinuationText = layout?.highlightContinuationText
+                    ? (typography.forceSingleLine
+                      ? normalizeOverlayInlineText(layout.highlightContinuationText)
+                      : layout.highlightContinuationText)
+                    : '';
+                  const overlayContent = (() => {
+                    if (!highlightContinuationText) {
+                      return overlayText;
+                    }
+
+                    const fullText = String(overlayText || '');
+                    const continuationText = String(highlightContinuationText || '');
+                    if (!fullText || !continuationText) {
+                      return overlayText;
+                    }
+
+                    const start = fullText.indexOf(continuationText);
+                    if (start < 0) {
+                      return overlayText;
+                    }
+
+                    const before = fullText.slice(0, start);
+                    const after = fullText.slice(start + continuationText.length);
+                    return (
+                      <>
+                        {before}
+                        <span style={{ color: continuationPalette.textColor }}>
+                          {continuationText}
+                        </span>
+                        {after}
+                      </>
+                    );
+                  })();
                   const rotationDeg = estimateLineRotationDeg(line);
                   const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
                   const minFillRatio = typography.estimatedLines > 1
@@ -596,7 +632,7 @@ export const ImageCanvas: React.FC = () => {
                               overflow: 'hidden',
                             }}
                           >
-                            {overlayText}
+                            {overlayContent}
                           </div>
                           {showDebugOverlay ? (
                             <>

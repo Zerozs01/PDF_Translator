@@ -817,6 +817,159 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(5)?.hidden).not.toBe(true);
   });
 
+  test('keeps adaptive dialogue groups per-line instead of merge-hide section blocks', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'สองไม่ทราบค่า',
+        width: 220,
+        height: 22,
+        bbox: { x0: 420, y0: 300, x1: 640, y1: 322 },
+        line: {
+          text: 'Two unknowns.',
+          confidence: 95,
+          bbox: { x0: 416, y0: 300, x1: 644, y1: 322 },
+          words: [{ text: 'Two', confidence: 95, bbox: { x0: 426, y0: 300, x1: 456, y1: 322 } }],
+        },
+        hints: {
+          sourceText: 'Two unknowns.',
+          sourceBoxWidth: 228,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+      {
+        index: 1,
+        text: 'และแรงที่ตั้งฉากกับแท่ง',
+        width: 260,
+        height: 22,
+        bbox: { x0: 430, y0: 332, x1: 690, y1: 354 },
+        line: {
+          text: 'and the force which acts perpendicular to the rod.',
+          confidence: 95,
+          bbox: { x0: 426, y0: 332, x1: 694, y1: 354 },
+          words: [{ text: 'force', confidence: 95, bbox: { x0: 478, y0: 332, x1: 520, y1: 354 } }],
+        },
+        hints: {
+          sourceText: 'and the force which acts perpendicular to the rod.',
+          sourceBoxWidth: 268,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'adaptive',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.renderText).toBe('สองไม่ทราบค่า');
+    expect(layoutMap.get(1)?.renderText).toBe('และแรงที่ตั้งฉากกับแท่ง');
+  });
+
+  test('keeps bracketed glossary narrative lines per-line under manga profile', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'อายนาร์',
+        width: 120,
+        height: 22,
+        bbox: { x0: 260, y0: 210, x1: 380, y1: 232 },
+        line: {
+          text: 'AYNAR',
+          confidence: 95,
+          bbox: { x0: 254, y0: 210, x1: 386, y1: 232 },
+          words: [{ text: 'AYNAR', confidence: 95, bbox: { x0: 262, y0: 210, x1: 352, y1: 232 } }],
+        },
+        hints: {
+          sourceText: 'AYNAR',
+          sourceBoxWidth: 132,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+      {
+        index: 1,
+        text: '[แก่นแท้ของเวอร์ทาร์]',
+        width: 260,
+        height: 28,
+        bbox: { x0: 120, y0: 246, x1: 380, y1: 274 },
+        line: {
+          text: "[VERTAR'S ESSENCE]",
+          confidence: 95,
+          bbox: { x0: 114, y0: 246, x1: 386, y1: 274 },
+          words: [{ text: "VERTAR'S", confidence: 95, bbox: { x0: 156, y0: 246, x1: 238, y1: 274 } }],
+        },
+        hints: {
+          sourceText: "[VERTAR'S ESSENCE]",
+          sourceBoxWidth: 272,
+          sourceBoxHeight: 28,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.mergedBBox).toBeUndefined();
+    expect(layoutMap.get(1)?.mergedBBox).toBeUndefined();
+    expect(layoutMap.get(1)?.renderText).toBe('[แก่นแท้ของเวอร์ทาร์]');
+  });
+
+  test('joins PHENELINE absorbed line with bracketed VERTAR essence continuation', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'ฟีนีลีนได้ดูดซับ',
+        width: 220,
+        height: 24,
+        bbox: { x0: 130, y0: 220, x1: 350, y1: 244 },
+        line: {
+          text: 'PHENELINE HAS ABSORBED',
+          confidence: 95,
+          bbox: { x0: 124, y0: 220, x1: 356, y1: 244 },
+          words: [{ text: 'PHENELINE', confidence: 95, bbox: { x0: 136, y0: 220, x1: 224, y1: 244 } }],
+        },
+        hints: {
+          sourceText: 'PHENELINE HAS ABSORBED',
+          sourceBoxWidth: 232,
+          sourceBoxHeight: 24,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+      {
+        index: 1,
+        text: '[แก่นแท้ของเวอร์ทาร์].',
+        width: 220,
+        height: 24,
+        bbox: { x0: 164, y0: 250, x1: 384, y1: 274 },
+        line: {
+          text: "[VERTAR'S ESSENCE].",
+          confidence: 95,
+          bbox: { x0: 158, y0: 250, x1: 390, y1: 274 },
+          words: [{ text: "VERTAR'S", confidence: 95, bbox: { x0: 176, y0: 250, x1: 258, y1: 274 } }],
+        },
+        hints: {
+          sourceText: "[VERTAR'S ESSENCE].",
+          sourceBoxWidth: 232,
+          sourceBoxHeight: 24,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.renderText).toContain('ฟีนีลีนได้ดูดซับ');
+    expect(layoutMap.get(0)?.renderText).toContain('[แก่นแท้ของเวอร์ทาร์]');
+    expect(layoutMap.get(0)?.highlightContinuationText).toContain('แก่นแท้ของเวอร์ทาร์');
+    expect(layoutMap.get(0)?.highlightTextColorSourceIndex).toBe(1);
+  });
+
   test('keeps document headings larger than document body text in official typography', () => {
     const heading = computeOverlayTypography('วัตถุประสงค์ของบทนี้', 210, 24, {
       sourceText: 'CHAPTER OBJECTIVES',

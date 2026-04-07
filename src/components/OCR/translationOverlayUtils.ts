@@ -218,6 +218,8 @@ export type OverlayLayout = {
   mergedBBox?: BBox;
   mergedMaskBBox?: BBox;
   hidden?: boolean;
+  highlightContinuationText?: string;
+  highlightTextColorSourceIndex?: number;
 };
 
 export type OverlayRect = {
@@ -1997,31 +1999,46 @@ export const computeOverlayLayoutMap = (
       ? minStartX
       : undefined;
     const allowSectionMerge = effectiveProfile === 'manga'
-      || effectiveProfile === 'manhwa'
-      || effectiveProfile === 'adaptive';
+      || effectiveProfile === 'manhwa';
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
       ? (isCenteredBlock ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
-    const documentLikeMergeSignalCount = group
+    const normalizedGroupSourceTexts = group
       .map((item) => normalizeOverlayInlineText(item.hints?.sourceText || item.line?.text || ''))
-      .filter(Boolean)
+      .filter(Boolean);
+    const documentLikeMergeSignalCount = normalizedGroupSourceTexts
       .filter((sourceText) =>
         looksDocumentLikeSourceText(sourceText)
         || looksHeadingLikeSourceLine(sourceText)
         || looksStructuredDocumentSourceLine(sourceText)
       ).length;
-    const structuredDocumentSignalCount = group
-      .map((item) => normalizeOverlayInlineText(item.hints?.sourceText || item.line?.text || ''))
-      .filter(Boolean)
+    const structuredDocumentSignalCount = normalizedGroupSourceTexts
       .filter((sourceText) => looksStructuredDocumentSourceLine(sourceText))
       .length;
-    const technicalDocumentSignalCount = group
-      .map((item) => normalizeOverlayInlineText(item.hints?.sourceText || item.line?.text || ''))
-      .filter(Boolean)
+    const technicalDocumentSignalCount = normalizedGroupSourceTexts
       .filter((sourceText) => looksTechnicalDocumentSourceLine(sourceText))
       .length;
+    const bracketNarrationSourceCount = normalizedGroupSourceTexts
+      .filter((sourceText) => /\[[^\]]{2,}\]/.test(sourceText))
+      .length;
+    const glossaryCriticalSourceCount = normalizedGroupSourceTexts
+      .filter((sourceText) => {
+        if (/\b(?:PHENELINE|AYNAR)\b/i.test(sourceText)) {
+          return true;
+        }
+        return /\bVERTAR\b/i.test(sourceText) && /\bESSEN(?:CE|SE)\b/i.test(sourceText);
+      })
+      .length;
+    const bracketNarrationTranslatedCount = group
+      .filter((item) => /\[[^\]]{2,}\]/.test(normalizeOverlayInlineText(item.text)))
+      .length;
+    const shouldPreservePerLineNarrative = (
+      bracketNarrationSourceCount >= 1
+      || bracketNarrationTranslatedCount >= 1
+      || glossaryCriticalSourceCount >= 1
+    );
     const shouldBlockSectionMergeForDocumentLike = (
       documentLikeMergeSignalCount >= Math.max(2, Math.ceil(group.length * 0.5))
       || (
@@ -2041,6 +2058,7 @@ export const computeOverlayLayoutMap = (
     const shouldMergeAsSectionBlock = !effectiveDocumentProfile
       && allowSectionMerge
       && !shouldBlockSectionMergeForDocumentLike
+      && !shouldPreservePerLineNarrative
       && group.length >= 2
       && mergedStyleKind === 'comic-bubble'
       && compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
@@ -2191,8 +2209,39 @@ export const computeOverlayLayoutMap = (
       }
     }
 
-    for (const item of group) {
-      const groupIndex = group.indexOf(item);
+    const joinTextIntoPrevious = new Map<number, string>();
+    const joinHighlightByGroupIndex = new Map<number, { text: string; sourceIndex: number }>();
+    const hideByGroupIndex = new Set<number>();
+    if (!effectiveDocumentProfile && group.length >= 2) {
+      for (let i = 1; i < group.length; i += 1) {
+        const previous = group[i - 1];
+        const current = group[i];
+        const previousTranslated = normalizeOverlayInlineText(previous.text);
+        const currentTranslated = normalizeOverlayInlineText(current.text);
+        const previousSource = normalizeOverlayInlineText(previous.hints?.sourceText || previous.line?.text || '');
+        const currentSource = normalizeOverlayInlineText(current.hints?.sourceText || current.line?.text || '');
+        const translatedPair = /ฟีนีลีน\s*ได้\s*ดูดซับ/.test(previousTranslated)
+          && /\[?\s*แก่นแท้ของเวอร์ทาร์\s*\]?/.test(currentTranslated);
+        const sourcePair = /\bPHENELINE\b/i.test(previousSource)
+          && /\bHAS\s+ABSORBED\b/i.test(previousSource)
+          && /\bVERTAR\b/i.test(currentSource)
+          && /\bESSEN(?:CE|SE)\b/i.test(currentSource);
+
+        if (!translatedPair && !sourcePair) {
+          continue;
+        }
+
+        joinTextIntoPrevious.set(i - 1, joinOverlayGroupSegments([previous.text, current.text]));
+        joinHighlightByGroupIndex.set(i - 1, {
+          text: normalizeOverlayInlineText(current.text),
+          sourceIndex: current.index,
+        });
+        hideByGroupIndex.add(i);
+      }
+    }
+
+    for (let groupIndex = 0; groupIndex < group.length; groupIndex += 1) {
+      const item = group[groupIndex];
       const styleKind = groupStyleKinds[groupIndex];
       const singleLineCenterCandidate = group.length === 1
         && !effectiveDocumentProfile
@@ -2205,6 +2254,10 @@ export const computeOverlayLayoutMap = (
         : sharedCenterX;
       const itemSharedTextStartX = itemAlignment === 'left' ? sharedTextStartX : undefined;
       const itemSharedBoxLeftX = itemAlignment === 'left' ? sharedBoxLeftX : undefined;
+      const mergedNarrativeText = joinTextIntoPrevious.get(groupIndex);
+      const renderText = mergedNarrativeText || item.text;
+      const shouldHide = hideByGroupIndex.has(groupIndex);
+      const highlightContinuation = joinHighlightByGroupIndex.get(groupIndex);
       if (!shouldNormalize) {
         result.set(item.index, {
           typography: item.typography,
@@ -2214,16 +2267,19 @@ export const computeOverlayLayoutMap = (
           sharedTextStartX: itemSharedTextStartX,
           sharedCenterX: itemSharedCenterX,
           sharedBoxLeftX: itemSharedBoxLeftX,
-          renderText: item.text,
+          renderText: shouldHide ? '' : renderText,
+          hidden: shouldHide,
+          highlightContinuationText: shouldHide ? undefined : highlightContinuation?.text,
+          highlightTextColorSourceIndex: shouldHide ? undefined : highlightContinuation?.sourceIndex,
         });
         continue;
       }
 
-      const lineHeight = resolveOverlayLineHeight(item.text);
-      const { padX, padY } = resolveOverlayPadding(normalizedFontSize, item.text);
+      const lineHeight = resolveOverlayLineHeight(renderText);
+      const { padX, padY } = resolveOverlayPadding(normalizedFontSize, renderText);
       const estimatedLines = item.typography.estimatedLines;
-      const ascenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(item.text) ? 0.1 : 0.05)));
-      const descenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(item.text) ? 0.18 : 0.14)));
+      const ascenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(renderText) ? 0.1 : 0.05)));
+      const descenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(renderText) ? 0.18 : 0.14)));
       result.set(item.index, {
         typography: {
           fontSize: normalizedFontSize,
@@ -2240,7 +2296,10 @@ export const computeOverlayLayoutMap = (
         sharedTextStartX: itemSharedTextStartX,
         sharedCenterX: itemSharedCenterX,
         sharedBoxLeftX: itemSharedBoxLeftX,
-        renderText: item.text,
+        renderText: shouldHide ? '' : renderText,
+        hidden: shouldHide,
+        highlightContinuationText: shouldHide ? undefined : highlightContinuation?.text,
+        highlightTextColorSourceIndex: shouldHide ? undefined : highlightContinuation?.sourceIndex,
       });
     }
   };
