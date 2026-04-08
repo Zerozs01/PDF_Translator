@@ -1,9 +1,121 @@
 import { create } from 'zustand';
 import { dbService } from '../services/dbService';
+import {
+  ensureProjectDocumentRecord,
+  persistProjectDocumentPage,
+  persistProjectDocumentTotalPages,
+  prepareProjectDocumentLoad,
+  touchProjectDocumentActivity,
+} from '../services/projectDocumentService';
 import { useOCRTextLayerStore } from './useOCRTextLayerStore';
+import { useUIStore } from './useUIStore';
+import {
+  DEFAULT_OVERLAY_FONT_PRESET,
+  OverlayFontPreset,
+  isOverlayFontPreset,
+} from '../constants/overlayFonts';
+import type { GeminiApiKeySource } from '../types/electron.d';
 
-export type TranslationMode = 'manga' | 'official';
+export type TranslationMode = 'adaptive' | 'manga' | 'manhwa' | 'official';
 export type ViewMode = 'single' | 'continuous';
+
+const LEGACY_GEMINI_API_KEY_STORAGE_KEY = 'pdf_translator.gemini_api_key';
+const OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY = 'pdf_translator.overlay_thai_font_enabled';
+const OVERLAY_FONT_PRESET_STORAGE_KEY = 'pdf_translator.overlay_font_preset';
+const OVERLAY_FONT_SIZE_SCALE_STORAGE_KEY = 'pdf_translator.overlay_font_size_scale';
+const OVERLAY_FONT_SIZE_SCALE_MIN = 0.7;
+const OVERLAY_FONT_SIZE_SCALE_MAX = 1.6;
+const THAI_TARGET_LANGUAGE_KEYS = new Set(['th', 'tha', 'thai']);
+
+const clampOverlayFontSizeScale = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  if (value < OVERLAY_FONT_SIZE_SCALE_MIN) return OVERLAY_FONT_SIZE_SCALE_MIN;
+  if (value > OVERLAY_FONT_SIZE_SCALE_MAX) return OVERLAY_FONT_SIZE_SCALE_MAX;
+  return Math.round(value * 100) / 100;
+};
+
+const isThaiTargetLanguage = (value: string): boolean => {
+  const normalized = String(value || '').trim().toLowerCase().split('-')[0];
+  return THAI_TARGET_LANGUAGE_KEYS.has(normalized);
+};
+
+const readLegacyPersistedGeminiApiKey = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    return String(window.localStorage.getItem(LEGACY_GEMINI_API_KEY_STORAGE_KEY) || '');
+  } catch {
+    return '';
+  }
+};
+
+const clearLegacyPersistedGeminiApiKey = (): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(LEGACY_GEMINI_API_KEY_STORAGE_KEY);
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const readPersistedOverlayThaiFontEnabled = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  try {
+    const raw = String(window.localStorage.getItem(OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY) || '').trim().toLowerCase();
+    if (!raw) return true;
+    if (raw === '0' || raw === 'false') return false;
+    return true;
+  } catch {
+    return true;
+  }
+};
+
+const persistOverlayThaiFontEnabled = (enabled: boolean): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const readPersistedOverlayFontPreset = (): OverlayFontPreset => {
+  if (typeof window === 'undefined') return DEFAULT_OVERLAY_FONT_PRESET;
+  try {
+    const raw = String(window.localStorage.getItem(OVERLAY_FONT_PRESET_STORAGE_KEY) || '').trim();
+    return isOverlayFontPreset(raw) ? raw : DEFAULT_OVERLAY_FONT_PRESET;
+  } catch {
+    return DEFAULT_OVERLAY_FONT_PRESET;
+  }
+};
+
+const persistOverlayFontPreset = (preset: OverlayFontPreset): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OVERLAY_FONT_PRESET_STORAGE_KEY, preset);
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const readPersistedOverlayFontSizeScale = (): number => {
+  if (typeof window === 'undefined') return 1;
+  try {
+    const raw = Number.parseFloat(String(window.localStorage.getItem(OVERLAY_FONT_SIZE_SCALE_STORAGE_KEY) || '').trim());
+    if (!Number.isFinite(raw)) return 1;
+    return clampOverlayFontSizeScale(raw);
+  } catch {
+    return 1;
+  }
+};
+
+const persistOverlayFontSizeScale = (scale: number): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OVERLAY_FONT_SIZE_SCALE_STORAGE_KEY, String(clampOverlayFontSizeScale(scale)));
+  } catch {
+    // Ignore local storage failures.
+  }
+};
 
 export interface SafetySettings {
   harassment: 'off' | 'low' | 'medium' | 'high';
@@ -11,6 +123,37 @@ export interface SafetySettings {
   sexual: 'off' | 'low' | 'medium' | 'high';
   dangerous: 'off' | 'low' | 'medium' | 'high';
 }
+
+const DEFAULT_SAFETY_SETTINGS_BY_MODE: Record<TranslationMode, SafetySettings> = {
+  adaptive: {
+    harassment: 'low',
+    hate: 'low',
+    sexual: 'medium',
+    dangerous: 'low',
+  },
+  manga: {
+    harassment: 'low',
+    hate: 'low',
+    sexual: 'low',
+    dangerous: 'low',
+  },
+  manhwa: {
+    harassment: 'low',
+    hate: 'low',
+    sexual: 'off',
+    dangerous: 'low',
+  },
+  official: {
+    harassment: 'medium',
+    hate: 'medium',
+    sexual: 'medium',
+    dangerous: 'medium',
+  },
+};
+
+const getDefaultSafetySettingsForMode = (mode: TranslationMode): SafetySettings => ({
+  ...DEFAULT_SAFETY_SETTINGS_BY_MODE[mode],
+});
 
 interface ProjectState {
   // File Data
@@ -32,8 +175,18 @@ interface ProjectState {
   safetySettings: SafetySettings;
   sourceLanguage: string;
   targetLanguage: string;
+  geminiApiKeyDraft: string;
+  hasGeminiApiKey: boolean;
+  geminiApiKeySource: GeminiApiKeySource;
+  isGeminiApiKeyLoaded: boolean;
+  isGeminiApiKeySaving: boolean;
+  geminiApiKeyError: string | null;
+  overlayThaiFontEnabled: boolean;
+  overlayFontPreset: OverlayFontPreset;
+  overlayFontSizeScale: number;
 
   // Actions
+  hydrateGeminiApiKey: () => Promise<void>;
   loadProject: (file: File, fileData?: Uint8Array | null) => Promise<void>;
   ensureDocumentId: () => Promise<number | null>;
   closeProject: () => void;
@@ -44,39 +197,14 @@ interface ProjectState {
   setTranslationMode: (mode: TranslationMode) => void;
   setSourceLanguage: (lang: string) => void;
   setTargetLanguage: (lang: string) => void;
+  setGeminiApiKeyDraft: (apiKey: string) => void;
+  saveGeminiApiKey: () => Promise<boolean>;
+  clearGeminiApiKey: () => Promise<boolean>;
+  setOverlayThaiFontEnabled: (enabled: boolean) => void;
+  setOverlayFontPreset: (preset: OverlayFontPreset) => void;
+  setOverlayFontSizeScale: (scale: number) => void;
   updateSafetySettings: (settings: Partial<SafetySettings>) => void;
 }
-
-const isImportedCachePath = (value: string | null): boolean =>
-  typeof value === 'string'
-  && /[\\/]imports[\\/][a-f0-9]{16,}\.[^\\/]+$/i.test(value);
-
-const touchDocumentActivity = async (documentId: number): Promise<void> => {
-  if (typeof window === 'undefined' || !window.electronAPI?.db?.touchDocument) return;
-  try {
-    await window.electronAPI.db.touchDocument(documentId);
-  } catch (error) {
-    console.warn('[DB] Failed to update recent activity:', error);
-  }
-};
-
-const persistDocumentPage = async (documentId: number, page: number): Promise<void> => {
-  if (typeof window === 'undefined' || !window.electronAPI?.db?.updateLastPage) return;
-  try {
-    await window.electronAPI.db.updateLastPage(documentId, page);
-  } catch (error) {
-    console.warn('[DB] Failed to persist page activity:', error);
-  }
-};
-
-const persistTotalPages = async (documentId: number, totalPages: number): Promise<void> => {
-  if (typeof window === 'undefined' || !window.electronAPI?.db?.updateDocument) return;
-  try {
-    await window.electronAPI.db.updateDocument(documentId, { total_pages: totalPages });
-  } catch (error) {
-    console.warn('[DB] Failed to persist total pages:', error);
-  }
-};
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   file: null,
@@ -91,92 +219,81 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   totalPages: 0,
   viewMode: 'single',
 
-  translationMode: 'manga',
-  safetySettings: {
-    harassment: 'off',
-    hate: 'off',
-    sexual: 'off',
-    dangerous: 'off'
-  },
+  translationMode: 'adaptive',
+  safetySettings: getDefaultSafetySettingsForMode('adaptive'),
   sourceLanguage: 'eng',
   targetLanguage: 'th',
+  geminiApiKeyDraft: '',
+  hasGeminiApiKey: false,
+  geminiApiKeySource: 'none',
+  isGeminiApiKeyLoaded: false,
+  isGeminiApiKeySaving: false,
+  geminiApiKeyError: null,
+  overlayThaiFontEnabled: true,
+  overlayFontPreset: readPersistedOverlayFontPreset(),
+  overlayFontSizeScale: readPersistedOverlayFontSizeScale(),
+
+  hydrateGeminiApiKey: async () => {
+    if (typeof window === 'undefined' || !window.electronAPI?.gemini?.getApiKeyStatus) {
+      set({
+        isGeminiApiKeyLoaded: true,
+        geminiApiKeyError: 'Gemini secure storage bridge is not available.',
+      });
+      return;
+    }
+
+    try {
+      let status = await window.electronAPI.gemini.getApiKeyStatus();
+      const legacyKey = readLegacyPersistedGeminiApiKey().trim();
+      let draft = '';
+      let errorMessage: string | null = null;
+
+      if (!status.configured && legacyKey) {
+        try {
+          status = await window.electronAPI.gemini.setApiKey(legacyKey);
+          clearLegacyPersistedGeminiApiKey();
+        } catch (error) {
+          draft = legacyKey;
+          errorMessage = error instanceof Error
+            ? error.message
+            : 'Failed to migrate legacy Gemini API key into secure storage.';
+        }
+      } else if (legacyKey) {
+        clearLegacyPersistedGeminiApiKey();
+      }
+
+      set({
+        geminiApiKeyDraft: draft,
+        hasGeminiApiKey: status.configured,
+        geminiApiKeySource: status.source,
+        isGeminiApiKeyLoaded: true,
+        geminiApiKeyError: errorMessage,
+      });
+    } catch (error) {
+      set({
+        isGeminiApiKeyLoaded: true,
+        geminiApiKeyError: error instanceof Error
+          ? error.message
+          : 'Failed to load Gemini API key status.',
+      });
+    }
+  },
 
   loadProject: async (file, fileData) => {
     // Clear OCR cache when loading a new file to avoid cross-file reuse
     useOCRTextLayerStore.getState().reset();
+    useUIStore.getState().resetView();
     // Save document to database for recent files tracking.
     // Use a canonical imported filepath when possible so OCR cache keys are stable
     // across open methods (browse, drag/drop, recent list).
-    const sourcePath = (file as unknown as { path?: string }).path ?? null;
-    let resolvedPath = sourcePath;
-    let resolvedFileData = fileData ?? null;
-    let importedPath: string | null = null;
-
-    if (window.electronAPI?.fs?.importFile) {
-      try {
-        if (!resolvedFileData) {
-          const buffer = await file.arrayBuffer();
-          resolvedFileData = new Uint8Array(buffer);
-        }
-        const dataForImport = new Uint8Array(resolvedFileData);
-        const imported = await window.electronAPI.fs.importFile({
-          name: file.name,
-          mimeType: file.type || 'application/octet-stream',
-          data: dataForImport
-        });
-        if (imported?.filepath) {
-          // Canonical stable path (content-hash based in main process).
-          importedPath = imported.filepath;
-        }
-      } catch (error) {
-        console.warn('[DB] Failed to import canonical file path, fallback to source path:', error);
-      }
-    }
-
-    // Keep legacy/source path if it already exists in DB (preserve old OCR cache/doc_id).
-    if (sourcePath && dbService.isAvailable()) {
-      try {
-        const existingSourceDoc = await dbService.getDocument(sourcePath);
-        if (existingSourceDoc?.id) {
-          resolvedPath = sourcePath;
-        } else if (importedPath) {
-          resolvedPath = importedPath;
-        }
-      } catch {
-        if (importedPath) resolvedPath = importedPath;
-      }
-    } else if (importedPath) {
-      resolvedPath = importedPath;
-    }
-
-    // Migration fallback:
-    // If we opened an imported (hash-path) file that has no OCR rows yet,
-    // but there is exactly one older document with the same filename and OCR cache,
-    // reuse that path so cache lookup remains backward compatible.
-    if (resolvedPath && dbService.isAvailable() && isImportedCachePath(resolvedPath)) {
-      try {
-        const activeDoc = await dbService.getDocument(resolvedPath);
-        const hasCurrentCache = Boolean(activeDoc?.id && await dbService.getLatestOCR(activeDoc.id));
-        if (!hasCurrentCache) {
-          const candidates = await dbService.findDocumentsByFilename(file.name);
-          const cacheCandidates = candidates.filter(
-            candidate => candidate.cache_pages > 0 && candidate.filepath !== resolvedPath
-          );
-          if (cacheCandidates.length === 1) {
-            resolvedPath = cacheCandidates[0].filepath;
-            console.log(
-              `[DB] Reusing OCR-backed document ${cacheCandidates[0].id} for "${file.name}" (cache pages: ${cacheCandidates[0].cache_pages})`
-            );
-          } else if (cacheCandidates.length > 1) {
-            console.warn(
-              `[DB] Multiple OCR-backed candidates found for "${file.name}". Keeping current imported path to avoid ambiguity.`
-            );
-          }
-        }
-      } catch (error) {
-        console.warn('[DB] Failed OCR cache fallback by filename:', error);
-      }
-    }
+    const prepared = await prepareProjectDocumentLoad({
+      db: dbService,
+      file: file as File & { path?: string },
+      fileData,
+      importFile: window.electronAPI?.fs?.importFile,
+    });
+    const resolvedPath = prepared.resolvedPath;
+    const resolvedFileData = prepared.resolvedFileData;
 
     if (!resolvedPath) {
       console.warn('[DB] File path not available. Recent list will not be saved for this file.');
@@ -207,7 +324,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       try {
         const ensuredId = await get().ensureDocumentId();
         if (ensuredId) {
-          await touchDocumentActivity(ensuredId);
+          await touchProjectDocumentActivity(dbService, ensuredId);
         }
       } catch (error) {
         console.error('[DB] Failed to ensure documentId:', error);
@@ -218,54 +335,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   ensureDocumentId: async () => {
     if (!dbService.isAvailable()) return null;
     const { documentId, file, filePath } = get();
+    const hadDocumentId = Boolean(documentId);
 
-    if (documentId) {
-      if (file && filePath && isImportedCachePath(filePath)) {
-        try {
-          const hasCurrentCache = Boolean(await dbService.getLatestOCR(documentId));
-          if (!hasCurrentCache) {
-            const candidates = await dbService.findDocumentsByFilename(file.name);
-            const cacheCandidates = candidates.filter(
-              candidate => candidate.cache_pages > 0 && candidate.id !== documentId
-            );
-            if (cacheCandidates.length === 1) {
-              const preferred = cacheCandidates[0];
-              console.log(
-                `[DB] Switching documentId ${documentId} -> ${preferred.id} for OCR cache compatibility`
-              );
-              set({ documentId: preferred.id, filePath: preferred.filepath });
-              return preferred.id;
-            }
-          }
-        } catch (error) {
-          console.warn('[DB] Failed to resolve legacy OCR cache document id:', error);
-        }
-      }
-      return documentId;
-    }
-
-    const path = filePath ?? (file as unknown as { path?: string }).path ?? null;
-    if (!path || !file) {
-      throw new Error('File path not available. Cannot ensure document_id.');
-    }
-
-    let doc = await dbService.getDocument(path);
-    if (!doc?.id) {
-      await dbService.saveDocument(path, file.name, 0);
-      doc = await dbService.getDocument(path);
-    }
-
-    if (!doc?.id) {
-      throw new Error('Failed to create document entry for OCR cache.');
-    }
+    const ensured = await ensureProjectDocumentRecord({
+      db: dbService,
+      documentId,
+      file: file as (File & { path?: string }) | null,
+      filePath,
+    });
 
     const currentPath = get().filePath;
-    if (currentPath !== path) {
+    if (!hadDocumentId && currentPath !== ensured.filePath) {
       return null;
     }
 
-    set({ documentId: doc.id, filePath: path });
-    return doc.id;
+    set({ documentId: ensured.documentId, filePath: ensured.filePath });
+    return ensured.documentId;
   },
 
   closeProject: () => set((state) => {
@@ -274,6 +359,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       setTimeout(() => URL.revokeObjectURL(state.fileUrl!), 0);
     }
     useOCRTextLayerStore.getState().reset();
+    useUIStore.getState().resetView();
     return { 
       file: null,
       fileUrl: null,
@@ -292,20 +378,111 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ currentPage: page });
     const documentId = get().documentId;
     if (documentId && options?.persist !== false) {
-      void persistDocumentPage(documentId, page);
+      void persistProjectDocumentPage(dbService, documentId, page);
     }
   },
   setTotalPages: (total) => {
     set({ totalPages: total });
     const documentId = get().documentId;
     if (documentId && total > 0) {
-      void persistTotalPages(documentId, total);
+      void persistProjectDocumentTotalPages(dbService, documentId, total);
     }
   },
   setViewMode: (mode) => set({ viewMode: mode }),
-  setTranslationMode: (mode) => set({ translationMode: mode }),
+  setTranslationMode: (mode) => set({
+    translationMode: mode,
+    safetySettings: getDefaultSafetySettingsForMode(mode),
+  }),
   setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
-  setTargetLanguage: (lang) => set({ targetLanguage: lang }),
+  setTargetLanguage: (lang) => {
+    const shouldEnableThaiOverlay = isThaiTargetLanguage(lang);
+    persistOverlayThaiFontEnabled(shouldEnableThaiOverlay);
+    set({
+      targetLanguage: lang,
+      overlayThaiFontEnabled: shouldEnableThaiOverlay,
+    });
+  },
+  setGeminiApiKeyDraft: (apiKey) => set({
+    geminiApiKeyDraft: String(apiKey || ''),
+    geminiApiKeyError: null,
+  }),
+  saveGeminiApiKey: async () => {
+    if (typeof window === 'undefined' || !window.electronAPI?.gemini?.setApiKey) {
+      set({ geminiApiKeyError: 'Gemini secure storage bridge is not available.' });
+      return false;
+    }
+
+    const trimmed = String(get().geminiApiKeyDraft || '').trim();
+    if (!trimmed) {
+      set({ geminiApiKeyError: 'Gemini API key cannot be empty.' });
+      return false;
+    }
+
+    set({ isGeminiApiKeySaving: true, geminiApiKeyError: null });
+    try {
+      const status = await window.electronAPI.gemini.setApiKey(trimmed);
+      clearLegacyPersistedGeminiApiKey();
+      set({
+        geminiApiKeyDraft: '',
+        hasGeminiApiKey: status.configured,
+        geminiApiKeySource: status.source,
+        isGeminiApiKeyLoaded: true,
+        isGeminiApiKeySaving: false,
+        geminiApiKeyError: null,
+      });
+      return true;
+    } catch (error) {
+      set({
+        isGeminiApiKeySaving: false,
+        geminiApiKeyError: error instanceof Error
+          ? error.message
+          : 'Failed to save Gemini API key.',
+      });
+      return false;
+    }
+  },
+  clearGeminiApiKey: async () => {
+    if (typeof window === 'undefined' || !window.electronAPI?.gemini?.clearApiKey) {
+      set({ geminiApiKeyError: 'Gemini secure storage bridge is not available.' });
+      return false;
+    }
+
+    set({ isGeminiApiKeySaving: true, geminiApiKeyError: null });
+    try {
+      const status = await window.electronAPI.gemini.clearApiKey();
+      clearLegacyPersistedGeminiApiKey();
+      set({
+        geminiApiKeyDraft: '',
+        hasGeminiApiKey: status.configured,
+        geminiApiKeySource: status.source,
+        isGeminiApiKeyLoaded: true,
+        isGeminiApiKeySaving: false,
+        geminiApiKeyError: null,
+      });
+      return true;
+    } catch (error) {
+      set({
+        isGeminiApiKeySaving: false,
+        geminiApiKeyError: error instanceof Error
+          ? error.message
+          : 'Failed to clear Gemini API key.',
+      });
+      return false;
+    }
+  },
+  setOverlayThaiFontEnabled: (enabled) => {
+    persistOverlayThaiFontEnabled(enabled);
+    set({ overlayThaiFontEnabled: Boolean(enabled) });
+  },
+  setOverlayFontPreset: (preset) => {
+    persistOverlayFontPreset(preset);
+    set({ overlayFontPreset: preset });
+  },
+  setOverlayFontSizeScale: (scale) => {
+    const normalized = clampOverlayFontSizeScale(scale);
+    persistOverlayFontSizeScale(normalized);
+    set({ overlayFontSizeScale: normalized });
+  },
   updateSafetySettings: (newSettings) => set((state) => ({
     safetySettings: { ...state.safetySettings, ...newSettings }
   }))

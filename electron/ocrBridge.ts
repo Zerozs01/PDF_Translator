@@ -52,6 +52,7 @@ interface ExternalOcrBridgeResponse {
 
 const EXTERNAL_ENGINES: ExternalBridgeEngine[] = ['paddleocr', 'easyocr'];
 const bridgeDaemons = new Map<ExternalBridgeEngine, BridgeDaemon>();
+let externalOcrTempRoot: string | null = null;
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /pin_memory.*no accelerator/i,
   /connectivity check to the model hoster has been skipped/i,
@@ -92,12 +93,59 @@ function resolveBridgeScriptSignature(scriptPath: string): string {
   }
 }
 
+function normalizePythonOverride(value: string | undefined): string | null {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return null;
+  if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
+    const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
+    return fs.existsSync(resolved) ? resolved : null;
+  }
+  return trimmed;
+}
+
+function findLocalPythonExecutable(roots: Array<string | null | undefined>): string | null {
+  const pythonRelativePath = process.platform === 'win32'
+    ? ['Scripts', 'python.exe']
+    : ['bin', 'python'];
+  const seen = new Set<string>();
+
+  for (const root of roots) {
+    if (!root) continue;
+    const resolvedRoot = path.resolve(root);
+    if (seen.has(resolvedRoot)) continue;
+    seen.add(resolvedRoot);
+
+    for (const venvDir of ['.venv-ocr', '.venv']) {
+      const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
 function resolvePythonExecutable(engine: ExternalBridgeEngine): string {
-  if (engine === 'paddleocr' && process.env.PADDLE_OCR_PYTHON_PATH) return process.env.PADDLE_OCR_PYTHON_PATH;
-  if (engine === 'easyocr' && process.env.EASY_YOLO_OCR_PYTHON_PATH) return process.env.EASY_YOLO_OCR_PYTHON_PATH;
-  if (process.env.OCR_PYTHON_PATH) return process.env.OCR_PYTHON_PATH;
-  const localVenvPython = path.join(app.getAppPath(), '.venv-ocr', 'Scripts', 'python.exe');
-  if (fs.existsSync(localVenvPython)) return localVenvPython;
+  const engineOverride = engine === 'paddleocr'
+    ? normalizePythonOverride(process.env.PADDLE_OCR_PYTHON_PATH)
+    : normalizePythonOverride(process.env.EASY_YOLO_OCR_PYTHON_PATH);
+  if (engineOverride) return engineOverride;
+
+  const sharedOverride = normalizePythonOverride(process.env.OCR_PYTHON_PATH);
+  if (sharedOverride) return sharedOverride;
+
+  const localVenvPython = findLocalPythonExecutable([
+    process.cwd(),
+    app.getAppPath(),
+    path.resolve(app.getAppPath(), '..'),
+    path.resolve(__dirname, '..'),
+    path.dirname(process.execPath),
+    process.resourcesPath,
+    process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
+  ]);
+  if (localVenvPython) return localVenvPython;
+
   return 'python';
 }
 
@@ -106,6 +154,17 @@ function resolveBridgeEnv(): NodeJS.ProcessEnv {
     ...process.env,
     PYTHONUNBUFFERED: '1',
   };
+}
+
+function getExternalOcrTempRoot(): string {
+  if (externalOcrTempRoot) {
+    return externalOcrTempRoot;
+  }
+
+  const tempRoot = path.join(os.tmpdir(), 'pdf-translator-ocr');
+  fs.mkdirSync(tempRoot, { recursive: true });
+  externalOcrTempRoot = tempRoot;
+  return tempRoot;
 }
 
 function isBenignBridgeStderr(message: string): boolean {
@@ -368,8 +427,10 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
   }
 
   const engine = payload.engine;
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pdf-translator-ocr-'));
-  const imagePath = path.join(tempDir, `input${mimeTypeToExtension(payload.imageMimeType)}`);
+  const imagePath = path.join(
+    getExternalOcrTempRoot(),
+    `${engine}-${randomUUID()}${mimeTypeToExtension(payload.imageMimeType)}`
+  );
 
   try {
     await fs.promises.writeFile(imagePath, coerceImageBuffer(payload.imageData));
@@ -432,7 +493,7 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
 
     return response;
   } finally {
-    await fs.promises.rm(tempDir, { recursive: true, force: true });
+    await fs.promises.rm(imagePath, { force: true });
   }
 }
 

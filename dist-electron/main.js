@@ -3,9 +3,9 @@ const electron = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const child_process = require("child_process");
 const Database = require("better-sqlite3");
 const os = require("os");
-const child_process = require("child_process");
 let db = null;
 function initDB() {
   if (db) return db;
@@ -91,6 +91,28 @@ function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for Translation Cache (per page/context/engine)
+      CREATE TABLE IF NOT EXISTS translation_cache (
+        document_id INTEGER NOT NULL,
+        page_number INTEGER NOT NULL,
+        cache_key TEXT NOT NULL,
+        ocr_engine TEXT NOT NULL,
+        ocr_language TEXT NOT NULL,
+        source_language TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        translation_mode TEXT NOT NULL,
+        translator_engine TEXT NOT NULL,
+        source_fingerprint TEXT NOT NULL,
+        translated_by_index TEXT NOT NULL,
+        translated_text TEXT NOT NULL,
+        line_count INTEGER DEFAULT 0,
+        group_count INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (document_id, page_number, cache_key),
+        FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
@@ -100,6 +122,7 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup ON translation_cache(document_id, page_number, ocr_engine, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 
       -- 🚀 Automatic Search Sync Triggers
@@ -511,10 +534,247 @@ const OCRCacheDAO = {
       updated_at: row.updated_at,
       ocr_data: JSON.parse(row.ocr_data)
     };
+  },
+  /** One round-trip: distinct cached pages + latest update per document (matches findByFilenameWithCacheStats semantics). */
+  getAggregatedCacheStatsByDocumentIds: (documentIds) => {
+    if (!db) throw new Error("DB not initialized");
+    const ids = documentIds.filter((id) => Number.isFinite(id) && id > 0);
+    if (ids.length === 0) {
+      return [];
+    }
+    const placeholders = ids.map(() => "?").join(", ");
+    return db.prepare(
+      `
+      SELECT document_id,
+        CAST(COUNT(*) AS INTEGER) AS cache_pages,
+        MAX(updated_at) AS last_cache_update
+      FROM (
+        SELECT document_id, page_number, MAX(updated_at) AS updated_at
+        FROM (
+          SELECT document_id, page_number, updated_at FROM ocr_cache
+          UNION ALL
+          SELECT document_id, page_number, updated_at FROM ocr_cache_engine
+        ) merged_cache
+        GROUP BY document_id, page_number
+      ) per_page
+      WHERE document_id IN (${placeholders})
+      GROUP BY document_id
+    `
+    ).all(...ids);
   }
+};
+const TranslationCacheDAO = {
+  save: (documentId, pageNumber, cacheKey, entry) => {
+    if (!db) throw new Error("DB not initialized");
+    const now = Date.now();
+    const normalizedEngine = String(entry.ocrEngine || "tesseract").toLowerCase();
+    const stmt = db.prepare(`
+      INSERT INTO translation_cache (
+        document_id,
+        page_number,
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @documentId,
+        @pageNumber,
+        @cacheKey,
+        @ocrEngine,
+        @ocrLanguage,
+        @sourceLanguage,
+        @targetLanguage,
+        @translationMode,
+        @translatorEngine,
+        @sourceFingerprint,
+        @translatedByIndex,
+        @translatedText,
+        @lineCount,
+        @groupCount,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(document_id, page_number, cache_key) DO UPDATE SET
+        ocr_engine = @ocrEngine,
+        ocr_language = @ocrLanguage,
+        source_language = @sourceLanguage,
+        target_language = @targetLanguage,
+        translation_mode = @translationMode,
+        translator_engine = @translatorEngine,
+        source_fingerprint = @sourceFingerprint,
+        translated_by_index = @translatedByIndex,
+        translated_text = @translatedText,
+        line_count = @lineCount,
+        group_count = @groupCount,
+        created_at = @createdAt,
+        updated_at = @updatedAt
+    `);
+    stmt.run({
+      documentId,
+      pageNumber,
+      cacheKey,
+      ocrEngine: normalizedEngine,
+      ocrLanguage: String(entry.ocrLanguage || "eng"),
+      sourceLanguage: String(entry.sourceLanguage || "eng").toLowerCase(),
+      targetLanguage: String(entry.targetLanguage || "th").toLowerCase(),
+      translationMode: String(entry.translationMode || "manga").toLowerCase(),
+      translatorEngine: String(entry.translatorEngine || "offline").toLowerCase(),
+      sourceFingerprint: String(entry.sourceFingerprint || ""),
+      translatedByIndex: JSON.stringify(Array.isArray(entry.translatedByIndex) ? entry.translatedByIndex : []),
+      translatedText: String(entry.translatedText || ""),
+      lineCount: Number(entry.lineCount || 0),
+      groupCount: Number(entry.groupCount || 0),
+      createdAt: Number(entry.createdAt || now),
+      updatedAt: now
+    });
+  },
+  getByPage: (documentId, pageNumber) => {
+    if (!db) throw new Error("DB not initialized");
+    const rows = db.prepare(`
+      SELECT
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at
+      FROM translation_cache
+      WHERE document_id = ?
+        AND page_number = ?
+      ORDER BY created_at DESC, updated_at DESC
+    `).all(documentId, pageNumber);
+    return rows.map((row) => {
+      let translatedByIndex = [];
+      try {
+        const parsed = JSON.parse(row.translated_by_index);
+        if (Array.isArray(parsed)) {
+          translatedByIndex = parsed.map((item) => ({
+            index: Number(item.index || 0),
+            text: String(item.text || "")
+          })).filter((item) => Number.isFinite(item.index));
+        }
+      } catch {
+        translatedByIndex = [];
+      }
+      return {
+        key: row.cache_key,
+        pageNum: pageNumber,
+        ocrEngine: row.ocr_engine,
+        ocrLanguage: row.ocr_language,
+        sourceLanguage: row.source_language,
+        targetLanguage: row.target_language,
+        translationMode: row.translation_mode,
+        translatorEngine: row.translator_engine,
+        sourceFingerprint: row.source_fingerprint,
+        translatedByIndex,
+        translatedText: row.translated_text,
+        lineCount: Number(row.line_count || 0),
+        groupCount: Number(row.group_count || 0),
+        createdAt: Number(row.created_at || Date.now())
+      };
+    });
+  },
+  clearByEngine: (documentId, pageNumber, engine = "tesseract") => {
+    if (!db) throw new Error("DB not initialized");
+    const normalizedEngine = String(engine || "tesseract").toLowerCase();
+    const result = db.prepare("DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    return result.changes > 0;
+  }
+};
+const SUPPORTED_DOCUMENT_EXTENSIONS = /* @__PURE__ */ new Map([
+  [".pdf", "application/pdf"],
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".tif", "image/tiff"],
+  [".tiff", "image/tiff"]
+]);
+const SUPPORTED_IMPORT_MIME_TYPES = /* @__PURE__ */ new Map([
+  ["application/pdf", ".pdf"],
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/tiff", ".tiff"]
+]);
+const getRequestedDocumentPath = (filepath) => {
+  if (!path.isAbsolute(filepath)) {
+    throw new Error("Filepath must be absolute");
+  }
+  if (filepath.includes("\0")) {
+    throw new Error("Invalid filepath");
+  }
+  return path.resolve(filepath);
+};
+const tryResolveRealDocumentPath = async (filepath) => {
+  try {
+    return await fs.promises.realpath(filepath);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return filepath;
+    }
+    throw error;
+  }
+};
+const getDocumentMimeType = (filepath) => SUPPORTED_DOCUMENT_EXTENSIONS.get(path.extname(filepath).toLowerCase()) ?? null;
+const isPathWithinDirectory = (parentPath, childPath) => {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === "" || !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+};
+const inspectExistingDocumentFile = async (filepath) => {
+  const requestedPath = getRequestedDocumentPath(filepath);
+  const canonicalPath = await tryResolveRealDocumentPath(requestedPath);
+  const mimeType = getDocumentMimeType(canonicalPath);
+  if (!mimeType) {
+    throw new Error("Unsupported file type");
+  }
+  const stats = await fs.promises.stat(canonicalPath);
+  if (!stats.isFile()) {
+    throw new Error("Path is not a file");
+  }
+  return {
+    canonicalPath,
+    mimeType,
+    size: stats.size,
+    name: path.basename(canonicalPath)
+  };
+};
+const resolveImportedDocumentName = (name, mimeType) => {
+  const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_").trim();
+  const extFromName = path.extname(safeName).toLowerCase();
+  const normalizedMimeType = String(mimeType || "").toLowerCase();
+  const fallbackExt = SUPPORTED_IMPORT_MIME_TYPES.get(normalizedMimeType) ?? "";
+  const finalExt = SUPPORTED_DOCUMENT_EXTENSIONS.has(extFromName) ? extFromName : fallbackExt;
+  const resolvedMimeType = SUPPORTED_DOCUMENT_EXTENSIONS.get(finalExt);
+  if (!finalExt || !resolvedMimeType) {
+    throw new Error("Unsupported file type");
+  }
+  const baseName = extFromName ? safeName.slice(0, safeName.length - extFromName.length) : safeName;
+  return {
+    finalName: `${baseName || "document"}${finalExt}`,
+    finalExt,
+    resolvedMimeType
+  };
 };
 const EXTERNAL_ENGINES = ["paddleocr", "easyocr"];
 const bridgeDaemons = /* @__PURE__ */ new Map();
+let externalOcrTempRoot = null;
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /pin_memory.*no accelerator/i,
   /connectivity check to the model hoster has been skipped/i,
@@ -536,12 +796,47 @@ function resolveBridgeScriptSignature(scriptPath) {
     return `${scriptPath}:unknown`;
   }
 }
+function normalizePythonOverride(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
+    const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
+    return fs.existsSync(resolved) ? resolved : null;
+  }
+  return trimmed;
+}
+function findLocalPythonExecutable(roots) {
+  const pythonRelativePath = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+  const seen = /* @__PURE__ */ new Set();
+  for (const root of roots) {
+    if (!root) continue;
+    const resolvedRoot = path.resolve(root);
+    if (seen.has(resolvedRoot)) continue;
+    seen.add(resolvedRoot);
+    for (const venvDir of [".venv-ocr", ".venv"]) {
+      const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
 function resolvePythonExecutable(engine) {
-  if (engine === "paddleocr" && process.env.PADDLE_OCR_PYTHON_PATH) return process.env.PADDLE_OCR_PYTHON_PATH;
-  if (engine === "easyocr" && process.env.EASY_YOLO_OCR_PYTHON_PATH) return process.env.EASY_YOLO_OCR_PYTHON_PATH;
-  if (process.env.OCR_PYTHON_PATH) return process.env.OCR_PYTHON_PATH;
-  const localVenvPython = path.join(electron.app.getAppPath(), ".venv-ocr", "Scripts", "python.exe");
-  if (fs.existsSync(localVenvPython)) return localVenvPython;
+  const engineOverride = engine === "paddleocr" ? normalizePythonOverride(process.env.PADDLE_OCR_PYTHON_PATH) : normalizePythonOverride(process.env.EASY_YOLO_OCR_PYTHON_PATH);
+  if (engineOverride) return engineOverride;
+  const sharedOverride = normalizePythonOverride(process.env.OCR_PYTHON_PATH);
+  if (sharedOverride) return sharedOverride;
+  const localVenvPython = findLocalPythonExecutable([
+    process.cwd(),
+    electron.app.getAppPath(),
+    path.resolve(electron.app.getAppPath(), ".."),
+    path.resolve(__dirname, ".."),
+    path.dirname(process.execPath),
+    process.resourcesPath,
+    process.resourcesPath ? path.resolve(process.resourcesPath, "..") : null
+  ]);
+  if (localVenvPython) return localVenvPython;
   return "python";
 }
 function resolveBridgeEnv() {
@@ -549,6 +844,15 @@ function resolveBridgeEnv() {
     ...process.env,
     PYTHONUNBUFFERED: "1"
   };
+}
+function getExternalOcrTempRoot() {
+  if (externalOcrTempRoot) {
+    return externalOcrTempRoot;
+  }
+  const tempRoot = path.join(os.tmpdir(), "pdf-translator-ocr");
+  fs.mkdirSync(tempRoot, { recursive: true });
+  externalOcrTempRoot = tempRoot;
+  return tempRoot;
 }
 function isBenignBridgeStderr(message) {
   const trimmed = message.trim();
@@ -772,8 +1076,10 @@ async function runExternalOcr(payload) {
     throw new Error(`Unsupported external OCR engine: ${payload.engine}`);
   }
   const engine = payload.engine;
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pdf-translator-ocr-"));
-  const imagePath = path.join(tempDir, `input${mimeTypeToExtension(payload.imageMimeType)}`);
+  const imagePath = path.join(
+    getExternalOcrTempRoot(),
+    `${engine}-${crypto.randomUUID()}${mimeTypeToExtension(payload.imageMimeType)}`
+  );
   try {
     await fs.promises.writeFile(imagePath, coerceImageBuffer(payload.imageData));
     const requestPayload = {
@@ -830,7 +1136,7 @@ async function runExternalOcr(payload) {
     }
     return response;
   } finally {
-    await fs.promises.rm(tempDir, { recursive: true, force: true });
+    await fs.promises.rm(imagePath, { force: true });
   }
 }
 async function prewarmExternalOcrEngine(engine, language = "eng") {
@@ -861,9 +1167,88 @@ function disposeExternalOcrDaemons() {
     teardownDaemon(engine);
   }
 }
+const SECURE_SETTINGS_DIR = "secure-settings";
+const GEMINI_API_KEY_FILE = "gemini-api-key.bin";
+const getSecureSettingsDir = () => {
+  return path.join(electron.app.getPath("userData"), SECURE_SETTINGS_DIR);
+};
+const getGeminiApiKeyFilePath = () => {
+  return path.join(getSecureSettingsDir(), GEMINI_API_KEY_FILE);
+};
+const getEnvironmentGeminiApiKey = () => {
+  return String(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "").trim();
+};
+const ensureSecureSettingsDir = () => {
+  fs.mkdirSync(getSecureSettingsDir(), { recursive: true });
+};
+const getGeminiApiKeyStatus = () => {
+  const secureFilePath = getGeminiApiKeyFilePath();
+  if (fs.existsSync(secureFilePath)) {
+    return {
+      configured: true,
+      source: "secure-storage",
+      supportsSecureStorage: electron.safeStorage.isEncryptionAvailable()
+    };
+  }
+  if (getEnvironmentGeminiApiKey()) {
+    return {
+      configured: true,
+      source: "environment",
+      supportsSecureStorage: electron.safeStorage.isEncryptionAvailable()
+    };
+  }
+  return {
+    configured: false,
+    source: "none",
+    supportsSecureStorage: electron.safeStorage.isEncryptionAvailable()
+  };
+};
+const readStoredGeminiApiKey = () => {
+  const secureFilePath = getGeminiApiKeyFilePath();
+  if (!fs.existsSync(secureFilePath)) {
+    return null;
+  }
+  if (!electron.safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS-level secure storage is not available.");
+  }
+  const encrypted = fs.readFileSync(secureFilePath);
+  if (!encrypted || encrypted.length === 0) {
+    return null;
+  }
+  return electron.safeStorage.decryptString(encrypted).trim() || null;
+};
+const resolveGeminiApiKey = () => {
+  const storedKey = readStoredGeminiApiKey();
+  if (storedKey) {
+    return storedKey;
+  }
+  const envKey = getEnvironmentGeminiApiKey();
+  return envKey || null;
+};
+const setStoredGeminiApiKey = (apiKey) => {
+  const trimmed = String(apiKey || "").trim();
+  if (!trimmed) {
+    throw new Error("Gemini API key cannot be empty.");
+  }
+  if (!electron.safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS-level secure storage is not available on this device.");
+  }
+  ensureSecureSettingsDir();
+  const encrypted = electron.safeStorage.encryptString(trimmed);
+  fs.writeFileSync(getGeminiApiKeyFilePath(), encrypted);
+  return getGeminiApiKeyStatus();
+};
+const clearStoredGeminiApiKey = () => {
+  const secureFilePath = getGeminiApiKeyFilePath();
+  if (fs.existsSync(secureFilePath)) {
+    fs.unlinkSync(secureFilePath);
+  }
+  return getGeminiApiKeyStatus();
+};
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path.join(process.env.DIST, "../public");
 let win;
+let disposeArgosTranslateRuntime = null;
 const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
 function createWindow() {
   electron.Menu.setApplicationMenu(null);
@@ -910,6 +1295,7 @@ function createWindow() {
 }
 electron.app.on("window-all-closed", () => {
   disposeExternalOcrDaemons();
+  disposeArgosTranslateRuntime?.();
   if (process.platform !== "darwin") {
     electron.app.quit();
   }
@@ -921,14 +1307,346 @@ electron.app.on("activate", () => {
 });
 electron.app.on("before-quit", () => {
   disposeExternalOcrDaemons();
+  disposeArgosTranslateRuntime?.();
 });
 electron.app.whenReady().then(() => {
   initDB();
   const isValidString = (value) => typeof value === "string" && value.length > 0 && value.length < 1e4;
   const isValidNumber = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const isValidEngine = (value) => typeof value === "string" && ["tesseract", "paddleocr", "easyocr"].includes(value);
-  const sanitizePath = (filepath) => {
-    return filepath.replace(/\.\.\//g, "").replace(/\.\.\\/g, "");
+  const getImportsDirectory = () => path.join(electron.app.getPath("userData"), "imports");
+  const assertAuthorizedDocumentRead = async (requestedPath, canonicalPath) => {
+    const importDir = getImportsDirectory();
+    const normalizedImportDir = await fs.promises.realpath(importDir).catch(() => path.resolve(importDir));
+    if (isPathWithinDirectory(normalizedImportDir, canonicalPath)) {
+      return;
+    }
+    if (DocumentDAO.get(requestedPath) || DocumentDAO.get(canonicalPath)) {
+      return;
+    }
+    throw new Error("File access denied");
+  };
+  const ARGOS_LANG_ALIASES = {
+    en: "en",
+    eng: "en",
+    english: "en",
+    th: "th",
+    tha: "th",
+    thai: "th",
+    ja: "ja",
+    jpn: "ja",
+    ko: "ko",
+    kor: "ko",
+    zh: "zh",
+    chi: "zh",
+    chi_sim: "zh",
+    chi_tra: "zh",
+    vi: "vi",
+    vie: "vi",
+    de: "de",
+    deu: "de",
+    fr: "fr",
+    fra: "fr",
+    ru: "ru",
+    rus: "ru",
+    es: "es",
+    spa: "es"
+  };
+  const LANGUAGE_DISPLAY_NAMES = {
+    en: "English",
+    th: "Thai",
+    ja: "Japanese",
+    ko: "Korean",
+    zh: "Chinese",
+    vi: "Vietnamese",
+    de: "German",
+    fr: "French",
+    ru: "Russian",
+    es: "Spanish"
+  };
+  const normalizeArgosLanguage = (value, fallback) => {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return fallback;
+    return ARGOS_LANG_ALIASES[raw] || raw.split("-")[0] || fallback;
+  };
+  const normalizePythonOverride2 = (value) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return null;
+    if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
+      const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
+      return fs.existsSync(resolved) ? resolved : null;
+    }
+    return trimmed;
+  };
+  const findLocalPythonExecutable2 = (roots) => {
+    const pythonRelativePath = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+    const seen = /* @__PURE__ */ new Set();
+    for (const root of roots) {
+      if (!root) continue;
+      const resolvedRoot = path.resolve(root);
+      if (seen.has(resolvedRoot)) continue;
+      seen.add(resolvedRoot);
+      for (const venvDir of [".venv-ocr", ".venv"]) {
+        const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  };
+  const resolvePythonExecutable2 = () => {
+    const argosOverride = normalizePythonOverride2(process.env.ARGOS_PYTHON_PATH);
+    if (argosOverride) return argosOverride;
+    const appOverride = normalizePythonOverride2(process.env.PDF_TRANSLATOR_PYTHON);
+    if (appOverride) return appOverride;
+    const sharedOverride = normalizePythonOverride2(process.env.OCR_PYTHON_PATH);
+    if (sharedOverride) return sharedOverride;
+    const localVenvPython = findLocalPythonExecutable2([
+      process.cwd(),
+      electron.app.getAppPath(),
+      path.resolve(electron.app.getAppPath(), ".."),
+      path.resolve(__dirname, ".."),
+      path.dirname(process.execPath),
+      process.resourcesPath,
+      process.resourcesPath ? path.resolve(process.resourcesPath, "..") : null
+    ]);
+    if (localVenvPython) return localVenvPython;
+    const virtualEnv = process.env.VIRTUAL_ENV;
+    if (virtualEnv) {
+      const windowsPython = path.join(virtualEnv, "Scripts", "python.exe");
+      if (fs.existsSync(windowsPython)) return windowsPython;
+      const posixPython = path.join(virtualEnv, "bin", "python");
+      if (fs.existsSync(posixPython)) return posixPython;
+    }
+    return process.platform === "win32" ? "python" : "python3";
+  };
+  const resolveArgosBridgePath = () => {
+    const candidates = [
+      path.join(process.cwd(), "scripts", "argos_translate_bridge.py"),
+      path.join(__dirname, "../scripts/argos_translate_bridge.py"),
+      path.join(process.resourcesPath, "ocr-bridge", "argos_translate_bridge.py")
+    ];
+    const found = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!found) {
+      throw new Error("Argos bridge script not found. Expected scripts/argos_translate_bridge.py");
+    }
+    return found;
+  };
+  const resolveArgosBridgeEnv = () => {
+    const userDataRoot = path.join(electron.app.getPath("userData"), "argos-runtime");
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(userDataRoot, "config");
+    const cacheHome = process.env.XDG_CACHE_HOME || path.join(userDataRoot, "cache");
+    fs.mkdirSync(configHome, { recursive: true });
+    fs.mkdirSync(cacheHome, { recursive: true });
+    const packageDirCandidates = [
+      process.env.ARGOS_PACKAGES_DIR,
+      process.env.ARGOS_TRANSLATE_PACKAGE_DIR,
+      path.join(electron.app.getPath("home"), ".local", "share", "argos-translate", "packages"),
+      path.join(userDataRoot, "packages")
+    ].filter((candidate) => Boolean(candidate));
+    const packageDir = packageDirCandidates.find((candidate) => {
+      try {
+        return fs.existsSync(candidate);
+      } catch {
+        return false;
+      }
+    });
+    return {
+      ...process.env,
+      PYTHONUTF8: "1",
+      XDG_CONFIG_HOME: configHome,
+      XDG_CACHE_HOME: cacheHome,
+      ...packageDir ? {
+        ARGOS_PACKAGES_DIR: packageDir,
+        ARGOS_TRANSLATE_PACKAGE_DIR: packageDir
+      } : {}
+    };
+  };
+  const argosBridgeScriptSignature = (bridgePath) => {
+    try {
+      const stat = fs.statSync(bridgePath);
+      return `${bridgePath}:${Math.floor(stat.mtimeMs)}`;
+    } catch {
+      return `${bridgePath}:unknown`;
+    }
+  };
+  let argosBridgeDaemon = null;
+  const teardownArgosDaemon = (reason) => {
+    const daemon = argosBridgeDaemon;
+    if (!daemon) return;
+    argosBridgeDaemon = null;
+    for (const [, pending] of daemon.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(reason ?? new Error("Argos translation daemon stopped unexpectedly"));
+    }
+    daemon.pending.clear();
+    if (!daemon.child.killed) {
+      daemon.child.kill();
+    }
+  };
+  disposeArgosTranslateRuntime = () => {
+    teardownArgosDaemon(new Error("Argos translation runtime disposed"));
+  };
+  const handleArgosDaemonStdout = (chunk) => {
+    const daemon = argosBridgeDaemon;
+    if (!daemon) return;
+    daemon.stdoutBuffer += chunk.toString();
+    const lines = daemon.stdoutBuffer.split(/\r?\n/);
+    daemon.stdoutBuffer = lines.pop() ?? "";
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      let payload;
+      try {
+        payload = JSON.parse(line);
+      } catch {
+        console.warn(`[argosBridge] Ignoring non-JSON stdout: ${line}`);
+        continue;
+      }
+      if (!payload.id) {
+        console.warn("[argosBridge] Ignoring daemon response without request id");
+        continue;
+      }
+      const pending = daemon.pending.get(payload.id);
+      if (!pending) {
+        console.warn(`[argosBridge] Received orphaned daemon response ${payload.id}`);
+        continue;
+      }
+      daemon.pending.delete(payload.id);
+      clearTimeout(pending.timeout);
+      if (payload.ok === false) {
+        pending.reject(new Error(payload.reason || "Argos translation bridge failed"));
+        continue;
+      }
+      pending.resolve(payload);
+    }
+  };
+  const ensureArgosDaemon = () => {
+    const pythonExecutable = resolvePythonExecutable2();
+    const bridgePath = resolveArgosBridgePath();
+    const bridgeSignature = argosBridgeScriptSignature(bridgePath);
+    const env = {
+      ...resolveArgosBridgeEnv(),
+      // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
+      ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || "MINISBD"
+    };
+    if (argosBridgeDaemon && !argosBridgeDaemon.child.killed && argosBridgeDaemon.pythonExecutable === pythonExecutable && argosBridgeDaemon.bridgePath === bridgePath && argosBridgeDaemon.bridgeSignature === bridgeSignature) {
+      return argosBridgeDaemon;
+    }
+    if (argosBridgeDaemon) {
+      teardownArgosDaemon(new Error("Argos bridge runtime changed; restarting daemon"));
+    }
+    const child = child_process.spawn(pythonExecutable, [bridgePath, "--stdio-server"], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+      env
+    });
+    const daemon = {
+      child,
+      stdoutBuffer: "",
+      pending: /* @__PURE__ */ new Map(),
+      pythonExecutable,
+      bridgePath,
+      bridgeSignature
+    };
+    child.stdout.on("data", (chunk) => {
+      handleArgosDaemonStdout(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      const message = chunk.toString().trim();
+      if (message) {
+        console.warn(`[argosBridge] ${message}`);
+      }
+    });
+    child.on("error", (error) => {
+      teardownArgosDaemon(error);
+    });
+    child.on("close", (code, signal) => {
+      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? "null"}, signal=${signal ?? "null"})`));
+    });
+    argosBridgeDaemon = daemon;
+    return daemon;
+  };
+  const requestArgosDaemon = async (payload, requestTimeoutMs) => {
+    const daemon = ensureArgosDaemon();
+    const id = crypto.randomUUID();
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        daemon.pending.delete(id);
+        teardownArgosDaemon(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
+        reject(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
+      }, requestTimeoutMs);
+      daemon.pending.set(id, { resolve, reject, timeout });
+      try {
+        const stdin = daemon.child.stdin;
+        if (!stdin) {
+          throw new Error("Argos daemon stdin is unavailable");
+        }
+        stdin.write(`${JSON.stringify({ id, ...payload })}
+`);
+      } catch (error) {
+        daemon.pending.delete(id);
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error(String(error)));
+        teardownArgosDaemon(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+  const runArgosTranslateBatch = async (texts, context) => {
+    if (!Array.isArray(texts)) {
+      throw new Error("Invalid input: texts must be an array");
+    }
+    if (texts.length === 0) return [];
+    const timeoutMs = Math.max(3e3, Math.min(12e4, Number(context?.timeoutMs || 45e3)));
+    const sourceLanguage = normalizeArgosLanguage(context?.sourceLanguage, "en");
+    const targetLanguage = normalizeArgosLanguage(context?.targetLanguage, "th");
+    if (sourceLanguage === targetLanguage) {
+      return texts.map((text) => String(text || ""));
+    }
+    const payload = {
+      texts: texts.map((text) => String(text || "")),
+      sourceLanguage,
+      targetLanguage,
+      mode: String(context?.mode || "manga"),
+      sourceType: String(context?.sourceType || "text")
+    };
+    const dedupedTexts = [];
+    const dedupeIndexByText = /* @__PURE__ */ new Map();
+    const textOrder = [];
+    for (const text of payload.texts) {
+      const key = String(text);
+      const existing = dedupeIndexByText.get(key);
+      if (existing !== void 0) {
+        textOrder.push(existing);
+        continue;
+      }
+      const nextIndex = dedupedTexts.length;
+      dedupeIndexByText.set(key, nextIndex);
+      dedupedTexts.push(key);
+      textOrder.push(nextIndex);
+    }
+    const dedupedPayload = {
+      ...payload,
+      texts: dedupedTexts
+    };
+    let response;
+    try {
+      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
+    } catch (error) {
+      teardownArgosDaemon(
+        error instanceof Error ? error : new Error(String(error))
+      );
+      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
+    }
+    if (!Array.isArray(response.translations)) {
+      throw new Error("Argos translation bridge returned invalid payload");
+    }
+    const dedupedTranslations = response.translations.map((item) => String(item ?? ""));
+    if (dedupedTranslations.length !== dedupedTexts.length) {
+      throw new Error(`Argos translation count mismatch: expected ${dedupedTexts.length}, got ${dedupedTranslations.length}`);
+    }
+    return textOrder.map((index) => dedupedTranslations[index] ?? "");
   };
   electron.ipcMain.handle("db:save-document", async (_, { filepath, filename, totalPages }) => {
     if (!isValidString(filepath) || !isValidString(filename)) {
@@ -938,8 +1656,11 @@ electron.app.whenReady().then(() => {
       throw new Error("Invalid input: totalPages must be a positive number");
     }
     try {
-      const safePath = sanitizePath(filepath);
-      const row = DocumentDAO.upsert(safePath, filename, totalPages);
+      const requestedPath = getRequestedDocumentPath(filepath);
+      const documentFile = await inspectExistingDocumentFile(requestedPath);
+      const storagePath = DocumentDAO.get(requestedPath) ? requestedPath : documentFile.canonicalPath;
+      const fileType = documentFile.mimeType === "application/pdf" ? "pdf" : "image";
+      const row = DocumentDAO.upsert(storagePath, filename, totalPages, documentFile.size, fileType);
       return row?.id ?? 0;
     } catch (error) {
       console.error("db:save-document error:", error);
@@ -951,8 +1672,8 @@ electron.app.whenReady().then(() => {
       throw new Error("Invalid input: filepath must be a non-empty string");
     }
     try {
-      const safePath = sanitizePath(filepath);
-      return DocumentDAO.get(safePath);
+      const requestedPath = getRequestedDocumentPath(filepath);
+      return DocumentDAO.get(requestedPath) ?? DocumentDAO.get(await tryResolveRealDocumentPath(requestedPath));
     } catch (error) {
       console.error("db:get-document error:", error);
       return null;
@@ -1015,6 +1736,61 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:get-latest-ocr error:", error);
       return null;
+    }
+  });
+  const MAX_OCR_CACHE_STATS_DOC_IDS = 500;
+  electron.ipcMain.handle("db:get-ocr-cache-stats-for-document-ids", async (_, payload) => {
+    const raw = payload?.documentIds;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return [];
+    }
+    const ids = raw.map((id) => typeof id === "number" ? id : Number(id)).filter((id) => Number.isFinite(id) && id > 0).slice(0, MAX_OCR_CACHE_STATS_DOC_IDS);
+    if (ids.length === 0) {
+      return [];
+    }
+    try {
+      return OCRCacheDAO.getAggregatedCacheStatsByDocumentIds(ids);
+    } catch (error) {
+      console.error("db:get-ocr-cache-stats-for-document-ids error:", error);
+      return [];
+    }
+  });
+  electron.ipcMain.handle("db:save-translation-cache", async (_, { docId, pageNum, cacheKey, entry }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    if (!isValidString(cacheKey) || !entry || typeof entry !== "object") {
+      throw new Error("Invalid input: cacheKey and entry are required");
+    }
+    try {
+      TranslationCacheDAO.save(docId, pageNum, cacheKey, entry);
+      return true;
+    } catch (error) {
+      console.error("db:save-translation-cache error:", error);
+      return false;
+    }
+  });
+  electron.ipcMain.handle("db:get-translation-cache-page", async (_, { docId, pageNum }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    try {
+      return TranslationCacheDAO.getByPage(docId, pageNum);
+    } catch (error) {
+      console.error("db:get-translation-cache-page error:", error);
+      return [];
+    }
+  });
+  electron.ipcMain.handle("db:clear-translation-cache-by-engine", async (_, { docId, pageNum, engine }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid input: docId and pageNum must be positive numbers");
+    }
+    try {
+      const selectedEngine = isValidEngine(engine) ? engine : "tesseract";
+      return TranslationCacheDAO.clearByEngine(docId, pageNum, selectedEngine);
+    } catch (error) {
+      console.error("db:clear-translation-cache-by-engine error:", error);
+      return false;
     }
   });
   electron.ipcMain.handle("db:get-recent-documents", async (_, limit = 50) => {
@@ -1098,20 +1874,14 @@ electron.app.whenReady().then(() => {
         return null;
       }
       const filepath = result.filePaths[0];
-      const safePath = sanitizePath(filepath);
-      if (!fs.existsSync(safePath)) {
-        throw new Error("File not found");
-      }
-      const buffer = await fs.promises.readFile(safePath);
-      const stats = await fs.promises.stat(safePath);
-      const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
+      const documentFile = await inspectExistingDocumentFile(filepath);
+      const buffer = await fs.promises.readFile(documentFile.canonicalPath);
       return {
-        filepath: safePath,
+        filepath: documentFile.canonicalPath,
         data: buffer,
-        mimeType,
-        size: stats.size,
-        name: path.basename(safePath)
+        mimeType: documentFile.mimeType,
+        size: documentFile.size,
+        name: documentFile.name
       };
     } catch (error) {
       console.error("fs:open-file error:", error);
@@ -1123,19 +1893,15 @@ electron.app.whenReady().then(() => {
       throw new Error("Invalid filepath");
     }
     try {
-      const safePath = sanitizePath(filepath);
-      if (!fs.existsSync(safePath)) {
-        throw new Error("File not found");
-      }
-      const buffer = await fs.promises.readFile(safePath);
-      const stats = await fs.promises.stat(safePath);
-      const ext = path.extname(safePath).toLowerCase();
-      const mimeType = ext === ".pdf" ? "application/pdf" : ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".tif" || ext === ".tiff" ? "image/tiff" : "application/octet-stream";
+      const requestedPath = getRequestedDocumentPath(filepath);
+      const documentFile = await inspectExistingDocumentFile(requestedPath);
+      await assertAuthorizedDocumentRead(requestedPath, documentFile.canonicalPath);
+      const buffer = await fs.promises.readFile(documentFile.canonicalPath);
       return {
         data: buffer,
-        mimeType,
-        size: stats.size,
-        name: path.basename(safePath)
+        mimeType: documentFile.mimeType,
+        size: documentFile.size,
+        name: documentFile.name
       };
     } catch (error) {
       console.error("fs:read-file error:", error);
@@ -1151,15 +1917,13 @@ electron.app.whenReady().then(() => {
       if (!(rawData instanceof Uint8Array)) {
         throw new Error("Invalid payload: data must be Uint8Array or ArrayBuffer");
       }
-      const safeName = payload.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const ext = path.extname(safeName);
-      const fallbackExt = payload.mimeType === "application/pdf" ? ".pdf" : payload.mimeType === "image/png" ? ".png" : payload.mimeType === "image/jpeg" ? ".jpg" : "";
-      const finalName = ext ? safeName : `${safeName}${fallbackExt}`;
-      const userDataDir = electron.app.getPath("userData");
-      const importDir = path.join(userDataDir, "imports");
+      const { finalName, finalExt, resolvedMimeType } = resolveImportedDocumentName(
+        payload.name,
+        payload.mimeType
+      );
+      const importDir = getImportsDirectory();
       await fs.promises.mkdir(importDir, { recursive: true });
       const contentHash = crypto.createHash("sha256").update(Buffer.from(rawData)).digest("hex").slice(0, 24);
-      const finalExt = ext || fallbackExt || path.extname(finalName) || "";
       const hashedPath = path.join(importDir, `${contentHash}${finalExt}`);
       let targetPath = hashedPath;
       if (!fs.existsSync(hashedPath)) {
@@ -1199,7 +1963,7 @@ electron.app.whenReady().then(() => {
       const stats = await fs.promises.stat(targetPath);
       return {
         filepath: targetPath,
-        mimeType: payload.mimeType,
+        mimeType: resolvedMimeType,
         size: stats.size,
         name: finalName
       };
@@ -1243,7 +2007,12 @@ electron.app.whenReady().then(() => {
     try {
       return await runExternalOcr(payload);
     } catch (error) {
-      console.error("ocr:run-external error:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (/External OCR canceled for (paddleocr|easyocr)/i.test(message)) {
+        console.warn(`ocr:run-external canceled: ${message}`);
+      } else {
+        console.error("ocr:run-external error:", error);
+      }
       throw error;
     }
   });
@@ -1406,6 +2175,45 @@ electron.app.whenReady().then(() => {
       return false;
     }
   });
+  electron.ipcMain.handle("translate:offline", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !isValidString(payload.text)) {
+      throw new Error("Invalid input: text must be a non-empty string");
+    }
+    try {
+      const translated = await runArgosTranslateBatch([payload.text], payload.context);
+      return translated[0] || "";
+    } catch (error) {
+      console.error("translate:offline error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("translate:offline-batch", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.texts)) {
+      throw new Error("Invalid input: texts must be an array");
+    }
+    const hasInvalidText = payload.texts.some((text) => typeof text !== "string");
+    if (hasInvalidText) {
+      throw new Error("Invalid input: all texts must be strings");
+    }
+    try {
+      return await runArgosTranslateBatch(payload.texts, payload.context);
+    } catch (error) {
+      console.error("translate:offline-batch error:", error);
+      throw error;
+    }
+  });
+  electron.ipcMain.handle("gemini:get-api-key-status", async () => {
+    return getGeminiApiKeyStatus();
+  });
+  electron.ipcMain.handle("gemini:set-api-key", async (_, payload) => {
+    if (!payload || typeof payload !== "object" || !isValidString(payload.apiKey)) {
+      throw new Error("Invalid input: apiKey must be a non-empty string");
+    }
+    return setStoredGeminiApiKey(payload.apiKey);
+  });
+  electron.ipcMain.handle("gemini:clear-api-key", async () => {
+    return clearStoredGeminiApiKey();
+  });
   electron.ipcMain.handle("gemini:translate", async (_, { text, context }) => {
     if (!isValidString(text)) {
       throw new Error("Invalid input: text must be a non-empty string");
@@ -1413,16 +2221,29 @@ electron.app.whenReady().then(() => {
     if (!context || typeof context !== "object") {
       throw new Error("Invalid input: context must be an object");
     }
-    const { mode = "manga", sourceType = "text" } = context;
-    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    const {
+      mode = "manga",
+      sourceType = "text",
+      sourceLanguage,
+      targetLanguage,
+      baseSystemPrompt
+    } = context;
+    const normalizedMode = mode === "official" ? "official" : mode === "manhwa" ? "manhwa" : "manga";
+    const normalizedSource = normalizeArgosLanguage(sourceLanguage, "en");
+    const normalizedTarget = normalizeArgosLanguage(targetLanguage, "th");
+    const sourceName = LANGUAGE_DISPLAY_NAMES[normalizedSource] || normalizedSource;
+    const targetName = LANGUAGE_DISPLAY_NAMES[normalizedTarget] || normalizedTarget;
+    const apiKey = resolveGeminiApiKey();
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY not configured. Please set it in .env file.");
+      throw new Error("Gemini API key is not configured. Save it once in Settings or provide GEMINI_API_KEY locally.");
     }
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    const systemPrompt = mode === "manga" ? `You are a professional manga translator. Translate to Thai. Use informal, emotional language with particles like "นะ", "โว้ย". If the type is "sfx", explain the sound in brackets like [เสียงสั่นสะเทือน].` : `You are a professional document translator. Translate to Thai. Use formal, polite language suitable for official documents.`;
+    const modePrompt = normalizedMode === "official" ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.` : normalizedMode === "manhwa" ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep mature dialogue natural and emotionally accurate while preserving intent and relationship dynamics.` : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`;
+    const systemPrompt = isValidString(baseSystemPrompt) ? baseSystemPrompt : modePrompt;
+    const promptText = sourceType === "batch-markdown" ? String(text) : `Translate this text: "${text}" (Type: ${sourceType})`;
     const payload = {
-      contents: [{ parts: [{ text: `Translate this text: "${text}" (Type: ${sourceType})` }] }],
+      contents: [{ parts: [{ text: promptText }] }],
       systemInstruction: { parts: [{ text: systemPrompt }] }
     };
     let delay = 1e3;

@@ -49,6 +49,29 @@ export interface DBDocumentCacheCandidate {
   last_cache_update: number | null;
 }
 
+export interface DBOcrCacheStatsRow {
+  document_id: number;
+  cache_pages: number;
+  last_cache_update: number | null;
+}
+
+export interface DBOCRTranslationCacheEntry {
+  key: string;
+  pageNum: number;
+  ocrEngine: OCREngine;
+  ocrLanguage: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
+  translatorEngine: 'offline' | 'ai';
+  sourceFingerprint: string;
+  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedText: string;
+  lineCount: number;
+  groupCount: number;
+  createdAt: number;
+}
+
 // Update types
 export interface DocumentUpdate {
   filename?: string;
@@ -110,6 +133,30 @@ export interface ExternalOCRResult {
   debug?: OCRPageResult['debug'];
 }
 
+export interface OfflineTranslationContext {
+  mode?: string;
+  sourceType?: string;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  timeoutMs?: number;
+}
+
+export type GeminiApiKeySource = 'secure-storage' | 'environment' | 'none';
+
+export interface GeminiApiKeyStatus {
+  configured: boolean;
+  source: GeminiApiKeySource;
+  supportsSecureStorage: boolean;
+}
+
+export interface GeminiTranslationContext {
+  mode: 'adaptive' | 'manga' | 'manhwa' | 'official';
+  sourceType: string;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  baseSystemPrompt?: string;
+}
+
 // Electron API interface (secure whitelist-based)
 export interface ElectronAPI {
   db: {
@@ -125,6 +172,15 @@ export interface ElectronAPI {
       updated_at: number;
       ocr_data: OCRPageResult;
     } | null>;
+    getOcrCacheStatsForDocumentIds: (documentIds: number[]) => Promise<DBOcrCacheStatsRow[]>;
+    saveTranslationCache: (
+      docId: number,
+      pageNum: number,
+      cacheKey: string,
+      entry: DBOCRTranslationCacheEntry
+    ) => Promise<boolean>;
+    getTranslationCachePage: (docId: number, pageNum: number) => Promise<DBOCRTranslationCacheEntry[]>;
+    clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
     
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;
@@ -157,7 +213,15 @@ export interface ElectronAPI {
   };
   
   gemini: {
-    translate: (text: string, context: { mode: string; sourceType: string }) => Promise<string>;
+    getApiKeyStatus: () => Promise<GeminiApiKeyStatus>;
+    setApiKey: (apiKey: string) => Promise<GeminiApiKeyStatus>;
+    clearApiKey: () => Promise<GeminiApiKeyStatus>;
+    translate: (text: string, context: GeminiTranslationContext) => Promise<string>;
+  };
+
+  translate: {
+    offline: (text: string, context?: OfflineTranslationContext) => Promise<string>;
+    offlineBatch: (texts: string[], context?: OfflineTranslationContext) => Promise<string[]>;
   };
   
   fs: {
@@ -196,19 +260,10 @@ export interface ElectronAPI {
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
-// Legacy IPC interface (for backward compatibility, will be deprecated)
-export interface LegacyIpcRenderer {
-  on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void;
-  off: (channel: string, listener?: (...args: unknown[]) => void) => void;
-  send: (channel: string, ...args: unknown[]) => void;
-  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
-}
-
 // Extend Window interface
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
-    ipcRenderer: LegacyIpcRenderer;
   }
 }
 

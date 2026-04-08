@@ -12,6 +12,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:get-ocr',
   'db:clear-ocr',
   'db:get-latest-ocr',
+  'db:save-translation-cache',
+  'db:get-translation-cache-page',
+  'db:clear-translation-cache-by-engine',
   // Document management
   'db:get-recent-documents',
   'db:get-documents-by-project',
@@ -43,6 +46,11 @@ const ALLOWED_INVOKE_CHANNELS = [
   'ocr:prewarm-engine',
   'ocr:run-external',
   'ocr:cancel-external',
+  'gemini:get-api-key-status',
+  'gemini:set-api-key',
+  'gemini:clear-api-key',
+  'translate:offline',
+  'translate:offline-batch',
   'gemini:translate', // For secure Gemini API calls via main process
 ] as const;
 
@@ -101,6 +109,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }),
     getLatestOCR: (docId: number) =>
       ipcRenderer.invoke('db:get-latest-ocr', { docId }),
+    getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
+      ipcRenderer.invoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
+    saveTranslationCache: (docId: number, pageNum: number, cacheKey: string, entry: unknown) =>
+      ipcRenderer.invoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
+    getTranslationCachePage: (docId: number, pageNum: number) =>
+      ipcRenderer.invoke('db:get-translation-cache-page', { docId, pageNum }),
+    clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: string) =>
+      ipcRenderer.invoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }),
     
     // Document management
     getRecentDocuments: (limit?: number) =>
@@ -153,8 +169,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
-    translate: (text: string, context: { mode: string; sourceType: string }) =>
+    getApiKeyStatus: () => ipcRenderer.invoke('gemini:get-api-key-status'),
+    setApiKey: (apiKey: string) =>
+      ipcRenderer.invoke('gemini:set-api-key', { apiKey }),
+    clearApiKey: () => ipcRenderer.invoke('gemini:clear-api-key'),
+    translate: (text: string, context: {
+      mode: 'adaptive' | 'manga' | 'manhwa' | 'official';
+      sourceType: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      baseSystemPrompt?: string;
+    }) =>
       ipcRenderer.invoke('gemini:translate', { text, context }),
+  },
+
+  translate: {
+    offline: (text: string, context?: {
+      mode?: string;
+      sourceType?: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('translate:offline', { text, context }),
+    offlineBatch: (texts: string[], context?: {
+      mode?: string;
+      sourceType?: string;
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('translate:offline-batch', { texts, context }),
   },
 
   // File system operations (SECURE: validated in main process)
@@ -197,24 +240,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 });
 
-// Legacy support: Keep ipcRenderer for backward compatibility during migration
-// TODO: Remove this after migrating all code to use electronAPI
-contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(...args: Parameters<typeof ipcRenderer.on>) {
-    const [channel, listener] = args
-    return ipcRenderer.on(channel, (event, ...args) => listener(event, ...args))
-  },
-  off(...args: Parameters<typeof ipcRenderer.off>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.off(channel, ...omit)
-  },
-  send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
-  },
-  invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
-  },
-})
 

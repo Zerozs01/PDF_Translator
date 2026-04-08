@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { OCREngine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile } from '../../types';
 import { visionService } from '../../services/vision/VisionService';
+import { pdfjs } from '../../services/pdf/pdfjsWorker';
 
 type HarnessStatus = 'idle' | 'loading' | 'running' | 'done' | 'error';
 
@@ -17,7 +18,9 @@ interface OCRFixtureExpectation {
 interface OCRFixtureCase {
   id: string;
   page: number;
-  image: string;
+  image?: string;
+  pdf?: string;
+  pdfPage?: number;
   language?: string;
   dpi?: number;
 }
@@ -74,6 +77,56 @@ async function getImageSize(imageUrl: string): Promise<{ width: number; height: 
   });
 }
 
+async function renderPdfFixturePageToDataUrl(
+  pdfBlob: Blob,
+  pageNum: number,
+  dpi: number
+): Promise<{ imageUrl: string; width: number; height: number }> {
+  const bytes = new Uint8Array(await pdfBlob.arrayBuffer());
+  const loadingTask = pdfjs.getDocument({ data: bytes });
+  const pdfDocument = await loadingTask.promise;
+  const requestedPage = Number.isFinite(pageNum) ? Math.floor(pageNum) : 1;
+  const safePage = Math.max(1, Math.min(pdfDocument.numPages, requestedPage));
+  const page = await pdfDocument.getPage(safePage);
+
+  try {
+    const baseScale = Math.max(0.5, (dpi || 300) / 72);
+    const baseViewport = page.getViewport({ scale: baseScale });
+    const maxSide = 3600;
+    const maxPixels = 13_000_000;
+    let scaleAdjust = 1;
+
+    if (Math.max(baseViewport.width, baseViewport.height) > maxSide) {
+      scaleAdjust = Math.min(scaleAdjust, maxSide / Math.max(baseViewport.width, baseViewport.height));
+    }
+    if (baseViewport.width * baseViewport.height > maxPixels) {
+      scaleAdjust = Math.min(scaleAdjust, Math.sqrt(maxPixels / (baseViewport.width * baseViewport.height)));
+    }
+
+    const viewport = scaleAdjust < 1
+      ? page.getViewport({ scale: baseScale * scaleAdjust })
+      : baseViewport;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Failed to create canvas context for PDF fixture render');
+
+    await page.render({ canvas, canvasContext: context, viewport, intent: 'print' }).promise;
+
+    return {
+      imageUrl: canvas.toDataURL('image/png'),
+      width: canvas.width,
+      height: canvas.height,
+    };
+  } finally {
+    page.cleanup();
+    await loadingTask.destroy();
+    pdfDocument.destroy();
+  }
+}
+
 export const OCRRegressionHarness: React.FC = () => {
   const [status, setStatus] = useState<HarnessStatus>('idle');
   const [fixtureId, setFixtureId] = useState('');
@@ -128,9 +181,36 @@ export const OCRRegressionHarness: React.FC = () => {
         const expectationEntry = manifestData.expectations.find((entry) => entry.page === fixture.page) || null;
         setExpectation(expectationEntry);
 
-        const imageResponse = await fetch(`/${fixture.image.replace(/^\/+/, '')}`, { cache: 'no-store' });
-        if (!imageResponse.ok) {
-          throw new Error(`Fixture image missing: ${fixture.image}`);
+        let sourceImageUrl = '';
+        let sourceWidth = 0;
+        let sourceHeight = 0;
+
+        if (fixture.image) {
+          const imageResponse = await fetch(`/${fixture.image.replace(/^\/+/, '')}`, { cache: 'no-store' });
+          if (!imageResponse.ok) {
+            throw new Error(`Fixture image missing: ${fixture.image}`);
+          }
+          const imageBlob = await imageResponse.blob();
+          sourceImageUrl = await blobToDataUrl(imageBlob);
+          const dims = await getImageSize(sourceImageUrl);
+          sourceWidth = dims.width;
+          sourceHeight = dims.height;
+        } else if (fixture.pdf) {
+          const pdfResponse = await fetch(`/${fixture.pdf.replace(/^\/+/, '')}`, { cache: 'no-store' });
+          if (!pdfResponse.ok) {
+            throw new Error(`Fixture PDF missing: ${fixture.pdf}`);
+          }
+          const pdfBlob = await pdfResponse.blob();
+          const rendered = await renderPdfFixturePageToDataUrl(
+            pdfBlob,
+            fixture.pdfPage || fixture.page || 1,
+            fixture.dpi || 300
+          );
+          sourceImageUrl = rendered.imageUrl;
+          sourceWidth = rendered.width;
+          sourceHeight = rendered.height;
+        } else {
+          throw new Error(`Fixture ${fixture.id} is missing both image and pdf fields`);
         }
 
         setStatus('running');
@@ -143,13 +223,10 @@ export const OCRRegressionHarness: React.FC = () => {
           qualityProfile: selectedQuality,
         });
 
-        const imageBlob = await imageResponse.blob();
-        const imageUrl = await blobToDataUrl(imageBlob);
-        const { width, height } = await getImageSize(imageUrl);
         const ocrResult = await visionService.ocrForTextLayer(
-          imageUrl,
-          width,
-          height,
+          sourceImageUrl,
+          sourceWidth,
+          sourceHeight,
           fixture.language || 'eng',
           fixture.dpi || 300,
           undefined,

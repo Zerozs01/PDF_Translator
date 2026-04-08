@@ -1,17 +1,19 @@
 # Local Tessdata
 
-The OCR worker resolves language data from `public/tessdata` first and falls back to the Tesseract CDN only if a requested file is missing.
+The app resolves OCR language data from local `public/tessdata` first, then falls back to remote only when required files are missing.
 
-## Current Runtime Behavior
+## Local Path
 
-- Config source: `src/services/vision/ocr-config.ts`
-- `LANG_PATH` is `/tessdata`
-- Worker initialization happens in `src/services/vision/worker.ts`
-- If local load fails, the worker retries without `langPath` and uses the CDN
+- `public/tessdata`
 
-## Supported UI Language Codes
+Examples:
 
-Current OCR language codes exposed in the app:
+- `public/tessdata/eng.traineddata`
+- `public/tessdata/kor.traineddata`
+- `public/tessdata/jpn.traineddata`
+- `public/tessdata/jpn_vert.traineddata`
+
+## Supported OCR Language Codes (UI)
 
 - `eng`
 - `jpn`
@@ -26,48 +28,22 @@ Current OCR language codes exposed in the app:
 - `spa`
 - `rus`
 
-## Folder Layout
+## Commands
 
-Put files in:
+Download default language packs:
 
-```text
-public/tessdata/
-```
+- `npm run tessdata:download`
 
-Examples:
+Download specific packs:
 
-```text
-public/tessdata/eng.traineddata
-public/tessdata/jpn.traineddata
-public/tessdata/jpn_vert.traineddata
-public/tessdata/kor.traineddata
-public/tessdata/chi_sim.traineddata
-```
+- `npm run tessdata:download -- --langs=eng,kor,jpn,jpn_vert,chi_sim,chi_tra`
 
-Both `.traineddata` and `.traineddata.gz` are usable in the current setup.
+Force refresh:
 
-## Download Script
+- `npm run tessdata:download -- --force`
 
-Download official language packs:
+## Troubleshooting
 
-```bash
-npm run tessdata:download
-```
-
-Download a specific subset:
-
-```bash
-npm run tessdata:download -- --langs=eng,kor,jpn,jpn_vert,chi_sim,chi_tra
-```
-
-Force re-download:
-
-```bash
-npm run tessdata:download -- --force
-```
-
-## Notes
-
-- Restart the dev server after adding or replacing language data.
-- The packaged app serves these files from the same `public/tessdata` path.
-- Local tessdata is strongly preferred for offline testing and for reproducible OCR behavior across sessions.
+- Restart dev server after adding/replacing traineddata files.
+- Verify filenames exactly match language codes used in OCR options.
+- If local file missing, the OCR worker may fallback to remote fetch path and change startup latency.

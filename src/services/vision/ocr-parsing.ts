@@ -416,35 +416,99 @@ export function findBestLineForBox(
   lines: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>,
   box: BBox
 ): { text: string; confidence: number; bbox: BBox; words: OCRWord[] } | null {
+  const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number => {
+    const overlap = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+    const base = Math.max(1, Math.min(Math.max(1, a1 - a0), Math.max(1, b1 - b0)));
+    return overlap / base;
+  };
+
   let best: typeof lines[number] | null = null;
-  let bestScore = 0;
+  let bestScore = -Infinity;
+  const boxW = Math.max(1, box.x1 - box.x0);
   const boxH = Math.max(1, box.y1 - box.y0);
+  const boxCenterX = (box.x0 + box.x1) * 0.5;
+  const boxCenterY = (box.y0 + box.y1) * 0.5;
+
   for (const line of lines) {
+    const lineW = Math.max(1, line.bbox.x1 - line.bbox.x0);
     const lineH = Math.max(1, line.bbox.y1 - line.bbox.y0);
-    const overlap = Math.min(line.bbox.y1, box.y1) - Math.max(line.bbox.y0, box.y0);
-    if (overlap <= 0) continue;
-    const score = overlap / Math.min(lineH, boxH);
-    if (score > bestScore) { bestScore = score; best = line; }
+    const lineCenterX = (line.bbox.x0 + line.bbox.x1) * 0.5;
+    const lineCenterY = (line.bbox.y0 + line.bbox.y1) * 0.5;
+    const yOverlap = overlapRatio(line.bbox.y0, line.bbox.y1, box.y0, box.y1);
+    const xOverlap = overlapRatio(line.bbox.x0, line.bbox.x1, box.x0, box.x1);
+    if (yOverlap <= 0) continue;
+
+    const avgWidth = Math.max(1, (lineW + boxW) * 0.5);
+    const avgHeight = Math.max(1, (lineH + boxH) * 0.5);
+    const normalizedCenterXGap = Math.abs(lineCenterX - boxCenterX) / avgWidth;
+    const normalizedCenterYGap = Math.abs(lineCenterY - boxCenterY) / avgHeight;
+
+    if (yOverlap < 0.24) continue;
+    if (xOverlap < 0.08 && normalizedCenterXGap > 0.55) continue;
+    if (normalizedCenterYGap > 1.4) continue;
+
+    const score = yOverlap * 5
+      + xOverlap * 2
+      - normalizedCenterXGap * 1.6
+      - normalizedCenterYGap * 1.2;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = line;
+    }
   }
-  return bestScore >= 0.4 ? best : null;
+
+  return bestScore >= 0.9 ? best : null;
 }
 
 export function findBestLineBoxForLine(
   lineBoxes: Array<{ key: string; bbox: BBox }>,
   line: { bbox: BBox }
 ): BBox | null {
+  const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number => {
+    const overlap = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+    const base = Math.max(1, Math.min(Math.max(1, a1 - a0), Math.max(1, b1 - b0)));
+    return overlap / base;
+  };
+
   let best: BBox | null = null;
-  let bestScore = 0;
+  let bestScore = -Infinity;
+  const lineW = Math.max(1, line.bbox.x1 - line.bbox.x0);
   const lineH = Math.max(1, line.bbox.y1 - line.bbox.y0);
+  const lineCenterX = (line.bbox.x0 + line.bbox.x1) * 0.5;
+  const lineCenterY = (line.bbox.y0 + line.bbox.y1) * 0.5;
+
   for (const candidate of lineBoxes) {
     const box = candidate.bbox;
+    const boxW = Math.max(1, box.x1 - box.x0);
     const boxH = Math.max(1, box.y1 - box.y0);
-    const overlap = Math.min(line.bbox.y1, box.y1) - Math.max(line.bbox.y0, box.y0);
-    if (overlap <= 0) continue;
-    const score = overlap / Math.min(lineH, boxH);
-    if (score > bestScore) { bestScore = score; best = box; }
+    const boxCenterX = (box.x0 + box.x1) * 0.5;
+    const boxCenterY = (box.y0 + box.y1) * 0.5;
+    const yOverlap = overlapRatio(line.bbox.y0, line.bbox.y1, box.y0, box.y1);
+    const xOverlap = overlapRatio(line.bbox.x0, line.bbox.x1, box.x0, box.x1);
+    if (yOverlap <= 0) continue;
+
+    const avgWidth = Math.max(1, (lineW + boxW) * 0.5);
+    const avgHeight = Math.max(1, (lineH + boxH) * 0.5);
+    const normalizedCenterXGap = Math.abs(lineCenterX - boxCenterX) / avgWidth;
+    const normalizedCenterYGap = Math.abs(lineCenterY - boxCenterY) / avgHeight;
+
+    if (yOverlap < 0.3) continue;
+    if (xOverlap < 0.08 && normalizedCenterXGap > 0.58) continue;
+    if (normalizedCenterYGap > 1.45) continue;
+
+    const score = yOverlap * 5
+      + xOverlap * 2
+      - normalizedCenterXGap * 1.6
+      - normalizedCenterYGap * 1.2;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = box;
+    }
   }
-  return bestScore >= 0.45 ? best : null;
+
+  return bestScore >= 0.92 ? best : null;
 }
 
 export function appendUniqueWords(existing: OCRWord[], incoming: OCRWord[], iouThreshold: number = 0.6): OCRWord[] {
@@ -591,3 +655,6 @@ export function findLargeGaps(lineWords: OCRWord[], isCjk: boolean = false): Arr
   }
   return regions;
 }
+
+
+

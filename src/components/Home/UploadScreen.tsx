@@ -2,16 +2,50 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { 
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
-  Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus,
-  Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart,
+  Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
+  Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
+import {
+  OVERLAY_FONT_OPTIONS,
+  OverlayFontPreset,
+  getOverlayPrimaryFontName,
+} from '../../constants/overlayFonts';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
+import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 
-type SidebarPage = 'home' | 'projects';
+type SidebarPage = 'home' | 'projects' | 'settings';
+
+const SAFETY_LEVEL_PREVIEW: Record<keyof SafetySettings, Record<'off' | 'low' | 'medium' | 'high', string>> = {
+  harassment: {
+    off: 'อนุญาตโทนกระทบกระทั่งตามบริบท เช่น "แกมันบ้าไปแล้ว"',
+    low: 'ลดคำโจมตีตรงๆ แต่ยังคงอารมณ์เผ็ดได้',
+    medium: 'ตัดการเหยียด/ด่ารุนแรง ให้ใช้โทนโต้เถียงสุภาพขึ้น',
+    high: 'บังคับโทนปลอดภัยสูงสุด หลีกเลี่ยงการโจมตีตัวบุคคล',
+  },
+  hate: {
+    off: 'คงเนื้อหาเข้มตามต้นฉบับ (ถ้ามี)',
+    low: 'ลดคำล่อแหลมเชิงอคติ แต่ยังคงความหมายหลัก',
+    medium: 'แทนถ้อยคำเกลียดชังด้วยคำกลางที่ปลอดภัย',
+    high: 'บังคับกรองเข้มงวด หลีกเลี่ยงถ้อยคำแบ่งแยกทั้งหมด',
+  },
+  sexual: {
+    off: 'โทนตรงไปตรงมา เหมาะงานผู้ใหญ่/manhwa',
+    low: 'ลดความ explicit ลงเล็กน้อย',
+    medium: 'ใช้คำกลางมากขึ้น ลดรายละเอียดทางเพศ',
+    high: 'หลีกเลี่ยงถ้อยคำเชิงเพศชัดเจน',
+  },
+  dangerous: {
+    off: 'เก็บโทนขู่/รุนแรงตามบทสนทนา',
+    low: 'ลดคำชี้นำรุนแรงโดยตรง',
+    medium: 'แทนคำอันตรายด้วยถ้อยคำทั่วไป',
+    high: 'กรองเข้ม ปลอดภัยสูงสุดสำหรับงานทั่วไป',
+  },
+};
 
 // Format file size
 const formatFileSize = (bytes: number): string => {
@@ -639,7 +673,27 @@ const TagPill: React.FC<{
 );
 
 export const UploadScreen: React.FC = () => {
-  const { loadProject, translationMode, setTranslationMode, safetySettings, updateSafetySettings } = useProjectStore();
+  const {
+    loadProject,
+    translationMode,
+    setTranslationMode,
+    safetySettings,
+    updateSafetySettings,
+    targetLanguage,
+    geminiApiKeyDraft,
+    hasGeminiApiKey,
+    geminiApiKeySource,
+    isGeminiApiKeyLoaded,
+    isGeminiApiKeySaving,
+    geminiApiKeyError,
+    setGeminiApiKeyDraft,
+    saveGeminiApiKey,
+    clearGeminiApiKey,
+    overlayFontPreset,
+    setOverlayFontPreset,
+  } = useProjectStore();
+  const ocrOptions = useOCRTextLayerStore((state) => state.options);
+  const setOCROptions = useOCRTextLayerStore((state) => state.setOptions);
   const {
     viewMode, setViewMode,
     filterType,
@@ -652,7 +706,7 @@ export const UploadScreen: React.FC = () => {
     searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
-    createTag, createProject, deleteTag, applyDocumentPatch,
+    createTag, createProject, deleteTag, loadDocumentTags, persistDocumentPatch,
     selectedDocumentIds, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
@@ -671,7 +725,58 @@ export const UploadScreen: React.FC = () => {
   const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
+  const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
+  const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
   const thumbnailJobsRef = useRef<Set<number>>(new Set());
+  const isThaiTargetLanguage = targetLanguage === 'th';
+  const geminiStatusLabel = !isGeminiApiKeyLoaded
+    ? 'Loading secure key status...'
+    : geminiApiKeySource === 'secure-storage'
+      ? 'Gemini key is stored securely on this device.'
+      : geminiApiKeySource === 'environment'
+        ? 'Gemini key is currently provided by local environment variables.'
+        : 'No Gemini key saved yet.';
+  const geminiInputPlaceholder = geminiApiKeySource === 'secure-storage'
+    ? 'Stored securely. Enter a new key to replace it.'
+    : geminiApiKeySource === 'environment'
+      ? 'Loaded from environment. Enter a key here to store it securely instead.'
+      : 'AIza...';
+  const geminiStatusClass = hasGeminiApiKey
+    ? 'text-emerald-300/85'
+    : 'text-slate-500';
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkFont = async () => {
+      if (!isThaiTargetLanguage) {
+        if (mounted) setSelectedFontAvailable(null);
+        return;
+      }
+
+      if (typeof document === 'undefined' || !('fonts' in document)) {
+        if (mounted) setSelectedFontAvailable(null);
+        return;
+      }
+
+      try {
+        await document.fonts.ready;
+      } catch {
+        // Ignore font-set readiness failures.
+      }
+
+      const primaryFont = getOverlayPrimaryFontName(overlayFontPreset);
+      const available = document.fonts.check(`16px "${primaryFont}"`);
+      if (mounted) {
+        setSelectedFontAvailable(available);
+      }
+    };
+
+    void checkFont();
+    return () => {
+      mounted = false;
+    };
+  }, [isThaiTargetLanguage, overlayFontPreset]);
 
   const reportFileOpenError = useCallback((
     context: FileOpenContext,
@@ -827,15 +932,15 @@ export const UploadScreen: React.FC = () => {
     setActiveDocumentMenuId(docId);
     setActiveDocumentMenuPosition(position);
 
-    if (!documentTagsById[docId] && window.electronAPI?.db?.getDocumentTags) {
+    if (!documentTagsById[docId]) {
       try {
-        const documentTags = await window.electronAPI.db.getDocumentTags(docId);
+        const documentTags = await loadDocumentTags(docId);
         setDocumentTagsById((current) => ({ ...current, [docId]: documentTags }));
       } catch (error) {
         console.error('Failed to load document tags:', error);
       }
     }
-  }, [documentTagsById]);
+  }, [documentTagsById, loadDocumentTags]);
 
   const openTagMenu = useCallback((tag: DBTag, event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -874,8 +979,7 @@ export const UploadScreen: React.FC = () => {
 
   const handleMoveDocumentToProject = useCallback(async (doc: DBDocument, projectId: number | null) => {
     await moveToProject(doc.id, projectId);
-    applyDocumentPatch(doc.id, { project_id: projectId });
-  }, [applyDocumentPatch, moveToProject]);
+  }, [moveToProject]);
 
   const openProjectDialog = useCallback((documentId: number | null = null) => {
     setActiveDocumentMenuId(null);
@@ -904,11 +1008,10 @@ export const UploadScreen: React.FC = () => {
 
     if (projectDialog.documentId) {
       await moveToProject(projectDialog.documentId, project.id);
-      applyDocumentPatch(projectDialog.documentId, { project_id: project.id });
     }
 
     setProjectDialog({ isOpen: false, name: '', documentId: null });
-  }, [applyDocumentPatch, createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
+  }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
 
   const handleCreateTag = useCallback(async () => {
     const name = tagDialog.name.trim();
@@ -983,15 +1086,13 @@ export const UploadScreen: React.FC = () => {
             data: source.data
           });
 
-          await window.electronAPI.db.updateDocument(doc.id, {
+          const persisted = await persistDocumentPatch(doc.id, {
             thumbnail_path: thumbnail.dataUrl,
             total_pages: thumbnail.totalPages ?? doc.total_pages
           });
-
-          applyDocumentPatch(doc.id, {
-            thumbnail_path: thumbnail.dataUrl,
-            total_pages: thumbnail.totalPages ?? doc.total_pages
-          });
+          if (!persisted) {
+            console.warn(`[Library] Failed to persist preview for "${doc.filename}"`);
+          }
         } catch (error) {
           console.warn(`[Library] Failed to generate preview for "${doc.filename}"`, error);
         } finally {
@@ -999,7 +1100,7 @@ export const UploadScreen: React.FC = () => {
         }
       })();
     });
-  }, [applyDocumentPatch, sortedDocuments, viewMode]);
+  }, [persistDocumentPatch, sortedDocuments, viewMode]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
@@ -1038,8 +1139,12 @@ export const UploadScreen: React.FC = () => {
           <div className="flex-1" />
 
           <button
-            onClick={() => {}}
-            className="p-3 rounded-xl text-slate-500 hover:bg-white/[0.06] hover:text-slate-100 transition-all"
+            onClick={() => { setActivePage('settings'); }}
+            className={`p-3 rounded-xl transition-all ${
+              activePage === 'settings'
+                ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+                : 'text-slate-500 hover:bg-white/[0.06] hover:text-slate-100'
+            }`}
             title="Settings"
           >
             <Settings2 size={20} />
@@ -1153,7 +1258,7 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
           </>
-        ) : (
+        ) : activePage === 'projects' ? (
           <>
             {/* Projects Page Sidebar */}
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
@@ -1191,6 +1296,138 @@ export const UploadScreen: React.FC = () => {
                   onSelect={() => loadDocumentsByProject(project.id)}
                 />
               ))}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Settings Page Sidebar */}
+            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <Settings2 className="text-slate-300" size={20} /> Settings
+            </h2>
+
+            <div className="flex-1 overflow-y-auto space-y-5 custom-scrollbar pr-1">
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2">
+                <label className="text-[11px] font-semibold text-slate-300">Gemini API Key</label>
+                <div className="relative">
+                  <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type={showGeminiApiKey ? 'text' : 'password'}
+                    value={geminiApiKeyDraft}
+                    onChange={(e) => setGeminiApiKeyDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void saveGeminiApiKey();
+                      }
+                    }}
+                    placeholder={geminiInputPlaceholder}
+                    className="w-full rounded-lg border border-white/12 bg-slate-900/85 pl-7 pr-8 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                    disabled={!isGeminiApiKeyLoaded || isGeminiApiKeySaving}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGeminiApiKey((prev) => !prev)}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-white/10"
+                    title={showGeminiApiKey ? 'Hide API key' : 'Show API key'}
+                  >
+                    {showGeminiApiKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveGeminiApiKey()}
+                    disabled={!geminiApiKeyDraft.trim() || isGeminiApiKeySaving || !isGeminiApiKeyLoaded}
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Check size={12} />
+                    Save Securely
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void clearGeminiApiKey()}
+                    disabled={(!hasGeminiApiKey && geminiApiKeySource !== 'environment') || isGeminiApiKeySaving || !isGeminiApiKeyLoaded}
+                    className="inline-flex items-center gap-1 rounded-lg border border-white/12 bg-slate-900/70 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:border-white/20 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <X size={12} />
+                    Clear Saved Key
+                  </button>
+                </div>
+                <p className={`text-[10px] leading-relaxed ${geminiStatusClass}`}>
+                  {geminiStatusLabel}
+                </p>
+                {geminiApiKeyError && (
+                  <p className="text-[10px] leading-relaxed text-rose-300/90">
+                    {geminiApiKeyError}
+                  </p>
+                )}
+              </div>
+
+              {isThaiTargetLanguage && (
+                <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
+                  <label className="text-[11px] font-semibold text-slate-300">Overlay Font</label>
+
+                  <select
+                    value={overlayFontPreset}
+                    onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
+                    className="w-full rounded-lg border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                    aria-label="Overlay font preset"
+                    title="Overlay font preset"
+                  >
+                    {OVERLAY_FONT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+
+                  <p className={`text-[10px] leading-relaxed ${
+                    selectedFontAvailable === false
+                      ? 'text-amber-300/90'
+                      : selectedFontAvailable === true
+                        ? 'text-emerald-300/85'
+                        : 'text-slate-500'
+                  }`}>
+                    Font status: {
+                      selectedFontAvailable === false
+                        ? 'fallback in use (font not detected)'
+                        : selectedFontAvailable === true
+                          ? 'detected and ready'
+                          : 'unknown'
+                    }
+                  </p>
+                </div>
+              )}
+
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
+                <label className="text-[11px] font-semibold text-slate-300">OCR Runtime</label>
+                <div className="grid grid-cols-12 items-center gap-2">
+                  <label className="col-span-5 text-[11px] font-semibold text-slate-300">Timeout</label>
+                  <select
+                    value={ocrOptions.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
+                    onChange={(e) => setOCROptions({ perPageTimeoutSec: Number(e.target.value) })}
+                    aria-label="OCR timeout seconds per page"
+                    title="OCR timeout seconds per page"
+                    className="col-span-7 rounded-lg border border-white/12 bg-slate-900/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
+                  >
+                    <option value={0}>No Limit</option>
+                    <option value={30}>30s</option>
+                    <option value={60}>60s</option>
+                    <option value={120}>120s</option>
+                    <option value={180}>180s</option>
+                    <option value={300}>300s</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2">
+                  <span className="text-[11px] font-semibold text-slate-300">Skip if text exists</span>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.skipIfTextExists !== false}
+                    onChange={(e) => setOCROptions({ skipIfTextExists: e.target.checked })}
+                    className="accent-[#2B9BFF]"
+                    aria-label="Skip OCR if Text Exists"
+                  />
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -1473,10 +1710,25 @@ export const UploadScreen: React.FC = () => {
             </button>
           </div>
 
-          {/* Mode Selection */}
+          {/* Profile Selection */}
           <div className="mb-6">
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Translation Mode</label>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Profile</label>
             <div className="space-y-2">
+              <button
+                onClick={() => setTranslationMode('adaptive')}
+                className={`w-full p-3 rounded-xl border text-left transition-all ${
+                  translationMode === 'adaptive'
+                    ? 'border-[#14B8A6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
+                }`}
+                style={translationMode === 'adaptive' ? { background: 'linear-gradient(180deg, rgba(20,184,166,0.22) 0%, rgba(19,48,58,0.92) 100%)' } : undefined}
+              >
+                <div className="flex items-center gap-2">
+                  <Compass size={14} className={translationMode === 'adaptive' ? 'text-[#99F6E4]' : 'text-slate-400'} />
+                  <span className={`font-medium text-sm ${translationMode === 'adaptive' ? 'text-[#E6FFF9]' : 'text-slate-300'}`}>Flexibility</span>
+                </div>
+              </button>
+
               <button
                 onClick={() => setTranslationMode('manga')}
                 className={`w-full p-3 rounded-xl border text-left transition-all ${
@@ -1489,6 +1741,21 @@ export const UploadScreen: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <Sparkles size={14} className={translationMode === 'manga' ? 'text-[#D8B4FE]' : 'text-slate-400'} />
                   <span className={`font-medium text-sm ${translationMode === 'manga' ? 'text-[#F4E8FF]' : 'text-slate-300'}`}>Manga Style</span>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setTranslationMode('manhwa')}
+                className={`w-full p-3 rounded-xl border text-left transition-all ${
+                  translationMode === 'manhwa'
+                    ? 'border-[#EC4899]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
+                }`}
+                style={translationMode === 'manhwa' ? { background: 'linear-gradient(180deg, rgba(236,72,153,0.24) 0%, rgba(66,24,44,0.92) 100%)' } : undefined}
+              >
+                <div className="flex items-center gap-2">
+                  <Flame size={14} className={translationMode === 'manhwa' ? 'text-[#F9A8D4]' : 'text-slate-400'} />
+                  <span className={`font-medium text-sm ${translationMode === 'manhwa' ? 'text-[#FFE7F3]' : 'text-slate-300'}`}>Manhwa Style</span>
                 </div>
               </button>
 
@@ -1521,6 +1788,9 @@ export const UploadScreen: React.FC = () => {
                     <span className="text-xs capitalize text-slate-300">{key}</span>
                     <span className="text-[10px] px-1.5 py-0.5 bg-slate-900/85 border border-white/10 rounded text-slate-400 uppercase">{value}</span>
                   </div>
+                  <p className="text-[10px] text-slate-500 mb-1.5 leading-relaxed">
+                    {SAFETY_LEVEL_PREVIEW[key as keyof SafetySettings][value as 'off' | 'low' | 'medium' | 'high']}
+                  </p>
                   <input
                     type="range"
                     min="0"

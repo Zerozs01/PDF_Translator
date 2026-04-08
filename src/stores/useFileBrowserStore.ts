@@ -1,9 +1,30 @@
 import { create } from 'zustand';
 import type { DBDocument, DBTag, DBProject, DocumentUpdate } from '../types/electron.d';
-
-const isVirtualPath = (filepath: string): boolean => filepath.startsWith('virtual://');
-const filterVirtualDocuments = (documents: DBDocument[]): DBDocument[] =>
-  documents.filter((doc) => !isVirtualPath(doc.filepath));
+import {
+  applyLibraryFavoriteToggle,
+  applyLibraryProjectMove,
+  applyLibraryTagRemoval,
+  createLibraryProject,
+  createLibraryTag,
+  deleteLibraryDocument,
+  deleteLibraryProject,
+  deleteLibraryTag,
+  loadFavoriteLibraryDocuments,
+  loadLibraryDocumentTags,
+  loadLibraryDocumentsByProject,
+  loadLibraryDocumentsByTag,
+  loadLibraryProjects,
+  loadLibraryTags,
+  loadRecentLibraryDocuments,
+  moveLibraryDocumentToProject,
+  patchLibraryDocuments,
+  removeLibraryTagFromDocument,
+  searchLibraryDocuments,
+  sortLibraryDocuments,
+  toggleLibraryDocumentFavorite,
+  updateLibraryDocument,
+  addLibraryTagToDocument,
+} from '../services/libraryService';
 
 export type ViewMode = 'grid' | 'detail';
 export type SortBy = 'name' | 'date' | 'size' | 'type';
@@ -68,7 +89,8 @@ interface FileBrowserState {
   moveToProject: (documentId: number, projectId: number | null) => Promise<void>;
   addTagToDocument: (documentId: number, tagId: number) => Promise<void>;
   removeTagFromDocument: (documentId: number, tagId: number) => Promise<void>;
-  applyDocumentPatch: (documentId: number, updates: Partial<DBDocument> & DocumentUpdate) => void;
+  loadDocumentTags: (documentId: number) => Promise<DBTag[]>;
+  persistDocumentPatch: (documentId: number, updates: DocumentUpdate) => Promise<boolean>;
   
   // Actions - Tag Operations
   createTag: (name: string, color?: string) => Promise<DBTag | null>;
@@ -145,9 +167,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadRecentDocuments: async () => {
     set({ isLoading: true, error: null });
     try {
-      const documents = await window.electronAPI.db.getRecentDocuments(50);
-      const filtered = filterVirtualDocuments(documents);
-      set({ documents: filtered, isLoading: false, filterType: 'recent' });
+      const documents = await loadRecentLibraryDocuments(50);
+      set({ documents, isLoading: false, filterType: 'recent' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -156,9 +177,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadDocumentsByProject: async (projectId) => {
     set({ isLoading: true, error: null });
     try {
-      const documents = await window.electronAPI.db.getDocumentsByProject(projectId);
-      const filtered = filterVirtualDocuments(documents);
-      set({ documents: filtered, isLoading: false, selectedProjectId: projectId, filterType: 'project' });
+      const documents = await loadLibraryDocumentsByProject(projectId);
+      set({ documents, isLoading: false, selectedProjectId: projectId, filterType: 'project' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -167,9 +187,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadFavoriteDocuments: async () => {
     set({ isLoading: true, error: null });
     try {
-      const documents = await window.electronAPI.db.getFavoriteDocuments();
-      const filtered = filterVirtualDocuments(documents);
-      set({ documents: filtered, isLoading: false, filterType: 'favorites' });
+      const documents = await loadFavoriteLibraryDocuments();
+      set({ documents, isLoading: false, filterType: 'favorites' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -178,9 +197,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadDocumentsByTag: async (tagId) => {
     set({ isLoading: true, error: null });
     try {
-      const documents = await window.electronAPI.db.getDocumentsByTag(tagId);
-      const filtered = filterVirtualDocuments(documents);
-      set({ documents: filtered, isLoading: false, selectedTagId: tagId, filterType: 'tag' });
+      const documents = await loadLibraryDocumentsByTag(tagId);
+      set({ documents, isLoading: false, selectedTagId: tagId, filterType: 'tag' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -189,9 +207,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   searchDocuments: async (query) => {
     set({ isLoading: true, error: null, searchQuery: query });
     try {
-      const documents = await window.electronAPI.db.searchDocuments(query);
-      const filtered = filterVirtualDocuments(documents);
-      set({ documents: filtered, isLoading: false });
+      const documents = await searchLibraryDocuments(query);
+      set({ documents, isLoading: false });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
     }
@@ -199,7 +216,7 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   loadTags: async () => {
     try {
-      const tags = await window.electronAPI.tags.getAll();
+      const tags = await loadLibraryTags();
       set({ tags });
     } catch (error) {
       console.error('Failed to load tags:', error);
@@ -208,7 +225,7 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   loadProjects: async () => {
     try {
-      const projects = await window.electronAPI.projects.getAll();
+      const projects = await loadLibraryProjects();
       set({ projects });
     } catch (error) {
       console.error('Failed to load projects:', error);
@@ -222,14 +239,16 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       set((state) => {
         const target = state.documents.find(doc => doc.id === id);
         nextFavorite = target ? !target.is_favorite : false;
-        const nextDocuments = state.filterType === 'favorites' && !nextFavorite
-          ? state.documents.filter(doc => doc.id !== id)
-          : state.documents.map(doc =>
-              doc.id === id ? { ...doc, is_favorite: nextFavorite } : doc
-            );
-        return { documents: nextDocuments };
+        return {
+          documents: applyLibraryFavoriteToggle({
+            documents: state.documents,
+            filterType: state.filterType,
+            documentId: id,
+            nextFavorite,
+          })
+        };
       });
-      await window.electronAPI.db.toggleFavorite(id);
+      await toggleLibraryDocumentFavorite(id);
     } catch (error) {
       console.error('Failed to toggle favorite:', error);
     }
@@ -237,7 +256,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   deleteDocument: async (id) => {
     try {
-      await window.electronAPI.db.deleteDocument(id);
+      const deleted = await deleteLibraryDocument(id);
+      if (!deleted) return;
       set((state) => ({
         documents: state.documents.filter(doc => doc.id !== id),
         selectedDocumentIds: (() => {
@@ -253,13 +273,16 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   moveToProject: async (documentId, projectId) => {
     try {
-      await window.electronAPI.db.updateDocument(documentId, { project_id: projectId });
+      const updated = await moveLibraryDocumentToProject(documentId, projectId);
+      if (!updated) return;
       set((state) => ({
-        documents: state.filterType === 'project' && state.selectedProjectId !== projectId
-          ? state.documents.filter(doc => doc.id !== documentId)
-          : state.documents.map(doc =>
-              doc.id === documentId ? { ...doc, project_id: projectId } : doc
-            )
+        documents: applyLibraryProjectMove({
+          documents: state.documents,
+          filterType: state.filterType,
+          selectedProjectId: state.selectedProjectId,
+          documentId,
+          projectId,
+        })
       }));
     } catch (error) {
       console.error('Failed to move document:', error);
@@ -268,7 +291,7 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   addTagToDocument: async (documentId, tagId) => {
     try {
-      await window.electronAPI.db.addDocumentTag(documentId, tagId);
+      await addLibraryTagToDocument(documentId, tagId);
     } catch (error) {
       console.error('Failed to add tag:', error);
     }
@@ -276,27 +299,37 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   removeTagFromDocument: async (documentId, tagId) => {
     try {
-      await window.electronAPI.db.removeDocumentTag(documentId, tagId);
+      const removed = await removeLibraryTagFromDocument(documentId, tagId);
+      if (!removed) return;
       set((state) => ({
-        documents: state.filterType === 'tag' && state.selectedTagId === tagId
-          ? state.documents.filter(doc => doc.id !== documentId)
-          : state.documents
+        documents: applyLibraryTagRemoval({
+          documents: state.documents,
+          filterType: state.filterType,
+          selectedTagId: state.selectedTagId,
+          documentId,
+          tagId,
+        })
       }));
     } catch (error) {
       console.error('Failed to remove tag:', error);
     }
   },
 
-  applyDocumentPatch: (documentId, updates) => set((state) => ({
-    documents: state.documents.map(doc =>
-      doc.id === documentId ? { ...doc, ...updates } : doc
-    )
-  })),
+  loadDocumentTags: async (documentId) => loadLibraryDocumentTags(documentId),
+
+  persistDocumentPatch: async (documentId, updates) => {
+    const updated = await updateLibraryDocument(documentId, updates);
+    if (!updated) return false;
+    set((state) => ({
+      documents: patchLibraryDocuments(state.documents, documentId, updates),
+    }));
+    return true;
+  },
   
   // Tag Operations
   createTag: async (name, color) => {
     try {
-      const tag = await window.electronAPI.tags.create(name, color);
+      const tag = await createLibraryTag(name, color);
       if (tag) {
         set((state) => ({ tags: [...state.tags, tag] }));
       }
@@ -309,7 +342,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   deleteTag: async (id) => {
     try {
-      await window.electronAPI.tags.delete(id);
+      const deleted = await deleteLibraryTag(id);
+      if (!deleted) return;
       set((state) => ({ tags: state.tags.filter(t => t.id !== id) }));
     } catch (error) {
       console.error('Failed to delete tag:', error);
@@ -319,7 +353,7 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   // Project Operations
   createProject: async (name, parentId = null, color) => {
     try {
-      const project = await window.electronAPI.projects.create({ 
+      const project = await createLibraryProject({ 
         name, 
         parent_id: parentId,
         color 
@@ -336,7 +370,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   
   deleteProject: async (id) => {
     try {
-      await window.electronAPI.projects.delete(id);
+      const deleted = await deleteLibraryProject(id);
+      if (!deleted) return;
       set((state) => ({ projects: state.projects.filter(p => p.id !== id) }));
     } catch (error) {
       console.error('Failed to delete project:', error);
@@ -346,24 +381,6 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   // Helper to get sorted documents
   getSortedDocuments: () => {
     const { documents, sortBy, sortOrder } = get();
-    const sorted = [...documents].sort((a, b) => {
-      let comparison = 0;
-      switch (sortBy) {
-        case 'name':
-          comparison = a.filename.localeCompare(b.filename);
-          break;
-        case 'date':
-          comparison = new Date(a.last_accessed).getTime() - new Date(b.last_accessed).getTime();
-          break;
-        case 'size':
-          comparison = a.file_size - b.file_size;
-          break;
-        case 'type':
-          comparison = a.file_type.localeCompare(b.file_type);
-          break;
-      }
-      return sortOrder === 'asc' ? comparison : -comparison;
-    });
-    return sorted;
+    return sortLibraryDocuments(documents, sortBy, sortOrder);
   }
 }));
