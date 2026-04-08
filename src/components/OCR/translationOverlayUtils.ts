@@ -2051,6 +2051,13 @@ export const computeOverlayLayoutMap = (
         )
       )
     );
+    const shouldBlockSectionMergeForTechnicalRows = (
+      technicalDocumentSignalCount >= 1
+      && (
+        structuredDocumentSignalCount >= 1
+        || (hasSharedLeftEdge && group.length >= 2)
+      )
+    );
     const mergeGapLimit = mergedStyleKind === 'comic-bubble'
       ? Math.max(34, maxHeight * (effectiveProfile === 'manga' ? 2.8 : 2.5))
       : Math.max(30, maxHeight * (effectiveProfile === 'manga' ? 2.35 : 2.15));
@@ -2058,6 +2065,7 @@ export const computeOverlayLayoutMap = (
     const shouldMergeAsSectionBlock = !effectiveDocumentProfile
       && allowSectionMerge
       && !shouldBlockSectionMergeForDocumentLike
+      && !shouldBlockSectionMergeForTechnicalRows
       && !shouldPreservePerLineNarrative
       && group.length >= 2
       && mergedStyleKind === 'comic-bubble'

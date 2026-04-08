@@ -867,6 +867,56 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(1)?.renderText).toBe('และแรงที่ตั้งฉากกับแท่ง');
   });
 
+  test('keeps manga technical stacked rows per-line instead of merge-hide section blocks', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'อาคารอเนกประสงค์นี้',
+        width: 220,
+        height: 22,
+        bbox: { x0: 250, y0: 320, x1: 470, y1: 342 },
+        line: {
+          text: 'This utility building is',
+          confidence: 95,
+          bbox: { x0: 246, y0: 320, x1: 474, y1: 342 },
+          words: [{ text: 'This', confidence: 95, bbox: { x0: 256, y0: 320, x1: 286, y1: 342 } }],
+        },
+        hints: {
+          sourceText: 'This utility building is',
+          sourceBoxWidth: 228,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+      {
+        index: 1,
+        text: 'รองรับแบบพินที่ด้านบนของคอลัมน์ (8)',
+        width: 300,
+        height: 22,
+        bbox: { x0: 246, y0: 348, x1: 546, y1: 370 },
+        line: {
+          text: 'pin supported at the top of the column. (8)',
+          confidence: 95,
+          bbox: { x0: 242, y0: 348, x1: 550, y1: 370 },
+          words: [{ text: 'pin', confidence: 95, bbox: { x0: 258, y0: 348, x1: 282, y1: 370 } }],
+        },
+        hints: {
+          sourceText: 'pin supported at the top of the column. (8)',
+          sourceBoxWidth: 308,
+          sourceBoxHeight: 22,
+          fontFamily: 'TH Sarabun',
+          profile: 'manga',
+        },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.renderText).toBe('อาคารอเนกประสงค์นี้');
+    expect(layoutMap.get(1)?.renderText).toContain('คอลัมน์');
+  });
+
   test('keeps bracketed glossary narrative lines per-line under manga profile', () => {
     const layoutMap = computeOverlayLayoutMap([
       {

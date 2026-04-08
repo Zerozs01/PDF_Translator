@@ -204,6 +204,35 @@ describe('dedupeTranslatableLinesForTranslation', () => {
     expect(deduped).toHaveLength(2);
     expect(deduped.map((line) => line.index).sort((a, b) => a - b)).toEqual([40, 41]);
   });
+
+  test('keeps nearby technical subset lines when they are not strong same-box overlaps', () => {
+    const shortLine = makeLine({
+      index: 51,
+      text: 'This utility building is',
+      sourceLength: 22,
+      top: 520,
+      bottom: 542,
+      left: 260,
+      right: 470,
+      height: 22,
+    });
+
+    const longLine = makeLine({
+      index: 52,
+      text: 'This utility building is pin supported at the top of the column. (8)',
+      sourceLength: 69,
+      top: 548,
+      bottom: 570,
+      left: 258,
+      right: 620,
+      height: 22,
+    });
+
+    const deduped = dedupeTranslatableLinesForTranslation([shortLine, longLine]);
+
+    expect(deduped).toHaveLength(2);
+    expect(deduped.map((line) => line.index).sort((a, b) => a - b)).toEqual([51, 52]);
+  });
 });
 
 describe('resolveBestOcrLineText', () => {
@@ -610,6 +639,23 @@ describe('shouldUseLineByLineGrouping', () => {
     ];
 
     const shouldLineByLine = shouldUseLineByLineGrouping(lines, 'th', 'th', 'offline', 'adaptive');
+    expect(shouldLineByLine).toBe(true);
+  });
+
+  test('forces line-by-line mode for strong technical table pages even in manga mode', () => {
+    const lines = [
+      makeLine({ index: 0, text: 'TABLE 5-1 Continued', sourceLength: 18, top: 20, bottom: 40, left: 40, right: 240, height: 20 }),
+      makeLine({ index: 1, text: 'Types of CONNECTION', sourceLength: 19, top: 44, bottom: 64, left: 40, right: 250, height: 20 }),
+      makeLine({ index: 2, text: 'REACTION', sourceLength: 8, top: 68, bottom: 88, left: 40, right: 170, height: 20 }),
+      makeLine({ index: 3, text: 'Number of unknowns', sourceLength: 18, top: 92, bottom: 112, left: 40, right: 250, height: 20 }),
+      makeLine({ index: 4, text: '(8)', sourceLength: 3, top: 116, bottom: 136, left: 40, right: 90, height: 20 }),
+      makeLine({ index: 5, text: 'Two unknowns.', sourceLength: 13, top: 140, bottom: 160, left: 320, right: 470, height: 20 }),
+      makeLine({ index: 6, text: 'The reactions are two components of force.', sourceLength: 40, top: 164, bottom: 184, left: 320, right: 700, height: 20 }),
+      makeLine({ index: 7, text: 'the magnitude and direction of the resultant force.', sourceLength: 48, top: 188, bottom: 208, left: 320, right: 760, height: 20 }),
+      makeLine({ index: 8, text: 'fixed support', sourceLength: 12, top: 212, bottom: 232, left: 320, right: 470, height: 20 }),
+    ];
+
+    const shouldLineByLine = shouldUseLineByLineGrouping(lines, 'en', 'th', 'offline', 'manga');
     expect(shouldLineByLine).toBe(true);
   });
 });

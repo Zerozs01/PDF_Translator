@@ -1462,6 +1462,23 @@ class VisionService {
     return tinyRelativeToPage && veryCompressed;
   }
 
+  private isCriticalTechnicalPaddleAnomalyLine(line: OCRLine): boolean {
+    const text = String(line.text || '').trim();
+    if (!text) return false;
+
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const alphaNumericLength = normalizeExternalLatinToken(normalized).length;
+    if (alphaNumericLength < 8) return false;
+
+    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+    if (tokenCount < 2 || tokenCount > 16) return false;
+
+    const hasEquationLabel = /\(\s*\d{1,3}[a-z]?\s*\)/i.test(normalized);
+    const hasTechnicalCue = /\b(resultant|magnitude|direction|force|column|columns|connections?|support|reaction|unknowns?|beam|beams|welded|fixed|table|figure|types?)\b/i.test(normalized);
+
+    return hasEquationLabel || hasTechnicalCue;
+  }
+
   private collectPaddlePanelGeometryAnomalies(result: OCRPageResult): OCRLine[] {
     if ((result.pipelineProfile || 'panel') !== 'panel') return [];
     if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') return [];
@@ -1510,6 +1527,11 @@ class VisionService {
       return true;
     }
 
+    const criticalTechnicalAnomalies = anomalies.filter((line) => this.isCriticalTechnicalPaddleAnomalyLine(line));
+    if (criticalTechnicalAnomalies.length > 0) {
+      return true;
+    }
+
     const totalLines = Math.max(1, Array.isArray(result.lines) ? result.lines.length : 0);
     const anomalyRatio = anomalies.length / totalLines;
     const pageHeight = Math.max(1, Number(result.height || 0));
@@ -1537,7 +1559,13 @@ class VisionService {
   ): OCRPageResult {
     if (anomalies.length === 0) return externalResult;
 
-    const anomalySet = new Set<OCRLine>(anomalies);
+    // Keep technical caption-like lines to avoid losing valid table/document rows.
+    const removableAnomalies = anomalies.filter((line) => !this.isCriticalTechnicalPaddleAnomalyLine(line));
+    if (removableAnomalies.length === 0) {
+      return externalResult;
+    }
+
+    const anomalySet = new Set<OCRLine>(removableAnomalies);
     const preservedLines = (externalResult.lines || []).filter((line) => !anomalySet.has(line));
     if (preservedLines.length === (externalResult.lines || []).length) {
       return externalResult;
@@ -1551,7 +1579,7 @@ class VisionService {
       ? preservedConfidences.reduce((sum, value) => sum + value, 0) / preservedConfidences.length
       : Number(externalResult.confidence || 0);
 
-    const droppedWords: OCRDroppedWord[] = anomalies.slice(0, 12).map((line) => ({
+    const droppedWords: OCRDroppedWord[] = removableAnomalies.slice(0, 12).map((line) => ({
       filter: 'externalPaddleFallback',
       reason: 'malformedTinyBboxForLongLine',
       text: String(line.text || '').trim(),
@@ -1574,7 +1602,7 @@ class VisionService {
         dropCounts: {
           ...(externalResult.debug?.dropCounts || {}),
           externalPaddleGeometryAnomalyDrop:
-            (externalResult.debug?.dropCounts?.externalPaddleGeometryAnomalyDrop || 0) + anomalies.length,
+            (externalResult.debug?.dropCounts?.externalPaddleGeometryAnomalyDrop || 0) + removableAnomalies.length,
         },
         skipReason,
       },

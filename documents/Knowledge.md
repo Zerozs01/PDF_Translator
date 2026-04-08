@@ -1,89 +1,59 @@
-# Consolidated Research Notes
+# Consolidated Knowledge
 
-This file keeps the research takeaways that still matter for the repo.
-It is not the place for exact thresholds or current file-level behavior. For that, use `ARCHITECTURE.md` and `OCR_OPTIMIZATION.md`.
+Short, durable rules that still apply to this repository.
 
-tr
-### Text-layer-first beats OCR
+## 1. Source Truth Priority
 
-If a PDF page already contains real text, extracting that text is more accurate and cheaper than OCR. The current repo already follows this in the export path through `SearchablePDFService`.
+1. OCR ingest quality
+2. Translation mapping integrity
+3. Overlay rendering polish
 
-### Detection-first OCR is still the highest-upside future upgrade
+Do not rely on overlay masking to fix upstream OCR errors.
 
-The current repo mostly performs full-page OCR plus heuristic filtering and rescue. Research still supports region-first OCR as the strongest long-term way to reduce ghost text, especially on manga, textured pages, and mixed layouts.
+## 2. Geometry Integrity
 
-### Geometry must stay first-class
+OCR text without usable geometry is not production-grade.
+Always preserve valid line/word boxes and normalize malformed line boxes with deterministic rules.
 
-Useful OCR output is not only text. It must keep:
+## 3. Deterministic Over Heuristic Drift
 
-- word and line boxes
-- confidence
-- page dimensions
-- stable cache identity
+When tuning:
 
-That principle already exists in the repo and should not be weakened during tuning.
+- prefer narrow deterministic guards
+- avoid broad threshold relaxation
+- isolate changes by page type (comic vs technical document)
 
-### Preprocessing should be evidence-based, not globally relaxed
+## 4. Cache Discipline
 
-Earlier experiments already showed that broad threshold relaxation can increase ghost text. Research and project history point in the same direction:
+Stale cache can hide fixes and fake regressions.
+Keep cache versioning strict and tied to behavior changes.
 
-- improve the exact failing stage
-- keep changes narrow
-- measure the before/after effect
+## 5. Validation Discipline
 
-### Confidence and language-aware cleanup are mandatory
+Every meaningful OCR change must pass both:
 
-Tesseract will often return something even when the visual evidence is weak. The current code correctly treats OCR as a noisy candidate stream that needs:
+- Tall comic page fixture
+- Dense technical/document fixture
 
-- image/text-background filtering
-- lexical or script-aware cleanup
-- line-level pruning
-- bounded rescue
+## 6. Translation Mapping Rule
 
-### Translation, RAG, and editor workflows are downstream concerns
+If source OCR line is visible and valid, it must either:
 
-Better OCR quality should happen before translation, LLM polishing, or search/retrieval. Garbage text passed downstream becomes harder and more expensive to fix later.
+- have translated text mapped by index, or
+- be intentionally preserved source text by explicit rule
 
-## 2. What The Current Repo Already Implements
+Silent index gaps are not acceptable.
 
-- PDF text-layer skip in export mode
-- local tessdata path with CDN fallback
-- OCR quality profiles: `fast`, `balanced`, `best`
-- two runtime contexts: `panel` and `export`
-- cache persistence in SQLite
-- cache compatibility checks using language, DPI, `pageSegMode`, algorithm version, pipeline profile, and quality profile
-- debug payloads with drop counts, stage metrics, candidate traces, runtime, and skip reason
-- Korean-specific filtering for:
-  - isolated CJK noise
-  - jamo-heavy artifacts
-  - weak isolated CJK lines
+## 7. Preferred Debug Order
 
-## 3. What The Repo Does Not Implement Yet
+When text appears in OCR but not in overlay:
 
-- detector-first region OCR
-- local deskew per text region
-- explicit per-region angle in OCR output
-- reproducible Korean fixture suite
-- unit-test coverage for the OCR heuristic modules
-- true editor/data model for bubble-aware replacement or PSD export
+1. Check OCR dropped-line reasons
+2. Check translation input filtering
+3. Check translatedByIndex coverage
+4. Check preview cache context/fingerprint
 
-Those older ideas are not wrong, but they are not the current critical path.
+## 8. UI Operator Ergonomics
 
-## 4. Research-Backed Next Upgrades After The Korean Baseline Stabilizes
-
-1. Add Korean fixtures and saved debug payloads so tuning stops depending on memory and screenshots.
-2. Add Korean-specific stage counters so keep/drop changes can be measured, not guessed.
-3. Evaluate limited detector-first OCR only for hard pages, not as an immediate repo-wide rewrite.
-4. Add local deskew only where debug evidence shows slanted speech or rotated regions are a real failure mode.
-5. Add unit tests for the filter stages before doing deeper heuristic expansion.
-
-## 5. De-Scoped For Now
-
-These ideas remain valid but are intentionally not active work right now:
-
-- PSD export architecture
-- full manga editor workflow
-- RAG integration
-- YOLO / layout-model experiments
-
-The repo needs a stable OCR baseline first, especially for Korean pages.
+OCR panel tools (copy/search/info) are part of quality control, not cosmetic features.
+Improving review speed directly improves OCR tuning cycle quality.

@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Languages,
   Eye,
+  Search,
   ChevronDown,
   ChevronRight,
   Info,
@@ -583,6 +584,31 @@ const readRuntimeMs = (result: OCRPageResult): number | null => {
 
 const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
 
+const escapePreviewSearchPattern = (value: string): string =>
+  String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const renderPreviewTextWithHighlight = (text: string, query: string): React.ReactNode => {
+  const normalizedText = String(text || '');
+  const normalizedQuery = normalizePreviewText(query);
+  if (!normalizedQuery) return normalizedText;
+
+  const matcher = new RegExp(`(${escapePreviewSearchPattern(normalizedQuery)})`, 'ig');
+  const parts = normalizedText.split(matcher);
+  if (parts.length <= 1) return normalizedText;
+
+  return parts.map((part, index) => {
+    const key = `${index}:${part}`;
+    if (index % 2 === 1) {
+      return (
+        <mark key={key} className="rounded bg-amber-300/30 px-px text-amber-100">
+          {part}
+        </mark>
+      );
+    }
+    return <React.Fragment key={key}>{part}</React.Fragment>;
+  });
+};
+
 const hasPositivePanelBBox = (bbox?: { x0: number; y0: number; x1: number; y1: number }): boolean => {
   if (!bbox) return false;
   return (Number(bbox.x1 || 0) - Number(bbox.x0 || 0)) > 0
@@ -721,6 +747,21 @@ const resolvePanelLineTextForSafety = (line: OCRLine): string => {
 
 const PANEL_GHOST_PUNCT_ONLY_REGEX = /^[|¦│┃/\\_~.,:;'"`!?-]+$/;
 const PANEL_GHOST_SHORT_TOKEN_REGEX = /^[A-Z0-9]{1,4}$/;
+const PANEL_TECHNICAL_ROW_HINT_REGEX = /\b(resultant|magnitude|direction|force|column|columns|connections?|support|reaction|unknowns?|beam|beams|welded|rigid|types?|table|continued|hinge|pin|collar|utility|building|bridge|girder|floor|member|concrete)\b/i;
+const PANEL_TECHNICAL_EQUATION_TAG_REGEX = /\(\s*\d{1,3}[a-z]?\s*\)/i;
+
+const isLikelyTechnicalDocumentLineForSafety = (resolvedText: string): boolean => {
+  const normalized = normalizePreviewText(String(resolvedText || ''));
+  if (!normalized) return false;
+
+  const alphaNumLength = normalized.replace(/[^A-Za-z0-9]/g, '').length;
+  if (alphaNumLength < 6) return false;
+
+  const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+  if (tokenCount < 2 || tokenCount > 20) return false;
+
+  return PANEL_TECHNICAL_ROW_HINT_REGEX.test(normalized) || PANEL_TECHNICAL_EQUATION_TAG_REGEX.test(normalized);
+};
 
 const isLikelyDocumentLikePanelPage = (result: OCRPageResult): boolean => {
   const lines = Array.isArray(result.lines) ? result.lines : [];
@@ -1151,9 +1192,34 @@ const shouldCollapsePanelSafetyDuplicate = (
     )
   );
 
-  const exactKeyMatch = existingKey === candidateKey;
   const existingPreview = normalizePreviewText(existingLine.text || '');
   const candidatePreview = normalizePreviewText(candidateLine.text || '');
+  const technicalLinePair = (
+    isLikelyTechnicalDocumentLineForSafety(existingPreview)
+    || isLikelyTechnicalDocumentLineForSafety(candidatePreview)
+  );
+
+  // On technical/document rows, collapse duplicates only when the boxes strongly match.
+  if (technicalLinePair) {
+    return (
+      iou >= 0.62
+      || (
+        overlapY >= 0.86
+        && overlapX >= 0.74
+        && centerDeltaY <= minHeight * 0.72
+        && centerDeltaX <= minWidth * 0.62
+      )
+      || (
+        overlapY >= 0.72
+        && overlapX >= 0.58
+        && nearSizeMatch
+        && centerDeltaY <= minHeight * 0.86
+        && centerDeltaX <= minWidth * 0.78
+      )
+    );
+  }
+
+  const exactKeyMatch = existingKey === candidateKey;
   const existingWordCount = existingPreview.split(/\s+/g).filter(Boolean).length;
   const candidateWordCount = candidatePreview.split(/\s+/g).filter(Boolean).length;
   const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= Math.max(96, minHeight * 4.2);
@@ -1255,7 +1321,8 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
         return null;
       }
 
-      if (documentLikePage && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth)) {
+      const technicalDocumentLine = isLikelyTechnicalDocumentLineForSafety(resolvedText);
+      if (documentLikePage && !technicalDocumentLine && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostLowSignalLine',
@@ -1675,6 +1742,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
   );
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied'>('idle');
+  const [ocrPreviewSearch, setOcrPreviewSearch] = useState<string>('');
+  const [ocrPreviewSearchActiveIndex, setOcrPreviewSearchActiveIndex] = useState<number>(0);
   const [benchmarkRows, setBenchmarkRows] = useState<BenchmarkRow[]>(() =>
     OCR_ENGINES.map((engine) => ({
       engine: engine.id,
@@ -2867,6 +2936,25 @@ export const OCRTextLayerPanel: React.FC = () => {
       : normalizePreviewText(previewSourceOCR?.text || '');
   const previewCopyText = previewText || previewSourceOCR?.words.map((word) => word.text).join(' ') || '';
   const hasPreviewCopyText = Boolean(previewCopyText.trim());
+  const normalizedPreviewSearch = normalizePreviewText(ocrPreviewSearch);
+  const previewSearchNeedle = normalizedPreviewSearch.toLowerCase();
+  const previewMatchedLineIndexes = previewSearchNeedle
+    ? previewLines
+      .map((line, lineIndex) => ({
+        lineIndex,
+        text: normalizePreviewText(String(line.text || '')),
+      }))
+      .filter((entry) => entry.text.toLowerCase().includes(previewSearchNeedle))
+      .map((entry) => entry.lineIndex)
+    : [];
+  const previewMatchedLineIndexSet = new Set<number>(previewMatchedLineIndexes);
+  const previewSearchMatchCount = normalizedPreviewSearch
+    ? (previewText.match(new RegExp(escapePreviewSearchPattern(normalizedPreviewSearch), 'ig')) || []).length
+    : 0;
+  const hasPreviewSearchMatches = previewMatchedLineIndexes.length > 0;
+  const activePreviewMatchLineIndex = hasPreviewSearchMatches
+    ? previewMatchedLineIndexes[Math.min(ocrPreviewSearchActiveIndex, previewMatchedLineIndexes.length - 1)]
+    : -1;
 
   const handleCopyPreviewText = useCallback(async () => {
     if (!hasPreviewCopyText) {
@@ -2887,6 +2975,20 @@ export const OCRTextLayerPanel: React.FC = () => {
         : 'Copied OCR result'
     );
   }, [effectivePreviewMode, hasPreviewCopyText, previewCopyText]);
+
+  const handlePreviewSearchStep = useCallback((direction: -1 | 1) => {
+    if (!normalizedPreviewSearch) return;
+    if (previewMatchedLineIndexes.length === 0) {
+      setCacheActionMessage('No match in OCR result');
+      return;
+    }
+
+    setOcrPreviewSearchActiveIndex((current) => {
+      const total = previewMatchedLineIndexes.length;
+      if (total <= 1) return 0;
+      return (current + direction + total) % total;
+    });
+  }, [normalizedPreviewSearch, previewMatchedLineIndexes.length]);
 
   const hasCjkOrThaiOcrLanguage = useCallback((language: string) => {
     const codes = language.split('+').map(code => code.trim()).filter(Boolean);
@@ -4024,6 +4126,19 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, [copyFeedback]);
 
   useEffect(() => {
+    if (!normalizedPreviewSearch || previewMatchedLineIndexes.length === 0) {
+      if (ocrPreviewSearchActiveIndex !== 0) {
+        setOcrPreviewSearchActiveIndex(0);
+      }
+      return;
+    }
+
+    if (ocrPreviewSearchActiveIndex > previewMatchedLineIndexes.length - 1) {
+      setOcrPreviewSearchActiveIndex(previewMatchedLineIndexes.length - 1);
+    }
+  }, [normalizedPreviewSearch, ocrPreviewSearchActiveIndex, previewMatchedLineIndexes.length]);
+
+  useEffect(() => {
     const handler = () => {
       if (benchmarkRunning) {
         setBenchmarkOpen(true);
@@ -4440,16 +4555,6 @@ export const OCRTextLayerPanel: React.FC = () => {
               </span>
               <button
                 type="button"
-                onClick={() => void handleCopyPreviewText()}
-                disabled={!hasPreviewCopyText}
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-slate-900/70 text-slate-300 transition-colors hover:border-cyan-300/60 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
-                title={hasPreviewCopyText ? 'Copy all OCR text in the current preview' : 'No OCR text to copy'}
-                aria-label={copyFeedback === 'copied' ? 'Copied OCR text' : 'Copy all OCR text'}
-              >
-                {copyFeedback === 'copied' ? <Check size={12} /> : <Copy size={12} />}
-              </button>
-              <button
-                type="button"
                 onClick={() => {
                   if (effectivePreviewMode === 'translated') {
                     setTranslationPreviewMode('original');
@@ -4484,20 +4589,82 @@ export const OCRTextLayerPanel: React.FC = () => {
           )}
           
           <div className="relative bg-slate-900/55 border border-white/10 rounded-lg min-h-56 max-h-[40vh] overflow-hidden">
+            <div className="pointer-events-none absolute right-2 top-2 z-20">
+              <button
+                type="button"
+                onClick={() => void handleCopyPreviewText()}
+                disabled={!hasPreviewCopyText}
+                className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-slate-950/80 text-slate-300 shadow-[0_6px_14px_rgba(2,8,23,0.45)] transition-colors hover:border-cyan-300/60 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+                title={hasPreviewCopyText ? 'Copy all OCR text in the current preview' : 'No OCR text to copy'}
+                aria-label={copyFeedback === 'copied' ? 'Copied OCR text' : 'Copy all OCR text'}
+              >
+                {copyFeedback === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+              </button>
+            </div>
             <div className="h-full max-h-[40vh] overflow-y-auto p-2 pb-4">
+              <div className="sticky top-0 z-10 mb-2 rounded-md border border-white/10 bg-slate-950/88 px-2 py-1.5 backdrop-blur">
+                <div className="flex items-center gap-1.5">
+                  <Search size={12} className="text-slate-400" />
+                  <input
+                    type="text"
+                    value={ocrPreviewSearch}
+                    onChange={(event) => setOcrPreviewSearch(event.target.value)}
+                    placeholder="Search OCR result..."
+                    className="h-7 flex-1 rounded-md border border-white/10 bg-slate-900/75 px-2 text-[11px] text-slate-100 placeholder:text-slate-500 focus:border-cyan-400/50 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handlePreviewSearchStep(-1)}
+                    disabled={!hasPreviewSearchMatches}
+                    className="h-7 rounded-md border border-white/12 bg-slate-900/75 px-2 text-[10px] font-semibold text-slate-200 transition-colors hover:border-cyan-400/45 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+                    title="Previous match"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePreviewSearchStep(1)}
+                    disabled={!hasPreviewSearchMatches}
+                    className="h-7 rounded-md border border-white/12 bg-slate-900/75 px-2 text-[10px] font-semibold text-slate-200 transition-colors hover:border-cyan-400/45 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+                    title="Next match"
+                  >
+                    Next
+                  </button>
+                </div>
+                {normalizedPreviewSearch && (
+                  <div className="mt-1 text-[10px] text-slate-400">
+                    {hasPreviewSearchMatches
+                      ? `matches ${previewSearchMatchCount} • line ${ocrPreviewSearchActiveIndex + 1}/${previewMatchedLineIndexes.length}`
+                      : 'No match'}
+                  </div>
+                )}
+              </div>
               {previewWordsLength > 0 ? (
                 <div className="space-y-1">
                   {/* Show text grouped by lines for better readability */}
                   {previewLines && previewLines.length > 0 ? (
-                    previewLines.map((line, i) => (
-                      <p key={i} className="text-xs text-slate-300 leading-relaxed">
-                        {line.text}
-                      </p>
-                    ))
+                    previewLines.map((line, i) => {
+                      const matchedLine = previewMatchedLineIndexSet.has(i);
+                      const activeMatchLine = matchedLine && i === activePreviewMatchLineIndex;
+                      return (
+                        <p
+                          key={i}
+                          className={`text-xs leading-relaxed ${
+                            activeMatchLine
+                              ? 'rounded bg-cyan-500/14 px-1 py-0.5 text-cyan-50 ring-1 ring-cyan-400/35'
+                              : matchedLine
+                                ? 'text-slate-100'
+                                : 'text-slate-300'
+                          }`}
+                        >
+                          {renderPreviewTextWithHighlight(line.text, normalizedPreviewSearch)}
+                        </p>
+                      );
+                    })
                   ) : (
                     // Fallback: show words joined
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      {previewText || previewSourceOCR.words.map(w => w.text).join(' ')}
+                      {renderPreviewTextWithHighlight(previewText || previewSourceOCR.words.map(w => w.text).join(' '), normalizedPreviewSearch)}
                     </p>
                   )}
                 </div>

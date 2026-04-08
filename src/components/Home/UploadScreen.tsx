@@ -1725,7 +1725,7 @@ export const UploadScreen: React.FC = () => {
               >
                 <div className="flex items-center gap-2">
                   <Compass size={14} className={translationMode === 'adaptive' ? 'text-[#99F6E4]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'adaptive' ? 'text-[#E6FFF9]' : 'text-slate-300'}`}>Orbit Adaptive</span>
+                  <span className={`font-medium text-sm ${translationMode === 'adaptive' ? 'text-[#E6FFF9]' : 'text-slate-300'}`}>Flexibility</span>
                 </div>
               </button>
 
@@ -1755,7 +1755,7 @@ export const UploadScreen: React.FC = () => {
               >
                 <div className="flex items-center gap-2">
                   <Flame size={14} className={translationMode === 'manhwa' ? 'text-[#F9A8D4]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'manhwa' ? 'text-[#FFE7F3]' : 'text-slate-300'}`}>Manhwa 18+ Style</span>
+                  <span className={`font-medium text-sm ${translationMode === 'manhwa' ? 'text-[#FFE7F3]' : 'text-slate-300'}`}>Manhwa Style</span>
                 </div>
               </button>
 

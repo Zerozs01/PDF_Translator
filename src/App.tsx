@@ -1284,6 +1284,31 @@ export const resolveBestOcrLineText = (line?: OCRLine): string => {
 
 const GHOST_TRANSLATION_PUNCT_ONLY_REGEX = /^[|¦│┃/\\_~.,:;'"`!?-]+$/;
 const GHOST_TRANSLATION_SHORT_TOKEN_REGEX = /^[A-Z0-9]{1,4}$/;
+const TECHNICAL_GHOST_BYPASS_REGEX = /\b(resultant|magnitude|direction|force|column|columns|connections?|support|reaction|unknowns?|beam|beams|welded|rigid|types?|table|continued|hinge|pin)\b/i;
+const TECHNICAL_EQUATION_TAG_REGEX = /\(\s*\d{1,3}[a-z]?\s*\)/i;
+
+const shouldForceKeepTechnicalTranslationLine = (resolvedText: string, line?: OCRLine): boolean => {
+  const normalized = normalizeWhitespace(String(resolvedText || ''));
+  if (!normalized) return false;
+
+  const alphaNumLength = normalized.replace(/[^A-Za-z0-9]/g, '').length;
+  if (alphaNumLength < 6) return false;
+
+  const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+  if (tokenCount < 2 || tokenCount > 20) return false;
+
+  const hasTechnicalCue = TECHNICAL_GHOST_BYPASS_REGEX.test(normalized);
+  const hasEquationTag = TECHNICAL_EQUATION_TAG_REGEX.test(normalized);
+  if (!hasTechnicalCue && !hasEquationTag) return false;
+
+  if (!line?.bbox) return true;
+
+  const width = Math.max(1, Number(line.bbox.x1 || 0) - Number(line.bbox.x0 || 0));
+  const height = Math.max(1, Number(line.bbox.y1 || 0) - Number(line.bbox.y0 || 0));
+  const rowLikeGeometry = width >= Math.max(88, alphaNumLength * 4.2) && height <= 72;
+
+  return rowLikeGeometry || hasEquationTag;
+};
 
 export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolvedText: string): boolean => {
   const text = normalizeWhitespace(String(resolvedText || ''));
@@ -1432,7 +1457,7 @@ const normalizeTranslatableDedupKey = (text: string): string =>
     .replace(/1/g, 'I')
     .replace(/5/g, 'S');
 
-const TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
+const TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
 const UNKNOWNS_COUNT_REGEX = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+unknowns?\b/i;
 const AXIS_SYMBOL_REGEX = /\b(?:fx|fy|fz|mx|my|mz|rx|ry|rz)\b/gi;
 const EQUATION_LABEL_REGEX = /\([0-9]{1,3}\)/;
@@ -1623,6 +1648,17 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
         && centerDeltaY <= Math.max(24, minHeight * 1.05)
         && centerDeltaX <= Math.max(62, minWidth * 1.45)
       );
+      const technicalLinePair = (
+        TECHNICAL_LINE_HINT_REGEX.test(existing.text)
+        || TECHNICAL_LINE_HINT_REGEX.test(candidate.text)
+        || UNKNOWNS_COUNT_REGEX.test(existing.text)
+        || UNKNOWNS_COUNT_REGEX.test(candidate.text)
+      );
+      const strictSubsetPair = sameOrSubset && Math.abs(existingKey.length - candidateKey.length) >= 8;
+      if (technicalLinePair && strictSubsetPair) {
+        const strictSpatialMatch = veryStrongSpatialMatch || compactSpatialMatch;
+        if (!strictSpatialMatch) return false;
+      }
       const noisyNearDuplicate = !sameOrSubset
         && keySimilarity >= 0.72
         && readabilityGap >= 4.8
@@ -2626,7 +2662,6 @@ export const shouldUseLineByLineGrouping = (
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
   if (normalizedTarget !== 'th') return false;
-  if (mode !== 'official' && mode !== 'adaptive') return false;
   if (lines.length <= 4) return false;
 
   const markerHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
@@ -2671,6 +2706,12 @@ export const shouldUseLineByLineGrouping = (
     && avgLength >= 21
     && uppercaseHeadingLines >= 1;
   const technicalEvidenceStrong = tableLikeTechnicalDocument || strongTechnicalDocument || mixedTechnicalEvidence;
+
+  if ((mode === 'manga' || mode === 'manhwa') && tableLikeTechnicalDocument) {
+    return true;
+  }
+
+  if (mode !== 'official' && mode !== 'adaptive') return false;
 
   const comicDialogueLike = isLikelyComicDialogueLayout(lines);
   if (mode === 'adaptive' && comicDialogueLike && !technicalEvidenceStrong) {
@@ -3182,7 +3223,7 @@ const splitTranslatedTextBySourceWeights = (
         const graphemeSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'grapheme' });
         return Array.from(graphemeSeg.segment(target))
           .map((item) => item.segment)
-          .filter((segment) => segment.length > 0);
+          .filter((segment) => segment.trim().length > 0);
       }
       return Array.from(target);
     };
@@ -3277,6 +3318,21 @@ const splitTranslatedTextBySourceWeights = (
   }
 
   return parts.map((part, index) => part || sourceLines[index]?.text || '');
+};
+
+const resolveRedistributedLineFallback = (
+  sourceLineText: string,
+  groupText: string,
+  targetLanguage: string
+): string => {
+  const source = normalizeWhitespace(String(sourceLineText || ''));
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    const normalizedSource = normalizeThaiTranslationText(source);
+    if (normalizedSource) return normalizedSource;
+  }
+
+  const normalizedGroup = normalizeWhitespace(String(groupText || ''));
+  return source || normalizedGroup;
 };
 
 // --- Mock Regions for Prototype ---
@@ -3496,7 +3552,10 @@ export default function App() {
     const collected: TranslatableLine[] = [];
     lines.forEach((line, index) => {
       const text = resolveBestOcrLineText(line);
-      if (!text || isLikelyGhostTranslatableLine(line, text)) return;
+      if (!text) return;
+
+      const likelyGhost = isLikelyGhostTranslatableLine(line, text);
+      if (likelyGhost && !shouldForceKeepTechnicalTranslationLine(text, line)) return;
 
       const bbox = resolveTranslatableLineBBox(line);
       const left = Number(bbox?.x0 ?? line.bbox?.x0 ?? 0);
@@ -3860,7 +3919,12 @@ export default function App() {
         ? 'en'
         : inferredSourceLanguage;
       const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
-      const lines = dedupedLines.filter((line) => {
+      const rawLines = assistedLines.filter((line) => {
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
+        return true;
+      });
+      let lines = dedupedLines.filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
         if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
         return true;
@@ -3872,7 +3936,7 @@ export default function App() {
         continue;
       }
 
-      const groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
+      let groupingProfile: TranslationGroupingProfile = shouldUseLineByLineGrouping(
         lines,
         translationSourceLanguage,
         normalizedTargetLanguage,
@@ -3888,6 +3952,9 @@ export default function App() {
         )
           ? 'dense-dialogue'
           : 'default');
+      if (groupingProfile === 'line-by-line' && rawLines.length > lines.length) {
+        lines = rawLines;
+      }
       const groups = buildTranslationGroups(lines, groupingProfile)
         .map((group, groupIndex) => {
           const rawSourceText = group.lines
@@ -4006,12 +4073,14 @@ export default function App() {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
           redistributedCursor += 1;
-          const thaiFallbackLine = normalizedTargetLanguage === 'th'
-            ? normalizeThaiTranslationText(normalizedGroupText)
-            : sourceLineText;
+          const fallbackLine = resolveRedistributedLineFallback(
+            sourceLineText,
+            normalizedGroupText,
+            normalizedTargetLanguage
+          );
           const nextText = finalizeTranslatedLine(
             sourceLineText,
-            redistributedLine || thaiFallbackLine,
+            redistributedLine || fallbackLine,
             normalizedTargetLanguage
           );
           if (!redistributedLine) {
@@ -4171,7 +4240,13 @@ export default function App() {
       : inferredSourceLanguage;
     const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedTranslatableLines)
       || hasStrongLatinAnchorLines(dedupedTranslatableLines);
-    const translatableLines = dedupedTranslatableLines
+    const rawTranslatableLines = assistedLines
+      .filter((line) => {
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
+        return true;
+      });
+    let translatableLines = dedupedTranslatableLines
       .filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
         if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
@@ -4213,6 +4288,10 @@ export default function App() {
       && shouldForceLineByLineForOfflinePanel(translatableLines)
     ) {
       groupingProfile = 'line-by-line';
+    }
+
+    if (groupingProfile === 'line-by-line' && rawTranslatableLines.length > translatableLines.length) {
+      translatableLines = rawTranslatableLines;
     }
 
     const groups = buildTranslationGroups(translatableLines, groupingProfile);
@@ -4396,12 +4475,14 @@ export default function App() {
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
         const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
         redistributedCursor += 1;
-        const thaiFallbackLine = normalizedTargetLanguage === 'th'
-          ? normalizeThaiTranslationText(translatedGroup)
-          : sourceLineText;
+        const fallbackLine = resolveRedistributedLineFallback(
+          sourceLineText,
+          translatedGroup,
+          normalizedTargetLanguage
+        );
         const finalizedLine = finalizeTranslatedLine(
           sourceLineText,
-          redistributedLine || thaiFallbackLine,
+          redistributedLine || fallbackLine,
           normalizedTargetLanguage
         );
         translatedByIndex.set(line.index, finalizedLine || sourceLineText);
