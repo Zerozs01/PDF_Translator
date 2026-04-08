@@ -63,6 +63,190 @@ const resolveTranslationSourceFromOCRKey = (ocrLanguageKey: string, fallback: st
   return nonEnglish || candidates[0] || fallback;
 };
 
+type TranslatedOverlayCandidate = {
+  index: number;
+  text: string;
+  normalizedKey: string;
+  sourceText: string;
+  sourceWordCount: number;
+  confidence: number;
+  bbox: BBox;
+};
+
+const normalizeTranslatedOverlayDuplicateKey = (value: string): string =>
+  normalizeOverlayInlineText(String(value || ''))
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+
+const overlayDedupBoxWidth = (bbox: BBox): number => Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
+const overlayDedupBoxHeight = (bbox: BBox): number => Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
+const overlayDedupBoxArea = (bbox: BBox): number => overlayDedupBoxWidth(bbox) * overlayDedupBoxHeight(bbox);
+const overlayDedupCenterX = (bbox: BBox): number => (Number(bbox.x0 || 0) + Number(bbox.x1 || 0)) / 2;
+const overlayDedupCenterY = (bbox: BBox): number => (Number(bbox.y0 || 0) + Number(bbox.y1 || 0)) / 2;
+
+const overlayDedupOverlapRatioX = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const minWidth = Math.max(1, Math.min(overlayDedupBoxWidth(a), overlayDedupBoxWidth(b)));
+  return overlap / minWidth;
+};
+
+const overlayDedupOverlapRatioY = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const minHeight = Math.max(1, Math.min(overlayDedupBoxHeight(a), overlayDedupBoxHeight(b)));
+  return overlap / minHeight;
+};
+
+const overlayDedupIou = (a: BBox, b: BBox): number => {
+  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const intersection = overlapWidth * overlapHeight;
+  if (intersection <= 0) return 0;
+
+  const union = overlayDedupBoxArea(a) + overlayDedupBoxArea(b) - intersection;
+  return union > 0 ? intersection / union : 0;
+};
+
+const shouldCollapseTranslatedOverlayDuplicate = (
+  existing: TranslatedOverlayCandidate,
+  candidate: TranslatedOverlayCandidate
+): boolean => {
+  if (!existing.normalizedKey || !candidate.normalizedKey) return false;
+
+  const minLength = Math.min(existing.normalizedKey.length, candidate.normalizedKey.length);
+  const exactKeyMatch = existing.normalizedKey === candidate.normalizedKey;
+  const sameOrSubset = exactKeyMatch
+    || (minLength >= 12 && (
+      existing.normalizedKey.includes(candidate.normalizedKey)
+      || candidate.normalizedKey.includes(existing.normalizedKey)
+    ));
+  if (!sameOrSubset) return false;
+
+  const overlapX = overlayDedupOverlapRatioX(existing.bbox, candidate.bbox);
+  const overlapY = overlayDedupOverlapRatioY(existing.bbox, candidate.bbox);
+  const iou = overlayDedupIou(existing.bbox, candidate.bbox);
+  const centerDeltaX = Math.abs(overlayDedupCenterX(existing.bbox) - overlayDedupCenterX(candidate.bbox));
+  const centerDeltaY = Math.abs(overlayDedupCenterY(existing.bbox) - overlayDedupCenterY(candidate.bbox));
+  const minHeight = Math.max(8, Math.min(overlayDedupBoxHeight(existing.bbox), overlayDedupBoxHeight(candidate.bbox)));
+  const minWidth = Math.max(18, Math.min(overlayDedupBoxWidth(existing.bbox), overlayDedupBoxWidth(candidate.bbox)));
+  const areaRatio = overlayDedupBoxArea(existing.bbox) / Math.max(1, overlayDedupBoxArea(candidate.bbox));
+  const comparableArea = areaRatio >= 0.28 && areaRatio <= 3.6;
+  const bothLongLines = minLength >= 16 && Math.min(existing.sourceWordCount, candidate.sourceWordCount) >= 3;
+  const veryShortPair = Math.max(existing.normalizedKey.length, candidate.normalizedKey.length) <= 9;
+
+  const strongSpatialMatch = (
+    iou >= 0.54
+    || (overlapY >= 0.74 && overlapX >= 0.62)
+    || (
+      overlapY >= 0.38
+      && overlapX >= 0.48
+      && centerDeltaY <= Math.max(84, minHeight * 4.2)
+      && centerDeltaX <= Math.max(80, minWidth * 1.65)
+    )
+  );
+
+  const stackedSameColumnEcho = (
+    comparableArea
+    && overlapX >= 0.56
+    && centerDeltaX <= Math.max(74, minWidth * 1.45)
+    && centerDeltaY <= Math.max(138, minHeight * 6.2)
+    && (overlapY >= 0.12 || iou >= 0.08)
+  );
+
+  if (veryShortPair) {
+    return exactKeyMatch && iou >= 0.62;
+  }
+
+  if (exactKeyMatch && strongSpatialMatch) return true;
+  if (exactKeyMatch && stackedSameColumnEcho) return true;
+  if (bothLongLines && strongSpatialMatch) return true;
+  if (bothLongLines && stackedSameColumnEcho) return true;
+
+  return false;
+};
+
+const scoreTranslatedOverlayCandidate = (candidate: TranslatedOverlayCandidate): number => {
+  const translatedLength = candidate.normalizedKey.length;
+  const sourceLength = normalizeOverlayInlineText(candidate.sourceText || '').length;
+  const areaScore = Math.log(overlayDedupBoxArea(candidate.bbox) + 1);
+  return (
+    translatedLength * 1.15
+    + sourceLength * 0.42
+    + Math.max(0, Number(candidate.confidence || 0)) * 0.18
+    + areaScore * 1.35
+  );
+};
+
+const collapseTranslatedOverlayDuplicates = (
+  currentPageOCR: OCRPageResult,
+  translatedByIndex: Map<number, string>
+): Map<number, string> => {
+  if (translatedByIndex.size <= 1) return translatedByIndex;
+
+  const lines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
+  if (lines.length === 0) return translatedByIndex;
+
+  const candidates: TranslatedOverlayCandidate[] = [];
+  translatedByIndex.forEach((text, index) => {
+    const line = lines[index];
+    if (!line) {
+      return;
+    }
+
+    const normalizedText = normalizeOverlayInlineText(String(text || ''));
+    if (!normalizedText) {
+      return;
+    }
+
+    const sourceBbox = resolveOverlaySourceBBox(line);
+    const width = Number(sourceBbox.x1 || 0) - Number(sourceBbox.x0 || 0);
+    const height = Number(sourceBbox.y1 || 0) - Number(sourceBbox.y0 || 0);
+    if (!(width > 0 && height > 0)) {
+      return;
+    }
+
+    const sourceText = normalizeOverlayInlineText(String(line.text || ''));
+    candidates.push({
+      index,
+      text,
+      normalizedKey: normalizeTranslatedOverlayDuplicateKey(normalizedText),
+      sourceText,
+      sourceWordCount: sourceText.split(/\s+/g).filter(Boolean).length,
+      confidence: Number(line.confidence || 0),
+      bbox: sourceBbox,
+    });
+  });
+
+  if (candidates.length <= 1) {
+    return translatedByIndex;
+  }
+
+  candidates.sort((a, b) => {
+    if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+    if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+    return a.index - b.index;
+  });
+
+  const kept: TranslatedOverlayCandidate[] = [];
+  for (const candidate of candidates) {
+    const duplicateIndex = kept.findIndex((existing) => shouldCollapseTranslatedOverlayDuplicate(existing, candidate));
+    if (duplicateIndex < 0) {
+      kept.push(candidate);
+      continue;
+    }
+
+    const existing = kept[duplicateIndex];
+    if (scoreTranslatedOverlayCandidate(candidate) > scoreTranslatedOverlayCandidate(existing)) {
+      kept[duplicateIndex] = candidate;
+    }
+  }
+
+  if (kept.length === translatedByIndex.size) {
+    return translatedByIndex;
+  }
+
+  return new Map<number, string>(kept.map((item) => [item.index, item.text]));
+};
+
 export type TranslationOverlayContext = {
   shouldRender: boolean;
   isStale: boolean;
@@ -149,11 +333,12 @@ export const resolveTranslationOverlayContext = ({
   }
 
   const isStale = resolvedEntry.sourceFingerprint !== sourceFingerprint;
-  const translatedByIndex = new Map<number, string>(
+  const translatedByIndexRaw = new Map<number, string>(
     resolvedEntry.translatedByIndex
       .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
       .map((item) => [item.index, item.text])
   );
+  const translatedByIndex = collapseTranslatedOverlayDuplicates(currentPageOCR, translatedByIndexRaw);
 
   return {
     shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && !isStale,
@@ -1895,6 +2080,153 @@ const isDocumentLikeOverlayGroup = (
   return hasSharedLeftEdge && startRange <= Math.max(8, maxHeight * 0.26);
 };
 
+type OverlayComputedInput = OverlayTypographyInput & { typography: OverlayTypography };
+
+const overlayBBoxWidth = (bbox: BBox): number => Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
+const overlayBBoxHeight = (bbox: BBox): number => Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
+const overlayBBoxArea = (bbox: BBox): number => overlayBBoxWidth(bbox) * overlayBBoxHeight(bbox);
+const overlayBBoxCenterX = (bbox: BBox): number => (Number(bbox.x0 || 0) + Number(bbox.x1 || 0)) * 0.5;
+const overlayBBoxCenterY = (bbox: BBox): number => (Number(bbox.y0 || 0) + Number(bbox.y1 || 0)) * 0.5;
+
+const overlayBBoxOverlapRatioX = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  return overlap / Math.max(1, Math.min(overlayBBoxWidth(a), overlayBBoxWidth(b)));
+};
+
+const overlayBBoxOverlapRatioY = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  return overlap / Math.max(1, Math.min(overlayBBoxHeight(a), overlayBBoxHeight(b)));
+};
+
+const overlayBBoxIoU = (a: BBox, b: BBox): number => {
+  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const intersection = overlapWidth * overlapHeight;
+  if (intersection <= 0) return 0;
+
+  const union = overlayBBoxArea(a) + overlayBBoxArea(b) - intersection;
+  return union > 0 ? (intersection / union) : 0;
+};
+
+const shouldSuppressOverlappingOverlayBorder = (a: BBox, b: BBox): boolean => {
+  const overlapX = overlayBBoxOverlapRatioX(a, b);
+  const overlapY = overlayBBoxOverlapRatioY(a, b);
+  const iou = overlayBBoxIoU(a, b);
+  const minWidth = Math.max(16, Math.min(overlayBBoxWidth(a), overlayBBoxWidth(b)));
+  const minHeight = Math.max(8, Math.min(overlayBBoxHeight(a), overlayBBoxHeight(b)));
+  const centerDeltaX = Math.abs(overlayBBoxCenterX(a) - overlayBBoxCenterX(b));
+  const centerDeltaY = Math.abs(overlayBBoxCenterY(a) - overlayBBoxCenterY(b));
+  const areaRatio = overlayBBoxArea(a) / Math.max(1, overlayBBoxArea(b));
+  const comparableArea = areaRatio >= 0.24 && areaRatio <= 4.2;
+
+  if (!comparableArea) return false;
+  if (iou >= 0.36) return true;
+  if (overlapX >= 0.74 && overlapY >= 0.62) return true;
+
+  return (
+    overlapX >= 0.6
+    && overlapY >= 0.48
+    && centerDeltaX <= Math.max(58, minWidth * 0.72)
+    && centerDeltaY <= Math.max(34, minHeight * 0.58)
+  );
+};
+
+const scoreOverlayVisibilityCandidate = (
+  layout: OverlayLayout,
+  input: OverlayComputedInput,
+  bbox: BBox
+): number => {
+  const renderText = normalizeOverlayInlineText(layout.renderText || input.text || '');
+  const wordCount = renderText.split(/\s+/g).filter(Boolean).length;
+  const confidence = Math.max(0, Number(input.line?.confidence || 0));
+  const styleBonus = layout.styleKind === 'comic-bubble' ? 8 : layout.styleKind === 'comic-box' ? 4 : 0;
+  const mergedBonus = layout.mergedBBox ? 10 : 0;
+
+  return (
+    renderText.length * 1.05
+    + wordCount * 3.4
+    + confidence * 0.16
+    + Math.log(overlayBBoxArea(bbox) + 1) * 2.1
+    + styleBonus
+    + mergedBonus
+  );
+};
+
+const suppressOverlappingOverlayBorders = (
+  layoutMap: Map<number, OverlayLayout>,
+  orderedInputs: OverlayComputedInput[]
+): Map<number, OverlayLayout> => {
+  if (layoutMap.size <= 1 || orderedInputs.length <= 1) {
+    return layoutMap;
+  }
+
+  const inputByIndex = new Map<number, OverlayComputedInput>(
+    orderedInputs.map((item) => [item.index, item])
+  );
+
+  type OverlayCandidate = {
+    index: number;
+    bbox: BBox;
+    layout: OverlayLayout;
+    input: OverlayComputedInput;
+  };
+
+  const candidates: OverlayCandidate[] = Array.from(layoutMap.entries())
+    .map(([index, layout]) => {
+      if (layout.hidden) return null;
+      const input = inputByIndex.get(index);
+      if (!input) return null;
+      const bbox = layout.mergedBBox || input.bbox;
+      if (!bbox || (bbox.x1 - bbox.x0) <= 0 || (bbox.y1 - bbox.y0) <= 0) return null;
+
+      return { index, bbox, layout, input };
+    })
+    .filter((item): item is OverlayCandidate => Boolean(item))
+    .sort((a, b) => {
+      if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+      if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+      return a.index - b.index;
+    });
+
+  if (candidates.length <= 1) return layoutMap;
+
+  const next = new Map(layoutMap);
+  const kept: OverlayCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const existingIndex = kept.findIndex((existing) =>
+      shouldSuppressOverlappingOverlayBorder(existing.bbox, candidate.bbox)
+    );
+
+    if (existingIndex < 0) {
+      kept.push(candidate);
+      continue;
+    }
+
+    const existing = kept[existingIndex];
+    const existingScore = scoreOverlayVisibilityCandidate(existing.layout, existing.input, existing.bbox);
+    const candidateScore = scoreOverlayVisibilityCandidate(candidate.layout, candidate.input, candidate.bbox);
+
+    if (candidateScore > existingScore) {
+      next.set(existing.index, {
+        ...existing.layout,
+        hidden: true,
+        renderText: '',
+      });
+      kept[existingIndex] = candidate;
+      continue;
+    }
+
+    next.set(candidate.index, {
+      ...candidate.layout,
+      hidden: true,
+      renderText: '',
+    });
+  }
+
+  return next;
+};
+
 export const computeOverlayLayoutMap = (
   inputs: OverlayTypographyInput[],
   options?: { profile?: OverlayLayoutProfile }
@@ -2320,7 +2652,7 @@ export const computeOverlayLayoutMap = (
   }
   flushGroup(orderedComputed.length);
 
-  return result;
+  return suppressOverlappingOverlayBorders(result, orderedComputed);
 };
 
 export const computeOverlayTypographyMap = (

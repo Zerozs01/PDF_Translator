@@ -3,9 +3,11 @@ import {
   computeOverlayLayoutMap,
   computeOverlayTypography,
   computeOverlayTypographyMap,
+  resolveTranslationOverlayContext,
   resolveOverlayMaskExpansion,
   resolveOverlaySourceBBox,
 } from './translationOverlayUtils';
+import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 
 describe('translationOverlayUtils typography', () => {
   test('shrinks font size for longer translated text in the same box', () => {
@@ -1278,6 +1280,257 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(0)?.sharedTextStartX).toBe(202);
     expect(layoutMap.get(1)?.sharedTextStartX).toBe(202);
     expect(layoutMap.get(2)?.alignment).toBe('left');
+  });
+
+  test('suppresses strongly overlapping overlay borders at the same anchor area', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'ตึกนี้รองรับแบบพิน',
+        width: 220,
+        height: 24,
+        bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+        line: {
+          text: 'This utility building is',
+          confidence: 78,
+          bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+          words: [{ text: 'This', confidence: 78, bbox: { x0: 268, y0: 520, x1: 298, y1: 544 } }],
+        },
+        hints: {
+          sourceText: 'This utility building is',
+          sourceBoxWidth: 220,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'ตึกอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของคอลัมน์',
+        width: 224,
+        height: 24,
+        bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+        line: {
+          text: 'This utility building is pin supported at the top of the column.',
+          confidence: 96,
+          bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+          words: [{ text: 'This', confidence: 96, bbox: { x0: 274, y0: 524, x1: 304, y1: 548 } }],
+        },
+        hints: {
+          sourceText: 'This utility building is pin supported at the top of the column.',
+          sourceBoxWidth: 224,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.renderText).toContain('คอลัมน์');
+  });
+
+  test('keeps nearby stacked lines when overlap is low and anchors are distinct', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'การรองรับคงที่',
+        width: 170,
+        height: 24,
+        bbox: { x0: 100, y0: 300, x1: 270, y1: 324 },
+        line: {
+          text: 'fixed support',
+          confidence: 95,
+          bbox: { x0: 100, y0: 300, x1: 270, y1: 324 },
+          words: [{ text: 'fixed', confidence: 95, bbox: { x0: 108, y0: 300, x1: 148, y1: 324 } }],
+        },
+        hints: {
+          sourceText: 'fixed support',
+          sourceBoxWidth: 170,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'ชนิดของความสัมพันธ์ในตาราง 5-1',
+        width: 310,
+        height: 24,
+        bbox: { x0: 100, y0: 332, x1: 410, y1: 356 },
+        line: {
+          text: 'CONNECTION types in Table 5-1.',
+          confidence: 95,
+          bbox: { x0: 100, y0: 332, x1: 410, y1: 356 },
+          words: [{ text: 'CONNECTION', confidence: 95, bbox: { x0: 108, y0: 332, x1: 206, y1: 356 } }],
+        },
+        hints: {
+          sourceText: 'CONNECTION types in Table 5-1.',
+          sourceBoxWidth: 310,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+});
+
+describe('resolveTranslationOverlayContext duplicate collapse', () => {
+  test('collapses near-identical translated lines that overlap in the same technical caption row', () => {
+    const currentPageOCR = {
+      pageNumber: 6,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'This utility building is',
+          confidence: 96,
+          bbox: { x0: 260, y0: 520, x1: 470, y1: 542 },
+          words: [{ text: 'This', confidence: 96, bbox: { x0: 266, y0: 520, x1: 296, y1: 542 } }],
+        },
+        {
+          text: 'This utility building is',
+          confidence: 74,
+          bbox: { x0: 266, y0: 526, x1: 474, y1: 548 },
+          words: [{ text: 'This', confidence: 74, bbox: { x0: 272, y0: 526, x1: 302, y1: 548 } }],
+        },
+        {
+          text: 'pin supported at the top of the column. (8)',
+          confidence: 95,
+          bbox: { x0: 256, y0: 550, x1: 566, y1: 572 },
+          words: [{ text: 'pin', confidence: 95, bbox: { x0: 266, y0: 550, x1: 292, y1: 572 } }],
+        },
+      ],
+      words: [],
+      text: 'This utility building is pin supported at the top of the column. (8)',
+      confidence: 92,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v20|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 6,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ตึกอเนกประสงค์นี้' },
+          { index: 1, text: 'ตึกอเนกประสงค์นี้' },
+          { index: 2, text: 'รองรับแบบพินที่ด้านบนของคอลัมน์ (8)' },
+        ],
+        translatedText: 'ตึกอเนกประสงค์นี้ รองรับแบบพินที่ด้านบนของคอลัมน์ (8)',
+        lineCount: 3,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(2);
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(false);
+    expect(overlay.translatedByIndex.get(2)).toContain('คอลัมน์');
+  });
+
+  test('keeps identical translated labels when they are far apart in different rows', () => {
+    const currentPageOCR = {
+      pageNumber: 3,
+      width: 820,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'fixed support',
+          confidence: 95,
+          bbox: { x0: 84, y0: 300, x1: 210, y1: 322 },
+          words: [{ text: 'fixed', confidence: 95, bbox: { x0: 90, y0: 300, x1: 130, y1: 322 } }],
+        },
+        {
+          text: 'fixed support',
+          confidence: 95,
+          bbox: { x0: 86, y0: 692, x1: 212, y1: 714 },
+          words: [{ text: 'fixed', confidence: 95, bbox: { x0: 92, y0: 692, x1: 132, y1: 714 } }],
+        },
+      ],
+      words: [],
+      text: 'fixed support fixed support',
+      confidence: 92,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v20|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 3,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'การรองรับคงที่' },
+          { index: 1, text: 'การรองรับคงที่' },
+        ],
+        translatedText: 'การรองรับคงที่',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(2);
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(true);
   });
 });
 
