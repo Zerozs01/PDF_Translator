@@ -36,7 +36,7 @@ export interface OCRTranslationCacheEntry {
   createdAt: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v20';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v26';
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')

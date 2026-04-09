@@ -1422,44 +1422,77 @@ class VisionService {
     return (confidence * 1.8) + (textLength * 1.15) + (Math.log10(area) * 3.0);
   }
 
-  private isLikelyMalformedPaddleLatinLine(line: OCRLine, pageWidth: number): boolean {
+  private getPaddleLatinLineGeometryMetrics(line: OCRLine): {
+    alphaLength: number;
+    tokenCount: number;
+    width: number;
+    height: number;
+    pxPerChar: number;
+    areaPerChar: number;
+  } | null {
     const text = String(line.text || '').trim();
-    if (!text) return false;
+    if (!text) return null;
 
-    const alpha = normalizeExternalLatinToken(text);
-    if (alpha.length < 10) return false;
+    const alphaLength = normalizeExternalLatinToken(text).length;
+    if (alphaLength < 4) return null;
 
-    const words = (line.words || []).filter((word) => String(word.text || '').trim().length > 0);
-    if (words.length < 4) return false;
-
+    const tokenCount = text.split(/\s+/g).filter(Boolean).length;
     const width = Math.max(1, bboxWidth(line.bbox));
     const height = Math.max(1, bboxHeight(line.bbox));
-    const pxPerChar = width / Math.max(1, alpha.length);
-
-    const veryNarrowForText = pxPerChar < 2.9;
-    const tinyRelativeToPage = width <= Math.max(64, pageWidth * 0.035);
-    const thinStrip = height <= 24 && width <= Math.max(140, alpha.length * 5.2);
-
-    return veryNarrowForText && (tinyRelativeToPage || thinStrip);
+    return {
+      alphaLength,
+      tokenCount,
+      width,
+      height,
+      pxPerChar: width / Math.max(1, alphaLength),
+      areaPerChar: (width * height) / Math.max(1, alphaLength),
+    };
   }
 
-  private isSevereMalformedPaddleLatinLine(line: OCRLine, pageWidth: number): boolean {
-    const text = String(line.text || '').trim();
-    if (!text) return false;
+  private isLikelyMalformedPaddleLatinLine(line: OCRLine, pageWidth: number, pageHeight: number): boolean {
+    const metrics = this.getPaddleLatinLineGeometryMetrics(line);
+    if (!metrics) return false;
 
-    const alpha = normalizeExternalLatinToken(text);
-    if (alpha.length < 14) return false;
+    const { alphaLength, tokenCount, width, height, pxPerChar, areaPerChar } = metrics;
+    if (alphaLength < 6) return false;
+    if (tokenCount < 1 || tokenCount > 8) return false;
 
-    const words = (line.words || []).filter((word) => String(word.text || '').trim().length > 0);
-    if (words.length < 4) return false;
+    const compressedTiny = tokenCount <= 6
+      && pxPerChar < 5.8
+      && width <= Math.max(96, pageWidth * 0.045)
+      && (height <= 58 || width <= Math.max(54, alphaLength * 5.2));
+    const oversizedSparse = tokenCount <= 4
+      && alphaLength <= 12
+      && width >= pageWidth * 0.28
+      && height >= pageHeight * 0.065
+      && (pxPerChar >= 34 || areaPerChar >= 15000);
 
-    const width = Math.max(1, bboxWidth(line.bbox));
-    const height = Math.max(1, bboxHeight(line.bbox));
-    const pxPerChar = width / Math.max(1, alpha.length);
-    const tinyRelativeToPage = width <= Math.max(52, pageWidth * 0.028);
-    const veryCompressed = pxPerChar < 2.2 && height <= 24;
+    return compressedTiny || oversizedSparse;
+  }
 
-    return tinyRelativeToPage && veryCompressed;
+  private isSevereMalformedPaddleLatinLine(line: OCRLine, pageWidth: number, pageHeight: number): boolean {
+    const metrics = this.getPaddleLatinLineGeometryMetrics(line);
+    if (!metrics) return false;
+
+    const { alphaLength, tokenCount, width, height, pxPerChar, areaPerChar } = metrics;
+    if (alphaLength < 6) return false;
+    if (tokenCount < 1 || tokenCount > 8) return false;
+
+    const compressedTiny = tokenCount <= 6
+      && width <= Math.max(52, pageWidth * 0.028)
+      && pxPerChar < 5.4
+      && height <= 60;
+    const needleStrip = tokenCount <= 3
+      && alphaLength >= 7
+      && width <= Math.max(42, alphaLength * 4.8);
+    const oversizedSparse = tokenCount <= 4
+      && alphaLength <= 12
+      && (
+        (width >= pageWidth * 0.32 && height >= pageHeight * 0.075)
+        || areaPerChar >= 18000
+      );
+
+    return compressedTiny || needleStrip || oversizedSparse;
   }
 
   private isCriticalTechnicalPaddleAnomalyLine(line: OCRLine): boolean {
@@ -1484,7 +1517,8 @@ class VisionService {
     if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') return [];
 
     const pageWidth = Math.max(1, result.width || 0);
-    return (result.lines || []).filter((line) => this.isLikelyMalformedPaddleLatinLine(line, pageWidth));
+    const pageHeight = Math.max(1, result.height || 0);
+    return (result.lines || []).filter((line) => this.isLikelyMalformedPaddleLatinLine(line, pageWidth, pageHeight));
   }
 
   private isLikelyDenseLatinDocumentPanelResult(result: OCRPageResult, language: string): boolean {
@@ -1522,7 +1556,8 @@ class VisionService {
     if (anomalies.length === 0) return false;
 
     const pageWidth = Math.max(1, Number(result.width || 0));
-    const severeAnomalies = anomalies.filter((line) => this.isSevereMalformedPaddleLatinLine(line, pageWidth));
+    const pageHeight = Math.max(1, Number(result.height || 0));
+    const severeAnomalies = anomalies.filter((line) => this.isSevereMalformedPaddleLatinLine(line, pageWidth, pageHeight));
     if (severeAnomalies.length > 0) {
       return true;
     }
@@ -1534,7 +1569,6 @@ class VisionService {
 
     const totalLines = Math.max(1, Array.isArray(result.lines) ? result.lines.length : 0);
     const anomalyRatio = anomalies.length / totalLines;
-    const pageHeight = Math.max(1, Number(result.height || 0));
     const aspectRatio = Math.max(pageWidth, pageHeight) / Math.max(1, Math.min(pageWidth, pageHeight));
     const veryTallPanelPage = pageHeight >= 4200 && aspectRatio >= 2.6;
 
@@ -1581,7 +1615,7 @@ class VisionService {
 
     const droppedWords: OCRDroppedWord[] = removableAnomalies.slice(0, 12).map((line) => ({
       filter: 'externalPaddleFallback',
-      reason: 'malformedTinyBboxForLongLine',
+      reason: 'malformedPanelGeometry',
       text: String(line.text || '').trim(),
       confidence: Number(line.confidence || 0),
       bbox: line.bbox,
@@ -1620,6 +1654,7 @@ class VisionService {
     pageSegMode: number | undefined,
     pipelineProfile: OCRPipelineProfile,
     ocrQualityProfile: OCRQualityProfile,
+    fallbackEngine: OCREngine,
   ): OCRPageResult {
     const anomalySet = new Set<OCRLine>(anomalies);
     const preservedExternalLines = (externalResult.lines || []).filter((line) => !anomalySet.has(line));
@@ -1653,7 +1688,7 @@ class VisionService {
 
     const fallbackDebugDrops: OCRDroppedWord[] = anomalies.slice(0, 8).map((line) => ({
       filter: 'externalPaddleFallback',
-      reason: 'malformedTinyBboxForLongLine',
+      reason: 'malformedPanelGeometry',
       text: String(line.text || '').trim(),
       confidence: Number(line.confidence || 0),
       bbox: line.bbox,
@@ -1678,7 +1713,7 @@ class VisionService {
         ...(hybridMerged.debug || { droppedWords: [], dropCounts: {} }),
         droppedWords: hybridDroppedWords,
         dropCounts: hybridDropCounts,
-        skipReason: 'paddleGeometryHybridFallbackToTesseract',
+        skipReason: `paddleGeometryHybridFallback:${fallbackEngine}`,
       },
     };
   }
@@ -2171,12 +2206,16 @@ class VisionService {
         ? this.collectPaddlePanelGeometryAnomalies(externalResult)
         : [];
       const severeAnomalyCount = anomalies.filter((line) =>
-        this.isSevereMalformedPaddleLatinLine(line, Math.max(1, Number(externalResult.width || 0)))
+        this.isSevereMalformedPaddleLatinLine(
+          line,
+          Math.max(1, Number(externalResult.width || 0)),
+          Math.max(1, Number(externalResult.height || 0)),
+        )
       ).length;
 
-      const shouldFallbackToTesseract = canApplyPaddleLatinGeometryGuard
+      const shouldFallbackToGeometryEngine = canApplyPaddleLatinGeometryGuard
         && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
-      if (!shouldFallbackToTesseract) {
+      if (!shouldFallbackToGeometryEngine) {
         if (anomalies.length > 0) {
           return this.dropMinorPaddleGeometryAnomalies(
             externalResult,
@@ -2194,19 +2233,20 @@ class VisionService {
       const fallbackQualityProfile: OCRQualityProfile = severeAnomalyCount > 0
         ? ocrQualityProfile
         : 'fast';
+      const fallbackEngine: OCREngine = 'easyocr';
       try {
-        const fallbackResult = await this.sendMessage<OCRPageResult>('OCR_FOR_TEXT_LAYER', {
+        const fallbackResult = await this.runExternalOcrForTextLayer(
           imageUrl,
           imageWidth,
           imageHeight,
           language,
-          dpi: fallbackDpi,
+          fallbackDpi,
           pageSegMode,
-          debugCollectDrops,
+          signal,
           pipelineProfile,
-          ocrQualityProfile: fallbackQualityProfile,
-          ocrEngine: 'tesseract',
-        }, { signal });
+          fallbackQualityProfile,
+          fallbackEngine,
+        );
 
         const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
           externalResult,
@@ -2219,6 +2259,7 @@ class VisionService {
           pageSegMode,
           pipelineProfile,
           ocrQualityProfile,
+          fallbackEngine,
         );
 
         if (fallbackDpi !== dpi) {
@@ -2252,7 +2293,7 @@ class VisionService {
             },
           };
         }
-        console.warn('[VisionService] Paddle geometry fallback to tesseract failed:', fallbackError);
+        console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
         if (severeAnomalyCount === 0 && anomalies.length > 0) {
           return this.dropMinorPaddleGeometryAnomalies(
             externalResult,

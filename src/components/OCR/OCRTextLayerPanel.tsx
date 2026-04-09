@@ -915,6 +915,22 @@ const isLikelyLargeBorderEffectLineForSafety = (
     return true;
   }
 
+  const latinEffectSectionGhost = hasLatin
+    && !hasCjkOrThai
+    && validWords.length <= 1
+    && tokenCount >= 2
+    && tokenCount <= 7
+    && alphaNum.length >= 6
+    && alphaNum.length <= 34
+    && areaRatio >= 0.022
+    && widthRatio >= 0.14
+    && heightRatio >= 0.1
+    && wordCoverage <= 0.24
+    && (area / Math.max(1, alphaNum.length)) >= 620;
+  if (latinEffectSectionGhost) {
+    return true;
+  }
+
   return false;
 };
 
@@ -1317,6 +1333,62 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
           text: normalizePreviewText(String(line.text || '')),
           confidence: Number(line.confidence || 0),
           bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      const normalizedLineBBox = normalizePanelBBox(lineWithResolvedGeometry.bbox);
+      if (!normalizedLineBBox) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'invalidLineBBox',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      const validWordCount = (Array.isArray(lineWithResolvedGeometry.words) ? lineWithResolvedGeometry.words : [])
+        .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0)
+        .length;
+      const compactResolvedText = resolvedText.replace(/\s+/g, '');
+      const bboxWidth = Math.max(1, normalizedLineBBox.x1 - normalizedLineBBox.x0);
+      const bboxHeight = Math.max(1, normalizedLineBBox.y1 - normalizedLineBBox.y0);
+      const bboxArea = Math.max(1, bboxWidth * bboxHeight);
+      const tinyNoWordLatinArtifact = !documentLikePage
+        && validWordCount === 0
+        && /[A-Za-z0-9]/.test(compactResolvedText)
+        && compactResolvedText.length <= 6
+        && bboxWidth <= 96
+        && bboxHeight <= 44
+        && bboxArea <= 3000
+        && Number(lineWithResolvedGeometry.confidence || 0) <= 94;
+      if (tinyNoWordLatinArtifact) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostTinyNoWordLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: normalizedLineBBox,
+        });
+        return null;
+      }
+
+      const wordCoverage = computePanelLineWordUnionCoverage(lineWithResolvedGeometry);
+      const hugeSparseBorderMismatch = !documentLikePage
+        && compactResolvedText.length <= 12
+        && validWordCount <= 1
+        && bboxArea >= Math.max(15000, pageWidth * pageHeight * 0.012)
+        && wordCoverage <= 0.18
+        && Number(lineWithResolvedGeometry.confidence || 0) <= 95;
+      if (hugeSparseBorderMismatch) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostBorderMismatchLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: normalizedLineBBox,
         });
         return null;
       }
@@ -2806,7 +2878,19 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
     if (entry.ocrEngine !== selectedOcrEngine) return false;
     if (entry.translationMode !== translationMode) return false;
-    if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedContextSourceLanguage) return false;
+
+    const normalizedEntrySource = normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en');
+    const sourceMatches = normalizedEntrySource === normalizedContextSourceLanguage;
+    if (!sourceMatches) {
+      const sameSnapshot = modelScopedFingerprint && entry.sourceFingerprint === modelScopedFingerprint;
+      const latinSourceDrift = Boolean(
+        sameSnapshot
+        && ['en', 'es'].includes(normalizedEntrySource)
+        && ['en', 'es'].includes(normalizedContextSourceLanguage)
+      );
+      if (!latinSourceDrift) return false;
+    }
+
     if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedContextTargetLanguage) return false;
 
     const normalizedEntryLanguage = normalizeCacheLanguageKey(entry.ocrLanguage);

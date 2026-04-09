@@ -20,6 +20,7 @@ import {
   type OverlayTypography,
   resolveTranslationOverlayContext,
   resolveOverlaySourceBBox,
+  shouldSkipOverlayRenderForSuspiciousLine,
   sampleOverlayPaletteFromLine,
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
@@ -167,6 +168,7 @@ export const PDFCanvas: React.FC = () => {
       currentPageOCR.lines.flatMap((line, index) => {
         const translatedText = translationOverlayContext.translatedByIndex.get(index);
         if (!translatedText) return [];
+        if (shouldSkipOverlayRenderForSuspiciousLine(line)) return [];
 
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
@@ -181,7 +183,6 @@ export const PDFCanvas: React.FC = () => {
         const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
           && widthCoverage < 0.84
           && areaCoverage < 0.86;
-        const severeCoverageSource = widthCoverage < 0.42 && areaCoverage < 0.3;
         const effectiveSourceBbox = lowCoverageSource ? maskBbox : sourceBbox;
         const baseWidth = Math.max(1, (effectiveSourceBbox.x1 - effectiveSourceBbox.x0) * ocrOverlayTransform.scaleX);
         const baseHeight = Math.max(1, (effectiveSourceBbox.y1 - effectiveSourceBbox.y0) * ocrOverlayTransform.scaleY);
@@ -207,7 +208,7 @@ export const PDFCanvas: React.FC = () => {
           text: translatedText,
           width: typographyWidth,
           height: typographyHeight,
-          bbox: (overlayLayoutProfile === 'official' || severeCoverageSource) ? maskBbox : effectiveSourceBbox,
+          bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
           line,
           hints: {
             sourceText: line.text,
@@ -597,6 +598,9 @@ export const PDFCanvas: React.FC = () => {
 
                       const layout = overlayLayoutByIndex.get(idx);
                       const isMaskOnlyLine = Boolean(layout?.hidden);
+                      if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
+                        return null;
+                      }
                       const renderText = layout?.renderText || translatedText;
                       const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
                       const styleKind = layout?.styleKind;
@@ -617,12 +621,9 @@ export const PDFCanvas: React.FC = () => {
                       const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
                         && widthCoverage < 0.84
                         && areaCoverage < 0.86;
-                      const severeCoverageSource = !isDocumentLikeOverlay
-                        && widthCoverage < 0.42
-                        && areaCoverage < 0.3;
                       const sourceBbox = isMaskOnlyLine
                         ? resolvedSourceBbox
-                        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource || severeCoverageSource ? maskBbox : resolvedSourceBbox));
+                        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox));
                       const maskRenderSourceLeft = maskBbox.x0;
                       const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
                         ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)

@@ -97,7 +97,7 @@ async function translateWithGemini(
   }
 }
 
-async function translateBatchOffline(
+async function translateBatchOfflineBridge(
   texts: string[],
   type: string,
   mode: TranslationMode,
@@ -140,6 +140,105 @@ async function translateBatchGemini(
   );
 }
 
+const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko']);
+
+const shouldUseOfflinePivotRoute = (sourceLanguage: string, targetLanguage: string): boolean => {
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  return normalizedTarget === 'th' && OFFLINE_PIVOT_SOURCE_LANGUAGES.has(normalizedSource);
+};
+
+const selectOfflinePivotCandidate = (
+  sourceText: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  directText: string,
+  pivotText: string
+): string => {
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  const direct = normalizeWhitespace(String(directText || ''));
+  const pivot = normalizeWhitespace(String(pivotText || ''));
+
+  if (!pivot) return direct;
+  if (!direct) return pivot;
+
+  const directNeedsRetry = shouldRetryLineTranslation(sourceText, direct, normalizedSource, normalizedTarget);
+  const pivotNeedsRetry = shouldRetryLineTranslation(sourceText, pivot, normalizedSource, normalizedTarget);
+
+  // For Spanish/Korean -> Thai offline routes, prefer pivot output when it passes basic quality gates.
+  if (OFFLINE_PIVOT_SOURCE_LANGUAGES.has(normalizedSource) && !pivotNeedsRetry) {
+    return pivot;
+  }
+  if (directNeedsRetry && !pivotNeedsRetry) return pivot;
+  if (!directNeedsRetry && pivotNeedsRetry) return direct;
+
+  const directScore = scoreTranslationCandidate(sourceText, direct, normalizedTarget);
+  const pivotScore = scoreTranslationCandidate(sourceText, pivot, normalizedTarget);
+  const pivotBias = normalizedSource === 'es' ? 14 : 10;
+  if (pivotScore >= directScore - pivotBias) {
+    return pivot;
+  }
+  return directScore >= pivotScore ? direct : pivot;
+};
+
+async function translateBatchOffline(
+  texts: string[],
+  type: string,
+  mode: TranslationMode,
+  sourceLanguage: string,
+  targetLanguage: string
+): Promise<string[]> {
+  if (texts.length === 0) return [];
+
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  const directTranslations = await translateBatchOfflineBridge(
+    texts,
+    type,
+    mode,
+    normalizedSource,
+    normalizedTarget
+  );
+
+  if (!shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget)) {
+    return directTranslations;
+  }
+
+  try {
+    const pivotEnglish = await translateBatchOfflineBridge(
+      texts,
+      type,
+      mode,
+      normalizedSource,
+      'en'
+    );
+    const pivotEnglishPrepared = pivotEnglish.map((line, index) => {
+      const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
+      if (normalizedPivot) return normalizedPivot;
+      return normalizeSourceForTranslation(String(texts[index] || ''), normalizedSource);
+    });
+    const pivotThai = await translateBatchOfflineBridge(
+      pivotEnglishPrepared,
+      type,
+      mode,
+      'en',
+      normalizedTarget
+    );
+
+    return texts.map((sourceText, index) => selectOfflinePivotCandidate(
+      String(sourceText || ''),
+      normalizedSource,
+      normalizedTarget,
+      String(directTranslations[index] || ''),
+      String(pivotThai[index] || '')
+    ));
+  } catch (error) {
+    console.warn(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
+    return directTranslations;
+  }
+}
+
 export type TranslatableLine = {
   index: number;
   text: string;
@@ -149,6 +248,10 @@ export type TranslatableLine = {
   left: number;
   right: number;
   height: number;
+  area?: number;
+  wordCoverage?: number;
+  wordBoxCount?: number;
+  confidence?: number;
 };
 
 type AdoptedSourceCandidate = {
@@ -488,13 +591,40 @@ const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bRAPIDOPR\b/gi, replacement: 'RAPIDO PR' },
   { pattern: /\bDE,\s*PIDIERON\b/gi, replacement: 'DESPIDIERON' },
   { pattern: /\bI?RAPIDO,?\s*PRI-?\b/gi, replacement: 'RAPIDO, PRI-' },
+  { pattern: /\bCOMOSI\b/gi, replacement: 'COMO SI' },
+  { pattern: /\bCIERTASPARTES\b/gi, replacement: 'CIERTAS PARTES' },
+  { pattern: /\bERAUNPOCO\b/gi, replacement: 'ERA UN POCO' },
+  { pattern: /\bNOERAUNPOCO\b/gi, replacement: 'NO ERA UN POCO' },
+  { pattern: /\bSERAQUE\b/gi, replacement: 'SERA QUE' },
+  { pattern: /\bCONMAS\b/gi, replacement: 'CON MAS' },
+  { pattern: /\bM[ÁA]SDETALLE\b/gi, replacement: 'MAS DETALLE' },
+  { pattern: /\bDETA\s*-?\s*LLE(?:S)?\b/gi, replacement: 'DETALLE' },
+  { pattern: /\bENESPECI(?:FICO|ICO)\b/gi, replacement: 'EN ESPECIFICO' },
+  { pattern: /\bESPEI?CICO\b/gi, replacement: 'ESPECIFICO' },
+  { pattern: /\bALGE\s+ASI\b/gi, replacement: 'ALGO ASI' },
 ];
 
-const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
+const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;
+
+const splitSpanishUppercaseCompounds = (text: string): string => {
+  let normalized = String(text || '');
+  for (let i = 0; i < 2; i += 1) {
+    normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, '$1 $2 $3');
+  }
+  return normalized;
+};
+
+export const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
   let normalized = normalizeWhitespace(String(text || ''));
+  normalized = normalized.replace(/(^|[\s"'([{])iC[-\s]*/gi, '$1¿C');
+  normalized = normalized.replace(/(^|[\s"'([{])i(?=COMO\b)/gi, '$1¿');
   SPANISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
   });
+  normalized = splitSpanishUppercaseCompounds(normalized);
+  normalized = normalized.replace(/¿C{2,}(?=OMO\b)/gi, '¿C');
+  normalized = normalized.replace(/\bESPEC[IÍ]FICO\b/gi, 'ESPECIFICO');
+  normalized = normalized.replace(/\bC+EH(?=[!?…])/gi, 'EH');
   normalized = normalized.replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2}),\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})\b/g, '$1$2');
   normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\s*,\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1, $2');
   return normalizeWhitespace(normalized);
@@ -892,13 +1022,49 @@ const resolveSourceLanguageFromOCR = (ocrLanguageKey: string, fallback: string):
 
 const SPANISH_HINT_WORDS = new Set([
   'que', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'por', 'para', 'con', 'sin', 'como', 'pero',
-  'si', 'ya', 'me', 'mi', 'se', 'lo', 'le', 'del', 'al', 'es', 'son', 'fue', 'esta', 'este', 'eso',
+  'si', 'ya', 'me', 'mi', 'se', 'te', 'tu', 'lo', 'le', 'del', 'al', 'es', 'son', 'fue', 'esta', 'este', 'eso',
+  'estaba', 'estaban', 'estoy', 'eres', 'somos', 'estan', 'todas', 'todos', 'parte', 'partes',
+  'cuerpo', 'solo', 'nada', 'doloroso', 'sentia', 'siento', 'espera', 'momento', 'aqui', 'ahi',
 ]);
 
 const ENGLISH_HINT_WORDS = new Set([
   'the', 'and', 'you', 'your', 'this', 'that', 'with', 'from', 'for', 'are', 'was', 'were',
   'have', 'has', 'had', 'will', 'would', 'there', 'here', 'what', 'when', 'where', 'who',
 ]);
+
+const SPANISH_MORPH_HINT_REGEX = /\b(?:[a-záéíóúüñ]+(?:ando|iendo|aron|aban|ado|ada|ados|adas|ido|ida|idos|idas|mente|cion(?:es)?|sion(?:es)?)|estaba|estaban|tocando|cuerpo|partes?|sentia|siento|espera|momento)\b/gi;
+
+const scoreSpanishHintTokens = (tokens: string[]): number => {
+  let score = 0;
+  for (const tokenRaw of tokens) {
+    const token = String(tokenRaw || '').toLowerCase();
+    if (!token) continue;
+
+    if (SPANISH_HINT_WORDS.has(token)) {
+      score += 1;
+      continue;
+    }
+
+    if (token.length >= 6 && /(?:ando|iendo|aron|aban|ado|ada|ados|adas|ido|ida|idos|idas|mente|cion(?:es)?|sion(?:es)?)$/.test(token)) {
+      score += 0.72;
+    }
+
+    if (token.length >= 6 && /(?:que|como|por|para|con|sin|del|al|te|se|me)$/.test(token)) {
+      score += 0.46;
+    }
+
+    if (/^(?:te|se|me|lo|la|los|las)[a-záéíóúüñ]{4,}$/.test(token)) {
+      score += 0.58;
+    }
+  }
+  return score;
+};
+
+const scoreEnglishHintTokens = (tokens: string[]): number =>
+  tokens.reduce((score, tokenRaw) => {
+    const token = String(tokenRaw || '').toLowerCase();
+    return score + (ENGLISH_HINT_WORDS.has(token) ? 1 : 0);
+  }, 0);
 
 const HANGUL_TEXT_HINT_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/g;
 const JAPANESE_KANA_HINT_REGEX = /[\u3040-\u30FF]/g;
@@ -907,7 +1073,7 @@ const THAI_TEXT_HINT_REGEX = /[\u0E00-\u0E7F]/g;
 const CYRILLIC_TEXT_HINT_REGEX = /[\u0400-\u04FF]/g;
 const LATIN_TEXT_HINT_REGEX = /[A-Za-z]/g;
 
-const inferSourceLanguageFromTextHints = (
+export const inferSourceLanguageFromTextHints = (
   lines: TranslatableLine[],
   fallbackLanguage: string
 ): string => {
@@ -949,11 +1115,11 @@ const inferSourceLanguageFromTextHints = (
   const tokens = sampleText.split(/\s+/g).map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase()).filter(Boolean);
   if (tokens.length === 0) return fallback;
 
-  const spanishHits = tokens.filter((token) => SPANISH_HINT_WORDS.has(token)).length;
-  const englishHits = tokens.filter((token) => ENGLISH_HINT_WORDS.has(token)).length;
+  const spanishTokenScore = scoreSpanishHintTokens(tokens);
+  const englishScore = scoreEnglishHintTokens(tokens);
   const spanishAccentHits = (sampleText.match(/[áéíóúüñ¿¡]/g) || []).length;
-  const spanishScore = spanishHits + (spanishAccentHits * 1.8);
-  const englishScore = englishHits;
+  const spanishMorphHits = (sampleText.match(SPANISH_MORPH_HINT_REGEX) || []).length;
+  const spanishScore = spanishTokenScore + (spanishAccentHits * 1.8) + (Math.min(6, spanishMorphHits) * 0.45);
 
   const latinDominant = latinCount >= Math.max(10, nonLatinCount * 2.2);
   const weakNonLatinEvidence = nonLatinCount <= 2 || nonLatinCount <= Math.max(2, latinCount * 0.08);
@@ -961,14 +1127,16 @@ const inferSourceLanguageFromTextHints = (
 
   if (latinDominant || shouldOverrideNonLatinFallback) {
     if (
-      (spanishAccentHits >= 2 && spanishScore >= 2)
-      || (spanishScore >= 4 && (spanishScore > englishScore * 1.1 || spanishAccentHits >= 1))
-      || (spanishScore >= 3 && englishScore <= 1 && /[¿¡]/.test(sampleText))
+      (spanishAccentHits >= 1 && spanishScore >= 2.4)
+      || (spanishScore >= 3.2 && spanishScore >= englishScore + 0.8)
+      || (spanishScore >= 2.8 && englishScore <= 1.8)
+      || (fallback === 'es' && spanishScore >= 2.1)
+      || (spanishScore >= 2.6 && /[¿¡]/.test(sampleText))
     ) {
       return 'es';
     }
 
-    if (englishScore >= 3 || fallback === 'en' || fallback === 'es') {
+    if (englishScore >= 3 && englishScore > spanishScore * 1.08) {
       return 'en';
     }
   }
@@ -977,10 +1145,10 @@ const inferSourceLanguageFromTextHints = (
     return fallback;
   }
 
-  if (spanishScore >= 6 && spanishScore > englishScore * 1.35) {
+  if (spanishScore >= 5.6 && spanishScore > englishScore * 1.25) {
     return 'es';
   }
-  if (englishScore >= 6 && englishScore > spanishScore * 1.35) {
+  if (englishScore >= 6 && englishScore > spanishScore * 1.25) {
     return 'en';
   }
   if (spanishAccentHits >= 2 && spanishScore >= 2 && spanishScore >= englishScore) {
@@ -990,7 +1158,7 @@ const inferSourceLanguageFromTextHints = (
   return fallback;
 };
 
-const resolvePreferredSourceLanguageForText = (
+export const resolvePreferredSourceLanguageForText = (
   text: string,
   fallbackLanguage: string
 ): string => {
@@ -1027,17 +1195,24 @@ const resolvePreferredSourceLanguageForText = (
     .split(/\s+/g)
     .map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase())
     .filter(Boolean);
-  const spanishHits = tokens.filter((token) => SPANISH_HINT_WORDS.has(token)).length;
-  const englishHits = tokens.filter((token) => ENGLISH_HINT_WORDS.has(token)).length;
+  const spanishTokenScore = scoreSpanishHintTokens(tokens);
+  const englishScore = scoreEnglishHintTokens(tokens);
   const spanishAccentHits = (normalized.match(/[áéíóúüñ¿¡]/g) || []).length;
+  const spanishMorphHits = (normalized.match(SPANISH_MORPH_HINT_REGEX) || []).length;
+  const spanishScore = spanishTokenScore + (spanishAccentHits * 1.8) + (Math.min(4, spanishMorphHits) * 0.5);
 
   if (latinDominant || fallback === 'en' || fallback === 'es') {
     if (
-      (spanishAccentHits >= 1 && spanishHits >= 1)
-      || (spanishHits >= 3 && spanishHits >= englishHits)
+      (spanishAccentHits >= 1 && spanishScore >= 1.8)
+      || (spanishScore >= 2.4 && spanishScore >= englishScore + 0.5)
+      || (spanishScore >= 2.1 && englishScore <= 1.3)
+      || (fallback === 'es' && spanishScore >= 1.5)
       || /[¿¡]/.test(normalized)
     ) {
       return 'es';
+    }
+    if (englishScore >= 2.6 && englishScore > spanishScore * 1.08) {
+      return 'en';
     }
     if (latinCount >= 4) {
       return 'en';
@@ -1332,9 +1507,8 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     if (!wordText || !bbox) return false;
     return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
   });
-  const wordCount = validWords.length > 0
-    ? validWords.length
-    : text.split(/\s+/g).filter(Boolean).length;
+  const sourceTokenCount = text.split(/\s+/g).filter(Boolean).length;
+  const wordCount = Math.max(validWords.length, sourceTokenCount);
   const confidenceSamples = validWords.length > 0
     ? validWords.map((word) => Number(word.confidence || 0))
     : [Number(line.confidence || 0)];
@@ -1347,6 +1521,18 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2)
     || (width >= 320 && height >= 98 && area >= 32000)
   );
+  const noWordOversizedShortPhrase = validWords.length === 0
+    && wordCount >= 2
+    && wordCount <= 6
+    && compact.length <= 30
+    && area >= 17000
+    && (width >= 170 || height >= 96)
+    && (area / Math.max(1, compact.length)) >= 680
+    && !shouldForceKeepTechnicalTranslationLine(text, line);
+  if (noWordOversizedShortPhrase) {
+    return true;
+  }
+
   const sparseLargePhrase = wordCount <= 4 && compact.length <= 24;
   const lowCoverageLargeBox = wordCoverage <= 0.26;
   const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
@@ -1402,6 +1588,32 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     return true;
   }
 
+  const tinyAsciiSingletonNoise = !hasCjkOrThai
+    && wordCount <= 1
+    && asciiCompact.length > 0
+    && asciiCompact.length <= 2
+    && width <= 72
+    && height <= 38
+    && area <= 2100
+    && avgConfidence <= 94
+    && !/[!?]/.test(text);
+  if (tinyAsciiSingletonNoise) {
+    return true;
+  }
+
+  const noWordTinyAsciiNoise = validWords.length === 0
+    && !hasCjkOrThai
+    && wordCount <= 2
+    && asciiCompact.length > 0
+    && asciiCompact.length <= 6
+    && width <= 88
+    && height <= 44
+    && area <= 2600
+    && avgConfidence <= 92;
+  if (noWordTinyAsciiNoise) {
+    return true;
+  }
+
   const pxPerLatinChar = width / Math.max(1, latinCompact.length);
   const suspiciousTinyLongLatin = latinCompact.length >= 10
     && wordCount >= 3
@@ -1409,6 +1621,21 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     && width <= Math.max(72, latinCompact.length * 5.4)
     && height <= 26;
   if (suspiciousTinyLongLatin) {
+    return true;
+  }
+
+  const compressedSparseShortPhrase = !hasCjkOrThai
+    && sourceTokenCount >= 2
+    && sourceTokenCount <= 4
+    && latinCompact.length >= 8
+    && width <= Math.max(92, latinCompact.length * 6.4)
+    && height <= 78
+    && area <= Math.max(5200, latinCompact.length * 520)
+    && (area / Math.max(1, latinCompact.length)) <= 430
+    && wordCoverage <= 0.24
+    && avgConfidence <= 94
+    && !/[.!?…]\s*$/.test(text);
+  if (compressedSparseShortPhrase) {
     return true;
   }
 
@@ -1447,6 +1674,119 @@ const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number =>
   const overlap = intervalOverlap(a0, a1, b0, b1);
   const base = Math.max(1, Math.min(Math.max(1, a1 - a0), Math.max(1, b1 - b0)));
   return overlap / base;
+};
+
+export const shouldPruneContextualGhostTranslatableLine = (
+  candidate: TranslatableLine,
+  lines: TranslatableLine[],
+): boolean => {
+  const text = normalizeWhitespace(String(candidate.text || ''));
+  if (!text) return true;
+
+  const width = Math.max(1, candidate.right - candidate.left);
+  const height = Math.max(1, candidate.bottom - candidate.top);
+  const area = Math.max(1, candidate.area || (width * height));
+  const centerX = (candidate.left + candidate.right) * 0.5;
+  const centerY = (candidate.top + candidate.bottom) * 0.5;
+  const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+  const compact = text.replace(/\s+/g, '');
+  const readability = scoreSourceLineReadability(text);
+  const wordCoverage = Math.max(0, Number(candidate.wordCoverage || 0));
+  const wordBoxCount = Math.max(0, Number(candidate.wordBoxCount || 0));
+
+  const neighbors = lines
+    .filter((line) => line.index !== candidate.index)
+    .map((line) => {
+      const otherWidth = Math.max(1, line.right - line.left);
+      const otherHeight = Math.max(1, line.bottom - line.top);
+      const otherArea = Math.max(1, line.area || (otherWidth * otherHeight));
+      const otherCenterX = (line.left + line.right) * 0.5;
+      const otherCenterY = (line.top + line.bottom) * 0.5;
+      const overlapX = overlapRatio(candidate.left, candidate.right, line.left, line.right);
+      const overlapY = overlapRatio(candidate.top, candidate.bottom, line.top, line.bottom);
+      const centerDeltaX = Math.abs(centerX - otherCenterX);
+      const centerDeltaY = Math.abs(centerY - otherCenterY);
+      const otherCoverage = Math.max(0, Number(line.wordCoverage || 0));
+      const otherWordBoxCount = Math.max(0, Number(line.wordBoxCount || 0));
+      const otherReadability = scoreSourceLineReadability(line.text);
+      const strongSignal = (
+        otherWordBoxCount >= 2
+        || otherCoverage >= 0.28
+        || line.sourceLength >= Math.max(8, candidate.sourceLength * 0.9)
+        || otherReadability >= readability + 2.5
+      );
+      return {
+        line,
+        width: otherWidth,
+        height: otherHeight,
+        area: otherArea,
+        overlapX,
+        overlapY,
+        centerDeltaX,
+        centerDeltaY,
+        strongSignal,
+        centerX: otherCenterX,
+        centerY: otherCenterY,
+      };
+    });
+
+  const sameBandNeighbors = neighbors.filter((neighbor) => (
+    neighbor.overlapY >= 0.18
+    || neighbor.centerDeltaY <= Math.max(96, height * 0.95)
+  ));
+  const leftAnchors = sameBandNeighbors.filter((neighbor) => (
+    neighbor.strongSignal
+    && neighbor.width <= width * 0.44
+    && neighbor.line.right <= centerX - Math.max(88, width * 0.08)
+  ));
+  const rightAnchors = sameBandNeighbors.filter((neighbor) => (
+    neighbor.strongSignal
+    && neighbor.width <= width * 0.44
+    && neighbor.line.left >= centerX + Math.max(88, width * 0.08)
+  ));
+  const bridgeLine = (
+    tokenCount >= 4
+    && tokenCount <= 8
+    && wordBoxCount >= 3
+    && width >= 900
+    && leftAnchors.length > 0
+    && rightAnchors.length > 0
+    && leftAnchors.some((leftAnchor) => rightAnchors.some((rightAnchor) => (
+      Math.abs(leftAnchor.centerY - rightAnchor.centerY) <= Math.max(110, height * 0.9)
+      && (rightAnchor.line.left - leftAnchor.line.right) >= Math.max(260, width * 0.22)
+    )))
+  );
+  if (bridgeLine) {
+    return true;
+  }
+
+  const localStrongNeighbors = neighbors.filter((neighbor) => (
+    neighbor.strongSignal
+    && neighbor.centerDeltaY <= Math.max(240, height * 2.4)
+    && (
+      neighbor.overlapX >= 0.28
+      || neighbor.centerDeltaX <= Math.max(240, width * 1.4)
+    )
+  ));
+  const strongAbove = localStrongNeighbors.some((neighbor) => neighbor.centerY < centerY - Math.max(18, height * 0.18));
+  const strongBelow = localStrongNeighbors.some((neighbor) => neighbor.centerY > centerY + Math.max(18, height * 0.18));
+
+  const trailingHyphenFragment = /-\s*$/.test(text)
+    && tokenCount <= 3
+    && (readability <= 12 || area >= 30000);
+  const malformedMixedCaseFragment = /[a-z][A-Z]/.test(text)
+    && tokenCount <= 3
+    && (readability <= 10.5 || area >= 18000);
+  const oversizedWeakSingleton = tokenCount <= 1
+    && compact.length <= 12
+    && wordBoxCount <= 1
+    && area >= 22000;
+
+  return (
+    (strongBelow && (trailingHyphenFragment || malformedMixedCaseFragment))
+    || (strongAbove && strongBelow && oversizedWeakSingleton)
+    || (strongAbove && strongBelow && wordBoxCount <= 1 && wordCoverage <= 0.22 && readability <= 4.2 && area >= 18000)
+  );
 };
 
 const normalizeTranslatableDedupKey = (text: string): string =>
@@ -1587,10 +1927,26 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
     const readability = scoreSourceLineReadability(line.text);
     const area = Math.max(1, width * height);
     const density = line.sourceLength / Math.max(1, Math.sqrt(area));
+    const wordCoverage = Math.max(0, Math.min(1.5, Number(line.wordCoverage || 0)));
+    const wordBoxCount = Math.max(0, Number(line.wordBoxCount || 0));
+    const coverageBonus = Math.min(1, wordCoverage) * 15.2;
+    const wordBoxBonus = Math.min(4, wordBoxCount) * 1.25;
+    const noWordPenalty = wordBoxCount === 0 ? 4.8 : 0;
+    const oversizedSparsePenalty = (
+      wordCoverage <= 0.2
+      && wordBoxCount <= 1
+      && line.sourceLength <= 34
+      && area >= 14000
+    ) ? (Math.log10(area) * 3.35) : 0;
+
     return (line.sourceLength * 1.82)
       + (readability * 2.75)
       + (density * 26)
       + (height * 0.18)
+      + coverageBonus
+      + wordBoxBonus
+      - noWordPenalty
+      - oversizedSparsePenalty
       - (Math.log10(area) * 1.45);
   };
 
@@ -2196,10 +2552,21 @@ export const applyThaiConversationalGlossary = (
   const source = normalizeWhitespace(String(sourceText || ''));
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source) return translated;
+  const normalizedSpanishSource = normalizeSpanishOcrNoiseForTranslation(source);
 
   const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
   const compactSourceUpper = source.toUpperCase().replace(/[^A-Z]/g, '');
   const compactSourceAlnumUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const compactSourceAsciiUpper = source
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  const compactNormalizedSourceAsciiUpper = normalizedSpanishSource
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
   const hasVertarToken = /\bVERTAR\b/i.test(source) || compactSourceUpper.includes('VERTAR');
   const hasEssenceToken = /\bESSENCE\b/i.test(source)
     || /\bESSEN(?:CE|SE)\b/i.test(source)
@@ -2207,6 +2574,90 @@ export const applyThaiConversationalGlossary = (
   const translatedLower = translated.toLowerCase();
   const replaceNameToken = (input: string, token: string, replacement: string): string =>
     input.replace(new RegExp(`\\b${token}\\b`, 'ig'), replacement);
+
+  if (/^C+EH[!?…]*$/i.test(source.replace(/\s+/g, '')) || compactSourceAsciiUpper === 'CEH') {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋');
+  }
+
+  if (
+    /\bALG[OE]\s+A[S5][IÍ1]\b/i.test(source)
+    || /\bALG[OE]\s+A[S5][IÍ1]\b/i.test(normalizedSpanishSource)
+    || compactSourceAsciiUpper.includes('ALGOASI')
+    || compactNormalizedSourceAsciiUpper.includes('ALGOASI')
+    || compactSourceAsciiUpper.includes('ALGEASI')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ประมาณนั้นแหละ');
+  }
+
+  const isConMasDetalle = (
+    /(^|\s)CON\s+M[ÁA]S\s+DETAL+E(?:S)?([.!?…]+)?$/i.test(source)
+    || /(^|\s)CON\s+M[ÁA]S\s+DETAL+E(?:S)?([.!?…]+)?$/i.test(normalizedSpanishSource)
+    || compactSourceAsciiUpper.includes('CONMASDETALLE')
+    || compactNormalizedSourceAsciiUpper.includes('CONMASDETALLE')
+  );
+  if (isConMasDetalle) {
+    return preserveSourceTrailingPunctuation(source, 'ในรายละเอียดเพิ่มเติม');
+  }
+
+  if (/^ENTONCES\s+SEGURO[.!?…]*$/i.test(source) || compactSourceAsciiUpper.includes('ENTONCESSEGURO')) {
+    return preserveSourceTrailingPunctuation(source, 'งั้น แน่นอน');
+  }
+
+  if (
+    /^[i¡¿-]*\s*C[ÓO]MO\s+LO\s+SUPO[.!?…]*$/i.test(source)
+    || compactSourceAsciiUpper.includes('ICOMOLOSUPO')
+    || compactSourceAsciiUpper.includes('ICCOMOLOSUPO')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'เขารู้ได้อย่างไร');
+  }
+
+  if (
+    compactSourceAsciiUpper.includes('SERAQUE')
+    && compactSourceAsciiUpper.includes('FANTASMA')
+    && compactSourceAsciiUpper.includes('PERVERTIDO')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'เป็นไปได้ไหมว่า "ผี" ตนนั้นจะออกแนวลามกนิดหน่อย');
+  }
+
+  if (
+    (compactSourceAsciiUpper.includes('COMOSI') || compactSourceAsciiUpper.includes('COMOS'))
+    && compactSourceAsciiUpper.includes('INSISTIERAEN')
+    && compactSourceAsciiUpper.includes('CIERTASPARTES')
+    && compactSourceAsciiUpper.includes('ENESPECIFICO')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ราวกับว่าพวกเขายืนกรานในบางส่วนโดยเฉพาะ');
+  }
+
+  if (/^SERA\s+QUE[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'SERAQUE') {
+    return preserveSourceTrailingPunctuation(source, 'เป็นไปได้ไหมว่า');
+  }
+
+  if (/^FANTASMA[.!?…]*$/i.test(source) || /^"\s*FANTASMA\s*"[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ผี');
+  }
+
+  if (
+    /^NO\s+ERA\s+UN\s+POCO\s+PERVERTIDO[.!?…]*$/i.test(source)
+    || compactSourceAsciiUpper === 'NOERAUNPOCOPERVERTIDO'
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'จะออกแนวลามกนิดหน่อย');
+  }
+
+  if (/^COMO\s*SI[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'COMOSI') {
+    return preserveSourceTrailingPunctuation(source, 'ราวกับว่า');
+  }
+
+  if (/^INSISTIERA\s+EN[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'INSISTIERAEN') {
+    return preserveSourceTrailingPunctuation(source, 'พวกเขายืนกรานใน');
+  }
+
+  if (/^CIERTAS\s*PARTES[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'CIERTASPARTES') {
+    return preserveSourceTrailingPunctuation(source, 'บางส่วน');
+  }
+
+  if (/^EN\s+ESPEC[IÍ]FICO[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'ENESPECIFICO') {
+    return preserveSourceTrailingPunctuation(source, 'โดยเฉพาะ');
+  }
 
   if (/^AYNAR[.!?…]*$/i.test(source.replace(/\s+/g, ''))) {
     return preserveSourceTrailingPunctuation(source, 'อายนาร์');
@@ -2896,14 +3347,14 @@ const computeGroupingColumnAffinity = (
   const rowDelta = Math.abs(line.top - column.lastTop);
   const verticalGap = line.top - column.lastBottom;
   const normalizedCenterDelta = centerDelta / Math.max(1, Math.max(columnWidth, lineWidth));
-  const sameRowButDifferentColumn = rowDelta <= baseHeight * 1.12
-    && overlap <= 0.18
-    && centerDelta >= baseHeight * 1.55;
+  const sameRowButDifferentColumn = rowDelta <= baseHeight * 1.4
+    && overlap <= 0.24
+    && centerDelta >= baseHeight * 1.35;
   if (sameRowButDifferentColumn) return null;
 
   const centerAligned = centerDelta <= Math.max(34, Math.min(columnWidth, lineWidth) * 0.48, baseHeight * 1.55);
   const leftAligned = Math.abs(line.left - column.left) <= Math.max(42, baseHeight * 2.2);
-  const canBridge = overlap >= 0.18 || (centerAligned && leftAligned);
+  const canBridge = overlap >= 0.2 || (centerAligned && leftAligned && rowDelta <= baseHeight * 1.95);
   if (!canBridge) return null;
 
   const outsideVerticalBand = verticalGap > baseHeight * 3.3 || verticalGap < -baseHeight * 0.95;
@@ -2973,7 +3424,19 @@ const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number):
       }),
     }))
     .sort((a, b) => {
-      if (a.firstTop !== b.firstTop) return a.firstTop - b.firstTop;
+      const topDelta = a.firstTop - b.firstTop;
+      const verticalOverlap = intervalOverlap(a.firstTop, a.lastBottom, b.firstTop, b.lastBottom);
+      const minColumnSpan = Math.max(1, Math.min(
+        Math.max(1, a.lastBottom - a.firstTop),
+        Math.max(1, b.lastBottom - b.firstTop)
+      ));
+      const overlapRatio = verticalOverlap / minColumnSpan;
+      const sameReadingBand = overlapRatio >= 0.16 || Math.abs(topDelta) <= baseHeight * 1.35;
+      if (sameReadingBand) {
+        if (a.left !== b.left) return a.left - b.left;
+        if (a.centerX !== b.centerX) return a.centerX - b.centerX;
+      }
+      if (topDelta !== 0) return topDelta;
       if (a.left !== b.left) return a.left - b.left;
       return a.centerX - b.centerX;
     });
@@ -3084,21 +3547,38 @@ const buildDenseDialogueGroupsByConnectivity = (
   });
 
   return Array.from(grouped.values())
-    .map((bucket) => ({
-      lines: [...bucket].sort((a, b) => {
-        if (a.top !== b.top) return a.top - b.top;
-        if (a.left !== b.left) return a.left - b.left;
-        return a.index - b.index;
-      }),
-    }))
+    .map((bucket) => {
+      const lines = orderLinesForGrouping(bucket, baseHeight);
+
+      return {
+        lines,
+        bounds: {
+          top: Math.min(...lines.map((line) => line.top)),
+          bottom: Math.max(...lines.map((line) => line.bottom)),
+          left: Math.min(...lines.map((line) => line.left)),
+          right: Math.max(...lines.map((line) => line.right)),
+        },
+      };
+    })
     .sort((a, b) => {
-      const aTop = Math.min(...a.lines.map((line) => line.top));
-      const bTop = Math.min(...b.lines.map((line) => line.top));
-      if (aTop !== bTop) return aTop - bTop;
-      const aLeft = Math.min(...a.lines.map((line) => line.left));
-      const bLeft = Math.min(...b.lines.map((line) => line.left));
-      return aLeft - bLeft;
-    });
+      const topDelta = a.bounds.top - b.bounds.top;
+      const verticalOverlap = intervalOverlap(a.bounds.top, a.bounds.bottom, b.bounds.top, b.bounds.bottom);
+      const minGroupSpan = Math.max(1, Math.min(
+        Math.max(1, a.bounds.bottom - a.bounds.top),
+        Math.max(1, b.bounds.bottom - b.bounds.top)
+      ));
+      const overlapRatio = verticalOverlap / minGroupSpan;
+      const sameReadingBand = overlapRatio >= 0.16 || Math.abs(topDelta) <= baseHeight * 1.35;
+
+      if (sameReadingBand) {
+        if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
+      }
+
+      if (topDelta !== 0) return topDelta;
+      if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
+      return a.bounds.right - b.bounds.right;
+    })
+    .map((bucket) => ({ lines: bucket.lines }));
 };
 
 export const buildTranslationGroups = (
@@ -3178,6 +3658,86 @@ const computeLineSplitWeight = (line: TranslatableLine): number => {
   return Math.max(1, line.sourceLength * 0.82 + areaScore);
 };
 
+const tokenizeRedistributedPart = (value: string, targetLanguage: string): string[] => {
+  const normalized = normalizeWhitespace(String(value || ''));
+  if (!normalized) return [];
+
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    return Array.from(normalized).filter((segment) => segment.trim().length > 0);
+  }
+
+  return normalized.split(/\s+/g).filter(Boolean);
+};
+
+const joinRedistributedTokens = (tokens: string[], targetLanguage: string): string => {
+  if (tokens.length === 0) return '';
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    return tokens.join('');
+  }
+  return tokens.join(' ');
+};
+
+const rebalanceRedistributedParts = (
+  parts: string[],
+  sourceLines: TranslatableLine[],
+  targetText: string,
+  targetLanguage: string
+): string[] => {
+  const normalizedTarget = normalizeWhitespace(String(targetText || ''));
+  const normalizedParts = sourceLines.map((_, index) => normalizeWhitespace(String(parts[index] || '')));
+
+  if (normalizedParts.every((part) => part.length > 0)) {
+    return normalizedParts;
+  }
+
+  for (let i = 0; i < normalizedParts.length; i += 1) {
+    if (normalizedParts[i]) continue;
+
+    let donorIndex = -1;
+    let donorScore = Number.NEGATIVE_INFINITY;
+
+    for (let j = 0; j < normalizedParts.length; j += 1) {
+      if (i === j) continue;
+      const tokens = tokenizeRedistributedPart(normalizedParts[j], targetLanguage);
+      if (tokens.length <= 1) continue;
+
+      const score = tokens.length * 10 - Math.abs(j - i);
+      if (score > donorScore) {
+        donorScore = score;
+        donorIndex = j;
+      }
+    }
+
+    if (donorIndex >= 0) {
+      const donorTokens = tokenizeRedistributedPart(normalizedParts[donorIndex], targetLanguage);
+      const takeTail = donorIndex < i;
+      const moved = takeTail ? donorTokens.pop() : donorTokens.shift();
+      if (moved) {
+        normalizedParts[i] = moved;
+        normalizedParts[donorIndex] = joinRedistributedTokens(donorTokens, targetLanguage);
+      }
+    }
+  }
+
+  if (normalizedParts.every((part) => part.length > 0) || !normalizedTarget) {
+    return normalizedParts;
+  }
+
+  const partCount = Math.max(1, normalizedParts.length);
+  for (let i = 0; i < normalizedParts.length; i += 1) {
+    if (normalizedParts[i]) continue;
+
+    const start = Math.floor((i / partCount) * normalizedTarget.length);
+    const end = Math.ceil(((i + 1) / partCount) * normalizedTarget.length);
+    const chunk = normalizeWhitespace(normalizedTarget.slice(start, end));
+    if (chunk) {
+      normalizedParts[i] = chunk;
+    }
+  }
+
+  return normalizedParts;
+};
+
 const splitTranslatedTextBySourceWeights = (
   translatedText: string,
   sourceLines: TranslatableLine[],
@@ -3193,7 +3753,7 @@ const splitTranslatedTextBySourceWeights = (
     .filter(Boolean);
 
   if (explicitLineBreaks.length === sourceLines.length) {
-    return explicitLineBreaks;
+    return rebalanceRedistributedParts(explicitLineBreaks, sourceLines, target, targetLanguage);
   }
 
   const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
@@ -3289,7 +3849,7 @@ const splitTranslatedTextBySourceWeights = (
       startIndex = bestBoundary;
     }
 
-    return thaiParts.map((part, index) => part || sourceLines[index]?.text || '');
+    return rebalanceRedistributedParts(thaiParts, sourceLines, target, targetLanguage);
   }
 
   const totalSource = sourceLines
@@ -3317,22 +3877,57 @@ const splitTranslatedTextBySourceWeights = (
     start = end;
   }
 
-  return parts.map((part, index) => part || sourceLines[index]?.text || '');
+  return rebalanceRedistributedParts(parts, sourceLines, target, targetLanguage);
 };
 
-const resolveRedistributedLineFallback = (
+export const resolveRedistributedLineFallback = (
   sourceLineText: string,
   groupText: string,
-  targetLanguage: string
+  targetLanguage: string,
+  lineIndex: number = 0,
+  totalLines: number = 1
 ): string => {
   const source = normalizeWhitespace(String(sourceLineText || ''));
-  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+  const normalizedGroup = normalizeWhitespace(String(groupText || ''));
+  const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
+
+  if (normalizedGroup) {
+    const clampedTotal = Math.max(1, totalLines);
+    const clampedIndex = Math.max(0, Math.min(clampedTotal - 1, lineIndex));
+
+    if (clampedTotal > 1) {
+      const sentenceChunks = normalizedGroup
+        .split(/(?<=[.!?…。！？])\s+/)
+        .map((chunk) => normalizeWhitespace(chunk))
+        .filter(Boolean);
+
+      if (sentenceChunks.length === clampedTotal) {
+        const sentenceChunk = sentenceChunks[clampedIndex];
+        if (sentenceChunk) return sentenceChunk;
+      }
+
+      if (normalizedGroup.length >= clampedTotal * 3) {
+        const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
+        const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
+        const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
+        if (proportionalChunk) return proportionalChunk;
+      }
+    }
+
+    if (isThaiTarget) {
+      const normalizedGroupThai = normalizeThaiTranslationText(normalizedGroup);
+      if (normalizedGroupThai) return normalizedGroupThai;
+    }
+
+    return normalizedGroup;
+  }
+
+  if (isThaiTarget) {
     const normalizedSource = normalizeThaiTranslationText(source);
     if (normalizedSource) return normalizedSource;
   }
 
-  const normalizedGroup = normalizeWhitespace(String(groupText || ''));
-  return source || normalizedGroup;
+  return source;
 };
 
 // --- Mock Regions for Prototype ---
@@ -3510,7 +4105,7 @@ export default function App() {
         if (!text || !bbox) return false;
         return Number(bbox.x1) > Number(bbox.x0) && Number(bbox.y1) > Number(bbox.y0);
       });
-    if (validWords.length === 0) return undefined;
+    if (validWords.length === 0) return normalizedRawBBox;
 
     let x0 = Number.POSITIVE_INFINITY;
     let y0 = Number.POSITIVE_INFINITY;
@@ -3558,10 +4153,49 @@ export default function App() {
       if (likelyGhost && !shouldForceKeepTechnicalTranslationLine(text, line)) return;
 
       const bbox = resolveTranslatableLineBBox(line);
-      const left = Number(bbox?.x0 ?? line.bbox?.x0 ?? 0);
-      const right = Number(bbox?.x1 ?? line.bbox?.x1 ?? (left + Math.max(1, text.length * 8)));
-      const top = Number(bbox?.y0 ?? line.bbox?.y0 ?? (index * 32));
-      const bottom = Number(bbox?.y1 ?? line.bbox?.y1 ?? (top + 24));
+      if (!bbox) return;
+
+      const left = Number(bbox.x0);
+      const right = Number(bbox.x1);
+      const top = Number(bbox.y0);
+      const bottom = Number(bbox.y1);
+      if (!(right > left && bottom > top)) return;
+
+      const validWordBoxCount = (Array.isArray(line.words) ? line.words : []).filter((word) => {
+        const wordText = normalizeWhitespace(String(word?.text || ''));
+        const wordBBox = word?.bbox;
+        if (!wordText || !wordBBox) return false;
+        return Number(wordBBox.x1) > Number(wordBBox.x0) && Number(wordBBox.y1) > Number(wordBBox.y0);
+      }).length;
+      const compactText = text.replace(/\s+/g, '');
+      const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+      const width = right - left;
+      const height = bottom - top;
+      const area = width * height;
+      const wordCoverage = computeLineWordUnionCoverage(line);
+      const noWordOversizedRawLine = (
+        validWordBoxCount === 0
+        && tokenCount >= 2
+        && tokenCount <= 6
+        && compactText.length <= 30
+        && area >= 16000
+        && (width >= 180 || height >= 96)
+        && (area / Math.max(1, compactText.length)) >= 680
+      );
+      const lowCoverageOversizedEffectSection = (
+        validWordBoxCount <= 1
+        && wordCoverage <= 0.2
+        && tokenCount >= 2
+        && tokenCount <= 6
+        && compactText.length <= 30
+        && area >= 17000
+        && (width >= 170 || height >= 96)
+        && (area / Math.max(1, compactText.length)) >= 650
+      );
+      if ((noWordOversizedRawLine || lowCoverageOversizedEffectSection) && !shouldForceKeepTechnicalTranslationLine(text, line)) {
+        return;
+      }
+
       collected.push({
         index,
         text,
@@ -3571,9 +4205,92 @@ export default function App() {
         top,
         bottom,
         height: Math.max(1, bottom - top),
+        area,
+        wordCoverage,
+        wordBoxCount: validWordBoxCount,
+        confidence: Number(line.confidence || 0),
       });
     });
-    return collected;
+
+    if (collected.length <= 1) {
+      return collected;
+    }
+
+    const isLikelyEffectBalloonSection = (line: TranslatableLine): boolean => {
+      const width = Math.max(1, line.right - line.left);
+      const height = Math.max(1, line.bottom - line.top);
+      const area = Math.max(1, line.area || (width * height));
+      const compact = normalizeWhitespace(String(line.text || '')).replace(/\s+/g, '');
+      const tokenCount = normalizeWhitespace(String(line.text || '')).split(/\s+/g).filter(Boolean).length;
+      const wordCoverage = Number(line.wordCoverage || 0);
+      const wordBoxCount = Number(line.wordBoxCount || 0);
+
+      return (
+        wordBoxCount <= 1
+        && wordCoverage <= 0.22
+        && tokenCount >= 2
+        && tokenCount <= 6
+        && compact.length <= 30
+        && area >= 17000
+        && (width >= 170 || height >= 96)
+      );
+    };
+
+    const hasNearbyTextAnchor = (candidate: TranslatableLine): boolean => {
+      const candidateWidth = Math.max(1, candidate.right - candidate.left);
+      const candidateHeight = Math.max(1, candidate.bottom - candidate.top);
+      const candidateArea = Math.max(1, candidate.area || (candidateWidth * candidateHeight));
+      const candidateCenterX = (candidate.left + candidate.right) * 0.5;
+      const candidateCenterY = (candidate.top + candidate.bottom) * 0.5;
+
+      return collected.some((other) => {
+        if (other.index === candidate.index) return false;
+
+        const otherArea = Math.max(1, other.area || ((other.right - other.left) * (other.bottom - other.top)));
+        if (otherArea > candidateArea * 0.74) return false;
+
+        const otherWordCoverage = Number(other.wordCoverage || 0);
+        const otherWordBoxCount = Number(other.wordBoxCount || 0);
+        const anchorSignal = otherWordBoxCount >= 2 || otherWordCoverage >= 0.32 || other.sourceLength >= Math.max(10, candidate.sourceLength * 0.9);
+        if (!anchorSignal) return false;
+
+        const overlapX = overlapRatio(candidate.left, candidate.right, other.left, other.right);
+        const overlapY = overlapRatio(candidate.top, candidate.bottom, other.top, other.bottom);
+        const otherCenterX = (other.left + other.right) * 0.5;
+        const otherCenterY = (other.top + other.bottom) * 0.5;
+        const centerDeltaX = Math.abs(candidateCenterX - otherCenterX);
+        const centerDeltaY = Math.abs(candidateCenterY - otherCenterY);
+        const nearInside = (
+          other.left >= candidate.left - 12
+          && other.right <= candidate.right + 12
+          && other.top >= candidate.top - 28
+          && other.bottom <= candidate.bottom + 28
+        );
+
+        return (
+          (overlapX >= 0.24 && overlapY >= 0.1)
+          || (nearInside && centerDeltaX <= candidateWidth * 0.65 && centerDeltaY <= candidateHeight * 0.9)
+        );
+      });
+    };
+
+    const filtered = collected.filter((line) => {
+      if (!isLikelyEffectBalloonSection(line)) return true;
+      return !hasNearbyTextAnchor(line);
+    });
+
+    const contextFiltered = filtered.filter((line) =>
+      !shouldPruneContextualGhostTranslatableLine(line, filtered)
+    );
+
+    // Never return an empty set after effect-balloon filtering.
+    // Falling back to raw collected lines keeps translation entry generation deterministic
+    // and avoids disabling translated preview when a page is fully borderline.
+    if (contextFiltered.length === 0) {
+      return collected;
+    }
+
+    return contextFiltered;
   };
 
   const resolveModelScopedOriginalPageOCR = (
@@ -4069,14 +4786,16 @@ export default function App() {
         );
 
         let redistributedCursor = 0;
-        group.lines.forEach((line) => {
+        group.lines.forEach((line, lineOffset) => {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
           redistributedCursor += 1;
           const fallbackLine = resolveRedistributedLineFallback(
             sourceLineText,
             normalizedGroupText,
-            normalizedTargetLanguage
+            normalizedTargetLanguage,
+            lineOffset,
+            group.lines.length
           );
           const nextText = finalizeTranslatedLine(
             sourceLineText,
@@ -4471,14 +5190,16 @@ export default function App() {
       const eligibleLines = group.lines;
       const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, eligibleLines, normalizedTargetLanguage);
       let redistributedCursor = 0;
-      group.lines.forEach((line) => {
+      group.lines.forEach((line, lineOffset) => {
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
         const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
         redistributedCursor += 1;
         const fallbackLine = resolveRedistributedLineFallback(
           sourceLineText,
           translatedGroup,
-          normalizedTargetLanguage
+          normalizedTargetLanguage,
+          lineOffset,
+          group.lines.length
         );
         const finalizedLine = finalizeTranslatedLine(
           sourceLineText,

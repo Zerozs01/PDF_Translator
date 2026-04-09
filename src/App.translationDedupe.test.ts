@@ -9,6 +9,10 @@ type TranslatableLine = {
   left: number;
   right: number;
   height: number;
+  area?: number;
+  wordCoverage?: number;
+  wordBoxCount?: number;
+  confidence?: number;
 };
 
 let dedupeTranslatableLinesForTranslation: (lines: TranslatableLine[]) => TranslatableLine[];
@@ -34,16 +38,36 @@ let applyThaiConversationalGlossary: (
   translatedText: string,
   targetLanguage: string
 ) => string;
+let resolveRedistributedLineFallback: (
+  sourceLineText: string,
+  groupText: string,
+  targetLanguage: string,
+  lineIndex?: number,
+  totalLines?: number
+) => string;
 let shouldPreserveSourceLineForTranslation: (
   text: string,
   sourceLanguage: string
 ) => boolean;
+let normalizeSpanishOcrNoiseForTranslation: (text: string) => string;
+let inferSourceLanguageFromTextHints: (
+  lines: TranslatableLine[],
+  fallbackLanguage: string
+) => string;
+let resolvePreferredSourceLanguageForText: (
+  text: string,
+  fallbackLanguage: string
+) => string;
 let isLikelyGhostTranslatableLine: (line: {
   text: string;
   confidence: number;
   bbox: { x0: number; y0: number; x1: number; y1: number };
   words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
 }, resolvedText: string) => boolean;
+let shouldPruneContextualGhostTranslatableLine: (
+  candidate: TranslatableLine,
+  lines: TranslatableLine[]
+) => boolean;
 
 beforeAll(async () => {
   if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix === 'undefined') {
@@ -88,8 +112,13 @@ beforeAll(async () => {
   buildTranslationGroups = appModule.buildTranslationGroups;
   shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
   applyThaiConversationalGlossary = appModule.applyThaiConversationalGlossary;
+  resolveRedistributedLineFallback = appModule.resolveRedistributedLineFallback;
   shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
+  normalizeSpanishOcrNoiseForTranslation = appModule.normalizeSpanishOcrNoiseForTranslation;
+  inferSourceLanguageFromTextHints = appModule.inferSourceLanguageFromTextHints;
+  resolvePreferredSourceLanguageForText = appModule.resolvePreferredSourceLanguageForText;
   isLikelyGhostTranslatableLine = appModule.isLikelyGhostTranslatableLine;
+  shouldPruneContextualGhostTranslatableLine = appModule.shouldPruneContextualGhostTranslatableLine;
 });
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
@@ -280,6 +309,30 @@ describe('isLikelyGhostTranslatableLine', () => {
     expect(isLikelyGhostTranslatableLine(ghostLine, '5C')).toBe(true);
   });
 
+  test('flags tiny latin singleton artifacts even at medium confidence', () => {
+    const tinyLatinNoise = makeOcrLine({
+      text: 'I',
+      confidence: 91,
+      bbox: { x0: 522, y0: 420, x1: 548, y1: 444 },
+      words: [
+        { text: 'I', confidence: 91, bbox: { x0: 524, y0: 422, x1: 546, y1: 442 } },
+      ],
+    });
+
+    expect(isLikelyGhostTranslatableLine(tinyLatinNoise, 'I')).toBe(true);
+  });
+
+  test('flags tiny no-word latin artifacts that can drift translation queue', () => {
+    const tinyNoWordNoise = makeOcrLine({
+      text: 'AA',
+      confidence: 90,
+      bbox: { x0: 604, y0: 386, x1: 658, y1: 424 },
+      words: [],
+    });
+
+    expect(isLikelyGhostTranslatableLine(tinyNoWordNoise, 'AA')).toBe(true);
+  });
+
   test('keeps valid short dialogue tokens with normal geometry', () => {
     const validShortLine = makeOcrLine({
       text: 'NO!',
@@ -291,6 +344,17 @@ describe('isLikelyGhostTranslatableLine', () => {
     });
 
     expect(isLikelyGhostTranslatableLine(validShortLine, 'NO!')).toBe(false);
+  });
+
+  test('flags oversized no-word balloon section boxes with short latin phrases', () => {
+    const oversizedNoWordSection = makeOcrLine({
+      text: 'YOON HYEYOON?',
+      confidence: 98,
+      bbox: { x0: 84, y0: 106, x1: 332, y1: 278 },
+      words: [],
+    });
+
+    expect(isLikelyGhostTranslatableLine(oversizedNoWordSection, 'YOON HYEYOON?')).toBe(true);
   });
 
   test('flags compressed long latin text in abnormally tiny boxes', () => {
@@ -349,6 +413,19 @@ describe('isLikelyGhostTranslatableLine', () => {
     expect(isLikelyGhostTranslatableLine(mediumBorderGhost, 'สิ่ง')).toBe(true);
   });
 
+  test('flags compressed short Latin phrases that only occupy a tiny fragment of the box', () => {
+    const compressedPhraseGhost = makeOcrLine({
+      text: 'WHY IS THIS',
+      confidence: 92,
+      bbox: { x0: 402, y0: 244, x1: 468, y1: 300 },
+      words: [
+        { text: 'WHY', confidence: 92, bbox: { x0: 426, y0: 264, x1: 446, y1: 278 } },
+      ],
+    });
+
+    expect(isLikelyGhostTranslatableLine(compressedPhraseGhost, 'WHY IS THIS')).toBe(true);
+  });
+
   test('flags wider stylized Hangul SFX blobs as ghost lines', () => {
     const stylizedSfxLine = makeOcrLine({
       text: '슬금',
@@ -373,6 +450,131 @@ describe('isLikelyGhostTranslatableLine', () => {
     });
 
     expect(isLikelyGhostTranslatableLine(cjkDialogue, '그러니까')).toBe(false);
+  });
+});
+
+describe('shouldPruneContextualGhostTranslatableLine', () => {
+  test('prunes cross-column bridge lines that merge two neighboring dialogue stacks', () => {
+    const lines = [
+      makeLine({
+        index: 12,
+        text: 'SHOE LOCKER',
+        sourceLength: 11,
+        left: 2483,
+        right: 2927,
+        top: 2194,
+        bottom: 2283,
+        height: 89,
+        area: 444 * 89,
+        wordCoverage: 0.92,
+        wordBoxCount: 2,
+      }),
+      makeLine({
+        index: 13,
+        text: 'BUT THERE',
+        sourceLength: 8,
+        left: 354,
+        right: 704,
+        top: 2217,
+        bottom: 2295,
+        height: 78,
+        area: 350 * 78,
+        wordCoverage: 0.9,
+        wordBoxCount: 2,
+      }),
+      makeLine({
+        index: 14,
+        text: 'ARE ONLY AND LEAVE THE',
+        sourceLength: 20,
+        left: 374,
+        right: 2953,
+        top: 2274,
+        bottom: 2384,
+        height: 110,
+        area: 2579 * 110,
+        wordCoverage: 0.98,
+        wordBoxCount: 5,
+      }),
+      makeLine({
+        index: 16,
+        text: 'ENOUGH KEYS',
+        sourceLength: 10,
+        left: 311,
+        right: 752,
+        top: 2374,
+        bottom: 2463,
+        height: 89,
+        area: 441 * 89,
+        wordCoverage: 0.94,
+        wordBoxCount: 2,
+      }),
+    ];
+
+    expect(shouldPruneContextualGhostTranslatableLine(lines[2], lines)).toBe(true);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[0], lines)).toBe(false);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[1], lines)).toBe(false);
+  });
+
+  test('prunes stacked oversized fragment lines inside a stronger local dialogue chain', () => {
+    const lines = [
+      makeLine({
+        index: 22,
+        text: 'iRAPIDO, PRI-',
+        sourceLength: 10,
+        left: 603,
+        right: 866,
+        top: 8398,
+        bottom: 8642,
+        height: 244,
+        area: 263 * 244,
+        wordCoverage: 0.18,
+        wordBoxCount: 1,
+      }),
+      makeLine({
+        index: 23,
+        text: 'ME ROLAFO TO',
+        sourceLength: 10,
+        left: 757,
+        right: 1342,
+        top: 8627,
+        bottom: 8734,
+        height: 107,
+        area: 585 * 107,
+        wordCoverage: 0.88,
+        wordBoxCount: 3,
+      }),
+      makeLine({
+        index: 25,
+        text: 'H',
+        sourceLength: 1,
+        left: 781,
+        right: 1315,
+        top: 8819,
+        bottom: 8913,
+        height: 94,
+        area: 534 * 94,
+        wordCoverage: 0.05,
+        wordBoxCount: 1,
+      }),
+      makeLine({
+        index: 26,
+        text: 'LO ESTABA',
+        sourceLength: 8,
+        left: 586,
+        right: 873,
+        top: 8878,
+        bottom: 9141,
+        height: 263,
+        area: 287 * 263,
+        wordCoverage: 0.82,
+        wordBoxCount: 2,
+      }),
+    ];
+
+    expect(shouldPruneContextualGhostTranslatableLine(lines[0], lines)).toBe(true);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[2], lines)).toBe(true);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[1], lines)).toBe(false);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[3], lines)).toBe(false);
   });
 });
 
@@ -578,6 +780,108 @@ describe('buildTranslationGroups', () => {
     ]);
   });
 
+  test('keeps same-row column reading order stable in line-by-line profile', () => {
+    const leftTop = makeLine({
+      index: 0,
+      text: 'LEFT TOP',
+      sourceLength: 8,
+      top: 100,
+      bottom: 124,
+      left: 80,
+      right: 190,
+      height: 24,
+    });
+
+    const rightTop = makeLine({
+      index: 1,
+      text: 'RIGHT TOP',
+      sourceLength: 9,
+      top: 94,
+      bottom: 118,
+      left: 320,
+      right: 430,
+      height: 24,
+    });
+
+    const leftBottom = makeLine({
+      index: 2,
+      text: 'LEFT BOTTOM',
+      sourceLength: 11,
+      top: 130,
+      bottom: 154,
+      left: 84,
+      right: 194,
+      height: 24,
+    });
+
+    const rightBottom = makeLine({
+      index: 3,
+      text: 'RIGHT BOTTOM',
+      sourceLength: 12,
+      top: 124,
+      bottom: 148,
+      left: 324,
+      right: 434,
+      height: 24,
+    });
+
+    const groups = buildTranslationGroups([leftTop, rightTop, leftBottom, rightBottom], 'line-by-line');
+    const orderedIndexes = groups.map((group) => group.lines[0].index);
+
+    expect(orderedIndexes).toEqual([0, 2, 1, 3]);
+  });
+
+  test('prioritizes left column first for same-row dense dialogue groups', () => {
+    const leftTop = makeLine({
+      index: 10,
+      text: 'LEFT TOP',
+      sourceLength: 8,
+      top: 100,
+      bottom: 124,
+      left: 70,
+      right: 180,
+      height: 24,
+    });
+
+    const rightTop = makeLine({
+      index: 11,
+      text: 'RIGHT TOP',
+      sourceLength: 9,
+      top: 94,
+      bottom: 118,
+      left: 310,
+      right: 420,
+      height: 24,
+    });
+
+    const leftBottom = makeLine({
+      index: 12,
+      text: 'LEFT BOTTOM',
+      sourceLength: 11,
+      top: 130,
+      bottom: 154,
+      left: 74,
+      right: 184,
+      height: 24,
+    });
+
+    const rightBottom = makeLine({
+      index: 13,
+      text: 'RIGHT BOTTOM',
+      sourceLength: 12,
+      top: 124,
+      bottom: 148,
+      left: 314,
+      right: 424,
+      height: 24,
+    });
+
+    const groups = buildTranslationGroups([leftTop, rightTop, leftBottom, rightBottom], 'dense-dialogue');
+    const groupedIndexes = groups.map((group) => group.lines.map((line) => line.index));
+
+    expect(groupedIndexes).toEqual([[10, 12], [11, 13]]);
+  });
+
   test('keeps three nearby manga stacks in separate connected groups', () => {
     const leftA = makeLine({ index: 120, text: 'BUT-', sourceLength: 4, top: 300, bottom: 322, left: 56, right: 126, height: 22 });
     const leftB = makeLine({ index: 121, text: 'SHE COULD', sourceLength: 9, top: 326, bottom: 348, left: 54, right: 132, height: 22 });
@@ -604,6 +908,113 @@ describe('buildTranslationGroups', () => {
       [123, 124, 125],
       [126, 127, 128],
     ]);
+  });
+
+  test('keeps staggered same-row columns in stable left-column-first order', () => {
+    const leftTop = makeLine({
+      index: 200,
+      text: 'LEFT TOP',
+      sourceLength: 8,
+      top: 122,
+      bottom: 146,
+      left: 72,
+      right: 192,
+      height: 24,
+    });
+
+    const rightTop = makeLine({
+      index: 201,
+      text: 'RIGHT TOP',
+      sourceLength: 9,
+      top: 88,
+      bottom: 112,
+      left: 330,
+      right: 452,
+      height: 24,
+    });
+
+    const leftMid = makeLine({
+      index: 202,
+      text: 'LEFT MID',
+      sourceLength: 8,
+      top: 150,
+      bottom: 174,
+      left: 74,
+      right: 194,
+      height: 24,
+    });
+
+    const rightMid = makeLine({
+      index: 203,
+      text: 'RIGHT MID',
+      sourceLength: 9,
+      top: 116,
+      bottom: 140,
+      left: 332,
+      right: 454,
+      height: 24,
+    });
+
+    const leftBottom = makeLine({
+      index: 204,
+      text: 'LEFT BOTTOM',
+      sourceLength: 11,
+      top: 178,
+      bottom: 202,
+      left: 76,
+      right: 196,
+      height: 24,
+    });
+
+    const rightBottom = makeLine({
+      index: 205,
+      text: 'RIGHT BOTTOM',
+      sourceLength: 12,
+      top: 144,
+      bottom: 168,
+      left: 334,
+      right: 456,
+      height: 24,
+    });
+
+    const lineByLineGroups = buildTranslationGroups(
+      [leftTop, rightTop, leftMid, rightMid, leftBottom, rightBottom],
+      'line-by-line'
+    );
+    const lineByLineOrder = lineByLineGroups.map((group) => group.lines[0].index);
+
+    expect(lineByLineOrder).toEqual([200, 202, 204, 201, 203, 205]);
+
+    const denseGroups = buildTranslationGroups(
+      [leftTop, rightTop, leftMid, rightMid, leftBottom, rightBottom],
+      'dense-dialogue'
+    );
+    const denseGroupedIndexes = denseGroups.map((group) => group.lines.map((line) => line.index));
+
+    expect(denseGroupedIndexes).toEqual([
+      [200, 202, 204],
+      [201, 203, 205],
+    ]);
+  });
+
+});
+
+describe('resolveRedistributedLineFallback', () => {
+  test('uses sentence-aligned group text when a redistributed segment is missing', () => {
+    const fallback = resolveRedistributedLineFallback(
+      'SOURCE LINE',
+      'หนึ่ง. สอง. สาม.',
+      'th',
+      1,
+      3
+    );
+
+    expect(fallback).toContain('สอง');
+  });
+
+  test('falls back to source text when grouped translation is empty', () => {
+    const fallback = resolveRedistributedLineFallback('Original text', '', 'en', 0, 2);
+    expect(fallback).toBe('Original text');
   });
 });
 
@@ -660,6 +1071,42 @@ describe('shouldUseLineByLineGrouping', () => {
   });
 });
 
+describe('source language inference', () => {
+  test('infers Spanish on OCR-noisy Latin dialogue lines', () => {
+    const lines = [
+      makeLine({ index: 0, text: 'TE ESTABAN TOCANDO EL CUERPO', sourceLength: 25, top: 100, bottom: 122, left: 80, right: 420, height: 22 }),
+      makeLine({ index: 1, text: 'SENTIA COMO SI ME TOCARANPOR TODAS PARTES', sourceLength: 39, top: 126, bottom: 148, left: 84, right: 506, height: 22 }),
+      makeLine({ index: 2, text: 'NO ERA DOLOROSO NI NADA', sourceLength: 22, top: 152, bottom: 174, left: 84, right: 360, height: 22 }),
+    ];
+
+    const inferred = inferSourceLanguageFromTextHints(lines, 'en');
+    expect(inferred).toBe('es');
+  });
+
+  test('prefers Spanish for fused-word dialogue chunks over English fallback', () => {
+    const source = 'TE ESTABAN TOCANDO EL CUERPO... SENTIA COMO SI ME TOCARANPOR TODAS PARTES';
+    const preferred = resolvePreferredSourceLanguageForText(source, 'en');
+    expect(preferred).toBe('es');
+  });
+});
+
+describe('normalizeSpanishOcrNoiseForTranslation', () => {
+  test('splits common OCR-fused spanish phrase fragments', () => {
+    const normalized = normalizeSpanishOcrNoiseForTranslation('COMOSI INSISTIERA EN CIERTASPARTES EN ESPECiFICO...');
+
+    expect(normalized).toContain('COMO SI');
+    expect(normalized).toContain('CIERTAS PARTES');
+    expect(normalized).toContain('EN ESPECIFICO');
+  });
+
+  test('restores noisy merged interrogative fragments', () => {
+    const normalized = normalizeSpanishOcrNoiseForTranslation('iC-COMO LO SUPO...?! NO ERAUNPOCO PERVERTIDO?');
+
+    expect(normalized).toContain('¿COMO LO SUPO');
+    expect(normalized).toContain('NO ERA UN POCO PERVERTIDO');
+  });
+});
+
 describe('applyThaiConversationalGlossary', () => {
   test('maps compact VERTAR essence OCR variants to full Thai phrase', () => {
     const translated = applyThaiConversationalGlossary("[VERTAR'SESSENCE]", 'เวอร์ทาร์', 'th');
@@ -693,6 +1140,26 @@ describe('applyThaiConversationalGlossary', () => {
 
     expect(hHow).toBe('ด-ได้ไง?');
     expect(uUh).toBe('อ-อา...');
+  });
+
+  test('maps spanish conversational fragments to stable thai meaning', () => {
+    const algoAsi = applyThaiConversationalGlossary('ALGO ASi...', 'ALGO ASi...', 'th');
+    const ceh = applyThaiConversationalGlossary('CEH?', 'CEH?', 'th');
+    const detalle = applyThaiConversationalGlossary('CON MAS DETALLE.', 'CON MAS DETALLE.', 'th');
+    const detalleNoisy = applyThaiConversationalGlossary('CON MAS DETA- LLE.', 'CON MAS DETA- LLE.', 'th');
+
+    expect(algoAsi).toBe('ประมาณนั้นแหละ...');
+    expect(ceh).toBe('เอ๋?');
+    expect(detalle).toBe('ในรายละเอียดเพิ่มเติม.');
+    expect(detalleNoisy).toBe('ในรายละเอียดเพิ่มเติม.');
+  });
+
+  test('maps noisy spanish question and emphasis fragments', () => {
+    const knowHow = applyThaiConversationalGlossary('iC-COMO LO SUPO...?!', 'iCCฉันสามารถ', 'th');
+    const entonces = applyThaiConversationalGlossary('ENTONCES SEGURO...', 'ตัวยก เซกูโร่', 'th');
+
+    expect(knowHow).toBe('เขารู้ได้อย่างไร...?!');
+    expect(entonces).toBe('งั้น แน่นอน...');
   });
 });
 

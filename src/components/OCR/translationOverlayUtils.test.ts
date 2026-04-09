@@ -6,6 +6,7 @@ import {
   resolveTranslationOverlayContext,
   resolveOverlayMaskExpansion,
   resolveOverlaySourceBBox,
+  shouldSkipOverlayRenderForSuspiciousLine,
 } from './translationOverlayUtils';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 
@@ -321,6 +322,55 @@ describe('translationOverlayUtils typography', () => {
     });
 
     expect(bbox).toEqual({ x0: 80, y0: 260, x1: 520, y1: 292 });
+  });
+
+  test('falls back to line bbox for centered short dialogue lines when word boxes collapse inside the bubble', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: 'H-HOW?',
+      confidence: 96,
+      bbox: { x0: 120, y0: 420, x1: 248, y1: 504 },
+      words: [
+        { text: 'H-HOW?', confidence: 96, bbox: { x0: 164, y0: 452, x1: 206, y1: 474 } },
+      ],
+    });
+
+    expect(bbox).toEqual({ x0: 120, y0: 420, x1: 248, y1: 504 });
+  });
+
+  test('skips suspicious sparse oversized lines for overlay rendering parity', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: 'AA',
+      confidence: 90,
+      bbox: { x0: 24, y0: 30, x1: 340, y1: 220 },
+      words: [{ text: 'A', confidence: 90, bbox: { x0: 178, y0: 118, x1: 192, y1: 134 } }],
+    });
+
+    expect(shouldSkip).toBe(true);
+  });
+
+  test('keeps sentence-like overlays renderable even when source coverage is low', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: 'TE ESTABAN TOCANDO EL CUERPO',
+      confidence: 91,
+      bbox: { x0: 20, y0: 24, x1: 348, y1: 214 },
+      words: [{ text: 'TOCANDO', confidence: 91, bbox: { x0: 166, y0: 112, x1: 218, y1: 138 } }],
+    });
+
+    expect(shouldSkip).toBe(false);
+  });
+
+  test('keeps normal compact lines renderable for overlay parity', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: 'OPEN LOCKER',
+      confidence: 95,
+      bbox: { x0: 120, y0: 200, x1: 280, y1: 236 },
+      words: [
+        { text: 'OPEN', confidence: 95, bbox: { x0: 126, y0: 202, x1: 178, y1: 234 } },
+        { text: 'LOCKER', confidence: 95, bbox: { x0: 186, y0: 202, x1: 268, y1: 234 } },
+      ],
+    });
+
+    expect(shouldSkip).toBe(false);
   });
 
   test('uses tighter mask expansion for compact labels than paragraph lines', () => {
@@ -1016,6 +1066,7 @@ describe('translationOverlayUtils typography', () => {
 
     expect(layoutMap.get(0)?.hidden).not.toBe(true);
     expect(layoutMap.get(1)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.preserveMaskWhenHidden).toBe(true);
     expect(layoutMap.get(0)?.renderText).toContain('ฟีนีลีนได้ดูดซับ');
     expect(layoutMap.get(0)?.renderText).toContain('[แก่นแท้ของเวอร์ทาร์]');
     expect(layoutMap.get(0)?.highlightContinuationText).toContain('แก่นแท้ของเวอร์ทาร์');
@@ -1142,6 +1193,8 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(0)?.renderText).toBe('นั่น เป็นไปได้แน่นอน.... คิดว่าไง ริฟรีด');
     expect(layoutMap.get(1)?.hidden).toBe(true);
     expect(layoutMap.get(2)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(2)?.preserveMaskWhenHidden).not.toBe(true);
     expect(layoutMap.get(0)?.mergedBBox).toEqual({ x0: 150, y0: 100, x1: 348, y1: 178 });
     expect(layoutMap.get(0)?.mergedMaskBBox).toEqual({ x0: 140, y0: 100, x1: 360, y1: 178 });
   });
@@ -1327,8 +1380,57 @@ describe('translationOverlayUtils typography', () => {
     ], { profile: 'adaptive' });
 
     expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.preserveMaskWhenHidden).not.toBe(true);
     expect(layoutMap.get(1)?.hidden).not.toBe(true);
     expect(layoutMap.get(1)?.renderText).toContain('คอลัมน์');
+  });
+
+  test('keeps strongly overlapped overlays when translated texts are clearly different', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เปิดตู้รองเท้าแล้วออกจากตึก',
+        width: 220,
+        height: 24,
+        bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+        line: {
+          text: 'OPEN A SHOE LOCKER AND LEAVE THE BUILDING',
+          confidence: 96,
+          bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+          words: [{ text: 'OPEN', confidence: 96, bbox: { x0: 268, y0: 520, x1: 306, y1: 544 } }],
+        },
+        hints: {
+          sourceText: 'OPEN A SHOE LOCKER AND LEAVE THE BUILDING',
+          sourceBoxWidth: 220,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'ทีม 30 คนกำลังรอที่ทางเข้า',
+        width: 224,
+        height: 24,
+        bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+        line: {
+          text: 'A TEAM OF 30 PLAYERS IS WAITING AT THE ENTRANCE',
+          confidence: 95,
+          bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+          words: [{ text: 'A', confidence: 95, bbox: { x0: 274, y0: 524, x1: 286, y1: 548 } }],
+        },
+        hints: {
+          sourceText: 'A TEAM OF 30 PLAYERS IS WAITING AT THE ENTRANCE',
+          sourceBoxWidth: 224,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
   });
 
   test('keeps nearby stacked lines when overlap is low and anchors are distinct', () => {
@@ -1418,7 +1520,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v20|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1492,7 +1594,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v20|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1531,6 +1633,214 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     expect(overlay.translatedByIndex.size).toBe(2);
     expect(overlay.translatedByIndex.has(0)).toBe(true);
     expect(overlay.translatedByIndex.has(1)).toBe(true);
+  });
+
+  test('keeps overlapping translated lines when source text differs substantially', () => {
+    const currentPageOCR = {
+      pageNumber: 9,
+      width: 820,
+      height: 1200,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'OPEN A SHOE LOCKER AND LEAVE THE BUILDING',
+          confidence: 95,
+          bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+          words: [{ text: 'OPEN', confidence: 95, bbox: { x0: 268, y0: 520, x1: 306, y1: 544 } }],
+        },
+        {
+          text: 'A TEAM OF 30 PLAYERS IS WAITING AT THE ENTRANCE',
+          confidence: 95,
+          bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+          words: [{ text: 'TEAM', confidence: 95, bbox: { x0: 286, y0: 524, x1: 328, y1: 548 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 90,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 9,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ข้อความเดียวกัน' },
+          { index: 1, text: 'ข้อความเดียวกัน' },
+        ],
+        translatedText: 'ข้อความเดียวกัน',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(2);
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(true);
+  });
+
+  test('collapses document-like overlapping duplicates even when source strings are noisy variants', () => {
+    const currentPageOCR = {
+      pageNumber: 6,
+      width: 1400,
+      height: 3200,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'BRIDGE GIRDER ALLOWS HORIZONTAL',
+          confidence: 88,
+          bbox: { x0: 760, y0: 2880, x1: 1420, y1: 2944 },
+          words: [{ text: 'BRIDGE', confidence: 88, bbox: { x0: 776, y0: 2882, x1: 866, y1: 2942 } }],
+        },
+        {
+          text: 'bridge girder allows horizontal @',
+          confidence: 82,
+          bbox: { x0: 756, y0: 2876, x1: 1412, y1: 2938 },
+          words: [{ text: 'bridge', confidence: 82, bbox: { x0: 772, y0: 2878, x1: 858, y1: 2936 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 86,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 6,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'คานสะพานรับแรงแนวนอน' },
+          { index: 1, text: 'คานสะพานรับแรงแนวนอน' },
+        ],
+        translatedText: 'คานสะพานรับแรงแนวนอน',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'official',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(1);
+    expect(overlay.translatedByIndex.has(0) || overlay.translatedByIndex.has(1)).toBe(true);
+  });
+
+  test('accepts spanish-source cache entry when OCR language key is english but snapshot matches', () => {
+    const currentPageOCR = {
+      pageNumber: 2,
+      width: 1000,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'TE ESTABAN TOCANDO EL CUERPO',
+          confidence: 94,
+          bbox: { x0: 120, y0: 220, x1: 520, y1: 280 },
+          words: [{ text: 'TE', confidence: 94, bbox: { x0: 130, y0: 224, x1: 168, y1: 278 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 90,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 2,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'es',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'พวกเขากำลังแตะตัวเธออยู่เหรอ' },
+        ],
+        translatedText: 'พวกเขากำลังแตะตัวเธออยู่เหรอ',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.sourceLanguage).toBe('es');
+    expect(overlay.translatedByIndex.size).toBe(1);
+    expect(overlay.translatedByIndex.get(0)).toContain('แตะตัว');
   });
 });
 
