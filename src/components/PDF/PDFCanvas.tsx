@@ -24,6 +24,7 @@ import {
   sampleOverlayPaletteFromLine,
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
+import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
 const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
@@ -61,6 +62,74 @@ const scaleOverlayTypography = (typography: OverlayTypography, scale: number): O
   };
 };
 
+const renderOverlayTextWithSearchHighlight = (
+  text: string,
+  continuationText: string,
+  defaultColor: string,
+  continuationColor: string,
+  searchPattern: TextSearchPattern | null
+): React.ReactNode => {
+  const fullText = String(text || '');
+  if (!fullText) return '';
+
+  const continuationStart = continuationText ? fullText.indexOf(continuationText) : -1;
+  const continuationEnd = continuationStart >= 0 ? continuationStart + continuationText.length : -1;
+  const matches = collectTextSearchMatches(fullText, searchPattern);
+
+  if (matches.length === 0 && continuationStart < 0) {
+    return fullText;
+  }
+
+  const boundaries = new Set<number>([0, fullText.length]);
+  matches.forEach((match) => {
+    boundaries.add(match.start);
+    boundaries.add(match.end);
+  });
+  if (continuationStart >= 0 && continuationEnd > continuationStart) {
+    boundaries.add(continuationStart);
+    boundaries.add(continuationEnd);
+  }
+
+  const sortedBoundaries = Array.from(boundaries)
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= fullText.length)
+    .sort((a, b) => a - b);
+
+  const pieces: React.ReactNode[] = [];
+  for (let i = 0; i < sortedBoundaries.length - 1; i += 1) {
+    const start = sortedBoundaries[i];
+    const end = sortedBoundaries[i + 1];
+    if (end <= start) continue;
+
+    const slice = fullText.slice(start, end);
+    if (!slice) continue;
+
+    const inContinuation = continuationStart >= 0 && start >= continuationStart && end <= continuationEnd;
+    const inMatch = matches.some((match) => start >= match.start && end <= match.end);
+
+    if (!inContinuation && !inMatch) {
+      pieces.push(<React.Fragment key={`plain-${start}`}>{slice}</React.Fragment>);
+      continue;
+    }
+
+    pieces.push(
+      <span
+        key={`seg-${start}`}
+        style={{
+          color: inContinuation ? continuationColor : defaultColor,
+          backgroundColor: inMatch ? 'rgba(250, 204, 21, 0.28)' : undefined,
+          borderRadius: inMatch ? 3 : undefined,
+          paddingInline: inMatch ? 1 : 0,
+          boxShadow: inMatch ? 'inset 0 0 0 1px rgba(250, 204, 21, 0.22)' : undefined,
+        }}
+      >
+        {slice}
+      </span>
+    );
+  }
+
+  return pieces;
+};
+
 export const PDFCanvas: React.FC = () => {
   const {
     fileUrl,
@@ -86,6 +155,7 @@ export const PDFCanvas: React.FC = () => {
     translationPreviewMode,
     translationCacheByPage,
     activeTranslationKeyByPage,
+    ocrResultSearchQuery,
   } = useOCRTextLayerStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -128,6 +198,29 @@ export const PDFCanvas: React.FC = () => {
     : translationMode === 'manhwa'
       ? 'manhwa'
       : 'manga';
+  const normalizedOverlaySearch = useMemo(
+    () => normalizeOverlayInlineText(ocrResultSearchQuery),
+    [ocrResultSearchQuery]
+  );
+  const overlaySearchPattern = useMemo(
+    () => buildTextSearchPattern(normalizedOverlaySearch),
+    [normalizedOverlaySearch]
+  );
+  const originalOCRSearchPattern = useMemo(() => {
+    if (translationPreviewMode !== 'original') return null;
+    if (!normalizedOverlaySearch) return null;
+    return buildTextSearchPattern(normalizedOverlaySearch);
+  }, [normalizedOverlaySearch, translationPreviewMode]);
+  const originalOCRMatchedLineIndexes = useMemo(() => {
+    if (!currentPageOCR || !originalOCRSearchPattern) return [] as number[];
+    return currentPageOCR.lines.reduce<number[]>((indexes, line, index) => {
+      const lineText = normalizeOverlayInlineText(String(line.text || ''));
+      if (lineText && hasTextSearchMatch(lineText, originalOCRSearchPattern)) {
+        indexes.push(index);
+      }
+      return indexes;
+    }, []);
+  }, [currentPageOCR, originalOCRSearchPattern]);
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
     optionsEngine: options.engine || 'tesseract',
@@ -743,34 +836,13 @@ export const PDFCanvas: React.FC = () => {
                           ? normalizeOverlayInlineText(layout.highlightContinuationText)
                           : layout.highlightContinuationText)
                         : '';
-                      const overlayContent = (() => {
-                        if (!highlightContinuationText) {
-                          return overlayText;
-                        }
-
-                        const fullText = String(overlayText || '');
-                        const continuationText = String(highlightContinuationText || '');
-                        if (!fullText || !continuationText) {
-                          return overlayText;
-                        }
-
-                        const start = fullText.indexOf(continuationText);
-                        if (start < 0) {
-                          return overlayText;
-                        }
-
-                        const before = fullText.slice(0, start);
-                        const after = fullText.slice(start + continuationText.length);
-                        return (
-                          <>
-                            {before}
-                            <span style={{ color: continuationPalette.textColor }}>
-                              {continuationText}
-                            </span>
-                            {after}
-                          </>
-                        );
-                      })();
+                      const overlayContent = renderOverlayTextWithSearchHighlight(
+                        overlayText,
+                        highlightContinuationText,
+                        palette.textColor,
+                        continuationPalette.textColor,
+                        overlaySearchPattern
+                      );
                       const rotationDeg = estimateLineRotationDeg(line);
                       const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
                       const minFillRatio = typography.estimatedLines > 1
@@ -894,6 +966,39 @@ export const PDFCanvas: React.FC = () => {
                             </div>
                           )}
                         </React.Fragment>
+                      );
+                    })}
+                  </div>
+                )}
+                {translationPreviewMode === 'original' && currentPageOCR && originalOCRMatchedLineIndexes.length > 0 && (
+                  <div className="absolute inset-0 pointer-events-none">
+                    {originalOCRMatchedLineIndexes.map((lineIndex) => {
+                      const line = currentPageOCR.lines[lineIndex];
+                      if (!line) return null;
+
+                      const sourceBBox = resolveOverlaySourceBBox(line);
+                      const rawLeft = ocrOverlayTransform.offsetX + sourceBBox.x0 * ocrOverlayTransform.scaleX - 2;
+                      const rawTop = ocrOverlayTransform.offsetY + sourceBBox.y0 * ocrOverlayTransform.scaleY - 2;
+                      const rawWidth = Math.max(1, (sourceBBox.x1 - sourceBBox.x0) * ocrOverlayTransform.scaleX + 4);
+                      const rawHeight = Math.max(1, (sourceBBox.y1 - sourceBBox.y0) * ocrOverlayTransform.scaleY + 4);
+                      const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
+                        x0: ocrOverlayTransform.offsetX,
+                        y0: ocrOverlayTransform.offsetY,
+                        x1: ocrOverlayTransform.offsetX + currentPageOCR.width * ocrOverlayTransform.scaleX,
+                        y1: ocrOverlayTransform.offsetY + currentPageOCR.height * ocrOverlayTransform.scaleY,
+                      });
+
+                      return (
+                        <div
+                          key={`ocr-original-search-${lineIndex}`}
+                          style={{
+                            left: rect.left,
+                            top: rect.top,
+                            width: rect.width,
+                            height: rect.height,
+                          }}
+                          className="absolute rounded-sm border border-amber-500/90 bg-amber-300/40"
+                        />
                       );
                     })}
                   </div>

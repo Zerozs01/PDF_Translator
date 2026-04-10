@@ -83,4 +83,24 @@ describe('VisionService paddle geometry guard', () => {
     expect(anomalyTexts).not.toContain('ENOUGH KEYS');
     expect(anomalyTexts).not.toContain('OUR CHANCE');
   });
+
+  test('collapses technical residual spatial duplicates that are slightly vertically offset', () => {
+    const service = visionService as unknown as {
+      collapseResidualSpatialDuplicateExternalLines: (lines: OCRLine[], languageCodes: string[]) => { lines: OCRLine[]; dropped: Array<{ text: string }> };
+    };
+    const lines = [
+      makeLine('in the direction of the cable. (1)', 226, 2356, 816, 2393),
+      makeLine('in the direction of the cable. (1)', 222, 2397, 738, 2445),
+      makeLine('Three unknowns. The reactions are the couple moment', 820, 2404, 1820, 2448),
+    ];
+
+    const result = service.collapseResidualSpatialDuplicateExternalLines(lines, ['eng']);
+
+    expect(result.lines.map((line) => line.text)).toEqual(expect.arrayContaining([
+      'in the direction of the cable. (1)',
+      'Three unknowns. The reactions are the couple moment',
+    ]));
+    expect(result.lines.filter((line) => line.text === 'in the direction of the cable. (1)')).toHaveLength(1);
+    expect(result.dropped).toHaveLength(1);
+  });
 });

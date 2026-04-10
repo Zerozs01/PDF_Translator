@@ -924,6 +924,52 @@ export const UploadScreen: React.FC = () => {
     }
   };
 
+  const refreshLibraryView = useCallback(async () => {
+    const activeSearch = searchQuery.trim();
+    if (activeSearch) {
+      await searchDocuments(activeSearch);
+      return;
+    }
+
+    if (filterType === 'favorites') {
+      await loadFavoriteDocuments();
+      return;
+    }
+
+    if (filterType === 'tag' && selectedTagId !== null) {
+      await loadDocumentsByTag(selectedTagId);
+      return;
+    }
+
+    if (filterType === 'project') {
+      await loadDocumentsByProject(selectedProjectId ?? null);
+      return;
+    }
+
+    await loadRecentDocuments();
+  }, [
+    filterType,
+    loadDocumentsByProject,
+    loadDocumentsByTag,
+    loadFavoriteDocuments,
+    loadRecentDocuments,
+    searchDocuments,
+    searchQuery,
+    selectedProjectId,
+    selectedTagId,
+  ]);
+
+  const handleDeleteDocument = useCallback(async (documentId: number) => {
+    await deleteDocument(documentId);
+    setDocumentTagsById((current) => {
+      if (!(documentId in current)) return current;
+      const next = { ...current };
+      delete next[documentId];
+      return next;
+    });
+    await refreshLibraryView();
+  }, [deleteDocument, refreshLibraryView]);
+
   const sortedDocuments = getSortedDocuments();
 
   const openDocumentMenu = useCallback(async (docId: number, position: MenuPosition) => {
@@ -1526,7 +1572,7 @@ export const UploadScreen: React.FC = () => {
                       <button
                         onClick={async () => {
                           if (fileOpenError.docId !== undefined) {
-                            await deleteDocument(fileOpenError.docId);
+                            await handleDeleteDocument(fileOpenError.docId);
                           }
                           setFileOpenError(null);
                         }}
@@ -1583,7 +1629,7 @@ export const UploadScreen: React.FC = () => {
                     isSelected={selectedDocumentIds.has(doc.id)}
                     onOpen={() => handleOpenDocument(doc)}
                     onToggleFavorite={() => toggleFavorite(doc.id)}
-                    onDelete={() => deleteDocument(doc.id)}
+                    onDelete={() => void handleDeleteDocument(doc.id)}
                     isMenuOpen={activeDocumentMenuId === doc.id}
                     menuPosition={activeDocumentMenuPosition}
                     documentTags={documentTagsById[doc.id] ?? []}

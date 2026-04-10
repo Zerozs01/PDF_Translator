@@ -24,8 +24,7 @@ import {
   Flame,
   FileText,
   BarChart3,
-  Download,
-  Files
+  Download
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
@@ -39,6 +38,23 @@ import {
 } from './stores/useOCRTextLayerStore';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { searchablePDFService } from './services/pdf';
+import { pdfjs } from './services/pdf/pdfjsWorker';
+import {
+  clampOverlayRect,
+  computeOverlayLayoutMap,
+  computeOverlayTypography,
+  DEFAULT_OVERLAY_PALETTE,
+  estimateLineRotationDeg,
+  normalizeOverlayInlineText,
+  resolveOverlayMaskBBox,
+  resolveOverlayMaskExpansion,
+  resolveOverlaySourceBBox,
+  sampleOverlayPaletteFromLine,
+  shouldSkipOverlayRenderForSuspiciousLine,
+  type OverlayLayoutProfile,
+  type OverlayTypography,
+} from './components/OCR/translationOverlayUtils';
+import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
 import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
 
 // Lazy Load Heavy Components
@@ -61,6 +77,205 @@ const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
 type AutoOCRScope = 'current' | 'all';
 type DownloadScope = 'current' | 'all';
 type DownloadContentMode = 'original' | 'translated';
+
+const formatPageListSummary = (pages: number[], maxItems: number = 8): string => {
+  if (pages.length === 0) return '-';
+  const ordered = Array.from(new Set(pages)).sort((a, b) => a - b);
+  const head = ordered.slice(0, maxItems).join(', ');
+  const remain = ordered.length - maxItems;
+  return remain > 0 ? `${head} (+${remain})` : head;
+};
+
+const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
+
+const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
+  const normalized = normalizeOverlayInlineText(String(sourceText || ''));
+  if (!normalized) return false;
+  const wordCount = normalized.split(/\s+/g).filter(Boolean).length;
+  const thaiCharCount = (normalized.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const technicalLike = DOCUMENT_SOURCE_HINT_REGEX.test(normalized);
+  const numericDocumentLike = wordCount >= 6 && /[0-9()\-]/.test(normalized);
+  const thaiDocumentLike = thaiCharCount >= 12
+    && (wordCount >= 3 || /[0-9()\[\].,:;\-]/.test(normalized));
+  return technicalLike || numericDocumentLike || thaiDocumentLike;
+};
+
+const clampOverlayTypographyScale = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  if (value < 0.7) return 0.7;
+  if (value > 1.6) return 1.6;
+  return value;
+};
+
+const scaleOverlayTypography = (typography: OverlayTypography, scale: number): OverlayTypography => {
+  const normalizedScale = clampOverlayTypographyScale(scale);
+  if (Math.abs(normalizedScale - 1) < 0.0001) return typography;
+
+  return {
+    ...typography,
+    fontSize: Math.max(8, Number((typography.fontSize * normalizedScale).toFixed(2))),
+    lineHeight: Number((typography.lineHeight * normalizedScale).toFixed(3)),
+    padX: Math.max(1, Math.round(typography.padX * normalizedScale)),
+    padY: Math.max(1, Math.round(typography.padY * normalizedScale)),
+    contentHeight: Math.max(1, Number((typography.contentHeight * normalizedScale).toFixed(2))),
+  };
+};
+
+const truncateCanvasText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  suffix: string = '...'
+): string => {
+  const normalized = String(text || '');
+  if (!normalized) return '';
+  if (ctx.measureText(normalized).width <= maxWidth) return normalized;
+
+  let current = normalized;
+  while (current.length > 0 && ctx.measureText(`${current}${suffix}`).width > maxWidth) {
+    current = current.slice(0, -1);
+  }
+
+  return current ? `${current}${suffix}` : '';
+};
+
+const wrapCanvasText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number,
+  forceSingleLine: boolean
+): string[] => {
+  const normalized = normalizeOverlayInlineText(String(text || ''));
+  if (!normalized) return [];
+  if (maxLines <= 1 || forceSingleLine) {
+    return [truncateCanvasText(ctx, normalized, maxWidth)];
+  }
+
+  const tokens = normalized.includes(' ')
+    ? normalized.split(/\s+/g).filter(Boolean)
+    : Array.from(normalized);
+
+  const lines: string[] = [];
+  let line = '';
+
+  tokens.forEach((token, index) => {
+    const unit = normalized.includes(' ') ? token : token;
+    const separator = normalized.includes(' ') && line ? ' ' : '';
+    const candidate = `${line}${separator}${unit}`;
+    if (!line || ctx.measureText(candidate).width <= maxWidth) {
+      line = candidate;
+      return;
+    }
+
+    lines.push(line);
+    line = unit;
+
+    if (lines.length >= maxLines) {
+      return;
+    }
+
+    if (index === tokens.length - 1) {
+      lines.push(line);
+    }
+  });
+
+  if (line && lines.length < maxLines) {
+    lines.push(line);
+  }
+
+  if (lines.length > maxLines) {
+    lines.length = maxLines;
+  }
+
+  if (lines.length === 0) {
+    return [truncateCanvasText(ctx, normalized, maxWidth)];
+  }
+
+  const consumed = lines.join(normalized.includes(' ') ? ' ' : '');
+  if (consumed.length < normalized.length) {
+    const lastIndex = Math.max(0, lines.length - 1);
+    lines[lastIndex] = truncateCanvasText(ctx, lines[lastIndex], maxWidth);
+  }
+
+  return lines;
+};
+
+const GENERIC_FONT_FAMILY_SET = new Set([
+  'serif',
+  'sans-serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'system-ui',
+  'ui-sans-serif',
+  'ui-serif',
+  'ui-monospace',
+]);
+
+const parseFontFamilyCandidates = (fontFamily: string): string[] =>
+  String(fontFamily || '')
+    .split(',')
+    .map((candidate) => candidate.trim().replace(/^['"]+|['"]+$/g, ''))
+    .filter(Boolean);
+
+const buildCanvasFontFamily = async (
+  preferredFontFamily: string,
+  fallbackFontFamily: string
+): Promise<string> => {
+  if (typeof document === 'undefined' || !('fonts' in document)) {
+    return preferredFontFamily || fallbackFontFamily;
+  }
+
+  const fontFaceSet = (document as Document & { fonts?: FontFaceSet }).fonts;
+  if (!fontFaceSet) {
+    return preferredFontFamily || fallbackFontFamily;
+  }
+
+  const candidates = [
+    ...parseFontFamilyCandidates(preferredFontFamily),
+    ...parseFontFamilyCandidates(fallbackFontFamily),
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = candidate.trim();
+    if (!normalized || GENERIC_FONT_FAMILY_SET.has(normalized.toLowerCase())) {
+      continue;
+    }
+
+    const quoted = /[\s'"]/.test(normalized) ? `"${normalized.replace(/"/g, '\\"')}"` : normalized;
+    try {
+      await Promise.allSettled([
+        fontFaceSet.load(`400 16px ${quoted}`, 'กขabCD'),
+        fontFaceSet.load(`500 16px ${quoted}`, 'กขabCD'),
+        fontFaceSet.load(`600 16px ${quoted}`, 'กขabCD'),
+      ]);
+      if (fontFaceSet.check(`16px ${quoted}`, 'กขabCD')) {
+        return `${quoted}, ${fallbackFontFamily || 'sans-serif'}`;
+      }
+    } catch {
+      // Ignore font probing errors and continue to the next family.
+    }
+  }
+
+  return preferredFontFamily || fallbackFontFamily;
+};
+
+const resolveOverlayExportScale = (
+  visibleWidth: number,
+  visibleHeight: number,
+  sourceWidth: number,
+  sourceHeight: number
+): number => {
+  const safeVisibleWidth = Math.max(1, visibleWidth);
+  const safeVisibleHeight = Math.max(1, visibleHeight);
+  const safeSourceWidth = Math.max(1, sourceWidth);
+  const safeSourceHeight = Math.max(1, sourceHeight);
+  const sourceRatio = Math.max(safeSourceWidth / safeVisibleWidth, safeSourceHeight / safeVisibleHeight);
+  const deviceRatio = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1;
+
+  return Math.min(3, Math.max(1.5, deviceRatio, sourceRatio));
+};
 
 // --- Translation APIs: Secure IPC to Main Process ---
 // Offline Argos and Gemini fallback are both resolved in main process bridges
@@ -3139,6 +3354,19 @@ export const shouldUseLineByLineGrouping = (
     const normalized = normalizeWhitespace(String(line.text || ''));
     return normalized.length > 0 && normalized.length <= 36;
   }).length;
+  const compactTechnicalRowCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+    return tokenCount >= 2
+      && tokenCount <= 9
+      && (
+        TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalized)
+        || (
+          TECHNICAL_SOURCE_HINT_REGEX.test(normalized)
+          && normalized.length <= 56
+        )
+      );
+  }).length;
   const noisyLines = lines.filter((line) => scoreSourceLineReadability(line.text) < 4).length;
   const uppercaseHeadingLines = lines.filter((line) => {
     const latin = line.text.replace(/[^A-Za-z]/g, '');
@@ -3156,7 +3384,16 @@ export const shouldUseLineByLineGrouping = (
     && longSentenceLines >= 3
     && avgLength >= 21
     && uppercaseHeadingLines >= 1;
-  const technicalEvidenceStrong = tableLikeTechnicalDocument || strongTechnicalDocument || mixedTechnicalEvidence;
+  const compactTechnicalRowPage = markerHits >= 1
+    && compactTechnicalRowCount >= Math.max(3, Math.floor(lines.length * 0.32))
+    && shortLineCount >= Math.ceil(lines.length * 0.4)
+    && latinHeavyLineCount >= Math.max(2, Math.floor(lines.length * 0.24));
+  const technicalEvidenceStrong = (
+    tableLikeTechnicalDocument
+    || strongTechnicalDocument
+    || mixedTechnicalEvidence
+    || compactTechnicalRowPage
+  );
 
   if ((mode === 'manga' || mode === 'manhwa') && tableLikeTechnicalDocument) {
     return true;
@@ -3176,6 +3413,9 @@ export const shouldUseLineByLineGrouping = (
     if (strongTechnicalDocument) {
       return true;
     }
+    if (compactTechnicalRowPage) {
+      return true;
+    }
     return mixedTechnicalEvidence && (normalizedSource === 'en' || normalizedSource === 'th');
   }
 
@@ -3183,6 +3423,7 @@ export const shouldUseLineByLineGrouping = (
     (markerHits >= 2 && (longSentenceLines >= 2 || avgLength >= 20))
     || (markerHits >= 1 && uppercaseHeadingLines >= 2 && lines.length >= 8)
     || tableLikeTechnicalDocument
+    || compactTechnicalRowPage
   );
   if (officialDocumentSignals) {
     return true;
@@ -3944,6 +4185,7 @@ export default function App() {
   const { 
     file, 
     fileType,
+    fileData,
     currentPage, 
     totalPages, 
     ensureDocumentId,
@@ -3956,6 +4198,9 @@ export default function App() {
     setTargetLanguage,
     translationMode,
     setTranslationMode,
+    overlayThaiFontEnabled,
+    overlayFontPreset,
+    overlayFontSizeScale,
     safetySettings,
     hydrateGeminiApiKey,
   } = useProjectStore();
@@ -3974,7 +4219,9 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
-  const [downloadMenuScope, setDownloadMenuScope] = useState<DownloadScope | null>(null);
+  const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
+  const [downloadScopeSelection, setDownloadScopeSelection] = useState<DownloadScope>('current');
+  const [downloadModeSelection, setDownloadModeSelection] = useState<DownloadContentMode>('original');
   const [isDownloadingResult, setIsDownloadingResult] = useState(false);
   const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -3983,18 +4230,18 @@ export default function App() {
   }, [hydrateGeminiApiKey]);
 
   useEffect(() => {
-    if (!downloadMenuScope) return undefined;
+    if (!isDownloadMenuOpen) return undefined;
 
     const handlePointerDown = (event: MouseEvent) => {
       const targetNode = event.target as Node | null;
       if (downloadMenuRef.current && targetNode && !downloadMenuRef.current.contains(targetNode)) {
-        setDownloadMenuScope(null);
+        setIsDownloadMenuOpen(false);
       }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setDownloadMenuScope(null);
+        setIsDownloadMenuOpen(false);
       }
     };
 
@@ -4004,7 +4251,7 @@ export default function App() {
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [downloadMenuScope]);
+  }, [isDownloadMenuOpen]);
 
   const handleBackToHome = () => {
     visionService.cancelAll('Project closed');
@@ -4449,6 +4696,531 @@ export default function App() {
     return entries[0];
   };
 
+  const resolveLineBBoxForExport = (line: OCRLine): BBox | undefined => {
+    const rawBBox = line?.bbox;
+    const rawValid = rawBBox
+      && Number(rawBBox.x1) > Number(rawBBox.x0)
+      && Number(rawBBox.y1) > Number(rawBBox.y0);
+    if (rawValid) {
+      return {
+        x0: Number(rawBBox.x0),
+        y0: Number(rawBBox.y0),
+        x1: Number(rawBBox.x1),
+        y1: Number(rawBBox.y1),
+      };
+    }
+
+    const validWords = (Array.isArray(line?.words) ? line.words : [])
+      .map((word) => word?.bbox)
+      .filter((bbox): bbox is BBox => Boolean(
+        bbox
+        && Number(bbox.x1) > Number(bbox.x0)
+        && Number(bbox.y1) > Number(bbox.y0)
+      ));
+
+    if (validWords.length === 0) return undefined;
+
+    return {
+      x0: Math.min(...validWords.map((bbox) => Number(bbox.x0))),
+      y0: Math.min(...validWords.map((bbox) => Number(bbox.y0))),
+      x1: Math.max(...validWords.map((bbox) => Number(bbox.x1))),
+      y1: Math.max(...validWords.map((bbox) => Number(bbox.y1))),
+    };
+  };
+
+  const buildTranslatedPageOCRForExport = (
+    pageOCR: OCRPageResult,
+    translatedEntry: OCRTranslationCacheEntry
+  ): OCRPageResult => {
+    const translatedByIndex = new Map<number, string>(
+      translatedEntry.translatedByIndex.map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
+    );
+
+    const translatedLines = (pageOCR.lines || []).map((line, lineIndex) => {
+      const translatedText = translatedByIndex.get(lineIndex) || normalizeWhitespace(String(line.text || ''));
+      const lineBBox = resolveLineBBoxForExport(line);
+      const confidence = Number(line.confidence || pageOCR.confidence || 0);
+      const translatedWords = lineBBox
+        ? [{
+          text: translatedText,
+          confidence,
+          bbox: lineBBox,
+        }]
+        : [];
+
+      return {
+        ...line,
+        text: translatedText,
+        words: translatedWords,
+        bbox: lineBBox || line.bbox,
+      };
+    });
+
+    const translatedWords = translatedLines.flatMap((line) => Array.isArray(line.words) ? line.words : []);
+    const translatedText = translatedLines
+      .map((line) => normalizeWhitespace(String(line.text || '')))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+
+    return {
+      ...pageOCR,
+      lines: translatedLines,
+      words: translatedWords,
+      text: translatedText,
+      confidence: Number(pageOCR.confidence || 0),
+    };
+  };
+
+  const resolveVisibleOverlayExportSize = (pageNum: number): { width: number; height: number } | undefined => {
+    if (typeof document === 'undefined') return undefined;
+
+    const candidate = fileType === 'pdf'
+      ? document.querySelector(`.react-pdf__Page[data-page-number="${pageNum}"] canvas`)
+      : document.querySelector('img[data-export-overlay-image="true"]');
+    if (!(candidate instanceof HTMLElement)) return undefined;
+
+    const rect = candidate.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    if (width <= 1 || height <= 1) return undefined;
+
+    return { width, height };
+  };
+
+  const exportTranslatedOverlayPngForSinglePage = async (
+    pageNum: number,
+    pageOCR: OCRPageResult,
+    translatedEntry: OCRTranslationCacheEntry
+  ): Promise<void> => {
+    if (!file) return;
+
+    const translatedByIndex = new Map<number, string>(
+      translatedEntry.translatedByIndex
+        .filter((item) => Number.isFinite(item.index))
+        .map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
+    );
+    if (translatedByIndex.size === 0) {
+      throw new Error('No translated lines found in cache for current page export.');
+    }
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      throw new Error('Failed to create export canvas context.');
+    }
+
+    const visibleExportSize = resolveVisibleOverlayExportSize(pageNum);
+
+    if (fileType === 'pdf') {
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+      const pdfDoc = await (loadingTask as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
+      const page = await pdfDoc.getPage(pageNum);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const layoutWidth = Math.max(
+        1,
+        visibleExportSize?.width || pageOCR.width || Math.round(baseViewport.width)
+      );
+      const layoutHeight = Math.max(
+        1,
+        visibleExportSize?.height || Math.round(baseViewport.height * (layoutWidth / Math.max(1, baseViewport.width)))
+      );
+      const exportScale = resolveOverlayExportScale(
+        layoutWidth,
+        layoutHeight,
+        Math.round(baseViewport.width),
+        Math.round(baseViewport.height)
+      );
+      const targetWidth = Math.max(1, Math.round(layoutWidth * exportScale));
+      const scale = targetWidth / Math.max(1, baseViewport.width);
+      const viewport = page.getViewport({ scale });
+
+      canvas.width = Math.max(1, Math.round(viewport.width));
+      canvas.height = Math.max(1, Math.round(viewport.height));
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+
+      await (pdfDoc as { destroy?: () => Promise<void> }).destroy?.();
+      (loadingTask as { destroy?: () => void }).destroy?.();
+    } else {
+      const imageBlob = fileData
+        ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
+        : file;
+      const imageBitmap = await createImageBitmap(imageBlob);
+      const layoutWidth = Math.max(1, visibleExportSize?.width || imageBitmap.width);
+      const layoutHeight = Math.max(1, visibleExportSize?.height || imageBitmap.height);
+      const exportScale = resolveOverlayExportScale(
+        layoutWidth,
+        layoutHeight,
+        imageBitmap.width,
+        imageBitmap.height
+      );
+      const targetWidth = Math.max(1, Math.round(layoutWidth * exportScale));
+      const targetHeight = Math.max(1, Math.round(layoutHeight * exportScale));
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+      imageBitmap.close?.();
+    }
+
+    const fontReadyPromise = (typeof document !== 'undefined' && 'fonts' in document)
+      ? (document as Document & { fonts?: FontFaceSet }).fonts?.ready
+      : undefined;
+    if (fontReadyPromise) {
+      await fontReadyPromise.catch(() => undefined);
+    }
+
+    const sourceWidth = Math.max(1, Number(pageOCR.width || canvas.width));
+    const sourceHeight = Math.max(1, Number(pageOCR.height || canvas.height));
+    const scaleX = canvas.width / sourceWidth;
+    const scaleY = canvas.height / sourceHeight;
+
+    const overlayLayoutProfile: OverlayLayoutProfile = translationMode === 'official'
+      ? 'official'
+      : translationMode === 'adaptive'
+        ? 'adaptive'
+        : translationMode === 'manhwa'
+          ? 'manhwa'
+          : 'manga';
+    const preferredOverlayFontFamily = getOverlayFontOption(overlayFontPreset).fontFamily;
+    const overlayFontFamily = resolveOverlayFontFamily({
+      preset: overlayFontPreset,
+      enabled: overlayThaiFontEnabled,
+      targetLanguage,
+    }) || preferredOverlayFontFamily || "'Noto Sans Thai', 'Sarabun', 'Segoe UI', sans-serif";
+    const canvasOverlayFontFamily = await buildCanvasFontFamily(
+      overlayFontFamily,
+      `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
+    );
+
+    const overlayLayoutByIndex = computeOverlayLayoutMap(
+      pageOCR.lines.flatMap((line, index) => {
+        const translatedText = translatedByIndex.get(index);
+        if (!translatedText) return [];
+        if (shouldSkipOverlayRenderForSuspiciousLine(line)) return [];
+
+        const sourceBbox = resolveOverlaySourceBBox(line);
+        const maskBbox = resolveOverlayMaskBBox(line);
+        const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
+        const sourceHeightRaw = Math.max(1, sourceBbox.y1 - sourceBbox.y0);
+        const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
+        const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
+        const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
+        const maskAreaRaw = maskWidthRaw * maskHeightRaw;
+        const widthCoverage = sourceWidthRaw / maskWidthRaw;
+        const areaCoverage = sourceAreaRaw / maskAreaRaw;
+        const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
+          && widthCoverage < 0.84
+          && areaCoverage < 0.86;
+        const effectiveSourceBbox = lowCoverageSource ? maskBbox : sourceBbox;
+        const baseWidth = Math.max(1, (effectiveSourceBbox.x1 - effectiveSourceBbox.x0) * scaleX);
+        const baseHeight = Math.max(1, (effectiveSourceBbox.y1 - effectiveSourceBbox.y0) * scaleY);
+        const expansion = resolveOverlayMaskExpansion(line);
+        const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
+        const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
+        const maskExpandBottom = Math.min(expansion.maxExpandBottom, Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)));
+        const rawLeft = effectiveSourceBbox.x0 * scaleX - maskExpandX;
+        const rawTop = effectiveSourceBbox.y0 * scaleY - maskExpandTop;
+        const rawWidth = baseWidth + maskExpandX * 2;
+        const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
+        const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
+          x0: 0,
+          y0: 0,
+          x1: canvas.width,
+          y1: canvas.height,
+        });
+        const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
+        const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
+
+        return [{
+          index,
+          text: translatedText,
+          width: typographyWidth,
+          height: typographyHeight,
+          bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
+          line,
+          hints: {
+            sourceText: line.text,
+            sourceBoxWidth: baseWidth,
+            sourceBoxHeight: baseHeight,
+            sourceLineCount: 1,
+            fontFamily: canvasOverlayFontFamily,
+            profile: overlayLayoutProfile,
+          },
+        }];
+      }),
+      { profile: overlayLayoutProfile }
+    );
+
+    const translatedLinePalette = new Map<number, { backgroundColor: string; textColor: string }>();
+    const maxSampleSide = 2400;
+    const sampleScale = Math.min(1, maxSampleSide / Math.max(1, canvas.width, canvas.height));
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = Math.max(1, Math.round(canvas.width * sampleScale));
+    sampleCanvas.height = Math.max(1, Math.round(canvas.height * sampleScale));
+    const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+    if (sampleContext) {
+      sampleContext.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      pageOCR.lines.forEach((line, index) => {
+        if (!translatedByIndex.has(index)) return;
+        translatedLinePalette.set(index, sampleOverlayPaletteFromLine(
+          sampleContext,
+          line,
+          sourceWidth,
+          sourceHeight,
+          sampleCanvas.width,
+          sampleCanvas.height
+        ));
+      });
+    }
+
+    pageOCR.lines.forEach((line, index) => {
+      const translatedText = translatedByIndex.get(index);
+      if (!translatedText) return;
+      if (shouldSkipOverlayRenderForSuspiciousLine(line)) return;
+
+      const layout = overlayLayoutByIndex.get(index);
+      const isMaskOnlyLine = Boolean(layout?.hidden);
+      if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
+        return;
+      }
+
+      const renderText = layout?.renderText || translatedText;
+      const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
+      const styleKind = layout?.styleKind;
+      const isDocumentLikeOverlay = styleKind
+        ? styleKind === 'document-heading' || styleKind === 'document-body'
+        : effectiveProfile === 'official';
+      const isComicLikeOverlay = !isDocumentLikeOverlay;
+      const maskBbox = (!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
+      const resolvedSourceBbox = resolveOverlaySourceBBox(line);
+      const sourceWidthRaw = Math.max(1, resolvedSourceBbox.x1 - resolvedSourceBbox.x0);
+      const sourceHeightRaw = Math.max(1, resolvedSourceBbox.y1 - resolvedSourceBbox.y0);
+      const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
+      const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
+      const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
+      const maskAreaRaw = maskWidthRaw * maskHeightRaw;
+      const widthCoverage = sourceWidthRaw / maskWidthRaw;
+      const areaCoverage = sourceAreaRaw / maskAreaRaw;
+      const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
+        && widthCoverage < 0.84
+        && areaCoverage < 0.86;
+      const sourceBbox = isMaskOnlyLine
+        ? resolvedSourceBbox
+        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox));
+
+      const maskRenderSourceLeft = maskBbox.x0;
+      const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
+        ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
+        : sourceBbox.x0;
+      const maskBaseWidth = Math.max(1, (maskBbox.x1 - maskRenderSourceLeft) * scaleX);
+      const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * scaleY);
+      const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * scaleX);
+      const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * scaleY);
+      const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
+      const expansion = resolveOverlayMaskExpansion(line);
+      const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
+      const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
+      const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
+      const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
+      const maskExpandX = Math.min(
+        expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
+        Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
+      );
+      const maskExpandLeft = Math.min(isComicLikeOverlay ? 4 : 1, maskExpandX);
+      const maskExpandRight = maskExpandX;
+      const maskExpandTop = Math.min(
+        expansion.maxExpandTop + mergedMaskBoost + comicMaskBoostTop,
+        Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
+      );
+      const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
+      const documentBottomBoost = isDocumentLikeOverlay
+        ? Math.min(8, Math.max(2, Math.round(maskBaseHeight * 0.16)))
+        : 0;
+      const maskExpandBottom = Math.min(
+        expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
+        Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
+      );
+      const rawMaskLeft = maskRenderSourceLeft * scaleX - maskExpandLeft;
+      const rawMaskTop = maskBbox.y0 * scaleY - maskExpandTop;
+      const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
+      const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
+      const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
+        x0: 0,
+        y0: 0,
+        x1: canvas.width,
+        y1: canvas.height,
+      });
+
+      const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
+      const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
+      const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+      const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
+      const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
+      const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
+      const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+      const rawTextLeft = textSourceLeft * scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
+      const rawTextTop = textSourceTop * scaleY - maskExpandTop - mergedComicTextTopLift;
+      const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
+      const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
+      let textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
+        x0: 0,
+        y0: 0,
+        x1: canvas.width,
+        y1: canvas.height,
+      });
+      if (!isDocumentLikeOverlay) {
+        textRect = clampOverlayRect(textRect.left, textRect.top, textRect.width, textRect.height, {
+          x0: Math.max(0, maskRect.left - 1),
+          y0: Math.max(0, maskRect.top - 1),
+          x1: Math.min(canvas.width, maskRect.left + maskRect.width + 1),
+          y1: Math.min(canvas.height, maskRect.top + maskRect.height + 1),
+        });
+      }
+
+      const palette = translatedLinePalette.get(index) || DEFAULT_OVERLAY_PALETTE;
+      const maskBackgroundColor = palette.backgroundColor;
+      const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
+        ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
+        : 0;
+      const documentTypographyWidth = lowCoverageSource
+        ? Math.max(baseWidth, maskBaseWidth)
+        : Math.max(baseWidth, textRect.width * 0.96);
+      const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
+      const typographyHeight = isDocumentLikeOverlay
+        ? Math.min(
+          textRect.height,
+          Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
+        )
+        : textRect.height;
+      const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
+        sourceText: line.text,
+        sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
+        sourceBoxHeight: isDocumentLikeOverlay
+          ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+          : baseHeight,
+        sourceLineCount: 1,
+        fontFamily: canvasOverlayFontFamily,
+        profile: effectiveProfile,
+        styleKind,
+      });
+      const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
+      const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
+      const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
+      const textStartOffset = layout?.sharedTextStartX !== undefined
+        ? Math.max(0, (layout.sharedTextStartX - renderSourceLeft) * scaleX)
+        : 0;
+      const centerOffset = layout?.sharedCenterX !== undefined
+        ? ((layout.sharedCenterX - renderSourceLeft) * scaleX) - (textRect.width * 0.5)
+        : 0;
+      const innerLeft = layout?.alignment === 'center'
+        ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+        : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
+      const innerWidth = layout?.alignment === 'center'
+        ? textRect.width
+        : Math.max(1, textRect.width - innerLeft);
+      const overlayText = typography.forceSingleLine
+        ? normalizeOverlayInlineText(renderText)
+        : renderText;
+      const rotationDeg = estimateLineRotationDeg(line);
+      const rotationRad = (rotationDeg * Math.PI) / 180;
+      const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+      const minFillRatio = typography.estimatedLines > 1
+        ? (thaiComicLine ? 0.82 : 0.74)
+        : (thaiComicLine ? 0.58 : 0.5);
+      const paintHeight = Math.min(
+        textRect.height,
+        Math.max(
+          typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
+          textRect.height * minFillRatio
+        )
+      );
+      const paintOffsetTop = Math.max(
+        hasThaiText ? 1 : 0,
+        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+      );
+
+      ctx.save();
+      if (rotationDeg !== 0) {
+        ctx.translate(maskRect.left, maskRect.top);
+        ctx.rotate(rotationRad);
+        ctx.fillStyle = maskBackgroundColor;
+        ctx.fillRect(0, 0, maskRect.width, maskRect.height);
+      } else {
+        ctx.fillStyle = maskBackgroundColor;
+        ctx.fillRect(maskRect.left, maskRect.top, maskRect.width, maskRect.height);
+      }
+      ctx.restore();
+
+      if (isMaskOnlyLine) {
+        return;
+      }
+
+      ctx.save();
+      if (rotationDeg !== 0) {
+        ctx.translate(textRect.left, textRect.top);
+        ctx.rotate(rotationRad);
+      }
+
+      const originLeft = rotationDeg !== 0 ? 0 : textRect.left;
+      const originTop = rotationDeg !== 0 ? 0 : textRect.top;
+      const paintLeft = originLeft + innerLeft;
+      const paintTop = originTop + paintOffsetTop;
+
+      ctx.beginPath();
+      ctx.rect(originLeft, originTop, textRect.width, textRect.height);
+      ctx.clip();
+
+      const textBoxLeft = paintLeft + typography.padX;
+      const textBoxTop = paintTop + typography.padY + extraTopPad;
+      const textBoxWidth = Math.max(1, innerWidth - (typography.padX * 2));
+      const textBoxHeight = Math.max(1, paintHeight - ((typography.padY * 2) + extraTopPad + extraBottomPad));
+      const lineHeightPx = Math.max(1, typography.fontSize * typography.lineHeight);
+      const maxLines = Math.max(1, Math.floor(textBoxHeight / lineHeightPx));
+
+      ctx.font = `400 ${typography.fontSize}px ${canvasOverlayFontFamily}`;
+      const lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
+      ctx.fillStyle = palette.textColor;
+      ctx.textBaseline = 'top';
+      ctx.textAlign = layout?.alignment === 'center' ? 'center' : 'left';
+
+      lines.forEach((lineText, lineIndex) => {
+        const y = textBoxTop + (lineIndex * lineHeightPx);
+        if (y + lineHeightPx > textBoxTop + textBoxHeight + 0.5) return;
+        const x = ctx.textAlign === 'center'
+          ? textBoxLeft + (textBoxWidth / 2)
+          : textBoxLeft;
+        ctx.fillText(lineText, x, y, textBoxWidth);
+      });
+
+      ctx.restore();
+    });
+
+    const pngBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to create translated PNG export.'));
+      }, 'image/png');
+    });
+
+    const pngUrl = URL.createObjectURL(pngBlob);
+    const anchor = document.createElement('a');
+    anchor.href = pngUrl;
+    anchor.download = file.name.replace(/\.[^.]+$/u, `_page_${pageNum}_translated_overlay.png`);
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(pngUrl);
+  };
+
   const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode) => {
     if (!file) return;
 
@@ -4486,26 +5258,24 @@ export default function App() {
         URL.revokeObjectURL(url);
       } else {
         const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
-        const translatedSections: string[] = [];
+        const translatedPageMap = new Map<number, OCRPageResult>();
+        const translatedEntryMap = new Map<number, OCRTranslationCacheEntry>();
+        const sourcePageMap = new Map<number, OCRPageResult>();
         let missingPages = 0;
 
         scopedPages.forEach(({ pageNum, ocr }) => {
+          sourcePageMap.set(pageNum, ocr);
           const translatedEntry = resolveTranslatedEntryForExport(pageNum, ocr, selectedEngine);
           if (!translatedEntry) {
             missingPages += 1;
             return;
           }
 
-          const translatedByIndex = new Map<number, string>(
-            translatedEntry.translatedByIndex.map((item) => [item.index, item.text])
-          );
-          const lines = (ocr.lines || [])
-            .map((line, lineIndex) => normalizeWhitespace(String(translatedByIndex.get(lineIndex) || '')))
-            .filter(Boolean);
-          translatedSections.push(`--- Page ${pageNum} ---\n${lines.join('\n')}`);
+          translatedEntryMap.set(pageNum, translatedEntry);
+          translatedPageMap.set(pageNum, buildTranslatedPageOCRForExport(ocr, translatedEntry));
         });
 
-        if (translatedSections.length === 0) {
+        if (translatedPageMap.size === 0) {
           setTranslationStatus({
             kind: 'error',
             message: 'No translated cache found for selected OCR model and target language. Run translation first.',
@@ -4513,30 +5283,52 @@ export default function App() {
           return;
         }
 
+        if (scope === 'current') {
+          const currentSourcePage = sourcePageMap.get(currentPage);
+          const currentEntry = translatedEntryMap.get(currentPage);
+          if (currentSourcePage && currentEntry) {
+            await exportTranslatedOverlayPngForSinglePage(currentPage, currentSourcePage, currentEntry);
+          }
+        }
+
+        if (scope === 'all' && fileType === 'pdf') {
+          const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
+          const arrayBuffer = await file.arrayBuffer();
+          const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
+            arrayBuffer,
+            translatedPageMap,
+            pageRange
+          );
+          const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          const suffix = '_translated_searchable.pdf';
+          anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+          URL.revokeObjectURL(url);
+        }
+
         if (missingPages > 0) {
           setTranslationStatus({
             kind: 'info',
-            message: `Exported translated text for ${translatedSections.length} pages; ${missingPages} pages had no matching translated cache.`,
+            message: `Exported translated overlay for ${translatedPageMap.size} pages; ${missingPages} pages had no matching translated cache.`,
+          });
+        } else if (scope === 'current') {
+          setTranslationStatus({
+            kind: 'success',
+            message: `Exported page ${currentPage} translated overlay PNG.`,
+          });
+        } else {
+          setTranslationStatus({
+            kind: 'success',
+            message: `Exported translated searchable PDF for ${translatedPageMap.size} pages.`,
           });
         }
-
-        const payload = translatedSections.join('\n\n');
-
-        const textBlob = new Blob([payload], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(textBlob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        const suffix = scope === 'current'
-          ? `_page_${currentPage}_translated.txt`
-          : '_translated_all_pages.txt';
-        anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
-        document.body.appendChild(anchor);
-        anchor.click();
-        document.body.removeChild(anchor);
-        URL.revokeObjectURL(url);
       }
 
-      setDownloadMenuScope(null);
+      setIsDownloadMenuOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown download error';
       setTranslationStatus({ kind: 'error', message: `Download failed: ${message}` });
@@ -5515,6 +6307,46 @@ export default function App() {
         ? 'text-[#F472B6]'
         : 'text-[#60A5FA]';
 
+  const effectiveDownloadScope: DownloadScope = downloadScopeSelection === 'all' && fileType === 'pdf'
+    ? 'all'
+    : 'current';
+  const selectedDownloadEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+  const downloadScopedPages = resolveModelScopedPagesForExport(effectiveDownloadScope);
+  const downloadScopePageNumbers = effectiveDownloadScope === 'all' && fileType === 'pdf'
+    ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
+    : [currentPage];
+  const ocrCoveredPageNumbers = downloadScopedPages
+    .map((item) => item.pageNum)
+    .sort((a, b) => a - b);
+  const ocrCoveredPageSet = new Set(ocrCoveredPageNumbers);
+  const missingOcrPageNumbers = downloadScopePageNumbers.filter((pageNum) => !ocrCoveredPageSet.has(pageNum));
+  const translatedAvailablePageNumbers = downloadScopedPages
+    .filter(({ pageNum, ocr }) => Boolean(resolveTranslatedEntryForExport(pageNum, ocr, selectedDownloadEngine)))
+    .map((item) => item.pageNum)
+    .sort((a, b) => a - b);
+  const translatedAvailablePageSet = new Set(translatedAvailablePageNumbers);
+  const missingTranslatedPageNumbers = ocrCoveredPageNumbers
+    .filter((pageNum) => !translatedAvailablePageSet.has(pageNum));
+  const canExportOriginalSelection = downloadScopedPages.length > 0;
+  const canExportTranslatedSelection = translatedAvailablePageNumbers.length > 0;
+
+  const triggerPopupTranslation = (engine: 'offline' | 'ai') => {
+    if (effectiveDownloadScope === 'all' && fileType === 'pdf') {
+      if (engine === 'offline') {
+        void handleOfflineTranslateAllPages();
+        return;
+      }
+      void handleAiTranslateAllPages();
+      return;
+    }
+
+    if (engine === 'offline') {
+      void handleOfflineTranslate();
+      return;
+    }
+    void handleAiTranslate();
+  };
+
   return (
     <div className="relative flex flex-col h-screen w-screen bg-[#0b0f16] text-slate-100 overflow-hidden font-sans">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -5655,50 +6487,15 @@ export default function App() {
           ))}
         </div>
 
-        <div className="relative" ref={downloadMenuRef}>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setDownloadMenuScope((prev) => (prev === 'current' ? null : 'current'))}
-              className={`p-2 rounded transition-colors ${downloadMenuScope === 'current' ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'}`}
-              title="Download current page"
-              disabled={isDownloadingResult || !file}
-            >
-              <Download size={16} />
-            </button>
-            <button
-              onClick={() => setDownloadMenuScope((prev) => (prev === 'all' ? null : 'all'))}
-              className={`p-2 rounded transition-colors ${downloadMenuScope === 'all' ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'} ${(fileType !== 'pdf' || !file) ? 'opacity-50 cursor-not-allowed' : ''}`}
-              title="Download all pages"
-              disabled={isDownloadingResult || !file || fileType !== 'pdf'}
-            >
-              <Files size={16} />
-            </button>
-          </div>
-
-          {downloadMenuScope && (
-            <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/15 bg-[#0f131b]/95 backdrop-blur-xl shadow-2xl p-2 z-50">
-              <div className="px-2 pt-1 pb-2 text-[11px] uppercase tracking-wide text-slate-400">
-                {downloadMenuScope === 'current' ? `Download page ${currentPage}` : 'Download all pages'}
-              </div>
-              <button
-                onClick={() => void handleHeaderDownload(downloadMenuScope, 'original')}
-                disabled={isDownloadingResult}
-                className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-100 hover:bg-white/10 transition-colors disabled:opacity-60"
-              >
-                Original OCR Result (Searchable PDF)
-              </button>
-              <button
-                onClick={() => void handleHeaderDownload(downloadMenuScope, 'translated')}
-                disabled={isDownloadingResult}
-                className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-100 hover:bg-white/10 transition-colors disabled:opacity-60"
-              >
-                Translated Result (TXT)
-              </button>
-              {isDownloadingResult && (
-                <div className="px-3 pt-2 pb-1 text-xs text-slate-400">Preparing download...</div>
-              )}
-            </div>
-          )}
+        <div className="relative">
+          <button
+            onClick={() => setIsDownloadMenuOpen((prev) => !prev)}
+            className={`p-2 rounded transition-colors ${isDownloadMenuOpen ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'}`}
+            title="Download"
+            disabled={isDownloadingResult || !file}
+          >
+            <Download size={16} />
+          </button>
         </div>
       </header>
 
@@ -5739,6 +6536,138 @@ export default function App() {
           />
         </React.Suspense>
       </div>
+
+      {isDownloadMenuOpen && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/62 backdrop-blur-sm px-4 py-6">
+          <div ref={downloadMenuRef} className="w-full max-w-md rounded-2xl border border-white/15 bg-[#0f131b]/96 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-300">Download Export</div>
+              <button
+                type="button"
+                onClick={() => setIsDownloadMenuOpen(false)}
+                className="rounded-md border border-white/15 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:border-white/30 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-2 p-3">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Scope</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadScopeSelection('current')}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadScopeSelection === 'current' ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
+                >
+                  Current Page
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDownloadScopeSelection('all')}
+                  disabled={fileType !== 'pdf'}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadScopeSelection === 'all' ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'} disabled:cursor-not-allowed disabled:opacity-45`}
+                >
+                  All Pages
+                </button>
+              </div>
+
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Content</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadModeSelection('original')}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadModeSelection === 'original' ? 'border-emerald-300/65 bg-emerald-500/16 text-emerald-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
+                >
+                  Original OCR PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDownloadModeSelection('translated')}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadModeSelection === 'translated' ? 'border-emerald-300/65 bg-emerald-500/16 text-emerald-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
+                >
+                  Translated Overlay
+                </button>
+              </div>
+
+              {downloadModeSelection === 'translated' && (
+                <div className="space-y-2 rounded-lg border border-white/12 bg-slate-900/60 p-2">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Language + Quick Translate</div>
+                  <select
+                    value={targetLanguage}
+                    onChange={(event) => setTargetLanguage(event.target.value)}
+                    aria-label="Download translated target language"
+                    title="Download translated target language"
+                    className="w-full rounded-md border border-white/15 bg-slate-950/80 px-2 py-1.5 text-[11px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                  >
+                    <option value="th">Thai (ไทย)</option>
+                    <option value="en">English</option>
+                    <option value="ja">Japanese (日本語)</option>
+                    <option value="ko">Korean (한국어)</option>
+                    <option value="zh">Chinese (中文)</option>
+                  </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => triggerPopupTranslation('offline')}
+                      disabled={isAiProcessing || isOfflineProcessing}
+                      className="rounded-md border border-emerald-400/55 bg-emerald-500/16 px-2 py-1.5 text-[11px] font-semibold text-emerald-100 transition-colors hover:bg-emerald-500/26 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Translate Offline
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => triggerPopupTranslation('ai')}
+                      disabled={isAiProcessing || isOfflineProcessing}
+                      className="rounded-md border border-cyan-300/65 bg-cyan-500/16 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/26 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Translate AI
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    target {effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'all OCR pages' : `page ${currentPage}`}
+                  </div>
+                </div>
+              )}
+
+              {effectiveDownloadScope === 'all' && fileType === 'pdf' && missingOcrPageNumbers.length > 0 && (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
+                  OCR missing on {missingOcrPageNumbers.length} page(s): {formatPageListSummary(missingOcrPageNumbers)}. Export can continue with OCR pages only.
+                </div>
+              )}
+
+              {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length > 0 && missingTranslatedPageNumbers.length > 0 && (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
+                  Translation cache missing on {missingTranslatedPageNumbers.length} OCR page(s): {formatPageListSummary(missingTranslatedPageNumbers)}. You can translate now or export available pages.
+                </div>
+              )}
+
+              {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length === 0 && (
+                <div className="rounded-lg border border-rose-500/45 bg-rose-500/12 px-2 py-1.5 text-[11px] text-rose-100">
+                  No OCR cache available yet for this scope. Run OCR first.
+                </div>
+              )}
+
+              <div className="rounded-lg border border-white/12 bg-slate-900/55 px-2 py-1.5 text-[10px] text-slate-300">
+                OCR pages in scope: {ocrCoveredPageNumbers.length > 0 ? formatPageListSummary(ocrCoveredPageNumbers) : '-'}
+                {downloadModeSelection === 'translated' && (
+                  <span>{` | translated pages: ${translatedAvailablePageNumbers.length > 0 ? formatPageListSummary(translatedAvailablePageNumbers) : '-'}`}</span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleHeaderDownload(effectiveDownloadScope, downloadModeSelection)}
+                disabled={isDownloadingResult || (downloadModeSelection === 'original' ? !canExportOriginalSelection : !canExportTranslatedSelection)}
+                className="w-full rounded-lg border border-cyan-300/60 bg-cyan-500/18 px-3 py-2 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/28 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isDownloadingResult
+                  ? 'Preparing download...'
+                  : `Export ${effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'All Pages' : `Page ${currentPage}`} • ${downloadModeSelection === 'original' ? 'Original OCR PDF' : 'Translated Overlay'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

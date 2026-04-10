@@ -745,12 +745,12 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     !allowLineFallback
     && meaningfulCharCount >= 4
     && sourceWordCount >= 1
-    && sourceWordCount <= 4
-    && centerOffsetXRatio <= 0.18
-    && centerOffsetYRatio <= 0.2
-    && widthCoverage < 0.56
-    && heightCoverage < 0.42
-    && areaCoverage < 0.32
+    && sourceWordCount <= 5
+    && centerOffsetXRatio <= 0.22
+    && centerOffsetYRatio <= 0.24
+    && widthCoverage < 0.66
+    && heightCoverage < 0.58
+    && areaCoverage < 0.42
   );
 
   if (allowLineFallback && (
@@ -1530,6 +1530,14 @@ const looksTechnicalDocumentSourceLine = (value: string): boolean => {
   return wordCount >= 3 && hasEquationLabel && /[A-Za-z]/.test(normalized);
 };
 
+const looksCompactTechnicalDocumentRow = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(value);
+  if (!normalized) return false;
+  const wordCount = countWords(normalized);
+  if (wordCount === 0 || wordCount > 10) return false;
+  return looksStructuredDocumentSourceLine(normalized) || looksTechnicalDocumentSourceLine(normalized);
+};
+
 const looksHeadingLikeSourceLine = (value: string): boolean => {
   const normalized = normalizeOverlayInlineText(value);
   if (!normalized) return false;
@@ -2220,6 +2228,8 @@ const shouldHarmonizeOverlayBlock = (
   const currentDocumentLike = looksDocumentLikeSourceText(current.hints?.sourceText || current.line?.text || '');
   const previousHeadingLike = looksHeadingLikeSourceLine(previous.hints?.sourceText || previous.line?.text || previous.text);
   const currentHeadingLike = looksHeadingLikeSourceLine(current.hints?.sourceText || current.line?.text || current.text);
+  const previousTechnicalRowLike = looksCompactTechnicalDocumentRow(previous.hints?.sourceText || previous.line?.text || previous.text);
+  const currentTechnicalRowLike = looksCompactTechnicalDocumentRow(current.hints?.sourceText || current.line?.text || current.text);
   const documentLikePair = (previousDocumentLike || previousHeadingLike) && (currentDocumentLike || currentHeadingLike);
   const effectiveDocumentProfile = isDocumentProfile || (profile === 'adaptive' && documentLikePair);
   const centeredStackContinuity = overlapRatio >= 0.08 || leftDelta <= Math.max(12, avgHeight * 0.92);
@@ -2239,6 +2249,15 @@ const shouldHarmonizeOverlayBlock = (
   }
   if (effectiveDocumentProfile && previousHeadingLike !== currentHeadingLike) {
     return false;
+  }
+  if (effectiveDocumentProfile && !bothParagraphLike && (previousTechnicalRowLike || currentTechnicalRowLike)) {
+    return (
+      heightRatio <= 1.18
+      && verticalGap >= -avgHeight * 0.12
+      && verticalGap <= Math.max(12, avgHeight * 0.42)
+      && (overlapRatio >= 0.5 || leftDelta <= Math.max(10, avgHeight * 0.66))
+      && centerDelta <= Math.max(14, avgHeight * 0.82)
+    );
   }
 
   if (!effectiveDocumentProfile) {
@@ -2479,10 +2498,10 @@ const suppressOverlappingOverlayBorders = (
         )
       );
 
-      if (documentAnchorMatch) {
-        const textSimilarity = (existing.textKey && candidate.textKey)
-          ? overlayKeyDiceSimilarity(existing.textKey, candidate.textKey)
-          : 0;
+    if (documentAnchorMatch) {
+      const textSimilarity = (existing.textKey && candidate.textKey)
+        ? overlayKeyDiceSimilarity(existing.textKey, candidate.textKey)
+        : 0;
         const sourceSimilarity = (existingSourceKey && candidateSourceKey)
           ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey)
           : 0;
@@ -2494,6 +2513,19 @@ const suppressOverlappingOverlayBorders = (
         ) {
           return true;
         }
+      }
+    }
+
+    if (!documentLikePair) {
+      const textSimilarity = (existing.textKey && candidate.textKey)
+        ? overlayKeyDiceSimilarity(existing.textKey, candidate.textKey)
+        : 0;
+      const sourceSimilarity = (existingSourceKey && candidateSourceKey)
+        ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey)
+        : 0;
+      const verticallyDistinctStack = centerDeltaY > Math.max(22, minHeight * 1.05);
+      if (verticallyDistinctStack && iou < 0.58 && textSimilarity < 0.76 && sourceSimilarity < 0.72) {
+        return false;
       }
     }
 

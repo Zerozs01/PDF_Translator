@@ -36,7 +36,7 @@ export interface OCRTranslationCacheEntry {
   createdAt: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v26';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v27';
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
@@ -109,6 +109,10 @@ interface OCRTextLayerState {
   getActiveTranslationCacheKey: (pageNum: number) => string | undefined;
   clearTranslationCache: (pageNum?: number) => void;
   clearTranslationCacheForEngine: (pageNum: number, engine: OCREngine) => void;
+
+  // OCR result search (shared with document overlays)
+  ocrResultSearchQuery: string;
+  setOcrResultSearchQuery: (query: string) => void;
 
   // Actions
   reset: () => void;
@@ -234,6 +238,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     translationCacheByPage: new Map(),
     activeTranslationKeyByPage: new Map(),
     translationPreviewMode: 'translated',
+    ocrResultSearchQuery: '',
   }),
 
   // Current page OCR (for preview)
@@ -332,6 +337,10 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     };
   }),
 
+  // OCR result search
+  ocrResultSearchQuery: '',
+  setOcrResultSearchQuery: (query) => set({ ocrResultSearchQuery: String(query || '') }),
+
   // Actions
   reset: () => set({
     isProcessing: false,
@@ -344,5 +353,6 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     translationPreviewMode: 'translated',
     translationCacheByPage: new Map(),
     activeTranslationKeyByPage: new Map(),
+    ocrResultSearchQuery: '',
   }),
 }));

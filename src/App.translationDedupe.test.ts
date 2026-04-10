@@ -1069,6 +1069,21 @@ describe('shouldUseLineByLineGrouping', () => {
     const shouldLineByLine = shouldUseLineByLineGrouping(lines, 'en', 'th', 'offline', 'manga');
     expect(shouldLineByLine).toBe(true);
   });
+
+  test('enables line-by-line mode for compact technical row pages in official mode', () => {
+    const lines = [
+      makeLine({ index: 0, text: 'TABLE 5-1 Continued', sourceLength: 18, top: 20, bottom: 40, left: 40, right: 240, height: 20 }),
+      makeLine({ index: 1, text: 'Number of unknowns', sourceLength: 18, top: 44, bottom: 64, left: 40, right: 250, height: 20 }),
+      makeLine({ index: 2, text: 'REACTION', sourceLength: 8, top: 68, bottom: 88, left: 40, right: 170, height: 20 }),
+      makeLine({ index: 3, text: 'Three unknowns.', sourceLength: 15, top: 92, bottom: 112, left: 320, right: 490, height: 20 }),
+      makeLine({ index: 4, text: 'fixed support', sourceLength: 12, top: 116, bottom: 136, left: 320, right: 470, height: 20 }),
+      makeLine({ index: 5, text: 'The reactions are the couple moment.', sourceLength: 34, top: 140, bottom: 160, left: 320, right: 690, height: 20 }),
+      makeLine({ index: 6, text: 'reactions in the x direction and in the y direction are two components.', sourceLength: 66, top: 164, bottom: 184, left: 320, right: 860, height: 20 }),
+    ];
+
+    const shouldLineByLine = shouldUseLineByLineGrouping(lines, 'en', 'th', 'offline', 'official');
+    expect(shouldLineByLine).toBe(true);
+  });
 });
 
 describe('source language inference', () => {

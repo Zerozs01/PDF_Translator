@@ -16,6 +16,9 @@ import {
   OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
 } from './ocr-timeout';
 
+const EXTERNAL_TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
+const EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX = /\b(?:table|continued|types?\s+of\s+connection|number\s+of\s+unknowns|reactions?|unknowns?|components?|couple\s+moment|magnitude|direction|resultant|smooth\s+pin|hinge|fixed\s+support|collar|rod|member\s+fixed|bridge|building|beam|welded|column)\b|^\(?\d+\)?$|^(?:fx|fy|fyt|f|m|or)$/i;
+
 type WorkerMessage = {
   type: string;
   payload?: unknown;
@@ -796,6 +799,14 @@ class VisionService {
     const centerDeltaX = Math.abs(bboxCenterX(existing.bbox) - bboxCenterX(candidate.bbox));
     const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(candidate.bbox)));
     const minWidth = Math.max(24, Math.min(bboxWidth(existing.bbox), bboxWidth(candidate.bbox)));
+    const existingRawText = String(existing.text || '').replace(/\s+/g, ' ').trim();
+    const candidateRawText = String(candidate.text || '').replace(/\s+/g, ' ').trim();
+    const technicalRowLikePair = (
+      EXTERNAL_TECHNICAL_LINE_HINT_REGEX.test(existingRawText)
+      || EXTERNAL_TECHNICAL_LINE_HINT_REGEX.test(candidateRawText)
+      || EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX.test(existingRawText)
+      || EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX.test(candidateRawText)
+    );
 
     if (centerDeltaY > Math.max(84, minHeight * 2.8)) return false;
     if (centerDeltaX > Math.max(120, minWidth * 2.6)) return false;
@@ -824,6 +835,19 @@ class VisionService {
     const sameOrSubset = existingToken === candidateToken
       || (minLength >= 4 && (existingToken.includes(candidateToken) || candidateToken.includes(existingToken)));
     if (sameOrSubset) {
+      return true;
+    }
+
+    if (
+      technicalRowLikePair
+      && minLength >= 8
+      && (existingToken.slice(0, Math.min(8, existingToken.length)) === candidateToken.slice(0, Math.min(8, candidateToken.length))
+        || existingToken.slice(-Math.min(8, existingToken.length)) === candidateToken.slice(-Math.min(8, candidateToken.length)))
+      && overlapX >= 0.72
+      && centerDeltaX <= Math.max(72, minWidth * 0.95)
+      && centerDeltaY <= Math.max(124, minHeight * 4.8)
+      && (overlapY >= 0.08 || iou >= 0.08)
+    ) {
       return true;
     }
 

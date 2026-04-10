@@ -1480,6 +1480,54 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(0)?.hidden).not.toBe(true);
     expect(layoutMap.get(1)?.hidden).not.toBe(true);
   });
+
+  test('keeps vertically stacked comic overlays when texts differ despite mask overlap', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เราพลาดโอกาสที่จะเข้าร่วม',
+        width: 168,
+        height: 32,
+        bbox: { x0: 180, y0: 420, x1: 348, y1: 452 },
+        line: {
+          text: 'OUR CHANCE',
+          confidence: 95,
+          bbox: { x0: 180, y0: 420, x1: 348, y1: 452 },
+          words: [{ text: 'OUR', confidence: 95, bbox: { x0: 192, y0: 422, x1: 232, y1: 452 } }],
+        },
+        hints: {
+          sourceText: 'OUR CHANCE',
+          sourceBoxWidth: 168,
+          sourceBoxHeight: 32,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'พวกเขา',
+        width: 170,
+        height: 32,
+        bbox: { x0: 182, y0: 458, x1: 352, y1: 490 },
+        line: {
+          text: 'THEM.',
+          confidence: 95,
+          bbox: { x0: 182, y0: 458, x1: 352, y1: 490 },
+          words: [{ text: 'THEM.', confidence: 95, bbox: { x0: 220, y0: 462, x1: 278, y1: 488 } }],
+        },
+        hints: {
+          sourceText: 'THEM.',
+          sourceBoxWidth: 170,
+          sourceBoxHeight: 32,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
 });
 
 describe('resolveTranslationOverlayContext duplicate collapse', () => {
@@ -1520,7 +1568,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v27|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1594,7 +1642,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v27|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1666,7 +1714,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v27|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1738,7 +1786,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const cacheKey = 'ver:v27|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1803,7 +1851,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v26|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v27|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
