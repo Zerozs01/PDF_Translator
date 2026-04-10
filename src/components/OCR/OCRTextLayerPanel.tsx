@@ -3106,7 +3106,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       && engine === 'paddleocr'
       && hasKoreanOcrLanguage(options.language);
 
-    // PaddleOCR: no minWidth — handles low resolution well, speed is priority
+    // PaddleOCR: let the detector work on a moderate panel render budget.
+    // The Python bridge already applies profile-aware det limits, so sending
+    // 16-30MP renders here mostly burns renderer/pdf.js time without improving recall.
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
         return {
@@ -3137,13 +3139,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
       return {
         maxSide: 16000,
-        maxPixels: 16_000_000,
+        maxPixels: 8_400_000,
         minWidth: null,
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
-          boostedMaxSide: 20000,
-          boostedMaxPixels: 30_000_000,
+          boostedMaxSide: 18000,
+          boostedMaxPixels: 11_200_000,
         },
       };
     }
@@ -3560,7 +3562,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
       const aspectRatio = longest / shortest;
       const pixelCount = imageWidth * imageHeight;
-      return aspectRatio <= 1.95 && pixelCount >= 6_400_000;
+      return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
     })();
 
     let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'

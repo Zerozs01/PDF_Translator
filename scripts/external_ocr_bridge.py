@@ -1556,6 +1556,156 @@ def prune_easyocr_panel_shadow_singletons(
     return kept, drops
 
 
+def count_line_word_boxes(line: Dict[str, Any]) -> int:
+    words = line.get("words") or []
+    valid_words = [word for word in words if normalize_text(str(word.get("text") or ""))]
+    if valid_words:
+        return len(valid_words)
+    return len(split_text_tokens(str(line.get("text") or "")))
+
+
+def prune_paddle_panel_contextual_noise_lines(
+    lines: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    language_codes: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 1 or is_cjk_or_thai_language_codes(language_codes):
+        return list(lines), []
+
+    drops: List[Dict[str, Any]] = []
+    kept: List[Dict[str, Any]] = []
+
+    for line in lines:
+        text = normalize_text(str(line.get("text") or ""))
+        if not text:
+            continue
+
+        bbox = line.get("bbox") or {}
+        line_w = max(1.0, bbox_width(bbox))
+        line_h = max(1.0, bbox_height(bbox))
+        line_area = line_w * line_h
+        center_x = bbox_center_x(bbox)
+        center_y = bbox_center_y(bbox)
+        compact_length = len(re.sub(r"\s+", "", text))
+        token_count = len(split_text_tokens(text))
+        word_box_count = count_line_word_boxes(line)
+
+        def collect_local_neighbors() -> List[Dict[str, Any]]:
+            neighbors: List[Dict[str, Any]] = []
+            for other in lines:
+                if other is line:
+                    continue
+                other_text = normalize_text(str(other.get("text") or ""))
+                if not other_text:
+                    continue
+                other_bbox = other.get("bbox") or {}
+                other_w = max(1.0, bbox_width(other_bbox))
+                other_h = max(1.0, bbox_height(other_bbox))
+                overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+                overlap_y = vertical_overlap_ratio(bbox, other_bbox)
+                other_center_x = bbox_center_x(other_bbox)
+                other_center_y = bbox_center_y(other_bbox)
+                token_count_other = len(split_text_tokens(other_text))
+                word_boxes_other = count_line_word_boxes(other)
+                strong_signal = (
+                    word_boxes_other >= 2
+                    or token_count_other >= 2
+                    or normalize_confidence(other.get("confidence", 0.0)) >= normalize_confidence(line.get("confidence", 0.0)) + 2.0
+                )
+                neighbors.append({
+                    "line": other,
+                    "text": other_text,
+                    "bbox": other_bbox,
+                    "width": other_w,
+                    "height": other_h,
+                    "overlapX": overlap_x,
+                    "overlapY": overlap_y,
+                    "centerDeltaX": abs(center_x - other_center_x),
+                    "centerDeltaY": abs(center_y - other_center_y),
+                    "centerY": other_center_y,
+                    "strongSignal": strong_signal,
+                })
+            return neighbors
+
+        neighbors = collect_local_neighbors()
+
+        if (
+            not has_non_latin_characters(text)
+            and 4 <= token_count <= 8
+            and word_box_count >= 3
+            and line_w >= max(840.0, width * 0.24)
+        ):
+            same_band_neighbors = [
+                neighbor for neighbor in neighbors
+                if neighbor["overlapY"] >= 0.18 or neighbor["centerDeltaY"] <= max(96.0, line_h * 0.95)
+            ]
+            left_anchors = [
+                neighbor for neighbor in same_band_neighbors
+                if neighbor["strongSignal"]
+                and neighbor["width"] <= line_w * 0.46
+                and float(neighbor["bbox"].get("x1", 0.0)) <= center_x - max(84.0, line_w * 0.08)
+            ]
+            right_anchors = [
+                neighbor for neighbor in same_band_neighbors
+                if neighbor["strongSignal"]
+                and neighbor["width"] <= line_w * 0.46
+                and float(neighbor["bbox"].get("x0", 0.0)) >= center_x + max(84.0, line_w * 0.08)
+            ]
+            bridge_detected = any(
+                abs(left_anchor["centerY"] - right_anchor["centerY"]) <= max(104.0, line_h * 0.9)
+                and (float(right_anchor["bbox"].get("x0", 0.0)) - float(left_anchor["bbox"].get("x1", 0.0))) >= max(240.0, line_w * 0.18)
+                for left_anchor in left_anchors
+                for right_anchor in right_anchors
+            )
+            if bridge_detected:
+                drops.append({
+                    "reason": "paddlePanelBridgeLine",
+                    "source": "paddle_panel",
+                    "text": text,
+                    "confidence": normalize_confidence(line.get("confidence", 0.0)),
+                })
+                continue
+
+        if not has_non_latin_characters(text) and token_count <= 3 and compact_length <= 16:
+            local_strong_neighbors = [
+                neighbor for neighbor in neighbors
+                if neighbor["strongSignal"]
+                and neighbor["centerDeltaY"] <= max(220.0, line_h * 2.4)
+                and (
+                    neighbor["overlapX"] >= 0.28
+                    or neighbor["centerDeltaX"] <= max(220.0, line_w * 1.35)
+                )
+            ]
+            strong_above = any(neighbor["centerY"] < center_y - max(16.0, line_h * 0.18) for neighbor in local_strong_neighbors)
+            strong_below = any(neighbor["centerY"] > center_y + max(16.0, line_h * 0.18) for neighbor in local_strong_neighbors)
+
+            trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14
+            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text))
+            oversized_weak_singleton = (
+                token_count <= 1
+                and compact_length <= 12
+                and word_box_count <= 1
+                and line_area >= 22000.0
+            )
+
+            if (
+                (strong_below and (trailing_hyphen_fragment or malformed_mixed_case))
+                or (strong_above and strong_below and oversized_weak_singleton)
+            ):
+                drops.append({
+                    "reason": "paddlePanelFragmentLine",
+                    "source": "paddle_panel",
+                    "text": text,
+                    "confidence": normalize_confidence(line.get("confidence", 0.0)),
+                })
+                continue
+
+        kept.append(line)
+
+    return kept, drops
+
+
 def reorder_tilted_line_clusters(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if len(lines) <= 1:
         return list(lines)
@@ -1620,9 +1770,12 @@ def minimal_cleanup_external_result(
         "inlineAdWord": 0,
         "watermarkLine": 0,
         "mergedLatinSplit": 0,
+        "contextualBridgeLine": 0,
+        "contextualFragmentLine": 0,
     }
     dropped_words: List[Dict[str, Any]] = []
     is_non_english_latin_panel = pipeline_profile == "panel" and is_non_english_latin_language_codes(language_codes)
+    is_latin_panel = pipeline_profile == "panel" and not is_cjk_or_thai_language_codes(language_codes)
 
     for source_index, line in enumerate(result.get("lines", []) or []):
         text = normalize_text(str(line.get("text") or ""))
@@ -1689,6 +1842,15 @@ def minimal_cleanup_external_result(
     else:
         lines = reorder_tilted_line_clusters(lines)
         lines = merge_near_duplicate_lines(lines)
+    if is_latin_panel:
+        lines, contextual_drops = prune_paddle_panel_contextual_noise_lines(lines, width, height, language_codes)
+        for drop in contextual_drops:
+            reason = str(drop.get("reason") or "")
+            if reason == "paddlePanelBridgeLine":
+                drop_counts["contextualBridgeLine"] = drop_counts.get("contextualBridgeLine", 0) + 1
+            elif reason == "paddlePanelFragmentLine":
+                drop_counts["contextualFragmentLine"] = drop_counts.get("contextualFragmentLine", 0) + 1
+        dropped_words.extend(contextual_drops)
     words = []
     for line in lines:
         words.extend(line.get("words") or [])
