@@ -41,6 +41,12 @@ const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
   return technicalLike || numericDocumentLike || thaiDocumentLike;
 };
 
+const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
+  const source = normalizeOverlayInlineText(String(sourceText || ''));
+  const translated = normalizeOverlayInlineText(String(translatedText || ''));
+  return Boolean(source && translated && source === translated);
+};
+
 const clampOverlayTypographyScale = (value: number): number => {
   if (!Number.isFinite(value)) return 1;
   if (value < 0.7) return 0.7;
@@ -261,7 +267,7 @@ export const PDFCanvas: React.FC = () => {
       currentPageOCR.lines.flatMap((line, index) => {
         const translatedText = translationOverlayContext.translatedByIndex.get(index);
         if (!translatedText) return [];
-        if (shouldSkipOverlayRenderForSuspiciousLine(line)) return [];
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return [];
 
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
@@ -363,6 +369,8 @@ export const PDFCanvas: React.FC = () => {
     const next = new Map<number, { backgroundColor: string; textColor: string }>();
     currentPageOCR.lines.forEach((line, index) => {
       if (!translationOverlayContext.translatedByIndex.has(index)) return;
+      const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
+      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
       next.set(index, sampleOverlayPaletteFromLine(
         context,
         line,
@@ -688,6 +696,9 @@ export const PDFCanvas: React.FC = () => {
                     {currentPageOCR.lines.map((line, idx) => {
                       const translatedText = translationOverlayContext.translatedByIndex.get(idx);
                       if (!translatedText) return null;
+                      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
+                        return null;
+                      }
 
                       const layout = overlayLayoutByIndex.get(idx);
                       const isMaskOnlyLine = Boolean(layout?.hidden);

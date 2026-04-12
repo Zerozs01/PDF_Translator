@@ -38,6 +38,11 @@ let applyThaiConversationalGlossary: (
   translatedText: string,
   targetLanguage: string
 ) => string;
+let applyThaiTechnicalGlossary: (
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string
+) => string;
 let resolveRedistributedLineFallback: (
   sourceLineText: string,
   groupText: string,
@@ -112,6 +117,7 @@ beforeAll(async () => {
   buildTranslationGroups = appModule.buildTranslationGroups;
   shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
   applyThaiConversationalGlossary = appModule.applyThaiConversationalGlossary;
+  applyThaiTechnicalGlossary = appModule.applyThaiTechnicalGlossary;
   resolveRedistributedLineFallback = appModule.resolveRedistributedLineFallback;
   shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
   normalizeSpanishOcrNoiseForTranslation = appModule.normalizeSpanishOcrNoiseForTranslation;
@@ -203,6 +209,83 @@ describe('dedupeTranslatableLinesForTranslation', () => {
 
     expect(deduped).toHaveLength(1);
     expect(deduped[0].text).toBe('ARE YOU');
+  });
+
+  test('dedupes same-box noisy phrase variants and keeps the clearer reading', () => {
+    const noisyVariant = makeLine({
+      index: 36,
+      text: 'AEs DEal HER',
+      sourceLength: 11,
+      top: 442,
+      bottom: 474,
+      left: 310,
+      right: 528,
+      height: 32,
+      area: 218 * 32,
+      wordCoverage: 0.74,
+      wordBoxCount: 3,
+      confidence: 94,
+    });
+
+    const clearerVariant = makeLine({
+      index: 37,
+      text: 'A BIG DEAL TO HER',
+      sourceLength: 17,
+      top: 444,
+      bottom: 476,
+      left: 306,
+      right: 536,
+      height: 32,
+      area: 230 * 32,
+      wordCoverage: 0.82,
+      wordBoxCount: 5,
+      confidence: 90,
+    });
+
+    const deduped = dedupeTranslatableLinesForTranslation([noisyVariant, clearerVariant]);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].text).toBe('A BIG DEAL TO HER');
+  });
+
+  test('keeps the cleaner duplicate geometry while restoring missing I THINK text', () => {
+    const richMislocalized = makeLine({
+      index: 34,
+      text: 'ITHINK.',
+      sourceLength: 7,
+      top: 100,
+      bottom: 148,
+      left: 84,
+      right: 284,
+      height: 48,
+      area: 200 * 48,
+      wordCoverage: 0.18,
+      wordBoxCount: 1,
+      confidence: 92,
+    });
+
+    const cleanerLocalized = makeLine({
+      index: 35,
+      text: 'THINK',
+      sourceLength: 5,
+      top: 112,
+      bottom: 140,
+      left: 128,
+      right: 226,
+      height: 28,
+      area: 98 * 28,
+      wordCoverage: 0.78,
+      wordBoxCount: 1,
+      confidence: 89,
+    });
+
+    const deduped = dedupeTranslatableLinesForTranslation([richMislocalized, cleanerLocalized]);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].text).toBe('I THINK.');
+    expect(deduped[0].index).toBe(35);
+    expect(deduped[0].left).toBe(128);
+    expect(deduped[0].right).toBe(226);
   });
 
   test('keeps repeated long document lines when they are far enough apart vertically', () => {
@@ -426,6 +509,34 @@ describe('isLikelyGhostTranslatableLine', () => {
     expect(isLikelyGhostTranslatableLine(compressedPhraseGhost, 'WHY IS THIS')).toBe(true);
   });
 
+  test('keeps known hyphenated aside dialogue even when confidence is low', () => {
+    const asideLine = makeOcrLine({
+      text: 'you-could say',
+      confidence: 78,
+      bbox: { x0: 304, y0: 348, x1: 494, y1: 380 },
+      words: [
+        { text: 'you-could', confidence: 78, bbox: { x0: 312, y0: 350, x1: 410, y1: 378 } },
+        { text: 'say', confidence: 79, bbox: { x0: 420, y0: 350, x1: 486, y1: 378 } },
+      ],
+    });
+
+    expect(isLikelyGhostTranslatableLine(asideLine, 'you-could say')).toBe(false);
+  });
+
+  test('keeps short ah me manga dialogue instead of treating it as an effect', () => {
+    const ahMeLine = makeOcrLine({
+      text: 'AH ME!!',
+      confidence: 82,
+      bbox: { x0: 88, y0: 42, x1: 198, y1: 92 },
+      words: [
+        { text: 'AH', confidence: 82, bbox: { x0: 94, y0: 48, x1: 130, y1: 86 } },
+        { text: 'ME!!', confidence: 81, bbox: { x0: 138, y0: 48, x1: 190, y1: 86 } },
+      ],
+    });
+
+    expect(isLikelyGhostTranslatableLine(ahMeLine, 'AH ME!!')).toBe(false);
+  });
+
   test('flags wider stylized Hangul SFX blobs as ghost lines', () => {
     const stylizedSfxLine = makeOcrLine({
       text: '슬금',
@@ -575,6 +686,105 @@ describe('shouldPruneContextualGhostTranslatableLine', () => {
     expect(shouldPruneContextualGhostTranslatableLine(lines[2], lines)).toBe(true);
     expect(shouldPruneContextualGhostTranslatableLine(lines[1], lines)).toBe(false);
     expect(shouldPruneContextualGhostTranslatableLine(lines[3], lines)).toBe(false);
+  });
+
+  test('keeps known aside dialogue fragments inside local stacks', () => {
+    const lines = [
+      makeLine({
+        index: 30,
+        text: 'you-could say',
+        sourceLength: 13,
+        left: 304,
+        right: 494,
+        top: 348,
+        bottom: 380,
+        height: 32,
+        area: 190 * 32,
+        wordCoverage: 0.86,
+        wordBoxCount: 2,
+        confidence: 78,
+      }),
+      makeLine({
+        index: 31,
+        text: 'SO ME THING that might',
+        sourceLength: 22,
+        left: 258,
+        right: 548,
+        top: 390,
+        bottom: 424,
+        height: 34,
+        area: 290 * 34,
+        wordCoverage: 0.9,
+        wordBoxCount: 5,
+        confidence: 82,
+      }),
+      makeLine({
+        index: 32,
+        text: 'help you too.',
+        sourceLength: 13,
+        left: 314,
+        right: 524,
+        top: 432,
+        bottom: 464,
+        height: 32,
+        area: 210 * 32,
+        wordCoverage: 0.88,
+        wordBoxCount: 3,
+        confidence: 84,
+      }),
+    ];
+
+    expect(shouldPruneContextualGhostTranslatableLine(lines[0], lines)).toBe(false);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[1], lines)).toBe(false);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[2], lines)).toBe(false);
+  });
+
+  test('keeps known manga navigation fragments inside local stacks', () => {
+    const lines = [
+      makeLine({
+        index: 40,
+        text: 'BUT THERE',
+        sourceLength: 8,
+        left: 354,
+        right: 704,
+        top: 2217,
+        bottom: 2295,
+        height: 78,
+        area: 350 * 78,
+        wordCoverage: 0.9,
+        wordBoxCount: 2,
+      }),
+      makeLine({
+        index: 41,
+        text: 'ARE ONLY',
+        sourceLength: 8,
+        left: 369,
+        right: 693,
+        top: 2292,
+        bottom: 2385,
+        height: 93,
+        area: 324 * 93,
+        wordCoverage: 0.9,
+        wordBoxCount: 2,
+      }),
+      makeLine({
+        index: 42,
+        text: 'ENOUGH KEYS',
+        sourceLength: 10,
+        left: 311,
+        right: 752,
+        top: 2374,
+        bottom: 2463,
+        height: 89,
+        area: 441 * 89,
+        wordCoverage: 0.94,
+        wordBoxCount: 2,
+      }),
+    ];
+
+    expect(shouldPruneContextualGhostTranslatableLine(lines[0], lines)).toBe(false);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[1], lines)).toBe(false);
+    expect(shouldPruneContextualGhostTranslatableLine(lines[2], lines)).toBe(false);
   });
 });
 
@@ -1142,6 +1352,77 @@ describe('applyThaiConversationalGlossary', () => {
     expect(translated).toBe('ฉันจะได้กำไร 40% หากฉันขายมัน.');
   });
 
+  test('maps teammate stronger sentence to stable Thai meaning', () => {
+    const source = "AND IT'S GOOD FOR\nUS IF OUR TeAMMATE\nBECOMES STRONGER.";
+    const translated = applyThaiConversationalGlossary(
+      source,
+      'มันดีสําหรับพวก เรานะถ้าคู่สมรสของ เรากลายเป็นอุปสรรค',
+      'th'
+    );
+
+    expect(translated).toBe('และมันก็ดีสำหรับเราด้วย หากเพื่อนร่วมทีมของเราแข็งแกร่งขึ้น.');
+  });
+
+  test('repairs teammate stronger sentence when offline output already contains Thai noise', () => {
+    const source = "AND IT'S GOOD FOR US IF OUR TeAMMATE BECOMES STRONGER.";
+    const translated = applyThaiConversationalGlossary(
+      source,
+      'มันดีสำหรับพวกเรานะถ้าเพื่อนร่วมทีมของเรากลายเป็นอุปสรรค',
+      'th'
+    );
+
+    expect(translated).toBe('และมันก็ดีสำหรับเราด้วย หากเพื่อนร่วมทีมของเราแข็งแกร่งขึ้น.');
+  });
+
+  test('maps experiment with her in return sentence to stable Thai meaning', () => {
+    const source = "I'LL LET YOU\nEXPERIMENT WITH\nHER IN RETURN.";
+    const translated = applyThaiConversationalGlossary(
+      source,
+      'ฉันจะปล่อยให้คุณ ทดลองกับ เธอกลับมา',
+      'th'
+    );
+
+    expect(translated).toBe('ฉันจะให้คุณทดลองกับเธอเป็นการตอบแทน.');
+  });
+
+  test('maps monster skills focus sentence while ignoring RIE ghost text', () => {
+    const source = 'THINK ABOUT THE SKILLS THE MONSTER RIE USED EARLIER AND FOCUS.';
+    const translated = applyThaiConversationalGlossary(
+      source,
+      'ลองนึกถึงทักษะที่เจอรี่ใช้ก่อนหน้านี้ดังนั้นสิ่งที่',
+      'th'
+    );
+
+    expect(translated).toBe('ลองนึกถึงทักษะที่สัตว์ประหลาดใช้ก่อนหน้านี้ แล้วจดจ่ออยู่กับมัน.');
+  });
+
+  test('maps you could say something might help sentence despite split OCR words', () => {
+    const source = 'you-could say SO ME THING that might help you too.';
+    const translated = applyThaiConversationalGlossary(
+      source,
+      'you-could say ฉันอาจช่วยให้ คุณมากเกินไป',
+      'th'
+    );
+
+    expect(translated).toBe('คุณอาจพูดได้ว่า มีบางอย่างที่อาจช่วยคุณได้เช่นกัน.');
+  });
+
+  test('repairs teammate and becomes stronger fragments from bad offline Thai output', () => {
+    const teammate = applyThaiConversationalGlossary(
+      'US IF OUR TeAMMATE',
+      'เรานะถ้าคู่สมรสของ',
+      'th'
+    );
+    const stronger = applyThaiConversationalGlossary(
+      'BECOMES STRONGER.',
+      'เรากลายเป็นอุปสรรค',
+      'th'
+    );
+
+    expect(teammate).toBe('เราด้วย หากเพื่อนร่วมทีมของเรา');
+    expect(stronger).toBe('แข็งแกร่งขึ้น.');
+  });
+
   test('maps HER IN RETURN fragment to Thai fallback', () => {
     const source = 'HER IN RETURN.';
     const translated = applyThaiConversationalGlossary(source, 'HER IN RETURN.', 'th');
@@ -1153,8 +1434,32 @@ describe('applyThaiConversationalGlossary', () => {
     const hHow = applyThaiConversationalGlossary('H-HOW?', 'H-HOW?', 'th');
     const uUh = applyThaiConversationalGlossary('U-UH...', 'U-UH...', 'th');
 
-    expect(hHow).toBe('ด-ได้ไง?');
+    expect(hHow).toBe('อ-อย่างไร?');
     expect(uUh).toBe('อ-อา...');
+  });
+
+  test('maps short manga navigation fragments so translated overlay is not skipped as English carry-over', () => {
+    expect(applyThaiConversationalGlossary('AH ME!!', 'AH ME!!', 'th')).toBe('อ๊ะ ฉัน!!');
+    expect(applyThaiConversationalGlossary('ENTRANCE', 'ENTRANCE', 'th')).toBe('ทางเข้า');
+    expect(applyThaiConversationalGlossary('ARE ONLY', 'ARE ONLY', 'th')).toBe('มีเพียง');
+    expect(applyThaiConversationalGlossary('OUR CHANCE', 'OUR CHANCE', 'th')).toBe('โอกาสของเรา');
+    expect(applyThaiConversationalGlossary('THEM.', 'THEM.', 'th')).toBe('พวกเขา.');
+    expect(applyThaiConversationalGlossary('EH ME?!!', 'EH ME?!!', 'th')).toBe('เอ๋ ฉัน?!!');
+    expect(applyThaiConversationalGlossary('ME?!!', 'ME?!!', 'th')).toBe('ฉัน?!!');
+  });
+
+  test('maps latest manga fragments that were previously left as OCR carry-over', () => {
+    expect(applyThaiConversationalGlossary("I DON'T CARE.", "I DON'T CARE.", 'th')).toBe('ฉันไม่สน.');
+    expect(applyThaiConversationalGlossary('I ALREADY EARNED', 'I ALREADY EARNED', 'th')).toBe('ฉันหาได้แล้ว');
+    expect(applyThaiConversationalGlossary('ENOUGH.', 'ENOUGH.', 'th')).toBe('พอแล้ว.');
+    expect(applyThaiConversationalGlossary('LOOK, BJORN!', 'LOOK, BJORN!', 'th')).toBe('ดูสิ บียอร์น!');
+    expect(applyThaiConversationalGlossary('I HAVE WINGS!!', 'I HAVE WINGS!!', 'th')).toBe('ฉันมีปีก!!');
+    expect(applyThaiConversationalGlossary('VALKYRIE', 'VALKYRIE', 'th')).toBe('วาลคีรี');
+    expect(applyThaiConversationalGlossary('A LITTLE, YEAH?', 'A LITTLE, YEAH?', 'th')).toBe('นิดหน่อย ใช่ไหม?');
+    expect(applyThaiConversationalGlossary('HMM?', 'HMM?', 'th')).toBe('อืม?');
+    expect(applyThaiConversationalGlossary('DO YOU', 'DO YOU', 'th')).toBe('คุณต้องการ');
+    expect(applyThaiConversationalGlossary('EARLIER AND', 'EARLIER AND', 'th')).toBe('ก่อนหน้านี้ แล้ว');
+    expect(applyThaiConversationalGlossary('OF COURSE', 'OF COURSE', 'th')).toBe('แน่นอน');
   });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
@@ -1175,6 +1480,41 @@ describe('applyThaiConversationalGlossary', () => {
 
     expect(knowHow).toBe('เขารู้ได้อย่างไร...?!');
     expect(entonces).toBe('งั้น แน่นอน...');
+  });
+});
+
+describe('applyThaiTechnicalGlossary', () => {
+  test('maps short technical document fragments that often stay untranslated offline', () => {
+    expect(applyThaiTechnicalGlossary('Three unknowns.', 'Three unknowns.', 'th')).toBe('ตัวไม่ทราบค่าสามตัว.');
+    expect(applyThaiTechnicalGlossary(
+      'Three unknowns. The reactions are the couple moment',
+      'Three unknowns. The reactions are the couple moment',
+      'th'
+    )).toBe('ตัวไม่ทราบค่าสามตัว แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+    expect(applyThaiTechnicalGlossary('The reactions are the couple moment', 'The reactions are the couple moment', 'th'))
+      .toBe('แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+    expect(applyThaiTechnicalGlossary('the magnitude and direction of the resultant force.', 'the magnitude and direction of the resultant force.', 'th'))
+      .toBe('ขนาดและทิศทางของแรงลัพธ์.');
+    expect(applyThaiTechnicalGlossary(
+      'The floor beams of this building are welded together and thus form fixed connections. (10)',
+      'The floor beams of this building are welded together and thus form fixed connections. (10)',
+      'th'
+    )).toBe('คานพื้นของอาคารนี้เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น (10)');
+    expect(applyThaiTechnicalGlossary(
+      'The floor beams of this building are welded to gether and thus form fixed connections. (10)',
+      'The floor beams of this building are welded to gether and thus form fixed connections. (10)',
+      'th'
+    )).toBe('คานพื้นของอาคารนี้เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น (10)');
+    expect(applyThaiTechnicalGlossary(
+      'to gether and thus form',
+      'to gether and thus form',
+      'th'
+    )).toBe('เชื่อมเข้าด้วยกัน จึงเกิดเป็น');
+    expect(applyThaiTechnicalGlossary(
+      'This utility building is pin supported at the top of the column. (8)',
+      'This utility building is pin supported at the top of the column. (8)',
+      'th'
+    )).toBe('อาคารอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของเสา (8)');
   });
 });
 

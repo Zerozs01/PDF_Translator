@@ -9,6 +9,17 @@ const makeLine = (text: string, x0: number, y0: number, x1: number, y1: number):
   words: [],
 });
 
+const makeLineWithWord = (text: string, x0: number, y0: number, x1: number, y1: number): OCRLine => ({
+  text,
+  confidence: 96,
+  bbox: { x0, y0, x1, y1 },
+  words: [{
+    text,
+    confidence: 96,
+    bbox: { x0, y0, x1, y1 },
+  }],
+});
+
 const createMalformedPaddlePanelResult = (): OCRPageResult => ({
   pageNumber: 6,
   width: 3337,
@@ -102,5 +113,222 @@ describe('VisionService paddle geometry guard', () => {
     ]));
     expect(result.lines.filter((line) => line.text === 'in the direction of the cable. (1)')).toHaveLength(1);
     expect(result.dropped).toHaveLength(1);
+  });
+
+  test('collapses same-box Latin phrase duplicates with noisy OCR variants', () => {
+    const service = visionService as unknown as {
+      collapseResidualSpatialDuplicateExternalLines: (lines: OCRLine[], languageCodes: string[]) => { lines: OCRLine[]; dropped: Array<{ text: string }> };
+    };
+    const lines = [
+      makeLine('AEs DEal HER', 310, 442, 528, 474),
+      makeLine('A BIG DEAL TO HER', 306, 444, 536, 476),
+    ];
+
+    const result = service.collapseResidualSpatialDuplicateExternalLines(lines, ['eng']);
+
+    expect(result.lines.map((line) => line.text)).toEqual(['A BIG DEAL TO HER']);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'AEs DEal HER' }),
+    ]);
+  });
+
+  test('repairs I THINK text from a top-right watermark echo onto the real bubble geometry', () => {
+    const service = visionService as unknown as {
+      repairPaddlePanelDialogueEchoLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLineWithWord('THINK', 92, 54, 214, 94),
+      makeLineWithWord('ITHINK.', 610, 52, 742, 92),
+      makeLineWithWord("IT'S BEST IF", 118, 720, 340, 758),
+    ];
+
+    const result = service.repairPaddlePanelDialogueEchoLines(lines, 800, 1100, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'I THINK.',
+      "IT'S BEST IF",
+    ]);
+    expect(result.lines[0].bbox).toEqual({ x0: 92, y0: 54, x1: 214, y1: 94 });
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'ITHINK.', reason: 'topWatermarkDialogueEcho' }),
+    ]);
+  });
+
+  test('drops isolated narrow tall Latin effect lines from Paddle panel output', () => {
+    const service = visionService as unknown as {
+      prunePaddlePanelTallEffectLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('ON THE', 120, 120, 260, 148),
+      makeLine('BATTLEFIELD,', 118, 154, 320, 182),
+      makeLine('STOP', 560, 340, 640, 505),
+      makeLine('ALL RIGHT,', 122, 190, 300, 218),
+    ];
+
+    const result = service.prunePaddlePanelTallEffectLines(lines, 800, 1100, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'ON THE',
+      'BATTLEFIELD,',
+      'ALL RIGHT,',
+    ]);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'STOP', reason: 'tallEffectLine' }),
+    ]);
+  });
+
+  test('drops isolated wide stylized Latin effect lines from Paddle panel output', () => {
+    const service = visionService as unknown as {
+      prunePaddlePanelTallEffectLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('I WILL LET YOU', 120, 110, 390, 145),
+      makeLine('EXPERIMENT WITH', 118, 152, 410, 187),
+      makeLine('Ooh~', 54, 760, 268, 840),
+      makeLine('HER IN RETURN.', 125, 196, 380, 232),
+    ];
+
+    const result = service.prunePaddlePanelTallEffectLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'I WILL LET YOU',
+      'EXPERIMENT WITH',
+      'HER IN RETURN.',
+    ]);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'Ooh~', reason: 'stylizedEffectLine' }),
+    ]);
+  });
+
+  test('keeps known short dialogue fragments even when they look like stylized effect lines', () => {
+    const service = visionService as unknown as {
+      prunePaddlePanelTallEffectLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('I WILL LET YOU', 120, 110, 390, 145),
+      makeLine('EXPERIMENT WITH', 118, 152, 410, 187),
+      makeLine('HER IN RETURN.', 125, 196, 380, 232),
+      makeLine('AH ME!!', 120, 760, 330, 840),
+      makeLine('Ooh~', 520, 760, 730, 840),
+    ];
+
+    const result = service.prunePaddlePanelTallEffectLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toContain('AH ME!!');
+    expect(result.lines.map((line) => line.text)).not.toContain('Ooh~');
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'Ooh~', reason: 'stylizedEffectLine' }),
+    ]);
+  });
+
+  test('repairs lost short I and IT tokens around SOLD in profit dialogue', () => {
+    const service = visionService as unknown as {
+      repairPaddlePanelContextualDialogueLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('GETTING 40% OF', 330, 210, 640, 246),
+      makeLine('THE PROFITS HAD', 318, 256, 670, 292),
+      makeLine('SOLD', 430, 304, 520, 338),
+      makeLine("I'LL LET YOU", 360, 410, 610, 446),
+    ];
+
+    const result = service.repairPaddlePanelContextualDialogueLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'GETTING 40% OF',
+      'THE PROFITS HAD',
+      'I SOLD IT.',
+      "I'LL LET YOU",
+    ]);
+    expect(result.dropped).toEqual([]);
+  });
+
+  test('drops RIE ghost line inside monster skills focus dialogue', () => {
+    const service = visionService as unknown as {
+      repairPaddlePanelContextualDialogueLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('THINK ABOUT THE', 120, 120, 420, 154),
+      makeLine('SKILLS THE MONSTER', 122, 164, 482, 198),
+      makeLine('RIE', 260, 205, 312, 232),
+      makeLine('USED EARLIER AND', 124, 244, 460, 278),
+      makeLine('FOCUS.', 186, 288, 332, 322),
+    ];
+
+    const result = service.repairPaddlePanelContextualDialogueLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'THINK ABOUT THE',
+      'SKILLS THE MONSTER',
+      'USED EARLIER AND',
+      'FOCUS.',
+    ]);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'RIE', reason: 'contextualDialogueGhostLine' }),
+    ]);
+  });
+
+  test('drops CARNED and WINGSII contextual ghost lines without removing real dialogue', () => {
+    const service = visionService as unknown as {
+      repairPaddlePanelContextualDialogueLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine("I DON'T CARE.", 120, 120, 380, 154),
+      makeLine('I ALREADY EARNED', 118, 164, 462, 198),
+      makeLine('CARNED', 310, 165, 430, 198),
+      makeLine('ENOUGH.', 190, 206, 340, 240),
+      makeLine('LOOK, BJORN!', 520, 420, 760, 454),
+      makeLine('I HAVE WINGS!!', 524, 462, 786, 496),
+      makeLine('WINGSII', 610, 506, 730, 540),
+    ];
+
+    const result = service.repairPaddlePanelContextualDialogueLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      "I DON'T CARE.",
+      'I ALREADY EARNED',
+      'ENOUGH.',
+      'LOOK, BJORN!',
+      'I HAVE WINGS!!',
+    ]);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'CARNED', reason: 'contextualDialogueGhostLine' }),
+      expect.objectContaining({ text: 'WINGSII', reason: 'contextualDialogueGhostLine' }),
+    ]);
   });
 });

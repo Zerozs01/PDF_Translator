@@ -40,6 +40,15 @@ import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { searchablePDFService } from './services/pdf';
 import { pdfjs } from './services/pdf/pdfjsWorker';
 import {
+  deriveBalloonAwareLayoutGrouping,
+  type DerivedLayoutGroup,
+  type LayoutGroupType,
+  type LayoutGroupingInput,
+  type LayoutGroupingResult,
+  type LayoutReadingMode,
+  type OCRLineWithLayout,
+} from './services/layout/balloonAwareGroupingService';
+import {
   clampOverlayRect,
   computeOverlayLayoutMap,
   computeOverlayTypography,
@@ -69,10 +78,13 @@ import './types/electron.d'; // Import type declarations
 type GlobalPrewarmState = typeof globalThis & {
   __pdfTranslatorExternalPrewarmStartedKeys?: Set<string>;
   __pdfTranslatorExternalPrewarmInFlight?: Map<string, Promise<void>>;
+  __pdfTranslatorLastLayoutGrouping?: unknown;
 };
 
 const AUTO_OCR_REQUEST_EVENT = 'pdf-translator:auto-ocr-request';
 const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
+const ENABLE_BALLOON_AWARE_GROUPING_STORAGE_KEY = 'pdf_translator.enable_balloon_aware_grouping';
+const LAYOUT_GROUPING_DEBUG_STORAGE_KEY = 'pdf_translator.layout_grouping_debug';
 
 type AutoOCRScope = 'current' | 'all';
 type DownloadScope = 'current' | 'all';
@@ -200,6 +212,25 @@ const wrapCanvasText = (
 
   return lines;
 };
+
+const readPersistedBooleanFlag = (key: string, defaultValue: boolean): boolean => {
+  if (typeof window === 'undefined') return defaultValue;
+  try {
+    const raw = String(window.localStorage.getItem(key) || '').trim().toLowerCase();
+    if (!raw) return defaultValue;
+    if (raw === '0' || raw === 'false' || raw === 'off') return false;
+    if (raw === '1' || raw === 'true' || raw === 'on') return true;
+    return defaultValue;
+  } catch {
+    return defaultValue;
+  }
+};
+
+const isBalloonAwareGroupingEnabled = (): boolean =>
+  readPersistedBooleanFlag(ENABLE_BALLOON_AWARE_GROUPING_STORAGE_KEY, true);
+
+const isLayoutGroupingDebugEnabled = (): boolean =>
+  readPersistedBooleanFlag(LAYOUT_GROUPING_DEBUG_STORAGE_KEY, false);
 
 const GENERIC_FONT_FAMILY_SET = new Set([
   'serif',
@@ -467,6 +498,11 @@ export type TranslatableLine = {
   wordCoverage?: number;
   wordBoxCount?: number;
   confidence?: number;
+  quad?: OCRLineWithLayout['quad'];
+  angleDeg?: number;
+  sortHintX?: number;
+  sortHintY?: number;
+  sourceEngine?: string;
 };
 
 type AdoptedSourceCandidate = {
@@ -478,9 +514,18 @@ type AdoptedSourceCandidate = {
 
 type TranslationGroup = {
   lines: TranslatableLine[];
+  groupType?: LayoutGroupType;
+  derivedGroupId?: string;
+  confidence?: number;
 };
 
-type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line';
+type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line' | 'balloon-aware';
+
+type GroupingDecision = {
+  appliedProfile: 'raw' | 'dense-dialogue' | 'balloon-aware';
+  confidence: number;
+  fallbackReason?: string;
+};
 
 type BatchGroupPlan = {
   index: number;
@@ -500,6 +545,14 @@ type BatchPageTranslationPlan = {
   lines: TranslatableLine[];
   groups: BatchGroupPlan[];
   groupingProfile: TranslationGroupingProfile;
+  groupingDecision?: GroupingDecision;
+};
+
+type ResolvedTranslationGroups = {
+  groups: TranslationGroup[];
+  groupingProfile: TranslationGroupingProfile;
+  groupingDecision: GroupingDecision;
+  layoutResult?: LayoutGroupingResult;
 };
 
 const GEMINI_MODE_STYLE_HINTS: Record<TranslationMode, string> = {
@@ -729,6 +782,8 @@ const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
   { pattern: /\bA-\s*Are\s*y\b/gi, replacement: 'A-Are you' },
   { pattern: /\bAreyou\b/gi, replacement: 'Are you' },
+  { pattern: /\bYOU\s*-\s*COULD\b/gi, replacement: 'YOU COULD' },
+  { pattern: /\bSO\s+ME\s+THING\b/gi, replacement: 'SOMETHING' },
   { pattern: /\bIT'?SA\b/gi, replacement: "IT'S A" },
   { pattern: /\bIT'?S\s+BESTIF\b/gi, replacement: "IT'S BEST IF" },
   { pattern: /\bBESTIF\b/gi, replacement: 'BEST IF' },
@@ -1011,6 +1066,42 @@ const buildTranslationComparisonKey = (value: string): string =>
     .toLowerCase()
     .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
 
+const shouldSkipOverlayForUntranslatedCarryOver = (
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string
+): boolean => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') return false;
+
+  const source = normalizeWhitespace(String(sourceText || ''));
+  const translated = normalizeWhitespace(String(translatedText || ''));
+  if (!source || !translated) return false;
+  if (isScientificSymbolLikeLine(source)) return false;
+
+  const sourceKey = buildTranslationComparisonKey(source);
+  const translatedKey = buildTranslationComparisonKey(translated);
+  if (!sourceKey || !translatedKey) return false;
+
+  const thaiChars = (translated.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const latinChars = (translated.match(/[A-Za-z]/g) || []).length;
+  const sourceLatinChars = (source.match(/[A-Za-z]/g) || []).length;
+  const tokenCount = source.split(/\s+/g).filter(Boolean).length;
+  if (thaiChars > 0) return false;
+
+  if (sourceKey === translatedKey) {
+    return tokenCount >= 1 && (sourceLatinChars >= 4 || source.length >= 4);
+  }
+
+  return latinChars >= 4 && sourceLatinChars >= 4 && tokenCount >= 2;
+};
+
+const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
+  const source = normalizeWhitespace(String(sourceText || ''));
+  const translated = normalizeWhitespace(String(translatedText || ''));
+  return Boolean(source && translated && source === translated);
+};
+
 const shouldRetryLineTranslation = (
   sourceText: string,
   translatedText: string,
@@ -1235,6 +1326,30 @@ const resolveSourceLanguageFromOCR = (ocrLanguageKey: string, fallback: string):
   return nonEnglish || candidates[0] || fallback;
 };
 
+const scoreSpanishVsEnglishHints = (text: string): {
+  spanishScore: number;
+  englishScore: number;
+  latinCount: number;
+  spanishAccentHits: number;
+} => {
+  const normalized = normalizeWhitespace(String(text || '')).toLowerCase();
+  const latinCount = (normalized.match(LATIN_TEXT_HINT_REGEX) || []).length;
+  const tokens = normalized
+    .split(/\s+/g)
+    .map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase())
+    .filter(Boolean);
+  const spanishTokenScore = scoreSpanishHintTokens(tokens);
+  const englishScore = scoreEnglishHintTokens(tokens);
+  const spanishAccentHits = (normalized.match(/[áéíóúüñ¿¡]/g) || []).length;
+  const spanishMorphHits = (normalized.match(SPANISH_MORPH_HINT_REGEX) || []).length;
+  return {
+    spanishScore: spanishTokenScore + (spanishAccentHits * 1.8) + (Math.min(4, spanishMorphHits) * 0.5),
+    englishScore,
+    latinCount,
+    spanishAccentHits,
+  };
+};
+
 const SPANISH_HINT_WORDS = new Set([
   'que', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'por', 'para', 'con', 'sin', 'como', 'pero',
   'si', 'ya', 'me', 'mi', 'se', 'te', 'tu', 'lo', 'le', 'del', 'al', 'es', 'son', 'fue', 'esta', 'este', 'eso',
@@ -1426,6 +1541,9 @@ export const resolvePreferredSourceLanguageForText = (
     ) {
       return 'es';
     }
+    if (fallback === 'es' && englishScore < 2.6) {
+      return 'es';
+    }
     if (englishScore >= 2.6 && englishScore > spanishScore * 1.08) {
       return 'en';
     }
@@ -1476,6 +1594,53 @@ const isLikelyShortForeignSfxLine = (text: string): boolean => {
   const unknownChars = compact.replace(/[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownRatio = unknownChars.length / Math.max(1, compact.length);
   return tokens.length <= 3 && compact.length <= 10 && unknownRatio <= 0.55;
+};
+
+const resolveComicPageSourceLanguage = (
+  lines: TranslatableLine[],
+  fallbackLanguage: string,
+  mode: TranslationMode
+): string => {
+  const fallback = normalizeTranslationLanguage(fallbackLanguage, 'en');
+  if (fallback !== 'en') return fallback;
+  if (mode !== 'manga' && mode !== 'manhwa' && mode !== 'adaptive') return fallback;
+  if (lines.length < 3) return fallback;
+
+  const sampleText = lines
+    .slice(0, 48)
+    .map((line) => normalizeWhitespace(String(line.text || '')))
+    .filter(Boolean)
+    .join(' ');
+  if (!sampleText) return fallback;
+
+  const sampleStats = scoreSpanishVsEnglishHints(sampleText);
+  const spanishLikeLineCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    if (!normalized) return false;
+    const stats = scoreSpanishVsEnglishHints(normalized);
+    return stats.spanishAccentHits >= 1
+      || stats.spanishScore >= 1.2
+      || (stats.spanishScore >= 0.8 && stats.englishScore === 0);
+  }).length;
+  const englishLikeLineCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    if (!normalized) return false;
+    const stats = scoreSpanishVsEnglishHints(normalized);
+    return stats.englishScore >= 1.4 && stats.englishScore > stats.spanishScore * 1.1;
+  }).length;
+
+  if (
+    sampleStats.latinCount >= 12
+    && (
+      (sampleStats.spanishAccentHits >= 1 && sampleStats.spanishScore >= 1.8)
+      || (sampleStats.spanishScore >= 2.4 && sampleStats.spanishScore >= sampleStats.englishScore + 0.35)
+      || (spanishLikeLineCount >= Math.max(2, Math.floor(lines.length * 0.18)) && englishLikeLineCount <= spanishLikeLineCount)
+    )
+  ) {
+    return 'es';
+  }
+
+  return fallback;
 };
 
 const ENGLISH_TECH_HINT_WORDS = new Set([
@@ -1700,6 +1865,43 @@ const shouldForceKeepTechnicalTranslationLine = (resolvedText: string, line?: OC
   return rowLikeGeometry || hasEquationTag;
 };
 
+const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
+  /^AH\s+ME[.!?…]*$/i,
+  /^EH\s+ME[.!?…]*$/i,
+  /^EH[.!?…]+$/i,
+  /^ME[.!?…]+$/i,
+  /^YOU[-\s]+COULD\s+SAY[.!?…]*$/i,
+  /^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i,
+  /^HELP\s+YOU\s+TOO[.!?…]*$/i,
+  /^ENTRANCE[.!?…]*$/i,
+  /^ARE\s+ONLY[.!?…]*$/i,
+  /^OUR\s+CHANCE[.!?…]*$/i,
+  /^THEM[.!?…]*$/i,
+  /^SHOE\s+LOCKER[.!?…]*$/i,
+  /^AND\s+LEAVE\s+THE[.!?…]*$/i,
+  /^OPEN\s+A\s+SHOE\s+LOCKER[.!?…]*$/i,
+];
+
+const shouldForceKeepComicTranslationLine = (
+  resolvedText: string,
+  line?: OCRLine,
+  metrics?: { width?: number; height?: number; area?: number; wordCoverage?: number }
+): boolean => {
+  const normalized = normalizeWhitespace(String(resolvedText || ''));
+  if (!normalized) return false;
+  if (!FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES.some((regex) => regex.test(normalized))) return false;
+
+  if (!line?.bbox) return true;
+  const width = Math.max(1, Number(metrics?.width ?? (Number(line.bbox.x1 || 0) - Number(line.bbox.x0 || 0))));
+  const height = Math.max(1, Number(metrics?.height ?? (Number(line.bbox.y1 || 0) - Number(line.bbox.y0 || 0))));
+  const area = Math.max(1, Number(metrics?.area ?? (width * height)));
+  const wordCoverage = Math.max(0, Number(metrics?.wordCoverage ?? computeLineWordUnionCoverage(line)));
+
+  // Keep the real short dialogue fragments, but do not resurrect cross-column bridge artifacts.
+  if (width >= 960 && area >= 76000 && wordCoverage >= 0.52) return false;
+  return true;
+};
+
 export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolvedText: string): boolean => {
   const text = normalizeWhitespace(String(resolvedText || ''));
   if (!text) return true;
@@ -1730,6 +1932,10 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
   const avgConfidence = confidenceSamples.reduce((sum, value) => sum + value, 0) / Math.max(1, confidenceSamples.length);
   const readability = scoreSourceLineReadability(text);
   const wordCoverage = computeLineWordUnionCoverage(line);
+
+  if (shouldForceKeepComicTranslationLine(text, line)) {
+    return false;
+  }
 
   const giantLineBox = (
     (width >= 180 && height >= 110 && area >= 18000)
@@ -1898,6 +2104,25 @@ export const shouldPruneContextualGhostTranslatableLine = (
   const text = normalizeWhitespace(String(candidate.text || ''));
   if (!text) return true;
 
+  if (shouldForceKeepComicTranslationLine(text, {
+    text,
+    confidence: candidate.confidence || 0,
+    bbox: {
+      x0: candidate.left,
+      y0: candidate.top,
+      x1: candidate.right,
+      y1: candidate.bottom,
+    },
+    words: [],
+  }, {
+    width: candidate.right - candidate.left,
+    height: candidate.bottom - candidate.top,
+    area: candidate.area,
+    wordCoverage: candidate.wordCoverage,
+  })) {
+    return false;
+  }
+
   const width = Math.max(1, candidate.right - candidate.left);
   const height = Math.max(1, candidate.bottom - candidate.top);
   const area = Math.max(1, candidate.area || (width * height));
@@ -2011,6 +2236,24 @@ const normalizeTranslatableDedupKey = (text: string): string =>
     .replace(/0/g, 'O')
     .replace(/1/g, 'I')
     .replace(/5/g, 'S');
+
+const collectMeaningfulTranslatableLatinTokens = (text: string): string[] => (
+  normalizeWhitespace(String(text || ''))
+    .toUpperCase()
+    .split(/\s+/g)
+    .map((token) => token.replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S'))
+    .filter((token) => token.length >= 3)
+);
+
+const countSharedTranslatableLatinTokens = (left: string, right: string): number => {
+  const leftTokens = new Set(collectMeaningfulTranslatableLatinTokens(left));
+  const rightTokens = new Set(collectMeaningfulTranslatableLatinTokens(right));
+  let shared = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) shared += 1;
+  });
+  return shared;
+};
 
 const TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
 const UNKNOWNS_COUNT_REGEX = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+unknowns?\b/i;
@@ -2136,6 +2379,68 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
 
   const kept: TranslatableLine[] = [];
   const keptKeys: string[] = [];
+  const mergeRicherDuplicateTextWithCleanerGeometry = (
+    existing: TranslatableLine,
+    existingKey: string,
+    candidate: TranslatableLine,
+    candidateKey: string
+  ): TranslatableLine | null => {
+    if (!existingKey || !candidateKey || existingKey === candidateKey) return null;
+    const minLength = Math.min(existingKey.length, candidateKey.length);
+    if (minLength < 5) return null;
+    const existingContainsCandidate = existingKey.includes(candidateKey);
+    const candidateContainsExisting = candidateKey.includes(existingKey);
+    if (!existingContainsCandidate && !candidateContainsExisting) return null;
+
+    const richer = existingKey.length > candidateKey.length ? existing : candidate;
+    const richerKey = existingKey.length > candidateKey.length ? existingKey : candidateKey;
+    const cleaner = richer === existing ? candidate : existing;
+    const cleanerKey = richer === existing ? candidateKey : existingKey;
+    const richerWordCount = normalizeWhitespace(String(richer.text || '')).split(/\s+/g).filter(Boolean).length;
+    const cleanerWordCount = normalizeWhitespace(String(cleaner.text || '')).split(/\s+/g).filter(Boolean).length;
+    if (richerWordCount > 4 || cleanerWordCount > 3) return null;
+    if (richerKey.length > 22 || cleanerKey.length > 16) return null;
+
+    const richerWidth = Math.max(1, richer.right - richer.left);
+    const richerHeight = Math.max(1, richer.bottom - richer.top);
+    const cleanerWidth = Math.max(1, cleaner.right - cleaner.left);
+    const cleanerHeight = Math.max(1, cleaner.bottom - cleaner.top);
+    const richerArea = Math.max(1, richerWidth * richerHeight);
+    const cleanerArea = Math.max(1, cleanerWidth * cleanerHeight);
+    const richerCoverage = Math.max(0, Number(richer.wordCoverage || 0));
+    const cleanerCoverage = Math.max(0, Number(cleaner.wordCoverage || 0));
+    const richerWordBoxes = Math.max(0, Number(richer.wordBoxCount || 0));
+    const cleanerWordBoxes = Math.max(0, Number(cleaner.wordBoxCount || 0));
+    const cleanerLooksLocalized = (
+      cleanerCoverage >= Math.max(0.36, richerCoverage + 0.14)
+      || (cleanerArea <= richerArea * 0.58 && cleanerCoverage >= Math.max(0.24, richerCoverage))
+      || (cleanerWordBoxes >= richerWordBoxes && cleanerArea <= richerArea * 0.72)
+    );
+    const richerLooksMislocalized = (
+      richerCoverage <= 0.36
+      || richerArea >= cleanerArea * 1.55
+      || richerHeight >= cleanerHeight * 1.7
+    );
+    const shortPhraseRepair = (
+      /^I\s*THINK[.!?…]*$/i.test(richer.text)
+      && /^THINK[.!?…]*$/i.test(cleaner.text)
+      && cleanerCoverage >= Math.max(0.22, richerCoverage)
+    );
+
+    if (!shortPhraseRepair && (!cleanerLooksLocalized || !richerLooksMislocalized)) {
+      return null;
+    }
+
+    const repairedText = /^I\s*THINK[.!?…]*$/i.test(richer.text)
+      ? String(richer.text || '').replace(/^I\s*THINK/i, 'I THINK')
+      : richer.text;
+
+    return {
+      ...cleaner,
+      text: repairedText,
+      sourceLength: Math.max(richer.sourceLength, countReadableLength(repairedText)),
+    };
+  };
   const lineScore = (line: TranslatableLine): number => {
     const width = Math.max(1, line.right - line.left);
     const height = Math.max(1, line.bottom - line.top);
@@ -2235,8 +2540,16 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
         && readabilityGap >= 4.8
         && (existingReadability <= 1.5 || candidateReadability <= 1.5)
         && strongSpatialForNoise;
+      const sameBoxSharedPhraseDuplicate = !sameOrSubset
+        && !technicalLinePair
+        && Math.min(existingKey.length, candidateKey.length) >= 8
+        && countSharedTranslatableLatinTokens(existing.text, candidate.text) >= 2
+        && overlapY >= 0.78
+        && overlapX >= 0.56
+        && centerDeltaY <= Math.max(24, minHeight * 1.05)
+        && centerDeltaX <= Math.max(72, minWidth * 1.4);
 
-      if (!sameOrSubset && !similar && !noisyNearDuplicate) return false;
+      if (!sameOrSubset && !similar && !noisyNearDuplicate && !sameBoxSharedPhraseDuplicate) return false;
 
       if ((longLinePair || paragraphLikePair) && !veryStrongSpatialMatch && !compactSpatialMatch) {
         return false;
@@ -2276,7 +2589,12 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
     }
 
     const existing = kept[existingIndex];
-    if (lineScore(candidate) > lineScore(existing)) {
+    const existingKey = keptKeys[existingIndex];
+    const repairedDuplicate = mergeRicherDuplicateTextWithCleanerGeometry(existing, existingKey, candidate, candidateKey);
+    if (repairedDuplicate) {
+      kept[existingIndex] = repairedDuplicate;
+      keptKeys[existingIndex] = normalizeTranslatableDedupKey(repairedDuplicate.text);
+    } else if (lineScore(candidate) > lineScore(existing)) {
       kept[existingIndex] = candidate;
       keptKeys[existingIndex] = candidateKey;
     }
@@ -2621,7 +2939,7 @@ const preserveTechnicalTokensInTranslation = (sourceText: string, translatedText
   return `${translated} ${missingTokens.join(' ')}`.replace(/\s+/g, ' ').trim();
 };
 
-const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, targetLanguage: string): string => {
+export const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   if (normalizeTranslationLanguage(targetLanguage, 'th') !== 'th') {
     return translatedText;
   }
@@ -2633,6 +2951,13 @@ const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, 
   const compactLower = lower.replace(/[^a-z]/g, '');
   const sectionPrefix = source.match(/^\s*(\d+\.\d+)\b/)?.[1];
   const withSectionPrefix = (value: string): string => (sectionPrefix ? `${sectionPrefix} ${value}` : value);
+  const trailingTechnicalLabel = source.match(/\s*(\(\s*[0-9]{1,3}[a-zA-Z]?\s*\))\s*$/)?.[1] || '';
+  const withTechnicalLabel = (value: string): string => {
+    const replacement = preserveSourceTrailingPunctuation(source, value);
+    return trailingTechnicalLabel && !hasTechnicalTokenInText(replacement, trailingTechnicalLabel)
+      ? `${replacement} ${trailingTechnicalLabel}`.trim()
+      : replacement;
+  };
 
   const chapterWithNumber = source.match(/^chapter\s*(\d+)\s*$/i);
   if (chapterWithNumber?.[1]) {
@@ -2717,6 +3042,53 @@ const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, 
   }
   if (/types?\s+of\s+connection/i.test(lower)) {
     return 'ประเภทของการเชื่อมต่อ';
+  }
+
+  if (/^two\s+unknowns?[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสองตัว');
+  }
+  if (/^three\s+unknowns?[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสามตัว');
+  }
+  if (/^three\s+unknowns?[.!?…]*\s+the\s+reactions?\s+are\s+the\s+couple\s+moment[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสามตัว แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+  }
+  if (/\breactions?\b/i.test(source) && /\bcouple\s+moment\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+  }
+  if (/\btwo\s+force\s+components?\b/i.test(source) && /\bcouple\s+moment\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'องค์ประกอบแรงสองแรง หรือโมเมนต์คู่ควบ');
+  }
+  if (/\bmagnitude\b/i.test(source) && /\bdirection\b/i.test(source) && /\bresultant\s+force\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ขนาดและทิศทางของแรงลัพธ์');
+  }
+  if (/\bthe\s+floor\s+beams\s+of\s+this\s+building\b/i.test(source) && /\bwelded\b/i.test(source)) {
+    if ((/\btogether\b/i.test(source) || compactLower.includes('together')) && /\bfixed\s+connections?\b/i.test(source)) {
+      return withTechnicalLabel('คานพื้นของอาคารนี้เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น');
+    }
+    return withTechnicalLabel('คานพื้นของอาคารนี้ถูกเชื่อมเข้าด้วยกัน');
+  }
+  if (
+    (/\btogether\b/i.test(source) || compactLower.includes('together'))
+    && (/\bthus\s+form\b/i.test(source) || compactLower.includes('thusform'))
+    && /\bfixed\s+connections?\b/i.test(source)
+  ) {
+    return withTechnicalLabel('เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น');
+  }
+  if (
+    (/\btogether\b/i.test(source) || compactLower.includes('together'))
+    && (/\bthus\s+form\b/i.test(source) || compactLower.includes('thusform'))
+  ) {
+    return withTechnicalLabel('เชื่อมเข้าด้วยกัน จึงเกิดเป็น');
+  }
+  if (/\bfixed\s+connections?\b/i.test(source)) {
+    return withTechnicalLabel('จุดต่อแบบยึดแน่น');
+  }
+  if (/\bthis\s+utility\s+building\s+is\b/i.test(source) && /\bpin\s+supported\b/i.test(source)) {
+    return withTechnicalLabel('อาคารอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของเสา');
+  }
+  if (/\bpin\s+supported\b/i.test(source) && /\btop\s+of\s+the\s+column\b/i.test(source)) {
+    return withTechnicalLabel('รองรับแบบพินที่ด้านบนของเสา');
   }
 
   const tableMatch = source.match(/table\s*(\d+(?:[-–]\d+)?)\s*continued/i);
@@ -2900,6 +3272,9 @@ export const applyThaiConversationalGlossary = (
   if (/^OR\s+DO\s+YO?U[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'หรือคุณ');
   }
+  if (/^DO\s+YO?U[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คุณต้องการ');
+  }
   if (/^WANT\s+THIS\s+ESSEN(?:CE|SE)\s+TO[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ต้องการให้แก่นแท้นี้');
   }
@@ -2932,6 +3307,40 @@ export const applyThaiConversationalGlossary = (
   if (/^I\s+SOLD\s+IT[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ขายมัน');
   }
+  if (/^I\s+DON['’]?T\s+CARE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่สน');
+  }
+  if (/^I\s+ALREADY\s+EARNED[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันหาได้แล้ว');
+  }
+  if (/^ENOUGH[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'พอแล้ว');
+  }
+  if (
+    /\bI\s+DON['’]?T\s+CARE\b/i.test(source)
+    && /\bI\s+ALREADY\s+EARNED\b/i.test(source)
+    && /\bENOUGH\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่สน ฉันหาได้พอแล้ว');
+  }
+  if (/^LOOK,?\s+B[Jl]ORN[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ดูสิ บียอร์น');
+  }
+  if (/^I\s+HAVE\s+WINGS[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันมีปีก');
+  }
+  if (/^A\s+LITTLE,?\s+YEAH[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'นิดหน่อย ใช่ไหม');
+  }
+  if (/^HMM[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อืม');
+  }
+  if (/^OF\s+COURSE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แน่นอน');
+  }
+  if (/^VALKYRIE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'วาลคีรี');
+  }
   if (/^FOR\s+HER\s+IN\s+RETURN[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'เพื่อแลกกับเธอ');
   }
@@ -2947,7 +3356,7 @@ export const applyThaiConversationalGlossary = (
   }
 
   if (/^H-?\s*HOW[.!?…]*$/i.test(source)) {
-    return preserveSourceTrailingPunctuation(source, 'ด-ได้ไง');
+    return preserveSourceTrailingPunctuation(source, 'อ-อย่างไร');
   }
 
   if (/^U-?\s*UH[.!?…]*$/i.test(source) || /^UH[.!?…]*$/i.test(source)) {
@@ -2986,8 +3395,112 @@ export const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'รวดเร็ว, ด่วน-');
   }
 
-  if (/^I\s+THINK[.!?…]*$/i.test(source)) {
+  if (/^I\s*THINK[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ฉันว่า');
+  }
+  if (/^AH\s+ME[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊ะ ฉัน');
+  }
+  if (/^EH\s+ME[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋ ฉัน');
+  }
+  if (/^EH[.!?…]+$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋');
+  }
+  if (/^ME[.!?…]+$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉัน');
+  }
+  if (/^ENTRANCE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทางเข้า');
+  }
+  if (/^ARE\s+ONLY[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีเพียง');
+  }
+  if (/^OUR\s+CHANCE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'โอกาสของเรา');
+  }
+  if (/^THEM[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'พวกเขา');
+  }
+  if (/^AND\s+LEAVE\s+THE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แล้วออกจาก');
+  }
+  if (/^SHOE\s+LOCKER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตู้รองเท้า');
+  }
+  if (/^OPEN\s+A\s+SHOE\s+LOCKER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เปิดตู้รองเท้า');
+  }
+  if (/^AND\s+LEAVE\s+THE\s+BUILDING[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แล้วออกจากอาคาร');
+  }
+  if (
+    /\bI['’]?LL\s+LET\s+YOU\b/i.test(source)
+    && /\bEXPERIMENT\s+WITH\b/i.test(source)
+    && /\bHER\s+IN\s+RETURN\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะให้คุณทดลองกับเธอเป็นการตอบแทน');
+  }
+  if (
+    /\bTHINK\s+ABOUT\s+THE\b/i.test(source)
+    && /\bSKILLS\s+THE\s+MONSTER\b/i.test(source)
+    && /\bUSED\s+EARLIER\s+AND\b/i.test(source)
+    && /\bFOCUS\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ลองนึกถึงทักษะที่สัตว์ประหลาดใช้ก่อนหน้านี้ แล้วจดจ่ออยู่กับมัน');
+  }
+  if (
+    /\bYOU[-\s]+COULD\s+SAY\b/i.test(source)
+    && (/\bSOMETHING\s+THAT\s+MIGHT\b/i.test(source) || /\bSO\s+ME\s+THING\s+THAT\s+MIGHT\b/i.test(source))
+    && /\bHELP\s+YOU\s+TOO\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า มีบางอย่างที่อาจช่วยคุณได้เช่นกัน');
+  }
+  if (/^I['’]?LL\s+LET\s+YOU[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะให้คุณ');
+  }
+  if (/^EXPERIMENT\s+WITH[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทดลองกับ');
+  }
+  if (/^THINK\s+ABOUT\s+THE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ลองนึกถึง');
+  }
+  if (/^SKILLS\s+THE\s+MONSTER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทักษะที่สัตว์ประหลาด');
+  }
+  if (/^USED\s+EARLIER\s+AND[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ใช้ก่อนหน้านี้ แล้ว');
+  }
+  if (/^EARLIER\s+AND[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ก่อนหน้านี้ แล้ว');
+  }
+  if (/^FOCUS[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'จดจ่ออยู่กับมัน');
+  }
+  if (/^YOU[-\s]+COULD\s+SAY[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า');
+  }
+  if (/^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีบางอย่างที่อาจ');
+  }
+  if (/^HELP\s+YOU\s+TOO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ช่วยคุณได้เช่นกัน');
+  }
+  if (
+    /\bAND\s+IT['’]?S\s+GOOD\s+FOR\b/i.test(source)
+    && /\bUS\s+IF\s+OUR\s+TE?A?M+MATE\b/i.test(source)
+    && /\bBECOMES\s+STRONGER\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับเราด้วย หากเพื่อนร่วมทีมของเราแข็งแกร่งขึ้น');
+  }
+  if (/^AND\s+IT['’]?S\s+GOOD\s+FOR[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับ');
+  }
+  if (/^US\s+IF\s+OUR\s+TE?A?M+MATE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เราด้วย หากเพื่อนร่วมทีมของเรา');
+  }
+  if (/^BECOMES\s+STRONGER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แข็งแกร่งขึ้น');
   }
   if (/^THAT['’]?S\s+TOO\s+LOW[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'มันต่ำเกินไปนะ');
@@ -3048,6 +3561,26 @@ export const applyThaiConversationalGlossary = (
 
   if ((/^เอชเอ็ม$/i.test(translated) || /^เอชเอ็มเอ็ม$/i.test(translated)) && /^hm+$/.test(compactSource)) {
     return preserveSourceTrailingPunctuation(source, 'อืม');
+  }
+
+  if (/\bTE?A?M+MATE\b/i.test(source)) {
+    let normalized = translated
+      .replace(/คู่สมรส/gi, 'เพื่อนร่วมทีม')
+      .replace(/เพื่อนร่วมงาน/gi, 'เพื่อนร่วมทีม')
+      .replace(/ทีมเมท/gi, 'เพื่อนร่วมทีม');
+    if (/\bBECOMES\s+STRONGER\b/i.test(source)) {
+      normalized = normalized
+        .replace(/กลายเป็นอุปสรรค/gi, 'แข็งแกร่งขึ้น')
+        .replace(/กลายเป็นแข็งแกร่งขึ้น/gi, 'แข็งแกร่งขึ้น')
+        .replace(/แข็งแรงขึ้น/gi, 'แข็งแกร่งขึ้น');
+    }
+    normalized = normalized
+      .replace(/มันดีสําหรับพวกเรานะถ้า/gi, 'และมันก็ดีสำหรับเราด้วย หาก')
+      .replace(/มันดีสำหรับพวกเรานะถ้า/gi, 'และมันก็ดีสำหรับเราด้วย หาก')
+      .replace(/เรานะถ้าเพื่อนร่วมทีมของ/gi, 'เราด้วย หากเพื่อนร่วมทีมของเรา');
+    if (normalized !== translated) {
+      return preserveSourceTrailingPunctuation(source, normalized);
+    }
   }
 
   return translated;
@@ -3438,6 +3971,50 @@ export const shouldUseLineByLineGrouping = (
   }
 
   return false;
+};
+
+const shouldUseBalloonAwareGrouping = (
+  lines: TranslatableLine[],
+  sourceLanguage: string,
+  targetLanguage: string,
+  mode: TranslationMode
+): boolean => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') return false;
+  if (lines.length < 3) return false;
+  if (mode === 'official') return false;
+
+  const technicalHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
+  const technicalRowHits = lines.reduce((count, line) => count + (TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalizeWhitespace(line.text)) ? 1 : 0), 0);
+  if (technicalHits >= 3 || technicalRowHits >= Math.max(3, Math.floor(lines.length * 0.24))) {
+    return false;
+  }
+
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const comicLike = isLikelyComicDialogueLayout(lines);
+  if (mode === 'manga' || mode === 'manhwa') {
+    return comicLike || ['en', 'es', 'ja', 'ko', 'zh'].includes(normalizedSource);
+  }
+
+  if (mode === 'adaptive') {
+    return comicLike;
+  }
+
+  return false;
+};
+
+const resolveBalloonAwareReadingMode = (
+  sourceLanguage: string,
+  mode: TranslationMode
+): LayoutReadingMode => {
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  if (mode === 'manga' && normalizedSource === 'ja') {
+    return 'rtl';
+  }
+  if (mode === 'manhwa' || normalizedSource === 'ko' || normalizedSource === 'zh') {
+    return 'auto';
+  }
+  return 'ltr';
 };
 
 const shouldPreferEnglishSourceForMixedTechnicalPage = (
@@ -3860,6 +4437,240 @@ export const buildTranslationGroups = (
   }
 
   return groups;
+};
+
+const composeGroupSourceText = (
+  lines: TranslatableLine[],
+  groupType: LayoutGroupType = 'unknown',
+  groupingProfile: TranslationGroupingProfile = 'default'
+): string => {
+  const normalized = lines
+    .map((line) => normalizeWhitespace(String(line.text || '')))
+    .filter(Boolean);
+  if (normalized.length <= 1) {
+    return normalized[0] || '';
+  }
+
+  if (groupType === 'narration') {
+    return normalized.join(' ');
+  }
+
+  if (groupingProfile === 'default' || groupingProfile === 'line-by-line') {
+    return normalized.join(' ');
+  }
+
+  if (groupingProfile === 'balloon-aware' && groupType === 'dialogue') {
+    return normalized.join(' ');
+  }
+
+  return normalized.join('\n');
+};
+
+const createBalloonAwareGroupingInput = (
+  pageNum: number,
+  pageOCR: OCRPageResult,
+  lines: TranslatableLine[],
+  sourceLanguage: string,
+  mode: TranslationMode
+): LayoutGroupingInput => ({
+  pageNumber: pageNum,
+  imageWidth: Math.max(1, Number(pageOCR.width || 1)),
+  imageHeight: Math.max(1, Number(pageOCR.height || 1)),
+  lines: lines.map<OCRLineWithLayout>((line) => ({
+    index: line.index,
+    text: line.text,
+    sourceLength: line.sourceLength,
+    top: line.top,
+    bottom: line.bottom,
+    left: line.left,
+    right: line.right,
+    height: line.height,
+    area: line.area,
+    confidence: line.confidence,
+    angleDeg: line.angleDeg,
+    sortHintX: line.sortHintX,
+    sortHintY: line.sortHintY,
+    quad: line.quad,
+    sourceEngine: line.sourceEngine,
+  })),
+  mode: 'balloon-aware',
+  readingMode: resolveBalloonAwareReadingMode(sourceLanguage, mode),
+});
+
+const buildTranslationGroupsFromDerivedLayout = (
+  layoutResult: LayoutGroupingResult,
+  lines: TranslatableLine[],
+  acceptedGroupIds?: Set<string>
+): TranslationGroup[] => {
+  const lineMap = new Map<number, TranslatableLine>(lines.map((line) => [line.index, line]));
+  const derivedGroupByLineIndex = new Map<number, DerivedLayoutGroup>();
+  layoutResult.groups.forEach((group) => {
+    if (acceptedGroupIds && !acceptedGroupIds.has(group.id)) return;
+    group.orderedLineIndexes.forEach((lineIndex) => {
+      derivedGroupByLineIndex.set(lineIndex, group);
+    });
+  });
+
+  const emittedGroupIds = new Set<string>();
+  const groups: TranslationGroup[] = [];
+
+  layoutResult.orderedLineIndexes.forEach((lineIndex) => {
+    const derivedGroup = derivedGroupByLineIndex.get(lineIndex);
+    if (derivedGroup) {
+      if (emittedGroupIds.has(derivedGroup.id)) return;
+      emittedGroupIds.add(derivedGroup.id);
+      const groupLines = derivedGroup.orderedLineIndexes
+        .map((index) => lineMap.get(index))
+        .filter((line): line is TranslatableLine => Boolean(line));
+      if (groupLines.length > 0) {
+        groups.push({
+          lines: groupLines,
+          groupType: derivedGroup.groupType,
+          derivedGroupId: derivedGroup.id,
+          confidence: derivedGroup.confidence,
+        });
+      }
+      return;
+    }
+
+    const line = lineMap.get(lineIndex);
+    if (!line) return;
+    groups.push({
+      lines: [line],
+      groupType: 'unknown',
+      confidence: 0.5,
+    });
+  });
+
+  if (groups.length === 0) {
+    return lines.map((line) => ({ lines: [line], groupType: 'unknown', confidence: 0.5 }));
+  }
+
+  return groups;
+};
+
+const pushLayoutGroupingDebugPayload = (
+  pageNum: number,
+  groupingProfile: TranslationGroupingProfile,
+  layoutResult: LayoutGroupingResult | undefined,
+  groups: TranslationGroup[]
+): void => {
+  if (!isLayoutGroupingDebugEnabled()) return;
+
+  const payload = {
+    pageNum,
+    groupingProfile,
+    rawOrder: layoutResult?.diagnostics.rawOrder || groups.flatMap((group) => group.lines.map((line) => line.index)),
+    derivedGroups: layoutResult?.groups || [],
+    orderedLineIndexes: layoutResult?.orderedLineIndexes || groups.flatMap((group) => group.lines.map((line) => line.index)),
+    composedGroupTexts: groups.map((group) => ({
+      groupId: group.derivedGroupId || null,
+      groupType: group.groupType || 'unknown',
+      confidence: group.confidence || 0,
+      lineIndexes: group.lines.map((line) => line.index),
+      text: composeGroupSourceText(group.lines, group.groupType || 'unknown', groupingProfile),
+    })),
+  };
+
+  const globalState = globalThis as GlobalPrewarmState;
+  globalState.__pdfTranslatorLastLayoutGrouping = payload;
+  console.debug('[LayoutGrouping]', payload);
+};
+
+const resolveTranslationGroupsWithLayout = (
+  pageNum: number,
+  pageOCR: OCRPageResult,
+  lines: TranslatableLine[],
+  fallbackProfile: TranslationGroupingProfile,
+  sourceLanguage: string,
+  targetLanguage: string,
+  mode: TranslationMode
+): ResolvedTranslationGroups => {
+  const fallbackGroups = buildTranslationGroups(lines, fallbackProfile);
+  const fallbackDecision: GroupingDecision = {
+    appliedProfile: fallbackProfile === 'dense-dialogue' ? 'dense-dialogue' : 'raw',
+    confidence: fallbackProfile === 'dense-dialogue' ? 0.58 : 0.5,
+  };
+
+  if (fallbackProfile === 'line-by-line') {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: fallbackDecision,
+    };
+  }
+
+  if (!isBalloonAwareGroupingEnabled()) {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: {
+        ...fallbackDecision,
+        fallbackReason: 'feature_flag_disabled',
+      },
+    };
+  }
+
+  if (!shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode)) {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: fallbackDecision,
+    };
+  }
+
+  const layoutResult = deriveBalloonAwareLayoutGrouping(
+    createBalloonAwareGroupingInput(pageNum, pageOCR, lines, sourceLanguage, mode)
+  );
+  const multiLineGroupCount = layoutResult.groups.filter((group) => group.orderedLineIndexes.length > 1).length;
+  const layoutConfidence = Number(layoutResult.diagnostics.avgConfidence || 0);
+  const acceptedGroupConfidenceFloor = mode === 'official' ? 0.68 : 0.62;
+
+  if (layoutConfidence < 0.62 || multiLineGroupCount === 0) {
+    const acceptedDerivedGroups = layoutResult.groups.filter((group) =>
+      group.orderedLineIndexes.length > 1
+      && group.confidence >= acceptedGroupConfidenceFloor
+      && (group.groupType === 'dialogue' || group.confidence >= 0.68)
+    );
+    const acceptedCoverage = acceptedDerivedGroups.reduce((sum, group) => sum + group.orderedLineIndexes.length, 0)
+      / Math.max(1, lines.length);
+    if (acceptedDerivedGroups.length > 0 && (layoutConfidence >= 0.48 || acceptedCoverage >= 0.18)) {
+      return {
+        groups: buildTranslationGroupsFromDerivedLayout(
+          layoutResult,
+          lines,
+          new Set(acceptedDerivedGroups.map((group) => group.id))
+        ),
+        groupingProfile: 'balloon-aware',
+        groupingDecision: {
+          appliedProfile: 'balloon-aware',
+          confidence: Math.max(layoutConfidence, acceptedCoverage),
+          fallbackReason: 'partial_layout_adoption',
+        },
+        layoutResult,
+      };
+    }
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: {
+        ...fallbackDecision,
+        confidence: layoutConfidence || fallbackDecision.confidence,
+        fallbackReason: layoutResult.diagnostics.warnings.join(',') || 'low_layout_confidence',
+      },
+      layoutResult,
+    };
+  }
+
+  return {
+    groups: buildTranslationGroupsFromDerivedLayout(layoutResult, lines),
+    groupingProfile: 'balloon-aware',
+    groupingDecision: {
+      appliedProfile: 'balloon-aware',
+      confidence: layoutConfidence,
+    },
+    layoutResult,
+  };
 };
 
 const findSplitIndexNear = (
@@ -4390,6 +5201,20 @@ export default function App() {
     return rawLooksMalformed ? wordUnionBBox : normalizedRawBBox;
   };
 
+  const resolveLineSortHintY = (line?: OCRLine): number | undefined => {
+    const direct = Number(line?.sortHintY);
+    if (Number.isFinite(direct)) return direct;
+    const legacy = Number((line as OCRLine | undefined)?.['_sortY']);
+    return Number.isFinite(legacy) ? legacy : undefined;
+  };
+
+  const resolveLineSortHintX = (line?: OCRLine): number | undefined => {
+    const direct = Number(line?.sortHintX);
+    if (Number.isFinite(direct)) return direct;
+    const legacy = Number((line as OCRLine | undefined)?.['_sortX']);
+    return Number.isFinite(legacy) ? legacy : undefined;
+  };
+
   const collectTranslatableLines = (lines: OCRLine[]): TranslatableLine[] => {
     const collected: TranslatableLine[] = [];
     lines.forEach((line, index) => {
@@ -4456,6 +5281,11 @@ export default function App() {
         wordCoverage,
         wordBoxCount: validWordBoxCount,
         confidence: Number(line.confidence || 0),
+        quad: Array.isArray(line.quad) ? line.quad.map((point) => ({ x: point.x, y: point.y })) : undefined,
+        angleDeg: Number.isFinite(line.angleDeg) ? Number(line.angleDeg) : undefined,
+        sortHintX: resolveLineSortHintX(line),
+        sortHintY: resolveLineSortHintY(line),
+        sourceEngine: line.sourceEngine,
       });
     });
 
@@ -4905,7 +5735,9 @@ export default function App() {
       pageOCR.lines.flatMap((line, index) => {
         const translatedText = translatedByIndex.get(index);
         if (!translatedText) return [];
-        if (shouldSkipOverlayRenderForSuspiciousLine(line)) return [];
+        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
+        if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
 
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
@@ -4971,6 +5803,9 @@ export default function App() {
       sampleContext.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
       pageOCR.lines.forEach((line, index) => {
         if (!translatedByIndex.has(index)) return;
+        const translatedText = translatedByIndex.get(index) || '';
+        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
         translatedLinePalette.set(index, sampleOverlayPaletteFromLine(
           sampleContext,
           line,
@@ -4985,7 +5820,9 @@ export default function App() {
     pageOCR.lines.forEach((line, index) => {
       const translatedText = translatedByIndex.get(index);
       if (!translatedText) return;
-      if (shouldSkipOverlayRenderForSuspiciousLine(line)) return;
+      const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
+      if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
 
       const layout = overlayLayoutByIndex.get(index);
       const isMaskOnlyLine = Boolean(layout?.hidden);
@@ -5419,14 +6256,19 @@ export default function App() {
       );
       const dedupedLines = dedupeTranslatableLinesForTranslation(assistedLines);
       const inferredSourceLanguage = inferSourceLanguageFromTextHints(dedupedLines, resolvedSourceFromOCR);
-      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      const pageBiasedSourceLanguage = resolveComicPageSourceLanguage(
         dedupedLines,
         inferredSourceLanguage,
+        translationMode
+      );
+      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+        dedupedLines,
+        pageBiasedSourceLanguage,
         normalizedTargetLanguage,
         translationMode
       )
         ? 'en'
-        : inferredSourceLanguage;
+        : pageBiasedSourceLanguage;
       const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
       const rawLines = assistedLines.filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
@@ -5464,11 +6306,24 @@ export default function App() {
       if (groupingProfile === 'line-by-line' && rawLines.length > lines.length) {
         lines = rawLines;
       }
-      const groups = buildTranslationGroups(lines, groupingProfile)
+      const resolvedGrouping = resolveTranslationGroupsWithLayout(
+        pageNum,
+        pageOCR,
+        lines,
+        groupingProfile,
+        translationSourceLanguage,
+        normalizedTargetLanguage,
+        translationMode
+      );
+      groupingProfile = resolvedGrouping.groupingProfile;
+      pushLayoutGroupingDebugPayload(pageNum, groupingProfile, resolvedGrouping.layoutResult, resolvedGrouping.groups);
+      const groups = resolvedGrouping.groups
         .map((group, groupIndex) => {
-          const rawSourceText = group.lines
-            .map((line) => line.text)
-            .join(' ');
+          const rawSourceText = composeGroupSourceText(
+            group.lines,
+            group.groupType || 'unknown',
+            groupingProfile
+          );
           const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
           const sourceText = normalizeSourceForTranslation(
             rawSourceText,
@@ -5500,6 +6355,7 @@ export default function App() {
         lines,
         groups,
         groupingProfile,
+        groupingDecision: resolvedGrouping.groupingDecision,
       };
 
       const pageEstimate = 260 + groups.reduce((sum, group) => sum + String(group.protectedText || '').length + 28, 0);
@@ -5741,14 +6597,19 @@ export default function App() {
     );
     const dedupedTranslatableLines = dedupeTranslatableLinesForTranslation(assistedLines);
     const inferredSourceLanguage = inferSourceLanguageFromTextHints(dedupedTranslatableLines, effectiveSourceLanguage);
-    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+    const pageBiasedSourceLanguage = resolveComicPageSourceLanguage(
       dedupedTranslatableLines,
       inferredSourceLanguage,
+      translationMode
+    );
+    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      dedupedTranslatableLines,
+      pageBiasedSourceLanguage,
       normalizedTargetLanguage,
       translationMode
     )
       ? 'en'
-      : inferredSourceLanguage;
+      : pageBiasedSourceLanguage;
     const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedTranslatableLines)
       || hasStrongLatinAnchorLines(dedupedTranslatableLines);
     const rawTranslatableLines = assistedLines
@@ -5805,9 +6666,24 @@ export default function App() {
       translatableLines = rawTranslatableLines;
     }
 
-    const groups = buildTranslationGroups(translatableLines, groupingProfile);
-    const preparedGroups = groups.map((group, groupIndex) => {
-      const rawSourceText = group.lines.map((line) => line.text).join(' ');
+    const resolvedGrouping = resolveTranslationGroupsWithLayout(
+      pageNum,
+      pageOCR,
+      translatableLines,
+      groupingProfile,
+      translationSourceLanguage,
+      normalizedTargetLanguage,
+      translationMode
+    );
+    groupingProfile = resolvedGrouping.groupingProfile;
+    pushLayoutGroupingDebugPayload(pageNum, groupingProfile, resolvedGrouping.layoutResult, resolvedGrouping.groups);
+
+    const preparedGroups = resolvedGrouping.groups.map((group, groupIndex) => {
+      const rawSourceText = composeGroupSourceText(
+        group.lines,
+        group.groupType || 'unknown',
+        groupingProfile
+      );
       const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
       const sourceText = normalizeSourceForTranslation(rawSourceText, groupSourceLanguage);
       const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
@@ -6003,6 +6879,24 @@ export default function App() {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
       });
+    });
+
+    translatableLines.forEach((line) => {
+      if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) {
+        return;
+      }
+      if (translatedByIndex.has(line.index)) {
+        return;
+      }
+      const finalizedFallback = finalizeTranslatedLine(line.text, line.text, normalizedTargetLanguage);
+      translatedByIndex.set(line.index, finalizedFallback || line.text);
+      if (shouldRetryLineTranslation(line.text, finalizedFallback, translationSourceLanguage, normalizedTargetLanguage)) {
+        retryLineMap.set(line.index, {
+          index: line.index,
+          sourceText: line.text,
+          sourceLanguage: translationSourceLanguage,
+        });
+      }
     });
 
     let retryAppliedCount = 0;
