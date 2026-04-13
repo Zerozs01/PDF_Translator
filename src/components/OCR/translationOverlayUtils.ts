@@ -423,6 +423,38 @@ export const resolveMissingOverlayLineFallbackText = (
   if (/^OF\s+COURSE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'แน่นอน');
   if (/^EARLIER\s+AND[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ก่อนหน้านี้ แล้ว');
   if (/^FOCUS[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'จดจ่ออยู่กับมัน');
+  if (/^BARBAR\s*I?\s*AN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source) || /^BARBARIAN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'บาร์บาเรียน (หญิง)');
+  }
+  if (/^VA(?:L)?KYR?I?E\s+MODE[.!?…]*$/i.test(source) || /^VALKYRIE\s+MODE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'โหมดวาลคีรี');
+  if (/^LIMITED\s+EDITION[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'รุ่นลิมิเต็ด');
+  if (/^TH-?THIS\s+LIGHT[.!?…]*$/i.test(source) || /^THIS\s+LIGHT[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'แส-แสงนี้');
+  if (/^(?:I\s+)?SUPPORT\s+YOU\s+TO\s+LIVE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉันช่วยให้คุณมีชีวิตอยู่');
+  if (/^HERE[.!?…]*\s+AND\s+YOU\s+DO\s+THIS\s+TO[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ที่นี่... แล้วคุณทำแบบนี้กับ');
+  if (/^THE\s+PEOPLE\s+HERE[!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'คนที่นี่เหรอ');
+  const compactSpanishSource = source
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+  if (compactSpanishSource === 'STAFF') return preserveOverlaySourceTrailingPunctuation(source, 'เจ้าหน้าที่');
+  if (compactSpanishSource === 'PRIMEROLAFOTO' || /^PRI-?MERO\s+LA\s+FOTO[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'ภาพแรก');
+  }
+  if (compactSpanishSource === 'PRIMERO') return preserveOverlaySourceTrailingPunctuation(source, 'อันดับแรก');
+  if (compactSpanishSource === 'LAFOTO') return preserveOverlaySourceTrailingPunctuation(source, 'ภาพ');
+  if (compactSpanishSource === 'DE') return preserveOverlaySourceTrailingPunctuation(source, 'ของ');
+  if (compactSpanishSource === 'METIENDOPOR' || compactSpanishSource === 'METIENDO') {
+    return preserveOverlaySourceTrailingPunctuation(source, 'กำลังดำเนินการ');
+  }
+  if (compactSpanishSource === 'LISTOCON' || /^[i¡]?\s*LISTO[.!?…]*\s+CON[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'พร้อม! ด้วย');
+  }
+  if (compactSpanishSource === 'SIMEQUEDO') return preserveOverlaySourceTrailingPunctuation(source, 'ถ้าฉันอยู่');
+  if (compactSpanishSource === 'AQUIMAS') return preserveOverlaySourceTrailingPunctuation(source, 'ที่นี่นานกว่านี้');
+  if (compactSpanishSource === 'TIEMPO') return preserveOverlaySourceTrailingPunctuation(source, 'อีกสักพัก');
+  if (compactSpanishSource === 'SSIENTOQUEME' || compactSpanishSource === 'SIENTOQUEME') return preserveOverlaySourceTrailingPunctuation(source, 'ฉะ-ฉันรู้สึกว่า');
+  if (compactSpanishSource === 'VOYCORRER' || compactSpanishSource === 'VOYACORRER') return preserveOverlaySourceTrailingPunctuation(source, 'ฉันจะเสร็จแล้ว');
   if (/^ENTRANCE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ทางเข้า');
   if (/^ARE\s+ONLY[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'มีเพียง');
   if (/^AND\s+LEAVE\s+THE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'แล้วออกจาก');
@@ -502,7 +534,7 @@ const isLikelyContextualGhostOverlayLine = (
   const sourceText = normalizeOverlayInlineText(String(line.text || ''));
   if (!sourceText) return false;
   const key = normalizeOverlayLatinContextKey(sourceText);
-  if (key !== 'CARNED' && !/^WINGSI{2,}$/.test(key)) return false;
+  if (key !== 'CARNED' && key !== 'THAVE' && !/^WINGSI{2,}$/.test(key)) return false;
 
   const lines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
   const bbox = line.bbox;
@@ -534,6 +566,20 @@ const isLikelyContextualGhostOverlayLine = (
       || otherKey.includes('EARNED')
     ) || nearbyByOrder(1, (otherKey) =>
       otherKey.includes('ENOUGH') || otherKey.includes('EARNEDENOUGH')
+    );
+  }
+
+  if (key === 'THAVE') {
+    return nearbyByOrder(-1, (otherKey) =>
+      otherKey.includes('IHAVEWINGS')
+      || otherKey.includes('LOOKBJORN')
+      || otherKey.includes('BJORN')
+      || otherKey.includes('WINGS')
+    ) || nearbyByOrder(1, (otherKey) =>
+      otherKey.includes('IHAVEWINGS')
+      || otherKey.includes('LOOKBJORN')
+      || otherKey.includes('BJORN')
+      || otherKey.includes('WINGS')
     );
   }
 
@@ -1262,6 +1308,40 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
   const dominantSat = computeSaturation(dominantRgb.r, dominantRgb.g, dominantRgb.b);
   const dominantDistance = dominant.distance / Math.max(1e-6, dominant.weight);
 
+  let vividBackgroundCandidate: PaletteSampleBucket | undefined;
+  let vividBackgroundScore = 0;
+  stats.buckets.forEach((bucket) => {
+    if (bucket.weight <= 0) return;
+    const rgb = resolveBucketRgb(bucket);
+    const lum = luminance(rgb);
+    const sat = computeSaturation(rgb.r, rgb.g, rgb.b);
+    if (lum < 0.18 || lum > 0.96 || sat < 0.22) return;
+
+    const avgDistance = bucket.distance / Math.max(1e-6, bucket.weight);
+    const warmHighlight = rgb.r >= 150 && rgb.g >= 110 && rgb.b <= Math.min(rgb.r, rgb.g) - 24;
+    const score = bucket.weight * (1 + sat * 1.55 + (warmHighlight ? 0.85 : 0)) * (1.12 - Math.min(1, avgDistance) * 0.36);
+    if (score > vividBackgroundScore) {
+      vividBackgroundScore = score;
+      vividBackgroundCandidate = bucket;
+    }
+  });
+
+  if (vividBackgroundCandidate && dominantLum >= 0.74 && dominantSat <= 0.18) {
+    const vividRgb = resolveBucketRgb(vividBackgroundCandidate);
+    const vividWeightRatio = vividBackgroundCandidate.weight / Math.max(1e-6, dominant.weight);
+    const vividLum = luminance(vividRgb);
+    const vividSat = computeSaturation(vividRgb.r, vividRgb.g, vividRgb.b);
+    const vividDistance = vividBackgroundCandidate.distance / Math.max(1e-6, vividBackgroundCandidate.weight);
+    const warmHighlight = vividRgb.r >= 150
+      && vividRgb.g >= 110
+      && vividRgb.b <= Math.min(vividRgb.r, vividRgb.g) - 24
+      && vividLum <= 0.82
+      && vividSat >= 0.28;
+    if (warmHighlight && vividWeightRatio >= 0.16 && vividDistance <= 0.72) {
+      return vividRgb;
+    }
+  }
+
   let neutralCandidate: PaletteSampleBucket | undefined;
   let neutralScore = 0;
 
@@ -1305,6 +1385,85 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
   }
 
   return resolved;
+};
+
+const isWarmBackdropTitleLine = (line: OCRLine): boolean => {
+  const key = normalizeOverlayLatinContextKey(String(line.text || ''));
+  return key === 'BARBARIANFEMALE'
+    || key === 'BARBARIAN'
+    || key === 'BARBARIANFEMALEVALKYRIEMODE'
+    || key === 'VALKYRIEMODE'
+    || key === 'VAKYREMODE'
+    || key === 'LIMITEDEDITION';
+};
+
+const pickWarmBackdropRgb = (stats: PaletteSampleStats, minWeightRatio: number): RGB | null => {
+  if (stats.totalWeight <= 0) return null;
+  let best: PaletteSampleBucket | undefined;
+  let bestScore = 0;
+  stats.buckets.forEach((bucket) => {
+    if (bucket.weight <= 0) return;
+    const rgb = resolveBucketRgb(bucket);
+    const lum = luminance(rgb);
+    const sat = computeSaturation(rgb.r, rgb.g, rgb.b);
+    const warmHighlight = rgb.r >= 150
+      && rgb.g >= 110
+      && rgb.b <= Math.min(rgb.r, rgb.g) - 20
+      && lum >= 0.2
+      && lum <= 0.86
+      && sat >= 0.22;
+    if (!warmHighlight) return;
+    const weightRatio = bucket.weight / Math.max(1e-6, stats.totalWeight);
+    if (weightRatio < minWeightRatio) return;
+    const distance = bucket.distance / Math.max(1e-6, bucket.weight);
+    const score = bucket.weight * (1 + sat * 1.6) * (1.12 - Math.min(1, distance) * 0.42);
+    if (score > bestScore) {
+      bestScore = score;
+      best = bucket;
+    }
+  });
+  return best ? resolveBucketRgb(best) : null;
+};
+
+const sampleWarmBackdropTitleRgbFromLine = (
+  context: CanvasRenderingContext2D,
+  line: OCRLine,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number
+): RGB | null => {
+  if (!hasPositiveBBox(line.bbox)) return null;
+  const stats = createPaletteSampleStats();
+  accumulateRegionSamples(
+    context,
+    line.bbox,
+    sourceWidth,
+    sourceHeight,
+    sampleWidth,
+    sampleHeight,
+    0.95,
+    1.15,
+    180,
+    110,
+    1.2,
+    stats
+  );
+  accumulateRegionSamples(
+    context,
+    line.bbox,
+    sourceWidth,
+    sourceHeight,
+    sampleWidth,
+    sampleHeight,
+    0.28,
+    0.34,
+    42,
+    36,
+    0.65,
+    stats
+  );
+  return pickWarmBackdropRgb(stats, 0.08);
 };
 
 const sampleForegroundRgbFromLine = (
@@ -1418,6 +1577,16 @@ const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB)
 
   // Keep neutral bright text on dark backgrounds when it is already readable.
   if (saturation < 0.08 && colorSpread < 18) {
+    const backgroundSaturation = computeSaturation(background.r, background.g, background.b);
+    const backgroundLuminance = luminance(background);
+    const warmReadableBackground = backgroundSaturation >= 0.22
+      && background.r >= 150
+      && background.g >= 105
+      && background.b <= Math.min(background.r, background.g) - 20
+      && backgroundLuminance <= 0.76;
+    if (warmReadableBackground && luminance(candidate) >= 0.78 && initialContrast >= 1.35) {
+      return candidate;
+    }
     if (initialContrast >= 3.2) {
       return candidate;
     }
@@ -1567,8 +1736,17 @@ export const sampleOverlayPaletteFromLine = (
   sampleWidth: number,
   sampleHeight: number
 ): OverlayPalette => {
-  const sample = sampleDominantRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
+  const warmTitleBackground = isWarmBackdropTitleLine(line)
+    ? sampleWarmBackdropTitleRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight)
+    : null;
+  const sample = warmTitleBackground || sampleDominantRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
   const pair = chooseReadablePair(sample);
+  if (warmTitleBackground) {
+    return {
+      backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
+      textColor: 'rgb(248, 250, 252)',
+    };
+  }
   const foregroundCandidate = sampleForegroundRgbFromLine(
     context,
     line,

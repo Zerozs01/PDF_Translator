@@ -7,6 +7,7 @@ import {
   resolveOverlayMaskExpansion,
   resolveOverlaySourceBBox,
   resolveMissingOverlayLineFallbackText,
+  sampleOverlayPaletteFromLine,
   shouldSkipOverlayRenderForSuspiciousLine,
 } from './translationOverlayUtils';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
@@ -18,6 +19,19 @@ describe('translationOverlayUtils typography', () => {
     expect(resolveMissingOverlayLineFallbackText('HMM?', 'th')).toBe('อืม?');
     expect(resolveMissingOverlayLineFallbackText('EARLIER AND', 'th')).toBe('ก่อนหน้านี้ แล้ว');
     expect(resolveMissingOverlayLineFallbackText('OF COURSE', 'th')).toBe('แน่นอน');
+    expect(resolveMissingOverlayLineFallbackText('BARBAR I AN (FEMALE)', 'th')).toBe('บาร์บาเรียน (หญิง)');
+    expect(resolveMissingOverlayLineFallbackText('VAKYRE MODE', 'th')).toBe('โหมดวาลคีรี');
+    expect(resolveMissingOverlayLineFallbackText('LIMITED EDITION', 'th')).toBe('รุ่นลิมิเต็ด');
+    expect(resolveMissingOverlayLineFallbackText('TH-THIS LIGHT...!', 'th')).toBe('แส-แสงนี้...!');
+    expect(resolveMissingOverlayLineFallbackText('SI ME QUEDO', 'th')).toBe('ถ้าฉันอยู่');
+    expect(resolveMissingOverlayLineFallbackText('AQuí MAS', 'th')).toBe('ที่นี่นานกว่านี้');
+    expect(resolveMissingOverlayLineFallbackText('S-SIENTO QUE ME', 'th')).toBe('ฉะ-ฉันรู้สึกว่า');
+    expect(resolveMissingOverlayLineFallbackText('VOY CORRER..', 'th')).toBe('ฉันจะเสร็จแล้ว..');
+    expect(resolveMissingOverlayLineFallbackText('STAFF', 'th')).toBe('เจ้าหน้าที่');
+    expect(resolveMissingOverlayLineFallbackText('PRI-MERO LA FOTO', 'th')).toBe('ภาพแรก');
+    expect(resolveMissingOverlayLineFallbackText('DE', 'th')).toBe('ของ');
+    expect(resolveMissingOverlayLineFallbackText('METIENDO POR', 'th')).toBe('กำลังดำเนินการ');
+    expect(resolveMissingOverlayLineFallbackText('iLISTO! CON', 'th')).toBe('พร้อม! ด้วย');
   });
 
   test('shrinks font size for longer translated text in the same box', () => {
@@ -54,6 +68,79 @@ describe('translationOverlayUtils typography', () => {
 
     expect(typography.forceSingleLine).toBe(true);
     expect(typography.fontSize).toBeLessThanOrEqual(16);
+  });
+
+  test('keeps warm title backgrounds when white lettering dominates the sampled text area', () => {
+    const yellow = [220, 170, 24, 255];
+    const white = [250, 250, 250, 255];
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          const color = (i % 100) < 62 ? white : yellow;
+          pixels.set(color, i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromLine(
+      context,
+      {
+        text: 'BARBARIAN (FEMALE)',
+        confidence: 94,
+        bbox: { x0: 10, y0: 10, x1: 210, y1: 50 },
+        words: [{ text: 'BARBARIAN', confidence: 94, bbox: { x0: 12, y0: 12, x1: 120, y1: 48 } }],
+      },
+      220,
+      80,
+      220,
+      80
+    );
+
+    expect(palette.backgroundColor).toBe('rgb(220, 170, 24)');
+    expect(palette.textColor).toBe('rgb(248, 250, 252)');
+  });
+
+  test('ignores small warm color fringes around otherwise white document text', () => {
+    const yellow = [220, 170, 24, 255];
+    const white = [250, 250, 250, 255];
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          const color = (i % 100) < 90 ? white : yellow;
+          pixels.set(color, i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromLine(
+      context,
+      {
+        text: 'Conditions for Rigid-Body Equilibrium',
+        confidence: 94,
+        bbox: { x0: 10, y0: 10, x1: 210, y1: 50 },
+        words: [{ text: 'Conditions', confidence: 94, bbox: { x0: 12, y0: 12, x1: 120, y1: 48 } }],
+      },
+      220,
+      80,
+      220,
+      80
+    );
+
+    expect(palette.backgroundColor).toBe('rgb(255, 255, 255)');
   });
 
   test('keeps elongated manga dialogue on a single line when the translation still fits', () => {
@@ -1794,7 +1881,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1868,7 +1955,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -1945,7 +2032,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2019,7 +2106,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2091,7 +2178,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2163,7 +2250,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2234,7 +2321,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2327,6 +2414,12 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
           bbox: { x0: 610, y0: 506, x1: 730, y1: 540 },
           words: [{ text: 'WINGSII', confidence: 80, bbox: { x0: 610, y0: 506, x1: 730, y1: 540 } }],
         },
+        {
+          text: 'THAVE',
+          confidence: 78,
+          bbox: { x0: 600, y0: 464, x1: 720, y1: 496 },
+          words: [{ text: 'THAVE', confidence: 78, bbox: { x0: 600, y0: 464, x1: 720, y1: 496 } }],
+        },
       ],
       words: [],
       text: '',
@@ -2334,7 +2427,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2354,6 +2447,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
           { index: 4, text: 'ดูสิ บียอร์น' },
           { index: 5, text: 'ฉันมีปีก' },
           { index: 6, text: 'WINGSII' },
+          { index: 7, text: 'THAVE' },
         ],
         translatedText: '',
         lineCount: 7,
@@ -2379,6 +2473,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     expect(overlay.translatedByIndex.has(2)).toBe(false);
     expect(overlay.translatedByIndex.has(5)).toBe(true);
     expect(overlay.translatedByIndex.has(6)).toBe(false);
+    expect(overlay.translatedByIndex.has(7)).toBe(false);
   });
 
   test('accepts spanish-source cache entry when OCR language key is english but snapshot matches', () => {
@@ -2406,7 +2501,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v43|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,

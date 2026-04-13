@@ -115,6 +115,24 @@ const horizontalContainmentRatio = (inner: OCRWord['bbox'] | OCRLine['bbox'], ou
 const bboxArea = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number =>
   Math.max(1, bboxWidth(bbox) * bboxHeight(bbox));
 
+const expandContextualPhraseBBox = (
+  bbox: OCRLine['bbox'],
+  pageWidth: number,
+  pageHeight: number,
+  leftRatio: number,
+  rightRatio: number,
+  verticalRatio: number = 0.08
+): OCRLine['bbox'] => {
+  const width = Math.max(1, bboxWidth(bbox));
+  const height = Math.max(1, bboxHeight(bbox));
+  return {
+    x0: Math.max(0, bbox.x0 - width * leftRatio),
+    y0: Math.max(0, bbox.y0 - height * verticalRatio),
+    x1: Math.min(Math.max(1, pageWidth), bbox.x1 + width * rightRatio),
+    y1: Math.min(Math.max(1, pageHeight), bbox.y1 + height * verticalRatio),
+  };
+};
+
 const bboxIoURatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
   const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
   const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
@@ -158,6 +176,8 @@ const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
   'I', 'YOU', 'HE', 'SHE', 'HER', 'HIM', 'WE', 'THEY', 'IT',
   'BIG', 'DEAL', 'GOOD', 'BAD', 'ONLY', 'LEAVE', 'OPEN', 'CHANCE',
 ]);
+
+const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set(['I', 'IN', 'IT', 'IS']);
 
 const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
   String(text || '')
@@ -299,9 +319,23 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'AREONLY',
   'OURCHANCE',
   'THEM',
+  'OPENA',
   'SHOELOCKER',
   'ANDLEAVETHE',
   'OPENASHOELOCKER',
+  'BUILDING',
+  'THTHIS',
+  'THTHISLIGHT',
+  'THISLIGHT',
+  'STAFF',
+  'PRIMERO',
+  'PRIMEROLAFOTO',
+  'LAFOTO',
+  'METIENDO',
+  'METIENDOPOR',
+  'LISTO',
+  'LISTOCON',
+  'ILISTOCON',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {
@@ -1401,6 +1435,9 @@ class VisionService {
           });
           return false;
         }
+        if (EXTERNAL_SHORT_DIALOGUE_WORDS.has(token)) {
+          return true;
+        }
         if (token.length <= 2 && nearEdge && confidence < 96) {
           dropped.push({
             filter: 'externalLatinCleanup',
@@ -1553,7 +1590,7 @@ class VisionService {
 
     const dropped: OCRDroppedWord[] = [];
     const droppedIndexes = new Set<number>();
-    const repairByIndex = new Map<number, { text: string; confidence: number }>();
+    const repairByIndex = new Map<number, { text: string; confidence: number; bbox?: OCRLine['bbox']; clearWords?: boolean }>();
 
     const normalizedLines = lines.map((line, index) => ({
       line,
@@ -1756,7 +1793,7 @@ class VisionService {
     }));
     const dropped: OCRDroppedWord[] = [];
     const droppedIndexes = new Set<number>();
-    const repairByIndex = new Map<number, { text: string; confidence: number }>();
+    const repairByIndex = new Map<number, { text: string; confidence: number; bbox?: OCRLine['bbox']; clearWords?: boolean }>();
 
     const nearbyByOrder = (
       item: typeof prepared[number],
@@ -1776,16 +1813,20 @@ class VisionService {
     });
 
     for (const item of prepared) {
-      if (item.key === 'SOLD') {
+      if (item.key === 'SOLD' || item.key === 'SOLDIT' || item.key === 'ISOLD') {
         const profitHadBefore = nearbyByOrder(item, -1, (other) =>
           other.key.includes('THEPROFITSHAD')
           || other.key.includes('PROFITSHAD')
           || other.key.includes('GETTING40OF')
         );
         if (profitHadBefore) {
+          const expandLeft = item.key === 'SOLDIT' ? 0.58 : item.key === 'ISOLD' ? 0.08 : 1.05;
+          const expandRight = item.key === 'ISOLD' ? 0.68 : item.key === 'SOLDIT' ? 0.08 : 0.95;
           repairByIndex.set(item.index, {
             text: 'I SOLD IT.',
             confidence: Number(item.line.confidence || 0),
+            bbox: expandContextualPhraseBBox(item.line.bbox, pageWidth, pageHeight, expandLeft, expandRight),
+            clearWords: true,
           });
         }
       }
@@ -1854,6 +1895,33 @@ class VisionService {
           });
         }
       }
+
+      if (item.key === 'THAVE') {
+        const haveWingsContext = (
+          nearbyByOrder(item, -1, (other) =>
+            other.key.includes('IHAVEWINGS')
+            || other.key.includes('LOOKBJORN')
+            || other.key.includes('BJORN')
+            || other.key.includes('WINGS')
+          )
+          || nearbyByOrder(item, 1, (other) =>
+            other.key.includes('IHAVEWINGS')
+            || other.key.includes('LOOKBJORN')
+            || other.key.includes('BJORN')
+            || other.key.includes('WINGS')
+          )
+        );
+        if (haveWingsContext) {
+          droppedIndexes.add(item.index);
+          dropped.push({
+            filter: 'externalPaddlePanelValidation',
+            reason: 'contextualDialogueGhostLine',
+            text: String(item.line.text || '').trim(),
+            confidence: Number(item.line.confidence || 0),
+            bbox: item.line.bbox,
+          });
+        }
+      }
     }
 
     if (droppedIndexes.size === 0 && repairByIndex.size === 0) {
@@ -1868,6 +1936,8 @@ class VisionService {
         return {
           ...line,
           text: repair.text,
+          bbox: repair.bbox || line.bbox,
+          words: repair.clearWords ? [] : line.words,
           confidence: Math.max(Number(line.confidence || 0), repair.confidence),
           layoutHints: {
             ...(line.layoutHints || {}),

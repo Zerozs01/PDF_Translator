@@ -854,6 +854,11 @@ const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bLOQUE\b/gi, replacement: 'LO QUE' },
   { pattern: /\bLISTO ?CON\b/gi, replacement: 'LISTO CON' },
   { pattern: /\bLISTOCON\b/gi, replacement: 'LISTO CON' },
+  { pattern: /\b[i¡]?LISTO[.!?…]+CON\b/gi, replacement: 'LISTO CON' },
+  { pattern: /\bPRI-?\s*MERO\s*LA\s*FOTO\b/gi, replacement: 'PRIMERO LA FOTO' },
+  { pattern: /\bPRIMEROLAFOTO\b/gi, replacement: 'PRIMERO LA FOTO' },
+  { pattern: /\bMETIENDO\s*POR\b/gi, replacement: 'METIENDO POR' },
+  { pattern: /\bMETIENDOPOR\b/gi, replacement: 'METIENDO POR' },
   { pattern: /\bPOR ?DENTRO\b/gi, replacement: 'POR DENTRO' },
   { pattern: /\bPORDENTRO\b/gi, replacement: 'POR DENTRO' },
   { pattern: /\bYA ?QUEDO\b/gi, replacement: 'YA QUEDO' },
@@ -3186,6 +3191,56 @@ export const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'ในรายละเอียดเพิ่มเติม');
   }
 
+  const compactSpanishSourceAsciiUpper = normalizedSpanishSource
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+  if (
+    compactSpanishSourceAsciiUpper.includes('SIMEQUEDO')
+    && compactSpanishSourceAsciiUpper.includes('AQUIMASTIEMPO')
+    && compactSpanishSourceAsciiUpper.includes('SIENTOQUEME')
+    && compactSpanishSourceAsciiUpper.includes('VOYCORRER')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าฉันอยู่ที่นี่นานกว่านี้ ฉะ-ฉันรู้สึกว่าจะเสร็จแล้ว');
+  }
+  if (compactSpanishSourceAsciiUpper === 'STAFF') {
+    return preserveSourceTrailingPunctuation(source, 'เจ้าหน้าที่');
+  }
+  if (compactSpanishSourceAsciiUpper === 'PRIMEROLAFOTO' || /^PRI-?MERO\s+LA\s+FOTO[.!?…]*$/i.test(normalizedSpanishSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ภาพแรก');
+  }
+  if (compactSpanishSourceAsciiUpper === 'PRIMERO') {
+    return preserveSourceTrailingPunctuation(source, 'อันดับแรก');
+  }
+  if (compactSpanishSourceAsciiUpper === 'LAFOTO') {
+    return preserveSourceTrailingPunctuation(source, 'ภาพ');
+  }
+  if (compactSpanishSourceAsciiUpper === 'DE') {
+    return preserveSourceTrailingPunctuation(source, 'ของ');
+  }
+  if (compactSpanishSourceAsciiUpper === 'METIENDOPOR' || compactSpanishSourceAsciiUpper === 'METIENDO') {
+    return preserveSourceTrailingPunctuation(source, 'กำลังดำเนินการ');
+  }
+  if (compactSpanishSourceAsciiUpper === 'LISTOCON' || /^[i¡]?\s*LISTO[.!?…]*\s+CON[.!?…]*$/i.test(normalizedSpanishSource)) {
+    return preserveSourceTrailingPunctuation(source, 'พร้อม! ด้วย');
+  }
+  if (/^SI\s+ME\s+QUEDO[.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'SIMEQUEDO') {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าฉันอยู่');
+  }
+  if (/^AQU[IÍ]\s+MAS[.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'AQUIMAS') {
+    return preserveSourceTrailingPunctuation(source, 'ที่นี่นานกว่านี้');
+  }
+  if (/^TIEMPO[,.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'TIEMPO') {
+    return preserveSourceTrailingPunctuation(source, 'อีกสักพัก');
+  }
+  if (/^S-?SIENTO\s+QUE\s+ME[.!?…]*$/i.test(source) || /^SIENTO\s+QUE\s+ME[.!?…]*$/i.test(normalizedSpanishSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉะ-ฉันรู้สึกว่า');
+  }
+  if (/^VOY\s+(?:A\s+)?CORRER[.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'VOYCORRER') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะเสร็จแล้ว');
+  }
+
   if (/^ENTONCES\s+SEGURO[.!?…]*$/i.test(source) || compactSourceAsciiUpper.includes('ENTONCESSEGURO')) {
     return preserveSourceTrailingPunctuation(source, 'งั้น แน่นอน');
   }
@@ -3340,6 +3395,27 @@ export const applyThaiConversationalGlossary = (
   }
   if (/^VALKYRIE[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'วาลคีรี');
+  }
+  if (/^BARBAR\s*I?\s*AN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source) || /^BARBARIAN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'บาร์บาเรียน (หญิง)');
+  }
+  if (/^VA(?:L)?KYR?I?E\s+MODE[.!?…]*$/i.test(source) || /^VALKYRIE\s+MODE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'โหมดวาลคีรี');
+  }
+  if (/^LIMITED\s+EDITION[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'รุ่นลิมิเต็ด');
+  }
+  if (/^TH-?THIS\s+LIGHT[.!?…]*$/i.test(source) || /^THIS\s+LIGHT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แส-แสงนี้');
+  }
+  if (/^(?:I\s+)?SUPPORT\s+YOU\s+TO\s+LIVE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันช่วยให้คุณมีชีวิตอยู่');
+  }
+  if (/^HERE[.!?…]*\s+AND\s+YOU\s+DO\s+THIS\s+TO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ที่นี่... แล้วคุณทำแบบนี้กับ');
+  }
+  if (/^THE\s+PEOPLE\s+HERE[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คนที่นี่เหรอ');
   }
   if (/^FOR\s+HER\s+IN\s+RETURN[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'เพื่อแลกกับเธอ');

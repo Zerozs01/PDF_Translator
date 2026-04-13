@@ -159,6 +159,59 @@ describe('VisionService paddle geometry guard', () => {
     ]);
   });
 
+  test('keeps short real I and IN tokens during Latin edge cleanup', () => {
+    const service = visionService as unknown as {
+      pruneLikelyLatinGhostExternalLines: (
+        lines: OCRLine[],
+        pageHeight: number,
+        pipelineProfile: string,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      { ...makeLine('I', 120, 44, 136, 78), confidence: 90 },
+      { ...makeLine('IN', 160, 48, 194, 78), confidence: 90 },
+      { ...makeLine('X', 220, 48, 238, 78), confidence: 90 },
+      { ...makeLine('THINK', 260, 48, 360, 82), confidence: 90 },
+    ];
+
+    const result = service.pruneLikelyLatinGhostExternalLines(lines, 1000, 'panel', 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual(['I', 'IN', 'THINK']);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'X', reason: 'latinEdgeSingleton' }),
+    ]);
+  });
+
+  test('keeps Spanish comic fragments during contextual panel cleanup', () => {
+    const service = visionService as unknown as {
+      repairPaddlePanelContextualDialogueLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('STAFF', 140, 100, 230, 132),
+      makeLine('PRI-MERO LA FOTO', 124, 138, 390, 172),
+      makeLine('DE', 150, 178, 190, 208),
+      makeLine('METIENDO POR', 118, 212, 330, 246),
+      makeLine('iLISTO! CON', 112, 252, 300, 286),
+    ];
+
+    const result = service.repairPaddlePanelContextualDialogueLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'STAFF',
+      'PRI-MERO LA FOTO',
+      'DE',
+      'METIENDO POR',
+      'iLISTO! CON',
+    ]);
+    expect(result.dropped).toEqual([]);
+  });
+
   test('drops isolated narrow tall Latin effect lines from Paddle panel output', () => {
     const service = visionService as unknown as {
       prunePaddlePanelTallEffectLines: (
@@ -265,6 +318,39 @@ describe('VisionService paddle geometry guard', () => {
       'I SOLD IT.',
       "I'LL LET YOU",
     ]);
+    const repairedSold = result.lines.find((line) => line.text === 'I SOLD IT.');
+    expect(repairedSold?.bbox.x0).toBeLessThan(430);
+    expect(repairedSold?.bbox.x1).toBeGreaterThan(520);
+    expect(repairedSold?.words).toEqual([]);
+    expect(result.dropped).toEqual([]);
+  });
+
+  test('repairs lost leading I when Paddle keeps SOLD IT together', () => {
+    const service = visionService as unknown as {
+      repairPaddlePanelContextualDialogueLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('GETTING 40% OF', 330, 210, 640, 246),
+      makeLine('THE PROFITS HAD', 318, 256, 670, 292),
+      makeLine('SOLD IT.', 430, 304, 590, 338),
+    ];
+
+    const result = service.repairPaddlePanelContextualDialogueLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      'GETTING 40% OF',
+      'THE PROFITS HAD',
+      'I SOLD IT.',
+    ]);
+    const repairedSoldIt = result.lines.find((line) => line.text === 'I SOLD IT.');
+    expect(repairedSoldIt?.bbox.x0).toBeLessThan(430);
+    expect(repairedSoldIt?.bbox.x1).toBeGreaterThanOrEqual(590);
+    expect(repairedSoldIt?.words).toEqual([]);
     expect(result.dropped).toEqual([]);
   });
 
@@ -315,6 +401,7 @@ describe('VisionService paddle geometry guard', () => {
       makeLine('LOOK, BJORN!', 520, 420, 760, 454),
       makeLine('I HAVE WINGS!!', 524, 462, 786, 496),
       makeLine('WINGSII', 610, 506, 730, 540),
+      makeLine('THAVE', 560, 464, 690, 496),
     ];
 
     const result = service.repairPaddlePanelContextualDialogueLines(lines, 900, 1300, 'eng');
@@ -329,6 +416,7 @@ describe('VisionService paddle geometry guard', () => {
     expect(result.dropped).toEqual([
       expect.objectContaining({ text: 'CARNED', reason: 'contextualDialogueGhostLine' }),
       expect.objectContaining({ text: 'WINGSII', reason: 'contextualDialogueGhostLine' }),
+      expect.objectContaining({ text: 'THAVE', reason: 'contextualDialogueGhostLine' }),
     ]);
   });
 });

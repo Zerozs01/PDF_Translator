@@ -1460,6 +1460,12 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('DO YOU', 'DO YOU', 'th')).toBe('คุณต้องการ');
     expect(applyThaiConversationalGlossary('EARLIER AND', 'EARLIER AND', 'th')).toBe('ก่อนหน้านี้ แล้ว');
     expect(applyThaiConversationalGlossary('OF COURSE', 'OF COURSE', 'th')).toBe('แน่นอน');
+    expect(applyThaiConversationalGlossary('BARBAR I AN (FEMALE)', 'BARBAR I AN (FEMALE)', 'th')).toBe('บาร์บาเรียน (หญิง)');
+    expect(applyThaiConversationalGlossary('VAKYRE MODE', 'VAKYRE MODE', 'th')).toBe('โหมดวาลคีรี');
+    expect(applyThaiConversationalGlossary('LIMITED EDITION', 'LIMITED EDITION', 'th')).toBe('รุ่นลิมิเต็ด');
+    expect(applyThaiConversationalGlossary('TH-THIS LIGHT...!', 'TH-THIS LIGHT...!', 'th')).toBe('แส-แสงนี้...!');
+    expect(applyThaiConversationalGlossary('SUPPORT YOU TO LIVE', 'SUPPORT YOU TO LIVE', 'th')).toBe('ฉันช่วยให้คุณมีชีวิตอยู่');
+    expect(applyThaiConversationalGlossary('THE PEOPLE HERE?', 'THE PEOPLE HERE?', 'th')).toBe('คนที่นี่เหรอ?');
   });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
@@ -1467,11 +1473,26 @@ describe('applyThaiConversationalGlossary', () => {
     const ceh = applyThaiConversationalGlossary('CEH?', 'CEH?', 'th');
     const detalle = applyThaiConversationalGlossary('CON MAS DETALLE.', 'CON MAS DETALLE.', 'th');
     const detalleNoisy = applyThaiConversationalGlossary('CON MAS DETA- LLE.', 'CON MAS DETA- LLE.', 'th');
+    const stayingTooLong = applyThaiConversationalGlossary(
+      'SI ME QUEDO AQuí MAS TIEMPO, S-SIENTO QUE ME VOY CORRER..',
+      'ถ้าฉันอยู่ ที่นี่ มาสัก พักฉันรู้สึก ฆ่าฉันจะมา',
+      'th'
+    );
 
     expect(algoAsi).toBe('ประมาณนั้นแหละ...');
     expect(ceh).toBe('เอ๋?');
     expect(detalle).toBe('ในรายละเอียดเพิ่มเติม.');
     expect(detalleNoisy).toBe('ในรายละเอียดเพิ่มเติม.');
+    expect(stayingTooLong).toBe('ถ้าฉันอยู่ที่นี่นานกว่านี้ ฉะ-ฉันรู้สึกว่าจะเสร็จแล้ว..');
+    expect(applyThaiConversationalGlossary('SI ME QUEDO', 'SI ME QUEDO', 'th')).toBe('ถ้าฉันอยู่');
+    expect(applyThaiConversationalGlossary('AQuí MAS', 'AQuí MAS', 'th')).toBe('ที่นี่นานกว่านี้');
+    expect(applyThaiConversationalGlossary('S-SIENTO QUE ME', 'S-SIENTO QUE ME', 'th')).toBe('ฉะ-ฉันรู้สึกว่า');
+    expect(applyThaiConversationalGlossary('VOY CORRER..', 'VOY CORRER..', 'th')).toBe('ฉันจะเสร็จแล้ว..');
+    expect(applyThaiConversationalGlossary('STAFF', 'STAFF', 'th')).toBe('เจ้าหน้าที่');
+    expect(applyThaiConversationalGlossary('PRI-MERO LA FOTO', 'PRI-MERO LA FOTO', 'th')).toBe('ภาพแรก');
+    expect(applyThaiConversationalGlossary('DE', 'DE', 'th')).toBe('ของ');
+    expect(applyThaiConversationalGlossary('METIENDO POR', 'METIENDO POR', 'th')).toBe('กำลังดำเนินการ');
+    expect(applyThaiConversationalGlossary('iLISTO! CON', 'iLISTO! CON', 'th')).toBe('พร้อม! ด้วย');
   });
 
   test('maps noisy spanish question and emphasis fragments', () => {

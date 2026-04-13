@@ -956,6 +956,18 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "SHOELOCKER",
     "OPENASHOELOCKER",
     "BUILDING",
+    "THTHIS",
+    "THTHISLIGHT",
+    "THISLIGHT",
+    "STAFF",
+    "PRIMERO",
+    "PRIMEROLAFOTO",
+    "LAFOTO",
+    "METIENDO",
+    "METIENDOPOR",
+    "LISTO",
+    "LISTOCON",
+    "ILISTOCON",
 }
 
 
@@ -1662,6 +1674,24 @@ def count_line_word_boxes(line: Dict[str, Any]) -> int:
     return len(split_text_tokens(str(line.get("text") or "")))
 
 
+def expand_contextual_phrase_bbox(
+    bbox: Dict[str, Any],
+    width: int,
+    height: int,
+    left_ratio: float,
+    right_ratio: float,
+    vertical_ratio: float = 0.08,
+) -> Dict[str, float]:
+    line_w = max(1.0, bbox_width(bbox))
+    line_h = max(1.0, bbox_height(bbox))
+    return {
+        "x0": max(0.0, float(bbox.get("x0", 0.0)) - line_w * left_ratio),
+        "y0": max(0.0, float(bbox.get("y0", 0.0)) - line_h * vertical_ratio),
+        "x1": min(float(max(1, width)), float(bbox.get("x1", 0.0)) + line_w * right_ratio),
+        "y1": min(float(max(1, height)), float(bbox.get("y1", 0.0)) + line_h * vertical_ratio),
+    }
+
+
 def prune_paddle_panel_contextual_noise_lines(
     lines: List[Dict[str, Any]],
     width: int,
@@ -1709,6 +1739,25 @@ def prune_paddle_panel_contextual_noise_lines(
         known_dialogue_fragment = is_known_paddle_dialogue_fragment(text)
         line_key = normalized_items[line_index]["key"]
 
+        if line_key in {"SOLD", "SOLDIT", "ISOLD"}:
+            profit_context = has_nearby_context(
+                line_index,
+                -1,
+                lambda key: "THEPROFITSHAD" in key or "PROFITSHAD" in key or "GETTING40OF" in key,
+            )
+            if profit_context:
+                expand_left = 0.58 if line_key == "SOLDIT" else 0.08 if line_key == "ISOLD" else 1.05
+                expand_right = 0.68 if line_key == "ISOLD" else 0.08 if line_key == "SOLDIT" else 0.95
+                repaired = dict(line)
+                repaired["text"] = "I SOLD IT."
+                repaired["bbox"] = expand_contextual_phrase_bbox(line.get("bbox") or {}, width, height, expand_left, expand_right)
+                repaired["words"] = []
+                layout_hints = dict(repaired.get("layoutHints") or {})
+                layout_hints["repairedTextFromContext"] = "I SOLD IT."
+                repaired["layoutHints"] = layout_hints
+                kept.append(repaired)
+                continue
+
         contextual_dialogue_ghost = False
         if line_key == "CARNED":
             contextual_dialogue_ghost = (
@@ -1734,6 +1783,19 @@ def prune_paddle_panel_contextual_noise_lines(
                     line_index,
                     1,
                     lambda key: "IHAVEWINGS" in key or "BJORN" in key,
+                )
+            )
+        elif line_key == "THAVE":
+            contextual_dialogue_ghost = (
+                has_nearby_context(
+                    line_index,
+                    -1,
+                    lambda key: "IHAVEWINGS" in key or "LOOKBJORN" in key or "BJORN" in key or "WINGS" in key,
+                )
+                or has_nearby_context(
+                    line_index,
+                    1,
+                    lambda key: "IHAVEWINGS" in key or "LOOKBJORN" in key or "BJORN" in key or "WINGS" in key,
                 )
             )
         if contextual_dialogue_ghost:
