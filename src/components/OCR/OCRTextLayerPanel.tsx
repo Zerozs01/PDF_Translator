@@ -624,8 +624,14 @@ const normalizePanelBBox = (bbox?: { x0?: number; y0?: number; x1?: number; y1?:
   const x1 = Number(bbox?.x1);
   const y1 = Number(bbox?.y1);
   if (![x0, y0, x1, y1].every(Number.isFinite)) return undefined;
-  if (!(x1 > x0 && y1 > y0)) return undefined;
-  return { x0, y0, x1, y1 };
+
+  const left = Math.min(x0, x1);
+  const right = Math.max(x0, x1);
+  const top = Math.min(y0, y1);
+  const bottom = Math.max(y0, y1);
+  if (!(right > left && bottom > top)) return undefined;
+
+  return { x0: left, y0: top, x1: right, y1: bottom };
 };
 
 const isSamePanelBBox = (a?: BBox, b?: BBox): boolean => {
@@ -1180,15 +1186,6 @@ const shouldCollapsePanelSafetyDuplicate = (
 ): boolean => {
   if (!existingKey || !candidateKey) return false;
 
-  const minLength = Math.min(existingKey.length, candidateKey.length);
-  const sameOrSubset = existingKey === candidateKey
-    || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
-  if (!sameOrSubset) {
-    const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
-    if (similarity < 0.72) return false;
-    if (minLength < 8 && similarity < 0.86) return false;
-  }
-
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
   const overlapX = panelOverlapRatioX(existingLine, candidateLine);
   const iou = panelIoURatio(existingLine, candidateLine);
@@ -1199,7 +1196,12 @@ const shouldCollapsePanelSafetyDuplicate = (
   const existingArea = Math.max(1, panelLineArea(existingLine));
   const candidateArea = Math.max(1, panelLineArea(candidateLine));
   const areaRatio = existingArea / candidateArea;
+  const areaSpanRatio = Math.max(existingArea, candidateArea) / Math.max(1, Math.min(existingArea, candidateArea));
   const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
+  const existingCoverage = computePanelLineWordUnionCoverage(existingLine);
+  const candidateCoverage = computePanelLineWordUnionCoverage(candidateLine);
+  const dominantCoverage = Math.max(existingCoverage, candidateCoverage);
+  const weakCoverage = Math.min(existingCoverage, candidateCoverage);
   const strongSpatialMatch = (
     iou >= 0.58
     || (overlapY >= 0.86 && overlapX >= 0.74)
@@ -1218,9 +1220,42 @@ const shouldCollapsePanelSafetyDuplicate = (
     || isLikelyTechnicalDocumentLineForSafety(candidatePreview)
   );
 
+  const severeGeometryEcho = (
+    overlapX >= 0.62
+    && (overlapY >= 0.16 || iou >= 0.1)
+    && centerDeltaX <= Math.max(104, minWidth * 1.2)
+    && centerDeltaY <= Math.max(136, minHeight * 4.2)
+    && areaSpanRatio >= 1.34
+    && (dominantCoverage - weakCoverage) >= 0.16
+    && weakCoverage <= 0.44
+    && (technicalLinePair || Math.max(existingArea, candidateArea) >= 9000 || iou >= 0.22)
+  );
+  if (severeGeometryEcho) {
+    return true;
+  }
+
+  const minLength = Math.min(existingKey.length, candidateKey.length);
+  const sameOrSubset = existingKey === candidateKey
+    || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
+  if (!sameOrSubset) {
+    const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
+    if (similarity < 0.72) return false;
+    if (minLength < 8 && similarity < 0.86) return false;
+  }
+
   // On technical/document rows, collapse duplicates only when the boxes strongly match.
   if (technicalLinePair) {
+    const technicalStackedEcho = (
+      (sameOrSubset || panelDedupDiceSimilarity(existingKey, candidateKey) >= 0.88)
+      && areaSpanRatio <= 2.8
+      && overlapX >= 0.74
+      && centerDeltaX <= Math.max(78, minWidth * 1.08)
+      && centerDeltaY <= Math.max(142, minHeight * 4.8)
+      && (overlapY >= 0.01 || iou >= 0.02)
+    );
     return (
+      technicalStackedEcho
+      ||
       iou >= 0.62
       || (
         overlapY >= 0.86
@@ -1423,6 +1458,127 @@ const mergePanelRicherTextWithCleanerDuplicateGeometry = (
       ...(cleaner.layoutHints || {}),
       repairedTextFromDuplicate: repairedText,
     },
+  };
+};
+
+const suppressDisplacedPanelLongPhraseEchoes = (
+  items: Array<{ line: OCRLine; index: number }>,
+): { items: Array<{ line: OCRLine; index: number }>; dropped: OCRDroppedWord[] } => {
+  if (items.length <= 1) {
+    return { items, dropped: [] };
+  }
+
+  type LineMetric = {
+    item: { line: OCRLine; index: number };
+    key: string;
+    tokenCount: number;
+    wordCount: number;
+    coverage: number;
+    confidence: number;
+    area: number;
+    width: number;
+    height: number;
+    centerX: number;
+    centerY: number;
+    score: number;
+  };
+
+  const grouped = new Map<string, LineMetric[]>();
+  items.forEach((item) => {
+    const text = normalizePreviewText(String(item.line.text || ''));
+    const key = normalizePanelDedupTextKey(text);
+    if (!key) return;
+
+    const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+    if (key.length < 14 || tokenCount < 3 || tokenCount > 12) return;
+
+    const coverage = computePanelLineWordUnionCoverage(item.line);
+    const words = (Array.isArray(item.line.words) ? item.line.words : [])
+      .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+    const wordCount = words.length > 0 ? words.length : tokenCount;
+    const confidence = Number(item.line.confidence || 0);
+    const area = Math.max(1, panelLineArea(item.line));
+    const width = Math.max(1, panelLineWidth(item.line));
+    const height = Math.max(1, panelLineHeight(item.line));
+    const centerX = panelLineCenterX(item.line);
+    const centerY = panelLineCenterY(item.line);
+    const score = (coverage * 120) + (wordCount * 9) + (confidence * 0.22) - (Math.log10(area) * 6);
+
+    const metric: LineMetric = {
+      item,
+      key,
+      tokenCount,
+      wordCount,
+      coverage,
+      confidence,
+      area,
+      width,
+      height,
+      centerX,
+      centerY,
+      score,
+    };
+    const current = grouped.get(key) || [];
+    current.push(metric);
+    grouped.set(key, current);
+  });
+
+  const droppedIndexes = new Set<number>();
+  const dropped: OCRDroppedWord[] = [];
+
+  grouped.forEach((metrics) => {
+    if (metrics.length <= 1) return;
+    const ordered = [...metrics].sort((a, b) => b.score - a.score);
+    const anchor = ordered[0];
+    if (!anchor) return;
+
+    for (let i = 1; i < ordered.length; i += 1) {
+      const candidate = ordered[i];
+      if (!candidate || droppedIndexes.has(candidate.item.index)) continue;
+
+      const overlapX = panelOverlapRatioX(anchor.item.line, candidate.item.line);
+      const overlapY = panelOverlapRatioY(anchor.item.line, candidate.item.line);
+      const minWidth = Math.max(24, Math.min(anchor.width, candidate.width));
+      const minHeight = Math.max(8, Math.min(anchor.height, candidate.height));
+      const centerDeltaX = Math.abs(anchor.centerX - candidate.centerX);
+      const centerDeltaY = Math.abs(anchor.centerY - candidate.centerY);
+      const areaRatio = candidate.area / Math.max(1, anchor.area);
+      const widthRatio = candidate.width / Math.max(1, anchor.width);
+      const heightRatio = candidate.height / Math.max(1, anchor.height);
+
+      const spatiallyDetached = (
+        overlapX <= 0.44
+        || overlapY <= 0.34
+        || centerDeltaX >= Math.max(96, minWidth * 1.2)
+        || centerDeltaY >= Math.max(78, minHeight * 1.45)
+      );
+      const clearlyOversized = areaRatio >= 1.55 || widthRatio >= 1.42 || heightRatio >= 1.55;
+      const lowCoverageEcho = candidate.coverage <= Math.max(0.34, anchor.coverage - 0.14);
+      const weakerSignal = candidate.wordCount <= anchor.wordCount
+        && candidate.confidence <= anchor.confidence + 4;
+
+      if (!(spatiallyDetached && clearlyOversized && lowCoverageEcho && weakerSignal)) {
+        continue;
+      }
+
+      droppedIndexes.add(candidate.item.index);
+      dropped.push({
+        filter: 'panelSafetyDedup',
+        reason: 'displacedLongPhraseEcho',
+        text: normalizePreviewText(String(candidate.item.line.text || '')),
+        confidence: Number(candidate.item.line.confidence || 0),
+        bbox: candidate.item.line.bbox,
+      });
+    }
+  });
+
+  if (droppedIndexes.size === 0) {
+    return { items, dropped: [] };
+  }
+
+  return {
+    items: items.filter((item) => !droppedIndexes.has(item.index)),
+    dropped,
   };
 };
 
@@ -1645,7 +1801,13 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
     };
   });
 
-  const orderedLines = repairedWatermarkFilteredLines
+  const displacedEchoPrune = suppressDisplacedPanelLongPhraseEchoes(repairedWatermarkFilteredLines);
+  if (displacedEchoPrune.dropped.length > 0) {
+    dropped.push(...displacedEchoPrune.dropped);
+  }
+  const dedupInputLines = displacedEchoPrune.items;
+
+  const orderedLines = dedupInputLines
     .sort((a, b) => {
       const ay = Number(a.line.bbox?.y0 || 0);
       const by = Number(b.line.bbox?.y0 || 0);
@@ -1662,7 +1824,8 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const lineScore = (line: OCRLine): number => {
     const confidence = Number(line.confidence || 0);
     const textLength = String(line.text || '').trim().length;
-    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8);
+    const coverage = computePanelLineWordUnionCoverage(line);
+    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8) + (coverage * 28);
   };
 
   for (const item of orderedLines) {
@@ -1726,7 +1889,7 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   }
 
   const originalOrder = new Map<OCRLine, number>();
-  repairedWatermarkFilteredLines.forEach(({ line, index }) => {
+  dedupInputLines.forEach(({ line, index }) => {
     originalOrder.set(line, index);
   });
 
@@ -3385,17 +3548,16 @@ export const OCRTextLayerPanel: React.FC = () => {
           },
         };
       }
-      // Keep Latin comic panels readable on very tall pages. A pure pixel budget can shrink
-      // 300 DPI webtoon pages below 900px wide, which loses small top-balloon text before OCR.
+      // Keep document-like pages close to native render size to improve bbox recall/coverage.
       return {
         maxSide: 16000,
-        maxPixels: 9_600_000,
-        minWidth: activePipelineProfile === 'panel' ? 1040 : null,
+        maxPixels: 8_400_000,
+        minWidth: null,
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
-          boostedMaxSide: 19000,
-          boostedMaxPixels: 14_800_000,
+          boostedMaxSide: 18000,
+          boostedMaxPixels: 11_200_000,
         },
       };
     }

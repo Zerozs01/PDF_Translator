@@ -15,6 +15,7 @@ import {
   normalizeOverlayInlineText,
   resolveOverlayMaskBBox,
   resolveOverlayMaskExpansion,
+  type OverlayPalette,
   type OverlayLayout,
   type OverlayLayoutProfile,
   type OverlayTypography,
@@ -176,7 +177,7 @@ export const PDFCanvas: React.FC = () => {
     offsetY: 0
   });
   const [pageRenderTick, setPageRenderTick] = useState(0);
-  const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, { backgroundColor: string; textColor: string }>>(new Map());
+  const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, OverlayPalette>>(new Map());
 
   const selectedEngine = (options.engine || 'tesseract');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
@@ -366,7 +367,7 @@ export const PDFCanvas: React.FC = () => {
 
     context.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-    const next = new Map<number, { backgroundColor: string; textColor: string }>();
+    const next = new Map<number, OverlayPalette>();
     currentPageOCR.lines.forEach((line, index) => {
       if (!translationOverlayContext.translatedByIndex.has(index)) return;
       const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
@@ -854,6 +855,11 @@ export const PDFCanvas: React.FC = () => {
                         continuationPalette.textColor,
                         overlaySearchPattern
                       );
+                      const overlayStrokeBaseWidth = Number(palette.textStrokeWidth || 0);
+                      const overlayStrokeWidth = overlayStrokeBaseWidth > 0
+                        ? Math.max(0.55, Math.min(1.35, overlayStrokeBaseWidth * (typography.fontSize / 14)))
+                        : 0;
+                      const overlayTextWeight = Math.max(400, Math.min(700, Math.round(Number(palette.textFillWeight || 400))));
                       const rotationDeg = estimateLineRotationDeg(line);
                       const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
                       const minFillRatio = typography.estimatedLines > 1
@@ -928,6 +934,7 @@ export const PDFCanvas: React.FC = () => {
                                   fontSize: typography.fontSize,
                                   lineHeight: typography.lineHeight,
                                   fontFamily: overlayFontFamily,
+                                  fontWeight: overlayTextWeight,
                                   boxSizing: 'border-box',
                                   display: 'flex',
                                   alignItems: 'flex-start',
@@ -935,6 +942,9 @@ export const PDFCanvas: React.FC = () => {
                                   whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
                                   wordBreak: 'normal',
                                   lineBreak: hasThaiText ? 'auto' : 'normal',
+                                  WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,
+                                  WebkitTextStrokeColor: overlayStrokeWidth > 0 ? palette.textStrokeColor : undefined,
+                                  textShadow: palette.textShadow,
                                   overflowWrap: typography.forceSingleLine
                                     ? 'normal'
                                     : (hasThaiText ? 'normal' : 'break-word'),

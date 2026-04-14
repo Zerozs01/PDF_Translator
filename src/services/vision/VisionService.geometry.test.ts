@@ -132,6 +132,109 @@ describe('VisionService paddle geometry guard', () => {
     ]);
   });
 
+  test('collapses same-box coverage echoes even when OCR text differs', () => {
+    const service = visionService as unknown as {
+      collapseResidualSpatialDuplicateExternalLines: (lines: OCRLine[], languageCodes: string[]) => { lines: OCRLine[]; dropped: Array<{ text: string }> };
+    };
+    const lines: OCRLine[] = [
+      {
+        text: 'rests on the ledge that',
+        confidence: 95,
+        bbox: { x0: 120, y0: 108, x1: 310, y1: 156 },
+        words: [
+          { text: 'rests', confidence: 95, bbox: { x0: 126, y0: 112, x1: 170, y1: 136 } },
+          { text: 'on', confidence: 95, bbox: { x0: 176, y0: 112, x1: 198, y1: 136 } },
+          { text: 'the', confidence: 95, bbox: { x0: 204, y0: 112, x1: 234, y1: 136 } },
+          { text: 'ledge', confidence: 95, bbox: { x0: 240, y0: 112, x1: 288, y1: 136 } },
+        ],
+      },
+      {
+        text: 'connection types in Table 5-1.',
+        confidence: 93,
+        bbox: { x0: 104, y0: 96, x1: 498, y1: 174 },
+        words: [
+          { text: 'connection', confidence: 93, bbox: { x0: 112, y0: 110, x1: 194, y1: 134 } },
+        ],
+      },
+    ];
+
+    const result = service.collapseResidualSpatialDuplicateExternalLines(lines, ['eng']);
+
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0].text).toBe('rests on the ledge that');
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'connection types in Table 5-1.' }),
+    ]);
+  });
+
+  test('collapses displaced oversized technical echoes with low coverage mismatch', () => {
+    const service = visionService as unknown as {
+      collapseResidualSpatialDuplicateExternalLines: (lines: OCRLine[], languageCodes: string[]) => { lines: OCRLine[]; dropped: Array<{ text: string }> };
+    };
+    const lines: OCRLine[] = [
+      {
+        text: 'rests on the ledge that',
+        confidence: 95,
+        bbox: { x0: 124, y0: 116, x1: 318, y1: 156 },
+        words: [
+          { text: 'rests', confidence: 95, bbox: { x0: 130, y0: 122, x1: 172, y1: 144 } },
+          { text: 'on', confidence: 95, bbox: { x0: 176, y0: 122, x1: 196, y1: 144 } },
+          { text: 'the', confidence: 95, bbox: { x0: 200, y0: 122, x1: 228, y1: 144 } },
+          { text: 'ledge', confidence: 95, bbox: { x0: 232, y0: 122, x1: 280, y1: 144 } },
+        ],
+      },
+      {
+        text: 'connection types in Table 5-1.',
+        confidence: 92,
+        bbox: { x0: 96, y0: 92, x1: 504, y1: 170 },
+        words: [
+          { text: 'connection', confidence: 92, bbox: { x0: 110, y0: 108, x1: 192, y1: 132 } },
+        ],
+      },
+    ];
+
+    const result = service.collapseResidualSpatialDuplicateExternalLines(lines, ['eng']);
+
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0].text).toBe('rests on the ledge that');
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'connection types in Table 5-1.' }),
+    ]);
+  });
+
+  test('collapses stacked same-source technical echoes with near-zero vertical overlap', () => {
+    const service = visionService as unknown as {
+      collapseResidualSpatialDuplicateExternalLines: (lines: OCRLine[], languageCodes: string[]) => { lines: OCRLine[]; dropped: Array<{ text: string }> };
+    };
+    const lines: OCRLine[] = [
+      {
+        text: 'in the direction of the cable. (1)',
+        confidence: 89,
+        bbox: { x0: 226, y0: 2356, x1: 816, y1: 2393 },
+        words: [
+          { text: 'direction', confidence: 89, bbox: { x0: 346, y0: 2364, x1: 412, y1: 2386 } },
+        ],
+      },
+      {
+        text: 'in the direction of the cable. (1)',
+        confidence: 92,
+        bbox: { x0: 222, y0: 2397, x1: 738, y1: 2445 },
+        words: [
+          { text: 'direction', confidence: 92, bbox: { x0: 326, y0: 2408, x1: 392, y1: 2432 } },
+          { text: 'cable', confidence: 92, bbox: { x0: 486, y0: 2408, x1: 536, y1: 2432 } },
+        ],
+      },
+    ];
+
+    const result = service.collapseResidualSpatialDuplicateExternalLines(lines, ['eng']);
+
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0].confidence).toBe(92);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ text: 'in the direction of the cable. (1)' }),
+    ]);
+  });
+
   test('repairs I THINK text from a top-right watermark echo onto the real bubble geometry', () => {
     const service = visionService as unknown as {
       repairPaddlePanelDialogueEchoLines: (

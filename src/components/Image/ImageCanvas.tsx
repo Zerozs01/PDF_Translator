@@ -11,6 +11,7 @@ import {
   normalizeOverlayInlineText,
   resolveOverlayMaskBBox,
   resolveOverlayMaskExpansion,
+  type OverlayPalette,
   type OverlayLayout,
   type OverlayLayoutProfile,
   type OverlayTypography,
@@ -204,7 +205,7 @@ export const ImageCanvas: React.FC = () => {
   const panRef = useRef(pan);
   const stateRef = useRef({ zoom, pan });
   const [imageDisplaySize, setImageDisplaySize] = useState({ width: 0, height: 0 });
-  const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, { backgroundColor: string; textColor: string }>>(new Map());
+  const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, OverlayPalette>>(new Map());
 
   useEffect(() => {
     if (!translationOverlayContext.shouldRender || !currentPageOCR || !imageRef.current) {
@@ -232,7 +233,7 @@ export const ImageCanvas: React.FC = () => {
 
     context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-    const next = new Map<number, { backgroundColor: string; textColor: string }>();
+    const next = new Map<number, OverlayPalette>();
     currentPageOCR.lines.forEach((line, index) => {
       if (!translationOverlayContext.translatedByIndex.has(index)) return;
       const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
@@ -638,6 +639,11 @@ export const ImageCanvas: React.FC = () => {
                     continuationPalette.textColor,
                     overlaySearchPattern
                   );
+                  const overlayStrokeBaseWidth = Number(palette.textStrokeWidth || 0);
+                  const overlayStrokeWidth = overlayStrokeBaseWidth > 0
+                    ? Math.max(0.55, Math.min(1.35, overlayStrokeBaseWidth * (typography.fontSize / 14)))
+                    : 0;
+                  const overlayTextWeight = Math.max(400, Math.min(700, Math.round(Number(palette.textFillWeight || 400))));
                   const rotationDeg = estimateLineRotationDeg(line);
                   const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
                   const minFillRatio = typography.estimatedLines > 1
@@ -715,10 +721,14 @@ export const ImageCanvas: React.FC = () => {
                               fontSize: typography.fontSize,
                               lineHeight: typography.lineHeight,
                               fontFamily: overlayFontFamily,
+                              fontWeight: overlayTextWeight,
                               textAlign: layout?.alignment === 'center' ? 'center' : 'left',
                               whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
                               wordBreak: 'normal',
                               lineBreak: hasThaiText ? 'auto' : 'normal',
+                              WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,
+                              WebkitTextStrokeColor: overlayStrokeWidth > 0 ? palette.textStrokeColor : undefined,
+                              textShadow: palette.textShadow,
                               overflowWrap: typography.forceSingleLine
                                 ? 'normal'
                                 : (hasThaiText ? 'normal' : 'break-word'),

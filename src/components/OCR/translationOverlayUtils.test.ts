@@ -7,6 +7,7 @@ import {
   resolveOverlayMaskExpansion,
   resolveOverlaySourceBBox,
   resolveMissingOverlayLineFallbackText,
+  sampleOverlayPaletteFromBbox,
   sampleOverlayPaletteFromLine,
   shouldSkipOverlayRenderForSuspiciousLine,
 } from './translationOverlayUtils';
@@ -105,6 +106,76 @@ describe('translationOverlayUtils typography', () => {
 
     expect(palette.backgroundColor).toBe('rgb(220, 170, 24)');
     expect(palette.textColor).toBe('rgb(248, 250, 252)');
+    expect(palette.textStrokeColor).toBe('rgba(0, 0, 0, 0.96)');
+    expect(palette.textStrokeWidth).toBeGreaterThan(0.6);
+    expect(palette.textStrokeWidth).toBeLessThan(1.1);
+    expect(palette.textFillWeight).toBeGreaterThanOrEqual(560);
+  });
+
+  test('keeps warm valkyrie labels white with thin stroke instead of forcing dark text', () => {
+    const warm = [236, 210, 88, 255];
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          pixels.set(warm, i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromLine(
+      context,
+      {
+        text: 'Valkyrismized',
+        confidence: 94,
+        bbox: { x0: 20, y0: 20, x1: 240, y1: 72 },
+        words: [{ text: 'Valkyrismized', confidence: 94, bbox: { x0: 26, y0: 28, x1: 220, y1: 62 } }],
+      },
+      260,
+      96,
+      260,
+      96
+    );
+
+    expect(palette.textColor).toBe('rgb(248, 250, 252)');
+    expect(palette.textStrokeColor).toBe('rgba(0, 0, 0, 0.96)');
+    expect(palette.textFillWeight).toBeGreaterThanOrEqual(560);
+  });
+
+  test('keeps white text un-stroked on dark backgrounds', () => {
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          pixels.set([18, 26, 40, 255], i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromBbox(
+      context,
+      { x0: 10, y0: 10, x1: 210, y1: 50 },
+      220,
+      80,
+      220,
+      80
+    );
+
+    expect(palette.textColor).toBe('rgb(248, 250, 252)');
+    expect(palette.textStrokeColor).toBeUndefined();
+    expect(palette.textFillWeight).toBeUndefined();
   });
 
   test('ignores small warm color fringes around otherwise white document text', () => {
@@ -452,6 +523,17 @@ describe('translationOverlayUtils typography', () => {
     });
 
     expect(bbox).toEqual({ x0: 72, y0: 124, x1: 288, y1: 254 });
+  });
+
+  test('normalizes swapped line bbox coordinates when words are unavailable', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: 'OPEN LOCKER',
+      confidence: 89,
+      bbox: { x0: 340, y0: 210, x1: 120, y1: 182 },
+      words: [],
+    });
+
+    expect(bbox).toEqual({ x0: 120, y0: 182, x1: 340, y1: 210 });
   });
 
   test('skips suspicious sparse oversized lines for overlay rendering parity', () => {
@@ -1520,6 +1602,58 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(1)?.renderText).toContain('คอลัมน์');
   });
 
+  test('suppresses oversized same-anchor overlays when translated text is identical', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'พร้อม! ด้วย',
+        width: 340,
+        height: 180,
+        bbox: { x0: 80, y0: 120, x1: 420, y1: 300 },
+        line: {
+          text: 'iLISTO! CON',
+          confidence: 78,
+          bbox: { x0: 80, y0: 120, x1: 420, y1: 300 },
+          words: [{ text: 'LISTO!', confidence: 78, bbox: { x0: 136, y0: 168, x1: 198, y1: 196 } }],
+        },
+        hints: {
+          sourceText: 'iLISTO! CON',
+          sourceBoxWidth: 340,
+          sourceBoxHeight: 180,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'พร้อม! ด้วย',
+        width: 116,
+        height: 30,
+        bbox: { x0: 132, y0: 168, x1: 248, y1: 198 },
+        line: {
+          text: 'LISTO! CON',
+          confidence: 95,
+          bbox: { x0: 132, y0: 168, x1: 248, y1: 198 },
+          words: [
+            { text: 'LISTO!', confidence: 95, bbox: { x0: 136, y0: 168, x1: 198, y1: 196 } },
+            { text: 'CON', confidence: 95, bbox: { x0: 206, y0: 168, x1: 244, y1: 196 } },
+          ],
+        },
+        hints: {
+          sourceText: 'LISTO! CON',
+          sourceBoxWidth: 116,
+          sourceBoxHeight: 30,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
   test('suppresses exact-anchor document overlays even when fallback text differs', () => {
     const layoutMap = computeOverlayLayoutMap([
       {
@@ -1554,6 +1688,195 @@ describe('translationOverlayUtils typography', () => {
 
     expect(layoutMap.get(0)?.hidden).toBe(true);
     expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses displaced document echoes when oversized low-coverage box collides with localized text', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'การต่อเชื่อมแบบมีร็อกเกอร์',
+        width: 392,
+        height: 78,
+        bbox: { x0: 104, y0: 96, x1: 498, y1: 174 },
+        line: {
+          text: 'connection types in Table 5-1.',
+          confidence: 93,
+          bbox: { x0: 104, y0: 96, x1: 498, y1: 174 },
+          words: [
+            { text: 'connection', confidence: 93, bbox: { x0: 112, y0: 110, x1: 194, y1: 134 } },
+          ],
+        },
+        hints: {
+          sourceText: 'connection types in Table 5-1.',
+          sourceBoxWidth: 392,
+          sourceBoxHeight: 78,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'วางอยู่บนขอบรองรับ',
+        width: 190,
+        height: 48,
+        bbox: { x0: 120, y0: 108, x1: 310, y1: 156 },
+        line: {
+          text: 'rests on the ledge that',
+          confidence: 95,
+          bbox: { x0: 120, y0: 108, x1: 310, y1: 156 },
+          words: [
+            { text: 'rests', confidence: 95, bbox: { x0: 126, y0: 112, x1: 170, y1: 136 } },
+            { text: 'on', confidence: 95, bbox: { x0: 176, y0: 112, x1: 198, y1: 136 } },
+            { text: 'the', confidence: 95, bbox: { x0: 204, y0: 112, x1: 234, y1: 136 } },
+            { text: 'ledge', confidence: 95, bbox: { x0: 240, y0: 112, x1: 288, y1: 136 } },
+          ],
+        },
+        hints: {
+          sourceText: 'rests on the ledge that',
+          sourceBoxWidth: 190,
+          sourceBoxHeight: 48,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'official' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses displaced oversized anchor while keeping stacked localized document lines', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'การต่อเชื่อมชนิดในตาราง 5-1',
+        width: 408,
+        height: 78,
+        bbox: { x0: 96, y0: 92, x1: 504, y1: 170 },
+        line: {
+          text: 'connection types in Table 5-1.',
+          confidence: 92,
+          bbox: { x0: 96, y0: 92, x1: 504, y1: 170 },
+          words: [
+            { text: 'connection', confidence: 92, bbox: { x0: 110, y0: 108, x1: 192, y1: 132 } },
+          ],
+        },
+        hints: {
+          sourceText: 'connection types in Table 5-1.',
+          sourceBoxWidth: 408,
+          sourceBoxHeight: 78,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'วางอยู่บนขอบรองรับ',
+        width: 194,
+        height: 40,
+        bbox: { x0: 124, y0: 116, x1: 318, y1: 156 },
+        line: {
+          text: 'rests on the ledge that',
+          confidence: 95,
+          bbox: { x0: 124, y0: 116, x1: 318, y1: 156 },
+          words: [
+            { text: 'rests', confidence: 95, bbox: { x0: 130, y0: 122, x1: 172, y1: 144 } },
+            { text: 'on', confidence: 95, bbox: { x0: 176, y0: 122, x1: 196, y1: 144 } },
+            { text: 'the', confidence: 95, bbox: { x0: 200, y0: 122, x1: 228, y1: 144 } },
+            { text: 'ledge', confidence: 95, bbox: { x0: 232, y0: 122, x1: 280, y1: 144 } },
+          ],
+        },
+        hints: {
+          sourceText: 'rests on the ledge that',
+          sourceBoxWidth: 194,
+          sourceBoxHeight: 40,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 2,
+        text: 'ถูกสมมติให้ทำหน้าที่เป็นพื้นผิวสัมผัส',
+        width: 194,
+        height: 38,
+        bbox: { x0: 126, y0: 160, x1: 320, y1: 198 },
+        line: {
+          text: 'is assumed to act as',
+          confidence: 95,
+          bbox: { x0: 126, y0: 160, x1: 320, y1: 198 },
+          words: [
+            { text: 'is', confidence: 95, bbox: { x0: 132, y0: 164, x1: 148, y1: 186 } },
+            { text: 'assumed', confidence: 95, bbox: { x0: 152, y0: 164, x1: 214, y1: 186 } },
+            { text: 'to', confidence: 95, bbox: { x0: 218, y0: 164, x1: 236, y1: 186 } },
+            { text: 'act', confidence: 95, bbox: { x0: 240, y0: 164, x1: 270, y1: 186 } },
+          ],
+        },
+        hints: {
+          sourceText: 'is assumed to act as',
+          sourceBoxWidth: 194,
+          sourceBoxHeight: 38,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'official' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(2)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses stacked same-source technical echoes even with very low vertical overlap', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'แรงกระทำในทิศทางเดียวกับสายเคเบิล (1)',
+        width: 594,
+        height: 37,
+        bbox: { x0: 226, y0: 2356, x1: 816, y1: 2393 },
+        line: {
+          text: 'in the direction of the cable. (1)',
+          confidence: 89,
+          bbox: { x0: 226, y0: 2356, x1: 816, y1: 2393 },
+          words: [
+            { text: 'direction', confidence: 89, bbox: { x0: 346, y0: 2364, x1: 412, y1: 2386 } },
+          ],
+        },
+        hints: {
+          sourceText: 'in the direction of the cable. (1)',
+          sourceBoxWidth: 594,
+          sourceBoxHeight: 37,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'สายเคเบิลรับแรงในแนวเดียวกัน',
+        width: 516,
+        height: 48,
+        bbox: { x0: 222, y0: 2397, x1: 738, y1: 2445 },
+        line: {
+          text: 'in the direction of the cable. (1)',
+          confidence: 92,
+          bbox: { x0: 222, y0: 2397, x1: 738, y1: 2445 },
+          words: [
+            { text: 'direction', confidence: 92, bbox: { x0: 326, y0: 2408, x1: 392, y1: 2432 } },
+            { text: 'cable', confidence: 92, bbox: { x0: 486, y0: 2408, x1: 536, y1: 2432 } },
+          ],
+        },
+        hints: {
+          sourceText: 'in the direction of the cable. (1)',
+          sourceBoxWidth: 516,
+          sourceBoxHeight: 48,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'official' });
+
+    const hiddenCount = [layoutMap.get(0)?.hidden, layoutMap.get(1)?.hidden].filter(Boolean).length;
+    expect(hiddenCount).toBe(1);
   });
 
   test('keeps strongly overlapped overlays when translated texts are clearly different', () => {

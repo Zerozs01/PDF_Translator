@@ -1884,7 +1884,7 @@ def prune_paddle_panel_contextual_noise_lines(
                 for left_anchor in left_anchors
                 for right_anchor in right_anchors
             )
-            if bridge_detected and not known_dialogue_fragment:
+            if bridge_detected:
                 drops.append({
                     "reason": "paddlePanelBridgeLine",
                     "source": "paddle_panel",

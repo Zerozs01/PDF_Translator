@@ -61,6 +61,7 @@ import {
   sampleOverlayPaletteFromLine,
   shouldSkipOverlayRenderForSuspiciousLine,
   type OverlayLayoutProfile,
+  type OverlayPalette,
   type OverlayTypography,
 } from './components/OCR/translationOverlayUtils';
 import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
@@ -5868,7 +5869,7 @@ export default function App() {
       { profile: overlayLayoutProfile }
     );
 
-    const translatedLinePalette = new Map<number, { backgroundColor: string; textColor: string }>();
+    const translatedLinePalette = new Map<number, OverlayPalette>();
     const maxSampleSide = 2400;
     const sampleScale = Math.min(1, maxSampleSide / Math.max(1, canvas.width, canvas.height));
     const sampleCanvas = document.createElement('canvas');
@@ -6098,10 +6099,16 @@ export default function App() {
       const textBoxHeight = Math.max(1, paintHeight - ((typography.padY * 2) + extraTopPad + extraBottomPad));
       const lineHeightPx = Math.max(1, typography.fontSize * typography.lineHeight);
       const maxLines = Math.max(1, Math.floor(textBoxHeight / lineHeightPx));
+      const overlayTextWeight = Number(palette.textFillWeight || 400);
+      const resolvedTextWeight = Math.max(400, Math.min(700, Math.round(overlayTextWeight)));
 
-      ctx.font = `400 ${typography.fontSize}px ${canvasOverlayFontFamily}`;
+      ctx.font = `${resolvedTextWeight} ${typography.fontSize}px ${canvasOverlayFontFamily}`;
       const lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
       ctx.fillStyle = palette.textColor;
+      const strokeBaseWidth = Number(palette.textStrokeWidth || 0);
+      const resolvedStrokeWidth = strokeBaseWidth > 0
+        ? Math.max(0.55, Math.min(1.35, strokeBaseWidth * (typography.fontSize / 14)))
+        : 0;
       ctx.textBaseline = 'top';
       ctx.textAlign = layout?.alignment === 'center' ? 'center' : 'left';
 
@@ -6111,6 +6118,15 @@ export default function App() {
         const x = ctx.textAlign === 'center'
           ? textBoxLeft + (textBoxWidth / 2)
           : textBoxLeft;
+        if (resolvedStrokeWidth > 0 && palette.textStrokeColor) {
+          ctx.save();
+          ctx.lineJoin = 'round';
+          ctx.miterLimit = 2;
+          ctx.lineWidth = resolvedStrokeWidth;
+          ctx.strokeStyle = palette.textStrokeColor;
+          ctx.strokeText(lineText, x, y, textBoxWidth);
+          ctx.restore();
+        }
         ctx.fillText(lineText, x, y, textBoxWidth);
       });
 

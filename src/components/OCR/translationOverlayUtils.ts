@@ -758,6 +758,10 @@ type RGB = { r: number; g: number; b: number };
 export type OverlayPalette = {
   backgroundColor: string;
   textColor: string;
+  textStrokeColor?: string;
+  textStrokeWidth?: number;
+  textShadow?: string;
+  textFillWeight?: number;
 };
 
 export type OverlayTypography = {
@@ -919,10 +923,23 @@ const computeSaturation = (r: number, g: number, b: number): number => {
   return (max - min) / max;
 };
 
-const hasPositiveBBox = (bbox?: BBox): bbox is BBox => {
-  if (!bbox) return false;
-  return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
+const normalizeOverlayBBox = (bbox?: Partial<BBox> | null): BBox | undefined => {
+  const x0 = Number(bbox?.x0);
+  const y0 = Number(bbox?.y0);
+  const x1 = Number(bbox?.x1);
+  const y1 = Number(bbox?.y1);
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return undefined;
+
+  const left = Math.min(x0, x1);
+  const right = Math.max(x0, x1);
+  const top = Math.min(y0, y1);
+  const bottom = Math.max(y0, y1);
+  if (!(right > left && bottom > top)) return undefined;
+
+  return { x0: left, y0: top, x1: right, y1: bottom };
 };
+
+const hasPositiveBBox = (bbox?: BBox): bbox is BBox => Boolean(normalizeOverlayBBox(bbox));
 
 const DOCUMENT_SOURCE_FALLBACK_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
 
@@ -948,21 +965,31 @@ const resolveQuadBBox = (line: OCRLine): BBox | null => {
 };
 
 export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
-  const quadBBox = resolveQuadBBox(line);
-  const rawLineBBox = hasPositiveBBox(line.bbox)
-    ? (quadBBox ? mergeOverlayBBoxes(line.bbox, quadBBox) : line.bbox)
+  const quadBBox = normalizeOverlayBBox(resolveQuadBBox(line));
+  const normalizedLineBBox = normalizeOverlayBBox(line.bbox);
+  const rawLineBBox = normalizedLineBBox
+    ? (quadBBox ? mergeOverlayBBoxes(normalizedLineBBox, quadBBox) : normalizedLineBBox)
     : (quadBBox || line.bbox);
   if (!Array.isArray(line.words) || line.words.length === 0) {
-    return rawLineBBox;
+    return normalizeOverlayBBox(rawLineBBox) || rawLineBBox;
   }
 
-  const validWords = line.words.filter((word) => hasPositiveBBox(word?.bbox));
+  const validWords = line.words
+    .map((word) => {
+      const bbox = normalizeOverlayBBox(word?.bbox);
+      if (!bbox) return null;
+      return {
+        ...word,
+        bbox,
+      };
+    })
+    .filter((word): word is OCRLine['words'][number] => Boolean(word));
   const meaningfulWords = validWords.filter((word) => MEANINGFUL_WORD_REGEX.test(String(word.text || '').trim()));
   const wordSource = meaningfulWords.length > 0 ? meaningfulWords : validWords;
   const validWordBoxes = wordSource.map((word) => word.bbox);
 
   if (validWordBoxes.length === 0) {
-    return rawLineBBox;
+    return normalizeOverlayBBox(rawLineBBox) || rawLineBBox;
   }
 
   const unionWordBox = validWordBoxes.reduce<BBox>((acc, bbox) => ({
@@ -1093,15 +1120,16 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
 
 export const resolveOverlayMaskBBox = (line: OCRLine): BBox => {
   const sourceBbox = resolveOverlaySourceBBox(line);
-  if (!hasPositiveBBox(line.bbox)) {
+  const normalizedLineBBox = normalizeOverlayBBox(line.bbox);
+  if (!normalizedLineBBox) {
     return sourceBbox;
   }
 
   return {
-    x0: Math.min(line.bbox.x0, sourceBbox.x0),
-    y0: Math.min(line.bbox.y0, sourceBbox.y0),
-    x1: Math.max(line.bbox.x1, sourceBbox.x1),
-    y1: Math.max(line.bbox.y1, sourceBbox.y1),
+    x0: Math.min(normalizedLineBBox.x0, sourceBbox.x0),
+    y0: Math.min(normalizedLineBBox.y0, sourceBbox.y0),
+    x1: Math.max(normalizedLineBBox.x1, sourceBbox.x1),
+    y1: Math.max(normalizedLineBBox.y1, sourceBbox.y1),
   };
 };
 
@@ -1145,7 +1173,16 @@ const MEANINGFUL_WORD_REGEX = /[\p{L}\p{N}]/u;
 const resolveOverlayTextStartX = (line: OCRLine, bbox: BBox): number => {
   if (!Array.isArray(line.words) || line.words.length === 0) return bbox.x0;
 
-  const validWords = line.words.filter((word) => hasPositiveBBox(word?.bbox));
+  const validWords = line.words
+    .map((word) => {
+      const normalizedBBox = normalizeOverlayBBox(word?.bbox);
+      if (!normalizedBBox) return null;
+      return {
+        ...word,
+        bbox: normalizedBBox,
+      };
+    })
+    .filter((word): word is OCRLine['words'][number] => Boolean(word));
   if (validWords.length === 0) return bbox.x0;
 
   const meaningful = validWords.find((word) => MEANINGFUL_WORD_REGEX.test(String(word.text || '').trim()));
@@ -1389,12 +1426,21 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
 
 const isWarmBackdropTitleLine = (line: OCRLine): boolean => {
   const key = normalizeOverlayLatinContextKey(String(line.text || ''));
-  return key === 'BARBARIANFEMALE'
+  if (!key) return false;
+
+  const warmTitleKey = key === 'BARBARIANFEMALE'
     || key === 'BARBARIAN'
     || key === 'BARBARIANFEMALEVALKYRIEMODE'
     || key === 'VALKYRIEMODE'
     || key === 'VAKYREMODE'
     || key === 'LIMITEDEDITION';
+  if (warmTitleKey) return true;
+
+  const barbarianLike = key.startsWith('BARBARI') && (key.includes('FEMALE') || key.includes('WOMAN'));
+  const valkyrieLike = key.includes('VALKYR') && (key.includes('MODE') || key.includes('MIZED') || key.includes('IZED'));
+  const editionLike = key.includes('LIMITED') && key.includes('EDITION');
+
+  return barbarianLike || valkyrieLike || editionLike;
 };
 
 const pickWarmBackdropRgb = (stats: PaletteSampleStats, minWeightRatio: number): RGB | null => {
@@ -1616,6 +1662,42 @@ const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB)
   return fallback;
 };
 
+const resolveOverlayWhiteTextStroke = (text: RGB, background: RGB): Pick<OverlayPalette, 'textStrokeColor' | 'textStrokeWidth' | 'textShadow' | 'textFillWeight'> => {
+  const textLuminance = luminance(text);
+  const backgroundLuminance = luminance(background);
+  const textSaturation = computeSaturation(text.r, text.g, text.b);
+  const backgroundSaturation = computeSaturation(background.r, background.g, background.b);
+  const warmLightBackground = background.r >= 150
+    && background.g >= 105
+    && background.b <= Math.min(background.r, background.g) - 18
+    && backgroundLuminance >= 0.32;
+
+  const whiteLikeText = textLuminance >= 0.82 && textSaturation <= 0.14;
+  const lightToneBackground = backgroundLuminance >= 0.6
+    || (backgroundLuminance >= 0.54 && backgroundSaturation <= 0.22)
+    || warmLightBackground;
+  const darkThemeBackground = backgroundLuminance <= 0.32;
+
+  if (!whiteLikeText || !lightToneBackground || darkThemeBackground) {
+    return {};
+  }
+
+  return {
+    textStrokeColor: 'rgba(0, 0, 0, 0.96)',
+    textStrokeWidth: 0.82,
+    textShadow: '0 0 0.7px rgba(0, 0, 0, 0.56)',
+    textFillWeight: 620,
+  };
+};
+
+const shouldForceWarmBackdropWhiteText = (line: OCRLine, background: RGB): boolean => {
+  if (!isWarmBackdropTitleLine(line)) return false;
+  return background.r >= 148
+    && background.g >= 102
+    && background.b <= Math.min(background.r, background.g) - 16
+    && luminance(background) >= 0.32;
+};
+
 const sampleDominantRgb = (
   context: CanvasRenderingContext2D,
   bbox: BBox,
@@ -1722,9 +1804,11 @@ export const sampleOverlayPaletteFromBbox = (
 ): OverlayPalette => {
   const sample = sampleDominantRgb(context, bbox, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
   const pair = chooseReadablePair(sample);
+  const textStroke = resolveOverlayWhiteTextStroke(pair.text, pair.bg);
   return {
     backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
     textColor: `rgb(${pair.text.r}, ${pair.text.g}, ${pair.text.b})`,
+    ...textStroke,
   };
 };
 
@@ -1742,9 +1826,12 @@ export const sampleOverlayPaletteFromLine = (
   const sample = warmTitleBackground || sampleDominantRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
   const pair = chooseReadablePair(sample);
   if (warmTitleBackground) {
+    const warmTitleText: RGB = { r: 248, g: 250, b: 252 };
+    const textStroke = resolveOverlayWhiteTextStroke(warmTitleText, pair.bg);
     return {
       backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
       textColor: 'rgb(248, 250, 252)',
+      ...textStroke,
     };
   }
   const foregroundCandidate = sampleForegroundRgbFromLine(
@@ -1763,10 +1850,15 @@ export const sampleOverlayPaletteFromLine = (
       pair.text
     )
     : pair.text;
+  const finalText = shouldForceWarmBackdropWhiteText(line, pair.bg)
+    ? { r: 248, g: 250, b: 252 }
+    : resolvedText;
+  const textStroke = resolveOverlayWhiteTextStroke(finalText, pair.bg);
 
   return {
     backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
-    textColor: `rgb(${resolvedText.r}, ${resolvedText.g}, ${resolvedText.b})`,
+    textColor: `rgb(${finalText.r}, ${finalText.g}, ${finalText.b})`,
+    ...textStroke,
   };
 };
 
@@ -2846,6 +2938,22 @@ const shouldSuppressOverlappingOverlayBorder = (a: BBox, b: BBox): boolean => {
   const areaRatio = overlayBBoxArea(a) / Math.max(1, overlayBBoxArea(b));
   const comparableArea = areaRatio >= 0.24 && areaRatio <= 4.2;
 
+  const containedAnchorCollision = (
+    overlapX >= 0.9
+    && overlapY >= 0.9
+    && centerDeltaX <= Math.max(86, minWidth * 1.22)
+    && centerDeltaY <= Math.max(64, minHeight * 1.18)
+  );
+  if (containedAnchorCollision) return true;
+
+  const severeAnchorCollision = (
+    overlapX >= 0.86
+    && overlapY >= 0.52
+    && centerDeltaX <= Math.max(74, minWidth * 1.05)
+    && centerDeltaY <= Math.max(52, minHeight * 0.96)
+  );
+  if (severeAnchorCollision) return true;
+
   if (!comparableArea) return false;
   if (iou >= 0.36) return true;
   if (overlapX >= 0.74 && overlapY >= 0.62) return true;
@@ -2860,6 +2968,30 @@ const shouldSuppressOverlappingOverlayBorder = (a: BBox, b: BBox): boolean => {
 
 const buildOverlaySuppressionTextKey = (layout: OverlayLayout, input: OverlayComputedInput): string =>
   normalizeTranslatedOverlayDuplicateKey(layout.renderText || input.text || '');
+
+const computeOverlayInputWordCoverage = (input: OverlayComputedInput, bbox: BBox): number => {
+  const lineWords = Array.isArray(input.line?.words) ? input.line.words : [];
+  if (lineWords.length === 0) return 0;
+
+  const normalizedWordBoxes = lineWords
+    .map((word) => normalizeOverlayBBox(word?.bbox))
+    .filter((wordBBox): wordBBox is BBox => Boolean(wordBBox));
+  if (normalizedWordBoxes.length === 0) return 0;
+
+  let unionX0 = Number.POSITIVE_INFINITY;
+  let unionY0 = Number.POSITIVE_INFINITY;
+  let unionX1 = Number.NEGATIVE_INFINITY;
+  let unionY1 = Number.NEGATIVE_INFINITY;
+  normalizedWordBoxes.forEach((wordBBox) => {
+    unionX0 = Math.min(unionX0, wordBBox.x0);
+    unionY0 = Math.min(unionY0, wordBBox.y0);
+    unionX1 = Math.max(unionX1, wordBBox.x1);
+    unionY1 = Math.max(unionY1, wordBBox.y1);
+  });
+
+  const unionArea = Math.max(1, (unionX1 - unionX0) * (unionY1 - unionY0));
+  return Math.max(0, Math.min(1.8, unionArea / Math.max(1, overlayBBoxArea(bbox))));
+};
 
 const scoreOverlayVisibilityCandidate = (
   layout: OverlayLayout,
@@ -2879,6 +3011,47 @@ const scoreOverlayVisibilityCandidate = (
     && /[A-Za-z]/.test(renderText)
   ) ? 32 : 0;
   const translatedThaiBonus = /[\u0E00-\u0E7F]/.test(renderText) ? 14 : 0;
+  let sparseWordCoveragePenalty = 0;
+  const wordCoverage = computeOverlayInputWordCoverage(input, bbox);
+  const coverageBonus = Math.max(0, Math.min(1, wordCoverage)) * 22;
+  const bboxArea = Math.max(1, overlayBBoxArea(bbox));
+  let lowCoveragePenalty = 0;
+  if (wordCoverage <= 0.2 && bboxArea >= 9000) {
+    lowCoveragePenalty = 36 + ((0.2 - wordCoverage) * 180);
+  } else if (wordCoverage <= 0.32 && bboxArea >= 12000) {
+    lowCoveragePenalty = 18 + ((0.32 - wordCoverage) * 96);
+  }
+
+  const lineWords = Array.isArray(input.line?.words) ? input.line.words : [];
+  if (lineWords.length > 0) {
+    const normalizedWordBoxes = lineWords
+      .map((word) => normalizeOverlayBBox(word?.bbox))
+      .filter((wordBBox): wordBBox is BBox => Boolean(wordBBox));
+    if (normalizedWordBoxes.length > 0) {
+      let unionX0 = Number.POSITIVE_INFINITY;
+      let unionY0 = Number.POSITIVE_INFINITY;
+      let unionX1 = Number.NEGATIVE_INFINITY;
+      let unionY1 = Number.NEGATIVE_INFINITY;
+      normalizedWordBoxes.forEach((wordBBox) => {
+        unionX0 = Math.min(unionX0, wordBBox.x0);
+        unionY0 = Math.min(unionY0, wordBBox.y0);
+        unionX1 = Math.max(unionX1, wordBBox.x1);
+        unionY1 = Math.max(unionY1, wordBBox.y1);
+      });
+
+      const unionArea = Math.max(1, (unionX1 - unionX0) * (unionY1 - unionY0));
+      const bboxArea = Math.max(1, overlayBBoxArea(bbox));
+      const localCoverage = unionArea / bboxArea;
+      const sourceTokenCount = sourceText.split(/\s+/g).filter(Boolean).length;
+      const sourceCompactLength = sourceText.replace(/[^\p{L}\p{N}]/gu, '').length;
+      const shortSparsePhrase = sourceTokenCount <= 4 && sourceCompactLength <= 22;
+      const sparseWordSignals = normalizedWordBoxes.length <= 2;
+      const oversizedCandidate = bboxArea >= 12000 || overlayBBoxWidth(bbox) >= 180 || overlayBBoxHeight(bbox) >= 92;
+      if (shortSparsePhrase && sparseWordSignals && oversizedCandidate && localCoverage <= 0.22) {
+        sparseWordCoveragePenalty = 24 + ((0.22 - localCoverage) * 72);
+      }
+    }
+  }
 
   return (
     renderText.length * 1.05
@@ -2888,7 +3061,10 @@ const scoreOverlayVisibilityCandidate = (
     + styleBonus
     + mergedBonus
     + translatedThaiBonus
+    + coverageBonus
     - sourceCarryOverPenalty
+    - lowCoveragePenalty
+    - sparseWordCoveragePenalty
   );
 };
 
@@ -2928,7 +3104,7 @@ const suppressOverlappingOverlayBorders = (
       if (layout.hidden) return null;
       const input = inputByIndex.get(index);
       if (!input) return null;
-      const bbox = layout.mergedBBox || input.bbox;
+      const bbox = normalizeOverlayBBox(layout.mergedBBox || input.bbox);
       if (!bbox || (bbox.x1 - bbox.x0) <= 0 || (bbox.y1 - bbox.y0) <= 0) return null;
 
       return {
@@ -2952,29 +3128,78 @@ const suppressOverlappingOverlayBorders = (
   const kept: OverlayCandidate[] = [];
 
   const shouldSuppressOverlayCandidate = (existing: OverlayCandidate, candidate: OverlayCandidate): boolean => {
-    if (!shouldSuppressOverlappingOverlayBorder(existing.bbox, candidate.bbox)) return false;
-
-    const iou = overlayBBoxIoU(existing.bbox, candidate.bbox);
-    if (iou >= 0.82) return true;
-
     const overlapX = overlayBBoxOverlapRatioX(existing.bbox, candidate.bbox);
     const overlapY = overlayBBoxOverlapRatioY(existing.bbox, candidate.bbox);
+    const iou = overlayBBoxIoU(existing.bbox, candidate.bbox);
     const minWidth = Math.max(18, Math.min(overlayBBoxWidth(existing.bbox), overlayBBoxWidth(candidate.bbox)));
     const minHeight = Math.max(8, Math.min(overlayBBoxHeight(existing.bbox), overlayBBoxHeight(candidate.bbox)));
     const centerDeltaX = Math.abs(overlayBBoxCenterX(existing.bbox) - overlayBBoxCenterX(candidate.bbox));
     const centerDeltaY = Math.abs(overlayBBoxCenterY(existing.bbox) - overlayBBoxCenterY(candidate.bbox));
-
+    const verticalGap = Math.max(
+      0,
+      Math.max(existing.bbox.y0, candidate.bbox.y0) - Math.min(existing.bbox.y1, candidate.bbox.y1)
+    );
+    const existingCoverage = computeOverlayInputWordCoverage(existing.input, existing.bbox);
+    const candidateCoverage = computeOverlayInputWordCoverage(candidate.input, candidate.bbox);
+    const dominantCoverage = Math.max(existingCoverage, candidateCoverage);
+    const weakCoverage = Math.min(existingCoverage, candidateCoverage);
+    const areaRatio = Math.max(overlayBBoxArea(existing.bbox), overlayBBoxArea(candidate.bbox))
+      / Math.max(1, Math.min(overlayBBoxArea(existing.bbox), overlayBBoxArea(candidate.bbox)));
+    const maxArea = Math.max(overlayBBoxArea(existing.bbox), overlayBBoxArea(candidate.bbox));
+    const documentLikePair = (
+      isDocumentLikeOverlaySuppressionInput(existing.input)
+      && isDocumentLikeOverlaySuppressionInput(candidate.input)
+    );
     const existingSourceKey = normalizeTranslatedOverlayDuplicateKey(
       existing.input.line?.text || existing.input.hints?.sourceText || ''
     );
     const candidateSourceKey = normalizeTranslatedOverlayDuplicateKey(
       candidate.input.line?.text || candidate.input.hints?.sourceText || ''
     );
-
-    const documentLikePair = (
-      isDocumentLikeOverlaySuppressionInput(existing.input)
-      && isDocumentLikeOverlaySuppressionInput(candidate.input)
+    const sourceMinLength = Math.min(existingSourceKey.length, candidateSourceKey.length);
+    const sourceSameOrSubset = sourceMinLength >= 8 && (
+      existingSourceKey === candidateSourceKey
+      || existingSourceKey.includes(candidateSourceKey)
+      || candidateSourceKey.includes(existingSourceKey)
     );
+    const sourceSimilarity = (existingSourceKey && candidateSourceKey)
+      ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey)
+      : 0;
+    const stackedSourceEcho = (
+      existingSourceKey.length > 0
+      && candidateSourceKey.length > 0
+      && (sourceSameOrSubset || sourceSimilarity >= 0.9)
+      && areaRatio <= 2.8
+      && overlapX >= 0.74
+      && centerDeltaX <= Math.max(78, minWidth * 1.06)
+      && centerDeltaY <= Math.max(132, minHeight * 4.4)
+      && (overlapY >= 0.01 || iou >= 0.02 || verticalGap <= Math.max(14, minHeight * 0.62))
+      && (documentLikePair || sourceSimilarity >= 0.94)
+    );
+
+    const displacedCoverageEcho = (
+      overlapX >= 0.62
+      && (overlapY >= 0.16 || iou >= 0.08)
+      && centerDeltaX <= Math.max(116, minWidth * 1.72)
+      && centerDeltaY <= Math.max(138, minHeight * 4.6)
+      && areaRatio >= 1.32
+      && (dominantCoverage - weakCoverage) >= 0.16
+      && weakCoverage <= 0.44
+      && (documentLikePair || maxArea >= 9000 || iou >= 0.22)
+    );
+    const baselineOverlapCollision = shouldSuppressOverlappingOverlayBorder(existing.bbox, candidate.bbox);
+    if (!baselineOverlapCollision && !displacedCoverageEcho && !stackedSourceEcho) return false;
+
+    if (iou >= 0.82) return true;
+
+    if (displacedCoverageEcho) {
+      return true;
+    }
+
+    if (stackedSourceEcho) {
+      return true;
+    }
+
     if (documentLikePair) {
       const sameDocumentRowTextEcho = (
         existing.textKey
@@ -3033,9 +3258,6 @@ const suppressOverlappingOverlayBorders = (
       const textSimilarity = (existing.textKey && candidate.textKey)
         ? overlayKeyDiceSimilarity(existing.textKey, candidate.textKey)
         : 0;
-      const sourceSimilarity = (existingSourceKey && candidateSourceKey)
-        ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey)
-        : 0;
       const separateSourceStack = Boolean(existingSourceKey && candidateSourceKey && existingSourceKey !== candidateSourceKey)
         && overlapX >= 0.42
         && overlapY <= 0.78
@@ -3059,7 +3281,6 @@ const suppressOverlappingOverlayBorders = (
       );
       if (sourceSameOrSubset && iou >= 0.34) return true;
 
-      const sourceSimilarity = overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey);
       if (sourceSimilarity >= 0.82 && iou >= 0.4) return true;
 
       if (!sourceSameOrSubset && sourceSimilarity < 0.58 && iou < 0.62) {

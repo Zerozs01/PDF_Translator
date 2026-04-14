@@ -944,8 +944,63 @@ class VisionService {
       || EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX.test(candidateRawText)
     );
 
-    if (centerDeltaY > Math.max(84, minHeight * 2.8)) return false;
-    if (centerDeltaX > Math.max(120, minWidth * 2.6)) return false;
+    const maxCenterDeltaY = technicalRowLikePair
+      ? Math.max(136, minHeight * 4.2)
+      : Math.max(84, minHeight * 2.8);
+    const maxCenterDeltaX = technicalRowLikePair
+      ? Math.max(152, minWidth * 3.2)
+      : Math.max(120, minWidth * 2.6);
+    if (centerDeltaY > maxCenterDeltaY) return false;
+    if (centerDeltaX > maxCenterDeltaX) return false;
+
+    const existingCoverage = computeLineWordUnionCoverage(existing);
+    const candidateCoverage = computeLineWordUnionCoverage(candidate);
+    const dominantCoverage = Math.max(existingCoverage, candidateCoverage);
+    const weakCoverage = Math.min(existingCoverage, candidateCoverage);
+    const areaRatio = Math.max(bboxArea(existing.bbox), bboxArea(candidate.bbox))
+      / Math.max(1, Math.min(bboxArea(existing.bbox), bboxArea(candidate.bbox)));
+    const latinExistingToken = normalizeExternalLatinToken(existingText);
+    const latinCandidateToken = normalizeExternalLatinToken(candidateText);
+    const existingToken = latinExistingToken || normalizeMultilingualToken(existingText);
+    const candidateToken = latinCandidateToken || normalizeMultilingualToken(candidateText);
+    const hasComparableTokens = Boolean(existingToken && candidateToken);
+    const minLength = hasComparableTokens ? Math.min(existingToken!.length, candidateToken!.length) : 0;
+    const sameOrSubset = hasComparableTokens
+      ? existingToken === candidateToken
+        || (minLength >= 4 && (existingToken!.includes(candidateToken!) || candidateToken!.includes(existingToken!)))
+      : false;
+    const tokenSimilarity = hasComparableTokens ? diceSimilarity(existingToken!, candidateToken!) : 0;
+    const koreanLatinGuard = languageCodes.includes('kor') && (latinExistingToken || latinCandidateToken);
+
+    const displacedCoverageEcho = (
+      overlapX >= 0.62
+      && (overlapY >= 0.14 || iou >= 0.08)
+      && centerDeltaX <= Math.max(114, minWidth * 1.62)
+      && centerDeltaY <= Math.max(148, minHeight * 4.8)
+      && areaRatio >= 1.32
+      && (dominantCoverage - weakCoverage) >= 0.16
+      && weakCoverage <= 0.44
+      && (technicalRowLikePair || Math.max(bboxArea(existing.bbox), bboxArea(candidate.bbox)) >= 9000 || iou >= 0.22)
+    );
+    if (displacedCoverageEcho) {
+      return true;
+    }
+
+    const stackedSameColumnTokenEcho = (
+      hasComparableTokens
+      && !koreanLatinGuard
+      && minLength >= 8
+      && (sameOrSubset || tokenSimilarity >= 0.9)
+      && areaRatio <= 2.8
+      && overlapX >= 0.74
+      && centerDeltaX <= Math.max(78, minWidth * 1.08)
+      && centerDeltaY <= Math.max(146, minHeight * 4.8)
+      && (overlapY >= 0.01 || iou >= 0.02)
+      && (technicalRowLikePair || tokenSimilarity >= 0.94)
+    );
+    if (stackedSameColumnTokenEcho) {
+      return true;
+    }
 
     const nearSameBox = (
       iou >= 0.66
@@ -961,15 +1016,22 @@ class VisionService {
       return false;
     }
 
-    const latinExistingToken = normalizeExternalLatinToken(existingText);
-    const latinCandidateToken = normalizeExternalLatinToken(candidateText);
-    const existingToken = latinExistingToken || normalizeMultilingualToken(existingText);
-    const candidateToken = latinCandidateToken || normalizeMultilingualToken(candidateText);
+    const severeCoverageEcho = (
+      dominantCoverage - weakCoverage >= 0.22
+      && weakCoverage <= 0.4
+      && areaRatio >= 1.18
+      && iou >= 0.18
+      && overlapX >= 0.66
+      && overlapY >= 0.28
+      && centerDeltaX <= Math.max(86, minWidth * 1.08)
+      && centerDeltaY <= Math.max(124, minHeight * 3.4)
+    );
+    if (severeCoverageEcho) {
+      return true;
+    }
+
     if (!existingToken || !candidateToken) return false;
 
-    const minLength = Math.min(existingToken.length, candidateToken.length);
-    const sameOrSubset = existingToken === candidateToken
-      || (minLength >= 4 && (existingToken.includes(candidateToken) || candidateToken.includes(existingToken)));
     if (sameOrSubset) {
       return true;
     }
@@ -1000,11 +1062,11 @@ class VisionService {
       return true;
     }
 
-    if (languageCodes.includes('kor') && (latinExistingToken || latinCandidateToken)) {
+    if (koreanLatinGuard) {
       return false;
     }
 
-    const similarity = diceSimilarity(existingToken, candidateToken);
+    const similarity = tokenSimilarity;
     const prefixMatch = minLength >= 4 && existingToken.slice(0, 4) === candidateToken.slice(0, 4);
     const suffixMatch = minLength >= 4 && existingToken.slice(-4) === candidateToken.slice(-4);
     if ((prefixMatch || suffixMatch) && similarity >= 0.82) {
@@ -1327,7 +1389,8 @@ class VisionService {
     const lineScore = (line: OCRLine): number => {
       const text = String(line.text || '').trim();
       const confidence = Number(line.confidence || 0);
-      return (confidence * 2.2) + text.length + (scoreExternalLatinLineNaturalness(text) * 3.4) + (Math.log10(bboxArea(line.bbox)) * 2.8);
+      const coverage = computeLineWordUnionCoverage(line);
+      return (confidence * 2.2) + text.length + (scoreExternalLatinLineNaturalness(text) * 3.4) + (Math.log10(bboxArea(line.bbox)) * 2.8) + (coverage * 32);
     };
 
     for (let i = 0; i < orderedIndices.length; i += 1) {
