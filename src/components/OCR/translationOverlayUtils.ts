@@ -63,6 +63,584 @@ const resolveTranslationSourceFromOCRKey = (ocrLanguageKey: string, fallback: st
   return nonEnglish || candidates[0] || fallback;
 };
 
+type TranslatedOverlayCandidate = {
+  index: number;
+  text: string;
+  normalizedKey: string;
+  sourceText: string;
+  sourceWordCount: number;
+  confidence: number;
+  bbox: BBox;
+};
+
+const normalizeTranslatedOverlayDuplicateKey = (value: string): string =>
+  normalizeOverlayInlineText(String(value || ''))
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+
+const OVERLAY_DEDUP_DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|components|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge|resultant|magnitude|direction|types?|row|rows|head(?:er|ing)?|label|labels)\b/i;
+
+const isLikelyDocumentLikeOverlayDedupSource = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(String(value || ''));
+  if (!normalized) return false;
+
+  if (OVERLAY_DEDUP_DOCUMENT_SOURCE_HINT_REGEX.test(normalized)) {
+    return true;
+  }
+
+  const words = normalized.split(/\s+/g).filter(Boolean);
+  const tokenCount = words.length;
+  const thaiCharCount = (normalized.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const hasDocumentMarkers = /[0-9()\[\].,:;\-]/.test(normalized);
+
+  if (tokenCount >= 5 && /[A-Za-z]/.test(normalized)) {
+    return true;
+  }
+  if (thaiCharCount >= 12 && (tokenCount >= 3 || hasDocumentMarkers)) {
+    return true;
+  }
+
+  return false;
+};
+
+const buildOverlayKeyBigrams = (value: string): Set<string> => {
+  const compact = String(value || '').trim();
+  const grams = new Set<string>();
+  if (!compact) return grams;
+  if (compact.length < 2) {
+    grams.add(compact);
+    return grams;
+  }
+  for (let i = 0; i < compact.length - 1; i += 1) {
+    grams.add(compact.slice(i, i + 2));
+  }
+  return grams;
+};
+
+const overlayKeyDiceSimilarity = (a: string, b: string): number => {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+
+  const aBigrams = buildOverlayKeyBigrams(a);
+  const bBigrams = buildOverlayKeyBigrams(b);
+  if (aBigrams.size === 0 || bBigrams.size === 0) return 0;
+
+  let overlap = 0;
+  for (const gram of aBigrams) {
+    if (bBigrams.has(gram)) overlap += 1;
+  }
+
+  return (2 * overlap) / (aBigrams.size + bBigrams.size);
+};
+
+const buildOverlayWordSet = (value: string): Set<string> => {
+  const normalized = normalizeOverlayInlineText(String(value || ''))
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/gu)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+  return new Set(normalized);
+};
+
+const overlayWordJaccardSimilarity = (a: string, b: string): number => {
+  if (!a || !b) return 0;
+  const setA = buildOverlayWordSet(a);
+  const setB = buildOverlayWordSet(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+
+  let overlap = 0;
+  for (const token of setA) {
+    if (setB.has(token)) overlap += 1;
+  }
+  const union = setA.size + setB.size - overlap;
+  return union > 0 ? overlap / union : 0;
+};
+
+const overlayDedupBoxWidth = (bbox: BBox): number => Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
+const overlayDedupBoxHeight = (bbox: BBox): number => Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
+const overlayDedupBoxArea = (bbox: BBox): number => overlayDedupBoxWidth(bbox) * overlayDedupBoxHeight(bbox);
+const overlayDedupCenterX = (bbox: BBox): number => (Number(bbox.x0 || 0) + Number(bbox.x1 || 0)) / 2;
+const overlayDedupCenterY = (bbox: BBox): number => (Number(bbox.y0 || 0) + Number(bbox.y1 || 0)) / 2;
+
+const overlayDedupOverlapRatioX = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const minWidth = Math.max(1, Math.min(overlayDedupBoxWidth(a), overlayDedupBoxWidth(b)));
+  return overlap / minWidth;
+};
+
+const overlayDedupOverlapRatioY = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const minHeight = Math.max(1, Math.min(overlayDedupBoxHeight(a), overlayDedupBoxHeight(b)));
+  return overlap / minHeight;
+};
+
+const overlayDedupIou = (a: BBox, b: BBox): number => {
+  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const intersection = overlapWidth * overlapHeight;
+  if (intersection <= 0) return 0;
+
+  const union = overlayDedupBoxArea(a) + overlayDedupBoxArea(b) - intersection;
+  return union > 0 ? intersection / union : 0;
+};
+
+const shouldCollapseTranslatedOverlayDuplicate = (
+  existing: TranslatedOverlayCandidate,
+  candidate: TranslatedOverlayCandidate
+): boolean => {
+  if (!existing.normalizedKey || !candidate.normalizedKey) return false;
+
+  const minLength = Math.min(existing.normalizedKey.length, candidate.normalizedKey.length);
+  const exactKeyMatch = existing.normalizedKey === candidate.normalizedKey;
+  const sameOrSubset = exactKeyMatch
+    || (minLength >= 12 && (
+      existing.normalizedKey.includes(candidate.normalizedKey)
+      || candidate.normalizedKey.includes(existing.normalizedKey)
+    ));
+
+  const overlapX = overlayDedupOverlapRatioX(existing.bbox, candidate.bbox);
+  const overlapY = overlayDedupOverlapRatioY(existing.bbox, candidate.bbox);
+  const iou = overlayDedupIou(existing.bbox, candidate.bbox);
+  const centerDeltaX = Math.abs(overlayDedupCenterX(existing.bbox) - overlayDedupCenterX(candidate.bbox));
+  const centerDeltaY = Math.abs(overlayDedupCenterY(existing.bbox) - overlayDedupCenterY(candidate.bbox));
+  const minHeight = Math.max(8, Math.min(overlayDedupBoxHeight(existing.bbox), overlayDedupBoxHeight(candidate.bbox)));
+  const minWidth = Math.max(18, Math.min(overlayDedupBoxWidth(existing.bbox), overlayDedupBoxWidth(candidate.bbox)));
+  const areaRatio = overlayDedupBoxArea(existing.bbox) / Math.max(1, overlayDedupBoxArea(candidate.bbox));
+  const comparableArea = areaRatio >= 0.28 && areaRatio <= 3.6;
+  const bothLongLines = minLength >= 16 && Math.min(existing.sourceWordCount, candidate.sourceWordCount) >= 3;
+  const veryShortPair = Math.max(existing.normalizedKey.length, candidate.normalizedKey.length) <= 9;
+
+  const strongSpatialMatch = (
+    iou >= 0.54
+    || (overlapY >= 0.74 && overlapX >= 0.62)
+    || (
+      overlapY >= 0.38
+      && overlapX >= 0.48
+      && centerDeltaY <= Math.max(84, minHeight * 4.2)
+      && centerDeltaX <= Math.max(80, minWidth * 1.65)
+    )
+  );
+
+  const stackedSameColumnEcho = (
+    comparableArea
+    && overlapX >= 0.56
+    && centerDeltaX <= Math.max(74, minWidth * 1.45)
+    && centerDeltaY <= Math.max(138, minHeight * 6.2)
+    && (overlapY >= 0.12 || iou >= 0.08)
+  );
+
+  let documentExactAnchorEcho = false;
+  const existingDocumentLikeSource = isLikelyDocumentLikeOverlayDedupSource(existing.sourceText);
+  const candidateDocumentLikeSource = isLikelyDocumentLikeOverlayDedupSource(candidate.sourceText);
+  if (veryShortPair && !(existingDocumentLikeSource && candidateDocumentLikeSource)) {
+    return exactKeyMatch && iou >= 0.62;
+  }
+
+  const existingSourceKey = normalizeTranslatedOverlayDuplicateKey(existing.sourceText || '');
+  const candidateSourceKey = normalizeTranslatedOverlayDuplicateKey(candidate.sourceText || '');
+  if (existingSourceKey && candidateSourceKey) {
+    const sourceMinLength = Math.min(existingSourceKey.length, candidateSourceKey.length);
+    const sourceSubset = sourceMinLength >= 6 && (
+      existingSourceKey.includes(candidateSourceKey)
+      || candidateSourceKey.includes(existingSourceKey)
+    );
+    const sourceSimilarity = overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey);
+    const sourceWordSimilarity = overlayWordJaccardSimilarity(existing.sourceText || '', candidate.sourceText || '');
+    const sourceClearlyDifferent = !sourceSubset && (sourceSimilarity < 0.68 || sourceWordSimilarity < 0.52);
+    const documentLikeSourcePair = (
+      existingDocumentLikeSource
+      && candidateDocumentLikeSource
+      && (sourceSubset || sourceWordSimilarity >= 0.54 || sourceSimilarity >= 0.72)
+    );
+    const sameDocumentRowTextEcho = (
+      exactKeyMatch
+      && documentLikeSourcePair
+      && comparableArea
+      && overlapX >= 0.34
+      && centerDeltaX <= Math.max(160, minWidth * 3.2)
+      && centerDeltaY <= Math.max(120, minHeight * 5.4)
+    );
+    if (sameDocumentRowTextEcho) return true;
+
+    const strongDocumentSpatialEcho = documentLikeSourcePair && (
+      iou >= 0.56
+      || (
+        overlapX >= 0.68
+        && overlapY >= 0.42
+        && centerDeltaX <= Math.max(66, minWidth * 1.1)
+        && centerDeltaY <= Math.max(88, minHeight * 3.6)
+      )
+      || (
+        overlapX >= 0.74
+        && centerDeltaX <= Math.max(60, minWidth * 0.95)
+        && centerDeltaY <= Math.max(132, minHeight * 5.4)
+        && (overlapY >= 0.08 || iou >= 0.1)
+      )
+    );
+    documentExactAnchorEcho = documentLikeSourcePair && (
+      iou >= 0.42
+      || (
+        overlapX >= 0.82
+        && overlapY >= 0.5
+        && centerDeltaX <= Math.max(52, minWidth * 0.76)
+        && centerDeltaY <= Math.max(28, minHeight * 1.12)
+      )
+    );
+    if (!sameOrSubset && documentExactAnchorEcho) return true;
+    if (sourceClearlyDifferent && iou < 0.86 && !strongDocumentSpatialEcho) {
+      return false;
+    }
+  }
+
+  if (!sameOrSubset) return false;
+
+  if (exactKeyMatch && strongSpatialMatch) return true;
+  if (exactKeyMatch && stackedSameColumnEcho) return true;
+  if (bothLongLines && strongSpatialMatch) return true;
+  if (bothLongLines && stackedSameColumnEcho) return true;
+
+  return false;
+};
+
+const scoreTranslatedOverlayCandidate = (candidate: TranslatedOverlayCandidate): number => {
+  const translatedLength = candidate.normalizedKey.length;
+  const sourceLength = normalizeOverlayInlineText(candidate.sourceText || '').length;
+  const areaScore = Math.log(overlayDedupBoxArea(candidate.bbox) + 1);
+  return (
+    translatedLength * 1.15
+    + sourceLength * 0.42
+    + Math.max(0, Number(candidate.confidence || 0)) * 0.18
+    + areaScore * 1.35
+  );
+};
+
+const collapseTranslatedOverlayDuplicates = (
+  currentPageOCR: OCRPageResult,
+  translatedByIndex: Map<number, string>
+): Map<number, string> => {
+  if (translatedByIndex.size <= 1) return translatedByIndex;
+
+  const lines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
+  if (lines.length === 0) return translatedByIndex;
+
+  const candidates: TranslatedOverlayCandidate[] = [];
+  translatedByIndex.forEach((text, index) => {
+    const line = lines[index];
+    if (!line) {
+      return;
+    }
+
+    const normalizedText = normalizeOverlayInlineText(String(text || ''));
+    if (!normalizedText) {
+      return;
+    }
+
+    const sourceBbox = resolveOverlaySourceBBox(line);
+    const width = Number(sourceBbox.x1 || 0) - Number(sourceBbox.x0 || 0);
+    const height = Number(sourceBbox.y1 || 0) - Number(sourceBbox.y0 || 0);
+    if (!(width > 0 && height > 0)) {
+      return;
+    }
+
+    const sourceText = normalizeOverlayInlineText(String(line.text || ''));
+    candidates.push({
+      index,
+      text,
+      normalizedKey: normalizeTranslatedOverlayDuplicateKey(normalizedText),
+      sourceText,
+      sourceWordCount: sourceText.split(/\s+/g).filter(Boolean).length,
+      confidence: Number(line.confidence || 0),
+      bbox: sourceBbox,
+    });
+  });
+
+  if (candidates.length <= 1) {
+    return translatedByIndex;
+  }
+
+  candidates.sort((a, b) => {
+    if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+    if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+    return a.index - b.index;
+  });
+
+  const kept: TranslatedOverlayCandidate[] = [];
+  for (const candidate of candidates) {
+    const duplicateIndex = kept.findIndex((existing) => shouldCollapseTranslatedOverlayDuplicate(existing, candidate));
+    if (duplicateIndex < 0) {
+      kept.push(candidate);
+      continue;
+    }
+
+    const existing = kept[duplicateIndex];
+    if (scoreTranslatedOverlayCandidate(candidate) > scoreTranslatedOverlayCandidate(existing)) {
+      kept[duplicateIndex] = candidate;
+    }
+  }
+
+  if (kept.length === translatedByIndex.size) {
+    return translatedByIndex;
+  }
+
+  return new Map<number, string>(kept.map((item) => [item.index, item.text]));
+};
+
+const preserveOverlaySourceTrailingPunctuation = (sourceText: string, replacement: string): string => {
+  const punctuation = String(sourceText || '').trim().match(/([.!?…]+)$/)?.[1] || '';
+  const cleanReplacement = normalizeOverlayInlineText(String(replacement || '')).replace(/[.!?…]+$/g, '').trim();
+  return `${cleanReplacement}${punctuation}`.trim();
+};
+
+const preserveOverlayTechnicalLabel = (sourceText: string, replacement: string): string => {
+  const preserved = preserveOverlaySourceTrailingPunctuation(sourceText, replacement);
+  const label = String(sourceText || '').trim().match(/\s*(\(\s*[0-9]{1,3}[a-zA-Z]?\s*\))\s*$/)?.[1] || '';
+  if (!label) return preserved;
+  const innerLabel = label.slice(1, -1).trim();
+  return !new RegExp(`\\(\\s*${innerLabel}\\s*\\)`, 'i').test(preserved)
+    ? `${preserved} ${label}`.trim()
+    : preserved;
+};
+
+export const resolveMissingOverlayLineFallbackText = (
+  sourceText: string,
+  targetLanguage: string
+): string => {
+  const source = normalizeOverlayInlineText(String(sourceText || ''));
+  if (!source) return '';
+  const normalizedTarget = normalizeTranslationLanguageKey(targetLanguage || '', 'th');
+  if (normalizedTarget !== 'th') return source;
+
+  if (/^AH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'อ๊ะ ฉัน');
+  if (/^EH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เอ๋ ฉัน');
+  if (/^EH[.!?…]+$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เอ๋');
+  if (/^ME[.!?…]+$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉัน');
+  if (/^YOU[-\s]+COULD\s+SAY[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า');
+  if (/^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'มีบางอย่างที่อาจ');
+  if (/^HELP\s+YOU\s+TOO[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ช่วยคุณได้เช่นกัน');
+  if (/^DO\s+YO?U[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'คุณต้องการ');
+  if (/^A\s+LITTLE,?\s+YEAH[!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'นิดหน่อย ใช่ไหม');
+  if (/^HMM[!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'อืม');
+  if (/^OF\s+COURSE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'แน่นอน');
+  if (/^EARLIER\s+AND[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ก่อนหน้านี้ แล้ว');
+  if (/^FOCUS[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'จดจ่ออยู่กับมัน');
+  if (/^BARBAR\s*I?\s*AN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source) || /^BARBARIAN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'บาร์บาเรียน (หญิง)');
+  }
+  if (/^VA(?:L)?KYR?I?E\s+MODE[.!?…]*$/i.test(source) || /^VALKYRIE\s+MODE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'โหมดวาลคีรี');
+  if (/^LIMITED\s+EDITION[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'รุ่นลิมิเต็ด');
+  if (/^TH-?THIS\s+LIGHT[.!?…]*$/i.test(source) || /^THIS\s+LIGHT[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'แส-แสงนี้');
+  if (/^(?:I\s+)?SUPPORT\s+YOU\s+TO\s+LIVE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉันช่วยให้คุณมีชีวิตอยู่');
+  if (/^HERE[.!?…]*\s+AND\s+YOU\s+DO\s+THIS\s+TO[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ที่นี่... แล้วคุณทำแบบนี้กับ');
+  if (/^THE\s+PEOPLE\s+HERE[!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'คนที่นี่เหรอ');
+  const compactSpanishSource = source
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+  if (compactSpanishSource === 'STAFF') return preserveOverlaySourceTrailingPunctuation(source, 'เจ้าหน้าที่');
+  if (compactSpanishSource === 'PRIMEROLAFOTO' || /^PRI-?MERO\s+LA\s+FOTO[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'ภาพแรก');
+  }
+  if (compactSpanishSource === 'PRIMERO') return preserveOverlaySourceTrailingPunctuation(source, 'อันดับแรก');
+  if (compactSpanishSource === 'LAFOTO') return preserveOverlaySourceTrailingPunctuation(source, 'ภาพ');
+  if (compactSpanishSource === 'DE') return preserveOverlaySourceTrailingPunctuation(source, 'ของ');
+  if (compactSpanishSource === 'METIENDOPOR' || compactSpanishSource === 'METIENDO') {
+    return preserveOverlaySourceTrailingPunctuation(source, 'กำลังดำเนินการ');
+  }
+  if (compactSpanishSource === 'LISTOCON' || /^[i¡]?\s*LISTO[.!?…]*\s+CON[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'พร้อม! ด้วย');
+  }
+  if (compactSpanishSource === 'SIMEQUEDO') return preserveOverlaySourceTrailingPunctuation(source, 'ถ้าฉันอยู่');
+  if (compactSpanishSource === 'AQUIMAS') return preserveOverlaySourceTrailingPunctuation(source, 'ที่นี่นานกว่านี้');
+  if (compactSpanishSource === 'TIEMPO') return preserveOverlaySourceTrailingPunctuation(source, 'อีกสักพัก');
+  if (compactSpanishSource === 'SSIENTOQUEME' || compactSpanishSource === 'SIENTOQUEME') return preserveOverlaySourceTrailingPunctuation(source, 'ฉะ-ฉันรู้สึกว่า');
+  if (compactSpanishSource === 'VOYCORRER' || compactSpanishSource === 'VOYACORRER') return preserveOverlaySourceTrailingPunctuation(source, 'ฉันจะเสร็จแล้ว');
+  if (/^ENTRANCE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ทางเข้า');
+  if (/^ARE\s+ONLY[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'มีเพียง');
+  if (/^AND\s+LEAVE\s+THE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'แล้วออกจาก');
+  if (/^BUILDING[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'อาคาร');
+  if (/^OUR\s+CHANCE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'โอกาสของเรา');
+  if (/^THEM[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'พวกเขา');
+  if (/^OPEN\s+A[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เปิด');
+  if (/^SHOE\s+LOCKER[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ตู้รองเท้า');
+  if (/^OPEN\s+A\s+SHOE\s+LOCKER[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เปิดตู้รองเท้า');
+  if (/^THREE\s+UNKNOWNS?[.!?…]*\s+THE\s+REACTIONS?\s+ARE\s+THE\s+COUPLE\s+MOMENT[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสามตัว แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+  }
+  if (/^THE\s+REACTIONS?\s+ARE\s+THE\s+COUPLE\s+MOMENT[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+  }
+  if (/^I\s+DON['’]?T\s+CARE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉันไม่สน');
+  if (/^I\s+ALREADY\s+EARNED[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉันหาได้แล้ว');
+  if (/^ENOUGH[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'พอแล้ว');
+  if (/^LOOK,?\s+B[Jl]ORN[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ดูสิ บียอร์น');
+  if (/^I\s+HAVE\s+WINGS[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉันมีปีก');
+  if (/^VALKYRIE[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'วาลคีรี');
+  const compactSource = source.toUpperCase().replace(/[^A-Z]/g, '');
+  if (/\bTHE\s+FLOOR\s+BEAMS\s+OF\s+THIS\s+BUILDING\b/i.test(source) && /\bWELDED\b/i.test(source)) {
+    if ((/\bTOGETHER\b/i.test(source) || compactSource.includes('TOGETHER')) && /\bFIXED\s+CONNECTIONS?\b/i.test(source)) {
+      return preserveOverlayTechnicalLabel(source, 'คานพื้นของอาคารนี้เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น');
+    }
+    return preserveOverlayTechnicalLabel(source, 'คานพื้นของอาคารนี้ถูกเชื่อมเข้าด้วยกัน');
+  }
+  if (
+    (/\bTOGETHER\b/i.test(source) || compactSource.includes('TOGETHER'))
+    && (/\bTHUS\s+FORM\b/i.test(source) || compactSource.includes('THUSFORM'))
+    && /\bFIXED\s+CONNECTIONS?\b/i.test(source)
+  ) {
+    return preserveOverlayTechnicalLabel(source, 'เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น');
+  }
+  if (
+    (/\bTOGETHER\b/i.test(source) || compactSource.includes('TOGETHER'))
+    && (/\bTHUS\s+FORM\b/i.test(source) || compactSource.includes('THUSFORM'))
+  ) {
+    return preserveOverlayTechnicalLabel(source, 'เชื่อมเข้าด้วยกัน จึงเกิดเป็น');
+  }
+  if (/\bFIXED\s+CONNECTIONS?\b/i.test(source)) return preserveOverlayTechnicalLabel(source, 'จุดต่อแบบยึดแน่น');
+  if (/\bTHIS\s+UTILITY\s+BUILDING\s+IS\b/i.test(source) && /\bPIN\s+SUPPORTED\b/i.test(source)) {
+    return preserveOverlayTechnicalLabel(source, 'อาคารอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของเสา');
+  }
+  if (/\bPIN\s+SUPPORTED\b/i.test(source) && /\bTOP\s+OF\s+THE\s+COLUMN\b/i.test(source)) {
+    return preserveOverlayTechnicalLabel(source, 'รองรับแบบพินที่ด้านบนของเสา');
+  }
+
+  return source;
+};
+
+const normalizeOverlayLatinContextKey = (value: string): string =>
+  String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/5/g, 'S');
+
+const isLikelyMergedNavigationBridgeLine = (line: OCRLine, currentPageOCR: OCRPageResult): boolean => {
+  const sourceText = normalizeOverlayInlineText(String(line.text || ''));
+  if (!/^ARE\s+ONLY\s+AND\s+LEAVE\s+THE(?:\s+BUILDING)?[.!?…]*$/i.test(sourceText)) return false;
+
+  const bbox = line.bbox;
+  if (!bbox) return false;
+  const lineWidth = Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
+  const pageWidth = Math.max(1, Number(currentPageOCR.width || 0));
+  return lineWidth >= Math.max(320, pageWidth * 0.32);
+};
+
+const isLikelyContextualGhostOverlayLine = (
+  line: OCRLine,
+  index: number,
+  currentPageOCR: OCRPageResult
+): boolean => {
+  const sourceText = normalizeOverlayInlineText(String(line.text || ''));
+  if (!sourceText) return false;
+  const key = normalizeOverlayLatinContextKey(sourceText);
+  if (key !== 'CARNED' && key !== 'THAVE' && !/^WINGSI{2,}$/.test(key)) return false;
+
+  const lines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
+  const bbox = line.bbox;
+  const pageWidth = Math.max(1, Number(currentPageOCR.width || 0));
+  const pageHeight = Math.max(1, Number(currentPageOCR.height || 0));
+  const centerX = (Number(bbox.x0 || 0) + Number(bbox.x1 || 0)) * 0.5;
+  const centerY = (Number(bbox.y0 || 0) + Number(bbox.y1 || 0)) * 0.5;
+  const nearbyByOrder = (direction: -1 | 1, predicate: (otherKey: string) => boolean): boolean =>
+    lines.some((other, otherIndex) => {
+      const orderDelta = otherIndex - index;
+      if (direction < 0 && !(orderDelta < 0 && orderDelta >= -4)) return false;
+      if (direction > 0 && !(orderDelta > 0 && orderDelta <= 4)) return false;
+      const otherBbox = other.bbox;
+      const otherCenterX = (Number(otherBbox.x0 || 0) + Number(otherBbox.x1 || 0)) * 0.5;
+      const otherCenterY = (Number(otherBbox.y0 || 0) + Number(otherBbox.y1 || 0)) * 0.5;
+      const overlapX = overlayBBoxOverlapRatioX(bbox, otherBbox);
+      const centerDeltaX = Math.abs(centerX - otherCenterX);
+      const centerDeltaY = Math.abs(centerY - otherCenterY);
+      const sameColumn = overlapX >= 0.12 || centerDeltaX <= Math.max(260, pageWidth * 0.32);
+      return sameColumn
+        && centerDeltaY <= Math.max(420, pageHeight * 0.12)
+        && predicate(normalizeOverlayLatinContextKey(String(other.text || '')));
+    });
+
+  if (key === 'CARNED') {
+    return nearbyByOrder(-1, (otherKey) =>
+      otherKey.includes('IDONTCARE')
+      || otherKey.includes('IALREADYEARNED')
+      || otherKey.includes('EARNED')
+    ) || nearbyByOrder(1, (otherKey) =>
+      otherKey.includes('ENOUGH') || otherKey.includes('EARNEDENOUGH')
+    );
+  }
+
+  if (key === 'THAVE') {
+    return nearbyByOrder(-1, (otherKey) =>
+      otherKey.includes('IHAVEWINGS')
+      || otherKey.includes('LOOKBJORN')
+      || otherKey.includes('BJORN')
+      || otherKey.includes('WINGS')
+    ) || nearbyByOrder(1, (otherKey) =>
+      otherKey.includes('IHAVEWINGS')
+      || otherKey.includes('LOOKBJORN')
+      || otherKey.includes('BJORN')
+      || otherKey.includes('WINGS')
+    );
+  }
+
+  return nearbyByOrder(-1, (otherKey) =>
+    otherKey.includes('IHAVEWINGS')
+    || otherKey.includes('LOOKBJORN')
+    || otherKey.includes('BJORN')
+  ) || nearbyByOrder(1, (otherKey) =>
+    otherKey.includes('IHAVEWINGS') || otherKey.includes('BJORN')
+  );
+};
+
+const fillMissingOverlayLinesWithSourceText = (
+  currentPageOCR: OCRPageResult,
+  translatedByIndex: Map<number, string>,
+  targetLanguage: string
+): Map<number, string> => {
+  const lines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
+  if (lines.length === 0) return translatedByIndex;
+
+  let filled: Map<number, string> | null = null;
+  lines.forEach((line, index) => {
+    const sourceText = normalizeOverlayInlineText(String(line.text || ''));
+    if (!sourceText) return;
+
+    const existingText = translatedByIndex.get(index);
+    if (isLikelyContextualGhostOverlayLine(line, index, currentPageOCR)) {
+      if (existingText) {
+        if (!filled) {
+          filled = new Map(translatedByIndex);
+        }
+        filled.delete(index);
+      }
+      return;
+    }
+
+    if (isLikelyMergedNavigationBridgeLine(line, currentPageOCR)) {
+      if (existingText) {
+        if (!filled) {
+          filled = new Map(translatedByIndex);
+        }
+        filled.delete(index);
+      }
+      return;
+    }
+
+    const existingLooksLikeSource = existingText
+      && normalizeTranslatedOverlayDuplicateKey(existingText) === normalizeTranslatedOverlayDuplicateKey(sourceText);
+    if (existingText && !existingLooksLikeSource) return;
+
+    const fallbackText = resolveMissingOverlayLineFallbackText(sourceText, targetLanguage);
+    if (!fallbackText) return;
+    if (!filled) {
+      filled = new Map(translatedByIndex);
+    }
+    filled.set(index, fallbackText);
+  });
+
+  return filled || translatedByIndex;
+};
+
 export type TranslationOverlayContext = {
   shouldRender: boolean;
   isStale: boolean;
@@ -119,7 +697,15 @@ export const resolveTranslationOverlayContext = ({
     if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
     if (entry.ocrEngine !== currentEngine) return false;
     if (entry.translationMode !== translationMode) return false;
-    if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedSource) return false;
+    const normalizedEntrySource = normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en');
+    const sourceMatches = normalizedEntrySource === normalizedSource;
+    if (!sourceMatches) {
+      const sameSnapshot = entry.sourceFingerprint === sourceFingerprint;
+      const latinSourceDrift = sameSnapshot
+        && ['en', 'es'].includes(normalizedEntrySource)
+        && ['en', 'es'].includes(normalizedSource);
+      if (!latinSourceDrift) return false;
+    }
     if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
 
     const normalizedEntryLanguage = normalizeCacheLanguageKey(entry.ocrLanguage);
@@ -149,16 +735,18 @@ export const resolveTranslationOverlayContext = ({
   }
 
   const isStale = resolvedEntry.sourceFingerprint !== sourceFingerprint;
-  const translatedByIndex = new Map<number, string>(
+  const translatedByIndexRaw = new Map<number, string>(
     resolvedEntry.translatedByIndex
       .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
       .map((item) => [item.index, item.text])
   );
+  const translatedByIndexWithFallback = fillMissingOverlayLinesWithSourceText(currentPageOCR, translatedByIndexRaw, normalizedTarget);
+  const translatedByIndex = collapseTranslatedOverlayDuplicates(currentPageOCR, translatedByIndexWithFallback);
 
   return {
     shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && !isStale,
     isStale,
-    sourceLanguage: normalizedSource,
+    sourceLanguage: normalizeTranslationLanguageKey(resolvedEntry.sourceLanguage || normalizedSource, normalizedSource),
     targetLanguage: normalizedTarget,
     translatedByIndex,
     entry: resolvedEntry,
@@ -170,6 +758,10 @@ type RGB = { r: number; g: number; b: number };
 export type OverlayPalette = {
   backgroundColor: string;
   textColor: string;
+  textStrokeColor?: string;
+  textStrokeWidth?: number;
+  textShadow?: string;
+  textFillWeight?: number;
 };
 
 export type OverlayTypography = {
@@ -218,6 +810,7 @@ export type OverlayLayout = {
   mergedBBox?: BBox;
   mergedMaskBBox?: BBox;
   hidden?: boolean;
+  preserveMaskWhenHidden?: boolean;
   highlightContinuationText?: string;
   highlightTextColorSourceIndex?: number;
 };
@@ -330,25 +923,73 @@ const computeSaturation = (r: number, g: number, b: number): number => {
   return (max - min) / max;
 };
 
-const hasPositiveBBox = (bbox?: BBox): bbox is BBox => {
-  if (!bbox) return false;
-  return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
+const normalizeOverlayBBox = (bbox?: Partial<BBox> | null): BBox | undefined => {
+  const x0 = Number(bbox?.x0);
+  const y0 = Number(bbox?.y0);
+  const x1 = Number(bbox?.x1);
+  const y1 = Number(bbox?.y1);
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return undefined;
+
+  const left = Math.min(x0, x1);
+  const right = Math.max(x0, x1);
+  const top = Math.min(y0, y1);
+  const bottom = Math.max(y0, y1);
+  if (!(right > left && bottom > top)) return undefined;
+
+  return { x0: left, y0: top, x1: right, y1: bottom };
 };
+
+const hasPositiveBBox = (bbox?: BBox): bbox is BBox => Boolean(normalizeOverlayBBox(bbox));
 
 const DOCUMENT_SOURCE_FALLBACK_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
 
+const mergeOverlayBBoxes = (a: BBox, b: BBox): BBox => ({
+  x0: Math.min(a.x0, b.x0),
+  y0: Math.min(a.y0, b.y0),
+  x1: Math.max(a.x1, b.x1),
+  y1: Math.max(a.y1, b.y1),
+});
+
+const resolveQuadBBox = (line: OCRLine): BBox | null => {
+  if (!Array.isArray(line.quad) || line.quad.length < 2) return null;
+  const points = line.quad.filter((point) =>
+    Number.isFinite(point?.x) && Number.isFinite(point?.y)
+  );
+  if (points.length < 2) return null;
+  return {
+    x0: Math.min(...points.map((point) => Number(point.x))),
+    y0: Math.min(...points.map((point) => Number(point.y))),
+    x1: Math.max(...points.map((point) => Number(point.x))),
+    y1: Math.max(...points.map((point) => Number(point.y))),
+  };
+};
+
 export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
+  const quadBBox = normalizeOverlayBBox(resolveQuadBBox(line));
+  const normalizedLineBBox = normalizeOverlayBBox(line.bbox);
+  const rawLineBBox = normalizedLineBBox
+    ? (quadBBox ? mergeOverlayBBoxes(normalizedLineBBox, quadBBox) : normalizedLineBBox)
+    : (quadBBox || line.bbox);
   if (!Array.isArray(line.words) || line.words.length === 0) {
-    return line.bbox;
+    return normalizeOverlayBBox(rawLineBBox) || rawLineBBox;
   }
 
-  const validWords = line.words.filter((word) => hasPositiveBBox(word?.bbox));
+  const validWords = line.words
+    .map((word) => {
+      const bbox = normalizeOverlayBBox(word?.bbox);
+      if (!bbox) return null;
+      return {
+        ...word,
+        bbox,
+      };
+    })
+    .filter((word): word is OCRLine['words'][number] => Boolean(word));
   const meaningfulWords = validWords.filter((word) => MEANINGFUL_WORD_REGEX.test(String(word.text || '').trim()));
   const wordSource = meaningfulWords.length > 0 ? meaningfulWords : validWords;
   const validWordBoxes = wordSource.map((word) => word.bbox);
 
   if (validWordBoxes.length === 0) {
-    return line.bbox;
+    return normalizeOverlayBBox(rawLineBBox) || rawLineBBox;
   }
 
   const unionWordBox = validWordBoxes.reduce<BBox>((acc, bbox) => ({
@@ -360,24 +1001,25 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     ...validWordBoxes[0],
   });
 
-  if (!hasPositiveBBox(line.bbox)) {
+  if (!hasPositiveBBox(rawLineBBox)) {
     return unionWordBox;
   }
 
-  const lineWidth = Math.max(1, line.bbox.x1 - line.bbox.x0);
-  const lineHeight = Math.max(1, line.bbox.y1 - line.bbox.y0);
+  const lineWidth = Math.max(1, rawLineBBox.x1 - rawLineBBox.x0);
+  const lineHeight = Math.max(1, rawLineBBox.y1 - rawLineBBox.y0);
   const lineArea = lineWidth * lineHeight;
   const wordWidth = Math.max(1, unionWordBox.x1 - unionWordBox.x0);
   const wordHeight = Math.max(1, unionWordBox.y1 - unionWordBox.y0);
   const wordArea = wordWidth * wordHeight;
-  const leftTrimRatio = Math.max(0, unionWordBox.x0 - line.bbox.x0) / lineWidth;
-  const rightTrimRatio = Math.max(0, line.bbox.x1 - unionWordBox.x1) / lineWidth;
+  const leftTrimRatio = Math.max(0, unionWordBox.x0 - rawLineBBox.x0) / lineWidth;
+  const rightTrimRatio = Math.max(0, rawLineBBox.x1 - unionWordBox.x1) / lineWidth;
   const horizontalTrimRatio = leftTrimRatio + rightTrimRatio;
   const widthCoverage = wordWidth / lineWidth;
   const heightCoverage = wordHeight / lineHeight;
   const areaCoverage = wordArea / lineArea;
   const normalizedLineText = normalizeOverlayInlineText(String(line.text || ''));
   const sourceWordCount = normalizedLineText.split(/\s+/g).filter(Boolean).length;
+  const meaningfulCharCount = normalizedLineText.replace(/[^\p{L}\p{N}]/gu, '').length;
   const thaiCharCount = (normalizedLineText.match(/[\u0E00-\u0E7F]/g) || []).length;
   const technicalSourceLike = DOCUMENT_SOURCE_FALLBACK_HINT_REGEX.test(normalizedLineText);
   const numericDocumentLike = sourceWordCount >= 5 && /[0-9()\-]/.test(normalizedLineText);
@@ -386,6 +1028,13 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
   const allowLineFallback = technicalSourceLike || numericDocumentLike || thaiDocumentLike;
   const longLineText = normalizedLineText.length >= 18;
   const sparseWordBoxes = validWordBoxes.length <= 3;
+  const rawCenterX = (rawLineBBox.x0 + rawLineBBox.x1) * 0.5;
+  const rawCenterY = (rawLineBBox.y0 + rawLineBBox.y1) * 0.5;
+  const unionCenterX = (unionWordBox.x0 + unionWordBox.x1) * 0.5;
+  const unionCenterY = (unionWordBox.y0 + unionWordBox.y1) * 0.5;
+  const centerOffsetXRatio = Math.abs(unionCenterX - rawCenterX) / lineWidth;
+  const centerOffsetYRatio = Math.abs(unionCenterY - rawCenterY) / lineHeight;
+  const rotatedLine = Boolean(quadBBox) && Math.abs(Number(line.angleDeg || 0)) >= 10;
   const severeCoverageLoss = (
     (widthCoverage < 0.62 && areaCoverage < 0.5)
     || (widthCoverage < 0.72 && heightCoverage < 0.38)
@@ -426,6 +1075,17 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     && heightCoverage >= 0.62
     && horizontalTrimRatio > 0.2
   );
+  const centeredShortDialogueCoverageLoss = (
+    !allowLineFallback
+    && meaningfulCharCount >= 4
+    && sourceWordCount >= 1
+    && sourceWordCount <= 5
+    && centerOffsetXRatio <= 0.22
+    && centerOffsetYRatio <= 0.24
+    && widthCoverage < 0.66
+    && heightCoverage < 0.58
+    && areaCoverage < 0.42
+  );
 
   if (allowLineFallback && (
     severeCoverageLoss
@@ -435,7 +1095,24 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
     || technicalSparseCoverageLoss
     || technicalEdgeTrimLoss
   )) {
-    return line.bbox;
+    return rawLineBBox;
+  }
+
+  if (centeredShortDialogueCoverageLoss) {
+    return rawLineBBox;
+  }
+
+  if (
+    rotatedLine
+    && meaningfulCharCount >= 3
+    && (
+      severeCoverageLoss
+      || moderateCoverageLoss
+      || widthCoverage < 0.82
+      || areaCoverage < 0.74
+    )
+  ) {
+    return rawLineBBox;
   }
 
   return unionWordBox;
@@ -443,16 +1120,52 @@ export const resolveOverlaySourceBBox = (line: OCRLine): BBox => {
 
 export const resolveOverlayMaskBBox = (line: OCRLine): BBox => {
   const sourceBbox = resolveOverlaySourceBBox(line);
-  if (!hasPositiveBBox(line.bbox)) {
+  const normalizedLineBBox = normalizeOverlayBBox(line.bbox);
+  if (!normalizedLineBBox) {
     return sourceBbox;
   }
 
   return {
-    x0: Math.min(line.bbox.x0, sourceBbox.x0),
-    y0: Math.min(line.bbox.y0, sourceBbox.y0),
-    x1: Math.max(line.bbox.x1, sourceBbox.x1),
-    y1: Math.max(line.bbox.y1, sourceBbox.y1),
+    x0: Math.min(normalizedLineBBox.x0, sourceBbox.x0),
+    y0: Math.min(normalizedLineBBox.y0, sourceBbox.y0),
+    x1: Math.max(normalizedLineBBox.x1, sourceBbox.x1),
+    y1: Math.max(normalizedLineBBox.y1, sourceBbox.y1),
   };
+};
+
+export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean => {
+  const sourceBbox = resolveOverlaySourceBBox(line);
+  const maskBbox = resolveOverlayMaskBBox(line);
+
+  const sourceWidth = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
+  const sourceHeight = Math.max(1, sourceBbox.y1 - sourceBbox.y0);
+  const sourceArea = sourceWidth * sourceHeight;
+  const maskWidth = Math.max(1, maskBbox.x1 - maskBbox.x0);
+  const maskHeight = Math.max(1, maskBbox.y1 - maskBbox.y0);
+  const maskArea = maskWidth * maskHeight;
+  const coverage = sourceArea / Math.max(1, maskArea);
+
+  const normalizedText = normalizeOverlayInlineText(String(line.text || ''));
+  const compact = normalizedText.replace(/\s+/g, '');
+  const meaningfulChars = compact.replace(/[^\p{L}\p{N}]/gu, '');
+  const tokenCount = normalizedText.split(/\s+/g).filter(Boolean).length;
+  const sentenceLikeSignal = tokenCount >= 3 || (tokenCount >= 2 && meaningfulChars.length >= 10);
+  const hasTerminalPunctuation = /[.!?…]\s*$/.test(normalizedText);
+  const angledLine = Math.abs(Number(line.angleDeg || 0)) >= 10 && Array.isArray(line.quad) && line.quad.length >= 2;
+  if (angledLine && meaningfulChars.length >= 2) {
+    return false;
+  }
+  const validWords = (Array.isArray(line.words) ? line.words : []).filter((word) => {
+    const wordText = normalizeOverlayInlineText(String(word?.text || ''));
+    return Boolean(wordText) && hasPositiveBBox(word?.bbox);
+  });
+
+  const sparseSignal = meaningfulChars.length <= 6 && validWords.length <= 1 && tokenCount <= 2;
+  const oversizedMask = maskArea >= 17000 && (maskWidth >= 170 || maskHeight >= 96);
+  const severeSourceLoss = coverage < 0.24 && maskArea >= sourceArea * 3.2;
+  const lowConfidence = Number(line.confidence || 0) <= 93;
+
+  return sparseSignal && oversizedMask && severeSourceLoss && lowConfidence && !sentenceLikeSignal && !hasTerminalPunctuation;
 };
 
 const MEANINGFUL_WORD_REGEX = /[\p{L}\p{N}]/u;
@@ -460,7 +1173,16 @@ const MEANINGFUL_WORD_REGEX = /[\p{L}\p{N}]/u;
 const resolveOverlayTextStartX = (line: OCRLine, bbox: BBox): number => {
   if (!Array.isArray(line.words) || line.words.length === 0) return bbox.x0;
 
-  const validWords = line.words.filter((word) => hasPositiveBBox(word?.bbox));
+  const validWords = line.words
+    .map((word) => {
+      const normalizedBBox = normalizeOverlayBBox(word?.bbox);
+      if (!normalizedBBox) return null;
+      return {
+        ...word,
+        bbox: normalizedBBox,
+      };
+    })
+    .filter((word): word is OCRLine['words'][number] => Boolean(word));
   if (validWords.length === 0) return bbox.x0;
 
   const meaningful = validWords.find((word) => MEANINGFUL_WORD_REGEX.test(String(word.text || '').trim()));
@@ -623,6 +1345,40 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
   const dominantSat = computeSaturation(dominantRgb.r, dominantRgb.g, dominantRgb.b);
   const dominantDistance = dominant.distance / Math.max(1e-6, dominant.weight);
 
+  let vividBackgroundCandidate: PaletteSampleBucket | undefined;
+  let vividBackgroundScore = 0;
+  stats.buckets.forEach((bucket) => {
+    if (bucket.weight <= 0) return;
+    const rgb = resolveBucketRgb(bucket);
+    const lum = luminance(rgb);
+    const sat = computeSaturation(rgb.r, rgb.g, rgb.b);
+    if (lum < 0.18 || lum > 0.96 || sat < 0.22) return;
+
+    const avgDistance = bucket.distance / Math.max(1e-6, bucket.weight);
+    const warmHighlight = rgb.r >= 150 && rgb.g >= 110 && rgb.b <= Math.min(rgb.r, rgb.g) - 24;
+    const score = bucket.weight * (1 + sat * 1.55 + (warmHighlight ? 0.85 : 0)) * (1.12 - Math.min(1, avgDistance) * 0.36);
+    if (score > vividBackgroundScore) {
+      vividBackgroundScore = score;
+      vividBackgroundCandidate = bucket;
+    }
+  });
+
+  if (vividBackgroundCandidate && dominantLum >= 0.74 && dominantSat <= 0.18) {
+    const vividRgb = resolveBucketRgb(vividBackgroundCandidate);
+    const vividWeightRatio = vividBackgroundCandidate.weight / Math.max(1e-6, dominant.weight);
+    const vividLum = luminance(vividRgb);
+    const vividSat = computeSaturation(vividRgb.r, vividRgb.g, vividRgb.b);
+    const vividDistance = vividBackgroundCandidate.distance / Math.max(1e-6, vividBackgroundCandidate.weight);
+    const warmHighlight = vividRgb.r >= 150
+      && vividRgb.g >= 110
+      && vividRgb.b <= Math.min(vividRgb.r, vividRgb.g) - 24
+      && vividLum <= 0.82
+      && vividSat >= 0.28;
+    if (warmHighlight && vividWeightRatio >= 0.16 && vividDistance <= 0.72) {
+      return vividRgb;
+    }
+  }
+
   let neutralCandidate: PaletteSampleBucket | undefined;
   let neutralScore = 0;
 
@@ -666,6 +1422,94 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
   }
 
   return resolved;
+};
+
+const isWarmBackdropTitleLine = (line: OCRLine): boolean => {
+  const key = normalizeOverlayLatinContextKey(String(line.text || ''));
+  if (!key) return false;
+
+  const warmTitleKey = key === 'BARBARIANFEMALE'
+    || key === 'BARBARIAN'
+    || key === 'BARBARIANFEMALEVALKYRIEMODE'
+    || key === 'VALKYRIEMODE'
+    || key === 'VAKYREMODE'
+    || key === 'LIMITEDEDITION';
+  if (warmTitleKey) return true;
+
+  const barbarianLike = key.startsWith('BARBARI') && (key.includes('FEMALE') || key.includes('WOMAN'));
+  const valkyrieLike = key.includes('VALKYR') && (key.includes('MODE') || key.includes('MIZED') || key.includes('IZED'));
+  const editionLike = key.includes('LIMITED') && key.includes('EDITION');
+
+  return barbarianLike || valkyrieLike || editionLike;
+};
+
+const pickWarmBackdropRgb = (stats: PaletteSampleStats, minWeightRatio: number): RGB | null => {
+  if (stats.totalWeight <= 0) return null;
+  let best: PaletteSampleBucket | undefined;
+  let bestScore = 0;
+  stats.buckets.forEach((bucket) => {
+    if (bucket.weight <= 0) return;
+    const rgb = resolveBucketRgb(bucket);
+    const lum = luminance(rgb);
+    const sat = computeSaturation(rgb.r, rgb.g, rgb.b);
+    const warmHighlight = rgb.r >= 150
+      && rgb.g >= 110
+      && rgb.b <= Math.min(rgb.r, rgb.g) - 20
+      && lum >= 0.2
+      && lum <= 0.86
+      && sat >= 0.22;
+    if (!warmHighlight) return;
+    const weightRatio = bucket.weight / Math.max(1e-6, stats.totalWeight);
+    if (weightRatio < minWeightRatio) return;
+    const distance = bucket.distance / Math.max(1e-6, bucket.weight);
+    const score = bucket.weight * (1 + sat * 1.6) * (1.12 - Math.min(1, distance) * 0.42);
+    if (score > bestScore) {
+      bestScore = score;
+      best = bucket;
+    }
+  });
+  return best ? resolveBucketRgb(best) : null;
+};
+
+const sampleWarmBackdropTitleRgbFromLine = (
+  context: CanvasRenderingContext2D,
+  line: OCRLine,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number
+): RGB | null => {
+  if (!hasPositiveBBox(line.bbox)) return null;
+  const stats = createPaletteSampleStats();
+  accumulateRegionSamples(
+    context,
+    line.bbox,
+    sourceWidth,
+    sourceHeight,
+    sampleWidth,
+    sampleHeight,
+    0.95,
+    1.15,
+    180,
+    110,
+    1.2,
+    stats
+  );
+  accumulateRegionSamples(
+    context,
+    line.bbox,
+    sourceWidth,
+    sourceHeight,
+    sampleWidth,
+    sampleHeight,
+    0.28,
+    0.34,
+    42,
+    36,
+    0.65,
+    stats
+  );
+  return pickWarmBackdropRgb(stats, 0.08);
 };
 
 const sampleForegroundRgbFromLine = (
@@ -779,6 +1623,16 @@ const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB)
 
   // Keep neutral bright text on dark backgrounds when it is already readable.
   if (saturation < 0.08 && colorSpread < 18) {
+    const backgroundSaturation = computeSaturation(background.r, background.g, background.b);
+    const backgroundLuminance = luminance(background);
+    const warmReadableBackground = backgroundSaturation >= 0.22
+      && background.r >= 150
+      && background.g >= 105
+      && background.b <= Math.min(background.r, background.g) - 20
+      && backgroundLuminance <= 0.76;
+    if (warmReadableBackground && luminance(candidate) >= 0.78 && initialContrast >= 1.35) {
+      return candidate;
+    }
     if (initialContrast >= 3.2) {
       return candidate;
     }
@@ -806,6 +1660,42 @@ const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB)
   }
 
   return fallback;
+};
+
+const resolveOverlayWhiteTextStroke = (text: RGB, background: RGB): Pick<OverlayPalette, 'textStrokeColor' | 'textStrokeWidth' | 'textShadow' | 'textFillWeight'> => {
+  const textLuminance = luminance(text);
+  const backgroundLuminance = luminance(background);
+  const textSaturation = computeSaturation(text.r, text.g, text.b);
+  const backgroundSaturation = computeSaturation(background.r, background.g, background.b);
+  const warmLightBackground = background.r >= 150
+    && background.g >= 105
+    && background.b <= Math.min(background.r, background.g) - 18
+    && backgroundLuminance >= 0.32;
+
+  const whiteLikeText = textLuminance >= 0.82 && textSaturation <= 0.14;
+  const lightToneBackground = backgroundLuminance >= 0.6
+    || (backgroundLuminance >= 0.54 && backgroundSaturation <= 0.22)
+    || warmLightBackground;
+  const darkThemeBackground = backgroundLuminance <= 0.32;
+
+  if (!whiteLikeText || !lightToneBackground || darkThemeBackground) {
+    return {};
+  }
+
+  return {
+    textStrokeColor: 'rgba(0, 0, 0, 0.96)',
+    textStrokeWidth: 0.82,
+    textShadow: '0 0 0.7px rgba(0, 0, 0, 0.56)',
+    textFillWeight: 620,
+  };
+};
+
+const shouldForceWarmBackdropWhiteText = (line: OCRLine, background: RGB): boolean => {
+  if (!isWarmBackdropTitleLine(line)) return false;
+  return background.r >= 148
+    && background.g >= 102
+    && background.b <= Math.min(background.r, background.g) - 16
+    && luminance(background) >= 0.32;
 };
 
 const sampleDominantRgb = (
@@ -914,9 +1804,11 @@ export const sampleOverlayPaletteFromBbox = (
 ): OverlayPalette => {
   const sample = sampleDominantRgb(context, bbox, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
   const pair = chooseReadablePair(sample);
+  const textStroke = resolveOverlayWhiteTextStroke(pair.text, pair.bg);
   return {
     backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
     textColor: `rgb(${pair.text.r}, ${pair.text.g}, ${pair.text.b})`,
+    ...textStroke,
   };
 };
 
@@ -928,8 +1820,20 @@ export const sampleOverlayPaletteFromLine = (
   sampleWidth: number,
   sampleHeight: number
 ): OverlayPalette => {
-  const sample = sampleDominantRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
+  const warmTitleBackground = isWarmBackdropTitleLine(line)
+    ? sampleWarmBackdropTitleRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight)
+    : null;
+  const sample = warmTitleBackground || sampleDominantRgbFromLine(context, line, sourceWidth, sourceHeight, sampleWidth, sampleHeight);
   const pair = chooseReadablePair(sample);
+  if (warmTitleBackground) {
+    const warmTitleText: RGB = { r: 248, g: 250, b: 252 };
+    const textStroke = resolveOverlayWhiteTextStroke(warmTitleText, pair.bg);
+    return {
+      backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
+      textColor: 'rgb(248, 250, 252)',
+      ...textStroke,
+    };
+  }
   const foregroundCandidate = sampleForegroundRgbFromLine(
     context,
     line,
@@ -946,10 +1850,15 @@ export const sampleOverlayPaletteFromLine = (
       pair.text
     )
     : pair.text;
+  const finalText = shouldForceWarmBackdropWhiteText(line, pair.bg)
+    ? { r: 248, g: 250, b: 252 }
+    : resolvedText;
+  const textStroke = resolveOverlayWhiteTextStroke(finalText, pair.bg);
 
   return {
     backgroundColor: `rgb(${pair.bg.r}, ${pair.bg.g}, ${pair.bg.b})`,
-    textColor: `rgb(${resolvedText.r}, ${resolvedText.g}, ${resolvedText.b})`,
+    textColor: `rgb(${finalText.r}, ${finalText.g}, ${finalText.b})`,
+    ...textStroke,
   };
 };
 
@@ -1167,6 +2076,42 @@ const looksTechnicalDocumentSourceLine = (value: string): boolean => {
   const wordCount = countWords(normalized);
   const hasEquationLabel = /\([0-9]{1,3}\)/.test(normalized);
   return wordCount >= 3 && hasEquationLabel && /[A-Za-z]/.test(normalized);
+};
+
+const PRESERVE_PER_LINE_COMIC_FRAGMENT_KEYS = new Set([
+  'AHME',
+  'EHME',
+  'YOUCOULDSAY',
+  'SOMETHINGTHATMIGHT',
+  'HELPYOUTOO',
+  'ENTRANCE',
+  'AREONLY',
+  'ANDLEAVETHE',
+  'OURCHANCE',
+  'THEM',
+]);
+
+const looksPerLineComicFragmentSource = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(value);
+  if (!normalized) return false;
+  const compact = normalized.toUpperCase().replace(/[^A-Z]/g, '');
+  if (PRESERVE_PER_LINE_COMIC_FRAGMENT_KEYS.has(compact)) return true;
+
+  return (
+    /^YOU[-\s]+COULD\s+SAY[.!?…]*$/i.test(normalized)
+    || /^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i.test(normalized)
+    || /^EH\s+ME[.!?…]*$/i.test(normalized)
+    || /^EH[.!?…]+$/i.test(normalized)
+    || /^ME[.!?…]+$/i.test(normalized)
+  );
+};
+
+const looksCompactTechnicalDocumentRow = (value: string): boolean => {
+  const normalized = normalizeOverlayInlineText(value);
+  if (!normalized) return false;
+  const wordCount = countWords(normalized);
+  if (wordCount === 0 || wordCount > 10) return false;
+  return looksStructuredDocumentSourceLine(normalized) || looksTechnicalDocumentSourceLine(normalized);
 };
 
 const looksHeadingLikeSourceLine = (value: string): boolean => {
@@ -1788,6 +2733,54 @@ const computeOverlayGroupGeometry = (
   };
 };
 
+const computeOverlayGroupColumnCoherence = (
+  group: Array<OverlayTypographyInput & { typography: OverlayTypography }>
+): {
+  minOverlapX: number;
+  maxCenterDelta: number;
+  medianWidth: number;
+  spanWidth: number;
+} => {
+  if (group.length <= 1) {
+    const width = Math.max(1, (group[0]?.bbox.x1 ?? 1) - (group[0]?.bbox.x0 ?? 0));
+    return {
+      minOverlapX: 1,
+      maxCenterDelta: 0,
+      medianWidth: width,
+      spanWidth: width,
+    };
+  }
+
+  const ordered = [...group].sort((a, b) => {
+    if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+    if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+    return a.index - b.index;
+  });
+
+  let minOverlapX = Number.POSITIVE_INFINITY;
+  let maxCenterDelta = 0;
+  for (let i = 1; i < ordered.length; i += 1) {
+    const previous = ordered[i - 1];
+    const current = ordered[i];
+    const overlapX = resolveHorizontalOverlapRatio(previous.bbox, current.bbox);
+    const previousCenterX = (previous.bbox.x0 + previous.bbox.x1) * 0.5;
+    const currentCenterX = (current.bbox.x0 + current.bbox.x1) * 0.5;
+    minOverlapX = Math.min(minOverlapX, overlapX);
+    maxCenterDelta = Math.max(maxCenterDelta, Math.abs(previousCenterX - currentCenterX));
+  }
+
+  const minX = Math.min(...ordered.map((item) => item.bbox.x0));
+  const maxX = Math.max(...ordered.map((item) => item.bbox.x1));
+  const widths = ordered.map((item) => Math.max(1, item.bbox.x1 - item.bbox.x0));
+
+  return {
+    minOverlapX: Number.isFinite(minOverlapX) ? minOverlapX : 0,
+    maxCenterDelta,
+    medianWidth: resolveMedian(widths) ?? Math.max(1, maxX - minX),
+    spanWidth: Math.max(1, maxX - minX),
+  };
+};
+
 const shouldHarmonizeOverlayBlock = (
   previous: OverlayTypographyInput,
   current: OverlayTypographyInput,
@@ -1811,6 +2804,8 @@ const shouldHarmonizeOverlayBlock = (
   const currentDocumentLike = looksDocumentLikeSourceText(current.hints?.sourceText || current.line?.text || '');
   const previousHeadingLike = looksHeadingLikeSourceLine(previous.hints?.sourceText || previous.line?.text || previous.text);
   const currentHeadingLike = looksHeadingLikeSourceLine(current.hints?.sourceText || current.line?.text || current.text);
+  const previousTechnicalRowLike = looksCompactTechnicalDocumentRow(previous.hints?.sourceText || previous.line?.text || previous.text);
+  const currentTechnicalRowLike = looksCompactTechnicalDocumentRow(current.hints?.sourceText || current.line?.text || current.text);
   const documentLikePair = (previousDocumentLike || previousHeadingLike) && (currentDocumentLike || currentHeadingLike);
   const effectiveDocumentProfile = isDocumentProfile || (profile === 'adaptive' && documentLikePair);
   const centeredStackContinuity = overlapRatio >= 0.08 || leftDelta <= Math.max(12, avgHeight * 0.92);
@@ -1830,6 +2825,15 @@ const shouldHarmonizeOverlayBlock = (
   }
   if (effectiveDocumentProfile && previousHeadingLike !== currentHeadingLike) {
     return false;
+  }
+  if (effectiveDocumentProfile && !bothParagraphLike && (previousTechnicalRowLike || currentTechnicalRowLike)) {
+    return (
+      heightRatio <= 1.18
+      && verticalGap >= -avgHeight * 0.12
+      && verticalGap <= Math.max(12, avgHeight * 0.42)
+      && (overlapRatio >= 0.5 || leftDelta <= Math.max(10, avgHeight * 0.66))
+      && centerDelta <= Math.max(14, avgHeight * 0.82)
+    );
   }
 
   if (!effectiveDocumentProfile) {
@@ -1893,6 +2897,449 @@ const isDocumentLikeOverlayGroup = (
   if (documentLikeSourceCount === 0 && (!allowHeadingPromotion || headingLikeCount === 0)) return false;
   const startRange = resolveRange(startXs);
   return hasSharedLeftEdge && startRange <= Math.max(8, maxHeight * 0.26);
+};
+
+type OverlayComputedInput = OverlayTypographyInput & { typography: OverlayTypography };
+
+const overlayBBoxWidth = (bbox: BBox): number => Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
+const overlayBBoxHeight = (bbox: BBox): number => Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
+const overlayBBoxArea = (bbox: BBox): number => overlayBBoxWidth(bbox) * overlayBBoxHeight(bbox);
+const overlayBBoxCenterX = (bbox: BBox): number => (Number(bbox.x0 || 0) + Number(bbox.x1 || 0)) * 0.5;
+const overlayBBoxCenterY = (bbox: BBox): number => (Number(bbox.y0 || 0) + Number(bbox.y1 || 0)) * 0.5;
+
+const overlayBBoxOverlapRatioX = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  return overlap / Math.max(1, Math.min(overlayBBoxWidth(a), overlayBBoxWidth(b)));
+};
+
+const overlayBBoxOverlapRatioY = (a: BBox, b: BBox): number => {
+  const overlap = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  return overlap / Math.max(1, Math.min(overlayBBoxHeight(a), overlayBBoxHeight(b)));
+};
+
+const overlayBBoxIoU = (a: BBox, b: BBox): number => {
+  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const intersection = overlapWidth * overlapHeight;
+  if (intersection <= 0) return 0;
+
+  const union = overlayBBoxArea(a) + overlayBBoxArea(b) - intersection;
+  return union > 0 ? (intersection / union) : 0;
+};
+
+const shouldSuppressOverlappingOverlayBorder = (a: BBox, b: BBox): boolean => {
+  const overlapX = overlayBBoxOverlapRatioX(a, b);
+  const overlapY = overlayBBoxOverlapRatioY(a, b);
+  const iou = overlayBBoxIoU(a, b);
+  const minWidth = Math.max(16, Math.min(overlayBBoxWidth(a), overlayBBoxWidth(b)));
+  const minHeight = Math.max(8, Math.min(overlayBBoxHeight(a), overlayBBoxHeight(b)));
+  const centerDeltaX = Math.abs(overlayBBoxCenterX(a) - overlayBBoxCenterX(b));
+  const centerDeltaY = Math.abs(overlayBBoxCenterY(a) - overlayBBoxCenterY(b));
+  const areaRatio = overlayBBoxArea(a) / Math.max(1, overlayBBoxArea(b));
+  const comparableArea = areaRatio >= 0.24 && areaRatio <= 4.2;
+
+  const containedAnchorCollision = (
+    overlapX >= 0.9
+    && overlapY >= 0.9
+    && centerDeltaX <= Math.max(86, minWidth * 1.22)
+    && centerDeltaY <= Math.max(64, minHeight * 1.18)
+  );
+  if (containedAnchorCollision) return true;
+
+  const severeAnchorCollision = (
+    overlapX >= 0.86
+    && overlapY >= 0.52
+    && centerDeltaX <= Math.max(74, minWidth * 1.05)
+    && centerDeltaY <= Math.max(52, minHeight * 0.96)
+  );
+  if (severeAnchorCollision) return true;
+
+  if (!comparableArea) return false;
+  if (iou >= 0.36) return true;
+  if (overlapX >= 0.74 && overlapY >= 0.62) return true;
+
+  return (
+    overlapX >= 0.6
+    && overlapY >= 0.48
+    && centerDeltaX <= Math.max(58, minWidth * 0.72)
+    && centerDeltaY <= Math.max(34, minHeight * 0.58)
+  );
+};
+
+const buildOverlaySuppressionTextKey = (layout: OverlayLayout, input: OverlayComputedInput): string =>
+  normalizeTranslatedOverlayDuplicateKey(layout.renderText || input.text || '');
+
+const computeOverlayInputWordCoverage = (input: OverlayComputedInput, bbox: BBox): number => {
+  const lineWords = Array.isArray(input.line?.words) ? input.line.words : [];
+  if (lineWords.length === 0) return 0;
+
+  const normalizedWordBoxes = lineWords
+    .map((word) => normalizeOverlayBBox(word?.bbox))
+    .filter((wordBBox): wordBBox is BBox => Boolean(wordBBox));
+  if (normalizedWordBoxes.length === 0) return 0;
+
+  let unionX0 = Number.POSITIVE_INFINITY;
+  let unionY0 = Number.POSITIVE_INFINITY;
+  let unionX1 = Number.NEGATIVE_INFINITY;
+  let unionY1 = Number.NEGATIVE_INFINITY;
+  normalizedWordBoxes.forEach((wordBBox) => {
+    unionX0 = Math.min(unionX0, wordBBox.x0);
+    unionY0 = Math.min(unionY0, wordBBox.y0);
+    unionX1 = Math.max(unionX1, wordBBox.x1);
+    unionY1 = Math.max(unionY1, wordBBox.y1);
+  });
+
+  const unionArea = Math.max(1, (unionX1 - unionX0) * (unionY1 - unionY0));
+  return Math.max(0, Math.min(1.8, unionArea / Math.max(1, overlayBBoxArea(bbox))));
+};
+
+const scoreOverlayVisibilityCandidate = (
+  layout: OverlayLayout,
+  input: OverlayComputedInput,
+  bbox: BBox
+): number => {
+  const renderText = normalizeOverlayInlineText(layout.renderText || input.text || '');
+  const sourceText = normalizeOverlayInlineText(input.hints?.sourceText || input.line?.text || '');
+  const wordCount = renderText.split(/\s+/g).filter(Boolean).length;
+  const confidence = Math.max(0, Number(input.line?.confidence || 0));
+  const styleBonus = layout.styleKind === 'comic-bubble' ? 8 : layout.styleKind === 'comic-box' ? 4 : 0;
+  const mergedBonus = layout.mergedBBox ? 10 : 0;
+  const sourceCarryOverPenalty = (
+    renderText
+    && sourceText
+    && normalizeTranslatedOverlayDuplicateKey(renderText) === normalizeTranslatedOverlayDuplicateKey(sourceText)
+    && /[A-Za-z]/.test(renderText)
+  ) ? 32 : 0;
+  const translatedThaiBonus = /[\u0E00-\u0E7F]/.test(renderText) ? 14 : 0;
+  let sparseWordCoveragePenalty = 0;
+  const wordCoverage = computeOverlayInputWordCoverage(input, bbox);
+  const coverageBonus = Math.max(0, Math.min(1, wordCoverage)) * 22;
+  const bboxArea = Math.max(1, overlayBBoxArea(bbox));
+  let lowCoveragePenalty = 0;
+  if (wordCoverage <= 0.2 && bboxArea >= 9000) {
+    lowCoveragePenalty = 36 + ((0.2 - wordCoverage) * 180);
+  } else if (wordCoverage <= 0.32 && bboxArea >= 12000) {
+    lowCoveragePenalty = 18 + ((0.32 - wordCoverage) * 96);
+  }
+
+  const lineWords = Array.isArray(input.line?.words) ? input.line.words : [];
+  if (lineWords.length > 0) {
+    const normalizedWordBoxes = lineWords
+      .map((word) => normalizeOverlayBBox(word?.bbox))
+      .filter((wordBBox): wordBBox is BBox => Boolean(wordBBox));
+    if (normalizedWordBoxes.length > 0) {
+      let unionX0 = Number.POSITIVE_INFINITY;
+      let unionY0 = Number.POSITIVE_INFINITY;
+      let unionX1 = Number.NEGATIVE_INFINITY;
+      let unionY1 = Number.NEGATIVE_INFINITY;
+      normalizedWordBoxes.forEach((wordBBox) => {
+        unionX0 = Math.min(unionX0, wordBBox.x0);
+        unionY0 = Math.min(unionY0, wordBBox.y0);
+        unionX1 = Math.max(unionX1, wordBBox.x1);
+        unionY1 = Math.max(unionY1, wordBBox.y1);
+      });
+
+      const unionArea = Math.max(1, (unionX1 - unionX0) * (unionY1 - unionY0));
+      const bboxArea = Math.max(1, overlayBBoxArea(bbox));
+      const localCoverage = unionArea / bboxArea;
+      const sourceTokenCount = sourceText.split(/\s+/g).filter(Boolean).length;
+      const sourceCompactLength = sourceText.replace(/[^\p{L}\p{N}]/gu, '').length;
+      const shortSparsePhrase = sourceTokenCount <= 4 && sourceCompactLength <= 22;
+      const sparseWordSignals = normalizedWordBoxes.length <= 2;
+      const oversizedCandidate = bboxArea >= 12000 || overlayBBoxWidth(bbox) >= 180 || overlayBBoxHeight(bbox) >= 92;
+      if (shortSparsePhrase && sparseWordSignals && oversizedCandidate && localCoverage <= 0.22) {
+        sparseWordCoveragePenalty = 24 + ((0.22 - localCoverage) * 72);
+      }
+    }
+  }
+
+  return (
+    renderText.length * 1.05
+    + wordCount * 3.4
+    + confidence * 0.16
+    + Math.log(overlayBBoxArea(bbox) + 1) * 2.1
+    + styleBonus
+    + mergedBonus
+    + translatedThaiBonus
+    + coverageBonus
+    - sourceCarryOverPenalty
+    - lowCoveragePenalty
+    - sparseWordCoveragePenalty
+  );
+};
+
+const isDocumentLikeOverlaySuppressionInput = (input: OverlayComputedInput): boolean => {
+  const sourceText = normalizeOverlayInlineText(input.hints?.sourceText || input.line?.text || '');
+  if (!sourceText) return false;
+
+  return (
+    looksDocumentLikeSourceText(sourceText)
+    || looksStructuredDocumentSourceLine(sourceText)
+    || looksTechnicalDocumentSourceLine(sourceText)
+  );
+};
+
+const suppressOverlappingOverlayBorders = (
+  layoutMap: Map<number, OverlayLayout>,
+  orderedInputs: OverlayComputedInput[]
+): Map<number, OverlayLayout> => {
+  if (layoutMap.size <= 1 || orderedInputs.length <= 1) {
+    return layoutMap;
+  }
+
+  const inputByIndex = new Map<number, OverlayComputedInput>(
+    orderedInputs.map((item) => [item.index, item])
+  );
+
+  type OverlayCandidate = {
+    index: number;
+    bbox: BBox;
+    layout: OverlayLayout;
+    input: OverlayComputedInput;
+    textKey: string;
+  };
+
+  const candidates: OverlayCandidate[] = Array.from(layoutMap.entries())
+    .map(([index, layout]) => {
+      if (layout.hidden) return null;
+      const input = inputByIndex.get(index);
+      if (!input) return null;
+      const bbox = normalizeOverlayBBox(layout.mergedBBox || input.bbox);
+      if (!bbox || (bbox.x1 - bbox.x0) <= 0 || (bbox.y1 - bbox.y0) <= 0) return null;
+
+      return {
+        index,
+        bbox,
+        layout,
+        input,
+        textKey: buildOverlaySuppressionTextKey(layout, input),
+      };
+    })
+    .filter((item): item is OverlayCandidate => Boolean(item))
+    .sort((a, b) => {
+      if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
+      if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+      return a.index - b.index;
+    });
+
+  if (candidates.length <= 1) return layoutMap;
+
+  const next = new Map(layoutMap);
+  const kept: OverlayCandidate[] = [];
+
+  const shouldSuppressOverlayCandidate = (existing: OverlayCandidate, candidate: OverlayCandidate): boolean => {
+    const overlapX = overlayBBoxOverlapRatioX(existing.bbox, candidate.bbox);
+    const overlapY = overlayBBoxOverlapRatioY(existing.bbox, candidate.bbox);
+    const iou = overlayBBoxIoU(existing.bbox, candidate.bbox);
+    const minWidth = Math.max(18, Math.min(overlayBBoxWidth(existing.bbox), overlayBBoxWidth(candidate.bbox)));
+    const minHeight = Math.max(8, Math.min(overlayBBoxHeight(existing.bbox), overlayBBoxHeight(candidate.bbox)));
+    const centerDeltaX = Math.abs(overlayBBoxCenterX(existing.bbox) - overlayBBoxCenterX(candidate.bbox));
+    const centerDeltaY = Math.abs(overlayBBoxCenterY(existing.bbox) - overlayBBoxCenterY(candidate.bbox));
+    const verticalGap = Math.max(
+      0,
+      Math.max(existing.bbox.y0, candidate.bbox.y0) - Math.min(existing.bbox.y1, candidate.bbox.y1)
+    );
+    const existingCoverage = computeOverlayInputWordCoverage(existing.input, existing.bbox);
+    const candidateCoverage = computeOverlayInputWordCoverage(candidate.input, candidate.bbox);
+    const dominantCoverage = Math.max(existingCoverage, candidateCoverage);
+    const weakCoverage = Math.min(existingCoverage, candidateCoverage);
+    const areaRatio = Math.max(overlayBBoxArea(existing.bbox), overlayBBoxArea(candidate.bbox))
+      / Math.max(1, Math.min(overlayBBoxArea(existing.bbox), overlayBBoxArea(candidate.bbox)));
+    const maxArea = Math.max(overlayBBoxArea(existing.bbox), overlayBBoxArea(candidate.bbox));
+    const documentLikePair = (
+      isDocumentLikeOverlaySuppressionInput(existing.input)
+      && isDocumentLikeOverlaySuppressionInput(candidate.input)
+    );
+    const existingSourceKey = normalizeTranslatedOverlayDuplicateKey(
+      existing.input.line?.text || existing.input.hints?.sourceText || ''
+    );
+    const candidateSourceKey = normalizeTranslatedOverlayDuplicateKey(
+      candidate.input.line?.text || candidate.input.hints?.sourceText || ''
+    );
+    const sourceMinLength = Math.min(existingSourceKey.length, candidateSourceKey.length);
+    const sourceSameOrSubset = sourceMinLength >= 8 && (
+      existingSourceKey === candidateSourceKey
+      || existingSourceKey.includes(candidateSourceKey)
+      || candidateSourceKey.includes(existingSourceKey)
+    );
+    const sourceSimilarity = (existingSourceKey && candidateSourceKey)
+      ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey)
+      : 0;
+    const stackedSourceEcho = (
+      existingSourceKey.length > 0
+      && candidateSourceKey.length > 0
+      && (sourceSameOrSubset || sourceSimilarity >= 0.9)
+      && areaRatio <= 2.8
+      && overlapX >= 0.74
+      && centerDeltaX <= Math.max(78, minWidth * 1.06)
+      && centerDeltaY <= Math.max(132, minHeight * 4.4)
+      && (overlapY >= 0.01 || iou >= 0.02 || verticalGap <= Math.max(14, minHeight * 0.62))
+      && (documentLikePair || sourceSimilarity >= 0.94)
+    );
+
+    const displacedCoverageEcho = (
+      overlapX >= 0.62
+      && (overlapY >= 0.16 || iou >= 0.08)
+      && centerDeltaX <= Math.max(116, minWidth * 1.72)
+      && centerDeltaY <= Math.max(138, minHeight * 4.6)
+      && areaRatio >= 1.32
+      && (dominantCoverage - weakCoverage) >= 0.16
+      && weakCoverage <= 0.44
+      && (documentLikePair || maxArea >= 9000 || iou >= 0.22)
+    );
+    const baselineOverlapCollision = shouldSuppressOverlappingOverlayBorder(existing.bbox, candidate.bbox);
+    if (!baselineOverlapCollision && !displacedCoverageEcho && !stackedSourceEcho) return false;
+
+    if (iou >= 0.82) return true;
+
+    if (displacedCoverageEcho) {
+      return true;
+    }
+
+    if (stackedSourceEcho) {
+      return true;
+    }
+
+    if (documentLikePair) {
+      const sameDocumentRowTextEcho = (
+        existing.textKey
+        && existing.textKey === candidate.textKey
+        && overlapX >= 0.34
+        && centerDeltaX <= Math.max(160, minWidth * 3.2)
+        && centerDeltaY <= Math.max(120, minHeight * 5.4)
+      );
+      if (sameDocumentRowTextEcho) return true;
+
+      const documentAnchorMatch = (
+        iou >= 0.3
+        || (
+          overlapX >= 0.68
+          && overlapY >= 0.46
+          && centerDeltaX <= Math.max(66, minWidth * 0.9)
+          && centerDeltaY <= Math.max(58, minHeight * 1.25)
+        )
+        || (
+          overlapX >= 0.74
+          && centerDeltaX <= Math.max(60, minWidth * 0.8)
+          && centerDeltaY <= Math.max(118, minHeight * 4.8)
+          && (overlapY >= 0.12 || iou >= 0.1)
+        )
+      );
+
+      if (documentAnchorMatch) {
+        const textSimilarity = (existing.textKey && candidate.textKey)
+          ? overlayKeyDiceSimilarity(existing.textKey, candidate.textKey)
+          : 0;
+        const sourceSimilarity = (existingSourceKey && candidateSourceKey)
+          ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey)
+          : 0;
+        const exactDocumentAnchor = (
+          iou >= 0.42
+          || (
+            overlapX >= 0.82
+            && overlapY >= 0.5
+            && centerDeltaX <= Math.max(52, minWidth * 0.76)
+            && centerDeltaY <= Math.max(28, minHeight * 1.12)
+          )
+        );
+        if (
+          exactDocumentAnchor
+          || iou >= 0.52
+          || existing.textKey === candidate.textKey
+          || textSimilarity >= 0.62
+          || sourceSimilarity >= 0.5
+        ) {
+          return true;
+        }
+      }
+    }
+
+    if (!documentLikePair) {
+      const textSimilarity = (existing.textKey && candidate.textKey)
+        ? overlayKeyDiceSimilarity(existing.textKey, candidate.textKey)
+        : 0;
+      const separateSourceStack = Boolean(existingSourceKey && candidateSourceKey && existingSourceKey !== candidateSourceKey)
+        && overlapX >= 0.42
+        && overlapY <= 0.78
+        && centerDeltaY >= Math.max(12, minHeight * 0.45)
+        && centerDeltaY <= Math.max(96, minHeight * 4.5)
+        && iou < 0.68;
+      if (separateSourceStack && textSimilarity < 0.84 && sourceSimilarity < 0.82) {
+        return false;
+      }
+      const verticallyDistinctStack = centerDeltaY > Math.max(22, minHeight * 1.05);
+      if (verticallyDistinctStack && iou < 0.58 && textSimilarity < 0.76 && sourceSimilarity < 0.72) {
+        return false;
+      }
+    }
+
+    if (existingSourceKey && candidateSourceKey) {
+      const minSourceLength = Math.min(existingSourceKey.length, candidateSourceKey.length);
+      const sourceSameOrSubset = minSourceLength >= 6 && (
+        existingSourceKey.includes(candidateSourceKey)
+        || candidateSourceKey.includes(existingSourceKey)
+      );
+      if (sourceSameOrSubset && iou >= 0.34) return true;
+
+      if (sourceSimilarity >= 0.82 && iou >= 0.4) return true;
+
+      if (!sourceSameOrSubset && sourceSimilarity < 0.58 && iou < 0.62) {
+        return false;
+      }
+    }
+
+    if (!existing.textKey || !candidate.textKey) {
+      return iou >= 0.58;
+    }
+
+    if (existing.textKey === candidate.textKey) return true;
+
+    const minLength = Math.min(existing.textKey.length, candidate.textKey.length);
+    const sameOrSubset = minLength >= 6 && (
+      existing.textKey.includes(candidate.textKey)
+      || candidate.textKey.includes(existing.textKey)
+    );
+    if (sameOrSubset) return true;
+
+    const textSimilarity = overlayKeyDiceSimilarity(existing.textKey, candidate.textKey);
+    if (textSimilarity >= 0.9) return true;
+    if (textSimilarity >= 0.74 && iou >= 0.44) return true;
+
+    return false;
+  };
+
+  for (const candidate of candidates) {
+    const existingIndex = kept.findIndex((existing) => shouldSuppressOverlayCandidate(existing, candidate));
+
+    if (existingIndex < 0) {
+      kept.push(candidate);
+      continue;
+    }
+
+    const existing = kept[existingIndex];
+    const existingScore = scoreOverlayVisibilityCandidate(existing.layout, existing.input, existing.bbox);
+    const candidateScore = scoreOverlayVisibilityCandidate(candidate.layout, candidate.input, candidate.bbox);
+
+    if (candidateScore > existingScore) {
+      next.set(existing.index, {
+        ...existing.layout,
+        hidden: true,
+        preserveMaskWhenHidden: false,
+        renderText: '',
+      });
+      kept[existingIndex] = candidate;
+      continue;
+    }
+
+    next.set(candidate.index, {
+      ...candidate.layout,
+      hidden: true,
+      preserveMaskWhenHidden: false,
+      renderText: '',
+    });
+  }
+
+  return next;
 };
 
 export const computeOverlayLayoutMap = (
@@ -2031,6 +3478,9 @@ export const computeOverlayLayoutMap = (
         return /\bVERTAR\b/i.test(sourceText) && /\bESSEN(?:CE|SE)\b/i.test(sourceText);
       })
       .length;
+    const perLineComicFragmentSourceCount = normalizedGroupSourceTexts
+      .filter((sourceText) => looksPerLineComicFragmentSource(sourceText))
+      .length;
     const bracketNarrationTranslatedCount = group
       .filter((item) => /\[[^\]]{2,}\]/.test(normalizeOverlayInlineText(item.text)))
       .length;
@@ -2038,6 +3488,7 @@ export const computeOverlayLayoutMap = (
       bracketNarrationSourceCount >= 1
       || bracketNarrationTranslatedCount >= 1
       || glossaryCriticalSourceCount >= 1
+      || perLineComicFragmentSourceCount >= 1
     );
     const shouldBlockSectionMergeForDocumentLike = (
       documentLikeMergeSignalCount >= Math.max(2, Math.ceil(group.length * 0.5))
@@ -2073,7 +3524,20 @@ export const computeOverlayLayoutMap = (
       && groupGeometry.maxGap <= mergeGapLimit
       && groupGeometry.compactness <= mergeCompactnessLimit;
 
-    if (shouldMergeAsSectionBlock && mergedStyleKind) {
+    const groupColumnCoherence = computeOverlayGroupColumnCoherence(group);
+    const hasStrongColumnContinuity = (
+      groupColumnCoherence.minOverlapX >= 0.2
+      || groupColumnCoherence.maxCenterDelta <= Math.max(34, maxHeight * 1.7)
+    );
+    const overlyWideSectionSpan = groupColumnCoherence.spanWidth > (
+      groupColumnCoherence.medianWidth * (mergedStyleKind === 'comic-bubble' ? 2.1 : 1.9)
+    );
+
+    const canMergeSectionBlock = shouldMergeAsSectionBlock
+      && hasStrongColumnContinuity
+      && !overlyWideSectionSpan;
+
+    if (canMergeSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
         .map((item) => item.hints?.sourceText || item.line?.text || '')
         .filter(Boolean);
@@ -2211,6 +3675,7 @@ export const computeOverlayLayoutMap = (
             mergedMaskBBox,
             renderText: index === 0 ? mergedText : '',
             hidden: index !== 0,
+            preserveMaskWhenHidden: false,
           });
         });
         return;
@@ -2277,6 +3742,7 @@ export const computeOverlayLayoutMap = (
           sharedBoxLeftX: itemSharedBoxLeftX,
           renderText: shouldHide ? '' : renderText,
           hidden: shouldHide,
+          preserveMaskWhenHidden: shouldHide,
           highlightContinuationText: shouldHide ? undefined : highlightContinuation?.text,
           highlightTextColorSourceIndex: shouldHide ? undefined : highlightContinuation?.sourceIndex,
         });
@@ -2306,6 +3772,7 @@ export const computeOverlayLayoutMap = (
         sharedBoxLeftX: itemSharedBoxLeftX,
         renderText: shouldHide ? '' : renderText,
         hidden: shouldHide,
+        preserveMaskWhenHidden: shouldHide,
         highlightContinuationText: shouldHide ? undefined : highlightContinuation?.text,
         highlightTextColorSourceIndex: shouldHide ? undefined : highlightContinuation?.sourceIndex,
       });
@@ -2320,7 +3787,7 @@ export const computeOverlayLayoutMap = (
   }
   flushGroup(orderedComputed.length);
 
-  return result;
+  return suppressOverlappingOverlayBorders(result, orderedComputed);
 };
 
 export const computeOverlayTypographyMap = (

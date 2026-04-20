@@ -32,6 +32,11 @@ export interface BBox {
   y1: number; // bottom
 }
 
+export interface OCRPoint {
+  x: number;
+  y: number;
+}
+
 /** Word-level OCR result with precise positioning */
 export interface OCRWord {
   text: string;
@@ -48,6 +53,14 @@ export interface OCRLine {
   confidence: number;
   bbox: BBox;
   words: OCRWord[];
+  quad?: OCRPoint[];
+  angleDeg?: number;
+  sortHintX?: number;
+  sortHintY?: number;
+  _sortX?: number;
+  _sortY?: number;
+  sourceEngine?: OCREngine;
+  layoutHints?: Record<string, unknown>;
 }
 
 export interface OCRDroppedWord {

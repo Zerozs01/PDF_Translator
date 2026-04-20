@@ -3,11 +3,38 @@ import {
   computeOverlayLayoutMap,
   computeOverlayTypography,
   computeOverlayTypographyMap,
+  resolveTranslationOverlayContext,
   resolveOverlayMaskExpansion,
   resolveOverlaySourceBBox,
+  resolveMissingOverlayLineFallbackText,
+  sampleOverlayPaletteFromBbox,
+  sampleOverlayPaletteFromLine,
+  shouldSkipOverlayRenderForSuspiciousLine,
 } from './translationOverlayUtils';
+import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 
 describe('translationOverlayUtils typography', () => {
+  test('maps latest manga OCR fragments before falling back to source overlay text', () => {
+    expect(resolveMissingOverlayLineFallbackText('DO YOU', 'th')).toBe('คุณต้องการ');
+    expect(resolveMissingOverlayLineFallbackText('A LITTLE, YEAH?', 'th')).toBe('นิดหน่อย ใช่ไหม?');
+    expect(resolveMissingOverlayLineFallbackText('HMM?', 'th')).toBe('อืม?');
+    expect(resolveMissingOverlayLineFallbackText('EARLIER AND', 'th')).toBe('ก่อนหน้านี้ แล้ว');
+    expect(resolveMissingOverlayLineFallbackText('OF COURSE', 'th')).toBe('แน่นอน');
+    expect(resolveMissingOverlayLineFallbackText('BARBAR I AN (FEMALE)', 'th')).toBe('บาร์บาเรียน (หญิง)');
+    expect(resolveMissingOverlayLineFallbackText('VAKYRE MODE', 'th')).toBe('โหมดวาลคีรี');
+    expect(resolveMissingOverlayLineFallbackText('LIMITED EDITION', 'th')).toBe('รุ่นลิมิเต็ด');
+    expect(resolveMissingOverlayLineFallbackText('TH-THIS LIGHT...!', 'th')).toBe('แส-แสงนี้...!');
+    expect(resolveMissingOverlayLineFallbackText('SI ME QUEDO', 'th')).toBe('ถ้าฉันอยู่');
+    expect(resolveMissingOverlayLineFallbackText('AQuí MAS', 'th')).toBe('ที่นี่นานกว่านี้');
+    expect(resolveMissingOverlayLineFallbackText('S-SIENTO QUE ME', 'th')).toBe('ฉะ-ฉันรู้สึกว่า');
+    expect(resolveMissingOverlayLineFallbackText('VOY CORRER..', 'th')).toBe('ฉันจะเสร็จแล้ว..');
+    expect(resolveMissingOverlayLineFallbackText('STAFF', 'th')).toBe('เจ้าหน้าที่');
+    expect(resolveMissingOverlayLineFallbackText('PRI-MERO LA FOTO', 'th')).toBe('ภาพแรก');
+    expect(resolveMissingOverlayLineFallbackText('DE', 'th')).toBe('ของ');
+    expect(resolveMissingOverlayLineFallbackText('METIENDO POR', 'th')).toBe('กำลังดำเนินการ');
+    expect(resolveMissingOverlayLineFallbackText('iLISTO! CON', 'th')).toBe('พร้อม! ด้วย');
+  });
+
   test('shrinks font size for longer translated text in the same box', () => {
     const shortTypography = computeOverlayTypography('US NAVY', 180, 28, {
       sourceText: 'US NAVY',
@@ -42,6 +69,149 @@ describe('translationOverlayUtils typography', () => {
 
     expect(typography.forceSingleLine).toBe(true);
     expect(typography.fontSize).toBeLessThanOrEqual(16);
+  });
+
+  test('keeps warm title backgrounds when white lettering dominates the sampled text area', () => {
+    const yellow = [220, 170, 24, 255];
+    const white = [250, 250, 250, 255];
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          const color = (i % 100) < 62 ? white : yellow;
+          pixels.set(color, i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromLine(
+      context,
+      {
+        text: 'BARBARIAN (FEMALE)',
+        confidence: 94,
+        bbox: { x0: 10, y0: 10, x1: 210, y1: 50 },
+        words: [{ text: 'BARBARIAN', confidence: 94, bbox: { x0: 12, y0: 12, x1: 120, y1: 48 } }],
+      },
+      220,
+      80,
+      220,
+      80
+    );
+
+    expect(palette.backgroundColor).toBe('rgb(220, 170, 24)');
+    expect(palette.textColor).toBe('rgb(248, 250, 252)');
+    expect(palette.textStrokeColor).toBe('rgba(0, 0, 0, 0.96)');
+    expect(palette.textStrokeWidth).toBeGreaterThan(0.6);
+    expect(palette.textStrokeWidth).toBeLessThan(1.1);
+    expect(palette.textFillWeight).toBeGreaterThanOrEqual(560);
+  });
+
+  test('keeps warm valkyrie labels white with thin stroke instead of forcing dark text', () => {
+    const warm = [236, 210, 88, 255];
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          pixels.set(warm, i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromLine(
+      context,
+      {
+        text: 'Valkyrismized',
+        confidence: 94,
+        bbox: { x0: 20, y0: 20, x1: 240, y1: 72 },
+        words: [{ text: 'Valkyrismized', confidence: 94, bbox: { x0: 26, y0: 28, x1: 220, y1: 62 } }],
+      },
+      260,
+      96,
+      260,
+      96
+    );
+
+    expect(palette.textColor).toBe('rgb(248, 250, 252)');
+    expect(palette.textStrokeColor).toBe('rgba(0, 0, 0, 0.96)');
+    expect(palette.textFillWeight).toBeGreaterThanOrEqual(560);
+  });
+
+  test('keeps white text un-stroked on dark backgrounds', () => {
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          pixels.set([18, 26, 40, 255], i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromBbox(
+      context,
+      { x0: 10, y0: 10, x1: 210, y1: 50 },
+      220,
+      80,
+      220,
+      80
+    );
+
+    expect(palette.textColor).toBe('rgb(248, 250, 252)');
+    expect(palette.textStrokeColor).toBeUndefined();
+    expect(palette.textFillWeight).toBeUndefined();
+  });
+
+  test('ignores small warm color fringes around otherwise white document text', () => {
+    const yellow = [220, 170, 24, 255];
+    const white = [250, 250, 250, 255];
+    const context = {
+      getImageData: (_x: number, _y: number, width: number, height: number) => {
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < width * height; i += 1) {
+          const color = (i % 100) < 90 ? white : yellow;
+          pixels.set(color, i * 4);
+        }
+        return {
+          data: pixels,
+          width,
+          height,
+          colorSpace: 'srgb',
+        } as ImageData;
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const palette = sampleOverlayPaletteFromLine(
+      context,
+      {
+        text: 'Conditions for Rigid-Body Equilibrium',
+        confidence: 94,
+        bbox: { x0: 10, y0: 10, x1: 210, y1: 50 },
+        words: [{ text: 'Conditions', confidence: 94, bbox: { x0: 12, y0: 12, x1: 120, y1: 48 } }],
+      },
+      220,
+      80,
+      220,
+      80
+    );
+
+    expect(palette.backgroundColor).toBe('rgb(255, 255, 255)');
   });
 
   test('keeps elongated manga dialogue on a single line when the translation still fits', () => {
@@ -319,6 +489,105 @@ describe('translationOverlayUtils typography', () => {
     });
 
     expect(bbox).toEqual({ x0: 80, y0: 260, x1: 520, y1: 292 });
+  });
+
+  test('falls back to line bbox for centered short dialogue lines when word boxes collapse inside the bubble', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: 'H-HOW?',
+      confidence: 96,
+      bbox: { x0: 120, y0: 420, x1: 248, y1: 504 },
+      words: [
+        { text: 'H-HOW?', confidence: 96, bbox: { x0: 164, y0: 452, x1: 206, y1: 474 } },
+      ],
+    });
+
+    expect(bbox).toEqual({ x0: 120, y0: 420, x1: 248, y1: 504 });
+  });
+
+  test('keeps rotated dialogue lines on the raw bbox when quad metadata shows angled text', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: '사진 뭐냐?',
+      confidence: 95,
+      angleDeg: -24,
+      quad: [
+        { x: 76, y: 174 },
+        { x: 266, y: 126 },
+        { x: 286, y: 204 },
+        { x: 96, y: 252 },
+      ],
+      bbox: { x0: 72, y0: 124, x1: 288, y1: 254 },
+      words: [
+        { text: '사진', confidence: 95, bbox: { x0: 114, y0: 172, x1: 160, y1: 196 } },
+        { text: '뭐냐?', confidence: 95, bbox: { x0: 176, y0: 154, x1: 228, y1: 184 } },
+      ],
+    });
+
+    expect(bbox).toEqual({ x0: 72, y0: 124, x1: 288, y1: 254 });
+  });
+
+  test('normalizes swapped line bbox coordinates when words are unavailable', () => {
+    const bbox = resolveOverlaySourceBBox({
+      text: 'OPEN LOCKER',
+      confidence: 89,
+      bbox: { x0: 340, y0: 210, x1: 120, y1: 182 },
+      words: [],
+    });
+
+    expect(bbox).toEqual({ x0: 120, y0: 182, x1: 340, y1: 210 });
+  });
+
+  test('skips suspicious sparse oversized lines for overlay rendering parity', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: 'AA',
+      confidence: 90,
+      bbox: { x0: 24, y0: 30, x1: 340, y1: 220 },
+      words: [{ text: 'A', confidence: 90, bbox: { x0: 178, y0: 118, x1: 192, y1: 134 } }],
+    });
+
+    expect(shouldSkip).toBe(true);
+  });
+
+  test('keeps sentence-like overlays renderable even when source coverage is low', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: 'TE ESTABAN TOCANDO EL CUERPO',
+      confidence: 91,
+      bbox: { x0: 20, y0: 24, x1: 348, y1: 214 },
+      words: [{ text: 'TOCANDO', confidence: 91, bbox: { x0: 166, y0: 112, x1: 218, y1: 138 } }],
+    });
+
+    expect(shouldSkip).toBe(false);
+  });
+
+  test('keeps normal compact lines renderable for overlay parity', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: 'OPEN LOCKER',
+      confidence: 95,
+      bbox: { x0: 120, y0: 200, x1: 280, y1: 236 },
+      words: [
+        { text: 'OPEN', confidence: 95, bbox: { x0: 126, y0: 202, x1: 178, y1: 234 } },
+        { text: 'LOCKER', confidence: 95, bbox: { x0: 186, y0: 202, x1: 268, y1: 234 } },
+      ],
+    });
+
+    expect(shouldSkip).toBe(false);
+  });
+
+  test('does not skip angled dialogue overlays with quad metadata', () => {
+    const shouldSkip = shouldSkipOverlayRenderForSuspiciousLine({
+      text: '사진 뭐냐?',
+      confidence: 91,
+      angleDeg: -22,
+      quad: [
+        { x: 76, y: 174 },
+        { x: 266, y: 126 },
+        { x: 286, y: 204 },
+        { x: 96, y: 252 },
+      ],
+      bbox: { x0: 70, y0: 120, x1: 292, y1: 258 },
+      words: [{ text: '뭐냐?', confidence: 91, bbox: { x0: 176, y0: 154, x1: 228, y1: 184 } }],
+    });
+
+    expect(shouldSkip).toBe(false);
   });
 
   test('uses tighter mask expansion for compact labels than paragraph lines', () => {
@@ -1014,6 +1283,7 @@ describe('translationOverlayUtils typography', () => {
 
     expect(layoutMap.get(0)?.hidden).not.toBe(true);
     expect(layoutMap.get(1)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.preserveMaskWhenHidden).toBe(true);
     expect(layoutMap.get(0)?.renderText).toContain('ฟีนีลีนได้ดูดซับ');
     expect(layoutMap.get(0)?.renderText).toContain('[แก่นแท้ของเวอร์ทาร์]');
     expect(layoutMap.get(0)?.highlightContinuationText).toContain('แก่นแท้ของเวอร์ทาร์');
@@ -1140,6 +1410,8 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(0)?.renderText).toBe('นั่น เป็นไปได้แน่นอน.... คิดว่าไง ริฟรีด');
     expect(layoutMap.get(1)?.hidden).toBe(true);
     expect(layoutMap.get(2)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(2)?.preserveMaskWhenHidden).not.toBe(true);
     expect(layoutMap.get(0)?.mergedBBox).toEqual({ x0: 150, y0: 100, x1: 348, y1: 178 });
     expect(layoutMap.get(0)?.mergedMaskBBox).toEqual({ x0: 140, y0: 100, x1: 360, y1: 178 });
   });
@@ -1278,6 +1550,1318 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(0)?.sharedTextStartX).toBe(202);
     expect(layoutMap.get(1)?.sharedTextStartX).toBe(202);
     expect(layoutMap.get(2)?.alignment).toBe('left');
+  });
+
+  test('suppresses strongly overlapping overlay borders at the same anchor area', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'ตึกนี้รองรับแบบพิน',
+        width: 220,
+        height: 24,
+        bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+        line: {
+          text: 'This utility building is',
+          confidence: 78,
+          bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+          words: [{ text: 'This', confidence: 78, bbox: { x0: 268, y0: 520, x1: 298, y1: 544 } }],
+        },
+        hints: {
+          sourceText: 'This utility building is',
+          sourceBoxWidth: 220,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'ตึกอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของคอลัมน์',
+        width: 224,
+        height: 24,
+        bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+        line: {
+          text: 'This utility building is pin supported at the top of the column.',
+          confidence: 96,
+          bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+          words: [{ text: 'This', confidence: 96, bbox: { x0: 274, y0: 524, x1: 304, y1: 548 } }],
+        },
+        hints: {
+          sourceText: 'This utility building is pin supported at the top of the column.',
+          sourceBoxWidth: 224,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.renderText).toContain('คอลัมน์');
+  });
+
+  test('suppresses oversized same-anchor overlays when translated text is identical', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'พร้อม! ด้วย',
+        width: 340,
+        height: 180,
+        bbox: { x0: 80, y0: 120, x1: 420, y1: 300 },
+        line: {
+          text: 'iLISTO! CON',
+          confidence: 78,
+          bbox: { x0: 80, y0: 120, x1: 420, y1: 300 },
+          words: [{ text: 'LISTO!', confidence: 78, bbox: { x0: 136, y0: 168, x1: 198, y1: 196 } }],
+        },
+        hints: {
+          sourceText: 'iLISTO! CON',
+          sourceBoxWidth: 340,
+          sourceBoxHeight: 180,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'พร้อม! ด้วย',
+        width: 116,
+        height: 30,
+        bbox: { x0: 132, y0: 168, x1: 248, y1: 198 },
+        line: {
+          text: 'LISTO! CON',
+          confidence: 95,
+          bbox: { x0: 132, y0: 168, x1: 248, y1: 198 },
+          words: [
+            { text: 'LISTO!', confidence: 95, bbox: { x0: 136, y0: 168, x1: 198, y1: 196 } },
+            { text: 'CON', confidence: 95, bbox: { x0: 206, y0: 168, x1: 244, y1: 196 } },
+          ],
+        },
+        hints: {
+          sourceText: 'LISTO! CON',
+          sourceBoxWidth: 116,
+          sourceBoxHeight: 30,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(0)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses exact-anchor document overlays even when fallback text differs', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'Three unknowns. The reactions are the couple moment',
+        width: 360,
+        height: 24,
+        bbox: { x0: 820, y0: 2404, x1: 1180, y1: 2428 },
+        line: {
+          text: 'Three unknowns. The reactions are the couple moment',
+          confidence: 82,
+          bbox: { x0: 820, y0: 2404, x1: 1180, y1: 2428 },
+          words: [{ text: 'Three', confidence: 82, bbox: { x0: 828, y0: 2404, x1: 878, y1: 2428 } }],
+        },
+        hints: { sourceText: 'Three unknowns. The reactions are the couple moment', profile: 'official', fontFamily: 'TH Sarabun' },
+      },
+      {
+        index: 1,
+        text: 'ตัวไม่ทราบค่าสามตัว แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ',
+        width: 358,
+        height: 24,
+        bbox: { x0: 822, y0: 2406, x1: 1182, y1: 2430 },
+        line: {
+          text: 'Three unknowns. The reactions are the couple moment',
+          confidence: 94,
+          bbox: { x0: 822, y0: 2406, x1: 1182, y1: 2430 },
+          words: [{ text: 'Three', confidence: 94, bbox: { x0: 830, y0: 2406, x1: 880, y1: 2430 } }],
+        },
+        hints: { sourceText: 'Three unknowns. The reactions are the couple moment', profile: 'official', fontFamily: 'TH Sarabun' },
+      },
+    ], { profile: 'official' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses displaced document echoes when oversized low-coverage box collides with localized text', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'การต่อเชื่อมแบบมีร็อกเกอร์',
+        width: 392,
+        height: 78,
+        bbox: { x0: 104, y0: 96, x1: 498, y1: 174 },
+        line: {
+          text: 'connection types in Table 5-1.',
+          confidence: 93,
+          bbox: { x0: 104, y0: 96, x1: 498, y1: 174 },
+          words: [
+            { text: 'connection', confidence: 93, bbox: { x0: 112, y0: 110, x1: 194, y1: 134 } },
+          ],
+        },
+        hints: {
+          sourceText: 'connection types in Table 5-1.',
+          sourceBoxWidth: 392,
+          sourceBoxHeight: 78,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'วางอยู่บนขอบรองรับ',
+        width: 190,
+        height: 48,
+        bbox: { x0: 120, y0: 108, x1: 310, y1: 156 },
+        line: {
+          text: 'rests on the ledge that',
+          confidence: 95,
+          bbox: { x0: 120, y0: 108, x1: 310, y1: 156 },
+          words: [
+            { text: 'rests', confidence: 95, bbox: { x0: 126, y0: 112, x1: 170, y1: 136 } },
+            { text: 'on', confidence: 95, bbox: { x0: 176, y0: 112, x1: 198, y1: 136 } },
+            { text: 'the', confidence: 95, bbox: { x0: 204, y0: 112, x1: 234, y1: 136 } },
+            { text: 'ledge', confidence: 95, bbox: { x0: 240, y0: 112, x1: 288, y1: 136 } },
+          ],
+        },
+        hints: {
+          sourceText: 'rests on the ledge that',
+          sourceBoxWidth: 190,
+          sourceBoxHeight: 48,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'official' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses displaced oversized anchor while keeping stacked localized document lines', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'การต่อเชื่อมชนิดในตาราง 5-1',
+        width: 408,
+        height: 78,
+        bbox: { x0: 96, y0: 92, x1: 504, y1: 170 },
+        line: {
+          text: 'connection types in Table 5-1.',
+          confidence: 92,
+          bbox: { x0: 96, y0: 92, x1: 504, y1: 170 },
+          words: [
+            { text: 'connection', confidence: 92, bbox: { x0: 110, y0: 108, x1: 192, y1: 132 } },
+          ],
+        },
+        hints: {
+          sourceText: 'connection types in Table 5-1.',
+          sourceBoxWidth: 408,
+          sourceBoxHeight: 78,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'วางอยู่บนขอบรองรับ',
+        width: 194,
+        height: 40,
+        bbox: { x0: 124, y0: 116, x1: 318, y1: 156 },
+        line: {
+          text: 'rests on the ledge that',
+          confidence: 95,
+          bbox: { x0: 124, y0: 116, x1: 318, y1: 156 },
+          words: [
+            { text: 'rests', confidence: 95, bbox: { x0: 130, y0: 122, x1: 172, y1: 144 } },
+            { text: 'on', confidence: 95, bbox: { x0: 176, y0: 122, x1: 196, y1: 144 } },
+            { text: 'the', confidence: 95, bbox: { x0: 200, y0: 122, x1: 228, y1: 144 } },
+            { text: 'ledge', confidence: 95, bbox: { x0: 232, y0: 122, x1: 280, y1: 144 } },
+          ],
+        },
+        hints: {
+          sourceText: 'rests on the ledge that',
+          sourceBoxWidth: 194,
+          sourceBoxHeight: 40,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 2,
+        text: 'ถูกสมมติให้ทำหน้าที่เป็นพื้นผิวสัมผัส',
+        width: 194,
+        height: 38,
+        bbox: { x0: 126, y0: 160, x1: 320, y1: 198 },
+        line: {
+          text: 'is assumed to act as',
+          confidence: 95,
+          bbox: { x0: 126, y0: 160, x1: 320, y1: 198 },
+          words: [
+            { text: 'is', confidence: 95, bbox: { x0: 132, y0: 164, x1: 148, y1: 186 } },
+            { text: 'assumed', confidence: 95, bbox: { x0: 152, y0: 164, x1: 214, y1: 186 } },
+            { text: 'to', confidence: 95, bbox: { x0: 218, y0: 164, x1: 236, y1: 186 } },
+            { text: 'act', confidence: 95, bbox: { x0: 240, y0: 164, x1: 270, y1: 186 } },
+          ],
+        },
+        hints: {
+          sourceText: 'is assumed to act as',
+          sourceBoxWidth: 194,
+          sourceBoxHeight: 38,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'official' });
+
+    expect(layoutMap.get(0)?.hidden).toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(2)?.hidden).not.toBe(true);
+  });
+
+  test('suppresses stacked same-source technical echoes even with very low vertical overlap', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'แรงกระทำในทิศทางเดียวกับสายเคเบิล (1)',
+        width: 594,
+        height: 37,
+        bbox: { x0: 226, y0: 2356, x1: 816, y1: 2393 },
+        line: {
+          text: 'in the direction of the cable. (1)',
+          confidence: 89,
+          bbox: { x0: 226, y0: 2356, x1: 816, y1: 2393 },
+          words: [
+            { text: 'direction', confidence: 89, bbox: { x0: 346, y0: 2364, x1: 412, y1: 2386 } },
+          ],
+        },
+        hints: {
+          sourceText: 'in the direction of the cable. (1)',
+          sourceBoxWidth: 594,
+          sourceBoxHeight: 37,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'สายเคเบิลรับแรงในแนวเดียวกัน',
+        width: 516,
+        height: 48,
+        bbox: { x0: 222, y0: 2397, x1: 738, y1: 2445 },
+        line: {
+          text: 'in the direction of the cable. (1)',
+          confidence: 92,
+          bbox: { x0: 222, y0: 2397, x1: 738, y1: 2445 },
+          words: [
+            { text: 'direction', confidence: 92, bbox: { x0: 326, y0: 2408, x1: 392, y1: 2432 } },
+            { text: 'cable', confidence: 92, bbox: { x0: 486, y0: 2408, x1: 536, y1: 2432 } },
+          ],
+        },
+        hints: {
+          sourceText: 'in the direction of the cable. (1)',
+          sourceBoxWidth: 516,
+          sourceBoxHeight: 48,
+          profile: 'official',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'official' });
+
+    const hiddenCount = [layoutMap.get(0)?.hidden, layoutMap.get(1)?.hidden].filter(Boolean).length;
+    expect(hiddenCount).toBe(1);
+  });
+
+  test('keeps strongly overlapped overlays when translated texts are clearly different', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เปิดตู้รองเท้าแล้วออกจากตึก',
+        width: 220,
+        height: 24,
+        bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+        line: {
+          text: 'OPEN A SHOE LOCKER AND LEAVE THE BUILDING',
+          confidence: 96,
+          bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+          words: [{ text: 'OPEN', confidence: 96, bbox: { x0: 268, y0: 520, x1: 306, y1: 544 } }],
+        },
+        hints: {
+          sourceText: 'OPEN A SHOE LOCKER AND LEAVE THE BUILDING',
+          sourceBoxWidth: 220,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'ทีม 30 คนกำลังรอที่ทางเข้า',
+        width: 224,
+        height: 24,
+        bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+        line: {
+          text: 'A TEAM OF 30 PLAYERS IS WAITING AT THE ENTRANCE',
+          confidence: 95,
+          bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+          words: [{ text: 'A', confidence: 95, bbox: { x0: 274, y0: 524, x1: 286, y1: 548 } }],
+        },
+        hints: {
+          sourceText: 'A TEAM OF 30 PLAYERS IS WAITING AT THE ENTRANCE',
+          sourceBoxWidth: 224,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('keeps nearby stacked lines when overlap is low and anchors are distinct', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'การรองรับคงที่',
+        width: 170,
+        height: 24,
+        bbox: { x0: 100, y0: 300, x1: 270, y1: 324 },
+        line: {
+          text: 'fixed support',
+          confidence: 95,
+          bbox: { x0: 100, y0: 300, x1: 270, y1: 324 },
+          words: [{ text: 'fixed', confidence: 95, bbox: { x0: 108, y0: 300, x1: 148, y1: 324 } }],
+        },
+        hints: {
+          sourceText: 'fixed support',
+          sourceBoxWidth: 170,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'ชนิดของความสัมพันธ์ในตาราง 5-1',
+        width: 310,
+        height: 24,
+        bbox: { x0: 100, y0: 332, x1: 410, y1: 356 },
+        line: {
+          text: 'CONNECTION types in Table 5-1.',
+          confidence: 95,
+          bbox: { x0: 100, y0: 332, x1: 410, y1: 356 },
+          words: [{ text: 'CONNECTION', confidence: 95, bbox: { x0: 108, y0: 332, x1: 206, y1: 356 } }],
+        },
+        hints: {
+          sourceText: 'CONNECTION types in Table 5-1.',
+          sourceBoxWidth: 310,
+          sourceBoxHeight: 24,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('keeps vertically stacked comic overlays when texts differ despite mask overlap', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'เราพลาดโอกาสที่จะเข้าร่วม',
+        width: 168,
+        height: 32,
+        bbox: { x0: 180, y0: 420, x1: 348, y1: 452 },
+        line: {
+          text: 'OUR CHANCE',
+          confidence: 95,
+          bbox: { x0: 180, y0: 420, x1: 348, y1: 452 },
+          words: [{ text: 'OUR', confidence: 95, bbox: { x0: 192, y0: 422, x1: 232, y1: 452 } }],
+        },
+        hints: {
+          sourceText: 'OUR CHANCE',
+          sourceBoxWidth: 168,
+          sourceBoxHeight: 32,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+      {
+        index: 1,
+        text: 'พวกเขา',
+        width: 170,
+        height: 32,
+        bbox: { x0: 182, y0: 458, x1: 352, y1: 490 },
+        line: {
+          text: 'THEM.',
+          confidence: 95,
+          bbox: { x0: 182, y0: 458, x1: 352, y1: 490 },
+          words: [{ text: 'THEM.', confidence: 95, bbox: { x0: 220, y0: 462, x1: 278, y1: 488 } }],
+        },
+        hints: {
+          sourceText: 'THEM.',
+          sourceBoxWidth: 170,
+          sourceBoxHeight: 32,
+          profile: 'adaptive',
+          fontFamily: 'TH Sarabun',
+        },
+      },
+    ], { profile: 'adaptive' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+  });
+
+  test('keeps middle stack overlays when adjacent source lines overlap but differ', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'ฉันกำลัง',
+        width: 220,
+        height: 34,
+        bbox: { x0: 120, y0: 210, x1: 340, y1: 244 },
+        line: {
+          text: 'AQUI MAS TIEMPO,',
+          confidence: 94,
+          bbox: { x0: 120, y0: 210, x1: 340, y1: 244 },
+          words: [{ text: 'AQUI', confidence: 94, bbox: { x0: 126, y0: 212, x1: 186, y1: 242 } }],
+        },
+        hints: { sourceText: 'AQUI MAS TIEMPO,', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+      {
+        index: 1,
+        text: 'จะกลับแล้ว',
+        width: 226,
+        height: 34,
+        bbox: { x0: 132, y0: 236, x1: 358, y1: 270 },
+        line: {
+          text: 'VOY A CORRER.',
+          confidence: 94,
+          bbox: { x0: 132, y0: 236, x1: 358, y1: 270 },
+          words: [{ text: 'VOY', confidence: 94, bbox: { x0: 152, y0: 238, x1: 198, y1: 268 } }],
+        },
+        hints: { sourceText: 'VOY A CORRER.', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+      {
+        index: 2,
+        text: 'ภาพถ่าย',
+        width: 170,
+        height: 34,
+        bbox: { x0: 126, y0: 262, x1: 296, y1: 296 },
+        line: {
+          text: 'FOTO',
+          confidence: 94,
+          bbox: { x0: 126, y0: 262, x1: 296, y1: 296 },
+          words: [{ text: 'FOTO', confidence: 94, bbox: { x0: 160, y0: 264, x1: 214, y1: 294 } }],
+        },
+        hints: { sourceText: 'FOTO', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(2)?.hidden).not.toBe(true);
+  });
+
+  test('keeps you-could aside fragments per-line instead of merge-hide section blocks', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'คุณอาจพูดได้ว่า',
+        width: 190,
+        height: 32,
+        bbox: { x0: 304, y0: 348, x1: 494, y1: 380 },
+        line: {
+          text: 'you-could say',
+          confidence: 94,
+          bbox: { x0: 304, y0: 348, x1: 494, y1: 380 },
+          words: [{ text: 'you-could', confidence: 94, bbox: { x0: 312, y0: 350, x1: 410, y1: 378 } }],
+        },
+        hints: { sourceText: 'you-could say', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+      {
+        index: 1,
+        text: 'มีบางอย่างที่อาจ',
+        width: 290,
+        height: 34,
+        bbox: { x0: 258, y0: 390, x1: 548, y1: 424 },
+        line: {
+          text: 'SO ME THING that might',
+          confidence: 94,
+          bbox: { x0: 258, y0: 390, x1: 548, y1: 424 },
+          words: [{ text: 'SO', confidence: 94, bbox: { x0: 266, y0: 392, x1: 302, y1: 422 } }],
+        },
+        hints: { sourceText: 'SO ME THING that might', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+      {
+        index: 2,
+        text: 'ช่วยคุณได้เช่นกัน',
+        width: 210,
+        height: 32,
+        bbox: { x0: 314, y0: 432, x1: 524, y1: 464 },
+        line: {
+          text: 'help you too.',
+          confidence: 94,
+          bbox: { x0: 314, y0: 432, x1: 524, y1: 464 },
+          words: [{ text: 'help', confidence: 94, bbox: { x0: 322, y0: 434, x1: 372, y1: 462 } }],
+        },
+        hints: { sourceText: 'help you too.', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(2)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.mergedBBox).toBeUndefined();
+    expect(layoutMap.get(1)?.renderText).toBe('มีบางอย่างที่อาจ');
+  });
+
+  test('keeps short manga navigation fragments per-line instead of merge-hide section blocks', () => {
+    const layoutMap = computeOverlayLayoutMap([
+      {
+        index: 0,
+        text: 'มีเพียง',
+        width: 130,
+        height: 34,
+        bbox: { x0: 82, y0: 448, x1: 212, y1: 482 },
+        line: {
+          text: 'ARE ONLY',
+          confidence: 94,
+          bbox: { x0: 82, y0: 448, x1: 212, y1: 482 },
+          words: [{ text: 'ARE', confidence: 94, bbox: { x0: 88, y0: 450, x1: 130, y1: 480 } }],
+        },
+        hints: { sourceText: 'ARE ONLY', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+      {
+        index: 1,
+        text: 'อ๊ะ ฉัน',
+        width: 110,
+        height: 42,
+        bbox: { x0: 90, y0: 82, x1: 200, y1: 124 },
+        line: {
+          text: 'AH ME!!',
+          confidence: 90,
+          bbox: { x0: 90, y0: 82, x1: 200, y1: 124 },
+          words: [{ text: 'AH', confidence: 90, bbox: { x0: 94, y0: 88, x1: 130, y1: 118 } }],
+        },
+        hints: { sourceText: 'AH ME!!', profile: 'manga', fontFamily: 'TH Sarabun' },
+      },
+    ], { profile: 'manga' });
+
+    expect(layoutMap.get(0)?.hidden).not.toBe(true);
+    expect(layoutMap.get(1)?.hidden).not.toBe(true);
+    expect(layoutMap.get(0)?.mergedBBox).toBeUndefined();
+    expect(layoutMap.get(1)?.mergedBBox).toBeUndefined();
+  });
+});
+
+describe('resolveTranslationOverlayContext duplicate collapse', () => {
+  test('fills missing translated overlay indexes with source OCR text for position debugging', () => {
+    const currentPageOCR = {
+      pageNumber: 2,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 185,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'ARE ONLY',
+          confidence: 96,
+          bbox: { x0: 90, y0: 420, x1: 210, y1: 452 },
+          words: [{ text: 'ARE', confidence: 96, bbox: { x0: 96, y0: 422, x1: 136, y1: 450 } }],
+        },
+        {
+          text: 'AND LEAVE THE',
+          confidence: 96,
+          bbox: { x0: 520, y0: 420, x1: 720, y1: 452 },
+          words: [{ text: 'AND', confidence: 96, bbox: { x0: 526, y0: 422, x1: 570, y1: 450 } }],
+        },
+        {
+          text: 'BUILDING',
+          confidence: 94,
+          bbox: { x0: 522, y0: 460, x1: 680, y1: 492 },
+          words: [{ text: 'BUILDING', confidence: 94, bbox: { x0: 528, y0: 462, x1: 676, y1: 490 } }],
+        },
+      ],
+      words: [],
+      text: 'ARE ONLY AND LEAVE THE BUILDING',
+      confidence: 95,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 2,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 1, text: 'แล้วออกจาก' },
+        ],
+        translatedText: 'แล้วออกจาก',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('มีเพียง');
+    expect(overlay.translatedByIndex.get(1)).toBe('แล้วออกจาก');
+    expect(overlay.translatedByIndex.get(2)).toBe('อาคาร');
+  });
+
+  test('removes cached source carry-over for wide merged navigation bridge lines', () => {
+    const currentPageOCR = {
+      pageNumber: 2,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 186,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'ARE ONLY AND LEAVE THE',
+          confidence: 96,
+          bbox: { x0: 90, y0: 420, x1: 720, y1: 452 },
+          words: [
+            { text: 'ARE', confidence: 96, bbox: { x0: 96, y0: 422, x1: 136, y1: 450 } },
+            { text: 'THE', confidence: 96, bbox: { x0: 680, y0: 422, x1: 716, y1: 450 } },
+          ],
+        },
+        {
+          text: 'BUILDING',
+          confidence: 94,
+          bbox: { x0: 522, y0: 460, x1: 680, y1: 492 },
+          words: [{ text: 'BUILDING', confidence: 94, bbox: { x0: 528, y0: 462, x1: 676, y1: 490 } }],
+        },
+      ],
+      words: [],
+      text: 'ARE ONLY AND LEAVE THE BUILDING',
+      confidence: 95,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 2,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ARE ONLY AND LEAVE THE' },
+          { index: 1, text: 'BUILDING' },
+        ],
+        translatedText: 'ARE ONLY AND LEAVE THE BUILDING',
+        lineCount: 2,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.has(0)).toBe(false);
+    expect(overlay.translatedByIndex.get(1)).toBe('อาคาร');
+  });
+
+  test('collapses near-identical translated lines that overlap in the same technical caption row', () => {
+    const currentPageOCR = {
+      pageNumber: 6,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'This utility building is',
+          confidence: 96,
+          bbox: { x0: 260, y0: 520, x1: 470, y1: 542 },
+          words: [{ text: 'This', confidence: 96, bbox: { x0: 266, y0: 520, x1: 296, y1: 542 } }],
+        },
+        {
+          text: 'This utility building is',
+          confidence: 74,
+          bbox: { x0: 266, y0: 526, x1: 474, y1: 548 },
+          words: [{ text: 'This', confidence: 74, bbox: { x0: 272, y0: 526, x1: 302, y1: 548 } }],
+        },
+        {
+          text: 'pin supported at the top of the column. (8)',
+          confidence: 95,
+          bbox: { x0: 256, y0: 550, x1: 566, y1: 572 },
+          words: [{ text: 'pin', confidence: 95, bbox: { x0: 266, y0: 550, x1: 292, y1: 572 } }],
+        },
+      ],
+      words: [],
+      text: 'This utility building is pin supported at the top of the column. (8)',
+      confidence: 92,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 6,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ตึกอเนกประสงค์นี้' },
+          { index: 1, text: 'ตึกอเนกประสงค์นี้' },
+          { index: 2, text: 'รองรับแบบพินที่ด้านบนของคอลัมน์ (8)' },
+        ],
+        translatedText: 'ตึกอเนกประสงค์นี้ รองรับแบบพินที่ด้านบนของคอลัมน์ (8)',
+        lineCount: 3,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(2);
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(false);
+    expect(overlay.translatedByIndex.get(2)).toContain('คอลัมน์');
+  });
+
+  test('keeps identical translated labels when they are far apart in different rows', () => {
+    const currentPageOCR = {
+      pageNumber: 3,
+      width: 820,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'fixed support',
+          confidence: 95,
+          bbox: { x0: 84, y0: 300, x1: 210, y1: 322 },
+          words: [{ text: 'fixed', confidence: 95, bbox: { x0: 90, y0: 300, x1: 130, y1: 322 } }],
+        },
+        {
+          text: 'fixed support',
+          confidence: 95,
+          bbox: { x0: 86, y0: 692, x1: 212, y1: 714 },
+          words: [{ text: 'fixed', confidence: 95, bbox: { x0: 92, y0: 692, x1: 132, y1: 714 } }],
+        },
+      ],
+      words: [],
+      text: 'fixed support fixed support',
+      confidence: 92,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 3,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'การรองรับคงที่' },
+          { index: 1, text: 'การรองรับคงที่' },
+        ],
+        translatedText: 'การรองรับคงที่',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(2);
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(true);
+  });
+
+  test('keeps overlapping translated lines when source text differs substantially', () => {
+    const currentPageOCR = {
+      pageNumber: 9,
+      width: 820,
+      height: 1200,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'OPEN A SHOE LOCKER AND LEAVE THE BUILDING',
+          confidence: 95,
+          bbox: { x0: 260, y0: 520, x1: 480, y1: 544 },
+          words: [{ text: 'OPEN', confidence: 95, bbox: { x0: 268, y0: 520, x1: 306, y1: 544 } }],
+        },
+        {
+          text: 'A TEAM OF 30 PLAYERS IS WAITING AT THE ENTRANCE',
+          confidence: 95,
+          bbox: { x0: 266, y0: 524, x1: 490, y1: 548 },
+          words: [{ text: 'TEAM', confidence: 95, bbox: { x0: 286, y0: 524, x1: 328, y1: 548 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 90,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 9,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ข้อความเดียวกัน' },
+          { index: 1, text: 'ข้อความเดียวกัน' },
+        ],
+        translatedText: 'ข้อความเดียวกัน',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(2);
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(true);
+  });
+
+  test('collapses document-like overlapping duplicates even when source strings are noisy variants', () => {
+    const currentPageOCR = {
+      pageNumber: 6,
+      width: 1400,
+      height: 3200,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'BRIDGE GIRDER ALLOWS HORIZONTAL',
+          confidence: 88,
+          bbox: { x0: 760, y0: 2880, x1: 1420, y1: 2944 },
+          words: [{ text: 'BRIDGE', confidence: 88, bbox: { x0: 776, y0: 2882, x1: 866, y1: 2942 } }],
+        },
+        {
+          text: 'bridge girder allows horizontal @',
+          confidence: 82,
+          bbox: { x0: 756, y0: 2876, x1: 1412, y1: 2938 },
+          words: [{ text: 'bridge', confidence: 82, bbox: { x0: 772, y0: 2878, x1: 858, y1: 2936 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 86,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 6,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'คานสะพานรับแรงแนวนอน' },
+          { index: 1, text: 'คานสะพานรับแรงแนวนอน' },
+        ],
+        translatedText: 'คานสะพานรับแรงแนวนอน',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'official',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.size).toBe(1);
+    expect(overlay.translatedByIndex.has(0) || overlay.translatedByIndex.has(1)).toBe(true);
+  });
+
+  test('collapses same document row translations that only differ by punctuation before labels', () => {
+    const currentPageOCR = {
+      pageNumber: 6,
+      width: 1400,
+      height: 3200,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 188,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'of the column. (8)',
+          confidence: 92,
+          bbox: { x0: 520, y0: 2460, x1: 760, y1: 2504 },
+          words: [{ text: 'column', confidence: 92, bbox: { x0: 590, y0: 2462, x1: 690, y1: 2502 } }],
+        },
+        {
+          text: 'of the column: (8)',
+          confidence: 84,
+          bbox: { x0: 540, y0: 2498, x1: 782, y1: 2542 },
+          words: [{ text: 'column', confidence: 84, bbox: { x0: 610, y0: 2500, x1: 710, y1: 2540 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 88,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 6,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ของคอลัมน์ (8)' },
+          { index: 1, text: 'ของคอลัมน์: (8)' },
+        ],
+        translatedText: 'ของคอลัมน์ (8)',
+        lineCount: 2,
+        groupCount: 2,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'official',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.translatedByIndex.size).toBe(1);
+    expect(Array.from(overlay.translatedByIndex.values())[0].replace(/\s+/g, '')).toBe('ของคอลัมน์(8)');
+  });
+
+  test('removes contextual OCR ghost fragments from translated overlay cache', () => {
+    const currentPageOCR = {
+      pageNumber: 5,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 188,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: "I DON'T CARE.",
+          confidence: 96,
+          bbox: { x0: 120, y0: 120, x1: 380, y1: 154 },
+          words: [{ text: "I DON'T", confidence: 96, bbox: { x0: 130, y0: 120, x1: 230, y1: 154 } }],
+        },
+        {
+          text: 'I ALREADY EARNED',
+          confidence: 96,
+          bbox: { x0: 118, y0: 164, x1: 462, y1: 198 },
+          words: [{ text: 'EARNED', confidence: 96, bbox: { x0: 330, y0: 164, x1: 442, y1: 198 } }],
+        },
+        {
+          text: 'CARNED',
+          confidence: 82,
+          bbox: { x0: 310, y0: 165, x1: 430, y1: 198 },
+          words: [{ text: 'CARNED', confidence: 82, bbox: { x0: 310, y0: 165, x1: 430, y1: 198 } }],
+        },
+        {
+          text: 'ENOUGH.',
+          confidence: 96,
+          bbox: { x0: 190, y0: 206, x1: 340, y1: 240 },
+          words: [{ text: 'ENOUGH', confidence: 96, bbox: { x0: 200, y0: 206, x1: 330, y1: 240 } }],
+        },
+        {
+          text: 'LOOK, BJORN!',
+          confidence: 96,
+          bbox: { x0: 520, y0: 420, x1: 760, y1: 454 },
+          words: [{ text: 'BJORN', confidence: 96, bbox: { x0: 650, y0: 420, x1: 750, y1: 454 } }],
+        },
+        {
+          text: 'I HAVE WINGS!!',
+          confidence: 96,
+          bbox: { x0: 524, y0: 462, x1: 786, y1: 496 },
+          words: [{ text: 'WINGS', confidence: 96, bbox: { x0: 660, y0: 462, x1: 780, y1: 496 } }],
+        },
+        {
+          text: 'WINGSII',
+          confidence: 80,
+          bbox: { x0: 610, y0: 506, x1: 730, y1: 540 },
+          words: [{ text: 'WINGSII', confidence: 80, bbox: { x0: 610, y0: 506, x1: 730, y1: 540 } }],
+        },
+        {
+          text: 'THAVE',
+          confidence: 78,
+          bbox: { x0: 600, y0: 464, x1: 720, y1: 496 },
+          words: [{ text: 'THAVE', confidence: 78, bbox: { x0: 600, y0: 464, x1: 720, y1: 496 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 90,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 5,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ฉันไม่สน' },
+          { index: 1, text: 'ฉันหาได้แล้ว' },
+          { index: 2, text: 'CARNED' },
+          { index: 3, text: 'พอแล้ว' },
+          { index: 4, text: 'ดูสิ บียอร์น' },
+          { index: 5, text: 'ฉันมีปีก' },
+          { index: 6, text: 'WINGSII' },
+          { index: 7, text: 'THAVE' },
+        ],
+        translatedText: '',
+        lineCount: 7,
+        groupCount: 5,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.translatedByIndex.has(0)).toBe(true);
+    expect(overlay.translatedByIndex.has(1)).toBe(true);
+    expect(overlay.translatedByIndex.has(2)).toBe(false);
+    expect(overlay.translatedByIndex.has(5)).toBe(true);
+    expect(overlay.translatedByIndex.has(6)).toBe(false);
+    expect(overlay.translatedByIndex.has(7)).toBe(false);
+  });
+
+  test('accepts spanish-source cache entry when OCR language key is english but snapshot matches', () => {
+    const currentPageOCR = {
+      pageNumber: 2,
+      width: 1000,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'TE ESTABAN TOCANDO EL CUERPO',
+          confidence: 94,
+          bbox: { x0: 120, y0: 220, x1: 520, y1: 280 },
+          words: [{ text: 'TE', confidence: 94, bbox: { x0: 130, y0: 224, x1: 168, y1: 278 } }],
+        },
+      ],
+      words: [],
+      text: '',
+      confidence: 90,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 2,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'es',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'พวกเขากำลังแตะตัวเธออยู่เหรอ' },
+        ],
+        translatedText: 'พวกเขากำลังแตะตัวเธออยู่เหรอ',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.sourceLanguage).toBe('es');
+    expect(overlay.translatedByIndex.size).toBe(1);
+    expect(overlay.translatedByIndex.get(0)).toContain('แตะตัว');
   });
 });
 

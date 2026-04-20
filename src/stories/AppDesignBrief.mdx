@@ -1,0 +1,76 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+
+<Meta title="Design/Stitch Prompt Brief" />
+
+# PDF Translator UX Remake Brief
+
+This page is a compact handoff note for using Stitch with screenshots.
+
+## 1) Copy This Master Prompt First
+
+```text
+Design a desktop-first Electron app UI for "PDF Translator".
+Tone: precision tool + creative lab. Keep it dark, high-contrast, and information-dense but calm.
+Visual style: layered glass panels, subtle atmospheric gradients, compact controls.
+Layout:
+- Left rail for global nav
+- Secondary sidebar for library/settings
+- Main workspace canvas
+- Right utility panel for OCR/translation controls
+- Sticky top toolbar
+Typography:
+- Thai-friendly sans style similar to Mitr/Sarabun
+Interaction:
+- Active = blue gradient
+- Informational/support = cyan and emerald
+- Warning = amber
+- Error = rose
+Do not output a generic SaaS dashboard. Keep it as a production OCR translation workstation.
+```
+
+## 2) Home Prompt
+
+```text
+Create the home screen for PDF Translator.
+Intent: file library + quick-start launchpad.
+Must include left icon rail, library sidebar, main document board, and right quick-start panel.
+Empty state must feature a high-visibility drag and drop upload zone.
+Color direction:
+- Base #17181b
+- Side surfaces #0e0f11 and #111214
+- Main board #25272b
+- Hero strip gradient #3C86DF -> #3A98E0 -> #4A78D5 -> #7054C2
+- Primary action blue #2B9BFF with cyan support #5CC6F2
+- Warning states in amber
+Output: polished desktop UI, not mobile-first.
+```
+
+## 3) Workspace Prompt
+
+```text
+Create the main working screen for PDF Translator after opening a file.
+Intent: OCR + translation editing cockpit.
+Include top toolbar, left document panel, center page canvas, right OCR controls, and export modal.
+Color direction:
+- Shell #0b0f16
+- Top bar #171b23
+- Canvas #313741
+- Active gradient #2B9BFF -> #2776FF
+- Cyan for scope actions, emerald for content actions, amber for warnings, rose for errors
+Behavior:
+- compact controls, keyboard-friendly, strong selected states
+- keep technical workstation vibe
+Output both wireframe and polished visual version.
+```
+
+## 4) Theme Snapshot
+
+| Area | Primary Colors | Notes |
+| --- | --- | --- |
+| Home | `#17181b`, `#0e0f11`, `#111214`, `#25272b` | Deep neutral surfaces |
+| Home Hero | `#3C86DF`, `#3A98E0`, `#4A78D5`, `#7054C2` | Signature ribbon gradient |
+| Workspace Shell | `#0b0f16`, `#171b23`, `#313741` | Dark technical editor shell |
+| Core Accent | `#2B9BFF`, `#2776FF` | Active tools and highlighted controls |
+| Status Accents | `cyan`, `emerald`, `amber`, `rose` | Scope/content/warn/error language |
+
+Use this with screenshots from current Home and Workspace before requesting UI regeneration.

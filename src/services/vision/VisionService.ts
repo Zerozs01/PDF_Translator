@@ -16,6 +16,9 @@ import {
   OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
 } from './ocr-timeout';
 
+const EXTERNAL_TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
+const EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX = /\b(?:table|continued|types?\s+of\s+connection|number\s+of\s+unknowns|reactions?|unknowns?|components?|couple\s+moment|magnitude|direction|resultant|smooth\s+pin|hinge|fixed\s+support|collar|rod|member\s+fixed|bridge|building|beam|welded|column)\b|^\(?\d+\)?$|^(?:fx|fy|fyt|f|m|or)$/i;
+
 type WorkerMessage = {
   type: string;
   payload?: unknown;
@@ -112,6 +115,24 @@ const horizontalContainmentRatio = (inner: OCRWord['bbox'] | OCRLine['bbox'], ou
 const bboxArea = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number =>
   Math.max(1, bboxWidth(bbox) * bboxHeight(bbox));
 
+const expandContextualPhraseBBox = (
+  bbox: OCRLine['bbox'],
+  pageWidth: number,
+  pageHeight: number,
+  leftRatio: number,
+  rightRatio: number,
+  verticalRatio: number = 0.08
+): OCRLine['bbox'] => {
+  const width = Math.max(1, bboxWidth(bbox));
+  const height = Math.max(1, bboxHeight(bbox));
+  return {
+    x0: Math.max(0, bbox.x0 - width * leftRatio),
+    y0: Math.max(0, bbox.y0 - height * verticalRatio),
+    x1: Math.min(Math.max(1, pageWidth), bbox.x1 + width * rightRatio),
+    y1: Math.min(Math.max(1, pageHeight), bbox.y1 + height * verticalRatio),
+  };
+};
+
 const bboxIoURatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
   const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
   const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
@@ -122,10 +143,74 @@ const bboxIoURatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] |
   return union > 0 ? (intersection / union) : 0;
 };
 
+const medianNumber = (values: number[]): number => {
+  if (values.length === 0) return 0;
+  const ordered = values.slice().sort((a, b) => a - b);
+  const middle = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 0) {
+    return (ordered[middle - 1] + ordered[middle]) / 2;
+  }
+  return ordered[middle];
+};
+
+const computeLineWordUnionCoverage = (line: OCRLine): number => {
+  const validWords = (Array.isArray(line.words) ? line.words : [])
+    .filter((word) => String(word.text || '').trim().length > 0 && bboxWidth(word.bbox) > 0 && bboxHeight(word.bbox) > 0);
+  if (validWords.length === 0) return 0;
+
+  const x0 = Math.min(...validWords.map((word) => word.bbox.x0));
+  const y0 = Math.min(...validWords.map((word) => word.bbox.y0));
+  const x1 = Math.max(...validWords.map((word) => word.bbox.x1));
+  const y1 = Math.max(...validWords.map((word) => word.bbox.y1));
+  const unionArea = Math.max(1, (x1 - x0) * (y1 - y0));
+  return Math.max(0, Math.min(1.8, unionArea / Math.max(1, bboxArea(line.bbox))));
+};
+
 const normalizeMultilingualToken = (text: string): string =>
   String(text || '').replace(/[^A-Za-z0-9\uAC00-\uD7A3]+/g, '').toUpperCase();
 
 const hasHangulChars = (text: string): boolean => /[\uAC00-\uD7A3]/.test(String(text || ''));
+
+const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
+  'A', 'AN', 'THE', 'TO', 'OF', 'FOR', 'AND', 'OR', 'IN', 'ON', 'WITH',
+  'I', 'YOU', 'HE', 'SHE', 'HER', 'HIM', 'WE', 'THEY', 'IT',
+  'BIG', 'DEAL', 'GOOD', 'BAD', 'ONLY', 'LEAVE', 'OPEN', 'CHANCE',
+]);
+
+const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set(['I', 'IN', 'IT', 'IS']);
+
+const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
+  String(text || '')
+    .toUpperCase()
+    .split(/\s+/g)
+    .map((token) => token.replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S'))
+    .filter((token) => token.length >= 3)
+);
+
+const countSharedExternalLatinTokens = (left: string, right: string): number => {
+  const leftTokens = new Set(collectMeaningfulExternalLatinTokens(left));
+  const rightTokens = new Set(collectMeaningfulExternalLatinTokens(right));
+  let shared = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) shared += 1;
+  });
+  return shared;
+};
+
+const scoreExternalLatinLineNaturalness = (text: string): number => {
+  const tokens = String(text || '').split(/\s+/g).filter(Boolean);
+  let score = 0;
+  tokens.forEach((token) => {
+    const alpha = token.replace(/[^A-Za-z]/g, '');
+    if (!alpha) return;
+    const upper = alpha.toUpperCase();
+    if (EXTERNAL_NATURAL_LATIN_WORDS.has(upper)) score += 3.2;
+    if (/[aeiou]/i.test(alpha)) score += 0.8;
+    if (/[A-Z][a-z][A-Z]/.test(alpha) || /[a-z][A-Z]/.test(alpha)) score -= 2.8;
+    if (!/[aeiou]/i.test(alpha) && alpha.length >= 4) score -= 2.4;
+  });
+  return score;
+};
 
 const normalizeKoreanDedupToken = (text: string): string => {
   const normalized = normalizeMultilingualToken(text);
@@ -223,6 +308,52 @@ const normalizeExternalLatinToken = (value: string): string =>
     .replace(/0/g, 'O')
     .replace(/1/g, 'I')
     .replace(/5/g, 'S');
+
+const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
+  'AHME',
+  'EHME',
+  'YOUCOULDSAY',
+  'SOMETHINGTHATMIGHT',
+  'HELPYOUTOO',
+  'ENTRANCE',
+  'AREONLY',
+  'OURCHANCE',
+  'THEM',
+  'OPENA',
+  'SHOELOCKER',
+  'ANDLEAVETHE',
+  'OPENASHOELOCKER',
+  'BUILDING',
+  'THTHIS',
+  'THTHISLIGHT',
+  'THISLIGHT',
+  'STAFF',
+  'PRIMERO',
+  'PRIMEROLAFOTO',
+  'LAFOTO',
+  'METIENDO',
+  'METIENDOPOR',
+  'LISTO',
+  'LISTOCON',
+  'ILISTOCON',
+]);
+
+const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {
+  const rawText = String(line.text || '').trim();
+  if (!rawText) return false;
+  const key = normalizeExternalLatinToken(rawText);
+  const compactRaw = rawText.replace(/\s+/g, '');
+  const knownShortInterjection = /^(?:E+H+|A+H+|M+E+)[!?…]+$/i.test(compactRaw)
+    || /^E+H+[!?…]*M+E+[!?…]*$/i.test(compactRaw)
+    || /^A+H+[!?…]*M+E+[!?…]*$/i.test(compactRaw);
+  if (!EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS.has(key) && !knownShortInterjection) return false;
+
+  const width = Math.max(1, bboxWidth(line.bbox));
+  const area = Math.max(1, bboxArea(line.bbox));
+  const coverage = computeLineWordUnionCoverage(line);
+
+  return !(width >= 960 && area >= 76000 && coverage >= 0.52);
+};
 
 class VisionService {
   private workers: WorkerSlot[] = [];
@@ -648,7 +779,7 @@ class VisionService {
   }
 
   private offsetExternalLine(line: OCRLine, yOffset: number): OCRLine {
-    const lineWithHints = line as OCRLine & { _sortY?: number; _sortX?: number };
+    const lineWithHints = line as OCRLine & { _sortY?: number; _sortX?: number; sortHintY?: number; sortHintX?: number };
     return {
       ...lineWithHints,
       bbox: {
@@ -658,8 +789,16 @@ class VisionService {
         y1: line.bbox.y1 + yOffset,
       },
       words: (line.words || []).map((word) => this.offsetExternalWord(word, yOffset)),
+      quad: Array.isArray(line.quad)
+        ? line.quad.map((point) => ({
+          x: point.x,
+          y: point.y + yOffset,
+        }))
+        : line.quad,
       ...(typeof lineWithHints._sortY === 'number' ? { _sortY: lineWithHints._sortY + yOffset } : {}),
       ...(typeof lineWithHints._sortX === 'number' ? { _sortX: lineWithHints._sortX } : {}),
+      ...(typeof lineWithHints.sortHintY === 'number' ? { sortHintY: lineWithHints.sortHintY + yOffset } : {}),
+      ...(typeof lineWithHints.sortHintX === 'number' ? { sortHintX: lineWithHints.sortHintX } : {}),
     };
   }
 
@@ -796,9 +935,72 @@ class VisionService {
     const centerDeltaX = Math.abs(bboxCenterX(existing.bbox) - bboxCenterX(candidate.bbox));
     const minHeight = Math.max(8, Math.min(bboxHeight(existing.bbox), bboxHeight(candidate.bbox)));
     const minWidth = Math.max(24, Math.min(bboxWidth(existing.bbox), bboxWidth(candidate.bbox)));
+    const existingRawText = String(existing.text || '').replace(/\s+/g, ' ').trim();
+    const candidateRawText = String(candidate.text || '').replace(/\s+/g, ' ').trim();
+    const technicalRowLikePair = (
+      EXTERNAL_TECHNICAL_LINE_HINT_REGEX.test(existingRawText)
+      || EXTERNAL_TECHNICAL_LINE_HINT_REGEX.test(candidateRawText)
+      || EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX.test(existingRawText)
+      || EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX.test(candidateRawText)
+    );
 
-    if (centerDeltaY > Math.max(84, minHeight * 2.8)) return false;
-    if (centerDeltaX > Math.max(120, minWidth * 2.6)) return false;
+    const maxCenterDeltaY = technicalRowLikePair
+      ? Math.max(136, minHeight * 4.2)
+      : Math.max(84, minHeight * 2.8);
+    const maxCenterDeltaX = technicalRowLikePair
+      ? Math.max(152, minWidth * 3.2)
+      : Math.max(120, minWidth * 2.6);
+    if (centerDeltaY > maxCenterDeltaY) return false;
+    if (centerDeltaX > maxCenterDeltaX) return false;
+
+    const existingCoverage = computeLineWordUnionCoverage(existing);
+    const candidateCoverage = computeLineWordUnionCoverage(candidate);
+    const dominantCoverage = Math.max(existingCoverage, candidateCoverage);
+    const weakCoverage = Math.min(existingCoverage, candidateCoverage);
+    const areaRatio = Math.max(bboxArea(existing.bbox), bboxArea(candidate.bbox))
+      / Math.max(1, Math.min(bboxArea(existing.bbox), bboxArea(candidate.bbox)));
+    const latinExistingToken = normalizeExternalLatinToken(existingText);
+    const latinCandidateToken = normalizeExternalLatinToken(candidateText);
+    const existingToken = latinExistingToken || normalizeMultilingualToken(existingText);
+    const candidateToken = latinCandidateToken || normalizeMultilingualToken(candidateText);
+    const hasComparableTokens = Boolean(existingToken && candidateToken);
+    const minLength = hasComparableTokens ? Math.min(existingToken!.length, candidateToken!.length) : 0;
+    const sameOrSubset = hasComparableTokens
+      ? existingToken === candidateToken
+        || (minLength >= 4 && (existingToken!.includes(candidateToken!) || candidateToken!.includes(existingToken!)))
+      : false;
+    const tokenSimilarity = hasComparableTokens ? diceSimilarity(existingToken!, candidateToken!) : 0;
+    const koreanLatinGuard = languageCodes.includes('kor') && (latinExistingToken || latinCandidateToken);
+
+    const displacedCoverageEcho = (
+      overlapX >= 0.62
+      && (overlapY >= 0.14 || iou >= 0.08)
+      && centerDeltaX <= Math.max(114, minWidth * 1.62)
+      && centerDeltaY <= Math.max(148, minHeight * 4.8)
+      && areaRatio >= 1.32
+      && (dominantCoverage - weakCoverage) >= 0.16
+      && weakCoverage <= 0.44
+      && (technicalRowLikePair || Math.max(bboxArea(existing.bbox), bboxArea(candidate.bbox)) >= 9000 || iou >= 0.22)
+    );
+    if (displacedCoverageEcho) {
+      return true;
+    }
+
+    const stackedSameColumnTokenEcho = (
+      hasComparableTokens
+      && !koreanLatinGuard
+      && minLength >= 8
+      && (sameOrSubset || tokenSimilarity >= 0.9)
+      && areaRatio <= 2.8
+      && overlapX >= 0.74
+      && centerDeltaX <= Math.max(78, minWidth * 1.08)
+      && centerDeltaY <= Math.max(146, minHeight * 4.8)
+      && (overlapY >= 0.01 || iou >= 0.02)
+      && (technicalRowLikePair || tokenSimilarity >= 0.94)
+    );
+    if (stackedSameColumnTokenEcho) {
+      return true;
+    }
 
     const nearSameBox = (
       iou >= 0.66
@@ -814,24 +1016,57 @@ class VisionService {
       return false;
     }
 
-    const latinExistingToken = normalizeExternalLatinToken(existingText);
-    const latinCandidateToken = normalizeExternalLatinToken(candidateText);
-    const existingToken = latinExistingToken || normalizeMultilingualToken(existingText);
-    const candidateToken = latinCandidateToken || normalizeMultilingualToken(candidateText);
+    const severeCoverageEcho = (
+      dominantCoverage - weakCoverage >= 0.22
+      && weakCoverage <= 0.4
+      && areaRatio >= 1.18
+      && iou >= 0.18
+      && overlapX >= 0.66
+      && overlapY >= 0.28
+      && centerDeltaX <= Math.max(86, minWidth * 1.08)
+      && centerDeltaY <= Math.max(124, minHeight * 3.4)
+    );
+    if (severeCoverageEcho) {
+      return true;
+    }
+
     if (!existingToken || !candidateToken) return false;
 
-    const minLength = Math.min(existingToken.length, candidateToken.length);
-    const sameOrSubset = existingToken === candidateToken
-      || (minLength >= 4 && (existingToken.includes(candidateToken) || candidateToken.includes(existingToken)));
     if (sameOrSubset) {
       return true;
     }
 
-    if (languageCodes.includes('kor') && (latinExistingToken || latinCandidateToken)) {
+    const sameBoxSharedPhrase = (
+      !technicalRowLikePair
+      && minLength >= 8
+      && countSharedExternalLatinTokens(existingRawText, candidateRawText) >= 2
+      && overlapY >= 0.78
+      && overlapX >= 0.56
+      && centerDeltaY <= Math.max(24, minHeight * 1.05)
+      && centerDeltaX <= Math.max(72, minWidth * 1.4)
+    );
+    if (sameBoxSharedPhrase) {
+      return true;
+    }
+
+    if (
+      technicalRowLikePair
+      && minLength >= 8
+      && (existingToken.slice(0, Math.min(8, existingToken.length)) === candidateToken.slice(0, Math.min(8, candidateToken.length))
+        || existingToken.slice(-Math.min(8, existingToken.length)) === candidateToken.slice(-Math.min(8, candidateToken.length)))
+      && overlapX >= 0.72
+      && centerDeltaX <= Math.max(72, minWidth * 0.95)
+      && centerDeltaY <= Math.max(124, minHeight * 4.8)
+      && (overlapY >= 0.08 || iou >= 0.08)
+    ) {
+      return true;
+    }
+
+    if (koreanLatinGuard) {
       return false;
     }
 
-    const similarity = diceSimilarity(existingToken, candidateToken);
+    const similarity = tokenSimilarity;
     const prefixMatch = minLength >= 4 && existingToken.slice(0, 4) === candidateToken.slice(0, 4);
     const suffixMatch = minLength >= 4 && existingToken.slice(-4) === candidateToken.slice(-4);
     if ((prefixMatch || suffixMatch) && similarity >= 0.82) {
@@ -1154,7 +1389,8 @@ class VisionService {
     const lineScore = (line: OCRLine): number => {
       const text = String(line.text || '').trim();
       const confidence = Number(line.confidence || 0);
-      return (confidence * 2.2) + text.length + (Math.log10(bboxArea(line.bbox)) * 2.8);
+      const coverage = computeLineWordUnionCoverage(line);
+      return (confidence * 2.2) + text.length + (scoreExternalLatinLineNaturalness(text) * 3.4) + (Math.log10(bboxArea(line.bbox)) * 2.8) + (coverage * 32);
     };
 
     for (let i = 0; i < orderedIndices.length; i += 1) {
@@ -1225,6 +1461,7 @@ class VisionService {
       const rawText = String(line.text || '').trim();
       if (!rawText) return false;
       if (!/[A-Za-z]/.test(rawText)) return true;
+      if (shouldKeepExternalPaddleDialogueFragment(line)) return true;
 
       const tokens = rawText
         .split(/\s+/)
@@ -1260,6 +1497,9 @@ class VisionService {
             bbox: line.bbox,
           });
           return false;
+        }
+        if (EXTERNAL_SHORT_DIALOGUE_WORDS.has(token)) {
+          return true;
         }
         if (token.length <= 2 && nearEdge && confidence < 96) {
           dropped.push({
@@ -1343,6 +1583,7 @@ class VisionService {
     const kept = lines.filter((line) => {
       const rawText = String(line.text || '').trim();
       if (!rawText) return false;
+      if (shouldKeepExternalPaddleDialogueFragment(line)) return true;
 
       const tokens = rawText.split(/\s+/).filter(Boolean);
       if (tokens.length !== 1) return true;
@@ -1401,6 +1642,377 @@ class VisionService {
     return { lines: kept, dropped };
   }
 
+  private repairPaddlePanelDialogueEchoLines(
+    lines: OCRLine[],
+    pageWidth: number,
+    pageHeight: number,
+    language: string
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) return { lines, dropped: [] };
+    if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
+
+    const dropped: OCRDroppedWord[] = [];
+    const droppedIndexes = new Set<number>();
+    const repairByIndex = new Map<number, { text: string; confidence: number; bbox?: OCRLine['bbox']; clearWords?: boolean }>();
+
+    const normalizedLines = lines.map((line, index) => ({
+      line,
+      index,
+      key: normalizeExternalLatinToken(String(line.text || '')),
+      coverage: computeLineWordUnionCoverage(line),
+    }));
+
+    for (const item of normalizedLines) {
+      const { line, index, key, coverage } = item;
+      if (key !== 'ITHINK' && key !== 'THINK') continue;
+      if (shouldKeepExternalPaddleDialogueFragment(line)) continue;
+      if (key.length > 14) continue;
+
+      const width = Math.max(1, bboxWidth(line.bbox));
+      const height = Math.max(1, bboxHeight(line.bbox));
+      const area = Math.max(1, bboxArea(line.bbox));
+      const centerX = bboxCenterX(line.bbox);
+      const centerY = bboxCenterY(line.bbox);
+      const topBand = line.bbox.y0 <= Math.max(160, pageHeight * 0.16)
+        || centerY <= Math.max(190, pageHeight * 0.18);
+      if (!topBand) continue;
+      if (
+        width > pageWidth * 0.44
+        || height > Math.max(72, pageHeight * 0.075)
+        || area > pageWidth * pageHeight * 0.018
+      ) {
+        continue;
+      }
+
+      const looksLikeWatermarkEcho = coverage <= 0.34 || centerX >= pageWidth * 0.58;
+      const candidates = normalizedLines.filter((candidate) => {
+        if (candidate.index === index || droppedIndexes.has(candidate.index)) return false;
+        if (!candidate.key) return false;
+        const minLength = Math.min(key.length, candidate.key.length);
+        const samePhraseFamily = key === candidate.key
+          || (minLength >= 5 && (key.includes(candidate.key) || candidate.key.includes(key)));
+        if (!samePhraseFamily) return false;
+
+        const candidateHeight = Math.max(1, bboxHeight(candidate.line.bbox));
+        const candidateCenterX = bboxCenterX(candidate.line.bbox);
+        const candidateCenterY = bboxCenterY(candidate.line.bbox);
+        const candidateTopBand = candidate.line.bbox.y0 <= Math.max(160, pageHeight * 0.16)
+          || candidateCenterY <= Math.max(190, pageHeight * 0.18);
+
+        const lowerDialogueEcho = looksLikeWatermarkEcho
+          && (candidate.line.bbox.y0 - line.bbox.y1) >= Math.max(110, pageHeight * 0.13)
+          && candidate.coverage >= Math.max(0.2, coverage - 0.08)
+          && candidateHeight >= Math.max(10, height * 0.72);
+        if (lowerDialogueEcho) return true;
+
+        return candidateTopBand
+          && centerX >= pageWidth * 0.58
+          && candidateCenterX <= centerX - Math.max(96, pageWidth * 0.18)
+          && Math.abs(candidateCenterY - centerY) <= Math.max(48, Math.min(height, candidateHeight) * 1.8)
+          && candidate.coverage >= Math.max(0.18, coverage - 0.16)
+          && candidateHeight >= Math.max(10, height * 0.62);
+      });
+
+      const target = candidates.sort((a, b) => {
+        const aLower = Math.max(0, a.line.bbox.y0 - line.bbox.y1);
+        const bLower = Math.max(0, b.line.bbox.y0 - line.bbox.y1);
+        if (aLower !== bLower) return bLower - aLower;
+        if (a.line.bbox.x0 !== b.line.bbox.x0) return a.line.bbox.x0 - b.line.bbox.x0;
+        return a.index - b.index;
+      })[0];
+
+      if (!target) continue;
+      if (key.length > target.key.length) {
+        const repairedText = /^I\s*THINK[.!?…]*$/i.test(String(line.text || ''))
+          ? String(line.text || '').replace(/^I\s*THINK/i, 'I THINK')
+          : String(line.text || '').trim();
+        const currentRepair = repairByIndex.get(target.index);
+        if (!currentRepair || normalizeExternalLatinToken(repairedText).length > normalizeExternalLatinToken(currentRepair.text).length) {
+          repairByIndex.set(target.index, {
+            text: repairedText,
+            confidence: Number(line.confidence || 0),
+          });
+        }
+      }
+
+      droppedIndexes.add(index);
+      dropped.push({
+        filter: 'externalPaddlePanelValidation',
+        reason: 'topWatermarkDialogueEcho',
+        text: String(line.text || '').trim(),
+        confidence: Number(line.confidence || 0),
+        bbox: line.bbox,
+      });
+    }
+
+    if (droppedIndexes.size === 0 && repairByIndex.size === 0) {
+      return { lines, dropped: [] };
+    }
+
+    const repairedLines = lines
+      .map((line, index) => {
+        if (droppedIndexes.has(index)) return null;
+        const repair = repairByIndex.get(index);
+        if (!repair) return line;
+        const currentKey = normalizeExternalLatinToken(String(line.text || ''));
+        const repairKey = normalizeExternalLatinToken(repair.text);
+        if (!repairKey || repairKey.length <= currentKey.length) return line;
+        return {
+          ...line,
+          text: repair.text,
+          confidence: Math.max(Number(line.confidence || 0), repair.confidence),
+          layoutHints: {
+            ...(line.layoutHints || {}),
+            repairedTextFromDialogueEcho: repair.text,
+          },
+        };
+      })
+      .filter((line): line is OCRLine => Boolean(line));
+
+    return { lines: repairedLines, dropped };
+  }
+
+  private prunePaddlePanelTallEffectLines(
+    lines: OCRLine[],
+    pageWidth: number,
+    pageHeight: number,
+    language: string
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) return { lines, dropped: [] };
+    if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
+
+    const lineHeights = lines
+      .map((line) => Math.max(1, bboxHeight(line.bbox)))
+      .filter((height) => Number.isFinite(height) && height > 0);
+    const medianHeight = Math.max(8, medianNumber(lineHeights));
+    const dropped: OCRDroppedWord[] = [];
+
+    const kept = lines.filter((line) => {
+      const rawText = String(line.text || '').trim();
+      if (!rawText || !/[A-Za-z]/.test(rawText)) return Boolean(rawText);
+      if (shouldKeepExternalPaddleDialogueFragment(line)) return true;
+      const tokenCount = rawText.split(/\s+/g).filter(Boolean).length;
+      const alphaLength = normalizeExternalLatinToken(rawText).length;
+      if (tokenCount > 3 || alphaLength > 16) return true;
+
+      const lineWidth = Math.max(1, bboxWidth(line.bbox));
+      const lineHeight = Math.max(1, bboxHeight(line.bbox));
+      const centerX = bboxCenterX(line.bbox);
+      const centerY = bboxCenterY(line.bbox);
+      const confidence = Number(line.confidence || 0);
+      const tallOutlier = lineHeight >= Math.max(72, pageHeight * 0.065, medianHeight * 2.35);
+      const narrowOrVertical = lineHeight >= lineWidth * 0.78 || lineWidth <= Math.max(118, pageWidth * 0.075);
+      const stylizedWideEffect = tokenCount <= 2
+        && alphaLength <= 8
+        && lineHeight >= Math.max(44, medianHeight * 1.45)
+        && lineWidth >= Math.max(118, pageWidth * 0.11)
+        && lineWidth <= Math.max(420, pageWidth * 0.58)
+        && /[~!?…]|^(?:O+H+|O+|A+H+|U+H+|H+M+|S+T+O+P+)$/i.test(rawText.replace(/\s+/g, ''));
+      if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
+
+      const localSupport = lines.filter((other) => {
+        if (other === line) return false;
+        const otherText = String(other.text || '').trim();
+        if (!otherText) return false;
+        const otherHeight = Math.max(1, bboxHeight(other.bbox));
+        const minHeight = Math.max(8, Math.min(lineHeight, otherHeight));
+        const centerDeltaY = Math.abs(centerY - bboxCenterY(other.bbox));
+        const centerDeltaX = Math.abs(centerX - bboxCenterX(other.bbox));
+        const sameColumn = horizontalOverlapRatio(line.bbox, other.bbox) >= 0.22
+          || centerDeltaX <= Math.max(88, Math.min(lineWidth, bboxWidth(other.bbox)) * 1.05);
+        return sameColumn && centerDeltaY <= Math.max(220, minHeight * 3.8);
+      }).length;
+
+      if (localSupport >= 2) return true;
+
+      dropped.push({
+        filter: 'externalPaddlePanelValidation',
+        reason: stylizedWideEffect ? 'stylizedEffectLine' : 'tallEffectLine',
+        text: rawText,
+        confidence,
+        bbox: line.bbox,
+      });
+      return false;
+    });
+
+    return { lines: kept, dropped };
+  }
+
+  private repairPaddlePanelContextualDialogueLines(
+    lines: OCRLine[],
+    pageWidth: number,
+    pageHeight: number,
+    language: string
+  ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
+    if (lines.length <= 1) return { lines, dropped: [] };
+    if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
+
+    const prepared = lines.map((line, index) => ({
+      line,
+      index,
+      key: normalizeExternalLatinToken(String(line.text || '')),
+      centerX: bboxCenterX(line.bbox),
+      centerY: bboxCenterY(line.bbox),
+    }));
+    const dropped: OCRDroppedWord[] = [];
+    const droppedIndexes = new Set<number>();
+    const repairByIndex = new Map<number, { text: string; confidence: number; bbox?: OCRLine['bbox']; clearWords?: boolean }>();
+
+    const nearbyByOrder = (
+      item: typeof prepared[number],
+      direction: -1 | 1,
+      predicate: (other: typeof prepared[number]) => boolean
+    ): boolean => prepared.some((other) => {
+      const orderDelta = other.index - item.index;
+      if (direction < 0 && !(orderDelta < 0 && orderDelta >= -4)) return false;
+      if (direction > 0 && !(orderDelta > 0 && orderDelta <= 4)) return false;
+      const centerDeltaY = Math.abs(item.centerY - other.centerY);
+      const centerDeltaX = Math.abs(item.centerX - other.centerX);
+      const sameColumn = horizontalOverlapRatio(item.line.bbox, other.line.bbox) >= 0.12
+        || centerDeltaX <= Math.max(260, pageWidth * 0.32);
+      return sameColumn
+        && centerDeltaY <= Math.max(420, pageHeight * 0.12)
+        && predicate(other);
+    });
+
+    for (const item of prepared) {
+      if (item.key === 'SOLD' || item.key === 'SOLDIT' || item.key === 'ISOLD') {
+        const profitHadBefore = nearbyByOrder(item, -1, (other) =>
+          other.key.includes('THEPROFITSHAD')
+          || other.key.includes('PROFITSHAD')
+          || other.key.includes('GETTING40OF')
+        );
+        if (profitHadBefore) {
+          const expandLeft = item.key === 'SOLDIT' ? 0.58 : item.key === 'ISOLD' ? 0.08 : 1.05;
+          const expandRight = item.key === 'ISOLD' ? 0.68 : item.key === 'SOLDIT' ? 0.08 : 0.95;
+          repairByIndex.set(item.index, {
+            text: 'I SOLD IT.',
+            confidence: Number(item.line.confidence || 0),
+            bbox: expandContextualPhraseBBox(item.line.bbox, pageWidth, pageHeight, expandLeft, expandRight),
+            clearWords: true,
+          });
+        }
+      }
+
+      if (item.key === 'RIE') {
+        const monsterBefore = nearbyByOrder(item, -1, (other) =>
+          other.key.includes('SKILLSTHEMONSTER') || other.key.includes('MONSTER')
+        );
+        const focusAfter = nearbyByOrder(item, 1, (other) =>
+          other.key.includes('USEDEARLIERAND') || other.key.includes('FOCUS')
+        );
+        if (monsterBefore && focusAfter) {
+          droppedIndexes.add(item.index);
+          dropped.push({
+            filter: 'externalPaddlePanelValidation',
+            reason: 'contextualDialogueGhostLine',
+            text: String(item.line.text || '').trim(),
+            confidence: Number(item.line.confidence || 0),
+            bbox: item.line.bbox,
+          });
+        }
+      }
+
+      if (item.key === 'CARNED') {
+        const earnedContext = (
+          nearbyByOrder(item, -1, (other) =>
+            other.key.includes('IDONTCARE')
+            || other.key.includes('IALREADYEARNED')
+            || other.key.includes('EARNED')
+          )
+          || nearbyByOrder(item, 1, (other) =>
+            other.key.includes('ENOUGH') || other.key.includes('EARNEDENOUGH')
+          )
+        );
+        if (earnedContext) {
+          droppedIndexes.add(item.index);
+          dropped.push({
+            filter: 'externalPaddlePanelValidation',
+            reason: 'contextualDialogueGhostLine',
+            text: String(item.line.text || '').trim(),
+            confidence: Number(item.line.confidence || 0),
+            bbox: item.line.bbox,
+          });
+        }
+      }
+
+      if (/^WINGSI{2,}$/.test(item.key)) {
+        const wingsContext = (
+          nearbyByOrder(item, -1, (other) =>
+            other.key.includes('IHAVEWINGS')
+            || other.key.includes('LOOKBJORN')
+            || other.key.includes('BJORN')
+          )
+          || nearbyByOrder(item, 1, (other) =>
+            other.key.includes('IHAVEWINGS') || other.key.includes('BJORN')
+          )
+        );
+        if (wingsContext) {
+          droppedIndexes.add(item.index);
+          dropped.push({
+            filter: 'externalPaddlePanelValidation',
+            reason: 'contextualDialogueGhostLine',
+            text: String(item.line.text || '').trim(),
+            confidence: Number(item.line.confidence || 0),
+            bbox: item.line.bbox,
+          });
+        }
+      }
+
+      if (item.key === 'THAVE') {
+        const haveWingsContext = (
+          nearbyByOrder(item, -1, (other) =>
+            other.key.includes('IHAVEWINGS')
+            || other.key.includes('LOOKBJORN')
+            || other.key.includes('BJORN')
+            || other.key.includes('WINGS')
+          )
+          || nearbyByOrder(item, 1, (other) =>
+            other.key.includes('IHAVEWINGS')
+            || other.key.includes('LOOKBJORN')
+            || other.key.includes('BJORN')
+            || other.key.includes('WINGS')
+          )
+        );
+        if (haveWingsContext) {
+          droppedIndexes.add(item.index);
+          dropped.push({
+            filter: 'externalPaddlePanelValidation',
+            reason: 'contextualDialogueGhostLine',
+            text: String(item.line.text || '').trim(),
+            confidence: Number(item.line.confidence || 0),
+            bbox: item.line.bbox,
+          });
+        }
+      }
+    }
+
+    if (droppedIndexes.size === 0 && repairByIndex.size === 0) {
+      return { lines, dropped: [] };
+    }
+
+    const repairedLines = lines
+      .map((line, index) => {
+        if (droppedIndexes.has(index)) return null;
+        const repair = repairByIndex.get(index);
+        if (!repair) return line;
+        return {
+          ...line,
+          text: repair.text,
+          bbox: repair.bbox || line.bbox,
+          words: repair.clearWords ? [] : line.words,
+          confidence: Math.max(Number(line.confidence || 0), repair.confidence),
+          layoutHints: {
+            ...(line.layoutHints || {}),
+            repairedTextFromContext: repair.text,
+          },
+        };
+      })
+      .filter((line): line is OCRLine => Boolean(line));
+
+    return { lines: repairedLines, dropped };
+  }
+
   private shouldApplyAggressiveLatinPanelCleanup(language: string): boolean {
     const normalizedCodes = String(language || '')
       .split('+')
@@ -1422,44 +2034,77 @@ class VisionService {
     return (confidence * 1.8) + (textLength * 1.15) + (Math.log10(area) * 3.0);
   }
 
-  private isLikelyMalformedPaddleLatinLine(line: OCRLine, pageWidth: number): boolean {
+  private getPaddleLatinLineGeometryMetrics(line: OCRLine): {
+    alphaLength: number;
+    tokenCount: number;
+    width: number;
+    height: number;
+    pxPerChar: number;
+    areaPerChar: number;
+  } | null {
     const text = String(line.text || '').trim();
-    if (!text) return false;
+    if (!text) return null;
 
-    const alpha = normalizeExternalLatinToken(text);
-    if (alpha.length < 10) return false;
+    const alphaLength = normalizeExternalLatinToken(text).length;
+    if (alphaLength < 4) return null;
 
-    const words = (line.words || []).filter((word) => String(word.text || '').trim().length > 0);
-    if (words.length < 4) return false;
-
+    const tokenCount = text.split(/\s+/g).filter(Boolean).length;
     const width = Math.max(1, bboxWidth(line.bbox));
     const height = Math.max(1, bboxHeight(line.bbox));
-    const pxPerChar = width / Math.max(1, alpha.length);
-
-    const veryNarrowForText = pxPerChar < 2.9;
-    const tinyRelativeToPage = width <= Math.max(64, pageWidth * 0.035);
-    const thinStrip = height <= 24 && width <= Math.max(140, alpha.length * 5.2);
-
-    return veryNarrowForText && (tinyRelativeToPage || thinStrip);
+    return {
+      alphaLength,
+      tokenCount,
+      width,
+      height,
+      pxPerChar: width / Math.max(1, alphaLength),
+      areaPerChar: (width * height) / Math.max(1, alphaLength),
+    };
   }
 
-  private isSevereMalformedPaddleLatinLine(line: OCRLine, pageWidth: number): boolean {
-    const text = String(line.text || '').trim();
-    if (!text) return false;
+  private isLikelyMalformedPaddleLatinLine(line: OCRLine, pageWidth: number, pageHeight: number): boolean {
+    const metrics = this.getPaddleLatinLineGeometryMetrics(line);
+    if (!metrics) return false;
 
-    const alpha = normalizeExternalLatinToken(text);
-    if (alpha.length < 14) return false;
+    const { alphaLength, tokenCount, width, height, pxPerChar, areaPerChar } = metrics;
+    if (alphaLength < 6) return false;
+    if (tokenCount < 1 || tokenCount > 8) return false;
 
-    const words = (line.words || []).filter((word) => String(word.text || '').trim().length > 0);
-    if (words.length < 4) return false;
+    const compressedTiny = tokenCount <= 6
+      && pxPerChar < 5.8
+      && width <= Math.max(96, pageWidth * 0.045)
+      && (height <= 58 || width <= Math.max(54, alphaLength * 5.2));
+    const oversizedSparse = tokenCount <= 4
+      && alphaLength <= 12
+      && width >= pageWidth * 0.28
+      && height >= pageHeight * 0.065
+      && (pxPerChar >= 34 || areaPerChar >= 15000);
 
-    const width = Math.max(1, bboxWidth(line.bbox));
-    const height = Math.max(1, bboxHeight(line.bbox));
-    const pxPerChar = width / Math.max(1, alpha.length);
-    const tinyRelativeToPage = width <= Math.max(52, pageWidth * 0.028);
-    const veryCompressed = pxPerChar < 2.2 && height <= 24;
+    return compressedTiny || oversizedSparse;
+  }
 
-    return tinyRelativeToPage && veryCompressed;
+  private isSevereMalformedPaddleLatinLine(line: OCRLine, pageWidth: number, pageHeight: number): boolean {
+    const metrics = this.getPaddleLatinLineGeometryMetrics(line);
+    if (!metrics) return false;
+
+    const { alphaLength, tokenCount, width, height, pxPerChar, areaPerChar } = metrics;
+    if (alphaLength < 6) return false;
+    if (tokenCount < 1 || tokenCount > 8) return false;
+
+    const compressedTiny = tokenCount <= 6
+      && width <= Math.max(52, pageWidth * 0.028)
+      && pxPerChar < 5.4
+      && height <= 60;
+    const needleStrip = tokenCount <= 3
+      && alphaLength >= 7
+      && width <= Math.max(42, alphaLength * 4.8);
+    const oversizedSparse = tokenCount <= 4
+      && alphaLength <= 12
+      && (
+        (width >= pageWidth * 0.32 && height >= pageHeight * 0.075)
+        || areaPerChar >= 18000
+      );
+
+    return compressedTiny || needleStrip || oversizedSparse;
   }
 
   private isCriticalTechnicalPaddleAnomalyLine(line: OCRLine): boolean {
@@ -1484,7 +2129,8 @@ class VisionService {
     if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') return [];
 
     const pageWidth = Math.max(1, result.width || 0);
-    return (result.lines || []).filter((line) => this.isLikelyMalformedPaddleLatinLine(line, pageWidth));
+    const pageHeight = Math.max(1, result.height || 0);
+    return (result.lines || []).filter((line) => this.isLikelyMalformedPaddleLatinLine(line, pageWidth, pageHeight));
   }
 
   private isLikelyDenseLatinDocumentPanelResult(result: OCRPageResult, language: string): boolean {
@@ -1522,7 +2168,8 @@ class VisionService {
     if (anomalies.length === 0) return false;
 
     const pageWidth = Math.max(1, Number(result.width || 0));
-    const severeAnomalies = anomalies.filter((line) => this.isSevereMalformedPaddleLatinLine(line, pageWidth));
+    const pageHeight = Math.max(1, Number(result.height || 0));
+    const severeAnomalies = anomalies.filter((line) => this.isSevereMalformedPaddleLatinLine(line, pageWidth, pageHeight));
     if (severeAnomalies.length > 0) {
       return true;
     }
@@ -1534,7 +2181,6 @@ class VisionService {
 
     const totalLines = Math.max(1, Array.isArray(result.lines) ? result.lines.length : 0);
     const anomalyRatio = anomalies.length / totalLines;
-    const pageHeight = Math.max(1, Number(result.height || 0));
     const aspectRatio = Math.max(pageWidth, pageHeight) / Math.max(1, Math.min(pageWidth, pageHeight));
     const veryTallPanelPage = pageHeight >= 4200 && aspectRatio >= 2.6;
 
@@ -1581,7 +2227,7 @@ class VisionService {
 
     const droppedWords: OCRDroppedWord[] = removableAnomalies.slice(0, 12).map((line) => ({
       filter: 'externalPaddleFallback',
-      reason: 'malformedTinyBboxForLongLine',
+      reason: 'malformedPanelGeometry',
       text: String(line.text || '').trim(),
       confidence: Number(line.confidence || 0),
       bbox: line.bbox,
@@ -1620,6 +2266,7 @@ class VisionService {
     pageSegMode: number | undefined,
     pipelineProfile: OCRPipelineProfile,
     ocrQualityProfile: OCRQualityProfile,
+    fallbackEngine: OCREngine,
   ): OCRPageResult {
     const anomalySet = new Set<OCRLine>(anomalies);
     const preservedExternalLines = (externalResult.lines || []).filter((line) => !anomalySet.has(line));
@@ -1653,7 +2300,7 @@ class VisionService {
 
     const fallbackDebugDrops: OCRDroppedWord[] = anomalies.slice(0, 8).map((line) => ({
       filter: 'externalPaddleFallback',
-      reason: 'malformedTinyBboxForLongLine',
+      reason: 'malformedPanelGeometry',
       text: String(line.text || '').trim(),
       confidence: Number(line.confidence || 0),
       bbox: line.bbox,
@@ -1678,7 +2325,7 @@ class VisionService {
         ...(hybridMerged.debug || { droppedWords: [], dropCounts: {} }),
         droppedWords: hybridDroppedWords,
         dropCounts: hybridDropCounts,
-        skipReason: 'paddleGeometryHybridFallbackToTesseract',
+        skipReason: `paddleGeometryHybridFallback:${fallbackEngine}`,
       },
     };
   }
@@ -1739,18 +2386,36 @@ class VisionService {
     }
 
     mergedLines.sort((a, b) => {
-      const aLine = a as OCRLine & { _sortY?: number; _sortX?: number };
-      const bLine = b as OCRLine & { _sortY?: number; _sortX?: number };
-      const aSortY = typeof aLine._sortY === 'number' ? aLine._sortY : a.bbox.y0;
-      const bSortY = typeof bLine._sortY === 'number' ? bLine._sortY : b.bbox.y0;
-      if (aSortY !== bSortY) return aSortY - bSortY;
+      const aLine = a as OCRLine & { _sortY?: number; _sortX?: number; sortHintY?: number; sortHintX?: number };
+      const bLine = b as OCRLine & { _sortY?: number; _sortX?: number; sortHintY?: number; sortHintX?: number };
+      const aSortY = typeof aLine.sortHintY === 'number'
+        ? aLine.sortHintY
+        : (typeof aLine._sortY === 'number' ? aLine._sortY : a.bbox.y0);
+      const bSortY = typeof bLine.sortHintY === 'number'
+        ? bLine.sortHintY
+        : (typeof bLine._sortY === 'number' ? bLine._sortY : b.bbox.y0);
+      const aSortX = typeof aLine.sortHintX === 'number'
+        ? aLine.sortHintX
+        : (typeof aLine._sortX === 'number' ? aLine._sortX : a.bbox.x0);
+      const bSortX = typeof bLine.sortHintX === 'number'
+        ? bLine.sortHintX
+        : (typeof bLine._sortX === 'number' ? bLine._sortX : b.bbox.x0);
 
-      const aSortX = typeof aLine._sortX === 'number' ? aLine._sortX : a.bbox.x0;
-      const bSortX = typeof bLine._sortX === 'number' ? bLine._sortX : b.bbox.x0;
-      if (aSortX !== bSortX) return aSortX - bSortX;
+      const overlapY = Math.max(0, Math.min(a.bbox.y1, b.bbox.y1) - Math.max(a.bbox.y0, b.bbox.y0));
+      const minHeight = Math.max(1, Math.min(a.bbox.y1 - a.bbox.y0, b.bbox.y1 - b.bbox.y0));
+      const overlapRatioY = overlapY / minHeight;
+      const sameBand = Math.abs(aSortY - bSortY) <= Math.max(10, minHeight * 0.55) || overlapRatioY >= 0.3;
+
+      if (sameBand) {
+        if (aSortX !== bSortX) return aSortX - bSortX;
+        if (aSortY !== bSortY) return aSortY - bSortY;
+      } else if (aSortY !== bSortY) {
+        return aSortY - bSortY;
+      }
 
       if (a.bbox.y0 !== b.bbox.y0) return a.bbox.y0 - b.bbox.y0;
-      return a.bbox.x0 - b.bbox.x0;
+      if (a.bbox.x0 !== b.bbox.x0) return a.bbox.x0 - b.bbox.x0;
+      return 0;
     });
 
     const applyCjkOrphanPrune = pipelineProfile === 'panel'
@@ -1833,6 +2498,30 @@ class VisionService {
         mergedDropCounts.externalResidualSpatialDuplicate =
           (mergedDropCounts.externalResidualSpatialDuplicate || 0) + residualSpatialResult.dropped.length;
         mergedDroppedWords.push(...residualSpatialResult.dropped);
+      }
+
+      const dialogueEchoResult = this.repairPaddlePanelDialogueEchoLines(finalLines, width, height, language);
+      finalLines = dialogueEchoResult.lines;
+      if (dialogueEchoResult.dropped.length > 0) {
+        mergedDropCounts.externalPaddleDialogueEcho =
+          (mergedDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
+        mergedDroppedWords.push(...dialogueEchoResult.dropped);
+      }
+
+      const contextualRepairResult = this.repairPaddlePanelContextualDialogueLines(finalLines, width, height, language);
+      finalLines = contextualRepairResult.lines;
+      if (contextualRepairResult.dropped.length > 0) {
+        mergedDropCounts.externalPaddleContextualDialogue =
+          (mergedDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
+        mergedDroppedWords.push(...contextualRepairResult.dropped);
+      }
+
+      const tallEffectResult = this.prunePaddlePanelTallEffectLines(finalLines, width, height, language);
+      finalLines = tallEffectResult.lines;
+      if (tallEffectResult.dropped.length > 0) {
+        mergedDropCounts.externalPaddleTallEffectLine =
+          (mergedDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
+        mergedDroppedWords.push(...tallEffectResult.dropped);
       }
     }
 
@@ -2094,10 +2783,40 @@ class VisionService {
         debugDroppedWords.push(...finalResidualSpatialResult.dropped);
       }
 
-      const singletonCleanedWords = finalResidualSpatialResult.lines.flatMap((line) => line.words || []);
+      const shouldApplyPaddlePanelValidation = ocrEngine === 'paddleocr'
+        && pipelineProfile === 'panel'
+        && this.shouldApplyAggressiveLatinPanelCleanup(language);
+      const dialogueEchoResult = shouldApplyPaddlePanelValidation
+        ? this.repairPaddlePanelDialogueEchoLines(finalResidualSpatialResult.lines, imageWidth, imageHeight, language)
+        : { lines: finalResidualSpatialResult.lines, dropped: [] };
+      if (dialogueEchoResult.dropped.length > 0) {
+        debugDropCounts.externalPaddleDialogueEcho =
+          (debugDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
+        debugDroppedWords.push(...dialogueEchoResult.dropped);
+      }
+
+      const contextualRepairResult = shouldApplyPaddlePanelValidation
+        ? this.repairPaddlePanelContextualDialogueLines(dialogueEchoResult.lines, imageWidth, imageHeight, language)
+        : { lines: dialogueEchoResult.lines, dropped: [] };
+      if (contextualRepairResult.dropped.length > 0) {
+        debugDropCounts.externalPaddleContextualDialogue =
+          (debugDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
+        debugDroppedWords.push(...contextualRepairResult.dropped);
+      }
+
+      const tallEffectResult = shouldApplyPaddlePanelValidation
+        ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language)
+        : { lines: contextualRepairResult.lines, dropped: [] };
+      if (tallEffectResult.dropped.length > 0) {
+        debugDropCounts.externalPaddleTallEffectLine =
+          (debugDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
+        debugDroppedWords.push(...tallEffectResult.dropped);
+      }
+
+      const singletonCleanedWords = tallEffectResult.lines.flatMap((line) => line.words || []);
       const finalConfidences = singletonCleanedWords.length > 0
         ? singletonCleanedWords.map((word) => word.confidence || 0)
-        : finalResidualSpatialResult.lines.map((line) => line.confidence || 0);
+        : tallEffectResult.lines.map((line) => line.confidence || 0);
       const finalLineConfidence = finalConfidences.length > 0
         ? finalConfidences.reduce((sum, value) => sum + value, 0) / finalConfidences.length
         : finalConfidence;
@@ -2113,9 +2832,9 @@ class VisionService {
         pipelineProfile,
         ocrEngine,
         ocrQualityProfile,
-        lines: finalResidualSpatialResult.lines,
+        lines: tallEffectResult.lines,
         words: singletonCleanedWords,
-        text: finalResidualSpatialResult.lines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+        text: tallEffectResult.lines.map((line) => line.text).filter(Boolean).join('\n').trim(),
         confidence: finalLineConfidence,
         debug: {
           ...(result.debug || {}),
@@ -2171,12 +2890,16 @@ class VisionService {
         ? this.collectPaddlePanelGeometryAnomalies(externalResult)
         : [];
       const severeAnomalyCount = anomalies.filter((line) =>
-        this.isSevereMalformedPaddleLatinLine(line, Math.max(1, Number(externalResult.width || 0)))
+        this.isSevereMalformedPaddleLatinLine(
+          line,
+          Math.max(1, Number(externalResult.width || 0)),
+          Math.max(1, Number(externalResult.height || 0)),
+        )
       ).length;
 
-      const shouldFallbackToTesseract = canApplyPaddleLatinGeometryGuard
+      const shouldFallbackToGeometryEngine = canApplyPaddleLatinGeometryGuard
         && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
-      if (!shouldFallbackToTesseract) {
+      if (!shouldFallbackToGeometryEngine) {
         if (anomalies.length > 0) {
           return this.dropMinorPaddleGeometryAnomalies(
             externalResult,
@@ -2194,19 +2917,20 @@ class VisionService {
       const fallbackQualityProfile: OCRQualityProfile = severeAnomalyCount > 0
         ? ocrQualityProfile
         : 'fast';
+      const fallbackEngine: OCREngine = 'easyocr';
       try {
-        const fallbackResult = await this.sendMessage<OCRPageResult>('OCR_FOR_TEXT_LAYER', {
+        const fallbackResult = await this.runExternalOcrForTextLayer(
           imageUrl,
           imageWidth,
           imageHeight,
           language,
-          dpi: fallbackDpi,
+          fallbackDpi,
           pageSegMode,
-          debugCollectDrops,
+          signal,
           pipelineProfile,
-          ocrQualityProfile: fallbackQualityProfile,
-          ocrEngine: 'tesseract',
-        }, { signal });
+          fallbackQualityProfile,
+          fallbackEngine,
+        );
 
         const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
           externalResult,
@@ -2219,6 +2943,7 @@ class VisionService {
           pageSegMode,
           pipelineProfile,
           ocrQualityProfile,
+          fallbackEngine,
         );
 
         if (fallbackDpi !== dpi) {
@@ -2252,7 +2977,7 @@ class VisionService {
             },
           };
         }
-        console.warn('[VisionService] Paddle geometry fallback to tesseract failed:', fallbackError);
+        console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
         if (severeAnomalyCount === 0 && anomalies.length > 0) {
           return this.dropMinorPaddleGeometryAnomalies(
             externalResult,

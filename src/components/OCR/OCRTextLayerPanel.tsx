@@ -14,7 +14,6 @@ import { createPortal } from 'react-dom';
 import {
   Play, 
   RefreshCw,
-  Languages,
   Eye,
   Search,
   ChevronDown,
@@ -35,7 +34,6 @@ import {
   hasCurrentOCRTranslationCacheVersion,
   OCR_ENGINES,
   OCRTranslationCacheEntry,
-  SUPPORTED_LANGUAGES,
   useOCRTextLayerStore,
 } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -50,6 +48,8 @@ import {
 } from '../../services/vision/ocr-timeout';
 import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
 import { pdfjs } from '../../services/pdf/pdfjsWorker';
+import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
+import { resolveMissingOverlayLineFallbackText } from './translationOverlayUtils';
 
 // PDF.js worker is configured via pdfjsWorker
 
@@ -81,7 +81,6 @@ const getEngineWarmSessionKey = (engine: OCREngine, language: string): string =>
 
 const AUTO_OCR_REQUEST_EVENT = 'pdf-translator:auto-ocr-request';
 const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
-const OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_languages_section_open';
 const OCR_MODEL_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_model_section_open';
 
 type AutoOCRScope = 'current' | 'all';
@@ -584,29 +583,33 @@ const readRuntimeMs = (result: OCRPageResult): number | null => {
 
 const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
 
-const escapePreviewSearchPattern = (value: string): string =>
-  String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const renderPreviewTextWithHighlight = (text: string, query: string): React.ReactNode => {
+const renderPreviewTextWithHighlight = (text: string, pattern: TextSearchPattern | null): React.ReactNode => {
   const normalizedText = String(text || '');
-  const normalizedQuery = normalizePreviewText(query);
-  if (!normalizedQuery) return normalizedText;
+  if (!pattern || !normalizedText) return normalizedText;
 
-  const matcher = new RegExp(`(${escapePreviewSearchPattern(normalizedQuery)})`, 'ig');
-  const parts = normalizedText.split(matcher);
-  if (parts.length <= 1) return normalizedText;
+  const matches = collectTextSearchMatches(normalizedText, pattern);
+  if (matches.length === 0) return normalizedText;
 
-  return parts.map((part, index) => {
-    const key = `${index}:${part}`;
-    if (index % 2 === 1) {
-      return (
-        <mark key={key} className="rounded bg-amber-300/30 px-px text-amber-100">
-          {part}
-        </mark>
-      );
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+
+  matches.forEach((match, index) => {
+    if (match.start > cursor) {
+      nodes.push(<React.Fragment key={`plain-${cursor}`}>{normalizedText.slice(cursor, match.start)}</React.Fragment>);
     }
-    return <React.Fragment key={key}>{part}</React.Fragment>;
+    nodes.push(
+      <mark key={`match-${index}-${match.start}`} className="rounded bg-amber-300/30 px-px text-amber-100">
+        {normalizedText.slice(match.start, match.end)}
+      </mark>
+    );
+    cursor = match.end;
   });
+
+  if (cursor < normalizedText.length) {
+    nodes.push(<React.Fragment key={`plain-tail-${cursor}`}>{normalizedText.slice(cursor)}</React.Fragment>);
+  }
+
+  return nodes;
 };
 
 const hasPositivePanelBBox = (bbox?: { x0: number; y0: number; x1: number; y1: number }): boolean => {
@@ -621,8 +624,14 @@ const normalizePanelBBox = (bbox?: { x0?: number; y0?: number; x1?: number; y1?:
   const x1 = Number(bbox?.x1);
   const y1 = Number(bbox?.y1);
   if (![x0, y0, x1, y1].every(Number.isFinite)) return undefined;
-  if (!(x1 > x0 && y1 > y0)) return undefined;
-  return { x0, y0, x1, y1 };
+
+  const left = Math.min(x0, x1);
+  const right = Math.max(x0, x1);
+  const top = Math.min(y0, y1);
+  const bottom = Math.max(y0, y1);
+  if (!(right > left && bottom > top)) return undefined;
+
+  return { x0: left, y0: top, x1: right, y1: bottom };
 };
 
 const isSamePanelBBox = (a?: BBox, b?: BBox): boolean => {
@@ -915,6 +924,22 @@ const isLikelyLargeBorderEffectLineForSafety = (
     return true;
   }
 
+  const latinEffectSectionGhost = hasLatin
+    && !hasCjkOrThai
+    && validWords.length <= 1
+    && tokenCount >= 2
+    && tokenCount <= 7
+    && alphaNum.length >= 6
+    && alphaNum.length <= 34
+    && areaRatio >= 0.022
+    && widthRatio >= 0.14
+    && heightRatio >= 0.1
+    && wordCoverage <= 0.24
+    && (area / Math.max(1, alphaNum.length)) >= 620;
+  if (latinEffectSectionGhost) {
+    return true;
+  }
+
   return false;
 };
 
@@ -1161,15 +1186,6 @@ const shouldCollapsePanelSafetyDuplicate = (
 ): boolean => {
   if (!existingKey || !candidateKey) return false;
 
-  const minLength = Math.min(existingKey.length, candidateKey.length);
-  const sameOrSubset = existingKey === candidateKey
-    || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
-  if (!sameOrSubset) {
-    const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
-    if (similarity < 0.72) return false;
-    if (minLength < 8 && similarity < 0.86) return false;
-  }
-
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
   const overlapX = panelOverlapRatioX(existingLine, candidateLine);
   const iou = panelIoURatio(existingLine, candidateLine);
@@ -1180,7 +1196,12 @@ const shouldCollapsePanelSafetyDuplicate = (
   const existingArea = Math.max(1, panelLineArea(existingLine));
   const candidateArea = Math.max(1, panelLineArea(candidateLine));
   const areaRatio = existingArea / candidateArea;
+  const areaSpanRatio = Math.max(existingArea, candidateArea) / Math.max(1, Math.min(existingArea, candidateArea));
   const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
+  const existingCoverage = computePanelLineWordUnionCoverage(existingLine);
+  const candidateCoverage = computePanelLineWordUnionCoverage(candidateLine);
+  const dominantCoverage = Math.max(existingCoverage, candidateCoverage);
+  const weakCoverage = Math.min(existingCoverage, candidateCoverage);
   const strongSpatialMatch = (
     iou >= 0.58
     || (overlapY >= 0.86 && overlapX >= 0.74)
@@ -1199,9 +1220,42 @@ const shouldCollapsePanelSafetyDuplicate = (
     || isLikelyTechnicalDocumentLineForSafety(candidatePreview)
   );
 
+  const severeGeometryEcho = (
+    overlapX >= 0.62
+    && (overlapY >= 0.16 || iou >= 0.1)
+    && centerDeltaX <= Math.max(104, minWidth * 1.2)
+    && centerDeltaY <= Math.max(136, minHeight * 4.2)
+    && areaSpanRatio >= 1.34
+    && (dominantCoverage - weakCoverage) >= 0.16
+    && weakCoverage <= 0.44
+    && (technicalLinePair || Math.max(existingArea, candidateArea) >= 9000 || iou >= 0.22)
+  );
+  if (severeGeometryEcho) {
+    return true;
+  }
+
+  const minLength = Math.min(existingKey.length, candidateKey.length);
+  const sameOrSubset = existingKey === candidateKey
+    || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
+  if (!sameOrSubset) {
+    const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
+    if (similarity < 0.72) return false;
+    if (minLength < 8 && similarity < 0.86) return false;
+  }
+
   // On technical/document rows, collapse duplicates only when the boxes strongly match.
   if (technicalLinePair) {
+    const technicalStackedEcho = (
+      (sameOrSubset || panelDedupDiceSimilarity(existingKey, candidateKey) >= 0.88)
+      && areaSpanRatio <= 2.8
+      && overlapX >= 0.74
+      && centerDeltaX <= Math.max(78, minWidth * 1.08)
+      && centerDeltaY <= Math.max(142, minHeight * 4.8)
+      && (overlapY >= 0.01 || iou >= 0.02)
+    );
     return (
+      technicalStackedEcho
+      ||
       iou >= 0.62
       || (
         overlapY >= 0.86
@@ -1278,6 +1332,256 @@ const shouldCollapsePanelSafetyDuplicate = (
   );
 };
 
+const findTopWatermarkDialogueEchoTarget = (
+  line: OCRLine,
+  key: string,
+  allLines: Array<{ line: OCRLine; index: number }>,
+  pageWidth: number,
+  pageHeight: number,
+): { line: OCRLine; index: number } | null => {
+  if (!key || key.length > 14) return null;
+  if (key !== 'ITHINK' && key !== 'THINK') return null;
+  const bbox = normalizePanelBBox(line.bbox);
+  if (!bbox) return null;
+
+  const width = Math.max(1, bbox.x1 - bbox.x0);
+  const height = Math.max(1, bbox.y1 - bbox.y0);
+  const area = Math.max(1, width * height);
+  const centerX = (bbox.x0 + bbox.x1) * 0.5;
+  const centerY = (bbox.y0 + bbox.y1) * 0.5;
+  const topBand = bbox.y0 <= Math.max(160, pageHeight * 0.16) || centerY <= Math.max(190, pageHeight * 0.18);
+  if (!topBand) return null;
+  if (width > pageWidth * 0.44 || height > Math.max(72, pageHeight * 0.075) || area > pageWidth * pageHeight * 0.018) {
+    return null;
+  }
+
+  const coverage = computePanelLineWordUnionCoverage(line);
+  const lineLooksLikeTopWatermarkEcho = coverage <= 0.34 || centerX >= pageWidth * 0.58;
+  const candidates = allLines.filter((candidate) => {
+    if (candidate.line === line) return false;
+    const candidateKey = normalizePanelDedupTextKey(candidate.line.text || '');
+    if (!candidateKey) return false;
+    const minLength = Math.min(key.length, candidateKey.length);
+    const samePhraseFamily = key === candidateKey
+      || (minLength >= 5 && (key.includes(candidateKey) || candidateKey.includes(key)));
+    if (!samePhraseFamily) return false;
+
+    const candidateBBox = normalizePanelBBox(candidate.line.bbox);
+    if (!candidateBBox) return false;
+
+    const candidateCoverage = computePanelLineWordUnionCoverage(candidate.line);
+    const candidateHeight = Math.max(1, candidateBBox.y1 - candidateBBox.y0);
+    const candidateCenterX = (candidateBBox.x0 + candidateBBox.x1) * 0.5;
+    const candidateCenterY = (candidateBBox.y0 + candidateBBox.y1) * 0.5;
+    const candidateTopBand = candidateBBox.y0 <= Math.max(160, pageHeight * 0.16)
+      || candidateCenterY <= Math.max(190, pageHeight * 0.18);
+
+    const lowerDialogueEcho = (
+      lineLooksLikeTopWatermarkEcho
+      && candidateBBox.y0 - bbox.y1 >= Math.max(110, pageHeight * 0.13)
+      && candidateCoverage >= Math.max(0.2, coverage - 0.08)
+      && candidateHeight >= Math.max(10, height * 0.72)
+    );
+    if (lowerDialogueEcho) return true;
+
+    const sameTopBandRightWatermarkEcho = (
+      candidateTopBand
+      && centerX >= pageWidth * 0.58
+      && candidateCenterX <= centerX - Math.max(96, pageWidth * 0.18)
+      && Math.abs(candidateCenterY - centerY) <= Math.max(48, Math.min(height, candidateHeight) * 1.8)
+      && candidateCoverage >= Math.max(0.18, coverage - 0.16)
+      && candidateHeight >= Math.max(10, height * 0.62)
+    );
+    return sameTopBandRightWatermarkEcho;
+  });
+
+  if (candidates.length === 0) return null;
+  return candidates.sort((a, b) => {
+    const aBBox = normalizePanelBBox(a.line.bbox);
+    const bBBox = normalizePanelBBox(b.line.bbox);
+    const aLower = aBBox ? Math.max(0, aBBox.y0 - bbox.y1) : 0;
+    const bLower = bBBox ? Math.max(0, bBBox.y0 - bbox.y1) : 0;
+    if (aLower !== bLower) return bLower - aLower;
+    if (aBBox && bBBox && aBBox.x0 !== bBBox.x0) return aBBox.x0 - bBBox.x0;
+    return a.index - b.index;
+  })[0];
+};
+
+const mergePanelRicherTextWithCleanerDuplicateGeometry = (
+  existingLine: OCRLine,
+  existingKey: string,
+  candidateLine: OCRLine,
+  candidateKey: string,
+): OCRLine | null => {
+  if (!existingKey || !candidateKey || existingKey === candidateKey) return null;
+  const minLength = Math.min(existingKey.length, candidateKey.length);
+  if (minLength < 5) return null;
+  if (!existingKey.includes(candidateKey) && !candidateKey.includes(existingKey)) return null;
+
+  const richer = existingKey.length > candidateKey.length ? existingLine : candidateLine;
+  const cleaner = richer === existingLine ? candidateLine : existingLine;
+  const richerKey = richer === existingLine ? existingKey : candidateKey;
+  const cleanerKey = richer === existingLine ? candidateKey : existingKey;
+  if (richerKey.length > 22 || cleanerKey.length > 16) return null;
+
+  const richerCoverage = computePanelLineWordUnionCoverage(richer);
+  const cleanerCoverage = computePanelLineWordUnionCoverage(cleaner);
+  const richerArea = Math.max(1, panelLineArea(richer));
+  const cleanerArea = Math.max(1, panelLineArea(cleaner));
+  const richerHeight = Math.max(1, panelLineHeight(richer));
+  const cleanerHeight = Math.max(1, panelLineHeight(cleaner));
+  const cleanerLooksLocalized = (
+    cleanerCoverage >= Math.max(0.36, richerCoverage + 0.14)
+    || (cleanerArea <= richerArea * 0.58 && cleanerCoverage >= Math.max(0.24, richerCoverage))
+    || cleanerHeight <= richerHeight * 0.72
+  );
+  const richerLooksMislocalized = richerCoverage <= 0.36
+    || richerArea >= cleanerArea * 1.55
+    || richerHeight >= cleanerHeight * 1.7;
+  const shortThinkRepair = /^I\s*THINK[.!?…]*$/i.test(richer.text || '')
+    && /^THINK[.!?…]*$/i.test(cleaner.text || '')
+    && cleanerCoverage >= Math.max(0.2, richerCoverage - 0.08);
+
+  if (!shortThinkRepair && (!cleanerLooksLocalized || !richerLooksMislocalized)) {
+    return null;
+  }
+
+  const repairedText = /^I\s*THINK[.!?…]*$/i.test(richer.text || '')
+    ? String(richer.text || '').replace(/^I\s*THINK/i, 'I THINK')
+    : richer.text;
+
+  return {
+    ...cleaner,
+    text: repairedText,
+    confidence: Math.max(Number(cleaner.confidence || 0), Number(richer.confidence || 0)),
+    layoutHints: {
+      ...(cleaner.layoutHints || {}),
+      repairedTextFromDuplicate: repairedText,
+    },
+  };
+};
+
+const suppressDisplacedPanelLongPhraseEchoes = (
+  items: Array<{ line: OCRLine; index: number }>,
+): { items: Array<{ line: OCRLine; index: number }>; dropped: OCRDroppedWord[] } => {
+  if (items.length <= 1) {
+    return { items, dropped: [] };
+  }
+
+  type LineMetric = {
+    item: { line: OCRLine; index: number };
+    key: string;
+    tokenCount: number;
+    wordCount: number;
+    coverage: number;
+    confidence: number;
+    area: number;
+    width: number;
+    height: number;
+    centerX: number;
+    centerY: number;
+    score: number;
+  };
+
+  const grouped = new Map<string, LineMetric[]>();
+  items.forEach((item) => {
+    const text = normalizePreviewText(String(item.line.text || ''));
+    const key = normalizePanelDedupTextKey(text);
+    if (!key) return;
+
+    const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+    if (key.length < 14 || tokenCount < 3 || tokenCount > 12) return;
+
+    const coverage = computePanelLineWordUnionCoverage(item.line);
+    const words = (Array.isArray(item.line.words) ? item.line.words : [])
+      .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0);
+    const wordCount = words.length > 0 ? words.length : tokenCount;
+    const confidence = Number(item.line.confidence || 0);
+    const area = Math.max(1, panelLineArea(item.line));
+    const width = Math.max(1, panelLineWidth(item.line));
+    const height = Math.max(1, panelLineHeight(item.line));
+    const centerX = panelLineCenterX(item.line);
+    const centerY = panelLineCenterY(item.line);
+    const score = (coverage * 120) + (wordCount * 9) + (confidence * 0.22) - (Math.log10(area) * 6);
+
+    const metric: LineMetric = {
+      item,
+      key,
+      tokenCount,
+      wordCount,
+      coverage,
+      confidence,
+      area,
+      width,
+      height,
+      centerX,
+      centerY,
+      score,
+    };
+    const current = grouped.get(key) || [];
+    current.push(metric);
+    grouped.set(key, current);
+  });
+
+  const droppedIndexes = new Set<number>();
+  const dropped: OCRDroppedWord[] = [];
+
+  grouped.forEach((metrics) => {
+    if (metrics.length <= 1) return;
+    const ordered = [...metrics].sort((a, b) => b.score - a.score);
+    const anchor = ordered[0];
+    if (!anchor) return;
+
+    for (let i = 1; i < ordered.length; i += 1) {
+      const candidate = ordered[i];
+      if (!candidate || droppedIndexes.has(candidate.item.index)) continue;
+
+      const overlapX = panelOverlapRatioX(anchor.item.line, candidate.item.line);
+      const overlapY = panelOverlapRatioY(anchor.item.line, candidate.item.line);
+      const minWidth = Math.max(24, Math.min(anchor.width, candidate.width));
+      const minHeight = Math.max(8, Math.min(anchor.height, candidate.height));
+      const centerDeltaX = Math.abs(anchor.centerX - candidate.centerX);
+      const centerDeltaY = Math.abs(anchor.centerY - candidate.centerY);
+      const areaRatio = candidate.area / Math.max(1, anchor.area);
+      const widthRatio = candidate.width / Math.max(1, anchor.width);
+      const heightRatio = candidate.height / Math.max(1, anchor.height);
+
+      const spatiallyDetached = (
+        overlapX <= 0.44
+        || overlapY <= 0.34
+        || centerDeltaX >= Math.max(96, minWidth * 1.2)
+        || centerDeltaY >= Math.max(78, minHeight * 1.45)
+      );
+      const clearlyOversized = areaRatio >= 1.55 || widthRatio >= 1.42 || heightRatio >= 1.55;
+      const lowCoverageEcho = candidate.coverage <= Math.max(0.34, anchor.coverage - 0.14);
+      const weakerSignal = candidate.wordCount <= anchor.wordCount
+        && candidate.confidence <= anchor.confidence + 4;
+
+      if (!(spatiallyDetached && clearlyOversized && lowCoverageEcho && weakerSignal)) {
+        continue;
+      }
+
+      droppedIndexes.add(candidate.item.index);
+      dropped.push({
+        filter: 'panelSafetyDedup',
+        reason: 'displacedLongPhraseEcho',
+        text: normalizePreviewText(String(candidate.item.line.text || '')),
+        confidence: Number(candidate.item.line.confidence || 0),
+        bbox: candidate.item.line.bbox,
+      });
+    }
+  });
+
+  if (droppedIndexes.size === 0) {
+    return { items, dropped: [] };
+  }
+
+  return {
+    items: items.filter((item) => !droppedIndexes.has(item.index)),
+    dropped,
+  };
+};
+
 const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const inputLines = Array.isArray(result.lines) ? result.lines : [];
   if ((result.pipelineProfile || 'panel') !== 'panel') {
@@ -1317,6 +1621,62 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
           text: normalizePreviewText(String(line.text || '')),
           confidence: Number(line.confidence || 0),
           bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      const normalizedLineBBox = normalizePanelBBox(lineWithResolvedGeometry.bbox);
+      if (!normalizedLineBBox) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'invalidLineBBox',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: lineWithResolvedGeometry.bbox,
+        });
+        return null;
+      }
+
+      const validWordCount = (Array.isArray(lineWithResolvedGeometry.words) ? lineWithResolvedGeometry.words : [])
+        .filter((word) => hasPositivePanelBBox(word?.bbox) && normalizePreviewText(String(word?.text || '')).length > 0)
+        .length;
+      const compactResolvedText = resolvedText.replace(/\s+/g, '');
+      const bboxWidth = Math.max(1, normalizedLineBBox.x1 - normalizedLineBBox.x0);
+      const bboxHeight = Math.max(1, normalizedLineBBox.y1 - normalizedLineBBox.y0);
+      const bboxArea = Math.max(1, bboxWidth * bboxHeight);
+      const tinyNoWordLatinArtifact = !documentLikePage
+        && validWordCount === 0
+        && /[A-Za-z0-9]/.test(compactResolvedText)
+        && compactResolvedText.length <= 6
+        && bboxWidth <= 96
+        && bboxHeight <= 44
+        && bboxArea <= 3000
+        && Number(lineWithResolvedGeometry.confidence || 0) <= 94;
+      if (tinyNoWordLatinArtifact) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostTinyNoWordLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: normalizedLineBBox,
+        });
+        return null;
+      }
+
+      const wordCoverage = computePanelLineWordUnionCoverage(lineWithResolvedGeometry);
+      const hugeSparseBorderMismatch = !documentLikePage
+        && compactResolvedText.length <= 12
+        && validWordCount <= 1
+        && bboxArea >= Math.max(15000, pageWidth * pageHeight * 0.012)
+        && wordCoverage <= 0.18
+        && Number(lineWithResolvedGeometry.confidence || 0) <= 95;
+      if (hugeSparseBorderMismatch) {
+        dropped.push({
+          filter: 'panelSafetyDedup',
+          reason: 'ghostBorderMismatchLine',
+          text: normalizePreviewText(String(resolvedText || line.text || '')),
+          confidence: Number(line.confidence || 0),
+          bbox: normalizedLineBBox,
         });
         return null;
       }
@@ -1390,7 +1750,64 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
     };
   }
 
-  const orderedLines = preparedLines
+  const echoTextRepairs = new Map<number, { text: string; confidence: number }>();
+  const watermarkFilteredLines = preparedLines.filter((item) => {
+    const key = normalizePanelDedupTextKey(item.line.text || '');
+    const echoTarget = findTopWatermarkDialogueEchoTarget(item.line, key, preparedLines, pageWidth, pageHeight);
+    if (!echoTarget) {
+      return true;
+    }
+    const targetKey = normalizePanelDedupTextKey(echoTarget.line.text || '');
+    if (key.length > targetKey.length) {
+      const existingRepair = echoTextRepairs.get(echoTarget.index);
+      if (!existingRepair || key.length > normalizePanelDedupTextKey(existingRepair.text).length) {
+        const repairedEchoText = /^I\s*THINK[.!?…]*$/i.test(item.line.text || '')
+          ? String(item.line.text || '').replace(/^I\s*THINK/i, 'I THINK')
+          : normalizePreviewText(String(item.line.text || ''));
+        echoTextRepairs.set(echoTarget.index, {
+          text: repairedEchoText,
+          confidence: Number(item.line.confidence || 0),
+        });
+      }
+    }
+    dropped.push({
+      filter: 'panelSafetyDedup',
+      reason: 'ghostTopWatermarkDialogueEcho',
+      text: normalizePreviewText(String(item.line.text || '')),
+      confidence: Number(item.line.confidence || 0),
+      bbox: item.line.bbox,
+    });
+    return false;
+  });
+
+  const repairedWatermarkFilteredLines = watermarkFilteredLines.map((item) => {
+    const repair = echoTextRepairs.get(item.index);
+    if (!repair) return item;
+    const currentKey = normalizePanelDedupTextKey(item.line.text || '');
+    const repairKey = normalizePanelDedupTextKey(repair.text);
+    if (!repairKey || repairKey.length <= currentKey.length) return item;
+    normalizedTextChanges += 1;
+    return {
+      ...item,
+      line: {
+        ...item.line,
+        text: repair.text,
+        confidence: Math.max(Number(item.line.confidence || 0), repair.confidence),
+        layoutHints: {
+          ...(item.line.layoutHints || {}),
+          repairedTextFromDialogueEcho: repair.text,
+        },
+      },
+    };
+  });
+
+  const displacedEchoPrune = suppressDisplacedPanelLongPhraseEchoes(repairedWatermarkFilteredLines);
+  if (displacedEchoPrune.dropped.length > 0) {
+    dropped.push(...displacedEchoPrune.dropped);
+  }
+  const dedupInputLines = displacedEchoPrune.items;
+
+  const orderedLines = dedupInputLines
     .sort((a, b) => {
       const ay = Number(a.line.bbox?.y0 || 0);
       const by = Number(b.line.bbox?.y0 || 0);
@@ -1407,7 +1824,8 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const lineScore = (line: OCRLine): number => {
     const confidence = Number(line.confidence || 0);
     const textLength = String(line.text || '').trim().length;
-    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8);
+    const coverage = computePanelLineWordUnionCoverage(line);
+    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8) + (coverage * 28);
   };
 
   for (const item of orderedLines) {
@@ -1429,6 +1847,27 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
     }
 
     const existingLine = kept[existingIndex];
+    const existingKey = keptKeys[existingIndex];
+    const repairedLine = mergePanelRicherTextWithCleanerDuplicateGeometry(
+      existingLine,
+      existingKey,
+      candidateLine,
+      candidateKey,
+    );
+    if (repairedLine) {
+      const loserLine = candidateKey.length > existingKey.length ? candidateLine : existingLine;
+      dropped.push({
+        filter: 'panelSafetyDedup',
+        reason: 'samePositionDuplicateLineTextGeometryRepair',
+        text: String(loserLine.text || '').trim(),
+        confidence: Number(loserLine.confidence || 0),
+        bbox: loserLine.bbox,
+      });
+      kept[existingIndex] = repairedLine;
+      keptKeys[existingIndex] = normalizePanelDedupTextKey(repairedLine.text || '');
+      continue;
+    }
+
     const keepCandidate = lineScore(candidateLine) > lineScore(existingLine);
     const loserLine = keepCandidate ? existingLine : candidateLine;
     dropped.push({
@@ -1450,7 +1889,7 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   }
 
   const originalOrder = new Map<OCRLine, number>();
-  preparedLines.forEach(({ line, index }) => {
+  dedupInputLines.forEach(({ line, index }) => {
     originalOrder.set(line, index);
   });
 
@@ -1639,6 +2078,19 @@ const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   spa: 'es',
 };
 
+const TRANSLATION_LANGUAGE_LABELS: Record<string, string> = {
+  en: 'English',
+  th: 'Thai',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zh: 'Chinese',
+  vi: 'Vietnamese',
+  de: 'German',
+  fr: 'French',
+  ru: 'Russian',
+  es: 'Spanish',
+};
+
 const normalizeTranslationLanguageKey = (value: string, fallback: string): string => {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return fallback;
@@ -1646,6 +2098,12 @@ const normalizeTranslationLanguageKey = (value: string, fallback: string): strin
   const primary = raw.split('-')[0].trim();
   if (!primary) return fallback;
   return TRANSLATION_LANGUAGE_ALIASES[primary] || primary;
+};
+
+const resolveTranslationLanguageLabel = (value: string): string => {
+  const normalized = normalizeTranslationLanguageKey(value, '').trim();
+  if (!normalized) return 'Unknown';
+  return TRANSLATION_LANGUAGE_LABELS[normalized] || normalized.toUpperCase();
 };
 
 const resolveTranslationSourceFromOCRKey = (ocrLanguageKey: string, fallback: string): string => {
@@ -1699,7 +2157,9 @@ export const OCRTextLayerPanel: React.FC = () => {
     setTranslationCacheEntry,
     setActiveTranslationCacheKey,
     clearTranslationCacheForEngine,
-    showDebugOverlay
+    showDebugOverlay,
+    ocrResultSearchQuery,
+    setOcrResultSearchQuery,
   } = useOCRTextLayerStore();
 
   const autoSyncedDocRef = useRef<number | null>(null);
@@ -1721,6 +2181,9 @@ export const OCRTextLayerPanel: React.FC = () => {
   const cacheLoadInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const aliasCandidateCacheRef = useRef<Map<string, DBDocumentCacheCandidate[]>>(new Map());
   const aliasCandidateInFlightRef = useRef<Map<string, Promise<DBDocumentCacheCandidate[]>>>(new Map());
+  const ocrPreviewScrollRef = useRef<HTMLDivElement | null>(null);
+  const ocrPreviewSearchHeaderRef = useRef<HTMLDivElement | null>(null);
+  const ocrPreviewLineRefs = useRef<Map<number, HTMLParagraphElement>>(new Map());
   // Tracks page+engine combos that were explicitly cleared by the user.
   // Alias probing is blocked for these keys until the file/pipeline resets.
   const clearedCacheKeysRef = useRef<Set<string>>(new Set());
@@ -1735,14 +2198,10 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
-  const [isLanguagesSectionOpen, setIsLanguagesSectionOpen] = useState<boolean>(() =>
-    readPersistedSectionOpen(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY, true)
-  );
   const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
     readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
   );
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied'>('idle');
-  const [ocrPreviewSearch, setOcrPreviewSearch] = useState<string>('');
   const [ocrPreviewSearchActiveIndex, setOcrPreviewSearchActiveIndex] = useState<number>(0);
   const [benchmarkRows, setBenchmarkRows] = useState<BenchmarkRow[]>(() =>
     OCR_ENGINES.map((engine) => ({
@@ -1803,10 +2262,6 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    persistSectionOpen(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY, isLanguagesSectionOpen);
-  }, [isLanguagesSectionOpen]);
-
-  useEffect(() => {
     persistSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, isModelSectionOpen);
   }, [isModelSectionOpen]);
 
@@ -1832,7 +2287,86 @@ export const OCRTextLayerPanel: React.FC = () => {
     });
   }, []);
 
+  const stopWarmAnimation = useCallback((engine?: OCREngine) => {
+    if (engine) {
+      const timer = warmAnimationTimersRef.current.get(engine);
+      if (timer) {
+        clearInterval(timer);
+        warmAnimationTimersRef.current.delete(engine);
+      }
+      return;
+    }
+
+    for (const timer of warmAnimationTimersRef.current.values()) {
+      clearInterval(timer);
+    }
+    warmAnimationTimersRef.current.clear();
+  }, []);
+
+  const refreshExternalEngineStatuses = useCallback(async () => {
+    if (statusRefreshInFlightRef.current) {
+      return await statusRefreshInFlightRef.current;
+    }
+
+    const run = (async () => {
+      setEngineWarmState('tesseract', {
+        phase: 'ready',
+        progress: 100,
+        runtime: 'Built-in WASM',
+        description: 'Current in-app OCR engine running the best-quality pipeline by default.',
+        etaSec: 0,
+        languageKey: normalizedWarmLanguage,
+      });
+
+      for (const engine of OCR_ENGINES) {
+        if (engine.id === 'tesseract') continue;
+
+        const sessionKey = getEngineWarmSessionKey(engine.id, normalizedWarmLanguage);
+        const currentState = SESSION_ENGINE_WARM_STATES[engine.id];
+        const isReadyForCurrentLanguage = SESSION_ENGINE_READY_KEYS.has(sessionKey)
+          || (currentState?.phase === 'ready' && currentState.languageKey === normalizedWarmLanguage);
+
+        if (isReadyForCurrentLanguage) {
+          setEngineWarmState(engine.id, {
+            phase: 'ready',
+            progress: 100,
+            runtime: currentState?.runtime || engine.runtime,
+            description: currentState?.description || engine.description,
+            etaSec: 0,
+            languageKey: normalizedWarmLanguage,
+          });
+          continue;
+        }
+
+        if (currentState?.phase === 'warming' || currentState?.phase === 'checking') {
+          setEngineWarmState(engine.id, {
+            ...currentState,
+            languageKey: normalizedWarmLanguage,
+          });
+          continue;
+        }
+
+        setEngineWarmState(engine.id, {
+          phase: 'idle',
+          progress: 0,
+          runtime: engine.runtime,
+          description: 'Click to check and warm this model',
+          etaSec: null,
+          languageKey: normalizedWarmLanguage,
+        });
+      }
+    })();
+
+    statusRefreshInFlightRef.current = run;
+    try {
+      await run;
+    } finally {
+      statusRefreshInFlightRef.current = null;
+    }
+  }, [normalizedWarmLanguage, setEngineWarmState]);
+
   const resetEngineWarmSession = useCallback((engine: OCREngine, description?: string) => {
+    stopWarmAnimation(engine);
     for (const key of Array.from(SESSION_ENGINE_WARM_PROMISES.keys())) {
       if (key.startsWith(`${engine}:`)) {
         SESSION_ENGINE_WARM_PROMISES.delete(key);
@@ -1848,79 +2382,17 @@ export const OCRTextLayerPanel: React.FC = () => {
         SESSION_PREWARM_REQUESTED.delete(key);
       }
     }
+
+    const runtime = OCR_ENGINES.find((candidate) => candidate.id === engine)?.runtime;
     setEngineWarmState(engine, {
       phase: 'idle',
       progress: 0,
+      runtime,
+      description: description || 'Click to check and warm this model',
       etaSec: null,
-      description,
-      languageKey: undefined,
+      languageKey: normalizedWarmLanguage,
     });
-  }, [setEngineWarmState]);
-
-  const stopWarmAnimation = useCallback((engine: string) => {
-    const timer = warmAnimationTimersRef.current.get(engine);
-    if (!timer) return;
-    clearInterval(timer);
-    warmAnimationTimersRef.current.delete(engine);
-  }, []);
-
-  const refreshExternalEngineStatuses = useCallback(async () => {
-    if (!window.electronAPI?.ocr?.getEngineStatus) return;
-    if (statusRefreshInFlightRef.current) {
-      return await statusRefreshInFlightRef.current;
-    }
-
-    const run = (async () => {
-      try {
-        const statuses = await window.electronAPI.ocr.getEngineStatus();
-        statuses.forEach((status) => {
-          const engine = status.engine;
-          if (engine === 'tesseract') return;
-
-          setEngineWarmStates((current) => {
-            const previous = current[engine] || SESSION_ENGINE_WARM_STATES[engine] || { phase: 'idle' as EngineWarmPhase, progress: 0 };
-            const nextState: EngineWarmState = status.available
-              ? {
-                  ...previous,
-                  phase: previous.phase === 'ready' ? 'ready' : 'idle',
-                  progress: previous.phase === 'ready' ? 100 : Math.max(previous.progress || 0, 12),
-                  runtime: status.runtime,
-                  description: status.description,
-                  etaSec: previous.phase === 'ready' ? 0 : null,
-                }
-              : {
-                  ...previous,
-                  phase: 'error',
-                  progress: 0,
-                  runtime: status.runtime,
-                  description: status.description,
-                  etaSec: null,
-                };
-            SESSION_ENGINE_WARM_STATES[engine] = nextState;
-            return {
-              ...current,
-              [engine]: nextState,
-            };
-          });
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        (['paddleocr', 'easyocr'] as const).forEach((engine) => {
-          setEngineWarmState(engine, {
-            phase: 'error',
-            progress: 0,
-            description: message,
-            etaSec: null,
-          });
-        });
-      } finally {
-        statusRefreshInFlightRef.current = null;
-      }
-    })();
-
-    statusRefreshInFlightRef.current = run;
-    return await run;
-  }, [setEngineWarmState]);
+  }, [normalizedWarmLanguage, setEngineWarmState, stopWarmAnimation]);
 
   const startWarmAnimation = useCallback((engine: OCREngine, phase: EngineWarmPhase) => {
     if (engine === 'tesseract') return;
@@ -2185,8 +2657,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         : (!cjkLike && (imageHeight >= 5200 || aspectRatio >= 2.3));
       if (chunkLikely) {
         const estimatedChunkHeight = Math.min(
-          Math.max(2200, Math.round(imageWidth * 0.95)),
-          Math.max(2200, Math.round(imageHeight * 0.34)),
+          Math.max(2200, Math.round(imageWidth * 1.05)),
+          Math.max(2200, Math.round(imageHeight * 0.48)),
         );
         const estimatedStride = Math.max(1, estimatedChunkHeight - 220);
         const estimatedChunks = Math.max(1, Math.ceil((imageHeight - 220) / estimatedStride));
@@ -2320,12 +2792,11 @@ export const OCRTextLayerPanel: React.FC = () => {
     return true;
   }, [normalizeLanguage, options.dpi, options.language, options.pageSegMode]);
 
-  // UI preview can show stale algorithm cache (marked as stale in badge) to avoid blank panel
-  // while still requiring language match.
   const isDisplayCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
     if (!cached || !Array.isArray(cached.words) || !Array.isArray(cached.lines)) return false;
     if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
+    if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
     if ((cached.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) return false;
     return true;
   }, [normalizeLanguage, options.engine, options.language]);
@@ -2785,7 +3256,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     });
   const selectedEngineWarming = selectedOcrEngine !== 'tesseract'
     && (selectedEngineWarmState.phase === 'checking' || selectedEngineWarmState.phase === 'warming');
-  const ocrActionDisabled = isProcessing || !file || selectedEngineWarming;
+  const ocrActionDisabled = isProcessing || !file;
   const modelScopedOriginalOCR = ocrByPageEngine.get(currentPage)?.get(selectedOcrEngine) || currentPageOCR;
   const modelScopedFingerprint = modelScopedOriginalOCR
     ? buildOCRSourceFingerprint(modelScopedOriginalOCR, selectedOcrEngine)
@@ -2806,7 +3277,19 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
     if (entry.ocrEngine !== selectedOcrEngine) return false;
     if (entry.translationMode !== translationMode) return false;
-    if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedContextSourceLanguage) return false;
+
+    const normalizedEntrySource = normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en');
+    const sourceMatches = normalizedEntrySource === normalizedContextSourceLanguage;
+    if (!sourceMatches) {
+      const sameSnapshot = modelScopedFingerprint && entry.sourceFingerprint === modelScopedFingerprint;
+      const latinSourceDrift = Boolean(
+        sameSnapshot
+        && ['en', 'es'].includes(normalizedEntrySource)
+        && ['en', 'es'].includes(normalizedContextSourceLanguage)
+      );
+      if (!latinSourceDrift) return false;
+    }
+
     if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedContextTargetLanguage) return false;
 
     const normalizedEntryLanguage = normalizeCacheLanguageKey(entry.ocrLanguage);
@@ -2924,8 +3407,13 @@ export const OCRTextLayerPanel: React.FC = () => {
     ? previewSourceOCR.lines.map((line, index) => {
       if (effectivePreviewMode !== 'translated') return line;
       const translated = translatedByIndexMap.get(index);
-      if (!translated) return line;
-      return { ...line, text: translated };
+      const sourceText = normalizePreviewText(String(line.text || ''));
+      const sourceKey = normalizePreviewText(sourceText).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+      const translatedKey = normalizePreviewText(String(translated || '')).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+      const fallbackText = (!translated || (sourceKey && sourceKey === translatedKey))
+        ? resolveMissingOverlayLineFallbackText(sourceText, targetLanguage)
+        : translated;
+      return { ...line, text: fallbackText || translated || sourceText };
     })
     : [];
   const previewWordsLength = previewSourceOCR?.words?.length || 0;
@@ -2936,20 +3424,28 @@ export const OCRTextLayerPanel: React.FC = () => {
       : normalizePreviewText(previewSourceOCR?.text || '');
   const previewCopyText = previewText || previewSourceOCR?.words.map((word) => word.text).join(' ') || '';
   const hasPreviewCopyText = Boolean(previewCopyText.trim());
-  const normalizedPreviewSearch = normalizePreviewText(ocrPreviewSearch);
-  const previewSearchNeedle = normalizedPreviewSearch.toLowerCase();
-  const previewMatchedLineIndexes = previewSearchNeedle
+  const normalizedPreviewSearch = normalizePreviewText(ocrResultSearchQuery);
+  const previewSearchPattern = buildTextSearchPattern(normalizedPreviewSearch);
+  const previewMatchedLineIndexes = previewSearchPattern
     ? previewLines
       .map((line, lineIndex) => ({
         lineIndex,
-        text: normalizePreviewText(String(line.text || '')),
+        text: normalizePreviewText([
+          String(line.text || ''),
+          String(previewSourceOCR?.lines?.[lineIndex]?.text || ''),
+        ].join(' ')),
       }))
-      .filter((entry) => entry.text.toLowerCase().includes(previewSearchNeedle))
+      .filter((entry) => hasTextSearchMatch(entry.text, previewSearchPattern))
       .map((entry) => entry.lineIndex)
     : [];
   const previewMatchedLineIndexSet = new Set<number>(previewMatchedLineIndexes);
-  const previewSearchMatchCount = normalizedPreviewSearch
-    ? (previewText.match(new RegExp(escapePreviewSearchPattern(normalizedPreviewSearch), 'ig')) || []).length
+  const previewSearchMatchCount = previewSearchPattern
+    ? collectTextSearchMatches([
+      previewText,
+      effectivePreviewMode === 'translated'
+        ? (previewSourceOCR?.lines || []).map((line) => String(line.text || '')).join('\n')
+        : '',
+    ].join('\n'), previewSearchPattern).length
     : 0;
   const hasPreviewSearchMatches = previewMatchedLineIndexes.length > 0;
   const activePreviewMatchLineIndex = hasPreviewSearchMatches
@@ -3022,7 +3518,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       && engine === 'paddleocr'
       && hasKoreanOcrLanguage(options.language);
 
-    // PaddleOCR: no minWidth — handles low resolution well, speed is priority
+    // PaddleOCR: let the detector work on a moderate panel render budget.
+    // The Python bridge already applies profile-aware det limits, so sending
+    // 16-30MP renders here mostly burns renderer/pdf.js time without improving recall.
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
         return {
@@ -3053,13 +3551,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
       return {
         maxSide: 16000,
-        maxPixels: 16_000_000,
+        maxPixels: 8_400_000,
         minWidth: null,
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
-          boostedMaxSide: 20000,
-          boostedMaxPixels: 30_000_000,
+          boostedMaxSide: 18000,
+          boostedMaxPixels: 11_200_000,
         },
       };
     }
@@ -3138,7 +3636,13 @@ export const OCRTextLayerPanel: React.FC = () => {
     // Only applies when the engine explicitly requests it (Tesseract=800, EasyOCR=650).
     // PaddleOCR sets minWidth=null so pixel budget controls everything → stays fast.
     if (minWidth && minWidth > 0 && scaleFactor < 1 && width * scaleFactor < minWidth && width > minWidth) {
-      scaleFactor = minWidth / width;
+      let minWidthScale = minWidth / width;
+      if (effectiveMaxSide && effectiveMaxSide > 0) {
+        minWidthScale = Math.min(minWidthScale, effectiveMaxSide / Math.max(width, height));
+      }
+      if (minWidthScale > scaleFactor) {
+        scaleFactor = minWidthScale;
+      }
     }
 
     if (scaleFactor >= 1) {
@@ -3476,7 +3980,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
       const aspectRatio = longest / shortest;
       const pixelCount = imageWidth * imageHeight;
-      return aspectRatio <= 1.95 && pixelCount >= 6_400_000;
+      return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
     })();
 
     let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
@@ -3570,15 +4074,28 @@ export const OCRTextLayerPanel: React.FC = () => {
       return;
     }
 
-    if (selectedEngineWarming) {
+    const activeEngine = (options.engine || 'tesseract') as OCREngine;
+
+    if (selectedEngineWarming && activeEngine !== 'tesseract') {
       setProgress({
         stage: 'init',
         currentPage: pageNum,
         totalPages: 1,
-        message: selectedEngineWarmState.description || 'Selected OCR model is still warming up',
+        message: selectedEngineWarmState.description || 'Selected OCR model is warming up. Waiting to start OCR...',
         progress: Math.max(0, Math.min(100, Number(selectedEngineWarmState.progress || 0))),
       });
-      return;
+
+      const ready = await ensureEngineReady(activeEngine, { selectOnReady: false });
+      if (!ready) {
+        setProgress({
+          stage: 'complete',
+          currentPage: pageNum,
+          totalPages: 1,
+          message: `${activeEngine} is not ready yet`,
+          progress: 0,
+        });
+        return;
+      }
     }
 
     if (ocrJobActiveRef.current) {
@@ -3624,7 +4141,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       suspendCacheReadsRef.current = false;
       setIsProcessing(false);
     }
-  }, [beginAbortableJob, file, fileUrl, isAbortError, options.engine, recoverExternalEngine, runCurrentPageOCR, selectedEngineWarmState.description, selectedEngineWarmState.progress, selectedEngineWarming, setIsProcessing, setProgress, shouldRecoverExternalEngine, stopExternalProgress]);
+  }, [beginAbortableJob, ensureEngineReady, file, fileUrl, isAbortError, options.engine, recoverExternalEngine, runCurrentPageOCR, selectedEngineWarmState.description, selectedEngineWarmState.progress, selectedEngineWarming, setIsProcessing, setProgress, shouldRecoverExternalEngine, stopExternalProgress]);
 
   const handleStartOCR = useCallback(async (targetPages?: number[], forceReOCR: boolean = false) => {
     if (!file || !fileUrl) {
@@ -3632,21 +4149,46 @@ export const OCRTextLayerPanel: React.FC = () => {
       return;
     }
 
-    if (selectedEngineWarming) {
+    const selectedEngine = (options.engine || 'tesseract') as OCREngine;
+
+    if (selectedEngineWarming && selectedEngine !== 'tesseract') {
       setProgress({
         stage: 'init',
         currentPage: 0,
         totalPages: 0,
-        message: selectedEngineWarmState.description || 'Selected OCR model is still warming up',
+        message: selectedEngineWarmState.description || 'Selected OCR model is warming up. Waiting to start OCR...',
         progress: Math.max(0, Math.min(100, Number(selectedEngineWarmState.progress || 0))),
       });
-      return;
+
+      const ready = await ensureEngineReady(selectedEngine, { selectOnReady: false });
+      if (!ready) {
+        setProgress({
+          stage: 'complete',
+          currentPage: 0,
+          totalPages: 0,
+          message: `${selectedEngine} is not ready yet`,
+          progress: 0,
+        });
+        return;
+      }
     }
 
     if (ocrJobActiveRef.current) {
       console.warn('[OCRPanel] Ignored batch OCR request while another OCR job is active');
       return;
     }
+
+    const activeFile = file;
+    let cacheDocId: number | null = null;
+    let wasCanceled = false;
+    const completedPageResults = new Map<number, OCRPageResult>();
+    const pendingCachePersistTasks = new Set<Promise<void>>();
+    const trackCachePersistTask = (task: Promise<void>) => {
+      pendingCachePersistTasks.add(task);
+      void task.finally(() => {
+        pendingCachePersistTasks.delete(task);
+      });
+    };
 
     try {
       console.log(`[OCRPanel] Starting batch OCR (forceReOCR=${forceReOCR}, targetPages=${targetPages?.join(',') || 'all'})`);
@@ -3689,23 +4231,27 @@ export const OCRTextLayerPanel: React.FC = () => {
         });
 
         setPageOCR(pageNum, normalizedResult);
-        void (async () => {
+        completedPageResults.set(pageNum, normalizedResult);
+
+        if (!cacheDocId) {
+          return;
+        }
+
+        const resultEngine = (normalizedResult.ocrEngine || activeEngine) as OCREngine;
+        const persistTask = (async () => {
           try {
             const activeFileNow = useProjectStore.getState().file;
             if (activeFileNow !== activeFile) return;
-            const docId = await ensureDocumentId();
-            if (!docId) return;
-            const resultEngine = (normalizedResult.ocrEngine || activeEngine) as OCREngine;
-            const saved = await dbService.saveOCR(docId, pageNum, normalizedResult, resultEngine);
+            const saved = await dbService.saveOCR(cacheDocId as number, pageNum, normalizedResult, resultEngine);
             if (!saved) {
-              console.warn(`[OCRPanel] Background cache persist failed for page ${pageNum} (docId=${docId})`);
+              console.warn(`[OCRPanel] Background cache persist failed for page ${pageNum} (docId=${cacheDocId})`);
             }
           } catch (error) {
             console.warn(`[OCRPanel] Background cache persist error for page ${pageNum}:`, error);
           }
         })();
+        trackCachePersistTask(persistTask);
       });
-      const activeFile = file;
       searchablePDFService.setCacheHitCallback(forceReOCR ? null : (pageNum) => {
         if (useProjectStore.getState().file !== activeFile) return;
       });
@@ -3717,7 +4263,10 @@ export const OCRTextLayerPanel: React.FC = () => {
       pdfDataRef.current = arrayBuffer as ArrayBuffer;
 
       // Create searchable PDF (also performs OCR)
-      const cacheDocId = await ensureDocumentId();
+      cacheDocId = await ensureDocumentId();
+      if (!cacheDocId && dbService.isAvailable()) {
+        console.warn('[OCRPanel] Batch OCR started without a document ID; completed pages may require post-cancel flush.');
+      }
       const resultBytes = await searchablePDFService.createSearchablePDF(
         arrayBuffer as ArrayBuffer,
         options,
@@ -3740,6 +4289,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     } catch (error) {
       if (isAbortError(error)) {
+        wasCanceled = true;
         searchablePDFService.setOCRResultCallback(null);
         searchablePDFService.setCacheHitCallback(null);
         setProgress({
@@ -3769,7 +4319,46 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       }
     } finally {
+      searchablePDFService.setOCRResultCallback(null);
+      searchablePDFService.setCacheHitCallback(null);
       searchablePDFService.setProgressCallback(null);
+
+      if (pendingCachePersistTasks.size > 0) {
+        await Promise.allSettled(Array.from(pendingCachePersistTasks));
+      }
+
+      if (
+        completedPageResults.size > 0
+        && dbService.isAvailable()
+        && useProjectStore.getState().file === activeFile
+      ) {
+        let persistDocId = cacheDocId;
+        if (!persistDocId) {
+          persistDocId = await ensureDocumentId().catch(() => null);
+        }
+
+        if (persistDocId) {
+          const recoveryTasks = Array.from(completedPageResults.entries()).map(async ([pageNum, result]) => {
+            const resultEngine = (result.ocrEngine || selectedEngine) as OCREngine;
+            const saved = await dbService.saveOCR(persistDocId as number, pageNum, result, resultEngine);
+            if (!saved) {
+              console.warn(`[OCRPanel] Post-cancel cache flush failed for page ${pageNum} (docId=${persistDocId})`);
+            }
+          });
+          await Promise.allSettled(recoveryTasks);
+        }
+      }
+
+      if (wasCanceled && completedPageResults.size > 0) {
+        setProgress({
+          stage: 'complete',
+          currentPage: 0,
+          totalPages: 0,
+          message: `OCR canceled. Saved cache for ${completedPageResults.size} completed page(s).`,
+          progress: 0,
+        });
+      }
+
       ocrJobActiveRef.current = false;
       suspendCacheReadsRef.current = false;
       setIsProcessing(false);
@@ -4139,6 +4728,26 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, [normalizedPreviewSearch, ocrPreviewSearchActiveIndex, previewMatchedLineIndexes.length]);
 
   useEffect(() => {
+    if (!normalizedPreviewSearch || !hasPreviewSearchMatches || activePreviewMatchLineIndex < 0) {
+      return;
+    }
+
+    const container = ocrPreviewScrollRef.current;
+    const targetLine = ocrPreviewLineRefs.current.get(activePreviewMatchLineIndex);
+    if (!container || !targetLine) {
+      return;
+    }
+
+    const stickyHeaderHeight = ocrPreviewSearchHeaderRef.current?.offsetHeight ?? 0;
+    const targetTop = Math.max(0, targetLine.offsetTop - stickyHeaderHeight - 8);
+
+    container.scrollTo({
+      top: targetTop,
+      behavior: 'smooth',
+    });
+  }, [activePreviewMatchLineIndex, hasPreviewSearchMatches, normalizedPreviewSearch, previewLines.length]);
+
+  useEffect(() => {
     const handler = () => {
       if (benchmarkRunning) {
         setBenchmarkOpen(true);
@@ -4208,6 +4817,14 @@ export const OCRTextLayerPanel: React.FC = () => {
     : '-';
   const currentEngine = OCR_ENGINES.find(engine => engine.id === (previewSourceOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
   const translatedCacheSlotCount = currentPageTranslationEntries.length;
+  const translatedTargetLanguages = Array.from(new Set(
+    currentPageTranslationEntries
+      .map((entry) => resolveTranslationLanguageLabel(entry.targetLanguage))
+      .filter(Boolean)
+  ));
+  const translatedLanguageSummary = translatedTargetLanguages.length <= 3
+    ? translatedTargetLanguages.join(', ')
+    : `${translatedTargetLanguages.slice(0, 3).join(', ')} +${translatedTargetLanguages.length - 3}`;
   const canToggleToTranslated = Boolean(preferredEntryForCurrentModel || resolvedTranslationEntry);
   const previewToggleLabel = effectivePreviewMode === 'translated' ? 'Original OCR' : 'Translated Result';
   const previewToggleDisabled = effectivePreviewMode === 'translated' ? false : !canToggleToTranslated;
@@ -4225,75 +4842,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     .sort((a, b) => a.suspiciousRatio - b.suspiciousRatio)[0];
 
   return (
-    <div className="space-y-2 p-4">
-      {/* Language Selector (Multi-select) */}
-      <div className="-mx-4 space-y-1">
-        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(122,28,210,0.34)_0%,rgba(219,39,119,0.24)_52%,rgba(17,24,39,0.92)_100%)] px-4 py-2">
-          <div className="min-w-0 flex-1">
-            <label className="flex items-center gap-2 text-xs font-semibold text-white">
-              <Languages size={12} />
-              OCR Languages
-            </label>
-          </div>
-
-          <div className="min-w-0 max-w-[56%] truncate text-right text-[11px] text-slate-200/85">
-            {options.language.split('+').filter(Boolean).map(code => {
-              const found = SUPPORTED_LANGUAGES.find(l => l.code === code);
-              return found ? found.name : code;
-            }).join(' + ') || 'English'}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsLanguagesSectionOpen((current) => !current)}
-            className="flex h-5 w-6 items-center justify-center rounded-md border border-fuchsia-200/45 bg-slate-950/60 text-fuchsia-100 transition-colors hover:border-fuchsia-100/60"
-            title={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
-            aria-label={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
-          >
-            {isLanguagesSectionOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </button>
-        </div>
-
-        {isLanguagesSectionOpen && (
-          <div className="px-4">
-            <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-950/65 p-2 grid grid-cols-2 gap-x-3 gap-y-1">
-              {SUPPORTED_LANGUAGES.map(lang => {
-                const selected = options.language.split('+').filter(Boolean).includes(lang.code);
-                return (
-                  <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-100 cursor-pointer min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      disabled={isProcessing}
-                      onChange={() => {
-                        const current = new Set(options.language.split('+').filter(Boolean));
-                        if (current.has(lang.code)) {
-                          current.delete(lang.code);
-                        } else {
-                          current.add(lang.code);
-                        }
-                        if (current.size === 0) {
-                          current.add('eng');
-                        }
-                        const ordered = SUPPORTED_LANGUAGES
-                          .map(l => l.code)
-                          .filter(code => current.has(code));
-                        setOptions({ language: ordered.join('+') });
-                      }}
-                      className="accent-[#2B9BFF]"
-                    />
-                    <span className="truncate">{lang.name}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
+    <div className="flex flex-col gap-1 p-2.5 pt-2">
       {/* OCR Model Selector */}
-      <div className="-mx-4 space-y-1">
-        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(234,179,8,0.30)_0%,rgba(249,115,22,0.24)_56%,rgba(17,24,39,0.92)_100%)] px-4 py-2">
+      <div className="-mx-2 order-1 space-y-1">
+        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(234,179,8,0.30)_0%,rgba(249,115,22,0.24)_56%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
           <label className="flex items-center gap-2 text-xs font-semibold text-white">
             <Cpu size={12} />
             OCR Model
@@ -4324,7 +4876,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         </div>
 
         {isModelSectionOpen && (
-          <div className="px-4">
+          <div className="px-2 pt-0.5">
             <div className="grid grid-cols-3 gap-2">
               {OCR_ENGINES.map((engine) => {
                 const warmState = engine.id === 'tesseract'
@@ -4418,7 +4970,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* Progress Bar */}
       {isProcessing && (
-        <div className="space-y-2 bg-slate-900/55 rounded-lg p-3 border border-white/10">
+        <div className="order-2 space-y-2 bg-slate-900/55 rounded-lg p-3 border border-white/10">
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-300 truncate max-w-[180px]">
               {progress?.message || 'กำลังเริ่มต้น...'}
@@ -4449,7 +5001,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       )}
 
       {/* Action Buttons */}
-      <div className="space-y-1.5">
+      <div className="order-2 space-y-1.5">
         {selectedEngineWarming && !isProcessing && (
           <div className="rounded-md border border-amber-400/35 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-100">
             selected model is warming: {selectedEngineWarmState.description || 'Please wait until it is ready'}
@@ -4495,7 +5047,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           <div className="flex gap-2">
             <button
               onClick={() => handleStartOCR(undefined, true)}
-              disabled={!file || selectedEngineWarming}
+              disabled={!file || isProcessing}
               className="flex-[1.2] bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(255,135,5,0.2)]"
               title={selectedEngineWarming
                 ? 'Wait for selected model warm-up to finish'
@@ -4537,7 +5089,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* OCR Results Preview */}
       {previewSourceOCR && !isProcessing && (
-        <div className="space-y-1.5">
+        <div className="order-3 space-y-1.5">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
             <Eye size={12} className="text-[#5CC6F2]" />
             OCR Result - หน้า {currentPage}
@@ -4582,6 +5134,11 @@ export const OCRTextLayerPanel: React.FC = () => {
           <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
             model {currentEngine.name} • พบ {previewSourceOCR.words.length} คำ • raw conf {previewSourceOCR.confidence.toFixed(0)}%
           </div>
+          {translatedTargetLanguages.length > 0 && (
+            <div className="rounded-lg border border-sky-500/35 bg-sky-500/12 px-3 py-2 text-[11px] text-sky-100">
+              translated cache on this page: {translatedLanguageSummary}
+            </div>
+          )}
           {translationPreviewMode === 'translated' && !activeTranslationMatchesCurrentOCR && translatedCacheSlotCount > 0 && (
             <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
               translated cache is stale for current OCR source, showing original OCR
@@ -4601,14 +5158,17 @@ export const OCRTextLayerPanel: React.FC = () => {
                 {copyFeedback === 'copied' ? <Check size={13} /> : <Copy size={13} />}
               </button>
             </div>
-            <div className="h-full max-h-[40vh] overflow-y-auto p-2 pb-4">
-              <div className="sticky top-0 z-10 mb-2 rounded-md border border-white/10 bg-slate-950/88 px-2 py-1.5 backdrop-blur">
+            <div ref={ocrPreviewScrollRef} className="h-full max-h-[40vh] overflow-y-auto px-2 pt-1 pb-4">
+              <div ref={ocrPreviewSearchHeaderRef} className="sticky top-0 z-10 mb-1.5 rounded-md border border-white/10 bg-slate-950/88 px-2 py-1 backdrop-blur">
                 <div className="flex items-center gap-1.5">
                   <Search size={12} className="text-slate-400" />
                   <input
                     type="text"
-                    value={ocrPreviewSearch}
-                    onChange={(event) => setOcrPreviewSearch(event.target.value)}
+                    value={ocrResultSearchQuery}
+                    onChange={(event) => {
+                      setOcrResultSearchQuery(event.target.value);
+                      setOcrPreviewSearchActiveIndex(0);
+                    }}
                     placeholder="Search OCR result..."
                     className="h-7 flex-1 rounded-md border border-white/10 bg-slate-900/75 px-2 text-[11px] text-slate-100 placeholder:text-slate-500 focus:border-cyan-400/50 focus:outline-none"
                   />
@@ -4632,7 +5192,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                   </button>
                 </div>
                 {normalizedPreviewSearch && (
-                  <div className="mt-1 text-[10px] text-slate-400">
+                  <div className="mt-0.5 text-[10px] text-slate-400">
                     {hasPreviewSearchMatches
                       ? `matches ${previewSearchMatchCount} • line ${ocrPreviewSearchActiveIndex + 1}/${previewMatchedLineIndexes.length}`
                       : 'No match'}
@@ -4651,20 +5211,27 @@ export const OCRTextLayerPanel: React.FC = () => {
                           key={i}
                           className={`text-xs leading-relaxed ${
                             activeMatchLine
-                              ? 'rounded bg-cyan-500/14 px-1 py-0.5 text-cyan-50 ring-1 ring-cyan-400/35'
+                              ? 'scroll-mt-24 rounded bg-cyan-500/14 px-1 py-0.5 text-cyan-50 ring-1 ring-cyan-400/35'
                               : matchedLine
-                                ? 'text-slate-100'
+                                ? 'scroll-mt-24 text-slate-100'
                                 : 'text-slate-300'
                           }`}
+                          ref={(element) => {
+                            if (element) {
+                              ocrPreviewLineRefs.current.set(i, element);
+                            } else {
+                              ocrPreviewLineRefs.current.delete(i);
+                            }
+                          }}
                         >
-                          {renderPreviewTextWithHighlight(line.text, normalizedPreviewSearch)}
+                          {renderPreviewTextWithHighlight(line.text, previewSearchPattern)}
                         </p>
                       );
                     })
                   ) : (
                     // Fallback: show words joined
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      {renderPreviewTextWithHighlight(previewText || previewSourceOCR.words.map(w => w.text).join(' '), normalizedPreviewSearch)}
+                      {renderPreviewTextWithHighlight(previewText || previewSourceOCR.words.map(w => w.text).join(' '), previewSearchPattern)}
                     </p>
                   )}
                 </div>

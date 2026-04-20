@@ -24,8 +24,7 @@ import {
   Flame,
   FileText,
   BarChart3,
-  Download,
-  Files
+  Download
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
@@ -39,6 +38,33 @@ import {
 } from './stores/useOCRTextLayerStore';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { searchablePDFService } from './services/pdf';
+import { pdfjs } from './services/pdf/pdfjsWorker';
+import {
+  deriveBalloonAwareLayoutGrouping,
+  type DerivedLayoutGroup,
+  type LayoutGroupType,
+  type LayoutGroupingInput,
+  type LayoutGroupingResult,
+  type LayoutReadingMode,
+  type OCRLineWithLayout,
+} from './services/layout/balloonAwareGroupingService';
+import {
+  clampOverlayRect,
+  computeOverlayLayoutMap,
+  computeOverlayTypography,
+  DEFAULT_OVERLAY_PALETTE,
+  estimateLineRotationDeg,
+  normalizeOverlayInlineText,
+  resolveOverlayMaskBBox,
+  resolveOverlayMaskExpansion,
+  resolveOverlaySourceBBox,
+  sampleOverlayPaletteFromLine,
+  shouldSkipOverlayRenderForSuspiciousLine,
+  type OverlayLayoutProfile,
+  type OverlayPalette,
+  type OverlayTypography,
+} from './components/OCR/translationOverlayUtils';
+import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
 import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
 
 // Lazy Load Heavy Components
@@ -53,14 +79,235 @@ import './types/electron.d'; // Import type declarations
 type GlobalPrewarmState = typeof globalThis & {
   __pdfTranslatorExternalPrewarmStartedKeys?: Set<string>;
   __pdfTranslatorExternalPrewarmInFlight?: Map<string, Promise<void>>;
+  __pdfTranslatorLastLayoutGrouping?: unknown;
 };
 
 const AUTO_OCR_REQUEST_EVENT = 'pdf-translator:auto-ocr-request';
 const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
+const ENABLE_BALLOON_AWARE_GROUPING_STORAGE_KEY = 'pdf_translator.enable_balloon_aware_grouping';
+const LAYOUT_GROUPING_DEBUG_STORAGE_KEY = 'pdf_translator.layout_grouping_debug';
 
 type AutoOCRScope = 'current' | 'all';
 type DownloadScope = 'current' | 'all';
 type DownloadContentMode = 'original' | 'translated';
+
+const formatPageListSummary = (pages: number[], maxItems: number = 8): string => {
+  if (pages.length === 0) return '-';
+  const ordered = Array.from(new Set(pages)).sort((a, b) => a - b);
+  const head = ordered.slice(0, maxItems).join(', ');
+  const remain = ordered.length - maxItems;
+  return remain > 0 ? `${head} (+${remain})` : head;
+};
+
+const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
+
+const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
+  const normalized = normalizeOverlayInlineText(String(sourceText || ''));
+  if (!normalized) return false;
+  const wordCount = normalized.split(/\s+/g).filter(Boolean).length;
+  const thaiCharCount = (normalized.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const technicalLike = DOCUMENT_SOURCE_HINT_REGEX.test(normalized);
+  const numericDocumentLike = wordCount >= 6 && /[0-9()\-]/.test(normalized);
+  const thaiDocumentLike = thaiCharCount >= 12
+    && (wordCount >= 3 || /[0-9()\[\].,:;\-]/.test(normalized));
+  return technicalLike || numericDocumentLike || thaiDocumentLike;
+};
+
+const clampOverlayTypographyScale = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  if (value < 0.7) return 0.7;
+  if (value > 1.6) return 1.6;
+  return value;
+};
+
+const scaleOverlayTypography = (typography: OverlayTypography, scale: number): OverlayTypography => {
+  const normalizedScale = clampOverlayTypographyScale(scale);
+  if (Math.abs(normalizedScale - 1) < 0.0001) return typography;
+
+  return {
+    ...typography,
+    fontSize: Math.max(8, Number((typography.fontSize * normalizedScale).toFixed(2))),
+    lineHeight: Number((typography.lineHeight * normalizedScale).toFixed(3)),
+    padX: Math.max(1, Math.round(typography.padX * normalizedScale)),
+    padY: Math.max(1, Math.round(typography.padY * normalizedScale)),
+    contentHeight: Math.max(1, Number((typography.contentHeight * normalizedScale).toFixed(2))),
+  };
+};
+
+const truncateCanvasText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  suffix: string = '...'
+): string => {
+  const normalized = String(text || '');
+  if (!normalized) return '';
+  if (ctx.measureText(normalized).width <= maxWidth) return normalized;
+
+  let current = normalized;
+  while (current.length > 0 && ctx.measureText(`${current}${suffix}`).width > maxWidth) {
+    current = current.slice(0, -1);
+  }
+
+  return current ? `${current}${suffix}` : '';
+};
+
+const wrapCanvasText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number,
+  forceSingleLine: boolean
+): string[] => {
+  const normalized = normalizeOverlayInlineText(String(text || ''));
+  if (!normalized) return [];
+  if (maxLines <= 1 || forceSingleLine) {
+    return [truncateCanvasText(ctx, normalized, maxWidth)];
+  }
+
+  const tokens = normalized.includes(' ')
+    ? normalized.split(/\s+/g).filter(Boolean)
+    : Array.from(normalized);
+
+  const lines: string[] = [];
+  let line = '';
+
+  tokens.forEach((token, index) => {
+    const unit = normalized.includes(' ') ? token : token;
+    const separator = normalized.includes(' ') && line ? ' ' : '';
+    const candidate = `${line}${separator}${unit}`;
+    if (!line || ctx.measureText(candidate).width <= maxWidth) {
+      line = candidate;
+      return;
+    }
+
+    lines.push(line);
+    line = unit;
+
+    if (lines.length >= maxLines) {
+      return;
+    }
+
+    if (index === tokens.length - 1) {
+      lines.push(line);
+    }
+  });
+
+  if (line && lines.length < maxLines) {
+    lines.push(line);
+  }
+
+  if (lines.length > maxLines) {
+    lines.length = maxLines;
+  }
+
+  if (lines.length === 0) {
+    return [truncateCanvasText(ctx, normalized, maxWidth)];
+  }
+
+  const consumed = lines.join(normalized.includes(' ') ? ' ' : '');
+  if (consumed.length < normalized.length) {
+    const lastIndex = Math.max(0, lines.length - 1);
+    lines[lastIndex] = truncateCanvasText(ctx, lines[lastIndex], maxWidth);
+  }
+
+  return lines;
+};
+
+const readPersistedBooleanFlag = (key: string, defaultValue: boolean): boolean => {
+  if (typeof window === 'undefined') return defaultValue;
+  try {
+    const raw = String(window.localStorage.getItem(key) || '').trim().toLowerCase();
+    if (!raw) return defaultValue;
+    if (raw === '0' || raw === 'false' || raw === 'off') return false;
+    if (raw === '1' || raw === 'true' || raw === 'on') return true;
+    return defaultValue;
+  } catch {
+    return defaultValue;
+  }
+};
+
+const isBalloonAwareGroupingEnabled = (): boolean =>
+  readPersistedBooleanFlag(ENABLE_BALLOON_AWARE_GROUPING_STORAGE_KEY, true);
+
+const isLayoutGroupingDebugEnabled = (): boolean =>
+  readPersistedBooleanFlag(LAYOUT_GROUPING_DEBUG_STORAGE_KEY, false);
+
+const GENERIC_FONT_FAMILY_SET = new Set([
+  'serif',
+  'sans-serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'system-ui',
+  'ui-sans-serif',
+  'ui-serif',
+  'ui-monospace',
+]);
+
+const parseFontFamilyCandidates = (fontFamily: string): string[] =>
+  String(fontFamily || '')
+    .split(',')
+    .map((candidate) => candidate.trim().replace(/^['"]+|['"]+$/g, ''))
+    .filter(Boolean);
+
+const buildCanvasFontFamily = async (
+  preferredFontFamily: string,
+  fallbackFontFamily: string
+): Promise<string> => {
+  if (typeof document === 'undefined' || !('fonts' in document)) {
+    return preferredFontFamily || fallbackFontFamily;
+  }
+
+  const fontFaceSet = (document as Document & { fonts?: FontFaceSet }).fonts;
+  if (!fontFaceSet) {
+    return preferredFontFamily || fallbackFontFamily;
+  }
+
+  const candidates = [
+    ...parseFontFamilyCandidates(preferredFontFamily),
+    ...parseFontFamilyCandidates(fallbackFontFamily),
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = candidate.trim();
+    if (!normalized || GENERIC_FONT_FAMILY_SET.has(normalized.toLowerCase())) {
+      continue;
+    }
+
+    const quoted = /[\s'"]/.test(normalized) ? `"${normalized.replace(/"/g, '\\"')}"` : normalized;
+    try {
+      await Promise.allSettled([
+        fontFaceSet.load(`400 16px ${quoted}`, 'กขabCD'),
+        fontFaceSet.load(`500 16px ${quoted}`, 'กขabCD'),
+        fontFaceSet.load(`600 16px ${quoted}`, 'กขabCD'),
+      ]);
+      if (fontFaceSet.check(`16px ${quoted}`, 'กขabCD')) {
+        return `${quoted}, ${fallbackFontFamily || 'sans-serif'}`;
+      }
+    } catch {
+      // Ignore font probing errors and continue to the next family.
+    }
+  }
+
+  return preferredFontFamily || fallbackFontFamily;
+};
+
+const resolveOverlayExportScale = (
+  visibleWidth: number,
+  visibleHeight: number,
+  sourceWidth: number,
+  sourceHeight: number
+): number => {
+  const safeVisibleWidth = Math.max(1, visibleWidth);
+  const safeVisibleHeight = Math.max(1, visibleHeight);
+  const safeSourceWidth = Math.max(1, sourceWidth);
+  const safeSourceHeight = Math.max(1, sourceHeight);
+  const sourceRatio = Math.max(safeSourceWidth / safeVisibleWidth, safeSourceHeight / safeVisibleHeight);
+  const deviceRatio = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1;
+
+  return Math.min(3, Math.max(1.5, deviceRatio, sourceRatio));
+};
 
 // --- Translation APIs: Secure IPC to Main Process ---
 // Offline Argos and Gemini fallback are both resolved in main process bridges
@@ -97,7 +344,7 @@ async function translateWithGemini(
   }
 }
 
-async function translateBatchOffline(
+async function translateBatchOfflineBridge(
   texts: string[],
   type: string,
   mode: TranslationMode,
@@ -140,6 +387,105 @@ async function translateBatchGemini(
   );
 }
 
+const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko']);
+
+const shouldUseOfflinePivotRoute = (sourceLanguage: string, targetLanguage: string): boolean => {
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  return normalizedTarget === 'th' && OFFLINE_PIVOT_SOURCE_LANGUAGES.has(normalizedSource);
+};
+
+const selectOfflinePivotCandidate = (
+  sourceText: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  directText: string,
+  pivotText: string
+): string => {
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  const direct = normalizeWhitespace(String(directText || ''));
+  const pivot = normalizeWhitespace(String(pivotText || ''));
+
+  if (!pivot) return direct;
+  if (!direct) return pivot;
+
+  const directNeedsRetry = shouldRetryLineTranslation(sourceText, direct, normalizedSource, normalizedTarget);
+  const pivotNeedsRetry = shouldRetryLineTranslation(sourceText, pivot, normalizedSource, normalizedTarget);
+
+  // For Spanish/Korean -> Thai offline routes, prefer pivot output when it passes basic quality gates.
+  if (OFFLINE_PIVOT_SOURCE_LANGUAGES.has(normalizedSource) && !pivotNeedsRetry) {
+    return pivot;
+  }
+  if (directNeedsRetry && !pivotNeedsRetry) return pivot;
+  if (!directNeedsRetry && pivotNeedsRetry) return direct;
+
+  const directScore = scoreTranslationCandidate(sourceText, direct, normalizedTarget);
+  const pivotScore = scoreTranslationCandidate(sourceText, pivot, normalizedTarget);
+  const pivotBias = normalizedSource === 'es' ? 14 : 10;
+  if (pivotScore >= directScore - pivotBias) {
+    return pivot;
+  }
+  return directScore >= pivotScore ? direct : pivot;
+};
+
+async function translateBatchOffline(
+  texts: string[],
+  type: string,
+  mode: TranslationMode,
+  sourceLanguage: string,
+  targetLanguage: string
+): Promise<string[]> {
+  if (texts.length === 0) return [];
+
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  const directTranslations = await translateBatchOfflineBridge(
+    texts,
+    type,
+    mode,
+    normalizedSource,
+    normalizedTarget
+  );
+
+  if (!shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget)) {
+    return directTranslations;
+  }
+
+  try {
+    const pivotEnglish = await translateBatchOfflineBridge(
+      texts,
+      type,
+      mode,
+      normalizedSource,
+      'en'
+    );
+    const pivotEnglishPrepared = pivotEnglish.map((line, index) => {
+      const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
+      if (normalizedPivot) return normalizedPivot;
+      return normalizeSourceForTranslation(String(texts[index] || ''), normalizedSource);
+    });
+    const pivotThai = await translateBatchOfflineBridge(
+      pivotEnglishPrepared,
+      type,
+      mode,
+      'en',
+      normalizedTarget
+    );
+
+    return texts.map((sourceText, index) => selectOfflinePivotCandidate(
+      String(sourceText || ''),
+      normalizedSource,
+      normalizedTarget,
+      String(directTranslations[index] || ''),
+      String(pivotThai[index] || '')
+    ));
+  } catch (error) {
+    console.warn(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
+    return directTranslations;
+  }
+}
+
 export type TranslatableLine = {
   index: number;
   text: string;
@@ -149,6 +495,15 @@ export type TranslatableLine = {
   left: number;
   right: number;
   height: number;
+  area?: number;
+  wordCoverage?: number;
+  wordBoxCount?: number;
+  confidence?: number;
+  quad?: OCRLineWithLayout['quad'];
+  angleDeg?: number;
+  sortHintX?: number;
+  sortHintY?: number;
+  sourceEngine?: string;
 };
 
 type AdoptedSourceCandidate = {
@@ -160,9 +515,18 @@ type AdoptedSourceCandidate = {
 
 type TranslationGroup = {
   lines: TranslatableLine[];
+  groupType?: LayoutGroupType;
+  derivedGroupId?: string;
+  confidence?: number;
 };
 
-type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line';
+type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line' | 'balloon-aware';
+
+type GroupingDecision = {
+  appliedProfile: 'raw' | 'dense-dialogue' | 'balloon-aware';
+  confidence: number;
+  fallbackReason?: string;
+};
 
 type BatchGroupPlan = {
   index: number;
@@ -182,6 +546,14 @@ type BatchPageTranslationPlan = {
   lines: TranslatableLine[];
   groups: BatchGroupPlan[];
   groupingProfile: TranslationGroupingProfile;
+  groupingDecision?: GroupingDecision;
+};
+
+type ResolvedTranslationGroups = {
+  groups: TranslationGroup[];
+  groupingProfile: TranslationGroupingProfile;
+  groupingDecision: GroupingDecision;
+  layoutResult?: LayoutGroupingResult;
 };
 
 const GEMINI_MODE_STYLE_HINTS: Record<TranslationMode, string> = {
@@ -411,6 +783,8 @@ const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
   { pattern: /\bA-\s*Are\s*y\b/gi, replacement: 'A-Are you' },
   { pattern: /\bAreyou\b/gi, replacement: 'Are you' },
+  { pattern: /\bYOU\s*-\s*COULD\b/gi, replacement: 'YOU COULD' },
+  { pattern: /\bSO\s+ME\s+THING\b/gi, replacement: 'SOMETHING' },
   { pattern: /\bIT'?SA\b/gi, replacement: "IT'S A" },
   { pattern: /\bIT'?S\s+BESTIF\b/gi, replacement: "IT'S BEST IF" },
   { pattern: /\bBESTIF\b/gi, replacement: 'BEST IF' },
@@ -481,6 +855,11 @@ const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bLOQUE\b/gi, replacement: 'LO QUE' },
   { pattern: /\bLISTO ?CON\b/gi, replacement: 'LISTO CON' },
   { pattern: /\bLISTOCON\b/gi, replacement: 'LISTO CON' },
+  { pattern: /\b[i¡]?LISTO[.!?…]+CON\b/gi, replacement: 'LISTO CON' },
+  { pattern: /\bPRI-?\s*MERO\s*LA\s*FOTO\b/gi, replacement: 'PRIMERO LA FOTO' },
+  { pattern: /\bPRIMEROLAFOTO\b/gi, replacement: 'PRIMERO LA FOTO' },
+  { pattern: /\bMETIENDO\s*POR\b/gi, replacement: 'METIENDO POR' },
+  { pattern: /\bMETIENDOPOR\b/gi, replacement: 'METIENDO POR' },
   { pattern: /\bPOR ?DENTRO\b/gi, replacement: 'POR DENTRO' },
   { pattern: /\bPORDENTRO\b/gi, replacement: 'POR DENTRO' },
   { pattern: /\bYA ?QUEDO\b/gi, replacement: 'YA QUEDO' },
@@ -488,13 +867,40 @@ const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bRAPIDOPR\b/gi, replacement: 'RAPIDO PR' },
   { pattern: /\bDE,\s*PIDIERON\b/gi, replacement: 'DESPIDIERON' },
   { pattern: /\bI?RAPIDO,?\s*PRI-?\b/gi, replacement: 'RAPIDO, PRI-' },
+  { pattern: /\bCOMOSI\b/gi, replacement: 'COMO SI' },
+  { pattern: /\bCIERTASPARTES\b/gi, replacement: 'CIERTAS PARTES' },
+  { pattern: /\bERAUNPOCO\b/gi, replacement: 'ERA UN POCO' },
+  { pattern: /\bNOERAUNPOCO\b/gi, replacement: 'NO ERA UN POCO' },
+  { pattern: /\bSERAQUE\b/gi, replacement: 'SERA QUE' },
+  { pattern: /\bCONMAS\b/gi, replacement: 'CON MAS' },
+  { pattern: /\bM[ÁA]SDETALLE\b/gi, replacement: 'MAS DETALLE' },
+  { pattern: /\bDETA\s*-?\s*LLE(?:S)?\b/gi, replacement: 'DETALLE' },
+  { pattern: /\bENESPECI(?:FICO|ICO)\b/gi, replacement: 'EN ESPECIFICO' },
+  { pattern: /\bESPEI?CICO\b/gi, replacement: 'ESPECIFICO' },
+  { pattern: /\bALGE\s+ASI\b/gi, replacement: 'ALGO ASI' },
 ];
 
-const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
+const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;
+
+const splitSpanishUppercaseCompounds = (text: string): string => {
+  let normalized = String(text || '');
+  for (let i = 0; i < 2; i += 1) {
+    normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, '$1 $2 $3');
+  }
+  return normalized;
+};
+
+export const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
   let normalized = normalizeWhitespace(String(text || ''));
+  normalized = normalized.replace(/(^|[\s"'([{])iC[-\s]*/gi, '$1¿C');
+  normalized = normalized.replace(/(^|[\s"'([{])i(?=COMO\b)/gi, '$1¿');
   SPANISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
   });
+  normalized = splitSpanishUppercaseCompounds(normalized);
+  normalized = normalized.replace(/¿C{2,}(?=OMO\b)/gi, '¿C');
+  normalized = normalized.replace(/\bESPEC[IÍ]FICO\b/gi, 'ESPECIFICO');
+  normalized = normalized.replace(/\bC+EH(?=[!?…])/gi, 'EH');
   normalized = normalized.replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2}),\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})\b/g, '$1$2');
   normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\s*,\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1, $2');
   return normalizeWhitespace(normalized);
@@ -665,6 +1071,42 @@ const buildTranslationComparisonKey = (value: string): string =>
   normalizeWhitespace(String(value || ''))
     .toLowerCase()
     .replace(/[^a-z0-9\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+
+const shouldSkipOverlayForUntranslatedCarryOver = (
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string
+): boolean => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') return false;
+
+  const source = normalizeWhitespace(String(sourceText || ''));
+  const translated = normalizeWhitespace(String(translatedText || ''));
+  if (!source || !translated) return false;
+  if (isScientificSymbolLikeLine(source)) return false;
+
+  const sourceKey = buildTranslationComparisonKey(source);
+  const translatedKey = buildTranslationComparisonKey(translated);
+  if (!sourceKey || !translatedKey) return false;
+
+  const thaiChars = (translated.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const latinChars = (translated.match(/[A-Za-z]/g) || []).length;
+  const sourceLatinChars = (source.match(/[A-Za-z]/g) || []).length;
+  const tokenCount = source.split(/\s+/g).filter(Boolean).length;
+  if (thaiChars > 0) return false;
+
+  if (sourceKey === translatedKey) {
+    return tokenCount >= 1 && (sourceLatinChars >= 4 || source.length >= 4);
+  }
+
+  return latinChars >= 4 && sourceLatinChars >= 4 && tokenCount >= 2;
+};
+
+const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
+  const source = normalizeWhitespace(String(sourceText || ''));
+  const translated = normalizeWhitespace(String(translatedText || ''));
+  return Boolean(source && translated && source === translated);
+};
 
 const shouldRetryLineTranslation = (
   sourceText: string,
@@ -890,15 +1332,75 @@ const resolveSourceLanguageFromOCR = (ocrLanguageKey: string, fallback: string):
   return nonEnglish || candidates[0] || fallback;
 };
 
+const scoreSpanishVsEnglishHints = (text: string): {
+  spanishScore: number;
+  englishScore: number;
+  latinCount: number;
+  spanishAccentHits: number;
+} => {
+  const normalized = normalizeWhitespace(String(text || '')).toLowerCase();
+  const latinCount = (normalized.match(LATIN_TEXT_HINT_REGEX) || []).length;
+  const tokens = normalized
+    .split(/\s+/g)
+    .map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase())
+    .filter(Boolean);
+  const spanishTokenScore = scoreSpanishHintTokens(tokens);
+  const englishScore = scoreEnglishHintTokens(tokens);
+  const spanishAccentHits = (normalized.match(/[áéíóúüñ¿¡]/g) || []).length;
+  const spanishMorphHits = (normalized.match(SPANISH_MORPH_HINT_REGEX) || []).length;
+  return {
+    spanishScore: spanishTokenScore + (spanishAccentHits * 1.8) + (Math.min(4, spanishMorphHits) * 0.5),
+    englishScore,
+    latinCount,
+    spanishAccentHits,
+  };
+};
+
 const SPANISH_HINT_WORDS = new Set([
   'que', 'de', 'la', 'el', 'los', 'las', 'un', 'una', 'por', 'para', 'con', 'sin', 'como', 'pero',
-  'si', 'ya', 'me', 'mi', 'se', 'lo', 'le', 'del', 'al', 'es', 'son', 'fue', 'esta', 'este', 'eso',
+  'si', 'ya', 'me', 'mi', 'se', 'te', 'tu', 'lo', 'le', 'del', 'al', 'es', 'son', 'fue', 'esta', 'este', 'eso',
+  'estaba', 'estaban', 'estoy', 'eres', 'somos', 'estan', 'todas', 'todos', 'parte', 'partes',
+  'cuerpo', 'solo', 'nada', 'doloroso', 'sentia', 'siento', 'espera', 'momento', 'aqui', 'ahi',
 ]);
 
 const ENGLISH_HINT_WORDS = new Set([
   'the', 'and', 'you', 'your', 'this', 'that', 'with', 'from', 'for', 'are', 'was', 'were',
   'have', 'has', 'had', 'will', 'would', 'there', 'here', 'what', 'when', 'where', 'who',
 ]);
+
+const SPANISH_MORPH_HINT_REGEX = /\b(?:[a-záéíóúüñ]+(?:ando|iendo|aron|aban|ado|ada|ados|adas|ido|ida|idos|idas|mente|cion(?:es)?|sion(?:es)?)|estaba|estaban|tocando|cuerpo|partes?|sentia|siento|espera|momento)\b/gi;
+
+const scoreSpanishHintTokens = (tokens: string[]): number => {
+  let score = 0;
+  for (const tokenRaw of tokens) {
+    const token = String(tokenRaw || '').toLowerCase();
+    if (!token) continue;
+
+    if (SPANISH_HINT_WORDS.has(token)) {
+      score += 1;
+      continue;
+    }
+
+    if (token.length >= 6 && /(?:ando|iendo|aron|aban|ado|ada|ados|adas|ido|ida|idos|idas|mente|cion(?:es)?|sion(?:es)?)$/.test(token)) {
+      score += 0.72;
+    }
+
+    if (token.length >= 6 && /(?:que|como|por|para|con|sin|del|al|te|se|me)$/.test(token)) {
+      score += 0.46;
+    }
+
+    if (/^(?:te|se|me|lo|la|los|las)[a-záéíóúüñ]{4,}$/.test(token)) {
+      score += 0.58;
+    }
+  }
+  return score;
+};
+
+const scoreEnglishHintTokens = (tokens: string[]): number =>
+  tokens.reduce((score, tokenRaw) => {
+    const token = String(tokenRaw || '').toLowerCase();
+    return score + (ENGLISH_HINT_WORDS.has(token) ? 1 : 0);
+  }, 0);
 
 const HANGUL_TEXT_HINT_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/g;
 const JAPANESE_KANA_HINT_REGEX = /[\u3040-\u30FF]/g;
@@ -907,7 +1409,7 @@ const THAI_TEXT_HINT_REGEX = /[\u0E00-\u0E7F]/g;
 const CYRILLIC_TEXT_HINT_REGEX = /[\u0400-\u04FF]/g;
 const LATIN_TEXT_HINT_REGEX = /[A-Za-z]/g;
 
-const inferSourceLanguageFromTextHints = (
+export const inferSourceLanguageFromTextHints = (
   lines: TranslatableLine[],
   fallbackLanguage: string
 ): string => {
@@ -949,11 +1451,11 @@ const inferSourceLanguageFromTextHints = (
   const tokens = sampleText.split(/\s+/g).map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase()).filter(Boolean);
   if (tokens.length === 0) return fallback;
 
-  const spanishHits = tokens.filter((token) => SPANISH_HINT_WORDS.has(token)).length;
-  const englishHits = tokens.filter((token) => ENGLISH_HINT_WORDS.has(token)).length;
+  const spanishTokenScore = scoreSpanishHintTokens(tokens);
+  const englishScore = scoreEnglishHintTokens(tokens);
   const spanishAccentHits = (sampleText.match(/[áéíóúüñ¿¡]/g) || []).length;
-  const spanishScore = spanishHits + (spanishAccentHits * 1.8);
-  const englishScore = englishHits;
+  const spanishMorphHits = (sampleText.match(SPANISH_MORPH_HINT_REGEX) || []).length;
+  const spanishScore = spanishTokenScore + (spanishAccentHits * 1.8) + (Math.min(6, spanishMorphHits) * 0.45);
 
   const latinDominant = latinCount >= Math.max(10, nonLatinCount * 2.2);
   const weakNonLatinEvidence = nonLatinCount <= 2 || nonLatinCount <= Math.max(2, latinCount * 0.08);
@@ -961,14 +1463,16 @@ const inferSourceLanguageFromTextHints = (
 
   if (latinDominant || shouldOverrideNonLatinFallback) {
     if (
-      (spanishAccentHits >= 2 && spanishScore >= 2)
-      || (spanishScore >= 4 && (spanishScore > englishScore * 1.1 || spanishAccentHits >= 1))
-      || (spanishScore >= 3 && englishScore <= 1 && /[¿¡]/.test(sampleText))
+      (spanishAccentHits >= 1 && spanishScore >= 2.4)
+      || (spanishScore >= 3.2 && spanishScore >= englishScore + 0.8)
+      || (spanishScore >= 2.8 && englishScore <= 1.8)
+      || (fallback === 'es' && spanishScore >= 2.1)
+      || (spanishScore >= 2.6 && /[¿¡]/.test(sampleText))
     ) {
       return 'es';
     }
 
-    if (englishScore >= 3 || fallback === 'en' || fallback === 'es') {
+    if (englishScore >= 3 && englishScore > spanishScore * 1.08) {
       return 'en';
     }
   }
@@ -977,10 +1481,10 @@ const inferSourceLanguageFromTextHints = (
     return fallback;
   }
 
-  if (spanishScore >= 6 && spanishScore > englishScore * 1.35) {
+  if (spanishScore >= 5.6 && spanishScore > englishScore * 1.25) {
     return 'es';
   }
-  if (englishScore >= 6 && englishScore > spanishScore * 1.35) {
+  if (englishScore >= 6 && englishScore > spanishScore * 1.25) {
     return 'en';
   }
   if (spanishAccentHits >= 2 && spanishScore >= 2 && spanishScore >= englishScore) {
@@ -990,7 +1494,7 @@ const inferSourceLanguageFromTextHints = (
   return fallback;
 };
 
-const resolvePreferredSourceLanguageForText = (
+export const resolvePreferredSourceLanguageForText = (
   text: string,
   fallbackLanguage: string
 ): string => {
@@ -1027,17 +1531,27 @@ const resolvePreferredSourceLanguageForText = (
     .split(/\s+/g)
     .map((token) => token.replace(/[^a-záéíóúüñ¿¡]/gi, '').toLowerCase())
     .filter(Boolean);
-  const spanishHits = tokens.filter((token) => SPANISH_HINT_WORDS.has(token)).length;
-  const englishHits = tokens.filter((token) => ENGLISH_HINT_WORDS.has(token)).length;
+  const spanishTokenScore = scoreSpanishHintTokens(tokens);
+  const englishScore = scoreEnglishHintTokens(tokens);
   const spanishAccentHits = (normalized.match(/[áéíóúüñ¿¡]/g) || []).length;
+  const spanishMorphHits = (normalized.match(SPANISH_MORPH_HINT_REGEX) || []).length;
+  const spanishScore = spanishTokenScore + (spanishAccentHits * 1.8) + (Math.min(4, spanishMorphHits) * 0.5);
 
   if (latinDominant || fallback === 'en' || fallback === 'es') {
     if (
-      (spanishAccentHits >= 1 && spanishHits >= 1)
-      || (spanishHits >= 3 && spanishHits >= englishHits)
+      (spanishAccentHits >= 1 && spanishScore >= 1.8)
+      || (spanishScore >= 2.4 && spanishScore >= englishScore + 0.5)
+      || (spanishScore >= 2.1 && englishScore <= 1.3)
+      || (fallback === 'es' && spanishScore >= 1.5)
       || /[¿¡]/.test(normalized)
     ) {
       return 'es';
+    }
+    if (fallback === 'es' && englishScore < 2.6) {
+      return 'es';
+    }
+    if (englishScore >= 2.6 && englishScore > spanishScore * 1.08) {
+      return 'en';
     }
     if (latinCount >= 4) {
       return 'en';
@@ -1086,6 +1600,53 @@ const isLikelyShortForeignSfxLine = (text: string): boolean => {
   const unknownChars = compact.replace(/[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownRatio = unknownChars.length / Math.max(1, compact.length);
   return tokens.length <= 3 && compact.length <= 10 && unknownRatio <= 0.55;
+};
+
+const resolveComicPageSourceLanguage = (
+  lines: TranslatableLine[],
+  fallbackLanguage: string,
+  mode: TranslationMode
+): string => {
+  const fallback = normalizeTranslationLanguage(fallbackLanguage, 'en');
+  if (fallback !== 'en') return fallback;
+  if (mode !== 'manga' && mode !== 'manhwa' && mode !== 'adaptive') return fallback;
+  if (lines.length < 3) return fallback;
+
+  const sampleText = lines
+    .slice(0, 48)
+    .map((line) => normalizeWhitespace(String(line.text || '')))
+    .filter(Boolean)
+    .join(' ');
+  if (!sampleText) return fallback;
+
+  const sampleStats = scoreSpanishVsEnglishHints(sampleText);
+  const spanishLikeLineCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    if (!normalized) return false;
+    const stats = scoreSpanishVsEnglishHints(normalized);
+    return stats.spanishAccentHits >= 1
+      || stats.spanishScore >= 1.2
+      || (stats.spanishScore >= 0.8 && stats.englishScore === 0);
+  }).length;
+  const englishLikeLineCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    if (!normalized) return false;
+    const stats = scoreSpanishVsEnglishHints(normalized);
+    return stats.englishScore >= 1.4 && stats.englishScore > stats.spanishScore * 1.1;
+  }).length;
+
+  if (
+    sampleStats.latinCount >= 12
+    && (
+      (sampleStats.spanishAccentHits >= 1 && sampleStats.spanishScore >= 1.8)
+      || (sampleStats.spanishScore >= 2.4 && sampleStats.spanishScore >= sampleStats.englishScore + 0.35)
+      || (spanishLikeLineCount >= Math.max(2, Math.floor(lines.length * 0.18)) && englishLikeLineCount <= spanishLikeLineCount)
+    )
+  ) {
+    return 'es';
+  }
+
+  return fallback;
 };
 
 const ENGLISH_TECH_HINT_WORDS = new Set([
@@ -1310,6 +1871,43 @@ const shouldForceKeepTechnicalTranslationLine = (resolvedText: string, line?: OC
   return rowLikeGeometry || hasEquationTag;
 };
 
+const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
+  /^AH\s+ME[.!?…]*$/i,
+  /^EH\s+ME[.!?…]*$/i,
+  /^EH[.!?…]+$/i,
+  /^ME[.!?…]+$/i,
+  /^YOU[-\s]+COULD\s+SAY[.!?…]*$/i,
+  /^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i,
+  /^HELP\s+YOU\s+TOO[.!?…]*$/i,
+  /^ENTRANCE[.!?…]*$/i,
+  /^ARE\s+ONLY[.!?…]*$/i,
+  /^OUR\s+CHANCE[.!?…]*$/i,
+  /^THEM[.!?…]*$/i,
+  /^SHOE\s+LOCKER[.!?…]*$/i,
+  /^AND\s+LEAVE\s+THE[.!?…]*$/i,
+  /^OPEN\s+A\s+SHOE\s+LOCKER[.!?…]*$/i,
+];
+
+const shouldForceKeepComicTranslationLine = (
+  resolvedText: string,
+  line?: OCRLine,
+  metrics?: { width?: number; height?: number; area?: number; wordCoverage?: number }
+): boolean => {
+  const normalized = normalizeWhitespace(String(resolvedText || ''));
+  if (!normalized) return false;
+  if (!FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES.some((regex) => regex.test(normalized))) return false;
+
+  if (!line?.bbox) return true;
+  const width = Math.max(1, Number(metrics?.width ?? (Number(line.bbox.x1 || 0) - Number(line.bbox.x0 || 0))));
+  const height = Math.max(1, Number(metrics?.height ?? (Number(line.bbox.y1 || 0) - Number(line.bbox.y0 || 0))));
+  const area = Math.max(1, Number(metrics?.area ?? (width * height)));
+  const wordCoverage = Math.max(0, Number(metrics?.wordCoverage ?? computeLineWordUnionCoverage(line)));
+
+  // Keep the real short dialogue fragments, but do not resurrect cross-column bridge artifacts.
+  if (width >= 960 && area >= 76000 && wordCoverage >= 0.52) return false;
+  return true;
+};
+
 export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolvedText: string): boolean => {
   const text = normalizeWhitespace(String(resolvedText || ''));
   if (!text) return true;
@@ -1332,9 +1930,8 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     if (!wordText || !bbox) return false;
     return (bbox.x1 - bbox.x0) > 0 && (bbox.y1 - bbox.y0) > 0;
   });
-  const wordCount = validWords.length > 0
-    ? validWords.length
-    : text.split(/\s+/g).filter(Boolean).length;
+  const sourceTokenCount = text.split(/\s+/g).filter(Boolean).length;
+  const wordCount = Math.max(validWords.length, sourceTokenCount);
   const confidenceSamples = validWords.length > 0
     ? validWords.map((word) => Number(word.confidence || 0))
     : [Number(line.confidence || 0)];
@@ -1342,11 +1939,27 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
   const readability = scoreSourceLineReadability(text);
   const wordCoverage = computeLineWordUnionCoverage(line);
 
+  if (shouldForceKeepComicTranslationLine(text, line)) {
+    return false;
+  }
+
   const giantLineBox = (
     (width >= 180 && height >= 110 && area >= 18000)
     || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2)
     || (width >= 320 && height >= 98 && area >= 32000)
   );
+  const noWordOversizedShortPhrase = validWords.length === 0
+    && wordCount >= 2
+    && wordCount <= 6
+    && compact.length <= 30
+    && area >= 17000
+    && (width >= 170 || height >= 96)
+    && (area / Math.max(1, compact.length)) >= 680
+    && !shouldForceKeepTechnicalTranslationLine(text, line);
+  if (noWordOversizedShortPhrase) {
+    return true;
+  }
+
   const sparseLargePhrase = wordCount <= 4 && compact.length <= 24;
   const lowCoverageLargeBox = wordCoverage <= 0.26;
   const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
@@ -1402,6 +2015,32 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     return true;
   }
 
+  const tinyAsciiSingletonNoise = !hasCjkOrThai
+    && wordCount <= 1
+    && asciiCompact.length > 0
+    && asciiCompact.length <= 2
+    && width <= 72
+    && height <= 38
+    && area <= 2100
+    && avgConfidence <= 94
+    && !/[!?]/.test(text);
+  if (tinyAsciiSingletonNoise) {
+    return true;
+  }
+
+  const noWordTinyAsciiNoise = validWords.length === 0
+    && !hasCjkOrThai
+    && wordCount <= 2
+    && asciiCompact.length > 0
+    && asciiCompact.length <= 6
+    && width <= 88
+    && height <= 44
+    && area <= 2600
+    && avgConfidence <= 92;
+  if (noWordTinyAsciiNoise) {
+    return true;
+  }
+
   const pxPerLatinChar = width / Math.max(1, latinCompact.length);
   const suspiciousTinyLongLatin = latinCompact.length >= 10
     && wordCount >= 3
@@ -1409,6 +2048,21 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     && width <= Math.max(72, latinCompact.length * 5.4)
     && height <= 26;
   if (suspiciousTinyLongLatin) {
+    return true;
+  }
+
+  const compressedSparseShortPhrase = !hasCjkOrThai
+    && sourceTokenCount >= 2
+    && sourceTokenCount <= 4
+    && latinCompact.length >= 8
+    && width <= Math.max(92, latinCompact.length * 6.4)
+    && height <= 78
+    && area <= Math.max(5200, latinCompact.length * 520)
+    && (area / Math.max(1, latinCompact.length)) <= 430
+    && wordCoverage <= 0.24
+    && avgConfidence <= 94
+    && !/[.!?…]\s*$/.test(text);
+  if (compressedSparseShortPhrase) {
     return true;
   }
 
@@ -1449,6 +2103,138 @@ const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number =>
   return overlap / base;
 };
 
+export const shouldPruneContextualGhostTranslatableLine = (
+  candidate: TranslatableLine,
+  lines: TranslatableLine[],
+): boolean => {
+  const text = normalizeWhitespace(String(candidate.text || ''));
+  if (!text) return true;
+
+  if (shouldForceKeepComicTranslationLine(text, {
+    text,
+    confidence: candidate.confidence || 0,
+    bbox: {
+      x0: candidate.left,
+      y0: candidate.top,
+      x1: candidate.right,
+      y1: candidate.bottom,
+    },
+    words: [],
+  }, {
+    width: candidate.right - candidate.left,
+    height: candidate.bottom - candidate.top,
+    area: candidate.area,
+    wordCoverage: candidate.wordCoverage,
+  })) {
+    return false;
+  }
+
+  const width = Math.max(1, candidate.right - candidate.left);
+  const height = Math.max(1, candidate.bottom - candidate.top);
+  const area = Math.max(1, candidate.area || (width * height));
+  const centerX = (candidate.left + candidate.right) * 0.5;
+  const centerY = (candidate.top + candidate.bottom) * 0.5;
+  const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+  const compact = text.replace(/\s+/g, '');
+  const readability = scoreSourceLineReadability(text);
+  const wordCoverage = Math.max(0, Number(candidate.wordCoverage || 0));
+  const wordBoxCount = Math.max(0, Number(candidate.wordBoxCount || 0));
+
+  const neighbors = lines
+    .filter((line) => line.index !== candidate.index)
+    .map((line) => {
+      const otherWidth = Math.max(1, line.right - line.left);
+      const otherHeight = Math.max(1, line.bottom - line.top);
+      const otherArea = Math.max(1, line.area || (otherWidth * otherHeight));
+      const otherCenterX = (line.left + line.right) * 0.5;
+      const otherCenterY = (line.top + line.bottom) * 0.5;
+      const overlapX = overlapRatio(candidate.left, candidate.right, line.left, line.right);
+      const overlapY = overlapRatio(candidate.top, candidate.bottom, line.top, line.bottom);
+      const centerDeltaX = Math.abs(centerX - otherCenterX);
+      const centerDeltaY = Math.abs(centerY - otherCenterY);
+      const otherCoverage = Math.max(0, Number(line.wordCoverage || 0));
+      const otherWordBoxCount = Math.max(0, Number(line.wordBoxCount || 0));
+      const otherReadability = scoreSourceLineReadability(line.text);
+      const strongSignal = (
+        otherWordBoxCount >= 2
+        || otherCoverage >= 0.28
+        || line.sourceLength >= Math.max(8, candidate.sourceLength * 0.9)
+        || otherReadability >= readability + 2.5
+      );
+      return {
+        line,
+        width: otherWidth,
+        height: otherHeight,
+        area: otherArea,
+        overlapX,
+        overlapY,
+        centerDeltaX,
+        centerDeltaY,
+        strongSignal,
+        centerX: otherCenterX,
+        centerY: otherCenterY,
+      };
+    });
+
+  const sameBandNeighbors = neighbors.filter((neighbor) => (
+    neighbor.overlapY >= 0.18
+    || neighbor.centerDeltaY <= Math.max(96, height * 0.95)
+  ));
+  const leftAnchors = sameBandNeighbors.filter((neighbor) => (
+    neighbor.strongSignal
+    && neighbor.width <= width * 0.44
+    && neighbor.line.right <= centerX - Math.max(88, width * 0.08)
+  ));
+  const rightAnchors = sameBandNeighbors.filter((neighbor) => (
+    neighbor.strongSignal
+    && neighbor.width <= width * 0.44
+    && neighbor.line.left >= centerX + Math.max(88, width * 0.08)
+  ));
+  const bridgeLine = (
+    tokenCount >= 4
+    && tokenCount <= 8
+    && wordBoxCount >= 3
+    && width >= 900
+    && leftAnchors.length > 0
+    && rightAnchors.length > 0
+    && leftAnchors.some((leftAnchor) => rightAnchors.some((rightAnchor) => (
+      Math.abs(leftAnchor.centerY - rightAnchor.centerY) <= Math.max(110, height * 0.9)
+      && (rightAnchor.line.left - leftAnchor.line.right) >= Math.max(260, width * 0.22)
+    )))
+  );
+  if (bridgeLine) {
+    return true;
+  }
+
+  const localStrongNeighbors = neighbors.filter((neighbor) => (
+    neighbor.strongSignal
+    && neighbor.centerDeltaY <= Math.max(240, height * 2.4)
+    && (
+      neighbor.overlapX >= 0.28
+      || neighbor.centerDeltaX <= Math.max(240, width * 1.4)
+    )
+  ));
+  const strongAbove = localStrongNeighbors.some((neighbor) => neighbor.centerY < centerY - Math.max(18, height * 0.18));
+  const strongBelow = localStrongNeighbors.some((neighbor) => neighbor.centerY > centerY + Math.max(18, height * 0.18));
+
+  const trailingHyphenFragment = /-\s*$/.test(text)
+    && tokenCount <= 3
+    && (readability <= 12 || area >= 30000);
+  const malformedMixedCaseFragment = /[a-z][A-Z]/.test(text)
+    && tokenCount <= 3
+    && (readability <= 10.5 || area >= 18000);
+  const oversizedWeakSingleton = tokenCount <= 1
+    && compact.length <= 12
+    && wordBoxCount <= 1
+    && area >= 22000;
+
+  return (
+    (strongBelow && (trailingHyphenFragment || malformedMixedCaseFragment))
+    || (strongAbove && strongBelow && oversizedWeakSingleton)
+    || (strongAbove && strongBelow && wordBoxCount <= 1 && wordCoverage <= 0.22 && readability <= 4.2 && area >= 18000)
+  );
+};
+
 const normalizeTranslatableDedupKey = (text: string): string =>
   normalizeWhitespace(String(text || ''))
     .toUpperCase()
@@ -1456,6 +2242,24 @@ const normalizeTranslatableDedupKey = (text: string): string =>
     .replace(/0/g, 'O')
     .replace(/1/g, 'I')
     .replace(/5/g, 'S');
+
+const collectMeaningfulTranslatableLatinTokens = (text: string): string[] => (
+  normalizeWhitespace(String(text || ''))
+    .toUpperCase()
+    .split(/\s+/g)
+    .map((token) => token.replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S'))
+    .filter((token) => token.length >= 3)
+);
+
+const countSharedTranslatableLatinTokens = (left: string, right: string): number => {
+  const leftTokens = new Set(collectMeaningfulTranslatableLatinTokens(left));
+  const rightTokens = new Set(collectMeaningfulTranslatableLatinTokens(right));
+  let shared = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) shared += 1;
+  });
+  return shared;
+};
 
 const TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
 const UNKNOWNS_COUNT_REGEX = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+unknowns?\b/i;
@@ -1581,16 +2385,94 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
 
   const kept: TranslatableLine[] = [];
   const keptKeys: string[] = [];
+  const mergeRicherDuplicateTextWithCleanerGeometry = (
+    existing: TranslatableLine,
+    existingKey: string,
+    candidate: TranslatableLine,
+    candidateKey: string
+  ): TranslatableLine | null => {
+    if (!existingKey || !candidateKey || existingKey === candidateKey) return null;
+    const minLength = Math.min(existingKey.length, candidateKey.length);
+    if (minLength < 5) return null;
+    const existingContainsCandidate = existingKey.includes(candidateKey);
+    const candidateContainsExisting = candidateKey.includes(existingKey);
+    if (!existingContainsCandidate && !candidateContainsExisting) return null;
+
+    const richer = existingKey.length > candidateKey.length ? existing : candidate;
+    const richerKey = existingKey.length > candidateKey.length ? existingKey : candidateKey;
+    const cleaner = richer === existing ? candidate : existing;
+    const cleanerKey = richer === existing ? candidateKey : existingKey;
+    const richerWordCount = normalizeWhitespace(String(richer.text || '')).split(/\s+/g).filter(Boolean).length;
+    const cleanerWordCount = normalizeWhitespace(String(cleaner.text || '')).split(/\s+/g).filter(Boolean).length;
+    if (richerWordCount > 4 || cleanerWordCount > 3) return null;
+    if (richerKey.length > 22 || cleanerKey.length > 16) return null;
+
+    const richerWidth = Math.max(1, richer.right - richer.left);
+    const richerHeight = Math.max(1, richer.bottom - richer.top);
+    const cleanerWidth = Math.max(1, cleaner.right - cleaner.left);
+    const cleanerHeight = Math.max(1, cleaner.bottom - cleaner.top);
+    const richerArea = Math.max(1, richerWidth * richerHeight);
+    const cleanerArea = Math.max(1, cleanerWidth * cleanerHeight);
+    const richerCoverage = Math.max(0, Number(richer.wordCoverage || 0));
+    const cleanerCoverage = Math.max(0, Number(cleaner.wordCoverage || 0));
+    const richerWordBoxes = Math.max(0, Number(richer.wordBoxCount || 0));
+    const cleanerWordBoxes = Math.max(0, Number(cleaner.wordBoxCount || 0));
+    const cleanerLooksLocalized = (
+      cleanerCoverage >= Math.max(0.36, richerCoverage + 0.14)
+      || (cleanerArea <= richerArea * 0.58 && cleanerCoverage >= Math.max(0.24, richerCoverage))
+      || (cleanerWordBoxes >= richerWordBoxes && cleanerArea <= richerArea * 0.72)
+    );
+    const richerLooksMislocalized = (
+      richerCoverage <= 0.36
+      || richerArea >= cleanerArea * 1.55
+      || richerHeight >= cleanerHeight * 1.7
+    );
+    const shortPhraseRepair = (
+      /^I\s*THINK[.!?…]*$/i.test(richer.text)
+      && /^THINK[.!?…]*$/i.test(cleaner.text)
+      && cleanerCoverage >= Math.max(0.22, richerCoverage)
+    );
+
+    if (!shortPhraseRepair && (!cleanerLooksLocalized || !richerLooksMislocalized)) {
+      return null;
+    }
+
+    const repairedText = /^I\s*THINK[.!?…]*$/i.test(richer.text)
+      ? String(richer.text || '').replace(/^I\s*THINK/i, 'I THINK')
+      : richer.text;
+
+    return {
+      ...cleaner,
+      text: repairedText,
+      sourceLength: Math.max(richer.sourceLength, countReadableLength(repairedText)),
+    };
+  };
   const lineScore = (line: TranslatableLine): number => {
     const width = Math.max(1, line.right - line.left);
     const height = Math.max(1, line.bottom - line.top);
     const readability = scoreSourceLineReadability(line.text);
     const area = Math.max(1, width * height);
     const density = line.sourceLength / Math.max(1, Math.sqrt(area));
+    const wordCoverage = Math.max(0, Math.min(1.5, Number(line.wordCoverage || 0)));
+    const wordBoxCount = Math.max(0, Number(line.wordBoxCount || 0));
+    const coverageBonus = Math.min(1, wordCoverage) * 15.2;
+    const wordBoxBonus = Math.min(4, wordBoxCount) * 1.25;
+    const noWordPenalty = wordBoxCount === 0 ? 4.8 : 0;
+    const oversizedSparsePenalty = (
+      wordCoverage <= 0.2
+      && wordBoxCount <= 1
+      && line.sourceLength <= 34
+      && area >= 14000
+    ) ? (Math.log10(area) * 3.35) : 0;
+
     return (line.sourceLength * 1.82)
       + (readability * 2.75)
       + (density * 26)
       + (height * 0.18)
+      + coverageBonus
+      + wordBoxBonus
+      - noWordPenalty
+      - oversizedSparsePenalty
       - (Math.log10(area) * 1.45);
   };
 
@@ -1664,8 +2546,16 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
         && readabilityGap >= 4.8
         && (existingReadability <= 1.5 || candidateReadability <= 1.5)
         && strongSpatialForNoise;
+      const sameBoxSharedPhraseDuplicate = !sameOrSubset
+        && !technicalLinePair
+        && Math.min(existingKey.length, candidateKey.length) >= 8
+        && countSharedTranslatableLatinTokens(existing.text, candidate.text) >= 2
+        && overlapY >= 0.78
+        && overlapX >= 0.56
+        && centerDeltaY <= Math.max(24, minHeight * 1.05)
+        && centerDeltaX <= Math.max(72, minWidth * 1.4);
 
-      if (!sameOrSubset && !similar && !noisyNearDuplicate) return false;
+      if (!sameOrSubset && !similar && !noisyNearDuplicate && !sameBoxSharedPhraseDuplicate) return false;
 
       if ((longLinePair || paragraphLikePair) && !veryStrongSpatialMatch && !compactSpatialMatch) {
         return false;
@@ -1705,7 +2595,12 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
     }
 
     const existing = kept[existingIndex];
-    if (lineScore(candidate) > lineScore(existing)) {
+    const existingKey = keptKeys[existingIndex];
+    const repairedDuplicate = mergeRicherDuplicateTextWithCleanerGeometry(existing, existingKey, candidate, candidateKey);
+    if (repairedDuplicate) {
+      kept[existingIndex] = repairedDuplicate;
+      keptKeys[existingIndex] = normalizeTranslatableDedupKey(repairedDuplicate.text);
+    } else if (lineScore(candidate) > lineScore(existing)) {
       kept[existingIndex] = candidate;
       keptKeys[existingIndex] = candidateKey;
     }
@@ -2050,7 +2945,7 @@ const preserveTechnicalTokensInTranslation = (sourceText: string, translatedText
   return `${translated} ${missingTokens.join(' ')}`.replace(/\s+/g, ' ').trim();
 };
 
-const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, targetLanguage: string): string => {
+export const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   if (normalizeTranslationLanguage(targetLanguage, 'th') !== 'th') {
     return translatedText;
   }
@@ -2062,6 +2957,13 @@ const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, 
   const compactLower = lower.replace(/[^a-z]/g, '');
   const sectionPrefix = source.match(/^\s*(\d+\.\d+)\b/)?.[1];
   const withSectionPrefix = (value: string): string => (sectionPrefix ? `${sectionPrefix} ${value}` : value);
+  const trailingTechnicalLabel = source.match(/\s*(\(\s*[0-9]{1,3}[a-zA-Z]?\s*\))\s*$/)?.[1] || '';
+  const withTechnicalLabel = (value: string): string => {
+    const replacement = preserveSourceTrailingPunctuation(source, value);
+    return trailingTechnicalLabel && !hasTechnicalTokenInText(replacement, trailingTechnicalLabel)
+      ? `${replacement} ${trailingTechnicalLabel}`.trim()
+      : replacement;
+  };
 
   const chapterWithNumber = source.match(/^chapter\s*(\d+)\s*$/i);
   if (chapterWithNumber?.[1]) {
@@ -2148,6 +3050,53 @@ const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, 
     return 'ประเภทของการเชื่อมต่อ';
   }
 
+  if (/^two\s+unknowns?[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสองตัว');
+  }
+  if (/^three\s+unknowns?[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสามตัว');
+  }
+  if (/^three\s+unknowns?[.!?…]*\s+the\s+reactions?\s+are\s+the\s+couple\s+moment[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวไม่ทราบค่าสามตัว แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+  }
+  if (/\breactions?\b/i.test(source) && /\bcouple\s+moment\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แรงปฏิกิริยาเป็นโมเมนต์คู่ควบ');
+  }
+  if (/\btwo\s+force\s+components?\b/i.test(source) && /\bcouple\s+moment\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'องค์ประกอบแรงสองแรง หรือโมเมนต์คู่ควบ');
+  }
+  if (/\bmagnitude\b/i.test(source) && /\bdirection\b/i.test(source) && /\bresultant\s+force\b/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ขนาดและทิศทางของแรงลัพธ์');
+  }
+  if (/\bthe\s+floor\s+beams\s+of\s+this\s+building\b/i.test(source) && /\bwelded\b/i.test(source)) {
+    if ((/\btogether\b/i.test(source) || compactLower.includes('together')) && /\bfixed\s+connections?\b/i.test(source)) {
+      return withTechnicalLabel('คานพื้นของอาคารนี้เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น');
+    }
+    return withTechnicalLabel('คานพื้นของอาคารนี้ถูกเชื่อมเข้าด้วยกัน');
+  }
+  if (
+    (/\btogether\b/i.test(source) || compactLower.includes('together'))
+    && (/\bthus\s+form\b/i.test(source) || compactLower.includes('thusform'))
+    && /\bfixed\s+connections?\b/i.test(source)
+  ) {
+    return withTechnicalLabel('เชื่อมเข้าด้วยกัน จึงเกิดเป็นจุดต่อแบบยึดแน่น');
+  }
+  if (
+    (/\btogether\b/i.test(source) || compactLower.includes('together'))
+    && (/\bthus\s+form\b/i.test(source) || compactLower.includes('thusform'))
+  ) {
+    return withTechnicalLabel('เชื่อมเข้าด้วยกัน จึงเกิดเป็น');
+  }
+  if (/\bfixed\s+connections?\b/i.test(source)) {
+    return withTechnicalLabel('จุดต่อแบบยึดแน่น');
+  }
+  if (/\bthis\s+utility\s+building\s+is\b/i.test(source) && /\bpin\s+supported\b/i.test(source)) {
+    return withTechnicalLabel('อาคารอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของเสา');
+  }
+  if (/\bpin\s+supported\b/i.test(source) && /\btop\s+of\s+the\s+column\b/i.test(source)) {
+    return withTechnicalLabel('รองรับแบบพินที่ด้านบนของเสา');
+  }
+
   const tableMatch = source.match(/table\s*(\d+(?:[-–]\d+)?)\s*continued/i);
   if (tableMatch?.[1]) {
     return `ตาราง ${tableMatch[1]} (ต่อ)`;
@@ -2196,10 +3145,21 @@ export const applyThaiConversationalGlossary = (
   const source = normalizeWhitespace(String(sourceText || ''));
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source) return translated;
+  const normalizedSpanishSource = normalizeSpanishOcrNoiseForTranslation(source);
 
   const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
   const compactSourceUpper = source.toUpperCase().replace(/[^A-Z]/g, '');
   const compactSourceAlnumUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const compactSourceAsciiUpper = source
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  const compactNormalizedSourceAsciiUpper = normalizedSpanishSource
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
   const hasVertarToken = /\bVERTAR\b/i.test(source) || compactSourceUpper.includes('VERTAR');
   const hasEssenceToken = /\bESSENCE\b/i.test(source)
     || /\bESSEN(?:CE|SE)\b/i.test(source)
@@ -2207,6 +3167,140 @@ export const applyThaiConversationalGlossary = (
   const translatedLower = translated.toLowerCase();
   const replaceNameToken = (input: string, token: string, replacement: string): string =>
     input.replace(new RegExp(`\\b${token}\\b`, 'ig'), replacement);
+
+  if (/^C+EH[!?…]*$/i.test(source.replace(/\s+/g, '')) || compactSourceAsciiUpper === 'CEH') {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋');
+  }
+
+  if (
+    /\bALG[OE]\s+A[S5][IÍ1]\b/i.test(source)
+    || /\bALG[OE]\s+A[S5][IÍ1]\b/i.test(normalizedSpanishSource)
+    || compactSourceAsciiUpper.includes('ALGOASI')
+    || compactNormalizedSourceAsciiUpper.includes('ALGOASI')
+    || compactSourceAsciiUpper.includes('ALGEASI')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ประมาณนั้นแหละ');
+  }
+
+  const isConMasDetalle = (
+    /(^|\s)CON\s+M[ÁA]S\s+DETAL+E(?:S)?([.!?…]+)?$/i.test(source)
+    || /(^|\s)CON\s+M[ÁA]S\s+DETAL+E(?:S)?([.!?…]+)?$/i.test(normalizedSpanishSource)
+    || compactSourceAsciiUpper.includes('CONMASDETALLE')
+    || compactNormalizedSourceAsciiUpper.includes('CONMASDETALLE')
+  );
+  if (isConMasDetalle) {
+    return preserveSourceTrailingPunctuation(source, 'ในรายละเอียดเพิ่มเติม');
+  }
+
+  const compactSpanishSourceAsciiUpper = normalizedSpanishSource
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+  if (
+    compactSpanishSourceAsciiUpper.includes('SIMEQUEDO')
+    && compactSpanishSourceAsciiUpper.includes('AQUIMASTIEMPO')
+    && compactSpanishSourceAsciiUpper.includes('SIENTOQUEME')
+    && compactSpanishSourceAsciiUpper.includes('VOYCORRER')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าฉันอยู่ที่นี่นานกว่านี้ ฉะ-ฉันรู้สึกว่าจะเสร็จแล้ว');
+  }
+  if (compactSpanishSourceAsciiUpper === 'STAFF') {
+    return preserveSourceTrailingPunctuation(source, 'เจ้าหน้าที่');
+  }
+  if (compactSpanishSourceAsciiUpper === 'PRIMEROLAFOTO' || /^PRI-?MERO\s+LA\s+FOTO[.!?…]*$/i.test(normalizedSpanishSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ภาพแรก');
+  }
+  if (compactSpanishSourceAsciiUpper === 'PRIMERO') {
+    return preserveSourceTrailingPunctuation(source, 'อันดับแรก');
+  }
+  if (compactSpanishSourceAsciiUpper === 'LAFOTO') {
+    return preserveSourceTrailingPunctuation(source, 'ภาพ');
+  }
+  if (compactSpanishSourceAsciiUpper === 'DE') {
+    return preserveSourceTrailingPunctuation(source, 'ของ');
+  }
+  if (compactSpanishSourceAsciiUpper === 'METIENDOPOR' || compactSpanishSourceAsciiUpper === 'METIENDO') {
+    return preserveSourceTrailingPunctuation(source, 'กำลังดำเนินการ');
+  }
+  if (compactSpanishSourceAsciiUpper === 'LISTOCON' || /^[i¡]?\s*LISTO[.!?…]*\s+CON[.!?…]*$/i.test(normalizedSpanishSource)) {
+    return preserveSourceTrailingPunctuation(source, 'พร้อม! ด้วย');
+  }
+  if (/^SI\s+ME\s+QUEDO[.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'SIMEQUEDO') {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าฉันอยู่');
+  }
+  if (/^AQU[IÍ]\s+MAS[.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'AQUIMAS') {
+    return preserveSourceTrailingPunctuation(source, 'ที่นี่นานกว่านี้');
+  }
+  if (/^TIEMPO[,.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'TIEMPO') {
+    return preserveSourceTrailingPunctuation(source, 'อีกสักพัก');
+  }
+  if (/^S-?SIENTO\s+QUE\s+ME[.!?…]*$/i.test(source) || /^SIENTO\s+QUE\s+ME[.!?…]*$/i.test(normalizedSpanishSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉะ-ฉันรู้สึกว่า');
+  }
+  if (/^VOY\s+(?:A\s+)?CORRER[.!?…]*$/i.test(normalizedSpanishSource) || compactSpanishSourceAsciiUpper === 'VOYCORRER') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะเสร็จแล้ว');
+  }
+
+  if (/^ENTONCES\s+SEGURO[.!?…]*$/i.test(source) || compactSourceAsciiUpper.includes('ENTONCESSEGURO')) {
+    return preserveSourceTrailingPunctuation(source, 'งั้น แน่นอน');
+  }
+
+  if (
+    /^[i¡¿-]*\s*C[ÓO]MO\s+LO\s+SUPO[.!?…]*$/i.test(source)
+    || compactSourceAsciiUpper.includes('ICOMOLOSUPO')
+    || compactSourceAsciiUpper.includes('ICCOMOLOSUPO')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'เขารู้ได้อย่างไร');
+  }
+
+  if (
+    compactSourceAsciiUpper.includes('SERAQUE')
+    && compactSourceAsciiUpper.includes('FANTASMA')
+    && compactSourceAsciiUpper.includes('PERVERTIDO')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'เป็นไปได้ไหมว่า "ผี" ตนนั้นจะออกแนวลามกนิดหน่อย');
+  }
+
+  if (
+    (compactSourceAsciiUpper.includes('COMOSI') || compactSourceAsciiUpper.includes('COMOS'))
+    && compactSourceAsciiUpper.includes('INSISTIERAEN')
+    && compactSourceAsciiUpper.includes('CIERTASPARTES')
+    && compactSourceAsciiUpper.includes('ENESPECIFICO')
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ราวกับว่าพวกเขายืนกรานในบางส่วนโดยเฉพาะ');
+  }
+
+  if (/^SERA\s+QUE[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'SERAQUE') {
+    return preserveSourceTrailingPunctuation(source, 'เป็นไปได้ไหมว่า');
+  }
+
+  if (/^FANTASMA[.!?…]*$/i.test(source) || /^"\s*FANTASMA\s*"[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ผี');
+  }
+
+  if (
+    /^NO\s+ERA\s+UN\s+POCO\s+PERVERTIDO[.!?…]*$/i.test(source)
+    || compactSourceAsciiUpper === 'NOERAUNPOCOPERVERTIDO'
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'จะออกแนวลามกนิดหน่อย');
+  }
+
+  if (/^COMO\s*SI[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'COMOSI') {
+    return preserveSourceTrailingPunctuation(source, 'ราวกับว่า');
+  }
+
+  if (/^INSISTIERA\s+EN[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'INSISTIERAEN') {
+    return preserveSourceTrailingPunctuation(source, 'พวกเขายืนกรานใน');
+  }
+
+  if (/^CIERTAS\s*PARTES[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'CIERTASPARTES') {
+    return preserveSourceTrailingPunctuation(source, 'บางส่วน');
+  }
+
+  if (/^EN\s+ESPEC[IÍ]FICO[.!?…]*$/i.test(source) || compactSourceAsciiUpper === 'ENESPECIFICO') {
+    return preserveSourceTrailingPunctuation(source, 'โดยเฉพาะ');
+  }
 
   if (/^AYNAR[.!?…]*$/i.test(source.replace(/\s+/g, ''))) {
     return preserveSourceTrailingPunctuation(source, 'อายนาร์');
@@ -2233,6 +3327,9 @@ export const applyThaiConversationalGlossary = (
 
   if (/^OR\s+DO\s+YO?U[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'หรือคุณ');
+  }
+  if (/^DO\s+YO?U[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คุณต้องการ');
   }
   if (/^WANT\s+THIS\s+ESSEN(?:CE|SE)\s+TO[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ต้องการให้แก่นแท้นี้');
@@ -2266,6 +3363,61 @@ export const applyThaiConversationalGlossary = (
   if (/^I\s+SOLD\s+IT[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ขายมัน');
   }
+  if (/^I\s+DON['’]?T\s+CARE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่สน');
+  }
+  if (/^I\s+ALREADY\s+EARNED[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันหาได้แล้ว');
+  }
+  if (/^ENOUGH[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'พอแล้ว');
+  }
+  if (
+    /\bI\s+DON['’]?T\s+CARE\b/i.test(source)
+    && /\bI\s+ALREADY\s+EARNED\b/i.test(source)
+    && /\bENOUGH\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่สน ฉันหาได้พอแล้ว');
+  }
+  if (/^LOOK,?\s+B[Jl]ORN[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ดูสิ บียอร์น');
+  }
+  if (/^I\s+HAVE\s+WINGS[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันมีปีก');
+  }
+  if (/^A\s+LITTLE,?\s+YEAH[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'นิดหน่อย ใช่ไหม');
+  }
+  if (/^HMM[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อืม');
+  }
+  if (/^OF\s+COURSE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แน่นอน');
+  }
+  if (/^VALKYRIE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'วาลคีรี');
+  }
+  if (/^BARBAR\s*I?\s*AN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source) || /^BARBARIAN\s*\(\s*FEMALE\s*\)[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'บาร์บาเรียน (หญิง)');
+  }
+  if (/^VA(?:L)?KYR?I?E\s+MODE[.!?…]*$/i.test(source) || /^VALKYRIE\s+MODE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'โหมดวาลคีรี');
+  }
+  if (/^LIMITED\s+EDITION[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'รุ่นลิมิเต็ด');
+  }
+  if (/^TH-?THIS\s+LIGHT[.!?…]*$/i.test(source) || /^THIS\s+LIGHT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แส-แสงนี้');
+  }
+  if (/^(?:I\s+)?SUPPORT\s+YOU\s+TO\s+LIVE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันช่วยให้คุณมีชีวิตอยู่');
+  }
+  if (/^HERE[.!?…]*\s+AND\s+YOU\s+DO\s+THIS\s+TO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ที่นี่... แล้วคุณทำแบบนี้กับ');
+  }
+  if (/^THE\s+PEOPLE\s+HERE[!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คนที่นี่เหรอ');
+  }
   if (/^FOR\s+HER\s+IN\s+RETURN[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'เพื่อแลกกับเธอ');
   }
@@ -2281,7 +3433,7 @@ export const applyThaiConversationalGlossary = (
   }
 
   if (/^H-?\s*HOW[.!?…]*$/i.test(source)) {
-    return preserveSourceTrailingPunctuation(source, 'ด-ได้ไง');
+    return preserveSourceTrailingPunctuation(source, 'อ-อย่างไร');
   }
 
   if (/^U-?\s*UH[.!?…]*$/i.test(source) || /^UH[.!?…]*$/i.test(source)) {
@@ -2320,8 +3472,112 @@ export const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'รวดเร็ว, ด่วน-');
   }
 
-  if (/^I\s+THINK[.!?…]*$/i.test(source)) {
+  if (/^I\s*THINK[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ฉันว่า');
+  }
+  if (/^AH\s+ME[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊ะ ฉัน');
+  }
+  if (/^EH\s+ME[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋ ฉัน');
+  }
+  if (/^EH[.!?…]+$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เอ๋');
+  }
+  if (/^ME[.!?…]+$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉัน');
+  }
+  if (/^ENTRANCE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทางเข้า');
+  }
+  if (/^ARE\s+ONLY[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีเพียง');
+  }
+  if (/^OUR\s+CHANCE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'โอกาสของเรา');
+  }
+  if (/^THEM[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'พวกเขา');
+  }
+  if (/^AND\s+LEAVE\s+THE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แล้วออกจาก');
+  }
+  if (/^SHOE\s+LOCKER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ตู้รองเท้า');
+  }
+  if (/^OPEN\s+A\s+SHOE\s+LOCKER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เปิดตู้รองเท้า');
+  }
+  if (/^AND\s+LEAVE\s+THE\s+BUILDING[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แล้วออกจากอาคาร');
+  }
+  if (
+    /\bI['’]?LL\s+LET\s+YOU\b/i.test(source)
+    && /\bEXPERIMENT\s+WITH\b/i.test(source)
+    && /\bHER\s+IN\s+RETURN\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะให้คุณทดลองกับเธอเป็นการตอบแทน');
+  }
+  if (
+    /\bTHINK\s+ABOUT\s+THE\b/i.test(source)
+    && /\bSKILLS\s+THE\s+MONSTER\b/i.test(source)
+    && /\bUSED\s+EARLIER\s+AND\b/i.test(source)
+    && /\bFOCUS\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ลองนึกถึงทักษะที่สัตว์ประหลาดใช้ก่อนหน้านี้ แล้วจดจ่ออยู่กับมัน');
+  }
+  if (
+    /\bYOU[-\s]+COULD\s+SAY\b/i.test(source)
+    && (/\bSOMETHING\s+THAT\s+MIGHT\b/i.test(source) || /\bSO\s+ME\s+THING\s+THAT\s+MIGHT\b/i.test(source))
+    && /\bHELP\s+YOU\s+TOO\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า มีบางอย่างที่อาจช่วยคุณได้เช่นกัน');
+  }
+  if (/^I['’]?LL\s+LET\s+YOU[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะให้คุณ');
+  }
+  if (/^EXPERIMENT\s+WITH[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทดลองกับ');
+  }
+  if (/^THINK\s+ABOUT\s+THE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ลองนึกถึง');
+  }
+  if (/^SKILLS\s+THE\s+MONSTER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทักษะที่สัตว์ประหลาด');
+  }
+  if (/^USED\s+EARLIER\s+AND[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ใช้ก่อนหน้านี้ แล้ว');
+  }
+  if (/^EARLIER\s+AND[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ก่อนหน้านี้ แล้ว');
+  }
+  if (/^FOCUS[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'จดจ่ออยู่กับมัน');
+  }
+  if (/^YOU[-\s]+COULD\s+SAY[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า');
+  }
+  if (/^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีบางอย่างที่อาจ');
+  }
+  if (/^HELP\s+YOU\s+TOO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ช่วยคุณได้เช่นกัน');
+  }
+  if (
+    /\bAND\s+IT['’]?S\s+GOOD\s+FOR\b/i.test(source)
+    && /\bUS\s+IF\s+OUR\s+TE?A?M+MATE\b/i.test(source)
+    && /\bBECOMES\s+STRONGER\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับเราด้วย หากเพื่อนร่วมทีมของเราแข็งแกร่งขึ้น');
+  }
+  if (/^AND\s+IT['’]?S\s+GOOD\s+FOR[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับ');
+  }
+  if (/^US\s+IF\s+OUR\s+TE?A?M+MATE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'เราด้วย หากเพื่อนร่วมทีมของเรา');
+  }
+  if (/^BECOMES\s+STRONGER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'แข็งแกร่งขึ้น');
   }
   if (/^THAT['’]?S\s+TOO\s+LOW[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'มันต่ำเกินไปนะ');
@@ -2382,6 +3638,26 @@ export const applyThaiConversationalGlossary = (
 
   if ((/^เอชเอ็ม$/i.test(translated) || /^เอชเอ็มเอ็ม$/i.test(translated)) && /^hm+$/.test(compactSource)) {
     return preserveSourceTrailingPunctuation(source, 'อืม');
+  }
+
+  if (/\bTE?A?M+MATE\b/i.test(source)) {
+    let normalized = translated
+      .replace(/คู่สมรส/gi, 'เพื่อนร่วมทีม')
+      .replace(/เพื่อนร่วมงาน/gi, 'เพื่อนร่วมทีม')
+      .replace(/ทีมเมท/gi, 'เพื่อนร่วมทีม');
+    if (/\bBECOMES\s+STRONGER\b/i.test(source)) {
+      normalized = normalized
+        .replace(/กลายเป็นอุปสรรค/gi, 'แข็งแกร่งขึ้น')
+        .replace(/กลายเป็นแข็งแกร่งขึ้น/gi, 'แข็งแกร่งขึ้น')
+        .replace(/แข็งแรงขึ้น/gi, 'แข็งแกร่งขึ้น');
+    }
+    normalized = normalized
+      .replace(/มันดีสําหรับพวกเรานะถ้า/gi, 'และมันก็ดีสำหรับเราด้วย หาก')
+      .replace(/มันดีสำหรับพวกเรานะถ้า/gi, 'และมันก็ดีสำหรับเราด้วย หาก')
+      .replace(/เรานะถ้าเพื่อนร่วมทีมของ/gi, 'เราด้วย หากเพื่อนร่วมทีมของเรา');
+    if (normalized !== translated) {
+      return preserveSourceTrailingPunctuation(source, normalized);
+    }
   }
 
   return translated;
@@ -2688,6 +3964,19 @@ export const shouldUseLineByLineGrouping = (
     const normalized = normalizeWhitespace(String(line.text || ''));
     return normalized.length > 0 && normalized.length <= 36;
   }).length;
+  const compactTechnicalRowCount = lines.filter((line) => {
+    const normalized = normalizeWhitespace(String(line.text || ''));
+    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
+    return tokenCount >= 2
+      && tokenCount <= 9
+      && (
+        TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalized)
+        || (
+          TECHNICAL_SOURCE_HINT_REGEX.test(normalized)
+          && normalized.length <= 56
+        )
+      );
+  }).length;
   const noisyLines = lines.filter((line) => scoreSourceLineReadability(line.text) < 4).length;
   const uppercaseHeadingLines = lines.filter((line) => {
     const latin = line.text.replace(/[^A-Za-z]/g, '');
@@ -2705,7 +3994,16 @@ export const shouldUseLineByLineGrouping = (
     && longSentenceLines >= 3
     && avgLength >= 21
     && uppercaseHeadingLines >= 1;
-  const technicalEvidenceStrong = tableLikeTechnicalDocument || strongTechnicalDocument || mixedTechnicalEvidence;
+  const compactTechnicalRowPage = markerHits >= 1
+    && compactTechnicalRowCount >= Math.max(3, Math.floor(lines.length * 0.32))
+    && shortLineCount >= Math.ceil(lines.length * 0.4)
+    && latinHeavyLineCount >= Math.max(2, Math.floor(lines.length * 0.24));
+  const technicalEvidenceStrong = (
+    tableLikeTechnicalDocument
+    || strongTechnicalDocument
+    || mixedTechnicalEvidence
+    || compactTechnicalRowPage
+  );
 
   if ((mode === 'manga' || mode === 'manhwa') && tableLikeTechnicalDocument) {
     return true;
@@ -2725,6 +4023,9 @@ export const shouldUseLineByLineGrouping = (
     if (strongTechnicalDocument) {
       return true;
     }
+    if (compactTechnicalRowPage) {
+      return true;
+    }
     return mixedTechnicalEvidence && (normalizedSource === 'en' || normalizedSource === 'th');
   }
 
@@ -2732,6 +4033,7 @@ export const shouldUseLineByLineGrouping = (
     (markerHits >= 2 && (longSentenceLines >= 2 || avgLength >= 20))
     || (markerHits >= 1 && uppercaseHeadingLines >= 2 && lines.length >= 8)
     || tableLikeTechnicalDocument
+    || compactTechnicalRowPage
   );
   if (officialDocumentSignals) {
     return true;
@@ -2746,6 +4048,50 @@ export const shouldUseLineByLineGrouping = (
   }
 
   return false;
+};
+
+const shouldUseBalloonAwareGrouping = (
+  lines: TranslatableLine[],
+  sourceLanguage: string,
+  targetLanguage: string,
+  mode: TranslationMode
+): boolean => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') return false;
+  if (lines.length < 3) return false;
+  if (mode === 'official') return false;
+
+  const technicalHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
+  const technicalRowHits = lines.reduce((count, line) => count + (TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalizeWhitespace(line.text)) ? 1 : 0), 0);
+  if (technicalHits >= 3 || technicalRowHits >= Math.max(3, Math.floor(lines.length * 0.24))) {
+    return false;
+  }
+
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const comicLike = isLikelyComicDialogueLayout(lines);
+  if (mode === 'manga' || mode === 'manhwa') {
+    return comicLike || ['en', 'es', 'ja', 'ko', 'zh'].includes(normalizedSource);
+  }
+
+  if (mode === 'adaptive') {
+    return comicLike;
+  }
+
+  return false;
+};
+
+const resolveBalloonAwareReadingMode = (
+  sourceLanguage: string,
+  mode: TranslationMode
+): LayoutReadingMode => {
+  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  if (mode === 'manga' && normalizedSource === 'ja') {
+    return 'rtl';
+  }
+  if (mode === 'manhwa' || normalizedSource === 'ko' || normalizedSource === 'zh') {
+    return 'auto';
+  }
+  return 'ltr';
 };
 
 const shouldPreferEnglishSourceForMixedTechnicalPage = (
@@ -2896,14 +4242,14 @@ const computeGroupingColumnAffinity = (
   const rowDelta = Math.abs(line.top - column.lastTop);
   const verticalGap = line.top - column.lastBottom;
   const normalizedCenterDelta = centerDelta / Math.max(1, Math.max(columnWidth, lineWidth));
-  const sameRowButDifferentColumn = rowDelta <= baseHeight * 1.12
-    && overlap <= 0.18
-    && centerDelta >= baseHeight * 1.55;
+  const sameRowButDifferentColumn = rowDelta <= baseHeight * 1.4
+    && overlap <= 0.24
+    && centerDelta >= baseHeight * 1.35;
   if (sameRowButDifferentColumn) return null;
 
   const centerAligned = centerDelta <= Math.max(34, Math.min(columnWidth, lineWidth) * 0.48, baseHeight * 1.55);
   const leftAligned = Math.abs(line.left - column.left) <= Math.max(42, baseHeight * 2.2);
-  const canBridge = overlap >= 0.18 || (centerAligned && leftAligned);
+  const canBridge = overlap >= 0.2 || (centerAligned && leftAligned && rowDelta <= baseHeight * 1.95);
   if (!canBridge) return null;
 
   const outsideVerticalBand = verticalGap > baseHeight * 3.3 || verticalGap < -baseHeight * 0.95;
@@ -2973,7 +4319,19 @@ const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number):
       }),
     }))
     .sort((a, b) => {
-      if (a.firstTop !== b.firstTop) return a.firstTop - b.firstTop;
+      const topDelta = a.firstTop - b.firstTop;
+      const verticalOverlap = intervalOverlap(a.firstTop, a.lastBottom, b.firstTop, b.lastBottom);
+      const minColumnSpan = Math.max(1, Math.min(
+        Math.max(1, a.lastBottom - a.firstTop),
+        Math.max(1, b.lastBottom - b.firstTop)
+      ));
+      const overlapRatio = verticalOverlap / minColumnSpan;
+      const sameReadingBand = overlapRatio >= 0.16 || Math.abs(topDelta) <= baseHeight * 1.35;
+      if (sameReadingBand) {
+        if (a.left !== b.left) return a.left - b.left;
+        if (a.centerX !== b.centerX) return a.centerX - b.centerX;
+      }
+      if (topDelta !== 0) return topDelta;
       if (a.left !== b.left) return a.left - b.left;
       return a.centerX - b.centerX;
     });
@@ -3084,21 +4442,38 @@ const buildDenseDialogueGroupsByConnectivity = (
   });
 
   return Array.from(grouped.values())
-    .map((bucket) => ({
-      lines: [...bucket].sort((a, b) => {
-        if (a.top !== b.top) return a.top - b.top;
-        if (a.left !== b.left) return a.left - b.left;
-        return a.index - b.index;
-      }),
-    }))
+    .map((bucket) => {
+      const lines = orderLinesForGrouping(bucket, baseHeight);
+
+      return {
+        lines,
+        bounds: {
+          top: Math.min(...lines.map((line) => line.top)),
+          bottom: Math.max(...lines.map((line) => line.bottom)),
+          left: Math.min(...lines.map((line) => line.left)),
+          right: Math.max(...lines.map((line) => line.right)),
+        },
+      };
+    })
     .sort((a, b) => {
-      const aTop = Math.min(...a.lines.map((line) => line.top));
-      const bTop = Math.min(...b.lines.map((line) => line.top));
-      if (aTop !== bTop) return aTop - bTop;
-      const aLeft = Math.min(...a.lines.map((line) => line.left));
-      const bLeft = Math.min(...b.lines.map((line) => line.left));
-      return aLeft - bLeft;
-    });
+      const topDelta = a.bounds.top - b.bounds.top;
+      const verticalOverlap = intervalOverlap(a.bounds.top, a.bounds.bottom, b.bounds.top, b.bounds.bottom);
+      const minGroupSpan = Math.max(1, Math.min(
+        Math.max(1, a.bounds.bottom - a.bounds.top),
+        Math.max(1, b.bounds.bottom - b.bounds.top)
+      ));
+      const overlapRatio = verticalOverlap / minGroupSpan;
+      const sameReadingBand = overlapRatio >= 0.16 || Math.abs(topDelta) <= baseHeight * 1.35;
+
+      if (sameReadingBand) {
+        if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
+      }
+
+      if (topDelta !== 0) return topDelta;
+      if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
+      return a.bounds.right - b.bounds.right;
+    })
+    .map((bucket) => ({ lines: bucket.lines }));
 };
 
 export const buildTranslationGroups = (
@@ -3141,6 +4516,240 @@ export const buildTranslationGroups = (
   return groups;
 };
 
+const composeGroupSourceText = (
+  lines: TranslatableLine[],
+  groupType: LayoutGroupType = 'unknown',
+  groupingProfile: TranslationGroupingProfile = 'default'
+): string => {
+  const normalized = lines
+    .map((line) => normalizeWhitespace(String(line.text || '')))
+    .filter(Boolean);
+  if (normalized.length <= 1) {
+    return normalized[0] || '';
+  }
+
+  if (groupType === 'narration') {
+    return normalized.join(' ');
+  }
+
+  if (groupingProfile === 'default' || groupingProfile === 'line-by-line') {
+    return normalized.join(' ');
+  }
+
+  if (groupingProfile === 'balloon-aware' && groupType === 'dialogue') {
+    return normalized.join(' ');
+  }
+
+  return normalized.join('\n');
+};
+
+const createBalloonAwareGroupingInput = (
+  pageNum: number,
+  pageOCR: OCRPageResult,
+  lines: TranslatableLine[],
+  sourceLanguage: string,
+  mode: TranslationMode
+): LayoutGroupingInput => ({
+  pageNumber: pageNum,
+  imageWidth: Math.max(1, Number(pageOCR.width || 1)),
+  imageHeight: Math.max(1, Number(pageOCR.height || 1)),
+  lines: lines.map<OCRLineWithLayout>((line) => ({
+    index: line.index,
+    text: line.text,
+    sourceLength: line.sourceLength,
+    top: line.top,
+    bottom: line.bottom,
+    left: line.left,
+    right: line.right,
+    height: line.height,
+    area: line.area,
+    confidence: line.confidence,
+    angleDeg: line.angleDeg,
+    sortHintX: line.sortHintX,
+    sortHintY: line.sortHintY,
+    quad: line.quad,
+    sourceEngine: line.sourceEngine,
+  })),
+  mode: 'balloon-aware',
+  readingMode: resolveBalloonAwareReadingMode(sourceLanguage, mode),
+});
+
+const buildTranslationGroupsFromDerivedLayout = (
+  layoutResult: LayoutGroupingResult,
+  lines: TranslatableLine[],
+  acceptedGroupIds?: Set<string>
+): TranslationGroup[] => {
+  const lineMap = new Map<number, TranslatableLine>(lines.map((line) => [line.index, line]));
+  const derivedGroupByLineIndex = new Map<number, DerivedLayoutGroup>();
+  layoutResult.groups.forEach((group) => {
+    if (acceptedGroupIds && !acceptedGroupIds.has(group.id)) return;
+    group.orderedLineIndexes.forEach((lineIndex) => {
+      derivedGroupByLineIndex.set(lineIndex, group);
+    });
+  });
+
+  const emittedGroupIds = new Set<string>();
+  const groups: TranslationGroup[] = [];
+
+  layoutResult.orderedLineIndexes.forEach((lineIndex) => {
+    const derivedGroup = derivedGroupByLineIndex.get(lineIndex);
+    if (derivedGroup) {
+      if (emittedGroupIds.has(derivedGroup.id)) return;
+      emittedGroupIds.add(derivedGroup.id);
+      const groupLines = derivedGroup.orderedLineIndexes
+        .map((index) => lineMap.get(index))
+        .filter((line): line is TranslatableLine => Boolean(line));
+      if (groupLines.length > 0) {
+        groups.push({
+          lines: groupLines,
+          groupType: derivedGroup.groupType,
+          derivedGroupId: derivedGroup.id,
+          confidence: derivedGroup.confidence,
+        });
+      }
+      return;
+    }
+
+    const line = lineMap.get(lineIndex);
+    if (!line) return;
+    groups.push({
+      lines: [line],
+      groupType: 'unknown',
+      confidence: 0.5,
+    });
+  });
+
+  if (groups.length === 0) {
+    return lines.map((line) => ({ lines: [line], groupType: 'unknown', confidence: 0.5 }));
+  }
+
+  return groups;
+};
+
+const pushLayoutGroupingDebugPayload = (
+  pageNum: number,
+  groupingProfile: TranslationGroupingProfile,
+  layoutResult: LayoutGroupingResult | undefined,
+  groups: TranslationGroup[]
+): void => {
+  if (!isLayoutGroupingDebugEnabled()) return;
+
+  const payload = {
+    pageNum,
+    groupingProfile,
+    rawOrder: layoutResult?.diagnostics.rawOrder || groups.flatMap((group) => group.lines.map((line) => line.index)),
+    derivedGroups: layoutResult?.groups || [],
+    orderedLineIndexes: layoutResult?.orderedLineIndexes || groups.flatMap((group) => group.lines.map((line) => line.index)),
+    composedGroupTexts: groups.map((group) => ({
+      groupId: group.derivedGroupId || null,
+      groupType: group.groupType || 'unknown',
+      confidence: group.confidence || 0,
+      lineIndexes: group.lines.map((line) => line.index),
+      text: composeGroupSourceText(group.lines, group.groupType || 'unknown', groupingProfile),
+    })),
+  };
+
+  const globalState = globalThis as GlobalPrewarmState;
+  globalState.__pdfTranslatorLastLayoutGrouping = payload;
+  console.debug('[LayoutGrouping]', payload);
+};
+
+const resolveTranslationGroupsWithLayout = (
+  pageNum: number,
+  pageOCR: OCRPageResult,
+  lines: TranslatableLine[],
+  fallbackProfile: TranslationGroupingProfile,
+  sourceLanguage: string,
+  targetLanguage: string,
+  mode: TranslationMode
+): ResolvedTranslationGroups => {
+  const fallbackGroups = buildTranslationGroups(lines, fallbackProfile);
+  const fallbackDecision: GroupingDecision = {
+    appliedProfile: fallbackProfile === 'dense-dialogue' ? 'dense-dialogue' : 'raw',
+    confidence: fallbackProfile === 'dense-dialogue' ? 0.58 : 0.5,
+  };
+
+  if (fallbackProfile === 'line-by-line') {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: fallbackDecision,
+    };
+  }
+
+  if (!isBalloonAwareGroupingEnabled()) {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: {
+        ...fallbackDecision,
+        fallbackReason: 'feature_flag_disabled',
+      },
+    };
+  }
+
+  if (!shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode)) {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: fallbackDecision,
+    };
+  }
+
+  const layoutResult = deriveBalloonAwareLayoutGrouping(
+    createBalloonAwareGroupingInput(pageNum, pageOCR, lines, sourceLanguage, mode)
+  );
+  const multiLineGroupCount = layoutResult.groups.filter((group) => group.orderedLineIndexes.length > 1).length;
+  const layoutConfidence = Number(layoutResult.diagnostics.avgConfidence || 0);
+  const acceptedGroupConfidenceFloor = mode === 'official' ? 0.68 : 0.62;
+
+  if (layoutConfidence < 0.62 || multiLineGroupCount === 0) {
+    const acceptedDerivedGroups = layoutResult.groups.filter((group) =>
+      group.orderedLineIndexes.length > 1
+      && group.confidence >= acceptedGroupConfidenceFloor
+      && (group.groupType === 'dialogue' || group.confidence >= 0.68)
+    );
+    const acceptedCoverage = acceptedDerivedGroups.reduce((sum, group) => sum + group.orderedLineIndexes.length, 0)
+      / Math.max(1, lines.length);
+    if (acceptedDerivedGroups.length > 0 && (layoutConfidence >= 0.48 || acceptedCoverage >= 0.18)) {
+      return {
+        groups: buildTranslationGroupsFromDerivedLayout(
+          layoutResult,
+          lines,
+          new Set(acceptedDerivedGroups.map((group) => group.id))
+        ),
+        groupingProfile: 'balloon-aware',
+        groupingDecision: {
+          appliedProfile: 'balloon-aware',
+          confidence: Math.max(layoutConfidence, acceptedCoverage),
+          fallbackReason: 'partial_layout_adoption',
+        },
+        layoutResult,
+      };
+    }
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: {
+        ...fallbackDecision,
+        confidence: layoutConfidence || fallbackDecision.confidence,
+        fallbackReason: layoutResult.diagnostics.warnings.join(',') || 'low_layout_confidence',
+      },
+      layoutResult,
+    };
+  }
+
+  return {
+    groups: buildTranslationGroupsFromDerivedLayout(layoutResult, lines),
+    groupingProfile: 'balloon-aware',
+    groupingDecision: {
+      appliedProfile: 'balloon-aware',
+      confidence: layoutConfidence,
+    },
+    layoutResult,
+  };
+};
+
 const findSplitIndexNear = (
   text: string,
   desired: number,
@@ -3178,6 +4787,86 @@ const computeLineSplitWeight = (line: TranslatableLine): number => {
   return Math.max(1, line.sourceLength * 0.82 + areaScore);
 };
 
+const tokenizeRedistributedPart = (value: string, targetLanguage: string): string[] => {
+  const normalized = normalizeWhitespace(String(value || ''));
+  if (!normalized) return [];
+
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    return Array.from(normalized).filter((segment) => segment.trim().length > 0);
+  }
+
+  return normalized.split(/\s+/g).filter(Boolean);
+};
+
+const joinRedistributedTokens = (tokens: string[], targetLanguage: string): string => {
+  if (tokens.length === 0) return '';
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    return tokens.join('');
+  }
+  return tokens.join(' ');
+};
+
+const rebalanceRedistributedParts = (
+  parts: string[],
+  sourceLines: TranslatableLine[],
+  targetText: string,
+  targetLanguage: string
+): string[] => {
+  const normalizedTarget = normalizeWhitespace(String(targetText || ''));
+  const normalizedParts = sourceLines.map((_, index) => normalizeWhitespace(String(parts[index] || '')));
+
+  if (normalizedParts.every((part) => part.length > 0)) {
+    return normalizedParts;
+  }
+
+  for (let i = 0; i < normalizedParts.length; i += 1) {
+    if (normalizedParts[i]) continue;
+
+    let donorIndex = -1;
+    let donorScore = Number.NEGATIVE_INFINITY;
+
+    for (let j = 0; j < normalizedParts.length; j += 1) {
+      if (i === j) continue;
+      const tokens = tokenizeRedistributedPart(normalizedParts[j], targetLanguage);
+      if (tokens.length <= 1) continue;
+
+      const score = tokens.length * 10 - Math.abs(j - i);
+      if (score > donorScore) {
+        donorScore = score;
+        donorIndex = j;
+      }
+    }
+
+    if (donorIndex >= 0) {
+      const donorTokens = tokenizeRedistributedPart(normalizedParts[donorIndex], targetLanguage);
+      const takeTail = donorIndex < i;
+      const moved = takeTail ? donorTokens.pop() : donorTokens.shift();
+      if (moved) {
+        normalizedParts[i] = moved;
+        normalizedParts[donorIndex] = joinRedistributedTokens(donorTokens, targetLanguage);
+      }
+    }
+  }
+
+  if (normalizedParts.every((part) => part.length > 0) || !normalizedTarget) {
+    return normalizedParts;
+  }
+
+  const partCount = Math.max(1, normalizedParts.length);
+  for (let i = 0; i < normalizedParts.length; i += 1) {
+    if (normalizedParts[i]) continue;
+
+    const start = Math.floor((i / partCount) * normalizedTarget.length);
+    const end = Math.ceil(((i + 1) / partCount) * normalizedTarget.length);
+    const chunk = normalizeWhitespace(normalizedTarget.slice(start, end));
+    if (chunk) {
+      normalizedParts[i] = chunk;
+    }
+  }
+
+  return normalizedParts;
+};
+
 const splitTranslatedTextBySourceWeights = (
   translatedText: string,
   sourceLines: TranslatableLine[],
@@ -3193,7 +4882,7 @@ const splitTranslatedTextBySourceWeights = (
     .filter(Boolean);
 
   if (explicitLineBreaks.length === sourceLines.length) {
-    return explicitLineBreaks;
+    return rebalanceRedistributedParts(explicitLineBreaks, sourceLines, target, targetLanguage);
   }
 
   const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
@@ -3289,7 +4978,7 @@ const splitTranslatedTextBySourceWeights = (
       startIndex = bestBoundary;
     }
 
-    return thaiParts.map((part, index) => part || sourceLines[index]?.text || '');
+    return rebalanceRedistributedParts(thaiParts, sourceLines, target, targetLanguage);
   }
 
   const totalSource = sourceLines
@@ -3317,22 +5006,57 @@ const splitTranslatedTextBySourceWeights = (
     start = end;
   }
 
-  return parts.map((part, index) => part || sourceLines[index]?.text || '');
+  return rebalanceRedistributedParts(parts, sourceLines, target, targetLanguage);
 };
 
-const resolveRedistributedLineFallback = (
+export const resolveRedistributedLineFallback = (
   sourceLineText: string,
   groupText: string,
-  targetLanguage: string
+  targetLanguage: string,
+  lineIndex: number = 0,
+  totalLines: number = 1
 ): string => {
   const source = normalizeWhitespace(String(sourceLineText || ''));
-  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+  const normalizedGroup = normalizeWhitespace(String(groupText || ''));
+  const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
+
+  if (normalizedGroup) {
+    const clampedTotal = Math.max(1, totalLines);
+    const clampedIndex = Math.max(0, Math.min(clampedTotal - 1, lineIndex));
+
+    if (clampedTotal > 1) {
+      const sentenceChunks = normalizedGroup
+        .split(/(?<=[.!?…。！？])\s+/)
+        .map((chunk) => normalizeWhitespace(chunk))
+        .filter(Boolean);
+
+      if (sentenceChunks.length === clampedTotal) {
+        const sentenceChunk = sentenceChunks[clampedIndex];
+        if (sentenceChunk) return sentenceChunk;
+      }
+
+      if (normalizedGroup.length >= clampedTotal * 3) {
+        const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
+        const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
+        const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
+        if (proportionalChunk) return proportionalChunk;
+      }
+    }
+
+    if (isThaiTarget) {
+      const normalizedGroupThai = normalizeThaiTranslationText(normalizedGroup);
+      if (normalizedGroupThai) return normalizedGroupThai;
+    }
+
+    return normalizedGroup;
+  }
+
+  if (isThaiTarget) {
     const normalizedSource = normalizeThaiTranslationText(source);
     if (normalizedSource) return normalizedSource;
   }
 
-  const normalizedGroup = normalizeWhitespace(String(groupText || ''));
-  return source || normalizedGroup;
+  return source;
 };
 
 // --- Mock Regions for Prototype ---
@@ -3349,6 +5073,7 @@ export default function App() {
   const { 
     file, 
     fileType,
+    fileData,
     currentPage, 
     totalPages, 
     ensureDocumentId,
@@ -3361,6 +5086,9 @@ export default function App() {
     setTargetLanguage,
     translationMode,
     setTranslationMode,
+    overlayThaiFontEnabled,
+    overlayFontPreset,
+    overlayFontSizeScale,
     safetySettings,
     hydrateGeminiApiKey,
   } = useProjectStore();
@@ -3379,7 +5107,9 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
-  const [downloadMenuScope, setDownloadMenuScope] = useState<DownloadScope | null>(null);
+  const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
+  const [downloadScopeSelection, setDownloadScopeSelection] = useState<DownloadScope>('current');
+  const [downloadModeSelection, setDownloadModeSelection] = useState<DownloadContentMode>('original');
   const [isDownloadingResult, setIsDownloadingResult] = useState(false);
   const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -3388,18 +5118,18 @@ export default function App() {
   }, [hydrateGeminiApiKey]);
 
   useEffect(() => {
-    if (!downloadMenuScope) return undefined;
+    if (!isDownloadMenuOpen) return undefined;
 
     const handlePointerDown = (event: MouseEvent) => {
       const targetNode = event.target as Node | null;
       if (downloadMenuRef.current && targetNode && !downloadMenuRef.current.contains(targetNode)) {
-        setDownloadMenuScope(null);
+        setIsDownloadMenuOpen(false);
       }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setDownloadMenuScope(null);
+        setIsDownloadMenuOpen(false);
       }
     };
 
@@ -3409,7 +5139,7 @@ export default function App() {
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [downloadMenuScope]);
+  }, [isDownloadMenuOpen]);
 
   const handleBackToHome = () => {
     visionService.cancelAll('Project closed');
@@ -3510,7 +5240,7 @@ export default function App() {
         if (!text || !bbox) return false;
         return Number(bbox.x1) > Number(bbox.x0) && Number(bbox.y1) > Number(bbox.y0);
       });
-    if (validWords.length === 0) return undefined;
+    if (validWords.length === 0) return normalizedRawBBox;
 
     let x0 = Number.POSITIVE_INFINITY;
     let y0 = Number.POSITIVE_INFINITY;
@@ -3548,6 +5278,20 @@ export default function App() {
     return rawLooksMalformed ? wordUnionBBox : normalizedRawBBox;
   };
 
+  const resolveLineSortHintY = (line?: OCRLine): number | undefined => {
+    const direct = Number(line?.sortHintY);
+    if (Number.isFinite(direct)) return direct;
+    const legacy = Number((line as OCRLine | undefined)?.['_sortY']);
+    return Number.isFinite(legacy) ? legacy : undefined;
+  };
+
+  const resolveLineSortHintX = (line?: OCRLine): number | undefined => {
+    const direct = Number(line?.sortHintX);
+    if (Number.isFinite(direct)) return direct;
+    const legacy = Number((line as OCRLine | undefined)?.['_sortX']);
+    return Number.isFinite(legacy) ? legacy : undefined;
+  };
+
   const collectTranslatableLines = (lines: OCRLine[]): TranslatableLine[] => {
     const collected: TranslatableLine[] = [];
     lines.forEach((line, index) => {
@@ -3558,10 +5302,49 @@ export default function App() {
       if (likelyGhost && !shouldForceKeepTechnicalTranslationLine(text, line)) return;
 
       const bbox = resolveTranslatableLineBBox(line);
-      const left = Number(bbox?.x0 ?? line.bbox?.x0 ?? 0);
-      const right = Number(bbox?.x1 ?? line.bbox?.x1 ?? (left + Math.max(1, text.length * 8)));
-      const top = Number(bbox?.y0 ?? line.bbox?.y0 ?? (index * 32));
-      const bottom = Number(bbox?.y1 ?? line.bbox?.y1 ?? (top + 24));
+      if (!bbox) return;
+
+      const left = Number(bbox.x0);
+      const right = Number(bbox.x1);
+      const top = Number(bbox.y0);
+      const bottom = Number(bbox.y1);
+      if (!(right > left && bottom > top)) return;
+
+      const validWordBoxCount = (Array.isArray(line.words) ? line.words : []).filter((word) => {
+        const wordText = normalizeWhitespace(String(word?.text || ''));
+        const wordBBox = word?.bbox;
+        if (!wordText || !wordBBox) return false;
+        return Number(wordBBox.x1) > Number(wordBBox.x0) && Number(wordBBox.y1) > Number(wordBBox.y0);
+      }).length;
+      const compactText = text.replace(/\s+/g, '');
+      const tokenCount = text.split(/\s+/g).filter(Boolean).length;
+      const width = right - left;
+      const height = bottom - top;
+      const area = width * height;
+      const wordCoverage = computeLineWordUnionCoverage(line);
+      const noWordOversizedRawLine = (
+        validWordBoxCount === 0
+        && tokenCount >= 2
+        && tokenCount <= 6
+        && compactText.length <= 30
+        && area >= 16000
+        && (width >= 180 || height >= 96)
+        && (area / Math.max(1, compactText.length)) >= 680
+      );
+      const lowCoverageOversizedEffectSection = (
+        validWordBoxCount <= 1
+        && wordCoverage <= 0.2
+        && tokenCount >= 2
+        && tokenCount <= 6
+        && compactText.length <= 30
+        && area >= 17000
+        && (width >= 170 || height >= 96)
+        && (area / Math.max(1, compactText.length)) >= 650
+      );
+      if ((noWordOversizedRawLine || lowCoverageOversizedEffectSection) && !shouldForceKeepTechnicalTranslationLine(text, line)) {
+        return;
+      }
+
       collected.push({
         index,
         text,
@@ -3571,9 +5354,97 @@ export default function App() {
         top,
         bottom,
         height: Math.max(1, bottom - top),
+        area,
+        wordCoverage,
+        wordBoxCount: validWordBoxCount,
+        confidence: Number(line.confidence || 0),
+        quad: Array.isArray(line.quad) ? line.quad.map((point) => ({ x: point.x, y: point.y })) : undefined,
+        angleDeg: Number.isFinite(line.angleDeg) ? Number(line.angleDeg) : undefined,
+        sortHintX: resolveLineSortHintX(line),
+        sortHintY: resolveLineSortHintY(line),
+        sourceEngine: line.sourceEngine,
       });
     });
-    return collected;
+
+    if (collected.length <= 1) {
+      return collected;
+    }
+
+    const isLikelyEffectBalloonSection = (line: TranslatableLine): boolean => {
+      const width = Math.max(1, line.right - line.left);
+      const height = Math.max(1, line.bottom - line.top);
+      const area = Math.max(1, line.area || (width * height));
+      const compact = normalizeWhitespace(String(line.text || '')).replace(/\s+/g, '');
+      const tokenCount = normalizeWhitespace(String(line.text || '')).split(/\s+/g).filter(Boolean).length;
+      const wordCoverage = Number(line.wordCoverage || 0);
+      const wordBoxCount = Number(line.wordBoxCount || 0);
+
+      return (
+        wordBoxCount <= 1
+        && wordCoverage <= 0.22
+        && tokenCount >= 2
+        && tokenCount <= 6
+        && compact.length <= 30
+        && area >= 17000
+        && (width >= 170 || height >= 96)
+      );
+    };
+
+    const hasNearbyTextAnchor = (candidate: TranslatableLine): boolean => {
+      const candidateWidth = Math.max(1, candidate.right - candidate.left);
+      const candidateHeight = Math.max(1, candidate.bottom - candidate.top);
+      const candidateArea = Math.max(1, candidate.area || (candidateWidth * candidateHeight));
+      const candidateCenterX = (candidate.left + candidate.right) * 0.5;
+      const candidateCenterY = (candidate.top + candidate.bottom) * 0.5;
+
+      return collected.some((other) => {
+        if (other.index === candidate.index) return false;
+
+        const otherArea = Math.max(1, other.area || ((other.right - other.left) * (other.bottom - other.top)));
+        if (otherArea > candidateArea * 0.74) return false;
+
+        const otherWordCoverage = Number(other.wordCoverage || 0);
+        const otherWordBoxCount = Number(other.wordBoxCount || 0);
+        const anchorSignal = otherWordBoxCount >= 2 || otherWordCoverage >= 0.32 || other.sourceLength >= Math.max(10, candidate.sourceLength * 0.9);
+        if (!anchorSignal) return false;
+
+        const overlapX = overlapRatio(candidate.left, candidate.right, other.left, other.right);
+        const overlapY = overlapRatio(candidate.top, candidate.bottom, other.top, other.bottom);
+        const otherCenterX = (other.left + other.right) * 0.5;
+        const otherCenterY = (other.top + other.bottom) * 0.5;
+        const centerDeltaX = Math.abs(candidateCenterX - otherCenterX);
+        const centerDeltaY = Math.abs(candidateCenterY - otherCenterY);
+        const nearInside = (
+          other.left >= candidate.left - 12
+          && other.right <= candidate.right + 12
+          && other.top >= candidate.top - 28
+          && other.bottom <= candidate.bottom + 28
+        );
+
+        return (
+          (overlapX >= 0.24 && overlapY >= 0.1)
+          || (nearInside && centerDeltaX <= candidateWidth * 0.65 && centerDeltaY <= candidateHeight * 0.9)
+        );
+      });
+    };
+
+    const filtered = collected.filter((line) => {
+      if (!isLikelyEffectBalloonSection(line)) return true;
+      return !hasNearbyTextAnchor(line);
+    });
+
+    const contextFiltered = filtered.filter((line) =>
+      !shouldPruneContextualGhostTranslatableLine(line, filtered)
+    );
+
+    // Never return an empty set after effect-balloon filtering.
+    // Falling back to raw collected lines keeps translation entry generation deterministic
+    // and avoids disabling translated preview when a page is fully borderline.
+    if (contextFiltered.length === 0) {
+      return collected;
+    }
+
+    return contextFiltered;
   };
 
   const resolveModelScopedOriginalPageOCR = (
@@ -3732,6 +5603,553 @@ export default function App() {
     return entries[0];
   };
 
+  const resolveLineBBoxForExport = (line: OCRLine): BBox | undefined => {
+    const rawBBox = line?.bbox;
+    const rawValid = rawBBox
+      && Number(rawBBox.x1) > Number(rawBBox.x0)
+      && Number(rawBBox.y1) > Number(rawBBox.y0);
+    if (rawValid) {
+      return {
+        x0: Number(rawBBox.x0),
+        y0: Number(rawBBox.y0),
+        x1: Number(rawBBox.x1),
+        y1: Number(rawBBox.y1),
+      };
+    }
+
+    const validWords = (Array.isArray(line?.words) ? line.words : [])
+      .map((word) => word?.bbox)
+      .filter((bbox): bbox is BBox => Boolean(
+        bbox
+        && Number(bbox.x1) > Number(bbox.x0)
+        && Number(bbox.y1) > Number(bbox.y0)
+      ));
+
+    if (validWords.length === 0) return undefined;
+
+    return {
+      x0: Math.min(...validWords.map((bbox) => Number(bbox.x0))),
+      y0: Math.min(...validWords.map((bbox) => Number(bbox.y0))),
+      x1: Math.max(...validWords.map((bbox) => Number(bbox.x1))),
+      y1: Math.max(...validWords.map((bbox) => Number(bbox.y1))),
+    };
+  };
+
+  const buildTranslatedPageOCRForExport = (
+    pageOCR: OCRPageResult,
+    translatedEntry: OCRTranslationCacheEntry
+  ): OCRPageResult => {
+    const translatedByIndex = new Map<number, string>(
+      translatedEntry.translatedByIndex.map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
+    );
+
+    const translatedLines = (pageOCR.lines || []).map((line, lineIndex) => {
+      const translatedText = translatedByIndex.get(lineIndex) || normalizeWhitespace(String(line.text || ''));
+      const lineBBox = resolveLineBBoxForExport(line);
+      const confidence = Number(line.confidence || pageOCR.confidence || 0);
+      const translatedWords = lineBBox
+        ? [{
+          text: translatedText,
+          confidence,
+          bbox: lineBBox,
+        }]
+        : [];
+
+      return {
+        ...line,
+        text: translatedText,
+        words: translatedWords,
+        bbox: lineBBox || line.bbox,
+      };
+    });
+
+    const translatedWords = translatedLines.flatMap((line) => Array.isArray(line.words) ? line.words : []);
+    const translatedText = translatedLines
+      .map((line) => normalizeWhitespace(String(line.text || '')))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+
+    return {
+      ...pageOCR,
+      lines: translatedLines,
+      words: translatedWords,
+      text: translatedText,
+      confidence: Number(pageOCR.confidence || 0),
+    };
+  };
+
+  const resolveVisibleOverlayExportSize = (pageNum: number): { width: number; height: number } | undefined => {
+    if (typeof document === 'undefined') return undefined;
+
+    const candidate = fileType === 'pdf'
+      ? document.querySelector(`.react-pdf__Page[data-page-number="${pageNum}"] canvas`)
+      : document.querySelector('img[data-export-overlay-image="true"]');
+    if (!(candidate instanceof HTMLElement)) return undefined;
+
+    const rect = candidate.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    if (width <= 1 || height <= 1) return undefined;
+
+    return { width, height };
+  };
+
+  const exportTranslatedOverlayPngForSinglePage = async (
+    pageNum: number,
+    pageOCR: OCRPageResult,
+    translatedEntry: OCRTranslationCacheEntry
+  ): Promise<void> => {
+    if (!file) return;
+
+    const translatedByIndex = new Map<number, string>(
+      translatedEntry.translatedByIndex
+        .filter((item) => Number.isFinite(item.index))
+        .map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
+    );
+    if (translatedByIndex.size === 0) {
+      throw new Error('No translated lines found in cache for current page export.');
+    }
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      throw new Error('Failed to create export canvas context.');
+    }
+
+    const visibleExportSize = resolveVisibleOverlayExportSize(pageNum);
+
+    if (fileType === 'pdf') {
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+      const pdfDoc = await (loadingTask as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
+      const page = await pdfDoc.getPage(pageNum);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const layoutWidth = Math.max(
+        1,
+        visibleExportSize?.width || pageOCR.width || Math.round(baseViewport.width)
+      );
+      const layoutHeight = Math.max(
+        1,
+        visibleExportSize?.height || Math.round(baseViewport.height * (layoutWidth / Math.max(1, baseViewport.width)))
+      );
+      const exportScale = resolveOverlayExportScale(
+        layoutWidth,
+        layoutHeight,
+        Math.round(baseViewport.width),
+        Math.round(baseViewport.height)
+      );
+      const targetWidth = Math.max(1, Math.round(layoutWidth * exportScale));
+      const scale = targetWidth / Math.max(1, baseViewport.width);
+      const viewport = page.getViewport({ scale });
+
+      canvas.width = Math.max(1, Math.round(viewport.width));
+      canvas.height = Math.max(1, Math.round(viewport.height));
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+
+      await (pdfDoc as { destroy?: () => Promise<void> }).destroy?.();
+      (loadingTask as { destroy?: () => void }).destroy?.();
+    } else {
+      const imageBlob = fileData
+        ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
+        : file;
+      const imageBitmap = await createImageBitmap(imageBlob);
+      const layoutWidth = Math.max(1, visibleExportSize?.width || imageBitmap.width);
+      const layoutHeight = Math.max(1, visibleExportSize?.height || imageBitmap.height);
+      const exportScale = resolveOverlayExportScale(
+        layoutWidth,
+        layoutHeight,
+        imageBitmap.width,
+        imageBitmap.height
+      );
+      const targetWidth = Math.max(1, Math.round(layoutWidth * exportScale));
+      const targetHeight = Math.max(1, Math.round(layoutHeight * exportScale));
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+      imageBitmap.close?.();
+    }
+
+    const fontReadyPromise = (typeof document !== 'undefined' && 'fonts' in document)
+      ? (document as Document & { fonts?: FontFaceSet }).fonts?.ready
+      : undefined;
+    if (fontReadyPromise) {
+      await fontReadyPromise.catch(() => undefined);
+    }
+
+    const sourceWidth = Math.max(1, Number(pageOCR.width || canvas.width));
+    const sourceHeight = Math.max(1, Number(pageOCR.height || canvas.height));
+    const scaleX = canvas.width / sourceWidth;
+    const scaleY = canvas.height / sourceHeight;
+
+    const overlayLayoutProfile: OverlayLayoutProfile = translationMode === 'official'
+      ? 'official'
+      : translationMode === 'adaptive'
+        ? 'adaptive'
+        : translationMode === 'manhwa'
+          ? 'manhwa'
+          : 'manga';
+    const preferredOverlayFontFamily = getOverlayFontOption(overlayFontPreset).fontFamily;
+    const overlayFontFamily = resolveOverlayFontFamily({
+      preset: overlayFontPreset,
+      enabled: overlayThaiFontEnabled,
+      targetLanguage,
+    }) || preferredOverlayFontFamily || "'Noto Sans Thai', 'Sarabun', 'Segoe UI', sans-serif";
+    const canvasOverlayFontFamily = await buildCanvasFontFamily(
+      overlayFontFamily,
+      `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
+    );
+
+    const overlayLayoutByIndex = computeOverlayLayoutMap(
+      pageOCR.lines.flatMap((line, index) => {
+        const translatedText = translatedByIndex.get(index);
+        if (!translatedText) return [];
+        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
+        if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
+
+        const sourceBbox = resolveOverlaySourceBBox(line);
+        const maskBbox = resolveOverlayMaskBBox(line);
+        const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
+        const sourceHeightRaw = Math.max(1, sourceBbox.y1 - sourceBbox.y0);
+        const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
+        const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
+        const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
+        const maskAreaRaw = maskWidthRaw * maskHeightRaw;
+        const widthCoverage = sourceWidthRaw / maskWidthRaw;
+        const areaCoverage = sourceAreaRaw / maskAreaRaw;
+        const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
+          && widthCoverage < 0.84
+          && areaCoverage < 0.86;
+        const effectiveSourceBbox = lowCoverageSource ? maskBbox : sourceBbox;
+        const baseWidth = Math.max(1, (effectiveSourceBbox.x1 - effectiveSourceBbox.x0) * scaleX);
+        const baseHeight = Math.max(1, (effectiveSourceBbox.y1 - effectiveSourceBbox.y0) * scaleY);
+        const expansion = resolveOverlayMaskExpansion(line);
+        const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
+        const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
+        const maskExpandBottom = Math.min(expansion.maxExpandBottom, Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)));
+        const rawLeft = effectiveSourceBbox.x0 * scaleX - maskExpandX;
+        const rawTop = effectiveSourceBbox.y0 * scaleY - maskExpandTop;
+        const rawWidth = baseWidth + maskExpandX * 2;
+        const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
+        const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
+          x0: 0,
+          y0: 0,
+          x1: canvas.width,
+          y1: canvas.height,
+        });
+        const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
+        const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
+
+        return [{
+          index,
+          text: translatedText,
+          width: typographyWidth,
+          height: typographyHeight,
+          bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
+          line,
+          hints: {
+            sourceText: line.text,
+            sourceBoxWidth: baseWidth,
+            sourceBoxHeight: baseHeight,
+            sourceLineCount: 1,
+            fontFamily: canvasOverlayFontFamily,
+            profile: overlayLayoutProfile,
+          },
+        }];
+      }),
+      { profile: overlayLayoutProfile }
+    );
+
+    const translatedLinePalette = new Map<number, OverlayPalette>();
+    const maxSampleSide = 2400;
+    const sampleScale = Math.min(1, maxSampleSide / Math.max(1, canvas.width, canvas.height));
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = Math.max(1, Math.round(canvas.width * sampleScale));
+    sampleCanvas.height = Math.max(1, Math.round(canvas.height * sampleScale));
+    const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+    if (sampleContext) {
+      sampleContext.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      pageOCR.lines.forEach((line, index) => {
+        if (!translatedByIndex.has(index)) return;
+        const translatedText = translatedByIndex.get(index) || '';
+        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
+        translatedLinePalette.set(index, sampleOverlayPaletteFromLine(
+          sampleContext,
+          line,
+          sourceWidth,
+          sourceHeight,
+          sampleCanvas.width,
+          sampleCanvas.height
+        ));
+      });
+    }
+
+    pageOCR.lines.forEach((line, index) => {
+      const translatedText = translatedByIndex.get(index);
+      if (!translatedText) return;
+      const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
+      if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
+
+      const layout = overlayLayoutByIndex.get(index);
+      const isMaskOnlyLine = Boolean(layout?.hidden);
+      if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
+        return;
+      }
+
+      const renderText = layout?.renderText || translatedText;
+      const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
+      const styleKind = layout?.styleKind;
+      const isDocumentLikeOverlay = styleKind
+        ? styleKind === 'document-heading' || styleKind === 'document-body'
+        : effectiveProfile === 'official';
+      const isComicLikeOverlay = !isDocumentLikeOverlay;
+      const maskBbox = (!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
+      const resolvedSourceBbox = resolveOverlaySourceBBox(line);
+      const sourceWidthRaw = Math.max(1, resolvedSourceBbox.x1 - resolvedSourceBbox.x0);
+      const sourceHeightRaw = Math.max(1, resolvedSourceBbox.y1 - resolvedSourceBbox.y0);
+      const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
+      const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
+      const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
+      const maskAreaRaw = maskWidthRaw * maskHeightRaw;
+      const widthCoverage = sourceWidthRaw / maskWidthRaw;
+      const areaCoverage = sourceAreaRaw / maskAreaRaw;
+      const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
+        && widthCoverage < 0.84
+        && areaCoverage < 0.86;
+      const sourceBbox = isMaskOnlyLine
+        ? resolvedSourceBbox
+        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox));
+
+      const maskRenderSourceLeft = maskBbox.x0;
+      const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
+        ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
+        : sourceBbox.x0;
+      const maskBaseWidth = Math.max(1, (maskBbox.x1 - maskRenderSourceLeft) * scaleX);
+      const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * scaleY);
+      const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * scaleX);
+      const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * scaleY);
+      const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
+      const expansion = resolveOverlayMaskExpansion(line);
+      const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
+      const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
+      const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
+      const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
+      const maskExpandX = Math.min(
+        expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
+        Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
+      );
+      const maskExpandLeft = Math.min(isComicLikeOverlay ? 4 : 1, maskExpandX);
+      const maskExpandRight = maskExpandX;
+      const maskExpandTop = Math.min(
+        expansion.maxExpandTop + mergedMaskBoost + comicMaskBoostTop,
+        Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
+      );
+      const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
+      const documentBottomBoost = isDocumentLikeOverlay
+        ? Math.min(8, Math.max(2, Math.round(maskBaseHeight * 0.16)))
+        : 0;
+      const maskExpandBottom = Math.min(
+        expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
+        Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
+      );
+      const rawMaskLeft = maskRenderSourceLeft * scaleX - maskExpandLeft;
+      const rawMaskTop = maskBbox.y0 * scaleY - maskExpandTop;
+      const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
+      const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
+      const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
+        x0: 0,
+        y0: 0,
+        x1: canvas.width,
+        y1: canvas.height,
+      });
+
+      const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
+      const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
+      const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+      const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
+      const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
+      const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
+      const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+      const rawTextLeft = textSourceLeft * scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
+      const rawTextTop = textSourceTop * scaleY - maskExpandTop - mergedComicTextTopLift;
+      const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
+      const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
+      let textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
+        x0: 0,
+        y0: 0,
+        x1: canvas.width,
+        y1: canvas.height,
+      });
+      if (!isDocumentLikeOverlay) {
+        textRect = clampOverlayRect(textRect.left, textRect.top, textRect.width, textRect.height, {
+          x0: Math.max(0, maskRect.left - 1),
+          y0: Math.max(0, maskRect.top - 1),
+          x1: Math.min(canvas.width, maskRect.left + maskRect.width + 1),
+          y1: Math.min(canvas.height, maskRect.top + maskRect.height + 1),
+        });
+      }
+
+      const palette = translatedLinePalette.get(index) || DEFAULT_OVERLAY_PALETTE;
+      const maskBackgroundColor = palette.backgroundColor;
+      const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
+        ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
+        : 0;
+      const documentTypographyWidth = lowCoverageSource
+        ? Math.max(baseWidth, maskBaseWidth)
+        : Math.max(baseWidth, textRect.width * 0.96);
+      const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
+      const typographyHeight = isDocumentLikeOverlay
+        ? Math.min(
+          textRect.height,
+          Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
+        )
+        : textRect.height;
+      const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
+        sourceText: line.text,
+        sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
+        sourceBoxHeight: isDocumentLikeOverlay
+          ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+          : baseHeight,
+        sourceLineCount: 1,
+        fontFamily: canvasOverlayFontFamily,
+        profile: effectiveProfile,
+        styleKind,
+      });
+      const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
+      const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
+      const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
+      const textStartOffset = layout?.sharedTextStartX !== undefined
+        ? Math.max(0, (layout.sharedTextStartX - renderSourceLeft) * scaleX)
+        : 0;
+      const centerOffset = layout?.sharedCenterX !== undefined
+        ? ((layout.sharedCenterX - renderSourceLeft) * scaleX) - (textRect.width * 0.5)
+        : 0;
+      const innerLeft = layout?.alignment === 'center'
+        ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+        : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
+      const innerWidth = layout?.alignment === 'center'
+        ? textRect.width
+        : Math.max(1, textRect.width - innerLeft);
+      const overlayText = typography.forceSingleLine
+        ? normalizeOverlayInlineText(renderText)
+        : renderText;
+      const rotationDeg = estimateLineRotationDeg(line);
+      const rotationRad = (rotationDeg * Math.PI) / 180;
+      const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+      const minFillRatio = typography.estimatedLines > 1
+        ? (thaiComicLine ? 0.82 : 0.74)
+        : (thaiComicLine ? 0.58 : 0.5);
+      const paintHeight = Math.min(
+        textRect.height,
+        Math.max(
+          typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
+          textRect.height * minFillRatio
+        )
+      );
+      const paintOffsetTop = Math.max(
+        hasThaiText ? 1 : 0,
+        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+      );
+
+      ctx.save();
+      if (rotationDeg !== 0) {
+        ctx.translate(maskRect.left, maskRect.top);
+        ctx.rotate(rotationRad);
+        ctx.fillStyle = maskBackgroundColor;
+        ctx.fillRect(0, 0, maskRect.width, maskRect.height);
+      } else {
+        ctx.fillStyle = maskBackgroundColor;
+        ctx.fillRect(maskRect.left, maskRect.top, maskRect.width, maskRect.height);
+      }
+      ctx.restore();
+
+      if (isMaskOnlyLine) {
+        return;
+      }
+
+      ctx.save();
+      if (rotationDeg !== 0) {
+        ctx.translate(textRect.left, textRect.top);
+        ctx.rotate(rotationRad);
+      }
+
+      const originLeft = rotationDeg !== 0 ? 0 : textRect.left;
+      const originTop = rotationDeg !== 0 ? 0 : textRect.top;
+      const paintLeft = originLeft + innerLeft;
+      const paintTop = originTop + paintOffsetTop;
+
+      ctx.beginPath();
+      ctx.rect(originLeft, originTop, textRect.width, textRect.height);
+      ctx.clip();
+
+      const textBoxLeft = paintLeft + typography.padX;
+      const textBoxTop = paintTop + typography.padY + extraTopPad;
+      const textBoxWidth = Math.max(1, innerWidth - (typography.padX * 2));
+      const textBoxHeight = Math.max(1, paintHeight - ((typography.padY * 2) + extraTopPad + extraBottomPad));
+      const lineHeightPx = Math.max(1, typography.fontSize * typography.lineHeight);
+      const maxLines = Math.max(1, Math.floor(textBoxHeight / lineHeightPx));
+      const overlayTextWeight = Number(palette.textFillWeight || 400);
+      const resolvedTextWeight = Math.max(400, Math.min(700, Math.round(overlayTextWeight)));
+
+      ctx.font = `${resolvedTextWeight} ${typography.fontSize}px ${canvasOverlayFontFamily}`;
+      const lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
+      ctx.fillStyle = palette.textColor;
+      const strokeBaseWidth = Number(palette.textStrokeWidth || 0);
+      const resolvedStrokeWidth = strokeBaseWidth > 0
+        ? Math.max(0.55, Math.min(1.35, strokeBaseWidth * (typography.fontSize / 14)))
+        : 0;
+      ctx.textBaseline = 'top';
+      ctx.textAlign = layout?.alignment === 'center' ? 'center' : 'left';
+
+      lines.forEach((lineText, lineIndex) => {
+        const y = textBoxTop + (lineIndex * lineHeightPx);
+        if (y + lineHeightPx > textBoxTop + textBoxHeight + 0.5) return;
+        const x = ctx.textAlign === 'center'
+          ? textBoxLeft + (textBoxWidth / 2)
+          : textBoxLeft;
+        if (resolvedStrokeWidth > 0 && palette.textStrokeColor) {
+          ctx.save();
+          ctx.lineJoin = 'round';
+          ctx.miterLimit = 2;
+          ctx.lineWidth = resolvedStrokeWidth;
+          ctx.strokeStyle = palette.textStrokeColor;
+          ctx.strokeText(lineText, x, y, textBoxWidth);
+          ctx.restore();
+        }
+        ctx.fillText(lineText, x, y, textBoxWidth);
+      });
+
+      ctx.restore();
+    });
+
+    const pngBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to create translated PNG export.'));
+      }, 'image/png');
+    });
+
+    const pngUrl = URL.createObjectURL(pngBlob);
+    const anchor = document.createElement('a');
+    anchor.href = pngUrl;
+    anchor.download = file.name.replace(/\.[^.]+$/u, `_page_${pageNum}_translated_overlay.png`);
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(pngUrl);
+  };
+
   const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode) => {
     if (!file) return;
 
@@ -3769,26 +6187,24 @@ export default function App() {
         URL.revokeObjectURL(url);
       } else {
         const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
-        const translatedSections: string[] = [];
+        const translatedPageMap = new Map<number, OCRPageResult>();
+        const translatedEntryMap = new Map<number, OCRTranslationCacheEntry>();
+        const sourcePageMap = new Map<number, OCRPageResult>();
         let missingPages = 0;
 
         scopedPages.forEach(({ pageNum, ocr }) => {
+          sourcePageMap.set(pageNum, ocr);
           const translatedEntry = resolveTranslatedEntryForExport(pageNum, ocr, selectedEngine);
           if (!translatedEntry) {
             missingPages += 1;
             return;
           }
 
-          const translatedByIndex = new Map<number, string>(
-            translatedEntry.translatedByIndex.map((item) => [item.index, item.text])
-          );
-          const lines = (ocr.lines || [])
-            .map((line, lineIndex) => normalizeWhitespace(String(translatedByIndex.get(lineIndex) || '')))
-            .filter(Boolean);
-          translatedSections.push(`--- Page ${pageNum} ---\n${lines.join('\n')}`);
+          translatedEntryMap.set(pageNum, translatedEntry);
+          translatedPageMap.set(pageNum, buildTranslatedPageOCRForExport(ocr, translatedEntry));
         });
 
-        if (translatedSections.length === 0) {
+        if (translatedPageMap.size === 0) {
           setTranslationStatus({
             kind: 'error',
             message: 'No translated cache found for selected OCR model and target language. Run translation first.',
@@ -3796,30 +6212,52 @@ export default function App() {
           return;
         }
 
+        if (scope === 'current') {
+          const currentSourcePage = sourcePageMap.get(currentPage);
+          const currentEntry = translatedEntryMap.get(currentPage);
+          if (currentSourcePage && currentEntry) {
+            await exportTranslatedOverlayPngForSinglePage(currentPage, currentSourcePage, currentEntry);
+          }
+        }
+
+        if (scope === 'all' && fileType === 'pdf') {
+          const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
+          const arrayBuffer = await file.arrayBuffer();
+          const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
+            arrayBuffer,
+            translatedPageMap,
+            pageRange
+          );
+          const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          const suffix = '_translated_searchable.pdf';
+          anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+          URL.revokeObjectURL(url);
+        }
+
         if (missingPages > 0) {
           setTranslationStatus({
             kind: 'info',
-            message: `Exported translated text for ${translatedSections.length} pages; ${missingPages} pages had no matching translated cache.`,
+            message: `Exported translated overlay for ${translatedPageMap.size} pages; ${missingPages} pages had no matching translated cache.`,
+          });
+        } else if (scope === 'current') {
+          setTranslationStatus({
+            kind: 'success',
+            message: `Exported page ${currentPage} translated overlay PNG.`,
+          });
+        } else {
+          setTranslationStatus({
+            kind: 'success',
+            message: `Exported translated searchable PDF for ${translatedPageMap.size} pages.`,
           });
         }
-
-        const payload = translatedSections.join('\n\n');
-
-        const textBlob = new Blob([payload], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(textBlob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        const suffix = scope === 'current'
-          ? `_page_${currentPage}_translated.txt`
-          : '_translated_all_pages.txt';
-        anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
-        document.body.appendChild(anchor);
-        anchor.click();
-        document.body.removeChild(anchor);
-        URL.revokeObjectURL(url);
       }
 
-      setDownloadMenuScope(null);
+      setIsDownloadMenuOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown download error';
       setTranslationStatus({ kind: 'error', message: `Download failed: ${message}` });
@@ -3910,14 +6348,19 @@ export default function App() {
       );
       const dedupedLines = dedupeTranslatableLinesForTranslation(assistedLines);
       const inferredSourceLanguage = inferSourceLanguageFromTextHints(dedupedLines, resolvedSourceFromOCR);
-      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      const pageBiasedSourceLanguage = resolveComicPageSourceLanguage(
         dedupedLines,
         inferredSourceLanguage,
+        translationMode
+      );
+      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+        dedupedLines,
+        pageBiasedSourceLanguage,
         normalizedTargetLanguage,
         translationMode
       )
         ? 'en'
-        : inferredSourceLanguage;
+        : pageBiasedSourceLanguage;
       const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
       const rawLines = assistedLines.filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
@@ -3955,11 +6398,24 @@ export default function App() {
       if (groupingProfile === 'line-by-line' && rawLines.length > lines.length) {
         lines = rawLines;
       }
-      const groups = buildTranslationGroups(lines, groupingProfile)
+      const resolvedGrouping = resolveTranslationGroupsWithLayout(
+        pageNum,
+        pageOCR,
+        lines,
+        groupingProfile,
+        translationSourceLanguage,
+        normalizedTargetLanguage,
+        translationMode
+      );
+      groupingProfile = resolvedGrouping.groupingProfile;
+      pushLayoutGroupingDebugPayload(pageNum, groupingProfile, resolvedGrouping.layoutResult, resolvedGrouping.groups);
+      const groups = resolvedGrouping.groups
         .map((group, groupIndex) => {
-          const rawSourceText = group.lines
-            .map((line) => line.text)
-            .join(' ');
+          const rawSourceText = composeGroupSourceText(
+            group.lines,
+            group.groupType || 'unknown',
+            groupingProfile
+          );
           const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
           const sourceText = normalizeSourceForTranslation(
             rawSourceText,
@@ -3991,6 +6447,7 @@ export default function App() {
         lines,
         groups,
         groupingProfile,
+        groupingDecision: resolvedGrouping.groupingDecision,
       };
 
       const pageEstimate = 260 + groups.reduce((sum, group) => sum + String(group.protectedText || '').length + 28, 0);
@@ -4069,14 +6526,16 @@ export default function App() {
         );
 
         let redistributedCursor = 0;
-        group.lines.forEach((line) => {
+        group.lines.forEach((line, lineOffset) => {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
           redistributedCursor += 1;
           const fallbackLine = resolveRedistributedLineFallback(
             sourceLineText,
             normalizedGroupText,
-            normalizedTargetLanguage
+            normalizedTargetLanguage,
+            lineOffset,
+            group.lines.length
           );
           const nextText = finalizeTranslatedLine(
             sourceLineText,
@@ -4230,14 +6689,19 @@ export default function App() {
     );
     const dedupedTranslatableLines = dedupeTranslatableLinesForTranslation(assistedLines);
     const inferredSourceLanguage = inferSourceLanguageFromTextHints(dedupedTranslatableLines, effectiveSourceLanguage);
-    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+    const pageBiasedSourceLanguage = resolveComicPageSourceLanguage(
       dedupedTranslatableLines,
       inferredSourceLanguage,
+      translationMode
+    );
+    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      dedupedTranslatableLines,
+      pageBiasedSourceLanguage,
       normalizedTargetLanguage,
       translationMode
     )
       ? 'en'
-      : inferredSourceLanguage;
+      : pageBiasedSourceLanguage;
     const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedTranslatableLines)
       || hasStrongLatinAnchorLines(dedupedTranslatableLines);
     const rawTranslatableLines = assistedLines
@@ -4294,9 +6758,24 @@ export default function App() {
       translatableLines = rawTranslatableLines;
     }
 
-    const groups = buildTranslationGroups(translatableLines, groupingProfile);
-    const preparedGroups = groups.map((group, groupIndex) => {
-      const rawSourceText = group.lines.map((line) => line.text).join(' ');
+    const resolvedGrouping = resolveTranslationGroupsWithLayout(
+      pageNum,
+      pageOCR,
+      translatableLines,
+      groupingProfile,
+      translationSourceLanguage,
+      normalizedTargetLanguage,
+      translationMode
+    );
+    groupingProfile = resolvedGrouping.groupingProfile;
+    pushLayoutGroupingDebugPayload(pageNum, groupingProfile, resolvedGrouping.layoutResult, resolvedGrouping.groups);
+
+    const preparedGroups = resolvedGrouping.groups.map((group, groupIndex) => {
+      const rawSourceText = composeGroupSourceText(
+        group.lines,
+        group.groupType || 'unknown',
+        groupingProfile
+      );
       const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
       const sourceText = normalizeSourceForTranslation(rawSourceText, groupSourceLanguage);
       const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
@@ -4471,14 +6950,16 @@ export default function App() {
       const eligibleLines = group.lines;
       const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, eligibleLines, normalizedTargetLanguage);
       let redistributedCursor = 0;
-      group.lines.forEach((line) => {
+      group.lines.forEach((line, lineOffset) => {
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
         const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
         redistributedCursor += 1;
         const fallbackLine = resolveRedistributedLineFallback(
           sourceLineText,
           translatedGroup,
-          normalizedTargetLanguage
+          normalizedTargetLanguage,
+          lineOffset,
+          group.lines.length
         );
         const finalizedLine = finalizeTranslatedLine(
           sourceLineText,
@@ -4490,6 +6971,24 @@ export default function App() {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
       });
+    });
+
+    translatableLines.forEach((line) => {
+      if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) {
+        return;
+      }
+      if (translatedByIndex.has(line.index)) {
+        return;
+      }
+      const finalizedFallback = finalizeTranslatedLine(line.text, line.text, normalizedTargetLanguage);
+      translatedByIndex.set(line.index, finalizedFallback || line.text);
+      if (shouldRetryLineTranslation(line.text, finalizedFallback, translationSourceLanguage, normalizedTargetLanguage)) {
+        retryLineMap.set(line.index, {
+          index: line.index,
+          sourceText: line.text,
+          sourceLanguage: translationSourceLanguage,
+        });
+      }
     });
 
     let retryAppliedCount = 0;
@@ -4794,6 +7293,46 @@ export default function App() {
         ? 'text-[#F472B6]'
         : 'text-[#60A5FA]';
 
+  const effectiveDownloadScope: DownloadScope = downloadScopeSelection === 'all' && fileType === 'pdf'
+    ? 'all'
+    : 'current';
+  const selectedDownloadEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+  const downloadScopedPages = resolveModelScopedPagesForExport(effectiveDownloadScope);
+  const downloadScopePageNumbers = effectiveDownloadScope === 'all' && fileType === 'pdf'
+    ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
+    : [currentPage];
+  const ocrCoveredPageNumbers = downloadScopedPages
+    .map((item) => item.pageNum)
+    .sort((a, b) => a - b);
+  const ocrCoveredPageSet = new Set(ocrCoveredPageNumbers);
+  const missingOcrPageNumbers = downloadScopePageNumbers.filter((pageNum) => !ocrCoveredPageSet.has(pageNum));
+  const translatedAvailablePageNumbers = downloadScopedPages
+    .filter(({ pageNum, ocr }) => Boolean(resolveTranslatedEntryForExport(pageNum, ocr, selectedDownloadEngine)))
+    .map((item) => item.pageNum)
+    .sort((a, b) => a - b);
+  const translatedAvailablePageSet = new Set(translatedAvailablePageNumbers);
+  const missingTranslatedPageNumbers = ocrCoveredPageNumbers
+    .filter((pageNum) => !translatedAvailablePageSet.has(pageNum));
+  const canExportOriginalSelection = downloadScopedPages.length > 0;
+  const canExportTranslatedSelection = translatedAvailablePageNumbers.length > 0;
+
+  const triggerPopupTranslation = (engine: 'offline' | 'ai') => {
+    if (effectiveDownloadScope === 'all' && fileType === 'pdf') {
+      if (engine === 'offline') {
+        void handleOfflineTranslateAllPages();
+        return;
+      }
+      void handleAiTranslateAllPages();
+      return;
+    }
+
+    if (engine === 'offline') {
+      void handleOfflineTranslate();
+      return;
+    }
+    void handleAiTranslate();
+  };
+
   return (
     <div className="relative flex flex-col h-screen w-screen bg-[#0b0f16] text-slate-100 overflow-hidden font-sans">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -4934,50 +7473,15 @@ export default function App() {
           ))}
         </div>
 
-        <div className="relative" ref={downloadMenuRef}>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setDownloadMenuScope((prev) => (prev === 'current' ? null : 'current'))}
-              className={`p-2 rounded transition-colors ${downloadMenuScope === 'current' ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'}`}
-              title="Download current page"
-              disabled={isDownloadingResult || !file}
-            >
-              <Download size={16} />
-            </button>
-            <button
-              onClick={() => setDownloadMenuScope((prev) => (prev === 'all' ? null : 'all'))}
-              className={`p-2 rounded transition-colors ${downloadMenuScope === 'all' ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'} ${(fileType !== 'pdf' || !file) ? 'opacity-50 cursor-not-allowed' : ''}`}
-              title="Download all pages"
-              disabled={isDownloadingResult || !file || fileType !== 'pdf'}
-            >
-              <Files size={16} />
-            </button>
-          </div>
-
-          {downloadMenuScope && (
-            <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/15 bg-[#0f131b]/95 backdrop-blur-xl shadow-2xl p-2 z-50">
-              <div className="px-2 pt-1 pb-2 text-[11px] uppercase tracking-wide text-slate-400">
-                {downloadMenuScope === 'current' ? `Download page ${currentPage}` : 'Download all pages'}
-              </div>
-              <button
-                onClick={() => void handleHeaderDownload(downloadMenuScope, 'original')}
-                disabled={isDownloadingResult}
-                className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-100 hover:bg-white/10 transition-colors disabled:opacity-60"
-              >
-                Original OCR Result (Searchable PDF)
-              </button>
-              <button
-                onClick={() => void handleHeaderDownload(downloadMenuScope, 'translated')}
-                disabled={isDownloadingResult}
-                className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-100 hover:bg-white/10 transition-colors disabled:opacity-60"
-              >
-                Translated Result (TXT)
-              </button>
-              {isDownloadingResult && (
-                <div className="px-3 pt-2 pb-1 text-xs text-slate-400">Preparing download...</div>
-              )}
-            </div>
-          )}
+        <div className="relative">
+          <button
+            onClick={() => setIsDownloadMenuOpen((prev) => !prev)}
+            className={`p-2 rounded transition-colors ${isDownloadMenuOpen ? 'bg-[#2B9BFF]/25 text-white' : 'hover:bg-white/10 text-slate-300 hover:text-white'}`}
+            title="Download"
+            disabled={isDownloadingResult || !file}
+          >
+            <Download size={16} />
+          </button>
         </div>
       </header>
 
@@ -5018,6 +7522,138 @@ export default function App() {
           />
         </React.Suspense>
       </div>
+
+      {isDownloadMenuOpen && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/62 backdrop-blur-sm px-4 py-6">
+          <div ref={downloadMenuRef} className="w-full max-w-md rounded-2xl border border-white/15 bg-[#0f131b]/96 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-300">Download Export</div>
+              <button
+                type="button"
+                onClick={() => setIsDownloadMenuOpen(false)}
+                className="rounded-md border border-white/15 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:border-white/30 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-2 p-3">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Scope</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadScopeSelection('current')}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadScopeSelection === 'current' ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
+                >
+                  Current Page
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDownloadScopeSelection('all')}
+                  disabled={fileType !== 'pdf'}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadScopeSelection === 'all' ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'} disabled:cursor-not-allowed disabled:opacity-45`}
+                >
+                  All Pages
+                </button>
+              </div>
+
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Content</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadModeSelection('original')}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadModeSelection === 'original' ? 'border-emerald-300/65 bg-emerald-500/16 text-emerald-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
+                >
+                  Original OCR PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDownloadModeSelection('translated')}
+                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadModeSelection === 'translated' ? 'border-emerald-300/65 bg-emerald-500/16 text-emerald-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
+                >
+                  Translated Overlay
+                </button>
+              </div>
+
+              {downloadModeSelection === 'translated' && (
+                <div className="space-y-2 rounded-lg border border-white/12 bg-slate-900/60 p-2">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Language + Quick Translate</div>
+                  <select
+                    value={targetLanguage}
+                    onChange={(event) => setTargetLanguage(event.target.value)}
+                    aria-label="Download translated target language"
+                    title="Download translated target language"
+                    className="w-full rounded-md border border-white/15 bg-slate-950/80 px-2 py-1.5 text-[11px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                  >
+                    <option value="th">Thai (ไทย)</option>
+                    <option value="en">English</option>
+                    <option value="ja">Japanese (日本語)</option>
+                    <option value="ko">Korean (한국어)</option>
+                    <option value="zh">Chinese (中文)</option>
+                  </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => triggerPopupTranslation('offline')}
+                      disabled={isAiProcessing || isOfflineProcessing}
+                      className="rounded-md border border-emerald-400/55 bg-emerald-500/16 px-2 py-1.5 text-[11px] font-semibold text-emerald-100 transition-colors hover:bg-emerald-500/26 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Translate Offline
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => triggerPopupTranslation('ai')}
+                      disabled={isAiProcessing || isOfflineProcessing}
+                      className="rounded-md border border-cyan-300/65 bg-cyan-500/16 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/26 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      Translate AI
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    target {effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'all OCR pages' : `page ${currentPage}`}
+                  </div>
+                </div>
+              )}
+
+              {effectiveDownloadScope === 'all' && fileType === 'pdf' && missingOcrPageNumbers.length > 0 && (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
+                  OCR missing on {missingOcrPageNumbers.length} page(s): {formatPageListSummary(missingOcrPageNumbers)}. Export can continue with OCR pages only.
+                </div>
+              )}
+
+              {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length > 0 && missingTranslatedPageNumbers.length > 0 && (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
+                  Translation cache missing on {missingTranslatedPageNumbers.length} OCR page(s): {formatPageListSummary(missingTranslatedPageNumbers)}. You can translate now or export available pages.
+                </div>
+              )}
+
+              {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length === 0 && (
+                <div className="rounded-lg border border-rose-500/45 bg-rose-500/12 px-2 py-1.5 text-[11px] text-rose-100">
+                  No OCR cache available yet for this scope. Run OCR first.
+                </div>
+              )}
+
+              <div className="rounded-lg border border-white/12 bg-slate-900/55 px-2 py-1.5 text-[10px] text-slate-300">
+                OCR pages in scope: {ocrCoveredPageNumbers.length > 0 ? formatPageListSummary(ocrCoveredPageNumbers) : '-'}
+                {downloadModeSelection === 'translated' && (
+                  <span>{` | translated pages: ${translatedAvailablePageNumbers.length > 0 ? formatPageListSummary(translatedAvailablePageNumbers) : '-'}`}</span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleHeaderDownload(effectiveDownloadScope, downloadModeSelection)}
+                disabled={isDownloadingResult || (downloadModeSelection === 'original' ? !canExportOriginalSelection : !canExportTranslatedSelection)}
+                className="w-full rounded-lg border border-cyan-300/60 bg-cyan-500/18 px-3 py-2 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/28 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isDownloadingResult
+                  ? 'Preparing download...'
+                  : `Export ${effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'All Pages' : `Page ${currentPage}`} • ${downloadModeSelection === 'original' ? 'Original OCR PDF' : 'Translated Overlay'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

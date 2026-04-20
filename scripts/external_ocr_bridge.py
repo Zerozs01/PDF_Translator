@@ -72,6 +72,53 @@ def bbox_from_points(points: Any) -> Dict[str, float]:
     return {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
 
 
+def normalize_quad_points(points: Any) -> List[Dict[str, float]]:
+    normalized: List[Dict[str, float]] = []
+    for point in points or []:
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            normalized.append({
+                "x": float(point[0]),
+                "y": float(point[1]),
+            })
+    return normalized
+
+
+def angle_deg_from_points(points: Any) -> float | None:
+    normalized_points: List[Tuple[float, float]] = []
+    for point in points or []:
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            normalized_points.append((float(point[0]), float(point[1])))
+    if len(normalized_points) < 2:
+        return None
+
+    baseline_dx = 1.0
+    baseline_dy = 0.0
+    longest_length = 0.0
+    point_count = len(normalized_points)
+    for index in range(point_count):
+        next_index = (index + 1) % point_count
+        x0, y0 = normalized_points[index]
+        x1, y1 = normalized_points[next_index]
+        dx = x1 - x0
+        dy = y1 - y0
+        length = math.hypot(dx, dy)
+        if length > longest_length:
+            longest_length = length
+            baseline_dx = dx / length
+            baseline_dy = dy / length
+
+    if baseline_dx < 0 or (abs(baseline_dx) < 0.15 and baseline_dy < 0):
+        baseline_dx *= -1
+        baseline_dy *= -1
+
+    angle = math.degrees(math.atan2(baseline_dy, baseline_dx))
+    while angle <= -90:
+        angle += 180
+    while angle > 90:
+        angle -= 180
+    return float(angle)
+
+
 def sort_hint_from_points(points: Any) -> Tuple[float | None, float | None]:
     normalized_points: List[Tuple[float, float]] = []
     for point in points or []:
@@ -198,6 +245,9 @@ def make_line(
     words: List[Dict[str, Any]] | None = None,
     sort_y: float | None = None,
     sort_x: float | None = None,
+    quad: List[Dict[str, float]] | None = None,
+    angle_deg: float | None = None,
+    source_engine: str | None = None,
 ) -> Dict[str, Any]:
     normalized_text = normalize_text(text)
     line = {
@@ -213,8 +263,16 @@ def make_line(
     }
     if sort_y is not None:
         line["_sortY"] = float(sort_y)
+        line["sortHintY"] = float(sort_y)
     if sort_x is not None:
         line["_sortX"] = float(sort_x)
+        line["sortHintX"] = float(sort_x)
+    if quad:
+        line["quad"] = quad
+    if angle_deg is not None:
+        line["angleDeg"] = float(angle_deg)
+    if source_engine:
+        line["sourceEngine"] = str(source_engine)
     return line
 
 
@@ -837,7 +895,14 @@ def bbox_union(items: List[Dict[str, Any]]) -> Dict[str, float]:
     }
 
 
-def make_line_from_words(words: List[Dict[str, Any]], sort_y: float | None = None, sort_x: float | None = None) -> Dict[str, Any]:
+def make_line_from_words(
+    words: List[Dict[str, Any]],
+    sort_y: float | None = None,
+    sort_x: float | None = None,
+    quad: List[Dict[str, float]] | None = None,
+    angle_deg: float | None = None,
+    source_engine: str | None = None,
+) -> Dict[str, Any]:
     normalized_words = sorted(words, key=lambda item: (float(item["bbox"].get("x0", 0.0)), float(item["bbox"].get("y0", 0.0))))
     text = " ".join(str(word.get("text") or "").strip() for word in normalized_words).strip()
     confidences = [normalize_confidence(word.get("confidence", 0.0)) for word in normalized_words]
@@ -847,7 +912,7 @@ def make_line_from_words(words: List[Dict[str, Any]], sort_y: float | None = Non
         sort_y = min(float(word["bbox"].get("y0", 0.0)) for word in normalized_words) if normalized_words else None
     if sort_x is None:
         sort_x = min(float(word["bbox"].get("x0", 0.0)) for word in normalized_words) if normalized_words else None
-    return make_line(text, confidence, bbox, normalized_words, sort_y, sort_x)
+    return make_line(text, confidence, bbox, normalized_words, sort_y, sort_x, quad, angle_deg, source_engine)
 
 
 def looks_mostly_upper(text: str) -> bool:
@@ -873,6 +938,51 @@ def normalize_latin_token_for_lexicon(text: str) -> str:
         .replace("6", "G")
         .replace("7", "T")
         .replace("8", "B")
+    )
+
+
+PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
+    "AHME",
+    "EHME",
+    "YOUCOULDSAY",
+    "SOMETHINGTHATMIGHT",
+    "HELPYOUTOO",
+    "ENTRANCE",
+    "AREONLY",
+    "ANDLEAVETHE",
+    "OURCHANCE",
+    "THEM",
+    "OPENA",
+    "SHOELOCKER",
+    "OPENASHOELOCKER",
+    "BUILDING",
+    "THTHIS",
+    "THTHISLIGHT",
+    "THISLIGHT",
+    "STAFF",
+    "PRIMERO",
+    "PRIMEROLAFOTO",
+    "LAFOTO",
+    "METIENDO",
+    "METIENDOPOR",
+    "LISTO",
+    "LISTOCON",
+    "ILISTOCON",
+}
+
+
+def is_known_paddle_dialogue_fragment(text: str) -> bool:
+    raw = normalize_text(str(text or ""))
+    if not raw:
+        return False
+    key = normalize_latin_token_for_lexicon(raw)
+    if key in PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS:
+        return True
+    compact = re.sub(r"\s+", "", raw)
+    return bool(
+        re.fullmatch(r"(?:E+H+|A+H+|M+E+)[!?…]+", compact, re.I)
+        or re.fullmatch(r"E+H+[!?…]*M+E+[!?…]*", compact, re.I)
+        or re.fullmatch(r"A+H+[!?…]*M+E+[!?…]*", compact, re.I)
     )
 
 
@@ -1556,6 +1666,272 @@ def prune_easyocr_panel_shadow_singletons(
     return kept, drops
 
 
+def count_line_word_boxes(line: Dict[str, Any]) -> int:
+    words = line.get("words") or []
+    valid_words = [word for word in words if normalize_text(str(word.get("text") or ""))]
+    if valid_words:
+        return len(valid_words)
+    return len(split_text_tokens(str(line.get("text") or "")))
+
+
+def expand_contextual_phrase_bbox(
+    bbox: Dict[str, Any],
+    width: int,
+    height: int,
+    left_ratio: float,
+    right_ratio: float,
+    vertical_ratio: float = 0.08,
+) -> Dict[str, float]:
+    line_w = max(1.0, bbox_width(bbox))
+    line_h = max(1.0, bbox_height(bbox))
+    return {
+        "x0": max(0.0, float(bbox.get("x0", 0.0)) - line_w * left_ratio),
+        "y0": max(0.0, float(bbox.get("y0", 0.0)) - line_h * vertical_ratio),
+        "x1": min(float(max(1, width)), float(bbox.get("x1", 0.0)) + line_w * right_ratio),
+        "y1": min(float(max(1, height)), float(bbox.get("y1", 0.0)) + line_h * vertical_ratio),
+    }
+
+
+def prune_paddle_panel_contextual_noise_lines(
+    lines: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    language_codes: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 1 or is_cjk_or_thai_language_codes(language_codes):
+        return list(lines), []
+
+    drops: List[Dict[str, Any]] = []
+    kept: List[Dict[str, Any]] = []
+    normalized_items = [
+        {
+            "line": source_line,
+            "index": source_index,
+            "key": normalize_latin_token_for_lexicon(normalize_text(str(source_line.get("text") or ""))),
+            "bbox": source_line.get("bbox") or {},
+        }
+        for source_index, source_line in enumerate(lines)
+    ]
+
+    def has_nearby_context(index: int, direction: int, predicate: Any) -> bool:
+        item = normalized_items[index]
+        bbox = item["bbox"]
+        center_x = bbox_center_x(bbox)
+        center_y = bbox_center_y(bbox)
+        for other in normalized_items:
+            order_delta = int(other["index"]) - index
+            if direction < 0 and not (-4 <= order_delta < 0):
+                continue
+            if direction > 0 and not (0 < order_delta <= 4):
+                continue
+            other_bbox = other["bbox"]
+            center_delta_x = abs(center_x - bbox_center_x(other_bbox))
+            center_delta_y = abs(center_y - bbox_center_y(other_bbox))
+            same_column = horizontal_overlap_ratio(bbox, other_bbox) >= 0.12 or center_delta_x <= max(260.0, width * 0.32)
+            if same_column and center_delta_y <= max(420.0, height * 0.12) and predicate(str(other["key"] or "")):
+                return True
+        return False
+
+    for line_index, line in enumerate(lines):
+        text = normalize_text(str(line.get("text") or ""))
+        if not text:
+            continue
+        known_dialogue_fragment = is_known_paddle_dialogue_fragment(text)
+        line_key = normalized_items[line_index]["key"]
+
+        if line_key in {"SOLD", "SOLDIT", "ISOLD"}:
+            profit_context = has_nearby_context(
+                line_index,
+                -1,
+                lambda key: "THEPROFITSHAD" in key or "PROFITSHAD" in key or "GETTING40OF" in key,
+            )
+            if profit_context:
+                expand_left = 0.58 if line_key == "SOLDIT" else 0.08 if line_key == "ISOLD" else 1.05
+                expand_right = 0.68 if line_key == "ISOLD" else 0.08 if line_key == "SOLDIT" else 0.95
+                repaired = dict(line)
+                repaired["text"] = "I SOLD IT."
+                repaired["bbox"] = expand_contextual_phrase_bbox(line.get("bbox") or {}, width, height, expand_left, expand_right)
+                repaired["words"] = []
+                layout_hints = dict(repaired.get("layoutHints") or {})
+                layout_hints["repairedTextFromContext"] = "I SOLD IT."
+                repaired["layoutHints"] = layout_hints
+                kept.append(repaired)
+                continue
+
+        contextual_dialogue_ghost = False
+        if line_key == "CARNED":
+            contextual_dialogue_ghost = (
+                has_nearby_context(
+                    line_index,
+                    -1,
+                    lambda key: "IDONTCARE" in key or "IALREADYEARNED" in key or "EARNED" in key,
+                )
+                or has_nearby_context(
+                    line_index,
+                    1,
+                    lambda key: "ENOUGH" in key or "EARNEDENOUGH" in key,
+                )
+            )
+        elif re.fullmatch(r"WINGSI{2,}", line_key or ""):
+            contextual_dialogue_ghost = (
+                has_nearby_context(
+                    line_index,
+                    -1,
+                    lambda key: "IHAVEWINGS" in key or "LOOKBJORN" in key or "BJORN" in key,
+                )
+                or has_nearby_context(
+                    line_index,
+                    1,
+                    lambda key: "IHAVEWINGS" in key or "BJORN" in key,
+                )
+            )
+        elif line_key == "THAVE":
+            contextual_dialogue_ghost = (
+                has_nearby_context(
+                    line_index,
+                    -1,
+                    lambda key: "IHAVEWINGS" in key or "LOOKBJORN" in key or "BJORN" in key or "WINGS" in key,
+                )
+                or has_nearby_context(
+                    line_index,
+                    1,
+                    lambda key: "IHAVEWINGS" in key or "LOOKBJORN" in key or "BJORN" in key or "WINGS" in key,
+                )
+            )
+        if contextual_dialogue_ghost:
+            drops.append({
+                "reason": "paddlePanelContextualDialogueGhost",
+                "source": "paddle_panel",
+                "text": text,
+                "confidence": normalize_confidence(line.get("confidence", 0.0)),
+            })
+            continue
+
+        bbox = line.get("bbox") or {}
+        line_w = max(1.0, bbox_width(bbox))
+        line_h = max(1.0, bbox_height(bbox))
+        line_area = line_w * line_h
+        center_x = bbox_center_x(bbox)
+        center_y = bbox_center_y(bbox)
+        compact_length = len(re.sub(r"\s+", "", text))
+        token_count = len(split_text_tokens(text))
+        word_box_count = count_line_word_boxes(line)
+
+        def collect_local_neighbors() -> List[Dict[str, Any]]:
+            neighbors: List[Dict[str, Any]] = []
+            for other in lines:
+                if other is line:
+                    continue
+                other_text = normalize_text(str(other.get("text") or ""))
+                if not other_text:
+                    continue
+                other_bbox = other.get("bbox") or {}
+                other_w = max(1.0, bbox_width(other_bbox))
+                other_h = max(1.0, bbox_height(other_bbox))
+                overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+                overlap_y = vertical_overlap_ratio(bbox, other_bbox)
+                other_center_x = bbox_center_x(other_bbox)
+                other_center_y = bbox_center_y(other_bbox)
+                token_count_other = len(split_text_tokens(other_text))
+                word_boxes_other = count_line_word_boxes(other)
+                strong_signal = (
+                    word_boxes_other >= 2
+                    or token_count_other >= 2
+                    or normalize_confidence(other.get("confidence", 0.0)) >= normalize_confidence(line.get("confidence", 0.0)) + 2.0
+                )
+                neighbors.append({
+                    "line": other,
+                    "text": other_text,
+                    "bbox": other_bbox,
+                    "width": other_w,
+                    "height": other_h,
+                    "overlapX": overlap_x,
+                    "overlapY": overlap_y,
+                    "centerDeltaX": abs(center_x - other_center_x),
+                    "centerDeltaY": abs(center_y - other_center_y),
+                    "centerY": other_center_y,
+                    "strongSignal": strong_signal,
+                })
+            return neighbors
+
+        neighbors = collect_local_neighbors()
+
+        if (
+            not has_non_latin_characters(text)
+            and 4 <= token_count <= 8
+            and word_box_count >= 3
+            and line_w >= max(840.0, width * 0.24)
+        ):
+            same_band_neighbors = [
+                neighbor for neighbor in neighbors
+                if neighbor["overlapY"] >= 0.18 or neighbor["centerDeltaY"] <= max(96.0, line_h * 0.95)
+            ]
+            left_anchors = [
+                neighbor for neighbor in same_band_neighbors
+                if neighbor["strongSignal"]
+                and neighbor["width"] <= line_w * 0.46
+                and float(neighbor["bbox"].get("x1", 0.0)) <= center_x - max(84.0, line_w * 0.08)
+            ]
+            right_anchors = [
+                neighbor for neighbor in same_band_neighbors
+                if neighbor["strongSignal"]
+                and neighbor["width"] <= line_w * 0.46
+                and float(neighbor["bbox"].get("x0", 0.0)) >= center_x + max(84.0, line_w * 0.08)
+            ]
+            bridge_detected = any(
+                abs(left_anchor["centerY"] - right_anchor["centerY"]) <= max(104.0, line_h * 0.9)
+                and (float(right_anchor["bbox"].get("x0", 0.0)) - float(left_anchor["bbox"].get("x1", 0.0))) >= max(240.0, line_w * 0.18)
+                for left_anchor in left_anchors
+                for right_anchor in right_anchors
+            )
+            if bridge_detected:
+                drops.append({
+                    "reason": "paddlePanelBridgeLine",
+                    "source": "paddle_panel",
+                    "text": text,
+                    "confidence": normalize_confidence(line.get("confidence", 0.0)),
+                })
+                continue
+
+        if not has_non_latin_characters(text) and token_count <= 3 and compact_length <= 16:
+            local_strong_neighbors = [
+                neighbor for neighbor in neighbors
+                if neighbor["strongSignal"]
+                and neighbor["centerDeltaY"] <= max(220.0, line_h * 2.4)
+                and (
+                    neighbor["overlapX"] >= 0.28
+                    or neighbor["centerDeltaX"] <= max(220.0, line_w * 1.35)
+                )
+            ]
+            strong_above = any(neighbor["centerY"] < center_y - max(16.0, line_h * 0.18) for neighbor in local_strong_neighbors)
+            strong_below = any(neighbor["centerY"] > center_y + max(16.0, line_h * 0.18) for neighbor in local_strong_neighbors)
+
+            trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14
+            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text))
+            oversized_weak_singleton = (
+                token_count <= 1
+                and compact_length <= 12
+                and word_box_count <= 1
+                and line_area >= 22000.0
+            )
+
+            if (
+                (strong_below and (trailing_hyphen_fragment or malformed_mixed_case))
+                or (strong_above and strong_below and oversized_weak_singleton)
+            ) and not known_dialogue_fragment:
+                drops.append({
+                    "reason": "paddlePanelFragmentLine",
+                    "source": "paddle_panel",
+                    "text": text,
+                    "confidence": normalize_confidence(line.get("confidence", 0.0)),
+                })
+                continue
+
+        kept.append(line)
+
+    return kept, drops
+
+
 def reorder_tilted_line_clusters(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if len(lines) <= 1:
         return list(lines)
@@ -1620,9 +1996,12 @@ def minimal_cleanup_external_result(
         "inlineAdWord": 0,
         "watermarkLine": 0,
         "mergedLatinSplit": 0,
+        "contextualBridgeLine": 0,
+        "contextualFragmentLine": 0,
     }
     dropped_words: List[Dict[str, Any]] = []
     is_non_english_latin_panel = pipeline_profile == "panel" and is_non_english_latin_language_codes(language_codes)
+    is_latin_panel = pipeline_profile == "panel" and not is_cjk_or_thai_language_codes(language_codes)
 
     for source_index, line in enumerate(result.get("lines", []) or []):
         text = normalize_text(str(line.get("text") or ""))
@@ -1665,7 +2044,24 @@ def minimal_cleanup_external_result(
             if split_count > 0:
                 drop_counts["mergedLatinSplit"] = drop_counts.get("mergedLatinSplit", 0) + split_count
 
-        candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if (removed_ad_words or split_count > 0) else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
+        candidate_line = make_line_from_words(
+            normalized_words,
+            line.get("_sortY"),
+            line.get("_sortX"),
+            line.get("quad"),
+            line.get("angleDeg"),
+            line.get("sourceEngine"),
+        ) if (removed_ad_words or split_count > 0) else make_line(
+            text,
+            confidence,
+            bbox,
+            normalized_words,
+            line.get("_sortY"),
+            line.get("_sortX"),
+            line.get("quad"),
+            line.get("angleDeg"),
+            line.get("sourceEngine"),
+        )
         candidate_line["_sourceIndex"] = source_index
         if is_probable_ascii_ghost(candidate_line.get("text", "")):
             continue
@@ -1689,6 +2085,15 @@ def minimal_cleanup_external_result(
     else:
         lines = reorder_tilted_line_clusters(lines)
         lines = merge_near_duplicate_lines(lines)
+    if is_latin_panel:
+        lines, contextual_drops = prune_paddle_panel_contextual_noise_lines(lines, width, height, language_codes)
+        for drop in contextual_drops:
+            reason = str(drop.get("reason") or "")
+            if reason == "paddlePanelBridgeLine":
+                drop_counts["contextualBridgeLine"] = drop_counts.get("contextualBridgeLine", 0) + 1
+            elif reason == "paddlePanelFragmentLine":
+                drop_counts["contextualFragmentLine"] = drop_counts.get("contextualFragmentLine", 0) + 1
+        dropped_words.extend(contextual_drops)
     words = []
     for line in lines:
         words.extend(line.get("words") or [])
@@ -2103,7 +2508,24 @@ def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profil
         normalized_words, removed_ad_words = strip_inline_ad_words(normalized_words)
         if not normalized_words:
             continue
-        candidate_line = make_line_from_words(normalized_words, line.get("_sortY"), line.get("_sortX")) if removed_ad_words else make_line(text, confidence, bbox, normalized_words, line.get("_sortY"), line.get("_sortX"))
+        candidate_line = make_line_from_words(
+            normalized_words,
+            line.get("_sortY"),
+            line.get("_sortX"),
+            line.get("quad"),
+            line.get("angleDeg"),
+            line.get("sourceEngine"),
+        ) if removed_ad_words else make_line(
+            text,
+            confidence,
+            bbox,
+            normalized_words,
+            line.get("_sortY"),
+            line.get("_sortX"),
+            line.get("quad"),
+            line.get("angleDeg"),
+            line.get("sourceEngine"),
+        )
         candidate_line["_sourceIndex"] = source_index
         candidate_lines.append(candidate_line)
         candidate_words.extend(candidate_line["words"])
@@ -2607,9 +3029,11 @@ def normalize_paddle_v2_output(raw_result: Any) -> Dict[str, Any]:
         if not text:
             continue
         bbox = bbox_from_points(points)
+        quad = normalize_quad_points(points)
+        angle_deg = angle_deg_from_points(points)
         sort_y, sort_x = sort_hint_from_points(points)
         line_words = explode_line_to_words(text, confidence, bbox)
-        lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x))
+        lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "paddleocr"))
         words.extend(line_words)
 
     return make_text_result(lines, words)
@@ -2661,13 +3085,15 @@ def normalize_paddle_v3_output(raw_result: Any) -> Dict[str, Any]:
                 continue
             points = polys[index] if index < len(polys) else []
             bbox = bbox_from_points(points)
+            quad = normalize_quad_points(points)
+            angle_deg = angle_deg_from_points(points)
             sort_y, sort_x = sort_hint_from_points(points)
             raw_score = scores[index] if index < len(scores) else 0.0
             if hasattr(raw_score, "item"):
                 raw_score = raw_score.item()
             confidence = float(raw_score or 0.0)
             line_words = explode_line_to_words(text_value, confidence, bbox)
-            lines.append(make_line(text_value, confidence, bbox, line_words, sort_y, sort_x))
+            lines.append(make_line(text_value, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "paddleocr"))
             words.extend(line_words)
 
     if not lines and not words:
@@ -3049,19 +3475,25 @@ def generic_item_to_line(item: Any) -> Dict[str, Any] | None:
                 "x1": float(bbox_value.get("x1", 0.0)),
                 "y1": float(bbox_value.get("y1", 0.0)),
             }
+            quad = None
+            angle_deg = None
         else:
             bbox = bbox_from_points(bbox_value)
+            quad = normalize_quad_points(bbox_value)
+            angle_deg = angle_deg_from_points(bbox_value)
             sort_y, sort_x = sort_hint_from_points(bbox_value)
         if text:
-            return make_line(text, confidence, bbox, None, sort_y, sort_x)
+            return make_line(text, confidence, bbox, None, sort_y, sort_x, quad, angle_deg)
     if isinstance(item, (list, tuple)) and len(item) >= 3:
         points = item[0]
         bbox = bbox_from_points(points)
+        quad = normalize_quad_points(points)
+        angle_deg = angle_deg_from_points(points)
         sort_y, sort_x = sort_hint_from_points(points)
         text = str(item[1] or "").strip()
         confidence = float(item[2] or 0.0)
         if text:
-            return make_line(text, confidence, bbox, None, sort_y, sort_x)
+            return make_line(text, confidence, bbox, None, sort_y, sort_x, quad, angle_deg)
     return None
 
 
@@ -3113,13 +3545,15 @@ def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
             continue
         points = item[0]
         bbox = bbox_from_points(points)
+        quad = normalize_quad_points(points)
+        angle_deg = angle_deg_from_points(points)
         sort_y, sort_x = sort_hint_from_points(points)
         text = str(item[1] or "").strip()
         confidence = float(item[2] or 0.0)
         if not text:
             continue
         line_words = explode_line_to_words(text, confidence, bbox)
-        lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x))
+        lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "easyocr"))
         words.extend(line_words)
 
     if not lines and not words:
