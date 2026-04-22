@@ -114,6 +114,13 @@ type BenchmarkRow = {
   runtimeMs: number | null;
   confidence: number | null;
   compositeScore: number | null;
+  efficiency: number | null;
+  rawAxis: number | null;
+  lexicalAxis: number | null;
+  yieldAxis: number | null;
+  werError: number | null;
+  cerError: number | null;
+  garbageRatio: number | null;
   wordCount: number;
   lineCount: number;
   suspiciousCount: number;
@@ -124,6 +131,16 @@ type BenchmarkRow = {
 
 const BENCHMARK_SHORT_KEEP = new Set(['i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it']);
 const BENCHMARK_DOMAIN_TOKENS = new Set(['io', 'com', 'net', 'org', 'gg', 'tv']);
+const BENCHMARK_COMPOSITE_WEIGHTS = Object.freeze({
+  rawConfidence: 0.35,
+  lexicalErrorPenalization: 0.45,
+  yieldPreservationDropSafe: 0.20,
+});
+const BENCHMARK_LEXICAL_WEIGHTS = Object.freeze({
+  wer: 0.35,
+  cer: 0.25,
+  garbage: 0.40,
+});
 
 const normalizeBenchmarkToken = (token: string): string =>
   String(token || '')
@@ -548,26 +565,113 @@ const computeLexicalQuality = (tokens: string[], language: string): number => {
   return clampUnit(strongRatio - (artifactRatio * 0.45));
 };
 
+const normalizeBenchmarkConfidence = (confidence: number): number => {
+  if (!Number.isFinite(confidence)) return 0;
+  if (confidence <= 1) return clampUnit(confidence);
+  return clampUnit(confidence / 100);
+};
+
+const levenshteinDistance = (left: readonly string[], right: readonly string[]): number => {
+  if (left.length === 0) return right.length;
+  if (right.length === 0) return left.length;
+
+  const previous = new Array(right.length + 1).fill(0);
+  const current = new Array(right.length + 1).fill(0);
+
+  for (let j = 0; j <= right.length; j += 1) {
+    previous[j] = j;
+  }
+
+  for (let i = 1; i <= left.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const substitutionCost = left[i - 1] === right[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + substitutionCost
+      );
+    }
+
+    for (let j = 0; j <= right.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[right.length];
+};
+
+const normalizedEditError = (reference: readonly string[], hypothesis: readonly string[]): number => {
+  if (reference.length === 0) {
+    return hypothesis.length === 0 ? 0 : 1;
+  }
+  const distance = levenshteinDistance(reference, hypothesis);
+  return clampUnit(distance / Math.max(1, reference.length));
+};
+
 const computeCompositeScore = (summary: {
   confidence: number;
   suspiciousRatio: number;
   droppedCount: number;
   wordCount: number;
   lexicalQuality: number;
-}): number => {
-  const confidenceScore = clampUnit(summary.confidence / 100);
-  const cleanTokenScore = clampUnit(1 - summary.suspiciousRatio);
-  const dropSafetyScore = clampUnit(1 - (summary.droppedCount / Math.max(summary.wordCount, 1)));
-  const lexicalScore = clampUnit(summary.lexicalQuality);
+  tokens: string[];
+  text: string;
+  language: string;
+}): {
+  compositeScore: number;
+  rawAxis: number;
+  lexicalAxis: number;
+  yieldAxis: number;
+  werError: number;
+  cerError: number;
+  garbageRatio: number;
+} => {
+  const confidenceScore = normalizeBenchmarkConfidence(summary.confidence);
+
+  const normalizedWordTokens = summary.tokens.map(normalizeBenchmarkToken).filter(Boolean);
+  const normalizedTextTokens = String(summary.text || '')
+    .split(/\s+/g)
+    .map(normalizeBenchmarkToken)
+    .filter(Boolean);
+
+  const referenceTokens = normalizedTextTokens.length > 0 ? normalizedTextTokens : normalizedWordTokens;
+  const candidateTokens = normalizedWordTokens.length > 0 ? normalizedWordTokens : normalizedTextTokens;
+
+  let werError = normalizedEditError(referenceTokens, candidateTokens);
+  const joiner = isCjkLikeLanguage(summary.language) ? '' : ' ';
+  const referenceChars = Array.from(referenceTokens.join(joiner));
+  const candidateChars = Array.from(candidateTokens.join(joiner));
+  const cerError = normalizedEditError(referenceChars, candidateChars);
+  if (isCjkLikeLanguage(summary.language)) {
+    werError = cerError;
+  }
+
+  const garbageRatio = clampUnit((summary.suspiciousRatio * 0.80) + ((1 - clampUnit(summary.lexicalQuality)) * 0.20));
+  const lexicalPenalty = clampUnit(
+    (werError * BENCHMARK_LEXICAL_WEIGHTS.wer)
+    + (cerError * BENCHMARK_LEXICAL_WEIGHTS.cer)
+    + (garbageRatio * BENCHMARK_LEXICAL_WEIGHTS.garbage)
+  );
+  const lexicalAxis = clampUnit(1 - lexicalPenalty);
+
+  const yieldAxis = clampUnit(summary.wordCount / Math.max(1, summary.wordCount + Math.max(0, summary.droppedCount)));
 
   const composite = (
-    (confidenceScore * 0.35)
-    + (cleanTokenScore * 0.35)
-    + (dropSafetyScore * 0.20)
-    + (lexicalScore * 0.10)
+    (confidenceScore * BENCHMARK_COMPOSITE_WEIGHTS.rawConfidence)
+    + (lexicalAxis * BENCHMARK_COMPOSITE_WEIGHTS.lexicalErrorPenalization)
+    + (yieldAxis * BENCHMARK_COMPOSITE_WEIGHTS.yieldPreservationDropSafe)
   ) * 100;
 
-  return Number(composite.toFixed(2));
+  return {
+    compositeScore: Number(composite.toFixed(2)),
+    rawAxis: confidenceScore,
+    lexicalAxis,
+    yieldAxis,
+    werError,
+    cerError,
+    garbageRatio,
+  };
 };
 
 const readRuntimeMs = (result: OCRPageResult): number | null => {
@@ -2212,6 +2316,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       runtimeMs: null,
       confidence: null,
       compositeScore: null,
+      efficiency: null,
+      rawAxis: null,
+      lexicalAxis: null,
+      yieldAxis: null,
+      werError: null,
+      cerError: null,
+      garbageRatio: null,
       wordCount: 0,
       lineCount: 0,
       suspiciousCount: 0,
@@ -2898,9 +3009,12 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       const memoryCached = state.allPagesOCR.get(pageNum);
       if (memoryCached && isDisplayCacheCompatible(memoryCached)) {
-        if (useProjectStore.getState().file !== activeFile) return false;
-        setPageOCR(pageNum, normalizeCacheProfile(memoryCached));
-        return true;
+        const memoryEngine = String(memoryCached.ocrEngine || 'tesseract').toLowerCase();
+        if (memoryEngine === activeEngine.toLowerCase()) {
+          if (useProjectStore.getState().file !== activeFile) return false;
+          setPageOCR(pageNum, normalizeCacheProfile(memoryCached));
+          return true;
+        }
       }
 
       let cacheDocId: number | null = null;
@@ -4445,6 +4559,13 @@ export const OCRTextLayerPanel: React.FC = () => {
         runtimeMs: null,
         confidence: null,
         compositeScore: null,
+        efficiency: null,
+        rawAxis: null,
+        lexicalAxis: null,
+        yieldAxis: null,
+        werError: null,
+        cerError: null,
+        garbageRatio: null,
         wordCount: 0,
         lineCount: 0,
         suspiciousCount: 0,
@@ -4466,18 +4587,31 @@ export const OCRTextLayerPanel: React.FC = () => {
     const suspiciousRatio = tokens.length > 0 ? suspiciousCount / tokens.length : 0;
     const droppedCount = Array.isArray(droppedWords) ? droppedWords.length : 0;
     const lexicalQuality = computeLexicalQuality(tokens, result.language || options.language);
-    const compositeScore = computeCompositeScore({
+    const composite = computeCompositeScore({
       confidence,
       suspiciousRatio,
       droppedCount,
       wordCount,
       lexicalQuality,
+      tokens,
+      text: result.text || '',
+      language: result.language || options.language,
     });
+    const efficiency = runtimeMs != null && runtimeMs > 0
+      ? Number((composite.compositeScore / (runtimeMs / 1000)).toFixed(4))
+      : null;
 
     return {
       runtimeMs,
       confidence,
-      compositeScore,
+      compositeScore: composite.compositeScore,
+      efficiency,
+      rawAxis: Number((composite.rawAxis * 100).toFixed(2)),
+      lexicalAxis: Number((composite.lexicalAxis * 100).toFixed(2)),
+      yieldAxis: Number((composite.yieldAxis * 100).toFixed(2)),
+      werError: Number(composite.werError.toFixed(4)),
+      cerError: Number(composite.cerError.toFixed(4)),
+      garbageRatio: Number(composite.garbageRatio.toFixed(4)),
       wordCount,
       lineCount,
       suspiciousCount,
@@ -4485,6 +4619,27 @@ export const OCRTextLayerPanel: React.FC = () => {
       droppedCount,
     };
   }, [options.language]);
+
+  const cacheBenchmarkResultInMemory = useCallback((pageNum: number, engine: OCREngine, result: OCRPageResult) => {
+    useOCRTextLayerStore.setState((state) => {
+      const byPageEngine = new Map(state.ocrByPageEngine);
+      const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
+      perPage.set(engine, result);
+      byPageEngine.set(pageNum, perPage);
+
+      const selectedEngine = (state.options.engine || 'tesseract') as OCREngine;
+      if (engine !== selectedEngine && state.allPagesOCR.has(pageNum)) {
+        return { ocrByPageEngine: byPageEngine };
+      }
+
+      const allPages = new Map(state.allPagesOCR);
+      allPages.set(pageNum, result);
+      return {
+        ocrByPageEngine: byPageEngine,
+        allPagesOCR: allPages,
+      };
+    });
+  }, []);
 
   const handleBenchmarkCurrentPage = useCallback(async () => {
     if (!file || !fileUrl) return;
@@ -4524,12 +4679,10 @@ export const OCRTextLayerPanel: React.FC = () => {
                   : 'Cache hit',
               });
 
-              if ((options.engine || 'tesseract') === engine.id) {
-                setPageOCR(currentPage, {
-                  ...normalizedCached,
-                  pageNumber: currentPage,
-                });
-              }
+              cacheBenchmarkResultInMemory(currentPage, engine.id, {
+                ...normalizedCached,
+                pageNumber: currentPage,
+              });
               continue;
             }
           }
@@ -4554,6 +4707,26 @@ export const OCRTextLayerPanel: React.FC = () => {
             }, 'image/png');
           });
 
+          const benchmarkQualityProfile: OCRQualityProfile = (() => {
+            if (engine.id !== 'paddleocr') return 'best';
+
+            const isCjkLike = options.language
+              .split('+')
+              .map((code) => code.trim())
+              .filter(Boolean)
+              .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+
+            if (activePipelineProfile !== 'panel') return 'balanced';
+            if (isCjkLike) return 'balanced';
+
+            const longest = Math.max(imageWidth, imageHeight);
+            const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
+            const aspectRatio = longest / shortest;
+            const pixelCount = imageWidth * imageHeight;
+            const preferFast = pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+            return preferFast ? 'fast' : 'balanced';
+          })();
+
           const result = await visionService.ocrForTextLayer(
             imageBlob,
             imageWidth,
@@ -4564,7 +4737,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             controller.signal,
             showDebugOverlay,
             activePipelineProfile,
-            'best',
+            benchmarkQualityProfile,
             engine.id
           );
 
@@ -4572,7 +4745,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           result.pageNumber = currentPage;
           result.pipelineProfile = activePipelineProfile;
           result.ocrEngine = engine.id;
-          result.ocrQualityProfile = 'best';
+          result.ocrQualityProfile = benchmarkQualityProfile;
 
           const normalizedResult = normalizeCacheProfile(result);
 
@@ -4592,9 +4765,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             }
           }
 
-          if ((options.engine || 'tesseract') === engine.id) {
-            setPageOCR(currentPage, normalizedResult);
-          }
+          cacheBenchmarkResultInMemory(currentPage, engine.id, normalizedResult);
         } catch (error) {
           const aborted = controller.signal.aborted || isAbortError(error);
           updateBenchmarkRow(engine.id, {
@@ -4616,7 +4787,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       visionService.setProgressCallback(null);
       stopExternalProgress();
     }
-  }, [activePipelineProfile, benchmarkRunning, currentPage, ensureDocumentId, ensureEngineReady, file, fileUrl, isAbortError, isCacheCompatibleForEngine, isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.engine, options.language, options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints, setPageOCR, showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
+  }, [activePipelineProfile, benchmarkRunning, cacheBenchmarkResultInMemory, currentPage, ensureDocumentId, ensureEngineReady, file, fileUrl, isAbortError, isCacheCompatibleForEngine, isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language, options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints, showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
 
   const handleCancelBenchmark = useCallback(() => {
     benchmarkAbortRef.current?.abort();
@@ -4836,10 +5007,13 @@ export const OCRTextLayerPanel: React.FC = () => {
     .filter((row) => typeof row.confidence === 'number')
     .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
   const benchmarkBestOverall = benchmarkDoneRows
-    .filter((row) => typeof row.compositeScore === 'number')
-    .sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0))[0];
+    .filter((row) => typeof row.efficiency === 'number')
+    .sort((a, b) => (b.efficiency || 0) - (a.efficiency || 0))[0]
+    || benchmarkDoneRows
+      .filter((row) => typeof row.compositeScore === 'number')
+      .sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0))[0];
   const benchmarkLeastGhost = benchmarkDoneRows
-    .sort((a, b) => a.suspiciousRatio - b.suspiciousRatio)[0];
+    .sort((a, b) => (a.garbageRatio ?? a.suspiciousRatio) - (b.garbageRatio ?? b.suspiciousRatio))[0];
 
   return (
     <div className="flex flex-col gap-1 p-2.5 pt-2">
@@ -5352,7 +5526,10 @@ export const OCRTextLayerPanel: React.FC = () => {
                   confidence เป็น raw score ของแต่ละ engine (ยังไม่ calibrated ข้าม model)
                 </p>
                 <p className="mt-1 text-[11px] text-cyan-200/90">
-                  composite score = 35% raw conf + 35% clean token + 20% drop-safe + 10% lexical quality
+                  composite score = 35% raw conf + 45% lexical error penalization (WER/CER + garbage) + 20% yield/drop-safe
+                </p>
+                <p className="mt-1 text-[11px] text-cyan-200/75">
+                  efficiency = composite score / runtime (seconds)
                 </p>
               </div>
               <button
@@ -5375,10 +5552,14 @@ export const OCRTextLayerPanel: React.FC = () => {
                     <th className="px-3 py-2 text-left">Engine</th>
                     <th className="px-3 py-2 text-right">Runtime</th>
                     <th className="px-3 py-2 text-right">Raw Conf</th>
+                    <th className="px-3 py-2 text-right">Lexical (45)</th>
+                    <th className="px-3 py-2 text-right">Yield (20)</th>
                     <th className="px-3 py-2 text-right">Composite</th>
+                    <th className="px-3 py-2 text-right">Efficiency</th>
+                    <th className="px-3 py-2 text-right">WER</th>
+                    <th className="px-3 py-2 text-right">CER</th>
+                    <th className="px-3 py-2 text-right">Garbage</th>
                     <th className="px-3 py-2 text-right">Words</th>
-                    <th className="px-3 py-2 text-right">Lines</th>
-                    <th className="px-3 py-2 text-right">Ghost Ratio</th>
                     <th className="px-3 py-2 text-right">Dropped</th>
                     <th className="px-3 py-2 text-left">Status</th>
                   </tr>
@@ -5394,13 +5575,29 @@ export const OCRTextLayerPanel: React.FC = () => {
                         {row.confidence != null ? `${row.confidence.toFixed(0)}%` : '-'}
                       </td>
                       <td className="px-3 py-2 text-right text-slate-200">
+                        {row.lexicalAxis != null ? `${row.lexicalAxis.toFixed(1)}%` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.yieldAxis != null ? `${row.yieldAxis.toFixed(1)}%` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
                         {row.compositeScore != null ? `${row.compositeScore.toFixed(1)}` : '-'}
                       </td>
-                      <td className="px-3 py-2 text-right text-slate-200">{row.wordCount || '-'}</td>
-                      <td className="px-3 py-2 text-right text-slate-200">{row.lineCount || '-'}</td>
                       <td className="px-3 py-2 text-right text-slate-200">
-                        {row.wordCount > 0 ? `${(row.suspiciousRatio * 100).toFixed(1)}%` : '-'}
+                        {row.efficiency != null ? `${row.efficiency.toFixed(2)}` : '-'}
                       </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.werError != null ? `${(row.werError * 100).toFixed(1)}%` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {row.cerError != null ? `${(row.cerError * 100).toFixed(1)}%` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">
+                        {(row.garbageRatio != null)
+                          ? `${(row.garbageRatio * 100).toFixed(1)}%`
+                          : (row.wordCount > 0 ? `${(row.suspiciousRatio * 100).toFixed(1)}%` : '-')}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-200">{row.wordCount || '-'}</td>
                       <td className="px-3 py-2 text-right text-slate-200">{row.droppedCount || '-'}</td>
                       <td className="px-3 py-2 text-left">
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
@@ -5437,9 +5634,13 @@ export const OCRTextLayerPanel: React.FC = () => {
               <div className="rounded-lg border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
                 <div className="flex items-center gap-1.5 font-semibold">
                   <Trophy size={12} />
-                  Best Overall (Composite)
+                  Best Overall (Efficiency)
                 </div>
-                <div className="mt-1">{benchmarkBestOverall ? `${benchmarkBestOverall.engineName} (${(benchmarkBestOverall.compositeScore || 0).toFixed(1)})` : '-'}</div>
+                <div className="mt-1">
+                  {benchmarkBestOverall
+                    ? `${benchmarkBestOverall.engineName} (${benchmarkBestOverall.efficiency != null ? benchmarkBestOverall.efficiency.toFixed(2) : (benchmarkBestOverall.compositeScore || 0).toFixed(1)})`
+                    : '-'}
+                </div>
               </div>
               <div className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
                 <div className="flex items-center gap-1.5 font-semibold">
@@ -5451,9 +5652,9 @@ export const OCRTextLayerPanel: React.FC = () => {
               <div className="rounded-lg border border-fuchsia-500/35 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200">
                 <div className="flex items-center gap-1.5 font-semibold">
                   <Trophy size={12} />
-                  Lowest Ghost Ratio
+                  Lowest Garbage Ratio
                 </div>
-                <div className="mt-1">{benchmarkLeastGhost ? `${benchmarkLeastGhost.engineName} (${(benchmarkLeastGhost.suspiciousRatio * 100).toFixed(1)}%)` : '-'}</div>
+                <div className="mt-1">{benchmarkLeastGhost ? `${benchmarkLeastGhost.engineName} (${(((benchmarkLeastGhost.garbageRatio ?? benchmarkLeastGhost.suspiciousRatio) || 0) * 100).toFixed(1)}%)` : '-'}</div>
               </div>
             </div>
 
