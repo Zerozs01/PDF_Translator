@@ -25,7 +25,8 @@ import {
   Trash2,
   X,
   Trophy,
-  BarChart3
+  BarChart3,
+  Sparkles
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile } from '../../types';
@@ -106,6 +107,20 @@ const persistSectionOpen = (storageKey: string, value: boolean): void => {
   }
 };
 
+type BenchmarkRawSnapshot = {
+  runtimeMs: number | null;
+  confidence: number | null;
+  compositeScore: number | null;
+  lexicalAxis: number | null;
+  yieldAxis: number | null;
+  garbageRatio: number | null;
+  wordCount: number;
+  lineCount: number;
+  droppedCount: number;
+  status: 'idle' | 'running' | 'done' | 'error';
+  message?: string;
+};
+
 type BenchmarkRow = {
   engine: OCREngine;
   engineName: string;
@@ -127,6 +142,8 @@ type BenchmarkRow = {
   suspiciousRatio: number;
   droppedCount: number;
   message?: string;
+  /** dual mode: raw (no-pipeline) snapshot for delta comparison */
+  rawSnapshot?: BenchmarkRawSnapshot;
 };
 
 const BENCHMARK_SHORT_KEEP = new Set(['i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it']);
@@ -2300,6 +2317,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [benchmarkOpen, setBenchmarkOpen] = useState(false);
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
+  const [benchmarkMode, setBenchmarkMode] = useState<BenchmarkMode>('base');
+  const [showMetricsInfo, setShowMetricsInfo] = useState(false);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
   const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
@@ -4789,6 +4808,149 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [activePipelineProfile, benchmarkRunning, cacheBenchmarkResultInMemory, currentPage, ensureDocumentId, ensureEngineReady, file, fileUrl, isAbortError, isCacheCompatibleForEngine, isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language, options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints, showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
 
+  const handleRawBenchmark = useCallback(async (mode: BenchmarkMode) => {
+    if (mode === 'base') {
+      setBenchmarkMode('base');
+      await handleBenchmarkCurrentPage();
+      return;
+    }
+
+    // ── DUAL MODE: rawOCR → snapshot, then ocrForTextLayer → full row ──
+    if (!file || !fileUrl) return;
+    if (isProcessing || benchmarkRunning || ocrJobActiveRef.current) return;
+
+    setBenchmarkMode('dual');
+    setBenchmarkOpen(true);
+    setBenchmarkTargetPage(currentPage);
+    resetBenchmarkRows();
+    setBenchmarkRunning(true);
+
+    const controller = new AbortController();
+    benchmarkAbortRef.current = controller;
+    ocrJobActiveRef.current = true;
+
+    try {
+      for (const engine of OCR_ENGINES) {
+        if (controller.signal.aborted) break;
+
+        // Tesseract has no rawOCR path (worker-only), skip raw phase
+        const supportsRaw = engine.id !== 'tesseract';
+
+        updateBenchmarkRow(engine.id, {
+          status: 'running',
+          message: supportsRaw ? 'RAW pass...' : 'Running...',
+        });
+
+        try {
+          // ── ensure engine ready ──
+          if (engine.id !== 'tesseract') {
+            const ready = await ensureEngineReady(engine.id, { selectOnReady: false });
+            if (!ready) throw new Error(`${engine.name} is not ready`);
+          }
+
+          const renderConstraints = resolveRenderConstraints(engine.id);
+          const { canvas, width: imgW, height: imgH } = await renderPageToCanvas(currentPage, options.dpi, {
+            allowNavigationFallback: true,
+            ...renderConstraints,
+          });
+          const imageBlob = await new Promise<Blob>((res, rej) => {
+            canvas.toBlob((b) => b ? res(b) : rej(new Error('canvas toBlob failed')), 'image/png');
+          });
+
+          // ── PARALLEL PROCESSING: Raw & Full Pipeline ──
+          let rawSnapshot: BenchmarkRawSnapshot | undefined;
+          let fullResult: OCRPageResult | undefined;
+          
+          const qualityProfile: OCRQualityProfile = (() => {
+            if (engine.id !== 'paddleocr') return 'best';
+            const isCjk = options.language.split('+').map(c => c.trim())
+              .some(c => ['kor','jpn','jpn_vert','chi_sim','chi_tra','tha'].includes(c));
+            if (activePipelineProfile !== 'panel' || isCjk) return 'balanced';
+            const px = imgW * imgH;
+            return (px >= 3_600_000 || Math.max(imgW,imgH) >= 5200) ? 'fast' : 'balanced';
+          })();
+
+          // Construct promises
+          const rawPromise = supportsRaw 
+            ? visionService.rawOCR(imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode, controller.signal, engine.id)
+                .then(res => summarizeBenchmarkResult(res))
+                .catch(err => { throw new Error(`RAW Error: ${err instanceof Error ? err.message : 'Unknown'}`); })
+            : Promise.resolve(null);
+            
+          const fullPromise = visionService.ocrForTextLayer(
+              imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode,
+              controller.signal, showDebugOverlay, activePipelineProfile, qualityProfile, engine.id
+            );
+
+          updateBenchmarkRow(engine.id, { message: supportsRaw ? 'Running Raw & Pipeline...' : 'Running Pipeline...' });
+
+          // Execute concurrently
+          const [rawSummary, rawFullResult] = await Promise.all([rawPromise, fullPromise]);
+
+          if (rawSummary) {
+            rawSnapshot = {
+              status: 'done',
+              runtimeMs: rawSummary.runtimeMs,
+              confidence: rawSummary.confidence,
+              compositeScore: rawSummary.compositeScore,
+              lexicalAxis: rawSummary.lexicalAxis,
+              yieldAxis: rawSummary.yieldAxis,
+              garbageRatio: rawSummary.garbageRatio,
+              wordCount: rawSummary.wordCount,
+              lineCount: rawSummary.lineCount,
+              droppedCount: rawSummary.droppedCount,
+              message: 'raw done',
+            };
+          } else if (supportsRaw) {
+             rawSnapshot = {
+                status: 'error',
+                runtimeMs: null, confidence: null, compositeScore: null,
+                lexicalAxis: null, yieldAxis: null, garbageRatio: null,
+                wordCount: 0, lineCount: 0, droppedCount: 0,
+                message: 'Raw failed',
+              };
+          }
+
+          fullResult = rawFullResult;
+          fullResult.language = normalizeLanguage(options.language);
+          fullResult.pageNumber = currentPage;
+          
+          const normalized = normalizeCacheProfile(fullResult);
+          const fullSummary = summarizeBenchmarkResult(normalized);
+
+          updateBenchmarkRow(engine.id, {
+            status: 'done',
+            cacheHit: false,
+            ...fullSummary,
+            rawSnapshot,
+            message: fullSummary.runtimeMs != null
+              ? `Full ${(fullSummary.runtimeMs / 1000).toFixed(2)}s`
+              : 'Done',
+          });
+
+          cacheBenchmarkResultInMemory(currentPage, engine.id, normalized);
+        } catch (error) {
+          const aborted = controller.signal.aborted || isAbortError(error);
+          updateBenchmarkRow(engine.id, {
+            status: 'error',
+            message: aborted ? 'Canceled' : (error instanceof Error ? error.message : 'Failed'),
+          });
+          if (aborted) break;
+        }
+      }
+    } finally {
+      benchmarkAbortRef.current = null;
+      setBenchmarkRunning(false);
+      ocrJobActiveRef.current = false;
+      visionService.setProgressCallback(null);
+      stopExternalProgress();
+    }
+  }, [activePipelineProfile, benchmarkRunning, cacheBenchmarkResultInMemory, currentPage,
+      ensureEngineReady, file, fileUrl, handleBenchmarkCurrentPage, isAbortError,
+      isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language,
+      options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints,
+      showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
+
   const handleCancelBenchmark = useCallback(() => {
     benchmarkAbortRef.current?.abort();
   }, []);
@@ -5026,16 +5188,28 @@ export const OCRTextLayerPanel: React.FC = () => {
           </label>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void handleBenchmarkCurrentPage()}
-              disabled={isProcessing || !file}
-              className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-black/70 px-2 py-1 text-[10px] font-semibold text-white transition-colors hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
-              title="Benchmark current page using OCR cache + missing-engine run"
-            >
-              <BarChart3 size={11} />
-              Benchmark
-            </button>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => void handleRawBenchmark('base')}
+                disabled={isProcessing || !file}
+                className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-slate-800/70 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Benchmark RAW engines (no preprocessing/filter/grouping)"
+              >
+                <Cpu size={10} />
+                Base
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRawBenchmark('dual')}
+                disabled={isProcessing || !file}
+                className="inline-flex items-center gap-1 rounded-md border border-emerald-400/50 bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-100 transition-colors hover:border-emerald-400/70 hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Benchmark RAW vs FULL pipeline → Δ metrics + side-by-side preview"
+              >
+                <Sparkles size={10} />
+                Improve
+              </button>
+            </div>
 
             <button
               type="button"
@@ -5518,7 +5692,17 @@ export const OCRTextLayerPanel: React.FC = () => {
           <div className="flex max-h-[90vh] w-[min(96vw,1240px)] flex-col rounded-2xl border border-white/15 bg-slate-950/95 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold text-slate-100">OCR Benchmark Summary</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-semibold text-slate-100">OCR Benchmark Summary</h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowMetricsInfo((prev) => !prev)}
+                    className={`rounded p-1 transition-colors hover:bg-white/10 ${showMetricsInfo ? 'text-emerald-300 bg-emerald-500/10' : 'text-slate-400'}`}
+                    title="Toggle detailed metrics explanation"
+                  >
+                    <Info size={14} />
+                  </button>
+                </div>
                 <p className="mt-1 text-xs text-slate-400">
                   page {benchmarkTargetPage ?? currentPage} • pipeline {activePipelineProfile} • lang {options.language} • dpi {options.dpi}
                 </p>
@@ -5531,6 +5715,16 @@ export const OCRTextLayerPanel: React.FC = () => {
                 <p className="mt-1 text-[11px] text-cyan-200/75">
                   efficiency = composite score / runtime (seconds)
                 </p>
+                {showMetricsInfo && (
+                  <div className="mt-3 space-y-1 rounded-lg bg-slate-900/50 p-3 text-[11px] leading-relaxed border border-white/5">
+                    <p className="text-emerald-200/90 font-medium">✦ Improve Mode (RAW vs FULL Pipeline Comparison)</p>
+                    <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
+                      <li><span className="text-cyan-300">Composite Score:</span> คะแนนรวม (35% Raw Conf + 45% Lexical Quality + 20% Yield) <span className="text-emerald-400">↑ ยิ่งสูงยิ่งดี</span> แปลว่าผลลัพธ์โดยรวมสมบูรณ์และถูกต้องมากขึ้น</li>
+                      <li><span className="text-cyan-300">Lexical & Yield:</span> ความถูกต้องของคำ (Lexical) และปริมาณข้อความที่รักษาไว้ได้ (Yield) <span className="text-emerald-400">↑ สูง=ดี</span> หมายถึงลด Garbage ได้โดยไม่ทำให้ข้อความหลักหาย</li>
+                      <li><span className="text-rose-300">Garbage & Errors (WER/CER):</span> สัดส่วนข้อความขยะ/ลายน้ำ (Garbage) และอัตราความผิดพลาดของคำ/ตัวอักษร <span className="text-emerald-400">↓ ยิ่งต่ำยิ่งดี</span> หมายถึง Pipeline สามารถกรองขยะและเส้นกวนทิ้งได้สำเร็จ</li>
+                    </ul>
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -5546,82 +5740,175 @@ export const OCRTextLayerPanel: React.FC = () => {
             </div>
 
             <div className="mt-4 flex-1 overflow-auto rounded-xl border border-white/10">
-              <table className="min-w-full table-fixed text-xs text-slate-200">
-                <thead className="bg-slate-900/85 text-slate-300">
+              {benchmarkMode === 'dual' && (
+                <div className="flex items-center gap-2 border-b border-white/8 bg-gradient-to-r from-emerald-950/60 to-slate-950/60 px-3 py-2 text-[11px]">
+                  <span className="font-semibold text-emerald-300">✦ Improve Mode</span>
+                  <span className="text-slate-500">·</span>
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">RAW</span>
+                  <span className="text-slate-500">= no pipeline</span>
+                  <span className="text-slate-500 mx-1">·</span>
+                  <span className="rounded bg-cyan-900/50 px-1.5 py-0.5 text-[10px] text-cyan-300">FULL</span>
+                  <span className="text-slate-500">= after processing</span>
+                  <span className="ml-auto flex items-center gap-2 text-[10px] text-slate-500">
+                    <span className="text-emerald-400 font-bold">↑</span> improved
+                    <span className="text-rose-400 font-bold">↓</span> worse
+                    <span className="mx-1">·</span>
+                    Tesseract: no raw pass
+                  </span>
+                </div>
+              )}
+              <table className="min-w-full text-xs text-slate-200">
+                <thead className="bg-slate-900/85 text-slate-400 text-[11px]">
                   <tr>
-                    <th className="px-3 py-2 text-left">Engine</th>
-                    <th className="px-3 py-2 text-right">Runtime</th>
-                    <th className="px-3 py-2 text-right">Raw Conf</th>
-                    <th className="px-3 py-2 text-right">Lexical (45)</th>
-                    <th className="px-3 py-2 text-right">Yield (20)</th>
-                    <th className="px-3 py-2 text-right">Composite</th>
-                    <th className="px-3 py-2 text-right">Efficiency</th>
-                    <th className="px-3 py-2 text-right">WER</th>
-                    <th className="px-3 py-2 text-right">CER</th>
-                    <th className="px-3 py-2 text-right">Garbage</th>
-                    <th className="px-3 py-2 text-right">Words</th>
-                    <th className="px-3 py-2 text-right">Dropped</th>
-                    <th className="px-3 py-2 text-left">Status</th>
+                    <th className="px-3 py-2 text-left w-28">Engine</th>
+                    <th className="px-2 py-2 text-right">Runtime</th>
+                    <th className="px-2 py-2 text-right">Conf</th>
+                    <th className="px-2 py-2 text-right">Lexical</th>
+                    <th className="px-2 py-2 text-right">Yield</th>
+                    <th className="px-2 py-2 text-right">Composite</th>
+                    <th className="px-2 py-2 text-right">Efficiency</th>
+                    <th className="px-2 py-2 text-right">WER</th>
+                    <th className="px-2 py-2 text-right">CER</th>
+                    <th className="px-2 py-2 text-right">Garbage</th>
+                    <th className="px-2 py-2 text-right">Words</th>
+                    <th className="px-2 py-2 text-right">Dropped</th>
+                    <th className="px-2 py-2 text-left">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {benchmarkRows.map((row) => (
-                    <tr key={row.engine} className="border-t border-white/10 bg-slate-900/35">
-                      <td className="px-3 py-2 font-semibold text-slate-100">{row.engineName}</td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.runtimeMs != null ? `${(row.runtimeMs / 1000).toFixed(row.runtimeMs >= 10000 ? 1 : 2)}s` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.confidence != null ? `${row.confidence.toFixed(0)}%` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.lexicalAxis != null ? `${row.lexicalAxis.toFixed(1)}%` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.yieldAxis != null ? `${row.yieldAxis.toFixed(1)}%` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.compositeScore != null ? `${row.compositeScore.toFixed(1)}` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.efficiency != null ? `${row.efficiency.toFixed(2)}` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.werError != null ? `${(row.werError * 100).toFixed(1)}%` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {row.cerError != null ? `${(row.cerError * 100).toFixed(1)}%` : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">
-                        {(row.garbageRatio != null)
-                          ? `${(row.garbageRatio * 100).toFixed(1)}%`
-                          : (row.wordCount > 0 ? `${(row.suspiciousRatio * 100).toFixed(1)}%` : '-')}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-200">{row.wordCount || '-'}</td>
-                      <td className="px-3 py-2 text-right text-slate-200">{row.droppedCount || '-'}</td>
-                      <td className="px-3 py-2 text-left">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          row.status === 'done'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : row.status === 'running'
-                              ? 'bg-sky-500/20 text-sky-300'
-                              : row.status === 'error'
-                                ? 'bg-rose-500/20 text-rose-300'
-                                : 'bg-slate-500/20 text-slate-300'
-                        }`}>
-                          {row.message || row.status}
+                  {benchmarkRows.map((row) => {
+                    const snap = row.rawSnapshot;
+                    const isDual = benchmarkMode === 'dual';
+                    const hasSnap = isDual && snap?.status === 'done';
+
+                    // Inline ↑/↓ badge: higher composite/lexical/yield/words = good; higher garbage/WER/CER = bad
+                    const dir = (full: number | null, raw: number | null, higherIsBetter = true): React.ReactNode => {
+                      if (full == null || raw == null) return null;
+                      const delta = full - raw;
+                      if (Math.abs(delta) < 0.0001) return null;
+                      const improved = higherIsBetter ? delta > 0 : delta < 0;
+                      return (
+                        <span className={`ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded text-[9px] font-bold leading-none ${improved ? 'bg-emerald-500/25 text-emerald-300' : 'bg-rose-500/25 text-rose-300'}`}>
+                          {improved ? '↑' : '↓'}
                         </span>
-                        {row.cacheHit && (
-                          <span className="ml-1.5 inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">
-                            cache
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                      );
+                    };
+
+                    const fmtMs = (ms: number | null) => ms != null ? `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s` : '—';
+                    const fmtPct = (v: number | null, decimals = 0) => v != null ? `${v.toFixed(decimals)}%` : '—';
+                    const fmtNum = (v: number | null, decimals = 1) => v != null ? v.toFixed(decimals) : '—';
+                    const garbagePct = (r: { garbageRatio: number | null; suspiciousRatio: number; wordCount: number }) =>
+                      r.garbageRatio != null ? r.garbageRatio : (r.wordCount > 0 ? r.suspiciousRatio : null);
+
+                    // Status badge shared helper
+                    const statusBadge = (s: 'idle' | 'running' | 'done' | 'error', msg?: string) => (
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        s === 'done' ? 'bg-emerald-500/20 text-emerald-300'
+                        : s === 'running' ? 'bg-sky-500/20 text-sky-300'
+                        : s === 'error' ? 'bg-rose-500/20 text-rose-300'
+                        : 'bg-slate-500/20 text-slate-400'
+                      }`}>{msg || s}</span>
+                    );
+
+                    if (isDual && snap) {
+                      // ── DUAL MODE: 2 rows per engine ──
+                      const snapGarbage = snap.garbageRatio;
+                      const fullGarbage = garbagePct(row);
+                      return (
+                        <React.Fragment key={row.engine}>
+                          {/* ── RAW row ── */}
+                          <tr className="border-t border-white/8 bg-slate-950/70">
+                            <td className="px-3 py-1.5 align-middle" rowSpan={2}>
+                              <div className="font-semibold text-slate-100 text-[12px]">{row.engineName}</div>
+                              <div className="mt-1 flex flex-col gap-0.5">
+                                {statusBadge(row.status, row.message)}
+                                {row.cacheHit && <span className="inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">cache</span>}
+                              </div>
+                            </td>
+                            <td className="px-2 py-1.5 text-right">
+                              <span className="rounded bg-slate-800 px-1 py-0.5 text-[9px] text-slate-500 mr-0.5">RAW</span>
+                              <span className="text-slate-500">{fmtMs(snap.runtimeMs)}</span>
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.confidence)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.lexicalAxis, 1)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.yieldAxis, 1)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtNum(snap.compositeScore)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">—</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">—</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">—</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{snapGarbage != null ? fmtPct(snapGarbage * 100, 1) : '—'}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{snap.wordCount || '—'}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{snap.droppedCount || '—'}</td>
+                            <td className="px-2 py-1.5">
+                              {snap.status === 'error'
+                                ? statusBadge('error', snap.message)
+                                : <span className="text-[10px] text-slate-600">raw pass</span>}
+                            </td>
+                          </tr>
+                          {/* ── FULL pipeline row ── */}
+                          <tr className="border-b-2 border-white/10 bg-slate-900/40">
+                            <td className="px-2 py-1.5 text-right">
+                              <span className="rounded bg-cyan-900/50 px-1 py-0.5 text-[9px] text-cyan-400 mr-0.5">FULL</span>
+                              <span className="text-slate-200">{fmtMs(row.runtimeMs)}</span>
+                              {dir(row.runtimeMs != null ? -row.runtimeMs : null, snap.runtimeMs != null ? -snap.runtimeMs : null)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">
+                              {fmtPct(row.confidence)}{dir(row.confidence, snap.confidence)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">
+                              {fmtPct(row.lexicalAxis, 1)}{dir(row.lexicalAxis, snap.lexicalAxis)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">
+                              {fmtPct(row.yieldAxis, 1)}{dir(row.yieldAxis, snap.yieldAxis)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right font-semibold text-white">
+                              {fmtNum(row.compositeScore)}{dir(row.compositeScore, snap.compositeScore)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">{fmtNum(row.efficiency)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">{row.werError != null ? fmtPct(row.werError * 100, 1) : '—'}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">{row.cerError != null ? fmtPct(row.cerError * 100, 1) : '—'}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">
+                              {fullGarbage != null ? fmtPct(fullGarbage * 100, 1) : '—'}
+                              {dir(fullGarbage != null ? -fullGarbage : null, snapGarbage != null ? -snapGarbage : null)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">
+                              {row.wordCount || '—'}{dir(row.wordCount, snap.wordCount)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-200">{row.droppedCount || '—'}</td>
+                            <td className="px-2 py-1.5" />
+                          </tr>
+                        </React.Fragment>
+                      );
+                    }
+
+                    // ── BASE MODE: single row ──
+                    return (
+                      <tr key={row.engine} className="border-t border-white/10 bg-slate-900/35">
+                        <td className="px-3 py-2 font-semibold text-slate-100">{row.engineName}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{fmtMs(row.runtimeMs)}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{fmtPct(row.confidence)}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{fmtPct(row.lexicalAxis, 1)}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{fmtPct(row.yieldAxis, 1)}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{fmtNum(row.compositeScore)}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{fmtNum(row.efficiency, 2)}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{row.werError != null ? fmtPct(row.werError * 100, 1) : '—'}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{row.cerError != null ? fmtPct(row.cerError * 100, 1) : '—'}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">
+                          {(() => { const g = garbagePct(row); return g != null ? fmtPct(g * 100, 1) : '—'; })()}
+                        </td>
+                        <td className="px-2 py-2 text-right text-slate-200">{row.wordCount || '—'}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{row.droppedCount || '—'}</td>
+                        <td className="px-2 py-2 text-left">
+                          {statusBadge(row.status, row.message)}
+                          {row.cacheHit && <span className="ml-1.5 inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">cache</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+
 
             <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
