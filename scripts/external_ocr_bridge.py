@@ -14,6 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 import re
 
@@ -24,6 +25,7 @@ os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 DEFAULT_EASY_YOLO_URL = "http://127.0.0.1:5000/easy-yolo-ocr"
 PADDLE_OCR_CACHE: Dict[Tuple[str, str], Any] = {}
+LOCAL_MODEL_BASE = Path(__file__).parent.parent / "public" / "paddle" / "models" / "inference"
 EASYOCR_READER_CACHE: Dict[Tuple[str, ...], Any] = {}
 WATERMARK_TOKENS = {
     "LIKEMANGA", "MANGA", "MANGAIO", "COLAMANGA", "CLOUDMERGE", "ACLOUDMERGE",
@@ -2793,6 +2795,20 @@ def get_paddle_profile_key(args: argparse.Namespace) -> str:
     return "cpu_shared"
 
 
+def resolve_local_model_dir(model_subdir: str) -> str | None:
+    """Return absolute path of local model dir if it exists & contains inference files, else None."""
+    candidate = LOCAL_MODEL_BASE / model_subdir
+    if candidate.is_dir():
+        # Verify it has the expected paddle inference files
+        has_inference = any(
+            (candidate / fname).exists()
+            for fname in ("inference.pdmodel", "inference.json", "inference.yml")
+        )
+        if has_inference:
+            return str(candidate)
+    return None
+
+
 def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, Any]:
     if profile_key == "cpu_korean_default":
         return {
@@ -2827,6 +2843,20 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
     }
     if text_detection_model_name:
         kwargs["text_detection_model_name"] = text_detection_model_name
+
+    # Thai: explicitly use the Thai-specific PP-OCRv5 mobile recognizer.
+    # Auto-downloaded into ~/.paddlex/official_models/th_PP-OCRv5_mobile_rec/
+    if lang == "th":
+        kwargs["text_recognition_model_name"] = "th_PP-OCRv5_mobile_rec"
+
+    # Priority: prefer local pre-bundled model dirs (offline / portable build) if present
+    if lang == "th":
+        local_det = resolve_local_model_dir("PP-OCRv5_mobile_det") or resolve_local_model_dir("th_PP-OCRv5_mobile_det")
+        local_rec = resolve_local_model_dir("th_PP-OCRv5_mobile_rec") or resolve_local_model_dir("th_PP-OCRv4_rec")
+        if local_det:
+            kwargs["text_detection_model_dir"] = local_det
+        if local_rec:
+            kwargs["text_recognition_model_dir"] = local_rec
 
     return kwargs
 

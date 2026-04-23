@@ -104,9 +104,16 @@ function Get-PythonCandidates {
 function Install-PaddleStack {
   param([Parameter(Mandatory = $true)][string]$PythonPath)
 
+  # CRITICAL: PaddlePaddle <= 3.3 was built against numpy 1.x ABI.
+  # Pin numpy<2 BEFORE installing paddle to avoid `_multiarray_umath` DLL load failures.
+  Write-Host '[ocr:bootstrap] Pinning numpy<2 (Paddle ABI requirement)'
+  Invoke-CheckedExternal -Executable $PythonPath -Arguments @('-m', 'pip', 'install', '--upgrade', 'numpy<2') -Step 'Pinning numpy<2'
+
   Write-Host '[ocr:bootstrap] Installing PaddleOCR stack'
   & $PythonPath -m pip install paddlepaddle paddleocr
   if ($LASTEXITCODE -eq 0) {
+    # Re-pin in case paddleocr deps bumped numpy
+    & $PythonPath -m pip install --upgrade 'numpy<2' | Out-Null
     return
   }
 
@@ -117,6 +124,8 @@ function Install-PaddleStack {
   }
 
   Invoke-CheckedExternal -Executable $PythonPath -Arguments @('-m', 'pip', 'install', 'paddleocr') -Step 'Installing paddleocr'
+  # Re-pin numpy<2 after dependency installs
+  & $PythonPath -m pip install --upgrade 'numpy<2' | Out-Null
 }
 
 if ($Engines.Count -eq 0) {
