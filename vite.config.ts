@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+
 import electron from 'vite-plugin-electron';
 
 // https://vitejs.dev/config/
@@ -12,6 +13,9 @@ const dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(file
 
 // More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
 export default defineConfig({
+  esbuild: {
+    target: 'es2022'
+  },
   worker: {
     format: 'es',
   },
@@ -34,6 +38,7 @@ export default defineConfig({
     }
   }])],
   build: {
+    target: 'es2022',
     rollupOptions: {
       output: {
         manualChunks: {
@@ -76,3 +81,4 @@ export default defineConfig({
     }]
   }
 });
+

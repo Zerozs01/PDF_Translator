@@ -3,6 +3,16 @@
 const fs = require('fs');
 const path = require('path');
 const SHORT_KEEP = new Set(['i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it']);
+const EVAL_WEIGHTS = Object.freeze({
+  rawConfidence: 0.35,
+  lexicalErrorPenalization: 0.45,
+  yieldPreservationDropSafe: 0.20,
+});
+const LEXICAL_WEIGHTS = Object.freeze({
+  wer: 0.35,
+  cer: 0.25,
+  garbage: 0.40,
+});
 
 function parseArgs(argv) {
   const args = {
@@ -122,6 +132,60 @@ function normalizeToken(token) {
     .trim();
 }
 
+function clampUnit(value) {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
+function normalizeConfidenceScore(rawConfidence) {
+  const value = Number(rawConfidence);
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 1) return clampUnit(value);
+  return clampUnit(value / 100);
+}
+
+function levenshteinDistance(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return 0;
+  if (left.length === 0) return right.length;
+  if (right.length === 0) return left.length;
+
+  const previous = new Array(right.length + 1);
+  const current = new Array(right.length + 1);
+
+  for (let j = 0; j <= right.length; j += 1) {
+    previous[j] = j;
+  }
+
+  for (let i = 1; i <= left.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const substitutionCost = left[i - 1] === right[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + substitutionCost
+      );
+    }
+    for (let j = 0; j <= right.length; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[right.length];
+}
+
+function normalizedEditError(reference, hypothesis) {
+  const ref = Array.isArray(reference) ? reference : [];
+  const hyp = Array.isArray(hypothesis) ? hypothesis : [];
+  if (ref.length === 0) {
+    return hyp.length === 0 ? null : 1;
+  }
+  const distance = levenshteinDistance(ref, hyp);
+  return clampUnit(distance / Math.max(1, ref.length));
+}
+
 function countMeaningfulWords(tokens) {
   let meaningful = 0;
   for (const token of tokens) {
@@ -219,6 +283,159 @@ function metric(page) {
     tokens,
     normalizedTokens,
     tokenSet: normalizedSet,
+    normalizedText: normalizedTokens.join(' '),
+  };
+}
+
+function expectationCoverage(expectation, candMetric) {
+  if (!expectation || !Array.isArray(expectation.mustContainAny) || expectation.mustContainAny.length === 0) {
+    return null;
+  }
+
+  let matched = 0;
+  for (const group of expectation.mustContainAny) {
+    const normalizedGroup = (group || []).map(normalizeToken).filter(Boolean);
+    if (normalizedGroup.length === 0) continue;
+    if (normalizedGroup.some((token) => candMetric.tokenSet.has(token))) {
+      matched += 1;
+    }
+  }
+
+  return clampUnit(matched / expectation.mustContainAny.length);
+}
+
+function expectationWerProxy(expectation, candMetric) {
+  const coverage = expectationCoverage(expectation, candMetric);
+  if (coverage == null) return null;
+
+  const minMeaningfulWords = Number(expectation && expectation.minMeaningfulWords ? expectation.minMeaningfulWords : 0);
+  const minLines = Number(expectation && expectation.minLines ? expectation.minLines : 0);
+
+  const meaningfulScore = minMeaningfulWords > 0
+    ? clampUnit(candMetric.meaningfulWords / minMeaningfulWords)
+    : 1;
+  const lineScore = minLines > 0
+    ? clampUnit(candMetric.lineCount / minLines)
+    : 1;
+
+  const expectedCoverage = clampUnit((coverage * 0.65) + (meaningfulScore * 0.25) + (lineScore * 0.10));
+  return clampUnit(1 - expectedCoverage);
+}
+
+function expectationCerProxy(expectation, candMetric) {
+  if (!expectation || !Array.isArray(expectation.mustContainAny) || expectation.mustContainAny.length === 0) {
+    return null;
+  }
+
+  const referenceTokens = expectation.mustContainAny
+    .map((group) => (group || []).map(normalizeToken).find(Boolean) || '')
+    .filter(Boolean);
+
+  if (referenceTokens.length === 0) return null;
+  if (candMetric.normalizedTokens.length === 0) return 1;
+
+  let totalError = 0;
+  for (const token of referenceTokens) {
+    let bestError = 1;
+    const tokenChars = Array.from(token);
+    for (const candidateToken of candMetric.normalizedTokens) {
+      const candidateChars = Array.from(candidateToken);
+      const error = normalizedEditError(tokenChars, candidateChars);
+      if (typeof error === 'number' && error < bestError) {
+        bestError = error;
+      }
+      if (bestError === 0) break;
+    }
+    totalError += bestError;
+  }
+
+  return clampUnit(totalError / referenceTokens.length);
+}
+
+function computeGarbageRatio(candMetric) {
+  const suspiciousRatio = clampUnit(candMetric.suspiciousRatio);
+  const shortTokenRatio = clampUnit(candMetric.standaloneShortTokens / Math.max(1, candMetric.wordCount));
+  const meaningfulRatio = clampUnit(candMetric.meaningfulWords / Math.max(1, candMetric.wordCount));
+  const nonMeaningfulRatio = clampUnit(1 - meaningfulRatio);
+
+  return clampUnit(
+    (suspiciousRatio * 0.60)
+    + (shortTokenRatio * 0.25)
+    + (nonMeaningfulRatio * 0.15)
+  );
+}
+
+function computeLexicalAxis(baseMetric, candMetric, expectation) {
+  const hasReference = Boolean(baseMetric && baseMetric.normalizedTokens.length > 0);
+  const garbageRatio = computeGarbageRatio(candMetric);
+
+  let werError = hasReference
+    ? normalizedEditError(baseMetric.normalizedTokens, candMetric.normalizedTokens)
+    : expectationWerProxy(expectation, candMetric);
+
+  let cerError;
+  if (hasReference) {
+    const refChars = Array.from(baseMetric.normalizedText);
+    const candChars = Array.from(candMetric.normalizedText);
+    cerError = normalizedEditError(refChars, candChars);
+  } else {
+    cerError = expectationCerProxy(expectation, candMetric);
+  }
+
+  if (typeof werError !== 'number') werError = garbageRatio;
+  if (typeof cerError !== 'number') cerError = garbageRatio;
+
+  const lexicalPenalty = clampUnit(
+    (werError * LEXICAL_WEIGHTS.wer)
+    + (cerError * LEXICAL_WEIGHTS.cer)
+    + (garbageRatio * LEXICAL_WEIGHTS.garbage)
+  );
+
+  return {
+    score: clampUnit(1 - lexicalPenalty),
+    mode: hasReference ? 'reference' : 'proxy',
+    werError: clampUnit(werError),
+    cerError: clampUnit(cerError),
+    garbageRatio,
+  };
+}
+
+function computeYieldAxis(baseMetric, candMetric) {
+  const observedWords = Math.max(0, Number(candMetric.wordCount || 0));
+  const droppedWords = Math.max(0, Number(candMetric.droppedCount || 0));
+  const wordYield = clampUnit(observedWords / Math.max(1, observedWords + droppedWords));
+  const baseCoverage = baseMetric && baseMetric.wordCount > 0
+    ? clampUnit(observedWords / baseMetric.wordCount)
+    : null;
+
+  const coverageForScore = baseCoverage == null ? 1 : baseCoverage;
+  return {
+    score: clampUnit((wordYield * 0.75) + (coverageForScore * 0.25)),
+    wordYield,
+    baseCoverage,
+  };
+}
+
+function computeCompositeEvaluation(baseMetric, candMetric, expectation) {
+  const rawConfidence = normalizeConfidenceScore(candMetric.confidence);
+  const lexical = computeLexicalAxis(baseMetric, candMetric, expectation);
+  const yieldAxis = computeYieldAxis(baseMetric, candMetric);
+
+  const compositeUnit = clampUnit(
+    (rawConfidence * EVAL_WEIGHTS.rawConfidence)
+    + (lexical.score * EVAL_WEIGHTS.lexicalErrorPenalization)
+    + (yieldAxis.score * EVAL_WEIGHTS.yieldPreservationDropSafe)
+  );
+
+  return {
+    compositeScore: Number((compositeUnit * 100).toFixed(2)),
+    axisScores: {
+      rawConfidence,
+      lexical: lexical.score,
+      yieldPreservation: yieldAxis.score,
+    },
+    lexical,
+    yield: yieldAxis,
   };
 }
 
@@ -372,12 +589,38 @@ function main() {
   let baseSuspiciousTotal = 0;
   let candSuspiciousTotal = 0;
   let expectationFailures = 0;
+  let evaluatedPages = 0;
+  let compositeScoreTotal = 0;
+  let rawAxisTotal = 0;
+  let lexicalAxisTotal = 0;
+  let yieldAxisTotal = 0;
+  let werErrorTotal = 0;
+  let cerErrorTotal = 0;
+  let garbageRatioTotal = 0;
 
   for (const pageNum of pageNumbers) {
     const basePage = basePages.get(pageNum);
     const candPage = candPages.get(pageNum);
     const expectation = expectations.get(pageNum);
     if (!candPage) {
+      const missingEvaluation = {
+        compositeScore: 0,
+        axisScores: {
+          rawConfidence: 0,
+          lexical: 0,
+          yieldPreservation: 0,
+        },
+        lexicalError: {
+          mode: 'proxy',
+          wer: 1,
+          cer: 1,
+          garbageRatio: 1,
+        },
+        yield: {
+          wordYield: 0,
+          baseCoverage: basePage ? 0 : null,
+        },
+      };
       pageReports.push({
         page: pageNum,
         score: 3,
@@ -385,13 +628,24 @@ function main() {
         baseExists: Boolean(basePage),
         candExists: false,
         expectation: expectation || null,
+        evaluation: missingEvaluation,
       });
       if (expectation) expectationFailures += 1;
+
+      evaluatedPages += 1;
+      compositeScoreTotal += missingEvaluation.compositeScore;
+      rawAxisTotal += missingEvaluation.axisScores.rawConfidence;
+      lexicalAxisTotal += missingEvaluation.axisScores.lexical;
+      yieldAxisTotal += missingEvaluation.axisScores.yieldPreservation;
+      werErrorTotal += missingEvaluation.lexicalError.wer;
+      cerErrorTotal += missingEvaluation.lexicalError.cer;
+      garbageRatioTotal += missingEvaluation.lexicalError.garbageRatio;
       continue;
     }
 
     const baseMetric = basePage ? metric(basePage) : null;
     const candMetric = metric(candPage);
+    const evaluation = computeCompositeEvaluation(baseMetric, candMetric, expectation);
     const { score: baseScore, reasons: baseReasons } = buildRisk(baseMetric, candMetric);
     const { score: expectScore, reasons: expectReasons, details: expectDetails } = evaluateExpectation(candMetric, expectation);
     const combinedReasons = Array.from(new Set([...baseReasons, ...expectReasons]));
@@ -425,9 +679,36 @@ function main() {
       },
       expectation: expectation || null,
       expectationDetails: expectDetails,
+      evaluation: {
+        compositeScore: evaluation.compositeScore,
+        axisScores: {
+          rawConfidence: Number((evaluation.axisScores.rawConfidence * 100).toFixed(2)),
+          lexical: Number((evaluation.axisScores.lexical * 100).toFixed(2)),
+          yieldPreservation: Number((evaluation.axisScores.yieldPreservation * 100).toFixed(2)),
+        },
+        lexicalError: {
+          mode: evaluation.lexical.mode,
+          wer: Number(evaluation.lexical.werError.toFixed(4)),
+          cer: Number(evaluation.lexical.cerError.toFixed(4)),
+          garbageRatio: Number(evaluation.lexical.garbageRatio.toFixed(4)),
+        },
+        yield: {
+          wordYield: Number(evaluation.yield.wordYield.toFixed(4)),
+          baseCoverage: evaluation.yield.baseCoverage == null ? null : Number(evaluation.yield.baseCoverage.toFixed(4)),
+        },
+      },
       missingTokens: tokenDiff.missing,
       addedTokens: tokenDiff.added,
     });
+
+    evaluatedPages += 1;
+    compositeScoreTotal += evaluation.compositeScore;
+    rawAxisTotal += evaluation.axisScores.rawConfidence;
+    lexicalAxisTotal += evaluation.axisScores.lexical;
+    yieldAxisTotal += evaluation.axisScores.yieldPreservation;
+    werErrorTotal += evaluation.lexical.werError;
+    cerErrorTotal += evaluation.lexical.cerError;
+    garbageRatioTotal += evaluation.lexical.garbageRatio;
 
     if (baseMetric) {
       baseWordsTotal += baseMetric.wordCount;
@@ -456,6 +737,30 @@ function main() {
     candSuspiciousTotal,
     suspiciousDelta: candSuspiciousTotal - baseSuspiciousTotal,
     riskyPages: risky.length,
+    compositeScore: Number((compositeScoreTotal / Math.max(1, evaluatedPages)).toFixed(2)),
+    axisScores: {
+      rawConfidence: Number(((rawAxisTotal / Math.max(1, evaluatedPages)) * 100).toFixed(2)),
+      lexical: Number(((lexicalAxisTotal / Math.max(1, evaluatedPages)) * 100).toFixed(2)),
+      yieldPreservation: Number(((yieldAxisTotal / Math.max(1, evaluatedPages)) * 100).toFixed(2)),
+    },
+    lexicalErrors: {
+      wer: Number((werErrorTotal / Math.max(1, evaluatedPages)).toFixed(4)),
+      cer: Number((cerErrorTotal / Math.max(1, evaluatedPages)).toFixed(4)),
+      garbageRatio: Number((garbageRatioTotal / Math.max(1, evaluatedPages)).toFixed(4)),
+    },
+    methodology: {
+      version: 'ocr-composite-v1',
+      weights: {
+        rawConfidence: EVAL_WEIGHTS.rawConfidence,
+        lexicalErrorPenalization: EVAL_WEIGHTS.lexicalErrorPenalization,
+        yieldPreservationDropSafe: EVAL_WEIGHTS.yieldPreservationDropSafe,
+      },
+      lexicalWeights: {
+        wer: LEXICAL_WEIGHTS.wer,
+        cer: LEXICAL_WEIGHTS.cer,
+        garbage: LEXICAL_WEIGHTS.garbage,
+      },
+    },
   };
 
   console.log('[OCR Regression] Summary');
@@ -469,6 +774,9 @@ function main() {
   }
   console.log(`- expectation failures: ${summary.expectationFailures}/${summary.expectationPages}`);
   console.log(`- risky pages: ${summary.riskyPages}`);
+  console.log(`- composite score: ${summary.compositeScore}/100`);
+  console.log(`- axis raw/lexical/yield: ${summary.axisScores.rawConfidence}% / ${summary.axisScores.lexical}% / ${summary.axisScores.yieldPreservation}%`);
+  console.log(`- lexical errors wer/cer/garbage: ${summary.lexicalErrors.wer} / ${summary.lexicalErrors.cer} / ${summary.lexicalErrors.garbageRatio}`);
 
   if (risky.length > 0) {
     console.log('\n[OCR Regression] Risk Details');

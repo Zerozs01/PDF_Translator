@@ -146,6 +146,11 @@ function toMdNumber(value) {
   return String(value);
 }
 
+function toMdFixed(value, digits = 2) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  return value.toFixed(digits);
+}
+
 function buildMarkdown(summary) {
   const lines = [];
   lines.push('# OCR Benchmark Matrix');
@@ -157,13 +162,19 @@ function buildMarkdown(summary) {
   lines.push(`- manifest: ${summary.config.manifest}`);
   lines.push(`- partialMode: ${summary.config.skipMissing ? 'enabled (--skip-missing)' : 'disabled (strict fixtures required)'}`);
   lines.push(`- requiredLanguages: ${(summary.config.requireLanguages || []).length > 0 ? summary.config.requireLanguages.join(', ') : '(none)'}`);
+  if (summary.methodology && summary.methodology.weights) {
+    lines.push(`- methodology: ${summary.methodology.version || 'ocr-composite-v1'}`);
+    lines.push(`- compositeWeights: raw=${summary.methodology.weights.rawConfidence}, lexical=${summary.methodology.weights.lexicalErrorPenalization}, yield=${summary.methodology.weights.yieldPreservationDropSafe}`);
+  }
   lines.push('');
-  lines.push('| Engine | Pages | Expect Fail | Risky Pages | Words | Suspicious | Avg ms | P50 ms | P90 ms | Status |');
-  lines.push('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |');
+  lines.push('| Engine | Pages | Composite | Efficiency (/s) | Raw (35%) | Lexical (45%) | Yield (20%) | WER | CER | Garbage | Expect Fail | Risky Pages | Words | Suspicious | Avg ms | P50 ms | P90 ms | Status |');
+  lines.push('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |');
 
   for (const row of summary.results) {
+    const axis = row.axisScores || {};
+    const lexical = row.lexicalErrors || {};
     lines.push(
-      `| ${row.engine} | ${row.comparedPages} | ${row.expectationFailures} | ${row.riskyPages} | ${row.candWordsTotal} | ${row.candSuspiciousTotal} | ${toMdNumber(row.runtime.avgMs)} | ${toMdNumber(row.runtime.p50Ms)} | ${toMdNumber(row.runtime.p90Ms)} | ${row.status} |`
+      `| ${row.engine} | ${row.comparedPages} | ${toMdFixed(row.compositeScore, 2)} | ${toMdFixed(row.efficiency, 2)} | ${toMdFixed(axis.rawConfidence, 2)} | ${toMdFixed(axis.lexical, 2)} | ${toMdFixed(axis.yieldPreservation, 2)} | ${toMdFixed(lexical.wer, 4)} | ${toMdFixed(lexical.cer, 4)} | ${toMdFixed(lexical.garbageRatio, 4)} | ${row.expectationFailures} | ${row.riskyPages} | ${row.candWordsTotal} | ${row.candSuspiciousTotal} | ${toMdNumber(row.runtime.avgMs)} | ${toMdNumber(row.runtime.p50Ms)} | ${toMdNumber(row.runtime.p90Ms)} | ${row.status} |`
     );
   }
 
@@ -171,6 +182,7 @@ function buildMarkdown(summary) {
   lines.push('## Gate');
   lines.push('');
   lines.push('- PASS criteria per engine: expectationFailures = 0 and riskyPages = 0');
+  lines.push('- Efficiency formula: CompositeScore / RuntimeSeconds (runtime uses per-engine avg ms)');
   lines.push(`- overallStatus: ${summary.overallStatus}`);
 
   if (summary.failures.length > 0) {
@@ -206,6 +218,7 @@ async function main() {
   const stamp = Date.now();
   const results = [];
   const failures = [];
+  let methodology = null;
 
   for (const engine of args.engines) {
     const candPath = `.tmp-ocr-current-${engine}-${args.pipeline}-${args.quality}-${stamp}.json`;
@@ -231,6 +244,18 @@ async function main() {
         engine,
         status: 'run_failed',
         comparedPages: 0,
+        compositeScore: null,
+        efficiency: null,
+        axisScores: {
+          rawConfidence: null,
+          lexical: null,
+          yieldPreservation: null,
+        },
+        lexicalErrors: {
+          wer: null,
+          cer: null,
+          garbageRatio: null,
+        },
         expectationFailures: 0,
         riskyPages: 0,
         candWordsTotal: 0,
@@ -266,6 +291,18 @@ async function main() {
         engine,
         status: 'score_failed',
         comparedPages: 0,
+        compositeScore: null,
+        efficiency: null,
+        axisScores: {
+          rawConfidence: null,
+          lexical: null,
+          yieldPreservation: null,
+        },
+        lexicalErrors: {
+          wer: null,
+          cer: null,
+          garbageRatio: null,
+        },
         expectationFailures: 0,
         riskyPages: 0,
         candWordsTotal: 0,
@@ -286,6 +323,17 @@ async function main() {
     const candidate = loadJson(candPath);
     const runtime = summarizeRuntime(candidate.pages || []);
     const summary = report.summary || {};
+    if (!methodology && summary.methodology && typeof summary.methodology === 'object') {
+      methodology = summary.methodology;
+    }
+
+    const compositeScore = Number(summary.compositeScore || 0);
+    const avgRuntimeSec = typeof runtime.avgMs === 'number' && runtime.avgMs > 0
+      ? runtime.avgMs / 1000
+      : null;
+    const efficiency = avgRuntimeSec == null
+      ? null
+      : Number((compositeScore / avgRuntimeSec).toFixed(4));
 
     const expectationFailures = Number(summary.expectationFailures || 0);
     const riskyPages = Number(summary.riskyPages || 0);
@@ -302,6 +350,18 @@ async function main() {
       engine,
       status,
       comparedPages: Number(summary.comparedPages || 0),
+      compositeScore,
+      efficiency,
+      axisScores: {
+        rawConfidence: Number(summary.axisScores && summary.axisScores.rawConfidence ? summary.axisScores.rawConfidence : 0),
+        lexical: Number(summary.axisScores && summary.axisScores.lexical ? summary.axisScores.lexical : 0),
+        yieldPreservation: Number(summary.axisScores && summary.axisScores.yieldPreservation ? summary.axisScores.yieldPreservation : 0),
+      },
+      lexicalErrors: {
+        wer: Number(summary.lexicalErrors && summary.lexicalErrors.wer ? summary.lexicalErrors.wer : 0),
+        cer: Number(summary.lexicalErrors && summary.lexicalErrors.cer ? summary.lexicalErrors.cer : 0),
+        garbageRatio: Number(summary.lexicalErrors && summary.lexicalErrors.garbageRatio ? summary.lexicalErrors.garbageRatio : 0),
+      },
       expectationFailures,
       riskyPages,
       candWordsTotal: Number(summary.candWordsTotal || 0),
@@ -329,6 +389,7 @@ async function main() {
       skipMissing: args.skipMissing,
       requireLanguages: args.requireLanguages,
     },
+    methodology,
     overallStatus,
     failures,
     results,

@@ -2856,6 +2856,83 @@ class VisionService {
    * OCR for Text Layer Overlay
    * Returns word-level bounding boxes for precise text positioning
    */
+public async rawOCR(
+    imageUrl: string | Blob,
+    imageWidth: number,
+    imageHeight: number,
+    language: string = 'eng',
+    dpi: number = 300,
+    pageSegMode?: number,
+    signal?: AbortSignal,
+    ocrEngine: OCREngine = 'paddleocr'
+  ): Promise<OCRPageResult> {
+    const bridge = window.electronAPI?.ocr;
+    if (!bridge?.runExternal) {
+      throw new Error(`Raw external OCR engine "${ocrEngine}" unavailable`);
+    }
+
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+
+    const onAbort = () => {
+      void bridge.cancelExternal?.({ engine: ocrEngine }).catch(() => {});
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      const { bytes, mimeType } = await this.readInputAsBytes(imageUrl);
+      if (signal?.aborted) throw createAbortError();
+
+      const resultRaw = await bridge.runExternal({
+        engine: ocrEngine,
+        imageData: bytes,
+        imageMimeType: mimeType,
+        imageWidth,
+        imageHeight,
+        language,
+        dpi,
+        pageSegMode,
+        pipelineProfile: 'raw' as any,
+        ocrQualityProfile: 'best',
+      });
+
+      const result: OCRPageResult = {
+        pageNumber: 0,
+        width: imageWidth,
+        height: imageHeight,
+        dpi,
+        language,
+        pageSegMode: resultRaw.pageSegMode ?? pageSegMode,
+        algorithmVersion: OCR_ALGORITHM_VERSION,
+        pipelineProfile: 'raw',
+        ocrEngine,
+        ocrQualityProfile: 'best',
+        lines: (resultRaw.lines || []).map(line => ({
+          ...line,
+          bbox: line.bbox as any,
+          words: (line.words || []).map((w: any) => ({ ...w, bbox: w.bbox as any })),
+        })),
+        words: [],
+        text: resultRaw.text || '',
+        confidence: Number(resultRaw.confidence) || 0,
+        debug: {
+          droppedWords: [],
+          dropCounts: {},
+          raw: true,
+          ...(resultRaw.debug || {}),
+        },
+      };
+
+      return result;
+    } catch (error) {
+      if (signal?.aborted) throw createAbortError();
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
   public async ocrForTextLayer(
     imageUrl: string | Blob,
     imageWidth: number,

@@ -71,7 +71,8 @@ export interface OCRDroppedWord {
   bbox?: BBox;
 }
 
-export type OCRPipelineProfile = "panel" | "export";
+export type BenchmarkMode = 'base' | 'dual';
+export type OCRPipelineProfile = "panel" | "export" | "raw";
 export type OCRQualityProfile = "fast" | "balanced" | "best";
 export type OCREngine = "tesseract" | "paddleocr" | "easyocr";
 
@@ -112,6 +113,7 @@ export interface OCRDebugInfo {
   skipReason?: string;
   runtimeMs?: number;
   qualityProfile?: OCRQualityProfile;
+  raw?: boolean;
 }
 
 export interface OCRFixtureExpectation {
