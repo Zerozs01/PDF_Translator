@@ -146,18 +146,18 @@ type BenchmarkRow = {
   rawSnapshot?: BenchmarkRawSnapshot;
 };
 
-const BENCHMARK_SHORT_KEEP = new Set(['i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it']);
+const BENCHMARK_SHORT_KEEP = new Set([
+  'i', 'a', 'go', 'to', 'do', 'in', 'on', 'of', 'if', 'is', 'be', 'we', 'us', 'my', 'or', 'an', 'at', 'as', 'am', 'up', 'it',
+  // Cyrillic (Russian) common short words to prevent false garbage flags
+  'в', 'и', 'с', 'я', 'к', 'о', 'а', 'у', 'он', 'не', 'по', 'на', 'из', 'от', 'до', 'за', 'да', 'но', 'вы', 'ты', 'мы'
+]);
 const BENCHMARK_DOMAIN_TOKENS = new Set(['io', 'com', 'net', 'org', 'gg', 'tv']);
 const BENCHMARK_COMPOSITE_WEIGHTS = Object.freeze({
   rawConfidence: 0.35,
   lexicalErrorPenalization: 0.45,
   yieldPreservationDropSafe: 0.20,
 });
-const BENCHMARK_LEXICAL_WEIGHTS = Object.freeze({
-  wer: 0.35,
-  cer: 0.25,
-  garbage: 0.40,
-});
+// (Removed BENCHMARK_LEXICAL_WEIGHTS since we rely entirely on garbage/suspicious ratios without ground truth)
 
 const normalizeBenchmarkToken = (token: string): string =>
   String(token || '')
@@ -512,20 +512,41 @@ const computeSuspiciousCount = (tokens: string[], language: string): number => {
   const jamoRe = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/;
   const syllableRe = /[\uAC00-\uD7AF]/;
   const edgeJamoRe = /^[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]|[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]$/;
+  const thaiConsoOnly = /^[\u0E00-\u0E2E]+$/;
+
   let suspicious = 0;
 
   for (const token of tokens) {
     const clean = token.trim();
     if (!clean) continue;
     const normalized = normalizeBenchmarkToken(clean);
+    
+    // Flag heavy special characters (punctuation, symbols) as garbage, ignoring letters/numbers of any language
+    const specialCharsCount = (clean.match(/[^\p{L}\p{N}\s]/gu) || []).length;
+    if (specialCharsCount > 0 && specialCharsCount >= clean.length * 0.5) {
+      suspicious += 1;
+      continue;
+    }
+
     const hasJamo = jamoRe.test(clean);
     const hasSyllable = syllableRe.test(clean);
 
-    if (hasJamo && !hasSyllable) suspicious += 1;
-    if (/^[0-9]{1,3}$/.test(clean)) suspicious += 1;
-    if (cjkLike && /^[A-Za-z]{1,2}$/.test(clean)) suspicious += 1;
-    if (hasSyllable && edgeJamoRe.test(clean) && clean.length <= 4) suspicious += 1;
-    if (!cjkLike && normalized.length === 1 && !BENCHMARK_SHORT_KEEP.has(normalized)) suspicious += 1;
+    if (hasJamo && !hasSyllable) { suspicious += 1; continue; }
+    if (/^[0-9]{1,3}$/.test(clean)) { suspicious += 1; continue; }
+    if (cjkLike && /^[A-Za-z]{1,2}$/.test(clean) && !BENCHMARK_SHORT_KEEP.has(clean.toLowerCase())) { suspicious += 1; continue; }
+    if (hasSyllable && edgeJamoRe.test(clean) && clean.length <= 4) { suspicious += 1; continue; }
+    
+    // Thai-specific noise: String of consonants with no vowels/tones
+    if (language.includes('tha') && thaiConsoOnly.test(clean)) {
+      if (clean.length === 1 && !['ก็','ณ','ธ'].includes(clean)) {
+        suspicious += 1; continue;
+      }
+      if (clean.length >= 4) {
+        suspicious += 1; continue; // 4+ consonants without vowel is highly likely noise (e.g. ดกทศ)
+      }
+    }
+
+    if (!cjkLike && normalized.length === 1 && !BENCHMARK_SHORT_KEEP.has(normalized)) { suspicious += 1; continue; }
   }
 
   return suspicious;
@@ -540,11 +561,13 @@ const clampUnit = (value: number): number => {
 
 const computeLexicalQuality = (tokens: string[], language: string): number => {
   if (tokens.length === 0) return 0;
-  if (isCjkLikeLanguage(language)) {
-    return 1;
-  }
+  
+  const isCjk = isCjkLikeLanguage(language);
+  const isThai = language.includes('tha');
+  const vowelLike = /[aeiouyаеёиоуыэюя]/i; // Includes Latin and Cyrillic vowels
+  const thaiVowelTone = /[\u0E30-\u0E4E]/;
+  const cjkChars = /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7A3]/;
 
-  const vowelLike = /[aeiouy]/i;
   let considered = 0;
   let strong = 0;
   let artifact = 0;
@@ -555,12 +578,7 @@ const computeLexicalQuality = (tokens: string[], language: string): number => {
 
     considered += 1;
 
-    if (BENCHMARK_DOMAIN_TOKENS.has(normalized)) {
-      artifact += 1;
-      continue;
-    }
-
-    if (/^[0-9]{1,4}$/.test(normalized)) {
+    if (BENCHMARK_DOMAIN_TOKENS.has(normalized) || /^[0-9]{1,4}$/.test(normalized)) {
       artifact += 1;
       continue;
     }
@@ -570,8 +588,22 @@ const computeLexicalQuality = (tokens: string[], language: string): number => {
       continue;
     }
 
-    if (normalized.length >= 5 || vowelLike.test(normalized)) {
-      strong += 1;
+    if (isThai) {
+      if (thaiVowelTone.test(rawToken)) {
+        strong += 1;
+      } else if (rawToken.length === 1) {
+        artifact += 1;
+      } else if (rawToken.length >= 2) {
+        strong += 0.5; // partial credit
+      }
+    } else if (isCjk) {
+       if (cjkChars.test(rawToken)) strong += 1;
+       else if (rawToken.length === 1) artifact += 1;
+       else strong += 0.5;
+    } else {
+      if (normalized.length >= 5 || vowelLike.test(normalized)) {
+        strong += 1;
+      }
     }
   }
 
@@ -646,33 +678,20 @@ const computeCompositeScore = (summary: {
 } => {
   const confidenceScore = normalizeBenchmarkConfidence(summary.confidence);
 
-  const normalizedWordTokens = summary.tokens.map(normalizeBenchmarkToken).filter(Boolean);
-  const normalizedTextTokens = String(summary.text || '')
-    .split(/\s+/g)
-    .map(normalizeBenchmarkToken)
-    .filter(Boolean);
-
-  const referenceTokens = normalizedTextTokens.length > 0 ? normalizedTextTokens : normalizedWordTokens;
-  const candidateTokens = normalizedWordTokens.length > 0 ? normalizedWordTokens : normalizedTextTokens;
-
-  let werError = normalizedEditError(referenceTokens, candidateTokens);
-  const joiner = isCjkLikeLanguage(summary.language) ? '' : ' ';
-  const referenceChars = Array.from(referenceTokens.join(joiner));
-  const candidateChars = Array.from(candidateTokens.join(joiner));
-  const cerError = normalizedEditError(referenceChars, candidateChars);
-  if (isCjkLikeLanguage(summary.language)) {
-    werError = cerError;
-  }
+  // WER and CER removed because they falsely compare candidate against candidate (yielding 0%) without true Ground Truth
+  const werError = 0;
+  const cerError = 0;
 
   const garbageRatio = clampUnit((summary.suspiciousRatio * 0.80) + ((1 - clampUnit(summary.lexicalQuality)) * 0.20));
-  const lexicalPenalty = clampUnit(
-    (werError * BENCHMARK_LEXICAL_WEIGHTS.wer)
-    + (cerError * BENCHMARK_LEXICAL_WEIGHTS.cer)
-    + (garbageRatio * BENCHMARK_LEXICAL_WEIGHTS.garbage)
-  );
+  
+  // Lexical Penalty is now fully driven by Garbage Ratio and poor Lexical patterns, preventing fake 100% scores
+  const lexicalPenalty = garbageRatio;
   const lexicalAxis = clampUnit(1 - lexicalPenalty);
 
-  const yieldAxis = clampUnit(summary.wordCount / Math.max(1, summary.wordCount + Math.max(0, summary.droppedCount)));
+  // Yield is now "Effective Yield": it only counts words that are likely NOT garbage
+  // This prevents an engine from getting 100% Yield just by outputting massive amounts of garbage text that doesn't get dropped.
+  const effectiveWordCount = summary.wordCount * lexicalAxis;
+  const yieldAxis = clampUnit(effectiveWordCount / Math.max(1, summary.wordCount + Math.max(0, summary.droppedCount)));
 
   const composite = (
     (confidenceScore * BENCHMARK_COMPOSITE_WEIGHTS.rawConfidence)
@@ -5710,7 +5729,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                   confidence เป็น raw score ของแต่ละ engine (ยังไม่ calibrated ข้าม model)
                 </p>
                 <p className="mt-1 text-[11px] text-cyan-200/90">
-                  composite score = 35% raw conf + 45% lexical error penalization (WER/CER + garbage) + 20% yield/drop-safe
+                  composite score = 35% raw conf + 45% lexical quality (garbage penalization) + 20% yield/drop-safe
                 </p>
                 <p className="mt-1 text-[11px] text-cyan-200/75">
                   efficiency = composite score / runtime (seconds)
@@ -5721,7 +5740,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                     <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
                       <li><span className="text-cyan-300">Composite Score:</span> คะแนนรวม (35% Raw Conf + 45% Lexical Quality + 20% Yield) <span className="text-emerald-400">↑ ยิ่งสูงยิ่งดี</span> แปลว่าผลลัพธ์โดยรวมสมบูรณ์และถูกต้องมากขึ้น</li>
                       <li><span className="text-cyan-300">Lexical & Yield:</span> ความถูกต้องของคำ (Lexical) และปริมาณข้อความที่รักษาไว้ได้ (Yield) <span className="text-emerald-400">↑ สูง=ดี</span> หมายถึงลด Garbage ได้โดยไม่ทำให้ข้อความหลักหาย</li>
-                      <li><span className="text-rose-300">Garbage & Errors (WER/CER):</span> สัดส่วนข้อความขยะ/ลายน้ำ (Garbage) และอัตราความผิดพลาดของคำ/ตัวอักษร <span className="text-emerald-400">↓ ยิ่งต่ำยิ่งดี</span> หมายถึง Pipeline สามารถกรองขยะและเส้นกวนทิ้งได้สำเร็จ</li>
+                      <li><span className="text-rose-300">Garbage Ratio:</span> สัดส่วนข้อความขยะ/ลายน้ำ หรือคำที่ผิดเพี้ยน <span className="text-emerald-400">↓ ยิ่งต่ำยิ่งดี</span> หมายถึง Pipeline สามารถกรองขยะและเส้นกวนทิ้งได้สำเร็จ</li>
                     </ul>
                   </div>
                 )}
@@ -5767,8 +5786,6 @@ export const OCRTextLayerPanel: React.FC = () => {
                     <th className="px-2 py-2 text-right">Yield</th>
                     <th className="px-2 py-2 text-right">Composite</th>
                     <th className="px-2 py-2 text-right">Efficiency</th>
-                    <th className="px-2 py-2 text-right">WER</th>
-                    <th className="px-2 py-2 text-right">CER</th>
                     <th className="px-2 py-2 text-right">Garbage</th>
                     <th className="px-2 py-2 text-right">Words</th>
                     <th className="px-2 py-2 text-right">Dropped</th>
@@ -5834,8 +5851,6 @@ export const OCRTextLayerPanel: React.FC = () => {
                             <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.yieldAxis, 1)}</td>
                             <td className="px-2 py-1.5 text-right text-slate-500">{fmtNum(snap.compositeScore)}</td>
                             <td className="px-2 py-1.5 text-right text-slate-500">—</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">—</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">—</td>
                             <td className="px-2 py-1.5 text-right text-slate-500">{snapGarbage != null ? fmtPct(snapGarbage * 100, 1) : '—'}</td>
                             <td className="px-2 py-1.5 text-right text-slate-500">{snap.wordCount || '—'}</td>
                             <td className="px-2 py-1.5 text-right text-slate-500">{snap.droppedCount || '—'}</td>
@@ -5865,8 +5880,6 @@ export const OCRTextLayerPanel: React.FC = () => {
                               {fmtNum(row.compositeScore)}{dir(row.compositeScore, snap.compositeScore)}
                             </td>
                             <td className="px-2 py-1.5 text-right text-slate-200">{fmtNum(row.efficiency)}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-200">{row.werError != null ? fmtPct(row.werError * 100, 1) : '—'}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-200">{row.cerError != null ? fmtPct(row.cerError * 100, 1) : '—'}</td>
                             <td className="px-2 py-1.5 text-right text-slate-200">
                               {fullGarbage != null ? fmtPct(fullGarbage * 100, 1) : '—'}
                               {dir(fullGarbage != null ? -fullGarbage : null, snapGarbage != null ? -snapGarbage : null)}
