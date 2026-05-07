@@ -2327,7 +2327,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   // Tracks page+engine combos that were explicitly cleared by the user.
   // Alias probing is blocked for these keys until the file/pipeline resets.
   const clearedCacheKeysRef = useRef<Set<string>>(new Set());
-  const [engineWarmStates, setEngineWarmStates] = useState<Record<string, EngineWarmState>>(() => ({ ...SESSION_ENGINE_WARM_STATES }));
+      const warmTimerIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [engineWarmStates, setEngineWarmStates] = useState<Record<string, EngineWarmState>>(() => ({ ...SESSION_ENGINE_WARM_STATES }));
   const pendingEngineSelectionRef = useRef<OCREngine | null>(null);
   const warmAnimationTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const externalProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -4848,17 +4849,75 @@ export const OCRTextLayerPanel: React.FC = () => {
     benchmarkAbortRef.current = controller;
     ocrJobActiveRef.current = true;
 
-    try {
-      for (const engine of OCR_ENGINES) {
-        if (controller.signal.aborted) break;
+        // Get docId for DB cache lookups
+        const cacheDocId = await ensureDocumentId().catch(() => null);
 
-        // Tesseract has no rawOCR path (worker-only), skip raw phase
-        const supportsRaw = engine.id !== 'tesseract';
+        // Check in-memory per-engine cache from previous OCR runs first.
+        // This avoids re-running OCR when the user has already run a model individually.
+        const engineMemoryCache: Record<string, OCRPageResult | null> = {};
+        for (const engine of OCR_ENGINES) {
+          const cached = useOCRTextLayerStore.getState().ocrByPageEngine.get(currentPage)?.get(engine.id);
+          if (cached && isCacheCompatibleForEngine(cached, engine.id)) {
+            engineMemoryCache[engine.id] = cached;
+          } else {
+            engineMemoryCache[engine.id] = null;
+          }
+        }
 
-        updateBenchmarkRow(engine.id, {
-          status: 'running',
-          message: supportsRaw ? 'RAW pass...' : 'Running...',
-        });
+        // Also check DB for engines not yet in memory
+        const engineDbCache: Record<string, OCRPageResult | null> = {};
+        for (const engine of OCR_ENGINES) {
+          if (engineMemoryCache[engine.id] !== null) {
+            engineDbCache[engine.id] = null;
+            continue;
+          }
+          if (cacheDocId) {
+            try {
+              const dbCached = await dbService.getOCR(cacheDocId, currentPage, engine.id);
+              if (dbCached && isCacheCompatibleForEngine(dbCached, engine.id)) {
+                engineDbCache[engine.id] = dbCached;
+                cacheBenchmarkResultInMemory(currentPage, engine.id, dbCached);
+              } else {
+                engineDbCache[engine.id] = null;
+              }
+            } catch {
+              engineDbCache[engine.id] = null;
+            }
+          } else {
+            engineDbCache[engine.id] = null;
+          }
+        }
+
+        try {
+          for (const engine of OCR_ENGINES) {
+            if (controller.signal.aborted) break;
+
+            const supportsRaw = engine.id !== 'tesseract';
+
+            // Use cached result if available (memory first, then DB)
+            const memoryCached = engineMemoryCache[engine.id];
+            const dbCached = engineDbCache[engine.id];
+            const cachedResult = memoryCached ?? (dbCached ?? null);
+
+            if (cachedResult) {
+              const normalizedCached = normalizeCacheProfile(cachedResult);
+              const summary = summarizeBenchmarkResult(normalizedCached);
+              updateBenchmarkRow(engine.id, {
+                status: 'done',
+                cacheHit: true,
+                ...summary,
+                rawSnapshot: undefined,
+                message: summary.runtimeMs != null
+                  ? `Cache hit ${(summary.runtimeMs / 1000).toFixed(summary.runtimeMs >= 10000 ? 1 : 2)}s`
+                  : 'Cache hit (full pipeline)',
+              });
+              continue;
+            }
+
+            updateBenchmarkRow(engine.id, {
+              status: 'running',
+              message: supportsRaw ? 'RAW pass...' : 'Running...',
+            });
 
         try {
           // ── ensure engine ready ──
@@ -4880,13 +4939,17 @@ export const OCRTextLayerPanel: React.FC = () => {
           let rawSnapshot: BenchmarkRawSnapshot | undefined;
           let fullResult: OCRPageResult | undefined;
           
-          const qualityProfile: OCRQualityProfile = (() => {
+                    const qualityProfile: OCRQualityProfile = (() => {
             if (engine.id !== 'paddleocr') return 'best';
             const isCjk = options.language.split('+').map(c => c.trim())
               .some(c => ['kor','jpn','jpn_vert','chi_sim','chi_tra','tha'].includes(c));
             if (activePipelineProfile !== 'panel' || isCjk) return 'balanced';
             const px = imgW * imgH;
-            return (px >= 3_600_000 || Math.max(imgW,imgH) >= 5200) ? 'fast' : 'balanced';
+            const longest = Math.max(imgW, imgH);
+            const shortest = Math.min(imgW, imgH);
+            const aspectRatio = longest / Math.max(1, shortest);
+            const preferFast = px >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+            return preferFast ? 'fast' : 'balanced';
           })();
 
           // Construct promises
@@ -4965,10 +5028,10 @@ export const OCRTextLayerPanel: React.FC = () => {
       stopExternalProgress();
     }
   }, [activePipelineProfile, benchmarkRunning, cacheBenchmarkResultInMemory, currentPage,
-      ensureEngineReady, file, fileUrl, handleBenchmarkCurrentPage, isAbortError,
-      isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language,
-      options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints,
-      showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
+        ensureDocumentId, ensureEngineReady, file, fileUrl, handleBenchmarkCurrentPage, isAbortError,
+        isCacheCompatibleForEngine, isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language,
+        options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints,
+        showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
 
   const handleCancelBenchmark = useCallback(() => {
     benchmarkAbortRef.current?.abort();

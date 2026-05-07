@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { app } from 'electron';
+import { BenchmarkDAO } from './BenchmarkDAO';
+export { BenchmarkDAO };
 
 let db: Database.Database | null = null;
 
@@ -30,7 +32,27 @@ export function initDB() {
     // 4. Memory-Mapped I/O: Map up to 128MB of DB into RAM for instant reads
     db.pragma('mmap_size = 134217728');
 
-    // Create Tables with comprehensive schema
+    // NEW: Benchmarks table + indexes (Phase 1.3)
+// BenchmarkDAO migration complete (Phase 1.3)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS benchmarks (
+    document_id INTEGER NOT NULL,
+    page_number INTEGER NOT NULL,
+    mode TEXT NOT NULL CHECK(mode IN ('baseline', 'improve')),
+    config_hash TEXT NOT NULL,
+    results TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+    updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+    PRIMARY KEY (document_id, page_number, mode, config_hash),
+    FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_benchmarks_doc_page ON benchmarks(document_id, page_number);
+  CREATE INDEX IF NOT EXISTS idx_benchmarks_lookup ON benchmarks(document_id, page_number, mode, config_hash);
+`);
+
+console.log('[DB] BenchmarkDAO ready');
+    BenchmarkDAO.init(db);
     const schema = `
       -- Table for Tags
       CREATE TABLE IF NOT EXISTS tags (

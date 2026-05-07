@@ -1,11 +1,11 @@
-import { OCREngine, OCRPageResult } from '../types';
+import { OCREngine, OCRPageResult, BenchmarkMode, BenchmarkResultRow, BenchmarkResultSnapshot, DBBenchmarkRecord } from '../types';
 import type {
   DBDocumentCacheCandidate,
   DBOCRTranslationCacheEntry,
   DBOcrCacheStatsRow,
   DocumentUpdate,
 } from '../types/electron.d';
-import '../types/electron.d'; // Import type declarations
+import '../types/electron.d';
 
 function isDbVerboseLoggingEnabled(): boolean {
   if (typeof window === 'undefined') return false;
@@ -55,9 +55,6 @@ export const dbService = {
     return isDbAvailable();
   },
 
-  /**
-   * Register or update a document in the database
-   */
   async saveDocument(filepath: string, filename: string, totalPages: number): Promise<number> {
     try {
       if (!isDbAvailable()) {
@@ -71,9 +68,63 @@ export const dbService = {
     }
   },
 
-  /**
-   * Get a document's ID and metadata by filepath
-   */
+  // Benchmark CRUD
+  async saveBenchmark(docId: number, pageNum: number, mode: BenchmarkMode, configHash: string, engine: OCREngine, result: BenchmarkResultSnapshot): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] saveBenchmark skipped: DB not available');
+        return false;
+      }
+      const key = `${mode}:${configHash}:${engine}`;
+      const payload = JSON.stringify(result);
+      return await window.electronAPI.db.saveBenchmark(docId, pageNum, key, payload);
+    } catch (error) {
+      console.error('Failed to save benchmark:', error);
+      return false;
+    }
+  },
+
+  async getBenchmark(docId: number, pageNum: number, mode: BenchmarkMode, configHash: string, engine: OCREngine): Promise<BenchmarkResultSnapshot | null> {
+    try {
+      if (!isDbAvailable()) return null;
+      const key = `${mode}:${configHash}:${engine}`;
+      const jsonStr = await window.electronAPI.db.getBenchmark(docId, pageNum, key);
+      return jsonStr ? JSON.parse(jsonStr) : null;
+    } catch (error) {
+      console.error('Failed to get benchmark:', error);
+      return null;
+    }
+  },
+
+  async clearBenchmark(docId: number, pageNum: number, mode?: BenchmarkMode, configHash?: string, engine?: OCREngine): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) return false;
+      const key = mode && configHash && engine ? `${mode}:${configHash}:${engine}` : null;
+      return await window.electronAPI.db.clearBenchmark(docId, pageNum, key);
+    } catch (error) {
+      console.error('Failed to clear benchmark:', error);
+      return false;
+    }
+  },
+
+  async listBenchmarks(docId: number, pageNum: number): Promise<DBBenchmarkRecord[]> {
+    try {
+      if (!isDbAvailable()) return [];
+      const rows = await window.electronAPI.db.listBenchmarks(docId, pageNum);
+      return Array.isArray(rows) ? rows.map((row: any) => ({
+        documentId: row.document_id,
+        pageNumber: row.page_number,
+        key: row.key, // mode:config:engine
+        result: JSON.parse(row.result),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })) : [];
+    } catch (error) {
+      console.error('Failed to list benchmarks:', error);
+      return [];
+    }
+  },
+
   async getDocument(filepath: string): Promise<{ id: number; total_pages: number } | null> {
     try {
       if (!isDbAvailable()) {
@@ -87,10 +138,6 @@ export const dbService = {
     }
   },
 
-  /**
-   * Find candidate documents by filename, enriched with OCR cache stats.
-   * Useful for deduplicating source-path vs imported-path records.
-   */
   async findDocumentsByFilename(filename: string): Promise<DBDocumentCacheCandidate[]> {
     if (!isDbAvailable()) {
       console.warn('[DB] findDocumentsByFilename skipped: DB not available');
@@ -128,8 +175,7 @@ export const dbService = {
       console.warn('[DB] findDocumentsByFilename primary query failed, using fallback:', error);
     }
 
-    // Fallback path: build candidates from existing typed channels so cache aliasing
-    // still works even if the dedicated lookup query is unavailable.
+    // Fallback path
     try {
       const merged = new Map<number, LooseDocumentRecord>();
       const pushDocs = (docs: LooseDocumentRecord[] | null | undefined) => {
@@ -197,9 +243,6 @@ export const dbService = {
     }
   },
 
-  /**
-   * Save OCR result for a specific page
-   */
   async saveOCR(docId: number, pageNum: number, data: OCRPageResult, engine?: OCREngine): Promise<boolean> {
     try {
       if (!isDbAvailable()) {
@@ -220,9 +263,6 @@ export const dbService = {
     }
   },
 
-  /**
-   * Retrieve cached OCR result (returns null if not found)
-   */
   async getOCR(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<OCRPageResult | null> {
     try {
       if (!isDbAvailable()) {
@@ -343,9 +383,6 @@ export const dbService = {
     }
   },
 
-  /**
-   * Retrieve latest OCR payload for a document (most recent page update)
-   */
   async getLatestOCR(docId: number): Promise<{
     page_number: number;
     updated_at: number;

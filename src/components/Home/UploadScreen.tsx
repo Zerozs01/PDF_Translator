@@ -701,9 +701,9 @@ export const UploadScreen: React.FC = () => {
     selectedProjectId, setSelectedProjectId,
     searchQuery, setSearchQuery,
     documents, tags, projects,
-    isLoading,
-    loadRecentDocuments, loadFavoriteDocuments, loadDocumentsByTag, loadDocumentsByProject,
-    searchDocuments, loadTags, loadProjects,
+          isLoading,
+          loadStartupData, loadRecentDocuments, loadFavoriteDocuments, loadDocumentsByTag, loadDocumentsByProject,
+          searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
     createTag, createProject, deleteTag, loadDocumentTags, persistDocumentPatch,
@@ -800,11 +800,9 @@ export const UploadScreen: React.FC = () => {
     setFileOpenError(entry);
   }, []);
 
-  // Load initial data
-  useEffect(() => {
-    loadRecentDocuments();
-    loadTags();
-    loadProjects();
+  // Load initial data — batched in 1 IPC round-trip
+    useEffect(() => {
+      loadStartupData();
   }, []);
 
   useEffect(() => {

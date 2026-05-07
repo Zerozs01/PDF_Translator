@@ -3,10 +3,11 @@ import path from 'path'
 import fs from 'fs'
 import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
-import { initDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO } from './db'
+import { initDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
+// BenchmarkDAO not implemented in this file (db.ts handles)
 
 // The built directory structure
 //
@@ -391,63 +392,70 @@ app.whenReady().then(() => {
   };
 
   const ensureArgosDaemon = (): ArgosBridgeDaemon => {
-    const pythonExecutable = resolvePythonExecutable();
-    const bridgePath = resolveArgosBridgePath();
-    const bridgeSignature = argosBridgeScriptSignature(bridgePath);
-    const env = {
-      ...resolveArgosBridgeEnv(),
-      // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
-      ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
-    };
+      const pythonExecutable = resolvePythonExecutable();
+      const bridgePath = resolveArgosBridgePath();
+      const bridgeSignature = argosBridgeScriptSignature(bridgePath);
+      const env = {
+        ...resolveArgosBridgeEnv(),
+        // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
+        ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
+      };
 
-    if (
-      argosBridgeDaemon
-      && !argosBridgeDaemon.child.killed
-      && argosBridgeDaemon.pythonExecutable === pythonExecutable
-      && argosBridgeDaemon.bridgePath === bridgePath
-      && argosBridgeDaemon.bridgeSignature === bridgeSignature
-    ) {
-      return argosBridgeDaemon;
-    }
-
-    if (argosBridgeDaemon) {
-      teardownArgosDaemon(new Error('Argos bridge runtime changed; restarting daemon'));
-    }
-
-    const child = spawn(pythonExecutable, [bridgePath, '--stdio-server'], {
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env,
-    });
-
-    const daemon: ArgosBridgeDaemon = {
-      child,
-      stdoutBuffer: '',
-      pending: new Map(),
-      pythonExecutable,
-      bridgePath,
-      bridgeSignature,
-    };
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      handleArgosDaemonStdout(chunk);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      const message = chunk.toString().trim();
-      if (message) {
-        console.warn(`[argosBridge] ${message}`);
+      // Reuse existing daemon if: not killed, path/executable/signature unchanged, and process still alive
+      if (
+        argosBridgeDaemon
+        && !argosBridgeDaemon.child.killed
+        && argosBridgeDaemon.pythonExecutable === pythonExecutable
+        && argosBridgeDaemon.bridgePath === bridgePath
+        && argosBridgeDaemon.bridgeSignature === bridgeSignature
+      ) {
+        // Double-check: is the child process actually alive? (handles orphaned state)
+        try {
+          process.kill(argosBridgeDaemon.child.pid!, 0); // Signal 0 = check-only, doesn't kill
+          return argosBridgeDaemon; // Process is alive, reuse it
+        } catch {
+          // Process is dead (pid doesn't exist or already exited), continue to spawn new
+        }
       }
-    });
-    child.on('error', (error) => {
-      teardownArgosDaemon(error);
-    });
-    child.on('close', (code, signal) => {
-      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
-    });
 
-    argosBridgeDaemon = daemon;
-    return daemon;
-  };
+      if (argosBridgeDaemon) {
+        teardownArgosDaemon(new Error('Argos bridge runtime changed or process died; restarting daemon'));
+      }
+
+      const child = spawn(pythonExecutable, [bridgePath, '--stdio-server'], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+      });
+
+      const daemon: ArgosBridgeDaemon = {
+        child,
+        stdoutBuffer: '',
+        pending: new Map(),
+        pythonExecutable,
+        bridgePath,
+        bridgeSignature,
+      };
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        handleArgosDaemonStdout(chunk);
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        const message = chunk.toString().trim();
+        if (message) {
+          console.warn(`[argosBridge] ${message}`);
+        }
+      });
+      child.on('error', (error) => {
+        teardownArgosDaemon(error);
+      });
+      child.on('close', (code, signal) => {
+        teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
+      });
+
+      argosBridgeDaemon = daemon;
+      return daemon;
+    };
 
   const requestArgosDaemon = async (
     payload: Record<string, unknown>,
@@ -684,6 +692,55 @@ app.whenReady().then(() => {
     }
   });
 
+  // Benchmark handlers (Phase 1.4)
+  ipcMain.handle('db:save-benchmark', async (_, { docId, pageNum, key, payload }: { docId: number; pageNum: number; key: string; payload: string }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum) || !isValidString(key) || !isValidString(payload)) {
+      throw new Error('Invalid benchmark save input');
+    }
+    try {
+      return BenchmarkDAO.save(docId, pageNum, key, payload);
+    } catch (error) {
+      console.error('db:save-benchmark error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-benchmark', async (_, { docId, pageNum, key }: { docId: number; pageNum: number; key: string }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum) || !isValidString(key)) {
+      throw new Error('Invalid benchmark get input');
+    }
+    try {
+      return BenchmarkDAO.get(docId, pageNum, key);
+    } catch (error) {
+      console.error('db:get-benchmark error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('db:clear-benchmark', async (_, { docId, pageNum, key }: { docId: number; pageNum: number; key?: string }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid benchmark clear input');
+    }
+    try {
+      return BenchmarkDAO.clear(docId, pageNum, key);
+    } catch (error) {
+      console.error('db:clear-benchmark error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:list-benchmarks', async (_, { docId, pageNum }: { docId: number; pageNum: number }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error('Invalid benchmark list input');
+    }
+    try {
+      return BenchmarkDAO.list(docId, pageNum);
+    } catch (error) {
+      console.error('db:list-benchmarks error:', error);
+      return [];
+    }
+  });
+
   ipcMain.handle('db:save-translation-cache', async (_, { docId, pageNum, cacheKey, entry }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');
@@ -744,16 +801,87 @@ app.whenReady().then(() => {
   });
 
   // ============================================
-  // Document Management IPC Handlers
-  // ============================================
-  ipcMain.handle('db:get-recent-documents', async (_, limit = 50) => {
-    try {
-      return DocumentDAO.getRecent(limit);
-    } catch (error) {
-      console.error('db:get-recent-documents error:', error);
-      return [];
-    }
-  });
+    // Document Management IPC Handlers
+    // ============================================
+
+    // 🚀 Startup optimization: batch load all needed data in 1 round-trip
+      ipcMain.handle('db:startup-load', async () => {
+        try {
+          // Run all queries in parallel — SQLite with WAL handles concurrency well
+          const [recentDocs, allTags, allProjects, latestOcr] = await Promise.all([
+            Promise.resolve().then(() => {
+              // Fast path: get recent docs WITHOUT tags join (hydrate in JS instead)
+              if (!db) throw new Error('DB not initialized');
+              return db.prepare(`
+                SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
+                       d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
+                FROM documents d
+                ORDER BY d.last_accessed DESC
+                LIMIT 50
+              `).all();
+            }),
+            Promise.resolve().then(() => TagDAO.getAll()),
+            Promise.resolve().then(() => ProjectDAO.getAll()),
+            Promise.resolve().then(() => {
+              if (!db) return null;
+              const latestDoc = db.prepare(`
+                SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
+              `).get() as { id: number } | undefined;
+              return latestDoc ? OCRCacheDAO.getLatestForDocument(latestDoc.id) : null;
+            }),
+          ]);
+
+          // Hydrate tag_names/tag_colors from document_tags in JS (faster than SQL JOIN per row)
+          const docIds = (recentDocs as Array<{ id: number }>).map(d => d.id);
+          let tagMap: Map<number, { names: string[]; colors: string[] }> = new Map();
+          if (docIds.length > 0 && db) {
+            const placeholders = docIds.map(() => '?').join(', ');
+            const tagRows = db.prepare(`
+              SELECT dt.document_id, t.name, t.color
+              FROM document_tags dt
+              JOIN tags t ON t.id = dt.tag_id
+              WHERE dt.document_id IN (${placeholders})
+              ORDER BY t.name
+            `).all(...docIds) as Array<{ document_id: number; name: string; color: string }>;
+            for (const row of tagRows) {
+              if (!tagMap.has(row.document_id)) {
+                tagMap.set(row.document_id, { names: [], colors: [] });
+              }
+              const entry = tagMap.get(row.document_id)!;
+              entry.names.push(row.name);
+              entry.colors.push(row.color);
+            }
+          }
+
+          const hydratedDocs = (recentDocs as Array<{ id: number }>).map(doc => {
+            const tags = tagMap.get(doc.id);
+            return {
+              ...doc,
+              tag_names: tags ? tags.names.join(',') : null,
+              tag_colors: tags ? tags.colors.join(',') : null,
+            };
+          });
+
+          return {
+            recentDocuments: hydratedDocs,
+            allTags,
+            allProjects,
+            latestOcrDocId: (recentDocs as Array<{ id: number }>)?.[0]?.id ?? null,
+          };
+        } catch (error) {
+          console.error('db:startup-load error:', error);
+          return { recentDocuments: [], allTags: [], allProjects: [], latestOcrDocId: null };
+        }
+      });
+
+    ipcMain.handle('db:get-recent-documents', async (_, limit = 50) => {
+      try {
+        return DocumentDAO.getRecent(limit);
+      } catch (error) {
+        console.error('db:get-recent-documents error:', error);
+        return [];
+      }
+    });
 
   ipcMain.handle('db:get-documents-by-project', async (_, projectId) => {
     try {
