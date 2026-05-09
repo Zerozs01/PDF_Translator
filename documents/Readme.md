@@ -6,7 +6,7 @@ All content here is kept in sync with the current codebase and should be preferr
 
 ## Current Snapshot (2026-04-08)
 
-- OCR algorithm version: `174`
+- OCR algorithm version: `200`
 - Translation cache version: `v18`
 - OCR engines in UI: `tesseract`, `paddleocr`, `easyocr`
 - OCR profiles: `pipelineProfile = panel | export`, `ocrQualityProfile = fast | balanced | best`

@@ -630,7 +630,8 @@ const buildBatchMarkdownPayload = (
     lines.push(`- groupingProfile: ${plan.groupingProfile}`);
     lines.push('- groups:');
     for (const group of plan.groups) {
-      const clean = String(group.protectedText || '').replace(/\r?\n+/g, ' ').trim();
+      // Use \\n to explicitly tell the model where the line breaks are
+      const clean = String(group.protectedText || '').replace(/\r?\n+/g, '\\n').trim();
       const lineIndexes = group.lines.map((line) => line.index).join(',');
       lines.push(`  - [${group.index}] (lines: ${lineIndexes}, source: ${group.sourceLanguage}) ${clean}`);
     }
@@ -795,6 +796,10 @@ const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bASICE\b/gi, replacement: 'AS ICE' },
   { pattern: /\bSCOLD\s+AS\s+ICE\b/gi, replacement: 'COLD AS ICE' },
   { pattern: /\bHE\s+SCOLD\b/gi, replacement: "HE'S COLD" },
+  { pattern: /WHAT\s+KIND-OE/gi, replacement: 'WHAT KIND OF' },
+  { pattern: /MY\s*STERIOUS/gi, replacement: 'MYSTERIOUS' },
+  { pattern: /UKELY/gi, replacement: 'LIKELY' },
+  { pattern: /HMM_\s*GUESS/gi, replacement: 'HMM I GUESS' },
   {
     pattern: /\bthis\s+submaie\s+to\s+in\s+ureat\s+the\s+ydoot\s+falinth\s+i\s+chapt\s+we\s+willtudhow\b/gi,
     replacement: 'this submarine to insure that they do not fail in this chapter we will study how',
@@ -939,19 +944,27 @@ const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): strin
   }
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   normalized = normalized.replace(/([,.;:!?])(\S)/g, '$1 $2');
+  // Strip trailing/leading underscores — common OCR noise in comic text (e.g., "HONESTLY_" → "HONESTLY")
+  normalized = normalized.replace(/(?<=\s|^)_+/g, '').replace(/_+(?=\s|$)/g, '');
+  normalized = normalized.replace(/\b([A-Za-z]{2,})_+\b/g, '$1');
+  normalized = normalized.replace(/\b_+([A-Za-z]{2,})\b/g, '$1');
+  normalized = normalizeWhitespace(normalized);
 
   const latinOnly = normalized.replace(/[^A-Za-z]/g, '');
   const words = normalized.split(/\s+/g).filter(Boolean);
-  const hasMixedCaseWord = words.some((word) => /[A-Z]/.test(word) && /[a-z]/.test(word));
   const looksLikeAcronymSequence = words.length > 0 && words.every((word) => {
     const lettersOnly = word.replace(/[^A-Za-z]/g, '');
     if (!lettersOnly) return true;
     return lettersOnly.length <= 3 && lettersOnly === lettersOnly.toUpperCase();
   });
-  if (latinOnly.length >= 5 && !hasMixedCaseWord && !looksLikeAcronymSequence) {
+
+  if (latinOnly.length >= 5 && !looksLikeAcronymSequence) {
     const uppercaseCount = latinOnly.replace(/[^A-Z]/g, '').length;
     const upperRatio = uppercaseCount / latinOnly.length;
     if (upperRatio >= 0.72) {
+      // Text is predominantly uppercase — lowercase it for Argos translation.
+      // Mixed-case words like "FAiR", "OUt", "PRidE" in mostly-uppercase text
+      // are OCR noise, not intentional casing, so we normalize them too.
       normalized = normalized.toLowerCase();
       normalized = normalized.replace(/(^|[.!?]\s+)([a-z])/g, (_m, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
     }
@@ -3667,7 +3680,11 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
   const source = normalizeWhitespace(String(sourceText || ''));
   let resolved = normalizeWhitespace(String(translatedText || ''));
   if (!resolved) {
-    resolved = source;
+    // Apply noise repair to source so we at least show cleaned text (e.g., "MYSTERIOUS CONCEPT" not "MY STERIOUS CONCEPT")
+    resolved = normalizeSourceForTranslation(source, 'en');
+    if (source && resolved === source) {
+      console.warn(`[finalizeTranslatedLine] fallback to source for: "${source}"`);
+    }
   }
 
   resolved = applyThaiTechnicalGlossary(source, resolved, targetLanguage);
@@ -3731,18 +3748,20 @@ const isScientificSymbolLikeLine = (text: string): boolean => {
     return normalized === normalized.toUpperCase() && tokens.length <= 2 && alnum.length <= 2;
   }
 
-  const hasMathLikeContent = SCI_MATH_LINE_REGEX.test(normalized)
-    && /[\u0391-\u03C9_+\-*/^=<>\u00B0\u2190-\u2193\u2212\u2032\u2033]/.test(normalized);
-  if (hasMathLikeContent) {
-    return true;
-  }
-
+  // Check for real English words BEFORE math-like detection to avoid
+  // false positives like "HMM_ GUESS" being treated as a formula
   const alphaTokens = tokens
     .map((token) => token.replace(/[^A-Za-z]/g, ''))
     .filter(Boolean);
   const longAlphaTokenCount = alphaTokens.filter((token) => token.length >= 4).length;
   if (longAlphaTokenCount >= 1) {
     return false;
+  }
+
+  const hasMathLikeContent = SCI_MATH_LINE_REGEX.test(normalized)
+    && /[\u0391-\u03C9_+\-*/^=<>\u00B0\u2190-\u2193\u2212\u2032\u2033]/.test(normalized);
+  if (hasMathLikeContent) {
+    return true;
   }
 
   return tokens.length <= 2 && alnum.length <= 6;
@@ -4532,14 +4551,7 @@ const composeGroupSourceText = (
     return normalized.join(' ');
   }
 
-  if (groupingProfile === 'default' || groupingProfile === 'line-by-line') {
-    return normalized.join(' ');
-  }
-
-  if (groupingProfile === 'balloon-aware' && groupType === 'dialogue') {
-    return normalized.join(' ');
-  }
-
+  // Preserve line breaks so the AI can return line-mapped translations
   return normalized.join('\n');
 };
 
@@ -4877,12 +4889,26 @@ const splitTranslatedTextBySourceWeights = (
   if (!target) return sourceLines.map(() => '');
 
   const explicitLineBreaks = translatedText
+    .replace(/\\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
     .split(/\r?\n+/)
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean);
 
   if (explicitLineBreaks.length === sourceLines.length) {
     return rebalanceRedistributedParts(explicitLineBreaks, sourceLines, target, targetLanguage);
+  }
+
+  if (explicitLineBreaks.length > 1) {
+    const result: string[] = [];
+    for (let i = 0; i < sourceLines.length; i++) {
+      if (i === sourceLines.length - 1 && explicitLineBreaks.length > sourceLines.length) {
+        result.push(explicitLineBreaks.slice(i).join(' '));
+      } else {
+        result.push(explicitLineBreaks[i] || '');
+      }
+    }
+    return result;
   }
 
   const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
@@ -5149,12 +5175,13 @@ export default function App() {
   useEffect(() => {
     if (showOCRHarness) return undefined;
     // Lazy Initialize Vision Worker (low priority)
+    // Delay increased to 3.5s to prevent CPU spiking immediately after initial render
     const timer = setTimeout(() => {
       visionService.initialize().then(() => {
         console.log('Vision System Ready (Lazy Loaded)');
         setIsVisionReady(true);
       });
-    }, 2000); // Delay 2s to let UI render first
+    }, 3500);
 
     return () => clearTimeout(timer);
   }, [showOCRHarness]);
@@ -5178,6 +5205,8 @@ export default function App() {
     // Keep startup prewarm lightweight; warm primary engine only.
     const targetEngines: Array<'paddleocr' | 'easyocr'> = ['paddleocr'];
 
+    // Delay increased to 8s to prevent Python PyTorch initialization from freezing the UI
+    // while the user is still interacting with the home screen.
     const timer = setTimeout(() => {
       for (const engine of targetEngines) {
         const warmKey = `${engine}:${normalizedLanguage}`;
@@ -5201,7 +5230,7 @@ export default function App() {
 
         globalPrewarm.__pdfTranslatorExternalPrewarmInFlight?.set(warmKey, warmPromise);
       }
-    }, 2200);
+    }, 8000);
 
     return () => clearTimeout(timer);
   }, [file, ocrLanguage, showOCRHarness]);
@@ -5344,10 +5373,13 @@ export default function App() {
       if ((noWordOversizedRawLine || lowCoverageOversizedEffectSection) && !shouldForceKeepTechnicalTranslationLine(text, line)) {
         return;
       }
+      // Apply OCR noise repair early so all downstream consumers
+      // (grouping, translation, cache keys, fallbacks) see cleaned text
+      const repairedText = normalizeEnglishOcrNoiseForTranslation(text);
 
       collected.push({
         index,
-        text,
+        text: repairedText,
         sourceLength: countReadableLength(text),
         left,
         right,
@@ -6824,6 +6856,18 @@ export default function App() {
       indexes.forEach((groupIndex, bucketIndex) => {
         translatedGroupsRaw[groupIndex] = bucketTranslated[bucketIndex] || '';
       });
+
+      // Diagnostic: log offline translation I/O for debugging untranslated lines
+      if (engine === 'offline') {
+        indexes.forEach((groupIndex, bucketIndex) => {
+          const input = bucketInputs[bucketIndex] || '';
+          const output = bucketTranslated[bucketIndex] || '';
+          const hasThai = /[\u0E00-\u0E7F]/.test(output);
+          if (!hasThai && input.length > 0) {
+            console.warn(`[OfflineTranslation] group ${groupIndex} NOT translated: input="${input.slice(0, 80)}" → output="${output.slice(0, 80)}"`);
+          }
+        });
+      }
     }
 
     const translatedGroups = translatedGroupsRaw.map((text, index) => {
@@ -6966,7 +7010,9 @@ export default function App() {
           redistributedLine || fallbackLine,
           normalizedTargetLanguage
         );
-        translatedByIndex.set(line.index, finalizedLine || sourceLineText);
+        // Use noise-repaired source as fallback instead of raw OCR text
+        const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
+        translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || sourceLineText);
         if (shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }

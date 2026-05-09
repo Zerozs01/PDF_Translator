@@ -2,11 +2,19 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-05-08
+
+- Updated changelog to match main `CHANGELOG.md` for v1.2.15 changes:
+  - EasyOCR chunking support with engine-specific chunk parameters
+  - Windows process force kill via `taskkill /F /T /PID`
+  - Main process `process.on('exit')` last-resort cleanup handler
+  - OCR Algorithm version bump **193 → 200**
+
 ## 2026-04-08
 
 - Performed full documentation refresh to match current codebase state.
 - Updated canonical values:
-  - `OCR_ALGORITHM_VERSION = 174`
+  - `OCR_ALGORITHM_VERSION = 200`
   - `OCR_TRANSLATION_CACHE_VERSION = v18`
 - Rewrote and simplified:
   - `ARCHITECTURE.md`

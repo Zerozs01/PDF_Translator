@@ -232,7 +232,21 @@ function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
   daemon.pending.clear();
 
   if (!daemon.child.killed) {
-    daemon.child.kill();
+    const pid = daemon.child.pid;
+    // On Windows, child.kill() only sends SIGTERM which Python may ignore.
+    // Use taskkill /F /T to forcefully terminate the entire process tree.
+    if (process.platform === 'win32' && pid) {
+      try {
+        spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+      } catch {
+        daemon.child.kill('SIGKILL');
+      }
+    } else {
+      daemon.child.kill('SIGKILL');
+    }
   }
 }
 
@@ -286,12 +300,15 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
   const existing = bridgeDaemons.get(engine);
   if (existing && !existing.child.killed) {
     if (existing.scriptPath === scriptPath && existing.scriptSignature === scriptSignature) {
+      console.log(`[ocrBridge] Reusing existing daemon for ${engine} (sig=${scriptSignature})`);
       return existing;
     }
+    console.log(`[ocrBridge] Script changed for ${engine}: old=${existing.scriptSignature} new=${scriptSignature}; restarting`);
     teardownDaemon(engine, new Error(`OCR bridge script changed for ${engine}; restarting daemon`));
   }
 
   const pythonCmd = resolvePythonExecutable(engine);
+  console.log(`[ocrBridge] Spawning NEW daemon for ${engine}: python=${pythonCmd} script=${scriptPath} sig=${scriptSignature}`);
   const child = spawn(pythonCmd, [scriptPath, '--stdio-server', '--action', 'ocr', '--engine', engine], {
     cwd: path.dirname(scriptPath),
     stdio: ['pipe', 'pipe', 'pipe'],

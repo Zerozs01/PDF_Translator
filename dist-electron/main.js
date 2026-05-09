@@ -991,7 +991,19 @@ function teardownDaemon(engine, reason) {
   }
   daemon.pending.clear();
   if (!daemon.child.killed) {
-    daemon.child.kill();
+    const pid = daemon.child.pid;
+    if (process.platform === "win32" && pid) {
+      try {
+        child_process.spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+          stdio: "ignore",
+          windowsHide: true
+        });
+      } catch {
+        daemon.child.kill("SIGKILL");
+      }
+    } else {
+      daemon.child.kill("SIGKILL");
+    }
   }
 }
 function handleDaemonStdout(engine, chunk) {
@@ -1036,11 +1048,14 @@ function ensureDaemon(engine) {
   const existing = bridgeDaemons.get(engine);
   if (existing && !existing.child.killed) {
     if (existing.scriptPath === scriptPath && existing.scriptSignature === scriptSignature) {
+      console.log(`[ocrBridge] Reusing existing daemon for ${engine} (sig=${scriptSignature})`);
       return existing;
     }
+    console.log(`[ocrBridge] Script changed for ${engine}: old=${existing.scriptSignature} new=${scriptSignature}; restarting`);
     teardownDaemon(engine, new Error(`OCR bridge script changed for ${engine}; restarting daemon`));
   }
   const pythonCmd = resolvePythonExecutable(engine);
+  console.log(`[ocrBridge] Spawning NEW daemon for ${engine}: python=${pythonCmd} script=${scriptPath} sig=${scriptSignature}`);
   const child = child_process.spawn(pythonCmd, [scriptPath, "--stdio-server", "--action", "ocr", "--engine", engine], {
     cwd: path.dirname(scriptPath),
     stdio: ["pipe", "pipe", "pipe"],
@@ -1387,6 +1402,10 @@ electron.app.on("activate", () => {
   }
 });
 electron.app.on("before-quit", () => {
+  disposeExternalOcrDaemons();
+  disposeArgosTranslateRuntime?.();
+});
+process.on("exit", () => {
   disposeExternalOcrDaemons();
   disposeArgosTranslateRuntime?.();
 });
@@ -2430,7 +2449,7 @@ electron.app.whenReady().then(() => {
     }
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    const modePrompt = normalizedMode === "official" ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.` : normalizedMode === "manhwa" ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep mature dialogue natural and emotionally accurate while preserving intent and relationship dynamics.` : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`;
+    const modePrompt = normalizedMode === "official" ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording. The source text is from OCR and may contain typos (e.g., "MY STERIOUS" -> "MYSTERIOUS", "UKELY" -> "LIKELY") and fragmented lines. Please fix these typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.` : normalizedMode === "manhwa" ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep dialogue natural and emotionally accurate. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.` : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName}. Preserve the general line break structure. If the type is "sfx", explain the sound in brackets.`;
     const systemPrompt = isValidString(baseSystemPrompt) ? baseSystemPrompt : modePrompt;
     const promptText = sourceType === "batch-markdown" ? String(text) : `Translate this text: "${text}" (Type: ${sourceType})`;
     const payload = {

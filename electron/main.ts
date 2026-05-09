@@ -97,6 +97,13 @@ app.on('before-quit', () => {
   disposeArgosTranslateRuntime?.()
 })
 
+// Last-resort cleanup: ensure all child processes are killed even if
+// 'before-quit' or 'window-all-closed' fail to run (e.g. Vite HMR restart).
+process.on('exit', () => {
+  disposeExternalOcrDaemons()
+  disposeArgosTranslateRuntime?.()
+})
+
 app.whenReady().then(() => {
   // Initialize SQLite Database with Performance Pragmas
   initDB();
@@ -1423,10 +1430,10 @@ app.whenReady().then(() => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
     const modePrompt = normalizedMode === 'official'
-      ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.`
+      ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording. The source text is from OCR and may contain typos (e.g., "MY STERIOUS" -> "MYSTERIOUS", "UKELY" -> "LIKELY") and fragmented lines. Please fix these typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.`
       : normalizedMode === 'manhwa'
-        ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep mature dialogue natural and emotionally accurate while preserving intent and relationship dynamics.`
-        : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`;
+        ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep dialogue natural and emotionally accurate. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.`
+        : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName}. Preserve the general line break structure. If the type is "sfx", explain the sound in brackets.`;
 
     const systemPrompt = isValidString(baseSystemPrompt)
       ? baseSystemPrompt

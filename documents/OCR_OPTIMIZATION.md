@@ -4,7 +4,7 @@ This is the active OCR optimization playbook. Historical version-by-version logs
 
 ## 1. Baseline
 
-- OCR algorithm version: `174`
+- OCR algorithm version: `200`
 - Translation cache version: `v18`
 - Engines: `tesseract`, `paddleocr`, `easyocr`
 - Pipeline profiles: `panel`, `export`

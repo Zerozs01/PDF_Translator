@@ -2845,9 +2845,9 @@ const shouldHarmonizeOverlayBlock = (
       && centerDelta <= Math.max(24, avgHeight * 1.9);
     const centeredFragmentMerge = centeredFragmentContinuity
       && centeredStack
-      && heightRatio <= 2.8
-      && verticalGap >= -avgHeight * 0.34
-      && verticalGap <= Math.max(34, avgHeight * 2.4);
+      && heightRatio <= 3.2
+      && verticalGap >= -avgHeight * 0.38
+      && verticalGap <= Math.max(42, avgHeight * 3.0);
     if (centeredFragmentMerge) {
       return true;
     }
@@ -2855,9 +2855,9 @@ const shouldHarmonizeOverlayBlock = (
       centeredStackContinuity
       && overlapRatio >= 0.04
       && centeredStack
-      && heightRatio <= 2.5
-      && verticalGap >= -avgHeight * 0.28
-      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 2.1 : profile === 'adaptive' ? 1.9 : 1.8))
+      && heightRatio <= 2.8
+      && verticalGap >= -avgHeight * 0.32
+      && verticalGap <= Math.max(34, avgHeight * (profile === 'manga' ? 2.4 : profile === 'adaptive' ? 2.2 : 2.0))
     ) {
       return true;
     }
