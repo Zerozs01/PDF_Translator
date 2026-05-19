@@ -21,6 +21,8 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Minus,
+  Plus,
   Compass,
   Flame,
   FileText,
@@ -5439,9 +5441,16 @@ export default function App() {
     overlayThaiFontEnabled,
     overlayFontPreset,
     overlayFontSizeScale,
+    setOverlayFontSizeScale,
     safetySettings,
     hydrateGeminiApiKey,
   } = useProjectStore();
+
+  const adjustOverlayFontScale = (delta: number) => {
+    const next = Math.max(0.1, Math.min(4.0, overlayFontSizeScale + delta));
+    setOverlayFontSizeScale(Number(next.toFixed(2)));
+  };
+  const overlayFontScalePercent = Math.round(overlayFontSizeScale * 100);
 
   const allPagesOCR = useOCRTextLayerStore((state) => state.allPagesOCR);
   const activePageOCR = allPagesOCR.get(currentPage);
@@ -7839,6 +7848,32 @@ export default function App() {
         <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Right">
           <AlignRight size={16} />
         </button>
+
+        {/* Font Size Scaling */}
+        <div className="w-px h-6 bg-white/10 mx-1" />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => adjustOverlayFontScale(-0.05)}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            title="Decrease overlay text size"
+            aria-label="Decrease overlay text size"
+          >
+            <Minus size={13} />
+          </button>
+          <span className="w-12 text-center text-xs font-semibold text-slate-300">
+            {overlayFontScalePercent}%
+          </span>
+          <button
+            type="button"
+            onClick={() => adjustOverlayFontScale(0.05)}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            title="Increase overlay text size"
+            aria-label="Increase overlay text size"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
 
         {/* Spacer - push profile/downloads to top-right */}
         <div className="flex-1" />

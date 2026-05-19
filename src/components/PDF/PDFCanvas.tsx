@@ -5,6 +5,7 @@ import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { useLayerStore } from '../../stores/useLayerStore';
 import { visionService } from '../../services/vision/VisionService';
 import {
   clampOverlayRect,
@@ -164,6 +165,11 @@ export const PDFCanvas: React.FC = () => {
     activeTranslationKeyByPage,
     ocrResultSearchQuery,
   } = useOCRTextLayerStore();
+  const layersByPage = useLayerStore((state) => state.layersByPage);
+  const hiddenLineIndexes = useMemo(() => {
+    const layers = layersByPage.get(currentPage) || [];
+    return new Set(layers.filter(l => !l.visible).map(l => l.lineIndex));
+  }, [layersByPage, currentPage]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -695,6 +701,9 @@ export const PDFCanvas: React.FC = () => {
                 {translationOverlayContext.shouldRender && currentPageOCR && (
                   <div className="absolute inset-0 pointer-events-none">
                     {currentPageOCR.lines.map((line, idx) => {
+                      if (hiddenLineIndexes.has(idx)) {
+                        return null;
+                      }
                       const translatedText = translationOverlayContext.translatedByIndex.get(idx);
                       if (!translatedText) return null;
                       if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {

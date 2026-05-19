@@ -5264,7 +5264,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     .sort((a, b) => (a.garbageRatio ?? a.suspiciousRatio) - (b.garbageRatio ?? b.suspiciousRatio))[0];
 
   return (
-    <div className="flex flex-col gap-1 p-2.5 pt-0">
+    <div className="flex flex-col gap-1.5 p-2.5 pt-0 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
       {/* OCR Model Selector */}
       <div className="-mx-2 order-1 space-y-1">
         <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(234,179,8,0.30)_0%,rgba(249,115,22,0.24)_56%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
@@ -5536,8 +5536,8 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       {/* OCR Results Preview */}
       {previewSourceOCR && !isProcessing && (
-        <div className="order-3 space-y-1.5">
-          <div className="flex items-center gap-2 text-xs font-bold">
+        <div className="order-3 space-y-1.5 flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex items-center gap-2 text-xs font-bold shrink-0">
             <span className="text-white">Result - </span>
             <span style={{ color: '#D7CE93' }}>P {currentPage}</span>
             <div className="ml-auto flex items-center gap-2">
@@ -5589,7 +5589,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           </div>
 
 
-          <div className="relative bg-slate-900/55 border border-[#CA7C4C]/50 shadow-[0_4px_20px_rgba(202,124,76,0.08)] rounded-lg min-h-56 max-h-[40vh] overflow-hidden">
+          <div className="relative flex-1 bg-slate-900/55 border border-[#CA7C4C]/50 shadow-[0_4px_20px_rgba(202,124,76,0.08)] rounded-lg min-h-[140px] flex flex-col overflow-hidden">
             <div className="pointer-events-none absolute right-2 top-2 z-20">
               <button
                 type="button"
@@ -5602,7 +5602,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                 {copyFeedback === 'copied' ? <Check size={13} /> : <Copy size={13} />}
               </button>
             </div>
-            <div ref={ocrPreviewScrollRef} className="h-full max-h-[40vh] overflow-y-auto px-2 pt-1 pb-4">
+            <div ref={ocrPreviewScrollRef} className="flex-1 overflow-y-auto px-2 pt-1 pb-4 custom-scrollbar">
               <div ref={ocrPreviewSearchHeaderRef} className="sticky top-0 z-10 mb-1.5 rounded-md border border-white/10 bg-slate-950/88 px-2 py-1 backdrop-blur">
                 <div className="flex items-center gap-1.5">
                   <Search size={12} className="text-slate-400" />
