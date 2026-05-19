@@ -39,6 +39,7 @@ import {
   type OCRTranslationCacheEntry,
   useOCRTextLayerStore,
 } from './stores/useOCRTextLayerStore';
+import { useLayerStore } from './stores/useLayerStore';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { searchablePDFService } from './services/pdf';
 import { pdfjs } from './services/pdf/pdfjsWorker';
@@ -390,7 +391,7 @@ async function translateBatchGemini(
   );
 }
 
-const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko']);
+const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko', 'ja']);
 
 const shouldUseOfflinePivotRoute = (sourceLanguage: string, targetLanguage: string): boolean => {
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
@@ -1950,8 +1951,8 @@ export const isLikelyGhostTranslatableLine = (
   resolvedText: string,
   engineHint?: string
 ): boolean => {
-  const isPaddle = engineHint === 'paddleocr' || line?.sourceEngine === 'paddleocr';
-  if (isPaddle) return false;
+  const isExternalEngine = engineHint === 'paddleocr' || line?.sourceEngine === 'paddleocr' || engineHint === 'easyocr' || line?.sourceEngine === 'easyocr';
+  if (isExternalEngine) return false;
 
   const text = normalizeWhitespace(String(resolvedText || ''));
   if (!text) return true;
@@ -4917,8 +4918,8 @@ const buildTranslationGroupsFromDerivedLayout = (
         // A group is massively sparse if it has very few characters in a huge area
         // Bypassed for PaddleOCR as it generally produces tight/accurate bounding boxes,
         // and webtoon pages can easily have bubble areas > 40,000 pixels.
-        const isPaddle = groupLines.some(l => l.sourceEngine === 'paddleocr');
-        const isSparselyPopulated = !isPaddle && (
+        const isExternalEngine = groupLines.some(l => l.sourceEngine === 'paddleocr' || l.sourceEngine === 'easyocr');
+        const isSparselyPopulated = !isExternalEngine && (
              (area >= 40000 && compactText.length <= 14 && (area / Math.max(1, compactText.length)) >= 2500)
           || (area >= 80000 && compactText.length <= 22 && (area / Math.max(1, compactText.length)) >= 2000)
         );
@@ -5422,6 +5423,12 @@ export default function App() {
   const ocrLanguage = ocrOptions.language;
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
   const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
+
+  const {
+    selectedLayerIds,
+    layersByPage,
+    updateLayerFontSize,
+  } = useLayerStore();
   const { 
     file, 
     fileType,
@@ -5445,6 +5452,12 @@ export default function App() {
     safetySettings,
     hydrateGeminiApiKey,
   } = useProjectStore();
+
+  const currentLayers = layersByPage.get(currentPage) || [];
+  const selectedLayers = currentLayers.filter(l => selectedLayerIds.has(l.id));
+  const firstSelectedLayer = selectedLayers[0];
+  const currentFontSize = firstSelectedLayer ? firstSelectedLayer.fontSize : 14;
+  const [showFontDropdown, setShowFontDropdown] = useState(false);
 
   const adjustOverlayFontScale = (delta: number) => {
     const next = Math.max(0.1, Math.min(4.0, overlayFontSizeScale + delta));
@@ -5688,8 +5701,8 @@ export default function App() {
       const height = bottom - top;
       const area = width * height;
       const wordCoverage = computeLineWordUnionCoverage(line);
-      const isPaddleLine = engineHint === 'paddleocr' || line.sourceEngine === 'paddleocr';
-      const noWordOversizedRawLine = !isPaddleLine && (
+      const isExternalEngineLine = engineHint === 'paddleocr' || line.sourceEngine === 'paddleocr' || engineHint === 'easyocr' || line.sourceEngine === 'easyocr';
+      const noWordOversizedRawLine = !isExternalEngineLine && (
         validWordBoxCount === 0
         && tokenCount >= 2
         && tokenCount <= 6
@@ -5698,7 +5711,7 @@ export default function App() {
         && (width >= 180 || height >= 96)
         && (area / Math.max(1, compactText.length)) >= 680
       );
-      const lowCoverageOversizedEffectSection = !isPaddleLine && (
+      const lowCoverageOversizedEffectSection = !isExternalEngineLine && (
         validWordBoxCount <= 1
         && wordCoverage <= 0.2
         && tokenCount >= 2
@@ -6725,7 +6738,7 @@ export default function App() {
         inferredSourceLanguage,
         translationMode
       );
-      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      let translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
         dedupedLines,
         pageBiasedSourceLanguage,
         normalizedTargetLanguage,
@@ -6733,6 +6746,10 @@ export default function App() {
       )
         ? 'en'
         : pageBiasedSourceLanguage;
+
+      if (translationSourceLanguage === normalizedTargetLanguage && normalizedUserSourceLanguage !== normalizedTargetLanguage) {
+        translationSourceLanguage = normalizedUserSourceLanguage;
+      }
       const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
       const rawLines = assistedLines.filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
@@ -6788,7 +6805,10 @@ export default function App() {
             group.groupType || 'unknown',
             groupingProfile
           );
-          const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+          let groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+          if (groupSourceLanguage === normalizedTargetLanguage && translationSourceLanguage !== normalizedTargetLanguage) {
+            groupSourceLanguage = translationSourceLanguage;
+          }
           const sourceText = normalizeSourceForTranslation(
             rawSourceText,
             groupSourceLanguage
@@ -7012,7 +7032,87 @@ export default function App() {
 
     const pageEngine = (pageOCR.ocrEngine || selectedEngine) as OCREngine;
 
-    const baseTranslatableLines = collectTranslatableLines(pageOCR.lines || [], pageEngine as string);
+    const rawBaseLines = collectTranslatableLines(pageOCR.lines || [], pageEngine as string);
+
+    // === SYNC WITH CURRENT LAYERS AND SFX (CURRENT INFO) ===
+    const currentLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+    
+    // อัปเดตข้อความใน rawBaseLines ให้ตรงกับเลเยอร์ล่าสุด
+    const updatedTranslatableLines = rawBaseLines.map(line => {
+      let matchingLayer = currentLayers.find(l => l.lineIndex === line.index);
+      
+      // ค้นหาเผื่อกรณีที่ lineIndex ไม่ตรง แต่เป็นตำแหน่งทับซ้อนกันมาก
+      if (!matchingLayer) {
+        matchingLayer = currentLayers.find(l => {
+          const lBbox = l.bbox;
+          const overlapX = Math.max(0, Math.min(lBbox.x1, line.right) - Math.max(lBbox.x0, line.left));
+          const overlapY = Math.max(0, Math.min(lBbox.y1, line.bottom) - Math.max(lBbox.y0, line.top));
+          const overlapArea = overlapX * overlapY;
+          if (overlapArea > 0) {
+            const lineArea = (line.right - line.left) * (line.bottom - line.top);
+            const layerArea = (lBbox.x1 - lBbox.x0) * (lBbox.y1 - lBbox.y0);
+            const minArea = Math.min(lineArea, layerArea);
+            return (overlapArea / minArea) >= 0.7; // ทับซ้อนมากกว่า 70%
+          }
+          return false;
+        });
+      }
+
+      if (matchingLayer) {
+        let layerSource = matchingLayer.sourceText;
+        if (!layerSource && matchingLayer.text) {
+          const hasThai = /[\u0E00-\u0E7F]/.test(matchingLayer.text);
+          if (!hasThai) {
+            layerSource = matchingLayer.text;
+          }
+        }
+        if (layerSource && layerSource.trim()) {
+          return {
+            ...line,
+            text: layerSource
+          };
+        }
+      }
+      return line;
+    });
+
+    // หาเลเยอร์ที่ยังไม่ถูกแมป (เช่น เลเยอร์ใหม่จากการวาด Drawing Region)
+    const unmappedLayers = currentLayers.filter(l => {
+      return !updatedTranslatableLines.some(line => line.index === l.lineIndex);
+    });
+
+    // แปลงเลเยอร์ใหม่เป็น TranslatableLine และ Append เพิ่มเข้าไป
+    const additionalLines: TranslatableLine[] = unmappedLayers.map((l, idx) => {
+      const bbox = l.bbox;
+      const left = Number(bbox.x0);
+      const right = Number(bbox.x1);
+      const top = Number(bbox.y0);
+      const bottom = Number(bbox.y1);
+      const width = right - left;
+      const height = bottom - top;
+      
+      let layerSource = l.sourceText || l.text || '';
+      const hasThai = /[\u0E00-\u0E7F]/.test(layerSource);
+      if (hasThai && l.sourceText) {
+        layerSource = l.sourceText;
+      }
+      
+      return {
+        index: l.lineIndex >= 0 ? l.lineIndex : (20000 + idx),
+        text: layerSource,
+        sourceLength: layerSource.length,
+        top,
+        bottom,
+        left,
+        right,
+        height,
+        area: width * height,
+        confidence: l.confidence || 100,
+        sourceEngine: 'manual'
+      };
+    });
+
+    const baseTranslatableLines = [...updatedTranslatableLines, ...additionalLines];
     // === DIAG: trace translation pipeline for debugging ===
     console.log(`[TranslateDiag] engine=${engine} pageEngine=${pageEngine} ocrLang=${pageOCR.language} totalOCRLines=${pageOCR.lines?.length ?? 0} baseTranslatableLines=${baseTranslatableLines.length}`);
     if (baseTranslatableLines.length > 0) {
@@ -7071,7 +7171,7 @@ export default function App() {
       inferredSourceLanguage,
       translationMode
     );
-    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+    let translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
       dedupedTranslatableLines,
       pageBiasedSourceLanguage,
       normalizedTargetLanguage,
@@ -7079,6 +7179,10 @@ export default function App() {
     )
       ? 'en'
       : pageBiasedSourceLanguage;
+
+    if (translationSourceLanguage === normalizedTargetLanguage && normalizedUserSourceLanguage !== normalizedTargetLanguage) {
+      translationSourceLanguage = normalizedUserSourceLanguage;
+    }
     const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedTranslatableLines)
       || hasStrongLatinAnchorLines(dedupedTranslatableLines);
     const rawTranslatableLines = assistedLines
@@ -7158,7 +7262,10 @@ export default function App() {
         group.groupType || 'unknown',
         groupingProfile
       );
-      const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+      let groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+      if (groupSourceLanguage === normalizedTargetLanguage && translationSourceLanguage !== normalizedTargetLanguage) {
+        groupSourceLanguage = translationSourceLanguage;
+      }
       const sourceText = normalizeSourceForTranslation(rawSourceText, groupSourceLanguage);
       const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
       return {
@@ -7485,6 +7592,27 @@ export default function App() {
     };
 
     setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
+
+    // Synchronize translated texts back to persistent Layer Store (useLayerStore)
+    try {
+      const layerStore = useLayerStore.getState();
+      const pageLayers = layerStore.getPageLayers(pageNum);
+      if (pageLayers.length > 0) {
+        const updatedPageLayers = pageLayers.map(layer => {
+          const translatedText = translatedByIndex.get(layer.lineIndex);
+          return {
+            ...layer,
+            text: translatedText || layer.text,
+          };
+        });
+        layerStore.setPageLayers(pageNum, {
+          layers: updatedPageLayers,
+          groups: layerStore.getPageGroups(pageNum),
+        });
+      }
+    } catch (err) {
+      console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
+    }
 
     const cacheDocId = await ensureDocumentId().catch(() => null);
     if (cacheDocId) {
@@ -7838,16 +7966,106 @@ export default function App() {
 
         <div className="w-px h-6 bg-white/10 mx-1" />
 
-        {/* Text Align */}
-        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Left">
-          <AlignLeft size={16} />
-        </button>
-        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Center">
-          <AlignCenter size={16} />
-        </button>
-        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Right">
-          <AlignRight size={16} />
-        </button>
+        {/* Google Docs Font Size Controls */}
+        <div className="relative flex items-center gap-1 bg-slate-950/40 rounded px-1.5 py-0.5 border border-white/5">
+          <button
+            type="button"
+            disabled={selectedLayers.length === 0}
+            onClick={() => {
+              selectedLayers.forEach(l => {
+                const nextSize = Math.max(4, l.fontSize - 1);
+                updateLayerFontSize(currentPage, l.id, nextSize);
+              });
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+            title="ลดขนาดตัวอักษร"
+            aria-label="Decrease Font Size"
+          >
+            <Minus size={13} />
+          </button>
+          
+          <div className="relative flex items-center gap-0.5">
+            <input
+              type="number"
+              disabled={selectedLayers.length === 0}
+              value={selectedLayers.length > 0 ? currentFontSize : ''}
+              placeholder={selectedLayers.length > 0 ? '' : '--'}
+              onClick={() => {
+                if (selectedLayers.length > 0) {
+                  setShowFontDropdown(!showFontDropdown);
+                }
+              }}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) {
+                  const clamped = Math.max(1, Math.min(200, val));
+                  selectedLayers.forEach(l => {
+                    updateLayerFontSize(currentPage, l.id, clamped);
+                  });
+                }
+              }}
+              className="w-10 h-7 text-center text-xs font-semibold text-white bg-slate-900 border border-white/10 rounded focus:border-[#2B9BFF] focus:outline-none disabled:opacity-30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none cursor-pointer"
+              title="ขนาดตัวอักษร"
+            />
+            
+            <button
+              type="button"
+              disabled={selectedLayers.length === 0}
+              onClick={() => setShowFontDropdown(!showFontDropdown)}
+              className="flex h-7 w-4 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+              title="เลือกขนาดตัวอักษร"
+            >
+              <ChevronDown size={10} />
+            </button>
+
+            {showFontDropdown && selectedLayers.length > 0 && (
+              <>
+                {/* Backdrop to close click outside */}
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setShowFontDropdown(false)} 
+                />
+                
+                {/* Popover Dropdown menu */}
+                <div className="absolute top-8 left-0 z-50 min-w-[72px] max-h-60 overflow-y-auto bg-slate-900 border border-white/10 rounded shadow-xl py-1 scrollbar-thin scrollbar-thumb-white/10">
+                  {[8, 9, 10, 11, 12, 14, 18, 24, 30, 36, 48, 60, 72, 96].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => {
+                        selectedLayers.forEach(l => {
+                          updateLayerFontSize(currentPage, l.id, size);
+                        });
+                        setShowFontDropdown(false);
+                      }}
+                      className={`w-full px-3 py-1.5 text-left text-xs hover:bg-white/10 transition-colors ${
+                        currentFontSize === size ? 'text-[#2B9BFF] font-bold bg-[#2B9BFF]/5' : 'text-slate-200'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <button
+            type="button"
+            disabled={selectedLayers.length === 0}
+            onClick={() => {
+              selectedLayers.forEach(l => {
+                const nextSize = Math.min(200, l.fontSize + 1);
+                updateLayerFontSize(currentPage, l.id, nextSize);
+              });
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+            title="เพิ่มขนาดตัวอักษร"
+            aria-label="Increase Font Size"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
 
         {/* Font Size Scaling */}
         <div className="w-px h-6 bg-white/10 mx-1" />
@@ -7883,9 +8101,9 @@ export default function App() {
           <div className="flex items-center gap-1.5 rounded-lg border border-[#5CC6F2]/25 bg-slate-900/55 px-2.5 py-1 text-[11px] text-[#5CC6F2]/90 font-medium tracking-wide shadow-[0_4px_12px_rgba(92,198,242,0.08)]">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             <span className="font-bold text-white shrink-0">
-              {activePageOCR.ocrEngine === 'paddleocr' || activePageOCR.ocrEngine === 'PaddleOCR'
+              {activePageOCR.ocrEngine === 'paddleocr'
                 ? 'Paddle'
-                : activePageOCR.ocrEngine === 'easyocr' || activePageOCR.ocrEngine === 'EasyOCR'
+                : activePageOCR.ocrEngine === 'easyocr'
                   ? 'Easy'
                   : 'Tesseract'}
             </span>

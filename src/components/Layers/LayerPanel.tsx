@@ -5,7 +5,7 @@
  * พร้อม visibility/lock toggle ตาม reference จาก Canva
  */
 
-import React, { useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import {
   Eye,
   EyeOff,
@@ -19,6 +19,7 @@ import {
   FileText,
   Package,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
@@ -56,7 +57,8 @@ const LayerRow: React.FC<{
   isHovered: boolean;
   groupColor: string;
 }> = ({ layer, pageNum, isSelected, isHovered, groupColor }) => {
-  const { toggleLayerVisibility, selectLayer, setHoveredLayer } = useLayerStore();
+  const { toggleLayerVisibility, selectLayer, setHoveredLayer, deleteLayer } = useLayerStore();
+  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
 
   return (
     <div
@@ -79,13 +81,31 @@ const LayerRow: React.FC<{
 
       {/* Text preview */}
       <span className={`flex-1 truncate select-none ${!layer.visible ? 'opacity-40 line-through' : ''}`}>
-        {truncateText(layer.text || layer.sourceText)}
+        {truncateText(
+          translationPreviewMode === 'original'
+            ? layer.sourceText || layer.text
+            : layer.text
+        )}
       </span>
 
       {/* BBox info (subtle) */}
       <span className="hidden group-hover/row:inline text-[9px] text-slate-600 font-mono shrink-0">
         {Math.round(layer.bbox.x0)},{Math.round(layer.bbox.y0)}
       </span>
+
+      {/* Delete button (Trash2) */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (confirm('คุณต้องการลบข้อความนี้ใช่หรือไม่? การลบนี้จะเป็นการลบอย่างถาวร')) {
+            deleteLayer(pageNum, layer.id);
+          }
+        }}
+        className="p-0.5 rounded transition-colors shrink-0 text-slate-500 hover:text-red-400 opacity-0 group-hover/row:opacity-100"
+        title="Delete layer"
+      >
+        <Trash2 size={10} />
+      </button>
 
       {/* Visibility toggle */}
       <button
@@ -110,7 +130,7 @@ const GroupHeader: React.FC<{
   layerCount: number;
   isHovered: boolean;
 }> = ({ group, pageNum, layerCount, isHovered }) => {
-  const { toggleGroupVisibility, toggleGroupCollapsed, toggleGroupLock, setHoveredGroup } = useLayerStore();
+  const { toggleGroupVisibility, toggleGroupCollapsed, toggleGroupLock, setHoveredGroup, deleteGroup } = useLayerStore();
 
   return (
     <div
@@ -161,6 +181,20 @@ const GroupHeader: React.FC<{
           {group.confidence}%
         </span>
       )}
+
+      {/* Delete button (Trash2) */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (confirm('คุณต้องการลบกลุ่มข้อความนี้พร้อมข้อความทั้งหมดในกลุ่มใช่หรือไม่? การลบนี้จะเป็นการลบอย่างถาวร')) {
+            deleteGroup(pageNum, group.id);
+          }
+        }}
+        className="p-0.5 rounded transition-colors shrink-0 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100"
+        title="Delete group"
+      >
+        <Trash2 size={10} />
+      </button>
 
       {/* Lock toggle */}
       <button

@@ -6,6 +6,7 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useLayerStore } from '../../stores/useLayerStore';
+import { InteractiveLayerOverlay } from '../Layers/InteractiveLayerOverlay';
 import { visionService } from '../../services/vision/VisionService';
 import {
   clampOverlayRect,
@@ -166,10 +167,18 @@ export const PDFCanvas: React.FC = () => {
     ocrResultSearchQuery,
   } = useOCRTextLayerStore();
   const layersByPage = useLayerStore((state) => state.layersByPage);
+  const groupsByPage = useLayerStore((state) => state.groupsByPage);
+  const editingLayerId = useLayerStore((state) => state.editingLayerId);
+  const currentPageLayers = layersByPage.get(currentPage) || [];
+  const currentPageGroups = groupsByPage.get(currentPage) || [];
   const hiddenLineIndexes = useMemo(() => {
-    const layers = layersByPage.get(currentPage) || [];
-    return new Set(layers.filter(l => !l.visible).map(l => l.lineIndex));
-  }, [layersByPage, currentPage]);
+    const hidden = new Set(currentPageLayers.filter(l => !l.visible).map(l => l.lineIndex));
+    const editingLayer = currentPageLayers.find(l => l.id === editingLayerId);
+    if (editingLayer) {
+      hidden.add(editingLayer.lineIndex);
+    }
+    return hidden;
+  }, [currentPageLayers, editingLayerId]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -598,8 +607,8 @@ export const PDFCanvas: React.FC = () => {
 
   // Pan Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Allow panning with Hand tool OR Middle Mouse Button (button 1)
-    if (activeTool === 'hand' || e.button === 1) { 
+    // Allow panning with Hand tool OR Middle Mouse Button (button 1) OR Ctrl+Left Click
+    if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) { 
       setIsDragging(true);
       // Calculate the offset from the mouse position to the current pan position
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -704,26 +713,31 @@ export const PDFCanvas: React.FC = () => {
                       if (hiddenLineIndexes.has(idx)) {
                         return null;
                       }
-                      const translatedText = translationOverlayContext.translatedByIndex.get(idx);
+                      const layer = currentPageLayers.find(l => l.lineIndex === idx);
+                      const translatedText = layer
+                        ? (translationPreviewMode === 'original' ? (layer.sourceText || layer.text) : layer.text)
+                        : translationOverlayContext.translatedByIndex.get(idx);
                       if (!translatedText) return null;
-                      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
+                      if (!layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
                         return null;
                       }
 
                       const layout = overlayLayoutByIndex.get(idx);
-                      const isMaskOnlyLine = Boolean(layout?.hidden);
+                      const isMaskOnlyLine = layer ? false : Boolean(layout?.hidden);
                       if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
                         return null;
                       }
-                      const renderText = layout?.renderText || translatedText;
+                      const renderText = layer
+                        ? (translationPreviewMode === 'original' ? (layer.sourceText || layer.text) : layer.text)
+                        : (layout?.renderText || translatedText);
                       const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
                       const styleKind = layout?.styleKind;
                       const isDocumentLikeOverlay = styleKind
                         ? styleKind === 'document-heading' || styleKind === 'document-body'
                         : effectiveProfile === 'official';
                       const isComicLikeOverlay = !isDocumentLikeOverlay;
-                      const maskBbox = (!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
-                      const resolvedSourceBbox = resolveOverlaySourceBBox(line);
+                      const maskBbox = layer ? layer.bbox : (((!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line)));
+                      const resolvedSourceBbox = layer ? layer.bbox : resolveOverlaySourceBBox(line);
                       const sourceWidthRaw = Math.max(1, resolvedSourceBbox.x1 - resolvedSourceBbox.x0);
                       const sourceHeightRaw = Math.max(1, resolvedSourceBbox.y1 - resolvedSourceBbox.y0);
                       const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
@@ -735,9 +749,11 @@ export const PDFCanvas: React.FC = () => {
                       const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
                         && widthCoverage < 0.84
                         && areaCoverage < 0.86;
-                      const sourceBbox = isMaskOnlyLine
-                        ? resolvedSourceBbox
-                        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox));
+                      const sourceBbox = layer
+                        ? layer.bbox
+                        : (isMaskOnlyLine
+                          ? resolvedSourceBbox
+                          : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox)));
                       const maskRenderSourceLeft = maskBbox.x0;
                       const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
                         ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
@@ -809,7 +825,7 @@ export const PDFCanvas: React.FC = () => {
                       const continuationPalette = layout?.highlightTextColorSourceIndex !== undefined
                         ? (translatedLinePalette.get(layout.highlightTextColorSourceIndex) || palette)
                         : palette;
-                      const maskBackgroundColor = palette.backgroundColor;
+                      const maskBackgroundColor = layer?.backgroundColor !== undefined ? layer.backgroundColor : palette.backgroundColor;
                       const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
                         ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
                         : 0;
@@ -835,6 +851,9 @@ export const PDFCanvas: React.FC = () => {
                         styleKind,
                       });
                       const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
+                      if (layer) {
+                        typography.fontSize = (layer.fontSize || 14) * ocrOverlayTransform.scaleX;
+                      }
                       const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
                       const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
                       const textStartOffset = layout?.sharedTextStartX !== undefined
@@ -857,11 +876,14 @@ export const PDFCanvas: React.FC = () => {
                           ? normalizeOverlayInlineText(layout.highlightContinuationText)
                           : layout.highlightContinuationText)
                         : '';
+                      
+                      const layerTextColor = layer?.textColor !== undefined ? layer.textColor : palette.textColor;
+                      const layerContinuationColor = layer?.textColor !== undefined ? layer.textColor : continuationPalette.textColor;
                       const overlayContent = renderOverlayTextWithSearchHighlight(
                         overlayText,
                         highlightContinuationText,
-                        palette.textColor,
-                        continuationPalette.textColor,
+                        layerTextColor,
+                        layerContinuationColor,
                         overlaySearchPattern
                       );
                       const overlayStrokeBaseWidth = Number(palette.textStrokeWidth || 0);
@@ -869,7 +891,8 @@ export const PDFCanvas: React.FC = () => {
                         ? Math.max(0.55, Math.min(1.35, overlayStrokeBaseWidth * (typography.fontSize / 14)))
                         : 0;
                       const overlayTextWeight = Math.max(400, Math.min(700, Math.round(Number(palette.textFillWeight || 400))));
-                      const rotationDeg = estimateLineRotationDeg(line);
+                      const rotationDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
+                      const rotationOrigin = layer ? 'center center' : 'left top';
                       const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
                       const minFillRatio = typography.estimatedLines > 1
                         ? (thaiComicLine ? 0.82 : 0.74)
@@ -905,7 +928,7 @@ export const PDFCanvas: React.FC = () => {
                               overflow: 'hidden',
                               zIndex: Math.max(1, Math.round(maskRect.top)),
                               transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
-                              transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
+                              transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,
                             }}
                             className="absolute"
                           />
@@ -923,7 +946,7 @@ export const PDFCanvas: React.FC = () => {
                                 overflow: 'hidden',
                                 zIndex: 1000 + Math.max(1, Math.round(textRect.top)),
                                 transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
-                                transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
+                                transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,
                               }}
                               className="absolute"
                             >
@@ -939,11 +962,11 @@ export const PDFCanvas: React.FC = () => {
                                   maxHeight: paintHeight,
                                   minHeight: paintHeight,
                                   padding: `${typography.padY + extraTopPad}px ${typography.padX}px ${typography.padY + extraBottomPad}px ${typography.padX}px`,
-                                  color: palette.textColor,
+                                  color: layerTextColor,
                                   fontSize: typography.fontSize,
                                   lineHeight: typography.lineHeight,
                                   fontFamily: overlayFontFamily,
-                                  fontWeight: overlayTextWeight,
+                                  fontWeight: layer?.bold ? 'bold' : overlayTextWeight,
                                   boxSizing: 'border-box',
                                   display: 'flex',
                                   alignItems: 'flex-start',
@@ -1071,6 +1094,14 @@ export const PDFCanvas: React.FC = () => {
                     })}
                   </div>
                 )}
+                {/* Phase 3: Interactive Layer Manipulation Overlay */}
+                <InteractiveLayerOverlay
+                  pageNum={currentPage}
+                  layers={currentPageLayers}
+                  groups={currentPageGroups}
+                  ocrTransform={ocrOverlayTransform}
+                  isActive={activeTool === 'select' || activeTool === 'region'}
+                />
               </div>
             ) : (
               Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (

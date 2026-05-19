@@ -153,19 +153,77 @@ const generateLayerId = (): string => `layer_${++layerIdCounter}_${Date.now().to
 const generateGroupId = (): string => `group_${++groupIdCounter}_${Date.now().toString(36)}`;
 
 /**
+ * Pre-processor: สับเส้นที่ถูก OCR มัดรวมแนวนอนยาวเกินไป (Over-merging)
+ * โดยการดูจากระยะห่างแนวนอนของ words ใน line นั้นๆ
+ */
+export const splitAggressiveMergedLines = (
+  lines: OCRLine[],
+  gapMultiplier = 2.5
+): OCRLine[] => {
+  const result: OCRLine[] = [];
+
+  for (const line of lines) {
+    if (!line.words || line.words.length <= 1) {
+      result.push(line);
+      continue;
+    }
+
+    const { words } = line;
+    let currentGroup = [words[0]];
+
+    for (let i = 1; i < words.length; i++) {
+      const prev = words[i - 1];
+      const curr = words[i];
+
+      const prevHeight = bboxHeight(prev.bbox);
+      const currHeight = bboxHeight(curr.bbox);
+      const avgHeight = (prevHeight + currHeight) * 0.5;
+
+      const gap = curr.bbox.x0 - prev.bbox.x1;
+
+      if (gap > gapMultiplier * avgHeight) {
+        result.push({
+          ...line, // preserve original confidence, engine hints, etc.
+          text: currentGroup.map(w => w.text).join(' '),
+          bbox: mergeBBoxes(currentGroup.map(w => w.bbox)),
+          words: currentGroup,
+        });
+        currentGroup = [curr];
+      } else {
+        currentGroup.push(curr);
+      }
+    }
+
+    if (currentGroup.length > 0) {
+      result.push({
+        ...line,
+        text: currentGroup.map(w => w.text).join(' '),
+        bbox: mergeBBoxes(currentGroup.map(w => w.bbox)),
+        words: currentGroup,
+      });
+    }
+  }
+
+  return result;
+};
+
+/**
  * buildLayerGroupsFromOCR — จุดเชื่อมต่อการรวมกลุ่ม 2D Spatial Clustering (Connected Components)
  */
 export const buildLayerGroupsFromOCR = (
   ocrResult: OCRPageResult,
   translatedByIndex?: Map<number, string>
 ): LayerGroupingResult => {
-  const lines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
+  let lines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
   const pageWidth = Math.max(1, ocrResult.width);
   const pageHeight = Math.max(1, ocrResult.height);
 
   if (lines.length === 0) {
     return { layers: [], groups: [] };
   }
+
+  // Pre-process: หั่นบรรทัดที่โดน EasyOCR/PaddleOCR มัดรวมข้าม panel ออกจากกัน
+  lines = splitAggressiveMergedLines(lines, 2.8);
 
   // รีเซ็ตตัวนับไอดี
   layerIdCounter = 0;
@@ -258,8 +316,8 @@ export const buildLayerGroupsFromOCR = (
         bbox: { ...line.bbox },
         originalBBox: { ...line.bbox },
         fontSize: h * 0.75,
-        textColor: '#ffffff',
-        backgroundColor: 'transparent',
+        textColor: undefined,
+        backgroundColor: undefined,
         rotation: 0,
         opacity: 1,
         visible: true,

@@ -19,8 +19,8 @@ export interface TextLayer {
   bbox: BBox;
   originalBBox: BBox;
   fontSize: number;
-  textColor: string;
-  backgroundColor: string;
+  textColor?: string;
+  backgroundColor?: string;
   rotation: number;
   opacity: number;
   visible: boolean;
@@ -28,6 +28,7 @@ export interface TextLayer {
   zIndex: number;
   userEdited: boolean;
   confidence: number;
+  bold?: boolean;
 }
 
 /** A group of TextLayers (e.g., one balloon/bubble) */

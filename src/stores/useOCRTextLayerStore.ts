@@ -3,9 +3,10 @@
  */
 
 import { create } from 'zustand';
-import { OCRPageResult, OCROptions, OCREngine } from '../types';
+import { OCRPageResult, OCROptions, OCREngine, OCRLine } from '../types';
 import { ProcessingProgress } from '../services/pdf';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout';
+import { splitAggressiveMergedLines } from '../services/layers/LayerGroupingService';
 
 export type TranslatorEngine = 'offline' | 'ai';
 export type OCRPreviewMode = 'translated' | 'original';
@@ -109,6 +110,10 @@ interface OCRTextLayerState {
   getActiveTranslationCacheKey: (pageNum: number) => string | undefined;
   clearTranslationCache: (pageNum?: number) => void;
   clearTranslationCacheForEngine: (pageNum: number, engine: OCREngine) => void;
+  updateOCRLineText: (pageNum: number, lineIndex: number, newText: string) => void;
+  updateTranslationCacheText: (pageNum: number, lineIndex: number, newText: string) => void;
+  addOCRLine: (pageNum: number, line: OCRLine) => void;
+  deleteOCRLine: (pageNum: number, lineIndex: number) => void;
 
   // OCR result search (shared with document overlays)
   ocrResultSearchQuery: string;
@@ -188,12 +193,14 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   allPagesOCR: new Map(),
   ocrByPageEngine: new Map(),
   setPageOCR: (pageNum, result) => set((state) => {
+    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.8);
+    const processedResult = { ...result, lines: processedLines };
     const newMap = new Map(state.allPagesOCR);
-    newMap.set(pageNum, result);
+    newMap.set(pageNum, processedResult);
     const engine = (result.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
     const byPageEngine = new Map(state.ocrByPageEngine);
     const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
-    perPage.set(engine, result);
+    perPage.set(engine, processedResult);
     byPageEngine.set(pageNum, perPage);
     return {
       allPagesOCR: newMap,
@@ -334,6 +341,170 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     return {
       translationCacheByPage: nextByPage,
       activeTranslationKeyByPage: nextActive,
+    };
+  }),
+
+  updateOCRLineText: (pageNum, lineIndex, newText) => set((state) => {
+    const pageOCR = state.allPagesOCR.get(pageNum);
+    if (!pageOCR) return {};
+
+    const nextLines = [...(pageOCR.lines || [])];
+    if (nextLines[lineIndex]) {
+      nextLines[lineIndex] = { ...nextLines[lineIndex], text: newText };
+    }
+
+    const updatedOCR = { ...pageOCR, lines: nextLines };
+
+    const nextAllPages = new Map(state.allPagesOCR);
+    nextAllPages.set(pageNum, updatedOCR);
+
+    const engine = (pageOCR.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const nextByPageEngine = new Map(state.ocrByPageEngine);
+    const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
+    perPage.set(engine, updatedOCR);
+    nextByPageEngine.set(pageNum, perPage);
+
+    return {
+      allPagesOCR: nextAllPages,
+      ocrByPageEngine: nextByPageEngine,
+      currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
+    };
+  }),
+
+  updateTranslationCacheText: (pageNum, lineIndex, newText) => set((state) => {
+    const activeKey = state.activeTranslationKeyByPage.get(pageNum);
+    if (!activeKey) return {};
+    const pageMap = state.translationCacheByPage.get(pageNum);
+    if (!pageMap) return {};
+    const entry = pageMap.get(activeKey);
+    if (!entry) return {};
+
+    const nextTranslated = [...entry.translatedByIndex];
+    const idx = nextTranslated.findIndex(t => t.index === lineIndex);
+    if (idx >= 0) {
+      nextTranslated[idx] = { ...nextTranslated[idx], text: newText };
+    } else {
+      nextTranslated.push({ index: lineIndex, text: newText });
+    }
+
+    const updatedEntry = {
+      ...entry,
+      translatedByIndex: nextTranslated,
+    };
+
+    const nextPageMap = new Map(pageMap);
+    nextPageMap.set(activeKey, updatedEntry);
+
+    const nextByPage = new Map(state.translationCacheByPage);
+    nextByPage.set(pageNum, nextPageMap);
+
+    return { translationCacheByPage: nextByPage };
+  }),
+
+  addOCRLine: (pageNum, line) => set((state) => {
+    const pageOCR: OCRPageResult = state.allPagesOCR.get(pageNum) || {
+      pageNumber: pageNum,
+      width: 800,
+      height: 1100,
+      dpi: state.options.dpi || 300,
+      language: state.options.language || 'eng',
+      algorithmVersion: 1,
+      lines: [],
+      words: [],
+      text: '',
+      ocrEngine: state.options.engine || 'tesseract',
+      confidence: 100,
+    };
+
+    const nextLines = [...(pageOCR.lines || [])];
+    const lineIndex = nextLines.length;
+    nextLines.push(line);
+    
+    const updatedOCR = { ...pageOCR, lines: nextLines };
+
+    const nextAllPages = new Map(state.allPagesOCR);
+    nextAllPages.set(pageNum, updatedOCR);
+
+    const engine = (pageOCR.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const nextByPageEngine = new Map(state.ocrByPageEngine);
+    const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
+    perPage.set(engine, updatedOCR);
+    nextByPageEngine.set(pageNum, perPage);
+
+    // Also update translation cache if there is an active translation
+    const nextTranslationCache = new Map(state.translationCacheByPage);
+    const activeKey = state.activeTranslationKeyByPage.get(pageNum);
+    if (activeKey) {
+      const pageMap = nextTranslationCache.get(pageNum);
+      if (pageMap) {
+        const entry = pageMap.get(activeKey);
+        if (entry) {
+          const nextTranslated = [...entry.translatedByIndex, { index: lineIndex, text: line.text }];
+          const updatedEntry = {
+            ...entry,
+            translatedByIndex: nextTranslated,
+            lineCount: nextLines.length,
+          };
+          const nextPageMap = new Map(pageMap);
+          nextPageMap.set(activeKey, updatedEntry);
+          nextTranslationCache.set(pageNum, nextPageMap);
+        }
+      }
+    }
+
+    return {
+      allPagesOCR: nextAllPages,
+      ocrByPageEngine: nextByPageEngine,
+      currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
+      translationCacheByPage: nextTranslationCache,
+    };
+  }),
+
+  deleteOCRLine: (pageNum, lineIndex) => set((state) => {
+    const pageOCR = state.allPagesOCR.get(pageNum);
+    if (!pageOCR) return {};
+
+    const nextLines = (pageOCR.lines || []).filter((_, idx) => idx !== lineIndex);
+    const updatedOCR = { ...pageOCR, lines: nextLines };
+
+    const nextAllPages = new Map(state.allPagesOCR);
+    nextAllPages.set(pageNum, updatedOCR);
+
+    const engine = (pageOCR.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const nextByPageEngine = new Map(state.ocrByPageEngine);
+    const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
+    perPage.set(engine, updatedOCR);
+    nextByPageEngine.set(pageNum, perPage);
+
+    // Sync with translationCacheByPage
+    const nextTranslationCache = new Map(state.translationCacheByPage);
+    const activeKey = state.activeTranslationKeyByPage.get(pageNum);
+    if (activeKey) {
+      const pageMap = nextTranslationCache.get(pageNum);
+      if (pageMap) {
+        const entry = pageMap.get(activeKey);
+        if (entry) {
+          const nextTranslated = entry.translatedByIndex
+            .filter((t) => t.index !== lineIndex)
+            .map((t) => t.index > lineIndex ? { ...t, index: t.index - 1 } : t);
+
+          const updatedEntry = {
+            ...entry,
+            translatedByIndex: nextTranslated,
+            lineCount: nextLines.length,
+          };
+          const nextPageMap = new Map(pageMap);
+          nextPageMap.set(activeKey, updatedEntry);
+          nextTranslationCache.set(pageNum, nextPageMap);
+        }
+      }
+    }
+
+    return {
+      allPagesOCR: nextAllPages,
+      ocrByPageEngine: nextByPageEngine,
+      currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
+      translationCacheByPage: nextTranslationCache,
     };
   }),
 
