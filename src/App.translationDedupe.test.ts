@@ -392,7 +392,7 @@ describe('isLikelyGhostTranslatableLine', () => {
     expect(isLikelyGhostTranslatableLine(ghostLine, '5C')).toBe(true);
   });
 
-  test('flags tiny latin singleton artifacts even at medium confidence', () => {
+  test('keeps known single-letter English pronoun I even in tiny boxes', () => {
     const tinyLatinNoise = makeOcrLine({
       text: 'I',
       confidence: 91,
@@ -402,7 +402,8 @@ describe('isLikelyGhostTranslatableLine', () => {
       ],
     });
 
-    expect(isLikelyGhostTranslatableLine(tinyLatinNoise, 'I')).toBe(true);
+    // "I" is a valid English pronoun, not ghost noise
+    expect(isLikelyGhostTranslatableLine(tinyLatinNoise, 'I')).toBe(false);
   });
 
   test('flags tiny no-word latin artifacts that can drift translation queue', () => {

@@ -3185,14 +3185,16 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (latestOCR.pageSegMode !== options.pageSegMode) {
       nextPatch.pageSegMode = latestOCR.pageSegMode;
     }
-    if ((latestOCR.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) {
-      nextPatch.engine = latestOCR.ocrEngine || 'tesseract';
-    }
+    // NOTE: We intentionally do NOT sync ocrEngine here.
+    // syncOptionsFromLatestCache is meant to restore the language/segMode used last time,
+    // but the user may have explicitly switched to a different engine (e.g., paddleocr vs easyocr).
+    // Auto-changing the engine causes the silent bug where paddleocr silently becomes easyocr
+    // after app reload because the DB stores the most recently run engine (which could be easyocr).
 
     if (Object.keys(nextPatch).length > 0) {
       setOptions(nextPatch);
     }
-  }, [ensureDocumentId, file, normalizeLanguage, options.engine, options.language, options.pageSegMode, setOptions]);
+  }, [ensureDocumentId, file, normalizeLanguage, options.language, options.pageSegMode, setOptions]);
 
   const beginAbortableJob = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -5217,14 +5219,6 @@ export const OCRTextLayerPanel: React.FC = () => {
       return `candidates accepted:${accepted}${topRejects ? ` | reject ${topRejects}` : ''}`;
     })()
     : '';
-  const currentSkipReason = previewSourceOCR?.debug?.skipReason || '';
-  const hasProcessInfo = Boolean(
-    currentDroppedCount
-    || currentDropSummary
-    || currentStageSummary
-    || currentCandidateSummary
-    || currentSkipReason
-  );
   const currentRuntimeMs = previewSourceOCR?.debug?.runtimeMs
     ?? (previewSourceOCR?.debug as { timingsMs?: { ocr?: number } } | undefined)?.timingsMs?.ocr;
   const currentRuntimeSecLabel = typeof currentRuntimeMs === 'number'
@@ -5232,6 +5226,16 @@ export const OCRTextLayerPanel: React.FC = () => {
     : '-';
   const currentEngine = OCR_ENGINES.find(engine => engine.id === (previewSourceOCR?.ocrEngine || 'tesseract')) || OCR_ENGINES[0];
   const translatedCacheSlotCount = currentPageTranslationEntries.length;
+  const currentSkipReason = previewSourceOCR?.debug?.skipReason || '';
+  const isStaleTranslation = translationPreviewMode === 'translated' && !activeTranslationMatchesCurrentOCR && translatedCacheSlotCount > 0;
+  const hasProcessInfo = Boolean(
+    currentDroppedCount
+    || currentDropSummary
+    || currentStageSummary
+    || currentCandidateSummary
+    || currentSkipReason
+    || isStaleTranslation
+  );
   const translatedTargetLanguages = Array.from(new Set(
     currentPageTranslationEntries
       .map((entry) => resolveTranslationLanguageLabel(entry.targetLanguage))
@@ -5260,7 +5264,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     .sort((a, b) => (a.garbageRatio ?? a.suspiciousRatio) - (b.garbageRatio ?? b.suspiciousRatio))[0];
 
   return (
-    <div className="flex flex-col gap-1 p-2.5 pt-2">
+    <div className="flex flex-col gap-1 p-2.5 pt-0">
       {/* OCR Model Selector */}
       <div className="-mx-2 order-1 space-y-1">
         <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(234,179,8,0.30)_0%,rgba(249,115,22,0.24)_56%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
@@ -5285,10 +5289,10 @@ export const OCRTextLayerPanel: React.FC = () => {
                 type="button"
                 onClick={() => void handleRawBenchmark('dual')}
                 disabled={isProcessing || !file}
-                className="inline-flex items-center gap-1 rounded-md border border-emerald-400/50 bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-100 transition-colors hover:border-emerald-400/70 hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md border border-white/25 bg-black px-2 py-1 text-[10px] font-semibold text-white transition-all hover:bg-white/10 hover:border-white/45 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Benchmark RAW vs FULL pipeline → Δ metrics + side-by-side preview"
               >
-                <Sparkles size={10} />
+                <Sparkles size={10} className="text-white" />
                 Improve
               </button>
             </div>
@@ -5348,26 +5352,29 @@ export const OCRTextLayerPanel: React.FC = () => {
                     title={warmState.description || engine.description}
                     className={`relative overflow-hidden rounded-xl border px-2 py-2 text-left transition-all ${
                       isCurrent
-                        ? 'border-[#5CC6F2]/70 bg-gradient-to-r from-[#2B9BFF]/25 to-[#2776FF]/20 shadow-[0_10px_24px_rgba(43,155,255,0.18)]'
+                        ? 'border-[#8AB83F]/65 bg-gradient-to-r from-[#8AB83F]/15 to-[#5B8220]/10 shadow-[0_10px_24px_rgba(138,184,63,0.12)]'
                         : 'border-white/10 bg-slate-900/45 hover:border-white/20'
                     } disabled:opacity-70`}
                   >
                     {isBusy && (
                       <div
-                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#2B9BFF]/20 via-[#5CC6F2]/25 to-transparent transition-[width] duration-500"
+                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#8AB83F]/20 via-[#5B8220]/25 to-transparent transition-[width] duration-500"
                         style={{ width: `${warmState.progress}%` }}
                       />
                     )}
                     <div className="relative z-10 space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11px] font-semibold text-white">{engine.name}</span>
-                        <span className={`text-[9px] font-medium ${
-                          warmState.phase === 'ready'
-                            ? 'text-emerald-300'
-                            : warmState.phase === 'error'
-                              ? 'text-rose-300'
-                              : 'text-slate-400'
-                        }`}>
+                        <span 
+                          className="text-[9px] font-medium" 
+                          style={
+                            warmState.phase === 'ready'
+                              ? { color: '#8AB83F' }
+                              : warmState.phase === 'error'
+                                ? { color: '#fda4af' }
+                                : { color: '#94a3b8' }
+                          }
+                        >
                           {warmState.phase === 'ready'
                             ? 'Ready'
                             : warmState.phase === 'error'
@@ -5379,14 +5386,16 @@ export const OCRTextLayerPanel: React.FC = () => {
                       </div>
                       <div className="h-1.5 rounded-full bg-slate-950/80 overflow-hidden">
                         <div
-                          className={`h-full transition-all duration-500 ${
-                            warmState.phase === 'ready'
-                              ? 'bg-gradient-to-r from-emerald-400 to-emerald-300'
-                              : warmState.phase === 'error'
-                                ? 'bg-gradient-to-r from-rose-500 to-orange-400'
-                                : 'bg-gradient-to-r from-[#2B9BFF] via-[#5CC6F2] to-[#89E6FF]'
-                          }`}
-                          style={{ width: `${Math.max(warmState.progress, warmState.phase === 'idle' ? 4 : 8)}%` }}
+                          className="h-full transition-all duration-500"
+                          style={{
+                            width: `${Math.max(warmState.progress, warmState.phase === 'idle' ? 4 : 8)}%`,
+                            background:
+                              warmState.phase === 'ready'
+                                ? 'linear-gradient(90deg, #8AB83F 0%, #5B8220 100%)'
+                                : warmState.phase === 'error'
+                                  ? '#f43f5e'
+                                  : '#3b82f6'
+                          }}
                         />
                       </div>
                     </div>
@@ -5443,7 +5452,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             <button
               onClick={() => handleCurrentPageOCR(useProjectStore.getState().currentPage, true)}
               disabled={ocrActionDisabled}
-              className="flex-[0.32] bg-gradient-to-r from-[#7C5CFF]/88 to-[#9A6BFF]/82 hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg flex items-center justify-center transition-all shadow-[0_5px_14px_rgba(124,92,255,0.18)] border border-[#A992FF]/35"
+              className="flex-[0.32] bg-[#864E3E] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg flex items-center justify-center transition-all shadow-[0_5px_14px_rgba(134,78,62,0.3)] border border-white/10"
               title={selectedEngineWarming ? 'Wait for selected model warm-up to finish' : 'Process current page only'}
             >
               <span className="text-[10px] font-semibold">Current</span>
@@ -5454,7 +5463,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           <button
             onClick={() => handleStartOCR()}
             disabled={ocrActionDisabled}
-            className="flex-1 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(43,155,255,0.24)]"
+            className="flex-1 bg-[#CA7C4C] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(202,124,76,0.3)]"
             title={selectedEngineWarming
               ? 'Wait for selected model warm-up to finish'
               : (fileType === 'pdf' ? 'Process all pages' : 'Process image')}
@@ -5490,10 +5499,15 @@ export const OCRTextLayerPanel: React.FC = () => {
             <button
               onClick={() => void handleClearCurrentModelCache()}
               disabled={!file}
-              className="flex-1 border border-rose-400/45 bg-rose-500/12 text-rose-100 py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              style={{
+                backgroundColor: '#FFFFFF',
+                borderColor: '#CA7C4C',
+                color: '#CA7C4C',
+              }}
+              className="flex-1 border py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               title="Clear cache only for current page and selected OCR model"
             >
-              <Trash2 size={12} />
+              <Trash2 size={12} style={{ color: '#CA7C4C' }} />
               Clear Cache P{currentPage}
             </button>
           </div>
@@ -5508,7 +5522,10 @@ export const OCRTextLayerPanel: React.FC = () => {
         {isProcessing && (
           <button
             onClick={cancelCurrentJob}
-            className="w-full bg-red-600 hover:bg-red-500 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+            style={{
+              backgroundColor: '#BB8588',
+            }}
+            className="w-full hover:brightness-110 text-white py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#BB8588]/20"
             title="Cancel OCR"
           >
             Cancel
@@ -5520,9 +5537,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       {/* OCR Results Preview */}
       {previewSourceOCR && !isProcessing && (
         <div className="order-3 space-y-1.5">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
-            <Eye size={12} className="text-[#5CC6F2]" />
-            OCR Result - หน้า {currentPage}
+          <div className="flex items-center gap-2 text-xs font-bold">
+            <span className="text-white">Result - </span>
+            <span style={{ color: '#D7CE93' }}>P {currentPage}</span>
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
@@ -5532,7 +5549,7 @@ export const OCRTextLayerPanel: React.FC = () => {
               >
                 <Info size={12} />
               </button>
-              <span className="text-[11px] font-medium text-sky-300/95">
+              <span className="text-[11px] font-medium" style={{ color: '#D7CE93' }}>
                 {`runtime ${currentRuntimeSecLabel}`}
               </span>
               <button
@@ -5550,32 +5567,29 @@ export const OCRTextLayerPanel: React.FC = () => {
                   setTranslationPreviewMode('translated');
                 }}
                 disabled={previewToggleDisabled}
-                className={`rounded-md border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                style={
                   effectivePreviewMode === 'translated'
-                    ? 'border-cyan-400/55 bg-cyan-500/20 text-cyan-100 hover:border-cyan-300/70 hover:bg-cyan-500/28'
-                    : 'border-emerald-400/55 bg-emerald-500/18 text-emerald-100 hover:border-emerald-300/70 hover:bg-emerald-500/28'
-                } disabled:cursor-not-allowed disabled:opacity-45`}
+                    ? {
+                        borderColor: 'rgba(215, 206, 147, 0.65)',
+                        backgroundColor: 'rgba(215, 206, 147, 0.22)',
+                        color: '#fdfbf0',
+                      }
+                    : {
+                        borderColor: 'rgba(215, 206, 147, 0.35)',
+                        backgroundColor: 'rgba(215, 206, 147, 0.08)',
+                        color: 'rgba(215, 206, 147, 0.90)',
+                      }
+                }
+                className="rounded-md border px-2.5 py-1 text-[10px] font-semibold transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45"
                 title={previewToggleDisabled ? 'No translated cache available for this context' : (effectivePreviewMode === 'translated' ? 'Show original OCR cache' : 'Show translated result cache')}
               >
                 {previewToggleLabel}
               </button>
             </div>
           </div>
-          <div className="rounded-lg border border-emerald-700/60 bg-emerald-900/20 px-3 py-2 text-[11px] text-emerald-300">
-            model {currentEngine.name} • พบ {previewSourceOCR.words.length} คำ • raw conf {previewSourceOCR.confidence.toFixed(0)}%
-          </div>
-          {translatedTargetLanguages.length > 0 && (
-            <div className="rounded-lg border border-sky-500/35 bg-sky-500/12 px-3 py-2 text-[11px] text-sky-100">
-              translated cache on this page: {translatedLanguageSummary}
-            </div>
-          )}
-          {translationPreviewMode === 'translated' && !activeTranslationMatchesCurrentOCR && translatedCacheSlotCount > 0 && (
-            <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
-              translated cache is stale for current OCR source, showing original OCR
-            </div>
-          )}
-          
-          <div className="relative bg-slate-900/55 border border-white/10 rounded-lg min-h-56 max-h-[40vh] overflow-hidden">
+
+
+          <div className="relative bg-slate-900/55 border border-[#CA7C4C]/50 shadow-[0_4px_20px_rgba(202,124,76,0.08)] rounded-lg min-h-56 max-h-[40vh] overflow-hidden">
             <div className="pointer-events-none absolute right-2 top-2 z-20">
               <button
                 type="button"
@@ -5736,6 +5750,11 @@ export const OCRTextLayerPanel: React.FC = () => {
                 </div>
 
                 <div className="mt-3 space-y-2 text-[11px] text-slate-200">
+                  {isStaleTranslation && (
+                    <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-amber-100">
+                      translated cache is stale for current OCR source, showing original OCR
+                    </div>
+                  )}
                   {currentDroppedCount > 0 && (
                     <div className="rounded-lg border border-orange-500/20 bg-orange-500/8 px-3 py-2 text-orange-100">
                       dropped {currentDroppedCount} คำ{currentDropSummary ? ` (${currentDropSummary})` : ''}

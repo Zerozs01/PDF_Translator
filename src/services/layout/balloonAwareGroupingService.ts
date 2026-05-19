@@ -181,13 +181,13 @@ const shouldLinkGeometryLines = (
   if (wideDistantColumns) return null;
 
   const verticallyStacked = overlapX >= 0.18
-    && verticalGap <= baseHeight * 2.15
+    && verticalGap <= baseHeight * 2.8
     && centerDeltaX <= Math.max(92, minWidth * 1.05);
   const tightlyStacked = overlapX >= 0.12
-    && verticalGap <= baseHeight * 1.25
+    && verticalGap <= baseHeight * 1.6
     && centerDeltaX <= Math.max(72, minWidth * 0.82);
   const diagonalStack = overlapX >= 0.1
-    && verticalGap <= baseHeight * 1.6
+    && verticalGap <= baseHeight * 2.2
     && horizontalGap <= Math.max(64, baseHeight * 1.7)
     && centerDeltaX <= Math.max(96, minWidth * 1.35);
   const looseColumnStack = overlapY <= 0.38
@@ -202,6 +202,16 @@ const shouldLinkGeometryLines = (
     && verticalGap <= baseHeight * 2.4;
 
   if (!verticallyStacked && !tightlyStacked && !diagonalStack && !looseColumnStack && !contained && !hintedSequence) {
+    return null;
+  }
+
+  // Do not group lines of completely different scripts (e.g. Thai and English)
+  // This ensures English fragments in Thai bubbles get translated separately.
+  const aHasThai = /[\u0E00-\u0E7F]/.test(a.text);
+  const bHasThai = /[\u0E00-\u0E7F]/.test(b.text);
+  const aIsLatinOnly = /[A-Za-z]/.test(a.text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(a.text);
+  const bIsLatinOnly = /[A-Za-z]/.test(b.text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(b.text);
+  if ((aHasThai && bIsLatinOnly) || (bHasThai && aIsLatinOnly)) {
     return null;
   }
 

@@ -3142,8 +3142,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       {previewSourceOCR && !isProcessing && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
-            <Eye size={12} className="text-[#5CC6F2]" />
-            OCR Result - หน้า {currentPage}
+            
+            OCR Result - P {currentPage}
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
@@ -3245,7 +3245,7 @@ export const OCRTextLayerPanel: React.FC = () => {
               <div>
                 <h3 className="text-sm font-semibold text-white">OCR Process Info</h3>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  หน้า {currentPage} • {currentEngine.name} • runtime {currentRuntimeSecLabel}
+                  P {currentPage} • {currentEngine.name} • runtime {currentRuntimeSecLabel}
                 </p>
               </div>
               <button

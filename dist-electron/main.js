@@ -258,7 +258,7 @@ const TagDAO = {
   },
   delete: (id) => {
     if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("DELETE FROM tags WHERE id = ?").run(id);
+    return db$1.prepare("DELETE FROM tags WHERE id = ?").run(id);
   }
 };
 const ProjectDAO = {
@@ -315,10 +315,11 @@ const ProjectDAO = {
     values.push(Date.now());
     values.push(id);
     db$1.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    return true;
   },
   delete: (id) => {
     if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("DELETE FROM projects WHERE id = ?").run(id);
+    return db$1.prepare("DELETE FROM projects WHERE id = ?").run(id);
   }
 };
 const DocumentDAO = {
@@ -496,9 +497,9 @@ const DocumentDAO = {
       sets.push("total_pages = ?");
       values.push(data.total_pages);
     }
-    if (sets.length === 0) return;
+    if (sets.length === 0) return true;
     values.push(id);
-    db$1.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    return db$1.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   },
   toggleFavorite: (id) => {
     if (!db$1) throw new Error("DB not initialized");
@@ -522,15 +523,15 @@ const DocumentDAO = {
   },
   touch: (id) => {
     if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
+    return db$1.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
   },
   updateLastPage: (id, pageNum) => {
     if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
+    return db$1.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
   },
   delete: (id) => {
     if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("DELETE FROM documents WHERE id = ?").run(id);
+    return db$1.prepare("DELETE FROM documents WHERE id = ?").run(id);
   }
 };
 const OCRCacheDAO = {

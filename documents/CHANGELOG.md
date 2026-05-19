@@ -2,6 +2,15 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-05-09
+
+- Optimized Offline (Argos) Translation Pipeline:
+  - Implemented unconditional Latin text lowercasing to resolve translation failures on ALL-CAPS and mixed-case OCR noise.
+  - Applied early-stage OCR noise repair (`normalizeEnglishOcrNoiseForTranslation`) to line collection.
+  - Exempted common short English words ('I', 'A', 'OK', etc.) from ghost and scientific symbol filters.
+  - Relaxed balloon grouping thresholds in `shouldHarmonizeOverlayBlock` to prevent top-line clipping.
+  - Fixed redistribution fallback to use noise-repaired source text.
+
 ## 2026-05-08
 
 - Updated changelog to match main `CHANGELOG.md` for v1.2.15 changes:

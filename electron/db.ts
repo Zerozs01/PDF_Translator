@@ -220,7 +220,7 @@ export const TagDAO = {
 
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('DELETE FROM tags WHERE id = ?').run(id);
+    return db.prepare('DELETE FROM tags WHERE id = ?').run(id);
   }
 };
 
@@ -273,11 +273,12 @@ export const ProjectDAO = {
     values.push(id);
     
     db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return true;
   },
 
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    return db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   }
 };
 
@@ -462,10 +463,10 @@ export const DocumentDAO = {
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
     if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
     
-    if (sets.length === 0) return;
+    if (sets.length === 0) return true;
     values.push(id);
     
-    db.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return db.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
   },
 
   toggleFavorite: (id: number) => {
@@ -492,17 +493,17 @@ export const DocumentDAO = {
 
   touch: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('UPDATE documents SET last_accessed = ? WHERE id = ?').run(Date.now(), id);
+    return db.prepare('UPDATE documents SET last_accessed = ? WHERE id = ?').run(Date.now(), id);
   },
 
   updateLastPage: (id: number, pageNum: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?').run(pageNum, Date.now(), id);
+    return db.prepare('UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?').run(pageNum, Date.now(), id);
   },
 
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+    return db.prepare('DELETE FROM documents WHERE id = ?').run(id);
   }
 };
 

@@ -42,13 +42,13 @@ HEADING_KEEP_TOKENS = {"CHAPTER", "SECTION", "PART", "OBJECTIVES", "CONDITIONS",
 SHORT_SPEECH_TOKENS = {"EH", "ME", "I", "OH", "AH", "NO", "A"}
 KOREAN_PARTICLE_SUFFIXES = {"이", "가", "은", "는", "을", "를", "의"}
 LATIN_SHORT_KEEP_TOKENS = {
-    "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH",
+    "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH", "HUH",
     "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE",
 }
 LATIN_COMMON_WORDS = {
     "THE", "YOU", "HE", "SHE", "WE", "THEY", "TO", "OF", "IN", "ON", "AT", "FOR", "AND", "OR", "ARE",
     "THAT", "THIS", "THOSE", "THESE", "PAST", "ONLY", "FOUND", "TOP", "GIRLS", "CITY", "BUT", "NOW",
-    "CAN", "MAKE", "WITH", "KIND", "STUFF", "ROOM", "DOOR", "LOCK", "TAKE", "LOOK", "OVER", "GO",
+    "CAN", "MAKE", "WITH", "KIND", "STUFF", "ROOM", "DOOR", "LOCK", "TAKE", "LOOK", "OVER", "GO", "ACTUALLY",
     "STUDENTS", "MAY", "DOING", "BAD", "THINGS", "ELDERLY", "WEAK", "WOMEN", "CHILDREN", "TOWN",
     "NOT", "JUST", "ALL", "COME", "ACROSS", "POSSIBILITY", "WHAT", "THINK", "BEST", "ITS", "ILL",
     "HERE", "PEOPLE", "LIVE", "THERE", "WHY", "OKAY", "FINE", "ACTING", "MYSTERIOUS", "WHATEVER",
@@ -402,6 +402,16 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 or bbox_width(current_bbox) <= bbox_width(candidate_bbox) * 0.52
                 or bbox_width(candidate_bbox) <= bbox_width(current_bbox) * 0.52
             )
+            # Prevent merging lines of different scripts (e.g. Thai and English)
+            a_has_thai = has_non_latin_characters(current_text)
+            b_has_thai = has_non_latin_characters(candidate_text)
+            a_is_latin_only = not a_has_thai and bool(re.search(r"[A-Za-z]", current_text))
+            b_is_latin_only = not b_has_thai and bool(re.search(r"[A-Za-z]", candidate_text))
+            if (a_has_thai and b_is_latin_only) or (b_has_thai and a_is_latin_only):
+                merged.append(current)
+                current = candidate
+                continue
+
             if current_has_terminal_punct and current_text_len > 2 and not (candidate_has_terminal_punct and min(current_text_len, candidate_text_len) <= 2):
                 merged.append(current)
                 current = candidate
@@ -1539,7 +1549,7 @@ def prune_easyocr_panel_weak_singletons(
         mostly_lower = len(letters) >= 3 and lower_ratio >= 0.8
 
         # Preserve short/high-confidence speech-style keep tokens.
-        if token in LATIN_SHORT_KEEP_TOKENS and confidence >= 90:
+        if token in LATIN_SHORT_KEEP_TOKENS and confidence >= 20:
             kept.append(line)
             continue
 
@@ -1664,6 +1674,92 @@ def prune_easyocr_panel_shadow_singletons(
             continue
 
         kept.append(line)
+
+    return kept, drops
+
+
+def prune_easyocr_panel_low_density_effects(
+    lines: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    language_codes: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 2:
+        return list(lines), []
+
+    # Calculate density metrics
+    metrics = []
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        bbox = line.get("bbox")
+        if not bbox:
+            continue
+        
+        line_w = max(1.0, bbox_width(bbox))
+        line_h = max(1.0, bbox_height(bbox))
+        area = line_w * line_h
+        
+        # Word count calculation that handles CJK and Latin differently
+        if has_non_latin_characters(text):
+            word_count = max(1, len(text.replace(" ", "")))
+        else:
+            word_count = max(1, len([w for w in re.split(r"\s+", text) if w]))
+            
+        metrics.append({
+            "line": line,
+            "text": text,
+            "area": area,
+            "word_count": word_count,
+            "area_per_word": area / word_count,
+            "w": line_w,
+            "h": line_h,
+            "confidence": normalize_confidence(line.get("confidence", 0.0)),
+        })
+
+    if len(metrics) < 3:
+        return list(lines), []
+
+    # Calculate median area per word across the page
+    sorted_apw = sorted(m["area_per_word"] for m in metrics)
+    median_apw = max(1.0, sorted_apw[len(sorted_apw) // 2])
+
+    kept: List[Dict[str, Any]] = []
+    drops: List[Dict[str, Any]] = []
+
+    for m in metrics:
+        line = m["line"]
+        is_effect = False
+        drop_reason = ""
+        
+        # Guard: Lines with many words are typically legitimate dialogue
+        if m["word_count"] >= 4:
+            kept.append(line)
+            continue
+            
+        # Check if line is an outlier in terms of area-per-word
+        # A typical speech bubble has a balanced area/word ratio. Effects have very high area per word.
+        if m["area_per_word"] >= median_apw * 3.8:
+            if m["area"] >= max(8000.0, (width * height) * 0.005) and m["w"] >= width * 0.08:
+                is_effect = True
+                drop_reason = "easyLowDensityEffect"
+
+        # Special check for oversized singletons like "GLEAM" with extremely large borders
+        if not is_effect and m["word_count"] <= 2 and m["area"] >= 18000.0:
+            if m["area_per_word"] >= median_apw * 2.8:
+                is_effect = True
+                drop_reason = "easyOversizedSingletonEffect"
+
+        if is_effect:
+            drops.append({
+                "reason": drop_reason,
+                "source": "easyocr_panel",
+                "text": m["text"],
+                "confidence": m["confidence"],
+            })
+        else:
+            kept.append(line)
 
     return kept, drops
 

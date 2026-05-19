@@ -73,3 +73,23 @@ When regressions appear, tune in this order:
 Bump OCR algorithm version whenever core OCR/cleanup/geometry behavior changes.
 
 Bump translation cache version whenever redistribution/grouping/index mapping logic changes.
+## 7. Pipeline Stabilization (2026-05-09)
+
+Recent fixes focused on the **Offline Argos Translation** pipeline and **Comic Balloon** detection:
+
+### 7.1 Core Normalization Strategy
+Instead of complex heuristics for casing, we now:
+- **Unconditionally lowercase** Latin text before translation (Argos performs much better on lowercase).
+- This eliminates failures caused by "mixed-case" OCR noise (e.g., "FAiR" blocking the lowercasing of a whole sentence).
+- Sentiment and sentence structure are preserved by capitalizing the first letter of sentences post-lowercasing.
+
+### 7.2 Early Noise Repair
+Noise repair (removing trailing underscores, fixing split possessives) is now applied **at the point of line collection**. This ensures all downstream consumers (grouping, cache, translation) see clean text.
+
+### 7.3 Semantic Filter Exemptions
+Specific short English words are now protected from aggressive filters:
+- **`isScientificSymbolLikeLine`**: No longer swallows "I" or "A" as diagram labels.
+- **`isLikelyGhostTranslatableLine`**: No longer drops "I" or "OK" as OCR artifacts.
+
+### 7.4 Balloon Harmonization
+Grouping tolerances were relaxed to allow higher vertical gaps and height ratios. This prevents the top line of a speech bubble from being excluded from the merged mask/border.
