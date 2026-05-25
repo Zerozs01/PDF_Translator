@@ -12,7 +12,7 @@
  * กด Layer icon จะ flip sidebar เป็น Layer management panel
  */
 
-import React, { useMemo, useState, lazy, Suspense } from 'react';
+import React, { useMemo, useState, lazy, Suspense, useCallback } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -29,10 +29,140 @@ interface LeftSidebarProps {
   onToggle: () => void;
 }
 
-export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) => {
-  const { fileUrl, fileData, currentPage, totalPages, setPage, viewMode, setViewMode } = useProjectStore();
+interface PagesGalleryProps {
+  pdfSource: any;
+  docKey: string;
+  totalPages: number;
+  currentPage: number;
+  setPage: (page: number) => void;
+}
+
+interface ThumbnailItemProps {
+  pageNum: number;
+  isSelected: boolean;
+  setPage: (page: number) => void;
+}
+
+const ThumbnailItem: React.FC<ThumbnailItemProps> = React.memo(({
+  pageNum,
+  isSelected,
+  setPage,
+}) => {
+  const handleClick = useCallback(() => {
+    setPage(pageNum);
+  }, [pageNum, setPage]);
+
+  return (
+    <div 
+      onClick={handleClick}
+      className={`cursor-pointer group relative rounded-lg overflow-hidden border-2 transition-all ${
+        isSelected 
+          ? 'border-[#2B9BFF] shadow-[0_0_14px_rgba(43,155,255,0.35)]' 
+          : 'border-white/10 hover:border-white/25'
+      }`}
+    >
+      <div className="relative bg-white">
+        <Page 
+          pageNumber={pageNum} 
+          width={160} 
+          renderTextLayer={false}
+          renderAnnotationLayer={false}
+          className="opacity-90 group-hover:opacity-100 transition-opacity"
+        />
+        {/* Page Number Badge */}
+        <div className="absolute bottom-1 right-1 bg-slate-900/80 text-white text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-sm">
+          {pageNum}
+        </div>
+        
+        {/* Active Indicator */}
+        {isSelected && (
+          <div className="absolute top-1 left-1 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white p-0.5 rounded-full shadow-lg">
+            <CheckSquare size={10} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}, (prev, next) => {
+  return prev.isSelected === next.isSelected && prev.pageNum === next.pageNum;
+});
+
+const PagesGallery: React.FC<PagesGalleryProps> = React.memo(({
+  pdfSource,
+  docKey,
+  totalPages,
+  currentPage,
+  setPage,
+}) => {
+  console.log('[LeftSidebar] PagesGallery render at', Date.now(), 'currentPage:', currentPage);
+  return (
+    <Document
+      key={docKey}
+      file={pdfSource}
+      onLoadError={(error) => console.error('[LeftSidebar] PDF load error:', error)}
+      className="p-2 space-y-2"
+    >
+      {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+        <ThumbnailItem
+          key={pageNum}
+          pageNum={pageNum}
+          isSelected={currentPage === pageNum}
+          setPage={setPage}
+        />
+      ))}
+    </Document>
+  );
+}, (prev, next) => {
+  return prev.docKey === next.docKey &&
+         prev.totalPages === next.totalPages &&
+         prev.currentPage === next.currentPage;
+});
+
+interface PagesListProps {
+  totalPages: number;
+  currentPage: number;
+  setPage: (page: number) => void;
+}
+
+const PagesList: React.FC<PagesListProps> = React.memo(({
+  totalPages,
+  currentPage,
+  setPage,
+}) => {
+  return (
+    <div className="p-2 space-y-1">
+      {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+        <button
+          key={pageNum}
+          onClick={() => setPage(pageNum)}
+          className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-all ${
+            currentPage === pageNum 
+              ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+              : 'bg-slate-900/45 border border-white/10 text-slate-300 hover:bg-slate-900/75'
+          }`}
+        >
+          <span>Page {pageNum}</span>
+          {currentPage === pageNum && <CheckSquare size={12} />}
+        </button>
+      ))}
+    </div>
+  );
+}, (prev, next) => {
+  return prev.totalPages === next.totalPages && prev.currentPage === next.currentPage;
+});
+
+export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onToggle }) => {
+  const fileUrl = useProjectStore((state) => state.fileUrl);
+  const fileData = useProjectStore((state) => state.fileData);
+  const currentPage = useProjectStore((state) => state.currentPage);
+  const totalPages = useProjectStore((state) => state.totalPages);
+  const setPage = useProjectStore((state) => state.setPage);
+  const viewMode = useProjectStore((state) => state.viewMode);
+  const setViewMode = useProjectStore((state) => state.setViewMode);
   const [displayMode, setDisplayMode] = useState<'gallery' | 'list'>('gallery');
   const [sidebarView, setSidebarView] = useState<SidebarView>('pages');
+
+  console.log('[LeftSidebar] LeftSidebar render at', Date.now(), 'currentPage:', currentPage);
 
   const pdfSource = useMemo(() => {
     // Prefer object URL source so worker message transfer never detaches app-held buffers.
@@ -50,7 +180,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
         isOpen ? 'w-48' : 'w-0'
       }`}
     >
-      <div className={`flex-1 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+      <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
         {/* Header - Combined Controls */}
         <div className="p-2 border-b border-white/10 bg-slate-950/35">
           <div className="flex items-center justify-between gap-1.5">
@@ -89,7 +219,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
                 onClick={() => setSidebarView(sidebarView === 'layers' ? 'pages' : 'layers')}
                 className={`p-1 rounded transition-all duration-200 border ${
                   sidebarView === 'layers'
-                    ? 'bg-gradient-to-r from-[#8B5CF6]/90 to-[#6366F1]/90 text-white border-[#8B5CF6]/50 shadow-[0_0_8px_rgba(139,92,246,0.3)]'
+                    ? 'bg-gradient-to-r from-[#8B5CF6]/90 to-[#6366F1]/90 text-white border-[#8B5CF6]/50 shadow-[0_0_8px_rgba(139,92,246,0.35)]'
                     : 'bg-slate-900/70 border-white/10 text-slate-400 hover:text-[#8B5CF6] hover:border-[#8B5CF6]/30'
                 }`}
                 title={sidebarView === 'layers' ? 'Back to Pages' : 'Open Layer Panel'}
@@ -146,85 +276,38 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
         </div>
 
         {/* Main Content Area — flips between pages and layers */}
-        <div className="flex-1 overflow-hidden flex flex-col relative">
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">
           {/* Pages View */}
           <div 
-            className={`absolute inset-0 flex flex-col transition-all duration-250 ease-in-out ${
-              sidebarView === 'pages'
-                ? 'opacity-100 translate-x-0'
-                : 'opacity-0 -translate-x-full pointer-events-none'
+            className={`w-full h-full flex flex-col min-h-0 ${
+              sidebarView === 'pages' ? 'flex' : 'hidden'
             }`}
           >
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
               {displayMode === 'gallery' ? (
                 // Gallery View - Thumbnails
-                <Document
-                  key={docKey}
-                  file={pdfSource}
-                  onLoadError={(error) => console.error('[LeftSidebar] PDF load error:', error)}
-                  className="p-2 space-y-2"
-                >
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-                    <div 
-                      key={pageNum}
-                      onClick={() => setPage(pageNum)}
-                      className={`cursor-pointer group relative rounded-lg overflow-hidden border-2 transition-all ${
-                        currentPage === pageNum 
-                          ? 'border-[#2B9BFF] shadow-[0_0_14px_rgba(43,155,255,0.35)]' 
-                          : 'border-white/10 hover:border-white/25'
-                      }`}
-                    >
-                      <div className="relative bg-white">
-                        <Page 
-                          pageNumber={pageNum} 
-                          width={160} 
-                          renderTextLayer={false}
-                          renderAnnotationLayer={false}
-                          className="opacity-90 group-hover:opacity-100 transition-opacity"
-                        />
-                        {/* Page Number Badge */}
-                        <div className="absolute bottom-1 right-1 bg-slate-900/80 text-white text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-sm">
-                          {pageNum}
-                        </div>
-                        
-                        {/* Active Indicator */}
-                        {currentPage === pageNum && (
-                          <div className="absolute top-1 left-1 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white p-0.5 rounded-full shadow-lg">
-                            <CheckSquare size={10} />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </Document>
+                <PagesGallery
+                  pdfSource={pdfSource}
+                  docKey={docKey}
+                  totalPages={totalPages}
+                  currentPage={currentPage}
+                  setPage={setPage}
+                />
               ) : (
                 // List View - Compact
-                <div className="p-2 space-y-1">
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-                    <button
-                      key={pageNum}
-                      onClick={() => setPage(pageNum)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-all ${
-                        currentPage === pageNum 
-                          ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                          : 'bg-slate-900/45 border border-white/10 text-slate-300 hover:bg-slate-900/75'
-                      }`}
-                    >
-                      <span>Page {pageNum}</span>
-                      {currentPage === pageNum && <CheckSquare size={12} />}
-                    </button>
-                  ))}
-                </div>
+                <PagesList
+                  totalPages={totalPages}
+                  currentPage={currentPage}
+                  setPage={setPage}
+                />
               )}
             </div>
           </div>
 
           {/* Layer View */}
           <div 
-            className={`absolute inset-0 flex flex-col transition-all duration-250 ease-in-out ${
-              sidebarView === 'layers'
-                ? 'opacity-100 translate-x-0'
-                : 'opacity-0 translate-x-full pointer-events-none'
+            className={`w-full h-full flex flex-col min-h-0 ${
+              sidebarView === 'layers' ? 'flex' : 'hidden'
             }`}
           >
             <Suspense fallback={
@@ -250,4 +333,5 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
       </button>
     </aside>
   );
-};
+});
+

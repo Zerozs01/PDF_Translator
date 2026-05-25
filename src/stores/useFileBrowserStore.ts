@@ -168,12 +168,7 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadStartupData: async () => {
     set({ isLoading: true, error: null });
     try {
-      const result = await (window.electronAPI as Window & { electronAPI?: { startupLoad: () => Promise<{
-        recentDocuments: DBDocument[];
-        allTags: DBTag[];
-        allProjects: DBProject[];
-        latestOcrDocId: number | null;
-      }> } }).electronAPI?.startupLoad();
+      const result = await window.electronAPI.startupLoad?.();
       if (result) {
         set({
           documents: result.recentDocuments,

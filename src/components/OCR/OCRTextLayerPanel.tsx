@@ -29,7 +29,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile } from '../../types';
+import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile, BenchmarkMode } from '../../types';
 import type { DBDocumentCacheCandidate } from '../../types/electron.d';
 import {
   hasCurrentOCRTranslationCacheVersion,
@@ -2356,7 +2356,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [benchmarkOpen, setBenchmarkOpen] = useState(false);
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [benchmarkTargetPage, setBenchmarkTargetPage] = useState<number | null>(null);
-  const [benchmarkMode, setBenchmarkMode] = useState<BenchmarkMode>('base');
+  const [benchmarkMode, setBenchmarkMode] = useState<BenchmarkMode>('baseline');
   const [showMetricsInfo, setShowMetricsInfo] = useState(false);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
@@ -4086,7 +4086,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
     const renderFromExistingCanvas = async () => {
       const existingCanvas = document.querySelector(
-        `.react-pdf__Page[data-page-number="${pageNum}"] canvas`
+        `.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`
       ) as HTMLCanvasElement | null;
 
       if (existingCanvas && existingCanvas.width > 0 && existingCanvas.height > 0) {
@@ -4138,7 +4138,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         await new Promise(resolve => setTimeout(resolve, 500));
 
         const newCanvas = document.querySelector(
-          `.react-pdf__Page[data-page-number="${pageNum}"] canvas`
+          `.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`
         ) as HTMLCanvasElement | null;
 
         if (newCanvas && newCanvas.width > 0 && newCanvas.height > 0) {
@@ -5078,8 +5078,8 @@ export const OCRTextLayerPanel: React.FC = () => {
   }, [activePipelineProfile, benchmarkRunning, cacheBenchmarkResultInMemory, currentPage, ensureDocumentId, ensureEngineReady, file, fileUrl, isAbortError, isCacheCompatibleForEngine, isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language, options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints, showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
 
   const handleRawBenchmark = useCallback(async (mode: BenchmarkMode) => {
-    if (mode === 'base') {
-      setBenchmarkMode('base');
+    if (mode === 'baseline') {
+      setBenchmarkMode('baseline');
       await handleBenchmarkCurrentPage();
       return;
     }
@@ -5524,7 +5524,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             <div className="flex gap-1">
               <button
                 type="button"
-                onClick={() => void handleRawBenchmark('base')}
+                onClick={() => void handleRawBenchmark('baseline')}
                 disabled={isProcessing || !file}
                 className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-slate-800/70 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Benchmark RAW engines (no preprocessing/filter/grouping)"

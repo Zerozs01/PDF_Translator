@@ -182,6 +182,12 @@ export interface ElectronAPI {
     getTranslationCachePage: (docId: number, pageNum: number) => Promise<DBOCRTranslationCacheEntry[]>;
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
     
+    // Benchmark CRUD
+    saveBenchmark?: (params: { docId: number; pageNum: number; key: string; payload: string }) => Promise<boolean>;
+    getBenchmark?: (params: { docId: number; pageNum: number; key: string }) => Promise<string | null>;
+    clearBenchmark?: (params: { docId: number; pageNum: number; key?: string }) => Promise<boolean>;
+    listBenchmarks?: (params: { docId: number; pageNum: number }) => Promise<any[]>;
+
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;
     getDocumentsByProject: (projectId: number | null) => Promise<DBDocument[]>;
@@ -256,6 +262,13 @@ export interface ElectronAPI {
     cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
     runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
   };
+
+  startupLoad?: () => Promise<{
+    recentDocuments: DBDocument[];
+    allTags: DBTag[];
+    allProjects: DBProject[];
+    latestOcrDocId: number | null;
+  }>;
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }

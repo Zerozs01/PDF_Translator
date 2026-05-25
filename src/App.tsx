@@ -5465,11 +5465,6 @@ export default function App() {
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
   const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
 
-  const {
-    selectedLayerIds,
-    layersByPage,
-    updateLayerFontSize,
-  } = useLayerStore();
   const { 
     file, 
     fileType,
@@ -5494,10 +5489,20 @@ export default function App() {
     hydrateGeminiApiKey,
   } = useProjectStore();
 
-  const currentLayers = layersByPage.get(currentPage) || [];
-  const selectedLayers = currentLayers.filter(l => selectedLayerIds.has(l.id));
-  const firstSelectedLayer = selectedLayers[0];
-  const currentFontSize = firstSelectedLayer ? firstSelectedLayer.fontSize : 14;
+  const updateLayerFontSize = useLayerStore((state) => state.updateLayerFontSize);
+
+  // Selective selectors to avoid re-renders during dragging/resizing/rotating on the canvas
+  const hasSelection = useLayerStore((state) => {
+    const pageLayers = state.layersByPage.get(currentPage) || [];
+    return pageLayers.some(l => state.selectedLayerIds.has(l.id));
+  });
+
+  const currentFontSize = useLayerStore((state) => {
+    const pageLayers = state.layersByPage.get(currentPage) || [];
+    const firstSelected = pageLayers.find(l => state.selectedLayerIds.has(l.id));
+    return firstSelected ? firstSelected.fontSize : 14;
+  });
+
   const [showFontDropdown, setShowFontDropdown] = useState(false);
 
   const adjustOverlayFontScale = (delta: number) => {
@@ -6127,7 +6132,7 @@ export default function App() {
     if (typeof document === 'undefined') return undefined;
 
     const candidate = fileType === 'pdf'
-      ? document.querySelector(`.react-pdf__Page[data-page-number="${pageNum}"] canvas`)
+      ? document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`)
       : document.querySelector('img[data-export-overlay-image="true"]');
     if (!(candidate instanceof HTMLElement)) return undefined;
 
@@ -8095,9 +8100,11 @@ export default function App() {
         <div className="relative flex items-center gap-1 bg-slate-950/40 rounded px-1.5 py-0.5 border border-white/5">
           <button
             type="button"
-            disabled={selectedLayers.length === 0}
+            disabled={!hasSelection}
             onClick={() => {
-              selectedLayers.forEach(l => {
+              const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+              const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+              selected.forEach(l => {
                 const nextSize = Math.max(4, l.fontSize - 1);
                 updateLayerFontSize(currentPage, l.id, nextSize);
               });
@@ -8112,11 +8119,11 @@ export default function App() {
           <div className="relative flex items-center gap-0.5">
             <input
               type="number"
-              disabled={selectedLayers.length === 0}
-              value={selectedLayers.length > 0 ? currentFontSize : ''}
-              placeholder={selectedLayers.length > 0 ? '' : '--'}
+              disabled={!hasSelection}
+              value={hasSelection ? currentFontSize : ''}
+              placeholder={hasSelection ? '' : '--'}
               onClick={() => {
-                if (selectedLayers.length > 0) {
+                if (hasSelection) {
                   setShowFontDropdown(!showFontDropdown);
                 }
               }}
@@ -8124,7 +8131,9 @@ export default function App() {
                 const val = parseInt(e.target.value, 10);
                 if (!isNaN(val)) {
                   const clamped = Math.max(1, Math.min(200, val));
-                  selectedLayers.forEach(l => {
+                  const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+                  const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+                  selected.forEach(l => {
                     updateLayerFontSize(currentPage, l.id, clamped);
                   });
                 }
@@ -8135,7 +8144,7 @@ export default function App() {
             
             <button
               type="button"
-              disabled={selectedLayers.length === 0}
+              disabled={!hasSelection}
               onClick={() => setShowFontDropdown(!showFontDropdown)}
               className="flex h-7 w-4 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
               title="เลือกขนาดตัวอักษร"
@@ -8143,7 +8152,7 @@ export default function App() {
               <ChevronDown size={10} />
             </button>
 
-            {showFontDropdown && selectedLayers.length > 0 && (
+            {showFontDropdown && hasSelection && (
               <>
                 {/* Backdrop to close click outside */}
                 <div 
@@ -8158,7 +8167,9 @@ export default function App() {
                       key={size}
                       type="button"
                       onClick={() => {
-                        selectedLayers.forEach(l => {
+                        const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+                        const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+                        selected.forEach(l => {
                           updateLayerFontSize(currentPage, l.id, size);
                         });
                         setShowFontDropdown(false);
@@ -8177,9 +8188,11 @@ export default function App() {
 
           <button
             type="button"
-            disabled={selectedLayers.length === 0}
+            disabled={!hasSelection}
             onClick={() => {
-              selectedLayers.forEach(l => {
+              const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+              const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+              selected.forEach(l => {
                 const nextSize = Math.min(200, l.fontSize + 1);
                 updateLayerFontSize(currentPage, l.id, nextSize);
               });

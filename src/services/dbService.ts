@@ -77,7 +77,7 @@ export const dbService = {
       }
       const key = `${mode}:${configHash}:${engine}`;
       const payload = JSON.stringify(result);
-      return await window.electronAPI.db.saveBenchmark(docId, pageNum, key, payload);
+      return await window.electronAPI.db.saveBenchmark?.({ docId, pageNum, key, payload }) ?? false;
     } catch (error) {
       console.error('Failed to save benchmark:', error);
       return false;
@@ -88,7 +88,7 @@ export const dbService = {
     try {
       if (!isDbAvailable()) return null;
       const key = `${mode}:${configHash}:${engine}`;
-      const jsonStr = await window.electronAPI.db.getBenchmark(docId, pageNum, key);
+      const jsonStr = await window.electronAPI.db.getBenchmark?.({ docId, pageNum, key }) ?? null;
       return jsonStr ? JSON.parse(jsonStr) : null;
     } catch (error) {
       console.error('Failed to get benchmark:', error);
@@ -99,8 +99,8 @@ export const dbService = {
   async clearBenchmark(docId: number, pageNum: number, mode?: BenchmarkMode, configHash?: string, engine?: OCREngine): Promise<boolean> {
     try {
       if (!isDbAvailable()) return false;
-      const key = mode && configHash && engine ? `${mode}:${configHash}:${engine}` : null;
-      return await window.electronAPI.db.clearBenchmark(docId, pageNum, key);
+      const key = mode && configHash && engine ? `${mode}:${configHash}:${engine}` : undefined;
+      return await window.electronAPI.db.clearBenchmark?.({ docId, pageNum, key }) ?? false;
     } catch (error) {
       console.error('Failed to clear benchmark:', error);
       return false;
@@ -110,15 +110,22 @@ export const dbService = {
   async listBenchmarks(docId: number, pageNum: number): Promise<DBBenchmarkRecord[]> {
     try {
       if (!isDbAvailable()) return [];
-      const rows = await window.electronAPI.db.listBenchmarks(docId, pageNum);
-      return Array.isArray(rows) ? rows.map((row: any) => ({
-        documentId: row.document_id,
-        pageNumber: row.page_number,
-        key: row.key, // mode:config:engine
-        result: JSON.parse(row.result),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })) : [];
+      const rows = await window.electronAPI.db.listBenchmarks?.({ docId, pageNum });
+      return Array.isArray(rows) ? rows.map((row: any) => {
+        const parts = String(row.key || '').split(':');
+        const mode = (parts[0] === 'improve' ? 'improve' : 'baseline') as 'baseline' | 'improve';
+        const configHash = parts[1] || '';
+        const snapshot = JSON.parse(row.result) as BenchmarkResultSnapshot;
+        return {
+          documentId: row.document_id,
+          pageNumber: row.page_number,
+          mode,
+          configHash,
+          results: [snapshot],
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      }) : [];
     } catch (error) {
       console.error('Failed to list benchmarks:', error);
       return [];

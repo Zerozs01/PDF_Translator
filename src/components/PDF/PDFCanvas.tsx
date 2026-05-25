@@ -577,7 +577,7 @@ export const PDFCanvas: React.FC = () => {
 
   const captureAndProcess = async () => {
     console.log("[PDFCanvas] Processing Triggered...");
-    const canvas = document.querySelector(`.react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
+    const canvas = document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
     
     if (!canvas) {
       console.warn("[PDFCanvas] Canvas not found for vision processing");
@@ -795,7 +795,7 @@ export const PDFCanvas: React.FC = () => {
             file={pdfSource}
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={(error) => console.error('[PDFCanvas] PDF load error:', error)}
-            className="flex flex-col gap-4"
+            className="flex flex-col gap-4 pdf-canvas-document"
           >
             {viewMode === 'single' ? (
               <div ref={pageRef} className="relative group">
