@@ -1173,7 +1173,7 @@ export const UploadScreen: React.FC = () => {
         {/* Left Navigation Sidebar */}
         <div className="w-16 bg-[#0e0f11]/86 border-r border-white/6 backdrop-blur-xl flex flex-col items-center py-4">
           <button
-            onClick={() => { setActivePage('home'); loadRecentDocuments(); setIsSidebarOpen(true); }}
+            onClick={() => { setActivePage('home'); loadRecentDocuments(); }}
             className={`p-3 rounded-xl mb-2 transition-all ${
               activePage === 'home'
                 ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'

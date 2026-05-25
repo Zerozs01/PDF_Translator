@@ -1817,6 +1817,10 @@ class VisionService {
       const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF)\b/i.test(rawText);
       if (hasKillOrOtherStandardWord) return true;
 
+      // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")
+      const looksLikeReadableEnglishWord = !stylizedWideEffect && ((alphaLength >= 3 && confidence >= 78) || (alphaLength >= 2 && confidence >= 85));
+      if (looksLikeReadableEnglishWord) return true;
+
       const localSupport = lines.filter((other) => {
         if (other === line) return false;
         const otherText = String(other.text || '').trim();

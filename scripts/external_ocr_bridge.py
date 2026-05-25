@@ -2018,6 +2018,7 @@ def prune_paddle_panel_contextual_noise_lines(
                 and compact_length <= 12
                 and word_box_count <= 1
                 and line_area >= 22000.0
+                and confidence <= 88.0
             )
 
             if (
@@ -3415,7 +3416,7 @@ def create_inverted_image_variant(image_path: str) -> str:
     return variant_path
 
 
-def resize_image_if_large(image_path: str, max_pixels: int = 4_000_000) -> Tuple[str, float, float]:
+def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple[str, float, float]:
     """
     Proportionally downscale image so total pixel count stays under max_pixels.
     Preserves aspect ratio — no distortion.
@@ -3723,12 +3724,12 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     # ── Determine processing path based on image dimensions ─────────────────
     # Tall images (aspect ratio >= 4:1 with height > 3000px) are chunked into
     # overlapping strips to avoid memory issues and improve OCR accuracy.
-    # Other large images are pixel-count-capped to stay under ~4MP.
+    # Other large images are pixel-count-capped to stay under ~9MP.
     TALL_ASPECT_THRESHOLD = 4.0
     TALL_HEIGHT_THRESHOLD = 3000
     CHUNK_HEIGHT = 2800
     CHUNK_OVERLAP = 120
-    MAX_PIXELS = 4_000_000
+    MAX_PIXELS = 9_000_000
 
     try:
         with Image.open(args.image) as _probe:

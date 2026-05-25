@@ -1049,8 +1049,8 @@ const isLikelyLargeBorderEffectLineForSafety = (
   const sparsePhrase = wordCount <= 3 || compact.length <= 16;
   const sparseCjk = hasCjkOrThai && compact.length <= 8 && wordCount <= 3;
   const sparseLatin = hasLatin && alphaNum.length <= 18 && wordCount <= 4;
-  const veryLowCoverage = wordCoverage <= 0.22;
-  const lowCoverage = wordCoverage <= 0.30;
+  const veryLowCoverage = wordCoverage <= 0.16;
+  const lowCoverage = wordCoverage <= 0.24;
   const lowSignal = avgConfidence <= 92 || unknownCharRatio >= 0.25;
 
   if (veryLowCoverage && sparsePhrase && (sparseCjk || sparseLatin || unknownCharRatio >= 0.32)) {
@@ -1823,7 +1823,7 @@ const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
         && compactResolvedText.length <= 12
         && validWordCount <= 1
         && bboxArea >= Math.max(15000, pageWidth * pageHeight * 0.012)
-        && wordCoverage <= 0.18
+        && wordCoverage <= 0.12
         && Number(lineWithResolvedGeometry.confidence || 0) <= 95;
       if (hugeSparseBorderMismatch) {
         dropped.push({
@@ -3935,13 +3935,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
       return {
         maxSide: 16000,
-        maxPixels: 8_400_000,
+        maxPixels: 9_000_000,
         minWidth: null,
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
           boostedMaxSide: 18000,
-          boostedMaxPixels: 11_200_000,
+          boostedMaxPixels: 12_000_000,
         },
       };
     }

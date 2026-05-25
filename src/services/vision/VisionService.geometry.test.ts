@@ -327,7 +327,7 @@ describe('VisionService paddle geometry guard', () => {
     const lines = [
       makeLine('ON THE', 120, 120, 260, 148),
       makeLine('BATTLEFIELD,', 118, 154, 320, 182),
-      makeLine('STOP', 560, 340, 640, 505),
+      makeLine('I', 560, 340, 640, 505),
       makeLine('ALL RIGHT,', 122, 190, 300, 218),
     ];
 
@@ -339,7 +339,7 @@ describe('VisionService paddle geometry guard', () => {
       'ALL RIGHT,',
     ]);
     expect(result.dropped).toEqual([
-      expect.objectContaining({ text: 'STOP', reason: 'tallEffectLine' }),
+      expect.objectContaining({ text: 'I', reason: 'tallEffectLine' }),
     ]);
   });
 
