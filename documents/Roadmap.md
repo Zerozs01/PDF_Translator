@@ -37,7 +37,25 @@ This roadmap tracks only active and near-term work.
 2. Add stable expected-output checks for each OCR engine
 3. Add focused tests for translatedByIndex completeness
 
-## P3 - Performance And Resource Control (Planned)
+## P3 - Layer Interactive Manipulation (Completed)
+
+### Objectives
+
+- Enable direct layer editing (position, text, style)
+- Protect manual edits from auto-translation overwrite
+- Support multi-select operations and undo
+
+### Completed Actions
+
+1. Phase 3 store implementation in `useLayerStore.ts`
+2. `userEdited` flag + `editingLayerId` state for edit protection
+3. Multi-select with Shift+click toggle
+4. Undo stack with MAX_UNDO_DEPTH=20 per page
+5. `deletedLineIndexesByPage` tracking for ghost overlay suppression
+6. Manual layer creation with auto balloon grouping
+7. Translation protection rule in `App.tsx`
+
+## P4 - Performance And Resource Control (Planned)
 
 ### Objectives
 
@@ -50,7 +68,7 @@ This roadmap tracks only active and near-term work.
 2. Keep cancellation/timeout paths deterministic
 3. Instrument per-stage runtime so tuning is evidence-based
 
-## P4 - Translation Quality Flow (Planned)
+## P5 - Translation Quality Flow (Planned)
 
 ### Objectives
 

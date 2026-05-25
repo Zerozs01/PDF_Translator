@@ -1777,9 +1777,11 @@ class VisionService {
     lines: OCRLine[],
     pageWidth: number,
     pageHeight: number,
-    language: string
+    language: string,
+    qualityProfile?: OCRQualityProfile
   ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
     if (lines.length <= 1) return { lines, dropped: [] };
+    if (qualityProfile === 'best' || qualityProfile === 'balanced') return { lines, dropped: [] };
     if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
 
     const lineHeights = lines
@@ -1810,6 +1812,10 @@ class VisionService {
         && lineWidth <= Math.max(420, pageWidth * 0.58)
         && /[~!?…]|^(?:O+H+|O+|A+H+|U+H+|H+M+|S+T+O+P+)$/i.test(rawText.replace(/\s+/g, ''));
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
+
+      // ── Safety Gate: prevent filtering standard English dialogue lines ──
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF)\b/i.test(rawText);
+      if (hasKillOrOtherStandardWord) return true;
 
       const localSupport = lines.filter((other) => {
         if (other === line) return false;
@@ -2510,13 +2516,53 @@ class VisionService {
         }
 
         const dialogueEchoResult = this.repairPaddlePanelDialogueEchoLines(finalLines, width, height, language);
-    // DEBUG: Log after dialogueEcho
+        finalLines = dialogueEchoResult.lines;
+        if (dialogueEchoResult.dropped.length > 0) {
+          mergedDropCounts.externalPaddleDialogueEcho =
+            (mergedDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
+          mergedDroppedWords.push(...dialogueEchoResult.dropped);
+        }
+        // DEBUG: Log after dialogueEcho
         if (CONFIG.DEBUG_LOG_MISSING_LINES) {
           const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
           if (killLine) {
             console.log(`[DEBUG] After dialogueEcho: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
           } else {
             console.warn(`[DEBUG] After dialogueEcho: "TO KILL THE" MISSING!`);
+          }
+        }
+
+        const contextualRepairResult = this.repairPaddlePanelContextualDialogueLines(finalLines, width, height, language);
+        finalLines = contextualRepairResult.lines;
+        if (contextualRepairResult.dropped.length > 0) {
+          mergedDropCounts.externalPaddleContextualDialogue =
+            (mergedDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
+          mergedDroppedWords.push(...contextualRepairResult.dropped);
+        }
+        // DEBUG: Log after contextual
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
+          if (killLine) {
+            console.log(`[DEBUG] After contextual: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
+          } else {
+            console.warn(`[DEBUG] After contextual: "TO KILL THE" MISSING!`);
+          }
+        }
+
+        const tallEffectResult = this.prunePaddlePanelTallEffectLines(finalLines, width, height, language, ocrQualityProfile);
+        finalLines = tallEffectResult.lines;
+        if (tallEffectResult.dropped.length > 0) {
+          mergedDropCounts.externalPaddleTallEffectLine =
+            (mergedDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
+          mergedDroppedWords.push(...tallEffectResult.dropped);
+        }
+        // DEBUG: Log after tallEffect
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
+          if (killLine) {
+            console.log(`[DEBUG] After tallEffect: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
+          } else {
+            console.warn(`[DEBUG] After tallEffect: "TO KILL THE" MISSING!`);
           }
         }
 
@@ -2530,47 +2576,7 @@ class VisionService {
             console.warn(`[DEBUG-FINAL] "TO KILL THE" MISSING from final result!`);
           }
         }
-      finalLines = dialogueEchoResult.lines;
-      if (dialogueEchoResult.dropped.length > 0) {
-        mergedDropCounts.externalPaddleDialogueEcho =
-          (mergedDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
-        mergedDroppedWords.push(...dialogueEchoResult.dropped);
       }
-
-      const contextualRepairResult = this.repairPaddlePanelContextualDialogueLines(finalLines, width, height, language);
-    // DEBUG: Log after contextual
-    if (CONFIG.DEBUG_LOG_MISSING_LINES) {
-      const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
-      if (killLine) {
-        console.log(`[DEBUG] After contextual: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
-      } else {
-        console.warn(`[DEBUG] After contextual: "TO KILL THE" MISSING!`);
-      }
-    }
-      finalLines = contextualRepairResult.lines;
-      if (contextualRepairResult.dropped.length > 0) {
-        mergedDropCounts.externalPaddleContextualDialogue =
-          (mergedDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
-        mergedDroppedWords.push(...contextualRepairResult.dropped);
-      }
-
-      const tallEffectResult = this.prunePaddlePanelTallEffectLines(finalLines, width, height, language);
-          // DEBUG: Log after tallEffect
-          if (CONFIG.DEBUG_LOG_MISSING_LINES) {
-            const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
-            if (killLine) {
-              console.log(`[DEBUG] After tallEffect: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
-            } else {
-              console.warn(`[DEBUG] After tallEffect: "TO KILL THE" MISSING!`);
-            }
-          }
-            finalLines = tallEffectResult.lines;
-      if (tallEffectResult.dropped.length > 0) {
-        mergedDropCounts.externalPaddleTallEffectLine =
-          (mergedDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
-        mergedDroppedWords.push(...tallEffectResult.dropped);
-      }
-    }
 
     const mergedWords = finalLines.flatMap((line) => line.words || []);
     const confidences = mergedWords.length > 0
@@ -2852,7 +2858,7 @@ class VisionService {
       }
 
       const tallEffectResult = shouldApplyPaddlePanelValidation
-        ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language)
+        ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language, ocrQualityProfile)
         : { lines: contextualRepairResult.lines, dropped: [] };
       if (tallEffectResult.dropped.length > 0) {
         debugDropCounts.externalPaddleTallEffectLine =

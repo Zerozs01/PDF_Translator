@@ -6,16 +6,16 @@ const crypto = require("crypto");
 const child_process = require("child_process");
 const Database = require("better-sqlite3");
 const os = require("os");
-let db$2 = null;
+let db$1 = null;
 const BenchmarkDAO = {
   init: (database) => {
-    db$2 = database;
+    db$1 = database;
   },
   save: (docId, pageNum, key, jsonPayload) => {
-    if (!db$2) return false;
+    if (!db$1) return false;
     try {
       const now = Date.now();
-      const stmt = db$2.prepare(`
+      const stmt = db$1.prepare(`
         INSERT INTO benchmarks (document_id, page_number, config_hash, results, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(document_id, page_number, config_hash)
@@ -28,9 +28,9 @@ const BenchmarkDAO = {
     }
   },
   get: (docId, pageNum, key) => {
-    if (!db$2) return null;
+    if (!db$1) return null;
     try {
-      const row = db$2.prepare(`
+      const row = db$1.prepare(`
         SELECT results FROM benchmarks
         WHERE document_id = ? AND page_number = ? AND config_hash = ?
       `).get(docId, pageNum, key);
@@ -41,13 +41,13 @@ const BenchmarkDAO = {
     }
   },
   clear: (docId, pageNum, key) => {
-    if (!db$2) return false;
+    if (!db$1) return false;
     try {
       if (key) {
-        const res2 = db$2.prepare("DELETE FROM benchmarks WHERE document_id = ? AND page_number = ? AND config_hash = ?").run(docId, pageNum, key);
+        const res2 = db$1.prepare("DELETE FROM benchmarks WHERE document_id = ? AND page_number = ? AND config_hash = ?").run(docId, pageNum, key);
         return res2.changes > 0;
       }
-      const res = db$2.prepare("DELETE FROM benchmarks WHERE document_id = ? AND page_number = ?").run(docId, pageNum);
+      const res = db$1.prepare("DELETE FROM benchmarks WHERE document_id = ? AND page_number = ?").run(docId, pageNum);
       return res.changes > 0;
     } catch (err) {
       console.error("[BenchmarkDAO] clear error:", err);
@@ -55,9 +55,9 @@ const BenchmarkDAO = {
     }
   },
   list: (docId, pageNum) => {
-    if (!db$2) return [];
+    if (!db$1) return [];
     try {
-      return db$2.prepare(`
+      return db$1.prepare(`
         SELECT document_id, page_number, config_hash, results, created_at, updated_at
         FROM benchmarks
         WHERE document_id = ? AND page_number = ?
@@ -69,19 +69,33 @@ const BenchmarkDAO = {
     }
   }
 };
-let db$1 = null;
+let db = null;
+const stmtCache = /* @__PURE__ */ new Map();
+function getStmt(sql) {
+  if (!db) throw new Error("DB not initialized");
+  let stmt = stmtCache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    stmtCache.set(sql, stmt);
+  }
+  return stmt;
+}
 function initDB() {
-  if (db$1) return db$1;
+  if (db) return db;
   const dbPath = path.join(electron.app.getPath("userData"), "pdf_translator.db");
   console.log("[SQLite] Database path:", dbPath);
   try {
-    db$1 = new Database(dbPath);
-    db$1.pragma("page_size = 4096");
-    db$1.pragma("journal_mode = WAL");
-    db$1.pragma("synchronous = NORMAL");
-    db$1.pragma("cache_size = -64000");
-    db$1.pragma("mmap_size = 134217728");
-    db$1.exec(`
+    db = new Database(dbPath);
+    db.pragma("page_size = 4096");
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("cache_size = -64000");
+    db.pragma("mmap_size = 134217728");
+    db.pragma("temp_store = MEMORY");
+    db.pragma("busy_timeout = 5000");
+    db.pragma("wal_autocheckpoint = 10000");
+    db.pragma("foreign_keys = ON");
+    db.exec(`
   CREATE TABLE IF NOT EXISTS benchmarks (
     document_id INTEGER NOT NULL,
     page_number INTEGER NOT NULL,
@@ -98,7 +112,7 @@ function initDB() {
   CREATE INDEX IF NOT EXISTS idx_benchmarks_lookup ON benchmarks(document_id, page_number, mode, config_hash);
 `);
     console.log("[DB] BenchmarkDAO ready");
-    BenchmarkDAO.init(db$1);
+    BenchmarkDAO.init(db);
     const schema = `
       -- Table for Tags
       CREATE TABLE IF NOT EXISTS tags (
@@ -205,6 +219,7 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup ON translation_cache(document_id, page_number, ocr_engine, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+      CREATE INDEX IF NOT EXISTS idx_document_tags_tag_id ON document_tags(tag_id);
 
       -- 🚀 Automatic Search Sync Triggers
       -- Keeps document_search in sync with documents table
@@ -238,9 +253,9 @@ function initDB() {
         ('Work', '#f59e0b'),
         ('Personal', '#ec4899');
     `;
-    db$1.exec(schema);
+    db.exec(schema);
     console.log("[SQLite] Database initialized successfully with WAL, FTS5 & MMap");
-    return db$1;
+    return db;
   } catch (err) {
     console.error("[SQLite] Failed to initialize database:", err);
     throw err;
@@ -248,34 +263,34 @@ function initDB() {
 }
 const TagDAO = {
   getAll: () => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("SELECT * FROM tags ORDER BY name").all();
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("SELECT * FROM tags ORDER BY name").all();
   },
   create: (name, color = "#6366f1") => {
-    if (!db$1) throw new Error("DB not initialized");
-    const stmt = db$1.prepare("INSERT INTO tags (name, color) VALUES (?, ?) RETURNING *");
+    if (!db) throw new Error("DB not initialized");
+    const stmt = db.prepare("INSERT INTO tags (name, color) VALUES (?, ?) RETURNING *");
     return stmt.get(name, color);
   },
   delete: (id) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("DELETE FROM tags WHERE id = ?").run(id);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("DELETE FROM tags WHERE id = ?").run(id);
   }
 };
 const ProjectDAO = {
   getAll: () => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("SELECT * FROM projects ORDER BY name").all();
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("SELECT * FROM projects ORDER BY name").all();
   },
   getChildren: (parentId) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     if (parentId === null) {
-      return db$1.prepare("SELECT * FROM projects WHERE parent_id IS NULL ORDER BY name").all();
+      return db.prepare("SELECT * FROM projects WHERE parent_id IS NULL ORDER BY name").all();
     }
-    return db$1.prepare("SELECT * FROM projects WHERE parent_id = ? ORDER BY name").all(parentId);
+    return db.prepare("SELECT * FROM projects WHERE parent_id = ? ORDER BY name").all(parentId);
   },
   create: (data) => {
-    if (!db$1) throw new Error("DB not initialized");
-    const stmt = db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    const stmt = db.prepare(`
       INSERT INTO projects (name, description, parent_id, icon, color, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       RETURNING *
@@ -292,7 +307,7 @@ const ProjectDAO = {
     );
   },
   update: (id, data) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const sets = [];
     const values = [];
     if (data.name !== void 0) {
@@ -314,18 +329,18 @@ const ProjectDAO = {
     sets.push("updated_at = ?");
     values.push(Date.now());
     values.push(id);
-    db$1.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    db.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...values);
     return true;
   },
   delete: (id) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("DELETE FROM projects WHERE id = ?").run(id);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("DELETE FROM projects WHERE id = ?").run(id);
   }
 };
 const DocumentDAO = {
   upsert: (filepath, filename, totalPages, fileSize = 0, fileType = "pdf") => {
-    if (!db$1) throw new Error("DB not initialized");
-    const stmt = db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    const stmt = db.prepare(`
       INSERT INTO documents (filepath, filename, total_pages, file_size, file_type, last_accessed, created_at)
       VALUES (@filepath, @filename, @totalPages, @fileSize, @fileType, @now, @now)
       ON CONFLICT(filepath) DO UPDATE SET
@@ -344,12 +359,12 @@ const DocumentDAO = {
     });
   },
   get: (filepath) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("SELECT * FROM documents WHERE filepath = ?").get(filepath);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("SELECT * FROM documents WHERE filepath = ?").get(filepath);
   },
   findByFilenameWithCacheStats: (filename, limit = 20) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
       SELECT
         d.id,
         d.filepath,
@@ -375,12 +390,12 @@ const DocumentDAO = {
     `).all(filename, limit);
   },
   getById: (id) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("SELECT * FROM documents WHERE id = ?").get(id);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("SELECT * FROM documents WHERE id = ?").get(id);
   },
   getRecent: (limit = 20) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
@@ -391,9 +406,9 @@ const DocumentDAO = {
     `).all(limit);
   },
   getByProject: (projectId) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     if (projectId === null) {
-      return db$1.prepare(`
+      return db.prepare(`
         SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
         FROM documents d
         LEFT JOIN document_tags dt ON d.id = dt.document_id
@@ -403,7 +418,7 @@ const DocumentDAO = {
         ORDER BY d.filename
       `).all();
     }
-    return db$1.prepare(`
+    return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
@@ -414,8 +429,8 @@ const DocumentDAO = {
     `).all(projectId);
   },
   getFavorites: () => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
@@ -426,11 +441,11 @@ const DocumentDAO = {
     `).all();
   },
   search: (query) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const trimmed = query.trim();
     if (!trimmed) return DocumentDAO.getRecent(50);
     const sanitized = trimmed.replace(/"/g, '""');
-    return db$1.prepare(`
+    return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       JOIN document_search ds ON d.id = ds.document_id
@@ -442,28 +457,28 @@ const DocumentDAO = {
     `).all(sanitized);
   },
   updateLastAccessed: (id, lastPage = 1) => {
-    if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("UPDATE documents SET last_accessed = ?, last_page = ? WHERE id = ?").run(Date.now(), lastPage, id);
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("UPDATE documents SET last_accessed = ?, last_page = ? WHERE id = ?").run(Date.now(), lastPage, id);
   },
   setFavorite: (id, isFavorite) => {
-    if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("UPDATE documents SET is_favorite = ? WHERE id = ?").run(isFavorite ? 1 : 0, id);
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("UPDATE documents SET is_favorite = ? WHERE id = ?").run(isFavorite ? 1 : 0, id);
   },
   setProject: (id, projectId) => {
-    if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("UPDATE documents SET project_id = ? WHERE id = ?").run(projectId, id);
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("UPDATE documents SET project_id = ? WHERE id = ?").run(projectId, id);
   },
   addTag: (documentId, tagId) => {
-    if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)").run(documentId, tagId);
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)").run(documentId, tagId);
   },
   removeTag: (documentId, tagId) => {
-    if (!db$1) throw new Error("DB not initialized");
-    db$1.prepare("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?").run(documentId, tagId);
+    if (!db) throw new Error("DB not initialized");
+    db.prepare("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?").run(documentId, tagId);
   },
   getByTag: (tagId) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       JOIN document_tags dt ON d.id = dt.document_id
@@ -474,7 +489,7 @@ const DocumentDAO = {
     `).all(tagId);
   },
   update: (id, data) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const sets = [];
     const values = [];
     if (data.filename !== void 0) {
@@ -499,21 +514,21 @@ const DocumentDAO = {
     }
     if (sets.length === 0) return true;
     values.push(id);
-    return db$1.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    return db.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   },
   toggleFavorite: (id) => {
-    if (!db$1) throw new Error("DB not initialized");
-    const doc = db$1.prepare("SELECT is_favorite FROM documents WHERE id = ?").get(id);
+    if (!db) throw new Error("DB not initialized");
+    const doc = db.prepare("SELECT is_favorite FROM documents WHERE id = ?").get(id);
     if (doc) {
       const newValue = doc.is_favorite ? 0 : 1;
-      db$1.prepare("UPDATE documents SET is_favorite = ? WHERE id = ?").run(newValue, id);
+      db.prepare("UPDATE documents SET is_favorite = ? WHERE id = ?").run(newValue, id);
       return newValue === 1;
     }
     return false;
   },
   getTags: (documentId) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare(`
       SELECT t.*
       FROM tags t
       JOIN document_tags dt ON t.id = dt.tag_id
@@ -522,23 +537,23 @@ const DocumentDAO = {
     `).all(documentId);
   },
   touch: (id) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
   },
   updateLastPage: (id, pageNum) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
   },
   delete: (id) => {
-    if (!db$1) throw new Error("DB not initialized");
-    return db$1.prepare("DELETE FROM documents WHERE id = ?").run(id);
+    if (!db) throw new Error("DB not initialized");
+    return db.prepare("DELETE FROM documents WHERE id = ?").run(id);
   }
 };
 const OCRCacheDAO = {
   save: (documentId, pageNumber, data, engine = "tesseract") => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const stmt = db$1.prepare(`
+    const stmt = getStmt(`
       INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
       VALUES (@documentId, @pageNumber, @engine, @json, @now)
       ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
@@ -554,13 +569,13 @@ const OCRCacheDAO = {
     });
   },
   get: (documentId, pageNumber, engine = "tesseract") => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const row = db$1.prepare("SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").get(documentId, pageNumber, normalizedEngine);
+    const row = getStmt("SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").get(documentId, pageNumber, normalizedEngine);
     if (row) {
       return JSON.parse(row.ocr_data);
     }
-    const legacyRow = db$1.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    const legacyRow = getStmt("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
     if (!legacyRow) return null;
     const parsed = JSON.parse(legacyRow.ocr_data);
     const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
@@ -568,36 +583,36 @@ const OCRCacheDAO = {
     return parsed;
   },
   clear: (documentId, pageNumber, engine = "tesseract") => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const res1 = db$1.prepare("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
-    const legacyRow = db$1.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    const res1 = getStmt("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    const legacyRow = getStmt("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
     let res2 = { changes: 0 };
     if (legacyRow) {
       try {
         const parsed = JSON.parse(legacyRow.ocr_data);
         const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
         if (legacyEngine === normalizedEngine) {
-          res2 = db$1.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+          res2 = getStmt("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
         }
       } catch {
         if (normalizedEngine === "tesseract") {
-          res2 = db$1.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+          res2 = getStmt("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
         }
       }
     }
     return res1.changes > 0 || res2.changes > 0;
   },
   getLatestForDocument: (documentId) => {
-    if (!db$1) throw new Error("DB not initialized");
-    const engineRow = db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    const engineRow = db.prepare(`
       SELECT page_number, ocr_data, updated_at
       FROM ocr_cache_engine
       WHERE document_id = ?
       ORDER BY updated_at DESC
       LIMIT 1
     `).get(documentId);
-    const legacyRow = db$1.prepare(`
+    const legacyRow = db.prepare(`
       SELECT page_number, ocr_data, updated_at
       FROM ocr_cache
       WHERE document_id = ?
@@ -619,13 +634,13 @@ const OCRCacheDAO = {
   },
   /** One round-trip: distinct cached pages + latest update per document (matches findByFilenameWithCacheStats semantics). */
   getAggregatedCacheStatsByDocumentIds: (documentIds) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const ids = documentIds.filter((id) => Number.isFinite(id) && id > 0);
     if (ids.length === 0) {
       return [];
     }
     const placeholders = ids.map(() => "?").join(", ");
-    return db$1.prepare(
+    return db.prepare(
       `
       SELECT document_id,
         CAST(COUNT(*) AS INTEGER) AS cache_pages,
@@ -647,10 +662,10 @@ const OCRCacheDAO = {
 };
 const TranslationCacheDAO = {
   save: (documentId, pageNumber, cacheKey, entry) => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const now = Date.now();
     const normalizedEngine = String(entry.ocrEngine || "tesseract").toLowerCase();
-    const stmt = db$1.prepare(`
+    const stmt = getStmt(`
       INSERT INTO translation_cache (
         document_id,
         page_number,
@@ -722,8 +737,8 @@ const TranslationCacheDAO = {
     });
   },
   getByPage: (documentId, pageNumber) => {
-    if (!db$1) throw new Error("DB not initialized");
-    const rows = db$1.prepare(`
+    if (!db) throw new Error("DB not initialized");
+    const rows = getStmt(`
       SELECT
         cache_key,
         ocr_engine,
@@ -775,12 +790,20 @@ const TranslationCacheDAO = {
     });
   },
   clearByEngine: (documentId, pageNumber, engine = "tesseract") => {
-    if (!db$1) throw new Error("DB not initialized");
+    if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const result = db$1.prepare("DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    const result = getStmt("DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
     return result.changes > 0;
   }
 };
+function checkpointDB(mode = "PASSIVE") {
+  if (!db) return;
+  try {
+    db.pragma(`wal_checkpoint(${mode})`);
+  } catch (err) {
+    console.warn("[SQLite] WAL checkpoint failed:", err);
+  }
+}
 const SUPPORTED_DOCUMENT_EXTENSIONS = /* @__PURE__ */ new Map([
   [".pdf", "application/pdf"],
   [".png", "image/png"],
@@ -1207,29 +1230,53 @@ async function runExternalOcr(payload) {
       }
     };
     try {
-      response = await requestDaemon(engine, requestPayload);
-    } catch (error) {
-      if (isNoTextBoxesError(error)) {
-        return emptyNoTextResponse;
-      }
-      if (!isRecoverableDaemonError(error)) {
-        throw error;
-      }
-      teardownDaemon(
-        engine,
-        error instanceof Error ? error : new Error(String(error))
-      );
       try {
         response = await requestDaemon(engine, requestPayload);
-      } catch (retryError) {
-        if (isNoTextBoxesError(retryError)) {
+      } catch (error) {
+        if (isNoTextBoxesError(error)) {
           return emptyNoTextResponse;
         }
-        throw retryError;
+        if (!isRecoverableDaemonError(error)) {
+          throw error;
+        }
+        teardownDaemon(
+          engine,
+          error instanceof Error ? error : new Error(String(error))
+        );
+        try {
+          response = await requestDaemon(engine, requestPayload);
+        } catch (retryError) {
+          if (isNoTextBoxesError(retryError)) {
+            return emptyNoTextResponse;
+          }
+          throw retryError;
+        }
       }
-    }
-    if (!response.ok) {
-      throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+      if (!response.ok) {
+        throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+      }
+    } catch (primaryError) {
+      if (engine === "paddleocr") {
+        console.warn(`[ocrBridge] paddleocr failed with error: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}. Performing seamless auto-fallback to easyocr...`);
+        try {
+          const fallbackPayload = {
+            ...requestPayload,
+            engine: "easyocr"
+          };
+          response = await requestDaemon("easyocr", fallbackPayload);
+          if (response.ok) {
+            response.engine = "easyocr";
+            if (response.debug && typeof response.debug === "object") {
+              response.debug.fallbackFromEngine = "paddleocr";
+              response.debug.fallbackReason = primaryError instanceof Error ? primaryError.message : String(primaryError);
+            }
+            return response;
+          }
+        } catch (fallbackError) {
+          console.error(`[ocrBridge] easyocr fallback also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+        }
+      }
+      throw primaryError;
     }
     return response;
   } finally {
@@ -1393,6 +1440,7 @@ function createWindow() {
 electron.app.on("window-all-closed", () => {
   disposeExternalOcrDaemons();
   disposeArgosTranslateRuntime?.();
+  checkpointDB("FULL");
   if (process.platform !== "darwin") {
     electron.app.quit();
   }
@@ -1405,6 +1453,7 @@ electron.app.on("activate", () => {
 electron.app.on("before-quit", () => {
   disposeExternalOcrDaemons();
   disposeArgosTranslateRuntime?.();
+  checkpointDB("FULL");
 });
 process.on("exit", () => {
   disposeExternalOcrDaemons();
@@ -1944,10 +1993,11 @@ electron.app.whenReady().then(() => {
   });
   electron.ipcMain.handle("db:startup-load", async () => {
     try {
+      const db2 = initDB();
       const [recentDocs, allTags, allProjects, latestOcr] = await Promise.all([
         Promise.resolve().then(() => {
-          if (!db) throw new Error("DB not initialized");
-          return db.prepare(`
+          if (!db2) throw new Error("DB not initialized");
+          return db2.prepare(`
                 SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
                        d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
                 FROM documents d
@@ -1958,8 +2008,8 @@ electron.app.whenReady().then(() => {
         Promise.resolve().then(() => TagDAO.getAll()),
         Promise.resolve().then(() => ProjectDAO.getAll()),
         Promise.resolve().then(() => {
-          if (!db) return null;
-          const latestDoc = db.prepare(`
+          if (!db2) return null;
+          const latestDoc = db2.prepare(`
                 SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
               `).get();
           return latestDoc ? OCRCacheDAO.getLatestForDocument(latestDoc.id) : null;
@@ -1967,9 +2017,9 @@ electron.app.whenReady().then(() => {
       ]);
       const docIds = recentDocs.map((d) => d.id);
       let tagMap = /* @__PURE__ */ new Map();
-      if (docIds.length > 0 && db) {
+      if (docIds.length > 0 && db2) {
         const placeholders = docIds.map(() => "?").join(", ");
-        const tagRows = db.prepare(`
+        const tagRows = db2.prepare(`
               SELECT dt.document_id, t.name, t.color
               FROM document_tags dt
               JOIN tags t ON t.id = dt.tag_id

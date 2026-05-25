@@ -3,7 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
-import { initDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO } from './db'
+import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
@@ -81,6 +81,8 @@ function createWindow() {
 app.on('window-all-closed', () => {
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
+  // Flush WAL to the main DB file before the process exits
+  checkpointDB('FULL')
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -95,6 +97,8 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
+  // Flush WAL so the .db file is fully up-to-date when the process exits
+  checkpointDB('FULL')
 })
 
 // Last-resort cleanup: ensure all child processes are killed even if
@@ -814,6 +818,7 @@ app.whenReady().then(() => {
     // 🚀 Startup optimization: batch load all needed data in 1 round-trip
       ipcMain.handle('db:startup-load', async () => {
         try {
+          const db = initDB();
           // Run all queries in parallel — SQLite with WAL handles concurrency well
           const [recentDocs, allTags, allProjects, latestOcr] = await Promise.all([
             Promise.resolve().then(() => {

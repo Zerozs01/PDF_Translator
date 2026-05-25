@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.16] - 2026-05-21
+
+### Added — Phase 3: Interactive Layer Manipulation (Edit Layer)
+
+- **`userEdited` flag on TextLayer**: Protects manually edited layers from auto-translation overwrite
+- **`editingLayerId` state**: Tracks which layer is currently in inline edit mode
+- **Multi-select support**: `selectedLayerIds` as `Set<string>` with Shift+click toggle
+- **Undo stack**: `undoStackByPage` with MAX_UNDO_DEPTH=20 per page
+- **`deletedLineIndexesByPage`**: Tracks deleted line indexes to suppress ghost overlays in PDFCanvas
+- **Phase 3 layer actions** in `useLayerStore.ts`:
+  - `updateLayerBBox`, `updateLayerText`, `updateLayerRotation`, `updateLayerFontSize`
+  - `updateLayerBackgroundColor`, `updateLayerTextColor`, `updateLayerBold`
+  - `updateMultiLayerBBoxDelta` (multi-select drag), `synchronizeGroupBBox`
+  - `addManualLayer` with auto balloon group creation
+- **Translation Protection Rule**: `App.tsx` (line ~7720) skips auto-translation when `layer.userEdited === true`
+
 ## [1.2.15] - 2026-05-08
 
 ### Added — EasyOCR Chunking Support + Windows Process Cleanup

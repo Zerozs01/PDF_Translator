@@ -205,6 +205,12 @@ const shouldCollapseTranslatedOverlayDuplicate = (
   const centerDeltaY = Math.abs(overlayDedupCenterY(existing.bbox) - overlayDedupCenterY(candidate.bbox));
   const minHeight = Math.max(8, Math.min(overlayDedupBoxHeight(existing.bbox), overlayDedupBoxHeight(candidate.bbox)));
   const minWidth = Math.max(18, Math.min(overlayDedupBoxWidth(existing.bbox), overlayDedupBoxWidth(candidate.bbox)));
+  
+  // Guard: If they are horizontally completely separated (no horizontal overlap or far apart),
+  // they are distinct columns/labels and MUST NOT be collapsed.
+  if (overlapX === 0 || centerDeltaX > minWidth * 1.5) {
+    return false;
+  }
   const areaRatio = overlayDedupBoxArea(existing.bbox) / Math.max(1, overlayDedupBoxArea(candidate.bbox));
   const comparableArea = areaRatio >= 0.28 && areaRatio <= 3.6;
   const bothLongLines = minLength >= 16 && Math.min(existing.sourceWordCount, candidate.sourceWordCount) >= 3;
@@ -660,6 +666,7 @@ type ResolveTranslationOverlayArgs = {
   translationPreviewMode: OCRPreviewMode;
   currentPageTranslationMap?: Map<string, OCRTranslationCacheEntry>;
   activeTranslationKey?: string;
+  pageOCRsByEngine?: Map<OCREngine, OCRPageResult>;
 };
 
 export const resolveTranslationOverlayContext = ({
@@ -672,6 +679,7 @@ export const resolveTranslationOverlayContext = ({
   translationPreviewMode,
   currentPageTranslationMap,
   activeTranslationKey,
+  pageOCRsByEngine,
 }: ResolveTranslationOverlayArgs): TranslationOverlayContext => {
   const fallbackSource = normalizeTranslationLanguageKey(sourceLanguage || '', 'en');
   const normalizedTarget = normalizeTranslationLanguageKey(targetLanguage || '', 'th');
@@ -716,13 +724,73 @@ export const resolveTranslationOverlayContext = ({
     return false;
   };
 
+  const matchesSelection = (entry: OCRTranslationCacheEntry): boolean => {
+    if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+    if (entry.ocrEngine !== currentEngine) return false;
+    if (entry.translationMode !== translationMode) return false;
+    if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedSource) return false;
+    if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
+    return normalizeCacheLanguageKey(entry.ocrLanguage) === normalizedCurrentLanguage;
+  };
+
+  const matchesEngineFallback = (entry: OCRTranslationCacheEntry): boolean => {
+    if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+    if (entry.ocrEngine !== currentEngine) return false;
+    if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
+    return entry.translatedByIndex.length > 0 || Boolean(entry.translatedText?.trim());
+  };
+
+  const getTranslationEntryMatchRank = (entry: OCRTranslationCacheEntry): number => {
+    if (matchesContext(entry)) return 3;
+    if (matchesSelection(entry)) return 2;
+    if (matchesEngineFallback(entry)) return 1;
+    return 0;
+  };
+
+  const hasThaiTranslation = (entry: OCRTranslationCacheEntry): boolean => {
+    if (normalizedTarget !== 'th') return false;
+    const sample = [
+      entry.translatedText || '',
+      ...entry.translatedByIndex.map((item) => String(item.text || '')),
+    ].join(' ');
+    return /[\u0E00-\u0E7F]/.test(sample);
+  };
+
+  const pickBestTranslationEntry = (entries: OCRTranslationCacheEntry[]): OCRTranslationCacheEntry | undefined => {
+    if (entries.length === 0) return undefined;
+    return entries
+      .slice()
+      .sort((a, b) => {
+        const thaiDiff = Number(hasThaiTranslation(b)) - Number(hasThaiTranslation(a));
+        if (thaiDiff !== 0) return thaiDiff;
+        const rankDiff = getTranslationEntryMatchRank(b) - getTranslationEntryMatchRank(a);
+        if (rankDiff !== 0) return rankDiff;
+        return b.createdAt - a.createdAt;
+      })[0];
+  };
+
   const activeEntry = activeTranslationKey && currentPageTranslationMap.has(activeTranslationKey)
     ? currentPageTranslationMap.get(activeTranslationKey)
     : currentEntries[0];
-  const preferredEntry = currentEntries.find((entry) => matchesContext(entry));
-  const resolvedEntry = activeEntry && matchesContext(activeEntry)
-    ? activeEntry
-    : preferredEntry;
+  const candidateEntries = currentEntries.filter((entry) => getTranslationEntryMatchRank(entry) > 0);
+  const fallbackEntry = pickBestTranslationEntry(candidateEntries);
+  
+  let resolvedEntry = fallbackEntry;
+
+  // Ultimate Fallback: หากหาแบบ Strict ไม่เจอเลย (เช่น เปลี่ยนโมเดลแปล หรือโหมด หรือเปลี่ยน OCR Engine)
+  // ให้ดึง Cache การแปลล่าสุดของหน้านี้ที่แปลสำเร็จแล้วมาทำเป็น Fallback
+  if (!resolvedEntry) {
+    const possibleFallbacks = currentEntries.filter((entry) => {
+      if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+      if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
+      return entry.translatedByIndex.length > 0 || Boolean(entry.translatedText?.trim());
+    });
+
+    if (possibleFallbacks.length > 0) {
+      const sameEngineFallback = possibleFallbacks.find((entry) => entry.ocrEngine === currentEngine);
+      resolvedEntry = sameEngineFallback ?? possibleFallbacks[0];
+    }
+  }
 
   if (!resolvedEntry) {
     return {
@@ -735,16 +803,100 @@ export const resolveTranslationOverlayContext = ({
   }
 
   const isStale = resolvedEntry.sourceFingerprint !== sourceFingerprint;
-  const translatedByIndexRaw = new Map<number, string>(
-    resolvedEntry.translatedByIndex
-      .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
-      .map((item) => [item.index, item.text])
-  );
+  let translatedByIndexRaw = new Map<number, string>();
+
+  if (resolvedEntry.ocrEngine === currentEngine) {
+    // OCR Engine ตรงกัน ดึงคำแปลมาใช้ได้ตรงๆ 100%
+    translatedByIndexRaw = new Map<number, string>(
+      resolvedEntry.translatedByIndex
+        .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
+        .map((item) => [item.index, item.text])
+    );
+  } else {
+    // OCR Engine ไม่ตรงกัน! ใช้ Spatial & Semantic Fuzzy Matching เพื่อ Map คำแปลข้าม Engine
+    const oldEngine = resolvedEntry.ocrEngine;
+    const oldOCR = pageOCRsByEngine?.get(oldEngine);
+    const oldLines = oldOCR && Array.isArray(oldOCR.lines) ? oldOCR.lines : [];
+    const currentLines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
+    const rawMap = new Map<number, string>(
+      resolvedEntry.translatedByIndex
+        .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
+        .map((item) => [item.index, item.text])
+    );
+
+    if (oldLines.length > 0 && currentLines.length > 0) {
+      currentLines.forEach((currentLine, currentIdx) => {
+        let bestOldIdx = -1;
+        let bestScore = -1;
+
+        const currentBBox = currentLine.bbox;
+        const currentText = normalizeOverlayInlineText(String(currentLine.text || ''));
+
+        oldLines.forEach((oldLine, oldIdx) => {
+          const oldText = normalizeOverlayInlineText(String(oldLine.text || ''));
+          const oldBBox = oldLine.bbox;
+
+          // 1. คำนวณ Spatial Score (IoU) ด้วยการสเกล oldBBox ให้ตรงกับ resolution ของ current OCR
+          let spatialScore = 0;
+          if (currentBBox && oldBBox) {
+            const oldWidth = oldOCR?.width || 1;
+            const oldHeight = oldOCR?.height || 1;
+            const currentWidth = currentPageOCR?.width || 1;
+            const currentHeight = currentPageOCR?.height || 1;
+
+            const scaleX = currentWidth / oldWidth;
+            const scaleY = currentHeight / oldHeight;
+
+            const scaledOldBBox: BBox = {
+              x0: oldBBox.x0 * scaleX,
+              y0: oldBBox.y0 * scaleY,
+              x1: oldBBox.x1 * scaleX,
+              y1: oldBBox.y1 * scaleY,
+            };
+
+            spatialScore = overlayDedupIou(currentBBox, scaledOldBBox);
+          }
+
+          // 2. คำนวณ Semantic Score (Dice Similarity)
+          let textScore = 0;
+          if (currentText && oldText) {
+            textScore = overlayKeyDiceSimilarity(currentText, oldText);
+          }
+
+          // คะแนนรวม: ให้น้ำหนักพิกัดสูงกว่าความเหมือนข้อความเล็กน้อย (0.7 vs 0.3)
+          const totalScore = spatialScore * 0.7 + textScore * 0.3;
+
+          if (totalScore > bestScore) {
+            bestScore = totalScore;
+            bestOldIdx = oldIdx;
+          }
+        });
+
+        // หากคะแนนรวมมีความคล้ายคลึงเกิน 0.2 ให้ถือว่าแมตช์
+        if (bestOldIdx >= 0 && bestScore >= 0.2) {
+          const oldTranslation = rawMap.get(bestOldIdx);
+          if (oldTranslation) {
+            translatedByIndexRaw.set(currentIdx, oldTranslation);
+          }
+        }
+      });
+    }
+
+    // กรณีสำรอง: ถ้าแมตช์ไม่ได้เลย ให้ Map ตามลำดับ index ดั้งเดิม
+    if (translatedByIndexRaw.size === 0) {
+      rawMap.forEach((text, oldIdx) => {
+        if (oldIdx < currentLines.length) {
+          translatedByIndexRaw.set(oldIdx, text);
+        }
+      });
+    }
+  }
+
   const translatedByIndexWithFallback = fillMissingOverlayLinesWithSourceText(currentPageOCR, translatedByIndexRaw, normalizedTarget);
   const translatedByIndex = collapseTranslatedOverlayDuplicates(currentPageOCR, translatedByIndexWithFallback);
 
   return {
-    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && !isStale,
+    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0,
     isStale,
     sourceLanguage: normalizeTranslationLanguageKey(resolvedEntry.sourceLanguage || normalizedSource, normalizedSource),
     targetLanguage: normalizedTarget,
@@ -2493,13 +2645,17 @@ export const computeOverlayTypography = (
     ? resolveDocumentHeadingBoost(hints?.sourceText || '', sourceWidth, sourceHeight)
     : documentBodyBoost;
 
-  const sourceDriven = sourceHeight
+  const effectiveSourceLineHeight = sourceLineCount > 1
+    ? (sourceHeight / sourceLineCount) * 1.15
+    : sourceHeight;
+
+  const sourceDriven = effectiveSourceLineHeight
     * (preferSingleLine ? (isComicBubble ? 0.8 : isComicBox ? 0.75 : useDocumentTypographyProfile ? 0.72 : 0.7) : (isComicBubble ? 0.76 : isComicBox ? 0.7 : useDocumentTypographyProfile ? 0.7 : 0.63))
     * ratio
     * scriptScale
     * documentHeadingBoost;
   const minFontSize = clamp(
-    sourceHeight * (
+    effectiveSourceLineHeight * (
       preferSingleLine
         ? (isComicBubble ? 0.58 : isComicLikeProfile ? 0.48 : (sourceLooksHeading ? 0.43 : 0.39))
         : (isComicBubble ? 0.54 : isComicBox ? 0.46 : isComicLikeProfile ? 0.41 : (sourceLooksHeading ? 0.4 : 0.38))
@@ -2828,7 +2984,7 @@ const shouldHarmonizeOverlayBlock = (
   }
   if (effectiveDocumentProfile && !bothParagraphLike && (previousTechnicalRowLike || currentTechnicalRowLike)) {
     return (
-      heightRatio <= 1.18
+      heightRatio <= 1.30
       && verticalGap >= -avgHeight * 0.12
       && verticalGap <= Math.max(12, avgHeight * 0.42)
       && (overlapRatio >= 0.5 || leftDelta <= Math.max(10, avgHeight * 0.66))
@@ -2863,9 +3019,22 @@ const shouldHarmonizeOverlayBlock = (
     }
   }
 
+  // Check if they are on the same horizontal line (horizontally aligned pairs)
+  // which is extremely common when OCR splits a single line into multiple words/boxes.
+  const verticalOverlap = Math.max(0, Math.min(previous.bbox.y1, current.bbox.y1) - Math.max(previous.bbox.y0, current.bbox.y0));
+  const verticalOverlapRatio = verticalOverlap / Math.max(1, Math.min(prevHeight, currHeight));
+  const horizontalGap = current.bbox.x0 - previous.bbox.x1;
+  const isSameLineHorizontalPair = verticalOverlapRatio >= 0.55
+    && horizontalGap >= -avgHeight * 0.75
+    && horizontalGap <= Math.max(48, avgHeight * 3.5);
+
+  if (isSameLineHorizontalPair && heightRatio <= 1.55) {
+    return true;
+  }
+
   if (
     bothParagraphLike
-    && heightRatio <= 1.24
+    && heightRatio <= 1.45
     && verticalGap >= -avgHeight * 0.18
     && verticalGap <= Math.max(22, avgHeight * 1.05)
   ) {
@@ -2873,9 +3042,9 @@ const shouldHarmonizeOverlayBlock = (
   }
 
   return (
-    heightRatio <= 1.15
+    heightRatio <= 1.32
     && verticalGap >= -avgHeight * 0.22
-    && verticalGap <= Math.max(18, avgHeight * 0.78)
+    && verticalGap <= Math.max(28, avgHeight * 1.15)
     && (overlapRatio >= 0.24 || leftDelta <= Math.max(18, avgHeight * 1.8))
   );
 };
@@ -3358,9 +3527,7 @@ export const computeOverlayLayoutMap = (
   });
   const result = new Map<number, OverlayLayout>();
 
-  let groupStart = 0;
-  const flushGroup = (endExclusive: number) => {
-    const group = orderedComputed.slice(groupStart, endExclusive);
+  const flushGroup = (group: typeof orderedComputed) => {
     if (group.length === 0) return;
 
     const fontSizes = group.map((item) => item.typography.fontSize);
@@ -3779,13 +3946,73 @@ export const computeOverlayLayoutMap = (
     }
   };
 
-  for (let i = 1; i < orderedComputed.length; i += 1) {
-    if (!shouldHarmonizeOverlayBlock(orderedComputed[i - 1], orderedComputed[i], profile)) {
-      flushGroup(i);
-      groupStart = i;
+  // Use Union-Find (Disjoint Set) to group items based on spatial connections.
+  // This avoids cross-column interleaving Y-sorted issues breaking sequential harmonization.
+  const ufParent = new Array(orderedComputed.length).fill(0).map((_, idx) => idx);
+
+  const ufFind = (i: number): number => {
+    let root = i;
+    while (root !== ufParent[root]) {
+      root = ufParent[root];
+    }
+    let curr = i;
+    while (curr !== root) {
+      const nxt = ufParent[curr];
+      ufParent[curr] = root;
+      curr = nxt;
+    }
+    return root;
+  };
+
+  const ufUnion = (i: number, j: number): void => {
+    const rootI = ufFind(i);
+    const rootJ = ufFind(j);
+    if (rootI !== rootJ) {
+      ufParent[rootI] = rootJ;
+    }
+  };
+
+  // Compare potential harmonizable pairs (optimized early exit since orderedComputed is Y-sorted)
+  for (let i = 0; i < orderedComputed.length; i += 1) {
+    const nodeA = orderedComputed[i];
+    for (let j = i + 1; j < orderedComputed.length; j += 1) {
+      const nodeB = orderedComputed[j];
+
+      // Stop searching this chain if Y gap is way too large
+      const yGap = nodeB.bbox.y0 - nodeA.bbox.y1;
+      const heightA = nodeA.bbox.y1 - nodeA.bbox.y0;
+      const heightB = nodeB.bbox.y1 - nodeB.bbox.y0;
+      if (yGap > Math.max(160, (heightA + heightB) * 5.0)) {
+        break;
+      }
+
+      if (shouldHarmonizeOverlayBlock(nodeA, nodeB, profile) || shouldHarmonizeOverlayBlock(nodeB, nodeA, profile)) {
+        ufUnion(i, j);
+      }
     }
   }
-  flushGroup(orderedComputed.length);
+
+  // Gather items into their connected components
+  const components = new Map<number, typeof orderedComputed>();
+  for (let i = 0; i < orderedComputed.length; i += 1) {
+    const root = ufFind(i);
+    if (!components.has(root)) {
+      components.set(root, []);
+    }
+    components.get(root)!.push(orderedComputed[i]);
+  }
+
+  // Process each unified group
+  for (const group of components.values()) {
+    // Sort each group logically: top-to-bottom, then left-to-right
+    const sortedGroup = [...group].sort((a, b) => {
+      if (Math.abs(a.bbox.y0 - b.bbox.y0) > 4) {
+        return a.bbox.y0 - b.bbox.y0;
+      }
+      return a.bbox.x0 - b.bbox.x0;
+    });
+    flushGroup(sortedGroup);
+  }
 
   return suppressOverlappingOverlayBorders(result, orderedComputed);
 };

@@ -81,6 +81,7 @@ interface OCRTextLayerState {
   allPagesOCR: Map<number, OCRPageResult>;
   ocrByPageEngine: Map<number, Map<OCREngine, OCRPageResult>>;
   setPageOCR: (pageNum: number, result: OCRPageResult) => void;
+  setPageOCRForEngine: (pageNum: number, engine: OCREngine, result: OCRPageResult) => void;
   removePageOCR: (pageNum: number) => void;
   removePageOCRForEngine: (pageNum: number, engine: OCREngine) => void;
   getPageOCR: (pageNum: number) => OCRPageResult | undefined;
@@ -202,6 +203,27 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
     perPage.set(engine, processedResult);
     byPageEngine.set(pageNum, perPage);
+    return {
+      allPagesOCR: newMap,
+      ocrByPageEngine: byPageEngine,
+    };
+  }),
+  setPageOCRForEngine: (pageNum, engine, result) => set((state) => {
+    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.8);
+    const processedResult = { ...result, lines: processedLines };
+    const byPageEngine = new Map(state.ocrByPageEngine);
+    const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
+    perPage.set(engine, processedResult);
+    byPageEngine.set(pageNum, perPage);
+
+    // Sync to allPagesOCR only if allPagesOCR doesn't have an entry for this page,
+    // OR if the engine being set matches the active/selected options engine.
+    const newMap = new Map(state.allPagesOCR);
+    const activeEngine = state.options.engine || 'tesseract';
+    if (!newMap.has(pageNum) || engine.toLowerCase() === activeEngine.toLowerCase()) {
+      newMap.set(pageNum, processedResult);
+    }
+
     return {
       allPagesOCR: newMap,
       ocrByPageEngine: byPageEngine,

@@ -40,6 +40,8 @@ import {
   useOCRTextLayerStore,
 } from './stores/useOCRTextLayerStore';
 import { useLayerStore } from './stores/useLayerStore';
+import { translationCoordinator } from './services/translation/translationCoordinator';
+import { TranslatableItem } from './types/translation';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { searchablePDFService } from './services/pdf';
 import { pdfjs } from './services/pdf/pdfjsWorker';
@@ -64,12 +66,14 @@ import {
   resolveOverlaySourceBBox,
   sampleOverlayPaletteFromLine,
   shouldSkipOverlayRenderForSuspiciousLine,
+  resolveTranslationOverlayContext,
   type OverlayLayoutProfile,
   type OverlayPalette,
   type OverlayTypography,
 } from './components/OCR/translationOverlayUtils';
 import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
 import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
+import { buildLayerGroupsFromOCR } from './services/layers/LayerGroupingService';
 
 // Lazy Load Heavy Components
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
@@ -1231,6 +1235,43 @@ const getTranslationScriptStats = (text: string): {
     latinRatio: latinChars / Math.max(1, letterChars),
     thaiRatio: thaiChars / Math.max(1, letterChars),
   };
+};
+
+const evaluateUntranslatedTranslation = (
+  lines: Array<{ index: number; text: string }>,
+  translatedByIndex: Map<number, string>,
+  sourceLanguage: string,
+  targetLanguage: string
+): { shouldSkip: boolean; retryRatio: number; thaiRatio: number; total: number } => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') {
+    return { shouldSkip: false, retryRatio: 0, thaiRatio: 0, total: 0 };
+  }
+
+  let total = 0;
+  let retryCount = 0;
+  let thaiChars = 0;
+  let letterChars = 0;
+
+  lines.forEach((line) => {
+    const translated = translatedByIndex.get(line.index) || '';
+    total += 1;
+    if (shouldRetryLineTranslation(line.text, translated, sourceLanguage, normalizedTarget)) {
+      retryCount += 1;
+    }
+    const stats = getTranslationScriptStats(translated);
+    thaiChars += stats.thaiChars;
+    letterChars += stats.letterChars;
+  });
+
+  if (total < 4) {
+    return { shouldSkip: false, retryRatio: 0, thaiRatio: 0, total };
+  }
+
+  const retryRatio = retryCount / Math.max(1, total);
+  const thaiRatio = thaiChars / Math.max(1, letterChars);
+  const shouldSkip = retryRatio >= 0.65 && thaiRatio < 0.06;
+  return { shouldSkip, retryRatio, thaiRatio, total };
 };
 
 const shouldRetryGroupTranslation = (
@@ -5851,11 +5892,24 @@ export default function App() {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const pages = new Set<number>();
+
+    // ตรวจจาก ocrByPageEngine (primary store)
     ocrState.ocrByPageEngine.forEach((byEngine, pageNum) => {
       if (byEngine.has(selectedEngine)) {
         pages.add(pageNum);
       }
     });
+
+    // fallback: ตรวจจาก allPagesOCR ด้วย (เช่น กรณีโหลดจาก DB มาเก็บที่ allPagesOCR)
+    ocrState.allPagesOCR.forEach((result, pageNum) => {
+      if (!pages.has(pageNum)) {
+        const resultEngine = (result.ocrEngine || selectedEngine) as OCREngine;
+        if (resultEngine === selectedEngine) {
+          pages.add(pageNum);
+        }
+      }
+    });
+
     return Array.from(pages).sort((a, b) => a - b);
   };
 
@@ -5921,22 +5975,27 @@ export default function App() {
 
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const cachedPages = getModelScopedCachedPageNumbers();
-    if (totalPages > 0 && cachedPages.length >= totalPages) {
+
+    // ถ้ามี OCR cache อย่างน้อย 1 หน้า ก็ proceed ได้เลย
+    // runOfflineBatchDocumentTranslation จะ skip หน้าที่ไม่มี OCR อยู่แล้ว
+    if (cachedPages.length > 0) {
       return true;
     }
 
+    // ยังไม่มี OCR เลย → ลอง Auto-run OCR ทั้งหมด
     setTranslationStatus({
       kind: 'info',
-      message: `OCR cache for ${selectedEngine} is incomplete (${cachedPages.length}/${totalPages || '?'} pages). Auto-running OCR for all pages...`,
+      message: `No OCR cache found for ${selectedEngine}. Auto-running OCR for all pages...`,
     });
 
     const ok = await requestAutoOCRFromPanel('all');
-    if (!ok) return false;
+    if (!ok) {
+      // ถ้า OCR all-pages ล้มเหลว ลอง ensure แค่หน้าปัจจุบัน
+      return ensureCurrentPageOCRReadyForTranslation();
+    }
 
     const refreshedPages = getModelScopedCachedPageNumbers();
-    return totalPages > 0
-      ? refreshedPages.length >= totalPages
-      : refreshedPages.length > 0;
+    return refreshedPages.length > 0;
   };
 
   const resolveModelScopedPagesForExport = (scope: DownloadScope): Array<{ pageNum: number; ocr: OCRPageResult }> => {
@@ -7289,42 +7348,67 @@ export default function App() {
     }
 
     const translatedGroupsRaw = new Array<string>(preparedGroups.length).fill('');
-    const sourceBuckets = new Map<string, number[]>();
-    preparedGroups.forEach((group, index) => {
-      const sourceKey = normalizeTranslationLanguage(group.sourceLanguage, translationSourceLanguage);
-      const bucket = sourceBuckets.get(sourceKey) || [];
-      bucket.push(index);
-      sourceBuckets.set(sourceKey, bucket);
+    
+    // แปลง preparedGroups เป็น TranslatableItem เพื่อรันผ่าน Coordinator
+    const translatableItems: TranslatableItem[] = preparedGroups.map((group, groupIndex) => {
+      const sampleLine = group.lines[0];
+      let groupType: any = 'ungrouped';
+      if (sampleLine) {
+        const matchingLayer = currentLayers.find(l => l.lineIndex === sampleLine.index);
+        if (matchingLayer && matchingLayer.groupId) {
+          const pageGroups = useLayerStore.getState().getPageGroups(pageNum);
+          const layerGroup = pageGroups.find(g => g.id === matchingLayer.groupId);
+          if (layerGroup) {
+            groupType = layerGroup.groupType;
+          }
+        }
+      }
+
+      return {
+        id: String(groupIndex),
+        text: group.protectedText || group.sourceText || '',
+        groupType: groupType,
+      };
     });
 
-    for (const [groupSourceLanguage, indexes] of sourceBuckets.entries()) {
-      const bucketInputs = indexes.map((index) => preparedGroups[index]?.protectedText || '');
-      const bucketTranslated = engine === 'offline'
-        ? await translateBatchOffline(bucketInputs, 'text', translationMode, groupSourceLanguage, normalizedTargetLanguage)
-        : await translateBatchGemini(
-          bucketInputs,
-          'text',
-          translationMode,
-          groupSourceLanguage,
-          normalizedTargetLanguage,
-          buildGeminiContextOverrides(translationMode, groupSourceLanguage, normalizedTargetLanguage)
-        );
+    const coordinatorEngineId = engine === 'offline' ? 'argos' : 'gemini';
+    
+    try {
+      // เรียกใช้งานตัวประสานงานแปลภาษาอัจฉริยะ (Group-Aware Translation Engine)
+      const translationResults = await translationCoordinator.runTranslation(
+        coordinatorEngineId,
+        translatableItems,
+        {
+          sourceLanguage: translationSourceLanguage,
+          targetLanguage: normalizedTargetLanguage,
+          translationMode: translationMode,
+          translateBatchOffline: (texts, type, mode, src, tgt) => 
+            translateBatchOffline(texts, type, mode, src, tgt),
+          translateBatchGemini: (texts, type, mode, src, tgt) => 
+            translateBatchGemini(
+              texts, 
+              type, 
+              mode, 
+              src, 
+              tgt, 
+              buildGeminiContextOverrides(translationMode, src, tgt)
+            ),
+        }
+      );
 
-      indexes.forEach((groupIndex, bucketIndex) => {
-        translatedGroupsRaw[groupIndex] = bucketTranslated[bucketIndex] || '';
+      // แมปผลการแปลกลับเข้าสู่ translatedGroupsRaw ตามลำดับดัชนีของกลุ่ม
+      translationResults.forEach((res) => {
+        const idx = Number(res.id);
+        if (!isNaN(idx) && idx >= 0 && idx < translatedGroupsRaw.length) {
+          translatedGroupsRaw[idx] = res.translatedText;
+        }
       });
-
-      // Diagnostic: log offline translation I/O for debugging untranslated lines
-      if (engine === 'offline') {
-        indexes.forEach((groupIndex, bucketIndex) => {
-          const input = bucketInputs[bucketIndex] || '';
-          const output = bucketTranslated[bucketIndex] || '';
-          const hasThai = /[\u0E00-\u0E7F]/.test(output);
-          if (!hasThai && input.length > 0) {
-            console.warn(`[OfflineTranslation] group ${groupIndex} NOT translated: input="${input.slice(0, 80)}" → output="${output.slice(0, 80)}"`);
-          }
-        });
-      }
+    } catch (err) {
+      console.error('[TranslationCoordinator] Run translation error:', err);
+      // Fallback: ใช้ข้อความเดิม
+      preparedGroups.forEach((group, index) => {
+        translatedGroupsRaw[index] = group.protectedText || group.sourceText || '';
+      });
     }
 
     const translatedGroups = translatedGroupsRaw.map((text, index) => {
@@ -7554,6 +7638,36 @@ export default function App() {
       });
     }
 
+    const translationHealth = evaluateUntranslatedTranslation(
+      translatableLines,
+      translatedByIndex,
+      translationSourceLanguage,
+      normalizedTargetLanguage
+    );
+    if (translationHealth.shouldSkip) {
+      const ocrStore = useOCRTextLayerStore.getState();
+      const existingEntries = ocrStore.getTranslationCacheEntries(pageNum);
+      const preserved = existingEntries.find((entry) => (
+        entry.ocrEngine === ocrEngine
+        && normalizeTranslationLanguage(entry.targetLanguage || '', 'th') === normalizedTargetLanguage
+        && entry.translatedByIndex.some((item) => THAI_REGEX.test(String(item.text || '')))
+      ));
+      if (preserved) {
+        ocrStore.setActiveTranslationCacheKey(pageNum, preserved.key);
+        ocrStore.setTranslationPreviewMode('translated');
+      }
+      if (!options?.suppressStatus) {
+        const retryPct = Math.round(translationHealth.retryRatio * 100);
+        const thaiPct = Math.round(translationHealth.thaiRatio * 100);
+        const engineLabel = engine === 'offline' ? 'Offline' : 'AI';
+        setTranslationStatus({
+          kind: 'error',
+          message: `${engineLabel} translation returned mostly source text (retry ${retryPct}%, Thai ${thaiPct}%). Cache preserved.`,
+        });
+      }
+      return false;
+    }
+
     const updatedLines = (pageOCR.lines || []).map((line, lineIndex) => {
       const translatedText = translatedByIndex.get(lineIndex);
       if (!translatedText) return line;
@@ -7592,6 +7706,7 @@ export default function App() {
     };
 
     setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
+    console.log(`[Translation] cache set page=${pageNum} engine=${ocrEngine} key=${cacheKey}`);
 
     // Synchronize translated texts back to persistent Layer Store (useLayerStore)
     try {
@@ -7600,9 +7715,19 @@ export default function App() {
       if (pageLayers.length > 0) {
         const updatedPageLayers = pageLayers.map(layer => {
           const translatedText = translatedByIndex.get(layer.lineIndex);
+          if (!translatedText) return layer;
+
+          // RULE 1: หากผู้ใช้เคยแก้ไขเลเยอร์นี้เองแล้ว ให้ข้ามการแปลทับ! (Manual Edit Protection)
+          if (layer.userEdited) {
+            return layer;
+          }
+
+          // RULE 2: อัปเดตข้อมูลคำแปลลงในแคช และเอาไปใช้เป็นค่าข้อความแสดงผลหลัก
           return {
             ...layer,
-            text: translatedText || layer.text,
+            translatedText: translatedText,
+            text: translatedText,
+            translationEngineUsed: engine, // 'offline' หรือ 'ai'
           };
         });
         layerStore.setPageLayers(pageNum, {

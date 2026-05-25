@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -28,6 +28,7 @@ import {
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
+import { buildLayerGroupsFromOCR } from '../../services/layers/LayerGroupingService';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
 const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
@@ -171,14 +172,20 @@ export const PDFCanvas: React.FC = () => {
   const editingLayerId = useLayerStore((state) => state.editingLayerId);
   const currentPageLayers = layersByPage.get(currentPage) || [];
   const currentPageGroups = groupsByPage.get(currentPage) || [];
+  const deletedLineIndexesByPage = useLayerStore((state) => state.deletedLineIndexesByPage);
   const hiddenLineIndexes = useMemo(() => {
     const hidden = new Set(currentPageLayers.filter(l => !l.visible).map(l => l.lineIndex));
     const editingLayer = currentPageLayers.find(l => l.id === editingLayerId);
     if (editingLayer) {
       hidden.add(editingLayer.lineIndex);
     }
+    // เพิ่ม lineIndex ที่ถูกลบ layer ออกไปแล้ว เพื่อซ่อน overlay ค้างของ line นั้น
+    const deletedForPage = deletedLineIndexesByPage.get(currentPage);
+    if (deletedForPage) {
+      deletedForPage.forEach(idx => hidden.add(idx));
+    }
     return hidden;
-  }, [currentPageLayers, editingLayerId]);
+  }, [currentPageLayers, editingLayerId, deletedLineIndexesByPage, currentPage]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -193,21 +200,96 @@ export const PDFCanvas: React.FC = () => {
   });
   const [pageRenderTick, setPageRenderTick] = useState(0);
   const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, OverlayPalette>>(new Map());
+  const wheelTransformRafRef = useRef<number | null>(null);
+  const wheelCommitRafRef = useRef<number | null>(null);
+  const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isWheelPanning, setIsWheelPanning] = useState(false);
 
   const selectedEngine = (options.engine || 'tesseract');
+  // คืน OCR result ของ engine ที่เลือกอยู่ ถ้าไม่มีให้ fallback ไป engine ที่มีผลล่าสุด
+  // (กรณีสลับ engine แต่ยังไม่ได้รัน OCR ใหม่ → ยังคง render overlay ด้วย OCR เก่าไว้)
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
-    if (byEngine) return byEngine;
+    if (byEngine) return { ocr: byEngine, effectiveEngine: selectedEngine };
 
+    // engine ใหม่ยังไม่รัน OCR → fallback ไป engine ใดก็ได้ที่มีผลอยู่
     const fallback = allPagesOCR.get(pageNum);
     if (!fallback) return undefined;
     const fallbackEngine = (fallback.ocrEngine || selectedEngine);
-    return fallbackEngine === selectedEngine ? fallback : undefined;
+    // ยอมรับ fallback จาก engine อื่นเพื่อให้ overlay ยังแสดงอยู่
+    return { ocr: fallback, effectiveEngine: fallbackEngine };
   };
 
-  const currentPageOCR = resolveEngineScopedPageOCR(currentPage);
+  const resolvedPageOCR = resolveEngineScopedPageOCR(currentPage);
+  const currentPageOCR = resolvedPageOCR?.ocr;
+  // engine จริงๆ ของ OCR ที่ใช้ render (อาจต่างจาก selectedEngine ถ้า fallback)
+  const effectiveOCREngine = resolvedPageOCR?.effectiveEngine || selectedEngine;
+  const pageOCRsByEngine = ocrByPageEngine.get(currentPage);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
+
+  const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
+    currentPageOCR,
+    // ใช้ effectiveOCREngine เพื่อให้ cache lookup ตรงกับ engine จริงของ OCR ที่ render อยู่
+    // (ถ้า fallback จาก engine อื่น ต้องใช้ engine นั้น ไม่ใช่ selectedEngine)
+    optionsEngine: effectiveOCREngine as any,
+    optionsLanguage: options.language || 'eng',
+    translationMode,
+    sourceLanguage,
+    targetLanguage,
+    translationPreviewMode,
+    currentPageTranslationMap,
+    activeTranslationKey,
+    pageOCRsByEngine,
+  }), [
+    activeTranslationKey,
+    currentPageOCR,
+    currentPageTranslationMap,
+    effectiveOCREngine,
+    options.language,
+    sourceLanguage,
+    targetLanguage,
+    translationMode,
+    translationPreviewMode,
+    pageOCRsByEngine,
+  ]);
+
+  // Auto-build layers เมื่อโหลด OCR สำเร็จหรือเปลี่ยนหน้า แต่ยังไม่มีเลเยอร์ถูกสร้างขึ้นใน Store
+  const hasLayers = layersByPage.has(currentPage) && (layersByPage.get(currentPage) || []).length > 0;
+  const lastBuiltEngineRef = useRef<Map<number, string>>(new Map());
+
+  useEffect(() => {
+    if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;
+
+    const pageNum = currentPage;
+    const layers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+    const newEngine = String(currentPageOCR.ocrEngine || 'tesseract').toLowerCase();
+    const lastEngine = lastBuiltEngineRef.current.get(pageNum);
+    const engineChanged = lastEngine !== undefined && lastEngine !== newEngine;
+
+    // ทำการสร้างเลเยอร์ใหม่เมื่อยังไม่มีเลเยอร์เลย หรือเมื่อเปลี่ยน OCR engine
+    if (layers.length === 0 || engineChanged) {
+      // ส่งคำแปลภาษาไทย (translatedByIndex) เข้าไปผสานเพื่อไม่ให้เลเยอร์มีเฉพาะภาษาอังกฤษในตอนเริ่มต้น
+      const result = buildLayerGroupsFromOCR(currentPageOCR, translationOverlayContext.translatedByIndex);
+
+      if (layers.length === 0 || !lastEngine) {
+        // Build เลเยอร์ครั้งแรกในหน้านั้น
+        useLayerStore.getState().setPageLayers(pageNum, result);
+      } else {
+        // Engine เปลี่ยน: ทำการผสานเลเยอร์เดิมเพื่อรักษาเลเยอร์ที่เพิ่มเอง (manual) และเลเยอร์ที่ถูกพิมพ์แก้แล้ว
+        const existingLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+        const manualLayers = existingLayers.filter(l => l.id.startsWith('manual-layer-') || l.userEdited);
+        const mergedLayers = [
+          ...result.layers,
+          ...manualLayers.filter(ml => !result.layers.some(rl => rl.lineIndex === ml.lineIndex))
+        ];
+        useLayerStore.getState().setPageLayers(pageNum, { layers: mergedLayers, groups: result.groups });
+      }
+
+      lastBuiltEngineRef.current.set(pageNum, newEngine);
+    }
+  }, [currentPageOCR, currentPage, hasLayers, translationOverlayContext.translatedByIndex]);
+
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
     preset: overlayFontPreset,
     enabled: overlayThaiFontEnabled,
@@ -243,27 +325,6 @@ export const PDFCanvas: React.FC = () => {
       return indexes;
     }, []);
   }, [currentPageOCR, originalOCRSearchPattern]);
-  const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
-    currentPageOCR,
-    optionsEngine: options.engine || 'tesseract',
-    optionsLanguage: options.language || 'eng',
-    translationMode,
-    sourceLanguage,
-    targetLanguage,
-    translationPreviewMode,
-    currentPageTranslationMap,
-    activeTranslationKey,
-  }), [
-    activeTranslationKey,
-    currentPageOCR,
-    currentPageTranslationMap,
-    options.engine,
-    options.language,
-    sourceLanguage,
-    targetLanguage,
-    translationMode,
-    translationPreviewMode,
-  ]);
   const debugPageOCR = showDebugOverlay ? currentPageOCR : undefined;
   const droppedDebugWords = useMemo(() => {
     if (!showDebugOverlay || !debugPageOCR?.debug?.droppedWords) return [];
@@ -502,6 +563,11 @@ export const PDFCanvas: React.FC = () => {
     setPageRenderTick((prev) => prev + 1);
   }, []);
 
+  const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
+    if (!contentRef.current) return;
+    contentRef.current.style.transform = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+  }, []);
+
   // Listen for Process Request
   useEffect(() => {
     if (processRequest > 0) {
@@ -583,27 +649,64 @@ export const PDFCanvas: React.FC = () => {
     if (!container) return;
 
     const onWheel = (e: WheelEvent) => {
-      // Only prevent default if Ctrl is pressed (Zoom) to allow normal scrolling if needed,
-      // BUT since we are implementing custom pan, we likely want to prevent default always
-      // to stop the browser from scrolling the page itself.
       e.preventDefault();
+      setIsWheelPanning(true);
+
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+      }
 
       if (e.ctrlKey) {
-        // Zoom
         const { zoom } = stateRef.current;
         const scaleAmount = -e.deltaY * 0.001;
         const newZoom = Math.min(Math.max(0.1, zoom + scaleAmount), 5);
-        setZoom(newZoom);
+
+        if (wheelTransformRafRef.current !== null) {
+          cancelAnimationFrame(wheelTransformRafRef.current);
+        }
+        wheelTransformRafRef.current = requestAnimationFrame(() => {
+          syncContentTransform(stateRef.current.pan, newZoom);
+          wheelTransformRafRef.current = null;
+        });
+
+        if (wheelCommitRafRef.current !== null) {
+          cancelAnimationFrame(wheelCommitRafRef.current);
+        }
+        wheelCommitRafRef.current = requestAnimationFrame(() => {
+          setZoom(newZoom);
+          wheelCommitRafRef.current = null;
+        });
       } else {
-        // Pan
         const { pan } = stateRef.current;
-        setPan(pan.x - e.deltaX, pan.y - e.deltaY);
+        const nextPan = { x: pan.x - e.deltaX, y: pan.y - e.deltaY };
+        panRef.current = nextPan;
+
+        if (wheelTransformRafRef.current !== null) {
+          cancelAnimationFrame(wheelTransformRafRef.current);
+        }
+        wheelTransformRafRef.current = requestAnimationFrame(() => {
+          syncContentTransform(nextPan, stateRef.current.zoom);
+          wheelTransformRafRef.current = null;
+        });
+
+        if (wheelCommitRafRef.current !== null) {
+          cancelAnimationFrame(wheelCommitRafRef.current);
+        }
+        wheelCommitRafRef.current = requestAnimationFrame(() => {
+          setPan(nextPan.x, nextPan.y);
+          wheelCommitRafRef.current = null;
+        });
       }
+
+      wheelIdleTimerRef.current = setTimeout(() => {
+        setIsWheelPanning(false);
+        wheelIdleTimerRef.current = null;
+      }, 120);
     };
 
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
-  }, [setZoom, setPan]);
+  }, [setZoom, setPan, syncContentTransform]);
 
   // Pan Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -640,6 +743,23 @@ export const PDFCanvas: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (wheelTransformRafRef.current !== null) {
+        cancelAnimationFrame(wheelTransformRafRef.current);
+        wheelTransformRafRef.current = null;
+      }
+      if (wheelCommitRafRef.current !== null) {
+        cancelAnimationFrame(wheelCommitRafRef.current);
+        wheelCommitRafRef.current = null;
+      }
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+        wheelIdleTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const pdfSource = useMemo(() => {
     // Prefer object URL source so worker transfer does not detach store-managed buffers.
     if (fileUrl) return fileUrl;
@@ -664,7 +784,7 @@ export const PDFCanvas: React.FC = () => {
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
           transformOrigin: '0 0',
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+          transition: isDragging || isWheelPanning ? 'none' : 'transform 0.1s ease-out',
           willChange: 'transform'
         }}
         className="absolute top-0 left-0 origin-top-left"
@@ -714,30 +834,53 @@ export const PDFCanvas: React.FC = () => {
                         return null;
                       }
                       const layer = currentPageLayers.find(l => l.lineIndex === idx);
-                      const translatedText = layer
-                        ? (translationPreviewMode === 'original' ? (layer.sourceText || layer.text) : layer.text)
-                        : translationOverlayContext.translatedByIndex.get(idx);
+                      // เลือก text ที่จะแสดง:
+                      // 1. original mode → ใช้ sourceText เสมอ
+                      // 2. user-edited layer → ใช้ layer.text (manual text)
+                      // 3. auto-layer ที่ text = sourceText (ยังไม่ sync translation) → fallback ไป cache
+                      // 4. auto-layer ที่ text ≠ sourceText (sync แล้ว) → ใช้ layer.text
+                      // 5. ไม่มี layer → ใช้ translatedByIndex จาก cache
+                      const translatedText = (() => {
+                        if (!layer) {
+                          return translationOverlayContext.translatedByIndex.get(idx);
+                        }
+                        if (translationPreviewMode === 'original') {
+                          return layer.sourceText || layer.text;
+                        }
+                        // ถ้า layer ถูก user แก้ไขเอง หรือมี translation ที่ต่างจาก source → ใช้ layer.text
+                        const hasTranslation = layer.userEdited || layer.text !== layer.sourceText;
+                        if (hasTranslation) return layer.text;
+                        // auto-layer ที่ยังไม่ sync → ใช้ cache translation
+                        return translationOverlayContext.translatedByIndex.get(idx) || layer.text;
+                      })();
                       if (!translatedText) return null;
                       if (!layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
                         return null;
                       }
 
                       const layout = overlayLayoutByIndex.get(idx);
-                      const isMaskOnlyLine = layer ? false : Boolean(layout?.hidden);
+                      const isMaskOnlyLine = (layer && layer.userEdited) ? false : Boolean(layout?.hidden);
                       if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
                         return null;
                       }
-                      const renderText = layer
+                      const renderText = (layer && layer.userEdited)
                         ? (translationPreviewMode === 'original' ? (layer.sourceText || layer.text) : layer.text)
-                        : (layout?.renderText || translatedText);
+                        : (layout?.renderText !== undefined ? layout.renderText : translatedText);
                       const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
                       const styleKind = layout?.styleKind;
                       const isDocumentLikeOverlay = styleKind
                         ? styleKind === 'document-heading' || styleKind === 'document-body'
                         : effectiveProfile === 'official';
                       const isComicLikeOverlay = !isDocumentLikeOverlay;
-                      const maskBbox = layer ? layer.bbox : (((!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line)));
-                      const resolvedSourceBbox = layer ? layer.bbox : resolveOverlaySourceBBox(line);
+                      // สำหรับ auto-built layers ที่ยังไม่ถูก user แก้ไขเอง ให้ใช้ bbox จาก OCR line ปัจจุบันโดยตรง
+                      // เพื่อป้องกันตำแหน่งเพี้ยนเมื่อสลับ OCR engine (LayerStore อาจยัง stale อยู่จาก engine เก่า)
+                      const useLayerBbox = Boolean(layer && layer.userEdited);
+                      const maskBbox = useLayerBbox
+                        ? layer!.bbox
+                        : ((!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line));
+                      const resolvedSourceBbox = useLayerBbox
+                        ? layer!.bbox
+                        : resolveOverlaySourceBBox(line);
                       const sourceWidthRaw = Math.max(1, resolvedSourceBbox.x1 - resolvedSourceBbox.x0);
                       const sourceHeightRaw = Math.max(1, resolvedSourceBbox.y1 - resolvedSourceBbox.y0);
                       const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
@@ -749,8 +892,8 @@ export const PDFCanvas: React.FC = () => {
                       const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
                         && widthCoverage < 0.84
                         && areaCoverage < 0.86;
-                      const sourceBbox = layer
-                        ? layer.bbox
+                      const sourceBbox = useLayerBbox
+                        ? layer!.bbox
                         : (isMaskOnlyLine
                           ? resolvedSourceBbox
                           : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox)));
@@ -915,6 +1058,7 @@ export const PDFCanvas: React.FC = () => {
                       return (
                         <React.Fragment key={`ocr-translation-line-${idx}`}>
                           <div
+                            id={layer ? `layer-mask-${layer.id}` : `layer-mask-${idx}`}
                             style={{
                               left: maskRect.left,
                               top: maskRect.top,
@@ -934,6 +1078,7 @@ export const PDFCanvas: React.FC = () => {
                           />
                           {isMaskOnlyLine ? null : (
                             <div
+                              id={layer ? `layer-text-${layer.id}` : `layer-text-${idx}`}
                               style={{
                                 left: textRect.left,
                                 top: textRect.top,
@@ -1101,6 +1246,7 @@ export const PDFCanvas: React.FC = () => {
                   groups={currentPageGroups}
                   ocrTransform={ocrOverlayTransform}
                   isActive={activeTool === 'select' || activeTool === 'region'}
+                  layouts={overlayLayoutByIndex}
                 />
               </div>
             ) : (

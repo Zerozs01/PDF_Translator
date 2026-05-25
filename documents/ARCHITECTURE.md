@@ -85,7 +85,31 @@ This reduces false drops for lines such as technical sentence fragments and numb
 5. Redistribute translated group text back to line indices
 6. Persist `translatedByIndex` and preview from cache aligned with OCR fingerprint
 
-## 6. UI Notes (OCR Result)
+## 6. Layer Store (Phase 3: Interactive Manipulation)
+
+`src/stores/useLayerStore.ts` manages position layers with full interactive manipulation:
+
+- **Data structures:**
+  - `layersByPage: Map<number, TextLayer[]>` — per-page layer list
+  - `groupsByPage: Map<number, TextLayerGroup[]>` — balloon/paragraph grouping
+  - `deletedLineIndexesByPage: Map<number, Set<number>>` — track deleted lines to suppress ghost overlays
+
+- **Selection:** `selectedLayerIds: Set<string>` supports multi-select (Shift+click toggle)
+- **Editing state:** `editingLayerId` for inline text editing mode
+- **Undo stack:** `undoStackByPage` with MAX_UNDO_DEPTH=20 per page
+
+- **Phase 3 actions:**
+  - `updateLayerBBox` — drag/resize
+  - `updateLayerText` — inline edit (sets `userEdited: true` on translation layer)
+  - `updateLayerRotation` / `updateLayerFontSize` / `updateLayerBold`
+  - `updateLayerBackgroundColor` / `updateLayerTextColor`
+  - `updateMultiLayerBBoxDelta` — multi-select drag
+  - `synchronizeGroupBBox` — recalculate balloon bbox after child moves
+  - `addManualLayer` — creates manual text layer with auto balloon group
+
+- **Manual Edit Protection:** `App.tsx` Rule 1 (line ~7720) skips auto-translation when `layer.userEdited === true`
+
+## 7. UI Notes (OCR Result)
 
 `OCRTextLayerPanel` now provides:
 

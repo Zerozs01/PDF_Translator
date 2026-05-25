@@ -482,30 +482,54 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
     };
 
     try {
-      response = await requestDaemon(engine, requestPayload);
-    } catch (error) {
-      if (isNoTextBoxesError(error)) {
-        return emptyNoTextResponse;
-      }
-      if (!isRecoverableDaemonError(error)) {
-        throw error;
-      }
-      teardownDaemon(
-        engine,
-        error instanceof Error ? error : new Error(String(error))
-      );
       try {
         response = await requestDaemon(engine, requestPayload);
-      } catch (retryError) {
-        if (isNoTextBoxesError(retryError)) {
+      } catch (error) {
+        if (isNoTextBoxesError(error)) {
           return emptyNoTextResponse;
         }
-        throw retryError;
+        if (!isRecoverableDaemonError(error)) {
+          throw error;
+        }
+        teardownDaemon(
+          engine,
+          error instanceof Error ? error : new Error(String(error))
+        );
+        try {
+          response = await requestDaemon(engine, requestPayload);
+        } catch (retryError) {
+          if (isNoTextBoxesError(retryError)) {
+            return emptyNoTextResponse;
+          }
+          throw retryError;
+        }
       }
-    }
 
-    if (!response.ok) {
-      throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+      if (!response.ok) {
+        throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+      }
+    } catch (primaryError) {
+      if (engine === 'paddleocr') {
+        console.warn(`[ocrBridge] paddleocr failed with error: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}. Performing seamless auto-fallback to easyocr...`);
+        try {
+          const fallbackPayload = {
+            ...requestPayload,
+            engine: 'easyocr',
+          };
+          response = await requestDaemon('easyocr', fallbackPayload);
+          if (response.ok) {
+            response.engine = 'easyocr';
+            if (response.debug && typeof response.debug === 'object') {
+              (response.debug as Record<string, unknown>).fallbackFromEngine = 'paddleocr';
+              (response.debug as Record<string, unknown>).fallbackReason = primaryError instanceof Error ? primaryError.message : String(primaryError);
+            }
+            return response;
+          }
+        } catch (fallbackError) {
+          console.error(`[ocrBridge] easyocr fallback also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+        }
+      }
+      throw primaryError;
     }
 
     return response;

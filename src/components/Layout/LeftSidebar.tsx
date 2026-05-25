@@ -232,7 +232,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({ isOpen, onToggle }) =>
                 Loading layers...
               </div>
             }>
-              <LayerPanel />
+              <LayerPanel onActivateLayerPanel={() => setSidebarView('layers')} />
             </Suspense>
           </div>
         </div>

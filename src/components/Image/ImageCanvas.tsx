@@ -172,6 +172,7 @@ export const ImageCanvas: React.FC = () => {
 
   const currentPageOCR = resolveEngineScopedPageOCR(currentPage)
     || resolveEngineScopedPageOCR(1);
+  const pageOCRsByEngine = ocrByPageEngine.get(currentPage) || ocrByPageEngine.get(1);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage) || translationCacheByPage.get(1);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage) || activeTranslationKeyByPage.get(1);
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
@@ -189,6 +190,7 @@ export const ImageCanvas: React.FC = () => {
     translationPreviewMode,
     currentPageTranslationMap,
     activeTranslationKey,
+    pageOCRsByEngine,
   }), [
     activeTranslationKey,
     currentPageOCR,
@@ -199,6 +201,7 @@ export const ImageCanvas: React.FC = () => {
     targetLanguage,
     translationMode,
     translationPreviewMode,
+    pageOCRsByEngine,
   ]);
   const debugPageOCR = showDebugOverlay ? currentPageOCR : undefined;
   const containerRef = useRef<HTMLDivElement>(null);

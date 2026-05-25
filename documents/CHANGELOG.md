@@ -2,6 +2,19 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-05-21
+
+- **Phase 3: Interactive Manipulation (Edit Layer)**
+  - Added `userEdited` flag to TextLayer to protect manual edits from auto-translation overwrites
+  - Implemented `editingLayerId` state for inline text editing
+  - Added multi-select support (`selectedLayerIds` as Set) with Shift+click toggle
+  - Implemented undo stack (`undoStackByPage`) with MAX_UNDO_DEPTH=20
+  - Added `deletedLineIndexesByPage` tracking to prevent ghost overlay after layer deletion
+  - Phase 3 actions: `updateLayerBBox`, `updateLayerText`, `updateLayerRotation`, `updateLayerFontSize`, `updateLayerBackgroundColor`, `updateLayerTextColor`, `updateLayerBold`
+  - Multi-select drag via `updateMultiLayerBBoxDelta`
+  - Manual layer creation via `addManualLayer` with auto balloon grouping
+  - Translation protection rule: if `layer.userEdited`, skip auto-translation (`App.tsx:7720`)
+
 ## 2026-05-09
 
 - Optimized Offline (Argos) Translation Pipeline:

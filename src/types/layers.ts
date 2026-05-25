@@ -27,6 +27,8 @@ export interface TextLayer {
   locked: boolean;
   zIndex: number;
   userEdited: boolean;
+  translatedText?: string;
+  translationEngineUsed?: string;
   confidence: number;
   bold?: boolean;
 }

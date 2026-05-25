@@ -5,7 +5,7 @@
  * พร้อม visibility/lock toggle ตาม reference จาก Canva
  */
 
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Eye,
   EyeOff,
@@ -25,6 +25,7 @@ import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { buildLayerGroupsFromOCR } from '../../services/layers/LayerGroupingService';
+import { resolveTranslationOverlayContext } from '../OCR/translationOverlayUtils';
 import type { TextLayer, TextLayerGroup, LayerGroupType } from '../../types/layers';
 
 const GROUP_TYPE_ICONS: Record<LayerGroupType, React.ReactNode> = {
@@ -52,24 +53,99 @@ const truncateText = (text: string, maxLen: number = 28): string => {
 /** Single layer row */
 const LayerRow: React.FC<{
   layer: TextLayer;
+  index: number;
   pageNum: number;
   isSelected: boolean;
   isHovered: boolean;
   groupColor: string;
-}> = ({ layer, pageNum, isSelected, isHovered, groupColor }) => {
-  const { toggleLayerVisibility, selectLayer, setHoveredLayer, deleteLayer } = useLayerStore();
+  onActivateLayerPanel?: () => void;
+}> = ({ layer, index, pageNum, isSelected, isHovered, groupColor, onActivateLayerPanel }) => {
+  const {
+    toggleLayerVisibility,
+    selectLayer,
+    setHoveredLayer,
+    deleteLayer,
+    activeDragItem,
+    setActiveDragItem,
+    moveLayerToGroup,
+  } = useLayerStore();
   const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const [isDragOver, setIsDragOver] = React.useState(false);
+
+  // Auto-scroll into view when selected (Figma-style)
+  useEffect(() => {
+    if (isSelected) {
+      const el = document.getElementById(`layer-row-${layer.id}`);
+      if (el) {
+        el.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+        });
+      }
+    }
+  }, [isSelected, layer.id]);
+
+  const isBeingDragged = activeDragItem?.type === 'layer' && activeDragItem.id === layer.id;
+
+  const handleDragStart = (e: React.DragEvent) => {
+    if (layer.locked) {
+      e.preventDefault();
+      return;
+    }
+    setActiveDragItem({ type: 'layer', id: layer.id, index });
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', layer.id);
+  };
+
+  const handleDragEnd = () => {
+    setActiveDragItem(null);
+    setIsDragOver(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (activeDragItem && activeDragItem.type === 'layer' && activeDragItem.id !== layer.id) {
+      e.preventDefault();
+      setIsDragOver(true);
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (activeDragItem && activeDragItem.type === 'layer') {
+      moveLayerToGroup(pageNum, activeDragItem.id, layer.groupId, index);
+    }
+  };
 
   return (
     <div
-      className={`group/row flex items-center gap-1.5 pl-6 pr-2 py-1 text-[11px] cursor-pointer transition-all duration-100 ${
+      id={`layer-row-${layer.id}`}
+      draggable={!layer.locked}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`group/row flex items-center gap-1.5 pl-6 pr-2 py-1 text-[11px] cursor-pointer transition-all duration-75 relative border-t-2 ${
+        isBeingDragged ? 'opacity-30 pointer-events-none' : ''
+      } ${
+        isDragOver ? 'border-t-[#2B9BFF]' : 'border-t-transparent'
+      } ${
         isSelected
           ? 'bg-[#2B9BFF]/18 text-white'
           : isHovered
             ? 'bg-white/6 text-slate-200'
             : 'text-slate-400 hover:bg-white/4 hover:text-slate-200'
       }`}
-      onClick={() => selectLayer(layer.id)}
+      onClick={() => {
+        onActivateLayerPanel?.();
+        selectLayer(layer.id);
+      }}
       onMouseEnter={() => setHoveredLayer(layer.id)}
       onMouseLeave={() => setHoveredLayer(null)}
     >
@@ -126,15 +202,87 @@ const LayerRow: React.FC<{
 /** Group header with collapse/expand */
 const GroupHeader: React.FC<{
   group: TextLayerGroup;
+  index: number;
   pageNum: number;
   layerCount: number;
   isHovered: boolean;
-}> = ({ group, pageNum, layerCount, isHovered }) => {
-  const { toggleGroupVisibility, toggleGroupCollapsed, toggleGroupLock, setHoveredGroup, deleteGroup } = useLayerStore();
+}> = ({ group, index, pageNum, layerCount, isHovered }) => {
+  const {
+    toggleGroupVisibility,
+    toggleGroupCollapsed,
+    toggleGroupLock,
+    setHoveredGroup,
+    deleteGroup,
+    activeDragItem,
+    setActiveDragItem,
+    moveLayerToGroup,
+    reorderGroups,
+  } = useLayerStore();
+
+  const [isDragOver, setIsDragOver] = React.useState<'group' | 'layer' | null>(null);
+
+  const isBeingDragged = activeDragItem?.type === 'group' && activeDragItem.id === group.id;
+
+  const handleDragStart = (e: React.DragEvent) => {
+    if (group.locked) {
+      e.preventDefault();
+      return;
+    }
+    setActiveDragItem({ type: 'group', id: group.id, index });
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', group.id);
+  };
+
+  const handleDragEnd = () => {
+    setActiveDragItem(null);
+    setIsDragOver(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!activeDragItem) return;
+    if (activeDragItem.type === 'group' && activeDragItem.id !== group.id) {
+      e.preventDefault();
+      setIsDragOver('group');
+      e.dataTransfer.dropEffect = 'move';
+    } else if (activeDragItem.type === 'layer') {
+      e.preventDefault();
+      setIsDragOver('layer');
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(null);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const dragType = isDragOver;
+    setIsDragOver(null);
+    if (!activeDragItem) return;
+
+    if (activeDragItem.type === 'group' && dragType === 'group') {
+      reorderGroups(pageNum, activeDragItem.index, index);
+    } else if (activeDragItem.type === 'layer' && dragType === 'layer') {
+      moveLayerToGroup(pageNum, activeDragItem.id, group.id);
+    }
+  };
 
   return (
     <div
-      className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-all duration-100 ${
+      draggable={!group.locked}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-all duration-75 border-t-2 relative ${
+        isBeingDragged ? 'opacity-30 pointer-events-none' : ''
+      } ${
+        isDragOver === 'group' ? 'border-t-[#2B9BFF]' : 'border-t-transparent'
+      } ${
+        isDragOver === 'layer' ? 'bg-[#2B9BFF]/12' : ''
+      } ${
         isHovered
           ? 'bg-white/8'
           : 'hover:bg-white/4'
@@ -160,7 +308,7 @@ const GroupHeader: React.FC<{
       />
 
       {/* Type icon */}
-      <span className={`shrink-0 ${group.visible ? 'text-slate-400' : 'text-slate-600'}`}>
+      <span className={`shrink-0 transition-colors duration-75 ${isDragOver === 'layer' ? 'text-[#2B9BFF]' : group.visible ? 'text-slate-400' : 'text-slate-600'}`}>
         {GROUP_TYPE_ICONS[group.groupType]}
       </span>
 
@@ -225,11 +373,40 @@ const GroupHeader: React.FC<{
   );
 };
 
+interface LayerPanelProps {
+  onActivateLayerPanel?: () => void;
+}
+
 /** Main Layer Panel */
-export const LayerPanel: React.FC = () => {
-  const { currentPage } = useProjectStore();
-  const { allPagesOCR } = useOCRTextLayerStore();
-  const currentPageOCR = allPagesOCR.get(currentPage);
+export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) => {
+  const { currentPage, sourceLanguage, targetLanguage, translationMode } = useProjectStore();
+  const {
+    allPagesOCR,
+    ocrByPageEngine,
+    options,
+    translationPreviewMode,
+    translationCacheByPage,
+    activeTranslationKeyByPage,
+  } = useOCRTextLayerStore();
+
+  const selectedEngine = (options.engine || 'tesseract');
+  const resolveEngineScopedPageOCR = (pageNum: number) => {
+    const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+    if (byEngine) return { ocr: byEngine, effectiveEngine: selectedEngine };
+
+    const fallback = allPagesOCR.get(pageNum);
+    if (!fallback) return undefined;
+    const fallbackEngine = (fallback.ocrEngine || selectedEngine);
+    return { ocr: fallback, effectiveEngine: fallbackEngine };
+  };
+
+  const resolvedPageOCR = resolveEngineScopedPageOCR(currentPage);
+  const currentPageOCR = resolvedPageOCR?.ocr;
+  const effectiveOCREngine = resolvedPageOCR?.effectiveEngine || selectedEngine;
+  const pageOCRsByEngine = ocrByPageEngine.get(currentPage);
+  const currentPageTranslationMap = translationCacheByPage.get(currentPage);
+  const activeTranslationKey = activeTranslationKeyByPage.get(currentPage);
+
   const {
     getPageLayers,
     getPageGroups,
@@ -237,25 +414,83 @@ export const LayerPanel: React.FC = () => {
     selectedLayerIds,
     hoveredLayerId,
     hoveredGroupId,
+    expandGroup,
   } = useLayerStore();
 
   const pageNum = currentPage;
   const layers = getPageLayers(pageNum);
   const groups = getPageGroups(pageNum);
 
-  // Build layers when OCR data changes
-  const handleBuildLayers = useCallback(() => {
-    if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;
-    const result = buildLayerGroupsFromOCR(currentPageOCR);
-    setPageLayers(pageNum, result);
-  }, [currentPageOCR, pageNum, setPageLayers]);
+  // Track engine ล่าสุดที่ใช้ build layers ต่อแต่ละ page
+  const lastBuiltEngineRef = useRef<Map<number, string>>(new Map());
 
-  // Auto-build on first load or OCR change
+  const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
+    currentPageOCR,
+    optionsEngine: effectiveOCREngine as any,
+    optionsLanguage: options.language || 'eng',
+    translationMode,
+    sourceLanguage,
+    targetLanguage,
+    translationPreviewMode,
+    currentPageTranslationMap,
+    activeTranslationKey,
+    pageOCRsByEngine,
+  }), [
+    activeTranslationKey,
+    currentPageOCR,
+    currentPageTranslationMap,
+    effectiveOCREngine,
+    options.language,
+    sourceLanguage,
+    targetLanguage,
+    translationMode,
+    translationPreviewMode,
+    pageOCRsByEngine,
+  ]);
+
+  // Auto-expand groups when layers inside them are selected (Figma-style)
   useEffect(() => {
-    if (currentPageOCR && layers.length === 0) {
-      handleBuildLayers();
+    if (selectedLayerIds.size === 0) return;
+    groups.forEach((group) => {
+      const hasSelected = group.layerIds.some((id) => selectedLayerIds.has(id));
+      if (hasSelected && group.collapsed) {
+        expandGroup(pageNum, group.id);
+      }
+    });
+  }, [selectedLayerIds, groups, pageNum, expandGroup]);
+
+  // Build layers when OCR data changes
+  const handleBuildLayers = useCallback((forceRebuild = false) => {
+    if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;
+
+    const newEngine = String(currentPageOCR.ocrEngine || 'tesseract').toLowerCase();
+    const lastEngine = lastBuiltEngineRef.current.get(pageNum);
+
+    // ถ้า engine เปลี่ยน → rebuild layers ใหม่ โดยรักษา manual layers ไว้
+    if (forceRebuild || !lastEngine || lastEngine !== newEngine) {
+      const result = buildLayerGroupsFromOCR(currentPageOCR, translationOverlayContext.translatedByIndex);
+
+      if (forceRebuild || !lastEngine) {
+        // First build หรือ manual rebuild: set ทันที
+        setPageLayers(pageNum, result);
+      } else {
+        // Engine changed: รักษา manual layers + user-edited layers จาก engine เก่า
+        const existingLayers = getPageLayers(pageNum);
+        const manualLayers = existingLayers.filter(l => l.id.startsWith('manual-layer-') || l.userEdited);
+        const mergedLayers = [
+          ...result.layers,
+          ...manualLayers.filter(ml => !result.layers.some(rl => rl.lineIndex === ml.lineIndex))
+        ];
+        setPageLayers(pageNum, { layers: mergedLayers, groups: result.groups });
+      }
+
+      lastBuiltEngineRef.current.set(pageNum, newEngine);
     }
-  }, [currentPageOCR, layers.length, handleBuildLayers]);
+  }, [currentPageOCR, pageNum, setPageLayers, getPageLayers, translationOverlayContext.translatedByIndex]);
+
+  // Note: Auto-building of layers on load is now centrally managed by PDFCanvas.tsx to guarantee
+  // that layers are always initialized even if the Layer Panel sidebar is closed or unmounted.
+  // Manual rebuilds are still supported using handleBuildLayers below.
 
   const layerMap = useMemo(() => {
     const map = new Map<string, TextLayer>();
@@ -280,7 +515,7 @@ export const LayerPanel: React.FC = () => {
         <Layers size={24} className="opacity-40" />
         <p className="text-[11px] text-center">No layers detected</p>
         <button
-          onClick={handleBuildLayers}
+          onClick={() => handleBuildLayers()}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 bg-slate-900/80 text-[10px] text-slate-300 hover:text-white hover:border-white/25 transition-colors"
         >
           <RefreshCw size={10} />
@@ -304,7 +539,7 @@ export const LayerPanel: React.FC = () => {
           </span>
         </div>
         <button
-          onClick={handleBuildLayers}
+          onClick={() => handleBuildLayers()}
           className="p-1 rounded text-slate-600 hover:text-white transition-colors"
           title="Rebuild layers from OCR"
         >
@@ -314,7 +549,7 @@ export const LayerPanel: React.FC = () => {
 
       {/* Tree view */}
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {groups.map((group) => {
+        {groups.map((group, index) => {
           const groupLayers = group.layerIds
             .map(id => layerMap.get(id))
             .filter((l): l is TextLayer => Boolean(l));
@@ -323,6 +558,7 @@ export const LayerPanel: React.FC = () => {
             <div key={group.id} className="border-b border-white/5">
               <GroupHeader
                 group={group}
+                index={index}
                 pageNum={pageNum}
                 layerCount={groupLayers.length}
                 isHovered={hoveredGroupId === group.id}
@@ -331,14 +567,16 @@ export const LayerPanel: React.FC = () => {
               {/* Layers (when expanded) */}
               {!group.collapsed && (
                 <div className="pb-0.5">
-                  {groupLayers.map((layer) => (
+                  {groupLayers.map((layer, lIndex) => (
                     <LayerRow
                       key={layer.id}
                       layer={layer}
+                      index={lIndex}
                       pageNum={pageNum}
                       isSelected={selectedLayerIds.has(layer.id)}
                       isHovered={hoveredLayerId === layer.id}
                       groupColor={group.color}
+                      onActivateLayerPanel={onActivateLayerPanel}
                     />
                   ))}
                 </div>
@@ -359,3 +597,4 @@ export const LayerPanel: React.FC = () => {
     </div>
   );
 };
+

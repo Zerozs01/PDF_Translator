@@ -9,8 +9,15 @@ describe('LayerGroupingService Spatial Clustering', () => {
     // Panel 2 (ขวา): x(300-490), y(105-125) และ y(130-150)
     // ทั้งสองคอลัมน์อยู่ระดับ Y ใกล้กันมาก แต่ห่างกันทางแกน X (ไม่มี Horizontal Overlap)
     const ocrResult: OCRPageResult = {
+      pageNumber: 1,
       width: 500,
       height: 500,
+      dpi: 72,
+      language: 'eng',
+      algorithmVersion: 1,
+      words: [],
+      text: '',
+      confidence: 90,
       lines: [
         {
           text: 'Panel Left Line 1',
@@ -62,8 +69,15 @@ describe('LayerGroupingService Spatial Clustering', () => {
   test('classifies tall or isolated short words as SFX and separates them from balloons', () => {
     // จำลองบทพูดบอลลูนยาว และตัวหนังสือ SFX สั้นตัวใหญ่ที่ลอยอยู่ใกล้กัน
     const ocrResult: OCRPageResult = {
+      pageNumber: 1,
       width: 500,
       height: 500,
+      dpi: 72,
+      language: 'eng',
+      algorithmVersion: 1,
+      words: [],
+      text: '',
+      confidence: 90,
       lines: [
         {
           text: 'THIS GAME IS DIVIDED',

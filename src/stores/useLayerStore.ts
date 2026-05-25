@@ -13,11 +13,15 @@ interface LayerStoreState {
   layersByPage: Map<number, TextLayer[]>;
   groupsByPage: Map<number, TextLayerGroup[]>;
 
+  // Track deleted OCR line indexes เพื่อป้องกัน overlay rendering ค้างหลังลบ layer
+  deletedLineIndexesByPage: Map<number, Set<number>>;
+
   // Selection — Set<string> รองรับ Multi-Selection
   selectedLayerIds: Set<string>;
   hoveredLayerId: string | null;
   hoveredGroupId: string | null;
   editingLayerId: string | null;
+  activeDragItem: { type: 'layer' | 'group'; id: string; index: number } | null;
 
   // Undo stack — เก็บ snapshot ของ layers ก่อนแต่ละ commit
   undoStackByPage: Map<number, TextLayer[][]>;
@@ -29,11 +33,15 @@ interface LayerStoreState {
   // Actions: Write (Batch)
   setPageLayers: (pageNum: number, result: LayerGroupingResult) => void;
 
+  // Actions: Drag & Drop Sidebar
+  setActiveDragItem: (item: { type: 'layer' | 'group'; id: string; index: number } | null) => void;
+
   // Actions: Visibility & Lock
   toggleLayerVisibility: (pageNum: number, layerId: string) => void;
   toggleGroupVisibility: (pageNum: number, groupId: string) => void;
   toggleGroupCollapsed: (pageNum: number, groupId: string) => void;
   toggleGroupLock: (pageNum: number, groupId: string) => void;
+  expandGroup: (pageNum: number, groupId: string) => void;
 
   // Actions: Selection
   selectLayer: (layerId: string | null, addToSelection?: boolean) => void;
@@ -55,6 +63,8 @@ interface LayerStoreState {
   deleteLayer: (pageNum: number, layerId: string) => void;
   deleteGroup: (pageNum: number, groupId: string) => void;
   addManualLayer: (pageNum: number, bbox: BBox, text: string, lineIndex: number, options?: { backgroundColor?: string; textColor?: string }) => void;
+  moveLayerToGroup: (pageNum: number, layerId: string, targetGroupId: string, targetIndex?: number) => void;
+  reorderGroups: (pageNum: number, dragIndex: number, hoverIndex: number) => void;
 
   // Undo
   pushUndoSnapshot: (pageNum: number) => void;
@@ -79,10 +89,12 @@ const MAX_UNDO_DEPTH = 20;
 export const useLayerStore = create<LayerStoreState>((set, get) => ({
   layersByPage: new Map(),
   groupsByPage: new Map(),
+  deletedLineIndexesByPage: new Map(),
   selectedLayerIds: new Set(),
   hoveredLayerId: null,
   hoveredGroupId: null,
   editingLayerId: null,
+  activeDragItem: null,
   undoStackByPage: new Map(),
 
   // ── Read ──────────────────────────────────────────────────────
@@ -97,6 +109,9 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     nextGroups.set(pageNum, result.groups);
     return { layersByPage: nextLayers, groupsByPage: nextGroups };
   }),
+
+  // ── Drag & Drop Sidebar ────────────────────────────────────────
+  setActiveDragItem: (item) => set({ activeDragItem: item }),
 
   // ── Visibility / Lock ─────────────────────────────────────────
   toggleLayerVisibility: (pageNum, layerId) => set((state) => {
@@ -129,6 +144,15 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const groups = state.groupsByPage.get(pageNum);
     if (!groups) return {};
     const updated = groups.map(g => g.id === groupId ? { ...g, collapsed: !g.collapsed } : g);
+    const next = new Map(state.groupsByPage);
+    next.set(pageNum, updated);
+    return { groupsByPage: next };
+  }),
+
+  expandGroup: (pageNum, groupId) => set((state) => {
+    const groups = state.groupsByPage.get(pageNum);
+    if (!groups) return {};
+    const updated = groups.map(g => g.id === groupId ? { ...g, collapsed: false } : g);
     const next = new Map(state.groupsByPage);
     next.set(pageNum, updated);
     return { groupsByPage: next };
@@ -190,18 +214,19 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const updated = layers.map(l => {
       if (l.id !== layerId) return l;
       if (isSource) {
-        const syncText = l.text === l.sourceText || !l.text;
+        const syncText = l.text === l.sourceText || !l.text || l.text === l.translatedText;
         return {
           ...l,
           sourceText: newText,
           text: syncText ? newText : l.text,
-          userEdited: true,
+          translatedText: undefined,
+          userEdited: false, // Reset userEdited to allow re-translation since source changed!
         };
       } else {
         return {
           ...l,
           text: newText,
-          userEdited: true,
+          userEdited: true, // Mark as user edited to protect from being auto-translated over!
         };
       }
     });
@@ -313,6 +338,8 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const groups = state.groupsByPage.get(pageNum);
     if (!layers) return {};
 
+    // หา lineIndex ของ layer ที่กำลังจะลบ เพื่อ track ไว้ใน deletedLineIndexesByPage
+    const layerToDelete = layers.find(l => l.id === layerId);
     const filteredLayers = layers.filter(l => l.id !== layerId);
     
     // Also remove from any groups
@@ -344,10 +371,19 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const nextSelection = new Set(state.selectedLayerIds);
     nextSelection.delete(layerId);
 
+    // Track deleted lineIndex เพื่อให้ PDFCanvas ซ่อน overlay ค้างของ line นี้
+    const nextDeletedLineIndexes = new Map(state.deletedLineIndexesByPage);
+    if (layerToDelete && layerToDelete.lineIndex >= 0) {
+      const pageSet = new Set(nextDeletedLineIndexes.get(pageNum) || []);
+      pageSet.add(layerToDelete.lineIndex);
+      nextDeletedLineIndexes.set(pageNum, pageSet);
+    }
+
     return {
       layersByPage: nextLayers,
       groupsByPage: nextGroups,
-      selectedLayerIds: nextSelection
+      selectedLayerIds: nextSelection,
+      deletedLineIndexesByPage: nextDeletedLineIndexes,
     };
   }),
 
@@ -360,6 +396,9 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     if (!targetGroup) return {};
 
     const targetLayerIds = new Set(targetGroup.layerIds);
+
+    // หา lineIndexes ของ layers ที่จะถูกลบ
+    const deletedLayers = layers.filter(l => targetLayerIds.has(l.id));
 
     const filteredLayers = layers.filter(l => !targetLayerIds.has(l.id));
     const filteredGroups = groups.filter(g => g.id !== groupId);
@@ -374,10 +413,21 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const nextSelection = new Set(state.selectedLayerIds);
     targetLayerIds.forEach(id => nextSelection.delete(id));
 
+    // Track deleted lineIndexes เพื่อให้ PDFCanvas ซ่อน overlay ค้าง
+    const nextDeletedLineIndexes = new Map(state.deletedLineIndexesByPage);
+    if (deletedLayers.length > 0) {
+      const pageSet = new Set(nextDeletedLineIndexes.get(pageNum) || []);
+      deletedLayers.forEach(l => {
+        if (l.lineIndex >= 0) pageSet.add(l.lineIndex);
+      });
+      nextDeletedLineIndexes.set(pageNum, pageSet);
+    }
+
     return {
       layersByPage: nextLayers,
       groupsByPage: nextGroups,
-      selectedLayerIds: nextSelection
+      selectedLayerIds: nextSelection,
+      deletedLineIndexesByPage: nextDeletedLineIndexes,
     };
   }),
 
@@ -442,6 +492,97 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     };
   }),
 
+  moveLayerToGroup: (pageNum, layerId, targetGroupId, targetIndex) => set((state) => {
+    const layers = state.layersByPage.get(pageNum);
+    const groups = state.groupsByPage.get(pageNum);
+    if (!layers || !groups) return {};
+
+    // Find layer
+    const layerIndex = layers.findIndex(l => l.id === layerId);
+    if (layerIndex === -1) return {};
+    const layer = layers[layerIndex];
+    const sourceGroupId = layer.groupId;
+
+    // Update layer's groupId in layers array
+    const updatedLayers = layers.map(l => l.id === layerId ? { ...l, groupId: targetGroupId } : l);
+
+    // Remove layerId from source group
+    let updatedGroups = groups.map(g => {
+      if (g.id === sourceGroupId) {
+        const nextIds = g.layerIds.filter(id => id !== layerId);
+        // Recalculate mergedBBox
+        const memberLayers = updatedLayers.filter(l => nextIds.includes(l.id));
+        const newBBox = memberLayers.length > 0
+          ? unionBBox(memberLayers.map(l => l.bbox))
+          : { x0: 0, y0: 0, x1: 0, y1: 0 };
+        return {
+          ...g,
+          layerIds: nextIds,
+          mergedBBox: newBBox
+        };
+      }
+      return g;
+    });
+
+    // Remove empty groups (just like deleteLayer does)
+    updatedGroups = updatedGroups.filter(g => g.layerIds.length > 0);
+
+    // Add layerId to target group at targetIndex or append to end
+    updatedGroups = updatedGroups.map(g => {
+      if (g.id === targetGroupId) {
+        // Ensure no duplicates
+        const nextIds = g.layerIds.filter(id => id !== layerId);
+        if (targetIndex !== undefined) {
+          nextIds.splice(targetIndex, 0, layerId);
+        } else {
+          nextIds.push(layerId);
+        }
+        // Recalculate mergedBBox for target group
+        const memberLayers = updatedLayers.filter(l => nextIds.includes(l.id));
+        const newBBox = memberLayers.length > 0
+          ? unionBBox(memberLayers.map(l => l.bbox))
+          : { x0: 0, y0: 0, x1: 0, y1: 0 };
+        return {
+          ...g,
+          layerIds: nextIds,
+          mergedBBox: newBBox
+        };
+      }
+      return g;
+    });
+
+    const nextLayers = new Map(state.layersByPage);
+    nextLayers.set(pageNum, updatedLayers);
+
+    const nextGroups = new Map(state.groupsByPage);
+    nextGroups.set(pageNum, updatedGroups);
+
+    return {
+      layersByPage: nextLayers,
+      groupsByPage: nextGroups
+    };
+  }),
+
+  reorderGroups: (pageNum, dragIndex, hoverIndex) => set((state) => {
+    const groups = state.groupsByPage.get(pageNum);
+    if (!groups) return {};
+
+    const updatedGroups = [...groups];
+    if (dragIndex < 0 || dragIndex >= updatedGroups.length || hoverIndex < 0 || hoverIndex >= updatedGroups.length) {
+      return {};
+    }
+
+    const [draggedGroup] = updatedGroups.splice(dragIndex, 1);
+    updatedGroups.splice(hoverIndex, 0, draggedGroup);
+
+    const nextGroups = new Map(state.groupsByPage);
+    nextGroups.set(pageNum, updatedGroups);
+
+    return {
+      groupsByPage: nextGroups
+    };
+  }),
+
   // ── Undo ─────────────────────────────────────────────────────
   pushUndoSnapshot: (pageNum) => set((state) => {
     const currentLayers = state.layersByPage.get(pageNum);
@@ -470,6 +611,7 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
   clearLayers: () => set({
     layersByPage: new Map(),
     groupsByPage: new Map(),
+    deletedLineIndexesByPage: new Map(),
     selectedLayerIds: new Set(),
     hoveredLayerId: null,
     hoveredGroupId: null,

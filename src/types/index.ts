@@ -167,6 +167,7 @@ export interface OCRDebugInfo {
   runtimeMs?: number;
   qualityProfile?: OCRQualityProfile;
   raw?: boolean;
+  panelSafetyNormalizedVersion?: number;
 }
 
 /** Benchmark result for a doc/page */

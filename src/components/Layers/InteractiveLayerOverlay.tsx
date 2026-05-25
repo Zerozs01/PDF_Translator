@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useRef, useCallback, type CSSProperties } from 'react';
 import type { BBox } from '../../types';
 import type { TextLayer, TextLayerGroup } from '../../types/layers';
+import type { OverlayLayout } from '../OCR/translationOverlayUtils';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useUIStore } from '../../stores/useUIStore';
@@ -33,6 +34,7 @@ interface Props {
   ocrTransform: OcrTransform;
   /** ถ้า false = ซ่อน overlay ทั้งหมด (เมื่อ activeTool ไม่ใช่ 'select' และไม่ใช่ 'region') */
   isActive: boolean;
+  layouts?: Map<number, OverlayLayout>;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -91,6 +93,7 @@ interface InlineEditorProps {
   onCommit: (layerId: string, newText: string) => void;
   defaultValue: string;
   pageNum: number;
+  layout?: OverlayLayout;
 }
 
 const TEXT_COLORS = [
@@ -120,9 +123,12 @@ const BG_COLORS = [
   { name: 'น้ำตาล', value: '#FEF3C7' },
 ];
 
-const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onCommit, defaultValue, pageNum }) => {
+const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onCommit, defaultValue, pageNum, layout }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { left, top, width } = toScreen(layer.bbox, ocrTransform);
+  const effectiveBBox = (layout && !layer.userEdited)
+    ? (layout.mergedBBox || layer.bbox)
+    : layer.bbox;
+  const { left, top, width } = toScreen(effectiveBBox, ocrTransform);
   const trimmedValue = defaultValue ? defaultValue.trim() : '';
 
   const { updateLayerBold, updateLayerBackgroundColor, updateLayerTextColor } = useLayerStore();
@@ -448,15 +454,19 @@ interface SelectionBoxProps {
   onMouseDownRotate: (e: React.MouseEvent, layerId: string) => void;
   onDoubleClick: (layerId: string) => void;
   onHover: (layerId: string | null) => void;
+  layout?: OverlayLayout;
 }
 
 const SelectionBox: React.FC<SelectionBoxProps> = ({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
-  onDoubleClick, onHover,
+  onDoubleClick, onHover, layout,
 }) => {
-  const { left, top, width, height } = toScreen(layer.bbox, ocrTransform);
+  const effectiveBBox = (layout && !layer.userEdited)
+    ? (layout.mergedBBox || layer.bbox)
+    : layer.bbox;
+  const { left, top, width, height } = toScreen(effectiveBBox, ocrTransform);
   const isHighlighted = isSelected || isMultiSelected;
   const rotation = layer.rotation || 0;
   
@@ -501,7 +511,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
           ? '2px solid #8B5CF6' // กำลังหมุน -> เปลี่ยนเป็นเส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
             ? '2px dashed #3B82F6'
-            : '1.5px solid rgba(59,130,246,0.25)',
+            : 'none',           // ซ่อน border เมื่อไม่ได้ select - ไม่ควรเห็นกล่องรอบทุก layer
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
@@ -660,7 +670,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
 
 // ─── Main Component: InteractiveLayerOverlay ──────────────────────
 export const InteractiveLayerOverlay: React.FC<Props> = ({
-  pageNum, layers, groups, ocrTransform, isActive,
+  pageNum, layers, groups, ocrTransform, isActive, layouts,
 }) => {
   const {
     selectedLayerIds,
@@ -672,6 +682,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     editingLayerId,
     setEditingLayerId,
     addManualLayer,
+    deleteLayer,
   } = useLayerStore();
 
   const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
@@ -701,7 +712,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     startAngle?: number;
   } | null>(null);
 
-  // ── Keyboard: Ctrl+Z Undo ────────────────────────────────────
+  // ── Keyboard: Ctrl+Z Undo & Delete ──────────────────────────────
   const { undoLastAction } = useLayerStore();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -713,10 +724,21 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         clearSelection();
         setEditingLayerId(null);
       }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !editingLayerId && selectedLayerIds.size > 0) {
+        e.preventDefault();
+        if (confirm(`คุณต้องการลบ ${selectedLayerIds.size} ข้อความที่เลือกใช่หรือไม่?`)) {
+          // ลบ snapshot ก่อนลบจริงเพื่อให้ undo ทำงานได้ถูกต้อง
+          pushUndoSnapshot(pageNum);
+          selectedLayerIds.forEach((id) => {
+            deleteLayer(pageNum, id);
+          });
+          clearSelection();
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pageNum, editingLayerId, undoLastAction, clearSelection]);
+  }, [pageNum, editingLayerId, selectedLayerIds, undoLastAction, clearSelection, deleteLayer, pushUndoSnapshot]);
 
   // ── Manual Region Creation Handler ──────────────────────────────────
   const handleCreateManualRegion = useCallback((pdfBBox: BBox, bgColor: string) => {
@@ -746,8 +768,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       const ds = dragState.current;
       if (!ds) return;
 
-      const screenDx = e.clientX - ds.startMouseX;
-      const screenDy = e.clientY - ds.startMouseY;
+      const zoom = useUIStore.getState().zoom || 1;
+      const screenDx = (e.clientX - ds.startMouseX) / zoom;
+      const screenDy = (e.clientY - ds.startMouseY) / zoom;
       const { dx, dy } = toPDFDelta(screenDx, screenDy, ocrTransform);
 
       if (ds.type === 'drag' && ds.layerId) {
@@ -757,11 +780,25 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
           : [ds.layerId];
 
         idsToMove.forEach(id => {
+          const l = layers.find(x => x.id === id);
+          const rotation = l?.rotation || 0;
+
+          // 1. Move BBox (selection outline)
           const el = document.getElementById(`layer-bbox-${id}`);
           if (el) {
-            const l = layers.find(x => x.id === id);
-            const rotation = l?.rotation || 0;
             el.style.transform = `translate(${screenDx}px, ${screenDy}px) rotate(${rotation}deg)`;
+          }
+
+          // 2. Move Mask (white background blocking original text)
+          const maskEl = document.getElementById(`layer-mask-${id}`);
+          if (maskEl) {
+            maskEl.style.transform = `translate(${screenDx}px, ${screenDy}px) rotate(${rotation}deg)`;
+          }
+
+          // 3. Move Text (rendered translation)
+          const textEl = document.getElementById(`layer-text-${id}`);
+          if (textEl) {
+            textEl.style.transform = `translate(${screenDx}px, ${screenDy}px) rotate(${rotation}deg)`;
           }
         });
       } else if (ds.type === 'resize' && ds.resizeDir && ds.layerId) {
@@ -776,8 +813,11 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         updateLayerRotation(pageNum, ds.layerId, Math.round(newRotation));
       } else if (ds.type === 'draw') {
         if (drawStartPos) {
-          const currentX = drawStartPos.x + screenDx;
-          const currentY = drawStartPos.y + screenDy;
+          // Note: for drawing region, screenDx/screenDy are still in screen coordinates because the overlay drawing container is at screen scale
+          const rawDx = e.clientX - ds.startMouseX;
+          const rawDy = e.clientY - ds.startMouseY;
+          const currentX = drawStartPos.x + rawDx;
+          const currentY = drawStartPos.y + rawDy;
           setDrawCurrentPos({ x: currentX, y: currentY });
         }
       }
@@ -824,21 +864,33 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         setDrawCurrentPos(null);
       } else if (ds.type === 'drag' && ds.layerId) {
         // Commit final drag to Zustand store once upon release!
-        const screenDx = e.clientX - ds.startMouseX;
-        const screenDy = e.clientY - ds.startMouseY;
+        const zoom = useUIStore.getState().zoom || 1;
+        const screenDx = (e.clientX - ds.startMouseX) / zoom;
+        const screenDy = (e.clientY - ds.startMouseY) / zoom;
         const { dx, dy } = toPDFDelta(screenDx, screenDy, ocrTransform);
 
         const idsToMove = (selectedLayerIds.size > 1 && selectedLayerIds.has(ds.layerId))
           ? Array.from(selectedLayerIds)
           : [ds.layerId];
 
-        // Clean up temporary DOM transform styles
+        // Clean up temporary DOM transform styles for all elements
         idsToMove.forEach(id => {
+          const l = layers.find(x => x.id === id);
+          const rotation = l?.rotation || 0;
+
           const el = document.getElementById(`layer-bbox-${id}`);
           if (el) {
-            const l = layers.find(x => x.id === id);
-            const rotation = l?.rotation || 0;
             el.style.transform = rotation ? `rotate(${rotation}deg)` : '';
+          }
+
+          const maskEl = document.getElementById(`layer-mask-${id}`);
+          if (maskEl) {
+            maskEl.style.transform = rotation ? `rotate(${rotation}deg)` : '';
+          }
+
+          const textEl = document.getElementById(`layer-text-${id}`);
+          if (textEl) {
+            textEl.style.transform = rotation ? `rotate(${rotation}deg)` : '';
           }
         });
 
@@ -1030,6 +1082,13 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       {/* Layer Selection Boxes */}
       {layers.map((layer) => {
         if (!layer.visible) return null;
+
+        // คัดกรองและซ่อนเลเยอร์ที่ถูกสั่ง hidden จาก layout map (เนื่องจากถูกผสานกลุ่ม)
+        const layout = layouts?.get(layer.lineIndex);
+        if (layout?.hidden) {
+          return null;
+        }
+
         const isEditing = editingLayerId === layer.id;
         const isSelected = selectedLayerIds.has(layer.id) && selectedLayerIds.size === 1;
         const isMultiSelected = selectedLayerIds.has(layer.id) && selectedLayerIds.size > 1;
@@ -1044,9 +1103,12 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
                 defaultValue={
                   translationPreviewMode === 'original'
                     ? layer.sourceText || layer.text
-                    : layer.text
+                    : (layer.userEdited || layer.text !== layer.sourceText
+                        ? layer.text
+                        : (layout?.renderText || layer.text))
                 }
                 pageNum={pageNum}
+                layout={layout}
               />
             ) : (
               <SelectionBox
@@ -1064,6 +1126,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
                 onMouseDownRotate={handleMouseDownRotate}
                 onDoubleClick={handleDoubleClick}
                 onHover={setHoveredLayer}
+                layout={layout}
               />
             )}
           </React.Fragment>
