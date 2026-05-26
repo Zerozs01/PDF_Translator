@@ -755,11 +755,11 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     const ocrStore = useOCRTextLayerStore.getState();
     const lineIndex = ocrStore.currentPageOCR ? ocrStore.currentPageOCR.lines.length : 0;
     
-    // บันทึกเข้า OCR Store
-    ocrStore.addOCRLine(pageNum, ocrLine);
+    // บันทึกเข้า OCR Store และดึงดัชนีจริงที่ถูกต้อง
+    const actualLineIndex = ocrStore.addOCRLine(pageNum, ocrLine);
     
     // 2. เพิ่มเลเยอร์ใหม่เข้า Layer store (จะผูกกับกลุ่ม Ungrouped โดยอัตโนมัติ)
-    addManualLayer(pageNum, pdfBBox, defaultText, lineIndex, { backgroundColor: bgColor });
+    addManualLayer(pageNum, pdfBBox, defaultText, actualLineIndex, { backgroundColor: bgColor });
   }, [pageNum, addManualLayer]);
 
   // ── Mouse Events: Global Listeners ──────────────────────────
@@ -813,9 +813,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         updateLayerRotation(pageNum, ds.layerId, Math.round(newRotation));
       } else if (ds.type === 'draw') {
         if (drawStartPos) {
-          // Note: for drawing region, screenDx/screenDy are still in screen coordinates because the overlay drawing container is at screen scale
-          const rawDx = e.clientX - ds.startMouseX;
-          const rawDy = e.clientY - ds.startMouseY;
+          const zoom = useUIStore.getState().zoom || 1;
+          const rawDx = (e.clientX - ds.startMouseX) / zoom;
+          const rawDy = (e.clientY - ds.startMouseY) / zoom;
           const currentX = drawStartPos.x + rawDx;
           const currentY = drawStartPos.y + rawDy;
           setDrawCurrentPos({ x: currentX, y: currentY });
@@ -1036,9 +1036,10 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       e.stopPropagation();
       e.preventDefault();
       
+      const zoom = useUIStore.getState().zoom || 1;
       const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = (e.clientX - rect.left) / zoom;
+      const y = (e.clientY - rect.top) / zoom;
       
       setIsDrawing(true);
       setDrawStartPos({ x, y });

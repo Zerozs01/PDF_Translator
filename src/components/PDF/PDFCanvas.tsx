@@ -1041,7 +1041,7 @@ export const PDFCanvas: React.FC = () => {
                         ? (thaiComicLine ? 0.82 : 0.74)
                         : (thaiComicLine ? 0.58 : 0.5);
                       const paintHeight = Math.min(
-                        textRect.height,
+                        textRect.height * 1.25, // อนุญาตให้ขยายพื้นที่เพิ่มขึ้นได้สูงสุด 25% เพื่อลดการบีบตัดสระไทยและ headroom
                         Math.max(
                           typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
                           textRect.height * minFillRatio
@@ -1088,7 +1088,7 @@ export const PDFCanvas: React.FC = () => {
                                 height: textRect.height,
                                 maxHeight: textRect.height,
                                 minHeight: textRect.height,
-                                overflow: 'hidden',
+                                overflow: 'visible',
                                 zIndex: 1000 + Math.max(1, Math.round(textRect.top)),
                                 transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
                                 transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,
@@ -1125,42 +1125,12 @@ export const PDFCanvas: React.FC = () => {
                                   overflowWrap: typography.forceSingleLine
                                     ? 'normal'
                                     : (hasThaiText ? 'normal' : 'break-word'),
-                                  overflow: 'hidden',
+                                  overflow: 'visible',
                                 }}
                               >
                                     {overlayContent}
                               </div>
-                              {showDebugOverlay ? (
-                                <>
-                                  <div
-                                    style={{
-                                      position: 'absolute',
-                                      left: 0,
-                                      top: 0,
-                                      width: textRect.width,
-                                      height: textRect.height,
-                                      border: '1px solid rgba(34, 211, 238, 0.8)',
-                                      boxSizing: 'border-box',
-                                    }}
-                                  />
-                                  <div
-                                    style={{
-                                      position: 'absolute',
-                                      left: 2,
-                                      top: -16,
-                                      padding: '1px 4px',
-                                      borderRadius: 4,
-                                      background: 'rgba(8, 19, 33, 0.9)',
-                                      color: '#67e8f9',
-                                      fontSize: 9,
-                                      lineHeight: 1.1,
-                                      whiteSpace: 'nowrap',
-                                    }}
-                                  >
-                                    {`W ${formatOverlayRatioLabel(widthRatio)} · H ${formatOverlayRatioLabel(heightRatio)}`}
-                                  </div>
-                                </>
-                              ) : null}
+                              {/* Removed debug ratio overlay label to avoid covering actual translations */}
                             </div>
                           )}
                         </React.Fragment>
