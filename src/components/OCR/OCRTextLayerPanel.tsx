@@ -3435,8 +3435,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
-          boostedMaxSide: 18000,
-          boostedMaxPixels: 12_000_000,
+          boostedMaxSide: 18500,
+          boostedMaxPixels: 13_000_000,
         },
       };
     }

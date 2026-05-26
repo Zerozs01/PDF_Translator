@@ -214,16 +214,22 @@ export const buildLayerGroupsFromOCR = (
   ocrResult: OCRPageResult,
   translatedByIndex?: Map<number, string>
 ): LayerGroupingResult => {
-  let lines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
+  const rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
   const pageWidth = Math.max(1, ocrResult.width);
   const pageHeight = Math.max(1, ocrResult.height);
 
-  if (lines.length === 0) {
+  if (rawLines.length === 0) {
     return { layers: [], groups: [] };
   }
 
+  // Attach original index before splitting
+  const linesWithIndex = rawLines.map((line, idx) => ({
+    ...line,
+    originalIndex: idx
+  }));
+
   // Pre-process: หั่นบรรทัดที่โดน EasyOCR/PaddleOCR มัดรวมข้าม panel ออกจากกัน
-  lines = splitAggressiveMergedLines(lines, 2.8);
+  const lines = splitAggressiveMergedLines(linesWithIndex, 2.8) as Array<OCRLine & { originalIndex?: number }>;
 
   // รีเซ็ตตัวนับไอดี
   layerIdCounter = 0;
@@ -302,14 +308,15 @@ export const buildLayerGroupsFromOCR = (
       const layerId = generateLayerId();
       layerIds.push(layerId);
 
-      const translatedText = translatedByIndex?.get(lineIdx);
+      const originalIndex = typeof line.originalIndex === 'number' ? line.originalIndex : lineIdx;
+      const translatedText = translatedByIndex?.get(originalIndex);
       const displayText = translatedText || normalizeInlineText(line.text);
       const sourceText = normalizeInlineText(line.text);
       const h = bboxHeight(line.bbox);
 
       allLayers.push({
         id: layerId,
-        lineIndex: lineIdx,
+        lineIndex: originalIndex,
         groupId,
         text: displayText,
         sourceText,

@@ -2374,8 +2374,8 @@ const resolveOverlayLineHeight = (text: string): number => (
 const resolveOverlayPadding = (fontSize: number, text: string): { padX: number; padY: number } => {
   const containsThai = THAI_CHAR_REGEX.test(text);
   return {
-    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.07 : 0.1))),
-    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.07 : 0.09))),
+    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.04 : 0.08))),
+    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.04 : 0.07))),
   };
 };
 
@@ -3031,6 +3031,15 @@ const shouldHarmonizeOverlayBlock = (
   }
 
   if (!effectiveDocumentProfile) {
+    const isComicProfile = profile === 'manga' || profile === 'manhwa' || profile === 'adaptive';
+    const generousComicStack = isComicProfile
+      && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
+      && verticalGap >= -avgHeight * 0.4
+      && verticalGap <= Math.max(48, avgHeight * 2.8)
+      && heightRatio <= 3.2;
+    if (generousComicStack) {
+      return true;
+    }
     if (boxedFragmentContinuity) {
       return true;
     }
@@ -3645,7 +3654,7 @@ export const computeOverlayLayoutMap = (
       : (group.length >= 2 && (isCenteredBlock || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind === 'comic-box') || (maxFontSize - minFontSize) >= 0.35));
     const alignment: 'left' | 'center' = isCenteredBlock ? 'center' : 'left';
     const sharedTextStartX = group.length >= 2
-      ? (alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles ? minStartX : resolveMedian(startXs))
+      ? (alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles ? minStartX : (effectiveDocumentProfile ? resolveMedian(startXs) : undefined))
       : undefined;
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
