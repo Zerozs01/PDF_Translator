@@ -373,7 +373,6 @@ export class SearchablePDFService {
     }
 
     if (signal?.aborted) {
-      await Promise.allSettled(inFlight);
       throw createAbortError();
     }
 
@@ -381,7 +380,6 @@ export class SearchablePDFService {
       await Promise.all(inFlight);
     } catch (error) {
       if (isAbortError(error)) {
-        await Promise.allSettled(inFlight);
         throw createAbortError();
       }
       throw error;

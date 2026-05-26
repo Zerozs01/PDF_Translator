@@ -1313,11 +1313,36 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
   });
 
   const sparseSignal = meaningfulChars.length <= 6 && validWords.length <= 1 && tokenCount <= 2;
-  const oversizedMask = maskArea >= 17000 && (maskWidth >= 170 || maskHeight >= 96);
-  const severeSourceLoss = coverage < 0.24 && maskArea >= sourceArea * 3.2;
   const lowConfidence = Number(line.confidence || 0) <= 93;
 
-  return sparseSignal && oversizedMask && severeSourceLoss && lowConfidence && !sentenceLikeSignal && !hasTerminalPunctuation;
+  // 1. Existing oversized mask condition
+  const oversizedMask = maskArea >= 17000 && (maskWidth >= 170 || maskHeight >= 96);
+  const severeSourceLoss = coverage < 0.24 && maskArea >= sourceArea * 3.2;
+  if (sparseSignal && oversizedMask && severeSourceLoss && lowConfidence && !sentenceLikeSignal && !hasTerminalPunctuation) {
+    return true;
+  }
+
+  // 2. Giant sparse/empty border or panel boxes that contain almost no characters
+  // If the box area is large but it has very few letters, it is almost certainly a panel border line or background noise.
+  const isLargeSparsePanelBox = maskArea >= 10000 && meaningfulChars.length <= 4 && !hasTerminalPunctuation;
+  if (isLargeSparsePanelBox && lowConfidence && !sentenceLikeSignal) {
+    return true;
+  }
+
+  // 3. Tall narrow vertical noise lines (speed lines, panels borders, hair streaks)
+  // An English/translated text block cannot read vertically in a super thin box of width < 22px
+  const isTallNarrowVerticalNoise = maskWidth < 22 && maskHeight > 35 && (maskHeight / maskWidth) > 2.0 && meaningfulChars.length <= 6;
+  if (isTallNarrowVerticalNoise && !hasTerminalPunctuation && !sentenceLikeSignal) {
+    return true;
+  }
+
+  // 4. Extremely thin horizontal noise lines (panel dividers, scratches)
+  const isThinHorizontalNoise = maskHeight < 10 && maskWidth > 50 && (maskWidth / maskHeight) > 6.0 && meaningfulChars.length <= 4;
+  if (isThinHorizontalNoise && !hasTerminalPunctuation && !sentenceLikeSignal) {
+    return true;
+  }
+
+  return false;
 };
 
 const MEANINGFUL_WORD_REGEX = /[\p{L}\p{N}]/u;
@@ -2645,9 +2670,15 @@ export const computeOverlayTypography = (
     ? resolveDocumentHeadingBoost(hints?.sourceText || '', sourceWidth, sourceHeight)
     : documentBodyBoost;
 
+  // ป้องกันกรณีกล่องบรรทัดเดี่ยวสูงผิดปกติ (เช่น สูงกว่ากว้างจัดๆ จากการดีเทคขอบเส้นพาเนลหรือสปีดไลน์)
+  let correctedSourceHeight = sourceHeight;
+  if (sourceLineCount === 1 && sourceHeight > sourceWidth * 0.8) {
+    correctedSourceHeight = Math.min(sourceHeight, sourceWidth * 0.35);
+  }
+
   const effectiveSourceLineHeight = sourceLineCount > 1
     ? (sourceHeight / sourceLineCount) * 1.15
-    : sourceHeight;
+    : correctedSourceHeight;
 
   const sourceDriven = effectiveSourceLineHeight
     * (preferSingleLine ? (isComicBubble ? 0.8 : isComicBox ? 0.75 : useDocumentTypographyProfile ? 0.72 : 0.7) : (isComicBubble ? 0.76 : isComicBox ? 0.7 : useDocumentTypographyProfile ? 0.7 : 0.63))
@@ -2663,6 +2694,13 @@ export const computeOverlayTypography = (
     6,
     isComicBubble ? 22 : isComicBox ? 20 : isComicLikeProfile ? 18 : (sourceLooksHeading ? 20 : 16)
   );
+  
+  const maxFontCap = sourceLooksHeading 
+    ? 34 
+    : (isComicLikeProfile && safeWidth < 150)
+      ? Math.min(20, Math.max(12, safeWidth * 0.15))
+      : 30;
+
   let fontSize = clamp(
     Math.min(
       sourceDriven,
@@ -2683,7 +2721,7 @@ export const computeOverlayTypography = (
       )
     ),
     minFontSize,
-    sourceLooksHeading ? 34 : 30
+    maxFontCap
   );
   fontSize *= preferSingleLine
     ? (

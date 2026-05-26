@@ -162,7 +162,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
   const [displayMode, setDisplayMode] = useState<'gallery' | 'list'>('gallery');
   const [sidebarView, setSidebarView] = useState<SidebarView>('pages');
 
-  console.log('[LeftSidebar] LeftSidebar render at', Date.now(), 'currentPage:', currentPage);
+
 
   const pdfSource = useMemo(() => {
     // Prefer object URL source so worker message transfer never detaches app-held buffers.

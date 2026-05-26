@@ -473,6 +473,9 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
   // State สำหรับจัดการ Hover Effect ของปุ่มหมุน
   const [isRotateHovered, setIsRotateHovered] = useState(false);
 
+  // State สำหรับจัดการ Hover Effect ของตัวกล่องข้อความ
+  const [isBoxHovered, setIsBoxHovered] = useState(false);
+
   // ตรวจวัดขนาดกล่องข้อความเพื่อหาว่ากล่องเป็นขนาด Small หรือไม่
   const isSmall = width < 120 || height < 40;
 
@@ -510,8 +513,10 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
         border: isRotating
           ? '2px solid #8B5CF6' // กำลังหมุน -> เปลี่ยนเป็นเส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? '2px dashed #3B82F6'
-            : 'none',           // ซ่อน border เมื่อไม่ได้ select - ไม่ควรเห็นกล่องรอบทุก layer
+            ? '2px dashed #3B82F6' // ได้รับการเลือก -> เส้นประสีน้ำเงิน
+            : isBoxHovered
+              ? '1.5px dashed #F97316' // ชี้เมาส์โดน -> เส้นประสีส้มสว่างเด่นชัด
+              : '1px dashed rgba(249, 115, 22, 0.45)', // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางเพื่อให้เห็นขอบเขตได้ชัดเจน
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
@@ -529,8 +534,14 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
             ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
             : undefined,
       }}
-      onMouseEnter={() => onHover(layer.id)}
-      onMouseLeave={() => onHover(null)}
+      onMouseEnter={() => {
+        setIsBoxHovered(true);
+        onHover(layer.id);
+      }}
+      onMouseLeave={() => {
+        setIsBoxHovered(false);
+        onHover(null);
+      }}
       onMouseDown={(e) => onMouseDownBody(e, layer.id)}
       onDoubleClick={() => !isEditing && onDoubleClick(layer.id)}
     >

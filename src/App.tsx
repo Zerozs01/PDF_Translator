@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -84,6 +84,22 @@ import { visionService } from './services/vision/VisionService';
 import { dbService } from './services/dbService';
 import './types/electron.d'; // Import type declarations
 
+import {
+  wrapCanvasText,
+  truncateCanvasText,
+  buildCanvasFontFamily
+} from './services/layout/canvasLayoutService';
+
+import {
+  buildBatchMarkdownPayload,
+  parseBatchJsonResponse,
+  type BatchPageTranslationPlan,
+  type BatchGroupPlan,
+  type TranslatableLine,
+  type TranslationGroupingProfile,
+  type GroupingDecision
+} from './services/translation/translationBatchService';
+
 type GlobalPrewarmState = typeof globalThis & {
   __pdfTranslatorExternalPrewarmStartedKeys?: Set<string>;
   __pdfTranslatorExternalPrewarmInFlight?: Map<string, Promise<void>>;
@@ -142,85 +158,7 @@ const scaleOverlayTypography = (typography: OverlayTypography, scale: number): O
   };
 };
 
-const truncateCanvasText = (
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  suffix: string = '...'
-): string => {
-  const normalized = String(text || '');
-  if (!normalized) return '';
-  if (ctx.measureText(normalized).width <= maxWidth) return normalized;
 
-  let current = normalized;
-  while (current.length > 0 && ctx.measureText(`${current}${suffix}`).width > maxWidth) {
-    current = current.slice(0, -1);
-  }
-
-  return current ? `${current}${suffix}` : '';
-};
-
-const wrapCanvasText = (
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  maxLines: number,
-  forceSingleLine: boolean
-): string[] => {
-  const normalized = normalizeOverlayInlineText(String(text || ''));
-  if (!normalized) return [];
-  if (maxLines <= 1 || forceSingleLine) {
-    return [truncateCanvasText(ctx, normalized, maxWidth)];
-  }
-
-  const tokens = normalized.includes(' ')
-    ? normalized.split(/\s+/g).filter(Boolean)
-    : Array.from(normalized);
-
-  const lines: string[] = [];
-  let line = '';
-
-  tokens.forEach((token, index) => {
-    const unit = normalized.includes(' ') ? token : token;
-    const separator = normalized.includes(' ') && line ? ' ' : '';
-    const candidate = `${line}${separator}${unit}`;
-    if (!line || ctx.measureText(candidate).width <= maxWidth) {
-      line = candidate;
-      return;
-    }
-
-    lines.push(line);
-    line = unit;
-
-    if (lines.length >= maxLines) {
-      return;
-    }
-
-    if (index === tokens.length - 1) {
-      lines.push(line);
-    }
-  });
-
-  if (line && lines.length < maxLines) {
-    lines.push(line);
-  }
-
-  if (lines.length > maxLines) {
-    lines.length = maxLines;
-  }
-
-  if (lines.length === 0) {
-    return [truncateCanvasText(ctx, normalized, maxWidth)];
-  }
-
-  const consumed = lines.join(normalized.includes(' ') ? ' ' : '');
-  if (consumed.length < normalized.length) {
-    const lastIndex = Math.max(0, lines.length - 1);
-    lines[lastIndex] = truncateCanvasText(ctx, lines[lastIndex], maxWidth);
-  }
-
-  return lines;
-};
 
 const readPersistedBooleanFlag = (key: string, defaultValue: boolean): boolean => {
   if (typeof window === 'undefined') return defaultValue;
@@ -253,53 +191,7 @@ const GENERIC_FONT_FAMILY_SET = new Set([
   'ui-monospace',
 ]);
 
-const parseFontFamilyCandidates = (fontFamily: string): string[] =>
-  String(fontFamily || '')
-    .split(',')
-    .map((candidate) => candidate.trim().replace(/^['"]+|['"]+$/g, ''))
-    .filter(Boolean);
 
-const buildCanvasFontFamily = async (
-  preferredFontFamily: string,
-  fallbackFontFamily: string
-): Promise<string> => {
-  if (typeof document === 'undefined' || !('fonts' in document)) {
-    return preferredFontFamily || fallbackFontFamily;
-  }
-
-  const fontFaceSet = (document as Document & { fonts?: FontFaceSet }).fonts;
-  if (!fontFaceSet) {
-    return preferredFontFamily || fallbackFontFamily;
-  }
-
-  const candidates = [
-    ...parseFontFamilyCandidates(preferredFontFamily),
-    ...parseFontFamilyCandidates(fallbackFontFamily),
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = candidate.trim();
-    if (!normalized || GENERIC_FONT_FAMILY_SET.has(normalized.toLowerCase())) {
-      continue;
-    }
-
-    const quoted = /[\s'"]/.test(normalized) ? `"${normalized.replace(/"/g, '\\"')}"` : normalized;
-    try {
-      await Promise.allSettled([
-        fontFaceSet.load(`400 16px ${quoted}`, 'กขabCD'),
-        fontFaceSet.load(`500 16px ${quoted}`, 'กขabCD'),
-        fontFaceSet.load(`600 16px ${quoted}`, 'กขabCD'),
-      ]);
-      if (fontFaceSet.check(`16px ${quoted}`, 'กขabCD')) {
-        return `${quoted}, ${fallbackFontFamily || 'sans-serif'}`;
-      }
-    } catch {
-      // Ignore font probing errors and continue to the next family.
-    }
-  }
-
-  return preferredFontFamily || fallbackFontFamily;
-};
 
 const resolveOverlayExportScale = (
   visibleWidth: number,
@@ -502,26 +394,7 @@ async function translateBatchOffline(
     return directTranslations;
   }
 }
-
-export type TranslatableLine = {
-  index: number;
-  text: string;
-  sourceLength: number;
-  top: number;
-  bottom: number;
-  left: number;
-  right: number;
-  height: number;
-  area?: number;
-  wordCoverage?: number;
-  wordBoxCount?: number;
-  confidence?: number;
-  quad?: OCRLineWithLayout['quad'];
-  angleDeg?: number;
-  sortHintX?: number;
-  sortHintY?: number;
-  sourceEngine?: string;
-};
+export type { TranslatableLine, TranslationGroupingProfile, GroupingDecision };
 
 type AdoptedSourceCandidate = {
   text: string;
@@ -537,34 +410,7 @@ type TranslationGroup = {
   confidence?: number;
 };
 
-type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line' | 'balloon-aware';
 
-type GroupingDecision = {
-  appliedProfile: 'raw' | 'dense-dialogue' | 'balloon-aware';
-  confidence: number;
-  fallbackReason?: string;
-};
-
-type BatchGroupPlan = {
-  index: number;
-  lines: TranslatableLine[];
-  sourceLanguage: string;
-  sourceText: string;
-  protectedText: string;
-  replacements: ProtectedTokenReplacement[];
-};
-
-type BatchPageTranslationPlan = {
-  pageNum: number;
-  ocr: OCRPageResult;
-  ocrEngine: OCREngine;
-  ocrLanguageKey: string;
-  sourceLanguage: string;
-  lines: TranslatableLine[];
-  groups: BatchGroupPlan[];
-  groupingProfile: TranslationGroupingProfile;
-  groupingDecision?: GroupingDecision;
-};
 
 type ResolvedTranslationGroups = {
   groups: TranslationGroup[];
@@ -607,106 +453,7 @@ const buildGeminiBasePrompt = (
   ].join(' ');
 };
 
-const buildBatchMarkdownPayload = (
-  plans: BatchPageTranslationPlan[],
-  translationMode: TranslationMode,
-  sourceLanguage: string,
-  targetLanguage: string
-): string => {
-  const lines: string[] = [];
-  lines.push('# OCR Translation Batch');
-  lines.push('');
-  lines.push('## Metadata');
-  lines.push(`- translationMode: ${translationMode}`);
-  lines.push(`- sourceLanguage: ${sourceLanguage}`);
-  lines.push(`- targetLanguage: ${targetLanguage}`);
-  lines.push(`- pageCount: ${plans.length}`);
-  lines.push('');
-  lines.push('## Required Output Format');
-  lines.push('Return ONLY valid JSON with this exact schema:');
-  lines.push('```json');
-  lines.push('{');
-  lines.push('  "pages": [');
-  lines.push('    { "page": 1, "groups": [ { "index": 0, "text": "..." } ] }');
-  lines.push('  ]');
-  lines.push('}');
-  lines.push('```');
-  lines.push('Rules:');
-  lines.push('- Every input group index must appear once in output for the same page.');
-  lines.push('- Keep index values unchanged.');
-  lines.push('- Translate text only; do not include notes, markdown, or extra fields.');
-  lines.push('');
-  lines.push('## OCR Input');
 
-  for (const plan of plans) {
-    lines.push('');
-    lines.push(`### Page ${plan.pageNum}`);
-    lines.push(`- ocrEngine: ${plan.ocrEngine}`);
-    lines.push(`- ocrLanguage: ${plan.ocrLanguageKey}`);
-    lines.push(`- sourceLanguage: ${plan.sourceLanguage}`);
-    lines.push(`- groupingProfile: ${plan.groupingProfile}`);
-    lines.push('- groups:');
-    for (const group of plan.groups) {
-      // Use \\n to explicitly tell the model where the line breaks are
-      const clean = String(group.protectedText || '').replace(/\r?\n+/g, '\\n').trim();
-      const lineIndexes = group.lines.map((line) => line.index).join(',');
-      lines.push(`  - [${group.index}] (lines: ${lineIndexes}, source: ${group.sourceLanguage}) ${clean}`);
-    }
-  }
-
-  return lines.join('\n');
-};
-
-const extractJsonObjectText = (raw: string): string => {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = (fenced?.[1] || raw || '').trim();
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) {
-    throw new Error('Gemini batch response does not contain a valid JSON object.');
-  }
-  return candidate.slice(start, end + 1);
-};
-
-const parseBatchJsonResponse = (raw: string): Map<number, Map<number, string>> => {
-  const jsonText = extractJsonObjectText(raw);
-  const parsed = JSON.parse(jsonText) as {
-    pages?: Array<{
-      page?: number;
-      pageNumber?: number;
-      groups?: Array<{ index?: number; text?: string }>;
-      lines?: Array<{ index?: number; text?: string }>;
-    }>;
-  };
-
-  if (!Array.isArray(parsed.pages)) {
-    throw new Error('Gemini batch response JSON is missing pages array.');
-  }
-
-  const byPage = new Map<number, Map<number, string>>();
-  parsed.pages.forEach((pageEntry) => {
-    const pageNum = Number(pageEntry.page ?? pageEntry.pageNumber);
-    if (!Number.isFinite(pageNum)) return;
-    const lineMap = new Map<number, string>();
-    if (Array.isArray(pageEntry.groups)) {
-      pageEntry.groups.forEach((line) => {
-        const index = Number(line.index);
-        if (!Number.isFinite(index)) return;
-        lineMap.set(index, String(line.text || '').trim());
-      });
-    } else if (Array.isArray(pageEntry.lines)) {
-      // Backward-compatible fallback if model returns previous line schema.
-      pageEntry.lines.forEach((line) => {
-        const index = Number(line.index);
-        if (!Number.isFinite(index)) return;
-        lineMap.set(index, String(line.text || '').trim());
-      });
-    }
-    byPage.set(pageNum, lineMap);
-  });
-
-  return byPage;
-};
 
 const SENTENCE_END_REGEX = /[.!?\u2026\u3002\uFF01\uFF1F]$/;
 const SOFT_CONTINUATION_END_REGEX = /[,;:\-\u2014\u2013\u3001\uFF0C]$/;
@@ -5465,29 +5212,27 @@ export default function App() {
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
   const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
 
-  const { 
-    file, 
-    fileType,
-    fileData,
-    currentPage, 
-    totalPages, 
-    ensureDocumentId,
-    setPage, 
-    closeProject, 
-    viewMode, 
-    setViewMode,
-    sourceLanguage,
-    targetLanguage,
-    setTargetLanguage,
-    translationMode,
-    setTranslationMode,
-    overlayThaiFontEnabled,
-    overlayFontPreset,
-    overlayFontSizeScale,
-    setOverlayFontSizeScale,
-    safetySettings,
-    hydrateGeminiApiKey,
-  } = useProjectStore();
+  const file = useProjectStore((s) => s.file);
+  const fileType = useProjectStore((s) => s.fileType);
+  const fileData = useProjectStore((s) => s.fileData);
+  const currentPage = useProjectStore((s) => s.currentPage);
+  const totalPages = useProjectStore((s) => s.totalPages);
+  const ensureDocumentId = useProjectStore((s) => s.ensureDocumentId);
+  const setPage = useProjectStore((s) => s.setPage);
+  const closeProject = useProjectStore((s) => s.closeProject);
+  const viewMode = useProjectStore((s) => s.viewMode);
+  const setViewMode = useProjectStore((s) => s.setViewMode);
+  const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
+  const targetLanguage = useProjectStore((s) => s.targetLanguage);
+  const setTargetLanguage = useProjectStore((s) => s.setTargetLanguage);
+  const translationMode = useProjectStore((s) => s.translationMode);
+  const setTranslationMode = useProjectStore((s) => s.setTranslationMode);
+  const overlayThaiFontEnabled = useProjectStore((s) => s.overlayThaiFontEnabled);
+  const overlayFontPreset = useProjectStore((s) => s.overlayFontPreset);
+  const overlayFontSizeScale = useProjectStore((s) => s.overlayFontSizeScale);
+  const setOverlayFontSizeScale = useProjectStore((s) => s.setOverlayFontSizeScale);
+  const safetySettings = useProjectStore((s) => s.safetySettings);
+  const hydrateGeminiApiKey = useProjectStore((s) => s.hydrateGeminiApiKey);
 
   const updateLayerFontSize = useLayerStore((state) => state.updateLayerFontSize);
 
@@ -5525,6 +5270,9 @@ export default function App() {
   const [isOfflineProcessing, setIsOfflineProcessing] = useState(false);
   const [isVisionReady, setIsVisionReady] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
+  const handleToggleLeftSidebar = useCallback(() => {
+    setIsLeftSidebarOpen((prev) => !prev);
+  }, []);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
@@ -5980,17 +5728,19 @@ export default function App() {
 
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const cachedPages = getModelScopedCachedPageNumbers();
+    const total = Math.max(1, totalPages);
 
-    // ถ้ามี OCR cache อย่างน้อย 1 หน้า ก็ proceed ได้เลย
-    // runOfflineBatchDocumentTranslation จะ skip หน้าที่ไม่มี OCR อยู่แล้ว
-    if (cachedPages.length > 0) {
+    // ตรวจสอบว่าหน้าทั้งหมดในไฟล์ PDF ได้รับการรัน OCR แล้วหรือยัง
+    const hasAllPagesCached = cachedPages.length >= total;
+
+    if (hasAllPagesCached) {
       return true;
     }
 
-    // ยังไม่มี OCR เลย → ลอง Auto-run OCR ทั้งหมด
+    // ยังมีบางหน้าที่ไม่มี OCR cache -> รัน Auto-run OCR ทั้งหมดสำหรับหน้าที่เหลือ
     setTranslationStatus({
       kind: 'info',
-      message: `No OCR cache found for ${selectedEngine}. Auto-running OCR for all pages...`,
+      message: `OCR cache is missing for some pages (found ${cachedPages.length}/${total}). Running Auto-OCR for all pages...`,
     });
 
     const ok = await requestAutoOCRFromPanel('all');
@@ -7792,7 +7542,13 @@ export default function App() {
     let skippedPages = 0;
     let failedPages = 0;
 
-    for (const pageNum of sortedPageNums) {
+    for (let i = 0; i < sortedPageNums.length; i++) {
+      const pageNum = sortedPageNums[i];
+      setTranslationStatus({
+        kind: 'info',
+        message: `Offline Batch: translating page ${pageNum} (${i + 1}/${sortedPageNums.length})...`,
+      });
+
       try {
         const translated = await runCurrentPageTranslation('offline', pageNum, { suppressStatus: true });
         if (translated) {
@@ -8325,7 +8081,7 @@ export default function App() {
           <React.Suspense fallback={<div className="w-48 bg-slate-950/55 border-r border-white/10" />}>
             <LeftSidebar 
               isOpen={isLeftSidebarOpen} 
-              onToggle={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)} 
+              onToggle={handleToggleLeftSidebar} 
             />
           </React.Suspense>
         )}

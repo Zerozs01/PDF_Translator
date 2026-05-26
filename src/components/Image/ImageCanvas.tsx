@@ -226,35 +226,39 @@ export const ImageCanvas: React.FC = () => {
       return;
     }
 
-    const maxSampleSide = 2400;
-    const sampleScale = Math.min(1, maxSampleSide / Math.max(img.naturalWidth, img.naturalHeight));
-    const sampleCanvas = document.createElement('canvas');
-    sampleCanvas.width = Math.max(1, Math.round(img.naturalWidth * sampleScale));
-    sampleCanvas.height = Math.max(1, Math.round(img.naturalHeight * sampleScale));
+    const timer = setTimeout(() => {
+      const maxSampleSide = 2400;
+      const sampleScale = Math.min(1, maxSampleSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = Math.max(1, Math.round(img.naturalWidth * sampleScale));
+      sampleCanvas.height = Math.max(1, Math.round(img.naturalHeight * sampleScale));
 
-    const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
-    if (!context) {
-      setTranslatedLinePalette(new Map());
-      return;
-    }
+      const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+      if (!context) {
+        setTranslatedLinePalette(new Map());
+        return;
+      }
 
-    context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-    const next = new Map<number, OverlayPalette>();
-    currentPageOCR.lines.forEach((line, index) => {
-      if (!translationOverlayContext.translatedByIndex.has(index)) return;
-      const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
-      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-      next.set(index, sampleOverlayPaletteFromLine(
-        context,
-        line,
-        currentPageOCR.width,
-        currentPageOCR.height,
-        sampleCanvas.width,
-        sampleCanvas.height
-      ));
-    });
-    setTranslatedLinePalette(next);
+      const next = new Map<number, OverlayPalette>();
+      currentPageOCR.lines.forEach((line, index) => {
+        if (!translationOverlayContext.translatedByIndex.has(index)) return;
+        const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
+        next.set(index, sampleOverlayPaletteFromLine(
+          context,
+          line,
+          currentPageOCR.width,
+          currentPageOCR.height,
+          sampleCanvas.width,
+          sampleCanvas.height
+        ));
+      });
+      setTranslatedLinePalette(next);
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [
     currentPageOCR,
     translationOverlayContext.entry?.key,

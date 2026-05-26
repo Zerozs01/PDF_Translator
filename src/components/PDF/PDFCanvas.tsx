@@ -422,42 +422,46 @@ export const PDFCanvas: React.FC = () => {
       return;
     }
 
-    const sourceWidth = Math.max(1, canvas.width);
-    const sourceHeight = Math.max(1, canvas.height);
-    if (!sourceWidth || !sourceHeight) {
-      setTranslatedLinePalette(new Map());
-      return;
-    }
+    const timer = setTimeout(() => {
+      const sourceWidth = Math.max(1, canvas.width);
+      const sourceHeight = Math.max(1, canvas.height);
+      if (!sourceWidth || !sourceHeight) {
+        setTranslatedLinePalette(new Map());
+        return;
+      }
 
-    const maxSampleSide = 2400;
-    const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
-    const sampleCanvas = document.createElement('canvas');
-    sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
-    sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
+      const maxSampleSide = 2400;
+      const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
+      sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
 
-    const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
-    if (!context) {
-      setTranslatedLinePalette(new Map());
-      return;
-    }
+      const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+      if (!context) {
+        setTranslatedLinePalette(new Map());
+        return;
+      }
 
-    context.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      context.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-    const next = new Map<number, OverlayPalette>();
-    currentPageOCR.lines.forEach((line, index) => {
-      if (!translationOverlayContext.translatedByIndex.has(index)) return;
-      const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
-      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-      next.set(index, sampleOverlayPaletteFromLine(
-        context,
-        line,
-        currentPageOCR.width,
-        currentPageOCR.height,
-        sampleCanvas.width,
-        sampleCanvas.height
-      ));
-    });
-    setTranslatedLinePalette(next);
+      const next = new Map<number, OverlayPalette>();
+      currentPageOCR.lines.forEach((line, index) => {
+        if (!translationOverlayContext.translatedByIndex.has(index)) return;
+        const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
+        next.set(index, sampleOverlayPaletteFromLine(
+          context,
+          line,
+          currentPageOCR.width,
+          currentPageOCR.height,
+          sampleCanvas.width,
+          sampleCanvas.height
+        ));
+      });
+      setTranslatedLinePalette(next);
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [
     currentPage,
     currentPageOCR,

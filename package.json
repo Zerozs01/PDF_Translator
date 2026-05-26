@@ -52,6 +52,7 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json",
+      "!dist/fixtures/**/*",
       "!node_modules/@napi-rs/canvas-android-arm64"
     ],
     "extraResources": [
