@@ -720,29 +720,72 @@ const normalizePossessiveCompoundsForTranslation = (text: string): string => {
   return normalizeWhitespace(normalized);
 };
 
-const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
+export const cleanJapaneseOcrSpacing = (text: string): string => {
+  let cleaned = text.replace(/([\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\uff00-\uffef])\s(?=[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\uff00-\uffef])/g, '$1');
+  cleaned = cleaned.replace(/([\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf])\s(?=[\u3000-\u303f])/g, '$1');
+  cleaned = cleaned.replace(/([\u3000-\u303f])\s(?=[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf])/g, '$1');
+  return cleaned;
+};
+
+export const cleanKoreanOcrSpacing = (text: string): string => {
+  return text.replace(/([\uac00-\ud7af])\s(?=[\uac00-\ud7af])/g, '$1');
+};
+
+export const normalizeJapaneseOcrNoiseForTranslation = (text: string): string => {
+  let normalized = String(text || '');
+  normalized = normalized
+    .replace(/。/g, '. ')
+    .replace(/、/g, ', ')
+    .replace(/！/g, '! ')
+    .replace(/？/g, '? ')
+    .replace(/〜/g, '~')
+    .replace(/「/g, '"')
+    .replace(/」/g, '"')
+    .replace(/『/g, "'")
+    .replace(/』/g, "'");
+
+  normalized = normalized.replace(/[il1I]\s*ッ/g, 'っ');
+  normalized = normalized.replace(/エ[il1I]/g, 'えっ');
+  return normalizeWhitespace(normalized);
+};
+
+export const normalizeKoreanOcrNoiseForTranslation = (text: string): string => {
+  let normalized = String(text || '');
+  normalized = normalized
+    .replace(/。/g, '. ')
+    .replace(/、/g, ', ')
+    .replace(/！/g, '! ')
+    .replace(/？/g, '? ')
+    .replace(/〜/g, '~');
+  return normalizeWhitespace(normalized);
+};
+
+export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   let normalized = normalizeTechnicalArtifactsForTranslation(text);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);
   normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
-  if (normalizeTranslationLanguage(sourceLanguage, '') === 'es') {
+
+  const normLang = normalizeTranslationLanguage(sourceLanguage, '');
+  if (normLang === 'es') {
     normalized = normalizeSpanishOcrNoiseForTranslation(normalized);
+  } else if (normLang === 'ja') {
+    normalized = cleanJapaneseOcrSpacing(normalized);
+    normalized = normalizeJapaneseOcrNoiseForTranslation(normalized);
+  } else if (normLang === 'ko') {
+    normalized = cleanKoreanOcrSpacing(normalized);
+    normalized = normalizeKoreanOcrNoiseForTranslation(normalized);
   }
+
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   normalized = normalized.replace(/([,.;:!?])(\S)/g, '$1 $2');
-  // Strip trailing/leading underscores — common OCR noise in comic text (e.g., "HONESTLY_" → "HONESTLY")
   normalized = normalized.replace(/(?<=\s|^)_+/g, '').replace(/_+(?=\s|$)/g, '');
-  // Convert trailing underscores to ellipses — comic OCR often sees "..." as "_" or "___"
   normalized = normalized.replace(/\b([A-Za-z]{2,})_+(\s|$)/g, '$1...$2');
   normalized = normalized.replace(/\b_+([A-Za-z]{2,})\b/g, '$1');
   normalized = normalizeWhitespace(normalized);
 
-  // Always lowercase Latin text for translation — Argos translates lowercase much more reliably.
-  // OCR from comics produces ALL CAPS or mixed-case noise (e.g., "FAiR", "OUt", "PRidE").
-  // No heuristic threshold is needed; just lowercase everything.
   const hasUpperLatin = /[A-Z]/.test(normalized);
   if (hasUpperLatin) {
     normalized = normalized.toLowerCase();
-    // Capitalize first letter of each sentence for readability
     normalized = normalized.replace(/(^|[.!?]\s+)([a-z])/g, (_m, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
   }
 

@@ -5212,7 +5212,7 @@ export const OCRTextLayerPanel: React.FC = () => {
           >
             {isProcessing ? (
               <>
-                <RefreshCw size={14} className="animate-spin" />
+                <RefreshCw size={14} className="animate-spin" style={{ willChange: 'transform' }} />
                 Processing...
               </>
             ) : (

@@ -813,7 +813,7 @@ export const PDFCanvas: React.FC = () => {
                   onRenderSuccess={onPageRenderSuccess}
                 />
                 {/* Regions Overlay */}
-                {regions.map(reg => (
+                {showDebugOverlay && regions.map(reg => (
                     <div 
                       key={reg.id}
                       style={{

@@ -463,6 +463,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
   onDoubleClick, onHover, layout,
 }) => {
+  const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
   const effectiveBBox = (layout && !layer.userEdited)
     ? (layout.mergedBBox || layer.bbox)
     : layer.bbox;
@@ -513,10 +514,12 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
         border: isRotating
           ? '2px solid #8B5CF6' // กำลังหมุน -> เปลี่ยนเป็นเส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? '2px dashed #3B82F6' // ได้รับการเลือก -> เส้นประสีน้ำเงิน
+            ? '2px solid #3B82F6' // ได้รับการเลือก -> เส้นทึบสีน้ำเงิน
             : isBoxHovered
-              ? '1.5px dashed #F97316' // ชี้เมาส์โดน -> เส้นประสีส้มสว่างเด่นชัด
-              : '1px dashed rgba(249, 115, 22, 0.45)', // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางเพื่อให้เห็นขอบเขตได้ชัดเจน
+              ? '1.5px solid #F97316' // ชี้เมาส์โดน -> เส้นทึบสีส้มสว่างเด่นชัด
+              : showDebugOverlay
+                ? '1.35px solid rgba(249, 115, 22, 0.45)' // ปกติ (ยังไม่เลือก) -> เส้นทึบสีส้มจางเพื่อให้เห็นขอบเขตได้ชัดเจน
+                : 'none',
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
