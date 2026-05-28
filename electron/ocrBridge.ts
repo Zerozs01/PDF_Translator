@@ -173,7 +173,11 @@ function isBenignBridgeStderr(message: string): boolean {
   return BENIGN_BRIDGE_STDERR_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
-async function runBridgeOnce(engine: ExternalBridgeEngine, args: string[]): Promise<ExternalOcrBridgeResponse> {
+async function runBridgeOnce(
+  engine: ExternalBridgeEngine,
+  args: string[],
+  timeoutMs: number = 30000
+): Promise<ExternalOcrBridgeResponse> {
   const scriptPath = resolveBridgeScriptPath();
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`OCR bridge script not found: ${scriptPath}`);
@@ -188,6 +192,28 @@ async function runBridgeOnce(engine: ExternalBridgeEngine, args: string[]): Prom
       windowsHide: true,
     });
 
+    let timeoutId: NodeJS.Timeout | null = null;
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        const pid = child.pid;
+        if (!child.killed) {
+          if (process.platform === 'win32' && pid) {
+            try {
+              spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
+                stdio: 'ignore',
+                windowsHide: true,
+              });
+            } catch {
+              child.kill('SIGKILL');
+            }
+          } else {
+            child.kill('SIGKILL');
+          }
+        }
+        reject(new Error(`OCR bridge status run timed out after ${timeoutMs / 1000} seconds`));
+      }, timeoutMs);
+    }
+
     let stdout = '';
     let stderr = '';
 
@@ -198,9 +224,11 @@ async function runBridgeOnce(engine: ExternalBridgeEngine, args: string[]): Prom
       stderr += chunk.toString();
     });
     child.on('error', (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
       reject(error);
     });
     child.on('close', (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
       const trimmed = stdout.trim();
       if (code !== 0) {
         reject(new Error(stderr.trim() || trimmed || `OCR bridge exited with code ${code}`));
@@ -350,13 +378,36 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
 
 async function requestDaemon(
   engine: ExternalBridgeEngine,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  timeoutMs: number = 30000
 ): Promise<ExternalOcrBridgeResponse> {
   const daemon = ensureDaemon(engine);
   const id = randomUUID();
 
   return await new Promise<ExternalOcrBridgeResponse>((resolve, reject) => {
-    daemon.pending.set(id, { resolve, reject });
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        daemon.pending.delete(id);
+        const timeoutError = new Error(`OCR daemon request timed out after ${timeoutMs / 1000} seconds`);
+        reject(timeoutError);
+        // Forcefully terminate the daemon process to prevent it from hanging/blocking subsequent requests.
+        teardownDaemon(engine, timeoutError);
+      }, timeoutMs);
+    }
+
+    const cleanResolve = (response: ExternalOcrBridgeResponse) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(response);
+    };
+
+    const cleanReject = (error: Error) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      reject(error);
+    };
+
+    daemon.pending.set(id, { resolve: cleanResolve, reject: cleanReject });
 
     try {
       const stdin = daemon.child.stdin;
@@ -365,6 +416,7 @@ async function requestDaemon(
       }
       stdin.write(`${JSON.stringify({ id, ...payload })}\n`);
     } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
       daemon.pending.delete(id);
       reject(error instanceof Error ? error : new Error(String(error)));
       teardownDaemon(

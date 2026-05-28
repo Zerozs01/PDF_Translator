@@ -177,12 +177,25 @@ console.log('[DB] BenchmarkDAO ready');
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for Sentence-level Translation Cache (cross-page deduplication)
+      CREATE TABLE IF NOT EXISTS sentence_translation_cache (
+        source_text TEXT NOT NULL,
+        source_language TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        translator_engine TEXT NOT NULL,
+        translation_mode TEXT NOT NULL,
+        translated_text TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (source_text, source_language, target_language, translator_engine, translation_mode)
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
       CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
       CREATE INDEX IF NOT EXISTS idx_documents_favorite ON documents(is_favorite);
       CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id);
+      CREATE INDEX IF NOT EXISTS idx_sentence_translation_lookup ON sentence_translation_cache(source_text, source_language, target_language, translator_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
@@ -856,6 +869,82 @@ export const TranslationCacheDAO = {
       .run(documentId, pageNumber, normalizedEngine);
     return result.changes > 0;
   },
+};
+
+export const SentenceTranslationDAO = {
+  save: (
+    sourceText: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string,
+    translatedText: string
+  ): boolean => {
+    if (!db) throw new Error('DB not initialized');
+    const now = Date.now();
+    try {
+      const stmt = getStmt(`
+        INSERT INTO sentence_translation_cache (
+          source_text,
+          source_language,
+          target_language,
+          translator_engine,
+          translation_mode,
+          translated_text,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_text, source_language, target_language, translator_engine, translation_mode) DO UPDATE SET
+          translated_text = excluded.translated_text,
+          created_at = excluded.created_at
+      `);
+      stmt.run(
+        sourceText,
+        sourceLanguage.toLowerCase(),
+        targetLanguage.toLowerCase(),
+        translatorEngine.toLowerCase(),
+        translationMode.toLowerCase(),
+        translatedText,
+        now
+      );
+      return true;
+    } catch (error) {
+      console.error('[DB] Failed to save sentence translation:', error);
+      return false;
+    }
+  },
+
+  get: (
+    sourceText: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string
+  ): string | null => {
+    if (!db) throw new Error('DB not initialized');
+    try {
+      const row = getStmt(`
+        SELECT translated_text 
+        FROM sentence_translation_cache 
+        WHERE source_text = ? 
+          AND source_language = ? 
+          AND target_language = ? 
+          AND translator_engine = ? 
+          AND translation_mode = ?
+      `).get(
+        sourceText,
+        sourceLanguage.toLowerCase(),
+        targetLanguage.toLowerCase(),
+        translatorEngine.toLowerCase(),
+        translationMode.toLowerCase()
+      ) as { translated_text: string } | undefined;
+
+      return row ? row.translated_text : null;
+    } catch (error) {
+      console.error('[DB] Failed to get sentence translation:', error);
+      return null;
+    }
+  }
 };
 
 // ─── Utility: manual WAL checkpoint ──────────────────────────────────────────

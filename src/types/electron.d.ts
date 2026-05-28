@@ -181,6 +181,21 @@ export interface ElectronAPI {
     ) => Promise<boolean>;
     getTranslationCachePage: (docId: number, pageNum: number) => Promise<DBOCRTranslationCacheEntry[]>;
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
+    saveSentenceTranslation?: (
+      sourceText: string,
+      sourceLanguage: string,
+      targetLanguage: string,
+      translatorEngine: string,
+      translationMode: string,
+      translatedText: string
+    ) => Promise<boolean>;
+    getSentenceTranslation?: (
+      sourceText: string,
+      sourceLanguage: string,
+      targetLanguage: string,
+      translatorEngine: string,
+      translationMode: string
+    ) => Promise<string | null>;
     
     // Benchmark CRUD
     saveBenchmark?: (params: { docId: number; pageNum: number; key: string; payload: string }) => Promise<boolean>;
@@ -261,6 +276,11 @@ export interface ElectronAPI {
     prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
     cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
     runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
+  };
+
+  models: {
+    getStatus: (payload: { engine: string; language: string }) => Promise<{ installed: boolean }>;
+    download: (payload: { engine: string; language: string }) => Promise<boolean>;
   };
 
   startupLoad?: () => Promise<{

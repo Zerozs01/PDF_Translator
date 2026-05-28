@@ -637,6 +637,12 @@ const PDFPageContainer: React.FC<{
         ));
       });
       setTranslatedLinePalette(next);
+
+      // Optimize Memory: Explicitly release memory by resizing to 0x0
+      try {
+        sampleCanvas.width = 0;
+        sampleCanvas.height = 0;
+      } catch (e) { /* ignore */ }
     }, 150);
 
     return () => clearTimeout(timer);
@@ -655,6 +661,7 @@ const PDFPageContainer: React.FC<{
     if (!currentPageOCR || !pageRef.current || !isVisible) return;
 
     let observedCanvas: HTMLCanvasElement | null = null;
+    let rafId: number | null = null;
 
     const updateTransform = () => {
       const container = pageRef.current;
@@ -686,15 +693,26 @@ const PDFPageContainer: React.FC<{
       });
     };
 
-    const raf = requestAnimationFrame(updateTransform);
-    const resizeObserver = new ResizeObserver(updateTransform);
+    const scheduleUpdate = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        updateTransform();
+      });
+    };
+
+    scheduleUpdate(); // Initial call
+
+    const resizeObserver = new ResizeObserver(scheduleUpdate);
     resizeObserver.observe(pageRef.current);
-    window.addEventListener('resize', updateTransform);
+    window.addEventListener('resize', scheduleUpdate);
 
     return () => {
-      cancelAnimationFrame(raf);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
       resizeObserver.disconnect();
-      window.removeEventListener('resize', updateTransform);
+      window.removeEventListener('resize', scheduleUpdate);
     };
   }, [currentPageOCR, pageNum, pageRenderTick, isVisible]);
 
@@ -1141,9 +1159,27 @@ export const PDFCanvas: React.FC = () => {
     viewMode,
   } = useProjectStore();
 
-  const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
+  const { zoom, pan, setZoom, setPan, setView, activeTool } = useUIStore();
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
+
+  // Model Downloader States
+  const [pendingOcrLang, setPendingOcrLang] = useState<string | null>(null);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  useEffect(() => {
+    if (!window.electronAPI?.on) return;
+    
+    const unsubscribe = window.electronAPI.on('main-process-message', (payload: any) => {
+      if (payload && payload.type === 'model-download-progress' && payload.language === pendingOcrLang?.toLowerCase()) {
+        setDownloadProgress(payload.progress);
+      }
+    });
+    
+    return unsubscribe;
+  }, [pendingOcrLang]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -1152,9 +1188,7 @@ export const PDFCanvas: React.FC = () => {
   const panRef = useRef(pan);
   
   const wheelTransformRafRef = useRef<number | null>(null);
-  const wheelCommitRafRef = useRef<number | null>(null);
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [isWheelPanning, setIsWheelPanning] = useState(false);
 
   const stateRef = useRef({ zoom, pan });
   useEffect(() => {
@@ -1248,6 +1282,25 @@ export const PDFCanvas: React.FC = () => {
     }
   }, [processRequest]);
 
+  const startModelDownload = async () => {
+    if (!pendingOcrLang || !window.electronAPI?.models) return;
+    setIsDownloading(true);
+    setDownloadProgress(0);
+    try {
+      await window.electronAPI.models.download({ engine: 'tesseract', language: pendingOcrLang });
+      setIsDownloadModalOpen(false);
+      setIsDownloading(false);
+      // Run OCR process automatically
+      setTimeout(() => {
+        void captureAndProcess();
+      }, 300);
+    } catch (err) {
+      console.error("[PDFCanvas] Model download failed:", err);
+      alert(`การดาวน์โหลดโมเดลล้มเหลว: ${err instanceof Error ? err.message : String(err)}`);
+      setIsDownloading(false);
+    }
+  };
+
   const captureAndProcess = async () => {
     console.log("[PDFCanvas] Processing Triggered...");
     const canvas = document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
@@ -1255,6 +1308,22 @@ export const PDFCanvas: React.FC = () => {
     if (!canvas) {
       console.warn("[PDFCanvas] Canvas not found for vision processing");
       return;
+    }
+
+    // Check if Tesseract model is installed before starting OCR
+    if (window.electronAPI?.models) {
+      try {
+        const status = await window.electronAPI.models.getStatus({ engine: 'tesseract', language: sourceLanguage });
+        if (!status.installed) {
+          setPendingOcrLang(sourceLanguage);
+          setIsDownloadModalOpen(true);
+          setDownloadProgress(0);
+          setIsProcessing(false);
+          return;
+        }
+      } catch (err) {
+        console.error("[PDFCanvas] Model check failed:", err);
+      }
     }
 
     console.log("[PDFCanvas] Canvas found, sending to Vision Service...");
@@ -1273,6 +1342,11 @@ export const PDFCanvas: React.FC = () => {
         ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
         ctx.drawImage(canvas, 0, 0);
         imageUrl = tempCanvas.toDataURL('image/jpeg', 0.95);
+        // Optimize Memory: Explicitly release memory by resizing to 0x0
+        try {
+          tempCanvas.width = 0;
+          tempCanvas.height = 0;
+        } catch (e) { /* ignore */ }
       } else {
         imageUrl = canvas.toDataURL('image/jpeg', 0.95);
       }
@@ -1313,16 +1387,21 @@ export const PDFCanvas: React.FC = () => {
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      setIsWheelPanning(true);
+
+      // Immediately kill CSS transition via direct DOM — zero React re-render cost
+      if (contentRef.current) {
+        contentRef.current.style.transition = 'none';
+      }
 
       if (wheelIdleTimerRef.current) {
         clearTimeout(wheelIdleTimerRef.current);
       }
 
       if (e.ctrlKey) {
-        const { zoom } = stateRef.current;
         const scaleAmount = -e.deltaY * 0.001;
-        const newZoom = Math.min(Math.max(0.1, zoom + scaleAmount), 5);
+        const newZoom = Math.min(Math.max(0.1, stateRef.current.zoom + scaleAmount), 5);
+        // Keep stateRef in sync so rapid zoom events accumulate correctly
+        stateRef.current = { ...stateRef.current, zoom: newZoom };
 
         if (wheelTransformRafRef.current !== null) {
           cancelAnimationFrame(wheelTransformRafRef.current);
@@ -1331,18 +1410,14 @@ export const PDFCanvas: React.FC = () => {
           syncContentTransform(stateRef.current.pan, newZoom);
           wheelTransformRafRef.current = null;
         });
-
-        if (wheelCommitRafRef.current !== null) {
-          cancelAnimationFrame(wheelCommitRafRef.current);
-        }
-        wheelCommitRafRef.current = requestAnimationFrame(() => {
-          setZoom(newZoom);
-          wheelCommitRafRef.current = null;
-        });
       } else {
-        const { pan } = stateRef.current;
-        const nextPan = { x: pan.x - e.deltaX, y: pan.y - e.deltaY };
+        const nextPan = {
+          x: stateRef.current.pan.x - e.deltaX,
+          y: stateRef.current.pan.y - e.deltaY,
+        };
         panRef.current = nextPan;
+        // Keep stateRef in sync so rapid scroll events accumulate correctly
+        stateRef.current = { ...stateRef.current, pan: nextPan };
 
         if (wheelTransformRafRef.current !== null) {
           cancelAnimationFrame(wheelTransformRafRef.current);
@@ -1351,25 +1426,20 @@ export const PDFCanvas: React.FC = () => {
           syncContentTransform(nextPan, stateRef.current.zoom);
           wheelTransformRafRef.current = null;
         });
-
-        if (wheelCommitRafRef.current !== null) {
-          cancelAnimationFrame(wheelCommitRafRef.current);
-        }
-        wheelCommitRafRef.current = requestAnimationFrame(() => {
-          setPan(nextPan.x, nextPan.y);
-          wheelCommitRafRef.current = null;
-        });
       }
 
+      // Commit to Zustand exactly once when scrolling stops (~120 ms after last tick).
+      // Using setView (atomic pan+zoom) → single React re-render instead of two.
+      // React then restores the CSS transition via the rendered style prop.
       wheelIdleTimerRef.current = setTimeout(() => {
-        setIsWheelPanning(false);
         wheelIdleTimerRef.current = null;
+        setView(panRef.current, stateRef.current.zoom);
       }, 120);
     };
 
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
-  }, [setZoom, setPan, syncContentTransform]);
+  }, [setView, syncContentTransform]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) { 
@@ -1406,10 +1476,6 @@ export const PDFCanvas: React.FC = () => {
         cancelAnimationFrame(wheelTransformRafRef.current);
         wheelTransformRafRef.current = null;
       }
-      if (wheelCommitRafRef.current !== null) {
-        cancelAnimationFrame(wheelCommitRafRef.current);
-        wheelCommitRafRef.current = null;
-      }
       if (wheelIdleTimerRef.current) {
         clearTimeout(wheelIdleTimerRef.current);
         wheelIdleTimerRef.current = null;
@@ -1439,7 +1505,10 @@ export const PDFCanvas: React.FC = () => {
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
           transformOrigin: '0 0',
-          transition: isDragging || isWheelPanning ? 'none' : 'transform 0.1s ease-out',
+          // During wheel scroll, transition is disabled directly on the DOM element
+          // (contentRef.current.style.transition = 'none') without React re-renders.
+          // React restores this value after the idle commit via setView.
+          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
           willChange: 'transform'
         }}
         className="absolute top-0 left-0 origin-top-left"
@@ -1469,6 +1538,53 @@ export const PDFCanvas: React.FC = () => {
           </Document>
         </div>
       </div>
+      {isDownloadModalOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-[4px] transition-all duration-300">
+          <div className="w-[420px] bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 flex flex-col gap-6 text-white transform scale-100 transition-transform duration-300">
+            <div className="flex flex-col gap-2">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <svg className="w-5 h-5 text-blue-500 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                ต้องการดาวน์โหลดโมเดลภาษา?
+              </h3>
+              <p className="text-sm text-slate-400 leading-relaxed">
+                ภาษา <span className="text-blue-400 font-bold uppercase">{pendingOcrLang}</span> สำหรับการประมวลผล Tesseract OCR ยังไม่ได้ติดตั้งในเครื่อง คุณต้องการดาวน์โหลดเพื่อเปิดใช้งานการแปลแบบ Offline ตอนนี้หรือไม่? (ขนาดประมาณ 3.5 MB)
+              </p>
+            </div>
+            
+            {isDownloading ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>กำลังดาวน์โหลดและติดตั้งโมเดล...</span>
+                  <span className="font-bold text-blue-400">{downloadProgress}%</span>
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
+                  <div 
+                    className="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-300 ease-out" 
+                    style={{ width: `${downloadProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setIsDownloadModalOpen(false)}
+                  className="px-4 py-2 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 active:bg-slate-650 rounded-xl transition-all"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  onClick={startModelDownload}
+                  className="px-5 py-2 text-sm font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all"
+                >
+                  ดาวน์โหลด
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

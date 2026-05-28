@@ -351,6 +351,57 @@ export const dbService = {
     }
   },
 
+  async saveSentenceTranslation(
+    sourceText: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string,
+    translatedText: string
+  ): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] saveSentenceTranslation skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.saveSentenceTranslation?.(
+        sourceText,
+        sourceLanguage,
+        targetLanguage,
+        translatorEngine,
+        translationMode,
+        translatedText
+      ) ?? false;
+    } catch (error) {
+      console.error('Failed to save sentence translation:', error);
+      return false;
+    }
+  },
+
+  async getSentenceTranslation(
+    sourceText: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string
+  ): Promise<string | null> {
+    try {
+      if (!isDbAvailable()) {
+        return null;
+      }
+      return await window.electronAPI.db.getSentenceTranslation?.(
+        sourceText,
+        sourceLanguage,
+        targetLanguage,
+        translatorEngine,
+        translationMode
+      ) ?? null;
+    } catch (error) {
+      console.error('Failed to get sentence translation:', error);
+      return null;
+    }
+  },
+
   async touchDocument(docId: number): Promise<boolean> {
     try {
       if (!isDbAvailable()) {

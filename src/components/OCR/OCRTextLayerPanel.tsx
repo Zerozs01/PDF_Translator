@@ -26,7 +26,9 @@ import {
   X,
   Trophy,
   BarChart3,
-  Sparkles
+  Sparkles,
+  Zap,
+  Gauge
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile, BenchmarkMode } from '../../types';
@@ -1992,6 +1994,13 @@ export const OCRTextLayerPanel: React.FC = () => {
   const pendingEngineSelectionRef = useRef<OCREngine | null>(null);
   const warmAnimationTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const externalProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Tracks when the current OCR job started — used to compute estimated time remaining */
+  const ocrStartTimeRef = useRef<number | null>(null);
+  const pageStartAtRef = useRef<number | null>(null);
+  const lastProgressPageRef = useRef<number>(0);
+  const pageDurationsRef = useRef<number[]>([]);
+  const etaLabelRef = useRef<string | null>(null);
+  const etaUpdatedAtRef = useRef<number>(0);
   const benchmarkAbortRef = useRef<AbortController | null>(null);
   const translationContextKeyRef = useRef<string>('');
   const translationCacheSessionKey = `${file?.name || fileUrl || 'unknown-file'}:${currentPage}`;
@@ -2002,6 +2011,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [showMetricsInfo, setShowMetricsInfo] = useState(false);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
+  const [ocrQualityMode, setOcrQualityMode] = useState<'high' | 'fast'>('high');
   const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
     readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
   );
@@ -2036,6 +2046,47 @@ export const OCRTextLayerPanel: React.FC = () => {
     (error: unknown): boolean => error instanceof Error && error.name === 'AbortError',
     []
   );
+
+  // Reset ETA start-time whenever a job starts or stops
+  useEffect(() => {
+    if (isProcessing) {
+      ocrStartTimeRef.current = Date.now();
+      pageStartAtRef.current = null;
+      lastProgressPageRef.current = 0;
+      pageDurationsRef.current = [];
+    } else {
+      ocrStartTimeRef.current = null;
+      pageStartAtRef.current = null;
+      lastProgressPageRef.current = 0;
+      pageDurationsRef.current = [];
+      etaLabelRef.current = null;
+      etaUpdatedAtRef.current = 0;
+    }
+  }, [isProcessing]);
+
+  useEffect(() => {
+    if (!isProcessing) return;
+    const currentPage = progress?.currentPage ?? 0;
+    const totalPages = progress?.totalPages ?? 0;
+    if (currentPage <= 0 || totalPages <= 1) return;
+
+    const now = Date.now();
+    if (currentPage !== lastProgressPageRef.current) {
+      if (lastProgressPageRef.current > 0 && pageStartAtRef.current !== null) {
+        const durationMs = now - pageStartAtRef.current;
+        if (durationMs > 250) {
+          pageDurationsRef.current.push(durationMs);
+        }
+      }
+      lastProgressPageRef.current = currentPage;
+      pageStartAtRef.current = now;
+    }
+
+    if (progress?.stage === 'complete') {
+      pageStartAtRef.current = null;
+      lastProgressPageRef.current = 0;
+    }
+  }, [isProcessing, progress?.currentPage, progress?.stage, progress?.totalPages]);
 
   const shouldRecoverExternalEngine = useCallback((error: unknown): boolean => {
     if (!(error instanceof Error)) return false;
@@ -3582,17 +3633,32 @@ export const OCRTextLayerPanel: React.FC = () => {
         };
       }
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
-      return {
-        maxSide: 16000,
-        maxPixels: 9_000_000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 18500,
-          boostedMaxPixels: 13_000_000,
-        },
-      };
+      if (ocrQualityMode === 'high') {
+        return {
+          maxSide: 20000,
+          maxPixels: 23_000_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 20000,
+            boostedMaxPixels: 22_000_000,
+          },
+        };
+      } else {
+        // Fast Mode
+        return {
+          maxSide: 18000,
+          maxPixels:18_500_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 18500,
+            boostedMaxPixels: 22_000_000,
+          },
+        };
+      }
     }
     // EasyOCR: moderate minWidth (650px) for readable text
     if (engine === 'easyocr') {
@@ -3617,7 +3683,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       return { maxSide: 16000, maxPixels: 2_800_000, minWidth: 800 };
     }
     return { maxSide: null, maxPixels: null, minWidth: null };
-  }, [EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS, EXTERNAL_OCR_CJK_PANEL_MAX_SIDE, EXTERNAL_OCR_RENDER_MAX_SIDE, activePipelineProfile, hasCjkOrThaiOcrLanguage, hasKoreanOcrLanguage, options.language]);
+  }, [EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS, EXTERNAL_OCR_CJK_PANEL_MAX_SIDE, EXTERNAL_OCR_RENDER_MAX_SIDE, activePipelineProfile, hasCjkOrThaiOcrLanguage, hasKoreanOcrLanguage, options.language, ocrQualityMode]);
 
   const fitDimensionsToConstraints = useCallback((
     width: number,
@@ -5179,6 +5245,23 @@ export const OCRTextLayerPanel: React.FC = () => {
             <div className="flex gap-1">
               <button
                 type="button"
+                onClick={() => setOcrQualityMode((prev) => (prev === 'high' ? 'fast' : 'high'))}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold transition-all shadow-sm ${
+                  ocrQualityMode === 'high'
+                    ? 'border-amber-400/40 bg-amber-950/70 text-amber-300 hover:bg-amber-900/60 hover:border-amber-300/60'
+                    : 'border-cyan-400/40 bg-cyan-950/70 text-cyan-300 hover:bg-cyan-900/60 hover:border-cyan-300/60'
+                }`}
+                title={`OCR quality profile: ${ocrQualityMode === 'high' ? 'High Detail' : 'Fast Speed'}. Click to toggle.`}
+              >
+                {ocrQualityMode === 'high' ? (
+                  <Zap size={10} className="text-amber-400" />
+                ) : (
+                  <Gauge size={10} className="text-cyan-400" />
+                )}
+                <span>{ocrQualityMode === 'high' ? 'High' : 'Fast'}</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => void handleRawBenchmark('baseline')}
                 disabled={isProcessing || !file}
                 className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-slate-800/70 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-50"
@@ -5309,37 +5392,72 @@ export const OCRTextLayerPanel: React.FC = () => {
         )}
       </div>
 
-      {/* Progress Bar */}
-      {isProcessing && (
-        <div className="order-2 space-y-2 bg-slate-900/55 rounded-lg p-3 border border-white/10">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-300 truncate max-w-[180px]">
-              {progress?.message || 'กำลังเริ่มต้น...'}
-            </span>
-            <span className="text-[#5CC6F2] font-mono">
-              {progress ? Math.round(progress.progress) : 0}%
-            </span>
+      {/* Progress — compact single-line design */}
+      {isProcessing && (() => {
+        const pct = Math.round(progress?.progress ?? 0);
+        const pg = progress?.currentPage;
+        const tot = progress?.totalPages;
+        // Compute rough ETA from elapsed time and current progress
+        let etaLabel: string | null = null;
+        const totalPages = progress?.totalPages ?? 0;
+        const completedPages = pageDurationsRef.current.length;
+        const remainingPages = Math.max(0, totalPages - completedPages);
+        const canEstimateByPage = totalPages > 1 && completedPages > 0 && remainingPages > 0;
+        const canEstimateByPercent = ocrStartTimeRef.current !== null && pct > 5;
+
+        if (canEstimateByPage || canEstimateByPercent) {
+          const now = Date.now();
+          if (etaLabelRef.current === null || (now - etaUpdatedAtRef.current) >= 2000) {
+            if (canEstimateByPage) {
+              const sample = pageDurationsRef.current.slice(-5);
+              const avgMs = sample.reduce((sum, value) => sum + value, 0) / Math.max(1, sample.length);
+              const remainingMs = avgMs * remainingPages;
+              const remSec = Math.round(remainingMs / 1000);
+              etaLabelRef.current = remSec >= 0
+                ? (remSec < 60 ? `~${remSec}s` : `~${Math.round(remSec / 60)}m`)
+                : null;
+            } else if (ocrStartTimeRef.current !== null) {
+              const elapsed = now - ocrStartTimeRef.current;
+              const remaining = (elapsed / pct) * (100 - pct);
+              const remSec = Math.round(remaining / 1000);
+              etaLabelRef.current = remSec >= 0
+                ? (remSec < 60 ? `~${remSec}s` : `~${Math.round(remSec / 60)}m`)
+                : null;
+            }
+            etaUpdatedAtRef.current = now;
+          }
+          etaLabel = etaLabelRef.current;
+        } else {
+          etaLabelRef.current = null;
+          etaUpdatedAtRef.current = 0;
+        }
+        return (
+          <div className="order-2 rounded-lg border border-white/10 bg-slate-900/55 px-3 py-2.5">
+            {/* Label */}
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-slate-200 truncate">
+                {`OCR Processing${pg ? ` page:${pg}${tot ? `/${tot}` : ''}` : ''}`}
+              </p>
+              <span className="text-xs font-semibold text-[#5CC6F2] tabular-nums">
+                {pct}%
+              </span>
+            </div>
+            {/* Bar */}
+            <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-150"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            {/* ETA bottom-left */}
+            {etaLabel && (
+              <p className="mt-1.5 text-[10px] text-slate-500">
+                ⏱ {etaLabel} remaining
+              </p>
+            )}
           </div>
-          <div className="h-2 bg-slate-950 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-150"
-              style={{ width: `${progress?.progress || 0}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-[10px] text-slate-500">
-            <span>
-              {progress?.stage === 'rendering' && '📄 Rendering...'}
-              {progress?.stage === 'ocr' && '🔍 OCR Processing...'}
-              {progress?.stage === 'text-layer' && '✍️ Adding Text...'}
-              {progress?.stage === 'saving' && '💾 Saving...'}
-              {!progress && '⏳ Initializing...'}
-            </span>
-            <span>
-              {progress?.currentPage || 0} / {progress?.totalPages || '?'}
-            </span>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Action Buttons */}
       <div className="order-2 space-y-1.5">
@@ -5400,7 +5518,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
             <button
               onClick={() => void handleClearCurrentModelCache()}
-              disabled={!file}
+              disabled={!file || isProcessing}
               style={{
                 backgroundColor: '#FFFFFF',
                 borderColor: '#CA7C4C',
