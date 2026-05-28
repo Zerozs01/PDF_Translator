@@ -4,10 +4,10 @@ This is the active OCR optimization playbook. Historical version-by-version logs
 
 ## 1. Baseline
 
-- OCR algorithm version: `200`
-- Translation cache version: `v18`
+- OCR algorithm version: `210`
+- Translation cache version: `v45`
 - Engines: `tesseract`, `paddleocr`, `easyocr`
-- Pipeline profiles: `panel`, `export`
+- Pipeline profiles: `panel`, `export`, `raw`
 - Quality profiles: `fast`, `balanced`, `best`
 
 ## 2. Current Stability Strategy

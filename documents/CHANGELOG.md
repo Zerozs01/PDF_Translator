@@ -2,6 +2,13 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-05-28
+
+- Synced version constants in docs to match code:
+  - OCR algorithm version `210`
+  - Translation cache version `v45`
+- Updated OCR profile list to include `raw` pipeline profile
+
 ## 2026-05-21
 
 - **Phase 3: Interactive Manipulation (Edit Layer)**
