@@ -4,7 +4,8 @@ import {
   Upload, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
-  AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus
+  AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import {
@@ -420,7 +421,7 @@ const TagContextMenu: React.FC<{
 );
 };
 
-const DocumentCard: React.FC<{
+const DocumentCard = React.memo<{
   doc: DBDocument;
   viewMode: FileBrowserViewMode;
   isSelected: boolean;
@@ -439,7 +440,7 @@ const DocumentCard: React.FC<{
   onCreateTag: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
-}> = ({
+}>(({
   doc,
   viewMode,
   isSelected,
@@ -490,18 +491,15 @@ const DocumentCard: React.FC<{
           onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
         }}
       >
-        {/* Thumbnail */}
         <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5">
           {thumbnail}
         </div>
         
-        {/* Info */}
         <h3 className="font-medium text-sm text-slate-100 truncate mb-1">{doc.filename}</h3>
         <p className="text-[10px] text-slate-400">
           {formatDate(doc.last_accessed)} • {doc.total_pages} pages
         </p>
         
-        {/* Favorite Button */}
         <button 
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
           className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all ${
@@ -513,7 +511,6 @@ const DocumentCard: React.FC<{
           <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
         </button>
         
-        {/* Context Menu */}
         {isMenuOpen && (
           <DocumentContextMenu
             doc={doc}
@@ -533,7 +530,6 @@ const DocumentCard: React.FC<{
     );
   }
 
-  // Detail view
   return (
     <div 
       data-document-card="true"
@@ -605,10 +601,10 @@ const DocumentCard: React.FC<{
       )}
     </div>
   );
-};
+});
 
 // Project Item Component
-const ProjectItem: React.FC<{
+const ProjectItem = React.memo<{
   project: DBProject;
   isSelected: boolean;
   onSelect: () => void;
@@ -617,7 +613,7 @@ const ProjectItem: React.FC<{
   onDragOver: (event: React.DragEvent<HTMLButtonElement>) => void;
   onDragLeave: () => void;
   onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
-}> = ({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop }) => {
+}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop }) => {
   const accent = displayColor || resolveStableAccent(project.id);
   return (
   <button 
@@ -645,16 +641,16 @@ const ProjectItem: React.FC<{
     <ChevronRight size={14} className="text-slate-500" />
   </button>
   );
-};
+});
 
 // Tag Pill Component
-const TagPill: React.FC<{
+const TagPill = React.memo<{
   tag: DBTag;
   isSelected: boolean;
   onClick: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLButtonElement>) => void;
   displayColor?: string;
-}> = ({ tag, isSelected, onClick, onContextMenu, displayColor }) => (
+}>(({ tag, isSelected, onClick, onContextMenu, displayColor }) => (
   <button
     onClick={onClick}
     onContextMenu={onContextMenu}
@@ -670,7 +666,7 @@ const TagPill: React.FC<{
     }`} style={isSelected ? { backgroundColor: displayColor || tag.color || '#8B5CF6' } : undefined} />
     {tag.name}
   </button>
-);
+));
 
 export const UploadScreen: React.FC = () => {
   const {
@@ -701,9 +697,9 @@ export const UploadScreen: React.FC = () => {
     selectedProjectId, setSelectedProjectId,
     searchQuery, setSearchQuery,
     documents, tags, projects,
-    isLoading,
-    loadRecentDocuments, loadFavoriteDocuments, loadDocumentsByTag, loadDocumentsByProject,
-    searchDocuments, loadTags, loadProjects,
+          isLoading,
+          loadStartupData, loadRecentDocuments, loadFavoriteDocuments, loadDocumentsByTag, loadDocumentsByProject,
+          searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
     createTag, createProject, deleteTag, loadDocumentTags, persistDocumentPatch,
@@ -727,6 +723,25 @@ export const UploadScreen: React.FC = () => {
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
   const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    try {
+      const saved = window.localStorage.getItem('pdf_translator.sidebar_open');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+  const toggleSidebar = useCallback(() => {
+    setIsSidebarOpen((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('pdf_translator.sidebar_open', String(next));
+      } catch (err) {
+        console.error('Failed to save sidebar state:', err);
+      }
+      return next;
+    });
+  }, []);
   const thumbnailJobsRef = useRef<Set<number>>(new Set());
   const isThaiTargetLanguage = targetLanguage === 'th';
   const geminiStatusLabel = !isGeminiApiKeyLoaded
@@ -800,11 +815,9 @@ export const UploadScreen: React.FC = () => {
     setFileOpenError(entry);
   }, []);
 
-  // Load initial data
-  useEffect(() => {
-    loadRecentDocuments();
-    loadTags();
-    loadProjects();
+  // Load initial data — batched in 1 IPC round-trip
+    useEffect(() => {
+      loadStartupData();
   }, []);
 
   useEffect(() => {
@@ -1171,7 +1184,7 @@ export const UploadScreen: React.FC = () => {
             <HomeIcon size={20} />
           </button>
           <button
-            onClick={() => { setActivePage('projects'); }}
+            onClick={() => { setActivePage('projects'); setIsSidebarOpen(true); }}
             className={`p-3 rounded-xl mb-2 transition-all ${
               activePage === 'projects'
                 ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
@@ -1185,7 +1198,7 @@ export const UploadScreen: React.FC = () => {
           <div className="flex-1" />
 
           <button
-            onClick={() => { setActivePage('settings'); }}
+            onClick={() => { setActivePage('settings'); setIsSidebarOpen(true); }}
             className={`p-3 rounded-xl transition-all ${
               activePage === 'settings'
                 ? 'bg-[#262a30] text-slate-50 ring-1 ring-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
@@ -1198,7 +1211,9 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Secondary Sidebar */}
-        <div className="w-56 border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl p-4 flex flex-col">
+        <div className={`transition-all duration-300 ease-in-out border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl flex flex-col overflow-hidden shrink-0 ${
+          isSidebarOpen ? 'w-56 p-4 opacity-100' : 'w-0 p-0 border-r-0 opacity-0 pointer-events-none'
+        }`}>
         {activePage === 'home' ? (
           <>
             {/* Quick Filters */}
@@ -1488,6 +1503,15 @@ export const UploadScreen: React.FC = () => {
             <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.03)_0%,rgba(0,0,0,0.05)_48%,rgba(0,0,0,0.09)_100%)]" />
             <div className="absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0))]" />
             <div className="relative z-10 flex items-center gap-4">
+              {/* Sidebar Toggle */}
+              <button
+                onClick={toggleSidebar}
+                className="p-2 rounded-lg bg-[#202329]/90 border border-white/8 text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0"
+                title={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+              >
+                {isSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+              </button>
+
               {/* Search */}
               <form onSubmit={handleSearch} className="flex-1 max-w-md">
                 <div className="relative">

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { useLayerStore } from '../../stores/useLayerStore';
 import {
   clampOverlayRect,
   computeOverlayTypography,
@@ -155,6 +156,9 @@ export const ImageCanvas: React.FC = () => {
     activeTranslationKeyByPage,
     ocrResultSearchQuery,
   } = useOCRTextLayerStore();
+  
+  const layersByPage = useLayerStore((state) => state.layersByPage);
+  const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
   const selectedEngine = (options.engine || 'tesseract');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
@@ -168,6 +172,7 @@ export const ImageCanvas: React.FC = () => {
 
   const currentPageOCR = resolveEngineScopedPageOCR(currentPage)
     || resolveEngineScopedPageOCR(1);
+  const pageOCRsByEngine = ocrByPageEngine.get(currentPage) || ocrByPageEngine.get(1);
   const currentPageTranslationMap = translationCacheByPage.get(currentPage) || translationCacheByPage.get(1);
   const activeTranslationKey = activeTranslationKeyByPage.get(currentPage) || activeTranslationKeyByPage.get(1);
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
@@ -185,6 +190,7 @@ export const ImageCanvas: React.FC = () => {
     translationPreviewMode,
     currentPageTranslationMap,
     activeTranslationKey,
+    pageOCRsByEngine,
   }), [
     activeTranslationKey,
     currentPageOCR,
@@ -195,6 +201,7 @@ export const ImageCanvas: React.FC = () => {
     targetLanguage,
     translationMode,
     translationPreviewMode,
+    pageOCRsByEngine,
   ]);
   const debugPageOCR = showDebugOverlay ? currentPageOCR : undefined;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -219,35 +226,39 @@ export const ImageCanvas: React.FC = () => {
       return;
     }
 
-    const maxSampleSide = 2400;
-    const sampleScale = Math.min(1, maxSampleSide / Math.max(img.naturalWidth, img.naturalHeight));
-    const sampleCanvas = document.createElement('canvas');
-    sampleCanvas.width = Math.max(1, Math.round(img.naturalWidth * sampleScale));
-    sampleCanvas.height = Math.max(1, Math.round(img.naturalHeight * sampleScale));
+    const timer = setTimeout(() => {
+      const maxSampleSide = 2400;
+      const sampleScale = Math.min(1, maxSampleSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = Math.max(1, Math.round(img.naturalWidth * sampleScale));
+      sampleCanvas.height = Math.max(1, Math.round(img.naturalHeight * sampleScale));
 
-    const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
-    if (!context) {
-      setTranslatedLinePalette(new Map());
-      return;
-    }
+      const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+      if (!context) {
+        setTranslatedLinePalette(new Map());
+        return;
+      }
 
-    context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-    const next = new Map<number, OverlayPalette>();
-    currentPageOCR.lines.forEach((line, index) => {
-      if (!translationOverlayContext.translatedByIndex.has(index)) return;
-      const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
-      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-      next.set(index, sampleOverlayPaletteFromLine(
-        context,
-        line,
-        currentPageOCR.width,
-        currentPageOCR.height,
-        sampleCanvas.width,
-        sampleCanvas.height
-      ));
-    });
-    setTranslatedLinePalette(next);
+      const next = new Map<number, OverlayPalette>();
+      currentPageOCR.lines.forEach((line, index) => {
+        if (!translationOverlayContext.translatedByIndex.has(index)) return;
+        const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
+        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
+        next.set(index, sampleOverlayPaletteFromLine(
+          context,
+          line,
+          currentPageOCR.width,
+          currentPageOCR.height,
+          sampleCanvas.width,
+          sampleCanvas.height
+        ));
+      });
+      setTranslatedLinePalette(next);
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [
     currentPageOCR,
     translationOverlayContext.entry?.key,
@@ -289,7 +300,7 @@ export const ImageCanvas: React.FC = () => {
   }, [setZoom, setPan]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (activeTool === 'hand' || e.button === 1) {
+    if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) {
       setIsDragging(true);
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
@@ -382,6 +393,9 @@ export const ImageCanvas: React.FC = () => {
         if (!translatedText) return [];
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return [];
 
+        const layer = currentPageLayers.find(l => l.lineIndex === index);
+        const balloonId = layer?.groupId;
+
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
         const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
@@ -422,6 +436,7 @@ export const ImageCanvas: React.FC = () => {
           height: typographyHeight,
           bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
           line,
+          balloonId,
           hints: {
             sourceText: line.text,
             sourceBoxWidth: baseWidth,
@@ -444,6 +459,7 @@ export const ImageCanvas: React.FC = () => {
     overlayFontFamily,
     translationOverlayContext.shouldRender,
     translationOverlayContext.translatedByIndex,
+    currentPageLayers,
   ]);
 
   return (
@@ -486,6 +502,7 @@ export const ImageCanvas: React.FC = () => {
                   }
 
                   const layout = overlayLayoutByIndex.get(idx);
+                  const layer = currentPageLayers.find(l => l.lineIndex === idx);
                   const isMaskOnlyLine = Boolean(layout?.hidden);
                   if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
                     return null;
@@ -584,7 +601,7 @@ export const ImageCanvas: React.FC = () => {
                   const continuationPalette = layout?.highlightTextColorSourceIndex !== undefined
                     ? (translatedLinePalette.get(layout.highlightTextColorSourceIndex) || palette)
                     : palette;
-                  const maskBackgroundColor = palette.backgroundColor;
+                  const maskBackgroundColor = layer?.backgroundColor !== undefined ? layer.backgroundColor : palette.backgroundColor;
                   const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
                     ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
                     : 0;
@@ -610,6 +627,9 @@ export const ImageCanvas: React.FC = () => {
                     styleKind,
                   });
                   const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
+                  if (layer && layer.userEdited) {
+                    typography.fontSize = (layer.fontSize || 14) * ocrScaleX;
+                  }
                   const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
                   const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
                   const textStartOffset = layout?.sharedTextStartX !== undefined
@@ -632,11 +652,14 @@ export const ImageCanvas: React.FC = () => {
                       ? normalizeOverlayInlineText(layout.highlightContinuationText)
                       : layout.highlightContinuationText)
                     : '';
+                  
+                  const layerTextColor = layer?.textColor !== undefined ? layer.textColor : palette.textColor;
+                  const layerContinuationColor = layer?.textColor !== undefined ? layer.textColor : continuationPalette.textColor;
                   const overlayContent = renderOverlayTextWithSearchHighlight(
                     overlayText,
                     highlightContinuationText,
-                    palette.textColor,
-                    continuationPalette.textColor,
+                    layerTextColor,
+                    layerContinuationColor,
                     overlaySearchPattern
                   );
                   const overlayStrokeBaseWidth = Number(palette.textStrokeWidth || 0);
@@ -644,7 +667,8 @@ export const ImageCanvas: React.FC = () => {
                     ? Math.max(0.55, Math.min(1.35, overlayStrokeBaseWidth * (typography.fontSize / 14)))
                     : 0;
                   const overlayTextWeight = Math.max(400, Math.min(700, Math.round(Number(palette.textFillWeight || 400))));
-                  const rotationDeg = estimateLineRotationDeg(line);
+                  const rotationDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
+                  const rotationOrigin = layer ? 'center center' : 'left top';
                   const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
                   const minFillRatio = typography.estimatedLines > 1
                     ? (thaiComicLine ? 0.82 : 0.74)
@@ -676,11 +700,11 @@ export const ImageCanvas: React.FC = () => {
                           height: maskRect.height,
                           maxHeight: maskRect.height,
                           minHeight: maskRect.height,
-                              backgroundColor: maskBackgroundColor,
+                          backgroundColor: maskBackgroundColor,
                           overflow: 'hidden',
                           zIndex: Math.max(1, Math.round(maskRect.top)),
                           transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
-                          transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
+                          transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,
                         }}
                         className="absolute"
                       />
@@ -698,7 +722,7 @@ export const ImageCanvas: React.FC = () => {
                             overflow: 'hidden',
                             zIndex: 1000 + Math.max(1, Math.round(textRect.top)),
                             transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
-                            transformOrigin: rotationDeg !== 0 ? 'left top' : undefined,
+                            transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,
                           }}
                           className="absolute"
                         >
@@ -717,11 +741,11 @@ export const ImageCanvas: React.FC = () => {
                               boxSizing: 'border-box',
                               display: 'flex',
                               alignItems: 'flex-start',
-                              color: palette.textColor,
+                              color: layerTextColor,
                               fontSize: typography.fontSize,
                               lineHeight: typography.lineHeight,
                               fontFamily: overlayFontFamily,
-                              fontWeight: overlayTextWeight,
+                              fontWeight: layer?.bold ? 'bold' : overlayTextWeight,
                               textAlign: layout?.alignment === 'center' ? 'center' : 'left',
                               whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
                               wordBreak: 'normal',

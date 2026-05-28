@@ -51,15 +51,21 @@ Output: polished desktop UI, not mobile-first.
 Create the main working screen for PDF Translator after opening a file.
 Intent: OCR + translation editing cockpit.
 Include top toolbar, left document panel, center page canvas, right OCR controls, and export modal.
+Phase 3 Feature: Interactive Layer Manipulation - Add layer selection, multi-select (Shift+click),
+inline editing (double-click), drag/resize handles, and a floating toolbar for font size,
+color, bold, rotation. Show a yellow border on user-edited layers to indicate translation protection.
 Color direction:
 - Shell #0b0f16
 - Top bar #171b23
 - Canvas #313741
 - Active gradient #2B9BFF -> #2776FF
 - Cyan for scope actions, emerald for content actions, amber for warnings, rose for errors
+- User-edited layers: yellow/amber border
+- Manual layers: blue border (#3B82F6)
 Behavior:
 - compact controls, keyboard-friendly, strong selected states
 - keep technical workstation vibe
+- Ctrl+Z for undo, Delete/Backspace to remove selected layers
 Output both wireframe and polished visual version.
 ```
 
@@ -72,5 +78,27 @@ Output both wireframe and polished visual version.
 | Workspace Shell | `#0b0f16`, `#171b23`, `#313741` | Dark technical editor shell |
 | Core Accent | `#2B9BFF`, `#2776FF` | Active tools and highlighted controls |
 | Status Accents | `cyan`, `emerald`, `amber`, `rose` | Scope/content/warn/error language |
+| User Edited | `#FBBF24` (amber) | Border indicating edit protection |
+| Manual Layer | `#3B82F6` (blue) | Border for user-created layers |
 
 Use this with screenshots from current Home and Workspace before requesting UI regeneration.
+
+## 5) Phase 3: Interactive Layer Manipulation UI
+
+When designing the layer manipulation overlay:
+
+- **Selection Box**: White 1px border with 8 resize handles (corners + midpoints)
+- **Selected Layer**: Blue border (`#3B82F6`) + light blue fill (`rgba(59,130,246,0.08)`)
+- **User-Edited Layer**: Amber border (`#FBBF24`) indicating translation protection
+- **Hover State**: Dashed border preview before clicking
+- **Inline Editor**: Appears on double-click, shows editable text with color/font toolbar
+- **Multi-Select**: Shift+click adds to selection, blue dashed border around all selected
+- **Delete Confirmation**: Remove selected layers with Delete key, ghost overlay suppression prevents text bleed-through
+- **Undo Indicator**: Visual feedback when Ctrl+Z reverts last action
+
+Key shortcuts:
+- `Ctrl+Z`: Undo last layer action
+- `Delete/Backspace`: Remove selected layers
+- `Shift+Click`: Toggle multi-select
+- `Double-click`: Enter inline text edit mode
+- `Escape`: Exit inline edit, commit changes

@@ -13,9 +13,13 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:clear-ocr',
   'db:get-latest-ocr',
   'db:save-translation-cache',
-  'db:get-translation-cache-page',
-  'db:clear-translation-cache-by-engine',
-  // Document management
+'db:get-translation-cache-page',
+      'db:clear-translation-cache-by-engine',
+      'db:save-benchmark',
+      'db:get-benchmark',
+      'db:clear-benchmark',
+      'db:list-benchmarks',
+      // Document management
   'db:get-recent-documents',
   'db:get-documents-by-project',
   'db:get-favorite-documents',
@@ -117,7 +121,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:get-translation-cache-page', { docId, pageNum }),
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: string) =>
       ipcRenderer.invoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }),
-    
+
+    // Benchmark CRUD (Phase 1.3)
+    saveBenchmark: (params: { docId: number; pageNum: number; key: string; payload: string }) =>
+      ipcRenderer.invoke('db:save-benchmark', params),
+    getBenchmark: (params: { docId: number; pageNum: number; key: string }) =>
+      ipcRenderer.invoke('db:get-benchmark', params),
+    clearBenchmark: (params: { docId: number; pageNum: number; key?: string }) =>
+      ipcRenderer.invoke('db:clear-benchmark', params),
+    listBenchmarks: (params: { docId: number; pageNum: number }) =>
+      ipcRenderer.invoke('db:list-benchmarks', params),
+
     // Document management
     getRecentDocuments: (limit?: number) =>
       ipcRenderer.invoke('db:get-recent-documents', limit),
@@ -196,9 +210,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sourceType?: string;
       sourceLanguage?: string;
       targetLanguage?: string;
-      timeoutMs?: number;
-    }) => ipcRenderer.invoke('translate:offline-batch', { texts, context }),
-  },
+              timeoutMs?: number;
+            }) => ipcRenderer.invoke('translate:offline-batch', { texts, context }),
+          },
+
+          // 🚀 Startup batch load (1 round-trip instead of 3+ separate IPC calls)
+          startupLoad: () => ipcRenderer.invoke('db:startup-load'),
+
+          // 🚀 Batch OCR cache stats for multiple docIds in 1 call
+          getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
+            ipcRenderer.invoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
 
   // File system operations (SECURE: validated in main process)
   fs: {

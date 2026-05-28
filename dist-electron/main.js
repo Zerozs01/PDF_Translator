@@ -6,7 +6,80 @@ const crypto = require("crypto");
 const child_process = require("child_process");
 const Database = require("better-sqlite3");
 const os = require("os");
+let db$1 = null;
+const BenchmarkDAO = {
+  init: (database) => {
+    db$1 = database;
+  },
+  save: (docId, pageNum, key, jsonPayload) => {
+    if (!db$1) return false;
+    try {
+      const now = Date.now();
+      const stmt = db$1.prepare(`
+        INSERT INTO benchmarks (document_id, page_number, config_hash, results, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(document_id, page_number, config_hash)
+        DO UPDATE SET results = excluded.results, updated_at = excluded.updated_at
+      `);
+      return Boolean(stmt.run(docId, pageNum, key, jsonPayload, now, now).changes);
+    } catch (err) {
+      console.error("[BenchmarkDAO] save error:", err);
+      return false;
+    }
+  },
+  get: (docId, pageNum, key) => {
+    if (!db$1) return null;
+    try {
+      const row = db$1.prepare(`
+        SELECT results FROM benchmarks
+        WHERE document_id = ? AND page_number = ? AND config_hash = ?
+      `).get(docId, pageNum, key);
+      return row?.results ?? null;
+    } catch (err) {
+      console.error("[BenchmarkDAO] get error:", err);
+      return null;
+    }
+  },
+  clear: (docId, pageNum, key) => {
+    if (!db$1) return false;
+    try {
+      if (key) {
+        const res2 = db$1.prepare("DELETE FROM benchmarks WHERE document_id = ? AND page_number = ? AND config_hash = ?").run(docId, pageNum, key);
+        return res2.changes > 0;
+      }
+      const res = db$1.prepare("DELETE FROM benchmarks WHERE document_id = ? AND page_number = ?").run(docId, pageNum);
+      return res.changes > 0;
+    } catch (err) {
+      console.error("[BenchmarkDAO] clear error:", err);
+      return false;
+    }
+  },
+  list: (docId, pageNum) => {
+    if (!db$1) return [];
+    try {
+      return db$1.prepare(`
+        SELECT document_id, page_number, config_hash, results, created_at, updated_at
+        FROM benchmarks
+        WHERE document_id = ? AND page_number = ?
+        ORDER BY updated_at DESC
+      `).all(docId, pageNum);
+    } catch (err) {
+      console.error("[BenchmarkDAO] list error:", err);
+      return [];
+    }
+  }
+};
 let db = null;
+const stmtCache = /* @__PURE__ */ new Map();
+function getStmt(sql) {
+  if (!db) throw new Error("DB not initialized");
+  let stmt = stmtCache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    stmtCache.set(sql, stmt);
+  }
+  return stmt;
+}
 function initDB() {
   if (db) return db;
   const dbPath = path.join(electron.app.getPath("userData"), "pdf_translator.db");
@@ -18,6 +91,28 @@ function initDB() {
     db.pragma("synchronous = NORMAL");
     db.pragma("cache_size = -64000");
     db.pragma("mmap_size = 134217728");
+    db.pragma("temp_store = MEMORY");
+    db.pragma("busy_timeout = 5000");
+    db.pragma("wal_autocheckpoint = 10000");
+    db.pragma("foreign_keys = ON");
+    db.exec(`
+  CREATE TABLE IF NOT EXISTS benchmarks (
+    document_id INTEGER NOT NULL,
+    page_number INTEGER NOT NULL,
+    mode TEXT NOT NULL CHECK(mode IN ('baseline', 'improve')),
+    config_hash TEXT NOT NULL,
+    results TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+    updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+    PRIMARY KEY (document_id, page_number, mode, config_hash),
+    FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_benchmarks_doc_page ON benchmarks(document_id, page_number);
+  CREATE INDEX IF NOT EXISTS idx_benchmarks_lookup ON benchmarks(document_id, page_number, mode, config_hash);
+`);
+    console.log("[DB] BenchmarkDAO ready");
+    BenchmarkDAO.init(db);
     const schema = `
       -- Table for Tags
       CREATE TABLE IF NOT EXISTS tags (
@@ -124,6 +219,7 @@ function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup ON translation_cache(document_id, page_number, ocr_engine, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+      CREATE INDEX IF NOT EXISTS idx_document_tags_tag_id ON document_tags(tag_id);
 
       -- 🚀 Automatic Search Sync Triggers
       -- Keeps document_search in sync with documents table
@@ -177,7 +273,7 @@ const TagDAO = {
   },
   delete: (id) => {
     if (!db) throw new Error("DB not initialized");
-    db.prepare("DELETE FROM tags WHERE id = ?").run(id);
+    return db.prepare("DELETE FROM tags WHERE id = ?").run(id);
   }
 };
 const ProjectDAO = {
@@ -234,10 +330,11 @@ const ProjectDAO = {
     values.push(Date.now());
     values.push(id);
     db.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    return true;
   },
   delete: (id) => {
     if (!db) throw new Error("DB not initialized");
-    db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+    return db.prepare("DELETE FROM projects WHERE id = ?").run(id);
   }
 };
 const DocumentDAO = {
@@ -415,9 +512,9 @@ const DocumentDAO = {
       sets.push("total_pages = ?");
       values.push(data.total_pages);
     }
-    if (sets.length === 0) return;
+    if (sets.length === 0) return true;
     values.push(id);
-    db.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    return db.prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   },
   toggleFavorite: (id) => {
     if (!db) throw new Error("DB not initialized");
@@ -441,22 +538,22 @@ const DocumentDAO = {
   },
   touch: (id) => {
     if (!db) throw new Error("DB not initialized");
-    db.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
+    return db.prepare("UPDATE documents SET last_accessed = ? WHERE id = ?").run(Date.now(), id);
   },
   updateLastPage: (id, pageNum) => {
     if (!db) throw new Error("DB not initialized");
-    db.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
+    return db.prepare("UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?").run(pageNum, Date.now(), id);
   },
   delete: (id) => {
     if (!db) throw new Error("DB not initialized");
-    db.prepare("DELETE FROM documents WHERE id = ?").run(id);
+    return db.prepare("DELETE FROM documents WHERE id = ?").run(id);
   }
 };
 const OCRCacheDAO = {
   save: (documentId, pageNumber, data, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const stmt = db.prepare(`
+    const stmt = getStmt(`
       INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
       VALUES (@documentId, @pageNumber, @engine, @json, @now)
       ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
@@ -474,11 +571,11 @@ const OCRCacheDAO = {
   get: (documentId, pageNumber, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const row = db.prepare("SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").get(documentId, pageNumber, normalizedEngine);
+    const row = getStmt("SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").get(documentId, pageNumber, normalizedEngine);
     if (row) {
       return JSON.parse(row.ocr_data);
     }
-    const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    const legacyRow = getStmt("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
     if (!legacyRow) return null;
     const parsed = JSON.parse(legacyRow.ocr_data);
     const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
@@ -488,19 +585,19 @@ const OCRCacheDAO = {
   clear: (documentId, pageNumber, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const res1 = db.prepare("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
-    const legacyRow = db.prepare("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
+    const res1 = getStmt("DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    const legacyRow = getStmt("SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?").get(documentId, pageNumber);
     let res2 = { changes: 0 };
     if (legacyRow) {
       try {
         const parsed = JSON.parse(legacyRow.ocr_data);
         const legacyEngine = String(parsed?.ocrEngine || "tesseract").toLowerCase();
         if (legacyEngine === normalizedEngine) {
-          res2 = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+          res2 = getStmt("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
         }
       } catch {
         if (normalizedEngine === "tesseract") {
-          res2 = db.prepare("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
+          res2 = getStmt("DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?").run(documentId, pageNumber);
         }
       }
     }
@@ -568,7 +665,7 @@ const TranslationCacheDAO = {
     if (!db) throw new Error("DB not initialized");
     const now = Date.now();
     const normalizedEngine = String(entry.ocrEngine || "tesseract").toLowerCase();
-    const stmt = db.prepare(`
+    const stmt = getStmt(`
       INSERT INTO translation_cache (
         document_id,
         page_number,
@@ -641,7 +738,7 @@ const TranslationCacheDAO = {
   },
   getByPage: (documentId, pageNumber) => {
     if (!db) throw new Error("DB not initialized");
-    const rows = db.prepare(`
+    const rows = getStmt(`
       SELECT
         cache_key,
         ocr_engine,
@@ -695,10 +792,18 @@ const TranslationCacheDAO = {
   clearByEngine: (documentId, pageNumber, engine = "tesseract") => {
     if (!db) throw new Error("DB not initialized");
     const normalizedEngine = String(engine || "tesseract").toLowerCase();
-    const result = db.prepare("DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
+    const result = getStmt("DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?").run(documentId, pageNumber, normalizedEngine);
     return result.changes > 0;
   }
 };
+function checkpointDB(mode = "PASSIVE") {
+  if (!db) return;
+  try {
+    db.pragma(`wal_checkpoint(${mode})`);
+  } catch (err) {
+    console.warn("[SQLite] WAL checkpoint failed:", err);
+  }
+}
 const SUPPORTED_DOCUMENT_EXTENSIONS = /* @__PURE__ */ new Map([
   [".pdf", "application/pdf"],
   [".png", "image/png"],
@@ -910,7 +1015,19 @@ function teardownDaemon(engine, reason) {
   }
   daemon.pending.clear();
   if (!daemon.child.killed) {
-    daemon.child.kill();
+    const pid = daemon.child.pid;
+    if (process.platform === "win32" && pid) {
+      try {
+        child_process.spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+          stdio: "ignore",
+          windowsHide: true
+        });
+      } catch {
+        daemon.child.kill("SIGKILL");
+      }
+    } else {
+      daemon.child.kill("SIGKILL");
+    }
   }
 }
 function handleDaemonStdout(engine, chunk) {
@@ -955,11 +1072,14 @@ function ensureDaemon(engine) {
   const existing = bridgeDaemons.get(engine);
   if (existing && !existing.child.killed) {
     if (existing.scriptPath === scriptPath && existing.scriptSignature === scriptSignature) {
+      console.log(`[ocrBridge] Reusing existing daemon for ${engine} (sig=${scriptSignature})`);
       return existing;
     }
+    console.log(`[ocrBridge] Script changed for ${engine}: old=${existing.scriptSignature} new=${scriptSignature}; restarting`);
     teardownDaemon(engine, new Error(`OCR bridge script changed for ${engine}; restarting daemon`));
   }
   const pythonCmd = resolvePythonExecutable(engine);
+  console.log(`[ocrBridge] Spawning NEW daemon for ${engine}: python=${pythonCmd} script=${scriptPath} sig=${scriptSignature}`);
   const child = child_process.spawn(pythonCmd, [scriptPath, "--stdio-server", "--action", "ocr", "--engine", engine], {
     cwd: path.dirname(scriptPath),
     stdio: ["pipe", "pipe", "pipe"],
@@ -1110,29 +1230,53 @@ async function runExternalOcr(payload) {
       }
     };
     try {
-      response = await requestDaemon(engine, requestPayload);
-    } catch (error) {
-      if (isNoTextBoxesError(error)) {
-        return emptyNoTextResponse;
-      }
-      if (!isRecoverableDaemonError(error)) {
-        throw error;
-      }
-      teardownDaemon(
-        engine,
-        error instanceof Error ? error : new Error(String(error))
-      );
       try {
         response = await requestDaemon(engine, requestPayload);
-      } catch (retryError) {
-        if (isNoTextBoxesError(retryError)) {
+      } catch (error) {
+        if (isNoTextBoxesError(error)) {
           return emptyNoTextResponse;
         }
-        throw retryError;
+        if (!isRecoverableDaemonError(error)) {
+          throw error;
+        }
+        teardownDaemon(
+          engine,
+          error instanceof Error ? error : new Error(String(error))
+        );
+        try {
+          response = await requestDaemon(engine, requestPayload);
+        } catch (retryError) {
+          if (isNoTextBoxesError(retryError)) {
+            return emptyNoTextResponse;
+          }
+          throw retryError;
+        }
       }
-    }
-    if (!response.ok) {
-      throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+      if (!response.ok) {
+        throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+      }
+    } catch (primaryError) {
+      if (engine === "paddleocr") {
+        console.warn(`[ocrBridge] paddleocr failed with error: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}. Performing seamless auto-fallback to easyocr...`);
+        try {
+          const fallbackPayload = {
+            ...requestPayload,
+            engine: "easyocr"
+          };
+          response = await requestDaemon("easyocr", fallbackPayload);
+          if (response.ok) {
+            response.engine = "easyocr";
+            if (response.debug && typeof response.debug === "object") {
+              response.debug.fallbackFromEngine = "paddleocr";
+              response.debug.fallbackReason = primaryError instanceof Error ? primaryError.message : String(primaryError);
+            }
+            return response;
+          }
+        } catch (fallbackError) {
+          console.error(`[ocrBridge] easyocr fallback also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+        }
+      }
+      throw primaryError;
     }
     return response;
   } finally {
@@ -1296,6 +1440,7 @@ function createWindow() {
 electron.app.on("window-all-closed", () => {
   disposeExternalOcrDaemons();
   disposeArgosTranslateRuntime?.();
+  checkpointDB("FULL");
   if (process.platform !== "darwin") {
     electron.app.quit();
   }
@@ -1306,6 +1451,11 @@ electron.app.on("activate", () => {
   }
 });
 electron.app.on("before-quit", () => {
+  disposeExternalOcrDaemons();
+  disposeArgosTranslateRuntime?.();
+  checkpointDB("FULL");
+});
+process.on("exit", () => {
   disposeExternalOcrDaemons();
   disposeArgosTranslateRuntime?.();
 });
@@ -1532,10 +1682,14 @@ electron.app.whenReady().then(() => {
       ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || "MINISBD"
     };
     if (argosBridgeDaemon && !argosBridgeDaemon.child.killed && argosBridgeDaemon.pythonExecutable === pythonExecutable && argosBridgeDaemon.bridgePath === bridgePath && argosBridgeDaemon.bridgeSignature === bridgeSignature) {
-      return argosBridgeDaemon;
+      try {
+        process.kill(argosBridgeDaemon.child.pid, 0);
+        return argosBridgeDaemon;
+      } catch {
+      }
     }
     if (argosBridgeDaemon) {
-      teardownArgosDaemon(new Error("Argos bridge runtime changed; restarting daemon"));
+      teardownArgosDaemon(new Error("Argos bridge runtime changed or process died; restarting daemon"));
     }
     const child = child_process.spawn(pythonExecutable, [bridgePath, "--stdio-server"], {
       windowsHide: true,
@@ -1755,6 +1909,50 @@ electron.app.whenReady().then(() => {
       return [];
     }
   });
+  electron.ipcMain.handle("db:save-benchmark", async (_, { docId, pageNum, key, payload }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum) || !isValidString(key) || !isValidString(payload)) {
+      throw new Error("Invalid benchmark save input");
+    }
+    try {
+      return BenchmarkDAO.save(docId, pageNum, key, payload);
+    } catch (error) {
+      console.error("db:save-benchmark error:", error);
+      return false;
+    }
+  });
+  electron.ipcMain.handle("db:get-benchmark", async (_, { docId, pageNum, key }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum) || !isValidString(key)) {
+      throw new Error("Invalid benchmark get input");
+    }
+    try {
+      return BenchmarkDAO.get(docId, pageNum, key);
+    } catch (error) {
+      console.error("db:get-benchmark error:", error);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("db:clear-benchmark", async (_, { docId, pageNum, key }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid benchmark clear input");
+    }
+    try {
+      return BenchmarkDAO.clear(docId, pageNum, key);
+    } catch (error) {
+      console.error("db:clear-benchmark error:", error);
+      return false;
+    }
+  });
+  electron.ipcMain.handle("db:list-benchmarks", async (_, { docId, pageNum }) => {
+    if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
+      throw new Error("Invalid benchmark list input");
+    }
+    try {
+      return BenchmarkDAO.list(docId, pageNum);
+    } catch (error) {
+      console.error("db:list-benchmarks error:", error);
+      return [];
+    }
+  });
   electron.ipcMain.handle("db:save-translation-cache", async (_, { docId, pageNum, cacheKey, entry }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error("Invalid input: docId and pageNum must be positive numbers");
@@ -1791,6 +1989,69 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:clear-translation-cache-by-engine error:", error);
       return false;
+    }
+  });
+  electron.ipcMain.handle("db:startup-load", async () => {
+    try {
+      const db2 = initDB();
+      const [recentDocs, allTags, allProjects, latestOcr] = await Promise.all([
+        Promise.resolve().then(() => {
+          if (!db2) throw new Error("DB not initialized");
+          return db2.prepare(`
+                SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
+                       d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
+                FROM documents d
+                ORDER BY d.last_accessed DESC
+                LIMIT 50
+              `).all();
+        }),
+        Promise.resolve().then(() => TagDAO.getAll()),
+        Promise.resolve().then(() => ProjectDAO.getAll()),
+        Promise.resolve().then(() => {
+          if (!db2) return null;
+          const latestDoc = db2.prepare(`
+                SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
+              `).get();
+          return latestDoc ? OCRCacheDAO.getLatestForDocument(latestDoc.id) : null;
+        })
+      ]);
+      const docIds = recentDocs.map((d) => d.id);
+      let tagMap = /* @__PURE__ */ new Map();
+      if (docIds.length > 0 && db2) {
+        const placeholders = docIds.map(() => "?").join(", ");
+        const tagRows = db2.prepare(`
+              SELECT dt.document_id, t.name, t.color
+              FROM document_tags dt
+              JOIN tags t ON t.id = dt.tag_id
+              WHERE dt.document_id IN (${placeholders})
+              ORDER BY t.name
+            `).all(...docIds);
+        for (const row of tagRows) {
+          if (!tagMap.has(row.document_id)) {
+            tagMap.set(row.document_id, { names: [], colors: [] });
+          }
+          const entry = tagMap.get(row.document_id);
+          entry.names.push(row.name);
+          entry.colors.push(row.color);
+        }
+      }
+      const hydratedDocs = recentDocs.map((doc) => {
+        const tags = tagMap.get(doc.id);
+        return {
+          ...doc,
+          tag_names: tags ? tags.names.join(",") : null,
+          tag_colors: tags ? tags.colors.join(",") : null
+        };
+      });
+      return {
+        recentDocuments: hydratedDocs,
+        allTags,
+        allProjects,
+        latestOcrDocId: recentDocs?.[0]?.id ?? null
+      };
+    } catch (error) {
+      console.error("db:startup-load error:", error);
+      return { recentDocuments: [], allTags: [], allProjects: [], latestOcrDocId: null };
     }
   });
   electron.ipcMain.handle("db:get-recent-documents", async (_, limit = 50) => {
@@ -2239,7 +2500,7 @@ electron.app.whenReady().then(() => {
     }
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    const modePrompt = normalizedMode === "official" ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording suitable for official documents.` : normalizedMode === "manhwa" ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep mature dialogue natural and emotionally accurate while preserving intent and relationship dynamics.` : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. If the type is "sfx", explain the sound in brackets.`;
+    const modePrompt = normalizedMode === "official" ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording. The source text is from OCR and may contain typos (e.g., "MY STERIOUS" -> "MYSTERIOUS", "UKELY" -> "LIKELY") and fragmented lines. Please fix these typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.` : normalizedMode === "manhwa" ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep dialogue natural and emotionally accurate. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.` : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName}. Preserve the general line break structure. If the type is "sfx", explain the sound in brackets.`;
     const systemPrompt = isValidString(baseSystemPrompt) ? baseSystemPrompt : modePrompt;
     const promptText = sourceType === "batch-markdown" ? String(text) : `Translate this text: "${text}" (Type: ${sourceType})`;
     const payload = {

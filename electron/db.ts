@@ -1,8 +1,25 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { app } from 'electron';
+import { BenchmarkDAO } from './BenchmarkDAO';
+export { BenchmarkDAO };
 
 let db: Database.Database | null = null;
+
+// ─── Prepared Statement Cache ──────────────────────────────────────────────
+// Avoid recompiling hot-path SQL on every call (OCR cache read/write, translation cache).
+// Statements are lazily compiled once and reused across calls.
+const stmtCache = new Map<string, Database.Statement>();
+
+function getStmt(sql: string): Database.Statement {
+  if (!db) throw new Error('DB not initialized');
+  let stmt = stmtCache.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    stmtCache.set(sql, stmt);
+  }
+  return stmt;
+}
 
 // Initialize Database
 export function initDB() {
@@ -30,7 +47,41 @@ export function initDB() {
     // 4. Memory-Mapped I/O: Map up to 128MB of DB into RAM for instant reads
     db.pragma('mmap_size = 134217728');
 
-    // Create Tables with comprehensive schema
+    // 5. Temp store in memory: sort/aggregate ops stay in RAM (no temp file I/O)
+    db.pragma('temp_store = MEMORY');
+
+    // 6. Busy timeout: wait up to 5s before throwing SQLITE_BUSY
+    //    (guards against rare concurrent IPC access in Electron main process)
+    db.pragma('busy_timeout = 5000');
+
+    // 7. Reduce WAL checkpoint frequency: checkpoint every 10 000 pages instead of
+    //    the default 1 000 — avoids I/O spikes during heavy OCR batch writes.
+    db.pragma('wal_autocheckpoint = 10000');
+
+    // 8. Enforce FK constraints (cascade deletes defined in schema)
+    db.pragma('foreign_keys = ON');
+
+    // NEW: Benchmarks table + indexes (Phase 1.3)
+// BenchmarkDAO migration complete (Phase 1.3)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS benchmarks (
+    document_id INTEGER NOT NULL,
+    page_number INTEGER NOT NULL,
+    mode TEXT NOT NULL CHECK(mode IN ('baseline', 'improve')),
+    config_hash TEXT NOT NULL,
+    results TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+    updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+    PRIMARY KEY (document_id, page_number, mode, config_hash),
+    FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_benchmarks_doc_page ON benchmarks(document_id, page_number);
+  CREATE INDEX IF NOT EXISTS idx_benchmarks_lookup ON benchmarks(document_id, page_number, mode, config_hash);
+`);
+
+console.log('[DB] BenchmarkDAO ready');
+    BenchmarkDAO.init(db);
     const schema = `
       -- Table for Tags
       CREATE TABLE IF NOT EXISTS tags (
@@ -137,6 +188,7 @@ export function initDB() {
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup ON translation_cache(document_id, page_number, ocr_engine, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+      CREATE INDEX IF NOT EXISTS idx_document_tags_tag_id ON document_tags(tag_id);
 
       -- 🚀 Automatic Search Sync Triggers
       -- Keeps document_search in sync with documents table
@@ -198,7 +250,7 @@ export const TagDAO = {
 
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('DELETE FROM tags WHERE id = ?').run(id);
+    return db.prepare('DELETE FROM tags WHERE id = ?').run(id);
   }
 };
 
@@ -251,11 +303,12 @@ export const ProjectDAO = {
     values.push(id);
     
     db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return true;
   },
 
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    return db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   }
 };
 
@@ -440,10 +493,10 @@ export const DocumentDAO = {
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
     if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
     
-    if (sets.length === 0) return;
+    if (sets.length === 0) return true;
     values.push(id);
     
-    db.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return db.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
   },
 
   toggleFavorite: (id: number) => {
@@ -470,17 +523,17 @@ export const DocumentDAO = {
 
   touch: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('UPDATE documents SET last_accessed = ? WHERE id = ?').run(Date.now(), id);
+    return db.prepare('UPDATE documents SET last_accessed = ? WHERE id = ?').run(Date.now(), id);
   },
 
   updateLastPage: (id: number, pageNum: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?').run(pageNum, Date.now(), id);
+    return db.prepare('UPDATE documents SET last_page = ?, last_accessed = ? WHERE id = ?').run(pageNum, Date.now(), id);
   },
 
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
-    db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+    return db.prepare('DELETE FROM documents WHERE id = ?').run(id);
   }
 };
 
@@ -488,7 +541,8 @@ export const OCRCacheDAO = {
   save: (documentId: number, pageNumber: number, data: any, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
-    const stmt = db.prepare(`
+    // Use cached prepared statement to avoid recompiling on every OCR save
+    const stmt = getStmt(`
       INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
       VALUES (@documentId, @pageNumber, @engine, @json, @now)
       ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
@@ -507,8 +561,7 @@ export const OCRCacheDAO = {
   get: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
-    const row = db
-      .prepare('SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+    const row = getStmt('SELECT ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
       .get(documentId, pageNumber, normalizedEngine) as { ocr_data: string } | undefined;
 
     if (row) {
@@ -516,8 +569,7 @@ export const OCRCacheDAO = {
     }
 
     // Legacy fallback (single cache row per page).
-    const legacyRow = db
-      .prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
+    const legacyRow = getStmt('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
       .get(documentId, pageNumber) as { ocr_data: string } | undefined;
 
     if (!legacyRow) return null;
@@ -532,13 +584,11 @@ export const OCRCacheDAO = {
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
     
     // 1. Clear new engine-specific cache
-    const res1 = db
-      .prepare('DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+    const res1 = getStmt('DELETE FROM ocr_cache_engine WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
       .run(documentId, pageNumber, normalizedEngine);
       
     // 2. Clear legacy cache if it matches the current engine
-    const legacyRow = db
-      .prepare('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
+    const legacyRow = getStmt('SELECT ocr_data FROM ocr_cache WHERE document_id = ? AND page_number = ?')
       .get(documentId, pageNumber) as { ocr_data: string } | undefined;
 
     let res2 = { changes: 0 };
@@ -547,12 +597,12 @@ export const OCRCacheDAO = {
         const parsed = JSON.parse(legacyRow.ocr_data);
         const legacyEngine = String(parsed?.ocrEngine || 'tesseract').toLowerCase();
         if (legacyEngine === normalizedEngine) {
-          res2 = db.prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
+          res2 = getStmt('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
         }
       } catch {
         // If unparseable but we are clearing tesseract (default), assume it's okay to delete
         if (normalizedEngine === 'tesseract') {
-          res2 = db.prepare('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
+          res2 = getStmt('DELETE FROM ocr_cache WHERE document_id = ? AND page_number = ?').run(documentId, pageNumber);
         }
       }
     }
@@ -652,7 +702,8 @@ export const TranslationCacheDAO = {
     if (!db) throw new Error('DB not initialized');
     const now = Date.now();
     const normalizedEngine = String(entry.ocrEngine || 'tesseract').toLowerCase();
-    const stmt = db.prepare(`
+    // Use cached prepared statement — translation saves happen very frequently
+    const stmt = getStmt(`
       INSERT INTO translation_cache (
         document_id,
         page_number,
@@ -727,7 +778,8 @@ export const TranslationCacheDAO = {
 
   getByPage: (documentId: number, pageNumber: number) => {
     if (!db) throw new Error('DB not initialized');
-    const rows = db.prepare(`
+    // Cached statement: called on every page load for translation overlay
+    const rows = getStmt(`
       SELECT
         cache_key,
         ocr_engine,
@@ -800,9 +852,19 @@ export const TranslationCacheDAO = {
   clearByEngine: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
-    const result = db
-      .prepare('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+    const result = getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
       .run(documentId, pageNumber, normalizedEngine);
     return result.changes > 0;
   },
 };
+
+// ─── Utility: manual WAL checkpoint ──────────────────────────────────────────
+// Call during app-idle or before quit to flush WAL pages to main DB file.
+export function checkpointDB(mode: 'PASSIVE' | 'FULL' | 'RESTART' = 'PASSIVE'): void {
+  if (!db) return;
+  try {
+    db.pragma(`wal_checkpoint(${mode})`);
+  } catch (err) {
+    console.warn('[SQLite] WAL checkpoint failed:', err);
+  }
+}

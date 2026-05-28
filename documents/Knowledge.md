@@ -57,3 +57,15 @@ When text appears in OCR but not in overlay:
 
 OCR panel tools (copy/search/info) are part of quality control, not cosmetic features.
 Improving review speed directly improves OCR tuning cycle quality.
+
+## 9. Manual Edit Protection Rule
+
+Layers marked with `userEdited: true` must not be overwritten by auto-translation.
+When `updateLayerText` is called on a translation layer, set `userEdited: true` to lock it.
+Rule 1 in `App.tsx` (~line 7720): `if (layer.userEdited) return layer;` — skips translation for edited layers.
+
+## 10. Ghost Overlay Suppression
+
+After deleting a layer, track its `lineIndex` in `deletedLineIndexesByPage` to prevent
+PDFCanvas from rendering stale overlay text for that line. This prevents ghost text
+appearing after manual layer deletion.

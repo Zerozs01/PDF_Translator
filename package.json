@@ -4,7 +4,7 @@
   "description": "**Next-Gen Local OCR & Manga Translation Engine**\r แอปพลิเคชันเวอร์ชันยกเครื่องใหม่ (Rebirth) ที่สร้างขึ้นเพื่อแก้ปัญหาความล่าช้าและการแยกแยะองค์ประกอบภาพที่ไม่แม่นยำ โดยเน้นการประมวลผลแบบ Offline 100% และมี UI ที่ยืดหยุ่นสูงสุด",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "set \"OCR_PYTHON_PATH=%CD%\\.venv-ocr\\Scripts\\python.exe\" && vite",
     "build": "tsc && vite build && electron-builder",
     "test": "vitest run --project unit",
     "preview": "vite preview",
@@ -52,6 +52,7 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json",
+      "!dist/fixtures/**/*",
       "!node_modules/@napi-rs/canvas-android-arm64"
     ],
     "extraResources": [

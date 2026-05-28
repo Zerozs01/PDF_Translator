@@ -4,12 +4,12 @@
 
 All content here is kept in sync with the current codebase and should be preferred over older ad-hoc notes.
 
-## Current Snapshot (2026-04-08)
+## Current Snapshot (2026-05-28)
 
-- OCR algorithm version: `174`
-- Translation cache version: `v18`
+- OCR algorithm version: `210`
+- Translation cache version: `v45`
 - OCR engines in UI: `tesseract`, `paddleocr`, `easyocr`
-- OCR profiles: `pipelineProfile = panel | export`, `ocrQualityProfile = fast | balanced | best`
+- OCR profiles: `pipelineProfile = panel | export | raw`, `ocrQualityProfile = fast | balanced | best`
 - Translation modes: `adaptive | manga | manhwa | official`
 - OCR panel now includes:
   - panel script-gate + panel safety dedupe before cache write

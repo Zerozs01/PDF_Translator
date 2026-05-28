@@ -1,10 +1,64 @@
-/** @format */
+/** @format */ 
 
 export interface Box {
   x: number;
   y: number;
   w: number;
   h: number;
+}
+
+export type BenchmarkMode = 'baseline' | 'improve' | 'dual' | 'compare';
+
+export interface BenchmarkSnapshot {
+  runtimeMs: number | null;
+  confidence: number | null;
+  compositeScore: number | null;
+  efficiency: number | null;
+  rawAxis: number | null;
+  lexicalAxis: number | null;
+  yieldAxis: number | null;
+  garbageRatio: number | null;
+  wordCount: number;
+  lineCount: number;
+  suspiciousCount: number;
+  suspiciousRatio: number;
+  droppedCount: number;
+  status: 'idle' | 'running' | 'done' | 'error' | 'cached';
+  message?: string;
+  timestamp?: number;
+}
+
+export interface BenchmarkResultSnapshot extends BenchmarkSnapshot {
+  engine: OCREngine;
+  timestamp: number;
+}
+
+export interface BenchmarkResultRow {
+  engine: OCREngine;
+  engineName: string;
+  baseline?: BenchmarkSnapshot | null;
+  improve?: BenchmarkSnapshot | null;
+  dualRaw?: BenchmarkSnapshot | null;
+  dualPipeline?: BenchmarkSnapshot | null;
+  status: 'idle' | 'cached' | 'running' | 'done' | 'error';
+  cacheHit: boolean;
+  timestamp: number;
+  message?: string;
+  deltas?: {
+    compositeDelta: number;
+    runtimeDelta: number;
+    efficiencyDelta: number;
+  };
+}
+
+export interface DBBenchmarkRecord {
+  documentId: number;
+  pageNumber: number;
+  mode: 'baseline' | 'improve';
+  configHash: string;
+  results: BenchmarkResultSnapshot[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type RegionType = "text" | "balloon" | "sfx" | "panel";
@@ -71,7 +125,6 @@ export interface OCRDroppedWord {
   bbox?: BBox;
 }
 
-export type BenchmarkMode = 'base' | 'dual';
 export type OCRPipelineProfile = "panel" | "export" | "raw";
 export type OCRQualityProfile = "fast" | "balanced" | "best";
 export type OCREngine = "tesseract" | "paddleocr" | "easyocr";
@@ -114,6 +167,19 @@ export interface OCRDebugInfo {
   runtimeMs?: number;
   qualityProfile?: OCRQualityProfile;
   raw?: boolean;
+  panelSafetyNormalizedVersion?: number;
+}
+
+/** Benchmark result for a doc/page */
+export interface BenchmarkResult {
+  docId: number;
+  pageNum: number;
+  mode: BenchmarkMode;
+  configHash: string;
+  results: BenchmarkResultRow[];
+  overallStatus: 'pass' | 'risk' | 'fail';
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface OCRFixtureExpectation {

@@ -1,5 +1,7 @@
 import type { OCRPoint } from '../../types';
 
+console.log("[GroupingServiceLoaded] Loaded balloonAwareGroupingService.ts");
+
 export type LayoutGroupingMode = 'default' | 'dense-dialogue' | 'balloon-aware';
 export type LayoutReadingMode = 'auto' | 'ltr' | 'rtl' | 'ttb';
 export type ResolvedLayoutReadingMode = Exclude<LayoutReadingMode, 'auto'>;
@@ -76,6 +78,7 @@ type PreparedLine = OCRLineWithLayout & {
   centerX: number;
   centerY: number;
   normalizedAngle: number;
+  originalHeight?: number;
 };
 
 type GroupSeed = {
@@ -103,6 +106,88 @@ const computeMedian = (values: number[]): number => {
     return (ordered[middle - 1] + ordered[middle]) / 2;
   }
   return ordered[middle];
+};
+
+const NEW_BALLOON_PATTERNS = [
+  /^\s*\.{2,}/,          // "...THAT'S" -> ellipsis ขึ้นต้น
+  /^\s*[\*\!\?]+/,       // "!?", "!!" -> คำอุทาน
+  /^\s*[""「『“]/,       // เครื่องหมายคำพูดเปิด
+];
+
+const END_BALLOON_PATTERNS = [
+  /[.!?…]["」』”]?\s*$/,  // จบประโยคสมบูรณ์
+];
+
+const startsNewBalloon = (text: string): boolean => {
+  return NEW_BALLOON_PATTERNS.some((p) => p.test(text));
+};
+
+const endsGroup = (text: string): boolean => {
+  return END_BALLOON_PATTERNS.some((p) => p.test(text));
+};
+
+const sanitizeLineBbox = (line: PreparedLine, baseHeight: number): PreparedLine => {
+  const originalHeight = line.originalHeight ?? (line.bottom - line.top);
+  console.log(`[Sanitize] "${line.text}" height=${originalHeight} baseHeight=${baseHeight} ratio=${(originalHeight/baseHeight).toFixed(2)}`);
+  if (originalHeight <= baseHeight * 2.5) return line;
+  const center = (line.top + line.bottom) * 0.5;
+  return {
+    ...line,
+    top: center - baseHeight * 0.5,
+    bottom: center + baseHeight * 0.5,
+    height: baseHeight,
+  };
+};
+
+const computePageMedianVerticalGap = (lines: PreparedLine[], baseHeight: number): number => {
+  const gaps: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const a = lines[i];
+      const b = lines[j];
+      const overlapX = overlapRatio(a.left, a.right, b.left, b.right);
+      const overlapY = overlapRatio(a.top, a.bottom, b.top, b.bottom);
+      if (overlapX >= 0.18 && overlapY <= 0.15) {
+        const verticalGap = computeVerticalGap(a, b);
+        if (verticalGap > 0 && verticalGap <= baseHeight * 1.25) {
+          gaps.push(verticalGap);
+        }
+      }
+    }
+  }
+  return gaps.length >= 2 ? computeMedian(gaps) : 0;
+};
+
+const splitMismergedGroup = (
+  lines: PreparedLine[],
+  baseHeight: number,
+  pageMedianVerticalGap: number
+): PreparedLine[][] => {
+  if (lines.length === 0) return [];
+
+  const subGroups: PreparedLine[][] = [[lines[0]]];
+  const anomalyThreshold = pageMedianVerticalGap > 0
+    ? Math.max(baseHeight * 1.0, pageMedianVerticalGap * 2.0)
+    : baseHeight * 1.8;
+
+  for (let i = 1; i < lines.length; i++) {
+    const prev = lines[i - 1];
+    const curr = lines[i];
+    const verticalGap = computeVerticalGap(prev, curr);
+
+    const shouldSplit =
+      verticalGap > baseHeight * 2.8 ||
+      verticalGap > anomalyThreshold ||
+      (startsNewBalloon(curr.text) && verticalGap > baseHeight * 0.8) ||
+      (endsGroup(prev.text) && verticalGap > baseHeight * 1.2);
+
+    if (shouldSplit) {
+      subGroups.push([curr]);
+    } else {
+      subGroups[subGroups.length - 1].push(curr);
+    }
+  }
+  return subGroups;
 };
 
 const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number => {
@@ -155,7 +240,8 @@ const shouldLinkGeometryLines = (
   a: PreparedLine,
   b: PreparedLine,
   baseHeight: number,
-  readingMode: ResolvedLayoutReadingMode
+  readingMode: ResolvedLayoutReadingMode,
+  pageMedianVerticalGap: number
 ): number | null => {
   const overlapX = overlapRatio(a.left, a.right, b.left, b.right);
   const overlapY = overlapRatio(a.top, a.bottom, b.top, b.bottom);
@@ -169,6 +255,37 @@ const shouldLinkGeometryLines = (
   const widthSimilarity = Math.min(a.width, b.width) / Math.max(a.width, b.width, 1);
   const localAngleDelta = angleDelta(a.angleDeg, b.angleDeg);
 
+  // --- Guard 1: Page-level Gap Anomaly ---
+  const anomalyThreshold = pageMedianVerticalGap > 0
+    ? Math.max(baseHeight * 1.0, pageMedianVerticalGap * 2.0)
+    : baseHeight * 1.8;
+
+  // --- Inflated Bbox Center Distance Guard ---
+  const heightA = a.originalHeight ?? (a.bottom - a.top);
+  const heightB = b.originalHeight ?? (b.bottom - b.top);
+  const isInflatedA = heightA > baseHeight * 2.0;
+  const isInflatedB = heightB > baseHeight * 2.0;
+  if (isInflatedA || isInflatedB) {
+    const centerGap = Math.abs(a.centerY - b.centerY);
+    if (centerGap > anomalyThreshold) {
+      return null;
+    }
+  }
+
+  if (verticalGap > anomalyThreshold) {
+    return null;
+  }
+
+  // --- Guard 2: Special character clue (starts new balloon) ---
+  if (startsNewBalloon(b.text)) {
+    if (verticalGap > baseHeight * 0.8) return null;
+  }
+
+  // --- Guard 3: Sentence ended cleanly + large gap ---
+  if (endsGroup(a.text) && verticalGap > baseHeight * 1.2) {
+    return null;
+  }
+
   const sameRowSeparatedColumns = overlapY >= 0.26
     && overlapX <= 0.18
     && horizontalGap >= baseHeight * 0.85
@@ -181,13 +298,13 @@ const shouldLinkGeometryLines = (
   if (wideDistantColumns) return null;
 
   const verticallyStacked = overlapX >= 0.18
-    && verticalGap <= baseHeight * 2.15
+    && verticalGap <= baseHeight * 2.8
     && centerDeltaX <= Math.max(92, minWidth * 1.05);
   const tightlyStacked = overlapX >= 0.12
-    && verticalGap <= baseHeight * 1.25
+    && verticalGap <= baseHeight * 1.6
     && centerDeltaX <= Math.max(72, minWidth * 0.82);
   const diagonalStack = overlapX >= 0.1
-    && verticalGap <= baseHeight * 1.6
+    && verticalGap <= baseHeight * 2.2
     && horizontalGap <= Math.max(64, baseHeight * 1.7)
     && centerDeltaX <= Math.max(96, minWidth * 1.35);
   const looseColumnStack = overlapY <= 0.38
@@ -202,6 +319,16 @@ const shouldLinkGeometryLines = (
     && verticalGap <= baseHeight * 2.4;
 
   if (!verticallyStacked && !tightlyStacked && !diagonalStack && !looseColumnStack && !contained && !hintedSequence) {
+    return null;
+  }
+
+  // Do not group lines of completely different scripts (e.g. Thai and English)
+  // This ensures English fragments in Thai bubbles get translated separately.
+  const aHasThai = /[\u0E00-\u0E7F]/.test(a.text);
+  const bHasThai = /[\u0E00-\u0E7F]/.test(b.text);
+  const aIsLatinOnly = /[A-Za-z]/.test(a.text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(a.text);
+  const bIsLatinOnly = /[A-Za-z]/.test(b.text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(b.text);
+  if ((aHasThai && bIsLatinOnly) || (bHasThai && aIsLatinOnly)) {
     return null;
   }
 
@@ -381,7 +508,8 @@ const buildOrderedLayoutItems = (
 export const deriveBalloonAwareLayoutGrouping = (
   input: LayoutGroupingInput
 ): LayoutGroupingResult => {
-  const preparedLines: PreparedLine[] = input.lines
+  console.log(`[deriveBalloonAwareLayoutGrouping] Called with ${input.lines.length} lines`);
+  const rawLines: PreparedLine[] = input.lines
     .map((line) => {
       const width = Math.max(1, line.right - line.left);
       const height = Math.max(1, line.bottom - line.top);
@@ -392,13 +520,13 @@ export const deriveBalloonAwareLayoutGrouping = (
         centerX: (line.left + line.right) * 0.5,
         centerY: (line.top + line.bottom) * 0.5,
         normalizedAngle: normalizeAngle(line.angleDeg),
+        originalHeight: height,
       };
     })
     .filter((line) => line.right > line.left && line.bottom > line.top);
 
-  const lineMap = new Map<number, PreparedLine>(preparedLines.map((line) => [line.index, line]));
-  const rawOrder = preparedLines.map((line) => line.index);
-  if (preparedLines.length === 0) {
+  const rawOrder = rawLines.map((line) => line.index);
+  if (rawLines.length === 0) {
     return {
       groups: [],
       ungroupedLineIndexes: [],
@@ -414,7 +542,9 @@ export const deriveBalloonAwareLayoutGrouping = (
     };
   }
 
-  const baseHeight = Math.max(8, computeMedian(preparedLines.map((line) => line.height)));
+  const baseHeight = Math.max(8, computeMedian(rawLines.map((line) => line.height)));
+  const preparedLines = rawLines.map((line) => sanitizeLineBbox(line, baseHeight));
+  const lineMap = new Map<number, PreparedLine>(preparedLines.map((line) => [line.index, line]));
   const resolvedReadingMode = resolveReadingMode(input.readingMode, preparedLines);
   const parent = preparedLines.map((_, index) => index);
   const groupEdgeScores = new Map<string, number[]>();
@@ -441,9 +571,11 @@ export const deriveBalloonAwareLayoutGrouping = (
     groupEdgeScores.set(key, bucket);
   };
 
+  const pageMedianVerticalGap = computePageMedianVerticalGap(preparedLines, baseHeight);
+
   for (let i = 0; i < preparedLines.length; i += 1) {
     for (let j = i + 1; j < preparedLines.length; j += 1) {
-      const score = shouldLinkGeometryLines(preparedLines[i], preparedLines[j], baseHeight, resolvedReadingMode);
+      const score = shouldLinkGeometryLines(preparedLines[i], preparedLines[j], baseHeight, resolvedReadingMode, pageMedianVerticalGap);
       if (score !== null) {
         unite(i, j, score);
       }
@@ -471,35 +603,43 @@ export const deriveBalloonAwareLayoutGrouping = (
 
   Array.from(grouped.values()).forEach((seed, bucketIndex) => {
     const orderedLines = orderGroupLines(seed.lines, resolvedReadingMode, baseHeight);
-    if (orderedLines.length <= 1) {
-      ungroupedLineIndexes.push(orderedLines[0].index);
-      return;
-    }
+    if (orderedLines.length === 0) return;
 
-    const bounds = {
-      top: Math.min(...orderedLines.map((line) => line.top)),
-      bottom: Math.max(...orderedLines.map((line) => line.bottom)),
-      left: Math.min(...orderedLines.map((line) => line.left)),
-      right: Math.max(...orderedLines.map((line) => line.right)),
-    };
+    // รัน Fallback Splitting ย้อนหลังเพื่อแยกแยะบอลลูนซ้อนที่หลุดลอด Union-Find
+    const subGroups = splitMismergedGroup(orderedLines, baseHeight, pageMedianVerticalGap);
 
-    groups.push({
-      id: `page-${input.pageNumber}-group-${bucketIndex}`,
-      page: input.pageNumber,
-      lineIndexes: orderedLines.map((line) => line.index),
-      orderedLineIndexes: orderedLines.map((line) => line.index),
-      intraGroupOrder: orderedLines.map((line) => line.index),
-      interGroupOrder: 0,
-      confidence: groupConfidenceFromSeed(seed, preparedLines.length),
-      readingMode: resolvedReadingMode,
-      strategy: 'geometry',
-      groupType: classifyGroupType(orderedLines),
-      bounds,
-      anchor: {
-        sortX: Number.isFinite(orderedLines[0]?.sortHintX) ? Number(orderedLines[0]?.sortHintX) : orderedLines[0]?.left ?? bounds.left,
-        sortY: Number.isFinite(orderedLines[0]?.sortHintY) ? Number(orderedLines[0]?.sortHintY) : orderedLines[0]?.top ?? bounds.top,
-        rawOrder: orderedLines[0]?.index ?? bucketIndex,
-      },
+    subGroups.forEach((subGroupLines, subIndex) => {
+      const uniqueBucketIndex = bucketIndex * 100 + subIndex;
+      if (subGroupLines.length <= 1) {
+        ungroupedLineIndexes.push(subGroupLines[0].index);
+        return;
+      }
+
+      const bounds = {
+        top: Math.min(...subGroupLines.map((line) => line.top)),
+        bottom: Math.max(...subGroupLines.map((line) => line.bottom)),
+        left: Math.min(...subGroupLines.map((line) => line.left)),
+        right: Math.max(...subGroupLines.map((line) => line.right)),
+      };
+
+      groups.push({
+        id: `page-${input.pageNumber}-group-${uniqueBucketIndex}`,
+        page: input.pageNumber,
+        lineIndexes: subGroupLines.map((line) => line.index),
+        orderedLineIndexes: subGroupLines.map((line) => line.index),
+        intraGroupOrder: subGroupLines.map((line) => line.index),
+        interGroupOrder: 0,
+        confidence: groupConfidenceFromSeed({ lines: subGroupLines, edgeScores: seed.edgeScores }, preparedLines.length),
+        readingMode: resolvedReadingMode,
+        strategy: 'geometry',
+        groupType: classifyGroupType(subGroupLines),
+        bounds,
+        anchor: {
+          sortX: Number.isFinite(subGroupLines[0]?.sortHintX) ? Number(subGroupLines[0]?.sortHintX) : subGroupLines[0]?.left ?? bounds.left,
+          sortY: Number.isFinite(subGroupLines[0]?.sortHintY) ? Number(subGroupLines[0]?.sortHintY) : subGroupLines[0]?.top ?? bounds.top,
+          rawOrder: subGroupLines[0]?.index ?? uniqueBucketIndex,
+        },
+      });
     });
   });
 

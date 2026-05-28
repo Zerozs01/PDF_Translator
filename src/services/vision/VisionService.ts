@@ -70,6 +70,7 @@ const CONFIG = {
   RETRY_DELAY_MS: OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
   HEALTH_CHECK_INTERVAL_MS: 30000,
   MAX_WORKERS: getDefaultWorkerCount(),
+  DEBUG_LOG_MISSING_LINES: true,
 };
 
 const createAbortError = (reason: string = 'OCR job canceled'): Error => {
@@ -1776,9 +1777,11 @@ class VisionService {
     lines: OCRLine[],
     pageWidth: number,
     pageHeight: number,
-    language: string
+    language: string,
+    qualityProfile?: OCRQualityProfile
   ): { lines: OCRLine[]; dropped: OCRDroppedWord[] } {
     if (lines.length <= 1) return { lines, dropped: [] };
+    if (qualityProfile === 'best' || qualityProfile === 'balanced') return { lines, dropped: [] };
     if (!this.shouldApplyAggressiveLatinPanelCleanup(language)) return { lines, dropped: [] };
 
     const lineHeights = lines
@@ -1809,6 +1812,14 @@ class VisionService {
         && lineWidth <= Math.max(420, pageWidth * 0.58)
         && /[~!?…]|^(?:O+H+|O+|A+H+|U+H+|H+M+|S+T+O+P+)$/i.test(rawText.replace(/\s+/g, ''));
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
+
+      // ── Safety Gate: prevent filtering standard English dialogue lines ──
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF)\b/i.test(rawText);
+      if (hasKillOrOtherStandardWord) return true;
+
+      // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")
+      const looksLikeReadableEnglishWord = !stylizedWideEffect && ((alphaLength >= 3 && confidence >= 78) || (alphaLength >= 2 && confidence >= 85));
+      if (looksLikeReadableEnglishWord) return true;
 
       const localSupport = lines.filter((other) => {
         if (other === line) return false;
@@ -2492,38 +2503,84 @@ class VisionService {
     }
 
     if (isPaddlePanel) {
-      const residualSpatialResult = this.collapseResidualSpatialDuplicateExternalLines(finalLines, languageCodes);
-      finalLines = residualSpatialResult.lines;
-      if (residualSpatialResult.dropped.length > 0) {
-        mergedDropCounts.externalResidualSpatialDuplicate =
-          (mergedDropCounts.externalResidualSpatialDuplicate || 0) + residualSpatialResult.dropped.length;
-        mergedDroppedWords.push(...residualSpatialResult.dropped);
-      }
+        const residualSpatialResult = this.collapseResidualSpatialDuplicateExternalLines(finalLines, languageCodes);
+        finalLines = residualSpatialResult.lines;
+        if (residualSpatialResult.dropped.length > 0) {
+          mergedDropCounts.externalResidualSpatialDuplicate =
+            (mergedDropCounts.externalResidualSpatialDuplicate || 0) + residualSpatialResult.dropped.length;
+          mergedDroppedWords.push(...residualSpatialResult.dropped);
+        }
 
-      const dialogueEchoResult = this.repairPaddlePanelDialogueEchoLines(finalLines, width, height, language);
-      finalLines = dialogueEchoResult.lines;
-      if (dialogueEchoResult.dropped.length > 0) {
-        mergedDropCounts.externalPaddleDialogueEcho =
-          (mergedDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
-        mergedDroppedWords.push(...dialogueEchoResult.dropped);
-      }
+        // DEBUG: Log all lines to find missing ones
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          console.log(`[DEBUG-MERGE] After residual collapse: ${finalLines.length} lines`);
+          finalLines.forEach((l, i) => {
+            console.log(`  [${i}] y=${l.bbox.y0.toFixed(0)}-${l.bbox.y1.toFixed(0)} conf=${l.confidence.toFixed(1)} "${String(l.text || '').slice(0, 25)}"`);
+          });
+        }
 
-      const contextualRepairResult = this.repairPaddlePanelContextualDialogueLines(finalLines, width, height, language);
-      finalLines = contextualRepairResult.lines;
-      if (contextualRepairResult.dropped.length > 0) {
-        mergedDropCounts.externalPaddleContextualDialogue =
-          (mergedDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
-        mergedDroppedWords.push(...contextualRepairResult.dropped);
-      }
+        const dialogueEchoResult = this.repairPaddlePanelDialogueEchoLines(finalLines, width, height, language);
+        finalLines = dialogueEchoResult.lines;
+        if (dialogueEchoResult.dropped.length > 0) {
+          mergedDropCounts.externalPaddleDialogueEcho =
+            (mergedDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
+          mergedDroppedWords.push(...dialogueEchoResult.dropped);
+        }
+        // DEBUG: Log after dialogueEcho
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
+          if (killLine) {
+            console.log(`[DEBUG] After dialogueEcho: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
+          } else {
+            console.warn(`[DEBUG] After dialogueEcho: "TO KILL THE" MISSING!`);
+          }
+        }
 
-      const tallEffectResult = this.prunePaddlePanelTallEffectLines(finalLines, width, height, language);
-      finalLines = tallEffectResult.lines;
-      if (tallEffectResult.dropped.length > 0) {
-        mergedDropCounts.externalPaddleTallEffectLine =
-          (mergedDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
-        mergedDroppedWords.push(...tallEffectResult.dropped);
+        const contextualRepairResult = this.repairPaddlePanelContextualDialogueLines(finalLines, width, height, language);
+        finalLines = contextualRepairResult.lines;
+        if (contextualRepairResult.dropped.length > 0) {
+          mergedDropCounts.externalPaddleContextualDialogue =
+            (mergedDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
+          mergedDroppedWords.push(...contextualRepairResult.dropped);
+        }
+        // DEBUG: Log after contextual
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
+          if (killLine) {
+            console.log(`[DEBUG] After contextual: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
+          } else {
+            console.warn(`[DEBUG] After contextual: "TO KILL THE" MISSING!`);
+          }
+        }
+
+        const tallEffectResult = this.prunePaddlePanelTallEffectLines(finalLines, width, height, language, ocrQualityProfile);
+        finalLines = tallEffectResult.lines;
+        if (tallEffectResult.dropped.length > 0) {
+          mergedDropCounts.externalPaddleTallEffectLine =
+            (mergedDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
+          mergedDroppedWords.push(...tallEffectResult.dropped);
+        }
+        // DEBUG: Log after tallEffect
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
+          if (killLine) {
+            console.log(`[DEBUG] After tallEffect: "TO KILL THE" still present at y=${killLine.bbox.y0.toFixed(0)}`);
+          } else {
+            console.warn(`[DEBUG] After tallEffect: "TO KILL THE" MISSING!`);
+          }
+        }
+
+        // DEBUG: Final check before return
+        if (CONFIG.DEBUG_LOG_MISSING_LINES) {
+          const killLine = finalLines.find(l => String(l.text || '').toUpperCase().includes('KILL'));
+          console.log(`[DEBUG-FINAL] Total lines: ${finalLines.length}, words: ${finalLines.flatMap(l => l.words || []).length}`);
+          if (killLine) {
+            console.log(`[DEBUG-FINAL] "TO KILL THE" present: y=${killLine.bbox.y0.toFixed(0)}-${killLine.bbox.y1.toFixed(0)}`);
+          } else {
+            console.warn(`[DEBUG-FINAL] "TO KILL THE" MISSING from final result!`);
+          }
+        }
       }
-    }
 
     const mergedWords = finalLines.flatMap((line) => line.words || []);
     const confidences = mergedWords.length > 0
@@ -2805,7 +2862,7 @@ class VisionService {
       }
 
       const tallEffectResult = shouldApplyPaddlePanelValidation
-        ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language)
+        ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language, ocrQualityProfile)
         : { lines: contextualRepairResult.lines, dropped: [] };
       if (tallEffectResult.dropped.length > 0) {
         debugDropCounts.externalPaddleTallEffectLine =

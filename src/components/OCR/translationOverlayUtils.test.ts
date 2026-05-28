@@ -2244,6 +2244,223 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     expect(overlay.translatedByIndex.get(2)).toBe('อาคาร');
   });
 
+  test('keeps a stale cached translation visible for the same OCR engine after the fingerprint changes', () => {
+    const currentPageOCR = {
+      pageNumber: 2,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 185,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'ARE ONLY',
+          confidence: 96,
+          bbox: { x0: 90, y0: 420, x1: 210, y1: 452 },
+          words: [{ text: 'ARE', confidence: 96, bbox: { x0: 96, y0: 422, x1: 136, y1: 450 } }],
+        },
+        {
+          text: 'AND LEAVE THE',
+          confidence: 96,
+          bbox: { x0: 520, y0: 420, x1: 720, y1: 452 },
+          words: [{ text: 'AND', confidence: 96, bbox: { x0: 526, y0: 422, x1: 570, y1: 450 } }],
+        },
+      ],
+      words: [],
+      text: 'ARE ONLY AND LEAVE THE',
+      confidence: 95,
+    };
+
+    const sourceFingerprint = `${buildOCRSourceFingerprint(currentPageOCR, 'paddleocr')}|stale-cache`;
+    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 2,
+        ocrEngine: 'paddleocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'มีเพียง' },
+          { index: 1, text: 'แล้วออกจาก' },
+        ],
+        translatedText: 'มีเพียง แล้วออกจาก',
+        lineCount: 2,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.isStale).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('มีเพียง');
+    expect(overlay.translatedByIndex.get(1)).toBe('แล้วออกจาก');
+  });
+
+  test('falls back to same-engine cache when source language drifts or mode differs', () => {
+    const currentPageOCR = {
+      pageNumber: 4,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 185,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'easyocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'THE DOOR',
+          confidence: 96,
+          bbox: { x0: 120, y0: 220, x1: 320, y1: 260 },
+          words: [{ text: 'THE', confidence: 96, bbox: { x0: 130, y0: 224, x1: 168, y1: 258 } }],
+        },
+      ],
+      words: [],
+      text: 'THE DOOR',
+      confidence: 95,
+    };
+
+    const sourceFingerprint = `${buildOCRSourceFingerprint(currentPageOCR, 'easyocr')}|mismatch`;
+    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:ja|dst:th|mode:official|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 4,
+        ocrEngine: 'easyocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'ja',
+        targetLanguage: 'th',
+        translationMode: 'official' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'ประตูนั้น' },
+        ],
+        translatedText: 'ประตูนั้น',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'easyocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: cacheKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('ประตูนั้น');
+  });
+
+  test('prefers Thai cache entries over untranslated ones for Thai target', () => {
+    const currentPageOCR = {
+      pageNumber: 7,
+      width: 900,
+      height: 1300,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 185,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'easyocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'OPEN DOOR',
+          confidence: 96,
+          bbox: { x0: 100, y0: 200, x1: 260, y1: 240 },
+          words: [{ text: 'OPEN', confidence: 96, bbox: { x0: 110, y0: 204, x1: 150, y1: 238 } }],
+        },
+      ],
+      words: [],
+      text: 'OPEN DOOR',
+      confidence: 95,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'easyocr');
+    const untranslatedKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const thaiKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [untranslatedKey, {
+        key: untranslatedKey,
+        pageNum: 7,
+        ocrEngine: 'easyocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'OPEN DOOR' },
+        ],
+        translatedText: 'OPEN DOOR',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now(),
+      }],
+      [thaiKey, {
+        key: thaiKey,
+        pageNum: 7,
+        ocrEngine: 'easyocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'เปิดประตู' },
+        ],
+        translatedText: 'เปิดประตู',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now() - 5000,
+      }],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'easyocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      activeTranslationKey: untranslatedKey,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('เปิดประตู');
+  });
+
   test('removes cached source carry-over for wide merged navigation bridge lines', () => {
     const currentPageOCR = {
       pageNumber: 2,
@@ -2864,6 +3081,259 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     expect(overlay.translatedByIndex.get(0)).toContain('แตะตัว');
   });
 });
+
+describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', () => {
+  test('uses ultimate fallback when strict translation options do not match but page has a cached translation', () => {
+    const currentPageOCR = {
+      pageNumber: 3,
+      width: 1000,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'tesseract' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'HELLO',
+          confidence: 90,
+          bbox: { x0: 100, y0: 100, x1: 200, y1: 120 },
+          words: [],
+        },
+      ],
+      words: [],
+      text: 'HELLO',
+      confidence: 90,
+    };
+
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'tesseract');
+    // Cache entry for 'offline' translator
+    const cacheKey = 'ver:v45|ocr:tesseract|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 3,
+        ocrEngine: 'tesseract' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'สวัสดี' },
+        ],
+        translatedText: 'สวัสดี',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now() - 5000,
+      }],
+    ]);
+
+    // Requesting overlay for 'gemini' translator (strict match fails, but ultimate fallback succeeds)
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR,
+      optionsEngine: 'tesseract',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('สวัสดี');
+  });
+
+  test('resolves and fuzzy-matches cached translations from a different OCR engine', () => {
+    const currentOCR = {
+      pageNumber: 3,
+      width: 1000,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'HELLO WORLD',
+          confidence: 90,
+          bbox: { x0: 100, y0: 100, x1: 200, y1: 120 },
+          words: [],
+        },
+      ],
+      words: [],
+      text: 'HELLO WORLD',
+      confidence: 90,
+    };
+
+    const oldOCR = {
+      pageNumber: 3,
+      width: 1000,
+      height: 1400,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'tesseract' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'HELLO WORLD',
+          confidence: 92,
+          bbox: { x0: 102, y0: 102, x1: 202, y1: 122 }, // Slightly different coordinates
+          words: [],
+        },
+      ],
+      words: [],
+      text: 'HELLO WORLD',
+      confidence: 92,
+    };
+
+    const oldFingerprint = buildOCRSourceFingerprint(oldOCR, 'tesseract');
+    // Cached translation using tesseract
+    const cacheKey = 'ver:v45|ocr:tesseract|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 3,
+        ocrEngine: 'tesseract' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint: oldFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'สวัสดีชาวโลก' },
+        ],
+        translatedText: 'สวัสดีชาวโลก',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now() - 10000,
+      }],
+    ]);
+
+    const pageOCRsByEngine = new Map<any, any>([
+      ['tesseract', oldOCR],
+      ['paddleocr', currentOCR],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR: currentOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      pageOCRsByEngine,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('สวัสดีชาวโลก');
+  });
+
+  test('fuzzy-matches cross-engine cached translations with different Megapixel/resolution scales', () => {
+    // Current OCR represents PaddleOCR with high resolution (e.g. 2000x2800, 8.4MP scale)
+    const currentOCR = {
+      pageNumber: 3,
+      width: 2000,
+      height: 2800,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'paddleocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'HELLO WORLD',
+          confidence: 90,
+          bbox: { x0: 200, y0: 200, x1: 400, y1: 240 }, // High resolution coordinates (scaled by 2x)
+          words: [],
+        },
+      ],
+      words: [],
+      text: 'HELLO WORLD',
+      confidence: 90,
+    };
+
+    // Old OCR represents EasyOCR with low resolution (e.g. 1000x1400, 4.2MP scale)
+    const oldOCR = {
+      pageNumber: 3,
+      width: 1000,
+      height: 1400,
+      dpi: 150,
+      language: 'eng',
+      algorithmVersion: 174,
+      pipelineProfile: 'panel' as const,
+      ocrEngine: 'easyocr' as const,
+      ocrQualityProfile: 'best' as const,
+      lines: [
+        {
+          text: 'HELLO WORLD',
+          confidence: 92,
+          bbox: { x0: 100, y0: 100, x1: 200, y1: 120 }, // Half resolution coordinates
+          words: [],
+        },
+      ],
+      words: [],
+      text: 'HELLO WORLD',
+      confidence: 92,
+    };
+
+    const oldFingerprint = buildOCRSourceFingerprint(oldOCR, 'easyocr');
+    // Cached translation using EasyOCR
+    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const currentPageTranslationMap = new Map([
+      [cacheKey, {
+        key: cacheKey,
+        pageNum: 3,
+        ocrEngine: 'easyocr' as const,
+        ocrLanguage: 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga' as const,
+        translatorEngine: 'offline' as const,
+        sourceFingerprint: oldFingerprint,
+        translatedByIndex: [
+          { index: 0, text: 'สวัสดีชาวโลก' },
+        ],
+        translatedText: 'สวัสดีชาวโลก',
+        lineCount: 1,
+        groupCount: 1,
+        createdAt: Date.now() - 10000,
+      }],
+    ]);
+
+    const pageOCRsByEngine = new Map<any, any>([
+      ['easyocr', oldOCR],
+      ['paddleocr', currentOCR],
+    ]);
+
+    const overlay = resolveTranslationOverlayContext({
+      currentPageOCR: currentOCR,
+      optionsEngine: 'paddleocr',
+      optionsLanguage: 'eng',
+      translationMode: 'manga',
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationPreviewMode: 'translated',
+      currentPageTranslationMap,
+      pageOCRsByEngine,
+    });
+
+    expect(overlay.shouldRender).toBe(true);
+    expect(overlay.translatedByIndex.get(0)).toBe('สวัสดีชาวโลก');
+  });
+});
+
 
 
 

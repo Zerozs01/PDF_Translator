@@ -21,6 +21,8 @@ import re
 from PIL import Image, ImageOps
 
 os.environ.setdefault("FLAGS_enable_pir_api", "0")
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
+os.environ.setdefault("FLAGS_use_onednn", "0")
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 DEFAULT_EASY_YOLO_URL = "http://127.0.0.1:5000/easy-yolo-ocr"
@@ -42,13 +44,13 @@ HEADING_KEEP_TOKENS = {"CHAPTER", "SECTION", "PART", "OBJECTIVES", "CONDITIONS",
 SHORT_SPEECH_TOKENS = {"EH", "ME", "I", "OH", "AH", "NO", "A"}
 KOREAN_PARTICLE_SUFFIXES = {"이", "가", "은", "는", "을", "를", "의"}
 LATIN_SHORT_KEEP_TOKENS = {
-    "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH",
+    "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH", "HUH",
     "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE",
 }
 LATIN_COMMON_WORDS = {
     "THE", "YOU", "HE", "SHE", "WE", "THEY", "TO", "OF", "IN", "ON", "AT", "FOR", "AND", "OR", "ARE",
     "THAT", "THIS", "THOSE", "THESE", "PAST", "ONLY", "FOUND", "TOP", "GIRLS", "CITY", "BUT", "NOW",
-    "CAN", "MAKE", "WITH", "KIND", "STUFF", "ROOM", "DOOR", "LOCK", "TAKE", "LOOK", "OVER", "GO",
+    "CAN", "MAKE", "WITH", "KIND", "STUFF", "ROOM", "DOOR", "LOCK", "TAKE", "LOOK", "OVER", "GO", "ACTUALLY",
     "STUDENTS", "MAY", "DOING", "BAD", "THINGS", "ELDERLY", "WEAK", "WOMEN", "CHILDREN", "TOWN",
     "NOT", "JUST", "ALL", "COME", "ACROSS", "POSSIBILITY", "WHAT", "THINK", "BEST", "ITS", "ILL",
     "HERE", "PEOPLE", "LIVE", "THERE", "WHY", "OKAY", "FINE", "ACTING", "MYSTERIOUS", "WHATEVER",
@@ -402,6 +404,16 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 or bbox_width(current_bbox) <= bbox_width(candidate_bbox) * 0.52
                 or bbox_width(candidate_bbox) <= bbox_width(current_bbox) * 0.52
             )
+            # Prevent merging lines of different scripts (e.g. Thai and English)
+            a_has_thai = has_non_latin_characters(current_text)
+            b_has_thai = has_non_latin_characters(candidate_text)
+            a_is_latin_only = not a_has_thai and bool(re.search(r"[A-Za-z]", current_text))
+            b_is_latin_only = not b_has_thai and bool(re.search(r"[A-Za-z]", candidate_text))
+            if (a_has_thai and b_is_latin_only) or (b_has_thai and a_is_latin_only):
+                merged.append(current)
+                current = candidate
+                continue
+
             if current_has_terminal_punct and current_text_len > 2 and not (candidate_has_terminal_punct and min(current_text_len, candidate_text_len) <= 2):
                 merged.append(current)
                 current = candidate
@@ -415,6 +427,7 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 and gap_x >= -max(10.0, min_height * 0.65)
                 and overlap_x <= 0.28
             )
+            is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
         else:
             # Tightened: prevent vertically stacked short words (EH/ME) from merging
             same_band = (
@@ -425,8 +438,11 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 (gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34)
                 and overlap_x <= 0.88  # block near-full vertical stacking
             )
+            is_very_close = gap_x <= max(36.0, min_height * 1.6)
 
-        if same_band and close_enough and fragment_like:
+        should_merge = fragment_like or is_very_close
+
+        if same_band and close_enough and should_merge:
             merged_words = list(current.get("words") or []) + list(candidate.get("words") or [])
             merged_line = make_line_from_words(
                 merged_words,
@@ -1539,7 +1555,7 @@ def prune_easyocr_panel_weak_singletons(
         mostly_lower = len(letters) >= 3 and lower_ratio >= 0.8
 
         # Preserve short/high-confidence speech-style keep tokens.
-        if token in LATIN_SHORT_KEEP_TOKENS and confidence >= 90:
+        if token in LATIN_SHORT_KEEP_TOKENS and confidence >= 20:
             kept.append(line)
             continue
 
@@ -1668,6 +1684,92 @@ def prune_easyocr_panel_shadow_singletons(
     return kept, drops
 
 
+def prune_easyocr_panel_low_density_effects(
+    lines: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    language_codes: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if len(lines) <= 2:
+        return list(lines), []
+
+    # Calculate density metrics
+    metrics = []
+    for line in lines:
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        bbox = line.get("bbox")
+        if not bbox:
+            continue
+        
+        line_w = max(1.0, bbox_width(bbox))
+        line_h = max(1.0, bbox_height(bbox))
+        area = line_w * line_h
+        
+        # Word count calculation that handles CJK and Latin differently
+        if has_non_latin_characters(text):
+            word_count = max(1, len(text.replace(" ", "")))
+        else:
+            word_count = max(1, len([w for w in re.split(r"\s+", text) if w]))
+            
+        metrics.append({
+            "line": line,
+            "text": text,
+            "area": area,
+            "word_count": word_count,
+            "area_per_word": area / word_count,
+            "w": line_w,
+            "h": line_h,
+            "confidence": normalize_confidence(line.get("confidence", 0.0)),
+        })
+
+    if len(metrics) < 3:
+        return list(lines), []
+
+    # Calculate median area per word across the page
+    sorted_apw = sorted(m["area_per_word"] for m in metrics)
+    median_apw = max(1.0, sorted_apw[len(sorted_apw) // 2])
+
+    kept: List[Dict[str, Any]] = []
+    drops: List[Dict[str, Any]] = []
+
+    for m in metrics:
+        line = m["line"]
+        is_effect = False
+        drop_reason = ""
+        
+        # Guard: Lines with many words are typically legitimate dialogue
+        if m["word_count"] >= 4:
+            kept.append(line)
+            continue
+            
+        # Check if line is an outlier in terms of area-per-word
+        # A typical speech bubble has a balanced area/word ratio. Effects have very high area per word.
+        if m["area_per_word"] >= median_apw * 3.8:
+            if m["area"] >= max(8000.0, (width * height) * 0.005) and m["w"] >= width * 0.08:
+                is_effect = True
+                drop_reason = "easyLowDensityEffect"
+
+        # Special check for oversized singletons like "GLEAM" with extremely large borders
+        if not is_effect and m["word_count"] <= 2 and m["area"] >= 18000.0:
+            if m["area_per_word"] >= median_apw * 2.8:
+                is_effect = True
+                drop_reason = "easyOversizedSingletonEffect"
+
+        if is_effect:
+            drops.append({
+                "reason": drop_reason,
+                "source": "easyocr_panel",
+                "text": m["text"],
+                "confidence": m["confidence"],
+            })
+        else:
+            kept.append(line)
+
+    return kept, drops
+
+
 def count_line_word_boxes(line: Dict[str, Any]) -> int:
     words = line.get("words") or []
     valid_words = [word for word in words if normalize_text(str(word.get("text") or ""))]
@@ -1699,6 +1801,7 @@ def prune_paddle_panel_contextual_noise_lines(
     width: int,
     height: int,
     language_codes: List[str],
+    quality_profile: str = "",
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if len(lines) <= 1 or is_cjk_or_thai_language_codes(language_codes):
         return list(lines), []
@@ -1895,7 +1998,7 @@ def prune_paddle_panel_contextual_noise_lines(
                 })
                 continue
 
-        if not has_non_latin_characters(text) and token_count <= 3 and compact_length <= 16:
+        if quality_profile not in {"best", "balanced"} and not has_non_latin_characters(text) and token_count <= 3 and compact_length <= 16:
             local_strong_neighbors = [
                 neighbor for neighbor in neighbors
                 if neighbor["strongSignal"]
@@ -1915,6 +2018,7 @@ def prune_paddle_panel_contextual_noise_lines(
                 and compact_length <= 12
                 and word_box_count <= 1
                 and line_area >= 22000.0
+                and confidence <= 88.0
             )
 
             if (
@@ -1990,6 +2094,7 @@ def minimal_cleanup_external_result(
     height: int,
     pipeline_profile: str,
     language_codes: List[str] | None = None,
+    quality_profile: str = "",
 ) -> Dict[str, Any]:
     language_codes = list(language_codes or [])
     lines: List[Dict[str, Any]] = []
@@ -2079,7 +2184,7 @@ def minimal_cleanup_external_result(
         lines.append(candidate_line)
         words.extend(candidate_line["words"])
 
-    if is_non_english_latin_panel:
+    if is_latin_panel:
         lines = merge_same_band_fragments(reorder_tilted_line_clusters(lines))
         lines = merge_short_lead_lines(lines)
         lines = reorder_tilted_line_clusters(lines)
@@ -2088,7 +2193,7 @@ def minimal_cleanup_external_result(
         lines = reorder_tilted_line_clusters(lines)
         lines = merge_near_duplicate_lines(lines)
     if is_latin_panel:
-        lines, contextual_drops = prune_paddle_panel_contextual_noise_lines(lines, width, height, language_codes)
+        lines, contextual_drops = prune_paddle_panel_contextual_noise_lines(lines, width, height, language_codes, quality_profile)
         for drop in contextual_drops:
             reason = str(drop.get("reason") or "")
             if reason == "paddlePanelBridgeLine":
@@ -2456,13 +2561,13 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
     return output
 
 
-def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profile: str, width: int, height: int, language: str = "") -> Dict[str, Any]:
+def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profile: str, width: int, height: int, language: str = "", quality_profile: str = "") -> Dict[str, Any]:
     language_codes = [code.strip() for code in str(language or "").split("+") if code.strip()]
     is_korean_panel = pipeline_profile == "panel" and "kor" in language_codes
     if engine == "paddleocr" and is_korean_panel:
         return cleanup_paddle_korean_panel_result(result, width, height)
     if engine == "paddleocr" and pipeline_profile == "panel":
-        return minimal_cleanup_external_result(result, width, height, pipeline_profile, language_codes)
+        return minimal_cleanup_external_result(result, width, height, pipeline_profile, language_codes, quality_profile)
 
     candidate_lines: List[Dict[str, Any]] = []
     candidate_words: List[Dict[str, Any]] = []
@@ -2789,6 +2894,9 @@ def get_paddle_profile_key(args: argparse.Namespace) -> str:
     if normalize_pipeline_profile(args.pipeline_profile) == "panel" and lang == "korean":
         return "cpu_korean_default"
     if normalize_pipeline_profile(args.pipeline_profile) == "panel":
+        quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
+        if quality_profile in {"best", "balanced"}:
+            return "cpu_panel_accurate"
         return "cpu_panel_fast"
     if lang in {"korean", "japan", "ch", "chinese_cht", "th"}:
         return "cpu_cjk"
@@ -2829,7 +2937,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
         )
     )
     text_detection_model_name = None
-    if profile_key == "cpu_cjk":
+    if profile_key in {"cpu_cjk", "cpu_panel_accurate"}:
         text_detection_model_name = "PP-OCRv5_server_det"
     elif profile_key != "cpu_korean_default":
         text_detection_model_name = "PP-OCRv5_mobile_det"
@@ -2851,7 +2959,11 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
 
     # Priority: prefer local pre-bundled model dirs (offline / portable build) if present
     if lang == "th":
-        local_det = resolve_local_model_dir("PP-OCRv5_mobile_det") or resolve_local_model_dir("th_PP-OCRv5_mobile_det")
+        local_det = None
+        if profile_key != "cpu_panel_accurate":
+            local_det = resolve_local_model_dir("PP-OCRv5_mobile_det") or resolve_local_model_dir("th_PP-OCRv5_mobile_det")
+        else:
+            local_det = resolve_local_model_dir("PP-OCRv5_server_det")
         local_rec = resolve_local_model_dir("th_PP-OCRv5_mobile_rec") or resolve_local_model_dir("th_PP-OCRv4_rec")
         if local_det:
             kwargs["text_detection_model_dir"] = local_det
@@ -2878,7 +2990,32 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
     rec_score_thresh: float | None = None
 
     if pipeline == "panel":
-        if profile_key == "cpu_panel_fast":
+        if profile_key == "cpu_panel_accurate":
+            if quality_profile == "balanced":
+                if shortest <= 420:
+                    det_limit = 2000
+                elif shortest <= 720:
+                    det_limit = 2200
+                else:
+                    det_limit = 2400
+                rec_batch = 10
+                det_thresh = 0.24 if is_cjk_like else 0.30
+                det_box_thresh = 0.54 if is_cjk_like else 0.60
+                det_unclip_ratio = 1.55 if is_cjk_like else 1.45
+                rec_score_thresh = 0.35
+            else:  # "best"
+                if shortest <= 420:
+                    det_limit = 2400
+                elif shortest <= 720:
+                    det_limit = 2600
+                else:
+                    det_limit = 2800
+                rec_batch = 8
+                det_thresh = 0.20 if is_cjk_like else 0.30
+                det_box_thresh = 0.50 if is_cjk_like else 0.60
+                det_unclip_ratio = 1.60 if is_cjk_like else 1.48
+                rec_score_thresh = 0.30
+        elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300
             elif shortest <= 720:
@@ -2890,7 +3027,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
             det_box_thresh = 0.66 if quality_profile == "fast" else 0.62 if quality_profile == "balanced" else 0.58
             rec_score_thresh = 0.38 if quality_profile == "fast" else 0.35 if quality_profile == "balanced" else 0.30
         if is_cjk_like:
-            if profile_key != "cpu_panel_fast":
+            if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
                 if aspect_ratio >= 2.3 or longest >= 7000:
                     det_limit = 2560
                 elif longest >= 5000:
@@ -2909,7 +3046,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = min(3200, int(det_limit * 1.08))
                     rec_batch = 7
-            if lang == "korean":
+            if lang == "korean" and profile_key != "cpu_panel_accurate":
                 if quality_profile == "fast":
                     det_thresh = 0.34
                     det_box_thresh = 0.66
@@ -2928,7 +3065,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     det_unclip_ratio = 1.55
                     rec_score_thresh = 0.30
         else:
-            if profile_key != "cpu_panel_fast":
+            if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
                 if shortest <= 420:
                     det_limit = 2300
                 elif shortest <= 720:
@@ -3150,16 +3287,60 @@ def get_paddle_ocr(lang: str, profile_key: str) -> Any:
     constructor_kwargs = build_paddle_constructor_kwargs(lang, profile_key)
     try:
         ocr = PaddleOCR(**constructor_kwargs)
-    except TypeError:
-        legacy_kwargs = {
-            "lang": lang,
-            "show_log": False,
-            "use_angle_cls": False,
-            "use_gpu": False,
-        }
-        if constructor_kwargs.get("text_detection_model_name"):
-            legacy_kwargs["det_model_name"] = constructor_kwargs["text_detection_model_name"]
-        ocr = PaddleOCR(**legacy_kwargs)
+    except Exception as e:
+        import sys
+        print(f"[WARN] Failed to initialize PaddleOCR with primary kwargs: {e}", file=sys.stderr)
+        
+        # Fallback System: If we were trying to use the server-class detection model, fallback to mobile model!
+        using_server_det = (
+            constructor_kwargs.get("text_detection_model_name") == "PP-OCRv5_server_det"
+            or "PP-OCRv5_server_det" in str(constructor_kwargs.get("text_detection_model_dir", ""))
+        )
+        
+        if using_server_det:
+            print("[WARN] Server-class detection model failed. Falling back to mobile detection model (PP-OCRv5_mobile_det)...", file=sys.stderr)
+            fallback_kwargs = constructor_kwargs.copy()
+            fallback_kwargs["text_detection_model_name"] = "PP-OCRv5_mobile_det"
+            
+            # Resolve local model dir for mobile model if it exists, or let it auto-download
+            if "text_detection_model_dir" in fallback_kwargs:
+                local_det = resolve_local_model_dir("PP-OCRv5_mobile_det") or resolve_local_model_dir("th_PP-OCRv5_mobile_det")
+                if local_det:
+                    fallback_kwargs["text_detection_model_dir"] = local_det
+                else:
+                    fallback_kwargs.pop("text_detection_model_dir", None)
+                    
+            try:
+                ocr = PaddleOCR(**fallback_kwargs)
+                PADDLE_OCR_CACHE[cache_key] = ocr
+                return ocr
+            except Exception as e2:
+                print(f"[WARN] Fallback to mobile detection model failed: {e2}", file=sys.stderr)
+        
+        # Legacy fallback path
+        try:
+            try:
+                legacy_kwargs = {
+                    "lang": lang,
+                    "device": "cpu",
+                    "enable_mkldnn": False,
+                }
+                if constructor_kwargs.get("text_detection_model_name"):
+                    legacy_kwargs["text_detection_model_name"] = "PP-OCRv5_mobile_det"
+                ocr = PaddleOCR(**legacy_kwargs)
+            except Exception:
+                legacy_kwargs = {
+                    "lang": lang,
+                    "show_log": False,
+                    "use_angle_cls": False,
+                    "use_gpu": False,
+                }
+                if constructor_kwargs.get("text_detection_model_name"):
+                    legacy_kwargs["det_model_name"] = "PP-OCRv5_mobile_det"
+                ocr = PaddleOCR(**legacy_kwargs)
+        except Exception as e_final:
+            print(f"[FATAL] All PaddleOCR initialization paths failed: {e_final}", file=sys.stderr)
+            raise e_final
 
     PADDLE_OCR_CACHE[cache_key] = ocr
     return ocr
@@ -3235,6 +3416,222 @@ def create_inverted_image_variant(image_path: str) -> str:
     return variant_path
 
 
+def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple[str, float, float]:
+    """
+    Proportionally downscale image so total pixel count stays under max_pixels.
+    Preserves aspect ratio — no distortion.
+    Returns (path, scale_x, scale_y); if no resize needed returns the original path.
+    """
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+            pixel_count = w * h
+            if pixel_count <= max_pixels:
+                return image_path, 1.0, 1.0
+
+            # Compute uniform scale so w_new * h_new <= max_pixels
+            scale = (max_pixels / pixel_count) ** 0.5
+            new_w = max(1, int(w * scale))
+            new_h = max(1, int(h * scale))
+
+            scale_x = w / new_w
+            scale_y = h / new_h
+
+            temp_dir = os.path.join(tempfile.gettempdir(), "pdf-translator-ocr", "paddle-variants")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_path = os.path.join(temp_dir, f"resized-{uuid.uuid4().hex}.png")
+
+            rgba = img.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            background.alpha_composite(rgba)
+            rgb = background.convert("RGB")
+
+            resampling = getattr(Image, "Resampling", None)
+            filter_type = resampling.LANCZOS if resampling else getattr(Image, "ANTIALIAS", Image.BICUBIC)
+
+            resized_img = rgb.resize((new_w, new_h), filter_type)
+            resized_img.save(temp_path, format="PNG")
+
+            print(f"[ocrBridge] Resized image {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})")
+            return temp_path, scale_x, scale_y
+    except Exception as e:
+        import sys
+        print(f"[WARN] Failed to resize large image: {e}", file=sys.stderr)
+        return image_path, 1.0, 1.0
+
+
+def chunk_tall_image_for_paddle(
+    image_path: str,
+    max_chunk_height: int = 2800,
+    overlap_px: int = 120,
+) -> List[Tuple[str, int, int]]:
+    """
+    Split a very tall image into overlapping horizontal strips for PaddleOCR.
+    Returns list of (chunk_path, y_offset_in_original, chunk_height).
+    Chunks are written to a temp directory and should be cleaned up by the caller.
+    """
+    temp_dir = os.path.join(tempfile.gettempdir(), "pdf-translator-ocr", "paddle-chunks")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    chunks: List[Tuple[str, int, int]] = []
+    with Image.open(image_path) as img:
+        w, h = img.size
+        rgba = img.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        background.alpha_composite(rgba)
+        rgb = background.convert("RGB")
+
+        stride = max_chunk_height - overlap_px
+        y = 0
+        while y < h:
+            y_end = min(y + max_chunk_height, h)
+            crop = rgb.crop((0, y, w, y_end))
+            chunk_path = os.path.join(temp_dir, f"chunk-{uuid.uuid4().hex}.png")
+            crop.save(chunk_path, format="PNG")
+            chunks.append((chunk_path, y, y_end - y))
+            if y_end >= h:
+                break
+            y += stride
+
+    print(f"[ocrBridge] Split tall image {w}x{h} into {len(chunks)} chunks (max_chunk_height={max_chunk_height}, overlap={overlap_px})")
+    return chunks
+
+
+def merge_chunked_paddle_results(
+    chunk_results: List[Tuple[Dict[str, Any], int]],  # (result, y_offset)
+    total_height: int,
+    overlap_px: int,
+) -> Dict[str, Any]:
+    """
+    Merge OCR results from multiple horizontal image chunks back into one result.
+    Adjusts y-coordinates and deduplicates lines that appear in overlap regions.
+    """
+    all_lines: List[Dict[str, Any]] = []
+    all_words: List[Dict[str, Any]] = []
+
+    for result, y_offset in chunk_results:
+        for line in result.get("lines") or []:
+            adjusted = dict(line)
+            if "bbox" in adjusted:
+                b = dict(adjusted["bbox"])
+                b["y0"] = float(b["y0"]) + y_offset
+                b["y1"] = float(b["y1"]) + y_offset
+                adjusted["bbox"] = b
+            if "quad" in adjusted:
+                adjusted["quad"] = [
+                    {"x": pt["x"], "y": float(pt["y"]) + y_offset}
+                    for pt in adjusted["quad"]
+                ]
+            if "_sortY" in adjusted:
+                adjusted["_sortY"] = float(adjusted["_sortY"]) + y_offset
+            if "sortHintY" in adjusted:
+                adjusted["sortHintY"] = float(adjusted["sortHintY"]) + y_offset
+            all_lines.append(adjusted)
+
+        for word in result.get("words") or []:
+            adjusted = dict(word)
+            if "bbox" in adjusted:
+                b = dict(adjusted["bbox"])
+                b["y0"] = float(b["y0"]) + y_offset
+                b["y1"] = float(b["y1"]) + y_offset
+                adjusted["bbox"] = b
+            all_words.append(adjusted)
+
+    # Deduplicate lines that appear in the overlap zone (same text, close y-position)
+    # Keep the line whose y_center is closer to the mid-point of its source chunk.
+    deduped_lines: List[Dict[str, Any]] = []
+    used_sigs: set = set()
+    for line in sorted(all_lines, key=lambda l: float((l.get("bbox") or {}).get("y0") or 0)):
+        text = (line.get("text") or "").strip()
+        if not text:
+            deduped_lines.append(line)
+            continue
+        y0 = float((line.get("bbox") or {}).get("y0") or 0)
+        # Round y to nearest overlap_px/2 bucket to catch near-duplicates
+        bucket = round(y0 / (overlap_px / 2))
+        sig = (text[:40], bucket)
+        if sig in used_sigs:
+            continue
+        used_sigs.add(sig)
+        deduped_lines.append(line)
+
+    first_debug = (chunk_results[0][0].get("debug") or {}) if chunk_results else {}
+    return {
+        "lines": deduped_lines,
+        "words": all_words,
+        "text": "\n".join(l.get("text") or "" for l in deduped_lines if l.get("text")),
+        "confidence": sum(
+            float((r.get("debug") or {}).get("confidence") or r.get("confidence") or 0)
+            for r, _ in chunk_results
+        ) / max(1, len(chunk_results)),
+        "debug": {
+            **first_debug,
+            "chunkedPaddle": True,
+            "chunkCount": len(chunk_results),
+        },
+    }
+
+
+def rescale_normalized_paddle_result(result: Dict[str, Any], scale_x: float, scale_y: float) -> Dict[str, Any]:
+    if scale_x == 1.0 and scale_y == 1.0:
+        return result
+
+    # Track scaled bounding boxes to prevent double scaling
+    # due to word objects being shared between lines and the root word list.
+    scaled_bboxes = set()
+
+    lines = result.get("lines") or []
+    for line in lines:
+        if "bbox" in line:
+            bbox = line["bbox"]
+            if id(bbox) not in scaled_bboxes:
+                bbox["x0"] = float(bbox["x0"]) * scale_x
+                bbox["x1"] = float(bbox["x1"]) * scale_x
+                bbox["y0"] = float(bbox["y0"]) * scale_y
+                bbox["y1"] = float(bbox["y1"]) * scale_y
+                scaled_bboxes.add(id(bbox))
+
+        if "words" in line:
+            for word in line["words"]:
+                if "bbox" in word:
+                    wbbox = word["bbox"]
+                    if id(wbbox) not in scaled_bboxes:
+                        wbbox["x0"] = float(wbbox["x0"]) * scale_x
+                        wbbox["x1"] = float(wbbox["x1"]) * scale_x
+                        wbbox["y0"] = float(wbbox["y0"]) * scale_y
+                        wbbox["y1"] = float(wbbox["y1"]) * scale_y
+                        scaled_bboxes.add(id(wbbox))
+
+        if "quad" in line:
+            for pt in line["quad"]:
+                if id(pt) not in scaled_bboxes:
+                    pt["x"] = float(pt["x"]) * scale_x
+                    pt["y"] = float(pt["y"]) * scale_y
+                    scaled_bboxes.add(id(pt))
+
+        if "_sortY" in line:
+            line["_sortY"] = float(line["_sortY"]) * scale_y
+        if "sortHintY" in line:
+            line["sortHintY"] = float(line["sortHintY"]) * scale_y
+        if "_sortX" in line:
+            line["_sortX"] = float(line["_sortX"]) * scale_x
+        if "sortHintX" in line:
+            line["sortHintX"] = float(line["sortHintX"]) * scale_x
+
+    words = result.get("words") or []
+    for word in words:
+        if "bbox" in word:
+            wbbox = word["bbox"]
+            if id(wbbox) not in scaled_bboxes:
+                wbbox["x0"] = float(wbbox["x0"]) * scale_x
+                wbbox["x1"] = float(wbbox["x1"]) * scale_x
+                wbbox["y0"] = float(wbbox["y0"]) * scale_y
+                wbbox["y1"] = float(wbbox["y1"]) * scale_y
+                scaled_bboxes.add(id(wbbox))
+
+    return result
+
+
 def run_paddleocr_pass(
     ocr: Any,
     image_path: str,
@@ -3243,19 +3640,26 @@ def run_paddleocr_pass(
     profile_key: str,
     quality_profile: str,
     pass_label: str,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
 
     if hasattr(ocr, "predict"):
         raw_result, applied_predict_kwargs = call_paddle_predict(ocr, image_path, predict_kwargs)
 
+        normalized = normalize_paddle_output(raw_result)
+        if scale_x != 1.0 or scale_y != 1.0:
+            normalized = rescale_normalized_paddle_result(normalized, scale_x, scale_y)
+
         cleaned = cleanup_external_result(
-            normalize_paddle_output(raw_result),
+            normalized,
             "paddleocr",
             args.pipeline_profile,
             args.width,
             args.height,
             args.language,
+            quality_profile=quality_profile,
         )
         cleanup_debug = cleaned.get("debug") or {}
         cleaned["debug"] = {
@@ -3274,23 +3678,23 @@ def run_paddleocr_pass(
 
     if hasattr(ocr, "ocr"):
         try:
-            cleaned = cleanup_external_result(
-                normalize_paddle_v2_output(ocr.ocr(image_path, cls=False)),
-                "paddleocr",
-                args.pipeline_profile,
-                args.width,
-                args.height,
-                args.language,
-            )
+            raw = ocr.ocr(image_path, cls=False)
         except TypeError:
-            cleaned = cleanup_external_result(
-                normalize_paddle_v2_output(ocr.ocr(image_path)),
-                "paddleocr",
-                args.pipeline_profile,
-                args.width,
-                args.height,
-                args.language,
-            )
+            raw = ocr.ocr(image_path)
+
+        normalized = normalize_paddle_v2_output(raw)
+        if scale_x != 1.0 or scale_y != 1.0:
+            normalized = rescale_normalized_paddle_result(normalized, scale_x, scale_y)
+
+        cleaned = cleanup_external_result(
+            normalized,
+            "paddleocr",
+            args.pipeline_profile,
+            args.width,
+            args.height,
+            args.language,
+            quality_profile=quality_profile,
+        )
         cleanup_debug = cleaned.get("debug") or {}
         cleaned["debug"] = {
             "profile": f"{profile_key}:{quality_profile}",
@@ -3316,87 +3720,191 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     ocr = get_paddle_ocr(lang, profile_key)
     predict_kwargs = build_paddle_predict_kwargs(args)
     started_at = time.perf_counter()
-    polarity = analyze_image_polarity(args.image)
-    original_result = run_paddleocr_pass(
-        ocr,
-        args.image,
-        args,
-        predict_kwargs,
-        profile_key,
-        quality_profile,
-        "original",
-    )
 
-    if not should_try_inverted_paddle_pass(polarity, original_result, args.pipeline_profile, quality_profile):
-        original_debug = original_result.get("debug") or {}
-        original_debug["imagePolarity"] = polarity
-        original_debug["paddlePass"] = "original"
-        original_debug["runtimeMs"] = round((time.perf_counter() - started_at) * 1000, 1)
-        original_debug.setdefault("timingsMs", {})["ocr"] = round((time.perf_counter() - started_at) * 1000, 1)
-        original_result["debug"] = original_debug
-        return original_result
+    # ── Determine processing path based on image dimensions ─────────────────
+    # Tall images (aspect ratio >= 4:1 with height > 3000px) are chunked into
+    # overlapping strips to avoid memory issues and improve OCR accuracy.
+    # Other large images are pixel-count-capped to stay under ~9MP.
+    TALL_ASPECT_THRESHOLD = 4.0
+    TALL_HEIGHT_THRESHOLD = 3000
+    CHUNK_HEIGHT = 2800
+    CHUNK_OVERLAP = 120
+    MAX_PIXELS = 9_000_000
 
-    inverted_path = create_inverted_image_variant(args.image)
     try:
-        inverted_result = run_paddleocr_pass(
-            ocr,
-            inverted_path,
-            args,
-            predict_kwargs,
-            profile_key,
-            quality_profile,
-            "inverted",
-        )
+        with Image.open(args.image) as _probe:
+            _iw, _ih = _probe.size
+    except Exception:
+        _iw, _ih = args.width or 0, args.height or 0
 
-        merged_input = {
-            "lines": list(original_result.get("lines") or []) + list(inverted_result.get("lines") or []),
-            "words": list(original_result.get("words") or []) + list(inverted_result.get("words") or []),
-            "pageSegMode": original_result.get("pageSegMode") or inverted_result.get("pageSegMode"),
-        }
-        merged = cleanup_external_result(
-            merged_input,
-            "paddleocr",
-            args.pipeline_profile,
-            args.width,
-            args.height,
-            args.language,
-        )
+    aspect_ratio = _ih / max(1, _iw)
+    use_chunked_path = (_ih >= TALL_HEIGHT_THRESHOLD and aspect_ratio >= TALL_ASPECT_THRESHOLD)
+
+    if use_chunked_path:
+        # ── Chunked tall-image path ──────────────────────────────────────────
+        print(f"[ocrBridge] Tall image detected ({_iw}x{_ih}, ratio={aspect_ratio:.1f}): using chunked OCR path")
+        chunks = chunk_tall_image_for_paddle(args.image, max_chunk_height=CHUNK_HEIGHT, overlap_px=CHUNK_OVERLAP)
+        chunk_results: List[Tuple[Dict[str, Any], int]] = []
+        try:
+            for chunk_path, y_offset, _ch in chunks:
+                try:
+                    # Each chunk is small enough — no further resize needed unless exceptional
+                    chunk_working, cx, cy = resize_image_if_large(chunk_path, max_pixels=MAX_PIXELS)
+                    try:
+                        polarity = analyze_image_polarity(chunk_working)
+                        result = run_paddleocr_pass(
+                            ocr, chunk_working, args, predict_kwargs,
+                            profile_key, quality_profile, "chunk",
+                            scale_x=cx, scale_y=cy,
+                        )
+                        # Optionally try inverted pass per chunk
+                        if should_try_inverted_paddle_pass(polarity, result, args.pipeline_profile, quality_profile):
+                            inv_path = create_inverted_image_variant(chunk_working)
+                            try:
+                                inv_result = run_paddleocr_pass(
+                                    ocr, inv_path, args, predict_kwargs,
+                                    profile_key, quality_profile, "chunk-inv",
+                                    scale_x=cx, scale_y=cy,
+                                )
+                                merged_lines = list(result.get("lines") or []) + list(inv_result.get("lines") or [])
+                                result["lines"] = merged_lines
+                            except Exception as inv_err:
+                                print(f"[WARN] Chunk inverted pass failed: {inv_err}", file=sys.stderr)
+                            finally:
+                                try:
+                                    os.remove(inv_path)
+                                except OSError:
+                                    pass
+                        chunk_results.append((result, y_offset))
+                    finally:
+                        if chunk_working != chunk_path:
+                            try:
+                                os.remove(chunk_working)
+                            except OSError:
+                                pass
+                finally:
+                    try:
+                        os.remove(chunk_path)
+                    except OSError:
+                        pass
+        except Exception:
+            # Clean up remaining chunk files on error
+            for cp, _, _ in chunks:
+                try:
+                    os.remove(cp)
+                except OSError:
+                    pass
+            raise
+
+        merged = merge_chunked_paddle_results(chunk_results, _ih, CHUNK_OVERLAP)
         merged_debug = merged.get("debug") or {}
         merged["debug"] = {
             **merged_debug,
             "profile": f"{profile_key}:{quality_profile}",
             "qualityProfile": quality_profile,
             "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
-            "dropCounts": dict(merged_debug.get("dropCounts") or {}),
-            "droppedWords": list(merged_debug.get("droppedWords") or []),
-            "timingsMs": {
-                "ocr": round((time.perf_counter() - started_at) * 1000, 1),
-                "originalPassMs": float((original_result.get("debug") or {}).get("runtimeMs") or 0.0),
-                "invertedPassMs": float((inverted_result.get("debug") or {}).get("runtimeMs") or 0.0),
-            },
-            "predictConfig": merged_debug.get("predictConfig") or (original_result.get("debug") or {}).get("predictConfig") or predict_kwargs,
-            "imagePolarity": polarity,
-            "paddlePass": {
-                "mode": "dual",
-                "usedInverted": True,
-                "original": {
-                    "lines": len(original_result.get("lines") or []),
-                    "words": len(original_result.get("words") or []),
-                    "confidence": normalize_confidence(original_result.get("confidence", 0.0)),
-                },
-                "inverted": {
-                    "lines": len(inverted_result.get("lines") or []),
-                    "words": len(inverted_result.get("words") or []),
-                    "confidence": normalize_confidence(inverted_result.get("confidence", 0.0)),
-                },
-            },
+            "paddlePass": "chunked",
+            "chunkCount": len(chunk_results),
         }
         return merged
-    finally:
+
+    # ── Normal (non-chunked) path ────────────────────────────────────────────
+    # Proportionally downscale to at most MAX_PIXELS total pixels
+    working_image, scale_x, scale_y = resize_image_if_large(args.image, max_pixels=MAX_PIXELS)
+
+    try:
+        polarity = analyze_image_polarity(working_image)
+        original_result = run_paddleocr_pass(
+            ocr,
+            working_image,
+            args,
+            predict_kwargs,
+            profile_key,
+            quality_profile,
+            "original",
+            scale_x=scale_x,
+            scale_y=scale_y,
+        )
+
+        if not should_try_inverted_paddle_pass(polarity, original_result, args.pipeline_profile, quality_profile):
+            original_debug = original_result.get("debug") or {}
+            original_debug["imagePolarity"] = polarity
+            original_debug["paddlePass"] = "original"
+            original_debug["runtimeMs"] = round((time.perf_counter() - started_at) * 1000, 1)
+            original_debug.setdefault("timingsMs", {})["ocr"] = round((time.perf_counter() - started_at) * 1000, 1)
+            original_result["debug"] = original_debug
+            return original_result
+
+        inverted_path = create_inverted_image_variant(working_image)
         try:
-            os.remove(inverted_path)
-        except OSError:
-            pass
+            inverted_result = run_paddleocr_pass(
+                ocr,
+                inverted_path,
+                args,
+                predict_kwargs,
+                profile_key,
+                quality_profile,
+                "inverted",
+                scale_x=scale_x,
+                scale_y=scale_y,
+            )
+
+            merged_input = {
+                "lines": list(original_result.get("lines") or []) + list(inverted_result.get("lines") or []),
+                "words": list(original_result.get("words") or []) + list(inverted_result.get("words") or []),
+                "pageSegMode": original_result.get("pageSegMode") or inverted_result.get("pageSegMode"),
+            }
+            merged = cleanup_external_result(
+                merged_input,
+                "paddleocr",
+                args.pipeline_profile,
+                args.width,
+                args.height,
+                args.language,
+                quality_profile=quality_profile,
+            )
+            merged_debug = merged.get("debug") or {}
+            merged["debug"] = {
+                **merged_debug,
+                "profile": f"{profile_key}:{quality_profile}",
+                "qualityProfile": quality_profile,
+                "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
+                "dropCounts": dict(merged_debug.get("dropCounts") or {}),
+                "droppedWords": list(merged_debug.get("droppedWords") or []),
+                "timingsMs": {
+                    "ocr": round((time.perf_counter() - started_at) * 1000, 1),
+                    "originalPassMs": float((original_result.get("debug") or {}).get("runtimeMs") or 0.0),
+                    "invertedPassMs": float((inverted_result.get("debug") or {}).get("runtimeMs") or 0.0),
+                },
+                "predictConfig": merged_debug.get("predictConfig") or (original_result.get("debug") or {}).get("predictConfig") or predict_kwargs,
+                "imagePolarity": polarity,
+                "paddlePass": {
+                    "mode": "dual",
+                    "usedInverted": True,
+                    "original": {
+                        "lines": len(original_result.get("lines") or []),
+                        "words": len(original_result.get("words") or []),
+                        "confidence": normalize_confidence(original_result.get("confidence", 0.0)),
+                    },
+                    "inverted": {
+                        "lines": len(inverted_result.get("lines") or []),
+                        "words": len(inverted_result.get("words") or []),
+                        "confidence": normalize_confidence(inverted_result.get("confidence", 0.0)),
+                    },
+                },
+            }
+            return merged
+        finally:
+            try:
+                os.remove(inverted_path)
+            except OSError:
+                pass
+    finally:
+        if working_image != args.image:
+            try:
+                os.remove(working_image)
+            except OSError:
+                pass
 
 
 def run_adapter(adapter_path: str, args: argparse.Namespace) -> Dict[str, Any]:

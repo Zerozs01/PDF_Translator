@@ -43,7 +43,7 @@ export const SmartCanvas: React.FC<SmartCanvasProps> = ({ regions }) => {
 
   // Handle Panning
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (activeTool === 'hand' || e.button === 1 || e.button === 2) { // Middle or Right click
+    if (activeTool === 'hand' || e.button === 1 || e.button === 2 || e.ctrlKey) { // Middle, Right or Ctrl+Left click
       setIsDragging(true);
       setLastMousePos({ x: e.clientX, y: e.clientY });
       e.preventDefault();

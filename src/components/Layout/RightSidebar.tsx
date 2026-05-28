@@ -65,6 +65,14 @@ const persistLanguagesSectionOpen = (open: boolean): void => {
   }
 };
 
+const LANGUAGES_CONFIG = [
+  { code: 'th', flagUrl: 'https://flagcdn.com/w20/th.png', label: 'TH', name: 'Thai (ไทย)' },
+  { code: 'en', flagUrl: 'https://flagcdn.com/w20/us.png', label: 'EN', name: 'English' },
+  { code: 'ja', flagUrl: 'https://flagcdn.com/w20/jp.png', label: 'JA', name: 'Japanese (日本語)' },
+  { code: 'ko', flagUrl: 'https://flagcdn.com/w20/kr.png', label: 'KO', name: 'Korean (한국어)' },
+  { code: 'zh', flagUrl: 'https://flagcdn.com/w20/cn.png', label: 'ZH', name: 'Chinese (中文)' },
+];
+
 interface RightSidebarProps {
   isAiProcessing?: boolean;
   isOfflineProcessing?: boolean;
@@ -103,9 +111,12 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(() => readPersistedPanelOpen());
   const [isLanguagesSectionOpen, setIsLanguagesSectionOpen] = useState<boolean>(() => readPersistedLanguagesSectionOpen());
   const [isTranslateInfoOpen, setIsTranslateInfoOpen] = useState(false);
+  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
   const isTranslateBusy = isAiProcessing || isOfflineProcessing;
   const isThaiTargetLanguage = targetLanguage === 'th';
   const overlayFontScalePercent = Math.round(overlayFontSizeScale * 100);
+
+  const activeLangConfig = LANGUAGES_CONFIG.find(l => l.code === targetLanguage) || LANGUAGES_CONFIG[0];
 
   const adjustOverlayFontScale = (delta: number) => {
     const next = Math.round((overlayFontSizeScale + delta) * 100) / 100;
@@ -160,43 +171,52 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
         {isLanguagesSectionOpen && (
           <div className="px-3 py-2">
-            <div className="max-h-36 overflow-y-auto border border-white/10 rounded-lg bg-slate-950/65 p-2 grid grid-cols-2 gap-x-3 gap-y-1">
-              {SUPPORTED_LANGUAGES.map((lang) => {
-                const selected = options.language.split('+').filter(Boolean).includes(lang.code);
-                return (
-                  <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-100 cursor-pointer min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      disabled={isProcessing}
-                      onChange={() => {
-                        const current = new Set(options.language.split('+').filter(Boolean));
-                        if (current.has(lang.code)) {
-                          current.delete(lang.code);
-                        } else {
-                          current.add(lang.code);
-                        }
-                        if (current.size === 0) {
-                          current.add('eng');
-                        }
-                        const ordered = SUPPORTED_LANGUAGES
-                          .map((language) => language.code)
-                          .filter((code) => current.has(code));
-                        setOptions({ language: ordered.join('+') });
-                      }}
-                      className="accent-[#2B9BFF]"
-                    />
-                    <span className="truncate">{lang.name}</span>
-                  </label>
-                );
-              })}
+            <div className="h-[66px] overflow-y-auto custom-scrollbar border border-white/10 rounded-lg bg-slate-950/65 px-2.5 py-1 grid grid-cols-2 gap-x-3 gap-y-1">
+              {(() => {
+                const sortedLanguages = [
+                  ...SUPPORTED_LANGUAGES.filter(lang => lang.code === 'eng'),
+                  ...SUPPORTED_LANGUAGES.filter(lang => lang.code === 'kor'),
+                  ...SUPPORTED_LANGUAGES.filter(lang => lang.code === 'tha'),
+                  ...SUPPORTED_LANGUAGES.filter(lang => lang.code === 'spa'),
+                  ...SUPPORTED_LANGUAGES.filter(lang => !['eng', 'kor', 'tha', 'spa'].includes(lang.code))
+                ];
+                return sortedLanguages.map((lang) => {
+                  const selected = options.language.split('+').filter(Boolean).includes(lang.code);
+                  return (
+                    <label key={lang.code} className="flex items-center gap-2 text-xs text-slate-100 cursor-pointer min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={isProcessing}
+                        onChange={() => {
+                          const current = new Set(options.language.split('+').filter(Boolean));
+                          if (current.has(lang.code)) {
+                            current.delete(lang.code);
+                          } else {
+                            current.add(lang.code);
+                          }
+                          if (current.size === 0) {
+                            current.add('eng');
+                          }
+                          const ordered = sortedLanguages
+                            .map((language) => language.code)
+                            .filter((code) => current.has(code));
+                          setOptions({ language: ordered.join('+') });
+                        }}
+                        className="accent-[#2B9BFF]"
+                      />
+                      <span className="truncate">{lang.name}</span>
+                    </label>
+                  );
+                });
+              })()}
             </div>
           </div>
         )}
       </div>
 
       {/* Header */}
-      <div className="relative p-2 border-b border-white/10 flex items-center justify-between overflow-hidden">
+      <div className="relative z-30 p-2 border-b border-white/10 flex items-center justify-between">
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(94deg,rgba(18,44,94,0.96)_0%,rgba(27,76,156,0.82)_46%,rgba(92,66,175,0.8)_100%)]" />
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.1)_0%,rgba(0,0,0,0.05)_52%,rgba(0,0,0,0.1)_100%)]" />
         <h3 className="relative z-10 text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
@@ -205,6 +225,54 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
         </h3>
         
         <div className="relative z-10 flex items-center gap-1.5">
+          {/* Custom Language Selector */}
+          <div className="relative">
+            <button
+              onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
+              type="button"
+              className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900/80 border border-white/15 text-[11px] font-bold text-white transition-colors hover:border-white/30"
+              title="Select translation target language"
+            >
+              <img 
+                src={activeLangConfig.flagUrl} 
+                alt={activeLangConfig.label} 
+                className="w-4 h-2.5 object-cover rounded-[1px] opacity-90 shrink-0" 
+              />
+              <span className="font-mono text-[10px]">{activeLangConfig.label}</span>
+              <ChevronDown size={10} className={`transition-transform duration-200 ${isLangDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isLangDropdownOpen && (
+              <>
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setIsLangDropdownOpen(false)}
+                />
+                <div className="absolute right-0 mt-1.5 w-36 bg-slate-950 border border-white/15 rounded-lg shadow-2xl z-50 py-1 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-100">
+                  {LANGUAGES_CONFIG.map((lang) => (
+                    <button
+                      key={lang.code}
+                      onClick={() => {
+                        setTargetLanguage(lang.code);
+                        setIsLangDropdownOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-white/10 ${
+                        targetLanguage === lang.code ? 'text-[#2B9BFF] font-semibold bg-white/5' : 'text-slate-200'
+                      }`}
+                    >
+                      <img 
+                        src={lang.flagUrl} 
+                        alt={lang.label} 
+                        className="w-4 h-2.5 object-cover rounded-[1px] opacity-90 shrink-0" 
+                      />
+                      <span>{lang.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
           <button
             onClick={() => setShowDebugOverlay(!showDebugOverlay)}
             type="button"
@@ -240,14 +308,28 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
         <div className="border-b border-white/10 bg-slate-950/45 p-2 space-y-1.5">
           {/* Translate To + Actions */}
           <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <label className="text-[8px] uppercase font-bold text-slate-400/85 tracking-wider block">
+            <div className="mb-1.5 flex items-center justify-between gap-1.5">
+              <label className="text-[8px] uppercase font-bold text-slate-400/85 tracking-wider block shrink-0">
                 Translate To / Actions
               </label>
+
+              <select
+                value={overlayFontPreset}
+                onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
+                disabled={!isThaiTargetLanguage}
+                className={`min-w-0 max-w-[125px] rounded border border-white/12 bg-slate-950 px-2 py-0.5 text-[10px] text-slate-200 focus:outline-none focus:border-[#2B9BFF]/60 ${!isThaiTargetLanguage ? 'cursor-not-allowed opacity-45' : ''}`}
+                aria-label="Overlay font preset"
+                title={isThaiTargetLanguage ? 'Overlay font preset' : 'Overlay font works when target language is Thai'}
+              >
+                {OVERLAY_FONT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+
               <button
                 type="button"
                 onClick={() => setIsTranslateInfoOpen((current) => !current)}
-                className={`flex h-5 w-5 items-center justify-center rounded-full border transition-colors ${
+                className={`flex h-5 w-5 items-center justify-center rounded-full border transition-colors shrink-0 ${
                   isTranslateInfoOpen
                     ? 'border-cyan-300/60 bg-cyan-500/18 text-cyan-100'
                     : 'border-white/12 bg-slate-900/60 text-slate-400 hover:border-white/25 hover:text-white'
@@ -258,31 +340,17 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 <Info size={11} />
               </button>
             </div>
-            <div className="grid grid-cols-12 gap-2">
-              <select
-                value={targetLanguage}
-                onChange={(e) => setTargetLanguage(e.target.value)}
-                aria-label="Translate target language"
-                title="Translate target language"
-                className="col-span-6 bg-slate-900/70 border border-white/15 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-[#2B9BFF]/60"
-              >
-                <option value="th">Thai (ไทย)</option>
-                <option value="en">English</option>
-                <option value="ja">Japanese (日本語)</option>
-                <option value="ko">Korean (한국어)</option>
-                <option value="zh">Chinese (中文)</option>
-              </select>
-
+            <div className="grid grid-cols-2 gap-1.5">
               <button
                 onClick={onOfflineTranslate}
                 disabled={isTranslateBusy}
-                className="col-span-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 disabled:opacity-50 py-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all"
+                className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.48)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
                 title="Use local Argos model on current page"
               >
                 {isOfflineProcessing ? (
-                  <RefreshCw className="animate-spin" size={12} />
+                  <RefreshCw className="animate-spin" size={11} />
                 ) : (
-                  <Languages size={12} />
+                  <Languages size={11} />
                 )}
                 Offline
               </button>
@@ -290,24 +358,24 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               <button
                 onClick={onAiTranslate}
                 disabled={isTranslateBusy}
-                className="col-span-3 bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-110 disabled:opacity-50 py-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all"
+                className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.58)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
                 title="Use Gemini cloud model on current page"
               >
                 {isAiProcessing ? (
-                  <RefreshCw className="animate-spin" size={12} />
+                  <RefreshCw className="animate-spin" size={11} />
                 ) : (
-                  <Sparkles size={12} />
+                  <Sparkles size={11} />
                 )}
                 AI
               </button>
             </div>
 
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="mt-1.5 grid grid-cols-2 gap-1.5">
               <button
                 type="button"
                 onClick={onOfflineTranslateAllPages}
                 disabled={isTranslateBusy}
-                className="rounded-lg border border-emerald-400/55 bg-emerald-500/18 px-2 py-1.5 text-[10px] font-semibold text-emerald-100 transition-all hover:bg-emerald-500/28 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-[#8BC3E5]/55 bg-[#8BC3E5]/18 px-2 py-1 text-[9.5px] font-semibold text-[#8BC3E5] transition-all hover:bg-[#8BC3E5]/28 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Run offline translation for all pages"
               >
                 Offline All Pages
@@ -316,7 +384,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 type="button"
                 onClick={onAiTranslateAllPages}
                 disabled={isTranslateBusy}
-                className="rounded-lg border border-cyan-300/65 bg-cyan-500/18 px-2 py-1.5 text-[10px] font-semibold text-cyan-100 transition-all hover:bg-cyan-500/28 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-cyan-300/65 bg-cyan-500/18 px-2 py-1 text-[9.5px] font-semibold text-cyan-100 transition-all hover:bg-cyan-500/28 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Run AI translation for all pages"
               >
                 AI All Pages
@@ -330,52 +398,11 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             )}
           </div>
 
-          <div className="rounded-lg border border-white/12 bg-slate-900/55 p-2">
-            <div className="flex items-center gap-2">
-              <select
-                value={overlayFontPreset}
-                onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
-                disabled={!isThaiTargetLanguage}
-                className={`min-w-0 flex-1 rounded-md border border-white/12 bg-slate-950/85 px-2 py-1.5 text-[11px] text-slate-100 focus:outline-none focus:border-[#2B9BFF]/60 ${!isThaiTargetLanguage ? 'cursor-not-allowed opacity-60' : ''}`}
-                aria-label="Overlay font preset"
-                title={isThaiTargetLanguage ? 'Overlay font preset' : 'Overlay font works when target language is Thai'}
-              >
-                {OVERLAY_FONT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-
-              <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => adjustOverlayFontScale(-0.05)}
-                  className="flex h-6 w-6 items-center justify-center rounded-md border border-white/12 bg-slate-950/80 text-slate-300 transition-colors hover:border-white/25 hover:text-white"
-                  title="Decrease overlay text size"
-                  aria-label="Decrease overlay text size"
-                >
-                  <Minus size={11} />
-                </button>
-                <span className="w-10 text-center text-[10px] font-semibold text-slate-300">
-                  {overlayFontScalePercent}%
-                </span>
-                <button
-                  type="button"
-                  onClick={() => adjustOverlayFontScale(0.05)}
-                  className="flex h-6 w-6 items-center justify-center rounded-md border border-white/12 bg-slate-950/80 text-slate-300 transition-colors hover:border-white/25 hover:text-white"
-                  title="Increase overlay text size"
-                  aria-label="Increase overlay text size"
-                >
-                  <Plus size={11} />
-                </button>
-              </div>
-            </div>
-          </div>
-
         </div>
       )}
 
       {/* OCR Text Layer Panel */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <OCRTextLayerPanel />
       </div>
     </aside>

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
+  ChevronDown, 
   Settings, 
   Languages, 
   MousePointer2, 
@@ -20,6 +21,8 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Minus,
+  Plus,
   Compass,
   Flame,
   FileText,
@@ -36,6 +39,9 @@ import {
   type OCRTranslationCacheEntry,
   useOCRTextLayerStore,
 } from './stores/useOCRTextLayerStore';
+import { useLayerStore } from './stores/useLayerStore';
+import { translationCoordinator } from './services/translation/translationCoordinator';
+import { TranslatableItem } from './types/translation';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
 import { searchablePDFService } from './services/pdf';
 import { pdfjs } from './services/pdf/pdfjsWorker';
@@ -60,12 +66,14 @@ import {
   resolveOverlaySourceBBox,
   sampleOverlayPaletteFromLine,
   shouldSkipOverlayRenderForSuspiciousLine,
+  resolveTranslationOverlayContext,
   type OverlayLayoutProfile,
   type OverlayPalette,
   type OverlayTypography,
 } from './components/OCR/translationOverlayUtils';
 import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
 import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
+import { buildLayerGroupsFromOCR } from './services/layers/LayerGroupingService';
 
 // Lazy Load Heavy Components
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
@@ -75,6 +83,22 @@ const ImageCanvas = React.lazy(() => import('./components/Image/ImageCanvas').th
 import { visionService } from './services/vision/VisionService';
 import { dbService } from './services/dbService';
 import './types/electron.d'; // Import type declarations
+
+import {
+  wrapCanvasText,
+  truncateCanvasText,
+  buildCanvasFontFamily
+} from './services/layout/canvasLayoutService';
+
+import {
+  buildBatchMarkdownPayload,
+  parseBatchJsonResponse,
+  type BatchPageTranslationPlan,
+  type BatchGroupPlan,
+  type TranslatableLine,
+  type TranslationGroupingProfile,
+  type GroupingDecision
+} from './services/translation/translationBatchService';
 
 type GlobalPrewarmState = typeof globalThis & {
   __pdfTranslatorExternalPrewarmStartedKeys?: Set<string>;
@@ -134,85 +158,7 @@ const scaleOverlayTypography = (typography: OverlayTypography, scale: number): O
   };
 };
 
-const truncateCanvasText = (
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  suffix: string = '...'
-): string => {
-  const normalized = String(text || '');
-  if (!normalized) return '';
-  if (ctx.measureText(normalized).width <= maxWidth) return normalized;
 
-  let current = normalized;
-  while (current.length > 0 && ctx.measureText(`${current}${suffix}`).width > maxWidth) {
-    current = current.slice(0, -1);
-  }
-
-  return current ? `${current}${suffix}` : '';
-};
-
-const wrapCanvasText = (
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  maxLines: number,
-  forceSingleLine: boolean
-): string[] => {
-  const normalized = normalizeOverlayInlineText(String(text || ''));
-  if (!normalized) return [];
-  if (maxLines <= 1 || forceSingleLine) {
-    return [truncateCanvasText(ctx, normalized, maxWidth)];
-  }
-
-  const tokens = normalized.includes(' ')
-    ? normalized.split(/\s+/g).filter(Boolean)
-    : Array.from(normalized);
-
-  const lines: string[] = [];
-  let line = '';
-
-  tokens.forEach((token, index) => {
-    const unit = normalized.includes(' ') ? token : token;
-    const separator = normalized.includes(' ') && line ? ' ' : '';
-    const candidate = `${line}${separator}${unit}`;
-    if (!line || ctx.measureText(candidate).width <= maxWidth) {
-      line = candidate;
-      return;
-    }
-
-    lines.push(line);
-    line = unit;
-
-    if (lines.length >= maxLines) {
-      return;
-    }
-
-    if (index === tokens.length - 1) {
-      lines.push(line);
-    }
-  });
-
-  if (line && lines.length < maxLines) {
-    lines.push(line);
-  }
-
-  if (lines.length > maxLines) {
-    lines.length = maxLines;
-  }
-
-  if (lines.length === 0) {
-    return [truncateCanvasText(ctx, normalized, maxWidth)];
-  }
-
-  const consumed = lines.join(normalized.includes(' ') ? ' ' : '');
-  if (consumed.length < normalized.length) {
-    const lastIndex = Math.max(0, lines.length - 1);
-    lines[lastIndex] = truncateCanvasText(ctx, lines[lastIndex], maxWidth);
-  }
-
-  return lines;
-};
 
 const readPersistedBooleanFlag = (key: string, defaultValue: boolean): boolean => {
   if (typeof window === 'undefined') return defaultValue;
@@ -245,53 +191,7 @@ const GENERIC_FONT_FAMILY_SET = new Set([
   'ui-monospace',
 ]);
 
-const parseFontFamilyCandidates = (fontFamily: string): string[] =>
-  String(fontFamily || '')
-    .split(',')
-    .map((candidate) => candidate.trim().replace(/^['"]+|['"]+$/g, ''))
-    .filter(Boolean);
 
-const buildCanvasFontFamily = async (
-  preferredFontFamily: string,
-  fallbackFontFamily: string
-): Promise<string> => {
-  if (typeof document === 'undefined' || !('fonts' in document)) {
-    return preferredFontFamily || fallbackFontFamily;
-  }
-
-  const fontFaceSet = (document as Document & { fonts?: FontFaceSet }).fonts;
-  if (!fontFaceSet) {
-    return preferredFontFamily || fallbackFontFamily;
-  }
-
-  const candidates = [
-    ...parseFontFamilyCandidates(preferredFontFamily),
-    ...parseFontFamilyCandidates(fallbackFontFamily),
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = candidate.trim();
-    if (!normalized || GENERIC_FONT_FAMILY_SET.has(normalized.toLowerCase())) {
-      continue;
-    }
-
-    const quoted = /[\s'"]/.test(normalized) ? `"${normalized.replace(/"/g, '\\"')}"` : normalized;
-    try {
-      await Promise.allSettled([
-        fontFaceSet.load(`400 16px ${quoted}`, 'กขabCD'),
-        fontFaceSet.load(`500 16px ${quoted}`, 'กขabCD'),
-        fontFaceSet.load(`600 16px ${quoted}`, 'กขabCD'),
-      ]);
-      if (fontFaceSet.check(`16px ${quoted}`, 'กขabCD')) {
-        return `${quoted}, ${fallbackFontFamily || 'sans-serif'}`;
-      }
-    } catch {
-      // Ignore font probing errors and continue to the next family.
-    }
-  }
-
-  return preferredFontFamily || fallbackFontFamily;
-};
 
 const resolveOverlayExportScale = (
   visibleWidth: number,
@@ -387,7 +287,7 @@ async function translateBatchGemini(
   );
 }
 
-const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko']);
+const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko', 'ja']);
 
 const shouldUseOfflinePivotRoute = (sourceLanguage: string, targetLanguage: string): boolean => {
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
@@ -440,8 +340,17 @@ async function translateBatchOffline(
 
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+
+  // Argos offline translation is highly sensitive to case; all-caps often fails or produces garbage.
+  // Force lowercase for all Latin-based source text to improve quality.
+  const preparedTexts = texts.map((t) => {
+    const raw = String(t || '');
+    const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(raw);
+    return hasCjkOrThai ? raw : raw.toLowerCase();
+  });
+
   const directTranslations = await translateBatchOfflineBridge(
-    texts,
+    preparedTexts,
     type,
     mode,
     normalizedSource,
@@ -454,7 +363,7 @@ async function translateBatchOffline(
 
   try {
     const pivotEnglish = await translateBatchOfflineBridge(
-      texts,
+      preparedTexts,
       type,
       mode,
       normalizedSource,
@@ -485,26 +394,7 @@ async function translateBatchOffline(
     return directTranslations;
   }
 }
-
-export type TranslatableLine = {
-  index: number;
-  text: string;
-  sourceLength: number;
-  top: number;
-  bottom: number;
-  left: number;
-  right: number;
-  height: number;
-  area?: number;
-  wordCoverage?: number;
-  wordBoxCount?: number;
-  confidence?: number;
-  quad?: OCRLineWithLayout['quad'];
-  angleDeg?: number;
-  sortHintX?: number;
-  sortHintY?: number;
-  sourceEngine?: string;
-};
+export type { TranslatableLine, TranslationGroupingProfile, GroupingDecision };
 
 type AdoptedSourceCandidate = {
   text: string;
@@ -520,34 +410,7 @@ type TranslationGroup = {
   confidence?: number;
 };
 
-type TranslationGroupingProfile = 'default' | 'dense-dialogue' | 'line-by-line' | 'balloon-aware';
 
-type GroupingDecision = {
-  appliedProfile: 'raw' | 'dense-dialogue' | 'balloon-aware';
-  confidence: number;
-  fallbackReason?: string;
-};
-
-type BatchGroupPlan = {
-  index: number;
-  lines: TranslatableLine[];
-  sourceLanguage: string;
-  sourceText: string;
-  protectedText: string;
-  replacements: ProtectedTokenReplacement[];
-};
-
-type BatchPageTranslationPlan = {
-  pageNum: number;
-  ocr: OCRPageResult;
-  ocrEngine: OCREngine;
-  ocrLanguageKey: string;
-  sourceLanguage: string;
-  lines: TranslatableLine[];
-  groups: BatchGroupPlan[];
-  groupingProfile: TranslationGroupingProfile;
-  groupingDecision?: GroupingDecision;
-};
 
 type ResolvedTranslationGroups = {
   groups: TranslationGroup[];
@@ -590,105 +453,7 @@ const buildGeminiBasePrompt = (
   ].join(' ');
 };
 
-const buildBatchMarkdownPayload = (
-  plans: BatchPageTranslationPlan[],
-  translationMode: TranslationMode,
-  sourceLanguage: string,
-  targetLanguage: string
-): string => {
-  const lines: string[] = [];
-  lines.push('# OCR Translation Batch');
-  lines.push('');
-  lines.push('## Metadata');
-  lines.push(`- translationMode: ${translationMode}`);
-  lines.push(`- sourceLanguage: ${sourceLanguage}`);
-  lines.push(`- targetLanguage: ${targetLanguage}`);
-  lines.push(`- pageCount: ${plans.length}`);
-  lines.push('');
-  lines.push('## Required Output Format');
-  lines.push('Return ONLY valid JSON with this exact schema:');
-  lines.push('```json');
-  lines.push('{');
-  lines.push('  "pages": [');
-  lines.push('    { "page": 1, "groups": [ { "index": 0, "text": "..." } ] }');
-  lines.push('  ]');
-  lines.push('}');
-  lines.push('```');
-  lines.push('Rules:');
-  lines.push('- Every input group index must appear once in output for the same page.');
-  lines.push('- Keep index values unchanged.');
-  lines.push('- Translate text only; do not include notes, markdown, or extra fields.');
-  lines.push('');
-  lines.push('## OCR Input');
 
-  for (const plan of plans) {
-    lines.push('');
-    lines.push(`### Page ${plan.pageNum}`);
-    lines.push(`- ocrEngine: ${plan.ocrEngine}`);
-    lines.push(`- ocrLanguage: ${plan.ocrLanguageKey}`);
-    lines.push(`- sourceLanguage: ${plan.sourceLanguage}`);
-    lines.push(`- groupingProfile: ${plan.groupingProfile}`);
-    lines.push('- groups:');
-    for (const group of plan.groups) {
-      const clean = String(group.protectedText || '').replace(/\r?\n+/g, ' ').trim();
-      const lineIndexes = group.lines.map((line) => line.index).join(',');
-      lines.push(`  - [${group.index}] (lines: ${lineIndexes}, source: ${group.sourceLanguage}) ${clean}`);
-    }
-  }
-
-  return lines.join('\n');
-};
-
-const extractJsonObjectText = (raw: string): string => {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = (fenced?.[1] || raw || '').trim();
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) {
-    throw new Error('Gemini batch response does not contain a valid JSON object.');
-  }
-  return candidate.slice(start, end + 1);
-};
-
-const parseBatchJsonResponse = (raw: string): Map<number, Map<number, string>> => {
-  const jsonText = extractJsonObjectText(raw);
-  const parsed = JSON.parse(jsonText) as {
-    pages?: Array<{
-      page?: number;
-      pageNumber?: number;
-      groups?: Array<{ index?: number; text?: string }>;
-      lines?: Array<{ index?: number; text?: string }>;
-    }>;
-  };
-
-  if (!Array.isArray(parsed.pages)) {
-    throw new Error('Gemini batch response JSON is missing pages array.');
-  }
-
-  const byPage = new Map<number, Map<number, string>>();
-  parsed.pages.forEach((pageEntry) => {
-    const pageNum = Number(pageEntry.page ?? pageEntry.pageNumber);
-    if (!Number.isFinite(pageNum)) return;
-    const lineMap = new Map<number, string>();
-    if (Array.isArray(pageEntry.groups)) {
-      pageEntry.groups.forEach((line) => {
-        const index = Number(line.index);
-        if (!Number.isFinite(index)) return;
-        lineMap.set(index, String(line.text || '').trim());
-      });
-    } else if (Array.isArray(pageEntry.lines)) {
-      // Backward-compatible fallback if model returns previous line schema.
-      pageEntry.lines.forEach((line) => {
-        const index = Number(line.index);
-        if (!Number.isFinite(index)) return;
-        lineMap.set(index, String(line.text || '').trim());
-      });
-    }
-    byPage.set(pageNum, lineMap);
-  });
-
-  return byPage;
-};
 
 const SENTENCE_END_REGEX = /[.!?\u2026\u3002\uFF01\uFF1F]$/;
 const SOFT_CONTINUATION_END_REGEX = /[,;:\-\u2014\u2013\u3001\uFF0C]$/;
@@ -795,6 +560,23 @@ const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /\bASICE\b/gi, replacement: 'AS ICE' },
   { pattern: /\bSCOLD\s+AS\s+ICE\b/gi, replacement: 'COLD AS ICE' },
   { pattern: /\bHE\s+SCOLD\b/gi, replacement: "HE'S COLD" },
+  { pattern: /WHAT\s+KIND-OE/gi, replacement: 'WHAT KIND OF' },
+  { pattern: /MY\s*STERIOUS/gi, replacement: 'MYSTERIOUS' },
+  { pattern: /UKELY/gi, replacement: 'LIKELY' },
+  { pattern: /HMM_\s*GUESS/gi, replacement: 'HMM I GUESS' },
+  { pattern: /\bHUH_\b/gi, replacement: 'HUH...' },
+  { pattern: /\bHUH\s*_\b/gi, replacement: 'HUH...' },
+  { pattern: /\bGO\s+ON_\b/gi, replacement: 'Go on.' },
+  { pattern: /\bGO\s+ON\s*_\b/gi, replacement: 'Go on.' },
+  { pattern: /\bFOR\s+WHILE\b/gi, replacement: 'FOR A WHILE' },
+  { pattern: /\bON\s+MY\s+MIND\b/gi, replacement: 'on my mind' },
+  { pattern: /\bImidefiniely\b/gi, replacement: "I'm definitely" },
+  { pattern: /\bImidefinitely\b/gi, replacement: "I'm definitely" },
+  { pattern: /\bARENT\b/gi, replacement: "AREN'T" },
+  { pattern: /\baren['’]t\s+we\b/gi, replacement: "aren't we" },
+  { pattern: /\bmur\s+dered\b/gi, replacement: 'murdered' },
+  { pattern: /\bTo\s+My\s+PRidE\b/gi, replacement: 'To my pride' },
+  { pattern: /\bTHAT'S\s+FAiR\b/gi, replacement: "That's fair" },
   {
     pattern: /\bthis\s+submaie\s+to\s+in\s+ureat\s+the\s+ydoot\s+falinth\s+i\s+chapt\s+we\s+willtudhow\b/gi,
     replacement: 'this submarine to insure that they do not fail in this chapter we will study how',
@@ -838,6 +620,14 @@ const normalizeEnglishOcrNoiseForTranslation = (text: string): string => {
   ) {
     normalized = 'of the effects of gravitational, electrical, magnetic, or contact forces caused';
   }
+
+  // Strip trailing underscores from English words that often appear in OCR artifacts
+  normalized = normalized.replace(/([A-Za-z]{2,})_+(\s|$)/g, '$1$2');
+  normalized = normalized.replace(/([A-Za-z]+)_+([A-Za-z]+)/g, '$1 $2'); // Fix mid-word underscores
+
+  // Semicolons often confuse Argos offline models; replace with commas for better flow
+  normalized = normalized.replace(/([A-Za-z])\s*;\s*(\s|$)/g, '$1, $2');
+  normalized = normalized.replace(/([A-Za-z])\s*;/g, '$1,');
 
   return normalizeWhitespace(normalized);
 };
@@ -930,31 +720,73 @@ const normalizePossessiveCompoundsForTranslation = (text: string): string => {
   return normalizeWhitespace(normalized);
 };
 
-const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
+export const cleanJapaneseOcrSpacing = (text: string): string => {
+  let cleaned = text.replace(/([\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\uff00-\uffef])\s(?=[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\uff00-\uffef])/g, '$1');
+  cleaned = cleaned.replace(/([\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf])\s(?=[\u3000-\u303f])/g, '$1');
+  cleaned = cleaned.replace(/([\u3000-\u303f])\s(?=[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf])/g, '$1');
+  return cleaned;
+};
+
+export const cleanKoreanOcrSpacing = (text: string): string => {
+  return text.replace(/([\uac00-\ud7af])\s(?=[\uac00-\ud7af])/g, '$1');
+};
+
+export const normalizeJapaneseOcrNoiseForTranslation = (text: string): string => {
+  let normalized = String(text || '');
+  normalized = normalized
+    .replace(/。/g, '. ')
+    .replace(/、/g, ', ')
+    .replace(/！/g, '! ')
+    .replace(/？/g, '? ')
+    .replace(/〜/g, '~')
+    .replace(/「/g, '"')
+    .replace(/」/g, '"')
+    .replace(/『/g, "'")
+    .replace(/』/g, "'");
+
+  normalized = normalized.replace(/[il1I]\s*ッ/g, 'っ');
+  normalized = normalized.replace(/エ[il1I]/g, 'えっ');
+  return normalizeWhitespace(normalized);
+};
+
+export const normalizeKoreanOcrNoiseForTranslation = (text: string): string => {
+  let normalized = String(text || '');
+  normalized = normalized
+    .replace(/。/g, '. ')
+    .replace(/、/g, ', ')
+    .replace(/！/g, '! ')
+    .replace(/？/g, '? ')
+    .replace(/〜/g, '~');
+  return normalizeWhitespace(normalized);
+};
+
+export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   let normalized = normalizeTechnicalArtifactsForTranslation(text);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);
   normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
-  if (normalizeTranslationLanguage(sourceLanguage, '') === 'es') {
+
+  const normLang = normalizeTranslationLanguage(sourceLanguage, '');
+  if (normLang === 'es') {
     normalized = normalizeSpanishOcrNoiseForTranslation(normalized);
+  } else if (normLang === 'ja') {
+    normalized = cleanJapaneseOcrSpacing(normalized);
+    normalized = normalizeJapaneseOcrNoiseForTranslation(normalized);
+  } else if (normLang === 'ko') {
+    normalized = cleanKoreanOcrSpacing(normalized);
+    normalized = normalizeKoreanOcrNoiseForTranslation(normalized);
   }
+
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   normalized = normalized.replace(/([,.;:!?])(\S)/g, '$1 $2');
+  normalized = normalized.replace(/(?<=\s|^)_+/g, '').replace(/_+(?=\s|$)/g, '');
+  normalized = normalized.replace(/\b([A-Za-z]{2,})_+(\s|$)/g, '$1...$2');
+  normalized = normalized.replace(/\b_+([A-Za-z]{2,})\b/g, '$1');
+  normalized = normalizeWhitespace(normalized);
 
-  const latinOnly = normalized.replace(/[^A-Za-z]/g, '');
-  const words = normalized.split(/\s+/g).filter(Boolean);
-  const hasMixedCaseWord = words.some((word) => /[A-Z]/.test(word) && /[a-z]/.test(word));
-  const looksLikeAcronymSequence = words.length > 0 && words.every((word) => {
-    const lettersOnly = word.replace(/[^A-Za-z]/g, '');
-    if (!lettersOnly) return true;
-    return lettersOnly.length <= 3 && lettersOnly === lettersOnly.toUpperCase();
-  });
-  if (latinOnly.length >= 5 && !hasMixedCaseWord && !looksLikeAcronymSequence) {
-    const uppercaseCount = latinOnly.replace(/[^A-Z]/g, '').length;
-    const upperRatio = uppercaseCount / latinOnly.length;
-    if (upperRatio >= 0.72) {
-      normalized = normalized.toLowerCase();
-      normalized = normalized.replace(/(^|[.!?]\s+)([a-z])/g, (_m, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
-    }
+  const hasUpperLatin = /[A-Z]/.test(normalized);
+  if (hasUpperLatin) {
+    normalized = normalized.toLowerCase();
+    normalized = normalized.replace(/(^|[.!?]\s+)([a-z])/g, (_m, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
   }
 
   return normalized;
@@ -1193,6 +1025,43 @@ const getTranslationScriptStats = (text: string): {
     latinRatio: latinChars / Math.max(1, letterChars),
     thaiRatio: thaiChars / Math.max(1, letterChars),
   };
+};
+
+const evaluateUntranslatedTranslation = (
+  lines: Array<{ index: number; text: string }>,
+  translatedByIndex: Map<number, string>,
+  sourceLanguage: string,
+  targetLanguage: string
+): { shouldSkip: boolean; retryRatio: number; thaiRatio: number; total: number } => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget !== 'th') {
+    return { shouldSkip: false, retryRatio: 0, thaiRatio: 0, total: 0 };
+  }
+
+  let total = 0;
+  let retryCount = 0;
+  let thaiChars = 0;
+  let letterChars = 0;
+
+  lines.forEach((line) => {
+    const translated = translatedByIndex.get(line.index) || '';
+    total += 1;
+    if (shouldRetryLineTranslation(line.text, translated, sourceLanguage, normalizedTarget)) {
+      retryCount += 1;
+    }
+    const stats = getTranslationScriptStats(translated);
+    thaiChars += stats.thaiChars;
+    letterChars += stats.letterChars;
+  });
+
+  if (total < 4) {
+    return { shouldSkip: false, retryRatio: 0, thaiRatio: 0, total };
+  }
+
+  const retryRatio = retryCount / Math.max(1, total);
+  const thaiRatio = thaiChars / Math.max(1, letterChars);
+  const shouldSkip = retryRatio >= 0.65 && thaiRatio < 0.06;
+  return { shouldSkip, retryRatio, thaiRatio, total };
 };
 
 const shouldRetryGroupTranslation = (
@@ -1908,7 +1777,11 @@ const shouldForceKeepComicTranslationLine = (
   return true;
 };
 
-export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolvedText: string): boolean => {
+export const isLikelyGhostTranslatableLine = (
+  line: OCRLine | undefined,
+  resolvedText: string,
+  engineHint?: string
+): boolean => {
   const text = normalizeWhitespace(String(resolvedText || ''));
   if (!text) return true;
   if (!line?.bbox) return false;
@@ -1923,6 +1796,8 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
   const cjkCompact = compact.replace(/[^\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
+  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP)$/i.test(asciiCompact);
 
   const validWords = (Array.isArray(line.words) ? line.words : []).filter((word) => {
     const wordText = normalizeWhitespace(String(word?.text || ''));
@@ -1941,6 +1816,38 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
 
   if (shouldForceKeepComicTranslationLine(text, line)) {
     return false;
+  }
+
+  // Apply these safety filters to ALL OCR engines to guarantee obvious ghost noise is always dropped
+  // 1. Pure non-alphanumeric symbol noise (e.g., "|||", "///", "\\", "---")
+  const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
+  if (isPureSymbolNoise) {
+    return true;
+  }
+
+  // 2. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky balloon borders, e.g. "lll", "III", "111", "I l I")
+  const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-s]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
+  if (isVerticalLineJunk) {
+    return true;
+  }
+
+  // 3. Single-character junk (English letters or digits that aren't valid single-letter words like I, A, O)
+  const isSingleCharJunk = !hasCjkOrThai
+    && asciiCompact.length === 1
+    && !/^[IAO]$/i.test(asciiCompact);
+  if (isSingleCharJunk) {
+    return true;
+  }
+
+  // 4. Tiny noise junk boxes with very short character lengths
+  const isExternalEngine = engineHint === 'paddleocr' || line?.sourceEngine === 'paddleocr' || engineHint === 'easyocr' || line?.sourceEngine === 'easyocr';
+  const isTinyJunkBox = !hasCjkOrThai
+    && asciiCompact.length <= 3
+    && area <= 8000
+    && (isExternalEngine ? avgConfidence <= 98 : avgConfidence <= 85)
+    && !isKnownShortWord;
+  if (isTinyJunkBox) {
+    return true;
   }
 
   const giantLineBox = (
@@ -1964,6 +1871,14 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
   const lowCoverageLargeBox = wordCoverage <= 0.26;
   const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
   if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox) {
+    return true;
+  }
+
+  // New aggressive sparse SFX filter: large area but very few characters
+  // Removed wordCoverage check because OCR sometimes creates word bboxes as large as the line bbox
+  const isSparseSfxBox = (area >= 12000 && compact.length <= 14 && (area / Math.max(1, compact.length)) >= 1200)
+    || (area >= 24000 && compact.length <= 22 && (area / Math.max(1, compact.length)) >= 1000);
+  if (isSparseSfxBox && !shouldForceKeepComicTranslationLine(text, line)) {
     return true;
   }
 
@@ -2024,7 +1939,8 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     && area <= 2100
     && avgConfidence <= 94
     && !/[!?]/.test(text);
-  if (tinyAsciiSingletonNoise) {
+  // Exempt known short English words — "I" (pronoun), "A" (article) are not ghost noise
+  if (tinyAsciiSingletonNoise && !isKnownShortWord) {
     return true;
   }
 
@@ -2036,7 +1952,8 @@ export const isLikelyGhostTranslatableLine = (line: OCRLine | undefined, resolve
     && width <= 88
     && height <= 44
     && area <= 2600
-    && avgConfidence <= 92;
+    && avgConfidence <= 92
+    && !isKnownShortWord;
   if (noWordTinyAsciiNoise) {
     return true;
   }
@@ -2220,16 +2137,13 @@ export const shouldPruneContextualGhostTranslatableLine = (
   const trailingHyphenFragment = /-\s*$/.test(text)
     && tokenCount <= 3
     && (readability <= 12 || area >= 30000);
-  const malformedMixedCaseFragment = /[a-z][A-Z]/.test(text)
-    && tokenCount <= 3
-    && (readability <= 10.5 || area >= 18000);
   const oversizedWeakSingleton = tokenCount <= 1
     && compact.length <= 12
     && wordBoxCount <= 1
     && area >= 22000;
 
   return (
-    (strongBelow && (trailingHyphenFragment || malformedMixedCaseFragment))
+    (strongBelow && trailingHyphenFragment)
     || (strongAbove && strongBelow && oversizedWeakSingleton)
     || (strongAbove && strongBelow && wordBoxCount <= 1 && wordCoverage <= 0.22 && readability <= 4.2 && area >= 18000)
   );
@@ -3090,6 +3004,30 @@ export const applyThaiTechnicalGlossary = (sourceText: string, translatedText: s
   if (/\bfixed\s+connections?\b/i.test(source)) {
     return withTechnicalLabel('จุดต่อแบบยึดแน่น');
   }
+  if (/^are\s+welded$/i.test(source) || compactLower === 'arewelded') {
+    return withTechnicalLabel('ถูกเชื่อมเข้าด้วยกัน');
+  }
+  if (/^welded$/i.test(source) || compactLower === 'welded') {
+    return withTechnicalLabel('เชื่อมเข้าด้วยกัน');
+  }
+  if (/^two$/i.test(source) || compactLower === 'two') {
+    return withTechnicalLabel('สอง');
+  }
+  if (/^three$/i.test(source) || compactLower === 'three') {
+    return withTechnicalLabel('สาม');
+  }
+  if (/^pin$/i.test(source) || compactLower === 'pin') {
+    return withTechnicalLabel('พิน');
+  }
+  if (/^in$/i.test(source) || compactLower === 'in') {
+    return withTechnicalLabel('ใน');
+  }
+  if (/^fixed$/i.test(source) || compactLower === 'fixed') {
+    return withTechnicalLabel('ยึดแน่น');
+  }
+  if (/^reactions$/i.test(source) || compactLower === 'reactions') {
+    return withTechnicalLabel('แรงปฏิกิริยา');
+  }
   if (/\bthis\s+utility\s+building\s+is\b/i.test(source) && /\bpin\s+supported\b/i.test(source)) {
     return withTechnicalLabel('อาคารอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของเสา');
   }
@@ -3155,6 +3093,41 @@ export const applyThaiConversationalGlossary = (
     .replace(/\p{M}+/gu, '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
+
+  if (/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(source)) {
+    // Hangul SFX / Conversational manual fallbacks for Offline model gaps
+    const koMap: Record<string, string> = {
+      '헉': 'เฮือก',
+      '헉헉': 'แฮ่กๆ',
+      '하하': 'ฮ่าๆ',
+      '하하하': 'ฮ่าๆๆ',
+      '후후': 'หึๆ',
+      '음': 'อืม',
+      '응': 'อืม',
+      '아': 'อา',
+      '앗': 'อ๊ะ',
+      '어': 'เอ๊ะ',
+      '어라': 'เอ๊ะ',
+      '오': 'โอ้',
+      '에': 'เอ๋',
+      '우와': 'ว้าว',
+      '쉿': 'ชู่ว',
+      '짝': 'แปะ',
+      '쾅': 'ปัง',
+      '탁': 'ตึก',
+      '끄덕': 'พยักหน้า',
+      '절레': 'ส่ายหน้า',
+      '안녕': 'สวัสดี',
+      '네': 'ใช่',
+      '아니': 'ไม่',
+      '진짜': 'จริงเหรอ',
+      '제발': 'ได้โปรด',
+    };
+    const strippedKo = source.replace(/[\s.!?~,]/g, '');
+    if (koMap[strippedKo]) {
+      return preserveSourceTrailingPunctuation(source, koMap[strippedKo]);
+    }
+  }
   const compactNormalizedSourceAsciiUpper = normalizedSpanishSource
     .normalize('NFD')
     .replace(/\p{M}+/gu, '')
@@ -3170,6 +3143,26 @@ export const applyThaiConversationalGlossary = (
 
   if (/^C+EH[!?…]*$/i.test(source.replace(/\s+/g, '')) || compactSourceAsciiUpper === 'CEH') {
     return preserveSourceTrailingPunctuation(source, 'เอ๋');
+  }
+
+  if (compactSourceAsciiUpper.includes('ACTUALLYTHISHASBEENONMYMINDFORWHILE')) {
+    return preserveSourceTrailingPunctuation(source, 'ที่จริงแล้ว เรื่องนี้อยู่ในใจฉันมาสักพักแล้ว');
+  }
+
+  if (/^ACTUALLY[,.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ที่จริงแล้ว');
+  }
+
+  if (/^GO\s+ON[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ไปต่อเลย');
+  }
+
+  if (/^SAY\s+THE\s+REST[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'พูดส่วนที่เหลือ');
+  }
+
+  if (/^MY[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ของฉัน');
   }
 
   if (
@@ -3570,6 +3563,67 @@ export const applyThaiConversationalGlossary = (
   ) {
     return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับเราด้วย หากเพื่อนร่วมทีมของเราแข็งแกร่งขึ้น');
   }
+
+  if (
+    /\bI['’]?LL\s+LET\s+YOU\b/i.test(source)
+    && /\bEXPERIMENT\s+WITH\b/i.test(source)
+    && /\bHER\s+IN\s+RETURN\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะให้คุณทดลองกับเธอเป็นการตอบแทน');
+  }
+  if (
+    /\bTHINK\s+ABOUT\s+THE\b/i.test(source)
+    && /\bSKILLS\s+THE\s+MONSTER\b/i.test(source)
+    && /\bUSED\s+EARLIER\s+AND\b/i.test(source)
+    && /\bFOCUS\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'ลองนึกถึงทักษะที่สัตว์ประหลาดใช้ก่อนหน้านี้ แล้วจดจ่ออยู่กับมัน');
+  }
+  if (
+    /\bYOU[-\s]+COULD\s+SAY\b/i.test(source)
+    && (/\bSOMETHING\s+THAT\s+MIGHT\b/i.test(source) || /\bSO\s+ME\s+THING\s+THAT\s+MIGHT\b/i.test(source))
+    && /\bHELP\s+YOU\s+TOO\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า มีบางอย่างที่อาจช่วยคุณได้เช่นกัน');
+  }
+  if (/^I['’]?LL\s+LET\s+YOU[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะให้คุณ');
+  }
+  if (/^EXPERIMENT\s+WITH[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทดลองกับ');
+  }
+  if (/^THINK\s+ABOUT\s+THE[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ลองนึกถึง');
+  }
+  if (/^SKILLS\s+THE\s+MONSTER[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ทักษะที่สัตว์ประหลาด');
+  }
+  if (/^USED\s+EARLIER\s+AND[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ใช้ก่อนหน้านี้ แล้ว');
+  }
+  if (/^EARLIER\s+AND[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ก่อนหน้านี้ แล้ว');
+  }
+  if (/^FOCUS[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'จดจ่ออยู่กับมัน');
+  }
+  if (/^YOU[-\s]+COULD\s+SAY[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า');
+  }
+  if (/^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีบางอย่างที่อาจ');
+  }
+  if (/^HELP\s+YOU\s+TOO[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ช่วยคุณได้เช่นกัน');
+  }
+  if (
+    /\bAND\s+IT['’]?S\s+GOOD\s+FOR\b/i.test(source)
+    && /\bUS\s+IF\s+OUR\s+TE?A?M+MATE\b/i.test(source)
+    && /\bBECOMES\s+STRONGER\b/i.test(source)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับเราด้วย หากเพื่อนร่วมทีมของเราแข็งแกร่งขึ้น');
+  }
+
   if (/^AND\s+IT['’]?S\s+GOOD\s+FOR[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'และมันก็ดีสำหรับ');
   }
@@ -3623,6 +3677,29 @@ export const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'อายนาร์');
   }
 
+  // --- Korean/Manhwa Loanwords & Names ---
+  if (compactSourceUpper.includes('YOIL')) {
+    const replaced = replaceNameToken(translated, 'YOIL', 'โยอิล');
+    if (replaced !== translated) return replaced;
+    // If not found in translated (hallucination happened), we might need to fix it later in fallback
+  }
+  if (compactSourceUpper.includes('UNNIE')) {
+    const replaced = replaceNameToken(translated, 'UNNIE', 'ออนนี่');
+    if (replaced !== translated) return replaced;
+  }
+  if (compactSourceUpper.includes('OPPA')) {
+    const replaced = replaceNameToken(translated, 'OPPA', 'โอปป้า');
+    if (replaced !== translated) return replaced;
+  }
+  if (compactSourceUpper.includes('NOONA')) {
+    const replaced = replaceNameToken(translated, 'NOONA', 'นูน่า');
+    if (replaced !== translated) return replaced;
+  }
+  if (compactSourceUpper.includes('HYUNG')) {
+    const replaced = replaceNameToken(translated, 'HYUNG', 'ฮยอง');
+    if (replaced !== translated) return replaced;
+  }
+
   if (/^hm+$/.test(compactSource) || /^hmm+$/.test(compactSource)) {
     return preserveSourceTrailingPunctuation(source, 'อืม');
   }
@@ -3660,14 +3737,114 @@ export const applyThaiConversationalGlossary = (
     }
   }
 
-  return translated;
+  // --- Final Fixup: Replace untranslated artifacts in the result ---
+  let finalResult = translated;
+  if (/\b(?:MY|my)\b/.test(finalResult) && /[\u0E00-\u0E7F]/.test(finalResult)) {
+    // For Thai output, ensure 'my' is translated if it was carried over
+    finalResult = finalResult.replace(/\bMY\b/g, 'ของฉัน').replace(/\bmy\b/g, 'ของฉัน');
+  }
+  if (/\b(?:GO\s+ON|go\s+on)\b/.test(finalResult) && /[\u0E00-\u0E7F]/.test(finalResult)) {
+    finalResult = finalResult.replace(/\bGO\s+ON\b/gi, 'ไปต่อเลย');
+  }
+
+  // Handle common missing 'A' in OCR
+  if (finalResult.includes('สำหรับขณะหนึ่ง') || finalResult.includes('สำหรับครู่หนึ่ง')) {
+    finalResult = finalResult.replace('สำหรับขณะหนึ่ง', 'มาสักพักแล้ว').replace('สำหรับครู่หนึ่ง', 'มาสักพักแล้ว');
+  }
+
+  // --- Hallucination Filter: Clean up musical or template artifacts from Argos ---
+  if (!source.includes('♪') && finalResult.includes('♪')) {
+    finalResult = finalResult.replace(/♪/g, '').trim();
+  }
+
+  const isSuspiciousHallucination = (
+    (finalResult.includes('your language') && finalResult.includes('your board'))
+    || (finalResult.includes('And your board') && finalResult.includes('your language'))
+    || finalResult.includes('โย่ง (กุมาร)')
+    || finalResult.includes('โย่ง(กุมาร)')
+    || finalResult.includes('และโย่ง (กุมาร)')
+  );
+
+  if (isSuspiciousHallucination) {
+    // If it contains the hallmark hallucination patterns, strip them aggressively
+    finalResult = finalResult
+      .replace(/\[?And\s+your\s+language\s+and\s+your\s+board\s*\]?/gi, '')
+      .replace(/\[?And\s+your\s+board\s+and\s+your\s+language\s*\]?/gi, '')
+      .replace(/และโย่ง\s*\(กุมาร\)/g, '')
+      .replace(/โย่ง\s*\(กุมาร\)/g, '')
+      .trim();
+
+    // If after stripping it's empty or too short compared to source, it was a total failure
+    const sourceTokens = source.split(/\s+/).filter(Boolean).length;
+    const resultTokens = finalResult.split(/\s+/).filter(Boolean).length;
+    if (finalResult.length < 2 || (sourceTokens >= 2 && resultTokens < sourceTokens / 2)) {
+      console.warn(`[HallucinationFilter] translation failed for: "${source}" -> applying glossary fallback.`);
+      // If translation failed completely, try to translate common tokens in the source text
+      let manual = source.replace(/\bAND\b/gi, 'และ')
+        .replace(/\bYOIL\b/gi, 'โยอิล')
+        .replace(/\bUNNIE\b/gi, 'ออนนี่')
+        .replace(/\bOPPA\b/gi, 'โอปป้า')
+        .replace(/\bNOONA\b/gi, 'นูน่า')
+        .replace(/\bHYUNG\b/gi, 'ฮยอง');
+      return manual;
+    }
+  }
+
+  // Clean up remaining brackets if they look like template wrappers
+  if (finalResult.startsWith('[') && finalResult.endsWith(']') && !source.includes('[')) {
+    finalResult = finalResult.slice(1, -1).trim();
+  }
+
+  // Final length-ratio safety check for short phrases
+  // If source is very short (3 words) but result is 3x longer and contains weird English noise, discard it.
+  if (source.length > 0 && finalResult.length > source.length * 4 && /[\u0E00-\u0E7F]/.test(finalResult)) {
+     const resultWords = finalResult.split(/\s+/).filter(Boolean);
+     const engWordCount = resultWords.filter(w => /^[a-z]+$/i.test(w)).length;
+     if (engWordCount > 5 && !source.includes('language') && !source.includes('board')) {
+       // Apply manual translation as last resort
+       return source.replace(/\bAND\b/gi, 'และ')
+        .replace(/\bYOIL\b/gi, 'โยอิล')
+        .replace(/\bUNNIE\b/gi, 'ออนนี่');
+     }
+  }
+
+  // Ensure names are applied even if the translator kept them in English
+  if (/\b(?:YOIL|UNNIE|OPPA|NOONA|HYUNG)\b/i.test(finalResult)) {
+    finalResult = finalResult.replace(/\bAND\b/gi, 'และ')
+      .replace(/\bYOIL\b/gi, 'โยอิล')
+      .replace(/\bUNNIE\b/gi, 'ออนนี่')
+      .replace(/\bOPPA\b/gi, 'โอปป้า')
+      .replace(/\bNOONA\b/gi, 'นูน่า')
+      .replace(/\bHYUNG\b/gi, 'ฮยอง');
+  }
+
+  // --- Translation Polish: Phrasal verbs and Tag questions ---
+  const sourceLower = source.toLowerCase();
+  if (sourceLower.includes('stand_out') || sourceLower.includes('stand out')) {
+    finalResult = finalResult.replace(/โดดเด่น\s*ออก(?:มา|ไป)?/g, 'โดดเด่น');
+  }
+  if (sourceLower.includes("aren't we") || sourceLower.includes("arent we")) {
+    finalResult = finalResult.replace(/(?:ไม่ได้\s*เรา|พวกเรา\s*ไม่ได้|ไม่\s*ใช่\s*เรา)(?:\?|$)/g, 'ไม่ใช่เหรอ?');
+  }
+  if (finalResult.includes('หือ?') && (sourceLower.includes('huh?') || sourceLower.includes('what?'))) {
+    // If it's a surprising question, 'อะไรนะ' is often more natural for comics
+    if (source.length >= 10 || sourceLower.includes('supposed to')) {
+      finalResult = finalResult.replace('หือ?', 'อะไรนะ?');
+    }
+  }
+
+  return finalResult;
 };
 
 const finalizeTranslatedLine = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   const source = normalizeWhitespace(String(sourceText || ''));
   let resolved = normalizeWhitespace(String(translatedText || ''));
   if (!resolved) {
-    resolved = source;
+    // Apply noise repair to source so we at least show cleaned text (e.g., "MYSTERIOUS CONCEPT" not "MY STERIOUS CONCEPT")
+    resolved = normalizeSourceForTranslation(source, 'en');
+    if (source && resolved === source) {
+      console.warn(`[finalizeTranslatedLine] fallback to source for: "${source}"`);
+    }
   }
 
   resolved = applyThaiTechnicalGlossary(source, resolved, targetLanguage);
@@ -3693,19 +3870,40 @@ const SCI_FORCE_COMPONENT_TOKEN_REGEX = /\b(?:F|M)(?:x|y|z|\d{1,2})\b/gi;
 const SCI_NOTATION_LINE_REGEX = /^(?:fig(?:ure)?\.?\s*\d+(?:[-–]\d+)?(?:\s*[a-z])?|table\s*\d+(?:[-–]\d+)?|chapter\s*\d+|[A-Za-z]?\d+(?:[-–]\d+)?|\(\s*[a-z0-9]{1,3}\s*\)|[A-Za-z]\.|[A-Za-z]{1,2}\d{1,2})$/i;
 const SCI_MATH_LINE_REGEX = /^[A-Za-z0-9\u0391-\u03C9()_+\-*/^=<>%\u00B0\u2190-\u2193\u2212\u2032\u2033\s]+$/;
 
-const isScientificSymbolLikeLine = (text: string): boolean => {
+const isScientificSymbolLikeLine = (text: string, sourceLanguage?: string): boolean => {
   const normalized = normalizeWhitespace(String(text || ''));
   if (!normalized) return false;
+
+  // Remove trailing/leading underscores before checking exemption
+  const noUnderscore = normalized.replace(/^_+|_+$/g, '');
+  const noUnderscoreUpper = noUnderscore.toUpperCase();
+
+  // If it contains multiple English-like words, it's probably dialogue, not a symbol
+  const ocrWords = noUnderscore.split(/\s+/g).filter(Boolean);
+  const alphaWordCount = ocrWords.filter((w) => w.length >= 2 && /[A-Za-z]/.test(w)).length;
+  if (alphaWordCount >= 2 && !/[=<>+\-*/^]/.test(noUnderscore)) {
+    return false;
+  }
+
+  if (/^[IAO]$/.test(noUnderscoreUpper)
+    || /^(?:OK|NO|HI|HUH|OH|GO|ON|MY|IT|BE|WE|ME|SO|UP|AM|IF|OR|AS|AT|IN|TO|OF|IS)$/i.test(noUnderscore)
+    || /^I[''\u2019](?:M|VE|LL|D)$/i.test(noUnderscore)) {
+    return false;
+  }
+
+  const normalizedSourceLanguage = normalizeTranslationLanguage(sourceLanguage || 'en', 'en');
+  if (normalizedSourceLanguage === 'es') {
+    if (/^(?:SI|NO|EL|LA|UN|YO|TU|SU|ES|EN|DE|AL|LO|TE|ME|SE)$/i.test(noUnderscore)) {
+      return false;
+    }
+  }
   const forceComponentTokens = normalized.match(SCI_FORCE_COMPONENT_TOKEN_REGEX) || [];
   if (forceComponentTokens.length > 0) {
-    const words = normalized.split(/\s+/g).filter(Boolean);
-    if (normalized.length <= 48 && words.length <= 8 && !/[.!?]/.test(normalized)) {
+    if (normalized.length <= 48 && ocrWords.length <= 8 && !/[.!?]/.test(normalized)) {
       return true;
     }
   }
 
-  const words = normalized.split(/\s+/g).filter(Boolean);
-  const alphaWordCount = words.filter((token) => token.replace(/[^A-Za-z]/g, '').length >= 2).length;
   const hasMathSignals = /[0-9=<>%^]/.test(normalized);
   const naturalLanguageLike = alphaWordCount >= 3 && !hasMathSignals;
   if (naturalLanguageLike) {
@@ -3715,7 +3913,7 @@ const isScientificSymbolLikeLine = (text: string): boolean => {
   if (normalized.length > 28) return false;
   if (!SCI_SYMBOL_ALLOWED_REGEX.test(normalized)) return false;
 
-  const tokens = words;
+  const tokens = ocrWords;
   if (tokens.length > 5) return false;
 
   const alnum = normalized.replace(/[^A-Za-z0-9\u0391-\u03C9]/g, '');
@@ -3731,18 +3929,20 @@ const isScientificSymbolLikeLine = (text: string): boolean => {
     return normalized === normalized.toUpperCase() && tokens.length <= 2 && alnum.length <= 2;
   }
 
-  const hasMathLikeContent = SCI_MATH_LINE_REGEX.test(normalized)
-    && /[\u0391-\u03C9_+\-*/^=<>\u00B0\u2190-\u2193\u2212\u2032\u2033]/.test(normalized);
-  if (hasMathLikeContent) {
-    return true;
-  }
-
+  // Check for real English words BEFORE math-like detection to avoid
+  // false positives like "HMM_ GUESS" being treated as a formula
   const alphaTokens = tokens
     .map((token) => token.replace(/[^A-Za-z]/g, ''))
     .filter(Boolean);
   const longAlphaTokenCount = alphaTokens.filter((token) => token.length >= 4).length;
   if (longAlphaTokenCount >= 1) {
     return false;
+  }
+
+  const hasMathLikeContent = SCI_MATH_LINE_REGEX.test(normalized)
+    && /[\u0391-\u03C9_+\-*/^=<>\u00B0\u2190-\u2193\u2212\u2032\u2033]/.test(normalized);
+  if (hasMathLikeContent) {
+    return true;
   }
 
   return tokens.length <= 2 && alnum.length <= 6;
@@ -3774,7 +3974,7 @@ const shouldSkipLineTranslationByScript = (text: string, sourceLanguage: string)
 };
 
 export const shouldPreserveSourceLineForTranslation = (text: string, sourceLanguage: string): boolean => {
-  if (isScientificSymbolLikeLine(text)) return true;
+  if (isScientificSymbolLikeLine(text, sourceLanguage)) return true;
   return shouldSkipLineTranslationByScript(text, sourceLanguage);
 };
 
@@ -3884,18 +4084,20 @@ const isLikelyComicDialogueLayout = (lines: TranslatableLine[]): boolean => {
     const width = Math.max(1, line.right - line.left);
     const height = Math.max(1, line.height);
     const aspect = width / Math.max(1, height);
-    return aspect <= 4.4 || width <= medianWidth * 0.9 || height >= medianHeight * 1.15;
+    return aspect <= 8.0 || width <= medianWidth * 0.95 || height >= medianHeight * 1.15;
   }).length;
   const longPunctuatedCount = lines.filter((line) => {
     const text = normalizeWhitespace(String(line.text || ''));
     return text.length >= 20 && /[.,;:]/.test(text);
   }).length;
 
-  return (
+  const result = (
     shortLineCount >= Math.ceil(lines.length * 0.62)
     && narrowOrBubbleLikeCount >= Math.ceil(lines.length * 0.58)
     && longPunctuatedCount <= Math.max(1, Math.floor(lines.length * 0.24))
   );
+  console.log(`[isLikelyComicDialogueLayout] lines=${lines.length} shortLineCount=${shortLineCount}/${Math.ceil(lines.length * 0.62)} narrowOrBubbleLikeCount=${narrowOrBubbleLikeCount}/${Math.ceil(lines.length * 0.58)} longPunctuatedCount=${longPunctuatedCount}/${Math.max(1, Math.floor(lines.length * 0.24))} result=${result}`);
+  return result;
 };
 
 const shouldForceLineByLineForOfflinePanel = (lines: TranslatableLine[]): boolean => {
@@ -4528,15 +4730,9 @@ const composeGroupSourceText = (
     return normalized[0] || '';
   }
 
-  if (groupType === 'narration') {
-    return normalized.join(' ');
-  }
-
-  if (groupingProfile === 'default' || groupingProfile === 'line-by-line') {
-    return normalized.join(' ');
-  }
-
-  if (groupingProfile === 'balloon-aware' && groupType === 'dialogue') {
+  if (groupType === 'narration' || groupType === 'dialogue' || groupType === 'unknown') {
+    // Joining with space is much better for Argos (offline) and most LLMs to see full sentence context.
+    // Line breaks (\n) often cause translators to treat lines as isolated fragments.
     return normalized.join(' ');
   }
 
@@ -4600,12 +4796,42 @@ const buildTranslationGroupsFromDerivedLayout = (
         .map((index) => lineMap.get(index))
         .filter((line): line is TranslatableLine => Boolean(line));
       if (groupLines.length > 0) {
-        groups.push({
-          lines: groupLines,
-          groupType: derivedGroup.groupType,
-          derivedGroupId: derivedGroup.id,
-          confidence: derivedGroup.confidence,
-        });
+        const width = Math.max(1, derivedGroup.bounds.right - derivedGroup.bounds.left);
+        const height = Math.max(1, derivedGroup.bounds.bottom - derivedGroup.bounds.top);
+        const area = width * height;
+        const compactText = groupLines.map(l => l.text.replace(/\s+/g, '')).join('');
+        const aspectRatio = height / Math.max(1, width);
+        
+        // A group is massively sparse if it has very few characters in a huge area
+        // Bypassed for PaddleOCR as it generally produces tight/accurate bounding boxes,
+        // and webtoon pages can easily have bubble areas > 40,000 pixels.
+        const isExternalEngine = groupLines.some(l => l.sourceEngine === 'paddleocr' || l.sourceEngine === 'easyocr');
+        const isSparselyPopulated = !isExternalEngine && (
+             (area >= 40000 && compactText.length <= 14 && (area / Math.max(1, compactText.length)) >= 2500)
+          || (area >= 80000 && compactText.length <= 22 && (area / Math.max(1, compactText.length)) >= 2000)
+        );
+
+        // Heuristics to protect legitimate dialogue bubbles like "OH MY~"
+        const fullText = groupLines.map(l => l.text).join(' ');
+        const hasDialoguePunctuation = /[~!?….,'"]/.test(fullText);
+        const isKnownShortDialogue = /^(?:OH|AH|UHM|HMM|UGH|OUCH|EH|UH|WOW|HEY|MY)/i.test(fullText.trim());
+        const isHorizontalBubble = aspectRatio <= 0.45; // Most speech bubbles are horizontal
+        const hasLowercase = /[a-z]/.test(fullText); // SFX are almost always ALL CAPS
+        const hasMultipleWords = fullText.trim().split(/\s+/).length >= 2;
+
+        // If it looks like dialogue, protect it from being filtered out
+        const looksLikeDialogue = hasDialoguePunctuation || isKnownShortDialogue || isHorizontalBubble || hasLowercase || hasMultipleWords;
+
+        const isSparseGroup = isSparselyPopulated && !looksLikeDialogue;
+          
+        if (!isSparseGroup) {
+          groups.push({
+            lines: groupLines,
+            groupType: derivedGroup.groupType,
+            derivedGroupId: derivedGroup.id,
+            confidence: derivedGroup.confidence,
+          });
+        }
       }
       return;
     }
@@ -4677,7 +4903,11 @@ const resolveTranslationGroupsWithLayout = (
     };
   }
 
-  if (!isBalloonAwareGroupingEnabled()) {
+  const flagEnabled = isBalloonAwareGroupingEnabled();
+  const shouldGroup = shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode);
+  console.log(`[resolveTranslationGroupsWithLayout] page=${pageNum} flagEnabled=${flagEnabled} shouldGroup=${shouldGroup} lines=${lines.length} mode=${mode}`);
+
+  if (!flagEnabled) {
     return {
       groups: fallbackGroups,
       groupingProfile: fallbackProfile,
@@ -4688,7 +4918,7 @@ const resolveTranslationGroupsWithLayout = (
     };
   }
 
-  if (!shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode)) {
+  if (!shouldGroup) {
     return {
       groups: fallbackGroups,
       groupingProfile: fallbackProfile,
@@ -4792,6 +5022,20 @@ const tokenizeRedistributedPart = (value: string, targetLanguage: string): strin
   if (!normalized) return [];
 
   if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    const intlWithSegmenter = Intl as unknown as {
+      Segmenter?: new (
+        locales?: string | string[],
+        options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
+      ) => {
+        segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }>;
+      };
+    };
+    if (intlWithSegmenter.Segmenter) {
+      const wordSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
+      return Array.from(wordSeg.segment(normalized))
+        .map((item) => item.segment)
+        .filter((segment) => segment.trim().length > 0);
+    }
     return Array.from(normalized).filter((segment) => segment.trim().length > 0);
   }
 
@@ -4852,6 +5096,12 @@ const rebalanceRedistributedParts = (
     return normalizedParts;
   }
 
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    // For Thai, do not force-slice target text by character index to fill empty lines,
+    // as it chops Thai words into unreadable letters/diacritics. Keep them empty/clean.
+    return normalizedParts;
+  }
+
   const partCount = Math.max(1, normalizedParts.length);
   for (let i = 0; i < normalizedParts.length; i += 1) {
     if (normalizedParts[i]) continue;
@@ -4877,12 +5127,26 @@ const splitTranslatedTextBySourceWeights = (
   if (!target) return sourceLines.map(() => '');
 
   const explicitLineBreaks = translatedText
+    .replace(/\\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
     .split(/\r?\n+/)
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean);
 
   if (explicitLineBreaks.length === sourceLines.length) {
     return rebalanceRedistributedParts(explicitLineBreaks, sourceLines, target, targetLanguage);
+  }
+
+  if (explicitLineBreaks.length > 1) {
+    const result: string[] = [];
+    for (let i = 0; i < sourceLines.length; i++) {
+      if (i === sourceLines.length - 1 && explicitLineBreaks.length > sourceLines.length) {
+        result.push(explicitLineBreaks.slice(i).join(' '));
+      } else {
+        result.push(explicitLineBreaks[i] || '');
+      }
+    }
+    return result;
   }
 
   const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
@@ -4902,17 +5166,9 @@ const splitTranslatedTextBySourceWeights = (
         const wordSegments = Array.from(wordSeg.segment(target))
           .map((item) => item.segment)
           .filter((segment) => segment.trim().length > 0);
-        if (wordSegments.length >= sourceLines.length) {
+        if (wordSegments.length > 0) {
           return wordSegments;
         }
-        if (target.length <= 8 && wordSegments.length > 0) {
-          return wordSegments;
-        }
-
-        const graphemeSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'grapheme' });
-        return Array.from(graphemeSeg.segment(target))
-          .map((item) => item.segment)
-          .filter((segment) => segment.trim().length > 0);
       }
       return Array.from(target);
     };
@@ -5036,10 +5292,22 @@ export const resolveRedistributedLineFallback = (
       }
 
       if (normalizedGroup.length >= clampedTotal * 3) {
-        const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
-        const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
-        const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
-        if (proportionalChunk) return proportionalChunk;
+        if (!isThaiTarget) {
+          const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
+          const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
+          const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
+          if (proportionalChunk) return proportionalChunk;
+        } else {
+          // For Thai, we do not want proportional slicing as it shreds words.
+          // Return empty string so it falls back to the original English line text naturally.
+          return '';
+        }
+      }
+
+      // Duplication Prevention: For multi-line groups, if we haven't found any valid split
+      // for subsequent lines (index > 0), return empty string to prevent duplicating the whole group.
+      if (clampedIndex > 0) {
+        return '';
       }
     }
 
@@ -5070,28 +5338,53 @@ export default function App() {
   const ocrLanguage = ocrOptions.language;
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
   const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
-  const { 
-    file, 
-    fileType,
-    fileData,
-    currentPage, 
-    totalPages, 
-    ensureDocumentId,
-    setPage, 
-    closeProject, 
-    viewMode, 
-    setViewMode,
-    sourceLanguage,
-    targetLanguage,
-    setTargetLanguage,
-    translationMode,
-    setTranslationMode,
-    overlayThaiFontEnabled,
-    overlayFontPreset,
-    overlayFontSizeScale,
-    safetySettings,
-    hydrateGeminiApiKey,
-  } = useProjectStore();
+
+  const file = useProjectStore((s) => s.file);
+  const fileType = useProjectStore((s) => s.fileType);
+  const fileData = useProjectStore((s) => s.fileData);
+  const currentPage = useProjectStore((s) => s.currentPage);
+  const totalPages = useProjectStore((s) => s.totalPages);
+  const ensureDocumentId = useProjectStore((s) => s.ensureDocumentId);
+  const setPage = useProjectStore((s) => s.setPage);
+  const closeProject = useProjectStore((s) => s.closeProject);
+  const viewMode = useProjectStore((s) => s.viewMode);
+  const setViewMode = useProjectStore((s) => s.setViewMode);
+  const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
+  const targetLanguage = useProjectStore((s) => s.targetLanguage);
+  const setTargetLanguage = useProjectStore((s) => s.setTargetLanguage);
+  const translationMode = useProjectStore((s) => s.translationMode);
+  const setTranslationMode = useProjectStore((s) => s.setTranslationMode);
+  const overlayThaiFontEnabled = useProjectStore((s) => s.overlayThaiFontEnabled);
+  const overlayFontPreset = useProjectStore((s) => s.overlayFontPreset);
+  const overlayFontSizeScale = useProjectStore((s) => s.overlayFontSizeScale);
+  const setOverlayFontSizeScale = useProjectStore((s) => s.setOverlayFontSizeScale);
+  const safetySettings = useProjectStore((s) => s.safetySettings);
+  const hydrateGeminiApiKey = useProjectStore((s) => s.hydrateGeminiApiKey);
+
+  const updateLayerFontSize = useLayerStore((state) => state.updateLayerFontSize);
+
+  // Selective selectors to avoid re-renders during dragging/resizing/rotating on the canvas
+  const hasSelection = useLayerStore((state) => {
+    const pageLayers = state.layersByPage.get(currentPage) || [];
+    return pageLayers.some(l => state.selectedLayerIds.has(l.id));
+  });
+
+  const currentFontSize = useLayerStore((state) => {
+    const pageLayers = state.layersByPage.get(currentPage) || [];
+    const firstSelected = pageLayers.find(l => state.selectedLayerIds.has(l.id));
+    return firstSelected ? firstSelected.fontSize : 14;
+  });
+
+  const [showFontDropdown, setShowFontDropdown] = useState(false);
+
+  const adjustOverlayFontScale = (delta: number) => {
+    const next = Math.max(0.1, Math.min(4.0, overlayFontSizeScale + delta));
+    setOverlayFontSizeScale(Number(next.toFixed(2)));
+  };
+  const overlayFontScalePercent = Math.round(overlayFontSizeScale * 100);
+
+  const allPagesOCR = useOCRTextLayerStore((state) => state.allPagesOCR);
+  const activePageOCR = allPagesOCR.get(currentPage);
 
   const normalizePrewarmLanguage = (value: string): string => value
     .split('+')
@@ -5104,10 +5397,14 @@ export default function App() {
   const [isOfflineProcessing, setIsOfflineProcessing] = useState(false);
   const [isVisionReady, setIsVisionReady] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
+  const handleToggleLeftSidebar = useCallback(() => {
+    setIsLeftSidebarOpen((prev) => !prev);
+  }, []);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
+  const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
   const [downloadScopeSelection, setDownloadScopeSelection] = useState<DownloadScope>('current');
   const [downloadModeSelection, setDownloadModeSelection] = useState<DownloadContentMode>('original');
   const [isDownloadingResult, setIsDownloadingResult] = useState(false);
@@ -5149,12 +5446,13 @@ export default function App() {
   useEffect(() => {
     if (showOCRHarness) return undefined;
     // Lazy Initialize Vision Worker (low priority)
+    // Delay increased to 3.5s to prevent CPU spiking immediately after initial render
     const timer = setTimeout(() => {
       visionService.initialize().then(() => {
         console.log('Vision System Ready (Lazy Loaded)');
         setIsVisionReady(true);
       });
-    }, 2000); // Delay 2s to let UI render first
+    }, 3500);
 
     return () => clearTimeout(timer);
   }, [showOCRHarness]);
@@ -5178,6 +5476,8 @@ export default function App() {
     // Keep startup prewarm lightweight; warm primary engine only.
     const targetEngines: Array<'paddleocr' | 'easyocr'> = ['paddleocr'];
 
+    // Delay increased to 8s to prevent Python PyTorch initialization from freezing the UI
+    // while the user is still interacting with the home screen.
     const timer = setTimeout(() => {
       for (const engine of targetEngines) {
         const warmKey = `${engine}:${normalizedLanguage}`;
@@ -5201,7 +5501,7 @@ export default function App() {
 
         globalPrewarm.__pdfTranslatorExternalPrewarmInFlight?.set(warmKey, warmPromise);
       }
-    }, 2200);
+    }, 8000);
 
     return () => clearTimeout(timer);
   }, [file, ocrLanguage, showOCRHarness]);
@@ -5292,13 +5592,13 @@ export default function App() {
     return Number.isFinite(legacy) ? legacy : undefined;
   };
 
-  const collectTranslatableLines = (lines: OCRLine[]): TranslatableLine[] => {
+  const collectTranslatableLines = (lines: OCRLine[], engineHint?: string): TranslatableLine[] => {
     const collected: TranslatableLine[] = [];
     lines.forEach((line, index) => {
       const text = resolveBestOcrLineText(line);
       if (!text) return;
 
-      const likelyGhost = isLikelyGhostTranslatableLine(line, text);
+      const likelyGhost = isLikelyGhostTranslatableLine(line, text, engineHint);
       if (likelyGhost && !shouldForceKeepTechnicalTranslationLine(text, line)) return;
 
       const bbox = resolveTranslatableLineBBox(line);
@@ -5322,7 +5622,8 @@ export default function App() {
       const height = bottom - top;
       const area = width * height;
       const wordCoverage = computeLineWordUnionCoverage(line);
-      const noWordOversizedRawLine = (
+      const isExternalEngineLine = engineHint === 'paddleocr' || line.sourceEngine === 'paddleocr' || engineHint === 'easyocr' || line.sourceEngine === 'easyocr';
+      const noWordOversizedRawLine = !isExternalEngineLine && (
         validWordBoxCount === 0
         && tokenCount >= 2
         && tokenCount <= 6
@@ -5331,7 +5632,7 @@ export default function App() {
         && (width >= 180 || height >= 96)
         && (area / Math.max(1, compactText.length)) >= 680
       );
-      const lowCoverageOversizedEffectSection = (
+      const lowCoverageOversizedEffectSection = !isExternalEngineLine && (
         validWordBoxCount <= 1
         && wordCoverage <= 0.2
         && tokenCount >= 2
@@ -5341,13 +5642,18 @@ export default function App() {
         && (width >= 170 || height >= 96)
         && (area / Math.max(1, compactText.length)) >= 650
       );
-      if ((noWordOversizedRawLine || lowCoverageOversizedEffectSection) && !shouldForceKeepTechnicalTranslationLine(text, line)) {
+      // Relaxed to include common dialogue punctuation like commas, periods, etc.
+      const isProbableComicDialogue = /^(?:THAT'S|MY|TO|IT'S|HAS)\b/i.test(text) || /^[A-Za-z\s;:'",.!?\-]+$/.test(text);
+      if ((noWordOversizedRawLine || lowCoverageOversizedEffectSection) && !shouldForceKeepTechnicalTranslationLine(text, line) && !isProbableComicDialogue) {
         return;
       }
+      // Apply OCR noise repair early so all downstream consumers
+      // (grouping, translation, cache keys, fallbacks) see cleaned text
+      const repairedText = normalizeEnglishOcrNoiseForTranslation(text);
 
       collected.push({
         index,
-        text,
+        text: repairedText,
         sourceLength: countReadableLength(text),
         left,
         right,
@@ -5362,7 +5668,7 @@ export default function App() {
         angleDeg: Number.isFinite(line.angleDeg) ? Number(line.angleDeg) : undefined,
         sortHintX: resolveLineSortHintX(line),
         sortHintY: resolveLineSortHintY(line),
-        sourceEngine: line.sourceEngine,
+        sourceEngine: line.sourceEngine || (engineHint as OCREngine),
       });
     });
 
@@ -5466,11 +5772,24 @@ export default function App() {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const pages = new Set<number>();
+
+    // ตรวจจาก ocrByPageEngine (primary store)
     ocrState.ocrByPageEngine.forEach((byEngine, pageNum) => {
       if (byEngine.has(selectedEngine)) {
         pages.add(pageNum);
       }
     });
+
+    // fallback: ตรวจจาก allPagesOCR ด้วย (เช่น กรณีโหลดจาก DB มาเก็บที่ allPagesOCR)
+    ocrState.allPagesOCR.forEach((result, pageNum) => {
+      if (!pages.has(pageNum)) {
+        const resultEngine = (result.ocrEngine || selectedEngine) as OCREngine;
+        if (resultEngine === selectedEngine) {
+          pages.add(pageNum);
+        }
+      }
+    });
+
     return Array.from(pages).sort((a, b) => a - b);
   };
 
@@ -5536,22 +5855,29 @@ export default function App() {
 
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const cachedPages = getModelScopedCachedPageNumbers();
-    if (totalPages > 0 && cachedPages.length >= totalPages) {
+    const total = Math.max(1, totalPages);
+
+    // ตรวจสอบว่าหน้าทั้งหมดในไฟล์ PDF ได้รับการรัน OCR แล้วหรือยัง
+    const hasAllPagesCached = cachedPages.length >= total;
+
+    if (hasAllPagesCached) {
       return true;
     }
 
+    // ยังมีบางหน้าที่ไม่มี OCR cache -> รัน Auto-run OCR ทั้งหมดสำหรับหน้าที่เหลือ
     setTranslationStatus({
       kind: 'info',
-      message: `OCR cache for ${selectedEngine} is incomplete (${cachedPages.length}/${totalPages || '?'} pages). Auto-running OCR for all pages...`,
+      message: `OCR cache is missing for some pages (found ${cachedPages.length}/${total}). Running Auto-OCR for all pages...`,
     });
 
     const ok = await requestAutoOCRFromPanel('all');
-    if (!ok) return false;
+    if (!ok) {
+      // ถ้า OCR all-pages ล้มเหลว ลอง ensure แค่หน้าปัจจุบัน
+      return ensureCurrentPageOCRReadyForTranslation();
+    }
 
     const refreshedPages = getModelScopedCachedPageNumbers();
-    return totalPages > 0
-      ? refreshedPages.length >= totalPages
-      : refreshedPages.length > 0;
+    return refreshedPages.length > 0;
   };
 
   const resolveModelScopedPagesForExport = (scope: DownloadScope): Array<{ pageNum: number; ocr: OCRPageResult }> => {
@@ -5683,7 +6009,7 @@ export default function App() {
     if (typeof document === 'undefined') return undefined;
 
     const candidate = fileType === 'pdf'
-      ? document.querySelector(`.react-pdf__Page[data-page-number="${pageNum}"] canvas`)
+      ? document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`)
       : document.querySelector('img[data-export-overlay-image="true"]');
     if (!(candidate instanceof HTMLElement)) return undefined;
 
@@ -5808,6 +6134,8 @@ export default function App() {
       `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
     );
 
+    const pageLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+
     const overlayLayoutByIndex = computeOverlayLayoutMap(
       pageOCR.lines.flatMap((line, index) => {
         const translatedText = translatedByIndex.get(index);
@@ -5815,6 +6143,9 @@ export default function App() {
         const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
         if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
+
+        const layer = pageLayers.find(l => l.lineIndex === index);
+        const balloonId = layer?.groupId;
 
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
@@ -5856,6 +6187,7 @@ export default function App() {
           height: typographyHeight,
           bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
           line,
+          balloonId,
           hints: {
             sourceText: line.text,
             sourceBoxWidth: baseWidth,
@@ -6308,7 +6640,7 @@ export default function App() {
         continue;
       }
 
-      const baseLines = collectTranslatableLines(pageOCR.lines || []);
+      const baseLines = collectTranslatableLines(pageOCR.lines || [], (pageOCR.ocrEngine || selectedEngine) as string);
       if (baseLines.length === 0) {
         skippedNoText += 1;
         continue;
@@ -6353,7 +6685,7 @@ export default function App() {
         inferredSourceLanguage,
         translationMode
       );
-      const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+      let translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
         dedupedLines,
         pageBiasedSourceLanguage,
         normalizedTargetLanguage,
@@ -6361,6 +6693,10 @@ export default function App() {
       )
         ? 'en'
         : pageBiasedSourceLanguage;
+
+      if (translationSourceLanguage === normalizedTargetLanguage && normalizedUserSourceLanguage !== normalizedTargetLanguage) {
+        translationSourceLanguage = normalizedUserSourceLanguage;
+      }
       const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
       const rawLines = assistedLines.filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
@@ -6416,7 +6752,10 @@ export default function App() {
             group.groupType || 'unknown',
             groupingProfile
           );
-          const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+          let groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+          if (groupSourceLanguage === normalizedTargetLanguage && translationSourceLanguage !== normalizedTargetLanguage) {
+            groupSourceLanguage = translationSourceLanguage;
+          }
           const sourceText = normalizeSourceForTranslation(
             rawSourceText,
             groupSourceLanguage
@@ -6640,7 +6979,92 @@ export default function App() {
 
     const pageEngine = (pageOCR.ocrEngine || selectedEngine) as OCREngine;
 
-    const baseTranslatableLines = collectTranslatableLines(pageOCR.lines || []);
+    const rawBaseLines = collectTranslatableLines(pageOCR.lines || [], pageEngine as string);
+
+    // === SYNC WITH CURRENT LAYERS AND SFX (CURRENT INFO) ===
+    const currentLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+    
+    // อัปเดตข้อความใน rawBaseLines ให้ตรงกับเลเยอร์ล่าสุด
+    const updatedTranslatableLines = rawBaseLines.map(line => {
+      let matchingLayer = currentLayers.find(l => l.lineIndex === line.index);
+      
+      // ค้นหาเผื่อกรณีที่ lineIndex ไม่ตรง แต่เป็นตำแหน่งทับซ้อนกันมาก
+      if (!matchingLayer) {
+        matchingLayer = currentLayers.find(l => {
+          const lBbox = l.bbox;
+          const overlapX = Math.max(0, Math.min(lBbox.x1, line.right) - Math.max(lBbox.x0, line.left));
+          const overlapY = Math.max(0, Math.min(lBbox.y1, line.bottom) - Math.max(lBbox.y0, line.top));
+          const overlapArea = overlapX * overlapY;
+          if (overlapArea > 0) {
+            const lineArea = (line.right - line.left) * (line.bottom - line.top);
+            const layerArea = (lBbox.x1 - lBbox.x0) * (lBbox.y1 - lBbox.y0);
+            const minArea = Math.min(lineArea, layerArea);
+            return (overlapArea / minArea) >= 0.7; // ทับซ้อนมากกว่า 70%
+          }
+          return false;
+        });
+      }
+
+      if (matchingLayer) {
+        let layerSource = matchingLayer.sourceText;
+        if (!layerSource && matchingLayer.text) {
+          const hasThai = /[\u0E00-\u0E7F]/.test(matchingLayer.text);
+          if (!hasThai) {
+            layerSource = matchingLayer.text;
+          }
+        }
+        if (layerSource && layerSource.trim()) {
+          return {
+            ...line,
+            text: layerSource
+          };
+        }
+      }
+      return line;
+    });
+
+    // หาเลเยอร์ที่ยังไม่ถูกแมป (เช่น เลเยอร์ใหม่จากการวาด Drawing Region)
+    const unmappedLayers = currentLayers.filter(l => {
+      return !updatedTranslatableLines.some(line => line.index === l.lineIndex);
+    });
+
+    // แปลงเลเยอร์ใหม่เป็น TranslatableLine และ Append เพิ่มเข้าไป
+    const additionalLines: TranslatableLine[] = unmappedLayers.map((l, idx) => {
+      const bbox = l.bbox;
+      const left = Number(bbox.x0);
+      const right = Number(bbox.x1);
+      const top = Number(bbox.y0);
+      const bottom = Number(bbox.y1);
+      const width = right - left;
+      const height = bottom - top;
+      
+      let layerSource = l.sourceText || l.text || '';
+      const hasThai = /[\u0E00-\u0E7F]/.test(layerSource);
+      if (hasThai && l.sourceText) {
+        layerSource = l.sourceText;
+      }
+      
+      return {
+        index: l.lineIndex >= 0 ? l.lineIndex : (20000 + idx),
+        text: layerSource,
+        sourceLength: layerSource.length,
+        top,
+        bottom,
+        left,
+        right,
+        height,
+        area: width * height,
+        confidence: l.confidence || 100,
+        sourceEngine: 'manual'
+      };
+    });
+
+    const baseTranslatableLines = [...updatedTranslatableLines, ...additionalLines];
+    // === DIAG: trace translation pipeline for debugging ===
+    console.log(`[TranslateDiag] engine=${engine} pageEngine=${pageEngine} ocrLang=${pageOCR.language} totalOCRLines=${pageOCR.lines?.length ?? 0} baseTranslatableLines=${baseTranslatableLines.length}`);
+    if (baseTranslatableLines.length > 0) {
+      console.log(`[TranslateDiag] first 3 lines:`, baseTranslatableLines.slice(0, 3).map(l => ({ text: l.text, sourceEngine: l.sourceEngine, area: l.area })));
+    }
     if (baseTranslatableLines.length === 0) {
       if (!options?.suppressStatus) {
         setTranslationStatus({
@@ -6694,7 +7118,7 @@ export default function App() {
       inferredSourceLanguage,
       translationMode
     );
-    const translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
+    let translationSourceLanguage = shouldPreferEnglishSourceForMixedTechnicalPage(
       dedupedTranslatableLines,
       pageBiasedSourceLanguage,
       normalizedTargetLanguage,
@@ -6702,6 +7126,10 @@ export default function App() {
     )
       ? 'en'
       : pageBiasedSourceLanguage;
+
+    if (translationSourceLanguage === normalizedTargetLanguage && normalizedUserSourceLanguage !== normalizedTargetLanguage) {
+      translationSourceLanguage = normalizedUserSourceLanguage;
+    }
     const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedTranslatableLines)
       || hasStrongLatinAnchorLines(dedupedTranslatableLines);
     const rawTranslatableLines = assistedLines
@@ -6717,6 +7145,11 @@ export default function App() {
         return true;
       });
     const preservedSourceLineCount = dedupedTranslatableLines.length - translatableLines.length;
+    // === DIAG: see how many lines remain after filters ===
+    console.log(`[TranslateDiag] srcLang=${translationSourceLanguage} tgtLang=${normalizedTargetLanguage} latinDominant=${latinDominantPage} deduped=${dedupedTranslatableLines.length} translatable=${translatableLines.length} preserved=${preservedSourceLineCount}`);
+    if (translatableLines.length === 0 && dedupedTranslatableLines.length > 0) {
+      console.warn(`[TranslateDiag] All lines filtered! First dropped:`, dedupedTranslatableLines.slice(0, 3).map(l => ({ text: l.text, preserve: shouldPreserveSourceLineForTranslation(l.text, translationSourceLanguage) })));
+    }
 
     if (translatableLines.length === 0) {
       if (!options?.suppressStatus) {
@@ -6776,7 +7209,10 @@ export default function App() {
         group.groupType || 'unknown',
         groupingProfile
       );
-      const groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+      let groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
+      if (groupSourceLanguage === normalizedTargetLanguage && translationSourceLanguage !== normalizedTargetLanguage) {
+        groupSourceLanguage = translationSourceLanguage;
+      }
       const sourceText = normalizeSourceForTranslation(rawSourceText, groupSourceLanguage);
       const protectedGroup = protectTranslationTokens(sourceText, targetLanguage);
       return {
@@ -6800,29 +7236,66 @@ export default function App() {
     }
 
     const translatedGroupsRaw = new Array<string>(preparedGroups.length).fill('');
-    const sourceBuckets = new Map<string, number[]>();
-    preparedGroups.forEach((group, index) => {
-      const sourceKey = normalizeTranslationLanguage(group.sourceLanguage, translationSourceLanguage);
-      const bucket = sourceBuckets.get(sourceKey) || [];
-      bucket.push(index);
-      sourceBuckets.set(sourceKey, bucket);
+    
+    // แปลง preparedGroups เป็น TranslatableItem เพื่อรันผ่าน Coordinator
+    const translatableItems: TranslatableItem[] = preparedGroups.map((group, groupIndex) => {
+      const sampleLine = group.lines[0];
+      let groupType: any = 'ungrouped';
+      if (sampleLine) {
+        const matchingLayer = currentLayers.find(l => l.lineIndex === sampleLine.index);
+        if (matchingLayer && matchingLayer.groupId) {
+          const pageGroups = useLayerStore.getState().getPageGroups(pageNum);
+          const layerGroup = pageGroups.find(g => g.id === matchingLayer.groupId);
+          if (layerGroup) {
+            groupType = layerGroup.groupType;
+          }
+        }
+      }
+
+      return {
+        id: String(groupIndex),
+        text: group.protectedText || group.sourceText || '',
+        groupType: groupType,
+      };
     });
 
-    for (const [groupSourceLanguage, indexes] of sourceBuckets.entries()) {
-      const bucketInputs = indexes.map((index) => preparedGroups[index]?.protectedText || '');
-      const bucketTranslated = engine === 'offline'
-        ? await translateBatchOffline(bucketInputs, 'text', translationMode, groupSourceLanguage, normalizedTargetLanguage)
-        : await translateBatchGemini(
-          bucketInputs,
-          'text',
-          translationMode,
-          groupSourceLanguage,
-          normalizedTargetLanguage,
-          buildGeminiContextOverrides(translationMode, groupSourceLanguage, normalizedTargetLanguage)
-        );
+    const coordinatorEngineId = engine === 'offline' ? 'argos' : 'gemini';
+    
+    try {
+      // เรียกใช้งานตัวประสานงานแปลภาษาอัจฉริยะ (Group-Aware Translation Engine)
+      const translationResults = await translationCoordinator.runTranslation(
+        coordinatorEngineId,
+        translatableItems,
+        {
+          sourceLanguage: translationSourceLanguage,
+          targetLanguage: normalizedTargetLanguage,
+          translationMode: translationMode,
+          translateBatchOffline: (texts, type, mode, src, tgt) => 
+            translateBatchOffline(texts, type, mode, src, tgt),
+          translateBatchGemini: (texts, type, mode, src, tgt) => 
+            translateBatchGemini(
+              texts, 
+              type, 
+              mode, 
+              src, 
+              tgt, 
+              buildGeminiContextOverrides(translationMode, src, tgt)
+            ),
+        }
+      );
 
-      indexes.forEach((groupIndex, bucketIndex) => {
-        translatedGroupsRaw[groupIndex] = bucketTranslated[bucketIndex] || '';
+      // แมปผลการแปลกลับเข้าสู่ translatedGroupsRaw ตามลำดับดัชนีของกลุ่ม
+      translationResults.forEach((res) => {
+        const idx = Number(res.id);
+        if (!isNaN(idx) && idx >= 0 && idx < translatedGroupsRaw.length) {
+          translatedGroupsRaw[idx] = res.translatedText;
+        }
+      });
+    } catch (err) {
+      console.error('[TranslationCoordinator] Run translation error:', err);
+      // Fallback: ใช้ข้อความเดิม
+      preparedGroups.forEach((group, index) => {
+        translatedGroupsRaw[index] = group.protectedText || group.sourceText || '';
       });
     }
 
@@ -6966,7 +7439,9 @@ export default function App() {
           redistributedLine || fallbackLine,
           normalizedTargetLanguage
         );
-        translatedByIndex.set(line.index, finalizedLine || sourceLineText);
+        // Use noise-repaired source as fallback instead of raw OCR text
+        const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
+        translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || sourceLineText);
         if (shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
@@ -7051,6 +7526,36 @@ export default function App() {
       });
     }
 
+    const translationHealth = evaluateUntranslatedTranslation(
+      translatableLines,
+      translatedByIndex,
+      translationSourceLanguage,
+      normalizedTargetLanguage
+    );
+    if (translationHealth.shouldSkip) {
+      const ocrStore = useOCRTextLayerStore.getState();
+      const existingEntries = ocrStore.getTranslationCacheEntries(pageNum);
+      const preserved = existingEntries.find((entry) => (
+        entry.ocrEngine === ocrEngine
+        && normalizeTranslationLanguage(entry.targetLanguage || '', 'th') === normalizedTargetLanguage
+        && entry.translatedByIndex.some((item) => THAI_REGEX.test(String(item.text || '')))
+      ));
+      if (preserved) {
+        ocrStore.setActiveTranslationCacheKey(pageNum, preserved.key);
+        ocrStore.setTranslationPreviewMode('translated');
+      }
+      if (!options?.suppressStatus) {
+        const retryPct = Math.round(translationHealth.retryRatio * 100);
+        const thaiPct = Math.round(translationHealth.thaiRatio * 100);
+        const engineLabel = engine === 'offline' ? 'Offline' : 'AI';
+        setTranslationStatus({
+          kind: 'error',
+          message: `${engineLabel} translation returned mostly source text (retry ${retryPct}%, Thai ${thaiPct}%). Cache preserved.`,
+        });
+      }
+      return false;
+    }
+
     const updatedLines = (pageOCR.lines || []).map((line, lineIndex) => {
       const translatedText = translatedByIndex.get(lineIndex);
       if (!translatedText) return line;
@@ -7089,6 +7594,38 @@ export default function App() {
     };
 
     setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
+    console.log(`[Translation] cache set page=${pageNum} engine=${ocrEngine} key=${cacheKey}`);
+
+    // Synchronize translated texts back to persistent Layer Store (useLayerStore)
+    try {
+      const layerStore = useLayerStore.getState();
+      const pageLayers = layerStore.getPageLayers(pageNum);
+      if (pageLayers.length > 0) {
+        const updatedPageLayers = pageLayers.map(layer => {
+          const translatedText = translatedByIndex.get(layer.lineIndex);
+          if (!translatedText) return layer;
+
+          // RULE 1: หากผู้ใช้เคยแก้ไขเลเยอร์นี้เองแล้ว ให้ข้ามการแปลทับ! (Manual Edit Protection)
+          if (layer.userEdited) {
+            return layer;
+          }
+
+          // RULE 2: อัปเดตข้อมูลคำแปลลงในแคช และเอาไปใช้เป็นค่าข้อความแสดงผลหลัก
+          return {
+            ...layer,
+            translatedText: translatedText,
+            text: translatedText,
+            translationEngineUsed: engine, // 'offline' หรือ 'ai'
+          };
+        });
+        layerStore.setPageLayers(pageNum, {
+          layers: updatedPageLayers,
+          groups: layerStore.getPageGroups(pageNum),
+        });
+      }
+    } catch (err) {
+      console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
+    }
 
     const cacheDocId = await ensureDocumentId().catch(() => null);
     if (cacheDocId) {
@@ -7138,7 +7675,13 @@ export default function App() {
     let skippedPages = 0;
     let failedPages = 0;
 
-    for (const pageNum of sortedPageNums) {
+    for (let i = 0; i < sortedPageNums.length; i++) {
+      const pageNum = sortedPageNums[i];
+      setTranslationStatus({
+        kind: 'info',
+        message: `Offline Batch: translating page ${pageNum} (${i + 1}/${sortedPageNums.length})...`,
+      });
+
       try {
         const translated = await runCurrentPageTranslation('offline', pageNum, { suppressStatus: true });
         if (translated) {
@@ -7285,6 +7828,7 @@ export default function App() {
       activeClass: 'border-cyan-300/50 bg-cyan-500/18 text-cyan-100',
     },
   ];
+  const activeOption = profileOptions.find((opt) => opt.mode === translationMode) || profileOptions[0];
   const modeLabelColorClass = translationMode === 'adaptive'
     ? 'text-emerald-300'
     : translationMode === 'manga'
@@ -7342,7 +7886,7 @@ export default function App() {
       </div>
       
       {/* HEADER TOOLBAR - Google Docs Style */}
-      <header className="relative z-10 h-12 bg-[#171b23]/78 border-b border-white/10 backdrop-blur-xl flex items-center px-2 gap-1 shrink-0">
+      <header className="relative z-50 h-12 bg-[#171b23]/78 border-b border-white/10 backdrop-blur-xl flex items-center px-2 gap-1 shrink-0">
         {/* Home Button */}
         <button 
           onClick={handleBackToHome}
@@ -7441,36 +7985,213 @@ export default function App() {
 
         <div className="w-px h-6 bg-white/10 mx-1" />
 
-        {/* Text Align */}
-        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Left">
-          <AlignLeft size={16} />
-        </button>
-        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Center">
-          <AlignCenter size={16} />
-        </button>
-        <button className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors" title="Align Right">
-          <AlignRight size={16} />
-        </button>
+        {/* Google Docs Font Size Controls */}
+        <div className="relative flex items-center gap-1 bg-slate-950/40 rounded px-1.5 py-0.5 border border-white/5">
+          <button
+            type="button"
+            disabled={!hasSelection}
+            onClick={() => {
+              const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+              const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+              selected.forEach(l => {
+                const nextSize = Math.max(4, l.fontSize - 1);
+                updateLayerFontSize(currentPage, l.id, nextSize);
+              });
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+            title="ลดขนาดตัวอักษร"
+            aria-label="Decrease Font Size"
+          >
+            <Minus size={13} />
+          </button>
+          
+          <div className="relative flex items-center gap-0.5">
+            <input
+              type="number"
+              disabled={!hasSelection}
+              value={hasSelection ? currentFontSize : ''}
+              placeholder={hasSelection ? '' : '--'}
+              onClick={() => {
+                if (hasSelection) {
+                  setShowFontDropdown(!showFontDropdown);
+                }
+              }}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) {
+                  const clamped = Math.max(1, Math.min(200, val));
+                  const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+                  const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+                  selected.forEach(l => {
+                    updateLayerFontSize(currentPage, l.id, clamped);
+                  });
+                }
+              }}
+              className="w-10 h-7 text-center text-xs font-semibold text-white bg-slate-900 border border-white/10 rounded focus:border-[#2B9BFF] focus:outline-none disabled:opacity-30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none cursor-pointer"
+              title="ขนาดตัวอักษร"
+            />
+            
+            <button
+              type="button"
+              disabled={!hasSelection}
+              onClick={() => setShowFontDropdown(!showFontDropdown)}
+              className="flex h-7 w-4 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+              title="เลือกขนาดตัวอักษร"
+            >
+              <ChevronDown size={10} />
+            </button>
+
+            {showFontDropdown && hasSelection && (
+              <>
+                {/* Backdrop to close click outside */}
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setShowFontDropdown(false)} 
+                />
+                
+                {/* Popover Dropdown menu */}
+                <div className="absolute top-8 left-0 z-50 min-w-[72px] max-h-60 overflow-y-auto bg-slate-900 border border-white/10 rounded shadow-xl py-1 scrollbar-thin scrollbar-thumb-white/10">
+                  {[8, 9, 10, 11, 12, 14, 18, 24, 30, 36, 48, 60, 72, 96].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => {
+                        const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+                        const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+                        selected.forEach(l => {
+                          updateLayerFontSize(currentPage, l.id, size);
+                        });
+                        setShowFontDropdown(false);
+                      }}
+                      className={`w-full px-3 py-1.5 text-left text-xs hover:bg-white/10 transition-colors ${
+                        currentFontSize === size ? 'text-[#2B9BFF] font-bold bg-[#2B9BFF]/5' : 'text-slate-200'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <button
+            type="button"
+            disabled={!hasSelection}
+            onClick={() => {
+              const pageLayers = useLayerStore.getState().layersByPage.get(currentPage) || [];
+              const selected = pageLayers.filter(l => useLayerStore.getState().selectedLayerIds.has(l.id));
+              selected.forEach(l => {
+                const nextSize = Math.min(200, l.fontSize + 1);
+                updateLayerFontSize(currentPage, l.id, nextSize);
+              });
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+            title="เพิ่มขนาดตัวอักษร"
+            aria-label="Increase Font Size"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+
+        {/* Font Size Scaling */}
+        <div className="w-px h-6 bg-white/10 mx-1" />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => adjustOverlayFontScale(-0.05)}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            title="Decrease overlay text size"
+            aria-label="Decrease overlay text size"
+          >
+            <Minus size={13} />
+          </button>
+          <span className="w-12 text-center text-xs font-semibold text-slate-300">
+            {overlayFontScalePercent}%
+          </span>
+          <button
+            type="button"
+            onClick={() => adjustOverlayFontScale(0.05)}
+            className="flex h-7 w-7 items-center justify-center rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            title="Increase overlay text size"
+            aria-label="Increase overlay text size"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
 
         {/* Spacer - push profile/downloads to top-right */}
         <div className="flex-1" />
 
-        <div className="flex items-center gap-1 rounded-lg border border-white/12 bg-slate-900/55 px-1.5 py-1">
-          <span className={`px-1 text-[10px] font-bold uppercase tracking-[0.18em] ${modeLabelColorClass}`}>
+        {/* Pulsing OCR Info Badge */}
+        {activePageOCR && activePageOCR.words && activePageOCR.words.length > 0 && (
+          <div className="flex items-center gap-1.5 rounded-lg border border-[#5CC6F2]/25 bg-slate-900/55 px-2.5 py-1 text-[11px] text-[#5CC6F2]/90 font-medium tracking-wide shadow-[0_4px_12px_rgba(92,198,242,0.08)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span className="font-bold text-white shrink-0">
+              {activePageOCR.ocrEngine === 'paddleocr'
+                ? 'Paddle'
+                : activePageOCR.ocrEngine === 'easyocr'
+                  ? 'Easy'
+                  : 'Tesseract'}
+            </span>
+            <span className="text-slate-500 font-normal shrink-0">•</span>
+            <span className="shrink-0">พบ {activePageOCR.words.length} คำ</span>
+            <span className="text-slate-500 font-normal shrink-0">•</span>
+            <span className="font-mono text-[10px] text-[#5CC6F2]/80 shrink-0">
+              conf {activePageOCR.confidence.toFixed(0)}%
+            </span>
+          </div>
+        )}
+
+        <div className="flex items-center gap-1.5 rounded-lg border border-white/12 bg-slate-900/55 px-2 py-1 relative">
+          <span className={`text-[10px] font-bold uppercase tracking-[0.18em] ${modeLabelColorClass} mr-0.5 shrink-0`}>
             Mode
           </span>
-          {profileOptions.map((option) => (
+          <div className="relative">
             <button
-              key={option.mode}
+              onClick={() => setIsModeDropdownOpen(!isModeDropdownOpen)}
               type="button"
-              onClick={() => setTranslationMode(option.mode)}
-              className={`h-6 w-6 rounded-md border flex items-center justify-center transition-colors ${translationMode === option.mode ? option.activeClass : 'border-white/12 bg-slate-950/75 text-slate-300 hover:border-white/25 hover:text-white'}`}
-              title={`Set translation profile to ${option.label}`}
-              aria-label={`Set translation profile to ${option.label}`}
+              className={`flex items-center gap-1.5 px-2 py-0.5 h-6 rounded-md border text-[11px] font-semibold transition-all ${activeOption.activeClass}`}
+              title={`Active translation profile: ${activeOption.label}`}
             >
-              {option.icon}
+              <span className="shrink-0 scale-90">{activeOption.icon}</span>
+              <span className="text-[10px] tracking-wide font-bold">{activeOption.label}</span>
+              <ChevronDown size={10} className={`transition-transform duration-200 ${isModeDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
-          ))}
+
+            {isModeDropdownOpen && (
+              <>
+                <div 
+                  className="fixed inset-0 z-[190]" 
+                  onClick={() => setIsModeDropdownOpen(false)}
+                />
+                <div className="absolute right-0 mt-1.5 w-36 bg-slate-950/98 border border-white/15 rounded-lg shadow-2xl z-[200] p-1 space-y-0.5 backdrop-blur-xl animate-in fade-in slide-in-from-top-1 duration-100">
+                  {profileOptions.map((option) => {
+                    const isActive = translationMode === option.mode;
+                    return (
+                      <button
+                        key={option.mode}
+                        onClick={() => {
+                          setTranslationMode(option.mode);
+                          setIsModeDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-2.5 py-1 text-left text-xs rounded-md transition-colors ${
+                          isActive 
+                            ? 'bg-white/10 text-white font-bold' 
+                            : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                        }`}
+                      >
+                        <span className={`shrink-0 scale-90 ${isActive ? modeLabelColorClass : 'text-slate-400'}`}>
+                          {option.icon}
+                        </span>
+                        <span className="text-[11px]">{option.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="relative">
@@ -7493,7 +8214,7 @@ export default function App() {
           <React.Suspense fallback={<div className="w-48 bg-slate-950/55 border-r border-white/10" />}>
             <LeftSidebar 
               isOpen={isLeftSidebarOpen} 
-              onToggle={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)} 
+              onToggle={handleToggleLeftSidebar} 
             />
           </React.Suspense>
         )}

@@ -39,8 +39,8 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .mypy_cache/
-.tmp-ocr-*
-
+.tmp-*
+temp_*
 
 *storybook.log
 storybook-static

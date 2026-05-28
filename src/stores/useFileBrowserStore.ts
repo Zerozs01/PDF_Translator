@@ -74,7 +74,8 @@ interface FileBrowserState {
   selectAllDocuments: () => void;
   clearSelection: () => void;
   
-  // Actions - Data Loading
+    // Actions - Data Loading
+  loadStartupData: () => Promise<void>; // 🚀 Batch load: recent + tags + projects in 1 call
   loadRecentDocuments: () => Promise<void>;
   loadDocumentsByProject: (projectId: number | null) => Promise<void>;
   loadFavoriteDocuments: () => Promise<void>;
@@ -163,7 +164,30 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   })),
   clearSelection: () => set({ selectedDocumentIds: new Set() }),
   
-  // Data Loading Actions
+    // 🚀 Batch startup load: all 3 in 1 IPC round-trip
+  loadStartupData: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const result = await window.electronAPI.startupLoad?.();
+      if (result) {
+        set({
+          documents: result.recentDocuments,
+          tags: result.allTags,
+          projects: result.allProjects,
+          isLoading: false,
+          filterType: 'recent',
+        });
+      } else {
+        // Fallback to parallel individual loads
+        await Promise.all([loadRecentLibraryDocuments(50), loadLibraryTags(), loadLibraryProjects()]).then(
+          ([documents, tags, projects]) => set({ documents, tags, projects, isLoading: false, filterType: 'recent' })
+        );
+      }
+    } catch (error) {
+      set({ error: (error as Error).message, isLoading: false });
+    }
+  },
+
   loadRecentDocuments: async () => {
     set({ isLoading: true, error: null });
     try {

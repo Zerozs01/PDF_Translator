@@ -8,6 +8,7 @@ import {
   touchProjectDocumentActivity,
 } from '../services/projectDocumentService';
 import { useOCRTextLayerStore } from './useOCRTextLayerStore';
+import { useLayerStore } from './useLayerStore';
 import { useUIStore } from './useUIStore';
 import {
   DEFAULT_OVERLAY_FONT_PRESET,
@@ -282,6 +283,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loadProject: async (file, fileData) => {
     // Clear OCR cache when loading a new file to avoid cross-file reuse
     useOCRTextLayerStore.getState().reset();
+    useLayerStore.getState().clearLayers();
     useUIStore.getState().resetView();
     // Save document to database for recent files tracking.
     // Use a canonical imported filepath when possible so OCR cache keys are stable
@@ -359,6 +361,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       setTimeout(() => URL.revokeObjectURL(state.fileUrl!), 0);
     }
     useOCRTextLayerStore.getState().reset();
+    useLayerStore.getState().clearLayers();
     useUIStore.getState().resetView();
     return { 
       file: null,

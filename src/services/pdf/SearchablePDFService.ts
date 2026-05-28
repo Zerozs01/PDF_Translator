@@ -294,6 +294,29 @@ export class SearchablePDFService {
               signal.addEventListener('abort', parentAbortHandler, { once: true });
             }
 
+            const activeEngine = options.engine || 'tesseract';
+            const shouldPreferFastPaddleProfile = (() => {
+              if (activeEngine !== 'paddleocr') return false;
+              if (pipelineProfile !== 'panel') return false;
+
+              const isCjkLike = options.language
+                  .split('+')
+                  .map(code => code.trim())
+                  .filter(Boolean)
+                  .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+              if (isCjkLike) return false;
+
+              const longest = Math.max(imageWidth, imageHeight);
+              const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
+              const aspectRatio = longest / shortest;
+              const pixelCount = imageWidth * imageHeight;
+              return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+            })();
+
+            const resolvedQualityProfile = activeEngine === 'paddleocr'
+              ? (shouldPreferFastPaddleProfile ? 'fast' : 'balanced')
+              : 'best';
+
             const ocrPromise = visionService.ocrForTextLayer(
               imageBlob,
               imageWidth,
@@ -304,7 +327,7 @@ export class SearchablePDFService {
               pageSignal,
               debugCollectDrops,
               pipelineProfile,
-              'best',
+              resolvedQualityProfile,
               options.engine
             );
 
@@ -330,7 +353,7 @@ export class SearchablePDFService {
             ocrResult.pageNumber = pageNum;
             ocrResult.pipelineProfile = pipelineProfile;
             ocrResult.ocrEngine = options.engine || 'tesseract';
-            ocrResult.ocrQualityProfile = 'best';
+            ocrResult.ocrQualityProfile = resolvedQualityProfile;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
             if (cacheDocId && dbService.isAvailable()) {
@@ -373,7 +396,6 @@ export class SearchablePDFService {
     }
 
     if (signal?.aborted) {
-      await Promise.allSettled(inFlight);
       throw createAbortError();
     }
 
@@ -381,7 +403,6 @@ export class SearchablePDFService {
       await Promise.all(inFlight);
     } catch (error) {
       if (isAbortError(error)) {
-        await Promise.allSettled(inFlight);
         throw createAbortError();
       }
       throw error;

@@ -205,6 +205,12 @@ const shouldCollapseTranslatedOverlayDuplicate = (
   const centerDeltaY = Math.abs(overlayDedupCenterY(existing.bbox) - overlayDedupCenterY(candidate.bbox));
   const minHeight = Math.max(8, Math.min(overlayDedupBoxHeight(existing.bbox), overlayDedupBoxHeight(candidate.bbox)));
   const minWidth = Math.max(18, Math.min(overlayDedupBoxWidth(existing.bbox), overlayDedupBoxWidth(candidate.bbox)));
+  
+  // Guard: If they are horizontally completely separated (no horizontal overlap or far apart),
+  // they are distinct columns/labels and MUST NOT be collapsed.
+  if (overlapX === 0 || centerDeltaX > minWidth * 1.5) {
+    return false;
+  }
   const areaRatio = overlayDedupBoxArea(existing.bbox) / Math.max(1, overlayDedupBoxArea(candidate.bbox));
   const comparableArea = areaRatio >= 0.28 && areaRatio <= 3.6;
   const bothLongLines = minLength >= 16 && Math.min(existing.sourceWordCount, candidate.sourceWordCount) >= 3;
@@ -660,6 +666,7 @@ type ResolveTranslationOverlayArgs = {
   translationPreviewMode: OCRPreviewMode;
   currentPageTranslationMap?: Map<string, OCRTranslationCacheEntry>;
   activeTranslationKey?: string;
+  pageOCRsByEngine?: Map<OCREngine, OCRPageResult>;
 };
 
 export const resolveTranslationOverlayContext = ({
@@ -672,6 +679,7 @@ export const resolveTranslationOverlayContext = ({
   translationPreviewMode,
   currentPageTranslationMap,
   activeTranslationKey,
+  pageOCRsByEngine,
 }: ResolveTranslationOverlayArgs): TranslationOverlayContext => {
   const fallbackSource = normalizeTranslationLanguageKey(sourceLanguage || '', 'en');
   const normalizedTarget = normalizeTranslationLanguageKey(targetLanguage || '', 'th');
@@ -716,13 +724,73 @@ export const resolveTranslationOverlayContext = ({
     return false;
   };
 
+  const matchesSelection = (entry: OCRTranslationCacheEntry): boolean => {
+    if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+    if (entry.ocrEngine !== currentEngine) return false;
+    if (entry.translationMode !== translationMode) return false;
+    if (normalizeTranslationLanguageKey(entry.sourceLanguage || '', 'en') !== normalizedSource) return false;
+    if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
+    return normalizeCacheLanguageKey(entry.ocrLanguage) === normalizedCurrentLanguage;
+  };
+
+  const matchesEngineFallback = (entry: OCRTranslationCacheEntry): boolean => {
+    if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+    if (entry.ocrEngine !== currentEngine) return false;
+    if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
+    return entry.translatedByIndex.length > 0 || Boolean(entry.translatedText?.trim());
+  };
+
+  const getTranslationEntryMatchRank = (entry: OCRTranslationCacheEntry): number => {
+    if (matchesContext(entry)) return 3;
+    if (matchesSelection(entry)) return 2;
+    if (matchesEngineFallback(entry)) return 1;
+    return 0;
+  };
+
+  const hasThaiTranslation = (entry: OCRTranslationCacheEntry): boolean => {
+    if (normalizedTarget !== 'th') return false;
+    const sample = [
+      entry.translatedText || '',
+      ...entry.translatedByIndex.map((item) => String(item.text || '')),
+    ].join(' ');
+    return /[\u0E00-\u0E7F]/.test(sample);
+  };
+
+  const pickBestTranslationEntry = (entries: OCRTranslationCacheEntry[]): OCRTranslationCacheEntry | undefined => {
+    if (entries.length === 0) return undefined;
+    return entries
+      .slice()
+      .sort((a, b) => {
+        const thaiDiff = Number(hasThaiTranslation(b)) - Number(hasThaiTranslation(a));
+        if (thaiDiff !== 0) return thaiDiff;
+        const rankDiff = getTranslationEntryMatchRank(b) - getTranslationEntryMatchRank(a);
+        if (rankDiff !== 0) return rankDiff;
+        return b.createdAt - a.createdAt;
+      })[0];
+  };
+
   const activeEntry = activeTranslationKey && currentPageTranslationMap.has(activeTranslationKey)
     ? currentPageTranslationMap.get(activeTranslationKey)
     : currentEntries[0];
-  const preferredEntry = currentEntries.find((entry) => matchesContext(entry));
-  const resolvedEntry = activeEntry && matchesContext(activeEntry)
-    ? activeEntry
-    : preferredEntry;
+  const candidateEntries = currentEntries.filter((entry) => getTranslationEntryMatchRank(entry) > 0);
+  const fallbackEntry = pickBestTranslationEntry(candidateEntries);
+  
+  let resolvedEntry = fallbackEntry;
+
+  // Ultimate Fallback: หากหาแบบ Strict ไม่เจอเลย (เช่น เปลี่ยนโมเดลแปล หรือโหมด หรือเปลี่ยน OCR Engine)
+  // ให้ดึง Cache การแปลล่าสุดของหน้านี้ที่แปลสำเร็จแล้วมาทำเป็น Fallback
+  if (!resolvedEntry) {
+    const possibleFallbacks = currentEntries.filter((entry) => {
+      if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
+      if (normalizeTranslationLanguageKey(entry.targetLanguage || '', 'th') !== normalizedTarget) return false;
+      return entry.translatedByIndex.length > 0 || Boolean(entry.translatedText?.trim());
+    });
+
+    if (possibleFallbacks.length > 0) {
+      const sameEngineFallback = possibleFallbacks.find((entry) => entry.ocrEngine === currentEngine);
+      resolvedEntry = sameEngineFallback ?? possibleFallbacks[0];
+    }
+  }
 
   if (!resolvedEntry) {
     return {
@@ -735,16 +803,100 @@ export const resolveTranslationOverlayContext = ({
   }
 
   const isStale = resolvedEntry.sourceFingerprint !== sourceFingerprint;
-  const translatedByIndexRaw = new Map<number, string>(
-    resolvedEntry.translatedByIndex
-      .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
-      .map((item) => [item.index, item.text])
-  );
+  let translatedByIndexRaw = new Map<number, string>();
+
+  if (resolvedEntry.ocrEngine === currentEngine) {
+    // OCR Engine ตรงกัน ดึงคำแปลมาใช้ได้ตรงๆ 100%
+    translatedByIndexRaw = new Map<number, string>(
+      resolvedEntry.translatedByIndex
+        .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
+        .map((item) => [item.index, item.text])
+    );
+  } else {
+    // OCR Engine ไม่ตรงกัน! ใช้ Spatial & Semantic Fuzzy Matching เพื่อ Map คำแปลข้าม Engine
+    const oldEngine = resolvedEntry.ocrEngine;
+    const oldOCR = pageOCRsByEngine?.get(oldEngine);
+    const oldLines = oldOCR && Array.isArray(oldOCR.lines) ? oldOCR.lines : [];
+    const currentLines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
+    const rawMap = new Map<number, string>(
+      resolvedEntry.translatedByIndex
+        .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
+        .map((item) => [item.index, item.text])
+    );
+
+    if (oldLines.length > 0 && currentLines.length > 0) {
+      currentLines.forEach((currentLine, currentIdx) => {
+        let bestOldIdx = -1;
+        let bestScore = -1;
+
+        const currentBBox = currentLine.bbox;
+        const currentText = normalizeOverlayInlineText(String(currentLine.text || ''));
+
+        oldLines.forEach((oldLine, oldIdx) => {
+          const oldText = normalizeOverlayInlineText(String(oldLine.text || ''));
+          const oldBBox = oldLine.bbox;
+
+          // 1. คำนวณ Spatial Score (IoU) ด้วยการสเกล oldBBox ให้ตรงกับ resolution ของ current OCR
+          let spatialScore = 0;
+          if (currentBBox && oldBBox) {
+            const oldWidth = oldOCR?.width || 1;
+            const oldHeight = oldOCR?.height || 1;
+            const currentWidth = currentPageOCR?.width || 1;
+            const currentHeight = currentPageOCR?.height || 1;
+
+            const scaleX = currentWidth / oldWidth;
+            const scaleY = currentHeight / oldHeight;
+
+            const scaledOldBBox: BBox = {
+              x0: oldBBox.x0 * scaleX,
+              y0: oldBBox.y0 * scaleY,
+              x1: oldBBox.x1 * scaleX,
+              y1: oldBBox.y1 * scaleY,
+            };
+
+            spatialScore = overlayDedupIou(currentBBox, scaledOldBBox);
+          }
+
+          // 2. คำนวณ Semantic Score (Dice Similarity)
+          let textScore = 0;
+          if (currentText && oldText) {
+            textScore = overlayKeyDiceSimilarity(currentText, oldText);
+          }
+
+          // คะแนนรวม: ให้น้ำหนักพิกัดสูงกว่าความเหมือนข้อความเล็กน้อย (0.7 vs 0.3)
+          const totalScore = spatialScore * 0.7 + textScore * 0.3;
+
+          if (totalScore > bestScore) {
+            bestScore = totalScore;
+            bestOldIdx = oldIdx;
+          }
+        });
+
+        // หากคะแนนรวมมีความคล้ายคลึงเกิน 0.2 ให้ถือว่าแมตช์
+        if (bestOldIdx >= 0 && bestScore >= 0.2) {
+          const oldTranslation = rawMap.get(bestOldIdx);
+          if (oldTranslation) {
+            translatedByIndexRaw.set(currentIdx, oldTranslation);
+          }
+        }
+      });
+    }
+
+    // กรณีสำรอง: ถ้าแมตช์ไม่ได้เลย ให้ Map ตามลำดับ index ดั้งเดิม
+    if (translatedByIndexRaw.size === 0) {
+      rawMap.forEach((text, oldIdx) => {
+        if (oldIdx < currentLines.length) {
+          translatedByIndexRaw.set(oldIdx, text);
+        }
+      });
+    }
+  }
+
   const translatedByIndexWithFallback = fillMissingOverlayLinesWithSourceText(currentPageOCR, translatedByIndexRaw, normalizedTarget);
   const translatedByIndex = collapseTranslatedOverlayDuplicates(currentPageOCR, translatedByIndexWithFallback);
 
   return {
-    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0 && !isStale,
+    shouldRender: translationPreviewMode === 'translated' && translatedByIndex.size > 0,
     isStale,
     sourceLanguage: normalizeTranslationLanguageKey(resolvedEntry.sourceLanguage || normalizedSource, normalizedSource),
     targetLanguage: normalizedTarget,
@@ -792,6 +944,7 @@ export type OverlayTypographyInput = {
   bbox: BBox;
   line?: OCRLine;
   hints?: OverlayTypographyHints;
+  balloonId?: string;
 };
 
 export type OverlayLayoutProfile = 'official' | 'adaptive' | 'manga' | 'manhwa';
@@ -1161,11 +1314,36 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
   });
 
   const sparseSignal = meaningfulChars.length <= 6 && validWords.length <= 1 && tokenCount <= 2;
-  const oversizedMask = maskArea >= 17000 && (maskWidth >= 170 || maskHeight >= 96);
-  const severeSourceLoss = coverage < 0.24 && maskArea >= sourceArea * 3.2;
   const lowConfidence = Number(line.confidence || 0) <= 93;
 
-  return sparseSignal && oversizedMask && severeSourceLoss && lowConfidence && !sentenceLikeSignal && !hasTerminalPunctuation;
+  // 1. Existing oversized mask condition
+  const oversizedMask = maskArea >= 17000 && (maskWidth >= 170 || maskHeight >= 96);
+  const severeSourceLoss = coverage < 0.24 && maskArea >= sourceArea * 3.2;
+  if (sparseSignal && oversizedMask && severeSourceLoss && lowConfidence && !sentenceLikeSignal && !hasTerminalPunctuation) {
+    return true;
+  }
+
+  // 2. Giant sparse/empty border or panel boxes that contain almost no characters
+  // If the box area is large but it has very few letters, it is almost certainly a panel border line or background noise.
+  const isLargeSparsePanelBox = maskArea >= 10000 && meaningfulChars.length <= 4 && !hasTerminalPunctuation;
+  if (isLargeSparsePanelBox && lowConfidence && !sentenceLikeSignal) {
+    return true;
+  }
+
+  // 3. Tall narrow vertical noise lines (speed lines, panels borders, hair streaks)
+  // An English/translated text block cannot read vertically in a super thin box of width < 22px
+  const isTallNarrowVerticalNoise = maskWidth < 22 && maskHeight > 35 && (maskHeight / maskWidth) > 2.0 && meaningfulChars.length <= 6;
+  if (isTallNarrowVerticalNoise && !hasTerminalPunctuation && !sentenceLikeSignal) {
+    return true;
+  }
+
+  // 4. Extremely thin horizontal noise lines (panel dividers, scratches)
+  const isThinHorizontalNoise = maskHeight < 10 && maskWidth > 50 && (maskWidth / maskHeight) > 6.0 && meaningfulChars.length <= 4;
+  if (isThinHorizontalNoise && !hasTerminalPunctuation && !sentenceLikeSignal) {
+    return true;
+  }
+
+  return false;
 };
 
 const MEANINGFUL_WORD_REGEX = /[\p{L}\p{N}]/u;
@@ -2197,8 +2375,8 @@ const resolveOverlayLineHeight = (text: string): number => (
 const resolveOverlayPadding = (fontSize: number, text: string): { padX: number; padY: number } => {
   const containsThai = THAI_CHAR_REGEX.test(text);
   return {
-    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.07 : 0.1))),
-    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.07 : 0.09))),
+    padX: Math.max(1, Math.round(fontSize * (containsThai ? 0.04 : 0.08))),
+    padY: Math.max(1, Math.round(fontSize * (containsThai ? 0.04 : 0.07))),
   };
 };
 
@@ -2493,41 +2671,58 @@ export const computeOverlayTypography = (
     ? resolveDocumentHeadingBoost(hints?.sourceText || '', sourceWidth, sourceHeight)
     : documentBodyBoost;
 
-  const sourceDriven = sourceHeight
+  // ป้องกันกรณีกล่องบรรทัดเดี่ยวสูงผิดปกติ (เช่น สูงกว่ากว้างจัดๆ จากการดีเทคขอบเส้นพาเนลหรือสปีดไลน์)
+  let correctedSourceHeight = sourceHeight;
+  if (sourceLineCount === 1 && sourceHeight > sourceWidth * 0.8) {
+    correctedSourceHeight = Math.min(sourceHeight, sourceWidth * 0.35);
+  }
+
+  const effectiveSourceLineHeight = sourceLineCount > 1
+    ? (sourceHeight / sourceLineCount) * 1.15
+    : correctedSourceHeight;
+
+  const sourceDriven = effectiveSourceLineHeight
     * (preferSingleLine ? (isComicBubble ? 0.8 : isComicBox ? 0.75 : useDocumentTypographyProfile ? 0.72 : 0.7) : (isComicBubble ? 0.76 : isComicBox ? 0.7 : useDocumentTypographyProfile ? 0.7 : 0.63))
     * ratio
     * scriptScale
     * documentHeadingBoost;
   const minFontSize = clamp(
-    sourceHeight * (
+    effectiveSourceLineHeight * (
       preferSingleLine
         ? (isComicBubble ? 0.58 : isComicLikeProfile ? 0.48 : (sourceLooksHeading ? 0.43 : 0.39))
         : (isComicBubble ? 0.54 : isComicBox ? 0.46 : isComicLikeProfile ? 0.41 : (sourceLooksHeading ? 0.4 : 0.38))
     ) * (containsThai ? (isComicLikeProfile ? 0.94 : 0.92) : 1),
     6,
-    isComicBubble ? 22 : isComicBox ? 20 : isComicLikeProfile ? 18 : (sourceLooksHeading ? 20 : 16)
+    isComicBubble ? 22 : isComicBox ? 20 : isComicLikeProfile ? 18 : (sourceLooksHeading ? 48 : 16)
   );
+  
+  const maxFontCap = sourceLooksHeading 
+    ? Math.max(48, Math.min(96, effectiveSourceLineHeight * 1.35))
+    : (isComicLikeProfile && safeWidth < 150)
+      ? Math.min(20, Math.max(12, safeWidth * 0.15))
+      : 30;
+
   let fontSize = clamp(
     Math.min(
       sourceDriven,
       safeHeight * (
         preferSingleLine
-          ? (isComicBubble ? 0.88 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.74 : 0.6))
-          : (isComicBubble ? 0.88 : isComicBox ? 0.84 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.78 : 0.68))
+          ? (isComicBubble ? 0.88 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.98 : 0.72))
+          : (isComicBubble ? 0.88 : isComicBox ? 0.84 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.98 : 0.75))
       ),
       safeWidth * (
         preferSingleLine
-          ? (isComicBubble ? 0.48 : isComicBox ? 0.43 : isComicLikeProfile ? 0.4 : (sourceLooksHeading ? 0.38 : 0.3))
-          : (isComicBubble ? 0.52 : isComicBox ? 0.47 : isComicLikeProfile ? 0.44 : (sourceLooksHeading ? 0.44 : 0.36))
+          ? (isComicBubble ? 0.48 : isComicBox ? 0.43 : isComicLikeProfile ? 0.4 : (sourceLooksHeading ? 0.72 : 0.38))
+          : (isComicBubble ? 0.52 : isComicBox ? 0.47 : isComicLikeProfile ? 0.44 : (sourceLooksHeading ? 0.72 : 0.4))
       ),
       sourceWidth * (
         preferSingleLine
-          ? (isComicBubble ? 0.43 : isComicBox ? 0.38 : isComicLikeProfile ? 0.35 : (sourceLooksHeading ? 0.33 : 0.25))
-          : (isComicBubble ? 0.46 : isComicBox ? 0.41 : isComicLikeProfile ? 0.38 : (sourceLooksHeading ? 0.38 : 0.3))
+          ? (isComicBubble ? 0.43 : isComicBox ? 0.38 : isComicLikeProfile ? 0.35 : (sourceLooksHeading ? 0.65 : 0.32))
+          : (isComicBubble ? 0.46 : isComicBox ? 0.41 : isComicLikeProfile ? 0.38 : (sourceLooksHeading ? 0.65 : 0.35))
       )
     ),
     minFontSize,
-    sourceLooksHeading ? 34 : 30
+    maxFontCap
   );
   fontSize *= preferSingleLine
     ? (
@@ -2828,7 +3023,7 @@ const shouldHarmonizeOverlayBlock = (
   }
   if (effectiveDocumentProfile && !bothParagraphLike && (previousTechnicalRowLike || currentTechnicalRowLike)) {
     return (
-      heightRatio <= 1.18
+      heightRatio <= 1.30
       && verticalGap >= -avgHeight * 0.12
       && verticalGap <= Math.max(12, avgHeight * 0.42)
       && (overlapRatio >= 0.5 || leftDelta <= Math.max(10, avgHeight * 0.66))
@@ -2837,6 +3032,15 @@ const shouldHarmonizeOverlayBlock = (
   }
 
   if (!effectiveDocumentProfile) {
+    const isComicProfile = profile === 'manga' || profile === 'manhwa' || profile === 'adaptive';
+    const generousComicStack = isComicProfile
+      && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
+      && verticalGap >= -avgHeight * 0.4
+      && verticalGap <= Math.max(28, avgHeight * 1.32)
+      && heightRatio <= 3.2;
+    if (generousComicStack) {
+      return true;
+    }
     if (boxedFragmentContinuity) {
       return true;
     }
@@ -2845,9 +3049,9 @@ const shouldHarmonizeOverlayBlock = (
       && centerDelta <= Math.max(24, avgHeight * 1.9);
     const centeredFragmentMerge = centeredFragmentContinuity
       && centeredStack
-      && heightRatio <= 2.8
-      && verticalGap >= -avgHeight * 0.34
-      && verticalGap <= Math.max(34, avgHeight * 2.4);
+      && heightRatio <= 3.2
+      && verticalGap >= -avgHeight * 0.38
+      && verticalGap <= Math.max(28, avgHeight * 1.32);
     if (centeredFragmentMerge) {
       return true;
     }
@@ -2855,17 +3059,30 @@ const shouldHarmonizeOverlayBlock = (
       centeredStackContinuity
       && overlapRatio >= 0.04
       && centeredStack
-      && heightRatio <= 2.5
-      && verticalGap >= -avgHeight * 0.28
-      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 2.1 : profile === 'adaptive' ? 1.9 : 1.8))
+      && heightRatio <= 2.8
+      && verticalGap >= -avgHeight * 0.32
+      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 1.32 : profile === 'adaptive' ? 1.28 : 1.25))
     ) {
       return true;
     }
   }
 
+  // Check if they are on the same horizontal line (horizontally aligned pairs)
+  // which is extremely common when OCR splits a single line into multiple words/boxes.
+  const verticalOverlap = Math.max(0, Math.min(previous.bbox.y1, current.bbox.y1) - Math.max(previous.bbox.y0, current.bbox.y0));
+  const verticalOverlapRatio = verticalOverlap / Math.max(1, Math.min(prevHeight, currHeight));
+  const horizontalGap = current.bbox.x0 - previous.bbox.x1;
+  const isSameLineHorizontalPair = verticalOverlapRatio >= 0.55
+    && horizontalGap >= -avgHeight * 0.75
+    && horizontalGap <= Math.max(48, avgHeight * 3.5);
+
+  if (isSameLineHorizontalPair && heightRatio <= 1.55) {
+    return true;
+  }
+
   if (
     bothParagraphLike
-    && heightRatio <= 1.24
+    && heightRatio <= 1.45
     && verticalGap >= -avgHeight * 0.18
     && verticalGap <= Math.max(22, avgHeight * 1.05)
   ) {
@@ -2873,9 +3090,9 @@ const shouldHarmonizeOverlayBlock = (
   }
 
   return (
-    heightRatio <= 1.15
+    heightRatio <= 1.32
     && verticalGap >= -avgHeight * 0.22
-    && verticalGap <= Math.max(18, avgHeight * 0.78)
+    && verticalGap <= Math.max(28, avgHeight * 1.15)
     && (overlapRatio >= 0.24 || leftDelta <= Math.max(18, avgHeight * 1.8))
   );
 };
@@ -3358,9 +3575,7 @@ export const computeOverlayLayoutMap = (
   });
   const result = new Map<number, OverlayLayout>();
 
-  let groupStart = 0;
-  const flushGroup = (endExclusive: number) => {
-    const group = orderedComputed.slice(groupStart, endExclusive);
+  const flushGroup = (group: typeof orderedComputed) => {
     if (group.length === 0) return;
 
     const fontSizes = group.map((item) => item.typography.fontSize);
@@ -3440,15 +3655,16 @@ export const computeOverlayLayoutMap = (
       : (group.length >= 2 && (isCenteredBlock || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind === 'comic-box') || (maxFontSize - minFontSize) >= 0.35));
     const alignment: 'left' | 'center' = isCenteredBlock ? 'center' : 'left';
     const sharedTextStartX = group.length >= 2
-      ? (alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles ? minStartX : resolveMedian(startXs))
+      ? (alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles ? minStartX : (effectiveDocumentProfile ? resolveMedian(startXs) : undefined))
       : undefined;
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
       : undefined;
     const allowSectionMerge = effectiveProfile === 'manga'
       || effectiveProfile === 'manhwa';
+    const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      ? (isCenteredBlock || hasBalloonMember ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -3779,13 +3995,86 @@ export const computeOverlayLayoutMap = (
     }
   };
 
-  for (let i = 1; i < orderedComputed.length; i += 1) {
-    if (!shouldHarmonizeOverlayBlock(orderedComputed[i - 1], orderedComputed[i], profile)) {
-      flushGroup(i);
-      groupStart = i;
+  // Use Union-Find (Disjoint Set) to group items based on spatial connections.
+  // This avoids cross-column interleaving Y-sorted issues breaking sequential harmonization.
+  const ufParent = new Array(orderedComputed.length).fill(0).map((_, idx) => idx);
+
+  const ufFind = (i: number): number => {
+    let root = i;
+    while (root !== ufParent[root]) {
+      root = ufParent[root];
+    }
+    let curr = i;
+    while (curr !== root) {
+      const nxt = ufParent[curr];
+      ufParent[curr] = root;
+      curr = nxt;
+    }
+    return root;
+  };
+
+  const ufUnion = (i: number, j: number): void => {
+    const rootI = ufFind(i);
+    const rootJ = ufFind(j);
+    if (rootI !== rootJ) {
+      ufParent[rootI] = rootJ;
+    }
+  };
+
+  // Compare potential harmonizable pairs (optimized early exit since orderedComputed is Y-sorted)
+  for (let i = 0; i < orderedComputed.length; i += 1) {
+    const nodeA = orderedComputed[i];
+    for (let j = i + 1; j < orderedComputed.length; j += 1) {
+      const nodeB = orderedComputed[j];
+
+      // บล็อกการผสานข้ามกลุ่มบอลลูนอย่างเด็ดขาด (ข้อมูลจริงจาก Grouper ต้นทาง)
+      if (
+        nodeA.balloonId !== undefined &&
+        nodeB.balloonId !== undefined &&
+        nodeA.balloonId !== nodeB.balloonId
+      ) {
+        continue;
+      }
+
+      // Stop searching this chain if Y gap is way too large
+      const yGap = nodeB.bbox.y0 - nodeA.bbox.y1;
+      const heightA = nodeA.bbox.y1 - nodeA.bbox.y0;
+      const heightB = nodeB.bbox.y1 - nodeB.bbox.y0;
+      if (yGap > Math.max(160, (heightA + heightB) * 5.0)) {
+        break;
+      }
+
+      const sameBalloon = nodeA.balloonId !== undefined &&
+        nodeB.balloonId !== undefined &&
+        nodeA.balloonId === nodeB.balloonId;
+
+      if (sameBalloon || shouldHarmonizeOverlayBlock(nodeA, nodeB, profile) || shouldHarmonizeOverlayBlock(nodeB, nodeA, profile)) {
+        ufUnion(i, j);
+      }
     }
   }
-  flushGroup(orderedComputed.length);
+
+  // Gather items into their connected components
+  const components = new Map<number, typeof orderedComputed>();
+  for (let i = 0; i < orderedComputed.length; i += 1) {
+    const root = ufFind(i);
+    if (!components.has(root)) {
+      components.set(root, []);
+    }
+    components.get(root)!.push(orderedComputed[i]);
+  }
+
+  // Process each unified group
+  for (const group of components.values()) {
+    // Sort each group logically: top-to-bottom, then left-to-right
+    const sortedGroup = [...group].sort((a, b) => {
+      if (Math.abs(a.bbox.y0 - b.bbox.y0) > 4) {
+        return a.bbox.y0 - b.bbox.y0;
+      }
+      return a.bbox.x0 - b.bbox.x0;
+    });
+    flushGroup(sortedGroup);
+  }
 
   return suppressOverlappingOverlayBorders(result, orderedComputed);
 };

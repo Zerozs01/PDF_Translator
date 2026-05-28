@@ -30,6 +30,9 @@ export default defineConfig({
           external: ['better-sqlite3']
         }
       }
+    },
+    onstart(options) {
+      options.startup();
     }
   }, {
     entry: 'electron/preload.ts',

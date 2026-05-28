@@ -73,6 +73,11 @@ let shouldPruneContextualGhostTranslatableLine: (
   candidate: TranslatableLine,
   lines: TranslatableLine[]
 ) => boolean;
+let cleanJapaneseOcrSpacing: (text: string) => string;
+let cleanKoreanOcrSpacing: (text: string) => string;
+let normalizeJapaneseOcrNoiseForTranslation: (text: string) => string;
+let normalizeKoreanOcrNoiseForTranslation: (text: string) => string;
+let normalizeSourceForTranslation: (text: string, sourceLanguage?: string) => string;
 
 beforeAll(async () => {
   if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix === 'undefined') {
@@ -125,6 +130,11 @@ beforeAll(async () => {
   resolvePreferredSourceLanguageForText = appModule.resolvePreferredSourceLanguageForText;
   isLikelyGhostTranslatableLine = appModule.isLikelyGhostTranslatableLine;
   shouldPruneContextualGhostTranslatableLine = appModule.shouldPruneContextualGhostTranslatableLine;
+  cleanJapaneseOcrSpacing = appModule.cleanJapaneseOcrSpacing;
+  cleanKoreanOcrSpacing = appModule.cleanKoreanOcrSpacing;
+  normalizeJapaneseOcrNoiseForTranslation = appModule.normalizeJapaneseOcrNoiseForTranslation;
+  normalizeKoreanOcrNoiseForTranslation = appModule.normalizeKoreanOcrNoiseForTranslation;
+  normalizeSourceForTranslation = appModule.normalizeSourceForTranslation;
 });
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
@@ -392,7 +402,7 @@ describe('isLikelyGhostTranslatableLine', () => {
     expect(isLikelyGhostTranslatableLine(ghostLine, '5C')).toBe(true);
   });
 
-  test('flags tiny latin singleton artifacts even at medium confidence', () => {
+  test('keeps known single-letter English pronoun I even in tiny boxes', () => {
     const tinyLatinNoise = makeOcrLine({
       text: 'I',
       confidence: 91,
@@ -402,7 +412,8 @@ describe('isLikelyGhostTranslatableLine', () => {
       ],
     });
 
-    expect(isLikelyGhostTranslatableLine(tinyLatinNoise, 'I')).toBe(true);
+    // "I" is a valid English pronoun, not ghost noise
+    expect(isLikelyGhostTranslatableLine(tinyLatinNoise, 'I')).toBe(false);
   });
 
   test('flags tiny no-word latin artifacts that can drift translation queue', () => {
@@ -1329,6 +1340,56 @@ describe('normalizeSpanishOcrNoiseForTranslation', () => {
 
     expect(normalized).toContain('¿COMO LO SUPO');
     expect(normalized).toContain('NO ERA UN POCO PERVERTIDO');
+  });
+});
+
+describe('cleanJapaneseOcrSpacing', () => {
+  test('strips spaces between Japanese Hiragana, Katakana, and Kanji characters', () => {
+    expect(cleanJapaneseOcrSpacing('保 存 で き ま せ ん')).toBe('保存できません');
+    expect(cleanJapaneseOcrSpacing('し て く だ さ い')).toBe('してください');
+    expect(cleanJapaneseOcrSpacing('コ ソ コ ソ')).toBe('コソコソ');
+  });
+
+  test('preserves spaces between English words and Japanese characters', () => {
+    expect(cleanJapaneseOcrSpacing('CPU 使 用')).toBe('CPU 使用');
+    expect(cleanJapaneseOcrSpacing('settings 保 存')).toBe('settings 保存');
+  });
+});
+
+describe('cleanKoreanOcrSpacing', () => {
+  test('strips spaces between Hangul syllables', () => {
+    expect(cleanKoreanOcrSpacing('설 정 을  다 시')).toBe('설정을  다시');
+    expect(cleanKoreanOcrSpacing('안 녕 하 세 요')).toBe('안녕하세요');
+  });
+});
+
+describe('normalizeJapaneseOcrNoiseForTranslation', () => {
+  test('normalizes Japanese full-width punctuation', () => {
+    expect(normalizeJapaneseOcrNoiseForTranslation('保存できませんでした。')).toBe('保存できませんでした.');
+    expect(normalizeJapaneseOcrNoiseForTranslation('えっ、本当に？')).toBe('えっ, 本当に?');
+  });
+
+  test('repairs vertical Japanese OCR layout noises', () => {
+    expect(normalizeJapaneseOcrNoiseForTranslation('エi')).toBe('えっ');
+    expect(normalizeJapaneseOcrNoiseForTranslation('1 ッ')).toBe('っ');
+  });
+});
+
+describe('normalizeKoreanOcrNoiseForTranslation', () => {
+  test('normalizes Korean full-width punctuation', () => {
+    expect(normalizeKoreanOcrNoiseForTranslation('완료되었습니다。')).toBe('완료되었습니다.');
+  });
+});
+
+describe('normalizeSourceForTranslation CJK integration', () => {
+  test('integrates Japanese spacing and noise normalization', () => {
+    const res = normalizeSourceForTranslation('し　て　く　だ　さ　い。', 'ja');
+    expect(res).toBe('してください.');
+  });
+
+  test('integrates Korean spacing and noise normalization', () => {
+    const res = normalizeSourceForTranslation('안 녕 하 세 요。', 'ko');
+    expect(res).toBe('안녕하세요.');
   });
 });
 

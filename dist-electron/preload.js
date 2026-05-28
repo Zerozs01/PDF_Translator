@@ -18,6 +18,11 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     saveTranslationCache: (docId, pageNum, cacheKey, entry) => electron.ipcRenderer.invoke("db:save-translation-cache", { docId, pageNum, cacheKey, entry }),
     getTranslationCachePage: (docId, pageNum) => electron.ipcRenderer.invoke("db:get-translation-cache-page", { docId, pageNum }),
     clearTranslationCacheByEngine: (docId, pageNum, engine) => electron.ipcRenderer.invoke("db:clear-translation-cache-by-engine", { docId, pageNum, engine }),
+    // Benchmark CRUD (Phase 1.3)
+    saveBenchmark: (params) => electron.ipcRenderer.invoke("db:save-benchmark", params),
+    getBenchmark: (params) => electron.ipcRenderer.invoke("db:get-benchmark", params),
+    clearBenchmark: (params) => electron.ipcRenderer.invoke("db:clear-benchmark", params),
+    listBenchmarks: (params) => electron.ipcRenderer.invoke("db:list-benchmarks", params),
     // Document management
     getRecentDocuments: (limit) => electron.ipcRenderer.invoke("db:get-recent-documents", limit),
     getDocumentsByProject: (projectId) => electron.ipcRenderer.invoke("db:get-documents-by-project", projectId),
@@ -58,6 +63,10 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
     offline: (text, context) => electron.ipcRenderer.invoke("translate:offline", { text, context }),
     offlineBatch: (texts, context) => electron.ipcRenderer.invoke("translate:offline-batch", { texts, context })
   },
+  // 🚀 Startup batch load (1 round-trip instead of 3+ separate IPC calls)
+  startupLoad: () => electron.ipcRenderer.invoke("db:startup-load"),
+  // 🚀 Batch OCR cache stats for multiple docIds in 1 call
+  getOcrCacheStatsForDocumentIds: (documentIds) => electron.ipcRenderer.invoke("db:get-ocr-cache-stats-for-document-ids", { documentIds }),
   // File system operations (SECURE: validated in main process)
   fs: {
     readFile: (filepath) => electron.ipcRenderer.invoke("fs:read-file", filepath),

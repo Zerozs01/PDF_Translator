@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.16] - 2026-05-21
+
+### Added — Phase 3: Interactive Layer Manipulation (Edit Layer)
+
+- **`userEdited` flag on TextLayer**: Protects manually edited layers from auto-translation overwrite
+- **`editingLayerId` state**: Tracks which layer is currently in inline edit mode
+- **Multi-select support**: `selectedLayerIds` as `Set<string>` with Shift+click toggle
+- **Undo stack**: `undoStackByPage` with MAX_UNDO_DEPTH=20 per page
+- **`deletedLineIndexesByPage`**: Tracks deleted line indexes to suppress ghost overlays in PDFCanvas
+- **Phase 3 layer actions** in `useLayerStore.ts`:
+  - `updateLayerBBox`, `updateLayerText`, `updateLayerRotation`, `updateLayerFontSize`
+  - `updateLayerBackgroundColor`, `updateLayerTextColor`, `updateLayerBold`
+  - `updateMultiLayerBBoxDelta` (multi-select drag), `synchronizeGroupBBox`
+  - `addManualLayer` with auto balloon group creation
+- **Translation Protection Rule**: `App.tsx` (line ~7720) skips auto-translation when `layer.userEdited === true`
+
+## [1.2.15] - 2026-05-08
+
+### Added — EasyOCR Chunking Support + Windows Process Cleanup
+
+- **EasyOCR chunking**: Added `EXTERNAL_EASYOCR_CHUNK_*` parameters to `VisionService.ts` for consistent chunking across OCR engines. EasyOCR chunking is now enabled for ALL languages including CJK/Thai (unlike PaddleOCR which only chunks Korean).
+- **Engine-specific chunk parameters**: `shouldChunkExternalImage()` now routes to engine-specific logic; `processLargeExternalImage()` uses `isEasyOCR` flag to select appropriate `chunkTargetHeight` and `chunkOverlap`.
+- **EasyOCR error handling**: Added skip-on-empty logic for EasyOCR empty responses (`EasyOCR did not return usable text boxes`, `Easy-Yolo adapter returned an empty response`, etc.).
+
+### Fixed — OCR Bridge Windows Force Kill
+
+- **Windows process termination**: `ocrBridge.ts` now uses `taskkill /F /T /PID` on Windows instead of SIGTERM to forcefully terminate the entire Python process tree. Falls back to `SIGKILL` if taskkill fails.
+- **Daemon reuse logging**: Added `[ocrBridge] Reusing existing daemon` and `[ocrBridge] Script changed...restarting` logs for better debugging.
+
+### Fixed — Main Process Last-Resort Cleanup
+
+- **Exit handler**: Added `process.on('exit')` handler in `main.ts` to ensure `disposeExternalOcrDaemons()` and `disposeArgosTranslateRuntime()` run even when `before-quit` or `window-all-closed` fail to fire (e.g., Vite HMR restarts).
+
+### ⚠️ OCR Algorithm Version Bump
+
+- OCR Algorithm version bumped from **193 → 200** to invalidate stale OCR cache. This will force re-OCR on all previously cached pages.
+
 ## [1.2.14] - 2026-03-31
 
 ### Fixed — OCR Algorithm v146 (External Panel Cleanup + Residual Singleton Guard)
