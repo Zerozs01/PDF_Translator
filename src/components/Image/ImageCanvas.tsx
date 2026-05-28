@@ -393,6 +393,9 @@ export const ImageCanvas: React.FC = () => {
         if (!translatedText) return [];
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return [];
 
+        const layer = currentPageLayers.find(l => l.lineIndex === index);
+        const balloonId = layer?.groupId;
+
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
         const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
@@ -433,6 +436,7 @@ export const ImageCanvas: React.FC = () => {
           height: typographyHeight,
           bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
           line,
+          balloonId,
           hints: {
             sourceText: line.text,
             sourceBoxWidth: baseWidth,
@@ -455,6 +459,7 @@ export const ImageCanvas: React.FC = () => {
     overlayFontFamily,
     translationOverlayContext.shouldRender,
     translationOverlayContext.translatedByIndex,
+    currentPageLayers,
   ]);
 
   return (
@@ -622,7 +627,7 @@ export const ImageCanvas: React.FC = () => {
                     styleKind,
                   });
                   const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
-                  if (layer) {
+                  if (layer && layer.userEdited) {
                     typography.fontSize = (layer.fontSize || 14) * ocrScaleX;
                   }
                   const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;

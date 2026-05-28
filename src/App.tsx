@@ -1782,9 +1782,6 @@ export const isLikelyGhostTranslatableLine = (
   resolvedText: string,
   engineHint?: string
 ): boolean => {
-  const isExternalEngine = engineHint === 'paddleocr' || line?.sourceEngine === 'paddleocr' || engineHint === 'easyocr' || line?.sourceEngine === 'easyocr';
-  if (isExternalEngine) return false;
-
   const text = normalizeWhitespace(String(resolvedText || ''));
   if (!text) return true;
   if (!line?.bbox) return false;
@@ -1799,6 +1796,8 @@ export const isLikelyGhostTranslatableLine = (
   const cjkCompact = compact.replace(/[^\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
+  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP)$/i.test(asciiCompact);
 
   const validWords = (Array.isArray(line.words) ? line.words : []).filter((word) => {
     const wordText = normalizeWhitespace(String(word?.text || ''));
@@ -1817,6 +1816,38 @@ export const isLikelyGhostTranslatableLine = (
 
   if (shouldForceKeepComicTranslationLine(text, line)) {
     return false;
+  }
+
+  // Apply these safety filters to ALL OCR engines to guarantee obvious ghost noise is always dropped
+  // 1. Pure non-alphanumeric symbol noise (e.g., "|||", "///", "\\", "---")
+  const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
+  if (isPureSymbolNoise) {
+    return true;
+  }
+
+  // 2. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky balloon borders, e.g. "lll", "III", "111", "I l I")
+  const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-s]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
+  if (isVerticalLineJunk) {
+    return true;
+  }
+
+  // 3. Single-character junk (English letters or digits that aren't valid single-letter words like I, A, O)
+  const isSingleCharJunk = !hasCjkOrThai
+    && asciiCompact.length === 1
+    && !/^[IAO]$/i.test(asciiCompact);
+  if (isSingleCharJunk) {
+    return true;
+  }
+
+  // 4. Tiny noise junk boxes with very short character lengths
+  const isExternalEngine = engineHint === 'paddleocr' || line?.sourceEngine === 'paddleocr' || engineHint === 'easyocr' || line?.sourceEngine === 'easyocr';
+  const isTinyJunkBox = !hasCjkOrThai
+    && asciiCompact.length <= 3
+    && area <= 8000
+    && (isExternalEngine ? avgConfidence <= 98 : avgConfidence <= 85)
+    && !isKnownShortWord;
+  if (isTinyJunkBox) {
+    return true;
   }
 
   const giantLineBox = (
@@ -1909,7 +1940,6 @@ export const isLikelyGhostTranslatableLine = (
     && avgConfidence <= 94
     && !/[!?]/.test(text);
   // Exempt known short English words — "I" (pronoun), "A" (article) are not ghost noise
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || /^(?:OK|NO|HI|OH)$/i.test(asciiCompact);
   if (tinyAsciiSingletonNoise && !isKnownShortWord) {
     return true;
   }
@@ -2974,6 +3004,30 @@ export const applyThaiTechnicalGlossary = (sourceText: string, translatedText: s
   if (/\bfixed\s+connections?\b/i.test(source)) {
     return withTechnicalLabel('จุดต่อแบบยึดแน่น');
   }
+  if (/^are\s+welded$/i.test(source) || compactLower === 'arewelded') {
+    return withTechnicalLabel('ถูกเชื่อมเข้าด้วยกัน');
+  }
+  if (/^welded$/i.test(source) || compactLower === 'welded') {
+    return withTechnicalLabel('เชื่อมเข้าด้วยกัน');
+  }
+  if (/^two$/i.test(source) || compactLower === 'two') {
+    return withTechnicalLabel('สอง');
+  }
+  if (/^three$/i.test(source) || compactLower === 'three') {
+    return withTechnicalLabel('สาม');
+  }
+  if (/^pin$/i.test(source) || compactLower === 'pin') {
+    return withTechnicalLabel('พิน');
+  }
+  if (/^in$/i.test(source) || compactLower === 'in') {
+    return withTechnicalLabel('ใน');
+  }
+  if (/^fixed$/i.test(source) || compactLower === 'fixed') {
+    return withTechnicalLabel('ยึดแน่น');
+  }
+  if (/^reactions$/i.test(source) || compactLower === 'reactions') {
+    return withTechnicalLabel('แรงปฏิกิริยา');
+  }
   if (/\bthis\s+utility\s+building\s+is\b/i.test(source) && /\bpin\s+supported\b/i.test(source)) {
     return withTechnicalLabel('อาคารอเนกประสงค์นี้รองรับแบบพินที่ด้านบนของเสา');
   }
@@ -4030,18 +4084,20 @@ const isLikelyComicDialogueLayout = (lines: TranslatableLine[]): boolean => {
     const width = Math.max(1, line.right - line.left);
     const height = Math.max(1, line.height);
     const aspect = width / Math.max(1, height);
-    return aspect <= 4.4 || width <= medianWidth * 0.9 || height >= medianHeight * 1.15;
+    return aspect <= 8.0 || width <= medianWidth * 0.95 || height >= medianHeight * 1.15;
   }).length;
   const longPunctuatedCount = lines.filter((line) => {
     const text = normalizeWhitespace(String(line.text || ''));
     return text.length >= 20 && /[.,;:]/.test(text);
   }).length;
 
-  return (
+  const result = (
     shortLineCount >= Math.ceil(lines.length * 0.62)
     && narrowOrBubbleLikeCount >= Math.ceil(lines.length * 0.58)
     && longPunctuatedCount <= Math.max(1, Math.floor(lines.length * 0.24))
   );
+  console.log(`[isLikelyComicDialogueLayout] lines=${lines.length} shortLineCount=${shortLineCount}/${Math.ceil(lines.length * 0.62)} narrowOrBubbleLikeCount=${narrowOrBubbleLikeCount}/${Math.ceil(lines.length * 0.58)} longPunctuatedCount=${longPunctuatedCount}/${Math.max(1, Math.floor(lines.length * 0.24))} result=${result}`);
+  return result;
 };
 
 const shouldForceLineByLineForOfflinePanel = (lines: TranslatableLine[]): boolean => {
@@ -4847,7 +4903,11 @@ const resolveTranslationGroupsWithLayout = (
     };
   }
 
-  if (!isBalloonAwareGroupingEnabled()) {
+  const flagEnabled = isBalloonAwareGroupingEnabled();
+  const shouldGroup = shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode);
+  console.log(`[resolveTranslationGroupsWithLayout] page=${pageNum} flagEnabled=${flagEnabled} shouldGroup=${shouldGroup} lines=${lines.length} mode=${mode}`);
+
+  if (!flagEnabled) {
     return {
       groups: fallbackGroups,
       groupingProfile: fallbackProfile,
@@ -4858,7 +4918,7 @@ const resolveTranslationGroupsWithLayout = (
     };
   }
 
-  if (!shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode)) {
+  if (!shouldGroup) {
     return {
       groups: fallbackGroups,
       groupingProfile: fallbackProfile,
@@ -4962,6 +5022,20 @@ const tokenizeRedistributedPart = (value: string, targetLanguage: string): strin
   if (!normalized) return [];
 
   if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    const intlWithSegmenter = Intl as unknown as {
+      Segmenter?: new (
+        locales?: string | string[],
+        options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
+      ) => {
+        segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }>;
+      };
+    };
+    if (intlWithSegmenter.Segmenter) {
+      const wordSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
+      return Array.from(wordSeg.segment(normalized))
+        .map((item) => item.segment)
+        .filter((segment) => segment.trim().length > 0);
+    }
     return Array.from(normalized).filter((segment) => segment.trim().length > 0);
   }
 
@@ -5019,6 +5093,12 @@ const rebalanceRedistributedParts = (
   }
 
   if (normalizedParts.every((part) => part.length > 0) || !normalizedTarget) {
+    return normalizedParts;
+  }
+
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    // For Thai, do not force-slice target text by character index to fill empty lines,
+    // as it chops Thai words into unreadable letters/diacritics. Keep them empty/clean.
     return normalizedParts;
   }
 
@@ -5086,17 +5166,9 @@ const splitTranslatedTextBySourceWeights = (
         const wordSegments = Array.from(wordSeg.segment(target))
           .map((item) => item.segment)
           .filter((segment) => segment.trim().length > 0);
-        if (wordSegments.length >= sourceLines.length) {
+        if (wordSegments.length > 0) {
           return wordSegments;
         }
-        if (target.length <= 8 && wordSegments.length > 0) {
-          return wordSegments;
-        }
-
-        const graphemeSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'grapheme' });
-        return Array.from(graphemeSeg.segment(target))
-          .map((item) => item.segment)
-          .filter((segment) => segment.trim().length > 0);
       }
       return Array.from(target);
     };
@@ -5220,10 +5292,22 @@ export const resolveRedistributedLineFallback = (
       }
 
       if (normalizedGroup.length >= clampedTotal * 3) {
-        const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
-        const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
-        const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
-        if (proportionalChunk) return proportionalChunk;
+        if (!isThaiTarget) {
+          const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
+          const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
+          const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
+          if (proportionalChunk) return proportionalChunk;
+        } else {
+          // For Thai, we do not want proportional slicing as it shreds words.
+          // Return empty string so it falls back to the original English line text naturally.
+          return '';
+        }
+      }
+
+      // Duplication Prevention: For multi-line groups, if we haven't found any valid split
+      // for subsequent lines (index > 0), return empty string to prevent duplicating the whole group.
+      if (clampedIndex > 0) {
+        return '';
       }
     }
 
@@ -6050,6 +6134,8 @@ export default function App() {
       `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
     );
 
+    const pageLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+
     const overlayLayoutByIndex = computeOverlayLayoutMap(
       pageOCR.lines.flatMap((line, index) => {
         const translatedText = translatedByIndex.get(index);
@@ -6057,6 +6143,9 @@ export default function App() {
         const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
         if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
+
+        const layer = pageLayers.find(l => l.lineIndex === index);
+        const balloonId = layer?.groupId;
 
         const sourceBbox = resolveOverlaySourceBBox(line);
         const maskBbox = resolveOverlayMaskBBox(line);
@@ -6098,6 +6187,7 @@ export default function App() {
           height: typographyHeight,
           bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
           line,
+          balloonId,
           hints: {
             sourceText: line.text,
             sourceBoxWidth: baseWidth,

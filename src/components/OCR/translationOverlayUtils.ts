@@ -944,6 +944,7 @@ export type OverlayTypographyInput = {
   bbox: BBox;
   line?: OCRLine;
   hints?: OverlayTypographyHints;
+  balloonId?: string;
 };
 
 export type OverlayLayoutProfile = 'official' | 'adaptive' | 'manga' | 'manhwa';
@@ -2692,11 +2693,11 @@ export const computeOverlayTypography = (
         : (isComicBubble ? 0.54 : isComicBox ? 0.46 : isComicLikeProfile ? 0.41 : (sourceLooksHeading ? 0.4 : 0.38))
     ) * (containsThai ? (isComicLikeProfile ? 0.94 : 0.92) : 1),
     6,
-    isComicBubble ? 22 : isComicBox ? 20 : isComicLikeProfile ? 18 : (sourceLooksHeading ? 20 : 16)
+    isComicBubble ? 22 : isComicBox ? 20 : isComicLikeProfile ? 18 : (sourceLooksHeading ? 48 : 16)
   );
   
   const maxFontCap = sourceLooksHeading 
-    ? 34 
+    ? Math.max(48, Math.min(96, effectiveSourceLineHeight * 1.35))
     : (isComicLikeProfile && safeWidth < 150)
       ? Math.min(20, Math.max(12, safeWidth * 0.15))
       : 30;
@@ -2706,18 +2707,18 @@ export const computeOverlayTypography = (
       sourceDriven,
       safeHeight * (
         preferSingleLine
-          ? (isComicBubble ? 0.88 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.74 : 0.6))
-          : (isComicBubble ? 0.88 : isComicBox ? 0.84 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.78 : 0.68))
+          ? (isComicBubble ? 0.88 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.98 : 0.72))
+          : (isComicBubble ? 0.88 : isComicBox ? 0.84 : isComicLikeProfile ? 0.8 : (sourceLooksHeading ? 0.98 : 0.75))
       ),
       safeWidth * (
         preferSingleLine
-          ? (isComicBubble ? 0.48 : isComicBox ? 0.43 : isComicLikeProfile ? 0.4 : (sourceLooksHeading ? 0.38 : 0.3))
-          : (isComicBubble ? 0.52 : isComicBox ? 0.47 : isComicLikeProfile ? 0.44 : (sourceLooksHeading ? 0.44 : 0.36))
+          ? (isComicBubble ? 0.48 : isComicBox ? 0.43 : isComicLikeProfile ? 0.4 : (sourceLooksHeading ? 0.72 : 0.38))
+          : (isComicBubble ? 0.52 : isComicBox ? 0.47 : isComicLikeProfile ? 0.44 : (sourceLooksHeading ? 0.72 : 0.4))
       ),
       sourceWidth * (
         preferSingleLine
-          ? (isComicBubble ? 0.43 : isComicBox ? 0.38 : isComicLikeProfile ? 0.35 : (sourceLooksHeading ? 0.33 : 0.25))
-          : (isComicBubble ? 0.46 : isComicBox ? 0.41 : isComicLikeProfile ? 0.38 : (sourceLooksHeading ? 0.38 : 0.3))
+          ? (isComicBubble ? 0.43 : isComicBox ? 0.38 : isComicLikeProfile ? 0.35 : (sourceLooksHeading ? 0.65 : 0.32))
+          : (isComicBubble ? 0.46 : isComicBox ? 0.41 : isComicLikeProfile ? 0.38 : (sourceLooksHeading ? 0.65 : 0.35))
       )
     ),
     minFontSize,
@@ -3035,7 +3036,7 @@ const shouldHarmonizeOverlayBlock = (
     const generousComicStack = isComicProfile
       && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
       && verticalGap >= -avgHeight * 0.4
-      && verticalGap <= Math.max(48, avgHeight * 2.8)
+      && verticalGap <= Math.max(28, avgHeight * 1.32)
       && heightRatio <= 3.2;
     if (generousComicStack) {
       return true;
@@ -3050,7 +3051,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 3.2
       && verticalGap >= -avgHeight * 0.38
-      && verticalGap <= Math.max(42, avgHeight * 3.0);
+      && verticalGap <= Math.max(28, avgHeight * 1.32);
     if (centeredFragmentMerge) {
       return true;
     }
@@ -3060,7 +3061,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 2.8
       && verticalGap >= -avgHeight * 0.32
-      && verticalGap <= Math.max(34, avgHeight * (profile === 'manga' ? 2.4 : profile === 'adaptive' ? 2.2 : 2.0))
+      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 1.32 : profile === 'adaptive' ? 1.28 : 1.25))
     ) {
       return true;
     }
@@ -3661,8 +3662,9 @@ export const computeOverlayLayoutMap = (
       : undefined;
     const allowSectionMerge = effectiveProfile === 'manga'
       || effectiveProfile === 'manhwa';
+    const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      ? (isCenteredBlock || hasBalloonMember ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -4025,6 +4027,15 @@ export const computeOverlayLayoutMap = (
     for (let j = i + 1; j < orderedComputed.length; j += 1) {
       const nodeB = orderedComputed[j];
 
+      // บล็อกการผสานข้ามกลุ่มบอลลูนอย่างเด็ดขาด (ข้อมูลจริงจาก Grouper ต้นทาง)
+      if (
+        nodeA.balloonId !== undefined &&
+        nodeB.balloonId !== undefined &&
+        nodeA.balloonId !== nodeB.balloonId
+      ) {
+        continue;
+      }
+
       // Stop searching this chain if Y gap is way too large
       const yGap = nodeB.bbox.y0 - nodeA.bbox.y1;
       const heightA = nodeA.bbox.y1 - nodeA.bbox.y0;
@@ -4033,7 +4044,11 @@ export const computeOverlayLayoutMap = (
         break;
       }
 
-      if (shouldHarmonizeOverlayBlock(nodeA, nodeB, profile) || shouldHarmonizeOverlayBlock(nodeB, nodeA, profile)) {
+      const sameBalloon = nodeA.balloonId !== undefined &&
+        nodeB.balloonId !== undefined &&
+        nodeA.balloonId === nodeB.balloonId;
+
+      if (sameBalloon || shouldHarmonizeOverlayBlock(nodeA, nodeB, profile) || shouldHarmonizeOverlayBlock(nodeB, nodeA, profile)) {
         ufUnion(i, j);
       }
     }

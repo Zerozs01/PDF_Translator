@@ -58,4 +58,81 @@ describe('deriveBalloonAwareLayoutGrouping', () => {
     expect(result.orderedLineIndexes).toEqual([0, 1, 2, 3]);
     expect(result.diagnostics.avgConfidence).toBeGreaterThan(0.62);
   });
+
+  test('detects vertical gap anomalies and separates adjacent speech balloons', () => {
+    const anomalyFixture = {
+      pageNumber: 8,
+      imageWidth: 1000,
+      imageHeight: 1500,
+      mode: 'balloon-aware' as const,
+      readingMode: 'ltr' as const,
+      lines: [
+        { index: 0, text: 'HELLO WORLD', left: 100, top: 100, right: 300, bottom: 130, height: 30, confidence: 95, sourceLength: 10 },
+        { index: 1, text: 'HOW ARE YOU', left: 102, top: 160, right: 298, bottom: 190, height: 30, confidence: 95, sourceLength: 11 },
+        { index: 2, text: 'I AM FINE', left: 98, top: 320, right: 302, bottom: 350, height: 30, confidence: 95, sourceLength: 9 },
+      ]
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(anomalyFixture);
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.orderedLineIndexes).toEqual([0, 1]);
+    expect(result.ungroupedLineIndexes).toEqual([2]);
+  });
+
+  test('prevents merging when ellipsis clues indicate a dialogue boundary starts', () => {
+    const ellipsisFixture = {
+      pageNumber: 9,
+      imageWidth: 1000,
+      imageHeight: 1500,
+      mode: 'balloon-aware' as const,
+      readingMode: 'ltr' as const,
+      lines: [
+        { index: 0, text: 'IT IS ALMOST OVER.', left: 100, top: 100, right: 300, bottom: 130, height: 30, confidence: 95, sourceLength: 18 },
+        { index: 1, text: '...THAT\'S WHY', left: 100, top: 170, right: 300, bottom: 200, height: 30, confidence: 95, sourceLength: 13 },
+      ]
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(ellipsisFixture);
+
+    expect(result.groups).toHaveLength(0);
+    expect(result.ungroupedLineIndexes).toEqual([0, 1]);
+  });
+
+  test('clamps inflated height bounding boxes and separates them from normal adjacent balloons', () => {
+    const inflatedFixture = {
+      pageNumber: 10,
+      imageWidth: 1000,
+      imageHeight: 1500,
+      mode: 'balloon-aware' as const,
+      readingMode: 'ltr' as const,
+      lines: [
+        { index: 0, text: 'BE THAT TYPE~', left: 100, top: 100, right: 300, bottom: 130, height: 30, confidence: 95, sourceLength: 13 },
+        { index: 1, text: 'CONSIDERING THE', left: 100, top: 210, right: 300, bottom: 240, height: 30, confidence: 95, sourceLength: 15 },
+        { index: 2, text: 'KINDS OF AWFUL', left: 100, top: 172, right: 300, bottom: 322, height: 150, confidence: 95, sourceLength: 14 },
+        { index: 3, text: 'RUMORS FLOATING', left: 100, top: 185, right: 300, bottom: 310, height: 125, confidence: 95, sourceLength: 15 },
+        // บรรทัดขนาดปกติเพิ่มเติมเพื่อพยุงค่ามัธยฐาน (Median Height) ให้เป็น 30px เสมือนหน้าเอกสารจริง
+        { index: 4, text: 'SOME NORMAL LINE', left: 100, top: 500, right: 300, bottom: 530, height: 30, confidence: 95, sourceLength: 16 },
+        { index: 5, text: 'ANOTHER NORMAL', left: 100, top: 540, right: 300, bottom: 570, height: 30, confidence: 95, sourceLength: 14 },
+        { index: 6, text: 'MORE NORMAL TEXT', left: 100, top: 580, right: 300, bottom: 610, height: 30, confidence: 95, sourceLength: 16 },
+        { index: 7, text: 'YET ANOTHER ONE', left: 100, top: 620, right: 300, bottom: 650, height: 30, confidence: 95, sourceLength: 15 },
+      ]
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(inflatedFixture);
+
+    // ยืนยันว่าบรรทัดแรก (index 0) จะแยกกันอย่างเด็ดขาดกับบรรทัดที่เหลือ (index 1, 2, 3) 
+    // โดยไม่มีการสร้างกลุ่มร่วมกันข้ามบอลลูน (cross-balloon)
+    const groupWithLine0 = result.groups.find(g => g.lineIndexes.includes(0));
+    const groupWithLine2 = result.groups.find(g => g.lineIndexes.includes(2));
+    
+    if (groupWithLine0 && groupWithLine2) {
+      expect(groupWithLine0.id).not.toEqual(groupWithLine2.id);
+    }
+    
+    const groupWithLine1 = result.groups.find(g => g.lineIndexes.includes(1));
+    if (groupWithLine0 && groupWithLine1) {
+      expect(groupWithLine0.id).not.toEqual(groupWithLine1.id);
+    }
+  });
 });

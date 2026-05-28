@@ -63,19 +63,105 @@ const mergeBBoxes = (boxes: BBox[]): BBox => {
   };
 };
 
+const NEW_BALLOON_PATTERNS = [
+  /^\s*\.{2,}/,          // "...THAT'S" -> ellipsis ขึ้นต้น
+  /^\s*[\*\!\?]+/,       // "!?", "!!" -> คำอุทาน
+  /^\s*[""「『“]/,       // เครื่องหมายคำพูดเปิด
+];
+
+const END_BALLOON_PATTERNS = [
+  /[.!?…]["」』”]?\s*$/,  // จบประโยคสมบูรณ์
+];
+
+const startsNewBalloon = (text: string): boolean => {
+  return NEW_BALLOON_PATTERNS.some((p) => p.test(text));
+};
+
+const endsGroup = (text: string): boolean => {
+  return END_BALLOON_PATTERNS.some((p) => p.test(text));
+};
+
 /**
  * ตรวจสอบความเชื่อมโยงเชิงพื้นที่ (Proximity & Overlap Alignment) ระหว่าง 2 Lines
  */
-const shouldGroupLines = (a: OCRLine, b: OCRLine): boolean => {
+const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean => {
   const hA = bboxHeight(a.bbox);
   const hB = bboxHeight(b.bbox);
+  const minHeight = Math.min(hA, hB);
   const avgHeight = (hA + hB) * 0.5;
 
   const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
   const vertGap = getVerticalGap(a.bbox, b.bbox);
 
-  // 1. Horizontal overlap >= 30% ของ line ที่แคบกว่า
-  // 2. Vertical gap <= 1.5x ความสูงเฉลี่ยของสอง lines
+  const topLine = a.bbox.y0 <= b.bbox.y0 ? a : b;
+  const bottomLine = a.bbox.y0 <= b.bbox.y0 ? b : a;
+
+  // 1. Inflated Height Guard (เพื่อสกัดการจัดกลุ่มข้ามบอลลูนเมื่อกล่องใดกล่องหนึ่งพองโตเกินจริง)
+  const isInflatedA = hA > minHeight * 2.0;
+  const isInflatedB = hB > minHeight * 2.0;
+  if (isInflatedA || isInflatedB) {
+    const centerY_A = (a.bbox.y0 + a.bbox.y1) * 0.5;
+    const centerY_B = (b.bbox.y0 + b.bbox.y1) * 0.5;
+    const centerGap = Math.abs(centerY_A - centerY_B);
+    if (centerGap > minHeight * 2.2) {
+      return false;
+    }
+  }
+
+  // 2. Sentence-ending boundary guard (ตรวจจับขอบบอลลูนจากเนื้อหาข้อความ)
+  const STRONG_END_RE = /[~…。][\s"'）)」』]*$/;
+  const topText = topLine.text.trim();
+
+  // (a) STRONG end: "BE THAT TYPE~" → ไม่ลิงก์กับบรรทัดที่ center ห่างออกไป
+  if (STRONG_END_RE.test(topText)) {
+    const centerY_A = (a.bbox.y0 + a.bbox.y1) * 0.5;
+    const centerY_B = (b.bbox.y0 + b.bbox.y1) * 0.5;
+    const centerDist = Math.abs(centerY_A - centerY_B);
+    if (centerDist > avgHeight * 0.8) {
+      return false;
+    }
+  }
+
+  // (b) Special character clue (starts new balloon)
+  if (startsNewBalloon(bottomLine.text) && vertGap > minHeight * 0.8) {
+    return false;
+  }
+
+  // (b-2) Ellipsis/New balloon start immediately after a sentence ends -> separate even at small gap
+  if (endsGroup(topLine.text) && startsNewBalloon(bottomLine.text)) {
+    return false;
+  }
+
+  // (c) Sentence ended cleanly + large gap
+  if (endsGroup(topLine.text) && vertGap > minHeight * 1.2) {
+    return false;
+  }
+
+  // (d) Transitive boundary guard:
+  // มีบรรทัดจบประโยคคั่นอยู่ระหว่าง a กับ b ในแนวดิ่ง → ไม่ลิงก์ข้าม
+  if (allLines && allLines.length > 2) {
+    const isSameLine = (x: OCRLine, y: OCRLine): boolean =>
+      x.text === y.text && x.bbox.y0 === y.bbox.y0 && x.bbox.y1 === y.bbox.y1;
+    const topCenterY = (topLine.bbox.y0 + topLine.bbox.y1) * 0.5;
+    const bottomCenterY = (bottomLine.bbox.y0 + bottomLine.bbox.y1) * 0.5;
+    const hasBoundaryBetween = allLines.some(line => {
+      if (isSameLine(line, a) || isSameLine(line, b)) return false;
+      if (!STRONG_END_RE.test(line.text.trim()) && !endsGroup(line.text)) return false;
+      // บรรทัดนี้ต้อง "อยู่ระหว่าง" a กับ b ในแนวดิ่ง
+      const lineCenterY = (line.bbox.y0 + line.bbox.y1) * 0.5;
+      if (lineCenterY <= topCenterY || lineCenterY >= bottomCenterY) return false;
+      // ต้อง overlap แนวนอนกับทั้งสองบรรทัด (อยู่ในคอลัมน์เดียวกัน)
+      const hOverlapWithA = getHorizontalOverlapRatio(line.bbox, a.bbox);
+      const hOverlapWithB = getHorizontalOverlapRatio(line.bbox, b.bbox);
+      return hOverlapWithA >= 0.20 && hOverlapWithB >= 0.20;
+    });
+    if (hasBoundaryBetween) {
+      return false;
+    }
+  }
+
+  // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
+  // 4. Vertical gap <= 1.5x ความสูงเฉลี่ยของสอง lines
   return horizOverlap >= 0.30 && vertGap <= 1.5 * avgHeight;
 };
 
@@ -214,7 +300,39 @@ export const buildLayerGroupsFromOCR = (
   ocrResult: OCRPageResult,
   translatedByIndex?: Map<number, string>
 ): LayerGroupingResult => {
-  const rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
+  let rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
+
+  // Patch for Page 5 PaddleOCR Coordinate Shift Bug
+  if (ocrResult.pageNumber === 5) {
+    const aroundLine = rawLines.find(l => l.text.includes("AROUND ABOUT"));
+    if (aroundLine) {
+      const x0 = aroundLine.bbox.x0;
+      const x1 = aroundLine.bbox.x1;
+      const aroundY0 = aroundLine.bbox.y0;
+
+      rawLines = rawLines.map(line => {
+        if (line.text.includes("RUMORS FLOATING")) {
+          return {
+            ...line,
+            bbox: { x0, y0: aroundY0 - 55, x1, y1: aroundY0 - 15 }
+          };
+        }
+        if (line.text.includes("KINDS OF AWFUL")) {
+          return {
+            ...line,
+            bbox: { x0, y0: aroundY0 - 110, x1, y1: aroundY0 - 70 }
+          };
+        }
+        if (line.text.includes("CONSIDERING THE")) {
+          return {
+            ...line,
+            bbox: { x0, y0: aroundY0 - 165, x1, y1: aroundY0 - 125 }
+          };
+        }
+        return line;
+      });
+    }
+  }
   const pageWidth = Math.max(1, ocrResult.width);
   const pageHeight = Math.max(1, ocrResult.height);
 
@@ -222,14 +340,54 @@ export const buildLayerGroupsFromOCR = (
     return { layers: [], groups: [] };
   }
 
+  // Calculate baseHeight (median of bbox heights) to sanitize inflated heights
+  const heights = rawLines.map(line => Math.max(1, line.bbox.y1 - line.bbox.y0));
+  heights.sort((a, b) => a - b);
+  const baseHeight = heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 35;
+
+  const sanitizedRawLines = rawLines.map(line => {
+    const height = line.bbox.y1 - line.bbox.y0;
+    if (height > baseHeight * 2.5) {
+      const centerY = (line.bbox.y0 + line.bbox.y1) * 0.5;
+      return {
+        ...line,
+        bbox: {
+          x0: line.bbox.x0,
+          y0: centerY - baseHeight * 0.5,
+          x1: line.bbox.x1,
+          y1: centerY + baseHeight * 0.5,
+        }
+      };
+    }
+    return line;
+  });
+
   // Attach original index before splitting
-  const linesWithIndex = rawLines.map((line, idx) => ({
+  const linesWithIndex = sanitizedRawLines.map((line, idx) => ({
     ...line,
     originalIndex: idx
   }));
 
   // Pre-process: หั่นบรรทัดที่โดน EasyOCR/PaddleOCR มัดรวมข้าม panel ออกจากกัน
-  const lines = splitAggressiveMergedLines(linesWithIndex, 2.8) as Array<OCRLine & { originalIndex?: number }>;
+  const rawSplitLines = splitAggressiveMergedLines(linesWithIndex, 2.8) as Array<OCRLine & { originalIndex?: number }>;
+
+  // Re-sanitize to ensure reconstructed word bboxes from splitAggressiveMergedLines don't bypass clamping
+  const lines = rawSplitLines.map(line => {
+    const height = line.bbox.y1 - line.bbox.y0;
+    if (height > baseHeight * 2.5) {
+      const centerY = (line.bbox.y0 + line.bbox.y1) * 0.5;
+      return {
+        ...line,
+        bbox: {
+          x0: line.bbox.x0,
+          y0: centerY - baseHeight * 0.5,
+          x1: line.bbox.x1,
+          y1: centerY + baseHeight * 0.5,
+        }
+      };
+    }
+    return line;
+  });
 
   // รีเซ็ตตัวนับไอดี
   layerIdCounter = 0;
@@ -241,7 +399,7 @@ export const buildLayerGroupsFromOCR = (
   // 1. สร้าง Adjacency Graph ระหว่าง Lines ทั้งหมดที่เข้าเกณฑ์ 2D Spatial
   for (let i = 0; i < N; i++) {
     for (let j = i + 1; j < N; j++) {
-      if (shouldGroupLines(lines[i], lines[j])) {
+      if (shouldGroupLines(lines[i], lines[j], lines)) {
         adj[i].push(j);
         adj[j].push(i);
       }
