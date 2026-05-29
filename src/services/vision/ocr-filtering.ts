@@ -742,6 +742,34 @@ export function filterKoreanJamoNoise(
       logDrop('korGhost', word, 'mixed jamo+digit/ascii non-syllable');
       return false;
     }
+
+    if (!hasSyllable && !hasJamo) {
+      // 1. Mixed digit + ASCII letters (e.g. "2help", "0m", "o0")
+      if (hasDigit && hasAscii && word.confidence < 98) {
+        logDrop('korGhost', word, `mixed digit+ascii non-syllable len=${len} conf=${word.confidence.toFixed(0)}`);
+        return false;
+      }
+      // 2. Pure ASCII letters (like "help", "abc")
+      if (hasAscii && !hasDigit) {
+        const normalized = alphaNum.toUpperCase();
+        const isCommonEnglish = LATIN_PROTECT_WORDS.has(normalized)
+          || LATIN_KEEP_SHORT_WORDS.has(normalized)
+          || /^(YES|NO|OK|OH|AH|HA|HEHE|HI|HELLO|UH|UM|HM|HMM|WHAT|WHO|WHY|HOW|OOF|WOW|GASP|BOOM|SLAM|BANG|CRASH|PANT|HUH|HAH|TSK|SIGH|OMG|AHA|HEH|HEY)$/.test(normalized);
+        
+        if (!isCommonEnglish && word.confidence < 92) {
+          logDrop('korGhost', word, `uncommon ascii non-syllable len=${len} conf=${word.confidence.toFixed(0)}`);
+          return false;
+        }
+      }
+      // 3. Brackets or symbols noise mixed in with text
+      const rawTrimmed = word.text.trim();
+      const hasBracketsOrSlashes = /[\[\]{}()\/\\_+=*^|¦]/.test(rawTrimmed);
+      if (hasBracketsOrSlashes && word.confidence < 96) {
+        logDrop('korGhost', word, `brackets/symbols noise in non-syllable conf=${word.confidence.toFixed(0)}`);
+        return false;
+      }
+    }
+
     if (!hasJamo) return true;
 
     const repeatedJamo = /^([\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF])\1+$/.test(alphaNum);
@@ -793,7 +821,8 @@ export function filterWeakIsolatedCjkLines(
   lines: Array<OCRLine>,
   gray?: Uint8ClampedArray,
   width?: number,
-  height?: number
+  height?: number,
+  isKorean?: boolean
 ): {
   lines: Array<OCRLine>;
   words: Array<OCRWord>;
@@ -883,11 +912,18 @@ export function filterWeakIsolatedCjkLines(
     const jamoHeavyWithSyllables = syllables > 0
       && jamoRatio >= CONFIG.CJK_GHOST_JAMO_RATIO_MIN
       && line.confidence < CONFIG.CJK_GHOST_LINE_CONF;
-    const explicitKorGhostLine = !repeatedJamoOnly && (
+    const isGarbagePunctOnly = /^[\[\]{}()\/\\_+=*^|¦#@<>-]+$/.test(rawLineText.replace(/\s+/g, ''));
+    const isKorGarbageLatin = !!isKorean && syllables === 0 && jamo === 0 && (
+      (digits > 0 && ascii > 0 && line.confidence < 98)
+      || (line.confidence < 85)
+      || (/[\[\]{}()\/\\_+=*^|¦]/.test(rawLineText) && line.confidence < 96)
+    );
+
+    const explicitKorGhostLine = isGarbagePunctOnly || isKorGarbageLatin || (!repeatedJamoOnly && (
       (syllables === 0 && totalChars > 0 && (jamo + digits + ascii) >= 2 && totalChars <= 12)
       || (syllables > 0 && hasDisallowedJamoRun && totalChars <= 12 && line.confidence < 99)
       || (syllables > 0 && digits >= 2 && jamo >= 1 && totalChars <= 10 && line.confidence < 99)
-    );
+    ));
 
     const weakByShape = noSyllableShort
       || aggressiveKorNoSyllableGhost

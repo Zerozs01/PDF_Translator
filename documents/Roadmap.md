@@ -6,7 +6,7 @@ This roadmap tracks only active and near-term work.
 
 - Consolidated `documents/` into one clean canonical set
 - Removed stale deep research dump files
-- Updated architecture/optimization docs to match current code (`OCR v174`, translation cache `v18`)
+- Updated architecture/optimization docs to match current code (`OCR v210`, translation cache `v45`)
 
 ## P1 - OCR Reliability (In Progress)
 

@@ -424,6 +424,7 @@ const PDFPageContainer: React.FC<{
   const hasLayers = pageLayers.length > 0;
   const lastBuiltEngineRef = useRef<string | null>(null);
   const lastBuiltOcrRef = useRef<any>(null);
+  const lastBuiltPreviewModeRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;
@@ -433,9 +434,14 @@ const PDFPageContainer: React.FC<{
     const lastEngine = lastBuiltEngineRef.current;
     const engineChanged = lastEngine !== null && lastEngine !== newEngine;
     const ocrDataChanged = lastBuiltOcrRef.current !== null && lastBuiltOcrRef.current !== currentPageOCR;
+    const lastPreviewMode = lastBuiltPreviewModeRef.current;
+    const previewModeChanged = lastPreviewMode !== null && lastPreviewMode !== translationPreviewMode;
 
-    if (layers.length === 0 || engineChanged || ocrDataChanged) {
-      const result = buildLayerGroupsFromOCR(currentPageOCR, translationOverlayContext.translatedByIndex);
+    if (layers.length === 0 || engineChanged || ocrDataChanged || previewModeChanged) {
+      const result = buildLayerGroupsFromOCR(
+        currentPageOCR,
+        translationPreviewMode === 'translated' ? translationOverlayContext.translatedByIndex : undefined
+      );
 
       if (layers.length === 0 || !lastEngine) {
         useLayerStore.getState().setPageLayers(pageNum, result);
@@ -451,8 +457,9 @@ const PDFPageContainer: React.FC<{
 
       lastBuiltEngineRef.current = newEngine;
       lastBuiltOcrRef.current = currentPageOCR;
+      lastBuiltPreviewModeRef.current = translationPreviewMode;
     }
-  }, [currentPageOCR, pageNum, hasLayers, translationOverlayContext.translatedByIndex]);
+  }, [currentPageOCR, pageNum, hasLayers, translationOverlayContext.translatedByIndex, translationPreviewMode]);
 
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
     preset: overlayFontPreset,

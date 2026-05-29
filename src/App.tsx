@@ -5843,6 +5843,8 @@ export default function App() {
     );
 
     const pageLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+    // ดึง lineIndexes ที่ถูก user ลบ เพื่อไม่ render overlay ให้
+    const deletedLineIndexes = useLayerStore.getState().deletedLineIndexesByPage.get(pageNum) || new Set<number>();
 
     const overlayLayoutByIndex = computeOverlayLayoutMap(
       pageOCR.lines.flatMap((line, index) => {
@@ -5935,11 +5937,17 @@ export default function App() {
     }
 
     pageOCR.lines.forEach((line, index) => {
+      // Skip lines ที่ถูก user ลบออก
+      if (deletedLineIndexes.has(index)) return;
       const translatedText = translatedByIndex.get(index);
       if (!translatedText) return;
       const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
       if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
       if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
+
+      // Skip ถ้า layer นี้ userEdited → จะ render ด้วย user-layer pass แทน
+      const matchedUserLayer = pageLayers.find(l => l.lineIndex === index && l.visible && l.userEdited);
+      if (matchedUserLayer) return;
 
       const layout = overlayLayoutByIndex.get(index);
       const isMaskOnlyLine = Boolean(layout?.hidden);
@@ -6173,6 +6181,73 @@ export default function App() {
       ctx.restore();
     });
 
+    // ── User-Edited Layer Render Pass ──────────────────────────────────────
+    // วนซ้ำ pageLayers ที่ user แก้ไขแล้ว (userEdited = true) เพื่อ render
+    // ทับด้วย style ที่ user ตั้งจริง: bbox, backgroundColor, textColor, fontSize, bold
+    // layer ที่ไม่ได้ userEdited จะ render โดย auto-layout loop ด้านบนแล้ว
+    const visibleUserLayers = pageLayers.filter(l => l.visible && l.userEdited);
+    if (visibleUserLayers.length > 0) {
+      for (const layer of visibleUserLayers) {
+        // แปลง OCR-space bbox → canvas pixel
+        const lx = Math.round(layer.bbox.x0 * scaleX);
+        const ly = Math.round(layer.bbox.y0 * scaleY);
+        const lw = Math.max(1, Math.round((layer.bbox.x1 - layer.bbox.x0) * scaleX));
+        const lh = Math.max(1, Math.round((layer.bbox.y1 - layer.bbox.y0) * scaleY));
+
+        ctx.save();
+
+        // Rotation support (หมุนรอบศูนย์กลางกล่อง)
+        const layerRotation = layer.rotation || 0;
+        if (layerRotation !== 0) {
+          const cx = lx + lw / 2;
+          const cy = ly + lh / 2;
+          ctx.translate(cx, cy);
+          ctx.rotate((layerRotation * Math.PI) / 180);
+          ctx.translate(-cx, -cy);
+        }
+
+        // วาด background rect
+        const layerBg = layer.backgroundColor;
+        if (layerBg && layerBg !== 'transparent') {
+          ctx.fillStyle = layerBg;
+          ctx.fillRect(lx, ly, lw, lh);
+        } else {
+          // โปร่งใส: ลบ pixel เดิมออก (white erase) เพื่อ match กล่องขาว
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(lx, ly, lw, lh);
+        }
+
+        // คำนวณ fontSize ที่ scale ตาม canvas
+        const baseFontSize = layer.fontSize || 14;
+        // scaleX แปลง OCR px → canvas px; clamp ให้อ่านได้
+        const resolvedFontSize = Math.max(8, Math.round(baseFontSize * scaleX));
+        const fontWeight = layer.bold ? 'bold' : 'normal';
+        ctx.font = `${fontWeight} ${resolvedFontSize}px ${canvasOverlayFontFamily}`;
+        ctx.fillStyle = layer.textColor || '#000000';
+        ctx.textBaseline = 'top';
+        ctx.textAlign = 'left';
+
+        // clip ไม่ให้ text ล้นกล่อง
+        ctx.beginPath();
+        ctx.rect(lx, ly, lw, lh);
+        ctx.clip();
+
+        // wrap text + render
+        const displayText = layer.text || '';
+        const lineHeightPx = Math.max(1, resolvedFontSize * 1.35);
+        const maxLines = Math.max(1, Math.floor((lh - 6) / lineHeightPx));
+        const wrappedLines = wrapCanvasText(ctx, displayText, lw - 8, maxLines, false);
+        wrappedLines.forEach((lineText, li) => {
+          const ty = ly + 3 + li * lineHeightPx;
+          if (ty + lineHeightPx > ly + lh + 0.5) return;
+          ctx.fillText(lineText, lx + 4, ty, lw - 8);
+        });
+
+        ctx.restore();
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────
+
     const pngBlob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (blob) resolve(blob);
@@ -6263,20 +6338,360 @@ export default function App() {
         if (scope === 'all' && fileType === 'pdf') {
           const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
           const arrayBuffer = await file.arrayBuffer();
-          const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
-            arrayBuffer,
-            translatedPageMap,
-            pageRange
-          );
+
+          // ── Canvas-based PDF export (Layer-aware) ──────────────────────────
+          // Rasterize แต่ละ page พร้อม translated overlay + user layer styling
+          // แล้ว embed เป็น image ใน PDF ใหม่ด้วย pdf-lib
+          const { PDFDocument: PdfLibDoc } = await import('pdf-lib');
+          const outputPdf = await PdfLibDoc.create();
+
+          const fontReadyPromise2 = (typeof document !== 'undefined' && 'fonts' in document)
+            ? (document as Document & { fonts?: FontFaceSet }).fonts?.ready
+            : undefined;
+          if (fontReadyPromise2) await fontReadyPromise2.catch(() => undefined);
+
+          for (const pageNum of pageRange) {
+            const sourceOCR = sourcePageMap.get(pageNum);
+            const translatedEntry = translatedEntryMap.get(pageNum);
+            if (!sourceOCR || !translatedEntry) continue;
+
+            // Render page พร้อม overlay ลง canvas ชั่วคราว
+            const pageCanvas = document.createElement('canvas');
+            const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
+            if (!pageCtx) continue;
+
+            // ── Render PDF page ต้นฉบับ ──────────────────────────────────
+            const loadingTask2 = pdfjs.getDocument({ data: arrayBuffer.slice(0) });
+            const pdfDoc2 = await (loadingTask2 as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
+            const pdfPage = await pdfDoc2.getPage(pageNum);
+            const baseVp = pdfPage.getViewport({ scale: 1 });
+            const exportW = Math.max(1, sourceOCR.width || Math.round(baseVp.width));
+            const exportH = Math.max(1, sourceOCR.height || Math.round(baseVp.height * (exportW / Math.max(1, baseVp.width))));
+            const exportScale2 = resolveOverlayExportScale(exportW, exportH, Math.round(baseVp.width), Math.round(baseVp.height));
+            const targetW2 = Math.max(1, Math.round(exportW * exportScale2));
+            const pdfScale = targetW2 / Math.max(1, baseVp.width);
+            const pdfViewport = pdfPage.getViewport({ scale: pdfScale });
+            pageCanvas.width = Math.max(1, Math.round(pdfViewport.width));
+            pageCanvas.height = Math.max(1, Math.round(pdfViewport.height));
+            pageCtx.fillStyle = '#ffffff';
+            pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+            await pdfPage.render({ canvasContext: pageCtx, viewport: pdfViewport, canvas: pageCanvas }).promise;
+            await (pdfDoc2 as { destroy?: () => Promise<void> }).destroy?.();
+            (loadingTask2 as { destroy?: () => void }).destroy?.();
+
+            // ── Render auto-layout overlay ────────────────────────────────
+            const srcW2 = Math.max(1, Number(sourceOCR.width || pageCanvas.width));
+            const srcH2 = Math.max(1, Number(sourceOCR.height || pageCanvas.height));
+            const sx = pageCanvas.width / srcW2;
+            const sy = pageCanvas.height / srcH2;
+
+            const translatedByIndex2 = new Map<number, string>(
+              translatedEntry.translatedByIndex
+                .filter(item => Number.isFinite(item.index))
+                .map(item => [item.index, normalizeWhitespace(String(item.text || ''))])
+            );
+
+            const overlayLayoutProfile2: OverlayLayoutProfile = translationMode === 'official'
+              ? 'official'
+              : translationMode === 'adaptive'
+                ? 'adaptive'
+                : translationMode === 'manhwa'
+                  ? 'manhwa'
+                  : 'manga';
+
+            const preferredFont2 = getOverlayFontOption(overlayFontPreset).fontFamily;
+            const overlayFont2 = resolveOverlayFontFamily({
+              preset: overlayFontPreset,
+              enabled: overlayThaiFontEnabled,
+              targetLanguage,
+            }) || preferredFont2 || "'Noto Sans Thai', 'Sarabun', 'Segoe UI', sans-serif";
+            const canvasFont2 = await buildCanvasFontFamily(
+              overlayFont2,
+              `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
+            );
+
+            const pageLayers2 = useLayerStore.getState().layersByPage.get(pageNum) || [];
+
+            const overlayLayout2 = computeOverlayLayoutMap(
+              sourceOCR.lines.flatMap((line, index) => {
+                const translatedText = translatedByIndex2.get(index);
+                if (!translatedText) return [];
+                const srcFb = isSourceFallbackOverlayText(line.text, translatedText);
+                if (shouldSkipOverlayRenderForSuspiciousLine(line) && !srcFb) return [];
+                if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !srcFb) return [];
+                const lyr = pageLayers2.find(l => l.lineIndex === index);
+                const balloonId = lyr?.groupId;
+                const srcBbox = resolveOverlaySourceBBox(line);
+                const mskBbox = resolveOverlayMaskBBox(line);
+                const srcW = Math.max(1, srcBbox.x1 - srcBbox.x0);
+                const srcH = Math.max(1, srcBbox.y1 - srcBbox.y0);
+                const mskW = Math.max(1, mskBbox.x1 - mskBbox.x0);
+                const mskH = Math.max(1, mskBbox.y1 - mskBbox.y0);
+                const wCov = srcW / mskW;
+                const aCov = (srcW * srcH) / Math.max(1, mskW * mskH);
+                const lowCov = shouldUseDocumentCoverageFallback(line.text) && wCov < 0.84 && aCov < 0.86;
+                const eBbox = lowCov ? mskBbox : srcBbox;
+                const bW = Math.max(1, (eBbox.x1 - eBbox.x0) * sx);
+                const bH = Math.max(1, (eBbox.y1 - eBbox.y0) * sy);
+                return [{
+                  index,
+                  text: translatedText,
+                  width: bW,
+                  height: bH,
+                  bbox: eBbox,
+                  line,
+                  balloonId,
+                  hints: {
+                    sourceText: line.text,
+                    sourceBoxWidth: bW,
+                    sourceBoxHeight: bH,
+                    sourceLineCount: 1,
+                    fontFamily: canvasFont2,
+                    profile: overlayLayoutProfile2,
+                  },
+                }];
+              }),
+              { profile: overlayLayoutProfile2 }
+            );
+
+            // palette sampling สำหรับ auto-layout lines
+            const palette2 = new Map<number, OverlayPalette>();
+            const maxSample2 = 2400;
+            const sampleScale2 = Math.min(1, maxSample2 / Math.max(1, pageCanvas.width, pageCanvas.height));
+            const sampleC2 = document.createElement('canvas');
+            sampleC2.width = Math.max(1, Math.round(pageCanvas.width * sampleScale2));
+            sampleC2.height = Math.max(1, Math.round(pageCanvas.height * sampleScale2));
+            const sampleCtx2 = sampleC2.getContext('2d', { willReadFrequently: true });
+            if (sampleCtx2) {
+              sampleCtx2.drawImage(pageCanvas, 0, 0, sampleC2.width, sampleC2.height);
+              sourceOCR.lines.forEach((line, index) => {
+                if (!translatedByIndex2.has(index)) return;
+                palette2.set(index, sampleOverlayPaletteFromLine(sampleCtx2, line, srcW2, srcH2, sampleC2.width, sampleC2.height));
+              });
+            }
+
+            // deleted line indexes
+            const deletedIndexes2 = useLayerStore.getState().deletedLineIndexesByPage.get(pageNum) || new Set<number>();
+
+            sourceOCR.lines.forEach((line, index) => {
+              if (deletedIndexes2.has(index)) return;
+              const translatedText = translatedByIndex2.get(index);
+              if (!translatedText) return;
+              const srcFb = isSourceFallbackOverlayText(line.text, translatedText);
+              if (shouldSkipOverlayRenderForSuspiciousLine(line) && !srcFb) return;
+              if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !srcFb) return;
+
+              // ถ้า layer นี้ถูก user edit → ข้ามไป render ใน user-layer pass
+              const matchLayer = pageLayers2.find(l => l.lineIndex === index && l.visible && l.userEdited);
+              if (matchLayer) return;
+
+              const layout2 = overlayLayout2.get(index);
+              const isMaskOnly2 = Boolean(layout2?.hidden);
+              if (isMaskOnly2 && !layout2?.preserveMaskWhenHidden) return;
+
+              const renderText2 = layout2?.renderText || translatedText;
+              const effectiveProfile2 = layout2?.effectiveProfile || overlayLayoutProfile2;
+              const styleKind2 = layout2?.styleKind;
+              const isDocLike2 = styleKind2 ? styleKind2 === 'document-heading' || styleKind2 === 'document-body' : effectiveProfile2 === 'official';
+              const isComicLike2 = !isDocLike2;
+              const maskBbox2 = (!isMaskOnly2 && layout2?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
+              const resolvedSrcBbox2 = resolveOverlaySourceBBox(line);
+              const mskW2 = Math.max(1, maskBbox2.x1 - maskBbox2.x0);
+              const mskH2 = Math.max(1, maskBbox2.y1 - maskBbox2.y0);
+              const srcW3 = Math.max(1, resolvedSrcBbox2.x1 - resolvedSrcBbox2.x0);
+              const srcH3 = Math.max(1, resolvedSrcBbox2.y1 - resolvedSrcBbox2.y0);
+              const wCov2 = srcW3 / mskW2;
+              const aCov2 = (srcW3 * srcH3) / Math.max(1, mskW2 * mskH2);
+              const lowCov2 = shouldUseDocumentCoverageFallback(line.text) && wCov2 < 0.84 && aCov2 < 0.86;
+              const srcBbox2 = isMaskOnly2 ? resolvedSrcBbox2 : (layout2?.mergedBBox || (isDocLike2 || lowCov2 ? maskBbox2 : resolvedSrcBbox2));
+
+              const mrkLeft2 = maskBbox2.x0;
+              const rkLeft2 = layout2?.alignment === 'left' && layout2.sharedBoxLeftX !== undefined ? Math.min(srcBbox2.x0, layout2.sharedBoxLeftX) : srcBbox2.x0;
+              const mBW2 = Math.max(1, (maskBbox2.x1 - mrkLeft2) * sx);
+              const mBH2 = Math.max(1, (maskBbox2.y1 - maskBbox2.y0) * sy);
+              const bW2 = Math.max(1, (srcBbox2.x1 - rkLeft2) * sx);
+              const bH2 = Math.max(1, (srcBbox2.y1 - srcBbox2.y0) * sy);
+              const expansion2 = resolveOverlayMaskExpansion(line);
+              const mBoost2 = isComicLike2 && layout2?.mergedBBox ? 4 : 0;
+              const cBX2 = isComicLike2 ? 3 : 0;
+              const cBTop2 = isComicLike2 ? 3 : 0;
+              const cBBot2 = isComicLike2 ? 2 : 0;
+              const mExpX2 = Math.min(expansion2.maxExpandX + mBoost2 + cBX2, Math.max(1, Math.round(mBH2 * expansion2.expandXRatio)) + mBoost2 + cBX2);
+              const mExpL2 = Math.min(isComicLike2 ? 4 : 1, mExpX2);
+              const mExpR2 = mExpX2;
+              const mExpTop2 = Math.min(expansion2.maxExpandTop + mBoost2 + cBTop2, Math.max(1, Math.round(mBH2 * expansion2.expandTopRatio)) + mBoost2 + cBTop2);
+              const hasThaiText2 = /[\u0E00-\u0E7F]/.test(renderText2);
+              const thaiBotBoost2 = hasThaiText2 ? Math.min(3, Math.max(1, Math.round(mBH2 * 0.08))) : 0;
+              const docBotBoost2 = isDocLike2 ? Math.min(8, Math.max(2, Math.round(mBH2 * 0.16))) : 0;
+              const mExpBot2 = Math.min(expansion2.maxExpandBottom + thaiBotBoost2 + docBotBoost2 + mBoost2 + cBBot2, Math.max(1, Math.round(mBH2 * expansion2.expandBottomRatio)) + thaiBotBoost2 + docBotBoost2 + mBoost2 + cBBot2);
+              const rawML2 = mrkLeft2 * sx - mExpL2;
+              const rawMT2 = maskBbox2.y0 * sy - mExpTop2;
+              const rawMW2 = mBW2 + mExpL2 + mExpR2;
+              const rawMH2 = mBH2 + mExpTop2 + mExpBot2;
+              const maskRect2 = clampOverlayRect(rawML2, rawMT2, rawMW2, rawMH2, { x0: 0, y0: 0, x1: pageCanvas.width, y1: pageCanvas.height });
+
+              const p2 = palette2.get(index) || DEFAULT_OVERLAY_PALETTE;
+              pageCtx.save();
+              pageCtx.fillStyle = p2.backgroundColor;
+              pageCtx.fillRect(maskRect2.left, maskRect2.top, maskRect2.width, maskRect2.height);
+              pageCtx.restore();
+              if (isMaskOnly2) return;
+
+              const useMergedComic2 = (styleKind2 === 'comic-bubble' || styleKind2 === 'comic-box') && !isMaskOnly2 && Boolean(layout2?.mergedMaskBBox);
+              const tSrcL2 = useMergedComic2 ? mrkLeft2 : rkLeft2;
+              const tSrcT2 = useMergedComic2 ? maskBbox2.y0 : srcBbox2.y0;
+              const tBW2 = useMergedComic2 ? Math.max(bW2, mBW2) : bW2;
+              const tBH2 = useMergedComic2 ? Math.max(bH2, mBH2) : bH2;
+              const mCTopLift2 = useMergedComic2 ? Math.max(0, Math.round(mBH2 * (styleKind2 === 'comic-bubble' ? 0.08 : 0.05))) : 0;
+              const mCExtraH2 = useMergedComic2 ? Math.max(0, Math.round(mBH2 * (styleKind2 === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+              const rawTL2 = tSrcL2 * sx - (layout2?.alignment === 'center' ? 0 : mExpL2);
+              const rawTT2 = tSrcT2 * sy - mExpTop2 - mCTopLift2;
+              const rawTW2 = tBW2 + (layout2?.alignment === 'center' ? 0 : mExpL2 + mExpR2);
+              const rawTH2 = tBH2 + mExpTop2 + mExpBot2 + mCTopLift2 + mCExtraH2;
+              let textRect2 = clampOverlayRect(rawTL2, rawTT2, rawTW2, rawTH2, { x0: 0, y0: 0, x1: pageCanvas.width, y1: pageCanvas.height });
+              if (!isDocLike2) {
+                textRect2 = clampOverlayRect(textRect2.left, textRect2.top, textRect2.width, textRect2.height, {
+                  x0: Math.max(0, maskRect2.left - 1),
+                  y0: Math.max(0, maskRect2.top - 1),
+                  x1: Math.min(pageCanvas.width, maskRect2.left + maskRect2.width + 1),
+                  y1: Math.min(pageCanvas.height, maskRect2.top + maskRect2.height + 1),
+                });
+              }
+
+              const hasThaiDoc2 = isDocLike2 && hasThaiText2;
+              const thaiHeadroom2 = hasThaiDoc2 ? Math.max(4, Math.round(Math.max(bH2, mBH2) * 0.4)) : 0;
+              const docTypoW2 = lowCov2 ? Math.max(bW2, mBW2) : Math.max(bW2, textRect2.width * 0.96);
+              const typoW2 = isDocLike2 ? docTypoW2 : textRect2.width;
+              const typoH2 = isDocLike2 ? Math.min(textRect2.height, Math.max(bH2 + thaiHeadroom2, (lowCov2 ? mBH2 : bH2) + thaiHeadroom2)) : textRect2.height;
+
+              const baseTypo2 = layout2?.typography || computeOverlayTypography(renderText2, typoW2, typoH2, {
+                sourceText: line.text,
+                sourceBoxWidth: isDocLike2 && lowCov2 ? Math.max(bW2, mBW2) : bW2,
+                sourceBoxHeight: isDocLike2 ? (lowCov2 ? Math.max(bH2, mBH2) : bH2) + thaiHeadroom2 : bH2,
+                sourceLineCount: 1,
+                fontFamily: canvasFont2,
+                profile: effectiveProfile2,
+                styleKind: styleKind2,
+              });
+              const typo2 = scaleOverlayTypography(baseTypo2, overlayFontSizeScale);
+              const extraTopPad2 = hasThaiText2 ? Math.max(1, Math.round(typo2.fontSize * 0.08)) : 0;
+              const extraBotPad2 = hasThaiText2 ? Math.max(1, Math.round(typo2.fontSize * 0.06)) : 0;
+              const tStartOff2 = layout2?.sharedTextStartX !== undefined ? Math.max(0, (layout2.sharedTextStartX - rkLeft2) * sx) : 0;
+              const cOff2 = layout2?.sharedCenterX !== undefined ? ((layout2.sharedCenterX - rkLeft2) * sx) - (textRect2.width * 0.5) : 0;
+              const innerLeft2 = layout2?.alignment === 'center' ? Math.max(0, Math.min(textRect2.width * 0.12, cOff2)) : Math.max(0, Math.min(textRect2.width - 1, mExpL2 + tStartOff2));
+              const innerWidth2 = layout2?.alignment === 'center' ? textRect2.width : Math.max(1, textRect2.width - innerLeft2);
+              const overlayText2 = typo2.forceSingleLine ? normalizeOverlayInlineText(renderText2) : renderText2;
+              const rotDeg2 = estimateLineRotationDeg(line);
+              const rotRad2 = (rotDeg2 * Math.PI) / 180;
+              const thaiComicLine2 = hasThaiText2 && (styleKind2 === 'comic-bubble' || styleKind2 === 'comic-box');
+              const minFillRatio2 = typo2.estimatedLines > 1 ? (thaiComicLine2 ? 0.82 : 0.74) : (thaiComicLine2 ? 0.58 : 0.5);
+              const paintH2 = Math.min(textRect2.height, Math.max(typo2.contentHeight + typo2.padY * 2 + extraTopPad2 + extraBotPad2, textRect2.height * minFillRatio2));
+              const paintOffT2 = Math.max(hasThaiText2 ? 1 : 0, Math.min(textRect2.height - paintH2, Math.round(textRect2.height * (thaiComicLine2 ? 0.04 : 0.08))));
+
+              pageCtx.save();
+              if (rotDeg2 !== 0) { pageCtx.translate(textRect2.left, textRect2.top); pageCtx.rotate(rotRad2); }
+              const oL2 = rotDeg2 !== 0 ? 0 : textRect2.left;
+              const oT2 = rotDeg2 !== 0 ? 0 : textRect2.top;
+              const pL2 = oL2 + innerLeft2;
+              const pT2 = oT2 + paintOffT2;
+              pageCtx.beginPath();
+              pageCtx.rect(oL2, oT2, textRect2.width, textRect2.height);
+              pageCtx.clip();
+              const tbL2 = pL2 + typo2.padX;
+              const tbT2 = pT2 + typo2.padY + extraTopPad2;
+              const tbW2 = Math.max(1, innerWidth2 - typo2.padX * 2);
+              const tbH2 = Math.max(1, paintH2 - (typo2.padY * 2 + extraTopPad2 + extraBotPad2));
+              const lhPx2 = Math.max(1, typo2.fontSize * typo2.lineHeight);
+              const maxL2 = Math.max(1, Math.floor(tbH2 / lhPx2));
+              const tWeight2 = Math.max(400, Math.min(700, Math.round(Number(p2.textFillWeight || 400))));
+              pageCtx.font = `${tWeight2} ${typo2.fontSize}px ${canvasFont2}`;
+              const wrLines2 = wrapCanvasText(pageCtx, overlayText2, tbW2, maxL2, typo2.forceSingleLine);
+              pageCtx.fillStyle = p2.textColor;
+              pageCtx.textBaseline = 'top';
+              pageCtx.textAlign = layout2?.alignment === 'center' ? 'center' : 'left';
+              const strokeBW2 = Number(p2.textStrokeWidth || 0);
+              const strokeW2 = strokeBW2 > 0 ? Math.max(0.55, Math.min(1.35, strokeBW2 * (typo2.fontSize / 14))) : 0;
+              wrLines2.forEach((lt2, li2) => {
+                const y2 = tbT2 + li2 * lhPx2;
+                if (y2 + lhPx2 > tbT2 + tbH2 + 0.5) return;
+                const x2 = pageCtx.textAlign === 'center' ? tbL2 + tbW2 / 2 : tbL2;
+                if (strokeW2 > 0 && p2.textStrokeColor) {
+                  pageCtx.save();
+                  pageCtx.lineJoin = 'round';
+                  pageCtx.miterLimit = 2;
+                  pageCtx.lineWidth = strokeW2;
+                  pageCtx.strokeStyle = p2.textStrokeColor;
+                  pageCtx.strokeText(lt2, x2, y2, tbW2);
+                  pageCtx.restore();
+                }
+                pageCtx.fillText(lt2, x2, y2, tbW2);
+              });
+              pageCtx.restore();
+            });
+
+            // ── User-Edited Layer Render Pass ─────────────────────────────
+            const visibleUserLayers2 = pageLayers2.filter(l => l.visible && l.userEdited);
+            for (const layer of visibleUserLayers2) {
+              const lx2 = Math.round(layer.bbox.x0 * sx);
+              const ly2 = Math.round(layer.bbox.y0 * sy);
+              const lw2 = Math.max(1, Math.round((layer.bbox.x1 - layer.bbox.x0) * sx));
+              const lh2 = Math.max(1, Math.round((layer.bbox.y1 - layer.bbox.y0) * sy));
+
+              pageCtx.save();
+              const layerRot2 = layer.rotation || 0;
+              if (layerRot2 !== 0) {
+                const cx2 = lx2 + lw2 / 2;
+                const cy2 = ly2 + lh2 / 2;
+                pageCtx.translate(cx2, cy2);
+                pageCtx.rotate((layerRot2 * Math.PI) / 180);
+                pageCtx.translate(-cx2, -cy2);
+              }
+              const layerBg2 = layer.backgroundColor;
+              if (layerBg2 && layerBg2 !== 'transparent') {
+                pageCtx.fillStyle = layerBg2;
+                pageCtx.fillRect(lx2, ly2, lw2, lh2);
+              } else {
+                pageCtx.fillStyle = '#FFFFFF';
+                pageCtx.fillRect(lx2, ly2, lw2, lh2);
+              }
+              const fs2 = Math.max(8, Math.round((layer.fontSize || 14) * sx));
+              pageCtx.font = `${layer.bold ? 'bold ' : ''}${fs2}px ${canvasFont2}`;
+              pageCtx.fillStyle = layer.textColor || '#000000';
+              pageCtx.textBaseline = 'top';
+              pageCtx.textAlign = 'left';
+              pageCtx.beginPath();
+              pageCtx.rect(lx2, ly2, lw2, lh2);
+              pageCtx.clip();
+              const lhPx3 = Math.max(1, fs2 * 1.35);
+              const maxL3 = Math.max(1, Math.floor((lh2 - 6) / lhPx3));
+              const wrLines3 = wrapCanvasText(pageCtx, layer.text || '', lw2 - 8, maxL3, false);
+              wrLines3.forEach((lt3, li3) => {
+                const ty3 = ly2 + 3 + li3 * lhPx3;
+                if (ty3 + lhPx3 > ly2 + lh2 + 0.5) return;
+                pageCtx.fillText(lt3, lx2 + 4, ty3, lw2 - 8);
+              });
+              pageCtx.restore();
+            }
+
+            // ── Embed canvas เป็น page ใน PDF ────────────────────────────
+            const pageImgData = pageCanvas.toDataURL('image/png');
+            const pageImgBytes = Uint8Array.from(atob(pageImgData.split(',')[1]), c => c.charCodeAt(0));
+            const embeddedImg = await outputPdf.embedPng(pageImgBytes);
+            const pdfPage2 = outputPdf.addPage([pageCanvas.width, pageCanvas.height]);
+            pdfPage2.drawImage(embeddedImg, { x: 0, y: 0, width: pageCanvas.width, height: pageCanvas.height });
+          }
+
+          const resultBytes = await outputPdf.save();
           const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
           const anchor = document.createElement('a');
           anchor.href = url;
-          const suffix = '_translated_searchable.pdf';
+          const suffix = '_translated_overlay.pdf';
           anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
           document.body.appendChild(anchor);
           anchor.click();
           document.body.removeChild(anchor);
           URL.revokeObjectURL(url);
+          // ────────────────────────────────────────────────────────────────
         }
 
         if (missingPages > 0) {
@@ -7021,6 +7436,10 @@ export default function App() {
     if (engine === 'offline') {
       for (let groupIndex = 0; groupIndex < preparedGroups.length; groupIndex += 1) {
         const group = preparedGroups[groupIndex];
+        // Skip retry for single-line groups since group retry vs line retry are identical and redundant
+        if (!group.lines || group.lines.length <= 1) {
+          continue;
+        }
         const groupSourceLanguage = group.sourceLanguage;
         const sourceGroupText = group.sourceText || '';
         const initialTranslated = translatedGroups[groupIndex] || sourceGroupText;

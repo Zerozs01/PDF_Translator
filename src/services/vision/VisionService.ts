@@ -9,6 +9,7 @@
  */
 
 import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
+import { filterKoreanJamoNoise, filterWeakIsolatedCjkLines } from './ocr-filtering';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
@@ -2266,6 +2267,46 @@ class VisionService {
     };
   }
 
+  private postProcessKoreanExternalResult(result: OCRPageResult, language: string): OCRPageResult {
+    const isKorean = String(language || '').split('+').map(c => c.trim().toLowerCase()).includes('kor');
+    if (!isKorean) return result;
+
+    const lines = result.lines || [];
+    if (lines.length === 0) return result;
+
+    const filteredLines: OCRLine[] = [];
+    for (const line of lines) {
+      const lineWords = (line.words || []) as OCRWord[];
+      if (lineWords.length === 0) {
+        filteredLines.push(line);
+        continue;
+      }
+      const filteredWords = filterKoreanJamoNoise(lineWords);
+      if (filteredWords.length === 0) {
+        continue;
+      }
+      
+      const filteredLine: OCRLine = {
+        ...line,
+        words: filteredWords,
+        text: filteredWords.map(w => w.text).join(' ')
+      };
+      filteredLines.push(filteredLine);
+    }
+
+    const pruned = filterWeakIsolatedCjkLines(filteredLines, undefined, result.width, result.height, true);
+
+    const finalWords = pruned.words;
+    const finalLines = pruned.lines;
+
+    return {
+      ...result,
+      lines: finalLines,
+      words: finalWords,
+      text: finalLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+    };
+  }
+
   private mergePaddleGeometryFallbackResult(
     externalResult: OCRPageResult,
     fallbackResult: OCRPageResult,
@@ -2913,7 +2954,7 @@ class VisionService {
    * OCR for Text Layer Overlay
    * Returns word-level bounding boxes for precise text positioning
    */
-public async rawOCR(
+  public async rawOCR(
     imageUrl: string | Blob,
     imageWidth: number,
     imageHeight: number,
@@ -2921,7 +2962,8 @@ public async rawOCR(
     dpi: number = 300,
     pageSegMode?: number,
     signal?: AbortSignal,
-    ocrEngine: OCREngine = 'paddleocr'
+    ocrEngine: OCREngine = 'paddleocr',
+    ocrQualityProfile: OCRQualityProfile = 'best'
   ): Promise<OCRPageResult> {
     const bridge = window.electronAPI?.ocr;
     if (!bridge?.runExternal) {
@@ -2951,7 +2993,7 @@ public async rawOCR(
         dpi,
         pageSegMode,
         pipelineProfile: 'raw' as any,
-        ocrQualityProfile: 'best',
+        ocrQualityProfile,
       });
 
       const result: OCRPageResult = {
@@ -2964,7 +3006,7 @@ public async rawOCR(
         algorithmVersion: OCR_ALGORITHM_VERSION,
         pipelineProfile: 'raw',
         ocrEngine,
-        ocrQualityProfile: 'best',
+        ocrQualityProfile,
         lines: (resultRaw.lines || []).map(line => ({
           ...line,
           bbox: line.bbox as any,
@@ -3036,13 +3078,16 @@ public async rawOCR(
           && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
         if (!shouldFallbackToGeometryEngine) {
           if (anomalies.length > 0) {
-            return this.dropMinorPaddleGeometryAnomalies(
-              externalResult,
-              anomalies,
-              'paddleGeometryMinorAnomalyDropNoFallback'
+            return this.postProcessKoreanExternalResult(
+              this.dropMinorPaddleGeometryAnomalies(
+                externalResult,
+                anomalies,
+                'paddleGeometryMinorAnomalyDropNoFallback'
+              ),
+              language
             );
           }
-          return externalResult;
+          return this.postProcessKoreanExternalResult(externalResult, language);
         }
 
         const denseLatinDocument = this.isLikelyDenseLatinDocumentPanelResult(externalResult, language);
@@ -3082,45 +3127,57 @@ public async rawOCR(
           );
 
           if (fallbackDpi !== dpi) {
-            return {
-              ...mergedFallbackResult,
-              debug: {
-                ...(mergedFallbackResult.debug || { droppedWords: [], dropCounts: {} }),
-                dropCounts: {
-                  ...(mergedFallbackResult.debug?.dropCounts || {}),
-                  externalPaddleGeometryFallbackDpiDownshift: 1,
+            return this.postProcessKoreanExternalResult(
+              {
+                ...mergedFallbackResult,
+                debug: {
+                  ...(mergedFallbackResult.debug || { droppedWords: [], dropCounts: {} }),
+                  dropCounts: {
+                    ...(mergedFallbackResult.debug?.dropCounts || {}),
+                    externalPaddleGeometryFallbackDpiDownshift: 1,
+                  },
                 },
               },
-            };
+              language
+            );
           }
 
-          return mergedFallbackResult;
+          return this.postProcessKoreanExternalResult(mergedFallbackResult, language);
         } catch (fallbackError) {
           if ((fallbackError as Error | undefined)?.name === 'AbortError' || signal?.aborted) {
             if (severeAnomalyCount === 0 && anomalies.length > 0) {
-              return this.dropMinorPaddleGeometryAnomalies(
-                externalResult,
-                anomalies,
-                'paddleGeometryFallbackAbortedMinorAnomalyDrop'
+              return this.postProcessKoreanExternalResult(
+                this.dropMinorPaddleGeometryAnomalies(
+                  externalResult,
+                  anomalies,
+                  'paddleGeometryFallbackAbortedMinorAnomalyDrop'
+                ),
+                language
               );
             }
-            return {
-              ...externalResult,
-              debug: {
-                ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
-                skipReason: 'paddleGeometryFallbackAborted',
+            return this.postProcessKoreanExternalResult(
+              {
+                ...externalResult,
+                debug: {
+                  ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
+                  skipReason: 'paddleGeometryFallbackAborted',
+                },
               },
-            };
+              language
+            );
           }
           console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
           if (severeAnomalyCount === 0 && anomalies.length > 0) {
-            return this.dropMinorPaddleGeometryAnomalies(
-              externalResult,
-              anomalies,
-              'paddleGeometryFallbackFailedMinorAnomalyDrop'
+            return this.postProcessKoreanExternalResult(
+              this.dropMinorPaddleGeometryAnomalies(
+                externalResult,
+                anomalies,
+                'paddleGeometryFallbackFailedMinorAnomalyDrop'
+              ),
+              language
             );
           }
-          return externalResult;
+          return this.postProcessKoreanExternalResult(externalResult, language);
         }
       } catch (error) {
         if (signal?.aborted || (error as Error | undefined)?.name === 'AbortError') {

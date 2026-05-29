@@ -4,7 +4,7 @@
 
 All content here is kept in sync with the current codebase and should be preferred over older ad-hoc notes.
 
-## Current Snapshot (2026-05-28)
+## Current Snapshot (2026-05-29)
 
 - OCR algorithm version: `210`
 - Translation cache version: `v45`
@@ -15,6 +15,7 @@ All content here is kept in sync with the current codebase and should be preferr
   - panel script-gate + panel safety dedupe before cache write
   - technical-line guards to prevent false drop on dense document pages
   - OCR Result tools: overlay copy button + in-panel search (highlight + Prev/Next)
+  - progress UI: right-aligned percent + ETA (page-based with single-page fallback)
 
 ## Canonical Files
 
@@ -34,6 +35,13 @@ All content here is kept in sync with the current codebase and should be preferr
 - `npm run ocr:regression:easy`
 - `npm run ocr:benchmark`
 - `npm run tessdata:download`
+
+## Before Release
+
+- `npm run ocr:gate`
+- `npm run test`
+- `npm run test:e2e`
+- `npm run build`
 
 ## Cleanup Notes
 
