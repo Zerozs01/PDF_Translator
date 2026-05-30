@@ -175,9 +175,15 @@ const splitMismergedGroup = (
     const curr = lines[i];
     const verticalGap = computeVerticalGap(prev, curr);
 
+    
+
+    const prevHasThai = /[\u0E00-\u0E7F]/.test(prev.text);
+    const currHasThai = /[\u0E00-\u0E7F]/.test(curr.text);
+
     const shouldSplit =
       verticalGap > baseHeight * 2.8 ||
-      verticalGap > anomalyThreshold ||
+      // allow Thai-to-Thai fragments to bridge slightly larger gaps
+      (verticalGap > anomalyThreshold && !(prevHasThai && currHasThai && verticalGap <= baseHeight * 3.0)) ||
       (startsNewBalloon(curr.text) && verticalGap > baseHeight * 0.8) ||
       (endsGroup(prev.text) && verticalGap > baseHeight * 1.2);
 
@@ -272,8 +278,13 @@ const shouldLinkGeometryLines = (
     }
   }
 
+  // Allow a relaxed anomaly threshold for same-script (e.g., Thai) hops
+  // where fragmented vertical pieces should still be merged.
   if (verticalGap > anomalyThreshold) {
-    return null;
+    // permit slightly larger gaps for Thai-to-Thai links (fragmented lines)
+    if (!(/[\u0E00-\u0E7F]/.test(a.text) && /[\u0E00-\u0E7F]/.test(b.text) && verticalGap <= baseHeight * 3.0)) {
+      return null;
+    }
   }
 
   // --- Guard 2: Special character clue (starts new balloon) ---
@@ -590,6 +601,10 @@ export const deriveBalloonAwareLayoutGrouping = (
     grouped.set(root, bucket);
   });
 
+  if (input.pageNumber === 12) {
+    // debug hook removed
+  }
+
   groupEdgeScores.forEach((scores, key) => {
     const rootText = key.split(':')[0];
     const root = Number.parseInt(rootText, 10);
@@ -605,7 +620,7 @@ export const deriveBalloonAwareLayoutGrouping = (
     const orderedLines = orderGroupLines(seed.lines, resolvedReadingMode, baseHeight);
     if (orderedLines.length === 0) return;
 
-    // รัน Fallback Splitting ย้อนหลังเพื่อแยกแยะบอลลูนซ้อนที่หลุดลอด Union-Find
+    // Fallback split for mismerged groups (e.g., nested balloons)
     const subGroups = splitMismergedGroup(orderedLines, baseHeight, pageMedianVerticalGap);
 
     subGroups.forEach((subGroupLines, subIndex) => {
@@ -643,6 +658,51 @@ export const deriveBalloonAwareLayoutGrouping = (
     });
   });
 
+  // Post-process groups to keep mixed-script (Thai vs Latin-only) separated.
+  // If a group contains both Thai and Latin-only lines, extract Latin-only
+  // lines back to ungrouped so Thai blocks remain isolated.
+  const isLatinOnlyText = (text: string | undefined): boolean => {
+    if (!text) return false;
+    return /[A-Za-z]/.test(text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(text);
+  };
+
+  for (let gi = groups.length - 1; gi >= 0; gi -= 1) {
+    const group = groups[gi];
+    const latinLines = group.lineIndexes.filter((idx) => isLatinOnlyText(lineMap.get(idx)?.text));
+    const thaiLines = group.lineIndexes.filter((idx) => /[\u0E00-\u0E7F]/.test(lineMap.get(idx)?.text ?? ''));
+    if (latinLines.length > 0 && thaiLines.length > 0) {
+      // remove latin lines from group
+      group.lineIndexes = group.lineIndexes.filter((i) => !latinLines.includes(i));
+      group.orderedLineIndexes = group.orderedLineIndexes.filter((i) => !latinLines.includes(i));
+      group.intraGroupOrder = group.intraGroupOrder.filter((i) => !latinLines.includes(i));
+
+      // recompute bounds/anchor/confidence for remaining lines
+      const remaining = group.lineIndexes.map((i) => lineMap.get(i)).filter(Boolean) as PreparedLine[];
+      if (remaining.length === 0) {
+        groups.splice(gi, 1);
+      } else {
+        group.bounds = {
+          top: Math.min(...remaining.map((l) => l.top)),
+          bottom: Math.max(...remaining.map((l) => l.bottom)),
+          left: Math.min(...remaining.map((l) => l.left)),
+          right: Math.max(...remaining.map((l) => l.right)),
+        };
+        group.anchor = {
+          sortX: Number.isFinite(remaining[0].sortHintX) ? Number(remaining[0].sortHintX) : remaining[0].left,
+          sortY: Number.isFinite(remaining[0].sortHintY) ? Number(remaining[0].sortHintY) : remaining[0].top,
+          rawOrder: remaining[0].index,
+        };
+        group.confidence = groupConfidenceFromSeed({ lines: remaining, edgeScores: [] }, preparedLines.length);
+        group.groupType = classifyGroupType(remaining);
+      }
+
+      // add latin lines back to ungrouped (preserve ordering)
+      latinLines.forEach((li) => {
+        if (!ungroupedLineIndexes.includes(li)) ungroupedLineIndexes.push(li);
+      });
+    }
+  }
+
   const orderedItems = buildOrderedLayoutItems(groups, ungroupedLineIndexes, lineMap, resolvedReadingMode, baseHeight);
   const orderedLineIndexes: number[] = [];
   const orderedGroupIds: string[] = [];
@@ -671,6 +731,8 @@ export const deriveBalloonAwareLayoutGrouping = (
   if (groups.length === 0) warnings.push('no_multi_line_groups');
   if (overallConfidence < 0.62) warnings.push('low_grouping_confidence');
   if (singletonRatio >= 0.72 && preparedLines.length >= 5) warnings.push('singleton_heavy_page');
+
+  // debug logs removed
 
   return {
     groups,

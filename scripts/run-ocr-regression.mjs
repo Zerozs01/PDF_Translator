@@ -13,6 +13,7 @@ function parseArgs(argv) {
     engine: 'tesseract',
     pipeline: 'panel',
     quality: 'best',
+    noFallback: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     if (arg === '--engine') args.engine = argv[i + 1] || args.engine;
     if (arg === '--pipeline') args.pipeline = argv[i + 1] || args.pipeline;
     if (arg === '--quality') args.quality = argv[i + 1] || args.quality;
+    if (arg === '--no-fallback') args.noFallback = true;
   }
 
   return args;
@@ -126,10 +128,22 @@ async function main() {
   const page = await browser.newPage();
   const pages = [];
   const errors = [];
+  const consoleMessages = [];
 
   try {
+    page.on('console', (msg) => {
+      try {
+        consoleMessages.push({ type: msg.type(), text: msg.text() });
+      } catch (e) {
+        // ignore
+      }
+    });
+    page.on('pageerror', (err) => {
+      consoleMessages.push({ type: 'pageerror', text: String(err && err.stack ? err.stack : err) });
+    });
     for (const fixture of fixtures) {
-      const url = `${args.baseUrl}/?ocr_harness=1&fixture=${encodeURIComponent(fixture.id)}&engine=${encodeURIComponent(engine)}&pipeline=${encodeURIComponent(pipeline)}&quality=${encodeURIComponent(quality)}`;
+      const noFallbackParam = args.noFallback ? '&no_fallback=1' : '';
+      const url = `${args.baseUrl}/?ocr_harness=1&fixture=${encodeURIComponent(fixture.id)}&engine=${encodeURIComponent(engine)}&pipeline=${encodeURIComponent(pipeline)}&quality=${encodeURIComponent(quality)}${noFallbackParam}`;
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.waitForFunction(
         () => {
@@ -177,6 +191,7 @@ async function main() {
     skippedFixtures: fixtureResolution.missing,
     pages,
     errors,
+    console: consoleMessages,
   };
 
   const outPath = path.resolve(args.out);

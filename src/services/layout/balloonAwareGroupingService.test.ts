@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import type { LayoutGroupingInput, OCRLineWithLayout } from './balloonAwareGroupingService';
 import { deriveBalloonAwareLayoutGrouping } from './balloonAwareGroupingService';
 import {
   angledDialogueFixture,
@@ -7,6 +8,27 @@ import {
   singletonHeavyFixture,
   stackedBalloonFixture,
 } from './balloonAwareGroupingService.fixtures';
+
+const line = (
+  index: number,
+  text: string,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  extra: Partial<OCRLineWithLayout> = {},
+): OCRLineWithLayout => ({
+  index,
+  text,
+  sourceLength: text.replace(/\s+/g, '').length,
+  left,
+  top,
+  right,
+  bottom,
+  height: Math.max(1, bottom - top),
+  confidence: 96,
+  ...extra,
+});
 
 describe('deriveBalloonAwareLayoutGrouping', () => {
   test('groups vertically stacked dialogue lines inside the same balloon', () => {
@@ -134,5 +156,55 @@ describe('deriveBalloonAwareLayoutGrouping', () => {
     if (groupWithLine0 && groupWithLine1) {
       expect(groupWithLine0.id).not.toEqual(groupWithLine1.id);
     }
+  });
+
+  test('merges heavily fragmented vertical dialogue into a single group (DSF geometry)', () => {
+    const fragmentedFixture: LayoutGroupingInput = {
+      pageNumber: 11,
+      imageWidth: 900,
+      imageHeight: 1400,
+      mode: 'balloon-aware',
+      readingMode: 'ltr',
+      lines: [
+        line(0, 'THIS', 120, 200, 240, 232, { sortHintX: 120, sortHintY: 200 }),
+        line(1, 'IS', 130, 242, 220, 272, { sortHintX: 130, sortHintY: 242 }),
+        line(2, 'ONE', 124, 284, 238, 314, { sortHintX: 124, sortHintY: 284 }),
+        line(3, 'BALLOON', 118, 326, 280, 360, { sortHintX: 118, sortHintY: 326 }),
+      ],
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(fragmentedFixture);
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.orderedLineIndexes).toEqual([0, 1, 2, 3]);
+    expect(result.ungroupedLineIndexes).toEqual([]);
+    expect(Number.isFinite(result.diagnostics.avgConfidence)).toBe(true);
+  });
+
+  test('keeps Thai blocks isolated from Latin fragments even when geometry overlaps', () => {
+    const mixedScriptFixture: LayoutGroupingInput = {
+      pageNumber: 12,
+      imageWidth: 900,
+      imageHeight: 1400,
+      mode: 'balloon-aware',
+      readingMode: 'ltr',
+      lines: [
+        line(0, 'ฉันไม่รู้', 140, 240, 320, 272, { sortHintX: 140, sortHintY: 240 }),
+        line(1, 'WHY?', 150, 276, 260, 306, { sortHintX: 150, sortHintY: 276 }),
+        line(2, 'ต้องทำแบบนี้', 142, 312, 340, 346, { sortHintX: 142, sortHintY: 312 }),
+      ],
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(mixedScriptFixture);
+
+    const thaiGroup = result.groups.find((group) =>
+      group.lineIndexes.includes(0) && group.lineIndexes.includes(2)
+    );
+
+    expect(thaiGroup?.orderedLineIndexes).toEqual([0, 2]);
+    expect(result.ungroupedLineIndexes).toContain(1);
+    expect(Number.isFinite(result.diagnostics.avgConfidence)).toBe(true);
+    expect(result.diagnostics.avgConfidence).toBeGreaterThanOrEqual(0);
+    expect(result.diagnostics.avgConfidence).toBeLessThanOrEqual(1);
   });
 });

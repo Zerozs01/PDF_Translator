@@ -1,23 +1,23 @@
 {
   "cases": [
     {
-      "id": "page-02-students",
+      "id": "manga-1",
       "page": 2,
-      "image": "fixtures/ocr/manga/page-02-students.png",
+      "image": "fixtures/ocr/manga/manga1.png",
       "language": "eng",
       "dpi": 300
     },
     {
-      "id": "page-03-take-a-look",
+      "id": "manga-2",
       "page": 3,
-      "image": "fixtures/ocr/manga/page-03-take-a-look.png",
+      "image": "fixtures/ocr/manga/manga2.png",
       "language": "eng",
       "dpi": 300
     },
     {
-      "id": "page-05-tianhai",
+      "id": "manga-3",
       "page": 5,
-      "image": "fixtures/ocr/manga/page-05-tianhai.png",
+      "image": "fixtures/ocr/manga/manga3.png",
       "language": "eng",
       "dpi": 300
     }

@@ -47,6 +47,7 @@ let workerInitPromise: Promise<void> | null = null;
 
 const CONFIG = {
   CORE_PATH: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/tesseract-core.wasm.js',
+  LANG_PATH: 'tessdata://',
   MIN_CONFIDENCE: 20,
   BALLOON_ASPECT_RATIO_MIN: 0.3,
   BALLOON_ASPECT_RATIO_MAX: 3.5,
@@ -567,13 +568,31 @@ function filterPipeline(
 
 // ─── Tesseract worker management ───
 
+function getLangPath(): string | undefined {
+  if (!CONFIG.LANG_PATH) return undefined;
+  try {
+    if (typeof self !== 'undefined' && 'location' in self) {
+      const base = self.location.origin;
+      const isElectron = typeof navigator !== 'undefined' && /electron/i.test(navigator.userAgent);
+      let path = CONFIG.LANG_PATH;
+      if (path === 'tessdata://' && !isElectron) {
+        path = '/tessdata';
+      }
+      return new URL(path, base).toString().replace(/\/$/, '');
+    }
+  } catch { /* ignore */ }
+  return CONFIG.LANG_PATH;
+}
+
 async function createWorkerWithLanguage(
   lang: string,
   sendUpdates = false,
 ): Promise<Awaited<ReturnType<typeof createWorker>>> {
   console.log(`[Worker-Stable] Creating Tesseract worker for: ${lang}`);
+  const langPath = getLangPath();
   const w = await createWorker(lang, OEM.LSTM_ONLY, {
     corePath: CONFIG.CORE_PATH,
+    langPath,
     logger: createOCRLogger(sendUpdates, ({ status, progress, workerId }) => {
       sendProgress(status, progress, workerId);
     }),

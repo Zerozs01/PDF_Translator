@@ -210,11 +210,17 @@ function getLangPath(): string | undefined {
   try {
     if (typeof self !== 'undefined' && 'location' in self) {
       const base = self.location.origin;
-      return new URL(CONFIG.LANG_PATH, base).toString().replace(/\/$/, '');
+      const isElectron = typeof navigator !== 'undefined' && /electron/i.test(navigator.userAgent);
+      let path = CONFIG.LANG_PATH;
+      if (path === 'tessdata://' && !isElectron) {
+        path = '/tessdata';
+      }
+      return new URL(path, base).toString().replace(/\/$/, '');
     }
   } catch { /* ignore */ }
   return CONFIG.LANG_PATH;
 }
+
 
 async function createWorkerWithLanguage(
   lang: string,
