@@ -1,3 +1,11 @@
+# TODO
+
+## Open Items
+
+- None. Track active work in `documents/Roadmap.md`.
+
+## Completed Notes
+
 # OCR Benchmark Improve Cache System
 ✅ **Syntax Fixed** - dbService.ts compile OK
 

@@ -1044,7 +1044,7 @@ const chooseReadablePair = (rawBackground: RGB): { bg: RGB; text: RGB } => {
   const rawLuminance = luminance(rawBackground);
 
   let background = rawBackground;
-  if (rawLuminance > 0.9 || (rawLuminance > 0.78 && saturation < 0.18)) {
+  if (rawLuminance > 0.97 && saturation < 0.05) {
     background = { r: 255, g: 255, b: 255 };
   }
 
@@ -2184,20 +2184,21 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
   const locale = containsThai ? 'th' : 'ja';
   const segmenter = getTextSegmenter(locale);
   if (!segmenter) {
+    // Correct fallback: split CJK or Thai character-by-character to prevent returning a single massive unsplit string
     return {
-      tokens: normalized.split(/\s+/g).filter(Boolean),
-      joinWithSpace: !containsThai && !containsCjk,
+      tokens: Array.from(normalized),
+      joinWithSpace: false,
     };
   }
 
   const tokens = Array.from(segmenter.segment(normalized))
-    .map((segment) => segment.segment.trim())
+    .map((segment) => segment.segment) // Do not trim, we want to keep structure if needed, or filter empty
     .filter(Boolean);
 
   if (tokens.length === 0) {
     return {
-      tokens: normalized.split(/\s+/g).filter(Boolean),
-      joinWithSpace: !containsThai && !containsCjk,
+      tokens: Array.from(normalized),
+      joinWithSpace: false,
     };
   }
 

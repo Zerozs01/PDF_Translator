@@ -972,6 +972,19 @@ export const UploadScreen: React.FC = () => {
     selectedTagId,
   ]);
 
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    const timer = window.setTimeout(() => {
+      if (!trimmed) {
+        void refreshLibraryView();
+        return;
+      }
+      void searchDocuments(trimmed);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [refreshLibraryView, searchDocuments, searchQuery]);
+
   const handleDeleteDocument = useCallback(async (documentId: number) => {
     await deleteDocument(documentId);
     setDocumentTagsById((current) => {

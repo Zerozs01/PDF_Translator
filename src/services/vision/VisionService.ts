@@ -9,6 +9,7 @@
  */
 
 import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
+import { filterKoreanJamoNoise, filterWeakIsolatedCjkLines } from './ocr-filtering';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
@@ -2266,6 +2267,46 @@ class VisionService {
     };
   }
 
+  private postProcessKoreanExternalResult(result: OCRPageResult, language: string): OCRPageResult {
+    const isKorean = String(language || '').split('+').map(c => c.trim().toLowerCase()).includes('kor');
+    if (!isKorean) return result;
+
+    const lines = result.lines || [];
+    if (lines.length === 0) return result;
+
+    const filteredLines: OCRLine[] = [];
+    for (const line of lines) {
+      const lineWords = (line.words || []) as OCRWord[];
+      if (lineWords.length === 0) {
+        filteredLines.push(line);
+        continue;
+      }
+      const filteredWords = filterKoreanJamoNoise(lineWords);
+      if (filteredWords.length === 0) {
+        continue;
+      }
+      
+      const filteredLine: OCRLine = {
+        ...line,
+        words: filteredWords,
+        text: filteredWords.map(w => w.text).join(' ')
+      };
+      filteredLines.push(filteredLine);
+    }
+
+    const pruned = filterWeakIsolatedCjkLines(filteredLines, undefined, result.width, result.height, true);
+
+    const finalWords = pruned.words;
+    const finalLines = pruned.lines;
+
+    return {
+      ...result,
+      lines: finalLines,
+      words: finalWords,
+      text: finalLines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+    };
+  }
+
   private mergePaddleGeometryFallbackResult(
     externalResult: OCRPageResult,
     fallbackResult: OCRPageResult,
@@ -2913,7 +2954,7 @@ class VisionService {
    * OCR for Text Layer Overlay
    * Returns word-level bounding boxes for precise text positioning
    */
-public async rawOCR(
+  public async rawOCR(
     imageUrl: string | Blob,
     imageWidth: number,
     imageHeight: number,
@@ -2921,7 +2962,8 @@ public async rawOCR(
     dpi: number = 300,
     pageSegMode?: number,
     signal?: AbortSignal,
-    ocrEngine: OCREngine = 'paddleocr'
+    ocrEngine: OCREngine = 'paddleocr',
+    ocrQualityProfile: OCRQualityProfile = 'best'
   ): Promise<OCRPageResult> {
     const bridge = window.electronAPI?.ocr;
     if (!bridge?.runExternal) {
@@ -2951,7 +2993,7 @@ public async rawOCR(
         dpi,
         pageSegMode,
         pipelineProfile: 'raw' as any,
-        ocrQualityProfile: 'best',
+        ocrQualityProfile,
       });
 
       const result: OCRPageResult = {
@@ -2964,7 +3006,7 @@ public async rawOCR(
         algorithmVersion: OCR_ALGORITHM_VERSION,
         pipelineProfile: 'raw',
         ocrEngine,
-        ocrQualityProfile: 'best',
+        ocrQualityProfile,
         lines: (resultRaw.lines || []).map(line => ({
           ...line,
           bbox: line.bbox as any,
@@ -3004,122 +3046,170 @@ public async rawOCR(
     ocrEngine: OCREngine = 'tesseract'
   ): Promise<OCRPageResult> {
     if (ocrEngine !== 'tesseract') {
-      const externalResult = await this.runExternalOcrForTextLayer(
-        imageUrl,
-        imageWidth,
-        imageHeight,
-        language,
-        dpi,
-        pageSegMode,
-        signal,
-        pipelineProfile,
-        ocrQualityProfile,
-        ocrEngine
-      );
-
-      const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
-        && pipelineProfile === 'panel'
-        && this.shouldApplyAggressiveLatinPanelCleanup(language);
-      const anomalies = canApplyPaddleLatinGeometryGuard
-        ? this.collectPaddlePanelGeometryAnomalies(externalResult)
-        : [];
-      const severeAnomalyCount = anomalies.filter((line) =>
-        this.isSevereMalformedPaddleLatinLine(
-          line,
-          Math.max(1, Number(externalResult.width || 0)),
-          Math.max(1, Number(externalResult.height || 0)),
-        )
-      ).length;
-
-      const shouldFallbackToGeometryEngine = canApplyPaddleLatinGeometryGuard
-        && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
-      if (!shouldFallbackToGeometryEngine) {
-        if (anomalies.length > 0) {
-          return this.dropMinorPaddleGeometryAnomalies(
-            externalResult,
-            anomalies,
-            'paddleGeometryMinorAnomalyDropNoFallback'
-          );
-        }
-        return externalResult;
-      }
-
-      const denseLatinDocument = this.isLikelyDenseLatinDocumentPanelResult(externalResult, language);
-      const fallbackDpi = denseLatinDocument && severeAnomalyCount === 0 && anomalies.length <= 4
-        ? Math.max(220, Math.min(dpi, 260))
-        : dpi;
-      const fallbackQualityProfile: OCRQualityProfile = severeAnomalyCount > 0
-        ? ocrQualityProfile
-        : 'fast';
-      const fallbackEngine: OCREngine = 'easyocr';
       try {
-        const fallbackResult = await this.runExternalOcrForTextLayer(
+        const externalResult = await this.runExternalOcrForTextLayer(
           imageUrl,
           imageWidth,
           imageHeight,
           language,
-          fallbackDpi,
+          dpi,
           pageSegMode,
           signal,
           pipelineProfile,
-          fallbackQualityProfile,
-          fallbackEngine,
-        );
-
-        const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
-          externalResult,
-          fallbackResult,
-          anomalies,
-          imageWidth,
-          imageHeight,
-          dpi,
-          language,
-          pageSegMode,
-          pipelineProfile,
           ocrQualityProfile,
-          fallbackEngine,
+          ocrEngine
         );
 
-        if (fallbackDpi !== dpi) {
-          return {
-            ...mergedFallbackResult,
-            debug: {
-              ...(mergedFallbackResult.debug || { droppedWords: [], dropCounts: {} }),
-              dropCounts: {
-                ...(mergedFallbackResult.debug?.dropCounts || {}),
-                externalPaddleGeometryFallbackDpiDownshift: 1,
-              },
-            },
-          };
-        }
+        const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
+          && pipelineProfile === 'panel'
+          && this.shouldApplyAggressiveLatinPanelCleanup(language);
+        const anomalies = canApplyPaddleLatinGeometryGuard
+          ? this.collectPaddlePanelGeometryAnomalies(externalResult)
+          : [];
+        const severeAnomalyCount = anomalies.filter((line) =>
+          this.isSevereMalformedPaddleLatinLine(
+            line,
+            Math.max(1, Number(externalResult.width || 0)),
+            Math.max(1, Number(externalResult.height || 0)),
+          )
+        ).length;
 
-        return mergedFallbackResult;
-      } catch (fallbackError) {
-        if ((fallbackError as Error | undefined)?.name === 'AbortError' || signal?.aborted) {
-          if (severeAnomalyCount === 0 && anomalies.length > 0) {
-            return this.dropMinorPaddleGeometryAnomalies(
-              externalResult,
-              anomalies,
-              'paddleGeometryFallbackAbortedMinorAnomalyDrop'
+        const shouldFallbackToGeometryEngine = canApplyPaddleLatinGeometryGuard
+          && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
+        if (!shouldFallbackToGeometryEngine) {
+          if (anomalies.length > 0) {
+            return this.postProcessKoreanExternalResult(
+              this.dropMinorPaddleGeometryAnomalies(
+                externalResult,
+                anomalies,
+                'paddleGeometryMinorAnomalyDropNoFallback'
+              ),
+              language
             );
           }
-          return {
-            ...externalResult,
-            debug: {
-              ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
-              skipReason: 'paddleGeometryFallbackAborted',
-            },
+          return this.postProcessKoreanExternalResult(externalResult, language);
+        }
+
+        const denseLatinDocument = this.isLikelyDenseLatinDocumentPanelResult(externalResult, language);
+        const fallbackDpi = denseLatinDocument && severeAnomalyCount === 0 && anomalies.length <= 4
+          ? Math.max(220, Math.min(dpi, 260))
+          : dpi;
+        const fallbackQualityProfile: OCRQualityProfile = severeAnomalyCount > 0
+          ? ocrQualityProfile
+          : 'fast';
+        const fallbackEngine: OCREngine = 'easyocr';
+        try {
+          const fallbackResult = await this.runExternalOcrForTextLayer(
+            imageUrl,
+            imageWidth,
+            imageHeight,
+            language,
+            fallbackDpi,
+            pageSegMode,
+            signal,
+            pipelineProfile,
+            fallbackQualityProfile,
+            fallbackEngine,
+          );
+
+          const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
+            externalResult,
+            fallbackResult,
+            anomalies,
+            imageWidth,
+            imageHeight,
+            dpi,
+            language,
+            pageSegMode,
+            pipelineProfile,
+            ocrQualityProfile,
+            fallbackEngine,
+          );
+
+          if (fallbackDpi !== dpi) {
+            return this.postProcessKoreanExternalResult(
+              {
+                ...mergedFallbackResult,
+                debug: {
+                  ...(mergedFallbackResult.debug || { droppedWords: [], dropCounts: {} }),
+                  dropCounts: {
+                    ...(mergedFallbackResult.debug?.dropCounts || {}),
+                    externalPaddleGeometryFallbackDpiDownshift: 1,
+                  },
+                },
+              },
+              language
+            );
+          }
+
+          return this.postProcessKoreanExternalResult(mergedFallbackResult, language);
+        } catch (fallbackError) {
+          if ((fallbackError as Error | undefined)?.name === 'AbortError' || signal?.aborted) {
+            if (severeAnomalyCount === 0 && anomalies.length > 0) {
+              return this.postProcessKoreanExternalResult(
+                this.dropMinorPaddleGeometryAnomalies(
+                  externalResult,
+                  anomalies,
+                  'paddleGeometryFallbackAbortedMinorAnomalyDrop'
+                ),
+                language
+              );
+            }
+            return this.postProcessKoreanExternalResult(
+              {
+                ...externalResult,
+                debug: {
+                  ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
+                  skipReason: 'paddleGeometryFallbackAborted',
+                },
+              },
+              language
+            );
+          }
+          console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
+          if (severeAnomalyCount === 0 && anomalies.length > 0) {
+            return this.postProcessKoreanExternalResult(
+              this.dropMinorPaddleGeometryAnomalies(
+                externalResult,
+                anomalies,
+                'paddleGeometryFallbackFailedMinorAnomalyDrop'
+              ),
+              language
+            );
+          }
+          return this.postProcessKoreanExternalResult(externalResult, language);
+        }
+      } catch (error) {
+        if (signal?.aborted || (error as Error | undefined)?.name === 'AbortError') {
+          throw error;
+        }
+        console.warn(`[VisionService] External OCR engine "${ocrEngine}" failed or timed out. Performing seamless fallback to Tesseract...`, error);
+
+        const tesseractResult = await this.sendMessage<OCRPageResult>('OCR_FOR_TEXT_LAYER', {
+          imageUrl,
+          imageWidth,
+          imageHeight,
+          language,
+          dpi,
+          pageSegMode,
+          debugCollectDrops,
+          pipelineProfile,
+          ocrQualityProfile,
+          ocrEngine: 'tesseract'
+        }, { signal });
+
+        if (tesseractResult.debug) {
+          tesseractResult.debug.fallbackFromEngine = ocrEngine;
+          tesseractResult.debug.fallbackReason = error instanceof Error ? error.message : String(error);
+        } else {
+          tesseractResult.debug = {
+            dropCounts: {},
+            droppedWords: [],
+            fallbackFromEngine: ocrEngine,
+            fallbackReason: error instanceof Error ? error.message : String(error)
           };
         }
-        console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
-        if (severeAnomalyCount === 0 && anomalies.length > 0) {
-          return this.dropMinorPaddleGeometryAnomalies(
-            externalResult,
-            anomalies,
-            'paddleGeometryFallbackFailedMinorAnomalyDrop'
-          );
-        }
-        return externalResult;
+        return tesseractResult;
       }
     }
 

@@ -12,14 +12,17 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:get-ocr',
   'db:clear-ocr',
   'db:get-latest-ocr',
+  'db:get-ocr-cache-stats-for-document-ids',
   'db:save-translation-cache',
-'db:get-translation-cache-page',
-      'db:clear-translation-cache-by-engine',
-      'db:save-benchmark',
-      'db:get-benchmark',
-      'db:clear-benchmark',
-      'db:list-benchmarks',
-      // Document management
+  'db:get-translation-cache-page',
+  'db:clear-translation-cache-by-engine',
+  'db:save-sentence-translation',
+  'db:get-sentence-translation',
+  'db:save-benchmark',
+  'db:get-benchmark',
+  'db:clear-benchmark',
+  'db:list-benchmarks',
+  // Document management
   'db:get-recent-documents',
   'db:get-documents-by-project',
   'db:get-favorite-documents',
@@ -46,16 +49,25 @@ const ALLOWED_INVOKE_CHANNELS = [
   // File system
   'fs:read-file',
   'fs:open-file',
+  'fs:import-file',
+  // OCR
   'ocr:get-engine-status',
   'ocr:prewarm-engine',
   'ocr:run-external',
   'ocr:cancel-external',
+  // Gemini
   'gemini:get-api-key-status',
   'gemini:set-api-key',
   'gemini:clear-api-key',
+  'gemini:translate', // For secure Gemini API calls via main process
+  // Offline translation
   'translate:offline',
   'translate:offline-batch',
-  'gemini:translate', // For secure Gemini API calls via main process
+  // Startup
+  'db:startup-load',
+  // Model Management
+  'models:get-status',
+  'models:download',
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -69,6 +81,14 @@ const ALLOWED_RECEIVE_CHANNELS = [
 type AllowedInvokeChannel = typeof ALLOWED_INVOKE_CHANNELS[number];
 type AllowedSendChannel = typeof ALLOWED_SEND_CHANNELS[number];
 type AllowedReceiveChannel = typeof ALLOWED_RECEIVE_CHANNELS[number];
+
+// SECURITY WRAPPER: Enforces strict channel validation at dynamic runtime
+const safeInvoke = <T = unknown>(channel: AllowedInvokeChannel, ...args: unknown[]): Promise<T> => {
+  if (!ALLOWED_INVOKE_CHANNELS.includes(channel)) {
+    throw new Error(`[Preload Security Exception] Blocked invoke on unauthorized channel: ${channel}`);
+  }
+  return ipcRenderer.invoke(channel, ...args);
+};
 
 // Type definitions
 interface DocumentUpdate {
@@ -100,93 +120,97 @@ contextBridge.exposeInMainWorld('electronAPI', {
   db: {
     // Basic operations
     saveDocument: (filepath: string, filename: string, totalPages: number) =>
-      ipcRenderer.invoke('db:save-document', { filepath, filename, totalPages }),
+      safeInvoke('db:save-document', { filepath, filename, totalPages }),
     getDocument: (filepath: string) =>
-      ipcRenderer.invoke('db:get-document', filepath),
+      safeInvoke('db:get-document', filepath),
     findDocumentsByFilename: (filename: string) =>
-      ipcRenderer.invoke('db:find-documents-by-filename', filename),
+      safeInvoke('db:find-documents-by-filename', filename),
     saveOCR: (docId: number, pageNum: number, data: unknown, engine?: string) =>
-      ipcRenderer.invoke('db:save-ocr', { docId, pageNum, data, engine }),
+      safeInvoke('db:save-ocr', { docId, pageNum, data, engine }),
     getOCR: (docId: number, pageNum: number, engine?: string) =>
-      ipcRenderer.invoke('db:get-ocr', { docId, pageNum, engine }),
+      safeInvoke('db:get-ocr', { docId, pageNum, engine }),
     clearOCR: (docId: number, pageNum: number, engine?: string) =>
-      ipcRenderer.invoke('db:clear-ocr', { docId, pageNum, engine }),
+      safeInvoke('db:clear-ocr', { docId, pageNum, engine }),
     getLatestOCR: (docId: number) =>
-      ipcRenderer.invoke('db:get-latest-ocr', { docId }),
+      safeInvoke('db:get-latest-ocr', { docId }),
     getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
-      ipcRenderer.invoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
+      safeInvoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
     saveTranslationCache: (docId: number, pageNum: number, cacheKey: string, entry: unknown) =>
-      ipcRenderer.invoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
+      safeInvoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
     getTranslationCachePage: (docId: number, pageNum: number) =>
-      ipcRenderer.invoke('db:get-translation-cache-page', { docId, pageNum }),
+      safeInvoke('db:get-translation-cache-page', { docId, pageNum }),
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: string) =>
-      ipcRenderer.invoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }),
+      safeInvoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }),
+    saveSentenceTranslation: (sourceText: string, sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string, translatedText: string) =>
+      safeInvoke('db:save-sentence-translation', { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText }),
+    getSentenceTranslation: (sourceText: string, sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string) =>
+      safeInvoke('db:get-sentence-translation', { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }),
 
     // Benchmark CRUD (Phase 1.3)
     saveBenchmark: (params: { docId: number; pageNum: number; key: string; payload: string }) =>
-      ipcRenderer.invoke('db:save-benchmark', params),
+      safeInvoke('db:save-benchmark', params),
     getBenchmark: (params: { docId: number; pageNum: number; key: string }) =>
-      ipcRenderer.invoke('db:get-benchmark', params),
+      safeInvoke('db:get-benchmark', params),
     clearBenchmark: (params: { docId: number; pageNum: number; key?: string }) =>
-      ipcRenderer.invoke('db:clear-benchmark', params),
+      safeInvoke('db:clear-benchmark', params),
     listBenchmarks: (params: { docId: number; pageNum: number }) =>
-      ipcRenderer.invoke('db:list-benchmarks', params),
+      safeInvoke('db:list-benchmarks', params),
 
     // Document management
     getRecentDocuments: (limit?: number) =>
-      ipcRenderer.invoke('db:get-recent-documents', limit),
+      safeInvoke('db:get-recent-documents', limit),
     getDocumentsByProject: (projectId: number | null) =>
-      ipcRenderer.invoke('db:get-documents-by-project', projectId),
+      safeInvoke('db:get-documents-by-project', projectId),
     getFavoriteDocuments: () =>
-      ipcRenderer.invoke('db:get-favorite-documents'),
+      safeInvoke('db:get-favorite-documents'),
     searchDocuments: (query: string) =>
-      ipcRenderer.invoke('db:search-documents', query),
+      safeInvoke('db:search-documents', query),
     updateDocument: (id: number, updates: DocumentUpdate) =>
-      ipcRenderer.invoke('db:update-document', { id, updates }),
+      safeInvoke('db:update-document', { id, updates }),
     deleteDocument: (id: number) =>
-      ipcRenderer.invoke('db:delete-document', id),
+      safeInvoke('db:delete-document', id),
     toggleFavorite: (id: number) =>
-      ipcRenderer.invoke('db:toggle-favorite', id),
+      safeInvoke('db:toggle-favorite', id),
     getDocumentsByTag: (tagId: number) =>
-      ipcRenderer.invoke('db:get-documents-by-tag', tagId),
+      safeInvoke('db:get-documents-by-tag', tagId),
     addDocumentTag: (documentId: number, tagId: number) =>
-      ipcRenderer.invoke('db:add-document-tag', { documentId, tagId }),
+      safeInvoke('db:add-document-tag', { documentId, tagId }),
     removeDocumentTag: (documentId: number, tagId: number) =>
-      ipcRenderer.invoke('db:remove-document-tag', { documentId, tagId }),
+      safeInvoke('db:remove-document-tag', { documentId, tagId }),
     getDocumentTags: (documentId: number) =>
-      ipcRenderer.invoke('db:get-document-tags', documentId),
+      safeInvoke('db:get-document-tags', documentId),
     touchDocument: (id: number) =>
-      ipcRenderer.invoke('db:touch-document', id),
+      safeInvoke('db:touch-document', id),
     updateLastPage: (id: number, pageNum: number) =>
-      ipcRenderer.invoke('db:update-last-page', { id, pageNum }),
+      safeInvoke('db:update-last-page', { id, pageNum }),
   },
 
   // Tag operations
   tags: {
-    getAll: () => ipcRenderer.invoke('db:get-all-tags'),
+    getAll: () => safeInvoke('db:get-all-tags'),
     create: (name: string, color?: string) =>
-      ipcRenderer.invoke('db:create-tag', { name, color }),
-    delete: (id: number) => ipcRenderer.invoke('db:delete-tag', id),
+      safeInvoke('db:create-tag', { name, color }),
+    delete: (id: number) => safeInvoke('db:delete-tag', id),
   },
 
   // Project operations
   projects: {
-    getAll: () => ipcRenderer.invoke('db:get-all-projects'),
+    getAll: () => safeInvoke('db:get-all-projects'),
     getChildren: (parentId: number | null) =>
-      ipcRenderer.invoke('db:get-project-children', parentId),
+      safeInvoke('db:get-project-children', parentId),
     create: (project: ProjectCreate) =>
-      ipcRenderer.invoke('db:create-project', project),
+      safeInvoke('db:create-project', project),
     update: (id: number, updates: ProjectUpdate) =>
-      ipcRenderer.invoke('db:update-project', { id, updates }),
-    delete: (id: number) => ipcRenderer.invoke('db:delete-project', id),
+      safeInvoke('db:update-project', { id, updates }),
+    delete: (id: number) => safeInvoke('db:delete-project', id),
   },
 
   // Gemini translation (SECURE: API key stays in main process)
   gemini: {
-    getApiKeyStatus: () => ipcRenderer.invoke('gemini:get-api-key-status'),
+    getApiKeyStatus: () => safeInvoke('gemini:get-api-key-status'),
     setApiKey: (apiKey: string) =>
-      ipcRenderer.invoke('gemini:set-api-key', { apiKey }),
-    clearApiKey: () => ipcRenderer.invoke('gemini:clear-api-key'),
+      safeInvoke('gemini:set-api-key', { apiKey }),
+    clearApiKey: () => safeInvoke('gemini:clear-api-key'),
     translate: (text: string, context: {
       mode: 'adaptive' | 'manga' | 'manhwa' | 'official';
       sourceType: string;
@@ -194,7 +218,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       targetLanguage?: string;
       baseSystemPrompt?: string;
     }) =>
-      ipcRenderer.invoke('gemini:translate', { text, context }),
+      safeInvoke('gemini:translate', { text, context }),
   },
 
   translate: {
@@ -204,37 +228,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sourceLanguage?: string;
       targetLanguage?: string;
       timeoutMs?: number;
-    }) => ipcRenderer.invoke('translate:offline', { text, context }),
+    }) => safeInvoke('translate:offline', { text, context }),
     offlineBatch: (texts: string[], context?: {
       mode?: string;
       sourceType?: string;
       sourceLanguage?: string;
       targetLanguage?: string;
-              timeoutMs?: number;
-            }) => ipcRenderer.invoke('translate:offline-batch', { texts, context }),
-          },
+      timeoutMs?: number;
+    }) => safeInvoke('translate:offline-batch', { texts, context }),
+  },
 
-          // 🚀 Startup batch load (1 round-trip instead of 3+ separate IPC calls)
-          startupLoad: () => ipcRenderer.invoke('db:startup-load'),
+  // 🚀 Startup batch load (1 round-trip instead of 3+ separate IPC calls)
+  startupLoad: () => safeInvoke('db:startup-load'),
 
-          // 🚀 Batch OCR cache stats for multiple docIds in 1 call
-          getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
-            ipcRenderer.invoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
+  // 🚀 Batch OCR cache stats for multiple docIds in 1 call
+  getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
+    safeInvoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
 
   // File system operations (SECURE: validated in main process)
   fs: {
-    readFile: (filepath: string) => ipcRenderer.invoke('fs:read-file', filepath),
-    openFile: () => ipcRenderer.invoke('fs:open-file'),
+    readFile: (filepath: string) => safeInvoke('fs:read-file', filepath),
+    openFile: () => safeInvoke('fs:open-file'),
     importFile: (payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) =>
-      ipcRenderer.invoke('fs:import-file', payload),
+      safeInvoke('fs:import-file', payload),
   },
 
   ocr: {
-    getEngineStatus: () => ipcRenderer.invoke('ocr:get-engine-status'),
+    getEngineStatus: () => safeInvoke('ocr:get-engine-status'),
     prewarmEngine: (payload: { engine: string; language?: string }) =>
-      ipcRenderer.invoke('ocr:prewarm-engine', payload),
+      safeInvoke('ocr:prewarm-engine', payload),
     cancelExternal: (payload?: { engine?: string }) =>
-      ipcRenderer.invoke('ocr:cancel-external', payload),
+      safeInvoke('ocr:cancel-external', payload),
     runExternal: (payload: {
       engine: string;
       imageData: Uint8Array | ArrayBuffer;
@@ -246,7 +270,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       pageSegMode?: number;
       pipelineProfile?: string;
       ocrQualityProfile?: string;
-    }) => ipcRenderer.invoke('ocr:run-external', payload),
+    }) => safeInvoke('ocr:run-external', payload),
+  },
+
+  models: {
+    getStatus: (payload: { engine: string; language: string }) =>
+      safeInvoke('models:get-status', payload),
+    download: (payload: { engine: string; language: string }) =>
+      safeInvoke('models:download', payload),
   },
 
   // Message handling (restricted to allowed channels)
@@ -260,5 +291,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {};
   },
 });
-
-

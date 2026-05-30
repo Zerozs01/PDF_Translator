@@ -57,13 +57,20 @@ This document describes the architecture as implemented in the current working t
 
 1. Render page to canvas
 2. Attempt in-memory cache, then DB cache
-3. Run OCR (Tesseract or external engine)
+3. Resolve OCR quality profile (panel toggle + engine heuristics)
+4. Run OCR (Tesseract or external engine)
 4. Apply panel normalization:
    - script gate
    - panel safety dedupe
    - geometry normalization with word-union fallback when line bbox is malformed
 5. Save page OCR to store and DB
 6. Use OCR result as source for translation mapping and overlay preview
+
+Quality profile resolution (panel):
+
+- PaddleOCR: `fast` or `balanced` (auto-prefer `fast` on large non-CJK pages)
+- Tesseract/EasyOCR: `best`
+- Raw OCR is used only in benchmark mode and is not a pipeline profile
 
 ## 4. External OCR Guardrails
 

@@ -143,7 +143,7 @@ export class SearchablePDFService {
     const normalizeLanguage = (value: string): string =>
       value
         .split('+')
-        .map(v => v.trim())
+        .map(v => v.trim().toLowerCase())
         .filter(Boolean)
         .sort()
         .join('+');
@@ -180,10 +180,15 @@ export class SearchablePDFService {
     const getCacheIncompatibilityReason = (cached: OCRPageResult): string | null => {
       if (normalizeLanguage(cached.language) !== normalizedLanguage) return 'language mismatch';
       if (cached.dpi !== options.dpi) return 'dpi mismatch';
-      if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return 'pageSegMode mismatch';
+      
+      const activeEngine = options.engine || 'tesseract';
+      if (activeEngine === 'tesseract' && options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) {
+        return 'pageSegMode mismatch';
+      }
+      
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
       if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
-      if ((cached.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) return 'ocrEngine mismatch';
+      if ((cached.ocrEngine || 'tesseract') !== activeEngine) return 'ocrEngine mismatch';
       return null;
     };
     const isCacheCompatible = (cached: OCRPageResult): boolean => getCacheIncompatibilityReason(cached) === null;

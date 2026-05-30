@@ -94,16 +94,16 @@ export const filterGhostOcrData = (
       return false;
     }
 
-    // B. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky balloon borders, e.g. "lll", "III", "111", "I l I")
-    const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-s]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
+    // B. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky balloon borders, e.g. "lll", "III", "I l I")
+    const isVerticalLineJunk = !hasCjkOrThai && /^[lI|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
     if (isVerticalLineJunk) {
       return false;
     }
 
-    // C. Single-character junk (English letters or digits that aren't valid single-letter words like I, A, O)
+    // C. Single-character junk: only drop if it is not alphanumeric (i.e. symbols or punctuation)
     const isSingleCharJunk = !hasCjkOrThai
       && asciiCompact.length === 1
-      && !/^[IAO]$/i.test(asciiCompact);
+      && !/[a-zA-Z0-9]/.test(asciiCompact);
     if (isSingleCharJunk) {
       return false;
     }
@@ -129,10 +129,14 @@ export const filterGhostOcrData = (
 
       const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
         /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP)$/i.test(asciiCompact);
+      const containsAlphanumeric = /[a-zA-Z0-9]/.test(asciiCompact);
       const isTinyJunkBox = !hasCjkOrThai
         && asciiCompact.length <= 3
         && area <= 8000
-        && (isExternal ? avgConfidence <= 98 : avgConfidence <= 85)
+        && (containsAlphanumeric
+          ? (isExternal ? avgConfidence <= 85 : avgConfidence <= 75)
+          : (isExternal ? avgConfidence <= 98 : avgConfidence <= 85)
+        )
         && !isKnownShortWord;
 
       if (isTinyJunkBox) {
@@ -257,7 +261,7 @@ export const OCR_ENGINES: Array<{
     id: 'tesseract',
     name: 'Tesseract',
     runtime: 'Built-in WASM',
-    description: 'Current in-app OCR engine running the best-quality pipeline by default.',
+    description: 'Built-in OCR engine running the WASM pipeline.',
     available: true,
   },
   {
@@ -281,7 +285,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   options: {
     language: 'eng',
     dpi: 300,
-    engine: 'tesseract',
+    engine: 'paddleocr',
     skipIfTextExists: true,
     perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
   },

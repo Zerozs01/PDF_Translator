@@ -534,7 +534,10 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
 
     // ถ้า engine เปลี่ยน → rebuild layers ใหม่ โดยรักษา manual layers ไว้
     if (forceRebuild || !lastEngine || lastEngine !== newEngine) {
-      const result = buildLayerGroupsFromOCR(currentPageOCR, translationOverlayContext.translatedByIndex);
+      const result = buildLayerGroupsFromOCR(
+        currentPageOCR,
+        translationPreviewMode === 'translated' ? translationOverlayContext.translatedByIndex : undefined
+      );
 
       if (forceRebuild || !lastEngine) {
         // First build หรือ manual rebuild: set ทันที
@@ -552,7 +555,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
 
       lastBuiltEngineRef.current.set(pageNum, newEngine);
     }
-  }, [currentPageOCR, pageNum, setPageLayers, getPageLayers, translationOverlayContext.translatedByIndex]);
+  }, [currentPageOCR, pageNum, setPageLayers, getPageLayers, translationOverlayContext.translatedByIndex, translationPreviewMode]);
 
   // Note: Auto-building of layers on load is now centrally managed by PDFCanvas.tsx to guarantee
   // that layers are always initialized even if the Layer Panel sidebar is closed or unmounted.

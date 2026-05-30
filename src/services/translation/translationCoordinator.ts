@@ -1,5 +1,6 @@
 import { TranslatableItem, TranslationResult, TranslationEngine } from '../../types/translation';
 import { translateSFX, SFXLanguage } from './sfxDictionaryService';
+import { dbService } from '../dbService';
 
 /**
  * Argos Offline Engine Implementation
@@ -212,8 +213,8 @@ export class TranslationCoordinator {
 
   constructor() {
     // ลงทะเบียน Engine ทั้งหมด
-    this.registerEngine(new ArgosTranslationEngine());
-    this.registerEngine(new GeminiTranslationEngine());
+    this.engines.set('argos', new ArgosTranslationEngine());
+    this.engines.set('gemini', new GeminiTranslationEngine());
   }
 
   registerEngine(engine: TranslationEngine) {
@@ -244,8 +245,90 @@ export class TranslationCoordinator {
     const activeItems = items.filter((item) => item.text.trim().length > 0);
     const emptyItems = items.filter((item) => item.text.trim().length === 0);
 
-    // 2. รันการแปลผ่าน Engine ที่เลือก
-    const results = await engine.translate(activeItems, options);
+    const results: TranslationResult[] = [];
+
+    // 1.5 ลองดึงข้อมูลคำแปลจากระบบแคชประโยค (Sentence-level cache) ข้ามการประมวลผลเอนจินหลัก
+    const cachedLookup = await Promise.all(
+      activeItems.map(async (item) => {
+        try {
+          const cachedText = await dbService.getSentenceTranslation(
+            item.text,
+            options.sourceLanguage,
+            options.targetLanguage,
+            engineId,
+            options.translationMode
+          );
+          return { item, cachedText };
+        } catch (error) {
+          console.warn('[TranslationCoordinator] Cache lookup error for text:', item.text, error);
+          return { item, cachedText: null };
+        }
+      })
+    );
+
+    const cachedItems: { item: TranslatableItem; cachedText: string }[] = [];
+    const uncachedItems: TranslatableItem[] = [];
+
+    // Detect cached translations that were never actually translated
+    // (Argos returned the English source unchanged and it was saved to DB cache).
+    // For Thai target: a valid translation must contain Thai characters.
+    const isCachedUntranslated = (cachedText: string, targetLang: string): boolean => {
+      if (targetLang !== 'th') return false;
+      const trimmed = cachedText.trim();
+      if (!trimmed) return false;
+      const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
+      const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
+      return hasLatinLetters && !hasThaiChars; // Still English → was never translated
+    };
+
+    for (const res of cachedLookup) {
+      if (res.cachedText !== null && !isCachedUntranslated(res.cachedText, options.targetLanguage)) {
+        cachedItems.push({ item: res.item, cachedText: res.cachedText });
+      } else {
+        // Cache miss OR cached result is untranslated → re-translate with engine
+        uncachedItems.push(res.item);
+      }
+    }
+
+    // 2. รันการแปลส่วนที่เหลือที่ไม่มีในแคชผ่าน Engine ที่เลือก
+    let engineResults: TranslationResult[] = [];
+    if (uncachedItems.length > 0) {
+      engineResults = await engine.translate(uncachedItems, options);
+
+      // บันทึกคำแปลที่ได้ลงในระบบแคชประโยคเพื่อใช้สำหรับครั้งต่อไปแบบคู่ขนาน
+      const savePromises = engineResults.map(async (res) => {
+        if (res.success && res.translatedText) {
+          const matchedItem = uncachedItems.find((ui) => ui.id === res.id);
+          if (matchedItem) {
+            try {
+              await dbService.saveSentenceTranslation(
+                matchedItem.text,
+                options.sourceLanguage,
+                options.targetLanguage,
+                engineId,
+                options.translationMode,
+                res.translatedText
+              );
+            } catch (saveError) {
+              console.warn('[TranslationCoordinator] Failed to save sentence to cache:', matchedItem.text, saveError);
+            }
+          }
+        }
+      });
+      // รันบันทึกแคช
+      await Promise.all(savePromises);
+    }
+
+    // 2.5 รวมผลงานจากแคชประโยคกลับเข้ามาในรูปแบบ TranslationResult
+    const cachedResults: TranslationResult[] = cachedItems.map((c) => ({
+      id: c.item.id,
+      translatedText: c.cachedText,
+      success: true,
+      engineUsed: `${engineId}-sentence-cache`,
+    }));
+
+    // รวมผลลัพธ์ทั้งหมด
+    results.push(...engineResults, ...cachedResults);
 
     // 3. รวมผลลัพธ์ของข้อความว่างกลับเข้ามา
     emptyItems.forEach((item) => {
@@ -255,6 +338,14 @@ export class TranslationCoordinator {
         success: true,
         engineUsed: 'empty',
       });
+    });
+
+    // จัดเรียงผลลัพธ์กลับตามลำดับ index ของข้อมูลที่ถูกส่งเข้ามาดั้งเดิม เพื่อไม่ให้ overlay สลับตำแหน่ง
+    const itemsOrderMap = new Map(items.map((item, idx) => [item.id, idx]));
+    results.sort((a, b) => {
+      const idxA = itemsOrderMap.get(a.id) ?? 0;
+      const idxB = itemsOrderMap.get(b.id) ?? 0;
+      return idxA - idxB;
     });
 
     return results;

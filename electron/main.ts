@@ -1,9 +1,17 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
-import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO } from './db'
+import { pathToFileURL } from 'url'
+import https from 'https'
+import zlib from 'zlib'
+
+// Register tessdata custom scheme before app ready
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'tessdata', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+]);
+import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
@@ -111,6 +119,159 @@ process.on('exit', () => {
 app.whenReady().then(() => {
   // Initialize SQLite Database with Performance Pragmas
   initDB();
+
+  // Register tessdata custom protocol handler
+  protocol.handle('tessdata', (request) => {
+    try {
+      const urlStr = request.url;
+      const parsedUrl = new URL(urlStr);
+      const fileName = path.basename(parsedUrl.pathname);
+      if (!fileName) {
+        return new Response('Invalid file request', { status: 400 });
+      }
+
+      // 1. Check in userData/tessdata
+      const userPath = path.join(app.getPath('userData'), 'tessdata', fileName);
+      if (fs.existsSync(userPath)) {
+        return net.fetch(pathToFileURL(userPath).toString());
+      }
+
+      // 2. Check in dist/tessdata
+      const appPath = path.join(process.env.DIST || '', 'tessdata', fileName);
+      if (fs.existsSync(appPath)) {
+        return net.fetch(pathToFileURL(appPath).toString());
+      }
+
+      // 3. Check in public/tessdata (development)
+      const devPath = path.join(process.cwd(), 'public', 'tessdata', fileName);
+      if (fs.existsSync(devPath)) {
+        return net.fetch(pathToFileURL(devPath).toString());
+      }
+
+      console.warn(`[Tessdata Protocol] Model not found: ${fileName}`);
+      return new Response('Model file not found', { status: 404 });
+    } catch (err) {
+      console.error('[Tessdata Protocol] Error:', err);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  });
+
+  // Model Management IPC Handlers
+  ipcMain.handle('models:get-status', async (_, { engine, language }) => {
+    if (!isValidString(language)) {
+      throw new Error('Invalid language code');
+    }
+    
+    const lang = language.trim().toLowerCase();
+    
+    if (engine === 'tesseract') {
+      const fileName = `${lang}.traineddata`;
+      
+      // Check in userData/tessdata
+      const userPath = path.join(app.getPath('userData'), 'tessdata', fileName);
+      if (fs.existsSync(userPath)) return { installed: true };
+      
+      // Check in dist/tessdata
+      const appPath = path.join(process.env.DIST || '', 'tessdata', fileName);
+      if (fs.existsSync(appPath)) return { installed: true };
+      
+      // Check in public/tessdata (dev mode)
+      const devPath = path.join(process.cwd(), 'public', 'tessdata', fileName);
+      if (fs.existsSync(devPath)) return { installed: true };
+      
+      return { installed: false };
+    }
+    
+    if (engine === 'paddleocr') {
+      try {
+        const statuses = await getExternalOcrEngineStatuses();
+        const paddle = statuses.find(s => s.engine === 'paddleocr');
+        return { installed: paddle ? paddle.available : false };
+      } catch {
+        return { installed: false };
+      }
+    }
+
+    if (engine === 'argos') {
+      return { installed: true }; // default true for Argos (built-in fallback)
+    }
+    
+    return { installed: false };
+  });
+
+  ipcMain.handle('models:download', async (event, { engine, language }) => {
+    if (!isValidString(language)) {
+      throw new Error('Invalid language code');
+    }
+    
+    const lang = language.trim().toLowerCase();
+    
+    if (engine === 'tesseract') {
+      const url = `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${lang}/4.0.0_best_int/${lang}.traineddata.gz`;
+      const destDir = path.join(app.getPath('userData'), 'tessdata');
+      await fs.promises.mkdir(destDir, { recursive: true });
+      const gzPath = path.join(destDir, `${lang}.traineddata.gz`);
+      const finalPath = path.join(destDir, `${lang}.traineddata`);
+      
+      return new Promise<boolean>((resolve, reject) => {
+        https.get(url, (res) => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`Tesseract CDN returned HTTP ${res.statusCode}`));
+            return;
+          }
+          const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+          let downloadedBytes = 0;
+          const file = fs.createWriteStream(gzPath);
+          
+          res.on('data', (chunk) => {
+            downloadedBytes += chunk.length;
+            if (totalBytes > 0) {
+              const progress = Math.round((downloadedBytes / totalBytes) * 100);
+              event.sender.send('main-process-message', {
+                type: 'model-download-progress',
+                engine: 'tesseract',
+                language: lang,
+                progress,
+              });
+            }
+          });
+
+          res.pipe(file);
+          file.on('finish', () => {
+            file.close(async () => {
+              try {
+                const gzBytes = await fs.promises.readFile(gzPath);
+                const rawBytes = zlib.gunzipSync(gzBytes);
+                await fs.promises.writeFile(finalPath, rawBytes);
+                // Also keep gz final path
+                const gzFinalPath = path.join(destDir, `${lang}.traineddata.gz`);
+                await fs.promises.rename(gzPath, gzFinalPath);
+                resolve(true);
+              } catch (err) {
+                reject(err);
+              }
+            });
+          });
+
+          file.on('error', (err) => {
+            reject(err);
+          });
+        }).on('error', reject);
+      });
+    }
+
+    if (engine === 'paddleocr') {
+      try {
+        await prewarmExternalOcrEngine('paddleocr', lang);
+        return true;
+      } catch (err) {
+        console.error(`[main] PaddleOCR prewarm failed for ${lang}:`, err);
+        throw err;
+      }
+    }
+    
+    return false;
+  });
 
   // ============================================
   // Input Validation Helpers
@@ -343,10 +504,14 @@ app.whenReady().then(() => {
 
   let argosBridgeDaemon: ArgosBridgeDaemon | null = null;
 
-  const teardownArgosDaemon = (reason?: Error): void => {
-    const daemon = argosBridgeDaemon;
+  const teardownArgosDaemon = (reason?: Error, targetDaemon?: ArgosBridgeDaemon | null): void => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
-    argosBridgeDaemon = null;
+
+    if (daemon === argosBridgeDaemon) {
+      argosBridgeDaemon = null;
+    }
+
     for (const [, pending] of daemon.pending) {
       clearTimeout(pending.timeout);
       pending.reject(reason ?? new Error('Argos translation daemon stopped unexpectedly'));
@@ -361,8 +526,8 @@ app.whenReady().then(() => {
     teardownArgosDaemon(new Error('Argos translation runtime disposed'));
   };
 
-  const handleArgosDaemonStdout = (chunk: Buffer): void => {
-    const daemon = argosBridgeDaemon;
+  const handleArgosDaemonStdout = (chunk: Buffer, targetDaemon?: ArgosBridgeDaemon | null): void => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
 
     daemon.stdoutBuffer += chunk.toString();
@@ -449,19 +614,21 @@ app.whenReady().then(() => {
       };
 
       child.stdout.on('data', (chunk: Buffer) => {
-        handleArgosDaemonStdout(chunk);
+        handleArgosDaemonStdout(chunk, daemon);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        const message = chunk.toString().trim();
-        if (message) {
-          console.warn(`[argosBridge] ${message}`);
+        if (argosBridgeDaemon && argosBridgeDaemon.child === child) {
+          const message = chunk.toString().trim();
+          if (message) {
+            console.warn(`[argosBridge] ${message}`);
+          }
         }
       });
       child.on('error', (error) => {
-        teardownArgosDaemon(error);
+        teardownArgosDaemon(error, daemon);
       });
       child.on('close', (code, signal) => {
-        teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
+        teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`), daemon);
       });
 
       argosBridgeDaemon = daemon;
@@ -808,6 +975,30 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:clear-translation-cache-by-engine error:', error);
       return false;
+    }
+  });
+
+  ipcMain.handle('db:save-sentence-translation', async (_, { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText }) => {
+    if (!isValidString(sourceText) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode) || !isValidString(translatedText)) {
+      throw new Error('Invalid input: all arguments must be non-empty strings');
+    }
+    try {
+      return SentenceTranslationDAO.save(sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText);
+    } catch (error) {
+      console.error('db:save-sentence-translation error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:get-sentence-translation', async (_, { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }) => {
+    if (!isValidString(sourceText) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode)) {
+      throw new Error('Invalid input: all arguments must be non-empty strings');
+    }
+    try {
+      return SentenceTranslationDAO.get(sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode);
+    } catch (error) {
+      console.error('db:get-sentence-translation error:', error);
+      return null;
     }
   });
 

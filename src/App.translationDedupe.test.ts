@@ -1,4 +1,6 @@
-import { beforeAll, describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test, vi } from 'vitest';
+import { translationCoordinator } from './services/translation/translationCoordinator';
+import { dbService } from './services/dbService';
 
 type TranslatableLine = {
   index: number;
@@ -1609,5 +1611,66 @@ describe('shouldPreserveSourceLineForTranslation', () => {
   test('does not force preserve when source language matches the script', () => {
     expect(shouldPreserveSourceLineForTranslation('헉', 'ko')).toBe(false);
     expect(shouldPreserveSourceLineForTranslation('えっ', 'ja')).toBe(false);
+  });
+});
+
+describe('Sentence-level Translation Caching & Deduplication', () => {
+  test('retrieves translation from sentence cache and bypasses offline/online engine', async () => {
+    const getSpy = vi.spyOn(dbService, 'getSentenceTranslation');
+    const saveSpy = vi.spyOn(dbService, 'saveSentenceTranslation');
+
+    getSpy.mockImplementation(async (text, src, tgt, engine, mode) => {
+      if (text === 'Hello' && engine === 'argos') {
+        return 'สวัสดี (จากแคชระดับประโยค)';
+      }
+      return null;
+    });
+
+    saveSpy.mockResolvedValue(true);
+
+    const mockTranslateBatchOffline = vi.fn().mockResolvedValue(['ยินดีต้อนรับ']);
+
+    const items = [
+      { id: '1', text: 'Hello', groupType: 'balloon' as const },
+      { id: '2', text: 'Welcome', groupType: 'balloon' as const },
+    ];
+
+    const results = await translationCoordinator.runTranslation('argos', items, {
+      sourceLanguage: 'en',
+      targetLanguage: 'th',
+      translationMode: 'official',
+      translateBatchOffline: mockTranslateBatchOffline,
+    });
+
+    expect(results).toHaveLength(2);
+    
+    const helloResult = results.find(r => r.id === '1');
+    const welcomeResult = results.find(r => r.id === '2');
+
+    expect(helloResult?.translatedText).toBe('สวัสดี (จากแคชระดับประโยค)');
+    expect(helloResult?.engineUsed).toBe('argos-sentence-cache');
+
+    expect(welcomeResult?.translatedText).toBe('ยินดีต้อนรับ');
+    expect(welcomeResult?.engineUsed).toBe('argos');
+
+    expect(mockTranslateBatchOffline).toHaveBeenCalledWith(
+      ['Welcome'],
+      'text',
+      'official',
+      'en',
+      'th'
+    );
+
+    expect(saveSpy).toHaveBeenCalledWith(
+      'Welcome',
+      'en',
+      'th',
+      'argos',
+      'official',
+      'ยินดีต้อนรับ'
+    );
+
+    getSpy.mockRestore();
+    saveSpy.mockRestore();
   });
 });

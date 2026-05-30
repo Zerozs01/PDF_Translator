@@ -168,6 +168,8 @@ export interface OCRDebugInfo {
   qualityProfile?: OCRQualityProfile;
   raw?: boolean;
   panelSafetyNormalizedVersion?: number;
+  fallbackFromEngine?: string;
+  fallbackReason?: string;
 }
 
 /** Benchmark result for a doc/page */

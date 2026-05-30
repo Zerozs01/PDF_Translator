@@ -7,8 +7,14 @@ This is the active OCR optimization playbook. Historical version-by-version logs
 - OCR algorithm version: `210`
 - Translation cache version: `v45`
 - Engines: `tesseract`, `paddleocr`, `easyocr`
-- Pipeline profiles: `panel`, `export`, `raw`
+- Pipeline profiles: `panel`, `export`
 - Quality profiles: `fast`, `balanced`, `best`
+
+Notes:
+- "Raw" is a benchmark-only path (raw OCR vs full pipeline), not a pipeline profile.
+- OCR quality toggle in the panel maps to:
+   - PaddleOCR (panel): `fast` or `balanced` (auto-downgrade to `fast` on large/non-CJK pages)
+   - Tesseract/EasyOCR: `best`
 
 ## 2. Current Stability Strategy
 

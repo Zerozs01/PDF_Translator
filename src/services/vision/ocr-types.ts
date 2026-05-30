@@ -71,6 +71,8 @@ export interface OCRDebugInfo {
   skipReason?: string;
   runtimeMs?: number;
   qualityProfile?: OCRQualityProfile;
+  fallbackFromEngine?: string;
+  fallbackReason?: string;
 }
 
 export interface OCRFixtureExpectation {

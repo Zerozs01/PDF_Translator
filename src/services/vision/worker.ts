@@ -4392,7 +4392,7 @@ self.onmessage = async (e: MessageEvent) => {
           const weakCjkWordsBefore = words.slice();
           const weakCjkLinesBefore = lines.slice();
           if (isCjk && lines.length > 0) {
-            const pruned = filterWeakIsolatedCjkLines(lines as OCRLine[], gray, actualWidth, actualHeight);
+            const pruned = filterWeakIsolatedCjkLines(lines as OCRLine[], gray, actualWidth, actualHeight, isKorean);
             if (pruned.words.length !== words.length) {
               console.log(`[Worker] Filtered weak isolated CJK lines: ${words.length - pruned.words.length} words removed`);
               words = pruned.words;

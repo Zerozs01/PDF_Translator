@@ -4,6 +4,9 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const child_process = require("child_process");
+const url = require("url");
+const https = require("https");
+const zlib = require("zlib");
 const Database = require("better-sqlite3");
 const os = require("os");
 let db$1 = null;
@@ -208,12 +211,25 @@ function initDB() {
         FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
       );
 
+      -- Table for Sentence-level Translation Cache (cross-page deduplication)
+      CREATE TABLE IF NOT EXISTS sentence_translation_cache (
+        source_text TEXT NOT NULL,
+        source_language TEXT NOT NULL,
+        target_language TEXT NOT NULL,
+        translator_engine TEXT NOT NULL,
+        translation_mode TEXT NOT NULL,
+        translated_text TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (source_text, source_language, target_language, translator_engine, translation_mode)
+      );
+
       -- 🚀 B-Tree Indexes for O(log N) lookup
       CREATE INDEX IF NOT EXISTS idx_documents_filepath ON documents(filepath);
       CREATE INDEX IF NOT EXISTS idx_documents_last_accessed ON documents(last_accessed DESC);
       CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
       CREATE INDEX IF NOT EXISTS idx_documents_favorite ON documents(is_favorite);
       CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_id);
+      CREATE INDEX IF NOT EXISTS idx_sentence_translation_lookup ON sentence_translation_cache(source_text, source_language, target_language, translator_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_lookup ON ocr_cache(document_id, page_number);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_lookup ON ocr_cache_engine(document_id, page_number, ocr_engine);
       CREATE INDEX IF NOT EXISTS idx_ocr_cache_engine_latest ON ocr_cache_engine(document_id, updated_at DESC);
@@ -796,6 +812,66 @@ const TranslationCacheDAO = {
     return result.changes > 0;
   }
 };
+const SentenceTranslationDAO = {
+  save: (sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText) => {
+    if (!db) throw new Error("DB not initialized");
+    const now = Date.now();
+    try {
+      const stmt = getStmt(`
+        INSERT INTO sentence_translation_cache (
+          source_text,
+          source_language,
+          target_language,
+          translator_engine,
+          translation_mode,
+          translated_text,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_text, source_language, target_language, translator_engine, translation_mode) DO UPDATE SET
+          translated_text = excluded.translated_text,
+          created_at = excluded.created_at
+      `);
+      stmt.run(
+        sourceText,
+        sourceLanguage.toLowerCase(),
+        targetLanguage.toLowerCase(),
+        translatorEngine.toLowerCase(),
+        translationMode.toLowerCase(),
+        translatedText,
+        now
+      );
+      return true;
+    } catch (error) {
+      console.error("[DB] Failed to save sentence translation:", error);
+      return false;
+    }
+  },
+  get: (sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode) => {
+    if (!db) throw new Error("DB not initialized");
+    try {
+      const row = getStmt(`
+        SELECT translated_text 
+        FROM sentence_translation_cache 
+        WHERE source_text = ? 
+          AND source_language = ? 
+          AND target_language = ? 
+          AND translator_engine = ? 
+          AND translation_mode = ?
+      `).get(
+        sourceText,
+        sourceLanguage.toLowerCase(),
+        targetLanguage.toLowerCase(),
+        translatorEngine.toLowerCase(),
+        translationMode.toLowerCase()
+      );
+      return row ? row.translated_text : null;
+    } catch (error) {
+      console.error("[DB] Failed to get sentence translation:", error);
+      return null;
+    }
+  }
+};
 function checkpointDB(mode = "PASSIVE") {
   if (!db) return;
   try {
@@ -964,7 +1040,7 @@ function isBenignBridgeStderr(message) {
   if (!trimmed) return true;
   return BENIGN_BRIDGE_STDERR_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
-async function runBridgeOnce(engine, args) {
+async function runBridgeOnce(engine, args, timeoutMs = 3e4) {
   const scriptPath = resolveBridgeScriptPath();
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`OCR bridge script not found: ${scriptPath}`);
@@ -977,6 +1053,27 @@ async function runBridgeOnce(engine, args) {
       env: resolveBridgeEnv(),
       windowsHide: true
     });
+    let timeoutId = null;
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        const pid = child.pid;
+        if (!child.killed) {
+          if (process.platform === "win32" && pid) {
+            try {
+              child_process.spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+                stdio: "ignore",
+                windowsHide: true
+              });
+            } catch {
+              child.kill("SIGKILL");
+            }
+          } else {
+            child.kill("SIGKILL");
+          }
+        }
+        reject(new Error(`OCR bridge status run timed out after ${timeoutMs / 1e3} seconds`));
+      }, timeoutMs);
+    }
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -986,9 +1083,11 @@ async function runBridgeOnce(engine, args) {
       stderr += chunk.toString();
     });
     child.on("error", (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
       reject(error);
     });
     child.on("close", (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
       const trimmed = stdout.trim();
       if (code !== 0) {
         reject(new Error(stderr.trim() || trimmed || `OCR bridge exited with code ${code}`));
@@ -1115,11 +1214,28 @@ function ensureDaemon(engine) {
   bridgeDaemons.set(engine, daemon);
   return daemon;
 }
-async function requestDaemon(engine, payload) {
+async function requestDaemon(engine, payload, timeoutMs = 3e4) {
   const daemon = ensureDaemon(engine);
   const id = crypto.randomUUID();
   return await new Promise((resolve, reject) => {
-    daemon.pending.set(id, { resolve, reject });
+    let timeoutId = null;
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        daemon.pending.delete(id);
+        const timeoutError = new Error(`OCR daemon request timed out after ${timeoutMs / 1e3} seconds`);
+        reject(timeoutError);
+        teardownDaemon(engine, timeoutError);
+      }, timeoutMs);
+    }
+    const cleanResolve = (response) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(response);
+    };
+    const cleanReject = (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      reject(error);
+    };
+    daemon.pending.set(id, { resolve: cleanResolve, reject: cleanReject });
     try {
       const stdin = daemon.child.stdin;
       if (!stdin) {
@@ -1128,6 +1244,7 @@ async function requestDaemon(engine, payload) {
       stdin.write(`${JSON.stringify({ id, ...payload })}
 `);
     } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
       daemon.pending.delete(id);
       reject(error instanceof Error ? error : new Error(String(error)));
       teardownDaemon(
@@ -1389,6 +1506,9 @@ const clearStoredGeminiApiKey = () => {
   }
   return getGeminiApiKeyStatus();
 };
+electron.protocol.registerSchemesAsPrivileged([
+  { scheme: "tessdata", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+]);
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = electron.app.isPackaged ? process.env.DIST : path.join(process.env.DIST, "../public");
 let win;
@@ -1461,6 +1581,126 @@ process.on("exit", () => {
 });
 electron.app.whenReady().then(() => {
   initDB();
+  electron.protocol.handle("tessdata", (request) => {
+    try {
+      const urlStr = request.url;
+      const parsedUrl = new URL(urlStr);
+      const fileName = path.basename(parsedUrl.pathname);
+      if (!fileName) {
+        return new Response("Invalid file request", { status: 400 });
+      }
+      const userPath = path.join(electron.app.getPath("userData"), "tessdata", fileName);
+      if (fs.existsSync(userPath)) {
+        return electron.net.fetch(url.pathToFileURL(userPath).toString());
+      }
+      const appPath = path.join(process.env.DIST || "", "tessdata", fileName);
+      if (fs.existsSync(appPath)) {
+        return electron.net.fetch(url.pathToFileURL(appPath).toString());
+      }
+      const devPath = path.join(process.cwd(), "public", "tessdata", fileName);
+      if (fs.existsSync(devPath)) {
+        return electron.net.fetch(url.pathToFileURL(devPath).toString());
+      }
+      console.warn(`[Tessdata Protocol] Model not found: ${fileName}`);
+      return new Response("Model file not found", { status: 404 });
+    } catch (err) {
+      console.error("[Tessdata Protocol] Error:", err);
+      return new Response("Internal Server Error", { status: 500 });
+    }
+  });
+  electron.ipcMain.handle("models:get-status", async (_, { engine, language }) => {
+    if (!isValidString(language)) {
+      throw new Error("Invalid language code");
+    }
+    const lang = language.trim().toLowerCase();
+    if (engine === "tesseract") {
+      const fileName = `${lang}.traineddata`;
+      const userPath = path.join(electron.app.getPath("userData"), "tessdata", fileName);
+      if (fs.existsSync(userPath)) return { installed: true };
+      const appPath = path.join(process.env.DIST || "", "tessdata", fileName);
+      if (fs.existsSync(appPath)) return { installed: true };
+      const devPath = path.join(process.cwd(), "public", "tessdata", fileName);
+      if (fs.existsSync(devPath)) return { installed: true };
+      return { installed: false };
+    }
+    if (engine === "paddleocr") {
+      try {
+        const statuses = await getExternalOcrEngineStatuses();
+        const paddle = statuses.find((s) => s.engine === "paddleocr");
+        return { installed: paddle ? paddle.available : false };
+      } catch {
+        return { installed: false };
+      }
+    }
+    if (engine === "argos") {
+      return { installed: true };
+    }
+    return { installed: false };
+  });
+  electron.ipcMain.handle("models:download", async (event, { engine, language }) => {
+    if (!isValidString(language)) {
+      throw new Error("Invalid language code");
+    }
+    const lang = language.trim().toLowerCase();
+    if (engine === "tesseract") {
+      const url2 = `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${lang}/4.0.0_best_int/${lang}.traineddata.gz`;
+      const destDir = path.join(electron.app.getPath("userData"), "tessdata");
+      await fs.promises.mkdir(destDir, { recursive: true });
+      const gzPath = path.join(destDir, `${lang}.traineddata.gz`);
+      const finalPath = path.join(destDir, `${lang}.traineddata`);
+      return new Promise((resolve, reject) => {
+        https.get(url2, (res) => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`Tesseract CDN returned HTTP ${res.statusCode}`));
+            return;
+          }
+          const totalBytes = parseInt(res.headers["content-length"] || "0", 10);
+          let downloadedBytes = 0;
+          const file = fs.createWriteStream(gzPath);
+          res.on("data", (chunk) => {
+            downloadedBytes += chunk.length;
+            if (totalBytes > 0) {
+              const progress = Math.round(downloadedBytes / totalBytes * 100);
+              event.sender.send("main-process-message", {
+                type: "model-download-progress",
+                engine: "tesseract",
+                language: lang,
+                progress
+              });
+            }
+          });
+          res.pipe(file);
+          file.on("finish", () => {
+            file.close(async () => {
+              try {
+                const gzBytes = await fs.promises.readFile(gzPath);
+                const rawBytes = zlib.gunzipSync(gzBytes);
+                await fs.promises.writeFile(finalPath, rawBytes);
+                const gzFinalPath = path.join(destDir, `${lang}.traineddata.gz`);
+                await fs.promises.rename(gzPath, gzFinalPath);
+                resolve(true);
+              } catch (err) {
+                reject(err);
+              }
+            });
+          });
+          file.on("error", (err) => {
+            reject(err);
+          });
+        }).on("error", reject);
+      });
+    }
+    if (engine === "paddleocr") {
+      try {
+        await prewarmExternalOcrEngine("paddleocr", lang);
+        return true;
+      } catch (err) {
+        console.error(`[main] PaddleOCR prewarm failed for ${lang}:`, err);
+        throw err;
+      }
+    }
+    return false;
+  });
   const isValidString = (value) => typeof value === "string" && value.length > 0 && value.length < 1e4;
   const isValidNumber = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const isValidEngine = (value) => typeof value === "string" && ["tesseract", "paddleocr", "easyocr"].includes(value);
@@ -1622,10 +1862,12 @@ electron.app.whenReady().then(() => {
     }
   };
   let argosBridgeDaemon = null;
-  const teardownArgosDaemon = (reason) => {
-    const daemon = argosBridgeDaemon;
+  const teardownArgosDaemon = (reason, targetDaemon) => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
-    argosBridgeDaemon = null;
+    if (daemon === argosBridgeDaemon) {
+      argosBridgeDaemon = null;
+    }
     for (const [, pending] of daemon.pending) {
       clearTimeout(pending.timeout);
       pending.reject(reason ?? new Error("Argos translation daemon stopped unexpectedly"));
@@ -1638,8 +1880,8 @@ electron.app.whenReady().then(() => {
   disposeArgosTranslateRuntime = () => {
     teardownArgosDaemon(new Error("Argos translation runtime disposed"));
   };
-  const handleArgosDaemonStdout = (chunk) => {
-    const daemon = argosBridgeDaemon;
+  const handleArgosDaemonStdout = (chunk, targetDaemon) => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
     daemon.stdoutBuffer += chunk.toString();
     const lines = daemon.stdoutBuffer.split(/\r?\n/);
@@ -1705,19 +1947,21 @@ electron.app.whenReady().then(() => {
       bridgeSignature
     };
     child.stdout.on("data", (chunk) => {
-      handleArgosDaemonStdout(chunk);
+      handleArgosDaemonStdout(chunk, daemon);
     });
     child.stderr.on("data", (chunk) => {
-      const message = chunk.toString().trim();
-      if (message) {
-        console.warn(`[argosBridge] ${message}`);
+      if (argosBridgeDaemon && argosBridgeDaemon.child === child) {
+        const message = chunk.toString().trim();
+        if (message) {
+          console.warn(`[argosBridge] ${message}`);
+        }
       }
     });
     child.on("error", (error) => {
-      teardownArgosDaemon(error);
+      teardownArgosDaemon(error, daemon);
     });
     child.on("close", (code, signal) => {
-      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? "null"}, signal=${signal ?? "null"})`));
+      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? "null"}, signal=${signal ?? "null"})`), daemon);
     });
     argosBridgeDaemon = daemon;
     return daemon;
@@ -1989,6 +2233,28 @@ electron.app.whenReady().then(() => {
     } catch (error) {
       console.error("db:clear-translation-cache-by-engine error:", error);
       return false;
+    }
+  });
+  electron.ipcMain.handle("db:save-sentence-translation", async (_, { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText }) => {
+    if (!isValidString(sourceText) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode) || !isValidString(translatedText)) {
+      throw new Error("Invalid input: all arguments must be non-empty strings");
+    }
+    try {
+      return SentenceTranslationDAO.save(sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText);
+    } catch (error) {
+      console.error("db:save-sentence-translation error:", error);
+      return false;
+    }
+  });
+  electron.ipcMain.handle("db:get-sentence-translation", async (_, { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }) => {
+    if (!isValidString(sourceText) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode)) {
+      throw new Error("Invalid input: all arguments must be non-empty strings");
+    }
+    try {
+      return SentenceTranslationDAO.get(sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode);
+    } catch (error) {
+      console.error("db:get-sentence-translation error:", error);
+      return null;
     }
   });
   electron.ipcMain.handle("db:startup-load", async () => {
@@ -2499,7 +2765,7 @@ electron.app.whenReady().then(() => {
       throw new Error("Gemini API key is not configured. Save it once in Settings or provide GEMINI_API_KEY locally.");
     }
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+    const url2 = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
     const modePrompt = normalizedMode === "official" ? `You are a professional document translator. Translate from ${sourceName} to ${targetName}. Use clear, formal, and accurate wording. The source text is from OCR and may contain typos (e.g., "MY STERIOUS" -> "MYSTERIOUS", "UKELY" -> "LIKELY") and fragmented lines. Please fix these typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.` : normalizedMode === "manhwa" ? `You are a professional manhwa translator. Translate from ${sourceName} to ${targetName}. Keep dialogue natural and emotionally accurate. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName} while preserving the general line break structure.` : `You are a professional manga translator. Translate from ${sourceName} to ${targetName}. Use informal and emotional wording that matches manga tone. The source text is from OCR and may contain typos and fragmented lines. Please fix typos implicitly, combine fragmented lines to form coherent sentences, and translate them naturally into ${targetName}. Preserve the general line break structure. If the type is "sfx", explain the sound in brackets.`;
     const systemPrompt = isValidString(baseSystemPrompt) ? baseSystemPrompt : modePrompt;
     const promptText = sourceType === "batch-markdown" ? String(text) : `Translate this text: "${text}" (Type: ${sourceType})`;
@@ -2510,7 +2776,7 @@ electron.app.whenReady().then(() => {
     let delay = 1e3;
     for (let i = 0; i < 5; i++) {
       try {
-        const response = await fetch(url, {
+        const response = await fetch(url2, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)

@@ -50,20 +50,55 @@ export const wrapCanvasText = (
 ): string[] => {
   const normalized = normalizeOverlayInlineText(String(text || ''));
   if (!normalized) return [];
-  if (maxLines <= 1 || forceSingleLine) {
+  if (maxLines <= 1 || (forceSingleLine && maxLines === 1)) {
     return [truncateCanvasText(ctx, normalized, maxWidth)];
   }
 
-  const tokens = normalized.includes(' ')
-    ? normalized.split(/\s+/g).filter(Boolean)
-    : Array.from(normalized);
+  // Check if string contains Thai or CJK characters
+  const containsThai = /[\u0E00-\u0E7F]/.test(normalized);
+  const containsCjk = /[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(normalized);
+  const hasWhitespaceBoundaries = /\s/.test(normalized);
+
+  let tokens: string[];
+  let joinWithSpace = true;
+
+  if (!containsThai && !containsCjk) {
+    tokens = normalized.split(/\s+/g).filter(Boolean);
+    joinWithSpace = true;
+  } else if (containsThai && hasWhitespaceBoundaries) {
+    // Keep explicit spacing for Thai when present to avoid breaking semantic phrase boundaries.
+    tokens = normalized.split(/\s+/g).filter(Boolean);
+    joinWithSpace = true;
+  } else {
+    // Attempt to segment Thai or CJK using Intl.Segmenter
+    let segmenter: any = null;
+    try {
+      const SegmenterCtor = (Intl as any).Segmenter;
+      if (SegmenterCtor) {
+        segmenter = new SegmenterCtor(containsThai ? 'th' : 'ja', { granularity: 'word' });
+      }
+    } catch (e) {
+      segmenter = null;
+    }
+
+    if (segmenter) {
+      tokens = Array.from(segmenter.segment(normalized))
+        .map((segment: any) => segment.segment)
+        .filter(Boolean);
+      joinWithSpace = false;
+    } else {
+      // Fallback to character-level wrapping
+      tokens = Array.from(normalized);
+      joinWithSpace = false;
+    }
+  }
 
   const lines: string[] = [];
   let line = '';
 
   tokens.forEach((token, index) => {
-    const unit = normalized.includes(' ') ? token : token;
-    const separator = normalized.includes(' ') && line ? ' ' : '';
+    const unit = token;
+    const separator = joinWithSpace && line ? ' ' : '';
     const candidate = `${line}${separator}${unit}`;
     if (!line || ctx.measureText(candidate).width <= maxWidth) {
       line = candidate;
@@ -94,7 +129,7 @@ export const wrapCanvasText = (
     return [truncateCanvasText(ctx, normalized, maxWidth)];
   }
 
-  const consumed = lines.join(normalized.includes(' ') ? ' ' : '');
+  const consumed = lines.join(joinWithSpace ? ' ' : '');
   if (consumed.length < normalized.length) {
     const lastIndex = Math.max(0, lines.length - 1);
     lines[lastIndex] = truncateCanvasText(ctx, lines[lastIndex], maxWidth);

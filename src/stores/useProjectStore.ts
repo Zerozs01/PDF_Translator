@@ -490,3 +490,31 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     safetySettings: { ...state.safetySettings, ...newSettings }
   }))
 }));
+
+// Subscribe to ocrLanguage (options.language) changes in OCRTextLayerStore to prevent targetLanguage conflict
+useOCRTextLayerStore.subscribe((state) => {
+  const ocrLang = state.options?.language;
+  if (ocrLang) {
+    const isThaiOcr = ocrLang.split('+').some(lang => lang.trim().toLowerCase() === 'tha' || lang.trim().toLowerCase() === 'thai');
+    if (isThaiOcr) {
+      const currentTarget = useProjectStore.getState().targetLanguage;
+      if (currentTarget === 'th' || currentTarget === 'thai') {
+        // Automatically switch destination/target language to English ('en') to prevent conflict
+        useProjectStore.getState().setTargetLanguage('en');
+      }
+    }
+  }
+});
+
+// Run initial check to prevent conflicts during startup/hydration
+const initialOcrLang = useOCRTextLayerStore.getState().options?.language;
+if (initialOcrLang) {
+  const isThaiOcr = initialOcrLang.split('+').some(lang => lang.trim().toLowerCase() === 'tha' || lang.trim().toLowerCase() === 'thai');
+  if (isThaiOcr) {
+    const currentTarget = useProjectStore.getState().targetLanguage;
+    if (currentTarget === 'th' || currentTarget === 'thai') {
+      useProjectStore.getState().setTargetLanguage('en');
+    }
+  }
+}
+

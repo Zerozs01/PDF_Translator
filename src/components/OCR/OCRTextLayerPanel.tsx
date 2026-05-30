@@ -26,7 +26,9 @@ import {
   X,
   Trophy,
   BarChart3,
-  Sparkles
+  Sparkles,
+  Zap,
+  Gauge
 } from 'lucide-react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult, OCRQualityProfile, BenchmarkMode } from '../../types';
@@ -133,6 +135,7 @@ type BenchmarkRawSnapshot = {
   lexicalAxis: number | null;
   yieldAxis: number | null;
   garbageRatio: number | null;
+  efficiency: number | null;
   wordCount: number;
   lineCount: number;
   droppedCount: number;
@@ -1992,6 +1995,13 @@ export const OCRTextLayerPanel: React.FC = () => {
   const pendingEngineSelectionRef = useRef<OCREngine | null>(null);
   const warmAnimationTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const externalProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Tracks when the current OCR job started — used to compute estimated time remaining */
+  const ocrStartTimeRef = useRef<number | null>(null);
+  const pageStartAtRef = useRef<number | null>(null);
+  const lastProgressPageRef = useRef<number>(0);
+  const pageDurationsRef = useRef<number[]>([]);
+  const etaLabelRef = useRef<string | null>(null);
+  const etaUpdatedAtRef = useRef<number>(0);
   const benchmarkAbortRef = useRef<AbortController | null>(null);
   const translationContextKeyRef = useRef<string>('');
   const translationCacheSessionKey = `${file?.name || fileUrl || 'unknown-file'}:${currentPage}`;
@@ -2002,6 +2012,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [showMetricsInfo, setShowMetricsInfo] = useState(false);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
+  const [ocrQualityMode, setOcrQualityMode] = useState<'high' | 'fast'>('fast');
   const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
     readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
   );
@@ -2036,6 +2047,47 @@ export const OCRTextLayerPanel: React.FC = () => {
     (error: unknown): boolean => error instanceof Error && error.name === 'AbortError',
     []
   );
+
+  // Reset ETA start-time whenever a job starts or stops
+  useEffect(() => {
+    if (isProcessing) {
+      ocrStartTimeRef.current = Date.now();
+      pageStartAtRef.current = null;
+      lastProgressPageRef.current = 0;
+      pageDurationsRef.current = [];
+    } else {
+      ocrStartTimeRef.current = null;
+      pageStartAtRef.current = null;
+      lastProgressPageRef.current = 0;
+      pageDurationsRef.current = [];
+      etaLabelRef.current = null;
+      etaUpdatedAtRef.current = 0;
+    }
+  }, [isProcessing]);
+
+  useEffect(() => {
+    if (!isProcessing) return;
+    const currentPage = progress?.currentPage ?? 0;
+    const totalPages = progress?.totalPages ?? 0;
+    if (currentPage <= 0 || totalPages <= 1) return;
+
+    const now = Date.now();
+    if (currentPage !== lastProgressPageRef.current) {
+      if (lastProgressPageRef.current > 0 && pageStartAtRef.current !== null) {
+        const durationMs = now - pageStartAtRef.current;
+        if (durationMs > 250) {
+          pageDurationsRef.current.push(durationMs);
+        }
+      }
+      lastProgressPageRef.current = currentPage;
+      pageStartAtRef.current = now;
+    }
+
+    if (progress?.stage === 'complete') {
+      pageStartAtRef.current = null;
+      lastProgressPageRef.current = 0;
+    }
+  }, [isProcessing, progress?.currentPage, progress?.stage, progress?.totalPages]);
 
   const shouldRecoverExternalEngine = useCallback((error: unknown): boolean => {
     if (!(error instanceof Error)) return false;
@@ -2582,7 +2634,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const normalizeLanguage = useCallback((value: string): string => {
     return value
       .split('+')
-      .map(v => v.trim())
+      .map(v => v.trim().toLowerCase())
       .filter(Boolean)
       .sort()
       .join('+');
@@ -2608,16 +2660,25 @@ export const OCRTextLayerPanel: React.FC = () => {
   const isCacheCompatible = useCallback((cached: OCRPageResult): boolean => {
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.dpi !== options.dpi) return false;
-    if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
+    
+    const activeEngine = options.engine || 'tesseract';
+    if (activeEngine === 'tesseract' && options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) {
+      return false;
+    }
+    
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
-    if ((cached.ocrEngine || 'tesseract') !== (options.engine || 'tesseract')) return false;
+    if ((cached.ocrEngine || 'tesseract') !== activeEngine) return false;
     return true;
   }, [options, normalizeLanguage]);
 
   const isCacheCompatibleForEngine = useCallback((cached: OCRPageResult, engine: OCREngine): boolean => {
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.dpi !== options.dpi) return false;
-    if (options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) return false;
+    
+    if (engine === 'tesseract' && options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) {
+      return false;
+    }
+    
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
     if ((cached.ocrEngine || 'tesseract') !== engine) return false;
     return true;
@@ -3582,17 +3643,32 @@ export const OCRTextLayerPanel: React.FC = () => {
         };
       }
       // Keep document-like pages close to native render size to improve bbox recall/coverage.
-      return {
-        maxSide: 16000,
-        maxPixels: 9_000_000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 18500,
-          boostedMaxPixels: 13_000_000,
-        },
-      };
+      if (ocrQualityMode === 'high') {
+        return {
+          maxSide:20000,
+          maxPixels:23_000_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 20000,
+            boostedMaxPixels: 22_000_000,
+          },
+        };
+      } else {
+        // Fast Mode
+        return {
+          maxSide: 20000,
+          maxPixels:18_750_000,
+          minWidth: null,
+          tallPageBoost: {
+            minAspectRatio: 2.35,
+            minLongSide: 9000,
+            boostedMaxSide: 18500,
+            boostedMaxPixels: 22_000_000,
+          },
+        };
+      }
     }
     // EasyOCR: moderate minWidth (650px) for readable text
     if (engine === 'easyocr') {
@@ -3617,7 +3693,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       return { maxSide: 16000, maxPixels: 2_800_000, minWidth: 800 };
     }
     return { maxSide: null, maxPixels: null, minWidth: null };
-  }, [EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS, EXTERNAL_OCR_CJK_PANEL_MAX_SIDE, EXTERNAL_OCR_RENDER_MAX_SIDE, activePipelineProfile, hasCjkOrThaiOcrLanguage, hasKoreanOcrLanguage, options.language]);
+  }, [EXTERNAL_OCR_CJK_PANEL_MAX_PIXELS, EXTERNAL_OCR_CJK_PANEL_MAX_SIDE, EXTERNAL_OCR_RENDER_MAX_SIDE, activePipelineProfile, hasCjkOrThaiOcrLanguage, hasKoreanOcrLanguage, options.language, ocrQualityMode]);
 
   const fitDimensionsToConstraints = useCallback((
     width: number,
@@ -3723,6 +3799,34 @@ export const OCRTextLayerPanel: React.FC = () => {
     };
   }, [file, fileData, fitDimensionsToConstraints]);
 
+  const isCanvasBlank = (canvas: HTMLCanvasElement): boolean => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return true;
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w <= 0 || h <= 0) return true;
+    try {
+      const sampleSize = 10;
+      const dx = Math.floor(w / sampleSize);
+      const dy = Math.floor(h / sampleSize);
+      for (let x = 1; x < sampleSize; x++) {
+        for (let y = 1; y < sampleSize; y++) {
+          const imgData = ctx.getImageData(x * dx, y * dy, 1, 1).data;
+          const r = imgData[0];
+          const g = imgData[1];
+          const b = imgData[2];
+          const a = imgData[3];
+          if (a > 0 && !(r === 255 && g === 255 && b === 255)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const renderPageToCanvas = useCallback(async (
     pageNum: number,
     targetDpi: number,
@@ -3734,9 +3838,29 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
 
     const renderFromExistingCanvas = async () => {
-      const existingCanvas = document.querySelector(
+      let existingCanvas = document.querySelector(
         `.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`
       ) as HTMLCanvasElement | null;
+
+      if (renderOptions?.allowNavigationFallback) {
+        const startTime = Date.now();
+        const maxWaitTime = 10000;
+        while (Date.now() - startTime < maxWaitTime) {
+          existingCanvas = document.querySelector(
+            `.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`
+          ) as HTMLCanvasElement | null;
+
+          if (existingCanvas && existingCanvas.width > 0 && existingCanvas.height > 0) {
+            const blank = isCanvasBlank(existingCanvas);
+            if (!blank) {
+              console.log(`[OCRPanel] Found fully rendered canvas for page ${pageNum}`);
+              break;
+            }
+            console.log(`[OCRPanel] Canvas for page ${pageNum} is still rendering/blank, waiting...`);
+          }
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      }
 
       if (existingCanvas && existingCanvas.width > 0 && existingCanvas.height > 0) {
         const currentWidth = existingCanvas.width;
@@ -3791,35 +3915,39 @@ export const OCRTextLayerPanel: React.FC = () => {
         ) as HTMLCanvasElement | null;
 
         if (newCanvas && newCanvas.width > 0 && newCanvas.height > 0) {
-          console.log(`[OCRPanel] Canvas appeared for page ${pageNum}: ${newCanvas.width}x${newCanvas.height}`);
+          const blank = isCanvasBlank(newCanvas);
+          if (!blank) {
+            console.log(`[OCRPanel] Canvas appeared and finished rendering for page ${pageNum}: ${newCanvas.width}x${newCanvas.height}`);
 
-          const currentWidth = newCanvas.width;
-          const currentHeight = newCanvas.height;
-          const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
-          const scaleFactor = targetDpi / Math.max(estimatedCurrentDpi, 72);
+            const currentWidth = newCanvas.width;
+            const currentHeight = newCanvas.height;
+            const estimatedCurrentDpi = Math.round((currentWidth / 595) * 72);
+            const scaleFactor = targetDpi / Math.max(estimatedCurrentDpi, 72);
 
-          const scaledWidth = Math.round(currentWidth * scaleFactor);
-          const scaledHeight = Math.round(currentHeight * scaleFactor);
-          const fitted = fitDimensionsToConstraints(scaledWidth, scaledHeight, renderOptions);
+            const scaledWidth = Math.round(currentWidth * scaleFactor);
+            const scaledHeight = Math.round(currentHeight * scaleFactor);
+            const fitted = fitDimensionsToConstraints(scaledWidth, scaledHeight, renderOptions);
 
-          const outputCanvas = document.createElement('canvas');
-          outputCanvas.width = fitted.width;
-          outputCanvas.height = fitted.height;
-          const ctx = outputCanvas.getContext('2d');
+            const outputCanvas = document.createElement('canvas');
+            outputCanvas.width = fitted.width;
+            outputCanvas.height = fitted.height;
+            const ctx = outputCanvas.getContext('2d');
 
-          if (!ctx) throw new Error('Cannot get canvas context');
+            if (!ctx) throw new Error('Cannot get canvas context');
 
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(newCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(newCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
 
-          return {
-            canvas: outputCanvas,
-            width: outputCanvas.width,
-            height: outputCanvas.height
-          };
+            return {
+              canvas: outputCanvas,
+              width: outputCanvas.width,
+              height: outputCanvas.height
+            };
+          }
+          console.log(`[OCRPanel] Canvas appeared for page ${pageNum} but is still rendering, waiting...`);
         }
       }
 
@@ -4035,7 +4163,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     })();
 
     let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
-      ? (shouldPreferFastPaddleProfile ? 'fast' : 'balanced')
+      ? (ocrQualityMode === 'fast' ? 'fast' : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
       : 'best';
     let ocrResult: import('../../types').OCRPageResult;
     try {
@@ -4111,6 +4239,8 @@ export const OCRTextLayerPanel: React.FC = () => {
       }
     }
 
+    setTranslationPreviewMode('original');
+
     setProgress({
       stage: 'complete',
       currentPage: pageNum,
@@ -4118,7 +4248,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       message: `OCR complete for page ${pageNum}`,
       progress: 100
     });
-  }, [activePipelineProfile, ensureDocumentId, ensureEngineReady, loadCachedOCR, normalizeLanguage, normalizedWarmLanguage, options.dpi, options.engine, options.language, options.pageSegMode, renderPageToCanvas, resolveRenderConstraints, setEngineWarmState, setIsProcessing, setPageOCR, setProgress, showDebugOverlay, startExternalProgress, stopExternalProgress]);
+  }, [activePipelineProfile, ensureDocumentId, ensureEngineReady, loadCachedOCR, normalizeLanguage, normalizedWarmLanguage, options.dpi, options.engine, options.language, options.pageSegMode, renderPageToCanvas, resolveRenderConstraints, setEngineWarmState, setIsProcessing, setPageOCR, setProgress, showDebugOverlay, startExternalProgress, stopExternalProgress, setTranslationPreviewMode]);
 
   /**
    * Start OCR processing
@@ -4524,7 +4654,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     const runtimeMs = readRuntimeMs(result);
     const lineCount = Array.isArray(result.lines) ? result.lines.length : 0;
     const confidence = Number(result.confidence.toFixed(2));
-    const wordCount = Array.isArray(result.words) ? result.words.length : tokens.length;
+    const wordCount = Array.isArray(result.words) && result.words.length > 0 ? result.words.length : tokens.length;
     const suspiciousRatio = tokens.length > 0 ? suspiciousCount / tokens.length : 0;
     const droppedCount = Array.isArray(droppedWords) ? droppedWords.length : 0;
     const lexicalQuality = computeLexicalQuality(tokens, result.language || options.language);
@@ -4582,7 +4712,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     });
   }, []);
 
-  const handleBenchmarkCurrentPage = useCallback(async () => {
+  const handleBenchmarkCurrentPage = useCallback(async (ignoreCache: boolean = false) => {
     if (!file || !fileUrl) return;
     if (isProcessing || benchmarkRunning || ocrJobActiveRef.current) return;
 
@@ -4606,7 +4736,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         });
 
         try {
-          if (cacheDocId) {
+          if (cacheDocId && !ignoreCache) {
             const cached = await dbService.getOCR(cacheDocId, currentPage, engine.id);
             if (cached && isCacheCompatibleForEngine(cached, engine.id)) {
               const normalizedCached = normalizeCacheProfile(cached);
@@ -4650,6 +4780,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
           const benchmarkQualityProfile: OCRQualityProfile = (() => {
             if (engine.id !== 'paddleocr') return 'best';
+            if (ocrQualityMode === 'fast') return 'fast';
 
             const isCjkLike = options.language
               .split('+')
@@ -4730,10 +4861,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [activePipelineProfile, benchmarkRunning, cacheBenchmarkResultInMemory, currentPage, ensureDocumentId, ensureEngineReady, file, fileUrl, isAbortError, isCacheCompatibleForEngine, isProcessing, normalizeCacheProfile, normalizeLanguage, options.dpi, options.language, options.pageSegMode, renderPageToCanvas, resetBenchmarkRows, resolveRenderConstraints, showDebugOverlay, stopExternalProgress, summarizeBenchmarkResult, updateBenchmarkRow]);
 
-  const handleRawBenchmark = useCallback(async (mode: BenchmarkMode) => {
+  const handleRawBenchmark = useCallback(async (mode: BenchmarkMode, ignoreCache: boolean = false) => {
     if (mode === 'baseline') {
       setBenchmarkMode('baseline');
-      await handleBenchmarkCurrentPage();
+      await handleBenchmarkCurrentPage(ignoreCache);
       return;
     }
 
@@ -4758,6 +4889,10 @@ export const OCRTextLayerPanel: React.FC = () => {
         // This avoids re-running OCR when the user has already run a model individually.
         const engineMemoryCache: Record<string, OCRPageResult | null> = {};
         for (const engine of OCR_ENGINES) {
+          if (ignoreCache) {
+            engineMemoryCache[engine.id] = null;
+            continue;
+          }
           const cached = useOCRTextLayerStore.getState().ocrByPageEngine.get(currentPage)?.get(engine.id);
           if (cached && isCacheCompatibleForEngine(cached, engine.id)) {
             engineMemoryCache[engine.id] = cached;
@@ -4769,7 +4904,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         // Also check DB for engines not yet in memory
         const engineDbCache: Record<string, OCRPageResult | null> = {};
         for (const engine of OCR_ENGINES) {
-          if (engineMemoryCache[engine.id] !== null) {
+          if (engineMemoryCache[engine.id] !== null || ignoreCache) {
             engineDbCache[engine.id] = null;
             continue;
           }
@@ -4803,17 +4938,22 @@ export const OCRTextLayerPanel: React.FC = () => {
 
             if (cachedResult) {
               const normalizedCached = normalizeCacheProfile(cachedResult);
-              const summary = summarizeBenchmarkResult(normalizedCached);
-              updateBenchmarkRow(engine.id, {
-                status: 'done',
-                cacheHit: true,
-                ...summary,
-                rawSnapshot: undefined,
-                message: summary.runtimeMs != null
-                  ? `Cache hit ${(summary.runtimeMs / 1000).toFixed(summary.runtimeMs >= 10000 ? 1 : 2)}s`
-                  : 'Cache hit (full pipeline)',
-              });
-              continue;
+              
+              if (benchmarkMode === 'dual' && supportsRaw) {
+                // Do not skip! We will run RAW pass and use the cached FULL result.
+              } else {
+                const summary = summarizeBenchmarkResult(normalizedCached);
+                updateBenchmarkRow(engine.id, {
+                  status: 'done',
+                  cacheHit: true,
+                  ...summary,
+                  rawSnapshot: undefined,
+                  message: summary.runtimeMs != null
+                    ? `Cache hit ${(summary.runtimeMs / 1000).toFixed(summary.runtimeMs >= 10000 ? 1 : 2)}s`
+                    : 'Cache hit (full pipeline)',
+                });
+                continue;
+              }
             }
 
             updateBenchmarkRow(engine.id, {
@@ -4837,12 +4977,13 @@ export const OCRTextLayerPanel: React.FC = () => {
             canvas.toBlob((b) => b ? res(b) : rej(new Error('canvas toBlob failed')), 'image/png');
           });
 
-          // ── PARALLEL PROCESSING: Raw & Full Pipeline ──
+          // ── SEQUENTIAL PROCESSING: Raw & Full Pipeline ──
           let rawSnapshot: BenchmarkRawSnapshot | undefined;
           let fullResult: OCRPageResult | undefined;
           
-                    const qualityProfile: OCRQualityProfile = (() => {
+          const qualityProfile: OCRQualityProfile = (() => {
             if (engine.id !== 'paddleocr') return 'best';
+            if (ocrQualityMode === 'fast') return 'fast';
             const isCjk = options.language.split('+').map(c => c.trim())
               .some(c => ['kor','jpn','jpn_vert','chi_sim','chi_tra','tha'].includes(c));
             if (activePipelineProfile !== 'panel' || isCjk) return 'balanced';
@@ -4854,22 +4995,34 @@ export const OCRTextLayerPanel: React.FC = () => {
             return preferFast ? 'fast' : 'balanced';
           })();
 
-          // Construct promises
-          const rawPromise = supportsRaw 
-            ? visionService.rawOCR(imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode, controller.signal, engine.id)
-                .then(res => summarizeBenchmarkResult(res))
-                .catch(err => { throw new Error(`RAW Error: ${err instanceof Error ? err.message : 'Unknown'}`); })
-            : Promise.resolve(null);
-            
-          const fullPromise = visionService.ocrForTextLayer(
-              imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode,
-              controller.signal, showDebugOverlay, activePipelineProfile, qualityProfile, engine.id
-            );
+          const cachedFullResult = benchmarkMode === 'dual' && supportsRaw ? (engineMemoryCache[engine.id] ?? engineDbCache[engine.id]) : null;
 
-          updateBenchmarkRow(engine.id, { message: supportsRaw ? 'Running Raw & Pipeline...' : 'Running Pipeline...' });
+          let rawSummary = null;
+          if (supportsRaw) {
+            updateBenchmarkRow(engine.id, { message: 'Running RAW pass...' });
+            try {
+              const rawResult = await visionService.rawOCR(
+                imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode,
+                controller.signal, engine.id, qualityProfile
+              );
+              rawSummary = summarizeBenchmarkResult(rawResult);
+            } catch (err) {
+              throw new Error(`RAW Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+            }
+          }
 
-          // Execute concurrently
-          const [rawSummary, rawFullResult] = await Promise.all([rawPromise, fullPromise]);
+          updateBenchmarkRow(engine.id, { 
+            message: cachedFullResult 
+              ? 'Loading cached FULL...' 
+              : 'Running FULL pipeline...' 
+          });
+
+          const rawFullResult = cachedFullResult
+            ? normalizeCacheProfile(cachedFullResult)
+            : await visionService.ocrForTextLayer(
+                imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode,
+                controller.signal, showDebugOverlay, activePipelineProfile, qualityProfile, engine.id
+              );
 
           if (rawSummary) {
             rawSnapshot = {
@@ -4880,6 +5033,7 @@ export const OCRTextLayerPanel: React.FC = () => {
               lexicalAxis: rawSummary.lexicalAxis,
               yieldAxis: rawSummary.yieldAxis,
               garbageRatio: rawSummary.garbageRatio,
+              efficiency: rawSummary.efficiency,
               wordCount: rawSummary.wordCount,
               lineCount: rawSummary.lineCount,
               droppedCount: rawSummary.droppedCount,
@@ -4890,6 +5044,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                 status: 'error',
                 runtimeMs: null, confidence: null, compositeScore: null,
                 lexicalAxis: null, yieldAxis: null, garbageRatio: null,
+                efficiency: null,
                 wordCount: 0, lineCount: 0, droppedCount: 0,
                 message: 'Raw failed',
               };
@@ -4904,12 +5059,12 @@ export const OCRTextLayerPanel: React.FC = () => {
 
           updateBenchmarkRow(engine.id, {
             status: 'done',
-            cacheHit: false,
+            cacheHit: Boolean(cachedFullResult),
             ...fullSummary,
             rawSnapshot,
-            message: fullSummary.runtimeMs != null
-              ? `Full ${(fullSummary.runtimeMs / 1000).toFixed(2)}s`
-              : 'Done',
+            message: cachedFullResult
+              ? 'Cached'
+              : (fullSummary.runtimeMs != null ? `Full ${(fullSummary.runtimeMs / 1000).toFixed(2)}s` : 'Done'),
           });
 
           cacheBenchmarkResultInMemory(currentPage, engine.id, normalized);
@@ -5157,11 +5312,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     .filter((row) => typeof row.confidence === 'number')
     .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
   const benchmarkBestOverall = benchmarkDoneRows
-    .filter((row) => typeof row.efficiency === 'number')
-    .sort((a, b) => (b.efficiency || 0) - (a.efficiency || 0))[0]
-    || benchmarkDoneRows
-      .filter((row) => typeof row.compositeScore === 'number')
-      .sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0))[0];
+    .filter((row) => typeof row.compositeScore === 'number')
+    .sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0))[0];
   const benchmarkLeastGhost = benchmarkDoneRows
     .sort((a, b) => (a.garbageRatio ?? a.suspiciousRatio) - (b.garbageRatio ?? b.suspiciousRatio))[0];
 
@@ -5179,7 +5331,24 @@ export const OCRTextLayerPanel: React.FC = () => {
             <div className="flex gap-1">
               <button
                 type="button"
-                onClick={() => void handleRawBenchmark('baseline')}
+                onClick={() => setOcrQualityMode((prev) => (prev === 'high' ? 'fast' : 'high'))}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold transition-all shadow-sm ${
+                  ocrQualityMode === 'high'
+                    ? 'border-amber-400/40 bg-amber-950/70 text-amber-300 hover:bg-amber-900/60 hover:border-amber-300/60'
+                    : 'border-cyan-400/40 bg-cyan-950/70 text-cyan-300 hover:bg-cyan-900/60 hover:border-cyan-300/60'
+                }`}
+                title={`OCR quality profile: ${ocrQualityMode === 'high' ? 'High Detail' : 'Fast Speed'}. Click to toggle.`}
+              >
+                {ocrQualityMode === 'high' ? (
+                  <Zap size={10} className="text-amber-400" />
+                ) : (
+                  <Gauge size={10} className="text-cyan-400" />
+                )}
+                <span>{ocrQualityMode === 'high' ? 'High' : 'Fast'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRawBenchmark('baseline', true)}
                 disabled={isProcessing || !file}
                 className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-slate-800/70 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Benchmark RAW engines (no preprocessing/filter/grouping)"
@@ -5189,7 +5358,7 @@ export const OCRTextLayerPanel: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => void handleRawBenchmark('dual')}
+                onClick={() => void handleRawBenchmark('dual', true)}
                 disabled={isProcessing || !file}
                 className="inline-flex items-center gap-1 rounded-md border border-white/25 bg-black px-2 py-1 text-[10px] font-semibold text-white transition-all hover:bg-white/10 hover:border-white/45 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Benchmark RAW vs FULL pipeline → Δ metrics + side-by-side preview"
@@ -5309,37 +5478,72 @@ export const OCRTextLayerPanel: React.FC = () => {
         )}
       </div>
 
-      {/* Progress Bar */}
-      {isProcessing && (
-        <div className="order-2 space-y-2 bg-slate-900/55 rounded-lg p-3 border border-white/10">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-300 truncate max-w-[180px]">
-              {progress?.message || 'กำลังเริ่มต้น...'}
-            </span>
-            <span className="text-[#5CC6F2] font-mono">
-              {progress ? Math.round(progress.progress) : 0}%
-            </span>
+      {/* Progress — compact single-line design */}
+      {isProcessing && (() => {
+        const pct = Math.round(progress?.progress ?? 0);
+        const pg = progress?.currentPage;
+        const tot = progress?.totalPages;
+        // Compute rough ETA from elapsed time and current progress
+        let etaLabel: string | null = null;
+        const totalPages = progress?.totalPages ?? 0;
+        const completedPages = pageDurationsRef.current.length;
+        const remainingPages = Math.max(0, totalPages - completedPages);
+        const canEstimateByPage = totalPages > 1 && completedPages > 0 && remainingPages > 0;
+        const canEstimateByPercent = ocrStartTimeRef.current !== null && pct > 5;
+
+        if (canEstimateByPage || canEstimateByPercent) {
+          const now = Date.now();
+          if (etaLabelRef.current === null || (now - etaUpdatedAtRef.current) >= 2000) {
+            if (canEstimateByPage) {
+              const sample = pageDurationsRef.current.slice(-5);
+              const avgMs = sample.reduce((sum, value) => sum + value, 0) / Math.max(1, sample.length);
+              const remainingMs = avgMs * remainingPages;
+              const remSec = Math.round(remainingMs / 1000);
+              etaLabelRef.current = remSec >= 0
+                ? (remSec < 60 ? `~${remSec}s` : `~${Math.round(remSec / 60)}m`)
+                : null;
+            } else if (ocrStartTimeRef.current !== null) {
+              const elapsed = now - ocrStartTimeRef.current;
+              const remaining = (elapsed / pct) * (100 - pct);
+              const remSec = Math.round(remaining / 1000);
+              etaLabelRef.current = remSec >= 0
+                ? (remSec < 60 ? `~${remSec}s` : `~${Math.round(remSec / 60)}m`)
+                : null;
+            }
+            etaUpdatedAtRef.current = now;
+          }
+          etaLabel = etaLabelRef.current;
+        } else {
+          etaLabelRef.current = null;
+          etaUpdatedAtRef.current = 0;
+        }
+        return (
+          <div className="order-2 rounded-lg border border-white/10 bg-slate-900/55 px-3 py-2.5">
+            {/* Label */}
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-slate-200 truncate">
+                {`OCR Processing${pg ? ` page:${pg}${tot ? `/${tot}` : ''}` : ''}`}
+              </p>
+              <span className="text-xs font-semibold text-[#5CC6F2] tabular-nums">
+                {pct}%
+              </span>
+            </div>
+            {/* Bar */}
+            <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-150"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            {/* ETA bottom-left */}
+            {etaLabel && (
+              <p className="mt-1.5 text-[10px] text-slate-500">
+                ⏱ {etaLabel} remaining
+              </p>
+            )}
           </div>
-          <div className="h-2 bg-slate-950 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-150"
-              style={{ width: `${progress?.progress || 0}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-[10px] text-slate-500">
-            <span>
-              {progress?.stage === 'rendering' && '📄 Rendering...'}
-              {progress?.stage === 'ocr' && '🔍 OCR Processing...'}
-              {progress?.stage === 'text-layer' && '✍️ Adding Text...'}
-              {progress?.stage === 'saving' && '💾 Saving...'}
-              {!progress && '⏳ Initializing...'}
-            </span>
-            <span>
-              {progress?.currentPage || 0} / {progress?.totalPages || '?'}
-            </span>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Action Buttons */}
       <div className="order-2 space-y-1.5">
@@ -5400,7 +5604,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
             <button
               onClick={() => void handleClearCurrentModelCache()}
-              disabled={!file}
+              disabled={!file || isProcessing}
               style={{
                 backgroundColor: '#FFFFFF',
                 borderColor: '#CA7C4C',
@@ -5741,7 +5945,6 @@ export const OCRTextLayerPanel: React.FC = () => {
                 <X size={14} />
               </button>
             </div>
-
             <div className="mt-4 flex-1 overflow-auto rounded-xl border border-white/10">
               {benchmarkMode === 'dual' && (
                 <div className="flex items-center gap-2 border-b border-white/8 bg-gradient-to-r from-emerald-950/60 to-slate-950/60 px-3 py-2 text-[11px]">
@@ -5788,9 +5991,10 @@ export const OCRTextLayerPanel: React.FC = () => {
                       const delta = full - raw;
                       if (Math.abs(delta) < 0.0001) return null;
                       const improved = higherIsBetter ? delta > 0 : delta < 0;
+                      const actualIncreased = delta > 0;
                       return (
                         <span className={`ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded text-[9px] font-bold leading-none ${improved ? 'bg-emerald-500/25 text-emerald-300' : 'bg-rose-500/25 text-rose-300'}`}>
-                          {improved ? '↑' : '↓'}
+                          {actualIncreased ? '↑' : '↓'}
                         </span>
                       );
                     };
@@ -5817,39 +6021,20 @@ export const OCRTextLayerPanel: React.FC = () => {
                       const fullGarbage = garbagePct(row);
                       return (
                         <React.Fragment key={row.engine}>
-                          {/* ── RAW row ── */}
-                          <tr className="border-t border-white/8 bg-slate-950/70">
+                          {/* ── FULL pipeline row (on top) ── */}
+                          <tr className="border-t border-white/8 bg-slate-900/40">
                             <td className="px-3 py-1.5 align-middle" rowSpan={2}>
                               <div className="font-semibold text-slate-100 text-[12px]">{row.engineName}</div>
-                              <div className="mt-1 flex flex-col gap-0.5">
-                                {statusBadge(row.status, row.message)}
-                                {row.cacheHit && <span className="inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">cache</span>}
-                              </div>
+                              {row.cacheHit && (
+                                <div className="mt-1">
+                                  <span className="inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">cache</span>
+                                </div>
+                              )}
                             </td>
-                            <td className="px-2 py-1.5 text-right">
-                              <span className="rounded bg-slate-800 px-1 py-0.5 text-[9px] text-slate-500 mr-0.5">RAW</span>
-                              <span className="text-slate-500">{fmtMs(snap.runtimeMs)}</span>
-                            </td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.confidence)}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.lexicalAxis, 1)}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.yieldAxis, 1)}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtNum(snap.compositeScore)}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">—</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{snapGarbage != null ? fmtPct(snapGarbage * 100, 1) : '—'}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{snap.wordCount || '—'}</td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{snap.droppedCount || '—'}</td>
-                            <td className="px-2 py-1.5">
-                              {snap.status === 'error'
-                                ? statusBadge('error', snap.message)
-                                : <span className="text-[10px] text-slate-600">raw pass</span>}
-                            </td>
-                          </tr>
-                          {/* ── FULL pipeline row ── */}
-                          <tr className="border-b-2 border-white/10 bg-slate-900/40">
                             <td className="px-2 py-1.5 text-right">
                               <span className="rounded bg-cyan-900/50 px-1 py-0.5 text-[9px] text-cyan-400 mr-0.5">FULL</span>
                               <span className="text-slate-200">{fmtMs(row.runtimeMs)}</span>
-                              {dir(row.runtimeMs != null ? -row.runtimeMs : null, snap.runtimeMs != null ? -snap.runtimeMs : null)}
+                              {dir(row.runtimeMs, snap.runtimeMs, false)}
                             </td>
                             <td className="px-2 py-1.5 text-right text-slate-200">
                               {fmtPct(row.confidence)}{dir(row.confidence, snap.confidence)}
@@ -5866,13 +6051,35 @@ export const OCRTextLayerPanel: React.FC = () => {
                             <td className="px-2 py-1.5 text-right text-slate-200">{fmtNum(row.efficiency)}</td>
                             <td className="px-2 py-1.5 text-right text-slate-200">
                               {fullGarbage != null ? fmtPct(fullGarbage * 100, 1) : '—'}
-                              {dir(fullGarbage != null ? -fullGarbage : null, snapGarbage != null ? -snapGarbage : null)}
+                              {dir(fullGarbage, snapGarbage, false)}
                             </td>
                             <td className="px-2 py-1.5 text-right text-slate-200">
-                              {row.wordCount || '—'}{dir(row.wordCount, snap.wordCount)}
+                              {row.wordCount ?? '—'}{dir(row.wordCount, snap.wordCount)}
                             </td>
-                            <td className="px-2 py-1.5 text-right text-slate-200">{row.droppedCount || '—'}</td>
-                            <td className="px-2 py-1.5" />
+                            <td className="px-2 py-1.5 text-right text-slate-200">{row.droppedCount ?? '—'}</td>
+                            <td className="px-2 py-1.5 text-left">
+                              {statusBadge(row.status, row.message)}
+                            </td>
+                          </tr>
+                          {/* ── RAW row (underneath) ── */}
+                          <tr className="border-b-2 border-white/10 bg-slate-950/70">
+                            <td className="px-2 py-1.5 text-right">
+                              <span className="rounded bg-slate-800 px-1 py-0.5 text-[9px] text-slate-500 mr-0.5">RAW</span>
+                              <span className="text-slate-500">{fmtMs(snap.runtimeMs)}</span>
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.confidence)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.lexicalAxis, 1)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtPct(snap.yieldAxis, 1)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtNum(snap.compositeScore)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{fmtNum(snap.efficiency)}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{snapGarbage != null ? fmtPct(snapGarbage * 100, 1) : '—'}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{snap.wordCount ?? '—'}</td>
+                            <td className="px-2 py-1.5 text-right text-slate-500">{snap.droppedCount ?? '—'}</td>
+                            <td className="px-2 py-1.5 text-left">
+                              {snap.status === 'error'
+                                ? statusBadge('error', snap.message)
+                                : <span className="text-[10px] text-slate-500">raw pass</span>}
+                            </td>
                           </tr>
                         </React.Fragment>
                       );
@@ -5888,13 +6095,11 @@ export const OCRTextLayerPanel: React.FC = () => {
                         <td className="px-2 py-2 text-right text-slate-200">{fmtPct(row.yieldAxis, 1)}</td>
                         <td className="px-2 py-2 text-right text-slate-200">{fmtNum(row.compositeScore)}</td>
                         <td className="px-2 py-2 text-right text-slate-200">{fmtNum(row.efficiency, 2)}</td>
-                        <td className="px-2 py-2 text-right text-slate-200">{row.werError != null ? fmtPct(row.werError * 100, 1) : '—'}</td>
-                        <td className="px-2 py-2 text-right text-slate-200">{row.cerError != null ? fmtPct(row.cerError * 100, 1) : '—'}</td>
                         <td className="px-2 py-2 text-right text-slate-200">
                           {(() => { const g = garbagePct(row); return g != null ? fmtPct(g * 100, 1) : '—'; })()}
                         </td>
-                        <td className="px-2 py-2 text-right text-slate-200">{row.wordCount || '—'}</td>
-                        <td className="px-2 py-2 text-right text-slate-200">{row.droppedCount || '—'}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{row.wordCount ?? '—'}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{row.droppedCount ?? '—'}</td>
                         <td className="px-2 py-2 text-left">
                           {statusBadge(row.status, row.message)}
                           {row.cacheHit && <span className="ml-1.5 inline-flex rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">cache</span>}
@@ -5918,11 +6123,11 @@ export const OCRTextLayerPanel: React.FC = () => {
               <div className="rounded-lg border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
                 <div className="flex items-center gap-1.5 font-semibold">
                   <Trophy size={12} />
-                  Best Overall (Efficiency)
+                  Best Overall (Composite)
                 </div>
                 <div className="mt-1">
                   {benchmarkBestOverall
-                    ? `${benchmarkBestOverall.engineName} (${benchmarkBestOverall.efficiency != null ? benchmarkBestOverall.efficiency.toFixed(2) : (benchmarkBestOverall.compositeScore || 0).toFixed(1)})`
+                    ? `${benchmarkBestOverall.engineName} (${(benchmarkBestOverall.compositeScore || 0).toFixed(1)})`
                     : '-'}
                 </div>
               </div>
@@ -5941,6 +6146,88 @@ export const OCRTextLayerPanel: React.FC = () => {
                 <div className="mt-1">{benchmarkLeastGhost ? `${benchmarkLeastGhost.engineName} (${(((benchmarkLeastGhost.garbageRatio ?? benchmarkLeastGhost.suspiciousRatio) || 0) * 100).toFixed(1)}%)` : '-'}</div>
               </div>
             </div>
+
+            {/* ── Compact Improvement Insights ── */}
+            {benchmarkMode === 'dual' && (() => {
+              const completedEngines = benchmarkRows.filter(
+                (row) => row.status === 'done' && row.rawSnapshot?.status === 'done'
+              );
+              if (completedEngines.length === 0) return null;
+
+              return (
+                <div className="mt-3.5 space-y-2 shrink-0">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                    <Sparkles size={11} className="text-cyan-400" />
+                    <span>วิเคราะห์ผลการจูนระบบ (Pipeline Optimization Insights)</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {completedEngines.map((row) => {
+                      const snap = row.rawSnapshot!;
+                      const scoreDelta = (row.compositeScore ?? 0) - (snap.compositeScore ?? 0);
+                      const rawGarbage = snap.garbageRatio ?? 0;
+                      const fullGarbage = row.garbageRatio ?? (row.wordCount > 0 ? row.suspiciousRatio : 0);
+                      const garbageDelta = rawGarbage - fullGarbage;
+                      const garbageReductionPct = rawGarbage > 0 ? (garbageDelta / rawGarbage) * 100 : 0;
+
+                      let commentary = '';
+                      if (scoreDelta > 0 && garbageDelta > 0) {
+                        commentary = `ล้างสัญญาณรบกวน/ลายน้ำลงได้ ${garbageReductionPct.toFixed(0)}% ดึงคุณภาพคำแปลกลับมาสมบูรณ์ขึ้น (${scoreDelta.toFixed(1)} คะแนนดีขึ้น)`;
+                      } else if (scoreDelta > 0) {
+                        commentary = `ดึงความถูกต้องของประโยคเพิ่มขึ้น ${scoreDelta.toFixed(1)} คะแนน รักษาโครงสร้างประโยคได้คมชัดกว่าตัวดิบ`;
+                      } else if (garbageDelta > 0) {
+                        commentary = `ตรวจจับและปัดกวาดขยะทิ้งไปได้สำเร็จ ป้องกันปัญหาอักขระแปลกปลอมปะปนในประโยค`;
+                      } else {
+                        commentary = `รักษาความถูกต้องได้ใกล้เคียงกับฐานตัวดิบ ทำงานร่วมกับฟิลเตอร์ต่างๆ ได้อย่างมั่นคง`;
+                      }
+
+                      return (
+                        <div key={row.engine} className="rounded-xl border border-white/8 bg-slate-900/40 p-2.5 flex flex-col justify-between hover:border-white/15 transition-all">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-bold text-white uppercase tracking-wider">{row.engineName}</span>
+                                <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400 border border-emerald-500/15">Active</span>
+                              </div>
+                              <p className="text-[10px] text-slate-400 font-normal leading-normal">{commentary}</p>
+                            </div>
+
+                            <div className="flex gap-2 shrink-0 text-right">
+                              <div className="rounded bg-slate-950/40 px-2 py-1 border border-white/5 min-w-[54px]">
+                                <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">คะแนนรวม</div>
+                                <div className="text-[10px] font-bold text-white flex items-center justify-end gap-0.5 mt-0.5">
+                                  <span>{(row.compositeScore ?? 0).toFixed(1)}</span>
+                                  <span className={`text-[8px] font-bold ${scoreDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {scoreDelta >= 0 ? '↑' : '↓'}{Math.abs(scoreDelta).toFixed(1)}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="rounded bg-slate-950/40 px-2 py-1 border border-white/5 min-w-[54px]">
+                                <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">ขยะขยุกขยิก</div>
+                                <div className="text-[10px] font-bold text-white flex items-center justify-end gap-0.5 mt-0.5">
+                                  <span>{(fullGarbage * 100).toFixed(0)}%</span>
+                                  {rawGarbage > 0 && (
+                                    <span className={`text-[8px] font-bold ${garbageDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                      {garbageDelta >= 0 ? '↓' : '↑'}{(Math.abs(garbageDelta) * 100).toFixed(0)}%
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {row.droppedCount > 0 && (
+                            <div className="mt-2 flex items-center gap-1 rounded bg-orange-950/15 px-2 py-0.5 text-[9px] text-orange-200/90 border border-orange-500/10">
+                              <Info size={9} className="shrink-0" />
+                              <span>ตรวจพบและปัดกวาดขยะลายน้ำทิ้งได้เป็นจำนวน <strong>{row.droppedCount} คำ</strong></span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="mt-4 flex items-center justify-end gap-2">
               {benchmarkRunning ? (

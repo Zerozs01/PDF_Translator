@@ -287,7 +287,7 @@ def make_text_result(lines: List[Dict[str, Any]], words: List[Dict[str, Any]], p
     return {
         "ok": True,
         "lines": lines,
-        "words": words,
+        "words": [],  # Optimize payload: top-level words is completely unused by the renderer as it flatMaps lines.words
         "text": text,
         "confidence": avg_conf,
         "pageSegMode": page_seg_mode,
@@ -2918,12 +2918,22 @@ def resolve_local_model_dir(model_subdir: str) -> str | None:
 
 
 def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, Any]:
+    # Dynamic hardware acceleration detection
+    use_gpu = False
+    try:
+        import paddle
+        if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+            use_gpu = True
+    except Exception:
+        pass
+
     if profile_key == "cpu_korean_default":
         return {
             "text_detection_model_name": "PP-OCRv5_mobile_det",
             "text_recognition_model_name": "korean_PP-OCRv5_mobile_rec",
-            "device": "cpu",
-            "enable_mkldnn": False,
+            "device": "gpu" if use_gpu else "cpu",
+            "enable_mkldnn": False,  # Disabled to prevent C++ ConvertPirAttribute2RuntimeAttribute crashes
+            "cpu_threads": 8 if not use_gpu else 10,
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
@@ -2943,12 +2953,14 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
         text_detection_model_name = "PP-OCRv5_mobile_det"
     kwargs: Dict[str, Any] = {
         "lang": lang,
-        "device": "cpu",
-        "enable_mkldnn": False,
+        "device": "gpu" if use_gpu else "cpu",
+        "enable_mkldnn": False,  # Disabled to prevent C++ ConvertPirAttribute2RuntimeAttribute crashes
+        "cpu_threads": 8 if not use_gpu else 10,
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "use_textline_orientation": enable_textline_orientation,
     }
+
     if text_detection_model_name:
         kwargs["text_detection_model_name"] = text_detection_model_name
 
