@@ -173,8 +173,17 @@ function buildMarkdown(summary) {
   for (const row of summary.results) {
     const axis = row.axisScores || {};
     const lexical = row.lexicalErrors || {};
+    const statusLabel = row.status === 'engine_unavailable'
+      ? '[unavailable]'
+      : row.status === 'run_failed'
+        ? '[run_failed]'
+        : row.status === 'score_failed'
+          ? '[score_failed]'
+          : row.status === 'pass'
+            ? '[pass]'
+            : '[risk]';
     lines.push(
-      `| ${row.engine} | ${row.comparedPages} | ${toMdFixed(row.compositeScore, 2)} | ${toMdFixed(row.efficiency, 2)} | ${toMdFixed(axis.rawConfidence, 2)} | ${toMdFixed(axis.lexical, 2)} | ${toMdFixed(axis.yieldPreservation, 2)} | ${toMdFixed(lexical.wer, 4)} | ${toMdFixed(lexical.cer, 4)} | ${toMdFixed(lexical.garbageRatio, 4)} | ${row.expectationFailures} | ${row.riskyPages} | ${row.candWordsTotal} | ${row.candSuspiciousTotal} | ${toMdNumber(row.runtime.avgMs)} | ${toMdNumber(row.runtime.p50Ms)} | ${toMdNumber(row.runtime.p90Ms)} | ${row.status} |`
+      `| ${row.engine} | ${row.comparedPages} | ${toMdFixed(row.compositeScore, 2)} | ${toMdFixed(row.efficiency, 2)} | ${toMdFixed(axis.rawConfidence, 2)} | ${toMdFixed(axis.lexical, 2)} | ${toMdFixed(axis.yieldPreservation, 2)} | ${toMdFixed(lexical.wer, 4)} | ${toMdFixed(lexical.cer, 4)} | ${toMdFixed(lexical.garbageRatio, 4)} | ${row.expectationFailures} | ${row.riskyPages} | ${row.candWordsTotal} | ${row.candSuspiciousTotal} | ${toMdNumber(row.runtime.avgMs)} | ${toMdNumber(row.runtime.p50Ms)} | ${toMdNumber(row.runtime.p90Ms)} | ${statusLabel} |`
     );
   }
 
@@ -235,14 +244,45 @@ async function main() {
     if (args.skipMissing) {
       runArgs.push('--skip-missing');
     }
+    // Non-Tesseract engines require the Electron native bridge (Python process).
+    // In headless/CI environments that bridge is absent and VisionService silently
+    // falls back to Tesseract — recording the wrong engine's results.
+    // --no-fallback tells the harness to fail-fast instead of masking the issue.
+    if (engine !== 'tesseract') {
+      runArgs.push('--no-fallback');
+    }
 
     console.log(`\n[OCR Benchmark] Running candidate for engine=${engine}`);
     const runResult = runNodeScript('scripts/run-ocr-regression.mjs', runArgs);
     if (!runResult.ok) {
-      failures.push({ engine, reason: `candidate_run_failed (exit=${runResult.exitCode})` });
+      // Exit code 2 means fixture errors. Try reading the output JSON to distinguish
+      // between a true crash and a clean engine_unavailable (no electronAPI bridge).
+      let engineStatus = 'run_failed';
+      let unavailableReason = null;
+      if (runResult.exitCode === 2 && fs.existsSync(path.resolve(candPath))) {
+        try {
+          const partialOutput = loadJson(candPath);
+          const errors = Array.isArray(partialOutput.errors) ? partialOutput.errors : [];
+          const allUnavailable = errors.length > 0
+            && errors.every((e) => String(e.error || '').startsWith('engine_unavailable:'));
+          if (allUnavailable) {
+            engineStatus = 'engine_unavailable';
+            unavailableReason = errors[0].error;
+          }
+        } catch (_) {
+          // JSON not readable — keep run_failed
+        }
+      }
+
+      failures.push({
+        engine,
+        reason: engineStatus === 'engine_unavailable'
+          ? `engine_unavailable: requires Electron native bridge (run inside Electron for accurate results). ${unavailableReason ?? ''}`
+          : `candidate_run_failed (exit=${runResult.exitCode})`,
+      });
       results.push({
         engine,
-        status: 'run_failed',
+        status: engineStatus,
         comparedPages: 0,
         compositeScore: null,
         efficiency: null,

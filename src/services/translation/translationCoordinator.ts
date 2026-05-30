@@ -269,23 +269,44 @@ export class TranslationCoordinator {
     const cachedItems: { item: TranslatableItem; cachedText: string }[] = [];
     const uncachedItems: TranslatableItem[] = [];
 
-    // Detect cached translations that were never actually translated
-    // (Argos returned the English source unchanged and it was saved to DB cache).
-    // For Thai target: a valid translation must contain Thai characters.
-    const isCachedUntranslated = (cachedText: string, targetLang: string): boolean => {
+    // Detect cached translations that were never actually translated or are low quality.
+    // Covers 3 failure modes:
+    // 1. Still English/Latin with no Thai chars (Argos returned source unchanged)
+    // 2. Still contains source-script characters (e.g. Hangul in result when target is Thai)
+    // 3. Result is extremely short compared to source — Argos collapsed long text to e.g. ". . ."
+    const isCachedUntranslated = (cachedText: string, sourceText: string, targetLang: string, sourceLang: string): boolean => {
       if (targetLang !== 'th') return false;
       const trimmed = cachedText.trim();
-      if (!trimmed) return false;
+      if (!trimmed) return true; // Empty is always bad
+
       const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
       const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
-      return hasLatinLetters && !hasThaiChars; // Still English → was never translated
+
+      // Case 1: Still English → was never translated
+      if (hasLatinLetters && !hasThaiChars) return true;
+
+      // Case 2: Still contains source-script characters (Hangul, Kana, CJK) in the result
+      const hasHangul = /[\uAC00-\uD7AF]/.test(trimmed);
+      if (hasHangul && sourceLang === 'ko') return true;
+      const hasKana = /[\u3040-\u30FF]/.test(trimmed);
+      if (hasKana && sourceLang === 'ja') return true;
+
+      // Case 3: Collapsed result — result is way shorter than source for non-trivial inputs
+      // e.g. source="출력해서집에붙여놓을라고하는데 ㅋㅋ" → result=". . ." is clearly garbage
+      const sourceLen = sourceText.trim().length;
+      const resultLen = trimmed.length;
+      if (sourceLen > 15 && resultLen < 4) return true; // collapsed to almost nothing
+      const resultHasOnlyDots = /^[\s.·•\-_]+$/.test(trimmed);
+      if (resultHasOnlyDots && sourceLen > 5) return true;
+
+      return false;
     };
 
     for (const res of cachedLookup) {
-      if (res.cachedText !== null && !isCachedUntranslated(res.cachedText, options.targetLanguage)) {
+      if (res.cachedText !== null && !isCachedUntranslated(res.cachedText, res.item.text, options.targetLanguage, options.sourceLanguage)) {
         cachedItems.push({ item: res.item, cachedText: res.cachedText });
       } else {
-        // Cache miss OR cached result is untranslated → re-translate with engine
+        // Cache miss OR cached result is low quality → re-translate with engine
         uncachedItems.push(res.item);
       }
     }
@@ -296,10 +317,22 @@ export class TranslationCoordinator {
       engineResults = await engine.translate(uncachedItems, options);
 
       // บันทึกคำแปลที่ได้ลงในระบบแคชประโยคเพื่อใช้สำหรับครั้งต่อไปแบบคู่ขนาน
+      // Guard: ตรวจสอบคุณภาพผลแปลก่อนบันทึก เพื่อป้องกันการแคชผลแปลมั่วจาก Argos
       const savePromises = engineResults.map(async (res) => {
         if (res.success && res.translatedText) {
           const matchedItem = uncachedItems.find((ui) => ui.id === res.id);
           if (matchedItem) {
+            // Skip saving if the result is detected as low quality (same guard as cache-read)
+            const wouldBeUntranslated = isCachedUntranslated(
+              res.translatedText,
+              matchedItem.text,
+              options.targetLanguage,
+              options.sourceLanguage
+            );
+            if (wouldBeUntranslated) {
+              console.warn('[TranslationCoordinator] Skipping cache save for low-quality translation:', matchedItem.text, '→', res.translatedText);
+              return;
+            }
             try {
               await dbService.saveSentenceTranslation(
                 matchedItem.text,

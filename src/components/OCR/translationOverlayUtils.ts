@@ -1044,7 +1044,8 @@ const chooseReadablePair = (rawBackground: RGB): { bg: RGB; text: RGB } => {
   const rawLuminance = luminance(rawBackground);
 
   let background = rawBackground;
-  if (rawLuminance > 0.97 && saturation < 0.05) {
+  // Treat near-white low-saturation backgrounds as pure white
+  if (rawLuminance > 0.94 && saturation < 0.08) {
     background = { r: 255, g: 255, b: 255 };
   }
 

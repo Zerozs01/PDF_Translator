@@ -150,6 +150,9 @@ export const OCRRegressionHarness: React.FC = () => {
       const selectedEngine = normalizeHarnessEngine(params.get('engine'));
       const selectedPipeline = normalizeHarnessPipeline(params.get('pipeline'));
       const selectedQuality = normalizeHarnessQuality(params.get('quality'));
+      // no_fallback=1: fail-fast mode for benchmark — do NOT silently return Tesseract
+      // results when the requested engine is unavailable (no electronAPI bridge).
+      const noFallback = params.get('no_fallback') === '1';
       setEngine(selectedEngine);
       setPipelineProfile(selectedPipeline);
       setQualityProfile(selectedQuality);
@@ -236,6 +239,21 @@ export const OCRRegressionHarness: React.FC = () => {
           selectedQuality,
           selectedEngine
         );
+
+        // Detect silent fallback: VisionService sets debug.fallbackFromEngine = the
+        // originally-requested engine (e.g. 'paddleocr') when it was unavailable and
+        // Tesseract was silently used instead.
+        // IMPORTANT: fellBackFrom holds the *requested* engine, NOT the fallback engine.
+        // So the presence of fellBackFrom alone means a fallback occurred — we must NOT
+        // compare it to selectedEngine (they would be equal and hide the issue).
+        const debugInfo = ocrResult.debug as Record<string, unknown> | undefined;
+        const fellBackFrom = debugInfo?.fallbackFromEngine as string | undefined;
+        if (noFallback && fellBackFrom) {
+          throw new Error(
+            `engine_unavailable:${selectedEngine} -- fell back to tesseract ` +
+            `(reason: ${String(debugInfo?.fallbackReason ?? 'no electronAPI bridge')})`
+          );
+        }
 
         ocrResult.pageNumber = fixture.page;
         ocrResult.pipelineProfile = selectedPipeline;

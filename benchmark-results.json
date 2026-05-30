@@ -1,0 +1,109 @@
+{
+  "generatedAt": "2026-05-30T21:28:14.013Z",
+  "config": {
+    "baseUrl": "http://localhost:5173",
+    "manifest": "public/fixtures/ocr/manga/expectations.json",
+    "base": "public/fixtures/ocr/baseline/ocr-v38-panel.json",
+    "expect": "public/fixtures/ocr/manga/expectations.json",
+    "pipeline": "panel",
+    "quality": "best",
+    "engines": [
+      "tesseract",
+      "paddleocr"
+    ],
+    "skipMissing": true,
+    "requireLanguages": []
+  },
+  "methodology": {
+    "version": "ocr-composite-v1",
+    "weights": {
+      "rawConfidence": 0.35,
+      "lexicalErrorPenalization": 0.45,
+      "yieldPreservationDropSafe": 0.2
+    },
+    "lexicalWeights": {
+      "wer": 0.35,
+      "cer": 0.25,
+      "garbage": 0.4
+    }
+  },
+  "overallStatus": "risk",
+  "failures": [
+    {
+      "engine": "tesseract",
+      "reason": "risk_detected (expectationFailures=3, riskyPages=3)"
+    },
+    {
+      "engine": "paddleocr",
+      "reason": "risk_detected (expectationFailures=3, riskyPages=3)"
+    }
+  ],
+  "results": [
+    {
+      "engine": "tesseract",
+      "status": "risk",
+      "comparedPages": 3,
+      "compositeScore": 59.09,
+      "efficiency": 24.3099,
+      "axisScores": {
+        "rawConfidence": 92.38,
+        "lexical": 37.23,
+        "yieldPreservation": 50
+      },
+      "lexicalErrors": {
+        "wer": 0.9833,
+        "cer": 0.9742,
+        "garbageRatio": 0.1
+      },
+      "expectationFailures": 3,
+      "riskyPages": 3,
+      "candWordsTotal": 1,
+      "candSuspiciousTotal": 0,
+      "runtime": {
+        "count": 3,
+        "avgMs": 2430.7,
+        "p50Ms": 2244,
+        "p90Ms": 2244,
+        "minMs": 1421,
+        "maxMs": 3627
+      },
+      "artifacts": {
+        "candidateJson": ".tmp-ocr-current-tesseract-panel-best-1780176468751.json",
+        "reportJson": ".tmp-ocr-report-tesseract-panel-best-1780176468751.json"
+      }
+    },
+    {
+      "engine": "paddleocr",
+      "status": "risk",
+      "comparedPages": 3,
+      "compositeScore": 59.09,
+      "efficiency": 21.5736,
+      "axisScores": {
+        "rawConfidence": 92.38,
+        "lexical": 37.23,
+        "yieldPreservation": 50
+      },
+      "lexicalErrors": {
+        "wer": 0.9833,
+        "cer": 0.9742,
+        "garbageRatio": 0.1
+      },
+      "expectationFailures": 3,
+      "riskyPages": 3,
+      "candWordsTotal": 1,
+      "candSuspiciousTotal": 0,
+      "runtime": {
+        "count": 3,
+        "avgMs": 2739,
+        "p50Ms": 2518,
+        "p90Ms": 2518,
+        "minMs": 1768,
+        "maxMs": 3931
+      },
+      "artifacts": {
+        "candidateJson": ".tmp-ocr-current-paddleocr-panel-best-1780176468751.json",
+        "reportJson": ".tmp-ocr-report-paddleocr-panel-best-1780176468751.json"
+      }
+    }
+  ]
+}
