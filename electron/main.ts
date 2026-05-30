@@ -504,10 +504,14 @@ app.whenReady().then(() => {
 
   let argosBridgeDaemon: ArgosBridgeDaemon | null = null;
 
-  const teardownArgosDaemon = (reason?: Error): void => {
-    const daemon = argosBridgeDaemon;
+  const teardownArgosDaemon = (reason?: Error, targetDaemon?: ArgosBridgeDaemon | null): void => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
-    argosBridgeDaemon = null;
+
+    if (daemon === argosBridgeDaemon) {
+      argosBridgeDaemon = null;
+    }
+
     for (const [, pending] of daemon.pending) {
       clearTimeout(pending.timeout);
       pending.reject(reason ?? new Error('Argos translation daemon stopped unexpectedly'));
@@ -522,8 +526,8 @@ app.whenReady().then(() => {
     teardownArgosDaemon(new Error('Argos translation runtime disposed'));
   };
 
-  const handleArgosDaemonStdout = (chunk: Buffer): void => {
-    const daemon = argosBridgeDaemon;
+  const handleArgosDaemonStdout = (chunk: Buffer, targetDaemon?: ArgosBridgeDaemon | null): void => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
 
     daemon.stdoutBuffer += chunk.toString();
@@ -610,19 +614,21 @@ app.whenReady().then(() => {
       };
 
       child.stdout.on('data', (chunk: Buffer) => {
-        handleArgosDaemonStdout(chunk);
+        handleArgosDaemonStdout(chunk, daemon);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        const message = chunk.toString().trim();
-        if (message) {
-          console.warn(`[argosBridge] ${message}`);
+        if (argosBridgeDaemon && argosBridgeDaemon.child === child) {
+          const message = chunk.toString().trim();
+          if (message) {
+            console.warn(`[argosBridge] ${message}`);
+          }
         }
       });
       child.on('error', (error) => {
-        teardownArgosDaemon(error);
+        teardownArgosDaemon(error, daemon);
       });
       child.on('close', (code, signal) => {
-        teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`));
+        teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`), daemon);
       });
 
       argosBridgeDaemon = daemon;

@@ -1862,10 +1862,12 @@ electron.app.whenReady().then(() => {
     }
   };
   let argosBridgeDaemon = null;
-  const teardownArgosDaemon = (reason) => {
-    const daemon = argosBridgeDaemon;
+  const teardownArgosDaemon = (reason, targetDaemon) => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
-    argosBridgeDaemon = null;
+    if (daemon === argosBridgeDaemon) {
+      argosBridgeDaemon = null;
+    }
     for (const [, pending] of daemon.pending) {
       clearTimeout(pending.timeout);
       pending.reject(reason ?? new Error("Argos translation daemon stopped unexpectedly"));
@@ -1878,8 +1880,8 @@ electron.app.whenReady().then(() => {
   disposeArgosTranslateRuntime = () => {
     teardownArgosDaemon(new Error("Argos translation runtime disposed"));
   };
-  const handleArgosDaemonStdout = (chunk) => {
-    const daemon = argosBridgeDaemon;
+  const handleArgosDaemonStdout = (chunk, targetDaemon) => {
+    const daemon = targetDaemon || argosBridgeDaemon;
     if (!daemon) return;
     daemon.stdoutBuffer += chunk.toString();
     const lines = daemon.stdoutBuffer.split(/\r?\n/);
@@ -1945,19 +1947,21 @@ electron.app.whenReady().then(() => {
       bridgeSignature
     };
     child.stdout.on("data", (chunk) => {
-      handleArgosDaemonStdout(chunk);
+      handleArgosDaemonStdout(chunk, daemon);
     });
     child.stderr.on("data", (chunk) => {
-      const message = chunk.toString().trim();
-      if (message) {
-        console.warn(`[argosBridge] ${message}`);
+      if (argosBridgeDaemon && argosBridgeDaemon.child === child) {
+        const message = chunk.toString().trim();
+        if (message) {
+          console.warn(`[argosBridge] ${message}`);
+        }
       }
     });
     child.on("error", (error) => {
-      teardownArgosDaemon(error);
+      teardownArgosDaemon(error, daemon);
     });
     child.on("close", (code, signal) => {
-      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? "null"}, signal=${signal ?? "null"})`));
+      teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? "null"}, signal=${signal ?? "null"})`), daemon);
     });
     argosBridgeDaemon = daemon;
     return daemon;

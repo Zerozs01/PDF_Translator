@@ -2012,7 +2012,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [showMetricsInfo, setShowMetricsInfo] = useState(false);
   const [cacheActionMessage, setCacheActionMessage] = useState<string>('');
   const [ocrInfoOpen, setOcrInfoOpen] = useState(false);
-  const [ocrQualityMode, setOcrQualityMode] = useState<'high' | 'fast'>('high');
+  const [ocrQualityMode, setOcrQualityMode] = useState<'high' | 'fast'>('fast');
   const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
     readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
   );
@@ -3659,7 +3659,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         // Fast Mode
         return {
           maxSide: 20000,
-          maxPixels:18_800_000,
+          maxPixels:18_750_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,

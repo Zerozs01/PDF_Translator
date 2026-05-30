@@ -9,13 +9,18 @@ All content here is kept in sync with the current codebase and should be preferr
 - OCR algorithm version: `210`
 - Translation cache version: `v45`
 - OCR engines in UI: `tesseract`, `paddleocr`, `easyocr`
-- OCR profiles: `pipelineProfile = panel | export | raw`, `ocrQualityProfile = fast | balanced | best`
+- OCR profiles: `pipelineProfile = panel | export`, `ocrQualityProfile = fast | balanced | best`
 - Translation modes: `adaptive | manga | manhwa | official`
 - OCR panel now includes:
   - panel script-gate + panel safety dedupe before cache write
   - technical-line guards to prevent false drop on dense document pages
+  - quality toggle: Fast/High (Paddle panel maps to `fast`/`balanced`, others default to `best`)
   - OCR Result tools: overlay copy button + in-panel search (highlight + Prev/Next)
   - progress UI: right-aligned percent + ETA (page-based with single-page fallback)
+
+Notes:
+- "Base" benchmark runs the full pipeline for each engine.
+- "Improve" runs raw OCR vs full pipeline side-by-side; raw is a benchmark path, not a pipeline profile.
 
 ## Canonical Files
 

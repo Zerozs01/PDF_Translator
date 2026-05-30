@@ -27,7 +27,16 @@ import {
   Flame,
   FileText,
   BarChart3,
-  Download
+  Download,
+  Check,
+  AlertCircle,
+  X,
+  FileDown,
+  Eye,
+  Cpu,
+  BookOpen,
+  Globe,
+  Layers
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
@@ -360,6 +369,55 @@ const selectOfflinePivotCandidate = (
   return directScore >= pivotScore ? direct : pivot;
 };
 
+// Static lookup for very short English phrases that Argos Translate routinely fails to translate.
+// These are 1-4 word expressions common in manga/manhwa OCR that Argos returns unchanged.
+// Keys must be lowercase and cleaned of special chars; values are Thai translations.
+const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
+  // Pronouns
+  'i': 'ฉัน', 'you': 'คุณ', 'he': 'เขา', 'she': 'เธอ',
+  'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
+  'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา',
+  // Interjections / short responses
+  'yes': 'ใช่', 'no': 'ไม่', 'ok': 'โอเค', 'okay': 'โอเค',
+  'what': 'อะไร', 'why': 'ทำไม', 'how': 'อย่างไร', 'when': 'เมื่อไหร่',
+  'where': 'ที่ไหน', 'who': 'ใคร', 'wait': 'รอก่อน', 'stop': 'หยุด',
+  'go': 'ไป', 'run': 'วิ่ง', 'help': 'ช่วยด้วย', 'look': 'ดูสิ',
+  'now': 'ตอนนี้', 'here': 'ที่นี่', 'there': 'ที่นั่น', 'come': 'มา',
+  'get': 'รับ', 'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
+  'ah': 'อา', 'oh': 'โอ้', 'uh': 'เอ่อ', 'ugh': 'โอ๊ย',
+  'wow': 'ว้าว', 'whoa': 'โว้ว', 'ha': 'ฮ่า',
+  'thanks': 'ขอบคุณ', 'sorry': 'ขอโทษ', 'please': 'กรุณา',
+  'right': 'ใช่แล้ว', 'wrong': 'ผิดแล้ว', 'really': 'จริงเหรอ',
+  'seriously': 'จริงจังเหรอ', 'impossible': 'เป็นไปไม่ได้',
+  'unbelievable': 'เชื่อไม่ได้', 'of course': 'แน่นอน',
+  // Common 2-4 word phrases
+  'i see': 'เข้าใจแล้ว', 'i know': 'ฉันรู้', 'i get it': 'ฉันเข้าใจ',
+  'got it': 'เข้าใจแล้ว', 'got you': 'จับได้แล้ว', 'come on': 'เร็วเข้า',
+  'let go': 'ปล่อยไป', 'let me': 'ให้ฉัน', 'lets go': 'ไปกันเถอะ',
+  'thank you': 'ขอบคุณ', 'no way': 'ไม่มีทาง', 'no problem': 'ไม่มีปัญหา',
+  'watch out': 'ระวัง', 'calm down': 'ใจเย็นๆ', 'shut up': 'หุบปาก',
+  'back off': 'ถอยออกไป', 'stand up': 'ลุกขึ้น', 'get up': 'ลุกขึ้น',
+  'get out': 'ออกไป', 'get away': 'หนีออกไป', 'go away': 'ไปให้พ้น',
+  'go on': 'ดำเนินต่อไป', 'move it': 'รีบไป', 'hurry up': 'รีบขึ้น',
+  'give up': 'ยอมแพ้', 'hold on': 'รอสักครู่', 'hang on': 'รอสักครู่',
+  'come here': 'มาที่นี่', 'over here': 'ที่นี่', 'over there': 'ที่นั่น',
+  'thats right': 'ถูกต้อง', 'no doubt': 'ไม่ต้องสงสัย',
+  'good luck': 'โชคดี', 'well done': 'เยี่ยมมาก', 'nice job': 'ทำได้ดี',
+  'im sorry': 'ฉันขอโทษ', 'excuse me': 'ขอโทษนะ', 'be careful': 'ระวังด้วย',
+  'dont move': 'อย่าขยับ', 'is that so': 'หรือจริงเหรอ',
+};
+
+/** Look up a short phrase in the static Thai table. Returns null if not found.
+ *  Comparison is case-insensitive and strips special characters/underscores first. */
+const lookupShortPhraseTh = (text: string): string | null => {
+  const key = text.trim().toLowerCase()
+    .replace(/[_]+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return ARGOS_SHORT_PHRASE_LOOKUP_TH[key] ?? null;
+};
+
 async function translateBatchOffline(
   texts: string[],
   type: string,
@@ -388,8 +446,74 @@ async function translateBatchOffline(
     normalizedTarget
   );
 
+  // Hybrid retry: detect texts Argos couldn't translate and retry with cleaned input.
+  // Detection strategy for en→th: if output still contains Latin letters but NO Thai chars
+  // → Argos failed to translate (returned source text as-is or near-unchanged).
+  const isArgosUntranslated = (result: string, targetLang: string): boolean => {
+    const trimmed = result.trim();
+    if (!trimmed) return false;
+    if (targetLang === 'th') {
+      // For Thai target: a properly translated result must contain Thai characters
+      const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
+      const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
+      return hasLatinLetters && !hasThaiChars;
+    }
+    // For other targets: fall back to exact-match check (result same as source = untranslated)
+    return false;
+  };
+
+  const cleanForRetry = (raw: string): string =>
+    raw
+      .replace(/[_]+/g, ' ')       // underscores → spaces (e.g. "YOU_" → "YOU")
+      .replace(/\.{2,}/g, ' ')     // multiple dots → space (e.g. "SEE__." → "SEE")
+      .replace(/[!?]{2,}/g, ' ')   // repeated punctuation → single space
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ') // any remaining non-word special chars → space
+      .replace(/\s{2,}/g, ' ')     // collapse multiple spaces
+      .trim();
+
+  const finalDirectTranslations = await Promise.all(directTranslations.map(async (text, i) => {
+    const untranslated = isArgosUntranslated(text, normalizedTarget);
+    // Debug: log every item so we can see what Argos returned and whether fix triggered
+    console.log(`[HybridRetry] i=${i} src="${preparedTexts[i]}" argosOut="${text}" untranslated=${untranslated}`);
+    if (!untranslated) return text;
+
+    const originalText = texts[i] ?? preparedTexts[i] ?? '';
+
+    // Last-resort lookup: check static Thai phrase table first (fastest, no network)
+    const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
+    if (lookupResult) {
+      console.log(`[HybridRetry] LOOKUP HIT: "${originalText}" → "${lookupResult}"`);
+      return lookupResult;
+    }
+
+    // Retry: strip special chars and try Argos again
+    const cleaned = cleanForRetry(preparedTexts[i]);
+    console.log(`[HybridRetry] cleaned="${cleaned}" sameAsPrepared=${cleaned === preparedTexts[i].trim()}`);
+    if (cleaned && cleaned !== preparedTexts[i].trim()) {
+      const cleanedLookup = normalizedTarget === 'th' ? lookupShortPhraseTh(cleaned) : null;
+      if (cleanedLookup) {
+        console.log(`[HybridRetry] CLEANED LOOKUP HIT: "${cleaned}" → "${cleanedLookup}"`);
+        return cleanedLookup;
+      }
+
+      try {
+        const retry = await translateBatchOfflineBridge([cleaned], type, mode, normalizedSource, normalizedTarget);
+        const retryResult = retry[0] ?? '';
+        console.log(`[HybridRetry] ARGOS RETRY: "${cleaned}" → "${retryResult}" stillUntranslated=${isArgosUntranslated(retryResult, normalizedTarget)}`);
+        if (!isArgosUntranslated(retryResult, normalizedTarget)) {
+          return retryResult;
+        }
+      } catch (_retryErr) {
+        console.warn('[HybridRetry] retry error:', _retryErr);
+      }
+    }
+
+    console.log(`[HybridRetry] GAVE UP: "${originalText}" → returning original Argos output`);
+    return text;
+  }));
+
   if (!shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget)) {
-    return directTranslations;
+    return finalDirectTranslations;
   }
 
   try {
@@ -417,12 +541,12 @@ async function translateBatchOffline(
       String(sourceText || ''),
       normalizedSource,
       normalizedTarget,
-      String(directTranslations[index] || ''),
+      String(finalDirectTranslations[index] || ''),
       String(pivotThai[index] || '')
     ));
   } catch (error) {
     console.warn(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
-    return directTranslations;
+    return finalDirectTranslations;
   }
 }
 export type { TranslatableLine, TranslationGroupingProfile, GroupingDecision };
@@ -788,6 +912,48 @@ const evaluateUntranslatedTranslation = (
   const thaiRatio = thaiChars / Math.max(1, letterChars);
   const shouldSkip = retryRatio >= 0.65 && thaiRatio < 0.06;
   return { shouldSkip, retryRatio, thaiRatio, total };
+};
+
+const evaluateThaiCarryoverForEnglish = (
+  groups: Array<{ sourceText: string }>,
+  translatedGroups: string[],
+  targetLanguage: string
+): { shouldFallback: boolean; thaiRatio: number; carryoverRatio: number; total: number } => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'en');
+  if (normalizedTarget !== 'en') {
+    return { shouldFallback: false, thaiRatio: 0, carryoverRatio: 0, total: 0 };
+  }
+
+  let total = 0;
+  let carryover = 0;
+  let thaiChars = 0;
+  let letterChars = 0;
+
+  groups.forEach((group, index) => {
+    const translated = normalizeWhitespace(String(translatedGroups[index] || ''));
+    if (!translated) return;
+
+    const stats = getTranslationScriptStats(translated);
+    if (stats.letterChars < 4) return;
+
+    total += 1;
+    thaiChars += stats.thaiChars;
+    letterChars += stats.letterChars;
+
+    const sourceKey = buildTranslationComparisonKey(group.sourceText || '');
+    const translatedKey = buildTranslationComparisonKey(translated);
+    const sameKey = Boolean(sourceKey) && sourceKey === translatedKey;
+    const thaiHeavy = stats.thaiChars >= 3 && stats.thaiRatio >= 0.35 && stats.latinChars < 3;
+    if (sameKey || thaiHeavy) {
+      carryover += 1;
+    }
+  });
+
+  const thaiRatio = thaiChars / Math.max(1, letterChars);
+  const carryoverRatio = carryover / Math.max(1, total);
+  const shouldFallback = total >= 2 && (thaiRatio >= 0.25 || carryoverRatio >= 0.4);
+
+  return { shouldFallback, thaiRatio, carryoverRatio, total };
 };
 
 const shouldRetryGroupTranslation = (
@@ -3525,6 +3691,49 @@ export const applyThaiConversationalGlossary = (
   return finalResult;
 };
 
+const RECEIPT_GLOSSARY_EN = new Map<string, string>([
+  [buildTranslationComparisonKey('รวมเงิน'), 'Total'],
+  [buildTranslationComparisonKey('ส่วนลด'), 'Discount'],
+  [buildTranslationComparisonKey('มูลค่าสินค้า'), 'Subtotal'],
+  [buildTranslationComparisonKey('รวมมูลค่าสุทธิ'), 'Net total'],
+  [buildTranslationComparisonKey('รวมสุทธิ'), 'Net total'],
+  [buildTranslationComparisonKey('ยอดสุทธิ'), 'Net total'],
+  [buildTranslationComparisonKey('ภาษีมูลค่าเพิ่ม'), 'VAT'],
+  [buildTranslationComparisonKey('รวมภาษี'), 'Tax total'],
+  [buildTranslationComparisonKey('จำนวนเงิน'), 'Amount'],
+  [buildTranslationComparisonKey('เงินสด'), 'Cash'],
+  [buildTranslationComparisonKey('บัตรเครดิต'), 'Credit card'],
+]);
+
+const applyReceiptGlossary = (
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string
+): string => {
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'en');
+  if (normalizedTarget !== 'en') return translatedText;
+
+  const source = normalizeWhitespace(String(sourceText || ''));
+  if (!source) return translatedText;
+
+  const sourceKey = buildTranslationComparisonKey(source);
+  if (!sourceKey) return translatedText;
+
+  const glossaryValue = RECEIPT_GLOSSARY_EN.get(sourceKey);
+  if (!glossaryValue) return translatedText;
+
+  const translated = normalizeWhitespace(String(translatedText || ''));
+  const translatedKey = buildTranslationComparisonKey(translated);
+  const hasThai = THAI_REGEX.test(translated);
+  const hasEnglish = /[A-Za-z]/.test(translated);
+  const carryover = Boolean(translatedKey) && translatedKey === sourceKey;
+
+  if (!translated || carryover || (hasThai && !hasEnglish)) {
+    return glossaryValue;
+  }
+  return translatedText;
+};
+
 const finalizeTranslatedLine = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   const source = normalizeWhitespace(String(sourceText || ''));
   let resolved = normalizeWhitespace(String(translatedText || ''));
@@ -3540,6 +3749,7 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
   resolved = preserveTechnicalTokensInTranslation(source, resolved);
   resolved = normalizeThaiTechnicalTerms(source, resolved);
   resolved = applyThaiConversationalGlossary(source, resolved, targetLanguage);
+  resolved = applyReceiptGlossary(source, resolved, targetLanguage);
   resolved = collapseRepeatedTranslationFragments(resolved);
 
   if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
@@ -5049,6 +5259,7 @@ export default function App() {
   const setOverlayFontSizeScale = useProjectStore((s) => s.setOverlayFontSizeScale);
   const safetySettings = useProjectStore((s) => s.safetySettings);
   const hydrateGeminiApiKey = useProjectStore((s) => s.hydrateGeminiApiKey);
+  const hasGeminiApiKey = useProjectStore((s) => s.hasGeminiApiKey);
 
   const updateLayerFontSize = useLayerStore((state) => state.updateLayerFontSize);
 
@@ -5096,8 +5307,21 @@ export default function App() {
   const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
   const [downloadScopeSelection, setDownloadScopeSelection] = useState<DownloadScope>('current');
   const [downloadModeSelection, setDownloadModeSelection] = useState<DownloadContentMode>('original');
+  const [selectedExportEngine, setSelectedExportEngine] = useState<OCREngine | null>(null);
   const [isDownloadingResult, setIsDownloadingResult] = useState(false);
   const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const [translationStartTime, setTranslationStartTime] = useState<number | null>(null);
+  const [popupOcrQualityMode, setPopupOcrQualityMode] = useState<'high' | 'fast'>('fast');
+
+  useEffect(() => {
+    if (isAiProcessing || isOfflineProcessing) {
+      if (translationStartTime === null) {
+        setTranslationStartTime(Date.now());
+      }
+    } else {
+      setTranslationStartTime(null);
+    }
+  }, [isAiProcessing, isOfflineProcessing, translationStartTime]);
 
   // Sync global loading state in useUIStore reactively
   const ocrProgress = useOCRTextLayerStore((state) => state.progress);
@@ -5588,9 +5812,9 @@ export default function App() {
     return refreshedPages.length > 0;
   };
 
-  const resolveModelScopedPagesForExport = (scope: DownloadScope): Array<{ pageNum: number; ocr: OCRPageResult }> => {
+  const resolveModelScopedPagesForExport = (scope: DownloadScope, engineOverride?: OCREngine): Array<{ pageNum: number; ocr: OCRPageResult }> => {
     const ocrState = useOCRTextLayerStore.getState();
-    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+    const selectedEngine = engineOverride || (ocrOptions.engine || 'tesseract') as OCREngine;
     const targetPages = scope === 'current'
       ? [currentPage]
       : (fileType === 'pdf'
@@ -6099,7 +6323,7 @@ export default function App() {
         ? (thaiComicLine ? 0.82 : 0.74)
         : (thaiComicLine ? 0.58 : 0.5);
       const paintHeight = Math.min(
-        textRect.height,
+        textRect.height * 1.8,
         Math.max(
           typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
           textRect.height * minFillRatio
@@ -6137,16 +6361,20 @@ export default function App() {
       const paintLeft = originLeft + innerLeft;
       const paintTop = originTop + paintOffsetTop;
 
+      const clipHeightBoost = hasThaiText ? Math.max(2, Math.round(typography.fontSize * 0.35)) : 0;
       ctx.beginPath();
-      ctx.rect(originLeft, originTop, textRect.width, textRect.height);
+      ctx.rect(originLeft - 180, originTop, textRect.width + 360, Math.max(textRect.height, paintHeight) + clipHeightBoost);
       ctx.clip();
 
       const textBoxLeft = paintLeft + typography.padX;
       const textBoxTop = paintTop + typography.padY + extraTopPad;
-      const textBoxWidth = Math.max(1, innerWidth - (typography.padX * 2));
-      const textBoxHeight = Math.max(1, paintHeight - ((typography.padY * 2) + extraTopPad + extraBottomPad));
+      const textBoxWidth = Math.max(1, Math.round((innerWidth - (typography.padX * 2)) * 1.15) + 12);
+      const textBoxHeight = Math.max(1, Math.max(paintHeight, typography.contentHeight) - ((typography.padY * 2) + extraTopPad + extraBottomPad));
       const lineHeightPx = Math.max(1, typography.fontSize * typography.lineHeight);
-      const maxLines = Math.max(1, Math.floor(textBoxHeight / lineHeightPx));
+      const maxLines = Math.max(1, Math.max(
+        Math.ceil(textBoxHeight / lineHeightPx),
+        typography.estimatedLines
+      ));
       const overlayTextWeight = Number(palette.textFillWeight || 400);
       const resolvedTextWeight = Math.max(400, Math.min(700, Math.round(overlayTextWeight)));
 
@@ -6162,9 +6390,9 @@ export default function App() {
 
       lines.forEach((lineText, lineIndex) => {
         const y = textBoxTop + (lineIndex * lineHeightPx);
-        if (y + lineHeightPx > textBoxTop + textBoxHeight + 0.5) return;
+        if (lineIndex > 0 && y + lineHeightPx > textBoxTop + textBoxHeight + 0.5) return;
         const x = ctx.textAlign === 'center'
-          ? textBoxLeft + (textBoxWidth / 2)
+          ? textRect.left + innerLeft + (innerWidth / 2)
           : textBoxLeft;
         if (resolvedStrokeWidth > 0 && palette.textStrokeColor) {
           ctx.save();
@@ -6239,7 +6467,7 @@ export default function App() {
         const wrappedLines = wrapCanvasText(ctx, displayText, lw - 8, maxLines, false);
         wrappedLines.forEach((lineText, li) => {
           const ty = ly + 3 + li * lineHeightPx;
-          if (ty + lineHeightPx > ly + lh + 0.5) return;
+          if (li > 0 && ty + lineHeightPx > ly + lh + 0.5) return;
           ctx.fillText(lineText, lx + 4, ty, lw - 8);
         });
 
@@ -6265,10 +6493,11 @@ export default function App() {
     URL.revokeObjectURL(pngUrl);
   };
 
-  const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode) => {
+  const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode, engineOverride?: OCREngine) => {
     if (!file) return;
 
-    const scopedPages = resolveModelScopedPagesForExport(scope);
+    const selectedEngine = engineOverride || (ocrOptions.engine || 'tesseract') as OCREngine;
+    const scopedPages = resolveModelScopedPagesForExport(scope, selectedEngine);
     if (scopedPages.length === 0) {
       setTranslationStatus({ kind: 'error', message: 'No OCR cache available for download. Run OCR first.' });
       return;
@@ -6301,7 +6530,6 @@ export default function App() {
         document.body.removeChild(anchor);
         URL.revokeObjectURL(url);
       } else {
-        const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
         const translatedPageMap = new Map<number, OCRPageResult>();
         const translatedEntryMap = new Map<number, OCRTranslationCacheEntry>();
         const sourcePageMap = new Map<number, OCRPageResult>();
@@ -6585,7 +6813,7 @@ export default function App() {
               const rotRad2 = (rotDeg2 * Math.PI) / 180;
               const thaiComicLine2 = hasThaiText2 && (styleKind2 === 'comic-bubble' || styleKind2 === 'comic-box');
               const minFillRatio2 = typo2.estimatedLines > 1 ? (thaiComicLine2 ? 0.82 : 0.74) : (thaiComicLine2 ? 0.58 : 0.5);
-              const paintH2 = Math.min(textRect2.height, Math.max(typo2.contentHeight + typo2.padY * 2 + extraTopPad2 + extraBotPad2, textRect2.height * minFillRatio2));
+              const paintH2 = Math.min(textRect2.height * 1.8, Math.max(typo2.contentHeight + typo2.padY * 2 + extraTopPad2 + extraBotPad2, textRect2.height * minFillRatio2));
               const paintOffT2 = Math.max(hasThaiText2 ? 1 : 0, Math.min(textRect2.height - paintH2, Math.round(textRect2.height * (thaiComicLine2 ? 0.04 : 0.08))));
 
               pageCtx.save();
@@ -6594,15 +6822,19 @@ export default function App() {
               const oT2 = rotDeg2 !== 0 ? 0 : textRect2.top;
               const pL2 = oL2 + innerLeft2;
               const pT2 = oT2 + paintOffT2;
+              const clipHeightBoost2 = hasThaiText2 ? Math.max(2, Math.round(typo2.fontSize * 0.35)) : 0;
               pageCtx.beginPath();
-              pageCtx.rect(oL2, oT2, textRect2.width, textRect2.height);
+              pageCtx.rect(oL2 - 180, oT2, textRect2.width + 360, Math.max(textRect2.height, paintH2) + clipHeightBoost2);
               pageCtx.clip();
               const tbL2 = pL2 + typo2.padX;
               const tbT2 = pT2 + typo2.padY + extraTopPad2;
-              const tbW2 = Math.max(1, innerWidth2 - typo2.padX * 2);
-              const tbH2 = Math.max(1, paintH2 - (typo2.padY * 2 + extraTopPad2 + extraBotPad2));
+              const tbW2 = Math.max(1, Math.round((innerWidth2 - typo2.padX * 2) * 1.15) + 12);
+              const tbH2 = Math.max(1, Math.max(paintH2, typo2.contentHeight) - (typo2.padY * 2 + extraTopPad2 + extraBotPad2));
               const lhPx2 = Math.max(1, typo2.fontSize * typo2.lineHeight);
-              const maxL2 = Math.max(1, Math.floor(tbH2 / lhPx2));
+              const maxL2 = Math.max(1, Math.max(
+                Math.ceil(tbH2 / lhPx2),
+                typo2.estimatedLines
+              ));
               const tWeight2 = Math.max(400, Math.min(700, Math.round(Number(p2.textFillWeight || 400))));
               pageCtx.font = `${tWeight2} ${typo2.fontSize}px ${canvasFont2}`;
               const wrLines2 = wrapCanvasText(pageCtx, overlayText2, tbW2, maxL2, typo2.forceSingleLine);
@@ -6613,8 +6845,10 @@ export default function App() {
               const strokeW2 = strokeBW2 > 0 ? Math.max(0.55, Math.min(1.35, strokeBW2 * (typo2.fontSize / 14))) : 0;
               wrLines2.forEach((lt2, li2) => {
                 const y2 = tbT2 + li2 * lhPx2;
-                if (y2 + lhPx2 > tbT2 + tbH2 + 0.5) return;
-                const x2 = pageCtx.textAlign === 'center' ? tbL2 + tbW2 / 2 : tbL2;
+                if (li2 > 0 && y2 + lhPx2 > tbT2 + tbH2 + 0.5) return;
+                const x2 = pageCtx.textAlign === 'center'
+                  ? textRect2.left + innerLeft2 + (innerWidth2 / 2)
+                  : tbL2;
                 if (strokeW2 > 0 && p2.textStrokeColor) {
                   pageCtx.save();
                   pageCtx.lineJoin = 'round';
@@ -6667,7 +6901,7 @@ export default function App() {
               const wrLines3 = wrapCanvasText(pageCtx, layer.text || '', lw2 - 8, maxL3, false);
               wrLines3.forEach((lt3, li3) => {
                 const ty3 = ly2 + 3 + li3 * lhPx3;
-                if (ty3 + lhPx3 > ly2 + lh2 + 0.5) return;
+                if (li3 > 0 && ty3 + lhPx3 > ly2 + lh2 + 0.5) return;
                 pageCtx.fillText(lt3, lx2 + 4, ty3, lw2 - 8);
               });
               pageCtx.restore();
@@ -7358,7 +7592,17 @@ export default function App() {
       return false;
     }
 
-    const translatedGroupsRaw = new Array<string>(preparedGroups.length).fill('');
+    let translatedGroupsRaw = new Array<string>(preparedGroups.length).fill('');
+    const mapTranslationResults = (results: Array<{ id: string; translatedText: string }>) => {
+      const nextRaw = new Array<string>(preparedGroups.length).fill('');
+      results.forEach((res) => {
+        const idx = Number(res.id);
+        if (!Number.isNaN(idx) && idx >= 0 && idx < nextRaw.length) {
+          nextRaw[idx] = res.translatedText;
+        }
+      });
+      return nextRaw;
+    };
     
     // แปลง preparedGroups เป็น TranslatableItem เพื่อรันผ่าน Coordinator
     const translatableItems: TranslatableItem[] = preparedGroups.map((group, groupIndex) => {
@@ -7383,6 +7627,8 @@ export default function App() {
     });
 
     const coordinatorEngineId = engine === 'offline' ? 'argos' : 'gemini';
+    let effectiveEngine: 'offline' | 'ai' = engine;
+    let fallbackNote = '';
     
     try {
       // เรียกใช้งานตัวประสานงานแปลภาษาอัจฉริยะ (Group-Aware Translation Engine)
@@ -7408,12 +7654,7 @@ export default function App() {
       );
 
       // แมปผลการแปลกลับเข้าสู่ translatedGroupsRaw ตามลำดับดัชนีของกลุ่ม
-      translationResults.forEach((res) => {
-        const idx = Number(res.id);
-        if (!isNaN(idx) && idx >= 0 && idx < translatedGroupsRaw.length) {
-          translatedGroupsRaw[idx] = res.translatedText;
-        }
-      });
+      translatedGroupsRaw = mapTranslationResults(translationResults);
     } catch (err) {
       console.error('[TranslationCoordinator] Run translation error:', err);
       // Fallback: ใช้ข้อความเดิม
@@ -7422,7 +7663,7 @@ export default function App() {
       });
     }
 
-    const translatedGroups = translatedGroupsRaw.map((text, index) => {
+    let translatedGroups = translatedGroupsRaw.map((text, index) => {
       const restored = restoreProtectedTokens(text, preparedGroups[index]?.replacements || []);
       if (normalizedTargetLanguage === 'th') {
         return normalizeThaiTranslationText(restored);
@@ -7430,10 +7671,58 @@ export default function App() {
       return restored;
     });
 
+    if (engine === 'offline' && translationSourceLanguage === 'th' && normalizedTargetLanguage === 'en') {
+      const carryover = evaluateThaiCarryoverForEnglish(preparedGroups, translatedGroups, normalizedTargetLanguage);
+      if (carryover.shouldFallback) {
+        if (!hasGeminiApiKey) {
+          const thaiPct = Math.round(carryover.thaiRatio * 100);
+          const carryPct = Math.round(carryover.carryoverRatio * 100);
+          fallbackNote = ` fallback skipped: no Gemini API key (${thaiPct}% Thai, ${carryPct}% carryover).`;
+          console.info(`[TranslateDiag] Offline carryover detected but Gemini key missing (Thai ${thaiPct}%, carryover ${carryPct}%).`);
+          // Keep offline output when Gemini is not configured.
+        } else {
+          try {
+            const fallbackResults = await translationCoordinator.runTranslation(
+              'gemini',
+              translatableItems,
+              {
+                sourceLanguage: translationSourceLanguage,
+                targetLanguage: normalizedTargetLanguage,
+                translationMode: translationMode,
+                translateBatchOffline: (texts, type, mode, src, tgt) =>
+                  translateBatchOffline(texts, type, mode, src, tgt),
+                translateBatchGemini: (texts, type, mode, src, tgt) =>
+                  translateBatchGemini(
+                    texts,
+                    type,
+                    mode,
+                    src,
+                    tgt,
+                    buildGeminiContextOverrides(translationMode, src, tgt)
+                  ),
+              }
+            );
+            translatedGroupsRaw = mapTranslationResults(fallbackResults);
+            translatedGroups = translatedGroupsRaw.map((text, index) => {
+              const restored = restoreProtectedTokens(text, preparedGroups[index]?.replacements || []);
+              return normalizeWhitespace(String(restored || ''));
+            });
+            effectiveEngine = 'ai';
+            const thaiPct = Math.round(carryover.thaiRatio * 100);
+            const carryPct = Math.round(carryover.carryoverRatio * 100);
+            fallbackNote = ` fallback: offline->ai (${thaiPct}% Thai, ${carryPct}% carryover).`;
+            console.info(`[TranslateDiag] Offline carryover detected (Thai ${thaiPct}%, carryover ${carryPct}%), switching to Gemini.`);
+          } catch (fallbackError) {
+            console.warn('[TranslationCoordinator] Gemini fallback failed:', fallbackError);
+          }
+        }
+      }
+    }
+
     const groupLineOverrides = new Map<number, string[]>();
     let groupRetryAppliedCount = 0;
 
-    if (engine === 'offline') {
+    if (effectiveEngine === 'offline') {
       for (let groupIndex = 0; groupIndex < preparedGroups.length; groupIndex += 1) {
         const group = preparedGroups[groupIndex];
         // Skip retry for single-line groups since group retry vs line retry are identical and redundant
@@ -7618,7 +7907,7 @@ export default function App() {
 
       for (const [retrySourceLanguage, indexes] of retryBuckets.entries()) {
         const retryInputs = indexes.map((index) => retryPrepared[index]?.protectedText || '');
-        const retryRaw = engine === 'offline'
+        const retryRaw = effectiveEngine === 'offline'
           ? await translateBatchOffline(retryInputs, 'text', translationMode, retrySourceLanguage, normalizedTargetLanguage)
           : await translateBatchGemini(
             retryInputs,
@@ -7674,7 +7963,7 @@ export default function App() {
       if (!options?.suppressStatus) {
         const retryPct = Math.round(translationHealth.retryRatio * 100);
         const thaiPct = Math.round(translationHealth.thaiRatio * 100);
-        const engineLabel = engine === 'offline' ? 'Offline' : 'AI';
+        const engineLabel = effectiveEngine === 'offline' ? 'Offline' : 'AI';
         setTranslationStatus({
           kind: 'error',
           message: `${engineLabel} translation returned mostly source text (retry ${retryPct}%, Thai ${thaiPct}%). Cache preserved.`,
@@ -7700,7 +7989,7 @@ export default function App() {
       sourceLanguage: translationSourceLanguage,
       targetLanguage: normalizedTargetLanguage,
       translationMode: cacheTranslationMode,
-      translatorEngine: engine,
+      translatorEngine: effectiveEngine,
     });
 
     const translationEntry = {
@@ -7711,7 +8000,7 @@ export default function App() {
       sourceLanguage: translationSourceLanguage,
       targetLanguage: normalizedTargetLanguage,
       translationMode: cacheTranslationMode,
-      translatorEngine: engine,
+      translatorEngine: effectiveEngine,
       sourceFingerprint: buildOCRSourceFingerprint(pageOCR, ocrEngine),
       translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
       translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
@@ -7742,7 +8031,7 @@ export default function App() {
             ...layer,
             translatedText: translatedText,
             text: translatedText,
-            translationEngineUsed: engine, // 'offline' หรือ 'ai'
+            translationEngineUsed: effectiveEngine, // 'offline' หรือ 'ai'
           };
         });
         layerStore.setPageLayers(pageNum, {
@@ -7763,7 +8052,7 @@ export default function App() {
     }
 
     const totalPageCaches = useOCRTextLayerStore.getState().getTranslationCacheEntries(pageNum).length;
-    const lowQualityOfflinePath = engine === 'offline'
+    const lowQualityOfflinePath = effectiveEngine === 'offline'
       && normalizedTargetLanguage === 'th'
       && (translationSourceLanguage === 'ko' || translationSourceLanguage === 'es');
     const qualityHint = lowQualityOfflinePath
@@ -7782,7 +8071,7 @@ export default function App() {
     if (!options?.suppressStatus) {
       setTranslationStatus({
         kind: 'success',
-        message: `${engine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${preparedGroups.length} grouped segments on page ${pageNum}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${preservedHint}${qualityHint}`,
+        message: `${effectiveEngine} | ${translationSourceLanguage}->${normalizedTargetLanguage} | ${ocrLanguageKey} | profile=${groupingProfile} translated ${translatedByIndex.size} lines in ${preparedGroups.length} grouped segments on page ${pageNum}.${groupRetryHint} line retries applied: ${retryAppliedCount}/${retryCandidates.length}. cache slots: ${totalPageCaches}.${crossEngineHint}${preservedHint}${qualityHint}${fallbackNote}`,
       });
     }
 
@@ -7967,11 +8256,34 @@ export default function App() {
   const effectiveDownloadScope: DownloadScope = downloadScopeSelection === 'all' && fileType === 'pdf'
     ? 'all'
     : 'current';
-  const selectedDownloadEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
-  const downloadScopedPages = resolveModelScopedPagesForExport(effectiveDownloadScope);
+  const selectedDownloadEngine = selectedExportEngine || (ocrOptions.engine || 'tesseract') as OCREngine;
+  const downloadScopedPages = resolveModelScopedPagesForExport(effectiveDownloadScope, selectedDownloadEngine);
   const downloadScopePageNumbers = effectiveDownloadScope === 'all' && fileType === 'pdf'
     ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
     : [currentPage];
+
+  const getEngineCacheStatus = (engineId: OCREngine) => {
+    const pages = resolveModelScopedPagesForExport(effectiveDownloadScope, engineId);
+    const totalInScope = downloadScopePageNumbers.length;
+    const ocrCount = pages.length;
+    const transCount = pages.filter(({ pageNum, ocr }) => 
+      Boolean(resolveTranslatedEntryForExport(pageNum, ocr, engineId))
+    ).length;
+
+    if (ocrCount === 0) {
+      return { status: 'no_cache', text: 'ไม่มีแคช', ocrCount, transCount };
+    }
+    if (transCount === totalInScope) {
+      return { status: 'ready', text: 'คำแปลพร้อม', ocrCount, transCount };
+    }
+    if (transCount > 0) {
+      return { status: 'partial_trans', text: `แปลแล้ว (${transCount}/${totalInScope})`, ocrCount, transCount };
+    }
+    if (ocrCount === totalInScope) {
+      return { status: 'ocr_only', text: 'เฉพาะต้นฉบับ OCR', ocrCount, transCount };
+    }
+    return { status: 'partial_ocr', text: `OCR แล้ว (${ocrCount}/${totalInScope})`, ocrCount, transCount };
+  };
   const ocrCoveredPageNumbers = downloadScopedPages
     .map((item) => item.pageNum)
     .sort((a, b) => a - b);
@@ -7986,6 +8298,22 @@ export default function App() {
     .filter((pageNum) => !translatedAvailablePageSet.has(pageNum));
   const canExportOriginalSelection = downloadScopedPages.length > 0;
   const canExportTranslatedSelection = translatedAvailablePageNumbers.length > 0;
+
+  const getRemainingSecondsText = () => {
+    if (!translationStartTime || !ocrProgress || ocrProgress.progress <= 0) return 'กำลังประเมินเวลา...';
+    const elapsedSec = (Date.now() - translationStartTime) / 1000;
+    const percent = ocrProgress.progress;
+    if (percent > 5) {
+      const totalSec = elapsedSec * (100 / percent);
+      const remainingSec = Math.max(1, Math.round(totalSec - elapsedSec));
+      return `อีกประมาณ ${remainingSec} วินาที`;
+    } else {
+      const pagesLeft = Math.max(1, ocrProgress.totalPages - ocrProgress.currentPage);
+      const estSecPerPage = isAiProcessing ? 12 : 4;
+      const remainingSec = pagesLeft * estSecPerPage;
+      return `อีกประมาณ ${remainingSec} วินาที`;
+    }
+  };
 
   const triggerPopupTranslation = (engine: 'offline' | 'ai') => {
     if (effectiveDownloadScope === 'all' && fileType === 'pdf') {
@@ -8271,9 +8599,6 @@ export default function App() {
         )}
 
         <div className="flex items-center gap-1.5 rounded-lg border border-white/12 bg-slate-900/55 px-2 py-1 relative">
-          <span className={`text-[10px] font-bold uppercase tracking-[0.18em] ${modeLabelColorClass} mr-0.5 shrink-0`}>
-            Mode
-          </span>
           <div className="relative">
             <button
               onClick={() => setIsModeDropdownOpen(!isModeDropdownOpen)}
@@ -8372,131 +8697,360 @@ export default function App() {
       </div>
 
       {isDownloadMenuOpen && (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/62 backdrop-blur-sm px-4 py-6">
-          <div ref={downloadMenuRef} className="w-full max-w-md rounded-2xl border border-white/15 bg-[#0f131b]/96 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-              <div className="text-[11px] uppercase tracking-wide text-slate-300">Download Export</div>
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-950/60 backdrop-blur-md px-4 py-6 transition-all duration-300">
+          <div 
+            ref={downloadMenuRef} 
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950/80 p-5 shadow-[0_0_50px_-12px_rgba(43,155,255,0.25)] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-white/5 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                  <FileDown size={18} />
+                </div>
+                <div className="text-left">
+                  <h3 className="text-xs font-bold text-slate-100 tracking-wide">ส่งออกข้อมูล PDF</h3>
+                  <p className="text-[9px] text-slate-400">เลือกขอบเขตและโมเดลสำหรับผลลัพธ์</p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => setIsDownloadMenuOpen(false)}
-                className="rounded-md border border-white/15 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:border-white/30 hover:text-white"
+                className="p-1 rounded-lg border border-white/10 hover:border-white/20 bg-white/5 text-slate-400 hover:text-white hover:bg-rose-500/10 hover:border-rose-500/25 transition-all"
+                title="ปิดหน้าต่าง"
               >
-                Close
+                <X size={15} />
               </button>
             </div>
 
-            <div className="space-y-2 p-3">
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Scope</div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDownloadScopeSelection('current')}
-                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadScopeSelection === 'current' ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
-                >
-                  Current Page
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDownloadScopeSelection('all')}
-                  disabled={fileType !== 'pdf'}
-                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadScopeSelection === 'all' ? 'border-cyan-300/65 bg-cyan-500/18 text-cyan-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'} disabled:cursor-not-allowed disabled:opacity-45`}
-                >
-                  All Pages
-                </button>
-              </div>
-
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Content</div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDownloadModeSelection('original')}
-                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadModeSelection === 'original' ? 'border-emerald-300/65 bg-emerald-500/16 text-emerald-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
-                >
-                  Original OCR PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDownloadModeSelection('translated')}
-                  className={`rounded-md border px-2 py-1.5 text-[11px] font-semibold transition-colors ${downloadModeSelection === 'translated' ? 'border-emerald-300/65 bg-emerald-500/16 text-emerald-100' : 'border-white/12 bg-slate-900/70 text-slate-200 hover:border-white/25 hover:text-white'}`}
-                >
-                  Translated Overlay
-                </button>
-              </div>
-
-              {downloadModeSelection === 'translated' && (
-                <div className="space-y-2 rounded-lg border border-white/12 bg-slate-900/60 p-2">
-                  <div className="text-[10px] uppercase tracking-wide text-slate-400">Language + Quick Translate</div>
-                  <select
-                    value={targetLanguage}
-                    onChange={(event) => setTargetLanguage(event.target.value)}
-                    aria-label="Download translated target language"
-                    title="Download translated target language"
-                    className="w-full rounded-md border border-white/15 bg-slate-950/80 px-2 py-1.5 text-[11px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+            <div className="space-y-4">
+              {/* 1. Scope Selection */}
+              <div className="space-y-2">
+                <div className="text-left">
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">ขอบเขตหน้า (Scope)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setDownloadScopeSelection('current')}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center group ${
+                      downloadScopeSelection === 'current'
+                        ? 'border-purple-500 bg-purple-500/12 text-purple-100 shadow-[0_0_15px_-4px_rgba(168,85,247,0.25)] scale-[1.01]'
+                        : 'border-white/5 bg-white/3 text-slate-400 hover:border-white/15 hover:bg-white/5 hover:text-slate-200'
+                    }`}
                   >
-                    <option value="th">Thai (ไทย)</option>
-                    <option value="en">English</option>
-                    <option value="ja">Japanese (日本語)</option>
-                    <option value="ko">Korean (한국어)</option>
-                    <option value="zh">Chinese (中文)</option>
-                  </select>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => triggerPopupTranslation('offline')}
-                      disabled={isAiProcessing || isOfflineProcessing}
-                      className="rounded-md border border-emerald-400/55 bg-emerald-500/16 px-2 py-1.5 text-[11px] font-semibold text-emerald-100 transition-colors hover:bg-emerald-500/26 disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      Translate Offline
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => triggerPopupTranslation('ai')}
-                      disabled={isAiProcessing || isOfflineProcessing}
-                      className="rounded-md border border-cyan-300/65 bg-cyan-500/16 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/26 disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      Translate AI
-                    </button>
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    target {effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'all OCR pages' : `page ${currentPage}`}
-                  </div>
+                    <BookOpen size={16} className={`mb-1.5 transition-transform group-hover:scale-110 ${downloadScopeSelection === 'current' ? 'text-purple-400' : 'text-slate-400'}`} />
+                    <span className="text-xs font-semibold">หน้าปัจจุบัน</span>
+                    <span className="text-[9px] opacity-75 mt-0.5 px-1.5 py-0.5 rounded-full bg-slate-900/50 border border-white/5">
+                      หน้า {currentPage}
+                    </span>
+                  </button>
+                  
+                  <button
+                    type="button"
+                    onClick={() => setDownloadScopeSelection('all')}
+                    disabled={fileType !== 'pdf'}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center group disabled:cursor-not-allowed disabled:opacity-40 ${
+                      downloadScopeSelection === 'all'
+                        ? 'border-purple-500 bg-purple-500/12 text-purple-100 shadow-[0_0_15px_-4px_rgba(168,85,247,0.25)] scale-[1.01]'
+                        : 'border-white/5 bg-white/3 text-slate-400 hover:border-white/15 hover:bg-white/5 hover:text-slate-200'
+                    }`}
+                  >
+                    <Layers size={16} className={`mb-1.5 transition-transform group-hover:scale-110 ${downloadScopeSelection === 'all' ? 'text-purple-400' : 'text-slate-400'}`} />
+                    <span className="text-xs font-semibold">ทุกหน้า</span>
+                    <span className="text-[9px] opacity-75 mt-0.5 px-1.5 py-0.5 rounded-full bg-slate-900/50 border border-white/5">
+                      {fileType === 'pdf' ? `รวม ${totalPages} หน้า` : 'ไฟล์รูปภาพ'}
+                    </span>
+                  </button>
                 </div>
-              )}
-
-              {effectiveDownloadScope === 'all' && fileType === 'pdf' && missingOcrPageNumbers.length > 0 && (
-                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
-                  OCR missing on {missingOcrPageNumbers.length} page(s): {formatPageListSummary(missingOcrPageNumbers)}. Export can continue with OCR pages only.
-                </div>
-              )}
-
-              {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length > 0 && missingTranslatedPageNumbers.length > 0 && (
-                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
-                  Translation cache missing on {missingTranslatedPageNumbers.length} OCR page(s): {formatPageListSummary(missingTranslatedPageNumbers)}. You can translate now or export available pages.
-                </div>
-              )}
-
-              {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length === 0 && (
-                <div className="rounded-lg border border-rose-500/45 bg-rose-500/12 px-2 py-1.5 text-[11px] text-rose-100">
-                  No OCR cache available yet for this scope. Run OCR first.
-                </div>
-              )}
-
-              <div className="rounded-lg border border-white/12 bg-slate-900/55 px-2 py-1.5 text-[10px] text-slate-300">
-                OCR pages in scope: {ocrCoveredPageNumbers.length > 0 ? formatPageListSummary(ocrCoveredPageNumbers) : '-'}
-                {downloadModeSelection === 'translated' && (
-                  <span>{` | translated pages: ${translatedAvailablePageNumbers.length > 0 ? formatPageListSummary(translatedAvailablePageNumbers) : '-'}`}</span>
-                )}
               </div>
 
+              {/* 2. Content Selection */}
+              <div className="space-y-2">
+                <div className="text-left">
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">รูปแบบเนื้อหา (Content)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setDownloadModeSelection('original')}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center group ${
+                      downloadModeSelection === 'original'
+                        ? 'border-blue-500 bg-blue-500/12 text-blue-100 shadow-[0_0_15px_-4px_rgba(59,130,246,0.25)] scale-[1.01]'
+                        : 'border-white/5 bg-white/3 text-slate-400 hover:border-white/15 hover:bg-white/5 hover:text-slate-200'
+                    }`}
+                  >
+                    <FileText size={16} className={`mb-1.5 transition-transform group-hover:scale-110 ${downloadModeSelection === 'original' ? 'text-blue-400' : 'text-slate-400'}`} />
+                    <span className="text-xs font-semibold">ต้นฉบับพร้อมค้นหา</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">เฉพาะข้อมูล OCR ดิบ</span>
+                  </button>
+                  
+                  <button
+                    type="button"
+                    onClick={() => setDownloadModeSelection('translated')}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all text-center group ${
+                      downloadModeSelection === 'translated'
+                        ? 'border-blue-500 bg-blue-500/12 text-blue-100 shadow-[0_0_15px_-4px_rgba(59,130,246,0.25)] scale-[1.01]'
+                        : 'border-white/5 bg-white/3 text-slate-400 hover:border-white/15 hover:bg-white/5 hover:text-slate-200'
+                    }`}
+                  >
+                    <Languages size={16} className={`mb-1.5 transition-transform group-hover:scale-110 ${downloadModeSelection === 'translated' ? 'text-blue-400' : 'text-slate-400'}`} />
+                    <span className="text-xs font-semibold">ฉบับแปลภาษา</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">ทับคำแปลบน PDF เดิม</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. Interactive OCR Model Grid */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">โมเดลประมวลผล (OCR Engine)</span>
+                  <span className="text-[9px] text-slate-400">คลิกเพื่อสลับใช้ผลลัพธ์</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2.5">
+                  {(['paddleocr', 'easyocr', 'tesseract'] as OCREngine[]).map((engineId) => {
+                    const statusInfo = getEngineCacheStatus(engineId);
+                    const isSelected = selectedDownloadEngine === engineId;
+                    
+                    let statusBg = 'bg-slate-900/60 text-slate-400 border-white/5';
+                    let statusTextClass = 'text-slate-500';
+                    let statusIcon = <AlertCircle size={10} className="text-slate-500" />;
+                    
+                    if (statusInfo.status === 'ready') {
+                      statusBg = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+                      statusTextClass = 'text-emerald-400';
+                      statusIcon = <Check size={10} className="text-emerald-400" />;
+                    } else if (statusInfo.status === 'partial_trans') {
+                      statusBg = 'bg-teal-500/10 text-teal-300 border-teal-500/20';
+                      statusTextClass = 'text-teal-400';
+                      statusIcon = <Check size={10} className="text-teal-400" />;
+                    } else if (statusInfo.status === 'ocr_only') {
+                      statusBg = 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+                      statusTextClass = 'text-cyan-400';
+                      statusIcon = <Eye size={10} className="text-cyan-400" />;
+                    } else if (statusInfo.status === 'partial_ocr') {
+                      statusBg = 'bg-cyan-500/5 text-cyan-300 border-cyan-500/10';
+                      statusTextClass = 'text-cyan-400/80';
+                      statusIcon = <Eye size={10} className="text-cyan-400/80" />;
+                    }
+                    
+                    const displayName = engineId === 'paddleocr' ? 'PaddleOCR' : engineId === 'easyocr' ? 'EasyOCR' : 'Tesseract';
+                    
+                    return (
+                      <button
+                        key={engineId}
+                        type="button"
+                        onClick={() => setSelectedExportEngine(engineId)}
+                        className={`flex flex-col items-center justify-between p-2.5 rounded-xl border text-center transition-all group relative overflow-hidden ${
+                          isSelected
+                            ? 'border-orange-500 bg-orange-950/20 text-orange-100 shadow-[0_0_15px_-4px_rgba(249,115,22,0.4)] scale-[1.02]'
+                            : 'border-white/5 bg-slate-900/40 text-slate-400 hover:border-white/10 hover:bg-slate-900/60 hover:text-slate-200'
+                        }`}
+                      >
+                        {isSelected && (
+                          <div className="absolute inset-0 bg-gradient-to-b from-orange-500/10 to-transparent pointer-events-none" />
+                        )}
+                        
+                        <Cpu size={14} className={`mb-1 transition-transform group-hover:rotate-12 ${isSelected ? 'text-orange-400' : 'text-slate-400'}`} />
+                        <span className="text-[10px] font-bold tracking-tight mb-1.5">{displayName}</span>
+                        
+                        <span className={`w-full flex items-center justify-center gap-0.5 px-1 py-0.5 rounded text-[8px] font-semibold tracking-tighter ${statusBg}`}>
+                          {statusIcon}
+                          <span className="truncate">{statusInfo.text}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 4. Quick Translation Console (แสดงเฉพาะเมื่อเลือก Translated) */}
+              {downloadModeSelection === 'translated' && (
+                <div className="rounded-xl border border-white/5 bg-white/2 p-3 space-y-2.5 backdrop-blur-md">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-wider text-slate-400 text-left">
+                    <Globe size={11} className="text-cyan-400 shrink-0" />
+                    <span>ตัวแปลภาษาด่วน (Quick Translate)</span>
+                  </div>
+                  
+                  {/* การแสดงผลระหว่างแปลภาษา (Progress Bar ของจริง!) */}
+                  {(isAiProcessing || isOfflineProcessing) && ocrProgress ? (
+                    <div className="space-y-2 p-2.5 rounded-xl border border-cyan-500/20 bg-cyan-500/5 backdrop-blur-sm">
+                      <div className="flex items-center justify-between text-[10px] text-cyan-200">
+                        <span className="font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+                          {ocrProgress.message || 'กำลังแปลเอกสาร...'}
+                        </span>
+                        <span className="font-mono text-[11px]">{Math.round(ocrProgress.progress)}%</span>
+                      </div>
+                      
+                      {/* หลอด Progress Bar */}
+                      <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-white/10 relative">
+                        <div 
+                          className="h-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 rounded-full transition-all duration-300 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
+                          style={{ width: `${ocrProgress.progress}%` }}
+                        />
+                      </div>
+                      
+                      {/* รายละเอียดเลขหน้าและเวลาที่เหลือ */}
+                      <div className="flex items-center justify-between text-[9px] text-slate-400">
+                        <span>หน้าที่: {ocrProgress.currentPage} / {ocrProgress.totalPages} หน้า</span>
+                        <span className="text-cyan-300 font-semibold">{getRemainingSecondsText()}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* เมนูตั้งค่าก่อนกดแปล (ปรับให้กะทัดรัดและมีปุ่มสลับ High/Fast ข้าง select ภาษา) */}
+                      <div className="grid grid-cols-12 gap-3 items-end">
+                        {/* 1. เลือกภาษา */}
+                        <div className="col-span-7 flex flex-col gap-1 text-left">
+                          <span className="text-[9px] text-slate-400">ภาษาเป้าหมาย:</span>
+                          <select
+                            value={targetLanguage}
+                            onChange={(event) => setTargetLanguage(event.target.value)}
+                            aria-label="Download translated target language"
+                            title="Download translated target language"
+                            className="w-full rounded-lg border border-white/10 bg-slate-950/90 px-2 py-1.5 text-[11px] text-slate-100 focus:border-cyan-400/50 focus:outline-none"
+                          >
+                            {(() => {
+                              const isOcrThai = ocrLanguage.split('+').some(lang => lang.trim().toLowerCase() === 'tha' || lang.trim().toLowerCase() === 'thai');
+                              return (
+                                <>
+                                  <option value="th" disabled={isOcrThai}>Thai (ไทย)</option>
+                                  <option value="en">English</option>
+                                  <option value="ja">Japanese (日本語)</option>
+                                  <option value="ko">Korean (한국어)</option>
+                                  <option value="zh">Chinese (中文)</option>
+                                </>
+                              );
+                            })()}
+                          </select>
+                        </div>
+
+                        {/* 2. สวิตช์ OCR Profile (High / Fast) โทนสีส้มพรีเมียมตามที่คุณต้องการ */}
+                        <div className="col-span-5 flex flex-col gap-1 text-left">
+                          <span className="text-[9px] text-slate-400">โปรไฟล์ OCR:</span>
+                          <div className="grid grid-cols-2 rounded-lg border border-white/10 bg-slate-950/90 p-0.5 h-[30px]">
+                            <button
+                              type="button"
+                              onClick={() => setPopupOcrQualityMode('high')}
+                              className={`text-[9px] font-bold rounded transition-all ${
+                                popupOcrQualityMode === 'high'
+                                  ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/30'
+                                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                              }`}
+                            >
+                              High
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPopupOcrQualityMode('fast')}
+                              className={`text-[9px] font-bold rounded transition-all ${
+                                popupOcrQualityMode === 'fast'
+                                  ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/30'
+                                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                              }`}
+                            >
+                              Fast
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ปุ่มเริ่มแปล */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => triggerPopupTranslation('offline')}
+                          disabled={isAiProcessing || isOfflineProcessing}
+                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 text-[10px] font-bold text-teal-200 transition-all hover:bg-teal-500/20 hover:border-teal-500/40 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          <RefreshCw size={10} className={isOfflineProcessing ? 'animate-spin' : ''} />
+                          <span>แปลภาษาแบบออฟไลน์</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => triggerPopupTranslation('ai')}
+                          disabled={isAiProcessing || isOfflineProcessing}
+                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-[10px] font-bold text-cyan-200 transition-all hover:bg-cyan-500/20 hover:border-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          <Sparkles size={10} className={isAiProcessing ? 'animate-pulse text-cyan-300' : ''} />
+                          <span>แปลภาษาด้วย AI</span>
+                        </button>
+                      </div>
+                      
+                      <div className="text-[9px] text-slate-400 text-center flex items-center justify-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-cyan-400 animate-ping shrink-0" />
+                        เป้าหมาย: {effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'ทุกหน้าที่มี OCR' : `เฉพาะหน้าปัจจุบัน (หน้า ${currentPage})`}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* 5. HUD-style Info & Warnings (เอาตัวคำเตือนไม่พบคู่แคชออกเพื่อประหยัดพื้นที่!) */}
+              <div className="space-y-2 text-[10px] text-left">
+                {effectiveDownloadScope === 'all' && fileType === 'pdf' && missingOcrPageNumbers.length > 0 && (
+                  <div className="flex gap-1.5 p-2 rounded-lg border border-amber-500/20 bg-amber-500/5 text-amber-300/90 leading-relaxed shadow-sm">
+                    <AlertCircle size={13} className="shrink-0 text-amber-400 mt-0.5" />
+                    <div>
+                      ยังไม่รัน OCR บางหน้า ({missingOcrPageNumbers.length} หน้า):{' '}
+                      <span className="font-bold">{formatPageListSummary(missingOcrPageNumbers)}</span>{' '}
+                      (ระบบจะส่งออกข้ามหน้าที่ยังไม่ได้ OCR)
+                    </div>
+                  </div>
+                )}
+
+                {downloadModeSelection === 'translated' && ocrCoveredPageNumbers.length > 0 && missingTranslatedPageNumbers.length > 0 && (
+                  <div className="flex gap-1.5 p-2 rounded-lg border border-amber-500/20 bg-amber-500/5 text-amber-300/90 leading-relaxed shadow-sm">
+                    <AlertCircle size={13} className="shrink-0 text-amber-400 mt-0.5" />
+                    <div>
+                      ยังไม่มีข้อมูลแปลของโมเดลนี้บางหน้า ({missingTranslatedPageNumbers.length} หน้า):{' '}
+                      <span className="font-bold">{formatPageListSummary(missingTranslatedPageNumbers)}</span>{' '}
+                      (กดแปลภาษาด้านบนก่อน หรือดาวน์โหลดเท่าที่มีแปลแล้ว)
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between p-2 rounded-lg border border-white/5 bg-slate-900/30 text-slate-400">
+                  <span>หน้าที่มี OCR: {ocrCoveredPageNumbers.length > 0 ? formatPageListSummary(ocrCoveredPageNumbers) : 'ไม่มี'}</span>
+                  {downloadModeSelection === 'translated' && (
+                    <span className="border-l border-white/10 pl-2">
+                      แปลแล้ว: {translatedAvailablePageNumbers.length > 0 ? formatPageListSummary(translatedAvailablePageNumbers) : 'ไม่มี'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* 6. Primary Action Button */}
               <button
                 type="button"
                 onClick={() => void handleHeaderDownload(effectiveDownloadScope, downloadModeSelection)}
                 disabled={isDownloadingResult || (downloadModeSelection === 'original' ? !canExportOriginalSelection : !canExportTranslatedSelection)}
-                className="w-full rounded-lg border border-cyan-300/60 bg-cyan-500/18 px-3 py-2 text-sm font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/28 disabled:cursor-not-allowed disabled:opacity-45"
+                className="w-full relative overflow-hidden group rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold p-3 text-xs tracking-wider transition-all duration-300 shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:shadow-[0_0_25px_rgba(6,182,212,0.45)] hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
               >
-                {isDownloadingResult
-                  ? 'Preparing download...'
-                  : `Export ${effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'All Pages' : `Page ${currentPage}`} • ${downloadModeSelection === 'original' ? 'Original OCR PDF' : 'Translated Overlay'}`}
+                <div className="absolute inset-0 bg-gradient-to-r from-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-out" />
+                
+                <div className="flex items-center justify-center gap-1.5">
+                  {isDownloadingResult ? (
+                    <>
+                      <RefreshCw size={14} className="animate-spin" />
+                      <span>กำลังส่งออกและรวมไฟล์...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileDown size={14} className="group-hover:translate-y-0.5 transition-transform" />
+                      <span>
+                        ส่งออกข้อมูล {effectiveDownloadScope === 'all' && fileType === 'pdf' ? 'ทั้งหมดทุกหน้า' : `เฉพาะหน้า ${currentPage}`}
+                      </span>
+                    </>
+                  )}
+                </div>
+                
+                {!isDownloadingResult && (
+                  <div className="text-[9px] font-normal opacity-75 mt-0.5 uppercase tracking-tighter">
+                    [{selectedDownloadEngine === 'paddleocr' ? 'PaddleOCR' : selectedDownloadEngine === 'easyocr' ? 'EasyOCR' : 'Tesseract'} • {downloadModeSelection === 'original' ? 'ต้นฉบับ OCR' : 'ฉบับแปลภาษา'}]
+                  </div>
+                )}
               </button>
             </div>
           </div>

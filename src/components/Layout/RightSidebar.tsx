@@ -249,25 +249,35 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   onClick={() => setIsLangDropdownOpen(false)}
                 />
                 <div className="absolute right-0 mt-1.5 w-36 bg-slate-950 border border-white/15 rounded-lg shadow-2xl z-50 py-1 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-100">
-                  {LANGUAGES_CONFIG.map((lang) => (
-                    <button
-                      key={lang.code}
-                      onClick={() => {
-                        setTargetLanguage(lang.code);
-                        setIsLangDropdownOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-white/10 ${
-                        targetLanguage === lang.code ? 'text-[#2B9BFF] font-semibold bg-white/5' : 'text-slate-200'
-                      }`}
-                    >
-                      <img 
-                        src={lang.flagUrl} 
-                        alt={lang.label} 
-                        className="w-4 h-2.5 object-cover rounded-[1px] opacity-90 shrink-0" 
-                      />
-                      <span>{lang.name}</span>
-                    </button>
-                  ))}
+                  {LANGUAGES_CONFIG.map((lang) => {
+                    const isOcrThai = options.language.split('+').some(l => l.trim().toLowerCase() === 'tha' || l.trim().toLowerCase() === 'thai');
+                    const isDisabled = lang.code === 'th' && isOcrThai;
+                    return (
+                      <button
+                        key={lang.code}
+                        disabled={isDisabled}
+                        onClick={() => {
+                          setTargetLanguage(lang.code);
+                          setIsLangDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors ${
+                          isDisabled 
+                            ? 'opacity-40 cursor-not-allowed text-slate-500' 
+                            : 'hover:bg-white/10 text-slate-200'
+                        } ${
+                          targetLanguage === lang.code && !isDisabled ? 'text-[#2B9BFF] font-semibold bg-white/5' : ''
+                        }`}
+                        title={isDisabled ? 'Cannot translate Thai to Thai' : `Switch to ${lang.name}`}
+                      >
+                        <img 
+                          src={lang.flagUrl} 
+                          alt={lang.label} 
+                          className="w-4 h-2.5 object-cover rounded-[1px] opacity-90 shrink-0" 
+                        />
+                        <span>{lang.name}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </>
             )}

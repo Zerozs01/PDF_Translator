@@ -9,6 +9,12 @@ This changelog tracks updates in `documents/` only.
   - Translation cache version `v45`
 - Updated OCR profile list to include `raw` pipeline profile
 
+## 2026-05-31
+
+- Corrected OCR pipeline profile list to `panel | export` (raw is benchmark-only)
+- Documented panel quality toggle mapping (Paddle: fast/balanced, others: best)
+- Added benchmark notes: Base runs full pipeline, Improve compares raw vs full
+
 ## 2026-05-29
 
 - OCR progress UI: right-aligned percent and ETA; page-based estimate with single-page fallback

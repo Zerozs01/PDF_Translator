@@ -269,10 +269,23 @@ export class TranslationCoordinator {
     const cachedItems: { item: TranslatableItem; cachedText: string }[] = [];
     const uncachedItems: TranslatableItem[] = [];
 
+    // Detect cached translations that were never actually translated
+    // (Argos returned the English source unchanged and it was saved to DB cache).
+    // For Thai target: a valid translation must contain Thai characters.
+    const isCachedUntranslated = (cachedText: string, targetLang: string): boolean => {
+      if (targetLang !== 'th') return false;
+      const trimmed = cachedText.trim();
+      if (!trimmed) return false;
+      const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
+      const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
+      return hasLatinLetters && !hasThaiChars; // Still English → was never translated
+    };
+
     for (const res of cachedLookup) {
-      if (res.cachedText !== null) {
+      if (res.cachedText !== null && !isCachedUntranslated(res.cachedText, options.targetLanguage)) {
         cachedItems.push({ item: res.item, cachedText: res.cachedText });
       } else {
+        // Cache miss OR cached result is untranslated → re-translate with engine
         uncachedItems.push(res.item);
       }
     }
