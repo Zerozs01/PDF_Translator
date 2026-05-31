@@ -1565,6 +1565,30 @@ describe('applyThaiConversationalGlossary', () => {
     expect(knowHow).toBe('เขารู้ได้อย่างไร...?!');
     expect(entonces).toBe('งั้น แน่นอน...');
   });
+
+  test('maps Korean abusive and threatening lines to stable Thai output', () => {
+    expect(applyThaiConversationalGlossary('걸레년', 'อีสารเลว', 'th')).toBe('อีผู้หญิงสำส่อน');
+    expect(applyThaiConversationalGlossary('지울 거지?응?', 'ยังไงข่าว', 'th')).toBe('แกจะลบมันใช่ไหม? ฮึ?');
+    expect(applyThaiConversationalGlossary('잘나왔던데 왜 지워?', 'ทำไมคุณรู้?', 'th')).toBe('มันออกมาดีนี่ ทำไมต้องลบ?');
+    expect(applyThaiConversationalGlossary('출력해서 집에 붙여놓을라고 하는데 ㅋㅋ', 'ส่ง 출력', 'th')).toBe('ฉันวางแผนจะพิมพ์ออกมาแล้วเอาไปติดไว้ที่บ้าน ฮ่าๆ');
+    expect(applyThaiConversationalGlossary('분여놓을라고하느데', 'เกี่ยวกับเรา', 'th')).toBe('ฉันวางแผนจะเอาไปแขวนไว้');
+  });
+
+  test('maps Korean OCR-noisy dialogue snippets to intended Thai phrases', () => {
+    expect(applyThaiConversationalGlossary('미친색까 뒤지기 싫으면', 'เป็นผู้ใหญ่', 'th')).toBe('ไอ้สารเลว ถ้าไม่อยากตาย');
+    expect(applyThaiConversationalGlossary('빨리 지워라', 'มีขนดก', 'th')).toBe('ลบมันซะเร็วๆ');
+    expect(applyThaiConversationalGlossary('안 지우면 진짜', 'ฉันจะเป็นผู้', 'th')).toBe('ถ้าไม่ลบ');
+    expect(applyThaiConversationalGlossary('죽여 버릴 거야', 'หญิงจริงๆ', 'th')).toBe('ฉันจะฆ่าแกจริงๆ');
+    expect(applyThaiConversationalGlossary('음!뭐지?이', 'ดนตรีคืออะไร', 'th')).toBe('หืม! นี่อะไรกันเนี่ย');
+    expect(applyThaiConversationalGlossary('가장 빠른 입분제공사이트', 'หนทางที่เร็วที่สุดที่จะเริ่มต้น', 'th')).toBe('เว็บไซต์ให้บริการเข้าเร็วที่สุด');
+    expect(applyThaiConversationalGlossary('데자뷰 같은 이 느낌.', '?มุมมองอิเดจา', 'th')).toBe('ความรู้สึกนี้เหมือนเคยเกิดขึ้นมาก่อน.');
+    expect(applyThaiConversationalGlossary('출력', '출력', 'th')).toBe('พิมพ์ออกมา');
+  });
+
+  test('maps Korean lines that previously leaked template-like garbage tokens', () => {
+    expect(applyThaiConversationalGlossary('이거 이거', 'จาก{ {/if]]', 'th')).toBe('เรื่องนี้ เรื่องนี้');
+    expect(applyThaiConversationalGlossary('넘어가 줘 말어.', '{/if]]', 'th')).toBe('ฉันควรปล่อยผ่านไปหรือไม่.');
+  });
 });
 
 describe('applyThaiTechnicalGlossary', () => {

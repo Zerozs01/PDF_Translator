@@ -1,5 +1,7 @@
 // src/services/ocr/ocrTextNormalizer.ts
 
+import { normalizeKoreanColloquialOcrText } from '../translation/koreanTranslationPolicy';
+
 export const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
   eng: 'en',
@@ -283,14 +285,7 @@ export const normalizeJapaneseOcrNoiseForTranslation = (text: string): string =>
 };
 
 export const normalizeKoreanOcrNoiseForTranslation = (text: string): string => {
-  let normalized = String(text || '');
-  normalized = normalized
-    .replace(/。/g, '. ')
-    .replace(/、/g, ', ')
-    .replace(/！/g, '! ')
-    .replace(/？/g, '? ')
-    .replace(/〜/g, '~');
-  return normalizeWhitespace(normalized);
+  return normalizeKoreanColloquialOcrText(text);
 };
 
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {

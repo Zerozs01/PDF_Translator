@@ -2,6 +2,14 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-06-01
+
+- Updated the OCR/translation docs to reflect current offline hardening:
+  - offline all-pages translation now uses any cached OCR page instead of a strict selected-engine gate
+  - Korean offline translation prefers the `ko -> en -> th` pivot path more aggressively
+  - short mixed-symbol OCR garbage tokens are filtered before translation
+  - Korean phrase repair rules were added for common noisy comic lines
+
 ## 2026-05-28
 
 - Synced version constants in docs to match code:

@@ -99,3 +99,13 @@ Specific short English words are now protected from aggressive filters:
 
 ### 7.4 Balloon Harmonization
 Grouping tolerances were relaxed to allow higher vertical gaps and height ratios. This prevents the top line of a speech bubble from being excluded from the merged mask/border.
+
+## 8. Offline Translation Hardening (2026-06-01)
+
+The offline pipeline now includes a few targeted protections to keep Korean comic dialogue closer to the quality expected from English routes:
+
+- **All-pages cache selection**: translation batch jobs no longer skip pages just because the selected OCR engine is different from the cached engine already present for that page.
+- **Korean source cleanup**: `ko` source text is normalized with Korean OCR spacing/noise cleanup before Argos receives it.
+- **Pivot bias**: Korean `ko -> th` routes prefer the `ko -> en -> th` pivot path more aggressively when direct output still looks weak or untranslated.
+- **Garbage token filter**: short OCR artifacts with mixed brackets/symbols and digits are dropped before translation.
+- **Phrase repair**: a small local fallback glossary handles a few recurring noisy comic lines so they do not degrade the final Thai output.

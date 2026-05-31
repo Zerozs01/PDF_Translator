@@ -32,7 +32,7 @@
     "ocr:gate": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
     "ocr:gate:kor": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk --require-language kor",
     "ocr:benchmark:ci": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/postinstall-ocr.js && node scripts/download-overlay-fonts.js"
+    "postinstall": "node scripts/postinstall-electron.js && node scripts/postinstall-ocr.js && node scripts/download-overlay-fonts.js"
   },
   "repository": {
     "type": "git",

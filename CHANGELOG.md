@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — Offline Translation Hardening
+
+- **Offline all-pages translation** now accepts any cached OCR page instead of being blocked by a single selected-engine gate when page OCR already exists in memory or cache.
+- **Korean offline translation** now prefers the `ko -> en -> th` pivot path more aggressively and applies Korean OCR noise cleanup before translation, improving Thai output quality on comic-style dialogue.
+- **OCR garbage filtering** now drops short mixed-symbol artifacts such as `[({2help)` before translation so they do not leak into translated output as bogus text.
+- **Korean phrase repair** adds local Thai fallbacks for common noisy lines such as `걸레년`, `미친`, `몸으로 때운다고?`, `그 사진 지워주면`, and `내가 뭐든 할게`.
+
 ## [1.2.16] - 2026-05-21
 
 ### Added — Phase 3: Interactive Layer Manipulation (Edit Layer)

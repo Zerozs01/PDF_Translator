@@ -78,6 +78,15 @@ PaddleOCR รองรับงาน OCR แบบ end-to-end และปั�
 
 EasyOCR เป็น OCR แบบ ready-to-use ที่รองรับหลายภาษาและมี API `readtext` ที่ปรับ parameter ด้าน decoder, contrast, detection, merging ได้ค่อนข้างง่าย เหมาะกับงานทดลองเร็วและ fallback บางประเภท ([github.com](https://github.com/JaidedAI/EasyOCR?utm_source=chatgpt.com))
 
+## 2.4 Offline Quality Notes
+
+For the current Electron pipeline, offline translation quality is improved when the system:
+
+- normalizes OCR noise before sending text into Argos
+- prefers pivot routing for Korean comic dialogue when direct output looks weak
+- filters short mixed-symbol OCR garbage tokens before translation
+- applies small local phrase repairs for recurring noisy lines instead of trusting Argos to recover them
+
 ### ควรใช้เมื่อ
 
 - ต้องการ integrate เร็ว

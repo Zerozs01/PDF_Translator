@@ -1553,7 +1553,7 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
       && vividRgb.b <= Math.min(vividRgb.r, vividRgb.g) - 24
       && vividLum <= 0.82
       && vividSat >= 0.28;
-    if (warmHighlight && vividWeightRatio >= 0.16 && vividDistance <= 0.72) {
+    if (warmHighlight && vividWeightRatio >= 0.05 && vividDistance <= 0.95) {
       return vividRgb;
     }
   }

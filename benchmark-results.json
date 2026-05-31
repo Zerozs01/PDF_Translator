@@ -1,109 +1,3145 @@
 {
-  "generatedAt": "2026-05-30T21:28:14.013Z",
-  "config": {
-    "baseUrl": "http://localhost:5173",
-    "manifest": "public/fixtures/ocr/manga/expectations.json",
-    "base": "public/fixtures/ocr/baseline/ocr-v38-panel.json",
-    "expect": "public/fixtures/ocr/manga/expectations.json",
-    "pipeline": "panel",
-    "quality": "best",
-    "engines": [
-      "tesseract",
-      "paddleocr"
+  "image": "manga1.png",
+  "width": 647,
+  "height": 902,
+  "baseline": {
+    "timeMs": 81192.7733,
+    "boxesCount": 48,
+    "lines": [
+      {
+        "text": "YOU AS A",
+        "confidence": 93.62701177597046,
+        "bbox": {
+          "x0": 497,
+          "y0": 79,
+          "x1": 555,
+          "y1": 93
+        },
+        "words": [
+          {
+            "text": "YOU",
+            "confidence": 93.62701177597046,
+            "bbox": {
+              "x0": 497,
+              "y0": 79,
+              "x1": 526,
+              "y1": 93
+            }
+          },
+          {
+            "text": "AS",
+            "confidence": 93.62701177597046,
+            "bbox": {
+              "x0": 526,
+              "y0": 79,
+              "x1": 545.33,
+              "y1": 93
+            }
+          },
+          {
+            "text": "A",
+            "confidence": 93.62701177597046,
+            "bbox": {
+              "x0": 545.33,
+              "y0": 79,
+              "x1": 555,
+              "y1": 93
+            }
+          }
+        ],
+        "_sortY": 79,
+        "sortHintY": 79,
+        "_sortX": 497,
+        "sortHintX": 497,
+        "quad": [
+          {
+            "x": 497,
+            "y": 79
+          },
+          {
+            "x": 555,
+            "y": 79
+          },
+          {
+            "x": 555,
+            "y": 93
+          },
+          {
+            "x": 497,
+            "y": 93
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 0
+      },
+      {
+        "text": "ARE IN",
+        "confidence": 95.26110291481018,
+        "bbox": {
+          "x0": 117,
+          "y0": 89,
+          "x1": 160,
+          "y1": 103
+        },
+        "words": [
+          {
+            "text": "ARE",
+            "confidence": 95.26110291481018,
+            "bbox": {
+              "x0": 117,
+              "y0": 89,
+              "x1": 142.8,
+              "y1": 103
+            }
+          },
+          {
+            "text": "IN",
+            "confidence": 95.26110291481018,
+            "bbox": {
+              "x0": 142.8,
+              "y0": 89,
+              "x1": 160,
+              "y1": 103
+            }
+          }
+        ],
+        "_sortY": 89,
+        "sortHintY": 89,
+        "_sortX": 117,
+        "sortHintX": 117,
+        "quad": [
+          {
+            "x": 117,
+            "y": 89
+          },
+          {
+            "x": 160,
+            "y": 89
+          },
+          {
+            "x": 160,
+            "y": 103
+          },
+          {
+            "x": 117,
+            "y": 103
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 1
+      },
+      {
+        "text": "LATECOMER..",
+        "confidence": 92.11817383766174,
+        "bbox": {
+          "x0": 487,
+          "y0": 94,
+          "x1": 564,
+          "y1": 105
+        },
+        "words": [
+          {
+            "text": "LATECOMER..",
+            "confidence": 92.11817383766174,
+            "bbox": {
+              "x0": 487,
+              "y0": 94,
+              "x1": 564,
+              "y1": 105
+            }
+          }
+        ],
+        "_sortY": 94,
+        "sortHintY": 94,
+        "_sortX": 487,
+        "sortHintX": 487,
+        "quad": [
+          {
+            "x": 487,
+            "y": 94
+          },
+          {
+            "x": 564,
+            "y": 94
+          },
+          {
+            "x": 564,
+            "y": 105
+          },
+          {
+            "x": 487,
+            "y": 105
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 3
+      },
+      {
+        "text": "THE SAME",
+        "confidence": 96.97926044464111,
+        "bbox": {
+          "x0": 107,
+          "y0": 101,
+          "x1": 169,
+          "y1": 115
+        },
+        "words": [
+          {
+            "text": "THE",
+            "confidence": 96.97926044464111,
+            "bbox": {
+              "x0": 107,
+              "y0": 101,
+              "x1": 133.57,
+              "y1": 115
+            }
+          },
+          {
+            "text": "SAME",
+            "confidence": 96.97926044464111,
+            "bbox": {
+              "x0": 133.57,
+              "y0": 101,
+              "x1": 169,
+              "y1": 115
+            }
+          }
+        ],
+        "_sortY": 101,
+        "sortHintY": 101,
+        "_sortX": 107,
+        "sortHintX": 107,
+        "quad": [
+          {
+            "x": 107,
+            "y": 101
+          },
+          {
+            "x": 169,
+            "y": 101
+          },
+          {
+            "x": 169,
+            "y": 115
+          },
+          {
+            "x": 107,
+            "y": 115
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 2
+      },
+      {
+        "text": "BOAT AS US.",
+        "confidence": 94.08035278320312,
+        "bbox": {
+          "x0": 102,
+          "y0": 114,
+          "x1": 174,
+          "y1": 128
+        },
+        "words": [
+          {
+            "text": "BOAT",
+            "confidence": 94.08035278320312,
+            "bbox": {
+              "x0": 102,
+              "y0": 114,
+              "x1": 134,
+              "y1": 128
+            }
+          },
+          {
+            "text": "AS",
+            "confidence": 94.08035278320312,
+            "bbox": {
+              "x0": 134,
+              "y0": 114,
+              "x1": 150,
+              "y1": 128
+            }
+          },
+          {
+            "text": "US.",
+            "confidence": 94.08035278320312,
+            "bbox": {
+              "x0": 150,
+              "y0": 114,
+              "x1": 174,
+              "y1": 128
+            }
+          }
+        ],
+        "_sortY": 114,
+        "sortHintY": 114,
+        "_sortX": 102,
+        "sortHintX": 102,
+        "quad": [
+          {
+            "x": 102,
+            "y": 114
+          },
+          {
+            "x": 174,
+            "y": 114
+          },
+          {
+            "x": 174,
+            "y": 128
+          },
+          {
+            "x": 102,
+            "y": 128
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 4
+      },
+      {
+        "text": "Plauer Name: Player Name:",
+        "confidence": 97.32822179794312,
+        "bbox": {
+          "x0": 92,
+          "y0": 193,
+          "x1": 594,
+          "y1": 208
+        },
+        "words": [
+          {
+            "text": "Plauer",
+            "confidence": 97.32392430305481,
+            "bbox": {
+              "x0": 92,
+              "y0": 197,
+              "x1": 140,
+              "y1": 208
+            }
+          },
+          {
+            "text": "Name:",
+            "confidence": 97.32392430305481,
+            "bbox": {
+              "x0": 140,
+              "y0": 197,
+              "x1": 180,
+              "y1": 208
+            }
+          },
+          {
+            "text": "Player",
+            "confidence": 97.33251929283142,
+            "bbox": {
+              "x0": 503,
+              "y0": 193,
+              "x1": 552.64,
+              "y1": 207
+            }
+          },
+          {
+            "text": "Name:",
+            "confidence": 97.33251929283142,
+            "bbox": {
+              "x0": 552.64,
+              "y0": 193,
+              "x1": 594,
+              "y1": 207
+            }
+          }
+        ],
+        "_sortY": 193,
+        "sortHintY": 193,
+        "_sortX": 92,
+        "sortHintX": 92,
+        "_sourceIndex": 5
+      },
+      {
+        "text": "Azuma Yuki",
+        "confidence": 98.13503623008728,
+        "bbox": {
+          "x0": 109,
+          "y0": 205,
+          "x1": 562,
+          "y1": 231
+        },
+        "words": [
+          {
+            "text": "Azuma",
+            "confidence": 99.08998608589172,
+            "bbox": {
+              "x0": 109,
+              "y0": 207,
+              "x1": 163,
+              "y1": 231
+            }
+          },
+          {
+            "text": "Yuki",
+            "confidence": 97.18008637428284,
+            "bbox": {
+              "x0": 524,
+              "y0": 205,
+              "x1": 562,
+              "y1": 229
+            }
+          }
+        ],
+        "_sortY": 200.45271774436003,
+        "sortHintY": 200.45271774436003,
+        "_sortX": 121.52245861938414,
+        "sortHintX": 121.52245861938414,
+        "_sourceIndex": 7
+      },
+      {
+        "text": "IF YOU GO",
+        "confidence": 96.35741114616394,
+        "bbox": {
+          "x0": 551,
+          "y0": 300,
+          "x1": 613,
+          "y1": 314
+        },
+        "words": [
+          {
+            "text": "IF",
+            "confidence": 96.35741114616394,
+            "bbox": {
+              "x0": 551,
+              "y0": 300,
+              "x1": 568.71,
+              "y1": 314
+            }
+          },
+          {
+            "text": "YOU",
+            "confidence": 96.35741114616394,
+            "bbox": {
+              "x0": 568.71,
+              "y0": 300,
+              "x1": 595.29,
+              "y1": 314
+            }
+          },
+          {
+            "text": "GO",
+            "confidence": 96.35741114616394,
+            "bbox": {
+              "x0": 595.29,
+              "y0": 300,
+              "x1": 613,
+              "y1": 314
+            }
+          }
+        ],
+        "_sortY": 300,
+        "sortHintY": 300,
+        "_sortX": 551,
+        "sortHintX": 551,
+        "quad": [
+          {
+            "x": 551,
+            "y": 300
+          },
+          {
+            "x": 613,
+            "y": 300
+          },
+          {
+            "x": 613,
+            "y": 314
+          },
+          {
+            "x": 551,
+            "y": 314
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 10
+      },
+      {
+        "text": "THE ONLY",
+        "confidence": 95.31075358390808,
+        "bbox": {
+          "x0": 275,
+          "y0": 304,
+          "x1": 335,
+          "y1": 318
+        },
+        "words": [
+          {
+            "text": "THE",
+            "confidence": 95.31075358390808,
+            "bbox": {
+              "x0": 275,
+              "y0": 304,
+              "x1": 300.71,
+              "y1": 318
+            }
+          },
+          {
+            "text": "ONLY",
+            "confidence": 95.31075358390808,
+            "bbox": {
+              "x0": 300.71,
+              "y0": 304,
+              "x1": 335,
+              "y1": 318
+            }
+          }
+        ],
+        "_sortY": 304,
+        "sortHintY": 304,
+        "_sortX": 275,
+        "sortHintX": 275,
+        "quad": [
+          {
+            "x": 275,
+            "y": 304
+          },
+          {
+            "x": 335,
+            "y": 304
+          },
+          {
+            "x": 335,
+            "y": 318
+          },
+          {
+            "x": 275,
+            "y": 318
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 9
+      },
+      {
+        "text": "WITH YOUR",
+        "confidence": 94.43787336349487,
+        "bbox": {
+          "x0": 549,
+          "y0": 314,
+          "x1": 614,
+          "y1": 325
+        },
+        "words": [
+          {
+            "text": "WITH",
+            "confidence": 94.43787336349487,
+            "bbox": {
+              "x0": 549,
+              "y0": 314,
+              "x1": 581.5,
+              "y1": 325
+            }
+          },
+          {
+            "text": "YOUR",
+            "confidence": 94.43787336349487,
+            "bbox": {
+              "x0": 581.5,
+              "y0": 314,
+              "x1": 614,
+              "y1": 325
+            }
+          }
+        ],
+        "_sortY": 314,
+        "sortHintY": 314,
+        "_sortX": 549,
+        "sortHintX": 549,
+        "quad": [
+          {
+            "x": 549,
+            "y": 314
+          },
+          {
+            "x": 614,
+            "y": 314
+          },
+          {
+            "x": 614,
+            "y": 325
+          },
+          {
+            "x": 549,
+            "y": 325
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 12
+      },
+      {
+        "text": "THING WE",
+        "confidence": 99.37745332717896,
+        "bbox": {
+          "x0": 275,
+          "y0": 317,
+          "x1": 335,
+          "y1": 331
+        },
+        "words": [
+          {
+            "text": "THING",
+            "confidence": 99.37745332717896,
+            "bbox": {
+              "x0": 275,
+              "y0": 317,
+              "x1": 317.86,
+              "y1": 331
+            }
+          },
+          {
+            "text": "WE",
+            "confidence": 99.37745332717896,
+            "bbox": {
+              "x0": 317.86,
+              "y0": 317,
+              "x1": 335,
+              "y1": 331
+            }
+          }
+        ],
+        "_sortY": 317,
+        "sortHintY": 317,
+        "_sortX": 275,
+        "sortHintX": 275,
+        "quad": [
+          {
+            "x": 275,
+            "y": 317
+          },
+          {
+            "x": 335,
+            "y": 317
+          },
+          {
+            "x": 335,
+            "y": 331
+          },
+          {
+            "x": 275,
+            "y": 331
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 11
+      },
+      {
+        "text": "KEY THEY'LL",
+        "confidence": 96.54579162597656,
+        "bbox": {
+          "x0": 545,
+          "y0": 325,
+          "x1": 618,
+          "y1": 339
+        },
+        "words": [
+          {
+            "text": "KEY",
+            "confidence": 96.54579162597656,
+            "bbox": {
+              "x0": 545,
+              "y0": 325,
+              "x1": 566.9,
+              "y1": 339
+            }
+          },
+          {
+            "text": "THEY'LL",
+            "confidence": 96.54579162597656,
+            "bbox": {
+              "x0": 566.9,
+              "y0": 325,
+              "x1": 618,
+              "y1": 339
+            }
+          }
+        ],
+        "_sortY": 325,
+        "sortHintY": 325,
+        "_sortX": 545,
+        "sortHintX": 545,
+        "quad": [
+          {
+            "x": 545,
+            "y": 325
+          },
+          {
+            "x": 618,
+            "y": 325
+          },
+          {
+            "x": 618,
+            "y": 339
+          },
+          {
+            "x": 545,
+            "y": 339
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 14
+      },
+      {
+        "text": "CAN DO...",
+        "confidence": 88.85907530784607,
+        "bbox": {
+          "x0": 276,
+          "y0": 330,
+          "x1": 333,
+          "y1": 344
+        },
+        "words": [
+          {
+            "text": "CAN",
+            "confidence": 88.85907530784607,
+            "bbox": {
+              "x0": 276,
+              "y0": 330,
+              "x1": 297.38,
+              "y1": 344
+            }
+          },
+          {
+            "text": "DO...",
+            "confidence": 88.85907530784607,
+            "bbox": {
+              "x0": 297.38,
+              "y0": 330,
+              "x1": 333,
+              "y1": 344
+            }
+          }
+        ],
+        "_sortY": 330,
+        "sortHintY": 330,
+        "_sortX": 276,
+        "sortHintX": 276,
+        "quad": [
+          {
+            "x": 276,
+            "y": 330
+          },
+          {
+            "x": 333,
+            "y": 330
+          },
+          {
+            "x": 333,
+            "y": 344
+          },
+          {
+            "x": 276,
+            "y": 344
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 13
+      },
+      {
+        "text": "IS TO SEARCH",
+        "confidence": 98.66883158683777,
+        "bbox": {
+          "x0": 68,
+          "y0": 335,
+          "x1": 145,
+          "y1": 346
+        },
+        "words": [
+          {
+            "text": "IS",
+            "confidence": 98.66883158683777,
+            "bbox": {
+              "x0": 68,
+              "y0": 335,
+              "x1": 83.4,
+              "y1": 346
+            }
+          },
+          {
+            "text": "TO",
+            "confidence": 98.66883158683777,
+            "bbox": {
+              "x0": 83.4,
+              "y0": 335,
+              "x1": 98.8,
+              "y1": 346
+            }
+          },
+          {
+            "text": "SEARCH",
+            "confidence": 98.66883158683777,
+            "bbox": {
+              "x0": 98.8,
+              "y0": 335,
+              "x1": 145,
+              "y1": 346
+            }
+          }
+        ],
+        "_sortY": 335,
+        "sortHintY": 335,
+        "_sortX": 68,
+        "sortHintX": 68,
+        "quad": [
+          {
+            "x": 68,
+            "y": 335
+          },
+          {
+            "x": 145,
+            "y": 335
+          },
+          {
+            "x": 145,
+            "y": 346
+          },
+          {
+            "x": 68,
+            "y": 346
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 15
+      },
+      {
+        "text": "TAKE IT FROM",
+        "confidence": 99.07829165458679,
+        "bbox": {
+          "x0": 541,
+          "y0": 338,
+          "x1": 623,
+          "y1": 352
+        },
+        "words": [
+          {
+            "text": "TAKE",
+            "confidence": 99.07829165458679,
+            "bbox": {
+              "x0": 541,
+              "y0": 338,
+              "x1": 573.8,
+              "y1": 352
+            }
+          },
+          {
+            "text": "IT",
+            "confidence": 99.07829165458679,
+            "bbox": {
+              "x0": 573.8,
+              "y0": 338,
+              "x1": 590.2,
+              "y1": 352
+            }
+          },
+          {
+            "text": "FROM",
+            "confidence": 99.07829165458679,
+            "bbox": {
+              "x0": 590.2,
+              "y0": 338,
+              "x1": 623,
+              "y1": 352
+            }
+          }
+        ],
+        "_sortY": 338,
+        "sortHintY": 338,
+        "_sortX": 541,
+        "sortHintX": 541,
+        "quad": [
+          {
+            "x": 541,
+            "y": 338
+          },
+          {
+            "x": 623,
+            "y": 338
+          },
+          {
+            "x": 623,
+            "y": 352
+          },
+          {
+            "x": 541,
+            "y": 352
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 17
+      },
+      {
+        "text": "THE BATH FOR",
+        "confidence": 98.78211617469788,
+        "bbox": {
+          "x0": 64,
+          "y0": 345,
+          "x1": 149,
+          "y1": 360
+        },
+        "words": [
+          {
+            "text": "THE",
+            "confidence": 98.78211617469788,
+            "bbox": {
+              "x0": 64,
+              "y0": 345,
+              "x1": 89.5,
+              "y1": 360
+            }
+          },
+          {
+            "text": "BATH",
+            "confidence": 98.78211617469788,
+            "bbox": {
+              "x0": 89.5,
+              "y0": 345,
+              "x1": 123.5,
+              "y1": 360
+            }
+          },
+          {
+            "text": "FOR",
+            "confidence": 98.78211617469788,
+            "bbox": {
+              "x0": 123.5,
+              "y0": 345,
+              "x1": 149,
+              "y1": 360
+            }
+          }
+        ],
+        "_sortY": 346.7171830320604,
+        "sortHintY": 346.7171830320604,
+        "_sortX": 59.9252648310425,
+        "sortHintX": 59.9252648310425,
+        "quad": [
+          {
+            "x": 64,
+            "y": 346
+          },
+          {
+            "x": 148,
+            "y": 345
+          },
+          {
+            "x": 149,
+            "y": 359
+          },
+          {
+            "x": 64,
+            "y": 360
+          }
+        ],
+        "angleDeg": -0.6740368979845053,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 16
+      },
+      {
+        "text": "you.",
+        "confidence": 95.7685112953186,
+        "bbox": {
+          "x0": 566,
+          "y0": 350,
+          "x1": 595,
+          "y1": 365
+        },
+        "words": [
+          {
+            "text": "you.",
+            "confidence": 95.7685112953186,
+            "bbox": {
+              "x0": 566,
+              "y0": 350,
+              "x1": 595,
+              "y1": 365
+            }
+          }
+        ],
+        "_sortY": 350,
+        "sortHintY": 350,
+        "_sortX": 566,
+        "sortHintX": 566,
+        "quad": [
+          {
+            "x": 566,
+            "y": 350
+          },
+          {
+            "x": 595,
+            "y": 350
+          },
+          {
+            "x": 595,
+            "y": 365
+          },
+          {
+            "x": 566,
+            "y": 365
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 19
+      },
+      {
+        "text": "MORE KEYS.",
+        "confidence": 95.9659218788147,
+        "bbox": {
+          "x0": 71,
+          "y0": 359,
+          "x1": 142,
+          "y1": 373
+        },
+        "words": [
+          {
+            "text": "MORE",
+            "confidence": 95.9659218788147,
+            "bbox": {
+              "x0": 71,
+              "y0": 359,
+              "x1": 102.56,
+              "y1": 373
+            }
+          },
+          {
+            "text": "KEYS.",
+            "confidence": 95.9659218788147,
+            "bbox": {
+              "x0": 102.56,
+              "y0": 359,
+              "x1": 142,
+              "y1": 373
+            }
+          }
+        ],
+        "_sortY": 359,
+        "sortHintY": 359,
+        "_sortX": 71,
+        "sortHintX": 71,
+        "quad": [
+          {
+            "x": 71,
+            "y": 359
+          },
+          {
+            "x": 142,
+            "y": 359
+          },
+          {
+            "x": 142,
+            "y": 373
+          },
+          {
+            "x": 71,
+            "y": 373
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 18
+      },
+      {
+        "text": "WE HAVE",
+        "confidence": 99.26247596740723,
+        "bbox": {
+          "x0": 373,
+          "y0": 389,
+          "x1": 429,
+          "y1": 403
+        },
+        "words": [
+          {
+            "text": "WE",
+            "confidence": 99.26247596740723,
+            "bbox": {
+              "x0": 373,
+              "y0": 389,
+              "x1": 391.67,
+              "y1": 403
+            }
+          },
+          {
+            "text": "HAVE",
+            "confidence": 99.26247596740723,
+            "bbox": {
+              "x0": 391.67,
+              "y0": 389,
+              "x1": 429,
+              "y1": 403
+            }
+          }
+        ],
+        "_sortY": 389,
+        "sortHintY": 389,
+        "_sortX": 373,
+        "sortHintX": 373,
+        "quad": [
+          {
+            "x": 373,
+            "y": 389
+          },
+          {
+            "x": 429,
+            "y": 389
+          },
+          {
+            "x": 429,
+            "y": 403
+          },
+          {
+            "x": 373,
+            "y": 403
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 20
+      },
+      {
+        "text": "NO CHOICE",
+        "confidence": 99.44669008255005,
+        "bbox": {
+          "x0": 367,
+          "y0": 401,
+          "x1": 434,
+          "y1": 415
+        },
+        "words": [
+          {
+            "text": "NO",
+            "confidence": 99.44669008255005,
+            "bbox": {
+              "x0": 367,
+              "y0": 401,
+              "x1": 383.75,
+              "y1": 415
+            }
+          },
+          {
+            "text": "CHOICE",
+            "confidence": 99.44669008255005,
+            "bbox": {
+              "x0": 383.75,
+              "y0": 401,
+              "x1": 434,
+              "y1": 415
+            }
+          }
+        ],
+        "_sortY": 401,
+        "sortHintY": 401,
+        "_sortX": 367,
+        "sortHintX": 367,
+        "quad": [
+          {
+            "x": 367,
+            "y": 401
+          },
+          {
+            "x": 434,
+            "y": 401
+          },
+          {
+            "x": 434,
+            "y": 415
+          },
+          {
+            "x": 367,
+            "y": 415
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 21
+      },
+      {
+        "text": "BUT TO HIDE",
+        "confidence": 95.91627717018127,
+        "bbox": {
+          "x0": 364,
+          "y0": 414,
+          "x1": 438,
+          "y1": 428
+        },
+        "words": [
+          {
+            "text": "BUT",
+            "confidence": 95.91627717018127,
+            "bbox": {
+              "x0": 364,
+              "y0": 414,
+              "x1": 388.67,
+              "y1": 428
+            }
+          },
+          {
+            "text": "TO",
+            "confidence": 95.91627717018127,
+            "bbox": {
+              "x0": 388.67,
+              "y0": 414,
+              "x1": 405.11,
+              "y1": 428
+            }
+          },
+          {
+            "text": "HIDE",
+            "confidence": 95.91627717018127,
+            "bbox": {
+              "x0": 405.11,
+              "y0": 414,
+              "x1": 438,
+              "y1": 428
+            }
+          }
+        ],
+        "_sortY": 414,
+        "sortHintY": 414,
+        "_sortX": 364,
+        "sortHintX": 364,
+        "quad": [
+          {
+            "x": 364,
+            "y": 414
+          },
+          {
+            "x": 438,
+            "y": 414
+          },
+          {
+            "x": 438,
+            "y": 428
+          },
+          {
+            "x": 364,
+            "y": 428
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 22
+      },
+      {
+        "text": "HERE.",
+        "confidence": 99.46331977844238,
+        "bbox": {
+          "x0": 383,
+          "y0": 426,
+          "x1": 418,
+          "y1": 441
+        },
+        "words": [
+          {
+            "text": "HERE.",
+            "confidence": 99.46331977844238,
+            "bbox": {
+              "x0": 383,
+              "y0": 426,
+              "x1": 418,
+              "y1": 441
+            }
+          }
+        ],
+        "_sortY": 426,
+        "sortHintY": 426,
+        "_sortX": 383,
+        "sortHintX": 383,
+        "quad": [
+          {
+            "x": 383,
+            "y": 426
+          },
+          {
+            "x": 418,
+            "y": 426
+          },
+          {
+            "x": 418,
+            "y": 441
+          },
+          {
+            "x": 383,
+            "y": 441
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 23
+      },
+      {
+        "text": "THAT'S",
+        "confidence": 98.92274737358093,
+        "bbox": {
+          "x0": 563,
+          "y0": 508,
+          "x1": 605,
+          "y1": 522
+        },
+        "words": [
+          {
+            "text": "THAT'S",
+            "confidence": 98.92274737358093,
+            "bbox": {
+              "x0": 563,
+              "y0": 508,
+              "x1": 605,
+              "y1": 522
+            }
+          }
+        ],
+        "_sortY": 508,
+        "sortHintY": 508,
+        "_sortX": 563,
+        "sortHintX": 563,
+        "quad": [
+          {
+            "x": 563,
+            "y": 508
+          },
+          {
+            "x": 605,
+            "y": 508
+          },
+          {
+            "x": 605,
+            "y": 522
+          },
+          {
+            "x": 563,
+            "y": 522
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 24
+      },
+      {
+        "text": "THE GIST",
+        "confidence": 98.45173358917236,
+        "bbox": {
+          "x0": 557,
+          "y0": 519,
+          "x1": 611,
+          "y1": 537
+        },
+        "words": [
+          {
+            "text": "THE",
+            "confidence": 98.45173358917236,
+            "bbox": {
+              "x0": 557,
+              "y0": 519,
+              "x1": 580.14,
+              "y1": 537
+            }
+          },
+          {
+            "text": "GIST",
+            "confidence": 98.45173358917236,
+            "bbox": {
+              "x0": 580.14,
+              "y0": 519,
+              "x1": 611,
+              "y1": 537
+            }
+          }
+        ],
+        "_sortY": 552.0376352833481,
+        "sortHintY": 552.0376352833481,
+        "_sortX": 527.1870664924578,
+        "sortHintX": 527.1870664924578,
+        "quad": [
+          {
+            "x": 557,
+            "y": 522
+          },
+          {
+            "x": 610,
+            "y": 519
+          },
+          {
+            "x": 611,
+            "y": 534
+          },
+          {
+            "x": 557,
+            "y": 537
+          }
+        ],
+        "angleDeg": -3.1798301198642345,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 25
+      },
+      {
+        "text": "OFIT.",
+        "confidence": 98.3481228351593,
+        "bbox": {
+          "x0": 565,
+          "y0": 534,
+          "x1": 603,
+          "y1": 549
+        },
+        "words": [
+          {
+            "text": "OFIT.",
+            "confidence": 98.3481228351593,
+            "bbox": {
+              "x0": 565,
+              "y0": 534,
+              "x1": 603,
+              "y1": 549
+            }
+          }
+        ],
+        "_sortY": 534,
+        "sortHintY": 534,
+        "_sortX": 565,
+        "sortHintX": 565,
+        "quad": [
+          {
+            "x": 565,
+            "y": 534
+          },
+          {
+            "x": 603,
+            "y": 534
+          },
+          {
+            "x": 603,
+            "y": 549
+          },
+          {
+            "x": 565,
+            "y": 549
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 27
+      },
+      {
+        "text": "I SEE...",
+        "confidence": 88.48663568496704,
+        "bbox": {
+          "x0": 325,
+          "y0": 543,
+          "x1": 369,
+          "y1": 558
+        },
+        "words": [
+          {
+            "text": "I",
+            "confidence": 88.48663568496704,
+            "bbox": {
+              "x0": 325,
+              "y0": 543,
+              "x1": 331.29,
+              "y1": 558
+            }
+          },
+          {
+            "text": "SEE...",
+            "confidence": 88.48663568496704,
+            "bbox": {
+              "x0": 331.29,
+              "y0": 543,
+              "x1": 369,
+              "y1": 558
+            }
+          }
+        ],
+        "_sortY": 543,
+        "sortHintY": 543,
+        "_sortX": 325,
+        "sortHintX": 325,
+        "quad": [
+          {
+            "x": 325,
+            "y": 543
+          },
+          {
+            "x": 369,
+            "y": 543
+          },
+          {
+            "x": 369,
+            "y": 558
+          },
+          {
+            "x": 325,
+            "y": 558
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 26
+      },
+      {
+        "text": "THERE ARE 50",
+        "confidence": 93.62944960594177,
+        "bbox": {
+          "x0": 176,
+          "y0": 570,
+          "x1": 258,
+          "y1": 581
+        },
+        "words": [
+          {
+            "text": "THERE",
+            "confidence": 93.62944960594177,
+            "bbox": {
+              "x0": 176,
+              "y0": 570,
+              "x1": 217,
+              "y1": 581
+            }
+          },
+          {
+            "text": "ARE",
+            "confidence": 93.62944960594177,
+            "bbox": {
+              "x0": 217,
+              "y0": 570,
+              "x1": 241.6,
+              "y1": 581
+            }
+          },
+          {
+            "text": "50",
+            "confidence": 93.62944960594177,
+            "bbox": {
+              "x0": 241.6,
+              "y0": 570,
+              "x1": 258,
+              "y1": 581
+            }
+          }
+        ],
+        "_sortY": 570,
+        "sortHintY": 570,
+        "_sortX": 176,
+        "sortHintX": 176,
+        "quad": [
+          {
+            "x": 176,
+            "y": 570
+          },
+          {
+            "x": 258,
+            "y": 570
+          },
+          {
+            "x": 258,
+            "y": 581
+          },
+          {
+            "x": 176,
+            "y": 581
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 28
+      },
+      {
+        "text": "ANY",
+        "confidence": 99.5493233203888,
+        "bbox": {
+          "x0": 525,
+          "y0": 575,
+          "x1": 550,
+          "y1": 587
+        },
+        "words": [
+          {
+            "text": "ANY",
+            "confidence": 99.5493233203888,
+            "bbox": {
+              "x0": 525,
+              "y0": 575,
+              "x1": 550,
+              "y1": 587
+            }
+          }
+        ],
+        "_sortY": 575,
+        "sortHintY": 575,
+        "_sortX": 525,
+        "sortHintX": 525,
+        "quad": [
+          {
+            "x": 525,
+            "y": 575
+          },
+          {
+            "x": 550,
+            "y": 575
+          },
+          {
+            "x": 550,
+            "y": 587
+          },
+          {
+            "x": 525,
+            "y": 587
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 30
+      },
+      {
+        "text": "SHOWER STALLS.",
+        "confidence": 94.21000480651855,
+        "bbox": {
+          "x0": 170,
+          "y0": 583,
+          "x1": 263,
+          "y1": 594
+        },
+        "words": [
+          {
+            "text": "SHOWER",
+            "confidence": 94.21000480651855,
+            "bbox": {
+              "x0": 170,
+              "y0": 583,
+              "x1": 212.92,
+              "y1": 594
+            }
+          },
+          {
+            "text": "STALLS.",
+            "confidence": 94.21000480651855,
+            "bbox": {
+              "x0": 212.92,
+              "y0": 583,
+              "x1": 263,
+              "y1": 594
+            }
+          }
+        ],
+        "_sortY": 583,
+        "sortHintY": 583,
+        "_sortX": 170,
+        "sortHintX": 170,
+        "quad": [
+          {
+            "x": 170,
+            "y": 583
+          },
+          {
+            "x": 263,
+            "y": 583
+          },
+          {
+            "x": 263,
+            "y": 594
+          },
+          {
+            "x": 170,
+            "y": 594
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 29
+      },
+      {
+        "text": "IF WE QUESTIONS?",
+        "confidence": 95.27085224787395,
+        "bbox": {
+          "x0": 114,
+          "y0": 585,
+          "x1": 572,
+          "y1": 617
+        },
+        "words": [
+          {
+            "text": "IF",
+            "confidence": 93.11834573745728,
+            "bbox": {
+              "x0": 114,
+              "y0": 603,
+              "x1": 133,
+              "y1": 617
+            }
+          },
+          {
+            "text": "WE",
+            "confidence": 93.11834573745728,
+            "bbox": {
+              "x0": 133,
+              "y0": 603,
+              "x1": 152,
+              "y1": 617
+            }
+          },
+          {
+            "text": "QUESTIONS?",
+            "confidence": 99.57586526870728,
+            "bbox": {
+              "x0": 501,
+              "y0": 585,
+              "x1": 572,
+              "y1": 602
+            }
+          }
+        ],
+        "_sortY": 600.8743284355261,
+        "sortHintY": 600.8743284355261,
+        "_sortX": 114,
+        "sortHintX": 114,
+        "_sourceIndex": 31
+      },
+      {
+        "text": "CONSIDER",
+        "confidence": 99.64088201522827,
+        "bbox": {
+          "x0": 106,
+          "y0": 617,
+          "x1": 161,
+          "y1": 628
+        },
+        "words": [
+          {
+            "text": "CONSIDER",
+            "confidence": 99.64088201522827,
+            "bbox": {
+              "x0": 106,
+              "y0": 617,
+              "x1": 161,
+              "y1": 628
+            }
+          }
+        ],
+        "_sortY": 617,
+        "sortHintY": 617,
+        "_sortX": 106,
+        "sortHintX": 106,
+        "quad": [
+          {
+            "x": 106,
+            "y": 617
+          },
+          {
+            "x": 161,
+            "y": 617
+          },
+          {
+            "x": 161,
+            "y": 628
+          },
+          {
+            "x": 106,
+            "y": 628
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 33
+      },
+      {
+        "text": "THE AVERAGE",
+        "confidence": 99.59188103675842,
+        "bbox": {
+          "x0": 93,
+          "y0": 628,
+          "x1": 174,
+          "y1": 642
+        },
+        "words": [
+          {
+            "text": "THE",
+            "confidence": 99.59188103675842,
+            "bbox": {
+              "x0": 93,
+              "y0": 628,
+              "x1": 117.3,
+              "y1": 642
+            }
+          },
+          {
+            "text": "AVERAGE",
+            "confidence": 99.59188103675842,
+            "bbox": {
+              "x0": 117.3,
+              "y0": 628,
+              "x1": 174,
+              "y1": 642
+            }
+          }
+        ],
+        "_sortY": 628,
+        "sortHintY": 628,
+        "_sortX": 93,
+        "sortHintX": 93,
+        "quad": [
+          {
+            "x": 93,
+            "y": 628
+          },
+          {
+            "x": 174,
+            "y": 628
+          },
+          {
+            "x": 174,
+            "y": 642
+          },
+          {
+            "x": 93,
+            "y": 642
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 34
+      },
+      {
+        "text": "SURVIVAL RATE",
+        "confidence": 95.72858810424805,
+        "bbox": {
+          "x0": 91,
+          "y0": 642,
+          "x1": 176,
+          "y1": 653
+        },
+        "words": [
+          {
+            "text": "SURVIVAL",
+            "confidence": 95.72858810424805,
+            "bbox": {
+              "x0": 91,
+              "y0": 642,
+              "x1": 147.67,
+              "y1": 653
+            }
+          },
+          {
+            "text": "RATE",
+            "confidence": 95.72858810424805,
+            "bbox": {
+              "x0": 147.67,
+              "y0": 642,
+              "x1": 176,
+              "y1": 653
+            }
+          }
+        ],
+        "_sortY": 642,
+        "sortHintY": 642,
+        "_sortX": 91,
+        "sortHintX": 91,
+        "quad": [
+          {
+            "x": 91,
+            "y": 642
+          },
+          {
+            "x": 176,
+            "y": 642
+          },
+          {
+            "x": 176,
+            "y": 653
+          },
+          {
+            "x": 91,
+            "y": 653
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 35
+      },
+      {
+        "text": "OF 70%. THERE",
+        "confidence": 91.52116179466248,
+        "bbox": {
+          "x0": 91,
+          "y0": 655,
+          "x1": 176,
+          "y1": 666
+        },
+        "words": [
+          {
+            "text": "OF",
+            "confidence": 91.52116179466248,
+            "bbox": {
+              "x0": 91,
+              "y0": 655,
+              "x1": 106.45,
+              "y1": 666
+            }
+          },
+          {
+            "text": "70%.",
+            "confidence": 91.52116179466248,
+            "bbox": {
+              "x0": 106.45,
+              "y0": 655,
+              "x1": 137.36,
+              "y1": 666
+            }
+          },
+          {
+            "text": "THERE",
+            "confidence": 91.52116179466248,
+            "bbox": {
+              "x0": 137.36,
+              "y0": 655,
+              "x1": 176,
+              "y1": 666
+            }
+          }
+        ],
+        "_sortY": 655,
+        "sortHintY": 655,
+        "_sortX": 91,
+        "sortHintX": 91,
+        "quad": [
+          {
+            "x": 91,
+            "y": 655
+          },
+          {
+            "x": 176,
+            "y": 655
+          },
+          {
+            "x": 176,
+            "y": 666
+          },
+          {
+            "x": 91,
+            "y": 666
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 36
+      },
+      {
+        "text": "SHOULD BE",
+        "confidence": 91.60454869270325,
+        "bbox": {
+          "x0": 101,
+          "y0": 666,
+          "x1": 166,
+          "y1": 681
+        },
+        "words": [
+          {
+            "text": "SHOULD",
+            "confidence": 91.60454869270325,
+            "bbox": {
+              "x0": 101,
+              "y0": 666,
+              "x1": 149.75,
+              "y1": 681
+            }
+          },
+          {
+            "text": "BE",
+            "confidence": 91.60454869270325,
+            "bbox": {
+              "x0": 149.75,
+              "y0": 666,
+              "x1": 166,
+              "y1": 681
+            }
+          }
+        ],
+        "_sortY": 666,
+        "sortHintY": 666,
+        "_sortX": 101,
+        "sortHintX": 101,
+        "quad": [
+          {
+            "x": 101,
+            "y": 666
+          },
+          {
+            "x": 166,
+            "y": 666
+          },
+          {
+            "x": 166,
+            "y": 681
+          },
+          {
+            "x": 101,
+            "y": 681
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 37
+      },
+      {
+        "text": "35 KEYS.",
+        "confidence": 96.11350297927856,
+        "bbox": {
+          "x0": 106,
+          "y0": 677,
+          "x1": 160,
+          "y1": 695
+        },
+        "words": [
+          {
+            "text": "35",
+            "confidence": 96.11350297927856,
+            "bbox": {
+              "x0": 106,
+              "y0": 677,
+              "x1": 121.43,
+              "y1": 695
+            }
+          },
+          {
+            "text": "KEYS.",
+            "confidence": 96.11350297927856,
+            "bbox": {
+              "x0": 121.43,
+              "y0": 677,
+              "x1": 160,
+              "y1": 695
+            }
+          }
+        ],
+        "_sortY": 684.9036661732396,
+        "sortHintY": 684.9036661732396,
+        "_sortX": 67.40154347235412,
+        "sortHintX": 67.40154347235412,
+        "quad": [
+          {
+            "x": 106,
+            "y": 680
+          },
+          {
+            "x": 159,
+            "y": 677
+          },
+          {
+            "x": 160,
+            "y": 692
+          },
+          {
+            "x": 107,
+            "y": 695
+          }
+        ],
+        "angleDeg": -3.23970029610213,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 38
+      },
+      {
+        "text": "HOW DID",
+        "confidence": 92.36246943473816,
+        "bbox": {
+          "x0": 334,
+          "y0": 718,
+          "x1": 385,
+          "y1": 732
+        },
+        "words": [
+          {
+            "text": "HOW",
+            "confidence": 92.36246943473816,
+            "bbox": {
+              "x0": 334,
+              "y0": 718,
+              "x1": 359.5,
+              "y1": 732
+            }
+          },
+          {
+            "text": "DID",
+            "confidence": 92.36246943473816,
+            "bbox": {
+              "x0": 359.5,
+              "y0": 718,
+              "x1": 385,
+              "y1": 732
+            }
+          }
+        ],
+        "_sortY": 718,
+        "sortHintY": 718,
+        "_sortX": 334,
+        "sortHintX": 334,
+        "quad": [
+          {
+            "x": 334,
+            "y": 718
+          },
+          {
+            "x": 385,
+            "y": 718
+          },
+          {
+            "x": 385,
+            "y": 732
+          },
+          {
+            "x": 334,
+            "y": 732
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 39
+      },
+      {
+        "text": "YOU GET THAT",
+        "confidence": 96.51314616203308,
+        "bbox": {
+          "x0": 317,
+          "y0": 732,
+          "x1": 400,
+          "y1": 743
+        },
+        "words": [
+          {
+            "text": "YOU",
+            "confidence": 96.51314616203308,
+            "bbox": {
+              "x0": 317,
+              "y0": 732,
+              "x1": 341.9,
+              "y1": 743
+            }
+          },
+          {
+            "text": "GET",
+            "confidence": 96.51314616203308,
+            "bbox": {
+              "x0": 341.9,
+              "y0": 732,
+              "x1": 366.8,
+              "y1": 743
+            }
+          },
+          {
+            "text": "THAT",
+            "confidence": 96.51314616203308,
+            "bbox": {
+              "x0": 366.8,
+              "y0": 732,
+              "x1": 400,
+              "y1": 743
+            }
+          }
+        ],
+        "_sortY": 732,
+        "sortHintY": 732,
+        "_sortX": 317,
+        "sortHintX": 317,
+        "quad": [
+          {
+            "x": 317,
+            "y": 732
+          },
+          {
+            "x": 400,
+            "y": 732
+          },
+          {
+            "x": 400,
+            "y": 743
+          },
+          {
+            "x": 317,
+            "y": 743
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 40
+      },
+      {
+        "text": "NUMBER? YOU SAID",
+        "confidence": 95.86069385210673,
+        "bbox": {
+          "x0": 332,
+          "y0": 740,
+          "x1": 619,
+          "y1": 755
+        },
+        "words": [
+          {
+            "text": "NUMBER?",
+            "confidence": 92.38219857215881,
+            "bbox": {
+              "x0": 332,
+              "y0": 744,
+              "x1": 385,
+              "y1": 755
+            }
+          },
+          {
+            "text": "YOU",
+            "confidence": 97.59994149208069,
+            "bbox": {
+              "x0": 564,
+              "y0": 740,
+              "x1": 587.57,
+              "y1": 754
+            }
+          },
+          {
+            "text": "SAID",
+            "confidence": 97.59994149208069,
+            "bbox": {
+              "x0": 587.57,
+              "y0": 740,
+              "x1": 619,
+              "y1": 754
+            }
+          }
+        ],
+        "_sortY": 740,
+        "sortHintY": 740,
+        "_sortX": 332,
+        "sortHintX": 332,
+        "_sourceIndex": 41
+      },
+      {
+        "text": "YOUR \"ESTIMATE\"",
+        "confidence": 97.2080945968628,
+        "bbox": {
+          "x0": 540,
+          "y0": 751,
+          "x1": 642,
+          "y1": 766
+        },
+        "words": [
+          {
+            "text": "YOUR",
+            "confidence": 97.2080945968628,
+            "bbox": {
+              "x0": 540,
+              "y0": 751,
+              "x1": 569.14,
+              "y1": 766
+            }
+          },
+          {
+            "text": "\"ESTIMATE\"",
+            "confidence": 97.2080945968628,
+            "bbox": {
+              "x0": 569.14,
+              "y0": 751,
+              "x1": 642,
+              "y1": 766
+            }
+          }
+        ],
+        "_sortY": 757.2577258972289,
+        "sortHintY": 757.2577258972289,
+        "_sortX": 532.601855581594,
+        "sortHintX": 532.601855581594,
+        "quad": [
+          {
+            "x": 540,
+            "y": 752
+          },
+          {
+            "x": 642,
+            "y": 751
+          },
+          {
+            "x": 642,
+            "y": 765
+          },
+          {
+            "x": 540,
+            "y": 766
+          }
+        ],
+        "angleDeg": -0.561705332566547,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 43
+      },
+      {
+        "text": "IS AROUND 30",
+        "confidence": 94.87895965576172,
+        "bbox": {
+          "x0": 551,
+          "y0": 767,
+          "x1": 632,
+          "y1": 778
+        },
+        "words": [
+          {
+            "text": "IS",
+            "confidence": 94.87895965576172,
+            "bbox": {
+              "x0": 551,
+              "y0": 767,
+              "x1": 567.2,
+              "y1": 778
+            }
+          },
+          {
+            "text": "AROUND",
+            "confidence": 94.87895965576172,
+            "bbox": {
+              "x0": 567.2,
+              "y0": 767,
+              "x1": 615.8,
+              "y1": 778
+            }
+          },
+          {
+            "text": "30",
+            "confidence": 94.87895965576172,
+            "bbox": {
+              "x0": 615.8,
+              "y0": 767,
+              "x1": 632,
+              "y1": 778
+            }
+          }
+        ],
+        "_sortY": 767,
+        "sortHintY": 767,
+        "_sortX": 551,
+        "sortHintX": 551,
+        "quad": [
+          {
+            "x": 551,
+            "y": 767
+          },
+          {
+            "x": 632,
+            "y": 767
+          },
+          {
+            "x": 632,
+            "y": 778
+          },
+          {
+            "x": 551,
+            "y": 778
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 44
+      },
+      {
+        "text": "PEOPLE.",
+        "confidence": 99.6284544467926,
+        "bbox": {
+          "x0": 569,
+          "y0": 780,
+          "x1": 615,
+          "y1": 791
+        },
+        "words": [
+          {
+            "text": "PEOPLE.",
+            "confidence": 99.6284544467926,
+            "bbox": {
+              "x0": 569,
+              "y0": 780,
+              "x1": 615,
+              "y1": 791
+            }
+          }
+        ],
+        "_sortY": 780,
+        "sortHintY": 780,
+        "_sortX": 569,
+        "sortHintX": 569,
+        "quad": [
+          {
+            "x": 569,
+            "y": 780
+          },
+          {
+            "x": 615,
+            "y": 780
+          },
+          {
+            "x": 615,
+            "y": 791
+          },
+          {
+            "x": 569,
+            "y": 791
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 45
+      },
+      {
+        "text": "MINUS A FEW",
+        "confidence": 96.21994495391846,
+        "bbox": {
+          "x0": 128,
+          "y0": 803,
+          "x1": 207,
+          "y1": 814
+        },
+        "words": [
+          {
+            "text": "MINUS",
+            "confidence": 96.21994495391846,
+            "bbox": {
+              "x0": 128,
+              "y0": 803,
+              "x1": 171.89,
+              "y1": 814
+            }
+          },
+          {
+            "text": "A",
+            "confidence": 96.21994495391846,
+            "bbox": {
+              "x0": 171.89,
+              "y0": 803,
+              "x1": 180.67,
+              "y1": 814
+            }
+          },
+          {
+            "text": "FEW",
+            "confidence": 96.21994495391846,
+            "bbox": {
+              "x0": 180.67,
+              "y0": 803,
+              "x1": 207,
+              "y1": 814
+            }
+          }
+        ],
+        "_sortY": 803,
+        "sortHintY": 803,
+        "_sortX": 128,
+        "sortHintX": 128,
+        "quad": [
+          {
+            "x": 128,
+            "y": 803
+          },
+          {
+            "x": 207,
+            "y": 803
+          },
+          {
+            "x": 207,
+            "y": 814
+          },
+          {
+            "x": 128,
+            "y": 814
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 46
+      },
+      {
+        "text": "KEYS THAT HAVE",
+        "confidence": 98.04520010948181,
+        "bbox": {
+          "x0": 118,
+          "y0": 813,
+          "x1": 215,
+          "y1": 829
+        },
+        "words": [
+          {
+            "text": "KEYS",
+            "confidence": 98.04520010948181,
+            "bbox": {
+              "x0": 118,
+              "y0": 813,
+              "x1": 150.33,
+              "y1": 829
+            }
+          },
+          {
+            "text": "THAT",
+            "confidence": 98.04520010948181,
+            "bbox": {
+              "x0": 150.33,
+              "y0": 813,
+              "x1": 182.67,
+              "y1": 829
+            }
+          },
+          {
+            "text": "HAVE",
+            "confidence": 98.04520010948181,
+            "bbox": {
+              "x0": 182.67,
+              "y0": 813,
+              "x1": 215,
+              "y1": 829
+            }
+          }
+        ],
+        "_sortY": 816.2595020156455,
+        "sortHintY": 816.2595020156455,
+        "_sortX": 101.19498687766256,
+        "sortHintX": 101.19498687766256,
+        "quad": [
+          {
+            "x": 118,
+            "y": 814
+          },
+          {
+            "x": 215,
+            "y": 813
+          },
+          {
+            "x": 215,
+            "y": 827
+          },
+          {
+            "x": 118,
+            "y": 829
+          }
+        ],
+        "angleDeg": -1.181188913326638,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 47
+      },
+      {
+        "text": "ALREADY BEEN",
+        "confidence": 97.46384620666504,
+        "bbox": {
+          "x0": 123,
+          "y0": 826,
+          "x1": 211,
+          "y1": 842
+        },
+        "words": [
+          {
+            "text": "ALREADY",
+            "confidence": 97.46384620666504,
+            "bbox": {
+              "x0": 123,
+              "y0": 826,
+              "x1": 179,
+              "y1": 842
+            }
+          },
+          {
+            "text": "BEEN",
+            "confidence": 97.46384620666504,
+            "bbox": {
+              "x0": 179,
+              "y0": 826,
+              "x1": 211,
+              "y1": 842
+            }
+          }
+        ],
+        "_sortY": 830.5809726896678,
+        "sortHintY": 830.5809726896678,
+        "_sortX": 104.1549221395004,
+        "sortHintX": 104.1549221395004,
+        "quad": [
+          {
+            "x": 123,
+            "y": 828
+          },
+          {
+            "x": 211,
+            "y": 826
+          },
+          {
+            "x": 211,
+            "y": 841
+          },
+          {
+            "x": 123,
+            "y": 842
+          }
+        ],
+        "angleDeg": -1.3019526725788753,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 48
+      },
+      {
+        "text": "USED, YOU",
+        "confidence": 92.75982975959778,
+        "bbox": {
+          "x0": 137,
+          "y0": 840,
+          "x1": 197,
+          "y1": 854
+        },
+        "words": [
+          {
+            "text": "USED,",
+            "confidence": 92.75982975959778,
+            "bbox": {
+              "x0": 137,
+              "y0": 840,
+              "x1": 174.5,
+              "y1": 854
+            }
+          },
+          {
+            "text": "YOU",
+            "confidence": 92.75982975959778,
+            "bbox": {
+              "x0": 174.5,
+              "y0": 840,
+              "x1": 197,
+              "y1": 854
+            }
+          }
+        ],
+        "_sortY": 840,
+        "sortHintY": 840,
+        "_sortX": 137,
+        "sortHintX": 137,
+        "quad": [
+          {
+            "x": 137,
+            "y": 840
+          },
+          {
+            "x": 197,
+            "y": 840
+          },
+          {
+            "x": 197,
+            "y": 854
+          },
+          {
+            "x": 137,
+            "y": 854
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 49
+      },
+      {
+        "text": "GET 30.",
+        "confidence": 96.02511525154114,
+        "bbox": {
+          "x0": 145,
+          "y0": 853,
+          "x1": 191,
+          "y1": 867
+        },
+        "words": [
+          {
+            "text": "GET",
+            "confidence": 96.02511525154114,
+            "bbox": {
+              "x0": 145,
+              "y0": 853,
+              "x1": 168,
+              "y1": 867
+            }
+          },
+          {
+            "text": "30.",
+            "confidence": 96.02511525154114,
+            "bbox": {
+              "x0": 168,
+              "y0": 853,
+              "x1": 191,
+              "y1": 867
+            }
+          }
+        ],
+        "_sortY": 853,
+        "sortHintY": 853,
+        "_sortX": 145,
+        "sortHintX": 145,
+        "quad": [
+          {
+            "x": 145,
+            "y": 853
+          },
+          {
+            "x": 191,
+            "y": 853
+          },
+          {
+            "x": 191,
+            "y": 867
+          },
+          {
+            "x": 145,
+            "y": 867
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 50
+      },
+      {
+        "text": "12",
+        "confidence": 99.96553659439087,
+        "bbox": {
+          "x0": 565,
+          "y0": 882,
+          "x1": 585,
+          "y1": 899
+        },
+        "words": [
+          {
+            "text": "12",
+            "confidence": 99.96553659439087,
+            "bbox": {
+              "x0": 565,
+              "y0": 882,
+              "x1": 585,
+              "y1": 899
+            }
+          }
+        ],
+        "_sortY": 882,
+        "sortHintY": 882,
+        "_sortX": 565,
+        "sortHintX": 565,
+        "quad": [
+          {
+            "x": 565,
+            "y": 882
+          },
+          {
+            "x": 585,
+            "y": 882
+          },
+          {
+            "x": 585,
+            "y": 899
+          },
+          {
+            "x": 565,
+            "y": 899
+          }
+        ],
+        "angleDeg": 0,
+        "sourceEngine": "paddleocr",
+        "_sourceIndex": 51
+      }
+    ]
+  },
+  "proposed": {
+    "preprocessTimeMs": 141.75340000000006,
+    "ocrTimeMs": 72167.5765,
+    "groupingTimeMs": 8.352799999993294,
+    "totalTimeMs": 72317.68269999999,
+    "finalBoxesCount": 11,
+    "groups": [
+      {
+        "id": "page-1-group-0",
+        "page": 1,
+        "lineIndexes": [
+          0,
+          2
+        ],
+        "orderedLineIndexes": [
+          0,
+          2
+        ],
+        "intraGroupOrder": [
+          0,
+          2
+        ],
+        "interGroupOrder": 1,
+        "confidence": 0.96,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 77,
+          "bottom": 105,
+          "left": 490,
+          "right": 556
+        },
+        "anchor": {
+          "sortX": 496,
+          "sortY": 77,
+          "rawOrder": 0
+        }
+      },
+      {
+        "id": "page-1-group-100",
+        "page": 1,
+        "lineIndexes": [
+          3,
+          1,
+          4
+        ],
+        "orderedLineIndexes": [
+          3,
+          1,
+          4
+        ],
+        "intraGroupOrder": [
+          3,
+          1,
+          4
+        ],
+        "interGroupOrder": 0,
+        "confidence": 0.9496477332466092,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 90,
+          "bottom": 128,
+          "left": 102,
+          "right": 174
+        },
+        "anchor": {
+          "sortX": 106,
+          "sortY": 99,
+          "rawOrder": 3
+        }
+      },
+      {
+        "id": "page-1-group-200",
+        "page": 1,
+        "lineIndexes": [
+          5,
+          6
+        ],
+        "orderedLineIndexes": [
+          5,
+          6
+        ],
+        "intraGroupOrder": [
+          5,
+          6
+        ],
+        "interGroupOrder": 2,
+        "confidence": 0.96,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 195,
+          "bottom": 231,
+          "left": 93,
+          "right": 562
+        },
+        "anchor": {
+          "sortX": 93,
+          "sortY": 195,
+          "rawOrder": 5
+        }
+      },
+      {
+        "id": "page-1-group-300",
+        "page": 1,
+        "lineIndexes": [
+          7,
+          9,
+          8,
+          11,
+          10,
+          13,
+          12,
+          15,
+          14
+        ],
+        "orderedLineIndexes": [
+          7,
+          9,
+          8,
+          11,
+          10,
+          13,
+          12,
+          15,
+          14
+        ],
+        "intraGroupOrder": [
+          7,
+          9,
+          8,
+          11,
+          10,
+          13,
+          12,
+          15,
+          14
+        ],
+        "interGroupOrder": 3,
+        "confidence": 0.96,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 300,
+          "bottom": 373,
+          "left": 65,
+          "right": 624
+        },
+        "anchor": {
+          "sortX": 274,
+          "sortY": 300,
+          "rawOrder": 7
+        }
+      },
+      {
+        "id": "page-1-group-400",
+        "page": 1,
+        "lineIndexes": [
+          16,
+          17,
+          18
+        ],
+        "orderedLineIndexes": [
+          16,
+          17,
+          18
+        ],
+        "intraGroupOrder": [
+          16,
+          17,
+          18
+        ],
+        "interGroupOrder": 4,
+        "confidence": 0.96,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 388,
+          "bottom": 428,
+          "left": 364,
+          "right": 438
+        },
+        "anchor": {
+          "sortX": 373,
+          "sortY": 388,
+          "rawOrder": 16
+        }
+      },
+      {
+        "id": "page-1-group-600",
+        "page": 1,
+        "lineIndexes": [
+          20,
+          22,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30
+        ],
+        "orderedLineIndexes": [
+          20,
+          22,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30
+        ],
+        "intraGroupOrder": [
+          20,
+          22,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30
+        ],
+        "interGroupOrder": 6,
+        "confidence": 0.96,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 569,
+          "bottom": 694,
+          "left": 89,
+          "right": 264
+        },
+        "anchor": {
+          "sortX": 175,
+          "sortY": 569,
+          "rawOrder": 20
+        }
+      },
+      {
+        "id": "page-1-group-700",
+        "page": 1,
+        "lineIndexes": [
+          21,
+          23
+        ],
+        "orderedLineIndexes": [
+          21,
+          23
+        ],
+        "intraGroupOrder": [
+          21,
+          23
+        ],
+        "interGroupOrder": 7,
+        "confidence": 0.9584588183878358,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 573,
+          "bottom": 600,
+          "left": 522,
+          "right": 572
+        },
+        "anchor": {
+          "sortX": 525,
+          "sortY": 573,
+          "rawOrder": 21
+        }
+      },
+      {
+        "id": "page-1-group-800",
+        "page": 1,
+        "lineIndexes": [
+          31,
+          32,
+          34
+        ],
+        "orderedLineIndexes": [
+          31,
+          32,
+          34
+        ],
+        "intraGroupOrder": [
+          31,
+          32,
+          34
+        ],
+        "interGroupOrder": 8,
+        "confidence": 0.9386402994476403,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 718,
+          "bottom": 756,
+          "left": 317,
+          "right": 399
+        },
+        "anchor": {
+          "sortX": 333,
+          "sortY": 718,
+          "rawOrder": 31
+        }
+      },
+      {
+        "id": "page-1-group-900",
+        "page": 1,
+        "lineIndexes": [
+          33,
+          35,
+          36,
+          37
+        ],
+        "orderedLineIndexes": [
+          33,
+          35,
+          36,
+          37
+        ],
+        "intraGroupOrder": [
+          33,
+          35,
+          36,
+          37
+        ],
+        "interGroupOrder": 9,
+        "confidence": 0.9430731464069795,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 740,
+          "bottom": 794,
+          "left": 540,
+          "right": 642
+        },
+        "anchor": {
+          "sortX": 564,
+          "sortY": 740,
+          "rawOrder": 33
+        }
+      },
+      {
+        "id": "page-1-group-1000",
+        "page": 1,
+        "lineIndexes": [
+          38,
+          39,
+          40,
+          41,
+          42
+        ],
+        "orderedLineIndexes": [
+          38,
+          39,
+          40,
+          41,
+          42
+        ],
+        "intraGroupOrder": [
+          38,
+          39,
+          40,
+          41,
+          42
+        ],
+        "interGroupOrder": 10,
+        "confidence": 0.9581007932687735,
+        "readingMode": "ltr",
+        "strategy": "geometry",
+        "groupType": "dialogue",
+        "bounds": {
+          "top": 803,
+          "bottom": 867,
+          "left": 119,
+          "right": 215
+        },
+        "anchor": {
+          "sortX": 127,
+          "sortY": 803,
+          "rawOrder": 38
+        }
+      }
     ],
-    "skipMissing": true,
-    "requireLanguages": []
-  },
-  "methodology": {
-    "version": "ocr-composite-v1",
-    "weights": {
-      "rawConfidence": 0.35,
-      "lexicalErrorPenalization": 0.45,
-      "yieldPreservationDropSafe": 0.2
-    },
-    "lexicalWeights": {
-      "wer": 0.35,
-      "cer": 0.25,
-      "garbage": 0.4
-    }
-  },
-  "overallStatus": "risk",
-  "failures": [
-    {
-      "engine": "tesseract",
-      "reason": "risk_detected (expectationFailures=3, riskyPages=3)"
-    },
-    {
-      "engine": "paddleocr",
-      "reason": "risk_detected (expectationFailures=3, riskyPages=3)"
-    }
-  ],
-  "results": [
-    {
-      "engine": "tesseract",
-      "status": "risk",
-      "comparedPages": 3,
-      "compositeScore": 59.09,
-      "efficiency": 24.3099,
-      "axisScores": {
-        "rawConfidence": 92.38,
-        "lexical": 37.23,
-        "yieldPreservation": 50
-      },
-      "lexicalErrors": {
-        "wer": 0.9833,
-        "cer": 0.9742,
-        "garbageRatio": 0.1
-      },
-      "expectationFailures": 3,
-      "riskyPages": 3,
-      "candWordsTotal": 1,
-      "candSuspiciousTotal": 0,
-      "runtime": {
-        "count": 3,
-        "avgMs": 2430.7,
-        "p50Ms": 2244,
-        "p90Ms": 2244,
-        "minMs": 1421,
-        "maxMs": 3627
-      },
-      "artifacts": {
-        "candidateJson": ".tmp-ocr-current-tesseract-panel-best-1780176468751.json",
-        "reportJson": ".tmp-ocr-report-tesseract-panel-best-1780176468751.json"
-      }
-    },
-    {
-      "engine": "paddleocr",
-      "status": "risk",
-      "comparedPages": 3,
-      "compositeScore": 59.09,
-      "efficiency": 21.5736,
-      "axisScores": {
-        "rawConfidence": 92.38,
-        "lexical": 37.23,
-        "yieldPreservation": 50
-      },
-      "lexicalErrors": {
-        "wer": 0.9833,
-        "cer": 0.9742,
-        "garbageRatio": 0.1
-      },
-      "expectationFailures": 3,
-      "riskyPages": 3,
-      "candWordsTotal": 1,
-      "candSuspiciousTotal": 0,
-      "runtime": {
-        "count": 3,
-        "avgMs": 2739,
-        "p50Ms": 2518,
-        "p90Ms": 2518,
-        "minMs": 1768,
-        "maxMs": 3931
-      },
-      "artifacts": {
-        "candidateJson": ".tmp-ocr-current-paddleocr-panel-best-1780176468751.json",
-        "reportJson": ".tmp-ocr-report-paddleocr-panel-best-1780176468751.json"
-      }
-    }
-  ]
+    "ungroupedLines": [
+      19
+    ]
+  }
 }

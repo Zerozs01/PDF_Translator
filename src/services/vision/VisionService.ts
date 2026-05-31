@@ -3032,6 +3032,83 @@ class VisionService {
     }
   }
 
+  /**
+   * Run a true raw model invocation (direct PaddleOCR process) bypassing the
+   * external bridge preprocessing. Returns a lightweight OCRPageResult with
+   * timing in debug.elapsed_ms.
+   */
+  public async runRawDirect(
+    imageUrl: string | Blob,
+    imageWidth: number,
+    imageHeight: number,
+    language: string = 'eng'
+  ): Promise<OCRPageResult> {
+    const bridge = window.electronAPI?.ocr;
+    if (!bridge?.runRawDirect) {
+      throw new Error('Raw direct OCR runner unavailable');
+    }
+
+    const { bytes, mimeType } = await this.readInputAsBytes(imageUrl);
+
+    const payload = await bridge.runRawDirect({
+      imageData: bytes,
+      imageMimeType: mimeType,
+      imageWidth,
+      imageHeight,
+      language,
+    });
+
+    // payload is expected to be the JSON emitted by scripts/paddleocr_raw_runner.py
+    const runtimeMs = payload?.elapsed_ms ?? null;
+    const text = String(payload?.text || '');
+    const lines = Array.isArray(payload?.lines)
+      ? payload.lines.map((line: any) => ({
+          text: String(line?.text || ''),
+          confidence: Number(line?.confidence) || 0,
+          bbox: line?.bbox,
+          words: Array.isArray(line?.words)
+            ? line.words.map((word: any) => ({
+                text: String(word?.text || ''),
+                confidence: Number(word?.confidence) || 0,
+                bbox: word?.bbox,
+              }))
+            : [],
+        }))
+      : [];
+    const words = Array.isArray(payload?.words)
+      ? payload.words.map((word: any) => ({
+          text: String(word?.text || word || ''),
+          confidence: Number(word?.confidence) || 0,
+          bbox: word?.bbox,
+        }))
+      : [];
+
+    const result: OCRPageResult = {
+      pageNumber: 0,
+      width: imageWidth,
+      height: imageHeight,
+      dpi: 300,
+      language,
+      pageSegMode: undefined,
+      algorithmVersion: OCR_ALGORITHM_VERSION,
+      pipelineProfile: 'raw',
+      ocrEngine: 'paddleocr',
+      ocrQualityProfile: 'best',
+      lines,
+      words,
+      text,
+      confidence: Number(payload?.confidence) || 0,
+      debug: {
+        raw: true,
+        runtimeMs,
+        timingsMs: { ocr: runtimeMs },
+        paddlePass: 'raw-direct',
+      },
+    };
+
+    return result;
+  }
+
   public async ocrForTextLayer(
     imageUrl: string | Blob,
     imageWidth: number,

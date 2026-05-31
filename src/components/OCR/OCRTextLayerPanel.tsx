@@ -4162,8 +4162,16 @@ export const OCRTextLayerPanel: React.FC = () => {
       return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
     })();
 
+    const isSensitiveFastLanguage = options.language
+      .split('+')
+      .map((code) => code.trim())
+      .filter(Boolean)
+      .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+
     let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
-      ? (ocrQualityMode === 'fast' ? 'fast' : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
+      ? (ocrQualityMode === 'fast'
+        ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
+        : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
       : 'best';
     let ocrResult: import('../../types').OCRPageResult;
     try {
@@ -4579,7 +4587,12 @@ export const OCRTextLayerPanel: React.FC = () => {
           const state = useOCRTextLayerStore.getState();
           let cachedPages = 0;
           state.ocrByPageEngine.forEach((engineMap) => {
-            if (engineMap.has(selectedEngine)) {
+            if (engineMap.size > 0) {
+              cachedPages += 1;
+            }
+          });
+          state.allPagesOCR.forEach((result, pageNum) => {
+            if (result && !Array.from(state.ocrByPageEngine.keys()).includes(pageNum)) {
               cachedPages += 1;
             }
           });
@@ -4780,7 +4793,14 @@ export const OCRTextLayerPanel: React.FC = () => {
 
           const benchmarkQualityProfile: OCRQualityProfile = (() => {
             if (engine.id !== 'paddleocr') return 'best';
-            if (ocrQualityMode === 'fast') return 'fast';
+            if (ocrQualityMode === 'fast') {
+              const isSensitiveFastLanguage = options.language
+                .split('+')
+                .map((code) => code.trim())
+                .filter(Boolean)
+                .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+              return isSensitiveFastLanguage ? 'balanced' : 'fast';
+            }
 
             const isCjkLike = options.language
               .split('+')
@@ -4983,7 +5003,14 @@ export const OCRTextLayerPanel: React.FC = () => {
           
           const qualityProfile: OCRQualityProfile = (() => {
             if (engine.id !== 'paddleocr') return 'best';
-            if (ocrQualityMode === 'fast') return 'fast';
+            if (ocrQualityMode === 'fast') {
+              const isSensitiveFastLanguage = options.language
+                .split('+')
+                .map((code) => code.trim())
+                .filter(Boolean)
+                .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+              return isSensitiveFastLanguage ? 'balanced' : 'fast';
+            }
             const isCjk = options.language.split('+').map(c => c.trim())
               .some(c => ['kor','jpn','jpn_vert','chi_sim','chi_tra','tha'].includes(c));
             if (activePipelineProfile !== 'panel' || isCjk) return 'balanced';
@@ -5000,10 +5027,10 @@ export const OCRTextLayerPanel: React.FC = () => {
           let rawSummary = null;
           if (supportsRaw) {
             updateBenchmarkRow(engine.id, { message: 'Running RAW pass...' });
-            try {
-              const rawResult = await visionService.rawOCR(
-                imageBlob, imgW, imgH, options.language, options.dpi, options.pageSegMode,
-                controller.signal, engine.id, qualityProfile
+              try {
+              // Use a true raw direct model run (bypass bridge preprocessing)
+              const rawResult = await visionService.runRawDirect(
+                imageBlob, imgW, imgH, options.language
               );
               rawSummary = summarizeBenchmarkResult(rawResult);
             } catch (err) {

@@ -50,6 +50,11 @@ import {
   useOCRTextLayerStore,
 } from './stores/useOCRTextLayerStore';
 import { useLayerStore } from './stores/useLayerStore';
+import {
+  applyKoreanConversationalFallback,
+  shouldPreferKoreanPivotTranslation,
+  hasKoreanTranslationCarryover,
+} from './services/translation/koreanTranslationPolicy';
 import { translationCoordinator } from './services/translation/translationCoordinator';
 import { TranslatableItem } from './types/translation';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
@@ -352,8 +357,16 @@ const selectOfflinePivotCandidate = (
 
   const directNeedsRetry = shouldRetryLineTranslation(sourceText, direct, normalizedSource, normalizedTarget);
   const pivotNeedsRetry = shouldRetryLineTranslation(sourceText, pivot, normalizedSource, normalizedTarget);
+  const directStats = getTranslationScriptStats(direct);
+  const pivotStats = getTranslationScriptStats(pivot);
 
   // For Spanish/Korean -> Thai offline routes, prefer pivot output when it passes basic quality gates.
+  if (normalizedSource === 'ko' && pivotStats.thaiChars > 0) {
+    const directWeak = directNeedsRetry || directStats.thaiChars === 0 || directStats.latinRatio >= 0.22;
+    if (directWeak || pivotStats.thaiRatio >= directStats.thaiRatio) {
+      return pivot;
+    }
+  }
   if (OFFLINE_PIVOT_SOURCE_LANGUAGES.has(normalizedSource) && !pivotNeedsRetry) {
     return pivot;
   }
@@ -362,7 +375,7 @@ const selectOfflinePivotCandidate = (
 
   const directScore = scoreTranslationCandidate(sourceText, direct, normalizedTarget);
   const pivotScore = scoreTranslationCandidate(sourceText, pivot, normalizedTarget);
-  const pivotBias = normalizedSource === 'es' ? 14 : 10;
+  const pivotBias = normalizedSource === 'ko' ? 24 : (normalizedSource === 'es' ? 14 : 10);
   if (pivotScore >= directScore - pivotBias) {
     return pivot;
   }
@@ -430,10 +443,27 @@ async function translateBatchOffline(
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
   const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
 
+  const normalizeOfflineSourceText = (rawText: string): string => {
+    const text = String(rawText || '');
+    if (normalizedSource === 'ko') {
+      return normalizeKoreanOcrNoiseForTranslation(cleanKoreanOcrSpacing(text));
+    }
+    if (normalizedSource === 'ja' || normalizedSource === 'jpn' || normalizedSource === 'jpn_vert') {
+      return normalizeJapaneseOcrNoiseForTranslation(cleanJapaneseOcrSpacing(text));
+    }
+    if (normalizedSource === 'es') {
+      return normalizeSpanishOcrNoiseForTranslation(text);
+    }
+    if (normalizedSource === 'en') {
+      return normalizeEnglishOcrNoiseForTranslation(text);
+    }
+    return normalizeSourceForTranslation(text, normalizedSource);
+  };
+
   // Argos offline translation is highly sensitive to case; all-caps often fails or produces garbage.
   // Force lowercase for all Latin-based source text to improve quality.
   const preparedTexts = texts.map((t) => {
-    const raw = String(t || '');
+    const raw = normalizeOfflineSourceText(String(t || ''));
     const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(raw);
     return hasCjkOrThai ? raw : raw.toLowerCase();
   });
@@ -527,7 +557,7 @@ async function translateBatchOffline(
     const pivotEnglishPrepared = pivotEnglish.map((line, index) => {
       const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
       if (normalizedPivot) return normalizedPivot;
-      return normalizeSourceForTranslation(String(texts[index] || ''), normalizedSource);
+      return normalizeOfflineSourceText(String(texts[index] || ''));
     });
     const pivotThai = await translateBatchOfflineBridge(
       pivotEnglishPrepared,
@@ -847,9 +877,7 @@ const shouldRetryLineTranslation = (
   }
 
   if (normalizedSource === 'ko' && normalizedTarget === 'th') {
-    const hasHangul = HANGUL_REGEX.test(translated);
-    const hasThai = THAI_REGEX.test(translated);
-    if (hasHangul && !hasThai) {
+    if (hasKoreanTranslationCarryover(translated)) {
       return true;
     }
   }
@@ -1399,6 +1427,31 @@ const hasKnownOcrNoisePattern = (text: string): boolean => {
     .replace(/[^a-z]/g, '');
   if (!compact) return false;
   return OCR_NOISE_COMPACT_FRAGMENTS.some((fragment) => compact.includes(fragment));
+};
+
+const isLikelyStructuredOcrGarbageToken = (text: string): boolean => {
+  const normalized = normalizeWhitespace(String(text || ''));
+  if (!normalized) return false;
+
+  const hasHangul = HANGUL_REGEX.test(normalized);
+  const hasKana = /[\u3040-\u30FF]/.test(normalized);
+  const hasHan = /[\u3400-\u9FFF]/.test(normalized);
+  const hasThai = THAI_REGEX.test(normalized);
+  if (hasHangul || hasKana || hasHan || hasThai) return false;
+
+  const compact = normalized.replace(/\s+/g, '');
+  if (compact.length > 14) return false;
+
+  const alphaCount = (compact.match(/[A-Za-z]/g) || []).length;
+  const digitCount = (compact.match(/[0-9]/g) || []).length;
+  const symbolCount = (compact.match(/[^A-Za-z0-9]/g) || []).length;
+  const bracketCount = (compact.match(/[()[\]{}<>]/g) || []).length;
+
+  const hasMixedSymbolNoise = bracketCount >= 1 && symbolCount >= 2;
+  const looksFragmented = compact.length <= 10 && alphaCount <= 5 && digitCount >= 1 && hasMixedSymbolNoise;
+  if (!looksFragmented) return false;
+
+  return true;
 };
 
 const scoreSourceLineReadability = (text: string): number => {
@@ -2949,39 +3002,9 @@ export const applyThaiConversationalGlossary = (
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
 
-  if (/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(source)) {
-    // Hangul SFX / Conversational manual fallbacks for Offline model gaps
-    const koMap: Record<string, string> = {
-      '헉': 'เฮือก',
-      '헉헉': 'แฮ่กๆ',
-      '하하': 'ฮ่าๆ',
-      '하하하': 'ฮ่าๆๆ',
-      '후후': 'หึๆ',
-      '음': 'อืม',
-      '응': 'อืม',
-      '아': 'อา',
-      '앗': 'อ๊ะ',
-      '어': 'เอ๊ะ',
-      '어라': 'เอ๊ะ',
-      '오': 'โอ้',
-      '에': 'เอ๋',
-      '우와': 'ว้าว',
-      '쉿': 'ชู่ว',
-      '짝': 'แปะ',
-      '쾅': 'ปัง',
-      '탁': 'ตึก',
-      '끄덕': 'พยักหน้า',
-      '절레': 'ส่ายหน้า',
-      '안녕': 'สวัสดี',
-      '네': 'ใช่',
-      '아니': 'ไม่',
-      '진짜': 'จริงเหรอ',
-      '제발': 'ได้โปรด',
-    };
-    const strippedKo = source.replace(/[\s.!?~,]/g, '');
-    if (koMap[strippedKo]) {
-      return preserveSourceTrailingPunctuation(source, koMap[strippedKo]);
-    }
+  const koreanFallback = applyKoreanConversationalFallback(source, translated);
+  if (koreanFallback) {
+    return koreanFallback;
   }
   const compactNormalizedSourceAsciiUpper = normalizedSpanishSource
     .normalize('NFD')
@@ -3612,6 +3635,17 @@ export const applyThaiConversationalGlossary = (
     finalResult = finalResult.replace(/♪/g, '').trim();
   }
 
+  // Remove leaked template-control artifacts from model output when source isn't template text.
+  if (!/[{}\[\]]/.test(source)) {
+    finalResult = finalResult
+      .replace(/[\[{]\s*\/?#?(?:if|else|elseif|endif|for|foreach|each|end)\b[^\]}\]]*[\]}]/gi, ' ')
+      .replace(/\{\s*\/[^}]+\}/g, ' ')
+      .replace(/\[\s*\/[^\]]+\]/g, ' ')
+      .replace(/[{}\[\]]{2,}/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
   const isSuspiciousHallucination = (
     (finalResult.includes('your language') && finalResult.includes('your board'))
     || (finalResult.includes('And your board') && finalResult.includes('your language'))
@@ -3847,12 +3881,26 @@ const isScientificSymbolLikeLine = (text: string, sourceLanguage?: string): bool
   return tokens.length <= 2 && alnum.length <= 6;
 };
 
-const shouldSkipLineTranslationByScript = (text: string, sourceLanguage: string): boolean => {
+const shouldSkipLineTranslationByScript = (
+  text: string,
+  sourceLanguage: string,
+  ocrLanguageHint?: string
+): boolean => {
   const normalized = normalizeWhitespace(String(text || ''));
   if (!normalized) return true;
 
   const resolvedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const normalizedOcrLanguageHint = String(ocrLanguageHint || '')
+    .split('+')
+    .map((part) => normalizeTranslationLanguage(part, ''))
+    .filter(Boolean);
+  const hasOcrCjkHint = normalizedOcrLanguageHint.some((lang) =>
+    ['ko', 'ja', 'zh', 'th'].includes(lang)
+  );
   if (resolvedSource === 'ko' || resolvedSource === 'ja' || resolvedSource === 'zh' || resolvedSource === 'th') {
+    return false;
+  }
+  if (hasOcrCjkHint) {
     return false;
   }
 
@@ -3872,9 +3920,14 @@ const shouldSkipLineTranslationByScript = (text: string, sourceLanguage: string)
   return false;
 };
 
-export const shouldPreserveSourceLineForTranslation = (text: string, sourceLanguage: string): boolean => {
+export const shouldPreserveSourceLineForTranslation = (
+  text: string,
+  sourceLanguage: string,
+  ocrLanguageHint?: string
+): boolean => {
+  if (isLikelyStructuredOcrGarbageToken(text)) return true;
   if (isScientificSymbolLikeLine(text, sourceLanguage)) return true;
-  return shouldSkipLineTranslationByScript(text, sourceLanguage);
+  return shouldSkipLineTranslationByScript(text, sourceLanguage, ocrLanguageHint);
 };
 
 const protectLocationPhrases = (
@@ -5693,21 +5746,23 @@ export default function App() {
     const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
     if (engineScoped) return engineScoped;
 
+    const pageScopedEntries = ocrState.ocrByPageEngine.get(pageNum);
+    if (pageScopedEntries && pageScopedEntries.size > 0) {
+      const fallbackEntry = Array.from(pageScopedEntries.entries())[0]?.[1];
+      if (fallbackEntry) return fallbackEntry;
+    }
+
     const fallback = ocrState.allPagesOCR.get(pageNum);
-    if (!fallback) return undefined;
-    const fallbackEngine = (fallback.ocrEngine || selectedEngine) as OCREngine;
-    if (fallbackEngine !== selectedEngine) return undefined;
-    return fallback;
+    return fallback || undefined;
   };
 
   const getModelScopedCachedPageNumbers = (): number[] => {
     const ocrState = useOCRTextLayerStore.getState();
-    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const pages = new Set<number>();
 
-    // ตรวจจาก ocrByPageEngine (primary store)
+    // ตรวจจาก ocrByPageEngine (primary store) โดยยอมรับทุก engine ที่มี cache อยู่
     ocrState.ocrByPageEngine.forEach((byEngine, pageNum) => {
-      if (byEngine.has(selectedEngine)) {
+      if (byEngine.size > 0) {
         pages.add(pageNum);
       }
     });
@@ -5715,8 +5770,7 @@ export default function App() {
     // fallback: ตรวจจาก allPagesOCR ด้วย (เช่น กรณีโหลดจาก DB มาเก็บที่ allPagesOCR)
     ocrState.allPagesOCR.forEach((result, pageNum) => {
       if (!pages.has(pageNum)) {
-        const resultEngine = (result.ocrEngine || selectedEngine) as OCREngine;
-        if (resultEngine === selectedEngine) {
+        if (result) {
           pages.add(pageNum);
         }
       }
@@ -7056,12 +7110,12 @@ export default function App() {
       }
       const latinDominantPage = isLikelyLatinDominantTranslationPage(dedupedLines) || hasStrongLatinAnchorLines(dedupedLines);
       const rawLines = assistedLines.filter((line) => {
-        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) return false;
         if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
         return true;
       });
       let lines = dedupedLines.filter((line) => {
-        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) return false;
         if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
         return true;
       });
@@ -7246,7 +7300,7 @@ export default function App() {
       });
 
       plan.lines.forEach((line) => {
-        if (shouldPreserveSourceLineForTranslation(line.text, plan.sourceLanguage)) {
+        if (shouldPreserveSourceLineForTranslation(line.text, plan.sourceLanguage, plan.ocrLanguageKey)) {
           return;
         }
         if (!translatedByIndex.has(line.index)) {
@@ -7491,13 +7545,13 @@ export default function App() {
       || hasStrongLatinAnchorLines(dedupedTranslatableLines);
     const rawTranslatableLines = assistedLines
       .filter((line) => {
-        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) return false;
         if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
         return true;
       });
     let translatableLines = dedupedTranslatableLines
       .filter((line) => {
-        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) return false;
+        if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) return false;
         if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
         return true;
       });
@@ -7505,7 +7559,7 @@ export default function App() {
     // === DIAG: see how many lines remain after filters ===
     console.log(`[TranslateDiag] srcLang=${translationSourceLanguage} tgtLang=${normalizedTargetLanguage} latinDominant=${latinDominantPage} deduped=${dedupedTranslatableLines.length} translatable=${translatableLines.length} preserved=${preservedSourceLineCount}`);
     if (translatableLines.length === 0 && dedupedTranslatableLines.length > 0) {
-      console.warn(`[TranslateDiag] All lines filtered! First dropped:`, dedupedTranslatableLines.slice(0, 3).map(l => ({ text: l.text, preserve: shouldPreserveSourceLineForTranslation(l.text, translationSourceLanguage) })));
+      console.warn(`[TranslateDiag] All lines filtered! First dropped:`, dedupedTranslatableLines.slice(0, 3).map(l => ({ text: l.text, preserve: shouldPreserveSourceLineForTranslation(l.text, translationSourceLanguage, ocrLanguageKey) })));
     }
 
     if (translatableLines.length === 0) {
@@ -7865,7 +7919,7 @@ export default function App() {
     });
 
     translatableLines.forEach((line) => {
-      if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage)) {
+      if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) {
         return;
       }
       if (translatedByIndex.has(line.index)) {

@@ -1,6 +1,7 @@
 import { TranslatableItem, TranslationResult, TranslationEngine } from '../../types/translation';
 import { translateSFX, SFXLanguage } from './sfxDictionaryService';
 import { dbService } from '../dbService';
+import { hasKoreanTranslationCarryover } from './koreanTranslationPolicy';
 
 /**
  * Argos Offline Engine Implementation
@@ -286,10 +287,14 @@ export class TranslationCoordinator {
       if (hasLatinLetters && !hasThaiChars) return true;
 
       // Case 2: Still contains source-script characters (Hangul, Kana, CJK) in the result
-      const hasHangul = /[\uAC00-\uD7AF]/.test(trimmed);
-      if (hasHangul && sourceLang === 'ko') return true;
+      const sourceHasHangul = /[\uAC00-\uD7AF]/.test(sourceText);
+      if (hasKoreanTranslationCarryover(trimmed) && (sourceLang === 'ko' || sourceHasHangul)) return true;
       const hasKana = /[\u3040-\u30FF]/.test(trimmed);
-      if (hasKana && sourceLang === 'ja') return true;
+      const sourceHasKana = /[\u3040-\u30FF]/.test(sourceText);
+      if (hasKana && (sourceLang === 'ja' || sourceHasKana)) return true;
+      const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(trimmed);
+      const sourceHasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(sourceText);
+      if (hasHan && sourceHasHan) return true;
 
       // Case 3: Collapsed result — result is way shorter than source for non-trivial inputs
       // e.g. source="출력해서집에붙여놓을라고하는데 ㅋㅋ" → result=". . ." is clearly garbage

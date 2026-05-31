@@ -48,6 +48,15 @@ describe('cleanKoreanOcrSpacing', () => {
   });
 });
 
+describe('normalizeKoreanOcrNoiseForTranslation', () => {
+  test('should normalize Korean full-width punctuation and common colloquial OCR forms', () => {
+    expect(normalizeKoreanOcrNoiseForTranslation('완료되었습니다。')).toBe('완료되었습니다.');
+    expect(normalizeKoreanOcrNoiseForTranslation('넘어가 줘 말어')).toBe('넘어가 줘 말아');
+    expect(normalizeKoreanOcrNoiseForTranslation('붙여놓을라고 하는데 ㅋㅋ')).toBe('붙여놓으려고 하는데 ㅋㅋ');
+    expect(normalizeKoreanOcrNoiseForTranslation('분여놓을라고하느데')).toBe('분여놓으려고하는데');
+  });
+});
+
 describe('normalizeJapaneseOcrNoiseForTranslation', () => {
   test('should normalize symbols and CJK punctuation', () => {
     expect(normalizeJapaneseOcrNoiseForTranslation('。')).toBe('.');

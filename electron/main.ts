@@ -368,7 +368,10 @@ app.whenReady().then(() => {
     return trimmed;
   };
 
-  const findLocalPythonExecutable = (roots: Array<string | null | undefined>): string | null => {
+  const findLocalPythonExecutable = (
+    roots: Array<string | null | undefined>,
+    venvDirs: string[] = ['.venv-ocr', '.venv']
+  ): string | null => {
     const pythonRelativePath = process.platform === 'win32'
       ? ['Scripts', 'python.exe']
       : ['bin', 'python'];
@@ -380,7 +383,7 @@ app.whenReady().then(() => {
       if (seen.has(resolvedRoot)) continue;
       seen.add(resolvedRoot);
 
-      for (const venvDir of ['.venv-ocr', '.venv']) {
+      for (const venvDir of venvDirs) {
         const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
         if (fs.existsSync(candidate)) {
           return candidate;
@@ -398,9 +401,6 @@ app.whenReady().then(() => {
     const appOverride = normalizePythonOverride(process.env.PDF_TRANSLATOR_PYTHON);
     if (appOverride) return appOverride;
 
-    const sharedOverride = normalizePythonOverride(process.env.OCR_PYTHON_PATH);
-    if (sharedOverride) return sharedOverride;
-
     const localVenvPython = findLocalPythonExecutable([
       process.cwd(),
       app.getAppPath(),
@@ -409,7 +409,7 @@ app.whenReady().then(() => {
       path.dirname(process.execPath),
       process.resourcesPath,
       process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
-    ]);
+    ], ['.venv', '.venv-argos']);
     if (localVenvPython) return localVenvPython;
 
     const virtualEnv = process.env.VIRTUAL_ENV;
@@ -487,6 +487,7 @@ app.whenReady().then(() => {
   interface ArgosBridgeDaemon {
     child: ReturnType<typeof spawn>;
     stdoutBuffer: string;
+    stderrBuffer: string;
     pending: Map<string, ArgosPendingRequest>;
     pythonExecutable: string;
     bridgePath: string;
@@ -607,6 +608,7 @@ app.whenReady().then(() => {
       const daemon: ArgosBridgeDaemon = {
         child,
         stdoutBuffer: '',
+        stderrBuffer: '',
         pending: new Map(),
         pythonExecutable,
         bridgePath,
@@ -617,18 +619,22 @@ app.whenReady().then(() => {
         handleArgosDaemonStdout(chunk, daemon);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        if (argosBridgeDaemon && argosBridgeDaemon.child === child) {
-          const message = chunk.toString().trim();
-          if (message) {
-            console.warn(`[argosBridge] ${message}`);
-          }
+        daemon.stderrBuffer += chunk.toString();
+        const message = chunk.toString().trim();
+        if (argosBridgeDaemon && argosBridgeDaemon.child === child && message) {
+          console.warn(`[argosBridge] ${message}`);
         }
       });
       child.on('error', (error) => {
         teardownArgosDaemon(error, daemon);
       });
       child.on('close', (code, signal) => {
-        teardownArgosDaemon(new Error(`Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`), daemon);
+        const stderr = daemon.stderrBuffer.trim();
+        const exitMessage = `Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
+        teardownArgosDaemon(
+          new Error(stderr ? `${exitMessage}: ${stderr}` : exitMessage),
+          daemon
+        );
       });
 
       argosBridgeDaemon = daemon;
@@ -1350,6 +1356,84 @@ app.whenReady().then(() => {
         console.error('ocr:run-external error:', error);
       }
       throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:run-raw-direct', async (_, payload: {
+    imageData: Uint8Array | ArrayBuffer;
+    imageMimeType: string;
+    imageWidth: number;
+    imageHeight: number;
+    language: string;
+  }) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid OCR payload');
+    }
+    if (!isValidString(payload.imageMimeType) || !isValidString(payload.language)) {
+      throw new Error('Invalid OCR payload: imageMimeType and language are required');
+    }
+    if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight)) {
+      throw new Error('Invalid OCR payload: imageWidth and imageHeight must be positive numbers');
+    }
+
+    const tmpDir = app.getPath('temp') || os.tmpdir();
+    const ext = payload.imageMimeType.includes('png') ? '.png' : (payload.imageMimeType.includes('jpeg') || payload.imageMimeType.includes('jpg') ? '.jpg' : '.img');
+    const tmpPath = path.join(tmpDir, `pdf-translator-raw-${randomUUID()}${ext}`);
+    const scriptPath = path.join(process.cwd(), 'scripts', 'paddleocr_raw_runner.py');
+
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(`Raw runner script not found: ${scriptPath}`);
+    }
+
+    const rawRunnerTimeoutMs = (() => {
+      const configured = Number(process.env.PDF_TRANSLATOR_RAW_OCR_TIMEOUT_MS || '0');
+      if (Number.isFinite(configured) && configured >= 60_000) {
+        return configured;
+      }
+      // True raw mode is intentionally heavy; give it enough room to finish.
+      return 20 * 60 * 1000;
+    })();
+
+    try {
+      await fs.promises.writeFile(tmpPath, Buffer.from(payload.imageData as ArrayBuffer));
+
+      const pythonCmd = resolvePythonExecutable();
+      const args = [scriptPath, '--image', tmpPath, '--language', String(payload.language || 'en')];
+
+      const proc = spawn(pythonCmd, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONWARNINGS: 'ignore' },
+      });
+
+      let stdout = '';
+      let stderr = '';
+      proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+      proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+      const exitCode = await new Promise<number>((resolve, reject) => {
+        const to = setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch {}
+          reject(new Error(`Raw runner timed out after ${Math.round(rawRunnerTimeoutMs / 60000)} minutes`));
+        }, rawRunnerTimeoutMs);
+        proc.on('error', (err) => { clearTimeout(to); reject(err); });
+        proc.on('close', (code) => { clearTimeout(to); resolve(code ?? 0); });
+      });
+
+      if (exitCode !== 0) {
+        throw new Error(stderr.trim() || stdout.trim() || `Raw runner exited with code ${exitCode}`);
+      }
+
+      const trimmed = stdout.trim();
+      if (!trimmed) throw new Error(stderr.trim() || 'Raw runner returned empty output');
+      try {
+        const parsed = JSON.parse(trimmed);
+        return parsed;
+      } catch (err) {
+        throw new Error(`Failed to parse raw runner output: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } finally {
+      try { await fs.promises.unlink(tmpPath); } catch {};
     }
   });
 
