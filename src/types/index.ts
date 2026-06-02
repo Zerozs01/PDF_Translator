@@ -159,12 +159,14 @@ export interface OCRCandidateDebug {
 }
 
 export interface OCRDebugInfo {
-  droppedWords: OCRDroppedWord[];
-  dropCounts: Record<string, number>;
+  droppedWords?: OCRDroppedWord[];
+  dropCounts?: Record<string, number>;
   stageMetrics?: OCRStageMetric[];
   candidates?: OCRCandidateDebug[];
   skipReason?: string;
   runtimeMs?: number;
+  timingsMs?: { ocr?: number; [key: string]: number | undefined };
+  paddlePass?: string;
   qualityProfile?: OCRQualityProfile;
   raw?: boolean;
   panelSafetyNormalizedVersion?: number;

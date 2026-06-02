@@ -5290,6 +5290,7 @@ export default function App() {
   const ocrLanguage = ocrOptions.language;
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
   const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
+  const setProgress = useOCRTextLayerStore((state) => state.setProgress);
 
   const file = useProjectStore((s) => s.file);
   const fileType = useProjectStore((s) => s.fileType);
@@ -5756,21 +5757,37 @@ export default function App() {
     return fallback || undefined;
   };
 
+  const hasModelScopedCachedOCR = (
+    ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
+    pageNum: number,
+    selectedEngine: OCREngine
+  ): boolean => {
+    const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+    if (engineScoped) return true;
+
+    const fallback = ocrState.allPagesOCR.get(pageNum);
+    if (fallback && (fallback.ocrEngine || 'tesseract') === selectedEngine) {
+      return true;
+    }
+    return false;
+  };
+
   const getModelScopedCachedPageNumbers = (): number[] => {
     const ocrState = useOCRTextLayerStore.getState();
+    const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
     const pages = new Set<number>();
 
-    // ตรวจจาก ocrByPageEngine (primary store) โดยยอมรับทุก engine ที่มี cache อยู่
+    // ตรวจจาก ocrByPageEngine (primary store)
     ocrState.ocrByPageEngine.forEach((byEngine, pageNum) => {
-      if (byEngine.size > 0) {
+      if (byEngine.has(selectedEngine)) {
         pages.add(pageNum);
       }
     });
 
-    // fallback: ตรวจจาก allPagesOCR ด้วย (เช่น กรณีโหลดจาก DB มาเก็บที่ allPagesOCR)
+    // fallback: ตรวจจาก allPagesOCR ด้วย
     ocrState.allPagesOCR.forEach((result, pageNum) => {
       if (!pages.has(pageNum)) {
-        if (result) {
+        if (result && (result.ocrEngine || 'tesseract') === selectedEngine) {
           pages.add(pageNum);
         }
       }
@@ -5818,7 +5835,7 @@ export default function App() {
   const ensureCurrentPageOCRReadyForTranslation = async (): Promise<boolean> => {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
-    if (resolveModelScopedOriginalPageOCR(ocrState, currentPage, selectedEngine)) {
+    if (hasModelScopedCachedOCR(ocrState, currentPage, selectedEngine)) {
       return true;
     }
 
@@ -5831,7 +5848,7 @@ export default function App() {
     if (!ok) return false;
 
     const refreshed = useOCRTextLayerStore.getState();
-    return Boolean(resolveModelScopedOriginalPageOCR(refreshed, currentPage, selectedEngine));
+    return hasModelScopedCachedOCR(refreshed, currentPage, selectedEngine);
   };
 
   const ensureAllPagesOCRReadyForTranslation = async (): Promise<boolean> => {
@@ -8186,6 +8203,16 @@ export default function App() {
   const handleOfflineTranslate = async () => {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsOfflineProcessing(true);
+
+    // ตั้งค่าเริ่มต้นความคืบหน้า เพื่อให้แถบขึ้นทันทีที่กด
+    setProgress({
+      stage: 'ocr',
+      currentPage: currentPage,
+      totalPages: totalPages,
+      message: 'กำลังตรวจหา cache หรือเริ่มตรวจจับข้อความ (OCR)...',
+      progress: 15,
+    });
+
     try {
       const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
       if (!ocrReady) {
@@ -8193,8 +8220,27 @@ export default function App() {
         return;
       }
 
+      // ปรับความคืบหน้าเข้าสู่ขั้นตอนการแปลภาษา (75%)
+      setProgress({
+        stage: 'text-layer',
+        currentPage: currentPage,
+        totalPages: totalPages,
+        message: 'กำลังดำเนินการแปลภาษาแบบ Offline...',
+        progress: 75,
+      });
+
       setTranslationStatus({ kind: 'info', message: 'Running offline translation on current page...' });
       await runCurrentPageTranslation('offline');
+
+      // อัปเดตสถานะความสำเร็จสุดท้ายไปที่ progress bar และหน่วงเวลา 800ms ให้ผู้ใช้เห็น 100% ครบถ้วนอย่างสวยงาม
+      setProgress({
+        stage: 'complete',
+        currentPage: currentPage,
+        totalPages: totalPages,
+        message: `แปลภาษาเสร็จสมบูรณ์!`,
+        progress: 100,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
     } catch (err) {
       console.error('Offline Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -8207,6 +8253,16 @@ export default function App() {
   const handleAiTranslate = async () => {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsAiProcessing(true);
+
+    // ตั้งค่าเริ่มต้นความคืบหน้า
+    setProgress({
+      stage: 'ocr',
+      currentPage: currentPage,
+      totalPages: totalPages,
+      message: 'กำลังตรวจหา cache หรือเริ่มตรวจจับข้อความ (OCR)...',
+      progress: 15,
+    });
+
     try {
       const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
       if (!ocrReady) {
@@ -8214,8 +8270,27 @@ export default function App() {
         return;
       }
 
+      // ปรับความคืบหน้าเข้าสู่ขั้นตอนการแปลภาษา (75%)
+      setProgress({
+        stage: 'text-layer',
+        currentPage: currentPage,
+        totalPages: totalPages,
+        message: 'กำลังส่งข้อมูลไปแปลภาษาด้วย AI (Gemini)...',
+        progress: 75,
+      });
+
       setTranslationStatus({ kind: 'info', message: 'Running Gemini translation on current page...' });
       await runCurrentPageTranslation('ai');
+
+      // อัปเดตสถานะความสำเร็จสุดท้ายไปที่ progress bar และหน่วงเวลา 800ms ให้ผู้ใช้เห็น 100% ครบถ้วนอย่างสวยงาม
+      setProgress({
+        stage: 'complete',
+        currentPage: currentPage,
+        totalPages: totalPages,
+        message: `แปลภาษา AI เสร็จสมบูรณ์!`,
+        progress: 100,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
     } catch (err) {
       console.error('AI Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -8229,14 +8304,112 @@ export default function App() {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsOfflineProcessing(true);
     try {
-      const ocrReady = await ensureAllPagesOCRReadyForTranslation();
-      if (!ocrReady) {
-        setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before offline all-pages translation.' });
+      const total = Math.max(1, totalPages);
+      const selectedEngine = (ocrOptions.engine || 'tesseract') as OCREngine;
+      
+      let translatedPages = 0;
+      let skippedPages = 0;
+      let failedPages = 0;
+
+      setTranslationStatus({
+        kind: 'info',
+        message: `Starting page-by-page offline OCR + translation for all ${total} pages...`,
+      });
+
+      for (let pageNum = 1; pageNum <= total; pageNum++) {
+        // 1. Navigate to the page so the user sees progress and OCR renders correctly
+        setPage(pageNum);
+        // Wait a tiny bit (e.g. 150ms) for state and rendering to catch up
+        await new Promise((resolve) => setTimeout(resolve, 150));
+
+        setTranslationStatus({
+          kind: 'info',
+          message: `Offline Batch: Processing page ${pageNum}/${total}... (Checking OCR)`,
+        });
+
+        // 2. Ensure OCR is ready for this specific page
+        const ocrState = useOCRTextLayerStore.getState();
+        const hasOcr = hasModelScopedCachedOCR(ocrState, pageNum, selectedEngine);
+        
+        if (!hasOcr) {
+          setTranslationStatus({
+            kind: 'info',
+            message: `Offline Batch: Running OCR on page ${pageNum}/${total} using ${selectedEngine}...`,
+          });
+          const ok = await requestAutoOCRFromPanel('current');
+          if (!ok) {
+            failedPages += 1;
+            console.warn(`[OfflineBatch] OCR failed on page ${pageNum}`);
+            continue;
+          }
+        } else {
+          // หากหน้ามีแคช OCR อยู่แล้ว ให้แสดงเปอร์เซ็นต์เต็มของหน้านั้นทันที
+          setProgress({
+            stage: 'ocr',
+            currentPage: pageNum,
+            totalPages: total,
+            message: `ใช้แคช OCR หน้าที่ ${pageNum}/${total}...`,
+            progress: 100,
+          });
+          // ทิ้งหน่วงสั้นๆ เพื่อเลี่ยงปุ่มวาปโดยไม่มีคำอธิบาย
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+
+        // 3. Translate this page immediately
+        setTranslationStatus({
+          kind: 'info',
+          message: `Offline Batch: Translating page ${pageNum}/${total}...`,
+        });
+
+        // แสดงสถานะการแปลแบบละเอียดหน้าต่อหน้า
+        setProgress({
+          stage: 'text-layer',
+          currentPage: pageNum,
+          totalPages: total,
+          message: `กำลังแปลเอกสารหน้าที่ ${pageNum}/${total}...`,
+          progress: 85,
+        });
+
+        try {
+          const translated = await runCurrentPageTranslation('offline', pageNum, { suppressStatus: true });
+          if (translated) {
+            translatedPages += 1;
+          } else {
+            skippedPages += 1;
+          }
+        } catch (error) {
+          failedPages += 1;
+          console.warn(`[OfflineBatch] Failed to translate page ${pageNum}:`, error);
+        }
+      }
+
+      if (translatedPages === 0) {
+        setTranslationStatus({
+          kind: 'error',
+          message: `Offline batch did not translate any pages.`,
+        });
         return;
       }
 
-      setTranslationStatus({ kind: 'info', message: 'Running offline translation for all pages...' });
-      await runOfflineBatchDocumentTranslation();
+      const notes: string[] = [];
+      if (skippedPages > 0) notes.push(`skipped ${skippedPages}`);
+      if (failedPages > 0) notes.push(`failed ${failedPages}`);
+
+      setTranslationStatus({
+        kind: failedPages > 0 ? 'info' : 'success',
+        message: `Offline batch translated ${translatedPages} pages using ${selectedEngine}.${notes.length ? ` notes: ${notes.join(', ')}` : ''}`,
+      });
+
+      // อัปเดตสถานะความสำเร็จสุดท้ายไปที่ progress bar และหน่วงเวลา 800ms ให้ผู้ใช้เห็น 100% ครบถ้วนอย่างสวยงาม
+      setProgress({
+        stage: 'complete',
+        currentPage: total,
+        totalPages: total,
+        message: `แปลภาษาเสร็จสมบูรณ์ทุกหน้า!`,
+        progress: 100,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
     } catch (err) {
       console.error('Offline All-Pages Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -8249,6 +8422,16 @@ export default function App() {
   const handleAiTranslateAllPages = async () => {
     if (isAiProcessing || isOfflineProcessing) return;
     setIsAiProcessing(true);
+
+    // ตั้งค่าเริ่มต้นความคืบหน้าในการแสกนทุกหน้า
+    setProgress({
+      stage: 'ocr',
+      currentPage: 1,
+      totalPages: totalPages,
+      message: 'กำลังวิเคราะห์เนื้อหาและเตรียมโครงสร้างรูปภาพทุกหน้า...',
+      progress: 20,
+    });
+
     try {
       const ocrReady = await ensureAllPagesOCRReadyForTranslation();
       if (!ocrReady) {
@@ -8256,8 +8439,27 @@ export default function App() {
         return;
       }
 
+      // ปรับเข้าสู่ขั้นตอนการเรียกแปล AI
+      setProgress({
+        stage: 'text-layer',
+        currentPage: totalPages,
+        totalPages: totalPages,
+        message: 'กำลังเรียกใช้งาน AI แปลภาษาทุกหน้าพร้อมกัน...',
+        progress: 75,
+      });
+
       setTranslationStatus({ kind: 'info', message: 'Running Gemini batch translation across OCR pages...' });
       await runAiBatchDocumentTranslation();
+
+      // อัปเดตสถานะความสำเร็จสุดท้ายไปที่ progress bar และหน่วงเวลา 800ms ให้ผู้ใช้เห็น 100% ครบถ้วนอย่างสวยงาม
+      setProgress({
+        stage: 'complete',
+        currentPage: totalPages,
+        totalPages: totalPages,
+        message: `แปลภาษา AI ทุกหน้าเสร็จสมบูรณ์!`,
+        progress: 100,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
     } catch (err) {
       console.error('AI All-Pages Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -8353,16 +8555,33 @@ export default function App() {
   const canExportOriginalSelection = downloadScopedPages.length > 0;
   const canExportTranslatedSelection = translatedAvailablePageNumbers.length > 0;
 
+  const computedProgressPercent = (() => {
+    if (!ocrProgress) return 0;
+    if (isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf') {
+      const base = ((currentPage - 1) / totalPages) * 100;
+      const currentContribution = ocrProgress.progress / totalPages;
+      return Math.min(100, Math.max(0, base + currentContribution));
+    }
+    return ocrProgress.progress;
+  })();
+
   const getRemainingSecondsText = () => {
-    if (!translationStartTime || !ocrProgress || ocrProgress.progress <= 0) return 'กำลังประเมินเวลา...';
+    if (!translationStartTime || !ocrProgress) return 'กำลังประเมินเวลา...';
+    const percent = isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
+      ? computedProgressPercent
+      : ocrProgress.progress;
+
+    if (percent <= 0) return 'กำลังประเมินเวลา...';
+    
     const elapsedSec = (Date.now() - translationStartTime) / 1000;
-    const percent = ocrProgress.progress;
     if (percent > 5) {
       const totalSec = elapsedSec * (100 / percent);
       const remainingSec = Math.max(1, Math.round(totalSec - elapsedSec));
       return `อีกประมาณ ${remainingSec} วินาที`;
     } else {
-      const pagesLeft = Math.max(1, ocrProgress.totalPages - ocrProgress.currentPage);
+      const pagesLeft = isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
+        ? Math.max(1, totalPages - currentPage)
+        : Math.max(1, ocrProgress.totalPages - ocrProgress.currentPage);
       const estSecPerPage = isAiProcessing ? 12 : 4;
       const remainingSec = pagesLeft * estSecPerPage;
       return `อีกประมาณ ${remainingSec} วินาที`;
@@ -8932,22 +9151,38 @@ export default function App() {
                       <div className="flex items-center justify-between text-[10px] text-cyan-200">
                         <span className="font-bold flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-                          {ocrProgress.message || 'กำลังแปลเอกสาร...'}
+                          {isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
+                            ? `กำลังประมวลผลหน้า ${currentPage} จาก ${totalPages} หน้า...`
+                            : (ocrProgress.message || 'กำลังแปลเอกสาร...')}
                         </span>
-                        <span className="font-mono text-[11px]">{Math.round(ocrProgress.progress)}%</span>
+                        <span className="font-mono text-[11px]">
+                          {Math.round(
+                            isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
+                              ? computedProgressPercent
+                              : ocrProgress.progress
+                          )}%
+                        </span>
                       </div>
                       
                       {/* หลอด Progress Bar */}
                       <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-white/10 relative">
                         <div 
                           className="h-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 rounded-full transition-all duration-300 shadow-[0_0_12px_rgba(6,182,212,0.5)]"
-                          style={{ width: `${ocrProgress.progress}%` }}
+                          style={{
+                            width: `${
+                              isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
+                                ? computedProgressPercent
+                                : ocrProgress.progress
+                            }%`
+                          }}
                         />
                       </div>
                       
                       {/* รายละเอียดเลขหน้าและเวลาที่เหลือ */}
                       <div className="flex items-center justify-between text-[9px] text-slate-400">
-                        <span>หน้าที่: {ocrProgress.currentPage} / {ocrProgress.totalPages} หน้า</span>
+                        <span>
+                          หน้าที่: {isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf' ? currentPage : ocrProgress.currentPage} / {isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf' ? totalPages : ocrProgress.totalPages} หน้า
+                        </span>
                         <span className="text-cyan-300 font-semibold">{getRemainingSecondsText()}</span>
                       </div>
                     </div>

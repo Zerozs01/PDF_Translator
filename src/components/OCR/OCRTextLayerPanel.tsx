@@ -3618,27 +3618,27 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
         return {
-          maxSide: 16000,
+          maxSide: 19000,
           maxPixels: 22_000_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
             boostedMaxSide: 20000,
-            boostedMaxPixels: 34_000_000,
+            boostedMaxPixels: 28_800_000,
           },
         };
       }
       if (cjkPanelExternal) {
         return {
-          maxSide: 16000,
-          maxPixels: 14_000_000,
+          maxSide: 19000,
+          maxPixels: 18_800_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
             boostedMaxSide: 20000,
-            boostedMaxPixels: 28_000_000,
+            boostedMaxPixels: 26_000_000,
           },
         };
       }
@@ -3658,14 +3658,14 @@ export const OCRTextLayerPanel: React.FC = () => {
       } else {
         // Fast Mode
         return {
-          maxSide: 20000,
-          maxPixels:18_750_000,
+          maxSide: 19000,
+          maxPixels:18_800_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
-            boostedMaxSide: 18500,
-            boostedMaxPixels: 22_000_000,
+            boostedMaxSide: 19000,
+            boostedMaxPixels: 18_800_000,
           },
         };
       }
@@ -5409,8 +5409,8 @@ export const OCRTextLayerPanel: React.FC = () => {
 
         {isModelSectionOpen && (
           <div className="px-2 pt-0.5">
-            <div className="grid grid-cols-3 gap-2">
-              {OCR_ENGINES.map((engine) => {
+            <div className="grid grid-cols-2 gap-2">
+              {OCR_ENGINES.filter((engine) => engine.id !== 'tesseract').map((engine) => {
                 const warmState = engine.id === 'tesseract'
                   ? {
                       phase: 'ready' as EngineWarmPhase,

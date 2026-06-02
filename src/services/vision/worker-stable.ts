@@ -737,8 +737,9 @@ self.onmessage = async (e: MessageEvent) => {
     switch (type) {
       // ─── INIT ───
       case 'INIT': {
-        console.log('[Worker-Stable] Initializing...');
-        await getOrCreateWorker('eng');
+        console.log('[Worker-Stable] Initializing (Tesseract deferred)...');
+        // Defer Tesseract initialization to avoid heavy startup load
+        // await getOrCreateWorker('eng');
         self.postMessage({ type: 'INIT_SUCCESS', id });
         break;
       }

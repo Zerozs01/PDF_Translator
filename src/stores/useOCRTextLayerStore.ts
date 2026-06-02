@@ -261,8 +261,8 @@ export const OCR_ENGINES: Array<{
     id: 'tesseract',
     name: 'Tesseract',
     runtime: 'Built-in WASM',
-    description: 'Built-in OCR engine running the WASM pipeline.',
-    available: true,
+    description: 'Suspended to reduce startup load. (Built-in OCR engine running the WASM pipeline).',
+    available: false,
   },
   {
     id: 'paddleocr',

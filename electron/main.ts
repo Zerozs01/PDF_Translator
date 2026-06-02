@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { pathToFileURL } from 'url'
