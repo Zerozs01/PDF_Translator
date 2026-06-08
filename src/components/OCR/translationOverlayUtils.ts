@@ -193,7 +193,7 @@ const shouldCollapseTranslatedOverlayDuplicate = (
   const minLength = Math.min(existing.normalizedKey.length, candidate.normalizedKey.length);
   const exactKeyMatch = existing.normalizedKey === candidate.normalizedKey;
   const sameOrSubset = exactKeyMatch
-    || (minLength >= 12 && (
+    || (minLength >= 5 && (
       existing.normalizedKey.includes(candidate.normalizedKey)
       || candidate.normalizedKey.includes(existing.normalizedKey)
     ));
@@ -610,6 +610,48 @@ const fillMissingOverlayLinesWithSourceText = (
   lines.forEach((line, index) => {
     const sourceText = normalizeOverlayInlineText(String(line.text || ''));
     if (!sourceText) return;
+
+    // Real-Time Subset/Duplicate Filter: ถ้ามีกล่องอื่นที่ยาวกว่า ครอบคลุมพิกัดของกล่องนี้เกิน 80%
+    // และมีข้อความของกล่องนี้รวมอยู่ด้วย จะข้ามไม่เติม fallback และลบออกจากคำแปลเพื่อหลีกเลี่ยงภาษาอังกฤษทับซ้อน
+    const bbox = line.bbox;
+    if (bbox) {
+      const lineArea = Math.max(1, (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0));
+      const hasLargerOverlap = lines.some((other, otherIdx) => {
+        if (otherIdx === index) return false;
+        const otherBBox = other.bbox;
+        if (!otherBBox) return false;
+
+        const otherArea = Math.max(1, (otherBBox.x1 - otherBBox.x0) * (otherBBox.y1 - otherBBox.y0));
+        if (otherArea <= lineArea) return false;
+
+        const overlapW = Math.max(0, Math.min(bbox.x1, otherBBox.x1) - Math.max(bbox.x0, otherBBox.x0));
+        const overlapH = Math.max(0, Math.min(bbox.y1, otherBBox.y1) - Math.max(bbox.y0, otherBBox.y0));
+        const overlapArea = overlapW * overlapH;
+
+        const isContained = (overlapArea / lineArea) >= 0.80;
+        if (!isContained) return false;
+
+        const otherText = normalizeOverlayInlineText(String(other.text || ''));
+        const thisText = sourceText;
+        if (otherText && thisText) {
+          const otherKey = otherText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const thisKey = thisText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          return otherKey.includes(thisKey);
+        }
+        return false;
+      });
+
+      if (hasLargerOverlap) {
+        const existingText = translatedByIndex.get(index);
+        if (existingText) {
+          if (!filled) {
+            filled = new Map(translatedByIndex);
+          }
+          filled.delete(index);
+        }
+        return;
+      }
+    }
 
     const existingText = translatedByIndex.get(index);
     if (isLikelyContextualGhostOverlayLine(line, index, currentPageOCR)) {

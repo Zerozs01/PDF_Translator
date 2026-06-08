@@ -511,6 +511,25 @@ export const OCRTextLayerPanel: React.FC = () => {
     }
   }, [isProcessing, progress?.currentPage, progress?.stage, progress?.totalPages]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI?.on) {
+      const unsubscribe = window.electronAPI.on('ocr:progress', (data: any) => {
+        if (isProcessing) {
+          setProgress({
+            stage: 'ocr',
+            currentPage: currentPage,
+            totalPages: 1,
+            message: `OCR page ${currentPage}: Running OCR (${Math.round(data.progress)}%)...`,
+            progress: data.progress,
+          });
+        }
+      });
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, [isProcessing, currentPage, setProgress]);
+
   const shouldRecoverExternalEngine = useCallback((error: unknown): boolean => {
     if (!(error instanceof Error)) return false;
     const message = error.message.toLowerCase();
@@ -916,96 +935,14 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   const startExternalProgress = useCallback((pageNum: number, engine: OCREngine, imageWidth?: number, imageHeight?: number) => {
     stopExternalProgress();
-    const startedAt = Date.now();
-    const warmState = SESSION_ENGINE_WARM_STATES[engine];
-    const engineReadyForLanguage = (
-      warmState?.phase === 'ready' && warmState.languageKey === normalizedWarmLanguage
-    ) || SESSION_ENGINE_READY_KEYS.has(getEngineWarmSessionKey(engine, normalizedWarmLanguage));
-    // Cold-start budget includes potential model download on first run (~2-5 min).
-    // Warm-start is much faster since the model is cached in memory.
-    let expectedMs = engine === 'paddleocr'
-      ? (engineReadyForLanguage ? 28000 : 240000)  // cold: 4 min (download+load+infer)
-      : (engineReadyForLanguage ? 14000 : 40000);
-
-    if (
-      engine === 'paddleocr'
-      && activePipelineProfile === 'panel'
-      && imageWidth
-      && imageHeight
-    ) {
-      const longest = Math.max(imageWidth, imageHeight);
-      const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
-      const aspectRatio = longest / shortest;
-      const cjkLike = options.language
-        .split('+')
-        .map(code => code.trim())
-        .filter(Boolean)
-        .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
-      const koreanLike = options.language
-        .split('+')
-        .map(code => code.trim())
-        .filter(Boolean)
-        .includes('kor');
-      const chunkLikely = koreanLike
-        ? (imageHeight >= 6200 || aspectRatio >= 2.4)
-        : (!cjkLike && (imageHeight >= 5200 || aspectRatio >= 2.3));
-      if (chunkLikely) {
-        const estimatedChunkHeight = Math.min(
-          Math.max(2200, Math.round(imageWidth * 1.05)),
-          Math.max(2200, Math.round(imageHeight * 0.48)),
-        );
-        const estimatedStride = Math.max(1, estimatedChunkHeight - 220);
-        const estimatedChunks = Math.max(1, Math.ceil((imageHeight - 220) / estimatedStride));
-        expectedMs = engineReadyForLanguage
-          ? (9000 + (estimatedChunks * 8500))
-          : (22000 + (estimatedChunks * 10000));
-      } else {
-        const pixelCount = Math.max(1, imageWidth * imageHeight);
-        const basePixels = 5_200_000;
-        const pixelScale = Math.min(4.5, Math.max(1, pixelCount / basePixels));
-        const latencyFactor = 1 + ((pixelScale - 1) * 1.6);
-        expectedMs = Math.round(expectedMs * latencyFactor);
-      }
-    }
-
-    const tick = () => {
-      const elapsedMs = Date.now() - startedAt;
-      // Linear progress from 18% → 90% within expectedMs,
-      // then logarithmic tail that grows very slowly — prevents the bar from
-      // appearing frozen at 98% when a model download takes longer than expected.
-      const warmupProgress = 18 + ((Math.min(elapsedMs, expectedMs) / expectedMs) * 72);
-      const overrunMs = Math.max(0, elapsedMs - expectedMs);
-      // Tail: approaches 99 asymptotically (never actually reaches it)
-      const tailProgress = elapsedMs > expectedMs
-        ? Math.min(99, 90 + (Math.log1p(overrunMs / 12000) * 3.2))
-        : warmupProgress;
-      const progressValue = Math.max(18, Math.min(99, tailProgress));
-      const statusText = engine === 'paddleocr'
-        ? !engineReadyForLanguage && elapsedMs < 11000
-          ? 'Preparing PaddleOCR runtime...'
-          : !engineReadyForLanguage && elapsedMs < 40000
-            ? 'Downloading / loading detection model...'
-            : !engineReadyForLanguage && elapsedMs < 120000
-              ? 'Downloading / loading recognition model...'
-              : 'Running PaddleOCR...'
-        : !engineReadyForLanguage && elapsedMs < 6000
-          ? 'Preparing EasyOCR runtime...'
-          : !engineReadyForLanguage && elapsedMs < 16000
-            ? 'Loading EasyOCR reader...'
-          : 'Running external OCR...';
-
-      setProgress({
-        stage: 'ocr',
-        currentPage: pageNum,
-        totalPages: 1,
-        message: `OCR page ${pageNum}: ${statusText}`,
-        progress: progressValue,
-      });
-    };
-
-    tick();
-    externalProgressTimerRef.current = setInterval(tick, 700);
-  }, [activePipelineProfile, normalizedWarmLanguage, options.language, setProgress, stopExternalProgress]);
+    setProgress({
+      stage: 'ocr',
+      currentPage: pageNum,
+      totalPages: 1,
+      message: `OCR page ${pageNum}: Initializing...`,
+      progress: 10,
+    });
+  }, [setProgress, stopExternalProgress]);
 
   const getPdfDoc = useCallback(async () => {
     if (!file) {
@@ -2044,8 +1981,8 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
         return {
-          maxSide: 19000,
-          maxPixels: 22_000_000,
+          maxSide: 20000,
+          maxPixels: 23_500_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
@@ -2058,7 +1995,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       if (cjkPanelExternal) {
         return {
           maxSide: 19000,
-          maxPixels: 18_800_000,
+          maxPixels: 28_800_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
@@ -2072,13 +2009,13 @@ export const OCRTextLayerPanel: React.FC = () => {
       if (ocrQualityMode === 'high') {
         return {
           maxSide:21500,
-          maxPixels:23_800_000,
+          maxPixels:37_650_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
             boostedMaxSide:21500,
-            boostedMaxPixels: 23_800_000,
+            boostedMaxPixels: 37_650_000,
           },
         };
       } else {
@@ -2101,7 +2038,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       if (cjkPanelExternal) {
         return {
           maxSide: 21500,
-          maxPixels: 26_000_000,
+          maxPixels: 23_800_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
@@ -2124,26 +2061,38 @@ export const OCRTextLayerPanel: React.FC = () => {
     const maxSide = constraints?.maxSide ?? null;
     const maxPixels = constraints?.maxPixels ?? null;
     const minWidth = constraints?.minWidth ?? null;
-    const tallPageBoost = constraints?.tallPageBoost ?? null;
+    
     let effectiveMaxSide = maxSide;
     let effectiveMaxPixels = maxPixels;
     let appliedTallPageBoost = false;
 
-    if (tallPageBoost) {
-      const longSide = Math.max(width, height);
-      const shortSide = Math.max(1, Math.min(width, height));
-      const aspectRatio = longSide / shortSide;
-      const qualifiesTallPage = longSide >= Math.max(1, tallPageBoost.minLongSide)
-        && aspectRatio >= Math.max(1, tallPageBoost.minAspectRatio);
-      if (qualifiesTallPage) {
-        appliedTallPageBoost = true;
-        if (tallPageBoost.boostedMaxSide > 0) {
-          effectiveMaxSide = Math.max(effectiveMaxSide || 0, tallPageBoost.boostedMaxSide);
-        }
-        if (tallPageBoost.boostedMaxPixels > 0) {
-          effectiveMaxPixels = Math.max(effectiveMaxPixels || 0, tallPageBoost.boostedMaxPixels);
-        }
+    const longSide = Math.max(width, height);
+    const shortSide = Math.max(1, Math.min(width, height));
+    const aspectRatio = longSide / shortSide;
+
+    // Use a sub-linear dynamic scaling multiplier instead of a hardcoded threshold
+    if (effectiveMaxPixels && effectiveMaxPixels > 0) {
+      const baseMaxPixels = effectiveMaxPixels;
+      // Scale dynamically using the square root of the aspect ratio
+      const subLinearMultiplier = Math.sqrt(aspectRatio);
+      let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
+
+      // Hard ceiling of 20M pixels to prevent memory exhaustion and "donut effect"
+      const MAX_PIXELS_CEILING = 37_650_000;
+      if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
+        dynamicMaxPixels = MAX_PIXELS_CEILING;
       }
+
+      effectiveMaxPixels = dynamicMaxPixels;
+      // Mark as boosted if aspect ratio is noticeably non-square (e.g. > 1.5)
+      appliedTallPageBoost = aspectRatio > 1.5;
+    }
+
+    // Adjust effectiveMaxSide sub-linearly to prevent the width from being crushed
+    // on images with extreme aspect ratios
+    if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
+      const baseMaxSide = effectiveMaxSide;
+      effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
     }
 
     let scaleFactor = 1;
@@ -2503,7 +2452,8 @@ export const OCRTextLayerPanel: React.FC = () => {
         showDebugOverlay,
         activePipelineProfile,
         qualityProfile,
-        activeEngine
+        activeEngine,
+        imageWidth * imageHeight
       );
 
       try {
@@ -3937,10 +3887,9 @@ export const OCRTextLayerPanel: React.FC = () => {
                 {pct}%
               </span>
             </div>
-            {/* Bar */}
             <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-150"
+                className="h-full bg-gradient-to-r from-[#2B9BFF] to-[#5CC6F2] transition-all duration-500 ease-out"
                 style={{ width: `${pct}%` }}
               />
             </div>

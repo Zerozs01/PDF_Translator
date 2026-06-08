@@ -35,6 +35,8 @@ def run_test(name, constructor_kwargs):
 run_test("Defaults", {
     "lang": "korean",
     "show_log": False,
+    "enable_mkldnn": False,
+    "use_onednn": False,
 })
 
 # Test 2: Custom thresholds with default Multilingual v3 detector
@@ -43,7 +45,9 @@ run_test("Custom Thresholds (unclip=1.95, thresh=0.18)", {
     "show_log": False,
     "det_db_unclip_ratio": 1.95,
     "det_db_thresh": 0.18,
-    "det_db_box_thresh": 0.42,
+    "det_db_box_thresh": 0.5,
+    "enable_mkldnn": False,
+    "use_onednn": False,
 })
 
 # Test 3: Using ch_PP-OCRv4_det_infer as det model + default unclip
@@ -51,6 +55,8 @@ run_test("ch_PP-OCRv4 Detector with Default Thresholds", {
     "lang": "korean",
     "show_log": False,
     "det_model_dir": os.path.expanduser("~/.paddleocr/whl/det/ch/ch_PP-OCRv4_det_infer"),
+    "enable_mkldnn": False,
+    "use_onednn": False,
 })
 
 # Test 4: Using ch_PP-OCRv4_det_infer as det model + unclip=1.95
@@ -60,5 +66,8 @@ run_test("ch_PP-OCRv4 Detector with unclip=1.95", {
     "det_model_dir": os.path.expanduser("~/.paddleocr/whl/det/ch/ch_PP-OCRv4_det_infer"),
     "det_db_unclip_ratio": 1.95,
     "det_db_thresh": 0.18,
-    "det_db_box_thresh": 0.42,
+    "det_db_box_thresh": 0.5,
+    "enable_mkldnn": False,
+    "use_onednn": False,
 })
+

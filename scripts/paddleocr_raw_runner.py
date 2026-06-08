@@ -18,6 +18,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True)
     parser.add_argument("--language", default="en")
+    parser.add_argument(
+        "--max-side-len",
+        type=int,
+        default=4800,
+        help=(
+            "Maximum det_limit_side_len for PaddleOCR detection. "
+            "Hard-capped at 6000 to prevent DB++ Donut Effect. Default: 4800."
+        ),
+    )
     args = parser.parse_args()
 
     img_path = Path(args.image)
@@ -92,6 +101,26 @@ def main():
     # Build constructor kwargs depending on PaddleOCR version to avoid deprecation warnings
     try:
         import inspect
+        from PIL import Image as _PILImage  # type: ignore
+
+        # Determine the natural maximum side length of the source image so we
+        # can set det_limit_side_len to exactly what the model needs — no more.
+        # Hard cap at 6000 to prevent the DB++ "Donut Effect" (receptive field
+        # saturation when characters are too large relative to the detection kernel).
+        _DONUT_HARD_CAP = 6000
+        _user_cap = max(1, int(getattr(args, "max_side_len", 4800) or 4800))
+        _user_cap = min(_user_cap, _DONUT_HARD_CAP)
+        try:
+            with _PILImage.open(str(img_path)) as _img:
+                _img_max_side = max(_img.width, _img.height)
+            # Only raise the limit if the image actually needs it.
+            # For images smaller than the cap, use the natural size so PaddleOCR
+            # doesn't upscale and waste memory.
+            det_limit = min(_img_max_side, _user_cap)
+        except Exception:
+            # If we can't read the image here, fall back to the user cap.
+            det_limit = _user_cap
+
         sig = inspect.signature(PaddleOCR)
         params = {}
         if 'use_textline_orientation' in sig.parameters:
@@ -100,20 +129,20 @@ def main():
             params['use_angle_cls'] = True
 
         if 'text_det_limit_side_len' in sig.parameters:
-            params['text_det_limit_side_len'] = 999999
+            params['text_det_limit_side_len'] = det_limit
         elif 'det_limit_side_len' in sig.parameters:
-            params['det_limit_side_len'] = 999999
+            params['det_limit_side_len'] = det_limit
 
         if 'text_det_limit_type' in sig.parameters:
             params['text_det_limit_type'] = 'max'
         elif 'det_limit_type' in sig.parameters:
             params['det_limit_type'] = 'max'
     except Exception:
-        params = {'use_angle_cls': True, 'det_limit_side_len': 999999, 'det_limit_type': 'max'}
+        params = {'use_angle_cls': True, 'det_limit_side_len': 4800, 'det_limit_type': 'max'}
 
     t0 = time.perf_counter()
     try:
-        # Force full-resolution detection (no internal size limits)
+        # Detect with dynamic side-length limit (avoids Donut Effect on high-DPI scans)
         ocr = PaddleOCR(lang=lang_norm, **params)
         if hasattr(ocr, "predict"):
             raw = ocr.predict(str(img_path))

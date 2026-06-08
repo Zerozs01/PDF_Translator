@@ -14,7 +14,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
-import { cancelExternalOcr, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr } from './ocrBridge'
+import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
 // BenchmarkDAO not implemented in this file (db.ts handles)
 
@@ -1334,9 +1334,51 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('ocr:write-temp-image', async (_, payload: {
+    imageData: Uint8Array | ArrayBuffer;
+    imageMimeType: string;
+  }) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid ocr:write-temp-image payload');
+    }
+    if (!isValidString(payload.imageMimeType)) {
+      throw new Error('Invalid ocr:write-temp-image payload: imageMimeType is required');
+    }
+    if (!payload.imageData) {
+      throw new Error('Invalid ocr:write-temp-image payload: imageData is required');
+    }
+    try {
+      const imagePath = await writeOcrTempImage(payload.imageData, payload.imageMimeType);
+      return { imagePath };
+    } catch (error) {
+      console.error('ocr:write-temp-image error:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('ocr:delete-temp-image', async (_, payload: {
+    imagePath: string;
+  }) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid ocr:delete-temp-image payload');
+    }
+    if (!isValidString(payload.imagePath)) {
+      throw new Error('Invalid ocr:delete-temp-image payload: imagePath is required');
+    }
+    try {
+      await deleteOcrTempImage(payload.imagePath);
+      return { ok: true };
+    } catch (error) {
+      console.error('ocr:delete-temp-image error:', error);
+      throw error;
+    }
+  });
+
+
   ipcMain.handle('ocr:run-external', async (_, payload: {
     engine: string;
-    imageData: Uint8Array | ArrayBuffer;
+    imagePath?: string;
+    imageData?: Uint8Array | ArrayBuffer;
     imageMimeType: string;
     imageWidth: number;
     imageHeight: number;
@@ -1345,6 +1387,9 @@ app.whenReady().then(() => {
     pageSegMode?: number;
     pipelineProfile?: string;
     ocrQualityProfile?: string;
+    maxSideLen?: number;
+    chunkIndex?: number;
+    totalChunks?: number;
   }) => {
     if (!payload || typeof payload !== 'object') {
       throw new Error('Invalid OCR payload');
@@ -1354,6 +1399,18 @@ app.whenReady().then(() => {
     }
     if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight) || !isValidNumber(payload.dpi)) {
       throw new Error('Invalid OCR payload: imageWidth, imageHeight, and dpi must be positive numbers');
+    }
+    // Must supply either imagePath or imageData
+    if (!payload.imagePath && !payload.imageData) {
+      throw new Error('Invalid OCR payload: either imagePath or imageData must be provided');
+    }
+    // Security: imagePath must reside within the designated OCR temp directory
+    if (payload.imagePath) {
+      const resolvedPath = path.resolve(payload.imagePath);
+      const tempRoot = path.join(os.tmpdir(), 'pdf-translator-ocr');
+      if (!resolvedPath.startsWith(tempRoot)) {
+        throw new Error('Invalid OCR payload: imagePath must be within the OCR temp directory');
+      }
     }
 
     try {
@@ -1370,7 +1427,8 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('ocr:run-raw-direct', async (_, payload: {
-    imageData: Uint8Array | ArrayBuffer;
+    imagePath?: string;
+    imageData?: Uint8Array | ArrayBuffer;
     imageMimeType: string;
     imageWidth: number;
     imageHeight: number;
@@ -1385,12 +1443,11 @@ app.whenReady().then(() => {
     if (!isValidNumber(payload.imageWidth) || !isValidNumber(payload.imageHeight)) {
       throw new Error('Invalid OCR payload: imageWidth and imageHeight must be positive numbers');
     }
+    if (!payload.imagePath && !payload.imageData) {
+      throw new Error('Invalid OCR payload: either imagePath or imageData must be provided');
+    }
 
-    const tmpDir = app.getPath('temp') || os.tmpdir();
-    const ext = payload.imageMimeType.includes('png') ? '.png' : (payload.imageMimeType.includes('jpeg') || payload.imageMimeType.includes('jpg') ? '.jpg' : '.img');
-    const tmpPath = path.join(tmpDir, `pdf-translator-raw-${randomUUID()}${ext}`);
     const scriptPath = path.join(process.cwd(), 'scripts', 'paddleocr_raw_runner.py');
-
     if (!fs.existsSync(scriptPath)) {
       throw new Error(`Raw runner script not found: ${scriptPath}`);
     }
@@ -1400,15 +1457,27 @@ app.whenReady().then(() => {
       if (Number.isFinite(configured) && configured >= 60_000) {
         return configured;
       }
-      // True raw mode is intentionally heavy; give it enough room to finish.
       return 20 * 60 * 1000;
     })();
 
-    try {
-      await fs.promises.writeFile(tmpPath, Buffer.from(payload.imageData as ArrayBuffer));
+    // Resolve or write temp file — skip writeFile entirely when imagePath is already available
+    let resolvedTmpPath: string;
+    let ownsTmpFile: boolean;
+    if (payload.imagePath) {
+      resolvedTmpPath = payload.imagePath;
+      ownsTmpFile = false;
+    } else {
+      const tmpDir = app.getPath('temp') || os.tmpdir();
+      const ext = payload.imageMimeType.includes('png') ? '.png'
+        : (payload.imageMimeType.includes('jpeg') || payload.imageMimeType.includes('jpg') ? '.jpg' : '.img');
+      resolvedTmpPath = path.join(tmpDir, `pdf-translator-raw-${randomUUID()}${ext}`);
+      await fs.promises.writeFile(resolvedTmpPath, Buffer.from(payload.imageData as ArrayBuffer));
+      ownsTmpFile = true;
+    }
 
+    try {
       const pythonCmd = resolvePythonExecutable();
-      const args = [scriptPath, '--image', tmpPath, '--language', String(payload.language || 'en')];
+      const args = [scriptPath, '--image', resolvedTmpPath, '--language', String(payload.language || 'en')];
 
       const proc = spawn(pythonCmd, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -1443,7 +1512,10 @@ app.whenReady().then(() => {
         throw new Error(`Failed to parse raw runner output: ${err instanceof Error ? err.message : String(err)}`);
       }
     } finally {
-      try { await fs.promises.unlink(tmpPath); } catch {};
+      // Only delete when we created the temp file; caller-supplied paths are cleaned up by the caller
+      if (ownsTmpFile) {
+        try { await fs.promises.unlink(resolvedTmpPath); } catch {};
+      }
     }
   });
 

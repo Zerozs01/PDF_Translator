@@ -1,6 +1,7 @@
 import React from 'react';
 import type { BBox, OCRDroppedWord, OCRLine, OCRPageResult } from '../../types';
 import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+import { collectTextSearchMatches } from '../textSearch';
 
 // -------------------------------------------------------------
 // Helper and Utility functions for Geometry & Safety Filtering
@@ -15,7 +16,6 @@ export const renderPreviewTextWithHighlight = (
   const normalizedText = String(text || '');
   if (!pattern || !normalizedText) return normalizedText;
 
-  const { collectTextSearchMatches } = require('../textSearch');
   const matches = collectTextSearchMatches(normalizedText, pattern);
   if (matches.length === 0) return normalizedText;
 

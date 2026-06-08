@@ -113,7 +113,8 @@ export interface ExternalOCRWarmupStatus {
 
 export interface ExternalOCRRequest {
   engine: OCREngine;
-  imageData: Uint8Array | ArrayBuffer;
+  imageData?: Uint8Array | ArrayBuffer;
+  imagePath?: string;
   imageMimeType: string;
   imageWidth: number;
   imageHeight: number;
@@ -122,6 +123,10 @@ export interface ExternalOCRRequest {
   pageSegMode?: number;
   pipelineProfile?: OCRPipelineProfile;
   ocrQualityProfile?: OCRQualityProfile;
+  maxSideLen?: number;
+  maxPixels?: number;
+  chunkIndex?: number;
+  totalChunks?: number;
 }
 
 export interface ExternalOCRResult {
@@ -276,7 +281,16 @@ export interface ElectronAPI {
     prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
     cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
     runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
-    runRawDirect?: (request: { imageData: Uint8Array | ArrayBuffer, imageMimeType: string, imageWidth: number, imageHeight: number, language: string }) => Promise<any>;
+    runRawDirect?: (payload: {
+      imagePath?: string;
+      imageData?: Uint8Array | ArrayBuffer;
+      imageMimeType: string;
+      imageWidth: number;
+      imageHeight: number;
+      language: string;
+    }) => Promise<any>;
+    writeTempImage: (payload: { imageData: Uint8Array | ArrayBuffer; imageMimeType: string }) => Promise<{ imagePath: string }>;
+    deleteTempImage: (payload: { imagePath: string }) => Promise<{ ok: boolean }>;
   };
 
   models: {
