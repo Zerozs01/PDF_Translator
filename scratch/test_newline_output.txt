@@ -1,0 +1,14 @@
+Python: C:\Users\auand\AppData\Local\Programs\Python\Python310\python.exe
+Bridge Path: C:\App\Electron\PDF_Translator\scripts\argos_translate_bridge.py
+
+--- Sending Multi-line Payload 1 ---
+{"id": "req-1", "sourceLanguage": "en", "targetLanguage": "th", "texts": ["682110209\ncome with me\nmama"]}
+Response 1:
+{"ok": true, "engine": "argos", "sourceLanguage": "en", "targetLanguage": "th", "translations": ["682110209\nมากับฉัน\nแม่"], "id": "req-1"}
+
+
+--- Sending Multi-line Payload 2 ---
+{"id": "req-2", "sourceLanguage": "en", "targetLanguage": "th", "texts": ["682110209\nCome with me\nMAMA"]}
+Response 2:
+{"ok": true, "engine": "argos", "sourceLanguage": "en", "targetLanguage": "th", "translations": ["682110209\nมากับฉัน\nMAMA"], "id": "req-2"}
+

@@ -256,7 +256,7 @@ export const dbService = {
         console.warn('[DB] saveOCR skipped: DB not available');
         return false;
       }
-      const selectedEngine = engine || data.ocrEngine || 'tesseract';
+      const selectedEngine = engine || data.ocrEngine || 'paddleocr';
       const ok = await window.electronAPI.db.saveOCR(docId, pageNum, data, selectedEngine);
       if (!ok) {
         console.warn(`[DB] saveOCR returned false for page ${pageNum} (docId=${docId}, engine=${selectedEngine})`);
@@ -270,7 +270,7 @@ export const dbService = {
     }
   },
 
-  async getOCR(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<OCRPageResult | null> {
+  async getOCR(docId: number, pageNum: number, engine: OCREngine = 'paddleocr'): Promise<OCRPageResult | null> {
     try {
       if (!isDbAvailable()) {
         console.warn('[DB] getOCR skipped: DB not available');
@@ -289,7 +289,7 @@ export const dbService = {
     }
   },
 
-  async clearOCR(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<boolean> {
+  async clearOCR(docId: number, pageNum: number, engine: OCREngine = 'paddleocr'): Promise<boolean> {
     try {
       if (!isDbAvailable()) {
         console.warn('[DB] clearOCR skipped: DB not available');
@@ -338,7 +338,7 @@ export const dbService = {
     }
   },
 
-  async clearTranslationCacheByEngine(docId: number, pageNum: number, engine: OCREngine = 'tesseract'): Promise<boolean> {
+  async clearTranslationCacheByEngine(docId: number, pageNum: number, engine: OCREngine = 'paddleocr'): Promise<boolean> {
     try {
       if (!isDbAvailable()) {
         console.warn('[DB] clearTranslationCacheByEngine skipped: DB not available');

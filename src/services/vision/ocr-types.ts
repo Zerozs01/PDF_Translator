@@ -19,7 +19,7 @@ export interface OCRDroppedWord {
 
 export type OCRPipelineProfile = 'panel' | 'export';
 export type OCRQualityProfile = 'fast' | 'balanced' | 'best';
-export type OCREngine = 'tesseract' | 'paddleocr' | 'easyocr';
+export type OCREngine = 'paddleocr' | 'easyocr';
 
 export interface OCRStageMetric {
   stage:
@@ -93,18 +93,6 @@ export interface OCRBlock {
 }
 
 export type OCRWord = { text: string; confidence: number; bbox: BBox };
-
-export interface TesseractResult {
-  data: {
-    text: string;
-    confidence: number;
-    blocks?: OCRBlock[];
-    lines?: Array<{ text: string; confidence: number; bbox: BBox; words: OCRWord[] }>;
-    words?: Array<{ text: string; confidence: number; bbox: BBox }>;
-    hocr?: string;
-    tsv?: string;
-  };
-}
 
 export type DocumentType = 'manga' | 'document';
 

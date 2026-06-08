@@ -126,6 +126,30 @@ const endsGroup = (text: string): boolean => {
   return END_BALLOON_PATTERNS.some((p) => p.test(text));
 };
 
+const areSameScriptLines = (a: string, b: string): boolean => {
+  const cleanA = a.replace(/[\d\s\W_]+/g, '');
+  const cleanB = b.replace(/[\d\s\W_]+/g, '');
+  if (!cleanA || !cleanB) return true;
+
+  const hasThaiA = /[\u0E00-\u0E7F]/.test(cleanA);
+  const hasThaiB = /[\u0E00-\u0E7F]/.test(cleanB);
+  if (hasThaiA || hasThaiB) return hasThaiA && hasThaiB;
+
+  const hasHangulA = /[\uAC00-\uD7AF]/.test(cleanA);
+  const hasHangulB = /[\uAC00-\uD7AF]/.test(cleanB);
+  if (hasHangulA || hasHangulB) return hasHangulA && hasHangulB;
+
+  const hasCjkA = /[\u3040-\u30FF\u4E00-\u9FFF]/.test(cleanA);
+  const hasCjkB = /[\u3040-\u30FF\u4E00-\u9FFF]/.test(cleanB);
+  if (hasCjkA || hasCjkB) return hasCjkA && hasCjkB;
+
+  const hasLatinA = /[A-Za-z]/.test(cleanA);
+  const hasLatinB = /[A-Za-z]/.test(cleanB);
+  if (hasLatinA || hasLatinB) return false;
+
+  return false;
+};
+
 const sanitizeLineBbox = (line: PreparedLine, baseHeight: number): PreparedLine => {
   const originalHeight = line.originalHeight ?? (line.bottom - line.top);
   console.log(`[Sanitize] "${line.text}" height=${originalHeight} baseHeight=${baseHeight} ratio=${(originalHeight/baseHeight).toFixed(2)}`);
@@ -177,13 +201,10 @@ const splitMismergedGroup = (
 
     
 
-    const prevHasThai = /[\u0E00-\u0E7F]/.test(prev.text);
-    const currHasThai = /[\u0E00-\u0E7F]/.test(curr.text);
-
     const shouldSplit =
       verticalGap > baseHeight * 2.8 ||
-      // allow Thai-to-Thai fragments to bridge slightly larger gaps
-      (verticalGap > anomalyThreshold && !(prevHasThai && currHasThai && verticalGap <= baseHeight * 3.0)) ||
+      // allow same-script fragments to bridge slightly larger gaps
+      (verticalGap > anomalyThreshold && !(areSameScriptLines(prev.text, curr.text) && verticalGap <= baseHeight * 3.0)) ||
       (startsNewBalloon(curr.text) && verticalGap > baseHeight * 0.8) ||
       (endsGroup(prev.text) && verticalGap > baseHeight * 1.2);
 
@@ -278,11 +299,11 @@ const shouldLinkGeometryLines = (
     }
   }
 
-  // Allow a relaxed anomaly threshold for same-script (e.g., Thai) hops
+  // Allow a relaxed anomaly threshold for same-script hops
   // where fragmented vertical pieces should still be merged.
   if (verticalGap > anomalyThreshold) {
-    // permit slightly larger gaps for Thai-to-Thai links (fragmented lines)
-    if (!(/[\u0E00-\u0E7F]/.test(a.text) && /[\u0E00-\u0E7F]/.test(b.text) && verticalGap <= baseHeight * 3.0)) {
+    // permit slightly larger gaps for same-script links (fragmented lines)
+    if (!(areSameScriptLines(a.text, b.text) && verticalGap <= baseHeight * 3.0)) {
       return null;
     }
   }

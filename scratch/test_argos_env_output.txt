@@ -1,0 +1,15 @@
+Config Home: C:\Users\auand\AppData\Roaming\pdf_translator\argos-runtime\config
+Cache Home: C:\Users\auand\AppData\Roaming\pdf_translator\argos-runtime\cache
+Package Dir: C:\Users\auand\.local\share\argos-translate\packages
+
+--- Installed Languages in Electron Env ---
+['en', 'ko', 'es', 'th']
+
+--- Translation Test ---
+come with me -> 'มากับฉัน'
+come -> 'มา'
+with -> 'ด้วย'
+me -> 'ฉัน'
+mama -> 'แม่'
+Come with me -> 'มากับฉัน'
+MAMA -> 'MAMA'

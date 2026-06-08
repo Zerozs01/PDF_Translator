@@ -149,22 +149,14 @@ export async function translateBatchOffline(
       return normalizeSpanishOcrNoiseForTranslation(text);
     }
     if (normalizedSource === 'en') {
-      return normalizeEnglishOcrNoiseForTranslation(text);
+      return normalizeSourceForTranslation(text, 'en');
     }
     return normalizeSourceForTranslation(text, normalizedSource);
   };
 
   const preparedTexts = texts.map((t) => {
-    const raw = normalizeOfflineSourceText(String(t || ''));
-    const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(raw);
-    return hasCjkOrThai ? raw : raw.toLowerCase();
-  });
-
-  const directTranslations = await offlineBatchBridge(preparedTexts, {
-    mode,
-    sourceType: type,
-    sourceLanguage: normalizedSource,
-    targetLanguage: normalizedTarget,
+    // Keep original case to improve NMT accuracy for English acronyms and proper nouns
+    return normalizeOfflineSourceText(String(t || ''));
   });
 
   const isArgosUntranslated = (result: string, targetLang: string): boolean => {
@@ -187,17 +179,46 @@ export async function translateBatchOffline(
       .replace(/\s{2,}/g, ' ')
       .trim();
 
-  const finalDirectTranslations = await Promise.all(directTranslations.map(async (text, i) => {
+  // Run Direct translation and Pivot English translation in parallel to minimize IPC latency
+  const runPivotEnglish = shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget);
+  const directPromise = offlineBatchBridge(preparedTexts, {
+    mode,
+    sourceType: type,
+    sourceLanguage: normalizedSource,
+    targetLanguage: normalizedTarget,
+  });
+
+  const pivotEnglishPromise = runPivotEnglish
+    ? offlineBatchBridge(preparedTexts, {
+        mode,
+        sourceType: type,
+        sourceLanguage: normalizedSource,
+        targetLanguage: 'en',
+      })
+    : Promise.resolve<string[]>([]);
+
+  const [directTranslations, pivotEnglish] = await Promise.all([
+    directPromise,
+    pivotEnglishPromise,
+  ]);
+
+  // Handle hybrid retry by batching the requests to reduce serial roundtrip IPC latency
+  const finalDirectTranslations = [...directTranslations];
+  const retriesPending: Array<{ index: number; cleaned: string }> = [];
+
+  for (let i = 0; i < directTranslations.length; i++) {
+    const text = directTranslations[i] || '';
     const untranslated = isArgosUntranslated(text, normalizedTarget);
     console.log(`[HybridRetry] i=${i} src="${preparedTexts[i]}" argosOut="${text}" untranslated=${untranslated}`);
-    if (!untranslated) return text;
+    if (!untranslated) continue;
 
     const originalText = texts[i] ?? preparedTexts[i] ?? '';
 
     const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
     if (lookupResult) {
       console.log(`[HybridRetry] LOOKUP HIT: "${originalText}" → "${lookupResult}"`);
-      return lookupResult;
+      finalDirectTranslations[i] = lookupResult;
+      continue;
     }
 
     const cleaned = cleanForRetry(preparedTexts[i]);
@@ -206,41 +227,45 @@ export async function translateBatchOffline(
       const cleanedLookup = normalizedTarget === 'th' ? lookupShortPhraseTh(cleaned) : null;
       if (cleanedLookup) {
         console.log(`[HybridRetry] CLEANED LOOKUP HIT: "${cleaned}" → "${cleanedLookup}"`);
-        return cleanedLookup;
+        finalDirectTranslations[i] = cleanedLookup;
+        continue;
       }
-
-      try {
-        const retry = await offlineBatchBridge([cleaned], {
-          mode,
-          sourceType: type,
-          sourceLanguage: normalizedSource,
-          targetLanguage: normalizedTarget,
-        });
-        const retryResult = retry[0] ?? '';
-        console.log(`[HybridRetry] ARGOS RETRY: "${cleaned}" → "${retryResult}" stillUntranslated=${isArgosUntranslated(retryResult, normalizedTarget)}`);
-        if (!isArgosUntranslated(retryResult, normalizedTarget)) {
-          return retryResult;
-        }
-      } catch (_retryErr) {
-        console.warn('[HybridRetry] retry error:', _retryErr);
-      }
+      retriesPending.push({ index: i, cleaned });
+    } else {
+      console.log(`[HybridRetry] GAVE UP (no clean retry target): "${originalText}" → returning original Argos output`);
     }
+  }
 
-    console.log(`[HybridRetry] GAVE UP: "${originalText}" → returning original Argos output`);
-    return text;
-  }));
+  if (retriesPending.length > 0) {
+    try {
+      const cleanedTexts = retriesPending.map((r) => r.cleaned);
+      const retryResults = await offlineBatchBridge(cleanedTexts, {
+        mode,
+        sourceType: type,
+        sourceLanguage: normalizedSource,
+        targetLanguage: normalizedTarget,
+      });
 
-  if (!shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget)) {
+      retriesPending.forEach((retry, batchIdx) => {
+        const retryResult = retryResults[batchIdx] ?? '';
+        const stillUntranslated = isArgosUntranslated(retryResult, normalizedTarget);
+        console.log(`[HybridRetry] BATCHED ARGOS RETRY: index=${retry.index} cleaned="${retry.cleaned}" → "${retryResult}" stillUntranslated=${stillUntranslated}`);
+        if (!stillUntranslated) {
+          finalDirectTranslations[retry.index] = retryResult;
+        } else {
+          console.log(`[HybridRetry] GAVE UP (still untranslated after retry): index=${retry.index} → returning original Argos output`);
+        }
+      });
+    } catch (_retryErr) {
+      console.warn('[HybridRetry] Batched retry error:', _retryErr);
+    }
+  }
+
+  if (!runPivotEnglish) {
     return finalDirectTranslations;
   }
 
   try {
-    const pivotEnglish = await offlineBatchBridge(preparedTexts, {
-      mode,
-      sourceType: type,
-      sourceLanguage: normalizedSource,
-      targetLanguage: 'en',
-    });
     const pivotEnglishPrepared = pivotEnglish.map((line, index) => {
       const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
       if (normalizedPivot) return normalizedPivot;
@@ -475,10 +500,10 @@ export const readPersistedBooleanFlag = (key: string, defaultValue: boolean): bo
   }
 };
 
-export const isBalloonAwareGroupingEnabled = (storageKey: string): boolean =>
+export const isBalloonAwareGroupingEnabled = (storageKey: string = 'pdf_translator_balloon_aware_grouping'): boolean =>
   readPersistedBooleanFlag(storageKey, true);
 
-export const isLayoutGroupingDebugEnabled = (storageKey: string): boolean =>
+export const isLayoutGroupingDebugEnabled = (storageKey: string = 'pdf_translator_layout_grouping_debug'): boolean =>
   readPersistedBooleanFlag(storageKey, false);
 
 export const resolveOverlayExportScale = (
@@ -528,11 +553,14 @@ export const shouldRetryLineTranslation = (
     const latinChars = translated.match(/[A-Za-z]/g) || [];
     const thaiChars = translated.match(/[\u0E00-\u0E7F]/g) || [];
     const latinRatio = latinChars.length / Math.max(1, letterChars.length);
+
+    // 1) Looks mostly untranslated Latin/English
     const looksUntranslatedLatin = letterChars.length >= 10 && latinRatio >= 0.62 && thaiChars.length <= 2;
     if (looksUntranslatedLatin) {
       return true;
     }
 
+    // 2) Short mostly Latin carry-over
     const sourceLatinChars = source.match(/[A-Za-z]/g) || [];
     const translatedAlphaChars = translated.match(/[A-Za-z\u0E00-\u0E7F]/g) || [];
     const translatedHasNoThai = thaiChars.length === 0;
@@ -544,6 +572,7 @@ export const shouldRetryLineTranslation = (
       return true;
     }
 
+    // 3) Mixed carry-over (partially translated but with too much English leftovers)
     const mixedCarryOver = sourceLatinChars.length >= 8
       && thaiChars.length >= 1
       && translatedAlphaChars.length >= 10
@@ -552,7 +581,26 @@ export const shouldRetryLineTranslation = (
       return true;
     }
 
-    // We check if hasKnownOcrNoisePattern is defined or passed, but since it's in normalizer
+    // 4) High English ratio in mid-to-long sentences with very few Thai characters
+    const highLatinRatioShortThai = letterChars.length >= 8
+      && latinRatio >= 0.35
+      && thaiChars.length < 4;
+    if (highLatinRatioShortThai) {
+      return true;
+    }
+
+    // 5) Sentence is reasonably long in source but translated to extremely short garbage Thai
+    const sourceLetters = source.replace(/[^A-Za-z]/g, '').length;
+    if (sourceLetters >= 15 && thaiChars.length > 0 && thaiChars.length <= 3) {
+      return true;
+    }
+
+    // 6) Translated text contains visible raw OCR noise remnants
+    const containsOcrNoiseTrash = /([lI1|]{3,}|ll\|l|I\|I|ll\|ll|\/\\|\\\/)/gi.test(translated);
+    if (containsOcrNoiseTrash && thaiChars.length <= 4) {
+      return true;
+    }
+
     const hasKnownOcrNoisePattern = (val: string): boolean => {
       const clean = val.replace(/[\s\-_]+/g, '');
       return /^[|¦│┃￨︱︲/\\_~.,:;'"`!?-]+$/.test(clean);
@@ -609,15 +657,36 @@ export const scoreTranslationCandidate = (
     const stats = getTranslationScriptStats(candidate);
     const hasThai = stats.thaiChars > 0;
     if (!hasThai) {
-      return -50;
+      return -100; // Penalize candidate heavily if it contains absolutely no Thai characters
     }
 
-    // Prefer sentences that are well-formed in Thai and are comparable in length to source
-    const lengthRatio = candidateLength / Math.max(1, sourceLength);
-    const lengthScore = lengthRatio >= 0.4 && lengthRatio <= 2.2 ? 15 : 0;
-    const thaiRatioScore = stats.thaiRatio * 20;
+    let score = candidateLength * 0.1;
 
-    return lengthScore + thaiRatioScore + (candidateLength * 0.1);
+    // 1) Length balance check
+    const lengthRatio = candidateLength / Math.max(1, sourceLength);
+    if (lengthRatio >= 0.5 && lengthRatio <= 1.8) {
+      score += 20; // Ideal length balance bonus
+    } else if (lengthRatio >= 0.35 && lengthRatio <= 2.3) {
+      score += 10; // Acceptable length balance bonus
+    } else if (lengthRatio < 0.22 && sourceLength >= 12) {
+      score -= 30; // Heavy penalty for overly truncated translation
+    }
+
+    // 2) Thai purity and density metrics
+    score += stats.thaiRatio * 30;
+    if (stats.latinChars === 0) {
+      score += 25; // Bonus for high quality pure Thai without Latin pollution
+    } else {
+      score -= stats.latinRatio * 35; // Penalize Latin pollution ratio
+    }
+
+    // 3) OCR noise leftovers penalty
+    const hasOcrTrash = /([lI1|]{3,}|ll\|l|I\|I|ll\|ll|\/\\|\\\/|..|_)/gi.test(candidate);
+    if (hasOcrTrash) {
+      score -= 40;
+    }
+
+    return score;
   }
 
   return candidateLength * 0.1;

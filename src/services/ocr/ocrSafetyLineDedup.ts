@@ -654,6 +654,20 @@ export const shouldCollapsePanelSafetyDuplicate = (
 ): boolean => {
   if (!existingKey || !candidateKey) return false;
 
+  const candidateArea = Math.max(1, panelLineArea(candidateLine));
+  const existingArea = Math.max(1, panelLineArea(existingLine));
+  const overlapW = Math.max(0, Math.min(existingLine.bbox.x1, candidateLine.bbox.x1) - Math.max(existingLine.bbox.x0, candidateLine.bbox.x0));
+  const overlapH = Math.max(0, Math.min(existingLine.bbox.y1, candidateLine.bbox.y1) - Math.max(existingLine.bbox.y0, candidateLine.bbox.y0));
+  const overlapArea = overlapW * overlapH;
+  const isBoxContained = (overlapArea / candidateArea) >= 0.85 || (overlapArea / existingArea) >= 0.85;
+
+  if (isBoxContained) {
+    const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
+    if (textSimilarity >= 0.15 || existingKey.includes(candidateKey) || candidateKey.includes(existingKey)) {
+      return true;
+    }
+  }
+
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
   const overlapX = panelOverlapRatioX(existingLine, candidateLine);
   const iou = panelIoURatio(existingLine, candidateLine);
@@ -661,8 +675,6 @@ export const shouldCollapsePanelSafetyDuplicate = (
   const centerDeltaX = Math.abs(panelLineCenterX(existingLine) - panelLineCenterX(candidateLine));
   const minHeight = Math.max(8, Math.min(panelLineHeight(existingLine), panelLineHeight(candidateLine)));
   const minWidth = Math.max(24, Math.min(panelLineWidth(existingLine), panelLineWidth(candidateLine)));
-  const existingArea = Math.max(1, panelLineArea(existingLine));
-  const candidateArea = Math.max(1, panelLineArea(candidateLine));
   const areaRatio = existingArea / candidateArea;
   const areaSpanRatio = Math.max(existingArea, candidateArea) / Math.max(1, Math.min(existingArea, candidateArea));
   const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
@@ -708,7 +720,13 @@ export const shouldCollapsePanelSafetyDuplicate = (
   if (!sameOrSubset) {
     const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
     if (similarity < 0.72) return false;
-    if (minLength < 8 && similarity < 0.86) return false;
+    
+    // Allow loose short match if the similarity is reasonably high and spatial overlap is strong
+    const isLooseShortMatch = minLength < 8
+      && similarity >= 0.70
+      && (iou >= 0.35 || (overlapY >= 0.50 && overlapX >= 0.45));
+      
+    if (minLength < 8 && similarity < 0.86 && !isLooseShortMatch) return false;
   }
 
   if (technicalLinePair) {
@@ -788,6 +806,19 @@ export const shouldCollapsePanelSafetyDuplicate = (
       || sameColumnEchoDuplicate;
   }
 
+  const similarity = panelDedupDiceSimilarity(existingKey, candidateKey);
+  const highSimilarity = similarity >= 0.88;
+  const looseSpatialMatch = highSimilarity
+    && (
+      iou >= 0.32
+      || (
+        overlapY >= 0.48
+        && overlapX >= 0.42
+        && centerDeltaY <= minHeight * 1.4
+        && centerDeltaX <= minWidth * 1.3
+      )
+    );
+
   return (
     iou >= 0.72
     || (overlapY >= 0.9 && overlapX >= 0.8)
@@ -796,6 +827,7 @@ export const shouldCollapsePanelSafetyDuplicate = (
       && centerDeltaY <= minHeight * 0.6
       && centerDeltaX <= minWidth * 0.55
     )
+    || looseSpatialMatch
   );
 };
 
@@ -1142,7 +1174,7 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
   if ((result.pipelineProfile || 'panel') !== 'panel') {
     return result;
   }
-  if ((result.ocrEngine || 'tesseract') !== 'paddleocr') {
+  if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') {
     return result;
   }
 

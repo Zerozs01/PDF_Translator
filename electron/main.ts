@@ -117,7 +117,16 @@ process.on('exit', () => {
   disposeArgosTranslateRuntime?.()
 })
 
+// ─── Chromium / GPU flags (must be set before app.whenReady) ────────────────
+// Disable GPU shader disk cache to prevent "Access is denied" / "Unable to move
+// the cache" errors that appear on every launch when the cache dir is locked.
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+// Suppress AMD DirectComposition VideoProcessorGetOutputExtension error spam
+app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.whenReady().then(() => {
+
   // Initialize SQLite Database with Performance Pragmas
   initDB();
 

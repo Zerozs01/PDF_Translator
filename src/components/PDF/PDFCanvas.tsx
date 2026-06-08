@@ -30,7 +30,7 @@ import {
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
-import { buildLayerGroupsFromOCR } from '../../services/layers/LayerGroupingService';
+import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
 const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
@@ -234,7 +234,7 @@ const PDFPageContainer: React.FC<{
   useEffect(() => {
     if (!documentId) return;
     let canceled = false;
-    const activeEngine = (options.engine || 'tesseract') as OCREngine;
+    const activeEngine = (options.engine || 'paddleocr') as OCREngine;
     const ocrState = useOCRTextLayerStore.getState();
 
     const loadCache = async () => {
@@ -264,7 +264,7 @@ const PDFPageContainer: React.FC<{
               const normalizedEntry: OCRTranslationCacheEntry = {
                 ...row,
                 pageNum,
-                ocrEngine: (row.ocrEngine || 'tesseract') as OCREngine,
+                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
                 translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
                 translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
                 translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
@@ -295,7 +295,7 @@ const PDFPageContainer: React.FC<{
     }
   }, [pageNum, setPage]);
 
-  const selectedEngine = (options.engine || 'tesseract');
+  const selectedEngine = (options.engine || 'paddleocr');
 
   const resolveEngineScopedPageOCR = (pNum: number) => {
     const byEngine = ocrByPageEngine.get(pNum)?.get(selectedEngine);
@@ -430,7 +430,7 @@ const PDFPageContainer: React.FC<{
     if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;
 
     const layers = useLayerStore.getState().layersByPage.get(pageNum) || [];
-    const newEngine = String(currentPageOCR.ocrEngine || 'tesseract').toLowerCase();
+    const newEngine = String(currentPageOCR.ocrEngine || 'paddleocr').toLowerCase();
     const lastEngine = lastBuiltEngineRef.current;
     const engineChanged = lastEngine !== null && lastEngine !== newEngine;
     const ocrDataChanged = lastBuiltOcrRef.current !== null && lastBuiltOcrRef.current !== currentPageOCR;
@@ -447,12 +447,9 @@ const PDFPageContainer: React.FC<{
         useLayerStore.getState().setPageLayers(pageNum, result);
       } else {
         const existingLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
-        const manualLayers = existingLayers.filter(l => l.id.startsWith('manual-layer-') || l.userEdited);
-        const mergedLayers = [
-          ...result.layers,
-          ...manualLayers.filter(ml => !result.layers.some(rl => rl.lineIndex === ml.lineIndex))
-        ];
-        useLayerStore.getState().setPageLayers(pageNum, { layers: mergedLayers, groups: result.groups });
+        const existingGroups = useLayerStore.getState().groupsByPage.get(pageNum) || [];
+        const mergedResult = mergeLayersAndGroups(result, existingLayers, existingGroups);
+        useLayerStore.getState().setPageLayers(pageNum, mergedResult);
       }
 
       lastBuiltEngineRef.current = newEngine;
@@ -1156,7 +1153,7 @@ const PDFPageContainer: React.FC<{
   );
 };
 
-export const PDFCanvas: React.FC = () => {
+export const PDFCanvas: React.FC = React.memo(() => {
   const {
     fileUrl,
     fileData,
@@ -1170,23 +1167,6 @@ export const PDFCanvas: React.FC = () => {
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
 
-  // Model Downloader States
-  const [pendingOcrLang, setPendingOcrLang] = useState<string | null>(null);
-  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  useEffect(() => {
-    if (!window.electronAPI?.on) return;
-    
-    const unsubscribe = window.electronAPI.on('main-process-message', (payload: any) => {
-      if (payload && payload.type === 'model-download-progress' && payload.language === pendingOcrLang?.toLowerCase()) {
-        setDownloadProgress(payload.progress);
-      }
-    });
-    
-    return unsubscribe;
-  }, [pendingOcrLang]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -1289,25 +1269,6 @@ export const PDFCanvas: React.FC = () => {
     }
   }, [processRequest]);
 
-  const startModelDownload = async () => {
-    if (!pendingOcrLang || !window.electronAPI?.models) return;
-    setIsDownloading(true);
-    setDownloadProgress(0);
-    try {
-      await window.electronAPI.models.download({ engine: 'tesseract', language: pendingOcrLang });
-      setIsDownloadModalOpen(false);
-      setIsDownloading(false);
-      // Run OCR process automatically
-      setTimeout(() => {
-        void captureAndProcess();
-      }, 300);
-    } catch (err) {
-      console.error("[PDFCanvas] Model download failed:", err);
-      alert(`การดาวน์โหลดโมเดลล้มเหลว: ${err instanceof Error ? err.message : String(err)}`);
-      setIsDownloading(false);
-    }
-  };
-
   const captureAndProcess = async () => {
     console.log("[PDFCanvas] Processing Triggered...");
     const canvas = document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
@@ -1315,22 +1276,6 @@ export const PDFCanvas: React.FC = () => {
     if (!canvas) {
       console.warn("[PDFCanvas] Canvas not found for vision processing");
       return;
-    }
-
-    // Check if Tesseract model is installed before starting OCR
-    if (window.electronAPI?.models) {
-      try {
-        const status = await window.electronAPI.models.getStatus({ engine: 'tesseract', language: sourceLanguage });
-        if (!status.installed) {
-          setPendingOcrLang(sourceLanguage);
-          setIsDownloadModalOpen(true);
-          setDownloadProgress(0);
-          setIsProcessing(false);
-          return;
-        }
-      } catch (err) {
-        console.error("[PDFCanvas] Model check failed:", err);
-      }
     }
 
     console.log("[PDFCanvas] Canvas found, sending to Vision Service...");
@@ -1545,53 +1490,9 @@ export const PDFCanvas: React.FC = () => {
           </Document>
         </div>
       </div>
-      {isDownloadModalOpen && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-[4px] transition-all duration-300">
-          <div className="w-[420px] bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 flex flex-col gap-6 text-white transform scale-100 transition-transform duration-300">
-            <div className="flex flex-col gap-2">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-500 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                ต้องการดาวน์โหลดโมเดลภาษา?
-              </h3>
-              <p className="text-sm text-slate-400 leading-relaxed">
-                ภาษา <span className="text-blue-400 font-bold uppercase">{pendingOcrLang}</span> สำหรับการประมวลผล Tesseract OCR ยังไม่ได้ติดตั้งในเครื่อง คุณต้องการดาวน์โหลดเพื่อเปิดใช้งานการแปลแบบ Offline ตอนนี้หรือไม่? (ขนาดประมาณ 3.5 MB)
-              </p>
-            </div>
-            
-            {isDownloading ? (
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between text-xs text-slate-400">
-                  <span>กำลังดาวน์โหลดและติดตั้งโมเดล...</span>
-                  <span className="font-bold text-blue-400">{downloadProgress}%</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
-                  <div 
-                    className="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-300 ease-out" 
-                    style={{ width: `${downloadProgress}%` }}
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="flex gap-3 justify-end">
-                <button
-                  onClick={() => setIsDownloadModalOpen(false)}
-                  className="px-4 py-2 text-sm font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 active:bg-slate-650 rounded-xl transition-all"
-                >
-                  ยกเลิก
-                </button>
-                <button
-                  onClick={startModelDownload}
-                  className="px-5 py-2 text-sm font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all"
-                >
-                  ดาวน์โหลด
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+
     </div>
   );
-};
+});
+
+PDFCanvas.displayName = 'PDFCanvas';

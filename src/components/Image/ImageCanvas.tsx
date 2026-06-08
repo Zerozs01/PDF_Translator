@@ -134,7 +134,7 @@ const renderOverlayTextWithSearchHighlight = (
   return pieces;
 };
 
-export const ImageCanvas: React.FC = () => {
+export const ImageCanvas: React.FC = React.memo(() => {
   const {
     fileUrl,
     currentPage,
@@ -855,4 +855,6 @@ export const ImageCanvas: React.FC = () => {
       </div>
     </div>
   );
-};
+});
+
+ImageCanvas.displayName = 'ImageCanvas';

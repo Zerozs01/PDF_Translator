@@ -1,6 +1,7 @@
 import type { OCREngine, OCRPageResult } from '../../types';
 import type { TranslationMode } from '../../stores/useProjectStore';
 import type { OCRLineWithLayout } from '../layout/balloonAwareGroupingService';
+import { sanitizeTranslationResult } from './translationCoordinator';
 
 export type ProtectedTokenReplacement = {
   token: string;
@@ -141,14 +142,14 @@ export const parseBatchJsonResponse = (raw: string): Map<number, Map<number, str
       pageEntry.groups.forEach((line) => {
         const index = Number(line.index);
         if (!Number.isFinite(index)) return;
-        lineMap.set(index, String(line.text || '').trim());
+        lineMap.set(index, sanitizeTranslationResult(String(line.text || '')));
       });
     } else if (Array.isArray(pageEntry.lines)) {
       // Backward-compatible fallback if model returns previous line schema.
       pageEntry.lines.forEach((line) => {
         const index = Number(line.index);
         if (!Number.isFinite(index)) return;
-        lineMap.set(index, String(line.text || '').trim());
+        lineMap.set(index, sanitizeTranslationResult(String(line.text || '')));
       });
     }
     byPage.set(pageNum, lineMap);

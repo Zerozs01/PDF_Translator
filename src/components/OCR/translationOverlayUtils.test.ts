@@ -3092,7 +3092,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
       language: 'eng',
       algorithmVersion: 174,
       pipelineProfile: 'panel' as const,
-      ocrEngine: 'tesseract' as const,
+      ocrEngine: 'easyocr' as const,
       ocrQualityProfile: 'best' as const,
       lines: [
         {
@@ -3107,14 +3107,14 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
       confidence: 90,
     };
 
-    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'tesseract');
+    const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'easyocr');
     // Cache entry for 'offline' translator
-    const cacheKey = 'ver:v45|ocr:tesseract|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
         pageNum: 3,
-        ocrEngine: 'tesseract' as const,
+        ocrEngine: 'easyocr' as const,
         ocrLanguage: 'eng',
         sourceLanguage: 'en',
         targetLanguage: 'th',
@@ -3134,7 +3134,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
     // Requesting overlay for 'gemini' translator (strict match fails, but ultimate fallback succeeds)
     const overlay = resolveTranslationOverlayContext({
       currentPageOCR,
-      optionsEngine: 'tesseract',
+      optionsEngine: 'easyocr',
       optionsLanguage: 'eng',
       translationMode: 'manga',
       sourceLanguage: 'en',
@@ -3179,7 +3179,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
       language: 'eng',
       algorithmVersion: 174,
       pipelineProfile: 'panel' as const,
-      ocrEngine: 'tesseract' as const,
+      ocrEngine: 'easyocr' as const,
       ocrQualityProfile: 'best' as const,
       lines: [
         {
@@ -3194,14 +3194,14 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
       confidence: 92,
     };
 
-    const oldFingerprint = buildOCRSourceFingerprint(oldOCR, 'tesseract');
-    // Cached translation using tesseract
-    const cacheKey = 'ver:v45|ocr:tesseract|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const oldFingerprint = buildOCRSourceFingerprint(oldOCR, 'easyocr');
+    // Cached translation using EasyOCR
+    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
         pageNum: 3,
-        ocrEngine: 'tesseract' as const,
+        ocrEngine: 'easyocr' as const,
         ocrLanguage: 'eng',
         sourceLanguage: 'en',
         targetLanguage: 'th',
@@ -3219,7 +3219,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
     ]);
 
     const pageOCRsByEngine = new Map<any, any>([
-      ['tesseract', oldOCR],
+      ['easyocr', oldOCR],
       ['paddleocr', currentOCR],
     ]);
 

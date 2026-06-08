@@ -34,15 +34,15 @@ interface HarnessWindow extends Window {
   __OCR_REGRESSION_RESULT__?: unknown;
 }
 
-const HARNESS_ENGINES: readonly OCREngine[] = ['tesseract', 'paddleocr', 'easyocr'];
+const HARNESS_ENGINES: readonly OCREngine[] = ['paddleocr', 'easyocr'];
 const HARNESS_PIPELINES: readonly OCRPipelineProfile[] = ['panel', 'export'];
 const HARNESS_QUALITY: readonly OCRQualityProfile[] = ['fast', 'balanced', 'best'];
 
 function normalizeHarnessEngine(value: string | null): OCREngine {
-  const normalized = String(value || 'tesseract').toLowerCase();
+  const normalized = String(value || 'paddleocr').toLowerCase();
   return HARNESS_ENGINES.includes(normalized as OCREngine)
     ? (normalized as OCREngine)
-    : 'tesseract';
+    : 'paddleocr';
 }
 
 function normalizeHarnessPipeline(value: string | null): OCRPipelineProfile {
@@ -134,7 +134,7 @@ export const OCRRegressionHarness: React.FC = () => {
   const [result, setResult] = useState<OCRPageResult | null>(null);
   const [manifest, setManifest] = useState<OCRFixtureManifest | null>(null);
   const [expectation, setExpectation] = useState<OCRFixtureExpectation | null>(null);
-  const [engine, setEngine] = useState<OCREngine>('tesseract');
+  const [engine, setEngine] = useState<OCREngine>('paddleocr');
   const [pipelineProfile, setPipelineProfile] = useState<OCRPipelineProfile>('panel');
   const [qualityProfile, setQualityProfile] = useState<OCRQualityProfile>('best');
 
@@ -250,7 +250,7 @@ export const OCRRegressionHarness: React.FC = () => {
         const fellBackFrom = debugInfo?.fallbackFromEngine as string | undefined;
         if (noFallback && fellBackFrom) {
           throw new Error(
-            `engine_unavailable:${selectedEngine} -- fell back to tesseract ` +
+            `engine_unavailable:${selectedEngine} -- fell back to easyocr ` +
             `(reason: ${String(debugInfo?.fallbackReason ?? 'no electronAPI bridge')})`
           );
         }

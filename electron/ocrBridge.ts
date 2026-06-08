@@ -5,6 +5,35 @@ import os from 'os';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
+// Load local .env file from project root if it exists
+function loadLocalEnv() {
+  try {
+    const envPath = path.join(app.getAppPath(), '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      for (const line of content.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const match = trimmed.match(/^([^=]+)=(.*)$/);
+        if (match) {
+          const key = match[1].trim();
+          let value = match[2].trim();
+          if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+          }
+          if (!(key in process.env)) {
+            process.env[key] = value;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[ocrBridge] Failed to load .env file:', err);
+  }
+}
+
+loadLocalEnv();
+
 type ExternalBridgeEngine = 'paddleocr' | 'easyocr';
 
 export interface ExternalOcrEngineStatus {
@@ -62,7 +91,30 @@ const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /resized image size .* exceeds max_side_limit/i,
   /info:\s*could not find files for the given pattern/i,
   /lang.*ocr_version.*will be ignored when model names/i,
+  // PaddlePaddle / ppocr DEBUG noise
+  /ppocr\s+DEBUG:/i,
+  /ppocr\s+INFO:/i,
+  /ppocr\s+WARNING:/i,
+  /^\s*Namespace\(/i,
+  /\[0-9]{4}\/[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\] ppocr/i,
+  /W[0-9]+.*paddle/i,
+  /I[0-9]+.*paddle/i,
+  /^W[0-9]{4}\s/,
+  /^I[0-9]{4}\s/,
+  // GPU / CUDA / ZLUDA init messages
+  /paddle.*use_gpu/i,
+  /paddle.*gpu_id/i,
+  /gpu.*successfully/i,
+  /cuda.*successfully/i,
+  /^.*ZLUDA.*(loaded|initialized|version)/i,
+  /registering.*hook/i,
+  /model.*warmup/i,
+  /^.*nvinfer.*[Ii]nfo/i,
+  // Electron / DirectComposition noise (not from bridge, but suppress at bridge level too)
+  /direct_composition/i,
+  /AMD VideoProcessor/i,
 ];
+
 
 interface BridgeDaemonRequest {
   resolve: (response: ExternalOcrBridgeResponse) => void;
@@ -149,9 +201,83 @@ function resolvePythonExecutable(engine: ExternalBridgeEngine): string {
   return 'python';
 }
 
-function resolveBridgeEnv(): NodeJS.ProcessEnv {
+function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
+  // If ZLUDA is enabled, prepend the ZLUDA directory to PATH so that
+  // Python/PaddlePaddle can find all cudnn*.dll files at runtime.
+  // ZLUDA replaces CUDA DLLs — all cudnn_*.dll must be on PATH.
+  const baseEnv = { ...process.env };
+  const useZluda = baseEnv.OCR_USE_ZLUDA === '1' || baseEnv.USE_ZLUDA === '1';
+  const engineAllowsZluda = engine !== 'paddleocr' && engine !== 'easyocr';
+  
+  const isWin = process.platform === 'win32';
+  const sep = isWin ? ';' : ':';
+  const currentPath = baseEnv.PATH || '';
+  
+  const priorityPaths: string[] = [];
+  
+  // 1. Python Virtual Environment directory (e.g., .venv-ocr/Scripts or bin)
+  if (engine) {
+    try {
+      const pythonExe = resolvePythonExecutable(engine);
+      if (pythonExe && pythonExe !== 'python') {
+        const pythonDir = path.dirname(pythonExe);
+        if (fs.existsSync(pythonDir)) {
+          priorityPaths.push(pythonDir);
+        }
+      }
+    } catch (err) {
+      console.warn('[ocrBridge] Failed to resolve python directory for PATH cleanup:', err);
+    }
+  }
+  
+  // 2. Windows system directories (system32, Windows, etc.)
+  if (isWin) {
+    const windir = baseEnv.windir || 'C:\\Windows';
+    const system32 = path.join(windir, 'System32');
+    const wbem = path.join(system32, 'Wbem');
+    const powershell = path.join(system32, 'WindowsPowerShell', 'v1.0');
+    
+    [system32, windir, wbem, powershell].forEach(dir => {
+      if (fs.existsSync(dir)) {
+        priorityPaths.push(dir);
+      }
+    });
+  }
+  
+  // 3. ZLUDA directory if enabled
+  if (useZluda && engineAllowsZluda) {
+    const zludaExe = baseEnv.ZLUDA_PATH || '';
+    const zludaDir = zludaExe ? path.dirname(zludaExe) : '';
+    if (zludaDir && fs.existsSync(zludaDir)) {
+      priorityPaths.push(zludaDir);
+    }
+  }
+  
+  const existingPaths = currentPath.split(sep).map(p => p.trim()).filter(Boolean);
+  const finalPaths: string[] = [];
+  const seen = new Set<string>();
+  const norm = (p: string) => isWin ? p.toLowerCase() : p;
+  
+  for (const p of priorityPaths) {
+    const n = norm(p);
+    if (!seen.has(n)) {
+      seen.add(n);
+      finalPaths.push(p);
+    }
+  }
+  
+  for (const p of existingPaths) {
+    const n = norm(p);
+    if (!seen.has(n)) {
+      seen.add(n);
+      finalPaths.push(p);
+    }
+  }
+  
+  baseEnv.PATH = finalPaths.join(sep);
+  
   return {
-    ...process.env,
+    ...baseEnv,
     PYTHONUNBUFFERED: '1',
   };
 }
@@ -173,6 +299,26 @@ function isBenignBridgeStderr(message: string): boolean {
   return BENIGN_BRIDGE_STDERR_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+function getSpawnCommandAndArgs(pythonCmd: string, scriptPath: string, args: string[], engine?: string): { cmd: string; args: string[] } {
+  const useZluda = process.env.OCR_USE_ZLUDA === '1' || process.env.USE_ZLUDA === '1';
+  // CRITICAL: PaddleOCR must NOT run under ZLUDA.
+  // ZLUDA only stubs cuBLAS but NOT cuBLASLt (cublasLt64_11.dll) which PaddlePaddle-GPU requires.
+  // Running paddle under ZLUDA causes fused_conv2d / OneDNN context crashes.
+  // EasyOCR (PyTorch-based) handles GPU via DirectML instead.
+  const engineAllowsZluda = engine !== 'paddleocr' && engine !== 'easyocr';
+  if (useZluda && engineAllowsZluda) {
+    const zludaPath = process.env.ZLUDA_PATH || 'zluda.exe';
+    return {
+      cmd: zludaPath,
+      args: ['--', pythonCmd, scriptPath, ...args],
+    };
+  }
+  return {
+    cmd: pythonCmd,
+    args: [scriptPath, ...args],
+  };
+}
+
 async function runBridgeOnce(
   engine: ExternalBridgeEngine,
   args: string[],
@@ -184,11 +330,12 @@ async function runBridgeOnce(
   }
 
   const pythonCmd = resolvePythonExecutable(engine);
+  const { cmd, args: spawnArgs } = getSpawnCommandAndArgs(pythonCmd, scriptPath, args, engine);
   return await new Promise<ExternalOcrBridgeResponse>((resolve, reject) => {
-    const child = spawn(pythonCmd, [scriptPath, ...args], {
+    const child = spawn(cmd, spawnArgs, {
       cwd: path.dirname(scriptPath),
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: resolveBridgeEnv(),
+      env: resolveBridgeEnv(engine),
       windowsHide: true,
     });
 
@@ -294,7 +441,10 @@ function handleDaemonStdout(engine: ExternalBridgeEngine, chunk: Buffer): void {
     try {
       payload = JSON.parse(line) as ExternalOcrBridgeResponse;
     } catch {
-      console.warn(`[ocrBridge] Ignoring non-JSON stdout from ${engine}: ${line}`);
+      // Only warn if it's not a known benign PaddleOCR debug/info line
+      if (!isBenignBridgeStderr(line)) {
+        console.warn(`[ocrBridge] Ignoring non-JSON stdout from ${engine}: ${line}`);
+      }
       continue;
     }
 
@@ -336,11 +486,12 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
   }
 
   const pythonCmd = resolvePythonExecutable(engine);
-  console.log(`[ocrBridge] Spawning NEW daemon for ${engine}: python=${pythonCmd} script=${scriptPath} sig=${scriptSignature}`);
-  const child = spawn(pythonCmd, [scriptPath, '--stdio-server', '--action', 'ocr', '--engine', engine], {
+  const { cmd, args: spawnArgs } = getSpawnCommandAndArgs(pythonCmd, scriptPath, ['--stdio-server', '--action', 'ocr', '--engine', engine], engine);
+  console.log(`[ocrBridge] Spawning NEW daemon for ${engine}: python=${pythonCmd} script=${scriptPath} sig=${scriptSignature} zluda=${process.env.OCR_USE_ZLUDA === '1' && engine !== 'paddleocr' && engine !== 'easyocr'}`);
+  const child = spawn(cmd, spawnArgs, {
     cwd: path.dirname(scriptPath),
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: resolveBridgeEnv(),
+    env: resolveBridgeEnv(engine),
     windowsHide: true,
   });
 

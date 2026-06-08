@@ -5,9 +5,10 @@ import {
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
-  PanelLeftClose, PanelLeftOpen
+  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
+import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
 import {
   OVERLAY_FONT_OPTIONS,
   OverlayFontPreset,
@@ -690,6 +691,14 @@ export const UploadScreen: React.FC = () => {
   } = useProjectStore();
   const ocrOptions = useOCRTextLayerStore((state) => state.options);
   const setOCROptions = useOCRTextLayerStore((state) => state.setOptions);
+  
+  const jobs = useBackgroundQueueStore((state) => state.jobs);
+  const pauseJob = useBackgroundQueueStore((state) => state.pauseJob);
+  const resumeJob = useBackgroundQueueStore((state) => state.resumeJob);
+  const cancelJob = useBackgroundQueueStore((state) => state.cancelJob);
+  const removeJob = useBackgroundQueueStore((state) => state.removeJob);
+  const clearCompletedJobs = useBackgroundQueueStore((state) => state.clearCompletedJobs);
+
   const {
     viewMode, setViewMode,
     filterType,
@@ -1890,6 +1899,131 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
           </details>
+
+          {/* Background Queue Monitor */}
+          <div className="mt-4 border-t border-white/6 pt-5">
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] flex items-center gap-1.5">
+                <Cpu size={12} className="text-slate-400" /> Queue Monitor
+              </label>
+              {jobs.some(j => ['completed', 'failed', 'cancelled'].includes(j.status)) && (
+                <button
+                  onClick={clearCompletedJobs}
+                  className="text-[10px] text-[#2B9BFF] hover:text-[#5CC6F2] transition-colors"
+                >
+                  Clear Finished
+                </button>
+              )}
+            </div>
+
+            {jobs.length === 0 ? (
+              <p className="text-[11px] text-slate-500 italic py-3 text-center bg-[#13151a]/40 rounded-xl border border-white/4">
+                No active background tasks
+              </p>
+            ) : (
+              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
+                {jobs.map((job) => {
+                  const isActive = job.status === 'processing';
+                  const isPending = job.status === 'pending';
+                  const isJobPaused = job.status === 'paused';
+                  const isFinished = ['completed', 'failed', 'cancelled'].includes(job.status);
+                  
+                  return (
+                    <div 
+                      key={job.id} 
+                      className={`p-2.5 rounded-xl border transition-all text-left ${
+                        isActive 
+                          ? 'border-[#2B9BFF]/35 bg-[#17191d]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]' 
+                          : 'bg-[#13151a]/70 border-white/6 hover:border-white/10'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1.5 mb-1.5">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold text-slate-200 truncate" title={job.filename}>
+                            {job.filename}
+                          </p>
+                          <p className="text-[9px] text-slate-500 truncate mt-0.5 capitalize">
+                            {job.type.replace('_all', ' all pages')} • {job.engine}
+                          </p>
+                        </div>
+                        
+                        <div className="flex items-center gap-1 shrink-0">
+                          {isActive && (
+                            <button
+                              onClick={() => pauseJob(job.id)}
+                              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-slate-100 transition-colors"
+                              title="Pause"
+                            >
+                              <Pause size={10} />
+                            </button>
+                          )}
+                          {isJobPaused && (
+                            <button
+                              onClick={() => resumeJob(job.id)}
+                              className="p-1 rounded bg-[#2B9BFF]/20 hover:bg-[#2B9BFF]/35 text-[#2B9BFF] hover:text-white transition-colors"
+                              title="Resume"
+                            >
+                              <Play size={10} />
+                            </button>
+                          )}
+                          {!isFinished && (
+                            <button
+                              onClick={() => cancelJob(job.id)}
+                              className="p-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 hover:text-rose-200 transition-colors"
+                              title="Cancel"
+                            >
+                              <X size={10} />
+                            </button>
+                          )}
+                          {isFinished && (
+                            <button
+                              onClick={() => removeJob(job.id)}
+                              className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
+                              title="Remove"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Progress and status message */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center text-[9px]">
+                          <span className={`truncate max-w-[170px] ${
+                            isActive ? 'text-[#2B9BFF] animate-pulse font-medium' :
+                            isJobPaused ? 'text-amber-400/90' :
+                            job.status === 'completed' ? 'text-emerald-400/90' :
+                            job.status === 'failed' ? 'text-rose-400/90' :
+                            job.status === 'cancelled' ? 'text-slate-400/90' :
+                            'text-slate-400'
+                          }`}>
+                            {job.message}
+                          </span>
+                          <span className="font-semibold text-slate-300">
+                            {job.progress}%
+                          </span>
+                        </div>
+                        <div className="w-full h-1 bg-slate-900 rounded-full overflow-hidden border border-white/4">
+                          <div 
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              isActive ? 'bg-[#2B9BFF]' :
+                              isJobPaused ? 'bg-amber-400/80' :
+                              job.status === 'completed' ? 'bg-emerald-400/80' :
+                              job.status === 'failed' ? 'bg-rose-500/80' :
+                              job.status === 'cancelled' ? 'bg-slate-500' :
+                              'bg-slate-700'
+                            }`}
+                            style={{ width: `${job.progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <div className="mt-auto" />
         </div>

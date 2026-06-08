@@ -521,3 +521,101 @@ export const buildLayerGroupsFromOCR = (
 
   return { layers: allLayers, groups: allGroups };
 };
+
+/**
+ * ผสานเลเยอร์ที่สร้างใหม่กับเลเยอร์เดิมเพื่อรักษาการปรับแต่งของยูสเซอร์ (Custom positions, styles)
+ */
+export const mergeLayersAndGroups = (
+  rebuilt: LayerGroupingResult,
+  existingLayers: TextLayer[],
+  existingGroups: TextLayerGroup[]
+): LayerGroupingResult => {
+  if (existingLayers.length === 0) {
+    return rebuilt;
+  }
+
+  // สร้าง Map สำหรับค้นหาเลเยอร์เดิมที่มี lineIndex ตรงกัน
+  const existingByLineIndex = new Map<number, TextLayer>();
+  existingLayers.forEach(l => {
+    if (l.lineIndex >= 0) {
+      existingByLineIndex.set(l.lineIndex, l);
+    }
+  });
+
+  const mergedLayers: TextLayer[] = [];
+  const idMap = new Map<string, string>(); // rebuilt ID -> existing ID
+
+  rebuilt.layers.forEach(rl => {
+    const el = existingByLineIndex.get(rl.lineIndex);
+    // ถ้าผู้ใช้เคยแก้ไขเลเยอร์เดิมไว้ ให้รักษาพิกัดและการจัดแต่งของเลเยอร์เดิม แต่ใช้ข้อความและข้อมูลแปลใหม่จาก rl
+    if (el && (el.userEdited || el.id.startsWith('manual-layer-'))) {
+      const mergedLayer: TextLayer = {
+        ...el,
+        text: rl.text,
+        sourceText: rl.sourceText,
+        confidence: rl.confidence,
+        // ข้อมูลอื่น ๆ เช่น ID, bbox, rotation, styles ยังคงของ el ไว้
+      };
+      mergedLayers.push(mergedLayer);
+      idMap.set(rl.id, el.id);
+    } else {
+      mergedLayers.push(rl);
+    }
+  });
+
+  // ใส่เลเยอร์แมนนวลที่เพิ่มโดยยูสเซอร์ แต่ไม่มีใน OCR ปกติ
+  const rebuiltLineIndexes = new Set(rebuilt.layers.map(rl => rl.lineIndex));
+  existingLayers.forEach(el => {
+    if (el.id.startsWith('manual-layer-') || el.userEdited) {
+      if (el.lineIndex < 0 || !rebuiltLineIndexes.has(el.lineIndex)) {
+        if (!mergedLayers.some(ml => ml.id === el.id)) {
+          mergedLayers.push(el);
+        }
+      }
+    }
+  });
+
+  // อัปเดตกลุ่มผลลัพธ์
+  const mergedGroups = rebuilt.groups.map(rg => {
+    const updatedLayerIds = rg.layerIds.map(id => idMap.get(id) || id);
+    const memberLayers = mergedLayers.filter(l => updatedLayerIds.includes(l.id));
+    const mergedBBox = memberLayers.length > 0
+      ? mergeBBoxes(memberLayers.map(l => l.bbox))
+      : rg.mergedBBox;
+
+    // หาว่ามีกลุ่มเดิมที่มีสมาชิกตรงกันหรือไม่ เพื่อรักษาคุณสมบัติของกลุ่มเดิม (collapsed, locked, visible, color, id)
+    const existingGroup = existingGroups.find(eg =>
+      eg.layerIds.some(eid => updatedLayerIds.includes(eid))
+    );
+
+    if (existingGroup) {
+      return {
+        ...rg,
+        id: existingGroup.id,
+        collapsed: existingGroup.collapsed,
+        locked: existingGroup.locked,
+        visible: existingGroup.visible,
+        color: existingGroup.color,
+        layerIds: updatedLayerIds,
+        mergedBBox,
+      };
+    }
+
+    return {
+      ...rg,
+      layerIds: updatedLayerIds,
+      mergedBBox,
+    };
+  });
+
+  // เติมกลุ่มแมนนวลของยูสเซอร์ที่ไม่ได้ผูกกับกลุ่มใด ๆ
+  existingGroups.forEach(eg => {
+    if (eg.userCreated) {
+      if (!mergedGroups.some(mg => mg.id === eg.id)) {
+        mergedGroups.push(eg);
+      }
+    }
+  });
+
+  return { layers: mergedLayers, groups: mergedGroups };
+};

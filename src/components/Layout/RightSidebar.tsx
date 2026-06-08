@@ -83,7 +83,7 @@ interface RightSidebarProps {
   translationStatus?: { kind: 'info' | 'success' | 'error'; message: string } | null;
 }
 
-export const RightSidebar: React.FC<RightSidebarProps> = ({ 
+export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({ 
   isAiProcessing = false, 
   isOfflineProcessing = false,
   onAiTranslate,
@@ -99,6 +99,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
     setOverlayFontPreset,
     overlayFontSizeScale,
     setOverlayFontSizeScale,
+    fileType,
   } = useProjectStore();
   const {
     options,
@@ -384,18 +385,18 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               <button
                 type="button"
                 onClick={onOfflineTranslateAllPages}
-                disabled={isTranslateBusy}
+                disabled={isTranslateBusy || fileType !== 'pdf'}
                 className="rounded-md border border-[#8BC3E5]/55 bg-[#8BC3E5]/18 px-2 py-1 text-[9.5px] font-semibold text-[#8BC3E5] transition-all hover:bg-[#8BC3E5]/28 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Run offline translation for all pages"
+                title={fileType !== 'pdf' ? "การแปลทุกหน้า (All Pages) รองรับเฉพาะไฟล์ PDF เท่านั้น" : "Run offline translation for all pages"}
               >
                 Offline All Pages
               </button>
               <button
                 type="button"
                 onClick={onAiTranslateAllPages}
-                disabled={isTranslateBusy}
+                disabled={isTranslateBusy || fileType !== 'pdf'}
                 className="rounded-md border border-cyan-300/65 bg-cyan-500/18 px-2 py-1 text-[9.5px] font-semibold text-cyan-100 transition-all hover:bg-cyan-500/28 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Run AI translation for all pages"
+                title={fileType !== 'pdf' ? "การแปลทุกหน้า (All Pages) รองรับเฉพาะไฟล์ PDF เท่านั้น" : "Run AI translation for all pages"}
               >
                 AI All Pages
               </button>
@@ -417,4 +418,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
       </div>
     </aside>
   );
-};
+});
+
+RightSidebar.displayName = 'RightSidebar';
