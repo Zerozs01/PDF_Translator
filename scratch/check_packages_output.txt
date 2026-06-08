@@ -1,0 +1,5 @@
+Local Packages Path: C:\Users\auand\AppData\Roaming\pdf_translator\argos-runtime\packages (Exists: False)
+
+Global Packages Path: C:\Users\auand\.local\share\argos-translate\packages (Exists: True)
+Contents:
+['ko_en', 'translate-en_th-1_9', 'translate-es_en-1_9', 'translate-th_en-1_9']

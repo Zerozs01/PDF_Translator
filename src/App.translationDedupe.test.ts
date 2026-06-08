@@ -119,8 +119,9 @@ beforeAll(async () => {
   }
 
   const appModule = await import('./App');
+  const heuristicsModule = await import('./services/ocr/ocrTextHeuristics');
   dedupeTranslatableLinesForTranslation = appModule.dedupeTranslatableLinesForTranslation;
-  resolveBestOcrLineText = appModule.resolveBestOcrLineText;
+  resolveBestOcrLineText = heuristicsModule.resolveBestOcrLineText;
   buildTranslationGroups = appModule.buildTranslationGroups;
   shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
   applyThaiConversationalGlossary = appModule.applyThaiConversationalGlossary;
@@ -128,9 +129,9 @@ beforeAll(async () => {
   resolveRedistributedLineFallback = appModule.resolveRedistributedLineFallback;
   shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
   normalizeSpanishOcrNoiseForTranslation = appModule.normalizeSpanishOcrNoiseForTranslation;
-  inferSourceLanguageFromTextHints = appModule.inferSourceLanguageFromTextHints;
-  resolvePreferredSourceLanguageForText = appModule.resolvePreferredSourceLanguageForText;
-  isLikelyGhostTranslatableLine = appModule.isLikelyGhostTranslatableLine;
+  inferSourceLanguageFromTextHints = heuristicsModule.inferSourceLanguageFromTextHints;
+  resolvePreferredSourceLanguageForText = heuristicsModule.resolvePreferredSourceLanguageForText;
+  isLikelyGhostTranslatableLine = heuristicsModule.isLikelyGhostTranslatableLine;
   shouldPruneContextualGhostTranslatableLine = appModule.shouldPruneContextualGhostTranslatableLine;
   cleanJapaneseOcrSpacing = appModule.cleanJapaneseOcrSpacing;
   cleanKoreanOcrSpacing = appModule.cleanKoreanOcrSpacing;
@@ -356,6 +357,114 @@ describe('dedupeTranslatableLinesForTranslation', () => {
 
     expect(deduped).toHaveLength(2);
     expect(deduped.map((line) => line.index).sort((a, b) => a - b)).toEqual([51, 52]);
+  });
+
+  test('dedupes OCR typo noise for short phrases like HELLO! and HELLOI', () => {
+    const originalLine = makeLine({
+      index: 61,
+      text: 'HELLO!',
+      sourceLength: 6,
+      top: 780,
+      bottom: 810,
+      left: 450,
+      right: 540,
+      height: 30,
+      area: 90 * 30,
+      wordCoverage: 0.9,
+      wordBoxCount: 1,
+      confidence: 95,
+    });
+
+    const easyOcrTypoLine = makeLine({
+      index: 62,
+      text: 'HELLOI',
+      sourceLength: 6,
+      top: 784,
+      bottom: 814,
+      left: 448,
+      right: 544,
+      height: 30,
+      area: 96 * 30,
+      wordCoverage: 0.85,
+      wordBoxCount: 1,
+      confidence: 80,
+    });
+
+    const deduped = dedupeTranslatableLinesForTranslation([originalLine, easyOcrTypoLine]);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].text).toBe('HELLO!');
+  });
+
+  test('dedupes drift-BBox overlapping long phrases like IM FROM DELNERY EATER... and Ilm From DELNERY EATER', () => {
+    const originalLine = makeLine({
+      index: 71,
+      text: "I'M FROM DELNERY EATER...",
+      sourceLength: 25,
+      top: 830,
+      bottom: 870,
+      left: 240,
+      right: 380,
+      height: 40,
+      area: 140 * 40,
+      wordCoverage: 0.88,
+      wordBoxCount: 4,
+      confidence: 94,
+    });
+
+    const easyOcrDriftLine = makeLine({
+      index: 72,
+      text: 'Ilm From DELNERY EATER',
+      sourceLength: 22,
+      top: 825,
+      bottom: 875,
+      left: 235,
+      right: 385,
+      height: 50,
+      area: 150 * 50,
+      wordCoverage: 0.8,
+      wordBoxCount: 4,
+      confidence: 88,
+    });
+
+    const deduped = dedupeTranslatableLinesForTranslation([originalLine, easyOcrDriftLine]);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].text).toBe("I'M FROM DELNERY EATER...");
+  });
+
+  test('dedupes sub-box containment duplicates where EasyOCR splits a larger PaddleOCR block', () => {
+    const paddleLargeBlock = makeLine({
+      index: 81,
+      text: 'BUT... THE OWNER OF THE ORDER I DELIVE- RED IS AN INCREDIBLY TERRIFYING LADY!',
+      sourceLength: 76,
+      top: 810,
+      bottom: 880,
+      left: 200,
+      right: 500,
+      height: 70,
+      area: 300 * 70,
+      wordCoverage: 0.92,
+      wordBoxCount: 12,
+      confidence: 96,
+    });
+
+    const easyOcrSubBox = makeLine({
+      index: 82,
+      text: 'RED IS AN Incredibly',
+      sourceLength: 20,
+      top: 845,
+      bottom: 865,
+      left: 250,
+      right: 450,
+      height: 20,
+      area: 200 * 20,
+      wordCoverage: 0.88,
+      wordBoxCount: 4,
+      confidence: 86,
+    });
+
+    const deduped = dedupeTranslatableLinesForTranslation([paddleLargeBlock, easyOcrSubBox]);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].text).toBe('BUT... THE OWNER OF THE ORDER I DELIVE- RED IS AN INCREDIBLY TERRIFYING LADY!');
   });
 });
 
@@ -1564,6 +1673,30 @@ describe('applyThaiConversationalGlossary', () => {
 
     expect(knowHow).toBe('เขารู้ได้อย่างไร...?!');
     expect(entonces).toBe('งั้น แน่นอน...');
+  });
+
+  test('maps Korean abusive and threatening lines to stable Thai output', () => {
+    expect(applyThaiConversationalGlossary('걸레년', 'อีสารเลว', 'th')).toBe('อีผู้หญิงสำส่อน');
+    expect(applyThaiConversationalGlossary('지울 거지?응?', 'ยังไงข่าว', 'th')).toBe('แกจะลบมันใช่ไหม? ฮึ?');
+    expect(applyThaiConversationalGlossary('잘나왔던데 왜 지워?', 'ทำไมคุณรู้?', 'th')).toBe('มันออกมาดีนี่ ทำไมต้องลบ?');
+    expect(applyThaiConversationalGlossary('출력해서 집에 붙여놓을라고 하는데 ㅋㅋ', 'ส่ง 출력', 'th')).toBe('ฉันวางแผนจะพิมพ์ออกมาแล้วเอาไปติดไว้ที่บ้าน ฮ่าๆ');
+    expect(applyThaiConversationalGlossary('분여놓을라고하느데', 'เกี่ยวกับเรา', 'th')).toBe('ฉันวางแผนจะเอาไปแขวนไว้');
+  });
+
+  test('maps Korean OCR-noisy dialogue snippets to intended Thai phrases', () => {
+    expect(applyThaiConversationalGlossary('미친색까 뒤지기 싫으면', 'เป็นผู้ใหญ่', 'th')).toBe('ไอ้สารเลว ถ้าไม่อยากตาย');
+    expect(applyThaiConversationalGlossary('빨리 지워라', 'มีขนดก', 'th')).toBe('ลบมันซะเร็วๆ');
+    expect(applyThaiConversationalGlossary('안 지우면 진짜', 'ฉันจะเป็นผู้', 'th')).toBe('ถ้าไม่ลบ');
+    expect(applyThaiConversationalGlossary('죽여 버릴 거야', 'หญิงจริงๆ', 'th')).toBe('ฉันจะฆ่าแกจริงๆ');
+    expect(applyThaiConversationalGlossary('음!뭐지?이', 'ดนตรีคืออะไร', 'th')).toBe('หืม! นี่อะไรกันเนี่ย');
+    expect(applyThaiConversationalGlossary('가장 빠른 입분제공사이트', 'หนทางที่เร็วที่สุดที่จะเริ่มต้น', 'th')).toBe('เว็บไซต์ให้บริการเข้าเร็วที่สุด');
+    expect(applyThaiConversationalGlossary('데자뷰 같은 이 느낌.', '?มุมมองอิเดจา', 'th')).toBe('ความรู้สึกนี้เหมือนเคยเกิดขึ้นมาก่อน.');
+    expect(applyThaiConversationalGlossary('출력', '출력', 'th')).toBe('พิมพ์ออกมา');
+  });
+
+  test('maps Korean lines that previously leaked template-like garbage tokens', () => {
+    expect(applyThaiConversationalGlossary('이거 이거', 'จาก{ {/if]]', 'th')).toBe('เรื่องนี้ เรื่องนี้');
+    expect(applyThaiConversationalGlossary('넘어가 줘 말어.', '{/if]]', 'th')).toBe('ฉันควรปล่อยผ่านไปหรือไม่.');
   });
 });
 

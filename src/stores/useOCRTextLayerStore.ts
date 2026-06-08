@@ -258,13 +258,6 @@ export const OCR_ENGINES: Array<{
   available: boolean;
 }> = [
   {
-    id: 'tesseract',
-    name: 'Tesseract',
-    runtime: 'Built-in WASM',
-    description: 'Built-in OCR engine running the WASM pipeline.',
-    available: true,
-  },
-  {
     id: 'paddleocr',
     name: 'PaddleOCR',
     runtime: 'Python bridge',
@@ -288,6 +281,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     engine: 'paddleocr',
     skipIfTextExists: true,
     perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
+    ocrQualityProfile: 'fast',
   },
   
   setOptions: (newOptions) => set((state) => ({
@@ -305,7 +299,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   ocrByPageEngine: new Map(),
   setPageOCR: (pageNum, result) => set((state) => {
     const processedLines = splitAggressiveMergedLines(result.lines || [], 2.8);
-    const engine = (result.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const engine = (result.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
@@ -345,7 +339,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     // Sync to allPagesOCR only if allPagesOCR doesn't have an entry for this page,
     // OR if the engine being set matches the active/selected options engine.
     const newMap = new Map(state.allPagesOCR);
-    const activeEngine = state.options.engine || 'tesseract';
+    const activeEngine = state.options.engine || 'paddleocr';
     if (!newMap.has(pageNum) || engine.toLowerCase() === activeEngine.toLowerCase()) {
       newMap.set(pageNum, processedResult);
     }
@@ -372,10 +366,10 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
 
     const nextAllPages = new Map(state.allPagesOCR);
     const existing = nextAllPages.get(pageNum);
-    const existingEngine = (existing?.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const existingEngine = (existing?.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
     if (existing && existingEngine === engine) {
       nextAllPages.delete(pageNum);
-      const fallback = perPage.get(state.options.engine || 'tesseract') || Array.from(perPage.values())[0];
+      const fallback = perPage.get(state.options.engine || 'paddleocr') || Array.from(perPage.values())[0];
       if (fallback) {
         nextAllPages.set(pageNum, fallback);
       }
@@ -506,7 +500,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     const nextAllPages = new Map(state.allPagesOCR);
     nextAllPages.set(pageNum, updatedOCR);
 
-    const engine = (pageOCR.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const engine = (pageOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
     const nextByPageEngine = new Map(state.ocrByPageEngine);
     const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
     perPage.set(engine, updatedOCR);
@@ -577,7 +571,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
         lines: [],
         words: [],
         text: '',
-        ocrEngine: state.options.engine || 'tesseract',
+        ocrEngine: state.options.engine || 'paddleocr',
         confidence: 100,
       };
 
@@ -590,7 +584,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       const nextAllPages = new Map(state.allPagesOCR);
       nextAllPages.set(pageNum, updatedOCR);
 
-      const engine = (pageOCR.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+      const engine = (pageOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
       const nextByPageEngine = new Map(state.ocrByPageEngine);
       const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
       perPage.set(engine, updatedOCR);
@@ -637,7 +631,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     const nextAllPages = new Map(state.allPagesOCR);
     nextAllPages.set(pageNum, updatedOCR);
 
-    const engine = (pageOCR.ocrEngine || state.options.engine || 'tesseract') as OCREngine;
+    const engine = (pageOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
     const nextByPageEngine = new Map(state.ocrByPageEngine);
     const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
     perPage.set(engine, updatedOCR);
@@ -680,7 +674,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   setOcrResultSearchQuery: (query) => set({ ocrResultSearchQuery: String(query || '') }),
 
   // Actions
-  reset: () => set({
+  reset: () => set((state) => ({
     isProcessing: false,
     progress: null,
     currentPageOCR: null,
@@ -692,5 +686,9 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     translationCacheByPage: new Map(),
     activeTranslationKeyByPage: new Map(),
     ocrResultSearchQuery: '',
-  }),
+    options: {
+      ...state.options,
+      language: 'eng',
+    }
+  })),
 }));

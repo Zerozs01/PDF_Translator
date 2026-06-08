@@ -175,7 +175,7 @@ export const isWordAllowedByScriptGate = (text: string, allowance: LanguageScrip
 };
 
 export const applyPanelLanguageScriptGate = (result: OCRPageResult, requestedLanguage: string): OCRPageResult => {
-  const engine = (result.ocrEngine || 'tesseract') as OCREngine;
+  const engine = (result.ocrEngine || 'paddleocr') as OCREngine;
   const pipeline = result.pipelineProfile || 'panel';
   if (pipeline !== 'panel') return result;
   if (engine !== 'paddleocr' && engine !== 'easyocr') return result;

@@ -697,7 +697,7 @@ export const resolveTranslationOverlayContext = ({
   }
 
   const currentEntries = Array.from(currentPageTranslationMap.values()).sort((a, b) => b.createdAt - a.createdAt);
-  const currentEngine = (currentPageOCR.ocrEngine || optionsEngine || 'tesseract') as OCREngine;
+  const currentEngine = (currentPageOCR.ocrEngine || optionsEngine || 'paddleocr') as OCREngine;
   const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, currentEngine);
   const normalizedCurrentLanguage = normalizeCacheLanguageKey(ocrLanguageKey);
 
@@ -1553,7 +1553,7 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
       && vividRgb.b <= Math.min(vividRgb.r, vividRgb.g) - 24
       && vividLum <= 0.82
       && vividSat >= 0.28;
-    if (warmHighlight && vividWeightRatio >= 0.16 && vividDistance <= 0.72) {
+    if (warmHighlight && vividWeightRatio >= 0.15 && vividDistance <= 0.95) {
       return vividRgb;
     }
   }

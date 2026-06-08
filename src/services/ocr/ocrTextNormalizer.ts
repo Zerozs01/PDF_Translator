@@ -1,5 +1,7 @@
 // src/services/ocr/ocrTextNormalizer.ts
 
+import { normalizeKoreanColloquialOcrText } from '../translation/koreanTranslationPolicy';
+
 export const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
   eng: 'en',
@@ -194,6 +196,12 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
     normalized = 'of the effects of gravitational, electrical, magnetic, or contact forces caused';
   }
 
+  // Clean common OCR noise artifacts that confuse the translation engine
+  normalized = normalized.replace(/\b([lI1|]{3,}|ll\|l|I\|I|ll\|ll)\b/gi, ' ');
+  normalized = normalized.replace(/(?<=^|\s)(\/\\|\\\/)(?=\s|$)/g, ' ');
+  normalized = normalized.replace(/(?<!\.)\.{2}(?!\.)/g, '...');
+  normalized = normalized.replace(/(?<=^|\s)[|¦│┃￨︱︲_](?=\s|$)/g, ' ');
+
   // Strip trailing underscores from English words that often appear in OCR artifacts
   normalized = normalized.replace(/([A-Za-z]{2,})_+(\s|$)/g, '$1$2');
   normalized = normalized.replace(/([A-Za-z]+)_+([A-Za-z]+)/g, '$1 $2'); // Fix mid-word underscores
@@ -283,18 +291,15 @@ export const normalizeJapaneseOcrNoiseForTranslation = (text: string): string =>
 };
 
 export const normalizeKoreanOcrNoiseForTranslation = (text: string): string => {
-  let normalized = String(text || '');
-  normalized = normalized
-    .replace(/。/g, '. ')
-    .replace(/、/g, ', ')
-    .replace(/！/g, '! ')
-    .replace(/？/g, '? ')
-    .replace(/〜/g, '~');
-  return normalizeWhitespace(normalized);
+  return normalizeKoreanColloquialOcrText(text);
 };
 
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
-  let normalized = normalizeTechnicalArtifactsForTranslation(text);
+  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely
+  let raw = String(text || '').replace(/[\r\n]+/g, ' ');
+  raw = raw.replace(/([A-Za-z])-\s+([A-Za-z])/g, '$1$2');
+
+  let normalized = normalizeTechnicalArtifactsForTranslation(raw);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);
   normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
 
@@ -320,6 +325,15 @@ export const normalizeSourceForTranslation = (text: string, sourceLanguage = '')
   if (hasUpperLatin) {
     normalized = normalized.toLowerCase();
     normalized = normalized.replace(/(^|[.!?]\s+)([a-z])/g, (_m, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
+  }
+
+  // Restore technical acronyms to uppercase
+  const ACRONYMS_TO_RESTORE = [
+    'CPU', 'GPU', 'RAM', 'ROM', 'OS', 'UI', 'UX', 'API', 'HTML', 'XML', 'JSON', 'SQL', 'IP', 'USB', 'ONNX', 'IPC', 'DLL'
+  ];
+  for (const acr of ACRONYMS_TO_RESTORE) {
+    const pattern = new RegExp(`\\b${acr}\\b`, 'gi');
+    normalized = normalized.replace(pattern, acr);
   }
 
   return normalized;

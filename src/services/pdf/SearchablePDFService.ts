@@ -12,7 +12,7 @@ import { visionService } from '../vision/VisionService';
 import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
 import { resolvePerPageTimeoutSec, withPerPageOCRTimeout } from '../vision/ocr-timeout';
 import { TextLayerService } from './TextLayerService';
-import { OCRPageResult, OCROptions, OCRPipelineProfile } from '../../types';
+import { OCRPageResult, OCROptions, OCRPipelineProfile, OCRQualityProfile } from '../../types';
 import { dbService } from '../dbService';
 import { pdfjs } from './pdfjsWorker';
 
@@ -181,14 +181,11 @@ export class SearchablePDFService {
       if (normalizeLanguage(cached.language) !== normalizedLanguage) return 'language mismatch';
       if (cached.dpi !== options.dpi) return 'dpi mismatch';
       
-      const activeEngine = options.engine || 'tesseract';
-      if (activeEngine === 'tesseract' && options.pageSegMode !== undefined && cached.pageSegMode !== options.pageSegMode) {
-        return 'pageSegMode mismatch';
-      }
+      const activeEngine = options.engine || 'paddleocr';
       
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
       if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
-      if ((cached.ocrEngine || 'tesseract') !== activeEngine) return 'ocrEngine mismatch';
+      if ((cached.ocrEngine || 'paddleocr') !== activeEngine) return 'ocrEngine mismatch';
       return null;
     };
     const isCacheCompatible = (cached: OCRPageResult): boolean => getCacheIncompatibilityReason(cached) === null;
@@ -258,7 +255,7 @@ export class SearchablePDFService {
           }
 
           if (canUseCache && cacheDocId) {
-            const cached = await dbService.getOCR(cacheDocId, pageNum, options.engine || 'tesseract');
+            const cached = await dbService.getOCR(cacheDocId, pageNum, options.engine || 'paddleocr');
             if (cached && isCacheCompatible(cached)) {
               ocrResult = cached;
               usedCache = true;
@@ -299,7 +296,7 @@ export class SearchablePDFService {
               signal.addEventListener('abort', parentAbortHandler, { once: true });
             }
 
-            const activeEngine = options.engine || 'tesseract';
+            const activeEngine = options.engine || 'paddleocr';
             const shouldPreferFastPaddleProfile = (() => {
               if (activeEngine !== 'paddleocr') return false;
               if (pipelineProfile !== 'panel') return false;
@@ -318,8 +315,18 @@ export class SearchablePDFService {
               return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
             })();
 
-            const resolvedQualityProfile = activeEngine === 'paddleocr'
-              ? (shouldPreferFastPaddleProfile ? 'fast' : 'balanced')
+            const isSensitiveFastLanguage = (options.language || 'eng')
+              .split('+')
+              .map((code) => code.trim())
+              .filter(Boolean)
+              .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+
+            const ocrQualityMode = options.ocrQualityProfile === 'balanced' || options.ocrQualityProfile === 'best' ? 'high' : 'fast';
+
+            const resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
+              ? (ocrQualityMode === 'fast'
+                ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
+                : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
               : 'best';
 
             const ocrPromise = visionService.ocrForTextLayer(
@@ -337,7 +344,7 @@ export class SearchablePDFService {
             );
 
             try {
-              const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'tesseract');
+              const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'paddleocr');
               ocrResult = await withPerPageOCRTimeout(
                 ocrPromise,
                 pageNum,
@@ -357,12 +364,12 @@ export class SearchablePDFService {
             ocrResult.language = normalizedLanguage;
             ocrResult.pageNumber = pageNum;
             ocrResult.pipelineProfile = pipelineProfile;
-            ocrResult.ocrEngine = options.engine || 'tesseract';
+            ocrResult.ocrEngine = options.engine || 'paddleocr';
             ocrResult.ocrQualityProfile = resolvedQualityProfile;
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
             if (cacheDocId && dbService.isAvailable()) {
-              const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult, options.engine || 'tesseract');
+              const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult, options.engine || 'paddleocr');
               if (!saved) {
                 console.warn(`[SearchablePDF] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);
               }

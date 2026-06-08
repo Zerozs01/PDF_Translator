@@ -4,14 +4,11 @@ export const OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT = 600000;
 export const OCR_WORKER_RETRY_ATTEMPTS_DEFAULT = 2;
 export const OCR_WORKER_RETRY_DELAY_MS_DEFAULT = 1000;
 
-export function resolvePerPageTimeoutSec(timeoutSec?: number, engine: string = 'tesseract'): number | undefined {
+export function resolvePerPageTimeoutSec(timeoutSec?: number, engine: string = 'paddleocr'): number | undefined {
   const normalized = typeof timeoutSec === 'number' && timeoutSec > 0
     ? timeoutSec
     : undefined;
-  if (engine !== 'tesseract') {
-    return normalized ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT;
-  }
-  return normalized;
+  return normalized ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT;
 }
 
 export function getPerPageTimeoutMs(timeoutSec?: number): number {

@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,7 @@ def run_tesseract(image_path: Path, language: str = "eng") -> dict[str, Any]:
         result = json.loads(proc.stdout.strip())
         return result
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
 
 
 # ─── PaddleOCR / EasyOCR via external_ocr_bridge.py ─────────────────────────
@@ -92,6 +93,154 @@ def run_bridge(engine: str, image_path: Path, language: str = "eng") -> dict[str
         return {"ok": False, "error": "timeout (>300s)"}
     except json.JSONDecodeError as exc:
         return {"ok": False, "error": f"JSON parse error: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# ─── True raw PaddleOCR (direct, no bridge) ──────────────────────────────────
+def run_true_raw_paddle(image_path: Path, language: str = "en") -> dict[str, Any]:
+    """
+    True Raw PaddleOCR (No Safety Nets).
+    ปลดลิมิต det_limit_side_len เพื่อบังคับให้ AI ประมวลผลภาพ 4K แบบเต็มความละเอียด
+    เพื่อให้เห็น System Overhead ที่แท้จริงเวลาไม่ผ่าน Pipeline ของเรา
+    """
+    import time
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError as exc:
+        return {"ok": False, "error": f"missing paddleocr: {exc}"}
+
+    def bbox_from_points(points):
+        try:
+            import numpy as np  # type: ignore
+            if isinstance(points, np.ndarray):
+                arr = points
+                if arr.ndim == 1 and arr.size >= 4:
+                    x0, y0, x1, y1 = [float(v) for v in arr[:4]]
+                    return {"x0": min(x0, x1), "y0": min(y0, y1), "x1": max(x0, x1), "y1": max(y0, y1)}
+                if arr.ndim >= 2 and arr.shape[-1] >= 2:
+                    xs = [float(p[0]) for p in arr]
+                    ys = [float(p[1]) for p in arr]
+                    return {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
+        except Exception:
+            pass
+
+        xs = []
+        ys = []
+        if points is None:
+            iterable = []
+        else:
+            iterable = points
+        for point in iterable:
+            try:
+                xs.append(float(point[0]))
+                ys.append(float(point[1]))
+            except Exception:
+                continue
+        if not xs or not ys:
+            return {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
+        return {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
+
+    def read_field(item, key, default=None):
+        try:
+            if isinstance(item, dict):
+                return item.get(key, default)
+            return item[key]
+        except Exception:
+            return getattr(item, key, default)
+
+    def as_list(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        try:
+            return list(value)
+        except Exception:
+            return [value]
+
+    # Normalize common language codes (bridge uses 'eng' in some places)
+    lang_norm = str(language or "").strip().lower()
+    if lang_norm in {"eng", "english"}:
+        lang_norm = "en"
+    elif lang_norm in {"tha", "thai"}:
+        lang_norm = "th"
+
+    t0 = time.perf_counter()
+    try:
+        # Prefer new parameter names if available to avoid deprecation warnings
+        try:
+            import inspect
+            sig = inspect.signature(PaddleOCR)
+            params = {}
+            if 'use_textline_orientation' in sig.parameters:
+                params['use_textline_orientation'] = True
+            elif 'use_angle_cls' in sig.parameters:
+                params['use_angle_cls'] = True
+
+            if 'text_det_limit_side_len' in sig.parameters:
+                params['text_det_limit_side_len'] = 999999
+            elif 'det_limit_side_len' in sig.parameters:
+                params['det_limit_side_len'] = 999999
+
+            if 'text_det_limit_type' in sig.parameters:
+                params['text_det_limit_type'] = 'max'
+            elif 'det_limit_type' in sig.parameters:
+                params['det_limit_type'] = 'max'
+        except Exception:
+            params = {'use_angle_cls': True, 'det_limit_side_len': 999999, 'det_limit_type': 'max'}
+
+        ocr = PaddleOCR(lang=lang_norm, **params)
+        if hasattr(ocr, "predict"):
+            raw_result = ocr.predict(str(image_path))
+        else:
+            raw_result = ocr.ocr(str(image_path))
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+
+        words = []
+        lines = []
+        result_items = raw_result if isinstance(raw_result, list) else [raw_result]
+        for item in result_items:
+            rec_texts = as_list(read_field(item, 'rec_texts', []))
+            rec_scores = as_list(read_field(item, 'rec_scores', []))
+            rec_boxes = as_list(read_field(item, 'rec_boxes', []))
+            rec_polys = as_list(read_field(item, 'rec_polys', []))
+            for index, text in enumerate(rec_texts):
+                text_value = str(text or '').strip()
+                if not text_value:
+                    continue
+                score = 0.0
+                if index < len(rec_scores):
+                    try:
+                        score = float(rec_scores[index])
+                    except Exception:
+                        score = 0.0
+                points = None
+                if index < len(rec_boxes):
+                    points = rec_boxes[index]
+                elif index < len(rec_polys):
+                    points = rec_polys[index]
+                bbox = bbox_from_points(points)
+                words.append(text_value)
+                lines.append({
+                    'text': text_value,
+                    'confidence': score,
+                    'bbox': bbox,
+                    'words': [{'text': text_value, 'confidence': score, 'bbox': bbox}],
+                })
+
+        return {
+            "ok": True,
+            "engine": "paddleocr-true-raw",
+            "elapsed_ms": elapsed_ms,
+            "word_count": len(words),
+            "words": words,
+            "lines": lines,
+            "confidence": 0.0,
+            "text": " ".join(words),
+        }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -227,7 +376,7 @@ def build_summary_table(rows: list[dict]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="OCR Engine Direct Benchmark")
     parser.add_argument("--engines", nargs="+", default=["tesseract", "paddleocr"],
-                        choices=["tesseract", "paddleocr", "easyocr"],
+                        choices=["tesseract", "paddleocr", "easyocr", "paddleocr-true-raw"],
                         help="Engines to benchmark")
     parser.add_argument("--images", nargs="+", default=None,
                         help="Image paths (default: public/fixtures/ocr/manga/*.png)")
@@ -259,6 +408,8 @@ def main() -> None:
 
             if engine == "tesseract":
                 result = run_tesseract(img_path, args.language)
+            elif engine == "paddleocr-true-raw":
+                result = run_true_raw_paddle(img_path, args.language)
             else:
                 result = run_bridge(engine, img_path, args.language)
 

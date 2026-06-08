@@ -10,6 +10,7 @@
 - **Coordinate Integrity:** พิกัด (Coordinates) ในผลลัพธ์ OCR ต้องแม่นยำและสัมพันธ์กับตำแหน่งบนหน้ากระดาษจริงเสมอ
 - **Deterministic Logic:** ให้ความสำคัญกับ Logic ที่คาดเดาผลได้ (Deterministic) มากกว่าการใช้ Heuristics แบบสุ่มเสี่ยง
 - **Resource Mindset:** คำนึงถึง Performance และ Memory เสมอ (นึกถึงเหตุการณ์ "Zombie State" ของ Hardware นายไว้) หากมีความเสี่ยงเรื่อง Timeout ให้ใช้ Stage-budget guards หรือ Cancel logic แทนการ Skip เงียบๆ
+-**Never commit by you self** without approval from me. Always ask for permission before pushing any code changes to the repository.
 
 ## 3. Technical Stack & Standards
 - **Stack:** TypeScript (Strict-mode), Electron, Vite, React, Supabase, และ n8n

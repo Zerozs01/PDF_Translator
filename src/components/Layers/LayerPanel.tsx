@@ -24,7 +24,7 @@ import {
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { buildLayerGroupsFromOCR } from '../../services/layers/LayerGroupingService';
+import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
 import { resolveTranslationOverlayContext } from '../OCR/translationOverlayUtils';
 import type { TextLayer, TextLayerGroup, LayerGroupType } from '../../types/layers';
 
@@ -389,7 +389,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     activeTranslationKeyByPage,
   } = useOCRTextLayerStore();
 
-  const selectedEngine = (options.engine || 'tesseract');
+  const selectedEngine = (options.engine || 'paddleocr');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
     if (byEngine) return { ocr: byEngine, effectiveEngine: selectedEngine };
@@ -529,7 +529,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
   const handleBuildLayers = useCallback((forceRebuild = false) => {
     if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;
 
-    const newEngine = String(currentPageOCR.ocrEngine || 'tesseract').toLowerCase();
+    const newEngine = String(currentPageOCR.ocrEngine || 'paddleocr').toLowerCase();
     const lastEngine = lastBuiltEngineRef.current.get(pageNum);
 
     // ถ้า engine เปลี่ยน → rebuild layers ใหม่ โดยรักษา manual layers ไว้
@@ -543,14 +543,11 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
         // First build หรือ manual rebuild: set ทันที
         setPageLayers(pageNum, result);
       } else {
-        // Engine changed: รักษา manual layers + user-edited layers จาก engine เก่า
+        // Engine changed หรือ previewModeChanged: รักษา manual layers + user-edited layers จาก engine เก่า
         const existingLayers = getPageLayers(pageNum);
-        const manualLayers = existingLayers.filter(l => l.id.startsWith('manual-layer-') || l.userEdited);
-        const mergedLayers = [
-          ...result.layers,
-          ...manualLayers.filter(ml => !result.layers.some(rl => rl.lineIndex === ml.lineIndex))
-        ];
-        setPageLayers(pageNum, { layers: mergedLayers, groups: result.groups });
+        const existingGroups = getPageGroups(pageNum);
+        const mergedResult = mergeLayersAndGroups(result, existingLayers, existingGroups);
+        setPageLayers(pageNum, mergedResult);
       }
 
       lastBuiltEngineRef.current.set(pageNum, newEngine);

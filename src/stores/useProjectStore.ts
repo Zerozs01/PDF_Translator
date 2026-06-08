@@ -332,6 +332,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         console.error('[DB] Failed to ensure documentId:', error);
       }
     }
+
+    // เรียกคืนภาษา OCR ล่าสุดของไฟล์นี้
+    const fileKey = resolvedPath || file.name;
+    let savedOcrLang = 'eng';
+    try {
+      savedOcrLang = localStorage.getItem(`pdf_translator.ocr_lang.${fileKey}`) || 'eng';
+    } catch (e) {
+      console.warn('[Storage] Failed to read OCR language:', e);
+    }
+    useOCRTextLayerStore.getState().setOptions({ language: savedOcrLang });
   },
 
   ensureDocumentId: async () => {
@@ -495,6 +505,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 useOCRTextLayerStore.subscribe((state) => {
   const ocrLang = state.options?.language;
   if (ocrLang) {
+    // บันทึกภาษา OCR ล่าสุดของไฟล์นี้ลง localStorage
+    const { filePath, fileName } = useProjectStore.getState();
+    const fileKey = filePath || fileName;
+    if (fileKey) {
+      try {
+        localStorage.setItem(`pdf_translator.ocr_lang.${fileKey}`, ocrLang);
+      } catch (e) {
+        console.warn('[Storage] Failed to save OCR language:', e);
+      }
+    }
+
     const isThaiOcr = ocrLang.split('+').some(lang => lang.trim().toLowerCase() === 'tha' || lang.trim().toLowerCase() === 'thai');
     if (isThaiOcr) {
       const currentTarget = useProjectStore.getState().targetLanguage;

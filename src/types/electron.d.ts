@@ -276,6 +276,7 @@ export interface ElectronAPI {
     prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
     cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
     runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
+    runRawDirect?: (request: { imageData: Uint8Array | ArrayBuffer, imageMimeType: string, imageWidth: number, imageHeight: number, language: string }) => Promise<any>;
   };
 
   models: {

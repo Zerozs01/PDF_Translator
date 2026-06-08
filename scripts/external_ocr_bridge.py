@@ -10,6 +10,88 @@ import subprocess
 import sys
 import tempfile
 import time
+
+# Resolve potential DLL loading conflicts for PyTorch/EasyOCR on Windows (e.g. WinError 127 in shm.dll)
+if sys.platform == "win32":
+    import ctypes
+    
+    log_lines = []
+    log_lines.append(f"Python executable: {sys.executable}")
+    log_lines.append(f"sys.path: {sys.path}")
+    log_lines.append(f"Original os.environ PATH: {os.environ.get('PATH')}")
+    
+    # 1. Prioritize crucial system paths and python execution paths
+    python_dir = os.path.dirname(sys.executable)
+    windir = os.environ.get("windir", "C:\\Windows")
+    system32 = os.path.join(windir, "System32")
+    wbem = os.path.join(system32, "Wbem")
+    powershell = os.path.join(system32, "WindowsPowerShell", "v1.0")
+    
+    priority_paths = [python_dir, system32, windir, wbem, powershell]
+    
+    found_torch_libs = []
+    for p in sys.path:
+        torch_lib = os.path.join(p, "torch", "lib")
+        if os.path.isdir(torch_lib):
+            found_torch_libs.append(torch_lib)
+            priority_paths.append(torch_lib)
+            try:
+                os.add_dll_directory(torch_lib)
+                log_lines.append(f"Successfully added DLL directory: {torch_lib}")
+            except Exception as e:
+                log_lines.append(f"Failed to add DLL directory {torch_lib}: {e}")
+                
+    log_lines.append(f"Found torch libs: {found_torch_libs}")
+    
+    # Reconstruct PATH to clean up and avoid external DLL interference
+    existing_paths = os.environ.get("PATH", "").split(";")
+    final_paths = []
+    seen = set()
+    
+    for p in priority_paths + existing_paths:
+        p_clean = p.strip()
+        if not p_clean:
+            continue
+        p_norm = p_clean.lower()
+        if p_norm not in seen:
+            seen.add(p_norm)
+            final_paths.append(p_clean)
+            
+    os.environ["PATH"] = ";".join(final_paths)
+    log_lines.append(f"Reorganized PATH: {os.environ['PATH']}")
+    
+    # 2. Pre-load critical PyTorch dependencies using ctypes to prevent WinError 127
+    # Loading uv.dll, c10.dll, libiomp5md.dll before importing PyTorch locks them in process memory.
+    preloaded_dlls = []
+    for lib_dir in found_torch_libs:
+        critical_dlls = ["uv.dll", "c10.dll", "libiomp5md.dll", "asmjit.dll", "fbgemm.dll", "torch_cpu.dll", "shm.dll"]
+        for dll_name in critical_dlls:
+            dll_path = os.path.join(lib_dir, dll_name)
+            if os.path.exists(dll_path):
+                try:
+                    ctypes.CDLL(dll_path)
+                    preloaded_dlls.append(f"SUCCESS: {dll_name}")
+                except Exception as e:
+                    preloaded_dlls.append(f"FAILED: {dll_name} ({e})")
+                    
+    log_lines.append(f"Preloaded DLLs: {preloaded_dlls}")
+    
+    # Try importing torch to verify
+    try:
+        import torch
+        log_lines.append(f"Torch imported successfully in bridge: {torch.__version__}")
+    except Exception as e:
+        log_lines.append(f"Torch import FAILED in bridge: {e}")
+        
+    try:
+        # Write debug log inside project directory
+        debug_log_path = os.path.join(os.path.dirname(__file__), "dll_debug.log")
+        with open(debug_log_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(log_lines))
+    except Exception:
+        pass
+
+
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,10 +102,95 @@ import re
 
 from PIL import Image, ImageOps
 
-os.environ.setdefault("FLAGS_enable_pir_api", "0")
-os.environ.setdefault("FLAGS_use_mkldnn", "0")
-os.environ.setdefault("FLAGS_use_onednn", "0")
-os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+import logging
+
+# Suppress verbose logging from PaddlePaddle and ppocr before any import
+# GLOG_minloglevel: 0=INFO,1=WARNING,2=ERROR,3=FATAL — set to 3 to suppress all but fatal
+os.environ["GLOG_minloglevel"] = "3"
+os.environ["GLOG_v"] = "0"
+# Suppress PaddlePaddle C++ layer verbose output
+os.environ["FLAGS_call_stack_level"] = "0"
+os.environ["FLAGS_selected_gpus"] = "0"
+
+os.environ["FLAGS_enable_pir_api"] = "0"
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["FLAGS_use_onednn"] = "0"
+# Disable OneDNN at C++ library level to prevent NotFoundError: OneDnnContext does not have input Filter
+# This is required on AMD/Intel systems where the OneDNN fused_conv2d kernel is unsupported
+os.environ["MKLDNN_VERBOSE"] = "0"
+os.environ["DNNL_VERBOSE"] = "0"  # oneDNN was renamed from MKL-DNN
+os.environ["PADDLE_USE_MKLDNN"] = "0"
+os.environ["FLAGS_enable_onednn_optional_dispatch"] = "0"
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+
+# Force disable MKLDNN globally at the very beginning of execution to prevent OneDNN crashes on CPU
+try:
+    import paddle
+    from paddle import inference
+    original_create_predictor = inference.create_predictor
+    def patched_create_predictor(config):
+        config.disable_mkldnn()
+        return original_create_predictor(config)
+    inference.create_predictor = patched_create_predictor
+except Exception:
+    pass
+
+GLOBAL_USE_DML = False
+
+def ensure_onnx_model_converted(model_dir: str) -> str:
+    if not model_dir:
+        return model_dir
+    model_dir = os.path.abspath(os.path.expanduser(model_dir))
+    onnx_path = os.path.join(model_dir, "model.onnx")
+    if os.path.exists(onnx_path):
+        return onnx_path
+    
+    pdmodel = os.path.join(model_dir, "inference.pdmodel")
+    pdiparams = os.path.join(model_dir, "inference.pdiparams")
+    if not os.path.exists(pdmodel) or not os.path.exists(pdiparams):
+        return model_dir
+    
+    python_dir = os.path.dirname(sys.executable)
+    paddle2onnx_bin = os.path.join(python_dir, "paddle2onnx.exe")
+    if not os.path.exists(paddle2onnx_bin):
+        paddle2onnx_bin = "paddle2onnx"
+        
+    cmd = [
+        paddle2onnx_bin,
+        "--model_dir", model_dir,
+        "--model_filename", "inference.pdmodel",
+        "--params_filename", "inference.pdiparams",
+        "--save_file", onnx_path,
+        "--opset_version", "11"
+    ]
+    try:
+        import subprocess
+        subprocess.run(cmd, capture_output=True, check=True)
+        return onnx_path
+    except Exception as e:
+        import sys
+        print(f"[WARN] Failed to convert model to ONNX in {model_dir}: {e}", file=sys.stderr)
+        return model_dir
+
+try:
+    import onnxruntime as ort
+    orig_init = ort.InferenceSession
+    def patched_InferenceSession(path, *args, **kwargs):
+        if os.path.isdir(path):
+            path = ensure_onnx_model_converted(path)
+        if GLOBAL_USE_DML and "DmlExecutionProvider" in ort.get_available_providers():
+            kwargs["providers"] = ["DmlExecutionProvider", "CPUExecutionProvider"]
+        return orig_init(path, *args, **kwargs)
+    ort.InferenceSession = patched_InferenceSession
+except Exception:
+    pass
+
+# Silence ppocr and paddle Python loggers
+for _logger_name in ("ppocr", "paddle", "paddlex", "PaddleOCR", "root"):
+    _log = logging.getLogger(_logger_name)
+    _log.setLevel(logging.CRITICAL)
+    _log.propagate = False
+
 
 DEFAULT_EASY_YOLO_URL = "http://127.0.0.1:5000/easy-yolo-ocr"
 PADDLE_OCR_CACHE: Dict[Tuple[str, str], Any] = {}
@@ -210,6 +377,10 @@ def normalize_quality_profile(value: Any) -> str:
 
 def has_terminal_sentence_punct(text: str) -> bool:
     return bool(re.search(r"[!?…\.]+$", str(text or "").strip()))
+
+
+def has_hangul_characters(text: str) -> bool:
+    return any(0xAC00 <= ord(char) <= 0xD7A3 for char in str(text or ""))
 
 
 def explode_line_to_words(text: str, confidence: float, bbox: Dict[str, float]) -> List[Dict[str, Any]]:
@@ -418,16 +589,29 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 merged.append(current)
                 current = candidate
                 continue
-            same_band = (
-                center_delta <= min_height * 0.22
-                or (overlap_y >= 0.78 and center_delta <= min_height * 0.34)
-            )
-            close_enough = (
-                gap_x <= max(26.0, min_height * 1.6)
-                and gap_x >= -max(10.0, min_height * 0.65)
-                and overlap_x <= 0.28
-            )
-            is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
+            is_korean = has_hangul_characters(current_text) or has_hangul_characters(candidate_text)
+            if is_korean:
+                same_band = (
+                    center_delta <= min_height * 0.48
+                    or (overlap_y >= 0.52 and center_delta <= min_height * 0.62)
+                )
+                close_enough = (
+                    gap_x <= max(56.0, min_height * 3.2)
+                    and gap_x >= -max(18.0, min_height * 0.95)
+                    and overlap_x <= 0.32
+                )
+                is_very_close = gap_x <= max(42.0, min_height * 2.2) and gap_x >= -max(14.0, min_height * 0.7)
+            else:
+                same_band = (
+                    center_delta <= min_height * 0.22
+                    or (overlap_y >= 0.78 and center_delta <= min_height * 0.34)
+                )
+                close_enough = (
+                    gap_x <= max(26.0, min_height * 1.6)
+                    and gap_x >= -max(10.0, min_height * 0.65)
+                    and overlap_x <= 0.28
+                )
+                is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
         else:
             # Tightened: prevent vertically stacked short words (EH/ME) from merging
             same_band = (
@@ -1014,10 +1198,6 @@ def normalize_domain_token(text: str) -> str:
 
 def has_non_latin_characters(text: str) -> bool:
     return any(ord(char) > 127 for char in str(text or ""))
-
-
-def has_hangul_characters(text: str) -> bool:
-    return any(0xAC00 <= ord(char) <= 0xD7A3 for char in str(text or ""))
 
 
 def is_advertisement_brand_token(text: str) -> bool:
@@ -1806,6 +1986,10 @@ def prune_paddle_panel_contextual_noise_lines(
     if len(lines) <= 1 or is_cjk_or_thai_language_codes(language_codes):
         return list(lines), []
 
+    scale_w = width / 3600.0
+    scale_h = height / 5200.0
+    scale_area = scale_w * scale_h
+
     drops: List[Dict[str, Any]] = []
     kept: List[Dict[str, Any]] = []
     normalized_items = [
@@ -2002,14 +2186,14 @@ def prune_paddle_panel_contextual_noise_lines(
             local_strong_neighbors = [
                 neighbor for neighbor in neighbors
                 if neighbor["strongSignal"]
-                and neighbor["centerDeltaY"] <= max(220.0, line_h * 2.4)
+                and neighbor["centerDeltaY"] <= max(220.0 * scale_h, line_h * 2.4)
                 and (
                     neighbor["overlapX"] >= 0.28
-                    or neighbor["centerDeltaX"] <= max(220.0, line_w * 1.35)
+                    or neighbor["centerDeltaX"] <= max(220.0 * scale_w, line_w * 1.35)
                 )
             ]
-            strong_above = any(neighbor["centerY"] < center_y - max(16.0, line_h * 0.18) for neighbor in local_strong_neighbors)
-            strong_below = any(neighbor["centerY"] > center_y + max(16.0, line_h * 0.18) for neighbor in local_strong_neighbors)
+            strong_above = any(neighbor["centerY"] < center_y - max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
+            strong_below = any(neighbor["centerY"] > center_y + max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
 
             trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14
             malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text))
@@ -2017,8 +2201,8 @@ def prune_paddle_panel_contextual_noise_lines(
                 token_count <= 1
                 and compact_length <= 12
                 and word_box_count <= 1
-                and line_area >= 22000.0
-                and confidence <= 88.0
+                and line_area >= 22000.0 * scale_area
+                and normalize_confidence(line.get("confidence", 0.0)) <= 88.0
             )
 
             if (
@@ -2213,7 +2397,7 @@ def minimal_cleanup_external_result(
     return output
 
 
-def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, height: int) -> Dict[str, Any]:
+def cleanup_korean_panel_result(result: Dict[str, Any], width: int, height: int, is_easyocr: bool = False) -> Dict[str, Any]:
     candidate_lines: List[Dict[str, Any]] = []
 
     for source_index, line in enumerate(result.get("lines", []) or []):
@@ -2273,6 +2457,13 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
         )
         candidate_line["_sourceIndex"] = source_index
         candidate_lines.append(candidate_line)
+
+    if is_easyocr:
+        candidate_lines = reorder_tilted_line_clusters(candidate_lines)
+        candidate_lines = merge_same_band_fragments(candidate_lines)
+        candidate_lines = merge_cjk_terminal_left_fragments(candidate_lines)
+        candidate_lines = merge_cjk_diagonal_continuations(candidate_lines)
+        candidate_lines = merge_same_band_fragments(candidate_lines)
 
     filtered_candidates: List[Dict[str, Any]] = []
 
@@ -2361,7 +2552,7 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
     deduped_lines = suppress_contained_hangul_fragments(
         deduped_lines,
         drop_reasons=hangul_fragment_drops,
-        source="paddle_korean_panel",
+        source="korean_panel",
     )
     deduped_lines = merge_near_duplicate_lines(deduped_lines)
 
@@ -2543,7 +2734,7 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
 
     final_lines, final_particle_drops = drop_final_particle_shadow_lines(
         filtered_lines,
-        source="paddle_korean_panel",
+        source="korean_panel",
     )
     final_words: List[Dict[str, Any]] = []
     for line in final_lines:
@@ -2551,7 +2742,7 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
 
     output = make_text_result(final_lines, final_words, result.get("pageSegMode"))
     output["debug"] = {
-        "cleanupRoute": "paddle_korean_panel",
+        "cleanupRoute": "korean_panel",
         "dropCounts": {
             "hangulFragmentSuppression": len(hangul_fragment_drops),
             "finalParticleShadowSuppression": len(final_particle_drops),
@@ -2564,8 +2755,8 @@ def cleanup_paddle_korean_panel_result(result: Dict[str, Any], width: int, heigh
 def cleanup_external_result(result: Dict[str, Any], engine: str, pipeline_profile: str, width: int, height: int, language: str = "", quality_profile: str = "") -> Dict[str, Any]:
     language_codes = [code.strip() for code in str(language or "").split("+") if code.strip()]
     is_korean_panel = pipeline_profile == "panel" and "kor" in language_codes
-    if engine == "paddleocr" and is_korean_panel:
-        return cleanup_paddle_korean_panel_result(result, width, height)
+    if is_korean_panel and engine in {"paddleocr", "easyocr"}:
+        return cleanup_korean_panel_result(result, width, height, is_easyocr=(engine == "easyocr"))
     if engine == "paddleocr" and pipeline_profile == "panel":
         return minimal_cleanup_external_result(result, width, height, pipeline_profile, language_codes, quality_profile)
 
@@ -2919,24 +3110,53 @@ def resolve_local_model_dir(model_subdir: str) -> str | None:
 
 def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, Any]:
     # Dynamic hardware acceleration detection
+    # NOTE: When running under ZLUDA (AMD GPU via CUDA emulation), PaddlePaddle-GPU
+    # requires cublasLt64_11.dll which ZLUDA does NOT implement (it only stubs cuBLAS,
+    # not cuBLASLt). Forcing CPU avoids the fatal crash. EasyOCR (PyTorch-based) handles
+    # GPU acceleration via ZLUDA instead, which has proper cuBLAS support.
+    global GLOBAL_USE_DML
+    running_under_zluda = (
+        os.environ.get("OCR_USE_ZLUDA", "0") == "1"
+        or os.environ.get("USE_ZLUDA", "0") == "1"
+    )
     use_gpu = False
-    try:
-        import paddle
-        if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
-            use_gpu = True
-    except Exception:
-        pass
+    use_onnx = False
+    paddle_device = "cpu"
+    if not running_under_zluda:
+        try:
+            import paddle
+            # Check CUDA (Nvidia)
+            if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+                use_gpu = True
+                paddle_device = "gpu"
+        except Exception:
+            pass
+
+    if not use_gpu:
+        try:
+            # Check DirectML (AMD/Intel) via ONNX Runtime
+            import onnxruntime as ort
+            if "DmlExecutionProvider" in ort.get_available_providers():
+                use_gpu = True
+                use_onnx = True
+                GLOBAL_USE_DML = True
+        except Exception:
+            pass
 
     if profile_key == "cpu_korean_default":
         return {
-            "text_detection_model_name": "PP-OCRv5_mobile_det",
-            "text_recognition_model_name": "korean_PP-OCRv5_mobile_rec",
-            "device": "gpu" if use_gpu else "cpu",
-            "enable_mkldnn": False,  # Disabled to prevent C++ ConvertPirAttribute2RuntimeAttribute crashes
-            "cpu_threads": 8 if not use_gpu else 10,
+            "lang": lang,
+            "det_model_dir": os.path.expanduser("~/.paddleocr/whl/det/ch/ch_PP-OCRv4_det_infer"),
+            "rec_model_dir": os.path.expanduser("~/.paddleocr/whl/rec/korean/korean_PP-OCRv4_rec_infer"),
+            "device": paddle_device,
+            "use_onnx": use_onnx,
+            "enable_mkldnn": False,  # Disabled: prevent C++ OneDNN ConvertPirAttribute2RuntimeAttribute crashes
+            "use_onednn": False,     # PaddlePaddle 3.x renamed enable_mkldnn -> use_onednn
+            "cpu_threads": os.cpu_count() or 8,
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
-            "use_textline_orientation": False,
+            "use_textline_orientation": True,
+            "show_log": False,
         }
 
     enable_textline_orientation = (
@@ -2953,12 +3173,15 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
         text_detection_model_name = "PP-OCRv5_mobile_det"
     kwargs: Dict[str, Any] = {
         "lang": lang,
-        "device": "gpu" if use_gpu else "cpu",
-        "enable_mkldnn": False,  # Disabled to prevent C++ ConvertPirAttribute2RuntimeAttribute crashes
-        "cpu_threads": 8 if not use_gpu else 10,
+        "device": paddle_device,
+        "use_onnx": use_onnx,
+        "enable_mkldnn": False,  # Disabled: prevent C++ OneDNN ConvertPirAttribute2RuntimeAttribute crashes
+        "use_onednn": False,     # PaddlePaddle 3.x renamed enable_mkldnn -> use_onednn
+        "cpu_threads": os.cpu_count() or 8,
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "use_textline_orientation": enable_textline_orientation,
+        "show_log": False,
     }
 
     if text_detection_model_name:
@@ -2981,6 +3204,13 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
             kwargs["text_detection_model_dir"] = local_det
         if local_rec:
             kwargs["text_recognition_model_dir"] = local_rec
+
+    if lang == "korean":
+        kwargs["det_model_dir"] = os.path.expanduser("~/.paddleocr/whl/det/ch/ch_PP-OCRv4_det_infer")
+        kwargs["rec_model_dir"] = os.path.expanduser("~/.paddleocr/whl/rec/korean/korean_PP-OCRv4_rec_infer")
+    elif lang == "japan":
+        kwargs["det_model_dir"] = os.path.expanduser("~/.paddleocr/whl/det/ch/ch_PP-OCRv4_det_infer")
+        kwargs["rec_model_dir"] = os.path.expanduser("~/.paddleocr/whl/rec/japan/japan_PP-OCRv4_rec_infer")
 
     return kwargs
 
@@ -3060,22 +3290,22 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     rec_batch = 7
             if lang == "korean" and profile_key != "cpu_panel_accurate":
                 if quality_profile == "fast":
-                    det_thresh = 0.34
-                    det_box_thresh = 0.66
-                    det_unclip_ratio = 1.45
-                    rec_score_thresh = 0.38
-                elif quality_profile == "balanced":
-                    det_thresh = 0.31
-                    det_box_thresh = 0.64
-                    det_unclip_ratio = 1.48
+                    det_thresh = 0.24
+                    det_box_thresh = 0.54
+                    det_unclip_ratio = 1.70
                     rec_score_thresh = 0.35
+                elif quality_profile == "balanced":
+                    det_thresh = 0.20
+                    det_box_thresh = 0.48
+                    det_unclip_ratio = 1.80
+                    rec_score_thresh = 0.32
                 else:
-                    # Keep detector thresholds near Paddle defaults to avoid dropping short valid text
-                    # and rely on deterministic fragment suppression for ghosts.
-                    det_thresh = 0.28
-                    det_box_thresh = 0.60
-                    det_unclip_ratio = 1.55
-                    rec_score_thresh = 0.30
+                    # Wider unclip_ratio to merge adjacent Hangul syllable boxes into
+                    # phrase-level regions, reducing fragmentation in manhwa/webtoon text.
+                    det_thresh = 0.18
+                    det_box_thresh = 0.42
+                    det_unclip_ratio = 1.95
+                    rec_score_thresh = 0.28
         else:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
                 if shortest <= 420:
@@ -3288,15 +3518,76 @@ def normalize_paddle_output(raw_result: Any) -> Dict[str, Any]:
         return normalize_paddle_v2_output(raw_result)
 
 
-def get_paddle_ocr(lang: str, profile_key: str) -> Any:
-    cache_key = (lang, profile_key)
+def ensure_paddle_model_downloaded(lang_or_model: str) -> None:
+    try:
+        from paddleocr import PaddleOCR
+        if lang_or_model == "ch_det":
+            PaddleOCR(lang="ch", use_onnx=False, show_log=False)
+        elif lang_or_model == "korean_rec":
+            PaddleOCR(lang="korean", use_onnx=False, show_log=False)
+        elif lang_or_model == "japan_rec":
+            PaddleOCR(lang="japan", use_onnx=False, show_log=False)
+    except Exception as exc:
+        import sys
+        print(f"[WARN] Failed to trigger auto-download for {lang_or_model}: {exc}", file=sys.stderr)
+
+
+def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", predict_kwargs: Dict[str, Any] = None) -> Any:
+    cache_key = (lang, profile_key, quality_profile)
     cached = PADDLE_OCR_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
+    try:
+        import paddle
+        for flag, val in [("FLAGS_use_onednn", 0), ("FLAGS_use_mkldnn", 0)]:
+            try:
+                paddle.set_flags({flag: val})
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     from paddleocr import PaddleOCR  # type: ignore
 
     constructor_kwargs = build_paddle_constructor_kwargs(lang, profile_key)
+
+    # Automatically download models if specified directories don't exist
+    det_dir = constructor_kwargs.get("det_model_dir")
+    if det_dir:
+        parent_dir = os.path.dirname(det_dir) if det_dir.endswith(".onnx") else det_dir
+        if not os.path.exists(parent_dir):
+            import sys
+            print(f"[ocrBridge] det_model_dir parent {parent_dir} not found. Triggering auto-download...", file=sys.stderr)
+            ensure_paddle_model_downloaded("ch_det")
+
+    rec_dir = constructor_kwargs.get("rec_model_dir")
+    if rec_dir:
+        parent_dir = os.path.dirname(rec_dir) if rec_dir.endswith(".onnx") else rec_dir
+        if not os.path.exists(parent_dir):
+            import sys
+            print(f"[ocrBridge] rec_model_dir parent {parent_dir} not found. Triggering auto-download...", file=sys.stderr)
+            if "korean" in parent_dir.lower():
+                ensure_paddle_model_downloaded("korean_rec")
+            elif "japan" in parent_dir.lower():
+                ensure_paddle_model_downloaded("japan_rec")
+
+
+    if predict_kwargs:
+        legacy_predict = build_paddle_legacy_predict_kwargs(predict_kwargs)
+        for k, v in legacy_predict.items():
+            if v is not None:
+                constructor_kwargs[k] = v
+        # Map parameters to ensure maximum compatibility in both constructor name layouts
+        if "det_db_thresh" in constructor_kwargs:
+            constructor_kwargs["det_thresh"] = constructor_kwargs["det_db_thresh"]
+        if "det_db_box_thresh" in constructor_kwargs:
+            constructor_kwargs["det_box_thresh"] = constructor_kwargs["det_db_box_thresh"]
+        if "det_db_unclip_ratio" in constructor_kwargs:
+            constructor_kwargs["det_unclip_ratio"] = constructor_kwargs["det_db_unclip_ratio"]
+        if "rec_score_thresh" in constructor_kwargs:
+            constructor_kwargs["rec_thresh"] = constructor_kwargs["rec_score_thresh"]
+
     try:
         ocr = PaddleOCR(**constructor_kwargs)
     except Exception as e:
@@ -3343,16 +3634,14 @@ def get_paddle_ocr(lang: str, profile_key: str) -> Any:
             except Exception:
                 legacy_kwargs = {
                     "lang": lang,
-                    "show_log": False,
-                    "use_angle_cls": False,
                     "use_gpu": False,
                 }
                 if constructor_kwargs.get("text_detection_model_name"):
                     legacy_kwargs["det_model_name"] = "PP-OCRv5_mobile_det"
                 ocr = PaddleOCR(**legacy_kwargs)
         except Exception as e_final:
-            print(f"[FATAL] All PaddleOCR initialization paths failed: {e_final}", file=sys.stderr)
-            raise e_final
+            print(f"[FATAL] All PaddleOCR initialization paths failed. Primary error: {e}. Fallback error: {e_final}", file=sys.stderr)
+            raise e
 
     PADDLE_OCR_CACHE[cache_key] = ocr
     return ocr
@@ -3657,6 +3946,18 @@ def run_paddleocr_pass(
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
 
+    active_providers = {}
+    if hasattr(ocr, "text_detector") and hasattr(ocr.text_detector, "predictor"):
+        try:
+            active_providers["det"] = ocr.text_detector.predictor.get_providers()
+        except Exception:
+            pass
+    if hasattr(ocr, "text_recognizer") and hasattr(ocr.text_recognizer, "predictor"):
+        try:
+            active_providers["rec"] = ocr.text_recognizer.predictor.get_providers()
+        except Exception:
+            pass
+
     if hasattr(ocr, "predict"):
         raw_result, applied_predict_kwargs = call_paddle_predict(ocr, image_path, predict_kwargs)
 
@@ -3685,6 +3986,7 @@ def run_paddleocr_pass(
             },
             "predictConfig": applied_predict_kwargs,
             "paddlePass": pass_label,
+            "activeProviders": active_providers,
         }
         return cleaned
 
@@ -3719,6 +4021,7 @@ def run_paddleocr_pass(
             },
             "predictConfig": predict_kwargs,
             "paddlePass": pass_label,
+            "activeProviders": active_providers,
         }
         return cleaned
 
@@ -3729,8 +4032,8 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     lang = select_paddle_lang(args.language)
     profile_key = get_paddle_profile_key(args)
     quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
-    ocr = get_paddle_ocr(lang, profile_key)
     predict_kwargs = build_paddle_predict_kwargs(args)
+    ocr = get_paddle_ocr(lang, profile_key, quality_profile, predict_kwargs)
     started_at = time.perf_counter()
 
     # ── Determine processing path based on image dimensions ─────────────────
@@ -4111,6 +4414,51 @@ def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
     return make_text_result(lines, words)
 
 
+def _detect_torch_device() -> Tuple[Any, bool, bool]:
+    """
+    Detects the best available PyTorch device (DirectML, CUDA, or CPU).
+    Returns (device, use_gpu, is_directml)
+    - is_directml=True means device is a torch_directml device object
+      (must be injected after EasyOCR Reader init, NOT passed as constructor arg)
+    """
+    # 1. Check for DirectML (High priority for Windows/AMD stability — no CUDA DLLs)
+    if os.environ.get("OCR_USE_DIRECTML", "0") == "1":
+        try:
+            import torch_directml  # type: ignore
+            if torch_directml.is_available():
+                return torch_directml.device(), False, True  # gpu=False to skip CUDA init
+        except Exception:
+            pass
+
+    try:
+        import torch_directml  # type: ignore
+        if torch_directml.is_available():
+            return torch_directml.device(), False, True
+    except Exception:
+        pass
+
+    # 2. Check for CUDA
+    try:
+        import torch
+        running_under_zluda = (
+            os.environ.get("OCR_USE_ZLUDA", "0") == "1"
+            or os.environ.get("USE_ZLUDA", "0") == "1"
+        )
+        if torch.cuda.is_available():
+            if running_under_zluda:
+                torch.backends.cudnn.enabled = False
+            return torch.device("cuda"), True, False
+    except Exception:
+        pass
+
+    # 3. Fallback to CPU
+    try:
+        import torch
+        return torch.device("cpu"), False, False
+    except Exception:
+        return "cpu", False, False
+
+
 def get_easyocr_reader(langs: List[str]) -> Any:
     cache_key = tuple(langs)
     cached = EASYOCR_READER_CACHE.get(cache_key)
@@ -4118,8 +4466,41 @@ def get_easyocr_reader(langs: List[str]) -> Any:
         return cached
 
     import easyocr  # type: ignore
+    device, use_gpu, is_directml = _detect_torch_device()
 
-    reader = easyocr.Reader(langs, gpu=False, verbose=False)
+    if is_directml:
+        # DirectML does not support quantized_lstm. But even with quantize=False,
+        # the recognizer fails at runtime due to PyTorch-DirectML CPU dispatch issues
+        # with 'aten::_thnn_fused_lstm_cell'.
+        # Solution: Use Hybrid Approach. Keep detector (CRAFT, CNN-only) on DirectML GPU
+        # and keep recognizer (CRNN, LSTM) on CPU.
+        reader = easyocr.Reader(langs, gpu=False, quantize=False, verbose=False)
+        try:
+            reader.detector = reader.detector.to(device)
+            
+            # Wrap reader.detect to dynamically set self.device to DirectML during detection,
+            # so CRAFT runs on GPU, while reader.device stays as 'cpu' for recognition (LSTM on CPU).
+            original_detect = reader.detect
+            def custom_detect(*args, **kwargs):
+                old_device = reader.device
+                reader.device = device
+                try:
+                    return original_detect(*args, **kwargs)
+                finally:
+                    reader.device = old_device
+            
+            reader.detect = custom_detect
+            print(f"[ocrBridge] EasyOCR using Hybrid GPU-CPU setup (Detector: {device}, Recognizer: CPU)", file=sys.stderr)
+        except Exception as e:
+            print(f"[WARN] Failed to setup EasyOCR Hybrid DirectML mode: {e}", file=sys.stderr)
+            reader.device = "cpu"
+    elif use_gpu:
+        # CUDA path
+        reader = easyocr.Reader(langs, gpu=True, verbose=False)
+    else:
+        # CPU fallback
+        reader = easyocr.Reader(langs, gpu=False, verbose=False)
+
     EASYOCR_READER_CACHE[cache_key] = reader
     return reader
 

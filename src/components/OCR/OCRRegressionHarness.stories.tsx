@@ -8,7 +8,7 @@ const HarnessLauncher: React.FC = () => {
   const handleStart = () => {
     const url = new URL(window.location.href);
     url.searchParams.set('fixture', 'page-02-students');
-    url.searchParams.set('engine', 'tesseract');
+    url.searchParams.set('engine', 'paddleocr');
     url.searchParams.set('pipeline', 'panel');
     url.searchParams.set('quality', 'best');
     window.history.replaceState({}, '', url.toString());

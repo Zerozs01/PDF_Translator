@@ -1,6 +1,7 @@
 import { TranslatableItem, TranslationResult, TranslationEngine } from '../../types/translation';
 import { translateSFX, SFXLanguage } from './sfxDictionaryService';
 import { dbService } from '../dbService';
+import { hasKoreanTranslationCarryover } from './koreanTranslationPolicy';
 
 /**
  * Argos Offline Engine Implementation
@@ -173,16 +174,17 @@ export class GeminiTranslationEngine implements TranslationEngine {
 
       llmTargetItems.forEach((item, index) => {
         const rawOutput = translatedOutputs[index] || item.text;
-        // ล้าง XML tag ออกจากผลลัพธ์ที่ตอบกลับมา (เช่น <balloon id="1">คำแปล</balloon> -> คำแปล)
         const cleanedText = rawOutput
           .replace(/<balloon[^>]*>([\s\S]*?)<\/balloon>/gi, '$1')
           .replace(/<sfx[^>]*>([\s\S]*?)<\/sfx>/gi, '$1')
           .replace(/<narration[^>]*>([\s\S]*?)<\/narration>/gi, '$1')
           .trim();
 
+        const sanitizedText = sanitizeTranslationResult(cleanedText);
+
         results.push({
           id: item.id,
-          translatedText: cleanedText || item.text,
+          translatedText: sanitizedText || item.text,
           success: true,
           engineUsed: this.id,
         });
@@ -286,10 +288,14 @@ export class TranslationCoordinator {
       if (hasLatinLetters && !hasThaiChars) return true;
 
       // Case 2: Still contains source-script characters (Hangul, Kana, CJK) in the result
-      const hasHangul = /[\uAC00-\uD7AF]/.test(trimmed);
-      if (hasHangul && sourceLang === 'ko') return true;
+      const sourceHasHangul = /[\uAC00-\uD7AF]/.test(sourceText);
+      if (hasKoreanTranslationCarryover(trimmed) && (sourceLang === 'ko' || sourceHasHangul)) return true;
       const hasKana = /[\u3040-\u30FF]/.test(trimmed);
-      if (hasKana && sourceLang === 'ja') return true;
+      const sourceHasKana = /[\u3040-\u30FF]/.test(sourceText);
+      if (hasKana && (sourceLang === 'ja' || sourceHasKana)) return true;
+      const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(trimmed);
+      const sourceHasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(sourceText);
+      if (hasHan && sourceHasHan) return true;
 
       // Case 3: Collapsed result — result is way shorter than source for non-trivial inputs
       // e.g. source="출력해서집에붙여놓을라고하는데 ㅋㅋ" → result=". . ." is clearly garbage
@@ -387,3 +393,22 @@ export class TranslationCoordinator {
 
 // สร้าง instance เดี่ยวสำหรับใช้ทั้งระบบ (Singleton)
 export const translationCoordinator = new TranslationCoordinator();
+
+/**
+ * ชำระล้างสัญลักษณ์จัดรูปแบบและอักขระขยะที่โมเดลแปลภาษาอาจแทรกกลับคืนมา (เช่น #คำแปล#, **คำแปล**, หรืออัญประกาศหัวท้าย)
+ */
+export const sanitizeTranslationResult = (text: string): string => {
+  if (!text) return '';
+  let cleaned = text.trim();
+  
+  // ล้างการครอบด้วย Markdown หรือ Hash (เช่น #คำแปล# หรือ *คำแปล*)
+  cleaned = cleaned.replace(/^(\*+|_|#+)(.*?)\1$/, '$2').trim();
+  
+  // ล้างเครื่องหมายอัญประกาศครอบหัวท้ายที่โมเดลชอบเติมมา
+  cleaned = cleaned.replace(/^["'“‘](.*?)["'”’]$/, '$2').trim();
+  
+  // ล้างเครื่องหมายแฮชที่อาจหลงเหลือเดี่ยว ๆ ที่จุดเริ่มต้นหรือจุดสิ้นสุด
+  cleaned = cleaned.replace(/^#+(.*?)$/, '$1').replace(/^(.*?)#+$/, '$1').trim();
+  
+  return cleaned;
+};

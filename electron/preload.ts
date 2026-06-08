@@ -53,6 +53,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   // OCR
   'ocr:get-engine-status',
   'ocr:prewarm-engine',
+  'ocr:run-raw-direct',
   'ocr:run-external',
   'ocr:cancel-external',
   // Gemini
@@ -271,6 +272,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       pipelineProfile?: string;
       ocrQualityProfile?: string;
     }) => safeInvoke('ocr:run-external', payload),
+    runRawDirect: (payload: {
+      imageData: Uint8Array | ArrayBuffer;
+      imageMimeType: string;
+      imageWidth: number;
+      imageHeight: number;
+      language: string;
+    }) => safeInvoke('ocr:run-raw-direct', payload),
   },
 
   models: {
