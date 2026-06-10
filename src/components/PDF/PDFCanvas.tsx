@@ -147,7 +147,8 @@ const PDFPageContainer: React.FC<{
   pageNum: number;
   onPageLoadSuccess?: (page: any) => void;
   onPageRenderSuccess?: () => void;
-}> = ({ pageNum, onPageLoadSuccess: externalOnLoadSuccess, onPageRenderSuccess: externalOnRenderSuccess }) => {
+  isProgrammaticScrollRef?: React.RefObject<boolean>;
+}> = ({ pageNum, onPageLoadSuccess: externalOnLoadSuccess, onPageRenderSuccess: externalOnRenderSuccess, isProgrammaticScrollRef }) => {
   const {
     currentPage,
     viewMode,
@@ -206,7 +207,14 @@ const PDFPageContainer: React.FC<{
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
             setIsVisible(true);
-            if (entry.intersectionRatio >= 0.5 && useProjectStore.getState().currentPage !== pageNum) {
+            // Skip updating active page state during programmatic scrolling or view mode transition,
+            // as this prevents the stale viewport position (e.g. at page 1) from reverting the active page
+            // before the scroll-snap positioning completes.
+            if (
+              entry.intersectionRatio >= 0.5 &&
+              !isProgrammaticScrollRef?.current &&
+              useProjectStore.getState().currentPage !== pageNum
+            ) {
               setPage(pageNum);
             }
           } else {
@@ -229,7 +237,7 @@ const PDFPageContainer: React.FC<{
     return () => {
       observer.disconnect();
     };
-  }, [pageNum, viewMode, setPage]);
+  }, [pageNum, viewMode, setPage, isProgrammaticScrollRef]);
 
   // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
   useEffect(() => {
@@ -388,7 +396,7 @@ const PDFPageContainer: React.FC<{
         const area = width * height;
 
         const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP)$/i.test(asciiCompact);
+          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP)$/i.test(asciiCompact);
         const isTinyJunkBox = !hasCjkOrThai
           && asciiCompact.length <= 3
           && area <= 8000
@@ -1193,12 +1201,19 @@ export const PDFCanvas: React.FC = React.memo(() => {
   const prevPageRef = useRef(currentPage);
   const prevViewModeRef = useRef(viewMode);
 
+  // Track programmatic scrolling to lock active page updates during animations
+  const isProgrammaticScrollRef = useRef(false);
+
   // Sync scroll position when switching to continuous viewMode or clicking LeftSidebar thumbnails
   useEffect(() => {
     const pageChanged = currentPage !== prevPageRef.current;
     const viewModeChanged = viewMode !== prevViewModeRef.current;
 
     if (viewMode === 'continuous' && (pageChanged || viewModeChanged)) {
+      // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
+      // from firing setPage and overriding the target page before the scroll snap finishes.
+      isProgrammaticScrollRef.current = true;
+
       const timer = setTimeout(() => {
         const pageElement = document.querySelector(
           `.pdf-canvas-document [data-page-container="${currentPage}"]`
@@ -1223,11 +1238,20 @@ export const PDFCanvas: React.FC = React.memo(() => {
             setPan(targetX, targetY);
           }
         }
+
+        // Release the programmatic scroll lock after the transition animation (0.1s transform duration + buffer)
+        setTimeout(() => {
+          isProgrammaticScrollRef.current = false;
+        }, 150);
+
       }, 100);
 
       prevPageRef.current = currentPage;
       prevViewModeRef.current = viewMode;
-      return () => clearTimeout(timer);
+      return () => {
+        clearTimeout(timer);
+        isProgrammaticScrollRef.current = false;
+      };
     }
 
     prevPageRef.current = currentPage;
@@ -1482,6 +1506,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
               <PDFPageContainer
                 pageNum={currentPage}
                 onPageLoadSuccess={onPageLoadSuccess}
+                isProgrammaticScrollRef={isProgrammaticScrollRef}
               />
             ) : (
               Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
@@ -1489,6 +1514,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
                   key={`page_${pageNum}`}
                   pageNum={pageNum}
                   onPageLoadSuccess={pageNum === 1 ? onPageLoadSuccess : undefined}
+                  isProgrammaticScrollRef={isProgrammaticScrollRef}
                 />
               ))
             )}

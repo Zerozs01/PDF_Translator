@@ -179,7 +179,10 @@ const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
   'BIG', 'DEAL', 'GOOD', 'BAD', 'ONLY', 'LEAVE', 'OPEN', 'CHANCE',
 ]);
 
-const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set(['I', 'IN', 'IT', 'IS']);
+const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set([
+  'I', 'IN', 'IT', 'IS', 'SO', 'OF', 'OH', 'WE', 'ME', 'UP', 'DO', 'GO', 'NO', 'BY', 'AT', 'IF', 'AN', 'OR', 'AS', 'AM', 'TO', 'HE', 'US', 'PIG', 'DIE', 'CUM', 'COCK',
+  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE'
+]);
 
 const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
   String(text || '')
@@ -338,6 +341,36 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'LISTO',
   'LISTOCON',
   'ILISTOCON',
+  'SO',
+  'DIE',
+  'PIG',
+  'CUM',
+  'COCK',
+  'ALL',
+  'MORE',
+  'OHHH',
+  'YOURE',
+  'STOOOOP',
+  'STOAOOP',
+  'STOAAOP',
+  'OHHHH',
+  'OHHHHH',
+  'ICAME',
+  'FORYOU',
+  'BARBARIAN',
+  'VIRGINITY',
+  'LOST',
+  'SOME',
+  'RAPING',
+  'WET',
+  'PUSSY',
+  'CUMMING',
+  'PRINCESS',
+  'NEGO',
+  'WITHAN',
+  'HEIRRR',
+  'RRR',
+  'IIM',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {

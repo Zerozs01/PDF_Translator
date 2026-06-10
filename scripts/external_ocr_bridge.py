@@ -1179,6 +1179,50 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "LISTO",
     "LISTOCON",
     "ILISTOCON",
+    "PRINCESS",
+    "DIE",
+    "PIG",
+    "CUM",
+    "COCK",
+    "OH",
+    "OHHH",
+    "OHHHH",
+    "OHHHHH",
+    "AGAA",
+    "SO",
+    "OF",
+    "ALL",
+    "MORE",
+    "YOU",
+    "USTHE",
+    "NOTMY",
+    "ASS",
+    "HOLE",
+    "FORYOU",
+    "ICAME",
+    "OHOHHH",
+    "BE",
+    "WETPUSSY",
+    "YOURE",
+    "STOOOOP",
+    "STOAOOP",
+    "STOAAOP",
+    "OHOH",
+    "OHOHHHH",
+    "OHOHHHHH",
+    "BARBARIAN",
+    "VIRGINITY",
+    "LOST",
+    "SOME",
+    "RAPING",
+    "WET",
+    "PUSSY",
+    "CUMMING",
+    "NEGO",
+    "WITHAN",
+    "HEIRRR",
+    "RRR",
+    "IIM",
 }
 
 
@@ -2397,7 +2441,7 @@ def prune_paddle_panel_contextual_noise_lines(
             strong_above = any(neighbor["centerY"] < center_y - max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
             strong_below = any(neighbor["centerY"] > center_y + max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
 
-            trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14
+            trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14 and len(re.sub(r"[^A-Za-z]", "", text)) <= 1
             has_vowel = bool(re.search(r"[aeiouAEIOUyY]", text))
             # Malformed mixed case is typically consonant-only noise (e.g. "gT", "xY") or tiny isolated casing junk.
             # Real words with casing typos (e.g. "WOuLD", "tOO") should not be dropped.
@@ -2408,6 +2452,7 @@ def prune_paddle_panel_contextual_noise_lines(
                 and word_box_count <= 1
                 and line_area >= 22000.0 * scale_area
                 and normalize_confidence(line.get("confidence", 0.0)) <= 88.0
+                and not has_vowel
             )
 
             if (

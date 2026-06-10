@@ -17,12 +17,15 @@ const KOR_JAMO_RUN_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]{
 const KOR_ALLOWED_REPEAT_JAMO_RE = /^([ㅋㅎㅠㅜ])\1+$/;
 const KOR_TERMINAL_PUNCT_RE = /[?!~.…？！〜]+[)"'’”\]\s]*$/u;
 const LATIN_KEEP_SHORT_WORDS = new Set([
-  'I', 'A', 'EH', 'ME', 'OH', 'AH', 'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE', 'US', 'MY', 'NO', 'GO', 'OR', 'AN'
+  'I', 'A', 'EH', 'ME', 'OH', 'AH', 'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE', 'US', 'MY', 'NO', 'GO', 'OR', 'AN',
+  'SO', 'DIE', 'PIG', 'CUM', 'COCK', 'ALL', 'YOU', 'OHHH', 'OHHHH', 'OHHHHH'
 ]);
 const LATIN_PROTECT_WORDS = new Set([
   'I', 'A', 'IT', 'ITS', 'ILL', 'GO', 'OVER', 'AND', 'TAKE', 'LOOK', 'BEST', 'IF', 'THINK', 'ME', 'EH',
   'THOSE', 'STUDENTS', 'MAY', 'DOING', 'BAD', 'THINGS', 'ELDERLY', 'WEAK', 'WOMEN', 'CHILDREN', 'IN', 'TOWN',
-  'AYNAR', 'ESSENCE', 'KNEW', 'NYAH', 'HOW', 'MUCH', 'FOR'
+  'AYNAR', 'ESSENCE', 'KNEW', 'NYAH', 'HOW', 'MUCH', 'FOR',
+  'YOURE', 'STOOOOP', 'STOAOOP', 'STOAAOP', 'MY', 'HEART', 'BEING', 'TORN', 'BY', 'THEIR', 'COCKS', 'VIRGINITY', 'LOST', 'SOME', 'BARBARIAN', 'RAPING', 'WET', 'PUSSY', 'AGAA',
+  'CAME', 'CUMMING', 'PRINCESS', 'NEGO', 'WITHAN', 'HEIRRR', 'RRR'
 ]);
 
 function normalizeLatinToken(token: string): string {

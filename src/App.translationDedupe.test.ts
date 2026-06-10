@@ -1647,6 +1647,16 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('THE PEOPLE HERE?', 'THE PEOPLE HERE?', 'th')).toBe('คนที่นี่เหรอ?');
   });
 
+  test('maps H-Manga conversational fragments to stable thai meaning', () => {
+    expect(applyThaiConversationalGlossary('I-IM', 'I-IM', 'th')).toBe('ฉ-ฉัน');
+    expect(applyThaiConversationalGlossary('YOU’RE', 'YOU’RE', 'th')).toBe('เธอ');
+    expect(applyThaiConversationalGlossary('raping-my', 'raping-my', 'th')).toBe('ข่มขืน-ฉัน');
+    expect(applyThaiConversationalGlossary('BARBAR I AN', 'I\'VELOST MYVIRGINITY TOSOME BARBAR I AN', 'th')).toBe('ข้าสูญเสียความบริสุทธิ์ให้กับคนป่าเถื่อน'); // (จะถูกส่งเข้าแปลปกติเนื่องจากไม่ใช่ exact match คำเดี่ยว แต่ normalize จะแก้คำให้อ่านเป็น BARBARIAN ได้ถูกต้อง)
+    expect(applyThaiConversationalGlossary('StOaaoP!', 'StOaaoP!', 'th')).toBe('หยุดดดดด!');
+    expect(applyThaiConversationalGlossary('OH,OHHH', 'OH,OHHH', 'th')).toBe('OH,OHHH'); // (คำครางไม่มีสระ/สะกดแปลกจะปล่อยทับศัพท์เพื่อความถูกต้อง)
+    expect(applyThaiConversationalGlossary('MY HEART\'S BEING TORN BY THEIR COCKS!', 'MY HEART\'S BEING TORN BY THEIR COCKS!', 'th')).toBe('หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!');
+  });
+
   test('maps spanish conversational fragments to stable thai meaning', () => {
     const algoAsi = applyThaiConversationalGlossary('ALGO ASi...', 'ALGO ASi...', 'th');
     const ceh = applyThaiConversationalGlossary('CEH?', 'CEH?', 'th');
