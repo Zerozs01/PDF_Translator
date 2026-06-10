@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildLayerGroupsFromOCR } from './LayerGroupingService';
+import { buildLayerGroupsFromOCR, splitAggressiveMergedLines } from './LayerGroupingService';
 import type { OCRPageResult } from '../../types';
 
 describe('LayerGroupingService Spatial Clustering', () => {
@@ -270,6 +270,64 @@ describe('LayerGroupingService Spatial Clustering', () => {
     }));
     expect(group4).toBeDefined();
     expect(group4?.layerIds.length).toBe(3);
+  });
+
+  test('splitAggressiveMergedLines correctly splits cross-balloon lines with punctuation or capitalized words', () => {
+    // 1. "FiTTiNG FOR" and "BEING" merged horizontal line simulation
+    const lineFittingBeing = {
+      text: 'FiTTiNG FOR BEING',
+      confidence: 90,
+      bbox: { x0: 10, y0: 100, x1: 200, y1: 120 },
+      words: [
+        { text: 'FiTTiNG', confidence: 90, bbox: { x0: 10, y0: 100, x1: 70, y1: 120 } },
+        { text: 'FOR', confidence: 90, bbox: { x0: 75, y0: 100, x1: 110, y1: 120 } },
+        { text: 'BEING', confidence: 90, bbox: { x0: 140, y0: 100, x1: 200, y1: 120 } }
+      ]
+    };
+    // Gap between FOR (x1=110) and BEING (x0=140) is 30px.
+    // Average word height is 20.
+    // 30 / 20 = 1.5, which is > 1.35 (the capitalization multiplier), so it should split!
+    // But it is < 2.2, so a fixed multiplier of 2.2 would NOT split it.
+    
+    const splitFittingBeing = splitAggressiveMergedLines([lineFittingBeing], 2.2);
+    expect(splitFittingBeing.length).toBe(2);
+    expect(splitFittingBeing[0].text).toBe('FiTTiNG FOR');
+    expect(splitFittingBeing[1].text).toBe('BEING');
+
+    // 2. "YOu!" and "SLASHED" merged horizontal line simulation
+    const lineYouSlashed = {
+      text: 'YOu! SLASHED',
+      confidence: 90,
+      bbox: { x0: 10, y0: 100, x1: 150, y1: 120 },
+      words: [
+        { text: 'YOu!', confidence: 90, bbox: { x0: 10, y0: 100, x1: 60, y1: 120 } },
+        { text: 'SLASHED', confidence: 90, bbox: { x0: 80, y0: 100, x1: 150, y1: 120 } }
+      ]
+    };
+    // Gap between YOu! (x1=60) and SLASHED (x0=80) is 20px.
+    // Average height is 20.
+    // 20 / 20 = 1.0, which is > 0.85 (punctuation multiplier), so it should split!
+    // But it is < 2.2, so a fixed multiplier of 2.2 would NOT split it.
+
+    const splitYouSlashed = splitAggressiveMergedLines([lineYouSlashed], 2.2);
+    expect(splitYouSlashed.length).toBe(2);
+    expect(splitYouSlashed[0].text).toBe('YOu!');
+    expect(splitYouSlashed[1].text).toBe('SLASHED');
+
+    // 3. Normal line "BUT IM SURE" (not to be split)
+    const normalLine = {
+      text: 'BUT IM SURE',
+      confidence: 95,
+      bbox: { x0: 10, y0: 100, x1: 150, y1: 120 },
+      words: [
+        { text: 'BUT', confidence: 95, bbox: { x0: 10, y0: 100, x1: 45, y1: 120 } },
+        { text: 'IM', confidence: 95, bbox: { x0: 52, y0: 100, x1: 80, y1: 120 } },
+        { text: 'SURE', confidence: 95, bbox: { x0: 88, y0: 100, x1: 150, y1: 120 } }
+      ]
+    };
+    const splitNormal = splitAggressiveMergedLines([normalLine], 2.2);
+    expect(splitNormal.length).toBe(1);
+    expect(splitNormal[0].text).toBe('BUT IM SURE');
   });
 });
 

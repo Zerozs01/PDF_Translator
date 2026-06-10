@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import { OCRPageResult, OCROptions, OCREngine, OCRLine } from '../types';
+import { OCRPageResult, OCROptions, OCREngine, OCRLine, BBox } from '../types';
 import { ProcessingProgress } from '../services/pdf';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout';
 import { splitAggressiveMergedLines } from '../services/layers/LayerGroupingService';
@@ -30,14 +30,16 @@ export interface OCRTranslationCacheEntry {
   translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   translatorEngine: TranslatorEngine;
   sourceFingerprint: string;
-  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedByIndex: Array<{ index: number; text: string; bbox?: BBox; sourceText?: string }>;
   translatedText: string;
   lineCount: number;
   groupCount: number;
   createdAt: number;
+  width?: number;
+  height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v46';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v47';
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
@@ -128,7 +130,7 @@ export const filterGhostOcrData = (
       const avgConfidence = confidenceSamples.reduce((sum, v) => sum + v, 0) / Math.max(1, confidenceSamples.length);
 
       const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-        /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP)$/i.test(asciiCompact);
+        /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING)$/i.test(asciiCompact);
       const containsAlphanumeric = /[a-zA-Z0-9]/.test(asciiCompact);
       const isTinyJunkBox = !hasCjkOrThai
         && asciiCompact.length <= 3
@@ -298,7 +300,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   allPagesOCR: new Map(),
   ocrByPageEngine: new Map(),
   setPageOCR: (pageNum, result) => set((state) => {
-    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.8);
+    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
     const engine = (result.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
@@ -321,7 +323,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     };
   }),
   setPageOCRForEngine: (pageNum, engine, result) => set((state) => {
-    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.8);
+    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
@@ -530,12 +532,23 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     const entry = pageMap.get(activeKey);
     if (!entry) return {};
 
+    const ocrLine = state.allPagesOCR.get(pageNum)?.lines?.[lineIndex];
     const nextTranslated = [...entry.translatedByIndex];
     const idx = nextTranslated.findIndex(t => t.index === lineIndex);
     if (idx >= 0) {
-      nextTranslated[idx] = { ...nextTranslated[idx], text: newText };
+      nextTranslated[idx] = { 
+        ...nextTranslated[idx], 
+        text: newText,
+        bbox: nextTranslated[idx].bbox || ocrLine?.bbox,
+        sourceText: nextTranslated[idx].sourceText || ocrLine?.text
+      };
     } else {
-      nextTranslated.push({ index: lineIndex, text: newText });
+      nextTranslated.push({ 
+        index: lineIndex, 
+        text: newText,
+        bbox: ocrLine?.bbox,
+        sourceText: ocrLine?.text
+      });
     }
 
     const updatedEntry = {
@@ -598,7 +611,12 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
         if (pageMap) {
           const entry = pageMap.get(activeKey);
           if (entry) {
-            const nextTranslated = [...entry.translatedByIndex, { index: lineIndex, text: line.text }];
+            const nextTranslated = [...entry.translatedByIndex, { 
+              index: lineIndex, 
+              text: line.text,
+              bbox: line.bbox,
+              sourceText: line.text
+            }];
             const updatedEntry = {
               ...entry,
               translatedByIndex: nextTranslated,

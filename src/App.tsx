@@ -1598,6 +1598,18 @@ export const applyThaiConversationalGlossary = (
   if (cleanDialogueText === 'more') {
     return preserveSourceTrailingPunctuation(source, 'อีก');
   }
+  if (cleanDialogueText === 'was toyed' || compactSourceAlnumUpper === 'WASTOYED') {
+    return preserveSourceTrailingPunctuation(source, 'ถูกเล่นสนุก');
+  }
+  if (cleanDialogueText === 'up looking' || cleanDialogueText === 'up looking' || compactSourceAlnumUpper === 'UPLOOKING') {
+    return preserveSourceTrailingPunctuation(source, 'มองขึ้นไป');
+  }
+  if (cleanDialogueText === 'like this' || compactSourceAlnumUpper === 'LIKETHIS') {
+    return preserveSourceTrailingPunctuation(source, 'แบบนี้');
+  }
+  if (cleanDialogueText === "heart's" || cleanDialogueText === 'heart' || compactSourceAlnumUpper === 'HEARTS' || compactSourceAlnumUpper === 'HEART') {
+    return preserveSourceTrailingPunctuation(source, 'หัวใจ');
+  }
   if (cleanDialogueText === 'so') {
     return preserveSourceTrailingPunctuation(source, 'ดังนั้น');
   }
@@ -6157,11 +6169,21 @@ export default function App() {
         translationMode,
         translatorEngine: 'ai' as const,
         sourceFingerprint: buildOCRSourceFingerprint(plan.ocr, plan.ocrEngine),
-        translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
+        translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => {
+          const ocrLine = plan.ocr.lines[index];
+          return {
+            index,
+            text,
+            bbox: ocrLine?.bbox,
+            sourceText: ocrLine?.text,
+          };
+        }),
         translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
         lineCount: translatedByIndex.size,
         groupCount: plan.groups.length,
         createdAt: Date.now(),
+        width: plan.ocr.width,
+        height: plan.ocr.height,
       };
 
       setTranslationCacheEntry(plan.pageNum, cacheKey, translationEntry);
@@ -6889,11 +6911,21 @@ export default function App() {
       translationMode: cacheTranslationMode,
       translatorEngine: effectiveEngine,
       sourceFingerprint: buildOCRSourceFingerprint(pageOCR, ocrEngine),
-      translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
+      translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => {
+        const ocrLine = pageOCR.lines[index];
+        return {
+          index,
+          text,
+          bbox: ocrLine?.bbox,
+          sourceText: ocrLine?.text,
+        };
+      }),
       translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
       lineCount: translatedByIndex.size,
       groupCount: preparedGroups.length,
       createdAt: Date.now(),
+      width: pageOCR.width,
+      height: pageOCR.height,
     };
 
     setTranslationCacheEntry(pageNum, cacheKey, translationEntry);

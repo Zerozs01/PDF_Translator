@@ -371,6 +371,9 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'HEIRRR',
   'RRR',
   'IIM',
+  'LIKETHIS',
+  'WASTOYED',
+  'UPLOOKING',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {

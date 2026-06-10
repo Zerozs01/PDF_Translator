@@ -1655,6 +1655,10 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('StOaaoP!', 'StOaaoP!', 'th')).toBe('หยุดดดดด!');
     expect(applyThaiConversationalGlossary('OH,OHHH', 'OH,OHHH', 'th')).toBe('OH,OHHH'); // (คำครางไม่มีสระ/สะกดแปลกจะปล่อยทับศัพท์เพื่อความถูกต้อง)
     expect(applyThaiConversationalGlossary('MY HEART\'S BEING TORN BY THEIR COCKS!', 'MY HEART\'S BEING TORN BY THEIR COCKS!', 'th')).toBe('หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!');
+    expect(applyThaiConversationalGlossary("HEART'S", "HEART'S", 'th')).toBe('หัวใจ');
+    expect(applyThaiConversationalGlossary("HEART'S!", "HEART'S!", 'th')).toBe('หัวใจ!');
+    expect(applyThaiConversationalGlossary("HEART’S...", "HEART’S...", 'th')).toBe('หัวใจ...');
+    expect(applyThaiConversationalGlossary("HEART", "HEART", 'th')).toBe('หัวใจ');
   });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
