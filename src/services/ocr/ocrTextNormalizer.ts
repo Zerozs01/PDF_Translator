@@ -182,6 +182,10 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
     normalized = normalized.replace(pattern, replacement);
   });
 
+  // Repair OCR digit-to-letter confusion (e.g., '4O%' -> '40%', '1O0' -> '100')
+  normalized = normalized.replace(/(?<=\d)[oO]+(?=\D|$|%)/g, '0');
+  normalized = normalized.replace(/(?<=\d)[oO]+(?=\d)/g, '0');
+
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,
     "BACK THEN HIS WHOLE BODY WAS BURNING UP LIKE A FURNACE, BUT NOW HE'S COLD AS ICE"

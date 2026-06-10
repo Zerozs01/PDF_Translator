@@ -89,6 +89,12 @@ describe('normalizeSourceForTranslation', () => {
       'してください.'
     );
   });
+
+  test('should repair digit confusion like 4O% to 40%', () => {
+    expect(normalizeSourceForTranslation('GETTING 4O% OF', 'en')).toBe('Getting 40% of');
+    expect(normalizeSourceForTranslation('GETTING 4o% OF', 'en')).toBe('Getting 40% of');
+    expect(normalizeSourceForTranslation('I HAVE 1O0 DOLLARS', 'en')).toBe('I have 100 dollars');
+  });
 });
 
 

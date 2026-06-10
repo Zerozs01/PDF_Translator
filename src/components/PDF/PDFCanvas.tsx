@@ -6,6 +6,7 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore, OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../../services/dbService';
+import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
 import { OCREngine } from '../../types';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { InteractiveLayerOverlay } from '../Layers/InteractiveLayerOverlay';
@@ -244,9 +245,13 @@ const PDFPageContainer: React.FC<{
         try {
           const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
           if (cached && !canceled) {
-            cached.pageNumber = pageNum;
-            ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
-            console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+            if (cached.algorithmVersion === OCR_ALGORITHM_VERSION) {
+              cached.pageNumber = pageNum;
+              ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+              console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+            } else {
+              console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected ${OCR_ALGORITHM_VERSION}, got ${cached.algorithmVersion}`);
+            }
           }
         } catch (err) {
           console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);

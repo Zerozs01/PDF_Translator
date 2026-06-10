@@ -2015,7 +2015,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             minAspectRatio: 2.35,
             minLongSide: 9000,
             boostedMaxSide:21500,
-            boostedMaxPixels: 37_650_000,
+            boostedMaxPixels: 37_950_000,
           },
         };
       } else {
@@ -2078,7 +2078,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
 
       // Hard ceiling of 20M pixels to prevent memory exhaustion and "donut effect"
-      const MAX_PIXELS_CEILING = 37_650_000;
+      const MAX_PIXELS_CEILING = 37_950_000;
       if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
         dynamicMaxPixels = MAX_PIXELS_CEILING;
       }

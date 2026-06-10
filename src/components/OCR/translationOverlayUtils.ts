@@ -3080,7 +3080,7 @@ const shouldHarmonizeOverlayBlock = (
     const generousComicStack = isComicProfile
       && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
       && verticalGap >= -avgHeight * 0.4
-      && verticalGap <= Math.max(28, avgHeight * 1.32)
+      && verticalGap <= Math.max(36, avgHeight * 1.85)
       && heightRatio <= 3.2;
     if (generousComicStack) {
       return true;
@@ -3095,7 +3095,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 3.2
       && verticalGap >= -avgHeight * 0.38
-      && verticalGap <= Math.max(28, avgHeight * 1.32);
+      && verticalGap <= Math.max(36, avgHeight * 1.85);
     if (centeredFragmentMerge) {
       return true;
     }
@@ -3105,7 +3105,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 2.8
       && verticalGap >= -avgHeight * 0.32
-      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 1.32 : profile === 'adaptive' ? 1.28 : 1.25))
+      && verticalGap <= Math.max(36, avgHeight * (profile === 'manga' ? 1.85 : profile === 'adaptive' ? 1.75 : 1.25))
     ) {
       return true;
     }
@@ -3707,8 +3707,9 @@ export const computeOverlayLayoutMap = (
     const allowSectionMerge = effectiveProfile === 'manga'
       || effectiveProfile === 'manhwa';
     const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
+    const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock || hasBalloonMember ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -3780,9 +3781,13 @@ export const computeOverlayLayoutMap = (
       && !shouldPreservePerLineNarrative
       && group.length >= 2
       && mergedStyleKind === 'comic-bubble'
-      && compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
-      && groupGeometry.maxGap <= mergeGapLimit
-      && groupGeometry.compactness <= mergeCompactnessLimit;
+      && (
+        hasBalloonMember || (
+          compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
+          && groupGeometry.maxGap <= mergeGapLimit
+          && groupGeometry.compactness <= mergeCompactnessLimit
+        )
+      );
 
     const groupColumnCoherence = computeOverlayGroupColumnCoherence(group);
     const hasStrongColumnContinuity = (
@@ -3794,8 +3799,7 @@ export const computeOverlayLayoutMap = (
     );
 
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && hasStrongColumnContinuity
-      && !overlyWideSectionSpan;
+      && (hasBalloonMember || (hasStrongColumnContinuity && !overlyWideSectionSpan));
 
     if (canMergeSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
@@ -3916,9 +3920,11 @@ export const computeOverlayLayoutMap = (
       })();
 
       const mergedFillRatio = mergedTypographyAdjusted.contentHeight / Math.max(1, mergedHeightBudget);
-      const mergeIsUseful = mergedTypographyAdjusted.estimatedLines >= 1
+      const mergeIsUseful = hasBalloonMember || (
+        mergedTypographyAdjusted.estimatedLines >= 1
         && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
-        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52);
+        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52)
+      );
       if (mergeIsUseful) {
         const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';
         const mergedCenterX = mergedBBox.x0 + (mergedBBox.x1 - mergedBBox.x0) * 0.5;

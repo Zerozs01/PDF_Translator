@@ -133,7 +133,7 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   }
 
   // (c) Sentence ended cleanly + large gap
-  if (endsGroup(topLine.text) && vertGap > minHeight * 1.2) {
+  if (endsGroup(topLine.text) && vertGap > minHeight * 0.85) {
     return false;
   }
 

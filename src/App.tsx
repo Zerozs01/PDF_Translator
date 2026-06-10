@@ -1481,7 +1481,10 @@ export const applyThaiConversationalGlossary = (
     return translatedText;
   }
 
-  const source = normalizeWhitespace(String(sourceText || ''));
+  let source = normalizeWhitespace(String(sourceText || ''));
+  // Repair digit confusion in source text early so glossary patterns match reliably (e.g. '4O%' -> '40%')
+  source = source.replace(/(?<=\d)[oO]+(?=\D|$|%)/g, '0');
+  source = source.replace(/(?<=\d)[oO]+(?=\d)/g, '0');
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source) return translated;
   const normalizedSpanishSource = normalizeSpanishOcrNoiseForTranslation(source);
@@ -3194,23 +3197,29 @@ const createBalloonAwareGroupingInput = (
   pageNumber: pageNum,
   imageWidth: Math.max(1, Number(pageOCR.width || 1)),
   imageHeight: Math.max(1, Number(pageOCR.height || 1)),
-  lines: lines.map<OCRLineWithLayout>((line) => ({
-    index: line.index,
-    text: line.text,
-    sourceLength: line.sourceLength,
-    top: line.top,
-    bottom: line.bottom,
-    left: line.left,
-    right: line.right,
-    height: line.height,
-    area: line.area,
-    confidence: line.confidence,
-    angleDeg: line.angleDeg,
-    sortHintX: line.sortHintX,
-    sortHintY: line.sortHintY,
-    quad: line.quad,
-    sourceEngine: line.sourceEngine,
-  })),
+  lines: lines.map<OCRLineWithLayout>((line) => {
+    const originalLine = pageOCR.lines?.[line.index] || pageOCR.lines?.find(l => 
+      Math.abs(l.bbox.x0 - line.left) < 1.5 && Math.abs(l.bbox.y0 - line.top) < 1.5
+    );
+    const originalText = originalLine ? originalLine.text : line.text;
+    return {
+      index: line.index,
+      text: originalText,
+      sourceLength: line.sourceLength,
+      top: line.top,
+      bottom: line.bottom,
+      left: line.left,
+      right: line.right,
+      height: line.height,
+      area: line.area,
+      confidence: line.confidence,
+      angleDeg: line.angleDeg,
+      sortHintX: line.sortHintX,
+      sortHintY: line.sortHintY,
+      quad: line.quad,
+      sourceEngine: line.sourceEngine,
+    };
+  }),
   mode: 'balloon-aware',
   readingMode: resolveBalloonAwareReadingMode(sourceLanguage, mode),
 });
@@ -6475,7 +6484,7 @@ export default function App() {
           score: retryLineOutputs.reduce(
             (sum, lineText, lineIndex) => sum + scoreTranslationCandidate(group.lines[lineIndex]?.text || '', lineText, normalizedTargetLanguage),
             0
-          ),
+          ) / Math.max(1, group.lines.length),
           lines: retryLineOutputs,
         });
 

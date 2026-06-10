@@ -1213,6 +1213,9 @@ def is_advertisement_brand_token(text: str) -> bool:
     alpha = normalize_alpha_token(text)
     if not alpha:
         return False
+    # Safeguard: Do not filter out common English/Latin vocabulary words, short keep-tokens, or heading indicators
+    if alpha in LATIN_COMMON_WORDS or alpha in LATIN_SHORT_KEEP_TOKENS or alpha in HEADING_KEEP_TOKENS:
+        return False
     if alpha in WATERMARK_TOKENS:
         return True
     if any(marker in alpha for marker in WATERMARK_TOKENS if len(marker) >= 6):
@@ -1227,9 +1230,11 @@ def is_advertisement_brand_token(text: str) -> bool:
         return True
     fuzzy_markers = [marker for marker in (WATERMARK_TOKENS | WATERMARK_PHRASE_MARKERS) if len(marker) >= 6]
     for marker in fuzzy_markers:
-        if abs(len(alpha) - len(marker)) > 2:
+        # Dynamically set max allowed distance (2 for len >= 9, 1 for shorter markers like NEWTOKI) to prevent false positives
+        max_dist = 2 if len(marker) >= 9 else 1
+        if abs(len(alpha) - len(marker)) > max_dist:
             continue
-        if levenshtein_distance(alpha, marker, max_distance=2) <= 2:
+        if levenshtein_distance(alpha, marker, max_distance=max_dist) <= max_dist:
             return True
     return False
 
@@ -1374,6 +1379,20 @@ def is_probable_ascii_ghost(text: str) -> bool:
     alpha_num = normalize_alpha_token(raw)
     if re.fullmatch(r"[\W_]+", raw):
         return True
+
+    # Check if this looks like a valid citation/bracketed reference (e.g., "[1]", "(2)]", "[usually", "[a]")
+    is_valid_ref = False
+    if any(char in raw for char in "[]{}") and alpha_num:
+        if any(char.isdigit() for char in alpha_num):
+            is_valid_ref = True
+        elif len(alpha_num) >= 3:
+            is_valid_ref = True
+        elif re.fullmatch(r"\(?[A-Za-z]\)?\]\.?", raw) or re.fullmatch(r"\[[A-Za-z]\]\.?", raw):
+            is_valid_ref = True
+
+    if is_valid_ref:
+        return False
+
     if any(marker in raw for marker in ("\\", "{", "}", "[", "]", "|")) and len(alpha_num) <= 4:
         return True
     if len(alpha_num) <= 2 and any(marker in raw for marker in ("\\", "/", "{", "}", "[", "]", "_", "|", "~", "`")):
@@ -1685,6 +1704,159 @@ def merge_short_lead_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
         merged.append(current)
         index += 1
+
+    return merged
+
+
+def expand_vertical_stack_width(line: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ขยายความกว้างของกล่องข้อความภาษาอังกฤษที่เป็นแนวตั้งสูง-แคบ (Vertical Stack)
+    ตามขนาดความสูงอักษรเฉลี่ย เพื่อให้เหมาะกับการแสดงผลภาษาไทยแนวนอนโดยไม่ล้นกรอบคำพูด
+    """
+    bbox = line.get("bbox") or {}
+    if not bbox:
+        return line
+
+    x0 = float(bbox.get("x0", 0.0))
+    y0 = float(bbox.get("y0", 0.0))
+    x1 = float(bbox.get("x1", 0.0))
+    y1 = float(bbox.get("y1", 0.0))
+    w = x1 - x0
+    h = y1 - y0
+
+    words = line.get("words") or []
+    if not words:
+        return line
+
+    # คำนวณความสูงของคำเฉลี่ย เพื่อใช้เป็นค่าอ้างอิงขนาดอักษร (Font size)
+    word_heights = [bbox_height(w.get("bbox") or {}) for w in words]
+    avg_word_h = sum(word_heights) / len(word_heights) if word_heights else 15.0
+    avg_word_h = max(10.0, avg_word_h)
+
+    # ตั้งความกว้างเป้าหมายให้อยู่ในระยะที่เหมาะสมสำหรับภาษาไทยแนวนอน (ประมาณ 5.2 เท่าของความสูงอักษร)
+    target_w = avg_word_h * 5.2
+    target_w = max(w, target_w)
+
+    needed_expansion = target_w - w
+    if needed_expansion > 0:
+        # จำกัดการขยายต่อฝั่งสูงสุดไม่เกิน 45px (หรือ 1.8 เท่าของความสูงอักษร)
+        max_expand_each_side = min(45.0, avg_word_h * 1.8)
+        expand_each_side = min(needed_expansion / 2.0, max_expand_each_side)
+
+        new_x0 = max(0.0, x0 - expand_each_side)
+        new_x1 = x1 + expand_each_side
+
+        # อัปเดต bbox ของกล่องบรรทัด
+        bbox["x0"] = round(new_x0, 2)
+        bbox["x1"] = round(new_x1, 2)
+
+        # อัปเดต bbox ของคำด้านในเพื่อให้สอดคล้องกัน
+        for word in words:
+            w_bbox = word.get("bbox") or {}
+            if "x0" in w_bbox:
+                w_bbox["x0"] = round(max(0.0, float(w_bbox["x0"]) - expand_each_side), 2)
+            if "x1" in w_bbox:
+                w_bbox["x1"] = round(float(w_bbox["x1"]) + expand_each_side, 2)
+
+    return line
+
+
+def merge_latin_vertical_stack(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    รวมกล่องข้อความภาษาอังกฤษที่เรียงซ้อนกันแนวตั้ง (Vertical Stack)
+    เช่น YOU / STUBBORN / FOOL ใน speech bubble เดียวกัน
+    """
+    if len(lines) <= 1:
+        return [expand_vertical_stack_width(l) for l in lines]
+
+    # เรียงลำดับจากบนลงล่างตามแกน Y
+    ordered = sorted(lines, key=lambda l: float((l.get("bbox") or {}).get("y0", 0.0)))
+    consumed: set = set()
+    merged: List[Dict[str, Any]] = []
+
+    for i, line in enumerate(ordered):
+        if i in consumed:
+            continue
+
+        text = str(line.get("text") or "").strip()
+        bbox = line.get("bbox") or {}
+
+        # ข้ามถ้าไม่ใช่ Latin
+        if has_non_latin_characters(text):
+            merged.append(line)
+            continue
+
+        group = [line]
+        group_bbox = dict(bbox)
+
+        for j in range(i + 1, len(ordered)):
+            if j in consumed:
+                continue
+
+            cand = ordered[j]
+            cand_text = str(cand.get("text") or "").strip()
+            cand_bbox = cand.get("bbox") or {}
+
+            if has_non_latin_characters(cand_text):
+                break  # เจอ CJK/Thai แล้วหยุดค้นหาใน stack นี้
+
+            # --- SAFETY GUARDS TO PREVENT COLLAPSING REGULAR PARAGRAPHS/TEXTBOOKS ---
+            words_curr = [w for w in re.split(r"\s+", text) if w]
+            words_cand = [w for w in re.split(r"\s+", cand_text) if w]
+
+            # บรรทัดยาวแบบเอกสารทางการ/หนังสือเรียน ห้ามรวมแนวตั้งเด็ดขาด
+            is_document_line = len(text) > 22 or len(cand_text) > 22 or len(words_curr) > 4 or len(words_cand) > 4
+            if is_document_line:
+                break
+
+            min_h = max(8.0, min(bbox_height(group_bbox), bbox_height(cand_bbox)))
+
+            # Y gap: ระยะห่างแนวตั้งต้องชิดกันจริงๆ สำหรับบับเบิ้ลแนวตั้ง (ไม่เกิน 1.35x ความสูงตัวอักษร)
+            gap_y = float(cand_bbox.get("y0", 0.0)) - float(group_bbox.get("y1", 0.0))
+            if gap_y > min_h * 1.35:
+                break  # ห่างเกินไป แสดงว่าเป็นคนละบับเบิ้ล
+
+            # X overlap: ต้องเหลื่อมกันในแนวนอนอย่างมาก (แกน X ทับซ้อนกันเกิน 65% ในแนวสดมภ์เดียวกัน)
+            overlap_x = horizontal_overlap_ratio(group_bbox, cand_bbox)
+            if overlap_x < 0.65:
+                continue  # อาจเป็นกล่องที่อยู่เยื้องกัน ให้ตรวจสอบบรรทัดถัดไป
+
+            # ไม่รวมถ้าข้อความก่อนหน้าจบด้วยเครื่องหมายสิ้นสุดประโยค
+            last_text = str(group[-1].get("text") or "")
+            if has_terminal_sentence_punct(last_text):
+                break
+
+            consumed.add(j)
+            group.append(cand)
+            group_bbox = {
+                "x0": min(float(group_bbox.get("x0", 0)), float(cand_bbox.get("x0", 0))),
+                "y0": float(group_bbox.get("y0", 0)),
+                "x1": max(float(group_bbox.get("x1", 0)), float(cand_bbox.get("x1", 0))),
+                "y1": float(cand_bbox.get("y1", 0)),
+            }
+            # อัปเดต text สำหรับรอบถัดไป
+            text = cand_text
+
+        if len(group) > 1:
+            all_words = []
+            for g in group:
+                all_words.extend(g.get("words") or [])
+            merged_line = make_line_from_words(
+                all_words,
+                min(line_sort_y(g) for g in group),
+                min(line_sort_x(g) for g in group),
+            )
+            # ขยายขนาดความกว้างกล่องแนวตั้งหลังยุบรวมเสร็จ
+            merged_line = expand_vertical_stack_width(merged_line)
+
+            source_index = min(
+                float(g.get("_sourceIndex", float("inf"))) for g in group
+            )
+            if math.isfinite(source_index):
+                merged_line["_sourceIndex"] = int(source_index)
+            merged.append(merged_line)
+        else:
+            merged.append(expand_vertical_stack_width(line))
 
     return merged
 
@@ -2176,9 +2348,30 @@ def prune_paddle_panel_contextual_noise_lines(
                 and neighbor["width"] <= line_w * 0.46
                 and float(neighbor["bbox"].get("x0", 0.0)) >= center_x + max(84.0, line_w * 0.08)
             ]
+
+            def is_lexically_related(anchor_text: str, target_text: str) -> bool:
+                def get_clean_tokens(s):
+                    raw_toks = re.sub(r"\s+", " ", s).split(" ")
+                    clean = []
+                    for t in raw_toks:
+                        t_clean = re.sub(r"[^A-Za-z0-9]", "", t).lower()
+                        if t_clean:
+                            clean.append(t_clean)
+                    return clean
+
+                anchor_toks = get_clean_tokens(anchor_text)
+                target_toks = set(get_clean_tokens(target_text))
+                if not anchor_toks or not target_toks:
+                    return False
+                matched = sum(1 for t in anchor_toks if t in target_toks)
+                match_ratio = matched / len(anchor_toks)
+                return match_ratio >= 0.6
+
             bridge_detected = any(
                 abs(left_anchor["centerY"] - right_anchor["centerY"]) <= max(104.0, line_h * 0.9)
                 and (float(right_anchor["bbox"].get("x0", 0.0)) - float(left_anchor["bbox"].get("x1", 0.0))) >= max(240.0, line_w * 0.18)
+                and is_lexically_related(left_anchor["text"], text)
+                and is_lexically_related(right_anchor["text"], text)
                 for left_anchor in left_anchors
                 for right_anchor in right_anchors
             )
@@ -2205,10 +2398,13 @@ def prune_paddle_panel_contextual_noise_lines(
             strong_below = any(neighbor["centerY"] > center_y + max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
 
             trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14
-            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text))
+            has_vowel = bool(re.search(r"[aeiouAEIOUyY]", text))
+            # Malformed mixed case is typically consonant-only noise (e.g. "gT", "xY") or tiny isolated casing junk.
+            # Real words with casing typos (e.g. "WOuLD", "tOO") should not be dropped.
+            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text)) and (not has_vowel or (token_count <= 1 and compact_length <= 3))
             oversized_weak_singleton = (
                 token_count <= 1
-                and compact_length <= 12
+                and compact_length <= 3
                 and word_box_count <= 1
                 and line_area >= 22000.0 * scale_area
                 and normalize_confidence(line.get("confidence", 0.0)) <= 88.0
@@ -3250,10 +3446,10 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = 2400
                 rec_batch = 10
-                det_thresh = 0.22 if is_cjk_like else 0.24
-                det_box_thresh = 0.50 if is_cjk_like else 0.52
-                det_unclip_ratio = 1.55 if is_cjk_like else 1.70
-                rec_score_thresh = 0.35
+                det_thresh = 0.18 if is_cjk_like else 0.20
+                det_box_thresh = 0.44 if is_cjk_like else 0.46
+                det_unclip_ratio = 1.60 if is_cjk_like else 1.75
+                rec_score_thresh = 0.22 if is_cjk_like else 0.24
             else:  # "best"
                 if shortest <= 420:
                     det_limit = 2400
@@ -3262,10 +3458,10 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = 2800
                 rec_batch = 8
-                det_thresh = 0.17 if is_cjk_like else 0.20
-                det_box_thresh = 0.44 if is_cjk_like else 0.46
-                det_unclip_ratio = 1.75 if is_cjk_like else 1.85
-                rec_score_thresh = 0.30
+                det_thresh = 0.12
+                det_box_thresh = 0.38 if is_cjk_like else 0.40
+                det_unclip_ratio =  1.90
+                rec_score_thresh = 0.3
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300

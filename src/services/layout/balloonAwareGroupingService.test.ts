@@ -207,4 +207,23 @@ describe('deriveBalloonAwareLayoutGrouping', () => {
     expect(result.diagnostics.avgConfidence).toBeGreaterThanOrEqual(0);
     expect(result.diagnostics.avgConfidence).toBeLessThanOrEqual(1);
   });
+
+  test('preserves vertical reading order for horizontally overlapping lines in same balloon', () => {
+    const overlappingFixture: LayoutGroupingInput = {
+      pageNumber: 2,
+      imageWidth: 1000,
+      imageHeight: 15000,
+      mode: 'balloon-aware',
+      readingMode: 'ltr',
+      lines: [
+        line(0, 'A-Are Vou', 315, 12218, 595, 12319, { sortHintX: 315, sortHintY: 12218 }),
+        line(1, 'selling mg Off to', 220, 12278, 699, 12416, { sortHintX: 220, sortHintY: 12278 }),
+      ],
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(overlappingFixture);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.orderedLineIndexes).toEqual([0, 1]);
+  });
 });
+

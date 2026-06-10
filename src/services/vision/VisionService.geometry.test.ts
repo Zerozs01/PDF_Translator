@@ -397,6 +397,30 @@ describe('VisionService paddle geometry guard', () => {
     ]);
   });
 
+  test('keeps common dialogue words like LIGHT and WAIT even if they match stylized wide effect dimensions', () => {
+    const service = visionService as unknown as {
+      prunePaddlePanelTallEffectLines: (
+        lines: OCRLine[],
+        pageWidth: number,
+        pageHeight: number,
+        language: string
+      ) => { lines: OCRLine[]; dropped: Array<{ text: string; reason: string }> };
+    };
+    const lines = [
+      makeLine('I WILL LET YOU', 120, 110, 390, 145),
+      makeLine('EXPERIMENT WITH', 118, 152, 410, 187),
+      makeLine('LIGHT...!', 54, 760, 268, 840),
+      makeLine('WAIT!', 600, 760, 750, 840),
+      makeLine('HER IN RETURN.', 125, 196, 380, 232),
+    ];
+
+    const result = service.prunePaddlePanelTallEffectLines(lines, 900, 1300, 'eng');
+
+    expect(result.lines.map((line) => line.text)).toContain('LIGHT...!');
+    expect(result.lines.map((line) => line.text)).toContain('WAIT!');
+    expect(result.dropped).toHaveLength(0);
+  });
+
   test('repairs lost short I and IT tokens around SOLD in profit dialogue', () => {
     const service = visionService as unknown as {
       repairPaddlePanelContextualDialogueLines: (

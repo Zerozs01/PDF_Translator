@@ -1524,6 +1524,13 @@ describe('applyThaiConversationalGlossary', () => {
     expect(translated).toBe('ฉันจะได้กำไร 40% หากฉันขายมัน.');
   });
 
+  test('maps I WOULD BE GETTING 4O% ... (OCR letter O) HAD I SOLD IT to conditional Thai', () => {
+    const source = 'I WOULD BE GETTING 4O% OF THE PROFITS HAD I SOLD IT.';
+    const translated = applyThaiConversationalGlossary(source, 'ฉันจะได้กําไร 4% ถ้าผมขายมัน', 'th');
+
+    expect(translated).toBe('ฉันจะได้กำไร 40% หากฉันขายมัน.');
+  });
+
   test('maps teammate stronger sentence to stable Thai meaning', () => {
     const source = "AND IT'S GOOD FOR\nUS IF OUR TeAMMATE\nBECOMES STRONGER.";
     const translated = applyThaiConversationalGlossary(
