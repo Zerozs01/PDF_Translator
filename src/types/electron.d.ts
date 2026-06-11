@@ -267,7 +267,8 @@ export interface ElectronAPI {
     importFile: (payload: {
       name: string;
       mimeType: string;
-      data: Uint8Array | ArrayBuffer;
+      data?: Uint8Array | ArrayBuffer;
+      filePath?: string;
     }) => Promise<{
       filepath: string;
       mimeType: string;

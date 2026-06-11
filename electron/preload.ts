@@ -253,7 +253,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fs: {
     readFile: (filepath: string) => safeInvoke('fs:read-file', filepath),
     openFile: () => safeInvoke('fs:open-file'),
-    importFile: (payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) =>
+    importFile: (payload: { name: string; mimeType: string; data?: Uint8Array | ArrayBuffer; filePath?: string }) =>
       safeInvoke('fs:import-file', payload),
   },
 

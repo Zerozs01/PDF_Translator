@@ -33,7 +33,8 @@ export const importCanonicalProjectFile = async ({
   importFile?: ((payload: {
     name: string;
     mimeType: string;
-    data: Uint8Array | ArrayBuffer;
+    data?: Uint8Array | ArrayBuffer;
+    filePath?: string;
   }) => Promise<DocumentImportResult | null>) | null;
 }): Promise<{
   resolvedFileData: Uint8Array | null;
@@ -51,11 +52,24 @@ export const importCanonicalProjectFile = async ({
       const buffer = await file.arrayBuffer();
       resolvedFileData = new Uint8Array(buffer);
     }
-    const imported = await importFile({
+
+    const importPayload: {
+      name: string;
+      mimeType: string;
+      data?: Uint8Array;
+      filePath?: string;
+    } = {
       name: file.name,
       mimeType: file.type || 'application/octet-stream',
-      data: new Uint8Array(resolvedFileData),
-    });
+    };
+
+    if (file.path) {
+      importPayload.filePath = file.path;
+    } else {
+      importPayload.data = new Uint8Array(resolvedFileData);
+    }
+
+    const imported = await importFile(importPayload);
     if (imported?.filepath) {
       importedPath = imported.filepath;
     }
@@ -78,7 +92,8 @@ export const prepareProjectDocumentLoad = async ({
   importFile?: ((payload: {
     name: string;
     mimeType: string;
-    data: Uint8Array | ArrayBuffer;
+    data?: Uint8Array | ArrayBuffer;
+    filePath?: string;
   }) => Promise<DocumentImportResult | null>) | null;
 }): Promise<{
   resolvedPath: string | null;
