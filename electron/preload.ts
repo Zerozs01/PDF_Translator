@@ -71,6 +71,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   // Model Management
   'models:get-status',
   'models:download',
+  // PDF export
+  'pdf-export:start',
+  'pdf-export:cancel',
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -80,6 +83,7 @@ const ALLOWED_SEND_CHANNELS = [
 const ALLOWED_RECEIVE_CHANNELS = [
   'main-process-message',
   'ocr:progress',
+  'pdf-export:progress',
 ] as const;
 
 type AllowedInvokeChannel = typeof ALLOWED_INVOKE_CHANNELS[number];
@@ -312,6 +316,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('models:get-status', payload),
     download: (payload: { engine: string; language: string }) =>
       safeInvoke('models:download', payload),
+  },
+
+  pdfExport: {
+    start: (job: unknown) =>
+      safeInvoke<{ ok: boolean; bytes?: Uint8Array; error?: string }>('pdf-export:start', job).then((result) => {
+        if (!result?.bytes) {
+          return result;
+        }
+        const raw = result.bytes as Uint8Array | ArrayBuffer | { data?: number[] };
+        if (raw instanceof Uint8Array) {
+          return { ...result, bytes: raw };
+        }
+        if (raw instanceof ArrayBuffer) {
+          return { ...result, bytes: new Uint8Array(raw) };
+        }
+        if (Array.isArray((raw as { data?: number[] }).data)) {
+          return { ...result, bytes: Uint8Array.from((raw as { data: number[] }).data) };
+        }
+        return result;
+      }),
+    cancel: (jobId: string) => safeInvoke('pdf-export:cancel', { jobId }),
+    onProgress: (callback: (payload: {
+      jobId: string;
+      done: number;
+      total: number;
+      progress: number;
+    }) => void) => {
+      const channel = 'pdf-export:progress' as AllowedReceiveChannel;
+      if (!ALLOWED_RECEIVE_CHANNELS.includes(channel)) {
+        return () => {};
+      }
+      const subscription = (_event: Electron.IpcRendererEvent, payload: {
+        jobId: string;
+        done: number;
+        total: number;
+        progress: number;
+      }) => callback(payload);
+      ipcRenderer.on(channel, subscription);
+      return () => ipcRenderer.removeListener(channel, subscription);
+    },
   },
 
   // Message handling (restricted to allowed channels)

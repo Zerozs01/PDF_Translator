@@ -38,14 +38,14 @@ This document describes the architecture as implemented in the current working t
   - language
   - dpi
   - pageSegMode
-  - algorithmVersion (`210`)
+  - algorithmVersion (`214`)
   - pipelineProfile
   - ocrEngine
   - ocrQualityProfile
 
 ### Translation Cache
 
-- Version: `v45`
+- Version: `v47`
 - Key dimensions include:
   - OCR engine + OCR language
   - source language + target language
@@ -128,7 +128,16 @@ This reduces false drops for lines such as technical sentence fragments and numb
   - Prev/Next navigation
   - active-line emphasis
 
-## 7. Security Boundary
+## 8. Custom Glossary System
+
+- **Glossary State Store:** `src/stores/useGlossaryStore.ts` tracks user glossary terms and sound effects (SFX) with localStorage persistence.
+- **Glossary Sidebar UI:** `src/components/Layout/GlossarySidebarPanel.tsx` is embedded within the `LeftSidebar.tsx` views, allowing users to:
+  - Add new terms or SFX translation overrides (Korean/English source to Thai target).
+  - Search and filter by entry types (`TERM` or `SFX`).
+  - Toggle items active/inactive in real-time or delete them.
+- **Dictionary Service Integration:** `src/services/translation/sfxDictionaryService.ts` integrates with `useGlossaryStore` to intercept raw source text and replace it with glossary terms during translation post-processing.
+
+## 9. Security Boundary
 
 - Renderer uses only preload-exposed API
 - DB/file/bridge execution stays in Electron main process

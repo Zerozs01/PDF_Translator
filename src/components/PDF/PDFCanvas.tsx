@@ -144,6 +144,19 @@ const renderOverlayTextWithSearchHighlight = (
   return pieces;
 };
 
+// ─── Sub-component: PDFPageOverlay ───────────────────────────────
+const getOffsetRelativeTo = (child: HTMLElement, ancestor: HTMLElement) => {
+  let x = 0;
+  let y = 0;
+  let el: HTMLElement | null = child;
+  while (el && el !== ancestor) {
+    x += el.offsetLeft || 0;
+    y += el.offsetTop || 0;
+    el = el.offsetParent as HTMLElement | null;
+  }
+  return { x, y };
+};
+
 const EMPTY_ARRAY: any[] = [];
 
 const PDFPageOverlay: React.FC<{
@@ -152,7 +165,7 @@ const PDFPageOverlay: React.FC<{
   pageRenderTick: number;
   isVisible: boolean;
 }> = React.memo(({ pageNum, pageRef, pageRenderTick, isVisible }) => {
-  const currentPage = useProjectStore((s) => s.currentPage);
+  const isCurrentPage = useProjectStore((s) => s.currentPage === pageNum);
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
   const targetLanguage = useProjectStore((s) => s.targetLanguage);
   const translationMode = useProjectStore((s) => s.translationMode);
@@ -522,49 +535,62 @@ const PDFPageOverlay: React.FC<{
       return;
     }
 
+    let canceled = false;
     const timer = setTimeout(() => {
-      const sourceWidth = Math.max(1, canvas.width);
-      const sourceHeight = Math.max(1, canvas.height);
-      if (!sourceWidth || !sourceHeight) {
-        return;
+      const runSampling = () => {
+        if (canceled) return;
+        const sourceWidth = Math.max(1, canvas.width);
+        const sourceHeight = Math.max(1, canvas.height);
+        if (!sourceWidth || !sourceHeight) {
+          return;
+        }
+
+        const maxSampleSide = 2400;
+        const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
+        const sampleCanvas = document.createElement('canvas');
+        sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
+        sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
+
+        const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+        if (!context) {
+          return;
+        }
+
+        context.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+        const next = new Map<number, OverlayPalette>();
+        currentPageOCRResolved.lines.forEach((line, index) => {
+          if (!translationOverlayContext.translatedByIndex.has(index)) return;
+          const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
+          if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
+          next.set(index, sampleOverlayPaletteFromLine(
+            context,
+            line,
+            currentPageOCRResolved.width,
+            currentPageOCRResolved.height,
+            sampleCanvas.width,
+            sampleCanvas.height
+          ));
+        });
+        setTranslatedLinePalette(next);
+
+        try {
+          sampleCanvas.width = 0;
+          sampleCanvas.height = 0;
+        } catch (e) { /* ignore */ }
+      };
+
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => runSampling(), { timeout: 100 });
+      } else {
+        runSampling();
       }
-
-      const maxSampleSide = 2400;
-      const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
-      const sampleCanvas = document.createElement('canvas');
-      sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
-      sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
-
-      const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
-      if (!context) {
-        return;
-      }
-
-      context.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
-
-      const next = new Map<number, OverlayPalette>();
-      currentPageOCRResolved.lines.forEach((line, index) => {
-        if (!translationOverlayContext.translatedByIndex.has(index)) return;
-        const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
-        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-        next.set(index, sampleOverlayPaletteFromLine(
-          context,
-          line,
-          currentPageOCRResolved.width,
-          currentPageOCRResolved.height,
-          sampleCanvas.width,
-          sampleCanvas.height
-        ));
-      });
-      setTranslatedLinePalette(next);
-
-      try {
-        sampleCanvas.width = 0;
-        sampleCanvas.height = 0;
-      } catch (e) { /* ignore */ }
     }, 150);
 
-    return () => clearTimeout(timer);
+    return () => {
+      canceled = true;
+      clearTimeout(timer);
+    };
   }, [
     pageNum,
     currentPageOCRResolved,
@@ -575,11 +601,10 @@ const PDFPageOverlay: React.FC<{
     isVisible,
   ]);
 
+  const lastCanvasSizeRef = useRef({ width: 0, height: 0 });
+
   useEffect(() => {
     if (!currentPageOCRResolved || !pageRef.current || !isVisible) return;
-
-    let observedCanvas: HTMLCanvasElement | null = null;
-    let rafId: number | null = null;
 
     const updateTransform = () => {
       const container = pageRef.current;
@@ -587,59 +612,57 @@ const PDFPageOverlay: React.FC<{
       if (!container || !canvas) return;
 
       if (!currentPageOCRResolved.width || !currentPageOCRResolved.height) return;
-      if (canvas.clientWidth === 0 || canvas.clientHeight === 0) return;
+      
+      const canvasWidth = canvas.clientWidth || 0;
+      const canvasHeight = canvas.clientHeight || 0;
+      if (canvasWidth === 0 || canvasHeight === 0) return;
 
-      if (canvas !== observedCanvas) {
-        if (observedCanvas) {
-          resizeObserver.unobserve(observedCanvas);
+      const offsets = getOffsetRelativeTo(canvas, container);
+
+      requestAnimationFrame(() => {
+        React.startTransition(() => {
+          setOcrOverlayTransform({
+            scaleX: canvasWidth / currentPageOCRResolved.width,
+            scaleY: canvasHeight / currentPageOCRResolved.height,
+            offsetX: offsets.x,
+            offsetY: offsets.y
+          });
+        });
+      });
+    };
+
+    const container = pageRef.current;
+    const canvas = container?.querySelector('canvas') as HTMLCanvasElement | null;
+    
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries[0]) {
+        const { width, height } = entries[0].contentRect;
+        const prev = lastCanvasSizeRef.current;
+        if (Math.abs(width - prev.width) > 1 || Math.abs(height - prev.height) > 1) {
+          lastCanvasSizeRef.current = { width, height };
+          updateTransform();
         }
-        observedCanvas = canvas;
-        resizeObserver.observe(canvas);
       }
+    });
 
-      const canvasRect = canvas.getBoundingClientRect();
-      const rootRect = container.getBoundingClientRect();
-      const currentZoom = useUIStore.getState().zoom || 1;
-      const offsetX = (canvasRect.left - rootRect.left) / currentZoom;
-      const offsetY = (canvasRect.top - rootRect.top) / currentZoom;
-
-      setOcrOverlayTransform({
-        scaleX: canvas.clientWidth / currentPageOCRResolved.width,
-        scaleY: canvas.clientHeight / currentPageOCRResolved.height,
-        offsetX,
-        offsetY
-      });
-    };
-
-    const scheduleUpdate = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        updateTransform();
-      });
-    };
-
-    scheduleUpdate(); // Initial call
-
-    const resizeObserver = new ResizeObserver(scheduleUpdate);
-    if (pageRef.current) {
-      resizeObserver.observe(pageRef.current);
+    if (canvas) {
+      resizeObserver.observe(canvas);
     }
-    window.addEventListener('resize', scheduleUpdate);
+
+    updateTransform();
+
+    window.addEventListener('resize', updateTransform);
 
     return () => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-      }
       resizeObserver.disconnect();
-      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('resize', updateTransform);
     };
   }, [currentPageOCRResolved, pageNum, pageRenderTick, isVisible]);
 
   return (
     <>
       {/* Regions Overlay */}
-      {showDebugOverlay && currentPage === pageNum && regions.map(reg => (
+      {showDebugOverlay && isCurrentPage && regions.map(reg => (
         <div 
           key={reg.id}
           style={{
@@ -657,7 +680,13 @@ const PDFPageOverlay: React.FC<{
       ))}
       {/* OCR Debug Overlay */}
       {translationOverlayContext.shouldRender && currentPageOCRResolved && (
-        <div className="absolute inset-0 pointer-events-none">
+        <div 
+          style={{
+            willChange: 'transform',
+            contain: 'layout style paint'
+          }}
+          className="absolute inset-0 pointer-events-none"
+        >
           {currentPageOCRResolved.lines.map((line, idx) => {
             if (hiddenLineIndexes.has(idx)) {
               return null;
@@ -1037,6 +1066,30 @@ const PDFPageOverlay: React.FC<{
 });
 PDFPageOverlay.displayName = 'PDFPageOverlay';
 
+let activePageChangeTimeout: ReturnType<typeof setTimeout> | null = null;
+let lastPageUpdateTime = 0;
+let pendingPage = 1;
+let isUserInteracting = false;
+let userInteractionTimer: ReturnType<typeof setTimeout> | null = null;
+
+const startUserInteraction = () => {
+  isUserInteracting = true;
+  if (userInteractionTimer) {
+    clearTimeout(userInteractionTimer);
+    userInteractionTimer = null;
+  }
+};
+
+const endUserInteraction = (delay = 800) => {
+  if (userInteractionTimer) {
+    clearTimeout(userInteractionTimer);
+  }
+  userInteractionTimer = setTimeout(() => {
+    isUserInteracting = false;
+    userInteractionTimer = null;
+  }, delay);
+};
+
 const PDFPageContainer: React.FC<{
   pageNum: number;
   onPageLoadSuccess?: (page: any) => void;
@@ -1063,50 +1116,65 @@ const PDFPageContainer: React.FC<{
     }
   }, [isVisible]);
 
-  // Viewport observer: only render overlays when the page is visible or within 600px,
-  // and sync currentPage state once a page is at least 50% visible in the viewport.
   useEffect(() => {
     if (viewMode === 'single') {
       setIsVisible(true);
       return;
     }
 
-    const observer = new IntersectionObserver(
+    const preloadObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            setIsVisible(true);
-            // Skip updating active page state during programmatic scrolling or view mode transition,
-            // as this prevents the stale viewport position (e.g. at page 1) from reverting the active page
-            // before the scroll-snap positioning completes.
-            if (
-              entry.intersectionRatio >= 0.5 &&
-              !isProgrammaticScrollRef?.current &&
-              useProjectStore.getState().currentPage !== pageNum
-            ) {
-              setPage(pageNum);
-            }
-          } else {
-            if (entry.intersectionRatio === 0) {
-              setIsVisible(false);
-            }
-          }
+          setIsVisible(entry.isIntersecting);
         });
       },
       {
-        threshold: [0.0, 0.5],
         rootMargin: '600px 0px 600px 0px',
       }
     );
 
+    const activePageObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (
+            entry.isIntersecting &&
+            !isProgrammaticScrollRef?.current &&
+            useProjectStore.getState().currentPage !== pageNum
+          ) {
+            const now = performance.now();
+            pendingPage = pageNum;
+            lastPageUpdateTime = now;
+            const capturedTime = now;
+
+            if (activePageChangeTimeout) {
+              clearTimeout(activePageChangeTimeout);
+            }
+            activePageChangeTimeout = setTimeout(() => {
+              React.startTransition(() => {
+                if (capturedTime < lastPageUpdateTime) return;
+                setPage(pendingPage);
+              });
+              activePageChangeTimeout = null;
+            }, 200);
+          }
+        });
+      },
+      {
+        threshold: 0.5,
+        rootMargin: '-10% 0px -10% 0px',
+      }
+    );
+
     if (pageRef.current) {
-      observer.observe(pageRef.current);
+      preloadObserver.observe(pageRef.current);
+      activePageObserver.observe(pageRef.current);
     }
 
     return () => {
-      observer.disconnect();
+      preloadObserver.disconnect();
+      activePageObserver.disconnect();
     };
-  }, [pageNum, viewMode, setPage, isProgrammaticScrollRef]);
+  }, [pageNum, viewMode, isProgrammaticScrollRef, setPage]);
 
   // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
   useEffect(() => {
@@ -1160,10 +1228,17 @@ const PDFPageContainer: React.FC<{
       }
     };
 
-    // Wait slightly to prevent blocking initial render thread
+    // Wait for scroll/pan to settle down before loading database cache (Lazy Cache Load)
+    // Delay increased to 350ms to completely bypass loading pages that are fast-scrolled past.
     const timer = setTimeout(() => {
-      void loadCache();
-    }, 50);
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        window.requestIdleCallback(() => {
+          if (!canceled) void loadCache();
+        }, { timeout: 1000 });
+      } else {
+        void loadCache();
+      }
+    }, 350);
 
     return () => {
       canceled = true;
@@ -1247,8 +1322,10 @@ export const PDFCanvas: React.FC = React.memo(() => {
   
   const wheelTransformRafRef = useRef<number | null>(null);
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragTransformRafRef = useRef<number | null>(null);
 
   const stateRef = useRef({ zoom, pan });
+
   useEffect(() => {
     stateRef.current = { zoom, pan };
     if (!isDragging) {
@@ -1268,6 +1345,12 @@ export const PDFCanvas: React.FC = React.memo(() => {
     const viewModeChanged = viewMode !== prevViewModeRef.current;
 
     if (viewMode === 'continuous' && (pageChanged || viewModeChanged)) {
+      if (isUserInteracting) {
+        prevPageRef.current = currentPage;
+        prevViewModeRef.current = viewMode;
+        return;
+      }
+      
       // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
       // from firing setPage and overriding the target page before the scroll snap finishes.
       isProgrammaticScrollRef.current = true;
@@ -1426,6 +1509,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      startUserInteraction();
 
       // Immediately kill CSS transition via direct DOM — zero React re-render cost
       if (contentRef.current) {
@@ -1439,14 +1523,27 @@ export const PDFCanvas: React.FC = React.memo(() => {
       if (e.ctrlKey) {
         const scaleAmount = -e.deltaY * 0.001;
         const newZoom = Math.min(Math.max(0.1, stateRef.current.zoom + scaleAmount), 5);
+        
+        // คำนวณจุดหมุนและระยะเลื่อนชดเชยของภาพ เพื่อซูมตามตำแหน่งเมาส์ (Zoom-to-Mouse Anchor)
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const zoomFactor = newZoom / stateRef.current.zoom;
+        const nextPan = {
+          x: mouseX - (mouseX - stateRef.current.pan.x) * zoomFactor,
+          y: mouseY - (mouseY - stateRef.current.pan.y) * zoomFactor,
+        };
+
+        panRef.current = nextPan;
         // Keep stateRef in sync so rapid zoom events accumulate correctly
-        stateRef.current = { ...stateRef.current, zoom: newZoom };
+        stateRef.current = { zoom: newZoom, pan: nextPan };
 
         if (wheelTransformRafRef.current !== null) {
           cancelAnimationFrame(wheelTransformRafRef.current);
         }
         wheelTransformRafRef.current = requestAnimationFrame(() => {
-          syncContentTransform(stateRef.current.pan, newZoom);
+          syncContentTransform(nextPan, newZoom);
           wheelTransformRafRef.current = null;
         });
       } else {
@@ -1473,6 +1570,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
       wheelIdleTimerRef.current = setTimeout(() => {
         wheelIdleTimerRef.current = null;
         setView(panRef.current, stateRef.current.zoom);
+        endUserInteraction(200);
       }, 120);
     };
 
@@ -1483,6 +1581,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) { 
       setIsDragging(true);
+      startUserInteraction();
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
     }
@@ -1496,16 +1595,27 @@ export const PDFCanvas: React.FC = React.memo(() => {
       
       panRef.current = { x: newX, y: newY };
 
-      if (contentRef.current) {
-        contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+      if (dragTransformRafRef.current !== null) {
+        cancelAnimationFrame(dragTransformRafRef.current);
       }
+      dragTransformRafRef.current = requestAnimationFrame(() => {
+        if (contentRef.current) {
+          contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+        }
+        dragTransformRafRef.current = null;
+      });
     }
   };
 
   const handleMouseUp = () => {
     if (isDragging) {
       setIsDragging(false);
+      if (dragTransformRafRef.current !== null) {
+        cancelAnimationFrame(dragTransformRafRef.current);
+        dragTransformRafRef.current = null;
+      }
       setPan(panRef.current.x, panRef.current.y);
+      endUserInteraction(800);
     }
   };
 
@@ -1514,6 +1624,10 @@ export const PDFCanvas: React.FC = React.memo(() => {
       if (wheelTransformRafRef.current !== null) {
         cancelAnimationFrame(wheelTransformRafRef.current);
         wheelTransformRafRef.current = null;
+      }
+      if (dragTransformRafRef.current !== null) {
+        cancelAnimationFrame(dragTransformRafRef.current);
+        dragTransformRafRef.current = null;
       }
       if (wheelIdleTimerRef.current) {
         clearTimeout(wheelIdleTimerRef.current);

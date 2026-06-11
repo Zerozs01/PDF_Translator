@@ -16,13 +16,17 @@ import React, { useMemo, useState, lazy, Suspense, useCallback } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { ChevronLeft, ChevronRight, Grid3X3, List, CheckSquare, Layers } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Grid3X3, List, CheckSquare, Layers, BookOpen } from 'lucide-react';
 
 const LayerPanel = lazy(() =>
   import('../Layers/LayerPanel').then(module => ({ default: module.LayerPanel }))
 );
 
-type SidebarView = 'pages' | 'layers';
+const GlossarySidebarPanel = lazy(() =>
+  import('./GlossarySidebarPanel').then(module => ({ default: module.GlossarySidebarPanel }))
+);
+
+type SidebarView = 'pages' | 'layers' | 'glossary';
 
 interface LeftSidebarProps {
   isOpen: boolean;
@@ -61,10 +65,10 @@ const ThumbnailItem: React.FC<ThumbnailItemProps> = React.memo(({
           : 'border-white/10 hover:border-white/25'
       }`}
     >
-      <div className="relative bg-white">
+      <div className="relative bg-white flex justify-center items-center overflow-hidden w-full">
         <Page 
           pageNumber={pageNum} 
-          width={160} 
+          width={190} 
           renderTextLayer={false}
           renderAnnotationLayer={false}
           className="opacity-90 group-hover:opacity-100 transition-opacity"
@@ -177,7 +181,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
   return (
     <aside 
       className={`bg-slate-950/60 border-r border-white/10 backdrop-blur-xl flex flex-col transition-all duration-300 ease-in-out relative shrink-0 overflow-visible z-20 ${
-        isOpen ? 'w-48' : 'w-0'
+        isOpen ? (sidebarView === 'pages' ? 'w-56' : 'w-80') : 'w-0'
       }`}
     >
       <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
@@ -225,6 +229,19 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
                 title={sidebarView === 'layers' ? 'Back to Pages' : 'Open Layer Panel'}
               >
                 <Layers size={12} />
+              </button>
+
+              {/* Glossary Toggle Button */}
+              <button
+                onClick={() => setSidebarView(sidebarView === 'glossary' ? 'pages' : 'glossary')}
+                className={`p-1 rounded transition-all duration-200 border ${
+                  sidebarView === 'glossary'
+                    ? 'bg-gradient-to-r from-pink-500/90 to-rose-500/90 text-white border-pink-500/50 shadow-[0_0_8px_rgba(236,72,153,0.35)]'
+                    : 'bg-slate-900/70 border-white/10 text-slate-400 hover:text-pink-400 hover:border-pink-500/30'
+                }`}
+                title={sidebarView === 'glossary' ? 'Back to Pages' : 'Open Glossary Panel'}
+              >
+                <BookOpen size={12} />
               </button>
             </div>
 
@@ -316,6 +333,21 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
               </div>
             }>
               <LayerPanel onActivateLayerPanel={() => setSidebarView('layers')} />
+            </Suspense>
+          </div>
+
+          {/* Glossary View */}
+          <div 
+            className={`w-full h-full flex flex-col min-h-0 ${
+              sidebarView === 'glossary' ? 'flex' : 'hidden'
+            }`}
+          >
+            <Suspense fallback={
+              <div className="flex-1 flex items-center justify-center text-slate-500 text-[11px]">
+                Loading glossary...
+              </div>
+            }>
+              <GlossarySidebarPanel />
             </Suspense>
           </div>
         </div>

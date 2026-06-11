@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
@@ -145,7 +145,7 @@ export const ImageCanvas: React.FC = React.memo(() => {
     overlayFontPreset,
     overlayFontSizeScale,
   } = useProjectStore();
-  const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
+  const { zoom, pan, setZoom, setPan, setView, activeTool } = useUIStore();
   const {
     allPagesOCR,
     ocrByPageEngine,
@@ -159,7 +159,7 @@ export const ImageCanvas: React.FC = React.memo(() => {
   
   const layersByPage = useLayerStore((state) => state.layersByPage);
   const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
-  const selectedEngine = (options.engine || 'tesseract');
+  const selectedEngine = (options.engine || 'paddleocr');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
     if (byEngine) return byEngine;
@@ -182,7 +182,7 @@ export const ImageCanvas: React.FC = React.memo(() => {
   }), [overlayFontPreset, overlayThaiFontEnabled, targetLanguage]);
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
-    optionsEngine: options.engine || 'tesseract',
+    optionsEngine: options.engine || 'paddleocr',
     optionsLanguage: options.language || 'eng',
     translationMode,
     sourceLanguage,
@@ -211,6 +211,16 @@ export const ImageCanvas: React.FC = React.memo(() => {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const panRef = useRef(pan);
   const stateRef = useRef({ zoom, pan });
+  
+  const wheelTransformRafRef = useRef<number | null>(null);
+  const dragTransformRafRef = useRef<number | null>(null);
+  const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
+    if (!contentRef.current) return;
+    contentRef.current.style.transform = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+  }, []);
+
   const [imageDisplaySize, setImageDisplaySize] = useState({ width: 0, height: 0 });
   const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, OverlayPalette>>(new Map());
 
@@ -226,39 +236,54 @@ export const ImageCanvas: React.FC = React.memo(() => {
       return;
     }
 
+    let canceled = false;
     const timer = setTimeout(() => {
-      const maxSampleSide = 2400;
-      const sampleScale = Math.min(1, maxSampleSide / Math.max(img.naturalWidth, img.naturalHeight));
-      const sampleCanvas = document.createElement('canvas');
-      sampleCanvas.width = Math.max(1, Math.round(img.naturalWidth * sampleScale));
-      sampleCanvas.height = Math.max(1, Math.round(img.naturalHeight * sampleScale));
+      const processPalette = () => {
+        if (canceled) return;
+        const maxSampleSide = 2400;
+        const sampleScale = Math.min(1, maxSampleSide / Math.max(img.naturalWidth, img.naturalHeight));
+        const sampleCanvas = document.createElement('canvas');
+        sampleCanvas.width = Math.max(1, Math.round(img.naturalWidth * sampleScale));
+        sampleCanvas.height = Math.max(1, Math.round(img.naturalHeight * sampleScale));
 
-      const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
-      if (!context) {
-        setTranslatedLinePalette(new Map());
-        return;
+        const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+        if (!context) {
+          setTranslatedLinePalette(new Map());
+          return;
+        }
+
+        context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+        const next = new Map<number, OverlayPalette>();
+        currentPageOCR.lines.forEach((line, index) => {
+          if (!translationOverlayContext.translatedByIndex.has(index)) return;
+          const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
+          if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
+          next.set(index, sampleOverlayPaletteFromLine(
+            context,
+            line,
+            currentPageOCR.width,
+            currentPageOCR.height,
+            sampleCanvas.width,
+            sampleCanvas.height
+          ));
+        });
+        if (!canceled) {
+          setTranslatedLinePalette(next);
+        }
+      };
+
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        window.requestIdleCallback(processPalette, { timeout: 1000 });
+      } else {
+        processPalette();
       }
+    }, 350);
 
-      context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
-
-      const next = new Map<number, OverlayPalette>();
-      currentPageOCR.lines.forEach((line, index) => {
-        if (!translationOverlayContext.translatedByIndex.has(index)) return;
-        const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
-        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-        next.set(index, sampleOverlayPaletteFromLine(
-          context,
-          line,
-          currentPageOCR.width,
-          currentPageOCR.height,
-          sampleCanvas.width,
-          sampleCanvas.height
-        ));
-      });
-      setTranslatedLinePalette(next);
-    }, 150);
-
-    return () => clearTimeout(timer);
+    return () => {
+      canceled = true;
+      clearTimeout(timer);
+    };
   }, [
     currentPageOCR,
     translationOverlayContext.entry?.key,
@@ -286,18 +311,67 @@ export const ImageCanvas: React.FC = React.memo(() => {
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+
+      if (contentRef.current) {
+        contentRef.current.style.transition = 'none';
+      }
+
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+      }
+
       if (e.ctrlKey) {
         const scaleAmount = -e.deltaY * 0.001;
         const newZoom = Math.min(Math.max(0.1, stateRef.current.zoom + scaleAmount), 5);
-        setZoom(newZoom);
+        
+        // คำนวณจุดหมุนและระยะเลื่อนชดเชยของภาพ เพื่อซูมตามตำแหน่งเมาส์ (Zoom-to-Mouse Anchor)
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const zoomFactor = newZoom / stateRef.current.zoom;
+        const nextPan = {
+          x: mouseX - (mouseX - stateRef.current.pan.x) * zoomFactor,
+          y: mouseY - (mouseY - stateRef.current.pan.y) * zoomFactor,
+        };
+
+        panRef.current = nextPan;
+        stateRef.current = { zoom: newZoom, pan: nextPan };
+
+        if (wheelTransformRafRef.current !== null) {
+          cancelAnimationFrame(wheelTransformRafRef.current);
+        }
+        wheelTransformRafRef.current = requestAnimationFrame(() => {
+          syncContentTransform(nextPan, newZoom);
+          wheelTransformRafRef.current = null;
+        });
       } else {
-        setPan(stateRef.current.pan.x - e.deltaX, stateRef.current.pan.y - e.deltaY);
+        const nextPan = {
+          x: stateRef.current.pan.x - e.deltaX,
+          y: stateRef.current.pan.y - e.deltaY,
+        };
+        panRef.current = nextPan;
+        stateRef.current = { ...stateRef.current, pan: nextPan };
+
+        if (wheelTransformRafRef.current !== null) {
+          cancelAnimationFrame(wheelTransformRafRef.current);
+        }
+        wheelTransformRafRef.current = requestAnimationFrame(() => {
+          syncContentTransform(nextPan, stateRef.current.zoom);
+          wheelTransformRafRef.current = null;
+        });
       }
+
+      // Commit to store exactly once after zoom/pan stops (~120ms)
+      wheelIdleTimerRef.current = setTimeout(() => {
+        wheelIdleTimerRef.current = null;
+        setView(panRef.current, stateRef.current.zoom);
+      }, 120);
     };
 
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
-  }, [setZoom, setPan]);
+  }, [setView, syncContentTransform]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) {
@@ -313,16 +387,44 @@ export const ImageCanvas: React.FC = React.memo(() => {
     const newX = e.clientX - dragStart.x;
     const newY = e.clientY - dragStart.y;
     panRef.current = { x: newX, y: newY };
-    if (contentRef.current) {
-      contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+    
+    if (dragTransformRafRef.current !== null) {
+      cancelAnimationFrame(dragTransformRafRef.current);
     }
+    dragTransformRafRef.current = requestAnimationFrame(() => {
+      if (contentRef.current) {
+        contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+      }
+      dragTransformRafRef.current = null;
+    });
   };
 
   const handleMouseUp = () => {
     if (!isDragging) return;
     setIsDragging(false);
+    if (dragTransformRafRef.current !== null) {
+      cancelAnimationFrame(dragTransformRafRef.current);
+      dragTransformRafRef.current = null;
+    }
     setPan(panRef.current.x, panRef.current.y);
   };
+
+  useEffect(() => {
+    return () => {
+      if (wheelTransformRafRef.current !== null) {
+        cancelAnimationFrame(wheelTransformRafRef.current);
+        wheelTransformRafRef.current = null;
+      }
+      if (dragTransformRafRef.current !== null) {
+        cancelAnimationFrame(dragTransformRafRef.current);
+        dragTransformRafRef.current = null;
+      }
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+        wheelIdleTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -493,7 +595,13 @@ export const ImageCanvas: React.FC = React.memo(() => {
               className="max-w-none border border-slate-700 bg-white shadow-2xl select-none block"
             />
             {translationOverlayContext.shouldRender && currentPageOCR && imageDisplaySize.width > 0 && imageDisplaySize.height > 0 && (
-              <div className="absolute inset-0 pointer-events-none">
+              <div 
+                style={{
+                  willChange: 'transform',
+                  contain: 'layout style paint'
+                }}
+                className="absolute inset-0 pointer-events-none"
+              >
                 {currentPageOCR.lines.map((line, idx) => {
                   const translatedText = translationOverlayContext.translatedByIndex.get(idx);
                   if (!translatedText) return null;

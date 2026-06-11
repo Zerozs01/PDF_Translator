@@ -80,7 +80,7 @@ describe('normalizeSpanishOcrNoiseForTranslation', () => {
 describe('normalizeSourceForTranslation', () => {
   test('should process Spanish texts correctly', () => {
     expect(normalizeSourceForTranslation('iC-COMO LO SUPO...?! NO ERAUNPOCO PERVERTIDO?', 'es')).toBe(
-      '¿como lo supo. .. ?! No era un poco pervertido?'
+      '¿como lo supo...?! No era un poco pervertido?'
     );
   });
 
@@ -94,6 +94,10 @@ describe('normalizeSourceForTranslation', () => {
     expect(normalizeSourceForTranslation('GETTING 4O% OF', 'en')).toBe('Getting 40% of');
     expect(normalizeSourceForTranslation('GETTING 4o% OF', 'en')).toBe('Getting 40% of');
     expect(normalizeSourceForTranslation('I HAVE 1O0 DOLLARS', 'en')).toBe('I have 100 dollars');
+  });
+
+  test('should repair dums to dumb', () => {
+    expect(normalizeSourceForTranslation('DUMS PRINCESS!!', 'en')).toBe('Dumb princess!!');
   });
 });
 
