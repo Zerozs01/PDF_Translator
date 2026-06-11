@@ -347,6 +347,7 @@ const shouldLinkGeometryLines = (
   const contained = overlapX >= 0.52 && overlapY >= 0.22;
   const hintedSequence = Number.isFinite(a.sortHintY) && Number.isFinite(b.sortHintY)
     && Math.abs(Number(a.sortHintY) - Number(b.sortHintY)) <= Math.max(28, baseHeight * 1.2)
+    && (!Number.isFinite(a.sortHintX) || !Number.isFinite(b.sortHintX) || Math.abs(Number(a.sortHintX) - Number(b.sortHintX)) <= Math.max(120, baseHeight * 1.5))
     && centerDeltaX <= Math.max(116, Math.max(a.width, b.width) * 1.45)
     && verticalGap <= baseHeight * 1.5;
 

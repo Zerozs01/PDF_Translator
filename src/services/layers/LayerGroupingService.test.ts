@@ -286,13 +286,31 @@ describe('LayerGroupingService Spatial Clustering', () => {
     };
     // Gap between FOR (x1=110) and BEING (x0=140) is 30px.
     // Average word height is 20.
-    // 30 / 20 = 1.5, which is > 1.35 (the capitalization multiplier), so it should split!
+    // 30 / 20 = 1.5, which is > 0.9 (the capitalization multiplier), so it should split!
     // But it is < 2.2, so a fixed multiplier of 2.2 would NOT split it.
     
     const splitFittingBeing = splitAggressiveMergedLines([lineFittingBeing], 2.2);
     expect(splitFittingBeing.length).toBe(2);
     expect(splitFittingBeing[0].text).toBe('FiTTiNG FOR');
     expect(splitFittingBeing[1].text).toBe('BEING');
+
+    // 1b. Real-world "FiTTiNG FOR BEING" from database (Doc 337 Page 21)
+    const lineRealFittingBeing = {
+      text: 'FiTTiNG FOR BEING',
+      confidence: 90,
+      bbox: { x0: 2718, y0: 4224, x1: 3584, y1: 4383 },
+      words: [
+        { text: 'FiTTiNG', confidence: 91, bbox: { x0: 2718, y0: 4236, x1: 3004.3, y1: 4327 } },
+        { text: 'FOR', confidence: 91, bbox: { x0: 3004.3, y0: 4236, x1: 3127, y1: 4327 } },
+        { text: 'BEING', confidence: 99, bbox: { x0: 3252, y0: 4224, x1: 3584, y1: 4383 } }
+      ]
+    };
+    // Gap = 3252 - 3127 = 125. avgHeight = 125.
+    // 125 / 125 = 1.0, which is > 0.9, so it should split!
+    const splitRealFittingBeing = splitAggressiveMergedLines([lineRealFittingBeing], 2.2);
+    expect(splitRealFittingBeing.length).toBe(2);
+    expect(splitRealFittingBeing[0].text).toBe('FiTTiNG FOR');
+    expect(splitRealFittingBeing[1].text).toBe('BEING');
 
     // 2. "YOu!" and "SLASHED" merged horizontal line simulation
     const lineYouSlashed = {
@@ -328,6 +346,53 @@ describe('LayerGroupingService Spatial Clustering', () => {
     const splitNormal = splitAggressiveMergedLines([normalLine], 2.2);
     expect(splitNormal.length).toBe(1);
     expect(splitNormal[0].text).toBe('BUT IM SURE');
+  });
+
+  test('does not group FITTING FOR (left) and BEING (right) into the same group', () => {
+    const ocrResult: OCRPageResult = {
+      pageNumber: 1,
+      width: 500,
+      height: 500,
+      dpi: 72,
+      language: 'eng',
+      algorithmVersion: 1,
+      words: [],
+      text: '',
+      confidence: 90,
+      lines: [
+        // Left column
+        { text: 'HEHEHE!', bbox: { x0: 80, y0: 50, x1: 170, y1: 70 }, confidence: 90, words: [] },
+        { text: 'THIS TIME,', bbox: { x0: 70, y0: 75, x1: 180, y1: 95 }, confidence: 90, words: [] },
+        { text: "WE'LL", bbox: { x0: 95, y0: 100, x1: 155, y1: 120 }, confidence: 90, words: [] },
+        { text: 'PIERCE', bbox: { x0: 85, y0: 125, x1: 165, y1: 145 }, confidence: 90, words: [] },
+        { text: 'A PLACE', bbox: { x0: 80, y0: 150, x1: 170, y1: 170 }, confidence: 90, words: [] },
+        { text: "THAT'S", bbox: { x0: 90, y0: 175, x1: 160, y1: 195 }, confidence: 90, words: [] },
+        { text: 'FITTING FOR', bbox: { x0: 60, y0: 200, x1: 190, y1: 220 }, confidence: 90, words: [] },
+        { text: 'A PIG LIKE', bbox: { x0: 70, y0: 225, x1: 180, y1: 245 }, confidence: 90, words: [] },
+        { text: 'YOU!', bbox: { x0: 90, y0: 250, x1: 160, y1: 270 }, confidence: 90, words: [] },
+
+        // Right column
+        { text: 'ARE', bbox: { x0: 280, y0: 100, x1: 340, y1: 120 }, confidence: 90, words: [] },
+        { text: 'ALL', bbox: { x0: 280, y0: 130, x1: 340, y1: 150 }, confidence: 90, words: [] },
+        { text: 'BEING', bbox: { x0: 160, y0: 200, x1: 240, y1: 220 }, confidence: 90, words: [] },
+        { text: 'SLASHED', bbox: { x0: 260, y0: 225, x1: 360, y1: 245 }, confidence: 90, words: [] },
+        { text: 'BY', bbox: { x0: 280, y0: 250, x1: 330, y1: 270 }, confidence: 90, words: [] },
+        { text: 'COO', bbox: { x0: 270, y0: 250, x1: 340, y1: 270 }, confidence: 90, words: [] },
+        { text: 'OOO', bbox: { x0: 270, y0: 275, x1: 340, y1: 295 }, confidence: 90, words: [] },
+        { text: 'OCKS', bbox: { x0: 265, y0: 300, x1: 345, y1: 320 }, confidence: 90, words: [] },
+        { text: '!!', bbox: { x0: 290, y0: 325, x1: 320, y1: 345 }, confidence: 90, words: [] },
+      ],
+    };
+
+    const result = buildLayerGroupsFromOCR(ocrResult);
+
+    // Left column and Right column must not be in the same group!
+    const fittingLayer = result.layers.find(l => l.sourceText === 'FITTING FOR');
+    const beingLayer = result.layers.find(l => l.sourceText === 'BEING');
+
+    expect(fittingLayer).toBeDefined();
+    expect(beingLayer).toBeDefined();
+    expect(fittingLayer!.groupId).not.toBe(beingLayer!.groupId);
   });
 });
 

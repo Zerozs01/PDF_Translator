@@ -90,6 +90,15 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   const minHeight = Math.min(hA, hB);
   const avgHeight = (hA + hB) * 0.5;
 
+  // 0. Side-by-side guard: หากกล่องสองกล่องมีการทับซ้อนแนวตั้ง (Vertical Overlap) มากเกินไป 
+  // แสดงว่าเป็นข้อความที่อยู่แถวเดียวกันหรือข้างกัน (side-by-side) ไม่ใช่การต่อบรรทัดแนวตั้ง (vertical stack)
+  // ให้ปฏิเสธการจัดกลุ่มทันที เพื่อไม่ให้ข้ามคอลัมน์หรือพาเนล
+  const overlapHeight = Math.max(0, Math.min(a.bbox.y1, b.bbox.y1) - Math.max(a.bbox.y0, b.bbox.y0));
+  const vertOverlapRatio = overlapHeight / Math.max(1, minHeight);
+  if (vertOverlapRatio > 0.25) {
+    return false;
+  }
+
   const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
   const vertGap = getVerticalGap(a.bbox, b.bbox);
 
@@ -279,7 +288,7 @@ export const splitAggressiveMergedLines = (
       if (/[!?.,;]$/.test(prevText)) {
         effectiveGapMultiplier = 0.85;
       } else if (/^[A-Z]/.test(currText)) {
-        effectiveGapMultiplier = 1.35;
+        effectiveGapMultiplier = 0.9;
       }
 
       if (gap > effectiveGapMultiplier * avgHeight) {
