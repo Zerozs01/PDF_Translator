@@ -159,7 +159,7 @@ export const ImageCanvas: React.FC = React.memo(() => {
   
   const layersByPage = useLayerStore((state) => state.layersByPage);
   const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
-  const selectedEngine = (options.engine || 'tesseract');
+  const selectedEngine = (options.engine || 'paddleocr');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
     if (byEngine) return byEngine;
@@ -182,7 +182,7 @@ export const ImageCanvas: React.FC = React.memo(() => {
   }), [overlayFontPreset, overlayThaiFontEnabled, targetLanguage]);
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
-    optionsEngine: options.engine || 'tesseract',
+    optionsEngine: options.engine || 'paddleocr',
     optionsLanguage: options.language || 'eng',
     translationMode,
     sourceLanguage,

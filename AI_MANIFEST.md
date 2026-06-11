@@ -24,12 +24,19 @@
   1. ตรวจสอบ [InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx) (การวาดและ event handling กล่องข้อความจำนวนมาก)
   2. ตรวจสอบ [ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) (การส่งข้อมูลผ่าน IPC และความปลอดภัยในฝั่ง Main Process)
 
+* **โจทย์ "Export PDF ช้า / UI ค้างตอนส่งออก":**
+  1. ตรวจสอบ [pdfExportService.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportService.ts) (Hidden BrowserWindow + `printToPDF` + stitch + `finally` destroy)
+  2. ตรวจสอบ [pdfExportStaging.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportStaging.ts) (เขียน payload ลง `%TEMP%` + ส่งแค่ path/protocol URL แทน base64 ยัด IPC)
+  3. ตรวจสอบ [PdfPrintExportService.ts](file:///c:/App/Electron/PDF_Translator/src/services/pdf/PdfPrintExportService.ts) (ใช้ `sourceFilePath` ก่อน, fallback เป็น raw bytes)
+  4. ตรวจสอบ [renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts) (DOM overlay + `@media print` zero margin)
+
 ---
 
 ## 🗺️ Project Structure Index
 
 ### 1. Frontend Core (React App)
 - **Application Shell & Orchestrator:** [src/App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) — จัดการ logic การแปล, overlay rendering, และ line grouping/deduplication
+- **Export Print Page (Hidden Renderer):** [src/export/renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts) — DOM overlay บนพื้นหลังโปร่งใส (หน่วย `pt` ตรง PDF page size) ไม่ใช้ pdf.js
 - **Main Viewport & Canvas:**
   - [src/components/PDF/PDFCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx) — เรนเดอร์หน้าเอกสาร PDF และจัดการ overlay text layers
   - [src/components/Image/ImageCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Image/ImageCanvas.tsx) — เรนเดอร์หน้าเอกสารรูปภาพ และจัดการการวาดตรวจจับคำ
@@ -41,6 +48,7 @@
 
 ### 2. Electron Core (Main Process)
 - **IPC Main Handler:** [electron/main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) — จัดการการสื่อสารระหว่าง Renderer และ Main process
+- **PDF Print Export (Level 2):** [electron/pdfExportService.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportService.ts) — Hidden Window พิมพ์เฉพาะ overlay โปร่งใส → [pdfExportMerge.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportMerge.ts) stamp ทับ Source PDF ด้วย `pdf-lib`
 - **Preload API Wrapper:** [electron/preload.ts](file:///c:/App/Electron/PDF_Translator/electron/preload.ts) — กำหนด API ปลอดภัยที่อนุญาตให้ Renderer เรียกใช้งานระบบได้
 - **Local SQLite Database Layer:** [electron/db.ts](file:///c:/App/Electron/PDF_Translator/electron/db.ts) — จัดการการเชื่อมต่อ จัดเก็บแคช OCR และคำแปล
 - **IPC Files Access Bridge:** [electron/documentFileAccess.ts](file:///c:/App/Electron/PDF_Translator/electron/documentFileAccess.ts) — จัดการการอ่านเขียนไฟล์ผ่าน IPC (รวมถึงฟังก์ชัน zero-copy path สำหรับการ import ไฟล์ขนาดใหญ่)

@@ -40,6 +40,10 @@ export default defineConfig({
   build: {
     target: 'es2022',
     rollupOptions: {
+      input: {
+        main: path.resolve(dirname, 'index.html'),
+        exportPrint: path.resolve(dirname, 'export-print.html'),
+      },
       output: {
         manualChunks: {
           pdf: ['react-pdf', 'pdf-lib'],

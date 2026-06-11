@@ -305,6 +305,12 @@ export interface ElectronAPI {
     allProjects: DBProject[];
     latestOcrDocId: number | null;
   }>;
+
+  pdfExport: {
+    start: (job: import('./pdfExport').PdfPrintExportJob) => Promise<import('./pdfExport').PdfPrintExportResult>;
+    cancel: (jobId: string) => Promise<{ ok: boolean }>;
+    onProgress: (callback: (progress: import('./pdfExport').PdfPrintExportProgress) => void) => () => void;
+  };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }

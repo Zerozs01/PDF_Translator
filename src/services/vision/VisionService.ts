@@ -17,6 +17,10 @@ import {
   OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
 } from './ocr-timeout';
 
+// Static URL literals so Vite emits hashed worker chunks in production builds.
+const VISION_WORKER_BOOT_URL = new URL('./worker-boot.ts', import.meta.url);
+const VISION_WORKER_STABLE_URL = new URL('./worker-stable.ts', import.meta.url);
+
 const EXTERNAL_TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
 const EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX = /\b(?:table|continued|types?\s+of\s+connection|number\s+of\s+unknowns|reactions?|unknowns?|components?|couple\s+moment|magnitude|direction|resultant|smooth\s+pin|hinge|fixed\s+support|collar|rod|member\s+fixed|bridge|building|beam|welded|column)\b|^\(?\d+\)?$|^(?:fx|fy|fyt|f|m|or)$/i;
 
@@ -437,8 +441,9 @@ class VisionService {
     // Primary mode uses the boot loader which dynamically imports worker.ts
     // and falls back to worker-stable.ts on error with full error reporting.
     // Stable mode loads worker-stable.ts directly.
-    const workerEntry = mode === 'stable' ? './worker-stable.ts' : './worker-boot.ts';
-    const workerUrl = new URL(workerEntry, import.meta.url);
+    // NOTE: Each branch must use a string literal in new URL() so Vite can
+    // emit separate worker chunks during production build.
+    const workerUrl = new URL(mode === 'stable' ? VISION_WORKER_STABLE_URL : VISION_WORKER_BOOT_URL);
     workerUrl.searchParams.set('v', String(OCR_ALGORITHM_VERSION));
     const worker = new Worker(workerUrl, {
       type: 'module',

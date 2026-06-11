@@ -1,0 +1,68 @@
+@page {
+  margin: 0;
+  size: auto;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+#export-root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.export-page {
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.export-mask {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.export-text {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+.export-user-layer {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+@media print {
+  @page {
+    margin: 0;
+    size: auto;
+  }
+
+  html,
+  body {
+    margin: 0;
+    background: transparent;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .export-page {
+    break-after: page;
+    page-break-after: always;
+    background: transparent;
+  }
+}

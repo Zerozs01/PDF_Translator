@@ -68,7 +68,7 @@ import {
 import { translationCoordinator } from './services/translation/translationCoordinator';
 import { TranslatableItem } from './types/translation';
 import { buildOCRSourceFingerprint } from './services/ocrSourceFingerprint';
-import { searchablePDFService } from './services/pdf';
+import { searchablePDFService, exportTranslatedPdfViaPrint } from './services/pdf';
 import { pdfjs } from './services/pdf/pdfjsWorker';
 import {
   deriveBalloonAwareLayoutGrouping,
@@ -97,7 +97,8 @@ import {
   type OverlayTypography,
 } from './components/OCR/translationOverlayUtils';
 import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
-import { BBox, OCRLine, OCREngine, OCRPageResult } from './types';
+import { BBox, OCRLine, OCREngine, OCRPageResult, OCRQualityProfile } from './types';
+import { OCR_ALGORITHM_VERSION } from './services/vision/ocrVersion';
 import { buildLayerGroupsFromOCR } from './services/layers/LayerGroupingService';
 import {
   translateBatchOffline,
@@ -4124,6 +4125,7 @@ export default function App() {
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
   const isOCRProcessing = useOCRTextLayerStore((state) => state.isProcessing);
   const setProgress = useOCRTextLayerStore((state) => state.setProgress);
+  const setOcrOptions = useOCRTextLayerStore((state) => state.setOptions);
 
   const file = useProjectStore((s) => s.file);
   const fileName = useProjectStore((s) => s.fileName);
@@ -4211,6 +4213,85 @@ export default function App() {
   const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [translationStartTime, setTranslationStartTime] = useState<number | null>(null);
   const [popupOcrQualityMode, setPopupOcrQualityMode] = useState<'high' | 'fast'>('fast');
+  const [exportCacheHydrationTick, setExportCacheHydrationTick] = useState(0);
+
+  const popupQualityToProfile = (mode: 'high' | 'fast'): OCRQualityProfile =>
+    mode === 'high' ? 'balanced' : 'fast';
+
+  const applyPopupOcrQualityProfile = useCallback((mode: 'high' | 'fast' = popupOcrQualityMode) => {
+    setOcrOptions({ ocrQualityProfile: popupQualityToProfile(mode) });
+  }, [popupOcrQualityMode, setOcrOptions]);
+
+  useEffect(() => {
+    if (!isDownloadMenuOpen) return;
+    const syncedMode = ocrOptions.ocrQualityProfile === 'balanced' || ocrOptions.ocrQualityProfile === 'best'
+      ? 'high'
+      : 'fast';
+    setPopupOcrQualityMode(syncedMode);
+    if (!selectedExportEngine) {
+      setSelectedExportEngine((ocrOptions.engine || 'paddleocr') as OCREngine);
+    }
+  }, [isDownloadMenuOpen, ocrOptions.engine, ocrOptions.ocrQualityProfile, selectedExportEngine]);
+
+  useEffect(() => {
+    if (!isDownloadMenuOpen) return undefined;
+    let canceled = false;
+    const engine = selectedExportEngine || (ocrOptions.engine || 'paddleocr') as OCREngine;
+
+    void (async () => {
+      const docId = await ensureDocumentId().catch(() => null);
+      if (!docId || canceled) return;
+
+      const pageNumbers = fileType === 'pdf'
+        ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
+        : [1];
+
+      await Promise.all(pageNumbers.map(async (pageNum) => {
+        try {
+          const ocrState = useOCRTextLayerStore.getState();
+          if (!ocrState.ocrByPageEngine.get(pageNum)?.has(engine)) {
+            const cached = await dbService.getOCR(docId, pageNum, engine);
+            if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION) {
+              cached.pageNumber = pageNum;
+              ocrState.setPageOCRForEngine(pageNum, engine, cached);
+            }
+          }
+
+          const translationMap = useOCRTextLayerStore.getState().translationCacheByPage.get(pageNum);
+          if (!translationMap || translationMap.size === 0) {
+            const rows = await dbService.getTranslationCachePage(docId, pageNum);
+            for (const row of rows) {
+              const normalizedEntry: OCRTranslationCacheEntry = {
+                ...row,
+                pageNum,
+                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+                translationMode: row.translationMode === 'official'
+                  ? 'official'
+                  : row.translationMode === 'adaptive'
+                    ? 'adaptive'
+                    : row.translationMode === 'manhwa'
+                      ? 'manhwa'
+                      : 'manga',
+                translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
+                translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
+              };
+              useOCRTextLayerStore.getState().setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
+            }
+          }
+        } catch (err) {
+          console.warn(`[ExportHydrate] Failed for page ${pageNum}:`, err);
+        }
+      }));
+
+      if (!canceled) {
+        setExportCacheHydrationTick((tick) => tick + 1);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [isDownloadMenuOpen, selectedExportEngine, ocrOptions.engine, totalPages, fileType, documentId]);
 
   useEffect(() => {
     if (isAiProcessing || isOfflineProcessing) {
@@ -4694,9 +4775,9 @@ export default function App() {
     return false;
   };
 
-  const getModelScopedCachedPageNumbers = (): number[] => {
+  const getModelScopedCachedPageNumbers = (engineOverride?: OCREngine): number[] => {
     const ocrState = useOCRTextLayerStore.getState();
-    const selectedEngine = (ocrOptions.engine || 'paddleocr') as OCREngine;
+    const selectedEngine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
     const pages = new Set<number>();
 
     // ตรวจจาก ocrByPageEngine (primary store)
@@ -4805,6 +4886,53 @@ export default function App() {
     return refreshedPages.length > 0;
   };
 
+  const hydrateExportCachesForDownload = async (engineOverride?: OCREngine): Promise<void> => {
+    const docId = await ensureDocumentId().catch(() => null);
+    if (!docId) return;
+
+    const engine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
+    const pageNumbers = fileType === 'pdf'
+      ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
+      : [1];
+
+    await Promise.all(pageNumbers.map(async (pageNum) => {
+      try {
+        const ocrState = useOCRTextLayerStore.getState();
+        if (!ocrState.ocrByPageEngine.get(pageNum)?.has(engine)) {
+          const cached = await dbService.getOCR(docId, pageNum, engine);
+          if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION) {
+            cached.pageNumber = pageNum;
+            ocrState.setPageOCRForEngine(pageNum, engine, cached);
+          }
+        }
+
+        const translationMap = useOCRTextLayerStore.getState().translationCacheByPage.get(pageNum);
+        if (!translationMap || translationMap.size === 0) {
+          const rows = await dbService.getTranslationCachePage(docId, pageNum);
+          for (const row of rows) {
+            const normalizedEntry: OCRTranslationCacheEntry = {
+              ...row,
+              pageNum,
+              ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+              translationMode: row.translationMode === 'official'
+                ? 'official'
+                : row.translationMode === 'adaptive'
+                  ? 'adaptive'
+                  : row.translationMode === 'manhwa'
+                    ? 'manhwa'
+                    : 'manga',
+              translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
+              translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
+            };
+            useOCRTextLayerStore.getState().setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
+          }
+        }
+      } catch (err) {
+        console.warn(`[ExportHydrate] Failed for page ${pageNum}:`, err);
+      }
+    }));
+  };
+
   const resolveModelScopedPagesForExport = (scope: DownloadScope, engineOverride?: OCREngine): Array<{ pageNum: number; ocr: OCRPageResult }> => {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
@@ -4837,21 +4965,26 @@ export default function App() {
       .filter((entry) => {
         if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
         if (entry.ocrEngine !== selectedEngine) return false;
-        if (entry.sourceFingerprint !== sourceFingerprint) return false;
         return normalizeTranslationLanguage(entry.targetLanguage, 'th') === normalizedTargetLanguage;
       })
       .sort((a, b) => b.createdAt - a.createdAt);
     if (entries.length === 0) return undefined;
 
+    const exactFingerprintMatches = entries.filter((entry) => entry.sourceFingerprint === sourceFingerprint);
+    const fingerprintPool = exactFingerprintMatches.length > 0 ? exactFingerprintMatches : entries;
+
     const activeKey = ocrState.activeTranslationKeyByPage.get(pageNum);
     if (activeKey) {
       const active = pageMap.get(activeKey);
-      if (active && entries.some((entry) => entry.key === active.key)) {
+      if (active && fingerprintPool.some((entry) => entry.key === active.key)) {
         return active;
       }
     }
 
-    return entries[0];
+    const withContent = fingerprintPool.filter(
+      (entry) => entry.translatedByIndex.length > 0 || Boolean(entry.translatedText?.trim())
+    );
+    return withContent[0] || fingerprintPool[0];
   };
 
   const resolveLineBBoxForExport = (line: OCRLine): BBox | undefined => {
@@ -5489,7 +5622,11 @@ export default function App() {
   const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode, engineOverride?: OCREngine) => {
     if (!file) return;
 
-    const selectedEngine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
+    applyPopupOcrQualityProfile();
+    const selectedEngine = engineOverride || selectedExportEngine || (ocrOptions.engine || 'paddleocr') as OCREngine;
+    await hydrateExportCachesForDownload(selectedEngine);
+    setExportCacheHydrationTick((tick) => tick + 1);
+
     const scopedPages = resolveModelScopedPagesForExport(scope, selectedEngine);
     if (scopedPages.length === 0) {
       setTranslationStatus({ kind: 'error', message: 'No OCR cache available for download. Run OCR first.' });
@@ -5558,367 +5695,21 @@ export default function App() {
 
         if (scope === 'all' && fileType === 'pdf') {
           const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
-          useExportStore.getState().startExport(pageRange.length);
-          const arrayBuffer = await file.arrayBuffer();
+          const resultBytes = await exportTranslatedPdfViaPrint({
+            fileType: 'pdf',
+            sourceBytes: filePath ? undefined : await file.arrayBuffer(),
+            sourceFilePath: filePath,
+            sourceMimeType: file.type || 'application/pdf',
+            pageRange,
+            sourcePageMap,
+            translatedEntryMap,
+            translationMode,
+            overlayFontPreset,
+            overlayThaiFontEnabled,
+            targetLanguage,
+            overlayFontSizeScale,
+          });
 
-          // ── Canvas-based PDF export (Layer-aware) ──────────────────────────
-          // Rasterize แต่ละ page พร้อม translated overlay + user layer styling
-          // แล้ว embed เป็น image ใน PDF ใหม่ด้วย pdf-lib
-          const { PDFDocument: PdfLibDoc } = await import('pdf-lib');
-          const outputPdf = await PdfLibDoc.create();
-
-          const fontReadyPromise2 = (typeof document !== 'undefined' && 'fonts' in document)
-            ? (document as Document & { fonts?: FontFaceSet }).fonts?.ready
-            : undefined;
-          if (fontReadyPromise2) await fontReadyPromise2.catch(() => undefined);
-
-          // โหลดเอกสาร PDF ต้นฉบับเพียงครั้งเดียวนอก Loop (ขจัด Overhead การโหลดซ้ำ)
-          const loadingTask2 = pdfjs.getDocument({ data: arrayBuffer.slice(0) });
-          const pdfDoc2 = await (loadingTask2 as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
-
-          let completedCount = 0;
-          try {
-            for (const pageNum of pageRange) {
-              completedCount++;
-              useExportStore.getState().updateProgress(completedCount);
-              const sourceOCR = sourcePageMap.get(pageNum);
-              const translatedEntry = translatedEntryMap.get(pageNum);
-              if (!sourceOCR || !translatedEntry) continue;
-
-              // Render page พร้อม overlay ลง canvas ชั่วคราว
-              const pageCanvas = document.createElement('canvas');
-              const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
-              if (!pageCtx) continue;
-
-              // ── Render PDF page ต้นฉบับ ──────────────────────────────────
-              const pdfPage = await pdfDoc2.getPage(pageNum);
-              const baseVp = pdfPage.getViewport({ scale: 1 });
-              const exportW = Math.max(1, sourceOCR.width || Math.round(baseVp.width));
-              const exportH = Math.max(1, sourceOCR.height || Math.round(baseVp.height * (exportW / Math.max(1, baseVp.width))));
-              // คุมสเกลการส่งออกให้อยู่ในช่วง 1.5 - 1.8 (ไม่ใช้ screen devicePixelRatio) เพื่อลดการประมวลผลพิกเซลขนาดใหญ่และเร่งความเร็ว
-              const exportScale2 = Math.min(1.8, resolveOverlayExportScale(exportW, exportH, Math.round(baseVp.width), Math.round(baseVp.height)));
-              const targetW2 = Math.max(1, Math.round(exportW * exportScale2));
-              const pdfScale = targetW2 / Math.max(1, baseVp.width);
-              const pdfViewport = pdfPage.getViewport({ scale: pdfScale });
-              pageCanvas.width = Math.max(1, Math.round(pdfViewport.width));
-              pageCanvas.height = Math.max(1, Math.round(pdfViewport.height));
-              pageCtx.fillStyle = '#ffffff';
-              pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-              await pdfPage.render({ canvasContext: pageCtx, viewport: pdfViewport, canvas: pageCanvas }).promise;
-
-            // ── Render auto-layout overlay ────────────────────────────────
-            const srcW2 = Math.max(1, Number(sourceOCR.width || pageCanvas.width));
-            const srcH2 = Math.max(1, Number(sourceOCR.height || pageCanvas.height));
-            const sx = pageCanvas.width / srcW2;
-            const sy = pageCanvas.height / srcH2;
-
-            const translatedByIndex2 = new Map<number, string>(
-              translatedEntry.translatedByIndex
-                .filter(item => Number.isFinite(item.index))
-                .map(item => [item.index, normalizeWhitespace(String(item.text || ''))])
-            );
-
-            const overlayLayoutProfile2: OverlayLayoutProfile = translationMode === 'official'
-              ? 'official'
-              : translationMode === 'adaptive'
-                ? 'adaptive'
-                : translationMode === 'manhwa'
-                  ? 'manhwa'
-                  : 'manga';
-
-            const preferredFont2 = getOverlayFontOption(overlayFontPreset).fontFamily;
-            const overlayFont2 = resolveOverlayFontFamily({
-              preset: overlayFontPreset,
-              enabled: overlayThaiFontEnabled,
-              targetLanguage,
-            }) || preferredFont2 || "'Noto Sans Thai', 'Sarabun', 'Segoe UI', sans-serif";
-            const canvasFont2 = await buildCanvasFontFamily(
-              overlayFont2,
-              `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
-            );
-
-            const pageLayers2 = useLayerStore.getState().layersByPage.get(pageNum) || [];
-
-            const overlayLayout2 = computeOverlayLayoutMap(
-              sourceOCR.lines.flatMap((line, index) => {
-                const translatedText = translatedByIndex2.get(index);
-                if (!translatedText) return [];
-                const srcFb = isSourceFallbackOverlayText(line.text, translatedText);
-                if (shouldSkipOverlayRenderForSuspiciousLine(line) && !srcFb) return [];
-                if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !srcFb) return [];
-                const lyr = pageLayers2.find(l => l.lineIndex === index);
-                const balloonId = lyr?.groupId;
-                const srcBbox = resolveOverlaySourceBBox(line);
-                const mskBbox = resolveOverlayMaskBBox(line);
-                const srcW = Math.max(1, srcBbox.x1 - srcBbox.x0);
-                const srcH = Math.max(1, srcBbox.y1 - srcBbox.y0);
-                const mskW = Math.max(1, mskBbox.x1 - mskBbox.x0);
-                const mskH = Math.max(1, mskBbox.y1 - mskBbox.y0);
-                const wCov = srcW / mskW;
-                const aCov = (srcW * srcH) / Math.max(1, mskW * mskH);
-                const lowCov = shouldUseDocumentCoverageFallback(line.text) && wCov < 0.84 && aCov < 0.86;
-                const eBbox = lowCov ? mskBbox : srcBbox;
-                const bW = Math.max(1, (eBbox.x1 - eBbox.x0) * sx);
-                const bH = Math.max(1, (eBbox.y1 - eBbox.y0) * sy);
-                return [{
-                  index,
-                  text: translatedText,
-                  width: bW,
-                  height: bH,
-                  bbox: eBbox,
-                  line,
-                  balloonId,
-                  hints: {
-                    sourceText: line.text,
-                    sourceBoxWidth: bW,
-                    sourceBoxHeight: bH,
-                    sourceLineCount: 1,
-                    fontFamily: canvasFont2,
-                    profile: overlayLayoutProfile2,
-                  },
-                }];
-              }),
-              { profile: overlayLayoutProfile2 }
-            );
-
-            // palette sampling สำหรับ auto-layout lines (จูนขนาดตัวอย่างสุ่มสีให้เล็กลงเป็น 800px เพื่อให้ดึงค่าสีได้ไวขึ้นมาก)
-            const palette2 = new Map<number, OverlayPalette>();
-            const maxSample2 = 800;
-            const sampleScale2 = Math.min(1, maxSample2 / Math.max(1, pageCanvas.width, pageCanvas.height));
-            const sampleC2 = document.createElement('canvas');
-            sampleC2.width = Math.max(1, Math.round(pageCanvas.width * sampleScale2));
-            sampleC2.height = Math.max(1, Math.round(pageCanvas.height * sampleScale2));
-            const sampleCtx2 = sampleC2.getContext('2d', { willReadFrequently: true });
-            if (sampleCtx2) {
-              sampleCtx2.drawImage(pageCanvas, 0, 0, sampleC2.width, sampleC2.height);
-              sourceOCR.lines.forEach((line, index) => {
-                if (!translatedByIndex2.has(index)) return;
-                palette2.set(index, sampleOverlayPaletteFromLine(sampleCtx2, line, srcW2, srcH2, sampleC2.width, sampleC2.height));
-              });
-            }
-
-            // deleted line indexes
-            const deletedIndexes2 = useLayerStore.getState().deletedLineIndexesByPage.get(pageNum) || new Set<number>();
-
-            sourceOCR.lines.forEach((line, index) => {
-              if (deletedIndexes2.has(index)) return;
-              const translatedText = translatedByIndex2.get(index);
-              if (!translatedText) return;
-              const srcFb = isSourceFallbackOverlayText(line.text, translatedText);
-              if (shouldSkipOverlayRenderForSuspiciousLine(line) && !srcFb) return;
-              if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !srcFb) return;
-
-              // ถ้า layer นี้ถูก user edit → ข้ามไป render ใน user-layer pass
-              const matchLayer = pageLayers2.find(l => l.lineIndex === index && l.visible && l.userEdited);
-              if (matchLayer) return;
-
-              const layout2 = overlayLayout2.get(index);
-              const isMaskOnly2 = Boolean(layout2?.hidden);
-              if (isMaskOnly2 && !layout2?.preserveMaskWhenHidden) return;
-
-              const renderText2 = layout2?.renderText || translatedText;
-              const effectiveProfile2 = layout2?.effectiveProfile || overlayLayoutProfile2;
-              const styleKind2 = layout2?.styleKind;
-              const isDocLike2 = styleKind2 ? styleKind2 === 'document-heading' || styleKind2 === 'document-body' : effectiveProfile2 === 'official';
-              const isComicLike2 = !isDocLike2;
-              const maskBbox2 = (!isMaskOnly2 && layout2?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
-              const resolvedSrcBbox2 = resolveOverlaySourceBBox(line);
-              const mskW2 = Math.max(1, maskBbox2.x1 - maskBbox2.x0);
-              const mskH2 = Math.max(1, maskBbox2.y1 - maskBbox2.y0);
-              const srcW3 = Math.max(1, resolvedSrcBbox2.x1 - resolvedSrcBbox2.x0);
-              const srcH3 = Math.max(1, resolvedSrcBbox2.y1 - resolvedSrcBbox2.y0);
-              const wCov2 = srcW3 / mskW2;
-              const aCov2 = (srcW3 * srcH3) / Math.max(1, mskW2 * mskH2);
-              const lowCov2 = shouldUseDocumentCoverageFallback(line.text) && wCov2 < 0.84 && aCov2 < 0.86;
-              const srcBbox2 = isMaskOnly2 ? resolvedSrcBbox2 : (layout2?.mergedBBox || (isDocLike2 || lowCov2 ? maskBbox2 : resolvedSrcBbox2));
-
-              const mrkLeft2 = maskBbox2.x0;
-              const rkLeft2 = layout2?.alignment === 'left' && layout2.sharedBoxLeftX !== undefined ? Math.min(srcBbox2.x0, layout2.sharedBoxLeftX) : srcBbox2.x0;
-              const mBW2 = Math.max(1, (maskBbox2.x1 - mrkLeft2) * sx);
-              const mBH2 = Math.max(1, (maskBbox2.y1 - maskBbox2.y0) * sy);
-              const bW2 = Math.max(1, (srcBbox2.x1 - rkLeft2) * sx);
-              const bH2 = Math.max(1, (srcBbox2.y1 - srcBbox2.y0) * sy);
-              const expansion2 = resolveOverlayMaskExpansion(line);
-              const mBoost2 = isComicLike2 && layout2?.mergedBBox ? 4 : 0;
-              const cBX2 = isComicLike2 ? 3 : 0;
-              const cBTop2 = isComicLike2 ? 3 : 0;
-              const cBBot2 = isComicLike2 ? 2 : 0;
-              const mExpX2 = Math.min(expansion2.maxExpandX + mBoost2 + cBX2, Math.max(1, Math.round(mBH2 * expansion2.expandXRatio)) + mBoost2 + cBX2);
-              const mExpL2 = Math.min(isComicLike2 ? 4 : 1, mExpX2);
-              const mExpR2 = mExpX2;
-              const mExpTop2 = Math.min(expansion2.maxExpandTop + mBoost2 + cBTop2, Math.max(1, Math.round(mBH2 * expansion2.expandTopRatio)) + mBoost2 + cBTop2);
-              const hasThaiText2 = /[\u0E00-\u0E7F]/.test(renderText2);
-              const thaiBotBoost2 = hasThaiText2 ? Math.min(3, Math.max(1, Math.round(mBH2 * 0.08))) : 0;
-              const docBotBoost2 = isDocLike2 ? Math.min(8, Math.max(2, Math.round(mBH2 * 0.16))) : 0;
-              const mExpBot2 = Math.min(expansion2.maxExpandBottom + thaiBotBoost2 + docBotBoost2 + mBoost2 + cBBot2, Math.max(1, Math.round(mBH2 * expansion2.expandBottomRatio)) + thaiBotBoost2 + docBotBoost2 + mBoost2 + cBBot2);
-              const rawML2 = mrkLeft2 * sx - mExpL2;
-              const rawMT2 = maskBbox2.y0 * sy - mExpTop2;
-              const rawMW2 = mBW2 + mExpL2 + mExpR2;
-              const rawMH2 = mBH2 + mExpTop2 + mExpBot2;
-              const maskRect2 = clampOverlayRect(rawML2, rawMT2, rawMW2, rawMH2, { x0: 0, y0: 0, x1: pageCanvas.width, y1: pageCanvas.height });
-
-              const p2 = palette2.get(index) || DEFAULT_OVERLAY_PALETTE;
-              pageCtx.save();
-              pageCtx.fillStyle = p2.backgroundColor;
-              pageCtx.fillRect(maskRect2.left, maskRect2.top, maskRect2.width, maskRect2.height);
-              pageCtx.restore();
-              if (isMaskOnly2) return;
-
-              const useMergedComic2 = (styleKind2 === 'comic-bubble' || styleKind2 === 'comic-box') && !isMaskOnly2 && Boolean(layout2?.mergedMaskBBox);
-              const tSrcL2 = useMergedComic2 ? mrkLeft2 : rkLeft2;
-              const tSrcT2 = useMergedComic2 ? maskBbox2.y0 : srcBbox2.y0;
-              const tBW2 = useMergedComic2 ? Math.max(bW2, mBW2) : bW2;
-              const tBH2 = useMergedComic2 ? Math.max(bH2, mBH2) : bH2;
-              const mCTopLift2 = useMergedComic2 ? Math.max(0, Math.round(mBH2 * (styleKind2 === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-              const mCExtraH2 = useMergedComic2 ? Math.max(0, Math.round(mBH2 * (styleKind2 === 'comic-bubble' ? 0.34 : 0.18))) : 0;
-              const rawTL2 = tSrcL2 * sx - (layout2?.alignment === 'center' ? 0 : mExpL2);
-              const rawTT2 = tSrcT2 * sy - mExpTop2 - mCTopLift2;
-              const rawTW2 = tBW2 + (layout2?.alignment === 'center' ? 0 : mExpL2 + mExpR2);
-              const rawTH2 = tBH2 + mExpTop2 + mExpBot2 + mCTopLift2 + mCExtraH2;
-              let textRect2 = clampOverlayRect(rawTL2, rawTT2, rawTW2, rawTH2, { x0: 0, y0: 0, x1: pageCanvas.width, y1: pageCanvas.height });
-              if (!isDocLike2) {
-                textRect2 = clampOverlayRect(textRect2.left, textRect2.top, textRect2.width, textRect2.height, {
-                  x0: Math.max(0, maskRect2.left - 1),
-                  y0: Math.max(0, maskRect2.top - 1),
-                  x1: Math.min(pageCanvas.width, maskRect2.left + maskRect2.width + 1),
-                  y1: Math.min(pageCanvas.height, maskRect2.top + maskRect2.height + 1),
-                });
-              }
-
-              const hasThaiDoc2 = isDocLike2 && hasThaiText2;
-              const thaiHeadroom2 = hasThaiDoc2 ? Math.max(4, Math.round(Math.max(bH2, mBH2) * 0.4)) : 0;
-              const docTypoW2 = lowCov2 ? Math.max(bW2, mBW2) : Math.max(bW2, textRect2.width * 0.96);
-              const typoW2 = isDocLike2 ? docTypoW2 : textRect2.width;
-              const typoH2 = isDocLike2 ? Math.min(textRect2.height, Math.max(bH2 + thaiHeadroom2, (lowCov2 ? mBH2 : bH2) + thaiHeadroom2)) : textRect2.height;
-
-              const baseTypo2 = layout2?.typography || computeOverlayTypography(renderText2, typoW2, typoH2, {
-                sourceText: line.text,
-                sourceBoxWidth: isDocLike2 && lowCov2 ? Math.max(bW2, mBW2) : bW2,
-                sourceBoxHeight: isDocLike2 ? (lowCov2 ? Math.max(bH2, mBH2) : bH2) + thaiHeadroom2 : bH2,
-                sourceLineCount: 1,
-                fontFamily: canvasFont2,
-                profile: effectiveProfile2,
-                styleKind: styleKind2,
-              });
-              const typo2 = scaleOverlayTypography(baseTypo2, overlayFontSizeScale);
-              const extraTopPad2 = hasThaiText2 ? Math.max(1, Math.round(typo2.fontSize * 0.08)) : 0;
-              const extraBotPad2 = hasThaiText2 ? Math.max(1, Math.round(typo2.fontSize * 0.06)) : 0;
-              const tStartOff2 = layout2?.sharedTextStartX !== undefined ? Math.max(0, (layout2.sharedTextStartX - rkLeft2) * sx) : 0;
-              const cOff2 = layout2?.sharedCenterX !== undefined ? ((layout2.sharedCenterX - rkLeft2) * sx) - (textRect2.width * 0.5) : 0;
-              const innerLeft2 = layout2?.alignment === 'center' ? Math.max(0, Math.min(textRect2.width * 0.12, cOff2)) : Math.max(0, Math.min(textRect2.width - 1, mExpL2 + tStartOff2));
-              const innerWidth2 = layout2?.alignment === 'center' ? textRect2.width : Math.max(1, textRect2.width - innerLeft2);
-              const overlayText2 = typo2.forceSingleLine ? normalizeOverlayInlineText(renderText2) : renderText2;
-              const rotDeg2 = estimateLineRotationDeg(line);
-              const rotRad2 = (rotDeg2 * Math.PI) / 180;
-              const thaiComicLine2 = hasThaiText2 && (styleKind2 === 'comic-bubble' || styleKind2 === 'comic-box');
-              const minFillRatio2 = typo2.estimatedLines > 1 ? (thaiComicLine2 ? 0.82 : 0.74) : (thaiComicLine2 ? 0.58 : 0.5);
-              const paintH2 = Math.min(textRect2.height * 1.8, Math.max(typo2.contentHeight + typo2.padY * 2 + extraTopPad2 + extraBotPad2, textRect2.height * minFillRatio2));
-              const paintOffT2 = Math.max(hasThaiText2 ? 1 : 0, Math.min(textRect2.height - paintH2, Math.round(textRect2.height * (thaiComicLine2 ? 0.04 : 0.08))));
-
-              pageCtx.save();
-              if (rotDeg2 !== 0) { pageCtx.translate(textRect2.left, textRect2.top); pageCtx.rotate(rotRad2); }
-              const oL2 = rotDeg2 !== 0 ? 0 : textRect2.left;
-              const oT2 = rotDeg2 !== 0 ? 0 : textRect2.top;
-              const pL2 = oL2 + innerLeft2;
-              const pT2 = oT2 + paintOffT2;
-              const clipHeightBoost2 = hasThaiText2 ? Math.max(2, Math.round(typo2.fontSize * 0.35)) : 0;
-              pageCtx.beginPath();
-              pageCtx.rect(oL2 - 180, oT2, textRect2.width + 360, Math.max(textRect2.height, paintH2) + clipHeightBoost2);
-              pageCtx.clip();
-              const tbL2 = pL2 + typo2.padX;
-              const tbT2 = pT2 + typo2.padY + extraTopPad2;
-              const tbW2 = Math.max(1, Math.round((innerWidth2 - typo2.padX * 2) * 1.15) + 12);
-              const tbH2 = Math.max(1, Math.max(paintH2, typo2.contentHeight) - (typo2.padY * 2 + extraTopPad2 + extraBotPad2));
-              const lhPx2 = Math.max(1, typo2.fontSize * typo2.lineHeight);
-              const maxL2 = Math.max(1, Math.max(
-                Math.ceil(tbH2 / lhPx2),
-                typo2.estimatedLines
-              ));
-              const tWeight2 = Math.max(400, Math.min(700, Math.round(Number(p2.textFillWeight || 400))));
-              pageCtx.font = `${tWeight2} ${typo2.fontSize}px ${canvasFont2}`;
-              const wrLines2 = wrapCanvasText(pageCtx, overlayText2, tbW2, maxL2, typo2.forceSingleLine);
-              pageCtx.fillStyle = p2.textColor;
-              pageCtx.textBaseline = 'top';
-              pageCtx.textAlign = layout2?.alignment === 'center' ? 'center' : 'left';
-              const strokeBW2 = Number(p2.textStrokeWidth || 0);
-              const strokeW2 = strokeBW2 > 0 ? Math.max(0.55, Math.min(1.35, strokeBW2 * (typo2.fontSize / 14))) : 0;
-              wrLines2.forEach((lt2, li2) => {
-                const y2 = tbT2 + li2 * lhPx2;
-                if (li2 > 0 && y2 + lhPx2 > tbT2 + tbH2 + 0.5) return;
-                const x2 = pageCtx.textAlign === 'center'
-                  ? textRect2.left + innerLeft2 + (innerWidth2 / 2)
-                  : tbL2;
-                if (strokeW2 > 0 && p2.textStrokeColor) {
-                  pageCtx.save();
-                  pageCtx.lineJoin = 'round';
-                  pageCtx.miterLimit = 2;
-                  pageCtx.lineWidth = strokeW2;
-                  pageCtx.strokeStyle = p2.textStrokeColor;
-                  pageCtx.strokeText(lt2, x2, y2, tbW2);
-                  pageCtx.restore();
-                }
-                pageCtx.fillText(lt2, x2, y2, tbW2);
-              });
-              pageCtx.restore();
-            });
-
-            // ── User-Edited Layer Render Pass ─────────────────────────────
-            const visibleUserLayers2 = pageLayers2.filter(l => l.visible && l.userEdited);
-            for (const layer of visibleUserLayers2) {
-              const lx2 = Math.round(layer.bbox.x0 * sx);
-              const ly2 = Math.round(layer.bbox.y0 * sy);
-              const lw2 = Math.max(1, Math.round((layer.bbox.x1 - layer.bbox.x0) * sx));
-              const lh2 = Math.max(1, Math.round((layer.bbox.y1 - layer.bbox.y0) * sy));
-
-              pageCtx.save();
-              const layerRot2 = layer.rotation || 0;
-              if (layerRot2 !== 0) {
-                const cx2 = lx2 + lw2 / 2;
-                const cy2 = ly2 + lh2 / 2;
-                pageCtx.translate(cx2, cy2);
-                pageCtx.rotate((layerRot2 * Math.PI) / 180);
-                pageCtx.translate(-cx2, -cy2);
-              }
-              const layerBg2 = layer.backgroundColor;
-              if (layerBg2 && layerBg2 !== 'transparent') {
-                pageCtx.fillStyle = layerBg2;
-                pageCtx.fillRect(lx2, ly2, lw2, lh2);
-              } else {
-                pageCtx.fillStyle = '#FFFFFF';
-                pageCtx.fillRect(lx2, ly2, lw2, lh2);
-              }
-              const fs2 = Math.max(8, Math.round((layer.fontSize || 14) * sx));
-              pageCtx.font = `${layer.bold ? 'bold ' : ''}${fs2}px ${canvasFont2}`;
-              pageCtx.fillStyle = layer.textColor || '#000000';
-              pageCtx.textBaseline = 'top';
-              pageCtx.textAlign = 'left';
-              pageCtx.beginPath();
-              pageCtx.rect(lx2, ly2, lw2, lh2);
-              pageCtx.clip();
-              const lhPx3 = Math.max(1, fs2 * 1.35);
-              const maxL3 = Math.max(1, Math.floor((lh2 - 6) / lhPx3));
-              const wrLines3 = wrapCanvasText(pageCtx, layer.text || '', lw2 - 8, maxL3, false);
-              wrLines3.forEach((lt3, li3) => {
-                const ty3 = ly2 + 3 + li3 * lhPx3;
-                if (li3 > 0 && ty3 + lhPx3 > ly2 + lh2 + 0.5) return;
-                pageCtx.fillText(lt3, lx2 + 4, ty3, lw2 - 8);
-              });
-              pageCtx.restore();
-            }
-
-            // ── Embed canvas เป็น page ใน PDF ────────────────────────────
-            const pageImgData = pageCanvas.toDataURL('image/png');
-            const pageImgBytes = Uint8Array.from(atob(pageImgData.split(',')[1]), c => c.charCodeAt(0));
-            const embeddedImg = await outputPdf.embedPng(pageImgBytes);
-            const pdfPage2 = outputPdf.addPage([pageCanvas.width, pageCanvas.height]);
-            pdfPage2.drawImage(embeddedImg, { x: 0, y: 0, width: pageCanvas.width, height: pageCanvas.height });
-          }
-        } finally {
-          await (pdfDoc2 as { destroy?: () => Promise<void> }).destroy?.();
-          (loadingTask2 as { destroy?: () => void }).destroy?.();
-        }
-
-        const resultBytes = await outputPdf.save();
           const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
           const anchor = document.createElement('a');
           anchor.href = url;
@@ -5928,7 +5719,6 @@ export default function App() {
           anchor.click();
           document.body.removeChild(anchor);
           URL.revokeObjectURL(url);
-          // ────────────────────────────────────────────────────────────────
         }
 
         if (missingPages > 0) {
@@ -5944,7 +5734,7 @@ export default function App() {
         } else {
           setTranslationStatus({
             kind: 'success',
-            message: `Exported translated searchable PDF for ${translatedPageMap.size} pages.`,
+            message: `Exported translated overlay PDF for ${translatedPageMap.size} pages.`,
           });
         }
       }
@@ -6344,10 +6134,11 @@ export default function App() {
       sourceLanguage?: string;
       targetLanguage?: string;
       translationMode?: TranslationMode;
+      engineOverride?: OCREngine;
     }
   ): Promise<boolean> {
     const ocrState = useOCRTextLayerStore.getState();
-    const selectedEngine = (ocrOptions.engine || 'paddleocr') as OCREngine;
+    const selectedEngine = (options?.engineOverride || ocrOptions.engine || 'paddleocr') as OCREngine;
     const pageOCR = resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
     if (!pageOCR) {
       if (!options?.suppressStatus) {
@@ -7427,22 +7218,19 @@ export default function App() {
     .filter((pageNum) => !translatedAvailablePageSet.has(pageNum));
   const canExportOriginalSelection = downloadScopedPages.length > 0;
   const canExportTranslatedSelection = translatedAvailablePageNumbers.length > 0;
+  void exportCacheHydrationTick;
 
   const computedProgressPercent = (() => {
     if (!ocrProgress) return 0;
-    if (isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf') {
-      const base = ((currentPage - 1) / totalPages) * 100;
-      const currentContribution = ocrProgress.progress / totalPages;
-      return Math.min(100, Math.max(0, base + currentContribution));
+    if (isOfflineProcessing || isAiProcessing) {
+      return ocrProgress.progress;
     }
     return ocrProgress.progress;
   })();
 
   const getRemainingSecondsText = () => {
     if (!translationStartTime || !ocrProgress) return 'กำลังประเมินเวลา...';
-    const percent = isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
-      ? computedProgressPercent
-      : ocrProgress.progress;
+    const percent = ocrProgress.progress;
 
     if (percent <= 0) return 'กำลังประเมินเวลา...';
     
@@ -7452,30 +7240,106 @@ export default function App() {
       const remainingSec = Math.max(1, Math.round(totalSec - elapsedSec));
       return `อีกประมาณ ${remainingSec} วินาที`;
     } else {
-      const pagesLeft = isOfflineProcessing && effectiveDownloadScope === 'all' && fileType === 'pdf'
-        ? Math.max(1, totalPages - currentPage)
-        : Math.max(1, ocrProgress.totalPages - ocrProgress.currentPage);
+      const pagesLeft = Math.max(1, ocrProgress.totalPages - ocrProgress.currentPage);
       const estSecPerPage = isAiProcessing ? 12 : 4;
       const remainingSec = pagesLeft * estSecPerPage;
       return `อีกประมาณ ${remainingSec} วินาที`;
     }
   };
 
-  const triggerPopupTranslation = (engine: 'offline' | 'ai') => {
-    if (effectiveDownloadScope === 'all' && fileType === 'pdf') {
-      if (engine === 'offline') {
-        void handleOfflineTranslateAllPages();
-        return;
-      }
-      void handleAiTranslateAllPages();
+  const runExportPopupBatchTranslation = async (translatorEngine: 'offline' | 'ai') => {
+    if (isAiProcessing || isOfflineProcessing) return;
+
+    applyPopupOcrQualityProfile();
+    const exportEngine = selectedDownloadEngine;
+    await hydrateExportCachesForDownload(exportEngine);
+    setExportCacheHydrationTick((tick) => tick + 1);
+
+    const scopedPages = resolveModelScopedPagesForExport(effectiveDownloadScope, exportEngine);
+    if (scopedPages.length === 0) {
+      setTranslationStatus({
+        kind: 'error',
+        message: `ไม่พบ OCR cache ของโมเดล ${exportEngine} สำหรับขอบเขตที่เลือก กรุณารัน OCR ก่อน`,
+      });
       return;
     }
 
-    if (engine === 'offline') {
-      void handleOfflineTranslate();
-      return;
+    const pageNums = scopedPages.map(({ pageNum }) => pageNum);
+    if (translatorEngine === 'offline') {
+      setIsOfflineProcessing(true);
+    } else {
+      setIsAiProcessing(true);
     }
-    void handleAiTranslate();
+
+    setProgress({
+      stage: 'text-layer',
+      currentPage: 1,
+      totalPages: pageNums.length,
+      message: `กำลังแปล ${pageNums.length} หน้า (${exportEngine})...`,
+      progress: 5,
+    });
+
+    let translatedPages = 0;
+    let skippedPages = 0;
+
+    try {
+      for (let index = 0; index < pageNums.length; index += 1) {
+        const pageNum = pageNums[index];
+        setProgress({
+          stage: 'text-layer',
+          currentPage: index + 1,
+          totalPages: pageNums.length,
+          message: `กำลังแปลหน้า ${pageNum} (${index + 1}/${pageNums.length})...`,
+          progress: Math.round(((index + 0.5) / pageNums.length) * 100),
+        });
+
+        const translated = await runCurrentPageTranslation(translatorEngine, pageNum, {
+          suppressStatus: true,
+          engineOverride: exportEngine,
+          ocrLanguage: ocrOptions.language,
+          sourceLanguage,
+          targetLanguage,
+          translationMode,
+        });
+        if (translated) {
+          translatedPages += 1;
+        } else {
+          skippedPages += 1;
+        }
+      }
+
+      setProgress({
+        stage: 'complete',
+        currentPage: pageNums.length,
+        totalPages: pageNums.length,
+        message: 'แปลภาษาเสร็จสมบูรณ์!',
+        progress: 100,
+      });
+      setExportCacheHydrationTick((tick) => tick + 1);
+
+      const notes = skippedPages > 0 ? ` (ข้าม ${skippedPages} หน้า)` : '';
+      setTranslationStatus({
+        kind: translatedPages > 0 ? 'success' : 'error',
+        message: translatedPages > 0
+          ? `แปล ${translatedPages}/${pageNums.length} หน้า ด้วย ${exportEngine} เรียบร้อย${notes}`
+          : `ไม่สามารถแปลหน้าใดได้สำหรับโมเดล ${exportEngine}`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    } catch (err) {
+      console.error('[ExportPopupBatchTranslation] Failed', err);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setTranslationStatus({
+        kind: 'error',
+        message: `การแปลล้มเหลว: ${message}`,
+      });
+    } finally {
+      setIsOfflineProcessing(false);
+      setIsAiProcessing(false);
+    }
+  };
+
+  const triggerPopupTranslation = (engine: 'offline' | 'ai') => {
+    void runExportPopupBatchTranslation(engine);
   };
 
   return (
@@ -7731,9 +7595,7 @@ export default function App() {
             <span className="font-bold text-white shrink-0">
               {activePageOCR.ocrEngine === 'paddleocr'
                 ? 'Paddle'
-                : activePageOCR.ocrEngine === 'easyocr'
-                  ? 'Easy'
-                  : 'Tesseract'}
+                : 'Easy'}
             </span>
             <span className="text-slate-500 font-normal shrink-0">•</span>
             <span className="shrink-0">พบ {activePageOCR.words.length} คำ</span>
@@ -7953,8 +7815,8 @@ export default function App() {
                   <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">โมเดลประมวลผล (OCR Engine)</span>
                   <span className="text-[9px] text-slate-400">คลิกเพื่อสลับใช้ผลลัพธ์</span>
                 </div>
-                <div className="grid grid-cols-3 gap-2.5">
-                  {(['paddleocr', 'easyocr', 'tesseract'] as OCREngine[]).map((engineId) => {
+                <div className="grid grid-cols-2 gap-2.5">
+                  {(['paddleocr', 'easyocr'] as OCREngine[]).map((engineId) => {
                     const statusInfo = getEngineCacheStatus(engineId);
                     const isSelected = selectedDownloadEngine === engineId;
                     
@@ -7980,7 +7842,7 @@ export default function App() {
                       statusIcon = <Eye size={10} className="text-cyan-400/80" />;
                     }
                     
-                    const displayName = engineId === 'paddleocr' ? 'PaddleOCR' : engineId === 'easyocr' ? 'EasyOCR' : 'Tesseract';
+                    const displayName = engineId === 'paddleocr' ? 'PaddleOCR' : 'EasyOCR';
                     
                     return (
                       <button
@@ -8210,7 +8072,7 @@ export default function App() {
                 
                 {!isDownloadingResult && (
                   <div className="text-[9px] font-normal opacity-75 mt-0.5 uppercase tracking-tighter">
-                    [{selectedDownloadEngine === 'paddleocr' ? 'PaddleOCR' : selectedDownloadEngine === 'easyocr' ? 'EasyOCR' : 'Tesseract'} • {downloadModeSelection === 'original' ? 'ต้นฉบับ OCR' : 'ฉบับแปลภาษา'}]
+                    [{selectedDownloadEngine === 'paddleocr' ? 'PaddleOCR' : 'EasyOCR'} • {downloadModeSelection === 'original' ? 'ต้นฉบับ OCR' : 'ฉบับแปลภาษา'}]
                   </div>
                 )}
               </button>

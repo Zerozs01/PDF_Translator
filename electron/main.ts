@@ -10,12 +10,20 @@ import zlib from 'zlib'
 
 // Register tessdata custom scheme before app ready
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'tessdata', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+  { scheme: 'tessdata', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+  { scheme: 'pdf-export', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ]);
 import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
+import { cancelPdfPrintExport, startPdfPrintExport } from './pdfExportService'
+import {
+  cleanupStagedPdfExportJob,
+  disposeAllStagedPdfExportJobs,
+  resolvePdfExportProtocolPath,
+  stagePdfExportJob,
+} from './pdfExportStaging'
 // BenchmarkDAO not implemented in this file (db.ts handles)
 
 // The built directory structure
@@ -106,6 +114,7 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
+  void disposeAllStagedPdfExportJobs()
   // Flush WAL so the .db file is fully up-to-date when the process exits
   checkpointDB('FULL')
 })
@@ -162,6 +171,19 @@ app.whenReady().then(() => {
       return new Response('Model file not found', { status: 404 });
     } catch (err) {
       console.error('[Tessdata Protocol] Error:', err);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  });
+
+  protocol.handle('pdf-export', (request) => {
+    try {
+      const sourcePath = resolvePdfExportProtocolPath(request.url);
+      if (!sourcePath) {
+        return new Response('Export source not found', { status: 404 });
+      }
+      return net.fetch(pathToFileURL(sourcePath).toString());
+    } catch (error) {
+      console.error('[PDF Export Protocol] Error:', error);
       return new Response('Internal Server Error', { status: 500 });
     }
   });
@@ -1784,6 +1806,41 @@ app.whenReady().then(() => {
         delay *= 2;
       }
     }
+  });
+
+  ipcMain.handle('pdf-export:start', async (event, request) => {
+    if (!request || typeof request !== 'object' || typeof request.jobId !== 'string') {
+      throw new Error('Invalid PDF export job payload.');
+    }
+
+    let manifest;
+    try {
+      manifest = await stagePdfExportJob(request);
+      const bytes = await startPdfPrintExport(manifest, (done, total) => {
+        event.sender.send('pdf-export:progress', {
+          jobId: request.jobId,
+          done,
+          total,
+          progress: Math.round((done / Math.max(1, total)) * 100),
+        });
+      });
+      return { ok: true, bytes };
+    } catch (error) {
+      await cleanupStagedPdfExportJob(request.jobId);
+      const message = error instanceof Error ? error.message : 'PDF export failed';
+      if (message === 'Export canceled') {
+        return { ok: false, error: message };
+      }
+      throw error;
+    }
+  });
+
+  ipcMain.handle('pdf-export:cancel', async (_, payload: { jobId?: string }) => {
+    if (!payload?.jobId) {
+      return { ok: false };
+    }
+    cancelPdfPrintExport(payload.jobId);
+    return { ok: true };
   });
 
   createWindow();
