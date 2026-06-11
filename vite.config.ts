@@ -19,9 +19,6 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
-  optimizeDeps: {
-    include: ['tesseract.js'],
-  },
   plugins: [react(), electron([{
     entry: 'electron/main.ts',
     vite: {
@@ -46,7 +43,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           pdf: ['react-pdf', 'pdf-lib'],
-          ocr: ['tesseract.js'],
           ui: ['lucide-react', 'zustand']
         }
       }
