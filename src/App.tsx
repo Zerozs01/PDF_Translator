@@ -54,7 +54,11 @@ import {
   useOCRTextLayerStore,
 } from './stores/useOCRTextLayerStore';
 import { useLayerStore } from './stores/useLayerStore';
+import type { TextLayer } from './types/layers';
+import { useExportStore } from './stores/useExportStore';
+import { ExportOverlay } from './components/Export/ExportOverlay';
 import { useBackgroundQueueStore } from './stores/useBackgroundQueueStore';
+import { useGlossaryStore } from './stores/useGlossaryStore';
 import { backgroundQueueProcessor } from './services/ocr/BackgroundQueueProcessor';
 import {
   applyKoreanConversationalFallback,
@@ -2679,7 +2683,50 @@ const protectTranslationTokens = (
   text: string,
   targetLanguage: string
 ): { protectedText: string; replacements: ProtectedTokenReplacement[] } => {
-  return protectLocationPhrases(text, targetLanguage, 0);
+  const locationResult = protectLocationPhrases(text, targetLanguage, 0);
+  // Normalize curly quotes/apostrophes in the input text to straight ones for uniform matching
+  let protectedText = locationResult.protectedText.replace(/[\u2018\u2019\u201B\u201C\u201D`‘’“”]/g, "'");
+  const replacements = [...locationResult.replacements];
+
+  try {
+    const entries = useGlossaryStore.getState().entries;
+    const activeEntries = entries
+      .filter((e) => e.isActive && e.sourceText.trim())
+      .sort((a, b) => b.sourceText.length - a.sourceText.length);
+
+    const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    activeEntries.forEach((entry, idx) => {
+      const source = entry.sourceText.trim();
+      const target = entry.targetText.trim();
+      
+      // Normalize curly quotes/apostrophes in the glossary source text as well
+      const normalizedSource = source
+        .replace(/[\u2018\u2019\u201B\u201C\u201D`‘’“”]/g, "'")
+        .replace(/\s+/g, ' ');
+
+      if (!normalizedSource) return;
+
+      // Check boundary characters to only apply \b when starting/ending with a word character
+      // This avoids \b matching failures on entries starting or ending with punctuation (e.g. "SHUP UP!")
+      const hasWordStart = /^\w/.test(normalizedSource);
+      const hasWordEnd = /\w$/.test(normalizedSource);
+      
+      const patternStr = (hasWordStart ? '\\b' : '') + escapeRegExp(normalizedSource) + (hasWordEnd ? '\\b' : '');
+      const pattern = new RegExp(patternStr, 'gi');
+
+      const token = `[[USERGLOS${idx}ZZ]]`;
+      const nextText = protectedText.replace(pattern, token);
+      if (nextText !== protectedText) {
+        protectedText = nextText;
+        replacements.push({ token, replacement: target });
+      }
+    });
+  } catch (err) {
+    console.error('[App] Failed to apply Custom Glossary Token Protection:', err);
+  }
+
+  return { protectedText, replacements };
 };
 
 const restoreProtectedTokens = (text: string, replacements: ProtectedTokenReplacement[]): string => {
@@ -3590,6 +3637,72 @@ const resolveTranslationGroupsWithLayout = (
       groupingProfile: fallbackProfile,
       groupingDecision: fallbackDecision,
     };
+  }
+
+  // 1. Try to load groups from useLayerStore to preserve user adjustments and high quality 2D spatial clustering
+  try {
+    const storeGroups = useLayerStore.getState().getPageGroups(pageNum);
+    const storeLayers = useLayerStore.getState().getPageLayers(pageNum);
+    if (storeGroups && storeGroups.length > 0) {
+      const lineMap = new Map<number, TranslatableLine>(lines.map((line) => [line.index, line]));
+      const layerMap = new Map<string, TextLayer>(storeLayers.map((l) => [l.id, l]));
+      
+      const translationGroups: TranslationGroup[] = [];
+      storeGroups.forEach((sg) => {
+        const groupLines = sg.layerIds
+          .map((id) => layerMap.get(id))
+          .filter((l): l is TextLayer => Boolean(l))
+          .map((l) => lineMap.get(l.lineIndex))
+          .filter((line): line is TranslatableLine => Boolean(line));
+
+        if (groupLines.length > 0) {
+          let groupType: LayoutGroupType = 'unknown';
+          if (sg.groupType === 'balloon') {
+            groupType = 'dialogue';
+          } else if (sg.groupType === 'narration') {
+            groupType = 'narration';
+          }
+
+          translationGroups.push({
+            lines: groupLines,
+            groupType,
+            derivedGroupId: sg.id,
+            confidence: sg.confidence,
+          });
+        }
+      });
+
+      if (translationGroups.length > 0) {
+        // Add any lines from `lines` that are not in any group as singleton groups
+        const groupedLineIndexes = new Set<number>();
+        translationGroups.forEach((tg) => {
+          tg.lines.forEach((l) => groupedLineIndexes.add(l.index));
+        });
+
+        lines.forEach((line) => {
+          if (!groupedLineIndexes.has(line.index)) {
+            translationGroups.push({
+              lines: [line],
+              groupType: 'unknown',
+              confidence: 0.5,
+            });
+          }
+        });
+
+        console.log(`[resolveTranslationGroupsWithLayout] Using store groups for page ${pageNum}: count=${translationGroups.length}`);
+        return {
+          groups: translationGroups,
+          groupingProfile: 'balloon-aware',
+          groupingDecision: {
+            appliedProfile: 'balloon-aware',
+            confidence: 1.0,
+            fallbackReason: 'use_store_groups',
+          },
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[resolveTranslationGroupsWithLayout] Failed to resolve groups from store:', err);
   }
 
   const layoutResult = deriveBalloonAwareLayoutGrouping(
@@ -5445,6 +5558,7 @@ export default function App() {
 
         if (scope === 'all' && fileType === 'pdf') {
           const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
+          useExportStore.getState().startExport(pageRange.length);
           const arrayBuffer = await file.arrayBuffer();
 
           // ── Canvas-based PDF export (Layer-aware) ──────────────────────────
@@ -5458,34 +5572,39 @@ export default function App() {
             : undefined;
           if (fontReadyPromise2) await fontReadyPromise2.catch(() => undefined);
 
-          for (const pageNum of pageRange) {
-            const sourceOCR = sourcePageMap.get(pageNum);
-            const translatedEntry = translatedEntryMap.get(pageNum);
-            if (!sourceOCR || !translatedEntry) continue;
+          // โหลดเอกสาร PDF ต้นฉบับเพียงครั้งเดียวนอก Loop (ขจัด Overhead การโหลดซ้ำ)
+          const loadingTask2 = pdfjs.getDocument({ data: arrayBuffer.slice(0) });
+          const pdfDoc2 = await (loadingTask2 as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
 
-            // Render page พร้อม overlay ลง canvas ชั่วคราว
-            const pageCanvas = document.createElement('canvas');
-            const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
-            if (!pageCtx) continue;
+          let completedCount = 0;
+          try {
+            for (const pageNum of pageRange) {
+              completedCount++;
+              useExportStore.getState().updateProgress(completedCount);
+              const sourceOCR = sourcePageMap.get(pageNum);
+              const translatedEntry = translatedEntryMap.get(pageNum);
+              if (!sourceOCR || !translatedEntry) continue;
 
-            // ── Render PDF page ต้นฉบับ ──────────────────────────────────
-            const loadingTask2 = pdfjs.getDocument({ data: arrayBuffer.slice(0) });
-            const pdfDoc2 = await (loadingTask2 as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
-            const pdfPage = await pdfDoc2.getPage(pageNum);
-            const baseVp = pdfPage.getViewport({ scale: 1 });
-            const exportW = Math.max(1, sourceOCR.width || Math.round(baseVp.width));
-            const exportH = Math.max(1, sourceOCR.height || Math.round(baseVp.height * (exportW / Math.max(1, baseVp.width))));
-            const exportScale2 = resolveOverlayExportScale(exportW, exportH, Math.round(baseVp.width), Math.round(baseVp.height));
-            const targetW2 = Math.max(1, Math.round(exportW * exportScale2));
-            const pdfScale = targetW2 / Math.max(1, baseVp.width);
-            const pdfViewport = pdfPage.getViewport({ scale: pdfScale });
-            pageCanvas.width = Math.max(1, Math.round(pdfViewport.width));
-            pageCanvas.height = Math.max(1, Math.round(pdfViewport.height));
-            pageCtx.fillStyle = '#ffffff';
-            pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-            await pdfPage.render({ canvasContext: pageCtx, viewport: pdfViewport, canvas: pageCanvas }).promise;
-            await (pdfDoc2 as { destroy?: () => Promise<void> }).destroy?.();
-            (loadingTask2 as { destroy?: () => void }).destroy?.();
+              // Render page พร้อม overlay ลง canvas ชั่วคราว
+              const pageCanvas = document.createElement('canvas');
+              const pageCtx = pageCanvas.getContext('2d', { willReadFrequently: true });
+              if (!pageCtx) continue;
+
+              // ── Render PDF page ต้นฉบับ ──────────────────────────────────
+              const pdfPage = await pdfDoc2.getPage(pageNum);
+              const baseVp = pdfPage.getViewport({ scale: 1 });
+              const exportW = Math.max(1, sourceOCR.width || Math.round(baseVp.width));
+              const exportH = Math.max(1, sourceOCR.height || Math.round(baseVp.height * (exportW / Math.max(1, baseVp.width))));
+              // คุมสเกลการส่งออกให้อยู่ในช่วง 1.5 - 1.8 (ไม่ใช้ screen devicePixelRatio) เพื่อลดการประมวลผลพิกเซลขนาดใหญ่และเร่งความเร็ว
+              const exportScale2 = Math.min(1.8, resolveOverlayExportScale(exportW, exportH, Math.round(baseVp.width), Math.round(baseVp.height)));
+              const targetW2 = Math.max(1, Math.round(exportW * exportScale2));
+              const pdfScale = targetW2 / Math.max(1, baseVp.width);
+              const pdfViewport = pdfPage.getViewport({ scale: pdfScale });
+              pageCanvas.width = Math.max(1, Math.round(pdfViewport.width));
+              pageCanvas.height = Math.max(1, Math.round(pdfViewport.height));
+              pageCtx.fillStyle = '#ffffff';
+              pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+              await pdfPage.render({ canvasContext: pageCtx, viewport: pdfViewport, canvas: pageCanvas }).promise;
 
             // ── Render auto-layout overlay ────────────────────────────────
             const srcW2 = Math.max(1, Number(sourceOCR.width || pageCanvas.width));
@@ -5562,9 +5681,9 @@ export default function App() {
               { profile: overlayLayoutProfile2 }
             );
 
-            // palette sampling สำหรับ auto-layout lines
+            // palette sampling สำหรับ auto-layout lines (จูนขนาดตัวอย่างสุ่มสีให้เล็กลงเป็น 800px เพื่อให้ดึงค่าสีได้ไวขึ้นมาก)
             const palette2 = new Map<number, OverlayPalette>();
-            const maxSample2 = 2400;
+            const maxSample2 = 800;
             const sampleScale2 = Math.min(1, maxSample2 / Math.max(1, pageCanvas.width, pageCanvas.height));
             const sampleC2 = document.createElement('canvas');
             sampleC2.width = Math.max(1, Math.round(pageCanvas.width * sampleScale2));
@@ -5794,8 +5913,12 @@ export default function App() {
             const pdfPage2 = outputPdf.addPage([pageCanvas.width, pageCanvas.height]);
             pdfPage2.drawImage(embeddedImg, { x: 0, y: 0, width: pageCanvas.width, height: pageCanvas.height });
           }
+        } finally {
+          await (pdfDoc2 as { destroy?: () => Promise<void> }).destroy?.();
+          (loadingTask2 as { destroy?: () => void }).destroy?.();
+        }
 
-          const resultBytes = await outputPdf.save();
+        const resultBytes = await outputPdf.save();
           const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
           const anchor = document.createElement('a');
           anchor.href = url;
@@ -5832,6 +5955,7 @@ export default function App() {
       setTranslationStatus({ kind: 'error', message: `Download failed: ${message}` });
     } finally {
       setIsDownloadingResult(false);
+      useExportStore.getState().finishExport();
     }
   };
 
@@ -6632,6 +6756,10 @@ export default function App() {
     if (effectiveEngine === 'offline') {
       for (let groupIndex = 0; groupIndex < preparedGroups.length; groupIndex += 1) {
         const group = preparedGroups[groupIndex];
+        // Skip retry if this group matched any custom glossary entries to preserve user translations
+        if (group.replacements && group.replacements.length > 0) {
+          continue;
+        }
         // Skip retry for single-line groups since group retry vs line retry are identical and redundant
         if (!group.lines || group.lines.length <= 1) {
           continue;
@@ -6737,7 +6865,7 @@ export default function App() {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
           const overrideText = directLineOverride[lineIndex] || sourceLineText;
           translatedByIndex.set(line.index, overrideText || sourceLineText);
-          if (shouldRetryLineTranslation(line.text, overrideText, groupSourceLanguage, normalizedTargetLanguage)) {
+          if (group.replacements.length === 0 && shouldRetryLineTranslation(line.text, overrideText, groupSourceLanguage, normalizedTargetLanguage)) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
           }
         });
@@ -6767,7 +6895,7 @@ export default function App() {
         // Use noise-repaired source as fallback instead of raw OCR text
         const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
         translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || sourceLineText);
-        if (shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
+        if (group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
       });
@@ -8300,6 +8428,7 @@ export default function App() {
           progress={loadingState.progress} 
         />
       )}
+      <ExportOverlay />
     </div>
   );
 }

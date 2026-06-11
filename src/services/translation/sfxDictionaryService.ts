@@ -7,6 +7,8 @@
  *   3. การผสานคำที่ผู้ใช้เพิ่ม/แก้ไขเอง (User Dict) ผ่าน LocalStorage
  */
 
+import { useGlossaryStore } from '../../stores/useGlossaryStore';
+
 export interface SFXDictionaryEntry {
   source: string;
   target: string;
@@ -129,12 +131,27 @@ export function saveUserDictionary(userDict: Record<SFXLanguage, SFXDictionaryEn
 export function getMergedDictionary(): SFXDictionary {
   const userDict = getUserDictionary();
   
+  // Fetch custom SFX entries from useGlossaryStore
+  let customSfxEntries: SFXDictionaryEntry[] = [];
+  try {
+    const storeEntries = useGlossaryStore.getState().entries;
+    customSfxEntries = storeEntries
+      .filter((e) => e.isActive && e.type === 'SFX' && e.sourceText.trim())
+      .map((e) => ({
+        source: e.sourceText.trim(),
+        target: e.targetText.trim(),
+        notes: 'คำแปลจากพจนานุกรมส่วนตัว (Custom Glossary)',
+      }));
+  } catch (err) {
+    console.error('[sfxDictionaryService] Failed to load custom SFX from useGlossaryStore:', err);
+  }
+  
   const merged: SFXDictionary = {
     version: '1.0',
     data: {
-      en: [...userDict.en, ...DEFAULT_SFX_DICTIONARY.data.en],
-      jp: [...userDict.jp, ...DEFAULT_SFX_DICTIONARY.data.jp],
-      ko: [...userDict.ko, ...DEFAULT_SFX_DICTIONARY.data.ko],
+      en: [...customSfxEntries, ...userDict.en, ...DEFAULT_SFX_DICTIONARY.data.en],
+      jp: [...customSfxEntries, ...userDict.jp, ...DEFAULT_SFX_DICTIONARY.data.jp],
+      ko: [...customSfxEntries, ...userDict.ko, ...DEFAULT_SFX_DICTIONARY.data.ko],
     },
   };
   

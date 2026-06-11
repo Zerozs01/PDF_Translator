@@ -480,7 +480,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   // ตรวจวัดขนาดกล่องข้อความเพื่อหาว่ากล่องเป็นขนาด Small หรือไม่
   const isSmall = width < 120 || height < 40;
 
-  // 定義ว่า handle ใดควรแสดงผลเพื่อความคลีนแบบ Canva
+  // กำหนดว่า handle ใดควรแสดงผลเพื่อความคลีนแบบ Canva
   const visibleDirs = React.useMemo<ResizeDirection[]>(() => {
     // 1. ถ้ามี handle กำลัง active อยู่ -> แสดงเฉพาะอันนั้นอันเดียวเพื่อความคลีนและโฟกัส!
     if (activeResizeDir) {
@@ -512,13 +512,13 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
         transform: rotation ? `rotate(${rotation}deg)` : undefined,
         transformOrigin: 'center center',
         border: isRotating
-          ? '2px solid #8B5CF6' // กำลังหมุน -> เปลี่ยนเป็นเส้นทึบสีม่วง Canva พรีเมียม!
+          ? '2px solid #8B5CF6' // กำลังหมุน -> เส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? '2px solid #3B82F6' // ได้รับการเลือก -> เส้นทึบสีน้ำเงิน
+            ? '2px dashed #3B82F6' // ได้รับการเลือก -> เส้นประสีน้ำเงินบางตาขึ้น
             : isBoxHovered
-              ? '1.5px solid #F97316' // ชี้เมาส์โดน -> เส้นทึบสีส้มสว่างเด่นชัด
+              ? '1.5px dashed #F97316' // ชี้เมาส์โดน -> เส้นประสีส้ม
               : showDebugOverlay
-                ? '1.35px solid rgba(249, 115, 22, 0.45)' // ปกติ (ยังไม่เลือก) -> เส้นทึบสีส้มจางเพื่อให้เห็นขอบเขตได้ชัดเจน
+                ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
                 : 'none',
         borderRadius: 3,
         cursor: 'move',
@@ -611,7 +611,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
               </div>
             </div>
           )}
- 
+
           {/* ป้ายบอกองศา (Degree Badge Tooltip) - แสดงตอนกำลังหมุนจริง สีม่วงสว่างตัดชัดเจนกับมังงะขาวดำ */}
           {isRotating && (() => {
             // ฟังก์ชันสำหรับ Normalize องศาให้อยู่ในช่วง -180 ถึง 180 เพื่อการแสดงผลที่สวยงาม
@@ -621,7 +621,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
               if (norm > 180) norm -= 360;
               return norm;
             };
- 
+
             const currentNorm = normalizeAngle(rotation);
             const startNorm = normalizeAngle(startRotation);
             const deltaFromStart = normalizeAngle(rotation - startRotation);
@@ -631,7 +631,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
               : deltaFromStart < 0 
                 ? `${deltaFromStart}°` 
                 : `0°`;
- 
+
             return (
               <div style={{
                 position: 'absolute',
@@ -706,52 +706,6 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   const [activeResizeDir, setActiveResizeDir] = useState<ResizeDirection | null>(null);
   const [isRotating, setIsRotating] = useState<boolean>(false);
   const [startRotation, setStartRotation] = useState<number>(0);
-
-  // Ref and state for Viewport Virtualization
-  const overlayRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-
-  useEffect(() => {
-    const el = overlayRef.current;
-    if (!el || !isActive) return;
-    const parent = el.parentElement;
-    if (!parent) return;
-
-    const handleUpdate = () => {
-      const elRect = el.getBoundingClientRect();
-      const parentRect = parent.getBoundingClientRect();
-
-      // Viewport boundaries in local coordinate space of the overlay
-      // Use 250px margin to load layers slightly ahead during drag/pan/scroll
-      const MARGIN = 250;
-      const x0 = parentRect.left - elRect.left - MARGIN;
-      const y0 = parentRect.top - elRect.top - MARGIN;
-      const x1 = parentRect.left - elRect.left + parentRect.width + MARGIN;
-      const y1 = parentRect.top - elRect.top + parentRect.height + MARGIN;
-
-      setViewport({ x0, y0, x1, y1 });
-    };
-
-    // Initial update
-    handleUpdate();
-
-    // Listen to scroll events on parent
-    parent.addEventListener('scroll', handleUpdate, { passive: true });
-    window.addEventListener('resize', handleUpdate, { passive: true });
-
-    // Use ResizeObserver to detect scale/layout changes on zoom or pan
-    const resizeObserver = new ResizeObserver(() => {
-      handleUpdate();
-    });
-    resizeObserver.observe(el);
-    resizeObserver.observe(parent);
-
-    return () => {
-      parent.removeEventListener('scroll', handleUpdate);
-      window.removeEventListener('resize', handleUpdate);
-      resizeObserver.disconnect();
-    };
-  }, [ocrTransform, isActive]);
 
   // States for drawing region
   const [isDrawing, setIsDrawing] = useState(false);
@@ -1128,9 +1082,15 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   // ── Render ────────────────────────────────────────────────────
   if (!isActive) return null;
 
+  // คำนวณขอบเขต Viewport ในการทำ Virtualization ด้วยสูตรคณิตศาสตร์ (Math-based, zero layout thrashing)
+  const MARGIN = 400;
+  const viewportX0 = -MARGIN;
+  const viewportY0 = -MARGIN;
+  const viewportX1 = window.innerWidth + MARGIN;
+  const viewportY1 = window.innerHeight + MARGIN;
+
   return (
     <div
-      ref={overlayRef}
       id="interactive-overlay"
       style={{
         position: 'absolute',
@@ -1138,6 +1098,8 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         pointerEvents: 'all',
         zIndex: 10000,
         cursor: (activeTool === 'region' || activeTool === 'text') ? 'crosshair' : 'default',
+        willChange: 'transform',
+        contain: 'layout style paint'
       }}
       onMouseDown={handleOverlayMouseDown}
     >
@@ -1151,30 +1113,29 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
           return null;
         }
 
-        // Viewport Virtualization check
-        if (viewport) {
-          const effectiveBBox = (layout && !layer.userEdited)
-            ? (layout.mergedBBox || layer.bbox)
-            : layer.bbox;
-          const screenBox = toScreen(effectiveBBox, ocrTransform);
-          
-          const isVisible = (
-            screenBox.left + screenBox.width >= viewport.x0 &&
-            screenBox.left <= viewport.x1 &&
-            screenBox.top + screenBox.height >= viewport.y0 &&
-            screenBox.top <= viewport.y1
-          );
+        // Viewport Virtualization check (Math-based, zero DOM metrics API overhead)
+        const effectiveBBox = (layout && !layer.userEdited)
+          ? (layout.mergedBBox || layer.bbox)
+          : layer.bbox;
+        const screenBox = toScreen(effectiveBBox, ocrTransform);
+        
+        const isVisible = (
+          screenBox.left + screenBox.width >= viewportX0 &&
+          screenBox.left <= viewportX1 &&
+          screenBox.top + screenBox.height >= viewportY0 &&
+          screenBox.top <= viewportY1
+        );
 
-          const isSelected = selectedLayerIds.has(layer.id);
-          const isEditing = editingLayerId === layer.id;
-          if (!isVisible && !isSelected && !isEditing) {
-            return null;
-          }
+        const isBoxSelected = selectedLayerIds.has(layer.id);
+        const isEditing = editingLayerId === layer.id;
+        
+        // ข้ามการสร้าง DOM Node เมื่อกล่องอยู่นอกพื้นที่หน้าต่าง และไม่ได้ถูกเลือกหรือแก้ไขอยู่
+        if (!isVisible && !isBoxSelected && !isEditing) {
+          return null;
         }
 
-        const isEditing = editingLayerId === layer.id;
-        const isSelected = selectedLayerIds.has(layer.id) && selectedLayerIds.size === 1;
-        const isMultiSelected = selectedLayerIds.has(layer.id) && selectedLayerIds.size > 1;
+        const isSelected = isBoxSelected && selectedLayerIds.size === 1;
+        const isMultiSelected = isBoxSelected && selectedLayerIds.size > 1;
 
         return (
           <React.Fragment key={layer.id}>

@@ -104,6 +104,7 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bTHISMY\b/gi, replacement: 'THIS, MY' },
   { pattern: /\bUSTHE,A\b/gi, replacement: 'US THE, A' },
   { pattern: /\bUSTHEA\b/gi, replacement: 'US THE, A' },
+  { pattern: /\bdums\b/gi, replacement: 'dumb' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -332,8 +333,8 @@ export const normalizeSourceForTranslation = (text: string, sourceLanguage = '')
   }
 
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
-  normalized = normalized.replace(/([,.;:!?])(\S)/g, '$1 $2');
-  normalized = normalized.replace(/(?<=\s|^)_+/g, '').replace(/_+(?=\s|$)/g, '');
+  normalized = normalized.replace(/([,.;:!?])(?=[^,.;:!?\s])/g, '$1 ');
+  normalized = normalized.replace(/(?<=^|\s)_+/g, '').replace(/_+(?=\s|$)/g, '');
   normalized = normalized.replace(/\b([A-Za-z]{2,})_+(\s|$)/g, '$1...$2');
   normalized = normalized.replace(/\b_+([A-Za-z]{2,})\b/g, '$1');
   normalized = normalizeWhitespace(normalized);

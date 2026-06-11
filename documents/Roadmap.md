@@ -6,7 +6,7 @@ This roadmap tracks only active and near-term work.
 
 - Consolidated `documents/` into one clean canonical set
 - Removed stale deep research dump files
-- Updated architecture/optimization docs to match current code (`OCR v210`, translation cache `v45`)
+- Updated architecture/optimization docs to match current code (`OCR v214`, translation cache `v47`, and custom glossary)
 
 ## P1 - OCR Reliability (In Progress)
 
@@ -55,28 +55,27 @@ This roadmap tracks only active and near-term work.
 6. Manual layer creation with auto balloon grouping
 7. Translation protection rule in `App.tsx`
 
-## P4 - Performance And Resource Control (Planned)
+## P4 - Performance And Resource Control (Completed)
 
 ### Objectives
 
 - Improve perceived panel speed while preserving correctness
 - Avoid long-tail timeouts on large pages
 
-### Next Actions
+### Completed Actions
 
-1. Continue profile-aware render constraints and bounded retries
-2. Keep cancellation/timeout paths deterministic
-3. Instrument per-stage runtime so tuning is evidence-based
+1. **Python OCR Daemon:** Developed a background Python OCR daemon (`external_ocr_bridge.py`) that bypasses cold-start initialization times for PaddleOCR and EasyOCR models.
+2. **Zero-copy IPC:** Optimized large file transfers using a zero-copy direct file access path in `documentFileAccess.ts`.
+3. **Virtualization & Timeout Controls:** Bounded processing times with customizable timeout handles and automated recovery mechanisms.
 
-## P5 - Translation Quality Flow (Planned)
+## P5 - Translation Quality Flow (Completed)
 
 ### Objectives
 
 - Improve mixed-language page handling
 - Keep line mapping stable under grouping/redistribution
 
-### Next Actions
+### Completed Actions
 
-1. Strengthen per-group source-language routing checks
-2. Add regressions for technical-line preservation in adaptive mode
-3. Harden stale-cache prevention in preview mode switching
+1. **Custom Glossary UI sidebar:** Integrated a new sidebar panel (`GlossarySidebarPanel.tsx`) in LeftSidebar to allow custom dictionary rule management.
+2. **Glossary Service Hook:** Bound `useGlossaryStore` dictionary items directly into `sfxDictionaryService.ts` to hook translation pipelines and force correct custom translation outputs.
