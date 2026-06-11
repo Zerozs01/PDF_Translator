@@ -457,7 +457,7 @@ interface SelectionBoxProps {
   layout?: OverlayLayout;
 }
 
-const SelectionBox: React.FC<SelectionBoxProps> = ({
+const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
@@ -480,7 +480,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
   // ตรวจวัดขนาดกล่องข้อความเพื่อหาว่ากล่องเป็นขนาด Small หรือไม่
   const isSmall = width < 120 || height < 40;
 
-  // กำหนดว่า handle ใดควรแสดงผลเพื่อความคลีนแบบ Canva
+  // 定義ว่า handle ใดควรแสดงผลเพื่อความคลีนแบบ Canva
   const visibleDirs = React.useMemo<ResizeDirection[]>(() => {
     // 1. ถ้ามี handle กำลัง active อยู่ -> แสดงเฉพาะอันนั้นอันเดียวเพื่อความคลีนและโฟกัส!
     if (activeResizeDir) {
@@ -611,7 +611,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
               </div>
             </div>
           )}
-
+ 
           {/* ป้ายบอกองศา (Degree Badge Tooltip) - แสดงตอนกำลังหมุนจริง สีม่วงสว่างตัดชัดเจนกับมังงะขาวดำ */}
           {isRotating && (() => {
             // ฟังก์ชันสำหรับ Normalize องศาให้อยู่ในช่วง -180 ถึง 180 เพื่อการแสดงผลที่สวยงาม
@@ -621,7 +621,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
               if (norm > 180) norm -= 360;
               return norm;
             };
-
+ 
             const currentNorm = normalizeAngle(rotation);
             const startNorm = normalizeAngle(startRotation);
             const deltaFromStart = normalizeAngle(rotation - startRotation);
@@ -631,7 +631,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
               : deltaFromStart < 0 
                 ? `${deltaFromStart}°` 
                 : `0°`;
-
+ 
             return (
               <div style={{
                 position: 'absolute',
@@ -680,7 +680,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = ({
       )}
     </div>
   );
-};
+});
 
 // ─── Main Component: InteractiveLayerOverlay ──────────────────────
 export const InteractiveLayerOverlay: React.FC<Props> = ({
@@ -706,6 +706,52 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   const [activeResizeDir, setActiveResizeDir] = useState<ResizeDirection | null>(null);
   const [isRotating, setIsRotating] = useState<boolean>(false);
   const [startRotation, setStartRotation] = useState<number>(0);
+
+  // Ref and state for Viewport Virtualization
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el || !isActive) return;
+    const parent = el.parentElement;
+    if (!parent) return;
+
+    const handleUpdate = () => {
+      const elRect = el.getBoundingClientRect();
+      const parentRect = parent.getBoundingClientRect();
+
+      // Viewport boundaries in local coordinate space of the overlay
+      // Use 250px margin to load layers slightly ahead during drag/pan/scroll
+      const MARGIN = 250;
+      const x0 = parentRect.left - elRect.left - MARGIN;
+      const y0 = parentRect.top - elRect.top - MARGIN;
+      const x1 = parentRect.left - elRect.left + parentRect.width + MARGIN;
+      const y1 = parentRect.top - elRect.top + parentRect.height + MARGIN;
+
+      setViewport({ x0, y0, x1, y1 });
+    };
+
+    // Initial update
+    handleUpdate();
+
+    // Listen to scroll events on parent
+    parent.addEventListener('scroll', handleUpdate, { passive: true });
+    window.addEventListener('resize', handleUpdate, { passive: true });
+
+    // Use ResizeObserver to detect scale/layout changes on zoom or pan
+    const resizeObserver = new ResizeObserver(() => {
+      handleUpdate();
+    });
+    resizeObserver.observe(el);
+    resizeObserver.observe(parent);
+
+    return () => {
+      parent.removeEventListener('scroll', handleUpdate);
+      window.removeEventListener('resize', handleUpdate);
+      resizeObserver.disconnect();
+    };
+  }, [ocrTransform, isActive]);
 
   // States for drawing region
   const [isDrawing, setIsDrawing] = useState(false);
@@ -1084,6 +1130,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
   return (
     <div
+      ref={overlayRef}
       id="interactive-overlay"
       style={{
         position: 'absolute',
@@ -1102,6 +1149,27 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         const layout = layouts?.get(layer.lineIndex);
         if (layout?.hidden) {
           return null;
+        }
+
+        // Viewport Virtualization check
+        if (viewport) {
+          const effectiveBBox = (layout && !layer.userEdited)
+            ? (layout.mergedBBox || layer.bbox)
+            : layer.bbox;
+          const screenBox = toScreen(effectiveBBox, ocrTransform);
+          
+          const isVisible = (
+            screenBox.left + screenBox.width >= viewport.x0 &&
+            screenBox.left <= viewport.x1 &&
+            screenBox.top + screenBox.height >= viewport.y0 &&
+            screenBox.top <= viewport.y1
+          );
+
+          const isSelected = selectedLayerIds.has(layer.id);
+          const isEditing = editingLayerId === layer.id;
+          if (!isVisible && !isSelected && !isEditing) {
+            return null;
+          }
         }
 
         const isEditing = editingLayerId === layer.id;
