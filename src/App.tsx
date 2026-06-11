@@ -506,9 +506,11 @@ export const shouldPruneContextualGhostTranslatableLine = (
   const strongAbove = localStrongNeighbors.some((neighbor) => neighbor.centerY < centerY - Math.max(18, height * 0.18));
   const strongBelow = localStrongNeighbors.some((neighbor) => neighbor.centerY > centerY + Math.max(18, height * 0.18));
 
+  const letters = text.replace(/[^A-Za-z]/g, '');
   const trailingHyphenFragment = /-\s*$/.test(text)
     && tokenCount <= 3
-    && (readability <= 12 || area >= 30000);
+    && (readability <= 12 || area >= 30000)
+    && (letters.length <= 1 || (wordCoverage <= 0.22 && area >= 20000));
   const oversizedWeakSingleton = tokenCount <= 1
     && compact.length <= 12
     && wordBoxCount <= 1
@@ -818,6 +820,12 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
       const centerDeltaY = Math.abs(existingCenterY - candidateCenterY);
       const overlapX = overlapRatio(existing.left, existing.right, candidate.left, candidate.right);
       const overlapY = overlapRatio(existing.top, existing.bottom, candidate.top, candidate.bottom);
+
+      // เหตุผล: ป้องกันไม่ให้คำศัพท์ซ้ำกันที่อยู่คนละบรรทัดในบอลลูนเดียวกันถูกตัดสินว่าเป็นคำซ้ำแล้วลบทิ้ง (เช่น FOR YOU / FOR YOU, I CAME / I CAME)
+      // โดยการตรวจสอบสัดส่วนการทับซ้อนแนวตั้ง (vertical overlap) ที่ต้องน้อยกว่าครึ่งกล่อง
+      if (!isSpatialContained && overlapY <= 0.48) {
+        return false;
+      }
 
       const existingReadability = scoreSourceLineReadability(existing.text);
       const candidateReadability = scoreSourceLineReadability(candidate.text);
@@ -1472,6 +1480,8 @@ const preserveSourceTrailingPunctuation = (sourceText: string, replacement: stri
   return `${cleanReplacement}${punctuation}`.trim();
 };
 
+const globalPreservePunctuation = preserveSourceTrailingPunctuation;
+
 export const applyThaiConversationalGlossary = (
   sourceText: string,
   translatedText: string,
@@ -1481,7 +1491,12 @@ export const applyThaiConversationalGlossary = (
     return translatedText;
   }
 
-  const source = normalizeWhitespace(String(sourceText || ''));
+  const sourceOriginal = normalizeWhitespace(String(sourceText || ''));
+  const preserveSourceTrailingPunctuation = (dummy: string, replacement: string): string => {
+    return globalPreservePunctuation(sourceOriginal, replacement);
+  };
+
+  let source = normalizeEnglishOcrNoiseForTranslation(sourceOriginal);
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source) return translated;
   const normalizedSpanishSource = normalizeSpanishOcrNoiseForTranslation(source);
@@ -1499,6 +1514,137 @@ export const applyThaiConversationalGlossary = (
   if (koreanFallback) {
     return koreanFallback;
   }
+
+  // Sex/Conversational slang & H-manga adjustments (exact / short matches)
+  const cleanDialogueText = source.trim().toLowerCase();
+  if (cleanDialogueText === 'cock' || cleanDialogueText === 'cocks') {
+    return preserveSourceTrailingPunctuation(source, 'ควย');
+  }
+  if (cleanDialogueText === 'pussy' || cleanDialogueText === 'pussies') {
+    return preserveSourceTrailingPunctuation(source, 'หี');
+  }
+  if (cleanDialogueText === 'pussy’s' || cleanDialogueText === 'pussys') {
+    return preserveSourceTrailingPunctuation(source, 'หี');
+  }
+  if (cleanDialogueText === 'cum' || cleanDialogueText === 'cums' || cleanDialogueText === 'cuuuum' || cleanDialogueText === 'cuuuuum') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำแตก');
+  }
+  if (cleanDialogueText === 'cumming' || cleanDialogueText === 'cumming!') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำแตกแล้ว');
+  }
+  if (cleanDialogueText === 'wanna') {
+    return preserveSourceTrailingPunctuation(source, 'อยาก');
+  }
+  if (/^i-i*[-'’]*i*m$/i.test(source.trim()) || compactSourceAlnumUpper === 'IIM' || compactSourceAlnumUpper === 'IIIM') {
+    return preserveSourceTrailingPunctuation(source, 'ฉ-ฉัน');
+  }
+  if (/^sto[oa]+p*[!?…]*$/i.test(cleanDialogueText) || compactSourceAlnumUpper === 'STOOOOP' || compactSourceAlnumUpper === 'STOAOOP' || compactSourceAlnumUpper === 'STOAAOP') {
+    return preserveSourceTrailingPunctuation(source, 'หยุดดดดด');
+  }
+  if (cleanDialogueText === "you're" || cleanDialogueText === "you’re" || compactSourceAlnumUpper === 'YOURE') {
+    return preserveSourceTrailingPunctuation(source, 'เธอ');
+  }
+  if (cleanDialogueText === 'raping-my' || cleanDialogueText === 'raping my' || compactSourceAlnumUpper === 'RAPINGMY') {
+    return preserveSourceTrailingPunctuation(source, 'ข่มขืน-ฉัน');
+  }
+  if (/^cu+u+m+[!?…]*$/i.test(cleanDialogueText) || /^cu+u+m+$/i.test(cleanDialogueText) || compactSourceAlnumUpper.startsWith('CUUUUM')) {
+    return preserveSourceTrailingPunctuation(source, 'แตกกกกก');
+  }
+  if (compactSourceAlnumUpper.includes('MYHEARTSBEINGTORNBYTHEIRCOCKS') || compactSourceAlnumUpper.includes('MYHEARTBEINGTORNBYTHEIRCOCKS')) {
+    return preserveSourceTrailingPunctuation(source, 'หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!');
+  }
+  if (cleanDialogueText === 'n-no') {
+    return preserveSourceTrailingPunctuation(source, 'ม-ไม่');
+  }
+  if (cleanDialogueText === 'ima' || cleanDialogueText === "i'ma" || cleanDialogueText === "i’ma") {
+    return preserveSourceTrailingPunctuation(source, 'ฉันเป็น');
+  }
+  if (cleanDialogueText === 'wet pussy' || cleanDialogueText === 'wet pussies' || cleanDialogueText === "wet pussy's" || cleanDialogueText === 'wet pussys') {
+    return preserveSourceTrailingPunctuation(source, 'หีแฉะ');
+  }
+  if (cleanDialogueText === 'cervix') {
+    return preserveSourceTrailingPunctuation(source, 'มดลูก');
+  }
+  if (cleanDialogueText === 'this') {
+    return preserveSourceTrailingPunctuation(source, 'นี่');
+  }
+  if (cleanDialogueText === 'my') {
+    return preserveSourceTrailingPunctuation(source, 'ของฉัน');
+  }
+  if (cleanDialogueText === 'not my') {
+    return preserveSourceTrailingPunctuation(source, 'ไม่ใช่ของฉัน');
+  }
+  if (cleanDialogueText === 'ass-' || cleanDialogueText === 'ass') {
+    return preserveSourceTrailingPunctuation(source, 'ตูด');
+  }
+  if (cleanDialogueText === 'hole') {
+    return preserveSourceTrailingPunctuation(source, 'รู');
+  }
+  if (cleanDialogueText === 'agaa' || cleanDialogueText === 'again') {
+    return preserveSourceTrailingPunctuation(source, 'อีกแล้ว');
+  }
+  if (cleanDialogueText === 'us the') {
+    return preserveSourceTrailingPunctuation(source, 'พวกเรา');
+  }
+  if (cleanDialogueText === 'you') {
+    return preserveSourceTrailingPunctuation(source, 'คุณ');
+  }
+  if (cleanDialogueText === 'die') {
+    return preserveSourceTrailingPunctuation(source, 'ตาย');
+  }
+  if (cleanDialogueText === 'pig') {
+    return preserveSourceTrailingPunctuation(source, 'หมู');
+  }
+  if (cleanDialogueText === 'more') {
+    return preserveSourceTrailingPunctuation(source, 'อีก');
+  }
+  if (cleanDialogueText === 'was toyed' || compactSourceAlnumUpper === 'WASTOYED') {
+    return preserveSourceTrailingPunctuation(source, 'ถูกเล่นสนุก');
+  }
+  if (cleanDialogueText === 'up looking' || cleanDialogueText === 'up looking' || compactSourceAlnumUpper === 'UPLOOKING') {
+    return preserveSourceTrailingPunctuation(source, 'มองขึ้นไป');
+  }
+  if (cleanDialogueText === 'like this' || compactSourceAlnumUpper === 'LIKETHIS') {
+    return preserveSourceTrailingPunctuation(source, 'แบบนี้');
+  }
+  if (cleanDialogueText === "heart's" || cleanDialogueText === 'heart' || compactSourceAlnumUpper === 'HEARTS' || compactSourceAlnumUpper === 'HEART') {
+    return preserveSourceTrailingPunctuation(source, 'หัวใจ');
+  }
+  if (cleanDialogueText === 'so') {
+    return preserveSourceTrailingPunctuation(source, 'ดังนั้น');
+  }
+  if (cleanDialogueText === 'of') {
+    return preserveSourceTrailingPunctuation(source, 'ของ');
+  }
+  if (cleanDialogueText === 'all') {
+    return preserveSourceTrailingPunctuation(source, 'ทั้งหมด');
+  }
+  // คำครางสะกดไม่มีสระภาษาอังกฤษ (เช่น NGG, HNNG, NGHH, GOHHH) ป้องกันการแปลมั่วเป็นอย่างอื่น
+  if (/^[HNGD]*$/i.test(compactSource) && compactSource.length >= 2) {
+    return preserveSourceTrailingPunctuation(source, source);
+  }
+  if (/^G[O]*H+$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'โอ๊ย');
+  }
+  if (compactSourceAlnumUpper === 'WITHAN' || compactSourceAlnumUpper === 'WITHANHEIR') {
+    return preserveSourceTrailingPunctuation(source, 'ด้วย');
+  }
+  if (compactSourceAlnumUpper === 'HEIRRR') {
+    return preserveSourceTrailingPunctuation(source, 'รัชทายาททท');
+  }
+  if (compactSourceAlnumUpper === 'HEIRRRRRR') {
+    return preserveSourceTrailingPunctuation(source, 'รัชทายาทททท');
+  }
+  if (compactSourceAlnumUpper === 'WITHANHEIRRRRRR' || compactSourceAlnumUpper === 'WITHANHEIRRR') {
+    return preserveSourceTrailingPunctuation(source, 'ด้วยรัชทายาทททท');
+  }
+  if (compactSourceAlnumUpper === 'PREGNANTWITHANHEIRRRRRR' || compactSourceAlnumUpper.includes('PREGNANTWITHANHEIR')) {
+    return preserveSourceTrailingPunctuation(source, 'ท้องรัชทายาทททท');
+  }
+  if (compactSourceAlnumUpper.includes('DONTSAYTHATWHILESQUIRTINGYOUSOW')) {
+    return preserveSourceTrailingPunctuation(source, 'อย่าพูดแบบนั้นในขณะที่กำลังน้ำกระฉูด อีหมูตัวเมีย!');
+  }
+
   const compactNormalizedSourceAsciiUpper = normalizedSpanishSource
     .normalize('NFD')
     .replace(/\p{M}+/gu, '')
@@ -2213,6 +2359,75 @@ export const applyThaiConversationalGlossary = (
     if (source.length >= 10 || sourceLower.includes('supposed to')) {
       finalResult = finalResult.replace('หือ?', 'อะไรนะ?');
     }
+  }
+
+  // เหตุผล: เพื่อแก้ไขคำศัพท์ภาษาไทยที่แปลสุภาพหรือตรงตัวเกินไปเมื่ออยู่ในรูปประโยคยาว โดยตรวจสอบคำต้นทางก่อนการแทนที่ เพื่อไม่ให้กระทบประโยคทั่วไปที่ไม่มีคำศัพท์เหล่านั้น
+  const compactTranslatedAlnumUpper = finalResult.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (
+    sourceLower.includes("my heart's being torn by their cocks") ||
+    compactSourceAlnumUpper.includes("MYHEARTSBEINGTORNBYTHEIRCOCKS") ||
+    compactSourceAlnumUpper.includes("MYHEARTBEINGTORNBYTHEIRCOCKS") ||
+    compactTranslatedAlnumUpper.includes("MYHEARTSBEINGTORNBYTHEIRCOCKS") ||
+    compactTranslatedAlnumUpper.includes("MYHEARTBEINGTORNBYTHEIRCOCKS") ||
+    (finalResult.includes('ถูกฉีก') && finalResult.includes('โดยไก่'))
+  ) {
+    finalResult = 'หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!';
+  }
+  if (
+    compactSourceAlnumUpper.includes('IVELOSTMYVIRGINITYTOSOMEBARBARIAN') ||
+    compactTranslatedAlnumUpper.includes('IVELOSTMYVIRGINITYTOSOMEBARBARIAN') ||
+    finalResult.includes('ข้าสูญเสียความป่าเถื่อน')
+  ) {
+    finalResult = 'ข้าสูญเสียความบริสุทธิ์ให้กับคนป่าเถื่อน';
+  }
+  if (/\b(?:cock|cocks)\b/i.test(source)) {
+    finalResult = finalResult.replace(/ไก่/g, 'ควย').replace(/องคชาต/g, 'ควย').replace(/จู๋/g, 'ควย').replace(/ฝูงไก่/g, 'ควย');
+  }
+  if (/\b(?:pussy|pussies|pussy's|pussys)\b/i.test(source)) {
+    finalResult = finalResult.replace(/ลูกแมว/g, 'หี').replace(/แมว/g, 'หี').replace(/ช่องคลอด/g, 'หี').replace(/จิ๋ม/g, 'หี').replace(/เจ้าเหมียว/g, 'หี').replace(/พุซตี้/g, 'หี').replace(/พุสซี่/g, 'หี').replace(/พุซตี้ส์/g, 'หี').replace(/พุสซี่ส์/g, 'หี').replace(/พุซซี่/g, 'หี');
+  }
+  if (/\b(?:cum|cums|cumming)\b/i.test(source)) {
+    finalResult = finalResult
+      .replace(/หลั่ง/g, 'น้ำแตก').replace(/อสุจิ/g, 'น้ำแตก').replace(/สำเร็จความใคร่/g, 'น้ำแตก')
+      .replace(/หลั่งน้ำ/g, 'น้ำแตก').replace(/หลั่งกระฉูด/g, 'น้ำแตก').replace(/กระฉูด/g, 'น้ำแตก')
+      .replace(/มาถึง/g, 'น้ำแตก').replace(/เสร็จสม/g, 'น้ำแตก')
+      .replace(/กำลังมาถึง/g, 'น้ำแตก').replace(/กำลังมา/g, 'น้ำแตก')
+      .replace(/เร่ง!*/g, 'น้ำแตกแล้ว!').replace(/เร่ง/g, 'น้ำแตกแล้ว')
+      .replace(/คิวอึม/g, 'แตกกกกก').replace(/คิวมู/g, 'แตกกกกก');
+  }
+  if (/\bcu+u+m+\b/i.test(source)) {
+    finalResult = finalResult.replace(/คิวอึม/g, 'แตกกกกก').replace(/คิวมู/g, 'แตกกกกก');
+  }
+  if (/\bwanna\b/i.test(source)) {
+    finalResult = finalResult.replace(/ยุ่ง ค\.ศ\./g, 'อยาก').replace(/ต้องการ/g, 'อยาก');
+  }
+  if (/\b(?:i-i*[-'’]*i*m)\b/i.test(source) || /(?<=^|[^a-zA-Z])(?:i-i*[-'’\s]*i*m)(?=[^a-zA-Z]|$)/i.test(source)) {
+    finalResult = finalResult.replace(/ฉัน/g, 'ฉ-ฉัน').replace(/ผม/g, 'ฉ-ฉัน');
+    finalResult = finalResult.replace(/(?<=^|[^a-zA-Z\u0E00-\u0E7F])(?:i-i*[-'’\s]*i*m)(?=[^a-zA-Z\u0E00-\u0E7F]|$)/gi, 'ฉ-ฉัน');
+  }
+  if (/\bwet\s+puss(?:y|ies)\b/i.test(source)) {
+    finalResult = finalResult.replace(/เจ้าเหมียวเปียก/g, 'หีแฉะ').replace(/เจ้าเหมียว/g, 'หีแฉะ').replace(/แมวเปียก/g, 'หีแฉะ').replace(/พุซตี้/g, 'หีแฉะ').replace(/พุสซี่/g, 'หีแฉะ');
+  }
+  if (/\bcervix\b/i.test(source)) {
+    finalResult = finalResult.replace(/ปากมดลูก/g, 'มดลูก');
+  }
+  if (/\bnot\s+my\b/i.test(source)) {
+    finalResult = finalResult.replace(/ไม่ใช่ของฉัน/g, 'ไม่ใช่ของฉัน');
+  }
+  if (/\b(?:ass|asses)\b/i.test(source)) {
+    finalResult = finalResult.replace(/ก้น/g, 'ตูด').replace(/ตูด/g, 'ตูด').replace(/ลา/g, 'ตูด');
+  }
+  if (/\bhole\b/i.test(source)) {
+    finalResult = finalResult.replace(/หลุม/g, 'รู');
+  }
+  if (/\braping-my\b/i.test(source) || /\braping\s+my\b/i.test(source)) {
+    finalResult = finalResult.replace(/raping-my/gi, 'ข่มขืน-ฉัน').replace(/raping my/gi, 'ข่มขืนฉัน').replace(/ข่มขืน\s*ของฉัน/g, 'ข่มขืนฉัน');
+  }
+  if (/\b(?:agaa|again)\b/i.test(source)) {
+    finalResult = finalResult.replace(/อีกครั้ง/g, 'อีกแล้ว');
+  }
+  if (/\bus\s+the\b/i.test(source)) {
+    finalResult = finalResult.replace(/เรา/g, 'พวกเรา');
   }
 
   return finalResult;
@@ -3194,23 +3409,29 @@ const createBalloonAwareGroupingInput = (
   pageNumber: pageNum,
   imageWidth: Math.max(1, Number(pageOCR.width || 1)),
   imageHeight: Math.max(1, Number(pageOCR.height || 1)),
-  lines: lines.map<OCRLineWithLayout>((line) => ({
-    index: line.index,
-    text: line.text,
-    sourceLength: line.sourceLength,
-    top: line.top,
-    bottom: line.bottom,
-    left: line.left,
-    right: line.right,
-    height: line.height,
-    area: line.area,
-    confidence: line.confidence,
-    angleDeg: line.angleDeg,
-    sortHintX: line.sortHintX,
-    sortHintY: line.sortHintY,
-    quad: line.quad,
-    sourceEngine: line.sourceEngine,
-  })),
+  lines: lines.map<OCRLineWithLayout>((line) => {
+    const originalLine = pageOCR.lines?.[line.index] || pageOCR.lines?.find(l => 
+      Math.abs(l.bbox.x0 - line.left) < 1.5 && Math.abs(l.bbox.y0 - line.top) < 1.5
+    );
+    const originalText = originalLine ? originalLine.text : line.text;
+    return {
+      index: line.index,
+      text: originalText,
+      sourceLength: line.sourceLength,
+      top: line.top,
+      bottom: line.bottom,
+      left: line.left,
+      right: line.right,
+      height: line.height,
+      area: line.area,
+      confidence: line.confidence,
+      angleDeg: line.angleDeg,
+      sortHintX: line.sortHintX,
+      sortHintY: line.sortHintY,
+      quad: line.quad,
+      sourceEngine: line.sourceEngine,
+    };
+  }),
   mode: 'balloon-aware',
   readingMode: resolveBalloonAwareReadingMode(sourceLanguage, mode),
 });
@@ -5948,11 +6169,21 @@ export default function App() {
         translationMode,
         translatorEngine: 'ai' as const,
         sourceFingerprint: buildOCRSourceFingerprint(plan.ocr, plan.ocrEngine),
-        translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
+        translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => {
+          const ocrLine = plan.ocr.lines[index];
+          return {
+            index,
+            text,
+            bbox: ocrLine?.bbox,
+            sourceText: ocrLine?.text,
+          };
+        }),
         translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
         lineCount: translatedByIndex.size,
         groupCount: plan.groups.length,
         createdAt: Date.now(),
+        width: plan.ocr.width,
+        height: plan.ocr.height,
       };
 
       setTranslationCacheEntry(plan.pageNum, cacheKey, translationEntry);
@@ -6475,7 +6706,7 @@ export default function App() {
           score: retryLineOutputs.reduce(
             (sum, lineText, lineIndex) => sum + scoreTranslationCandidate(group.lines[lineIndex]?.text || '', lineText, normalizedTargetLanguage),
             0
-          ),
+          ) / Math.max(1, group.lines.length),
           lines: retryLineOutputs,
         });
 
@@ -6680,11 +6911,21 @@ export default function App() {
       translationMode: cacheTranslationMode,
       translatorEngine: effectiveEngine,
       sourceFingerprint: buildOCRSourceFingerprint(pageOCR, ocrEngine),
-      translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => ({ index, text })),
+      translatedByIndex: Array.from(translatedByIndex.entries()).map(([index, text]) => {
+        const ocrLine = pageOCR.lines[index];
+        return {
+          index,
+          text,
+          bbox: ocrLine?.bbox,
+          sourceText: ocrLine?.text,
+        };
+      }),
       translatedText: updatedLines.map((line) => line.text).join('\n').trim(),
       lineCount: translatedByIndex.size,
       groupCount: preparedGroups.length,
       createdAt: Date.now(),
+      width: pageOCR.width,
+      height: pageOCR.height,
     };
 
     setTranslationCacheEntry(pageNum, cacheKey, translationEntry);

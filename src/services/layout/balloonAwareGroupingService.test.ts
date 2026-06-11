@@ -207,4 +207,61 @@ describe('deriveBalloonAwareLayoutGrouping', () => {
     expect(result.diagnostics.avgConfidence).toBeGreaterThanOrEqual(0);
     expect(result.diagnostics.avgConfidence).toBeLessThanOrEqual(1);
   });
+
+  test('preserves vertical reading order for horizontally overlapping lines in same balloon', () => {
+    const overlappingFixture: LayoutGroupingInput = {
+      pageNumber: 2,
+      imageWidth: 1000,
+      imageHeight: 15000,
+      mode: 'balloon-aware',
+      readingMode: 'ltr',
+      lines: [
+        line(0, 'A-Are Vou', 315, 12218, 595, 12319, { sortHintX: 315, sortHintY: 12218 }),
+        line(1, 'selling mg Off to', 220, 12278, 699, 12416, { sortHintX: 220, sortHintY: 12278 }),
+      ],
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(overlappingFixture);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.orderedLineIndexes).toEqual([0, 1]);
+  });
+
+  test('keeps "FiTTiNG FOR" (left column) and "BEING" (right column) separated on page 21', () => {
+    const page21Fixture: LayoutGroupingInput = {
+      pageNumber: 21,
+      imageWidth: 5132,
+      imageHeight: 7394,
+      mode: 'balloon-aware',
+      readingMode: 'ltr',
+      lines: [
+        // Dummy lines to stabilize baseHeight (median height) around 100px
+        line(90, 'DUMMY 1', 10, 10, 50, 110),
+        line(91, 'DUMMY 2', 10, 120, 50, 220),
+        line(92, 'DUMMY 3', 10, 230, 50, 330),
+        line(93, 'DUMMY 4', 10, 340, 50, 440),
+        line(94, 'DUMMY 5', 10, 450, 50, 550),
+
+        // Left Column
+        line(35, 'FiTTiNG FOR', 2718, 4236, 3127, 4327, { sortHintX: 2718, sortHintY: 4224 }),
+        line(38, 'A PiG LiKE', 2742, 4339, 3095, 4422, { sortHintX: 313.49, sortHintY: 4339 }),
+        line(39, 'yOU!', 2835, 4434, 3003, 4525, { sortHintX: 2835, sortHintY: 4426 }),
+
+        // Right Column
+        line(28, 'ARE', 3308, 3812, 3528, 3990, { sortHintX: 3308, sortHintY: 3812 }),
+        line(31, 'ALL', 3316, 4010, 3512, 4181, { sortHintX: 3316, sortHintY: 4010 }),
+        line(36, 'BEING', 3252, 4224, 3584, 4383, { sortHintX: 2718, sortHintY: 4224 }),
+        line(40, 'SLASHED', 3171, 4426, 3653, 4589, { sortHintX: 2835, sortHintY: 4426 }),
+      ],
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(page21Fixture);
+
+    const groupWithFitting = result.groups.find(g => g.lineIndexes.includes(35));
+    const groupWithBeing = result.groups.find(g => g.lineIndexes.includes(36));
+
+    expect(groupWithFitting).toBeDefined();
+    expect(groupWithBeing).toBeDefined();
+    expect(groupWithFitting!.id).not.toEqual(groupWithBeing!.id);
+  });
 });
+

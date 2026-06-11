@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -51,8 +51,21 @@ export interface ExternalOcrWarmupResponse {
 }
 
 export interface ExternalOcrRequestPayload {
+  id?: string;
   engine: string;
-  imageData: Uint8Array | ArrayBuffer;
+  chunkIndex?: number;
+  totalChunks?: number;
+  /**
+   * Absolute path to a temp image file already written to disk.
+   * Preferred over imageData — avoids heavy buffer serialization across the IPC bridge.
+   * When provided, runExternalOcr bypasses the writeFile step entirely.
+   */
+  imagePath?: string;
+  /**
+   * @deprecated Provide imagePath instead to eliminate IPC buffer copy overhead.
+   * Still supported for backward-compatibility but will be removed in a future version.
+   */
+  imageData?: Uint8Array | ArrayBuffer;
   imageMimeType: string;
   imageWidth: number;
   imageHeight: number;
@@ -61,6 +74,14 @@ export interface ExternalOcrRequestPayload {
   pageSegMode?: number;
   pipelineProfile?: string;
   ocrQualityProfile?: string;
+  /**
+   * Override PaddleOCR det_limit_side_len (pixels) for this request.
+   * Defaults to 4800 when omitted — optimal for dense academic PDFs.
+   * Use up to 6000 for tall financial spreadsheets or receipts.
+   * Hard-capped at 6000 to prevent the DB++ "Donut Effect".
+   */
+  maxSideLen?: number;
+  maxPixels?: number;
 }
 
 interface ExternalOcrBridgeResponse {
@@ -119,6 +140,7 @@ const BENIGN_BRIDGE_STDERR_PATTERNS = [
 interface BridgeDaemonRequest {
   resolve: (response: ExternalOcrBridgeResponse) => void;
   reject: (error: Error) => void;
+  payload?: Record<string, unknown>;
 }
 
 interface BridgeDaemon {
@@ -128,6 +150,13 @@ interface BridgeDaemon {
   pending: Map<string, BridgeDaemonRequest>;
   scriptPath: string;
   scriptSignature: string;
+  queue: Array<{
+    payload: Record<string, unknown>;
+    resolve: (response: ExternalOcrBridgeResponse) => void;
+    reject: (error: Error) => void;
+    timeoutMs: number;
+  }>;
+  running: boolean;
 }
 
 function resolveBridgeScriptPath(): string {
@@ -401,6 +430,15 @@ function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
   if (!daemon) return;
 
   bridgeDaemons.delete(engine);
+
+  if (daemon.queue) {
+    for (const task of daemon.queue) {
+      task.reject(reason ?? new Error(`OCR daemon for ${engine} stopped unexpectedly`));
+    }
+    daemon.queue = [];
+  }
+  daemon.running = false;
+
   for (const [, pending] of daemon.pending) {
     pending.reject(reason ?? new Error(`OCR daemon for ${engine} stopped unexpectedly`));
   }
@@ -437,13 +475,45 @@ function handleDaemonStdout(engine: ExternalBridgeEngine, chunk: Buffer): void {
     const line = rawLine.trim();
     if (!line) continue;
 
-    let payload: ExternalOcrBridgeResponse;
+    let payload: any;
     try {
-      payload = JSON.parse(line) as ExternalOcrBridgeResponse;
+      payload = JSON.parse(line);
     } catch {
       // Only warn if it's not a known benign PaddleOCR debug/info line
       if (!isBenignBridgeStderr(line)) {
         console.warn(`[ocrBridge] Ignoring non-JSON stdout from ${engine}: ${line}`);
+      }
+      continue;
+    }
+
+    if (payload.type === 'progress') {
+      const progressPayload = payload as { id?: string; progress?: number; value?: number };
+      const progressId = progressPayload.id;
+      let progressVal = typeof progressPayload.progress === 'number' ? progressPayload.progress : progressPayload.value;
+      if (progressId && typeof progressVal === 'number') {
+        const pending = daemon.pending.get(progressId);
+        let loggedScaling = false;
+        const originalVal = progressVal;
+        if (pending && pending.payload) {
+          const reqPayload = pending.payload;
+          const total = Number(reqPayload.totalChunks ?? reqPayload.total_chunks);
+          const idx = Number(reqPayload.chunkIndex ?? reqPayload.chunk_index);
+          
+          console.log(`[ocrBridge] Progress raw: ${originalVal}, totalChunks: ${reqPayload.totalChunks} (parsed: ${total}), chunkIndex: ${reqPayload.chunkIndex} (parsed: ${idx})`);
+          
+          if (!Number.isNaN(total) && !Number.isNaN(idx) && total > 0) {
+            const chunkPct = (progressVal / 90) * 100;
+            progressVal = Math.round(((idx + chunkPct / 100) / total) * 90);
+            console.log(`[ocrBridge] Scaled progress to: ${progressVal} (idx: ${idx}/${total}, pct: ${chunkPct})`);
+            loggedScaling = true;
+          }
+        }
+        if (!loggedScaling) {
+          console.log(`[ocrBridge] Dispatching UNSCALED progress: ${progressVal} (pending found: ${!!pending})`);
+        }
+        BrowserWindow.getAllWindows().forEach((w) => {
+          w.webContents.send('ocr:progress', { id: progressId, progress: progressVal });
+        });
       }
       continue;
     }
@@ -502,6 +572,8 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
     pending: new Map(),
     scriptPath,
     scriptSignature,
+    queue: [],
+    running: false,
   };
 
   child.stdout.on('data', (chunk: Buffer) => {
@@ -527,13 +599,12 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
   return daemon;
 }
 
-async function requestDaemon(
-  engine: ExternalBridgeEngine,
+async function requestDaemonInternal(
+  daemon: BridgeDaemon,
   payload: Record<string, unknown>,
-  timeoutMs: number = 30000
+  timeoutMs: number
 ): Promise<ExternalOcrBridgeResponse> {
-  const daemon = ensureDaemon(engine);
-  const id = randomUUID();
+  const id = (payload.id as string) || randomUUID();
 
   return await new Promise<ExternalOcrBridgeResponse>((resolve, reject) => {
     let timeoutId: NodeJS.Timeout | null = null;
@@ -544,7 +615,7 @@ async function requestDaemon(
         const timeoutError = new Error(`OCR daemon request timed out after ${timeoutMs / 1000} seconds`);
         reject(timeoutError);
         // Forcefully terminate the daemon process to prevent it from hanging/blocking subsequent requests.
-        teardownDaemon(engine, timeoutError);
+        teardownDaemon(daemon.engine, timeoutError);
       }, timeoutMs);
     }
 
@@ -558,23 +629,51 @@ async function requestDaemon(
       reject(error);
     };
 
-    daemon.pending.set(id, { resolve: cleanResolve, reject: cleanReject });
+    daemon.pending.set(id, { resolve: cleanResolve, reject: cleanReject, payload });
 
     try {
       const stdin = daemon.child.stdin;
       if (!stdin) {
-        throw new Error(`OCR daemon stdin is unavailable for ${engine}`);
+        throw new Error(`OCR daemon stdin is unavailable for ${daemon.engine}`);
       }
-      stdin.write(`${JSON.stringify({ id, ...payload })}\n`);
+      stdin.write(`${JSON.stringify({ ...payload, id })}\n`);
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
       daemon.pending.delete(id);
       reject(error instanceof Error ? error : new Error(String(error)));
       teardownDaemon(
-        engine,
+        daemon.engine,
         error instanceof Error ? error : new Error(String(error))
       );
     }
+  });
+}
+
+function processQueue(daemon: BridgeDaemon): void {
+  if (daemon.running || daemon.queue.length === 0) return;
+
+  daemon.running = true;
+  const task = daemon.queue.shift()!;
+
+  requestDaemonInternal(daemon, task.payload, task.timeoutMs)
+    .then(task.resolve)
+    .catch(task.reject)
+    .finally(() => {
+      daemon.running = false;
+      processQueue(daemon);
+    });
+}
+
+async function requestDaemon(
+  engine: ExternalBridgeEngine,
+  payload: Record<string, unknown>,
+  timeoutMs: number = 30000
+): Promise<ExternalOcrBridgeResponse> {
+  const daemon = ensureDaemon(engine);
+
+  return await new Promise<ExternalOcrBridgeResponse>((resolve, reject) => {
+    daemon.queue.push({ payload, resolve, reject, timeoutMs });
+    processQueue(daemon);
   });
 }
 
@@ -641,24 +740,75 @@ export async function getExternalOcrEngineStatuses(): Promise<ExternalOcrEngineS
   }));
 }
 
+/**
+ * Write raw image bytes to a unique temp file and return its absolute path.
+ * Call this from the Main process on behalf of the Renderer so that the buffer
+ * is written once (locally) and only a lightweight string crosses the IPC bridge.
+ */
+export async function writeOcrTempImage(
+  imageData: Uint8Array | ArrayBuffer,
+  mimeType: string
+): Promise<string> {
+  const tempRoot = getExternalOcrTempRoot();
+  const ext = mimeTypeToExtension(mimeType);
+  const imagePath = path.join(tempRoot, `ocr-tmp-${randomUUID()}${ext}`);
+  await fs.promises.writeFile(imagePath, coerceImageBuffer(imageData));
+  return imagePath;
+}
+
+/**
+ * Delete a temporary image file explicitly.
+ * Validates that the path lies within the OCR temp directory to prevent directory traversal.
+ */
+export async function deleteOcrTempImage(imagePath: string): Promise<void> {
+  const tempRoot = getExternalOcrTempRoot();
+  const resolvedPath = path.resolve(imagePath);
+  const relativePath = path.relative(tempRoot, resolvedPath);
+  const isWithin = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+  if (!isWithin) {
+    throw new Error('deleteOcrTempImage: path is outside OCR temp directory');
+  }
+  await fs.promises.rm(resolvedPath, { force: true });
+}
+
+
 export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promise<ExternalOcrBridgeResponse> {
   if (payload.engine !== 'paddleocr' && payload.engine !== 'easyocr') {
     throw new Error(`Unsupported external OCR engine: ${payload.engine}`);
   }
+  if (!payload.imagePath && !payload.imageData) {
+    throw new Error('ExternalOcrRequestPayload must provide either imagePath or imageData');
+  }
 
   const engine = payload.engine;
-  const imagePath = path.join(
-    getExternalOcrTempRoot(),
-    `${engine}-${randomUUID()}${mimeTypeToExtension(payload.imageMimeType)}`
-  );
+
+  // --- Zero-copy path: reuse a temp file that was already written by the caller ---
+  // When imagePath is supplied we skip writeFile entirely, saving one full buffer
+  // clone and dramatically reducing IPC serialization pressure.
+  let resolvedImagePath: string;
+  let ownsTempFile: boolean;
+
+  if (payload.imagePath) {
+    resolvedImagePath = payload.imagePath;
+    ownsTempFile = false; // Caller is responsible for cleanup
+  } else {
+    // Legacy path: write buffer to disk here (backward-compat, triggers GC pressure)
+    resolvedImagePath = path.join(
+      getExternalOcrTempRoot(),
+      `${engine}-${randomUUID()}${mimeTypeToExtension(payload.imageMimeType)}`
+    );
+    await fs.promises.writeFile(resolvedImagePath, coerceImageBuffer(payload.imageData!));
+    ownsTempFile = true;
+  }
 
   try {
-    await fs.promises.writeFile(imagePath, coerceImageBuffer(payload.imageData));
-
-    const requestPayload = {
+    const requestPayload: Record<string, unknown> = {
+      id: payload.id,
       action: 'ocr',
       engine,
-      image: imagePath,
+      ...(typeof payload.chunkIndex === 'number' ? { chunkIndex: payload.chunkIndex } : {}),
+      ...(typeof payload.totalChunks === 'number' ? { totalChunks: payload.totalChunks } : {}),
+      image: resolvedImagePath,
       language: payload.language,
       width: Math.round(payload.imageWidth),
       height: Math.round(payload.imageHeight),
@@ -666,6 +816,11 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
       ...(typeof payload.pageSegMode === 'number' ? { pageSegMode: payload.pageSegMode } : {}),
       ...(payload.pipelineProfile ? { pipelineProfile: payload.pipelineProfile } : {}),
       ...(payload.ocrQualityProfile ? { qualityProfile: payload.ocrQualityProfile } : {}),
+      // Forward maxSideLen to Python bridge (capped at 6000 to prevent Donut Effect)
+      ...(typeof payload.maxSideLen === 'number'
+        ? { maxSideLen: Math.min(Math.max(1, payload.maxSideLen), 6000) }
+        : {}),
+      ...(typeof payload.maxPixels === 'number' ? { maxPixels: payload.maxPixels } : {}),
     };
 
     let response: ExternalOcrBridgeResponse;
@@ -737,7 +892,11 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
 
     return response;
   } finally {
-    await fs.promises.rm(imagePath, { force: true });
+    // Only delete the temp file if we created it ourselves.
+    // When imagePath was caller-supplied (ownsTempFile=false) the caller handles cleanup.
+    if (ownsTempFile) {
+      await fs.promises.rm(resolvedImagePath, { force: true });
+    }
   }
 }
 

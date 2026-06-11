@@ -1,6 +1,7 @@
 import React from 'react';
 import type { BBox, OCRDroppedWord, OCRLine, OCRPageResult } from '../../types';
 import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+import { collectTextSearchMatches } from '../textSearch';
 
 // -------------------------------------------------------------
 // Helper and Utility functions for Geometry & Safety Filtering
@@ -15,7 +16,6 @@ export const renderPreviewTextWithHighlight = (
   const normalizedText = String(text || '');
   if (!pattern || !normalizedText) return normalizedText;
 
-  const { collectTextSearchMatches } = require('../textSearch');
   const matches = collectTextSearchMatches(normalizedText, pattern);
   if (matches.length === 0) return normalizedText;
 
@@ -433,7 +433,7 @@ export const isLikelyPanelGhostLineForSafety = (
   }
 
   const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP)$/i.test(asciiCompact);
   const isTinyJunkBox = asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
   if (isTinyJunkBox) {
     return true;
@@ -669,6 +669,10 @@ export const shouldCollapsePanelSafetyDuplicate = (
   }
 
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
+  // ป้องกันไม่ให้ลบคำศัพท์ซ้ำที่อยู่คนละบรรทัดกัน (เช่น FOR YOU / FOR YOU, I CAME / I CAME)
+  if (overlapY <= 0.48 && !isBoxContained) {
+    return false;
+  }
   const overlapX = panelOverlapRatioX(existingLine, candidateLine);
   const iou = panelIoURatio(existingLine, candidateLine);
   const centerDeltaY = Math.abs(panelLineCenterY(existingLine) - panelLineCenterY(candidateLine));

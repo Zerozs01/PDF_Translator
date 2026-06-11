@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import math
+import numpy as np
 import os
 import socket
 import subprocess
@@ -168,7 +169,6 @@ def ensure_onnx_model_converted(model_dir: str) -> str:
         subprocess.run(cmd, capture_output=True, check=True)
         return onnx_path
     except Exception as e:
-        import sys
         print(f"[WARN] Failed to convert model to ONNX in {model_dir}: {e}", file=sys.stderr)
         return model_dir
 
@@ -178,6 +178,15 @@ try:
     def patched_InferenceSession(path, *args, **kwargs):
         if os.path.isdir(path):
             path = ensure_onnx_model_converted(path)
+        
+        # Configure SessionOptions to optimize threading and memory patterns for OCR
+        sess_opts = ort.SessionOptions()
+        sess_opts.intra_op_num_threads = 2
+        sess_opts.inter_op_num_threads = 2
+        sess_opts.enable_mem_pattern = False
+        sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        kwargs["sess_options"] = sess_opts
+
         if GLOBAL_USE_DML and "DmlExecutionProvider" in ort.get_available_providers():
             kwargs["providers"] = ["DmlExecutionProvider", "CPUExecutionProvider"]
         return orig_init(path, *args, **kwargs)
@@ -1170,6 +1179,50 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "LISTO",
     "LISTOCON",
     "ILISTOCON",
+    "PRINCESS",
+    "DIE",
+    "PIG",
+    "CUM",
+    "COCK",
+    "OH",
+    "OHHH",
+    "OHHHH",
+    "OHHHHH",
+    "AGAA",
+    "SO",
+    "OF",
+    "ALL",
+    "MORE",
+    "YOU",
+    "USTHE",
+    "NOTMY",
+    "ASS",
+    "HOLE",
+    "FORYOU",
+    "ICAME",
+    "OHOHHH",
+    "BE",
+    "WETPUSSY",
+    "YOURE",
+    "STOOOOP",
+    "STOAOOP",
+    "STOAAOP",
+    "OHOH",
+    "OHOHHHH",
+    "OHOHHHHH",
+    "BARBARIAN",
+    "VIRGINITY",
+    "LOST",
+    "SOME",
+    "RAPING",
+    "WET",
+    "PUSSY",
+    "CUMMING",
+    "NEGO",
+    "WITHAN",
+    "HEIRRR",
+    "RRR",
+    "IIM",
 }
 
 
@@ -1204,6 +1257,9 @@ def is_advertisement_brand_token(text: str) -> bool:
     alpha = normalize_alpha_token(text)
     if not alpha:
         return False
+    # Safeguard: Do not filter out common English/Latin vocabulary words, short keep-tokens, or heading indicators
+    if alpha in LATIN_COMMON_WORDS or alpha in LATIN_SHORT_KEEP_TOKENS or alpha in HEADING_KEEP_TOKENS:
+        return False
     if alpha in WATERMARK_TOKENS:
         return True
     if any(marker in alpha for marker in WATERMARK_TOKENS if len(marker) >= 6):
@@ -1218,9 +1274,11 @@ def is_advertisement_brand_token(text: str) -> bool:
         return True
     fuzzy_markers = [marker for marker in (WATERMARK_TOKENS | WATERMARK_PHRASE_MARKERS) if len(marker) >= 6]
     for marker in fuzzy_markers:
-        if abs(len(alpha) - len(marker)) > 2:
+        # Dynamically set max allowed distance (2 for len >= 9, 1 for shorter markers like NEWTOKI) to prevent false positives
+        max_dist = 2 if len(marker) >= 9 else 1
+        if abs(len(alpha) - len(marker)) > max_dist:
             continue
-        if levenshtein_distance(alpha, marker, max_distance=2) <= 2:
+        if levenshtein_distance(alpha, marker, max_distance=max_dist) <= max_dist:
             return True
     return False
 
@@ -1365,6 +1423,20 @@ def is_probable_ascii_ghost(text: str) -> bool:
     alpha_num = normalize_alpha_token(raw)
     if re.fullmatch(r"[\W_]+", raw):
         return True
+
+    # Check if this looks like a valid citation/bracketed reference (e.g., "[1]", "(2)]", "[usually", "[a]")
+    is_valid_ref = False
+    if any(char in raw for char in "[]{}") and alpha_num:
+        if any(char.isdigit() for char in alpha_num):
+            is_valid_ref = True
+        elif len(alpha_num) >= 3:
+            is_valid_ref = True
+        elif re.fullmatch(r"\(?[A-Za-z]\)?\]\.?", raw) or re.fullmatch(r"\[[A-Za-z]\]\.?", raw):
+            is_valid_ref = True
+
+    if is_valid_ref:
+        return False
+
     if any(marker in raw for marker in ("\\", "{", "}", "[", "]", "|")) and len(alpha_num) <= 4:
         return True
     if len(alpha_num) <= 2 and any(marker in raw for marker in ("\\", "/", "{", "}", "[", "]", "_", "|", "~", "`")):
@@ -1676,6 +1748,159 @@ def merge_short_lead_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
         merged.append(current)
         index += 1
+
+    return merged
+
+
+def expand_vertical_stack_width(line: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ขยายความกว้างของกล่องข้อความภาษาอังกฤษที่เป็นแนวตั้งสูง-แคบ (Vertical Stack)
+    ตามขนาดความสูงอักษรเฉลี่ย เพื่อให้เหมาะกับการแสดงผลภาษาไทยแนวนอนโดยไม่ล้นกรอบคำพูด
+    """
+    bbox = line.get("bbox") or {}
+    if not bbox:
+        return line
+
+    x0 = float(bbox.get("x0", 0.0))
+    y0 = float(bbox.get("y0", 0.0))
+    x1 = float(bbox.get("x1", 0.0))
+    y1 = float(bbox.get("y1", 0.0))
+    w = x1 - x0
+    h = y1 - y0
+
+    words = line.get("words") or []
+    if not words:
+        return line
+
+    # คำนวณความสูงของคำเฉลี่ย เพื่อใช้เป็นค่าอ้างอิงขนาดอักษร (Font size)
+    word_heights = [bbox_height(w.get("bbox") or {}) for w in words]
+    avg_word_h = sum(word_heights) / len(word_heights) if word_heights else 15.0
+    avg_word_h = max(10.0, avg_word_h)
+
+    # ตั้งความกว้างเป้าหมายให้อยู่ในระยะที่เหมาะสมสำหรับภาษาไทยแนวนอน (ประมาณ 5.2 เท่าของความสูงอักษร)
+    target_w = avg_word_h * 5.2
+    target_w = max(w, target_w)
+
+    needed_expansion = target_w - w
+    if needed_expansion > 0:
+        # จำกัดการขยายต่อฝั่งสูงสุดไม่เกิน 45px (หรือ 1.8 เท่าของความสูงอักษร)
+        max_expand_each_side = min(45.0, avg_word_h * 1.8)
+        expand_each_side = min(needed_expansion / 2.0, max_expand_each_side)
+
+        new_x0 = max(0.0, x0 - expand_each_side)
+        new_x1 = x1 + expand_each_side
+
+        # อัปเดต bbox ของกล่องบรรทัด
+        bbox["x0"] = round(new_x0, 2)
+        bbox["x1"] = round(new_x1, 2)
+
+        # อัปเดต bbox ของคำด้านในเพื่อให้สอดคล้องกัน
+        for word in words:
+            w_bbox = word.get("bbox") or {}
+            if "x0" in w_bbox:
+                w_bbox["x0"] = round(max(0.0, float(w_bbox["x0"]) - expand_each_side), 2)
+            if "x1" in w_bbox:
+                w_bbox["x1"] = round(float(w_bbox["x1"]) + expand_each_side, 2)
+
+    return line
+
+
+def merge_latin_vertical_stack(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    รวมกล่องข้อความภาษาอังกฤษที่เรียงซ้อนกันแนวตั้ง (Vertical Stack)
+    เช่น YOU / STUBBORN / FOOL ใน speech bubble เดียวกัน
+    """
+    if len(lines) <= 1:
+        return [expand_vertical_stack_width(l) for l in lines]
+
+    # เรียงลำดับจากบนลงล่างตามแกน Y
+    ordered = sorted(lines, key=lambda l: float((l.get("bbox") or {}).get("y0", 0.0)))
+    consumed: set = set()
+    merged: List[Dict[str, Any]] = []
+
+    for i, line in enumerate(ordered):
+        if i in consumed:
+            continue
+
+        text = str(line.get("text") or "").strip()
+        bbox = line.get("bbox") or {}
+
+        # ข้ามถ้าไม่ใช่ Latin
+        if has_non_latin_characters(text):
+            merged.append(line)
+            continue
+
+        group = [line]
+        group_bbox = dict(bbox)
+
+        for j in range(i + 1, len(ordered)):
+            if j in consumed:
+                continue
+
+            cand = ordered[j]
+            cand_text = str(cand.get("text") or "").strip()
+            cand_bbox = cand.get("bbox") or {}
+
+            if has_non_latin_characters(cand_text):
+                break  # เจอ CJK/Thai แล้วหยุดค้นหาใน stack นี้
+
+            # --- SAFETY GUARDS TO PREVENT COLLAPSING REGULAR PARAGRAPHS/TEXTBOOKS ---
+            words_curr = [w for w in re.split(r"\s+", text) if w]
+            words_cand = [w for w in re.split(r"\s+", cand_text) if w]
+
+            # บรรทัดยาวแบบเอกสารทางการ/หนังสือเรียน ห้ามรวมแนวตั้งเด็ดขาด
+            is_document_line = len(text) > 22 or len(cand_text) > 22 or len(words_curr) > 4 or len(words_cand) > 4
+            if is_document_line:
+                break
+
+            min_h = max(8.0, min(bbox_height(group_bbox), bbox_height(cand_bbox)))
+
+            # Y gap: ระยะห่างแนวตั้งต้องชิดกันจริงๆ สำหรับบับเบิ้ลแนวตั้ง (ไม่เกิน 1.35x ความสูงตัวอักษร)
+            gap_y = float(cand_bbox.get("y0", 0.0)) - float(group_bbox.get("y1", 0.0))
+            if gap_y > min_h * 1.35:
+                break  # ห่างเกินไป แสดงว่าเป็นคนละบับเบิ้ล
+
+            # X overlap: ต้องเหลื่อมกันในแนวนอนอย่างมาก (แกน X ทับซ้อนกันเกิน 65% ในแนวสดมภ์เดียวกัน)
+            overlap_x = horizontal_overlap_ratio(group_bbox, cand_bbox)
+            if overlap_x < 0.65:
+                continue  # อาจเป็นกล่องที่อยู่เยื้องกัน ให้ตรวจสอบบรรทัดถัดไป
+
+            # ไม่รวมถ้าข้อความก่อนหน้าจบด้วยเครื่องหมายสิ้นสุดประโยค
+            last_text = str(group[-1].get("text") or "")
+            if has_terminal_sentence_punct(last_text):
+                break
+
+            consumed.add(j)
+            group.append(cand)
+            group_bbox = {
+                "x0": min(float(group_bbox.get("x0", 0)), float(cand_bbox.get("x0", 0))),
+                "y0": float(group_bbox.get("y0", 0)),
+                "x1": max(float(group_bbox.get("x1", 0)), float(cand_bbox.get("x1", 0))),
+                "y1": float(cand_bbox.get("y1", 0)),
+            }
+            # อัปเดต text สำหรับรอบถัดไป
+            text = cand_text
+
+        if len(group) > 1:
+            all_words = []
+            for g in group:
+                all_words.extend(g.get("words") or [])
+            merged_line = make_line_from_words(
+                all_words,
+                min(line_sort_y(g) for g in group),
+                min(line_sort_x(g) for g in group),
+            )
+            # ขยายขนาดความกว้างกล่องแนวตั้งหลังยุบรวมเสร็จ
+            merged_line = expand_vertical_stack_width(merged_line)
+
+            source_index = min(
+                float(g.get("_sourceIndex", float("inf"))) for g in group
+            )
+            if math.isfinite(source_index):
+                merged_line["_sourceIndex"] = int(source_index)
+            merged.append(merged_line)
+        else:
+            merged.append(expand_vertical_stack_width(line))
 
     return merged
 
@@ -2167,9 +2392,30 @@ def prune_paddle_panel_contextual_noise_lines(
                 and neighbor["width"] <= line_w * 0.46
                 and float(neighbor["bbox"].get("x0", 0.0)) >= center_x + max(84.0, line_w * 0.08)
             ]
+
+            def is_lexically_related(anchor_text: str, target_text: str) -> bool:
+                def get_clean_tokens(s):
+                    raw_toks = re.sub(r"\s+", " ", s).split(" ")
+                    clean = []
+                    for t in raw_toks:
+                        t_clean = re.sub(r"[^A-Za-z0-9]", "", t).lower()
+                        if t_clean:
+                            clean.append(t_clean)
+                    return clean
+
+                anchor_toks = get_clean_tokens(anchor_text)
+                target_toks = set(get_clean_tokens(target_text))
+                if not anchor_toks or not target_toks:
+                    return False
+                matched = sum(1 for t in anchor_toks if t in target_toks)
+                match_ratio = matched / len(anchor_toks)
+                return match_ratio >= 0.6
+
             bridge_detected = any(
                 abs(left_anchor["centerY"] - right_anchor["centerY"]) <= max(104.0, line_h * 0.9)
                 and (float(right_anchor["bbox"].get("x0", 0.0)) - float(left_anchor["bbox"].get("x1", 0.0))) >= max(240.0, line_w * 0.18)
+                and is_lexically_related(left_anchor["text"], text)
+                and is_lexically_related(right_anchor["text"], text)
                 for left_anchor in left_anchors
                 for right_anchor in right_anchors
             )
@@ -2195,14 +2441,18 @@ def prune_paddle_panel_contextual_noise_lines(
             strong_above = any(neighbor["centerY"] < center_y - max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
             strong_below = any(neighbor["centerY"] > center_y + max(16.0 * scale_h, line_h * 0.18) for neighbor in local_strong_neighbors)
 
-            trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14
-            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text))
+            trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14 and len(re.sub(r"[^A-Za-z]", "", text)) <= 1
+            has_vowel = bool(re.search(r"[aeiouAEIOUyY]", text))
+            # Malformed mixed case is typically consonant-only noise (e.g. "gT", "xY") or tiny isolated casing junk.
+            # Real words with casing typos (e.g. "WOuLD", "tOO") should not be dropped.
+            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text)) and (not has_vowel or (token_count <= 1 and compact_length <= 3))
             oversized_weak_singleton = (
                 token_count <= 1
-                and compact_length <= 12
+                and compact_length <= 3
                 and word_box_count <= 1
                 and line_area >= 22000.0 * scale_area
                 and normalize_confidence(line.get("confidence", 0.0)) <= 88.0
+                and not has_vowel
             )
 
             if (
@@ -3241,10 +3491,10 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = 2400
                 rec_batch = 10
-                det_thresh = 0.24 if is_cjk_like else 0.30
-                det_box_thresh = 0.54 if is_cjk_like else 0.60
-                det_unclip_ratio = 1.55 if is_cjk_like else 1.45
-                rec_score_thresh = 0.35
+                det_thresh = 0.18 if is_cjk_like else 0.20
+                det_box_thresh = 0.44 if is_cjk_like else 0.46
+                det_unclip_ratio = 1.60 if is_cjk_like else 1.75
+                rec_score_thresh = 0.22 if is_cjk_like else 0.24
             else:  # "best"
                 if shortest <= 420:
                     det_limit = 2400
@@ -3253,10 +3503,10 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = 2800
                 rec_batch = 8
-                det_thresh = 0.20 if is_cjk_like else 0.30
-                det_box_thresh = 0.50 if is_cjk_like else 0.60
-                det_unclip_ratio = 1.60 if is_cjk_like else 1.48
-                rec_score_thresh = 0.30
+                det_thresh = 0.12
+                det_box_thresh = 0.38 if is_cjk_like else 0.40
+                det_unclip_ratio =  1.90
+                rec_score_thresh = 0.3
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300
@@ -3265,9 +3515,10 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
             else:
                 det_limit = 1280 if quality_profile == "fast" else 1536 if quality_profile == "balanced" else 1800
             rec_batch = 12 if quality_profile == "fast" else 10 if quality_profile == "balanced" else 8
-            det_thresh = 0.34 if quality_profile == "fast" else 0.31 if quality_profile == "balanced" else 0.28
-            det_box_thresh = 0.66 if quality_profile == "fast" else 0.62 if quality_profile == "balanced" else 0.58
-            rec_score_thresh = 0.38 if quality_profile == "fast" else 0.35 if quality_profile == "balanced" else 0.30
+            det_thresh = 0.28 if quality_profile == "fast" else 0.24 if quality_profile == "balanced" else 0.20
+            det_box_thresh = 0.58 if quality_profile == "fast" else 0.52 if quality_profile == "balanced" else 0.46
+            det_unclip_ratio = 1.60 if quality_profile == "fast" else 1.67 if quality_profile == "balanced" else 1.85
+            rec_score_thresh = 0.35 if quality_profile == "fast" else 0.32 if quality_profile == "balanced" else 0.30
         if is_cjk_like:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
                 if aspect_ratio >= 2.3 or longest >= 7000:
@@ -3349,6 +3600,27 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
         predict_kwargs["text_det_unclip_ratio"] = det_unclip_ratio
     if rec_score_thresh is not None:
         predict_kwargs["text_rec_score_thresh"] = rec_score_thresh
+
+    # ---- Hard safety cap: prevent DB++ "Donut Effect" ----
+    # If the caller supplied a maxSideLen in the payload, honour it (capped at 6000).
+    # This lets the TypeScript frontend pass document-type-specific limits:
+    #   • Dense academic PDF  → 4800 (default)
+    #   • Tall receipt/spread → 6000
+    # If no caller override, still enforce the absolute hard cap of 6000.
+    _DONUT_HARD_CAP = 6000
+    _user_cap = int(getattr(args, "max_side_len", 0) or 0)
+    if _user_cap > 0:
+        # Caller explicitly requested a cap — honour it but never exceed the hard limit
+        effective_cap = min(_user_cap, _DONUT_HARD_CAP)
+        predict_kwargs["text_det_limit_side_len"] = min(
+            predict_kwargs["text_det_limit_side_len"], effective_cap
+        )
+    else:
+        # No caller cap — still enforce the absolute safety ceiling
+        predict_kwargs["text_det_limit_side_len"] = min(
+            predict_kwargs["text_det_limit_side_len"], _DONUT_HARD_CAP
+        )
+
     return predict_kwargs
 
 
@@ -3528,7 +3800,6 @@ def ensure_paddle_model_downloaded(lang_or_model: str) -> None:
         elif lang_or_model == "japan_rec":
             PaddleOCR(lang="japan", use_onnx=False, show_log=False)
     except Exception as exc:
-        import sys
         print(f"[WARN] Failed to trigger auto-download for {lang_or_model}: {exc}", file=sys.stderr)
 
 
@@ -3557,7 +3828,6 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
     if det_dir:
         parent_dir = os.path.dirname(det_dir) if det_dir.endswith(".onnx") else det_dir
         if not os.path.exists(parent_dir):
-            import sys
             print(f"[ocrBridge] det_model_dir parent {parent_dir} not found. Triggering auto-download...", file=sys.stderr)
             ensure_paddle_model_downloaded("ch_det")
 
@@ -3565,7 +3835,6 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
     if rec_dir:
         parent_dir = os.path.dirname(rec_dir) if rec_dir.endswith(".onnx") else rec_dir
         if not os.path.exists(parent_dir):
-            import sys
             print(f"[ocrBridge] rec_model_dir parent {parent_dir} not found. Triggering auto-download...", file=sys.stderr)
             if "korean" in parent_dir.lower():
                 ensure_paddle_model_downloaded("korean_rec")
@@ -3591,7 +3860,6 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
     try:
         ocr = PaddleOCR(**constructor_kwargs)
     except Exception as e:
-        import sys
         print(f"[WARN] Failed to initialize PaddleOCR with primary kwargs: {e}", file=sys.stderr)
         
         # Fallback System: If we were trying to use the server-class detection model, fallback to mobile model!
@@ -3647,8 +3915,13 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
     return ocr
 
 
-def analyze_image_polarity(image_path: str) -> Dict[str, float]:
-    with Image.open(image_path) as image:
+def analyze_image_polarity(image_input: str | np.ndarray) -> Dict[str, float]:
+    if isinstance(image_input, np.ndarray):
+        image = Image.fromarray(image_input[:, :, ::-1])
+    else:
+        image = Image.open(image_input)
+
+    with image:
         preview = image.convert("RGB")
         preview.thumbnail((640, 640), Image.BILINEAR)
         gray = preview.convert("L")
@@ -3702,33 +3975,42 @@ def should_try_inverted_paddle_pass(
     return False
 
 
-def create_inverted_image_variant(image_path: str) -> str:
-    variant_dir = os.path.join(tempfile.gettempdir(), "pdf-translator-ocr", "paddle-variants")
-    os.makedirs(variant_dir, exist_ok=True)
-    variant_path = os.path.join(variant_dir, f"{uuid.uuid4().hex}.png")
+def create_inverted_image_variant(image_input: str | np.ndarray) -> np.ndarray:
+    if isinstance(image_input, np.ndarray):
+        image = Image.fromarray(image_input[:, :, ::-1])
+    else:
+        image = Image.open(image_input)
 
-    with Image.open(image_path) as image:
+    with image:
         rgba = image.convert("RGBA")
         background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
         background.alpha_composite(rgba)
         inverted = ImageOps.invert(background.convert("RGB"))
-        inverted.save(variant_path, format="PNG")
-
-    return variant_path
+        return np.array(inverted)[:, :, ::-1]
 
 
-def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple[str, float, float]:
+def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple[str | np.ndarray, float, float]:
     """
     Proportionally downscale image so total pixel count stays under max_pixels.
     Preserves aspect ratio — no distortion.
-    Returns (path, scale_x, scale_y); if no resize needed returns the original path.
+    Returns (path_or_ndarray, scale_x, scale_y); if no resize needed returns the original path.
     """
     try:
+        from PIL import ImageEnhance
         with Image.open(image_path) as img:
             w, h = img.size
             pixel_count = w * h
             if pixel_count <= max_pixels:
-                return image_path, 1.0, 1.0
+                # Flat alpha channel on white background and apply Sharpness boost before inference
+                rgba = img.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                background.alpha_composite(rgba)
+                rgb = background.convert("RGB")
+                
+                enhancer = ImageEnhance.Sharpness(rgb)
+                enhanced_img = enhancer.enhance(1.3)
+                arr = np.array(enhanced_img)[:, :, ::-1]
+                return arr, 1.0, 1.0
 
             # Compute uniform scale so w_new * h_new <= max_pixels
             scale = (max_pixels / pixel_count) ** 0.5
@@ -3738,25 +4020,31 @@ def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple
             scale_x = w / new_w
             scale_y = h / new_h
 
-            temp_dir = os.path.join(tempfile.gettempdir(), "pdf-translator-ocr", "paddle-variants")
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, f"resized-{uuid.uuid4().hex}.png")
-
+            # Flatten alpha channel on white background
             rgba = img.convert("RGBA")
             background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
             background.alpha_composite(rgba)
             rgb = background.convert("RGB")
 
             resampling = getattr(Image, "Resampling", None)
-            filter_type = resampling.LANCZOS if resampling else getattr(Image, "ANTIALIAS", Image.BICUBIC)
+            target_pixels = new_w * new_h
+            if target_pixels > 20_000_000:
+                # Use BICUBIC for huge images to avoid performance issue while keeping high quality
+                filter_type = resampling.BICUBIC if resampling else Image.BICUBIC
+            else:
+                # Use LANCZOS for maximum quality on smaller/medium images
+                filter_type = resampling.LANCZOS if resampling else getattr(Image, "ANTIALIAS", Image.BICUBIC)
 
             resized_img = rgb.resize((new_w, new_h), filter_type)
-            resized_img.save(temp_path, format="PNG")
+            
+            # Apply Sharpness boost
+            enhancer = ImageEnhance.Sharpness(resized_img)
+            enhanced_img = enhancer.enhance(1.3)
+            arr = np.array(enhanced_img)[:, :, ::-1]
 
-            print(f"[ocrBridge] Resized image {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})")
-            return temp_path, scale_x, scale_y
+            print(f"[ocrBridge] Resized and sharpened image in-memory {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})")
+            return arr, scale_x, scale_y
     except Exception as e:
-        import sys
         print(f"[WARN] Failed to resize large image: {e}", file=sys.stderr)
         return image_path, 1.0, 1.0
 
@@ -3935,7 +4223,7 @@ def rescale_normalized_paddle_result(result: Dict[str, Any], scale_x: float, sca
 
 def run_paddleocr_pass(
     ocr: Any,
-    image_path: str,
+    image_path: str | np.ndarray,
     args: argparse.Namespace,
     predict_kwargs: Dict[str, Any],
     profile_key: str,
@@ -4028,7 +4316,22 @@ def run_paddleocr_pass(
     raise RuntimeError("Unsupported PaddleOCR API: neither ocr() nor predict() is available")
 
 
+def report_progress(request_id: str | None, current_chunk: int, total_chunks: int) -> None:
+    if not request_id:
+        return
+    if total_chunks <= 0:
+        total_chunks = 1
+    progress_val = int((current_chunk / total_chunks) * 90)
+    progress_val = max(0, min(90, progress_val))
+    try:
+        sys.stdout.write(json.dumps({"id": request_id, "type": "progress", "progress": progress_val, "value": progress_val}) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
+    request_id = getattr(args, "id", None)
     lang = select_paddle_lang(args.language)
     profile_key = get_paddle_profile_key(args)
     quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
@@ -4044,7 +4347,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     TALL_HEIGHT_THRESHOLD = 3000
     CHUNK_HEIGHT = 2800
     CHUNK_OVERLAP = 120
-    MAX_PIXELS = 9_000_000
+    MAX_PIXELS = args.max_pixels if getattr(args, "max_pixels", 0) > 0 else 9_000_000
 
     try:
         with Image.open(args.image) as _probe:
@@ -4060,8 +4363,10 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
         print(f"[ocrBridge] Tall image detected ({_iw}x{_ih}, ratio={aspect_ratio:.1f}): using chunked OCR path")
         chunks = chunk_tall_image_for_paddle(args.image, max_chunk_height=CHUNK_HEIGHT, overlap_px=CHUNK_OVERLAP)
         chunk_results: List[Tuple[Dict[str, Any], int]] = []
+        total_chunks = len(chunks)
+        report_progress(request_id, 0, total_chunks)
         try:
-            for chunk_path, y_offset, _ch in chunks:
+            for idx, (chunk_path, y_offset, _ch) in enumerate(chunks):
                 try:
                     # Each chunk is small enough — no further resize needed unless exceptional
                     chunk_working, cx, cy = resize_image_if_large(chunk_path, max_pixels=MAX_PIXELS)
@@ -4086,13 +4391,15 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                             except Exception as inv_err:
                                 print(f"[WARN] Chunk inverted pass failed: {inv_err}", file=sys.stderr)
                             finally:
-                                try:
-                                    os.remove(inv_path)
-                                except OSError:
-                                    pass
+                                if isinstance(inv_path, str):
+                                    try:
+                                        os.remove(inv_path)
+                                    except OSError:
+                                        pass
                         chunk_results.append((result, y_offset))
+                        report_progress(request_id, idx + 1, total_chunks)
                     finally:
-                        if chunk_working != chunk_path:
+                        if isinstance(chunk_working, str) and chunk_working != chunk_path:
                             try:
                                 os.remove(chunk_working)
                             except OSError:
@@ -4125,6 +4432,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
 
     # ── Normal (non-chunked) path ────────────────────────────────────────────
     # Proportionally downscale to at most MAX_PIXELS total pixels
+    report_progress(request_id, 10, 100)
     working_image, scale_x, scale_y = resize_image_if_large(args.image, max_pixels=MAX_PIXELS)
 
     try:
@@ -4140,6 +4448,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             scale_x=scale_x,
             scale_y=scale_y,
         )
+        report_progress(request_id, 50, 100)
 
         if not should_try_inverted_paddle_pass(polarity, original_result, args.pipeline_profile, quality_profile):
             original_debug = original_result.get("debug") or {}
@@ -4148,6 +4457,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             original_debug["runtimeMs"] = round((time.perf_counter() - started_at) * 1000, 1)
             original_debug.setdefault("timingsMs", {})["ocr"] = round((time.perf_counter() - started_at) * 1000, 1)
             original_result["debug"] = original_debug
+            report_progress(request_id, 100, 100)
             return original_result
 
         inverted_path = create_inverted_image_variant(working_image)
@@ -4163,6 +4473,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                 scale_x=scale_x,
                 scale_y=scale_y,
             )
+            report_progress(request_id, 100, 100)
 
             merged_input = {
                 "lines": list(original_result.get("lines") or []) + list(inverted_result.get("lines") or []),
@@ -4210,12 +4521,13 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             }
             return merged
         finally:
-            try:
-                os.remove(inverted_path)
-            except OSError:
-                pass
+            if isinstance(inverted_path, str):
+                try:
+                    os.remove(inverted_path)
+                except OSError:
+                    pass
     finally:
-        if working_image != args.image:
+        if isinstance(working_image, str) and working_image != args.image:
             try:
                 os.remove(working_image)
             except OSError:
@@ -4506,6 +4818,8 @@ def get_easyocr_reader(langs: List[str]) -> Any:
 
 
 def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
+    request_id = getattr(args, "id", None)
+    report_progress(request_id, 10, 100)
     langs = select_easyocr_langs(args.language)
     reader = get_easyocr_reader(langs)
     started_at = time.perf_counter()
@@ -4528,13 +4842,18 @@ def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
             "ocr": round((time.perf_counter() - started_at) * 1000, 1),
         },
     }
+    report_progress(request_id, 100, 100)
     return cleaned
 
 
 def run_easy_yolo(args: argparse.Namespace) -> Dict[str, Any]:
+    request_id = getattr(args, "id", None)
+    report_progress(request_id, 10, 100)
     adapter = os.environ.get("EASY_YOLO_OCR_ADAPTER")
     if adapter:
-        return run_adapter(adapter, args)
+        res = run_adapter(adapter, args)
+        report_progress(request_id, 100, 100)
+        return res
 
     if importlib.util.find_spec("easyocr") is not None:
         return run_easyocr_python(args)
@@ -4581,11 +4900,13 @@ def run_easy_yolo(args: argparse.Namespace) -> Dict[str, Any]:
             "ocr": round((time.perf_counter() - started_at) * 1000, 1),
         },
     }
+    report_progress(request_id, 100, 100)
     return cleaned
 
 
 def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -> argparse.Namespace:
     return argparse.Namespace(
+        id=payload.get("id"),
         action=str(payload.get("action") or "ocr"),
         engine=str(payload.get("engine") or fallback_engine),
         image=payload.get("image"),
@@ -4596,6 +4917,10 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
         page_seg_mode=int(payload.get("pageSegMode") or payload.get("page_segm_mode") or 0),
         pipeline_profile=str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel"),
         quality_profile=str(payload.get("qualityProfile") or payload.get("quality_profile") or "best"),
+        # maxSideLen (camelCase from TS) or max_side_len (snake_case) — 0 means use profile default
+        max_side_len=int(payload.get("maxSideLen") or payload.get("max_side_len") or 0),
+        # maxPixels (camelCase from TS) or max_pixels (snake_case)
+        max_pixels=int(payload.get("maxPixels") or payload.get("max_pixels") or 0),
         stdio_server=False,
     )
 
@@ -4689,6 +5014,7 @@ def main() -> None:
     parser.add_argument("--page-seg-mode", type=int, default=0)
     parser.add_argument("--pipeline-profile", default="panel")
     parser.add_argument("--quality-profile", default="best")
+    parser.add_argument("--max-pixels", type=int, default=0)
     parser.add_argument("--stdio-server", action="store_true")
     args = parser.parse_args()
 

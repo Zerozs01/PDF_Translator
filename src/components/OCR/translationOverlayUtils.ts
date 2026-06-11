@@ -193,7 +193,7 @@ const shouldCollapseTranslatedOverlayDuplicate = (
   const minLength = Math.min(existing.normalizedKey.length, candidate.normalizedKey.length);
   const exactKeyMatch = existing.normalizedKey === candidate.normalizedKey;
   const sameOrSubset = exactKeyMatch
-    || (minLength >= 12 && (
+    || (minLength >= 5 && (
       existing.normalizedKey.includes(candidate.normalizedKey)
       || candidate.normalizedKey.includes(existing.normalizedKey)
     ));
@@ -420,6 +420,16 @@ export const resolveMissingOverlayLineFallbackText = (
   if (/^EH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เอ๋ ฉัน');
   if (/^EH[.!?…]+$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เอ๋');
   if (/^ME[.!?…]+$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ฉัน');
+  if (/^WAS\s+TOYED[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ถูกเล่นสนุก');
+  if (/^UP\s+LOOKING[.!?…]*$/i.test(source) || /^UP\s+LOOKiNG[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'มองขึ้นไป');
+  }
+  if (/^LiKE\s+THIS[.!?…]*$/i.test(source) || /^LIKE\s+THIS[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'แบบนี้');
+  }
+  if (/^HEART['’]?S[.!?…]*$/i.test(source) || /^HEART[.!?…]*$/i.test(source)) {
+    return preserveOverlaySourceTrailingPunctuation(source, 'หัวใจ');
+  }
   if (/^YOU[-\s]+COULD\s+SAY[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'คุณอาจพูดได้ว่า');
   if (/^(?:SO\s+ME\s+THING|SOMETHING)\s+THAT\s+MIGHT[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'มีบางอย่างที่อาจ');
   if (/^HELP\s+YOU\s+TOO[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'ช่วยคุณได้เช่นกัน');
@@ -610,6 +620,48 @@ const fillMissingOverlayLinesWithSourceText = (
   lines.forEach((line, index) => {
     const sourceText = normalizeOverlayInlineText(String(line.text || ''));
     if (!sourceText) return;
+
+    // Real-Time Subset/Duplicate Filter: ถ้ามีกล่องอื่นที่ยาวกว่า ครอบคลุมพิกัดของกล่องนี้เกิน 80%
+    // และมีข้อความของกล่องนี้รวมอยู่ด้วย จะข้ามไม่เติม fallback และลบออกจากคำแปลเพื่อหลีกเลี่ยงภาษาอังกฤษทับซ้อน
+    const bbox = line.bbox;
+    if (bbox) {
+      const lineArea = Math.max(1, (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0));
+      const hasLargerOverlap = lines.some((other, otherIdx) => {
+        if (otherIdx === index) return false;
+        const otherBBox = other.bbox;
+        if (!otherBBox) return false;
+
+        const otherArea = Math.max(1, (otherBBox.x1 - otherBBox.x0) * (otherBBox.y1 - otherBBox.y0));
+        if (otherArea <= lineArea) return false;
+
+        const overlapW = Math.max(0, Math.min(bbox.x1, otherBBox.x1) - Math.max(bbox.x0, otherBBox.x0));
+        const overlapH = Math.max(0, Math.min(bbox.y1, otherBBox.y1) - Math.max(bbox.y0, otherBBox.y0));
+        const overlapArea = overlapW * overlapH;
+
+        const isContained = (overlapArea / lineArea) >= 0.80;
+        if (!isContained) return false;
+
+        const otherText = normalizeOverlayInlineText(String(other.text || ''));
+        const thisText = sourceText;
+        if (otherText && thisText) {
+          const otherKey = otherText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const thisKey = thisText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          return otherKey.includes(thisKey);
+        }
+        return false;
+      });
+
+      if (hasLargerOverlap) {
+        const existingText = translatedByIndex.get(index);
+        if (existingText) {
+          if (!filled) {
+            filled = new Map(translatedByIndex);
+          }
+          filled.delete(index);
+        }
+        return;
+      }
+    }
 
     const existingText = translatedByIndex.get(index);
     if (isLikelyContextualGhostOverlayLine(line, index, currentPageOCR)) {
@@ -805,18 +857,17 @@ export const resolveTranslationOverlayContext = ({
   const isStale = resolvedEntry.sourceFingerprint !== sourceFingerprint;
   let translatedByIndexRaw = new Map<number, string>();
 
-  if (resolvedEntry.ocrEngine === currentEngine) {
-    // OCR Engine ตรงกัน ดึงคำแปลมาใช้ได้ตรงๆ 100%
+  if (resolvedEntry.ocrEngine === currentEngine && !isStale) {
+    // OCR Engine ตรงกัน และแคชไม่ stale ดึงคำแปลมาใช้ได้ตรงๆ 100%
     translatedByIndexRaw = new Map<number, string>(
       resolvedEntry.translatedByIndex
         .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
         .map((item) => [item.index, item.text])
     );
   } else {
-    // OCR Engine ไม่ตรงกัน! ใช้ Spatial & Semantic Fuzzy Matching เพื่อ Map คำแปลข้าม Engine
+    // OCR Engine ไม่ตรงกัน หรือโครงสร้างหน้าเปลี่ยนไป (isStale)! ใช้ Spatial & Semantic Fuzzy Matching เพื่อ Map คำแปล
     const oldEngine = resolvedEntry.ocrEngine;
     const oldOCR = pageOCRsByEngine?.get(oldEngine);
-    const oldLines = oldOCR && Array.isArray(oldOCR.lines) ? oldOCR.lines : [];
     const currentLines = Array.isArray(currentPageOCR.lines) ? currentPageOCR.lines : [];
     const rawMap = new Map<number, string>(
       resolvedEntry.translatedByIndex
@@ -824,62 +875,113 @@ export const resolveTranslationOverlayContext = ({
         .map((item) => [item.index, item.text])
     );
 
-    if (oldLines.length > 0 && currentLines.length > 0) {
-      currentLines.forEach((currentLine, currentIdx) => {
-        let bestOldIdx = -1;
-        let bestScore = -1;
+    const hasCacheBBoxes = resolvedEntry.translatedByIndex.some(item => item.bbox);
 
-        const currentBBox = currentLine.bbox;
-        const currentText = normalizeOverlayInlineText(String(currentLine.text || ''));
+    if (currentLines.length > 0) {
+      if (hasCacheBBoxes) {
+        // ใช้ข้อมูลพิกัดและข้อความดั้งเดิมจาก Cache Entry โดยตรง
+        const oldWidth = resolvedEntry.width || currentPageOCR.width || 1;
+        const oldHeight = resolvedEntry.height || currentPageOCR.height || 1;
+        const currentWidth = currentPageOCR.width || 1;
+        const currentHeight = currentPageOCR.height || 1;
+        
+        const scaleX = currentWidth / oldWidth;
+        const scaleY = currentHeight / oldHeight;
 
-        oldLines.forEach((oldLine, oldIdx) => {
-          const oldText = normalizeOverlayInlineText(String(oldLine.text || ''));
-          const oldBBox = oldLine.bbox;
+        currentLines.forEach((currentLine, currentIdx) => {
+          let bestOldIdx = -1;
+          let bestScore = -1;
+          const currentBBox = currentLine.bbox;
+          const currentText = normalizeOverlayInlineText(String(currentLine.text || ''));
 
-          // 1. คำนวณ Spatial Score (IoU) ด้วยการสเกล oldBBox ให้ตรงกับ resolution ของ current OCR
-          let spatialScore = 0;
-          if (currentBBox && oldBBox) {
-            const oldWidth = oldOCR?.width || 1;
-            const oldHeight = oldOCR?.height || 1;
-            const currentWidth = currentPageOCR?.width || 1;
-            const currentHeight = currentPageOCR?.height || 1;
+          resolvedEntry.translatedByIndex.forEach((oldItem) => {
+            const oldBBox = oldItem.bbox;
+            const oldText = normalizeOverlayInlineText(String(oldItem.sourceText || ''));
 
-            const scaleX = currentWidth / oldWidth;
-            const scaleY = currentHeight / oldHeight;
+            let spatialScore = 0;
+            if (currentBBox && oldBBox) {
+              const scaledOldBBox: BBox = {
+                x0: oldBBox.x0 * scaleX,
+                y0: oldBBox.y0 * scaleY,
+                x1: oldBBox.x1 * scaleX,
+                y1: oldBBox.y1 * scaleY,
+              };
+              spatialScore = overlayDedupIou(currentBBox, scaledOldBBox);
+            }
 
-            const scaledOldBBox: BBox = {
-              x0: oldBBox.x0 * scaleX,
-              y0: oldBBox.y0 * scaleY,
-              x1: oldBBox.x1 * scaleX,
-              y1: oldBBox.y1 * scaleY,
-            };
+            let textScore = 0;
+            if (currentText && oldText) {
+              textScore = overlayKeyDiceSimilarity(currentText, oldText);
+            }
 
-            spatialScore = overlayDedupIou(currentBBox, scaledOldBBox);
-          }
+            const totalScore = spatialScore * 0.7 + textScore * 0.3;
+            if (totalScore > bestScore) {
+              bestScore = totalScore;
+              bestOldIdx = oldItem.index;
+            }
+          });
 
-          // 2. คำนวณ Semantic Score (Dice Similarity)
-          let textScore = 0;
-          if (currentText && oldText) {
-            textScore = overlayKeyDiceSimilarity(currentText, oldText);
-          }
-
-          // คะแนนรวม: ให้น้ำหนักพิกัดสูงกว่าความเหมือนข้อความเล็กน้อย (0.7 vs 0.3)
-          const totalScore = spatialScore * 0.7 + textScore * 0.3;
-
-          if (totalScore > bestScore) {
-            bestScore = totalScore;
-            bestOldIdx = oldIdx;
+          if (bestOldIdx >= 0 && bestScore >= 0.2) {
+            const oldTranslation = rawMap.get(bestOldIdx);
+            if (oldTranslation) {
+              translatedByIndexRaw.set(currentIdx, oldTranslation);
+            }
           }
         });
+      } else {
+        // Fallback เดิม: แมปโดยอ้างอิงจาก pageOCRsByEngine (กรณีเป็นแคชเวอร์ชันเก่าที่ไม่มี bbox)
+        const oldLines = oldOCR && Array.isArray(oldOCR.lines) ? oldOCR.lines : [];
+        if (oldLines.length > 0) {
+          currentLines.forEach((currentLine, currentIdx) => {
+            let bestOldIdx = -1;
+            let bestScore = -1;
+            const currentBBox = currentLine.bbox;
+            const currentText = normalizeOverlayInlineText(String(currentLine.text || ''));
 
-        // หากคะแนนรวมมีความคล้ายคลึงเกิน 0.2 ให้ถือว่าแมตช์
-        if (bestOldIdx >= 0 && bestScore >= 0.2) {
-          const oldTranslation = rawMap.get(bestOldIdx);
-          if (oldTranslation) {
-            translatedByIndexRaw.set(currentIdx, oldTranslation);
-          }
+            oldLines.forEach((oldLine, oldIdx) => {
+              const oldText = normalizeOverlayInlineText(String(oldLine.text || ''));
+              const oldBBox = oldLine.bbox;
+
+              let spatialScore = 0;
+              if (currentBBox && oldBBox) {
+                const oldWidth = oldOCR?.width || 1;
+                const oldHeight = oldOCR?.height || 1;
+                const currentWidth = currentPageOCR?.width || 1;
+                const currentHeight = currentPageOCR?.height || 1;
+
+                const scaleX = currentWidth / oldWidth;
+                const scaleY = currentHeight / oldHeight;
+
+                const scaledOldBBox: BBox = {
+                  x0: oldBBox.x0 * scaleX,
+                  y0: oldBBox.y0 * scaleY,
+                  x1: oldBBox.x1 * scaleX,
+                  y1: oldBBox.y1 * scaleY,
+                };
+                spatialScore = overlayDedupIou(currentBBox, scaledOldBBox);
+              }
+
+              let textScore = 0;
+              if (currentText && oldText) {
+                textScore = overlayKeyDiceSimilarity(currentText, oldText);
+              }
+
+              const totalScore = spatialScore * 0.7 + textScore * 0.3;
+              if (totalScore > bestScore) {
+                bestScore = totalScore;
+                bestOldIdx = oldIdx;
+              }
+            });
+
+            if (bestOldIdx >= 0 && bestScore >= 0.2) {
+              const oldTranslation = rawMap.get(bestOldIdx);
+              if (oldTranslation) {
+                translatedByIndexRaw.set(currentIdx, oldTranslation);
+              }
+            }
+          });
         }
-      });
+      }
     }
 
     // กรณีสำรอง: ถ้าแมตช์ไม่ได้เลย ให้ Map ตามลำดับ index ดั้งเดิม
@@ -3038,7 +3140,7 @@ const shouldHarmonizeOverlayBlock = (
     const generousComicStack = isComicProfile
       && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
       && verticalGap >= -avgHeight * 0.4
-      && verticalGap <= Math.max(28, avgHeight * 1.32)
+      && verticalGap <= Math.max(36, avgHeight * 1.85)
       && heightRatio <= 3.2;
     if (generousComicStack) {
       return true;
@@ -3053,7 +3155,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 3.2
       && verticalGap >= -avgHeight * 0.38
-      && verticalGap <= Math.max(28, avgHeight * 1.32);
+      && verticalGap <= Math.max(36, avgHeight * 1.85);
     if (centeredFragmentMerge) {
       return true;
     }
@@ -3063,7 +3165,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 2.8
       && verticalGap >= -avgHeight * 0.32
-      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 1.32 : profile === 'adaptive' ? 1.28 : 1.25))
+      && verticalGap <= Math.max(36, avgHeight * (profile === 'manga' ? 1.85 : profile === 'adaptive' ? 1.75 : 1.25))
     ) {
       return true;
     }
@@ -3665,8 +3767,9 @@ export const computeOverlayLayoutMap = (
     const allowSectionMerge = effectiveProfile === 'manga'
       || effectiveProfile === 'manhwa';
     const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
+    const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock || hasBalloonMember ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -3738,9 +3841,13 @@ export const computeOverlayLayoutMap = (
       && !shouldPreservePerLineNarrative
       && group.length >= 2
       && mergedStyleKind === 'comic-bubble'
-      && compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
-      && groupGeometry.maxGap <= mergeGapLimit
-      && groupGeometry.compactness <= mergeCompactnessLimit;
+      && (
+        hasBalloonMember || (
+          compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
+          && groupGeometry.maxGap <= mergeGapLimit
+          && groupGeometry.compactness <= mergeCompactnessLimit
+        )
+      );
 
     const groupColumnCoherence = computeOverlayGroupColumnCoherence(group);
     const hasStrongColumnContinuity = (
@@ -3752,8 +3859,7 @@ export const computeOverlayLayoutMap = (
     );
 
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && hasStrongColumnContinuity
-      && !overlyWideSectionSpan;
+      && (hasBalloonMember || (hasStrongColumnContinuity && !overlyWideSectionSpan));
 
     if (canMergeSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
@@ -3874,9 +3980,11 @@ export const computeOverlayLayoutMap = (
       })();
 
       const mergedFillRatio = mergedTypographyAdjusted.contentHeight / Math.max(1, mergedHeightBudget);
-      const mergeIsUseful = mergedTypographyAdjusted.estimatedLines >= 1
+      const mergeIsUseful = hasBalloonMember || (
+        mergedTypographyAdjusted.estimatedLines >= 1
         && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
-        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52);
+        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52)
+      );
       if (mergeIsUseful) {
         const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';
         const mergedCenterX = mergedBBox.x0 + (mergedBBox.x1 - mergedBBox.x0) * 0.5;

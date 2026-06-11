@@ -2204,7 +2204,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2275,7 +2275,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = `${buildOCRSourceFingerprint(currentPageOCR, 'paddleocr')}|stale-cache`;
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2341,7 +2341,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = `${buildOCRSourceFingerprint(currentPageOCR, 'easyocr')}|mismatch`;
-    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:ja|dst:th|mode:official|translator:offline';
+    const cacheKey = 'ver:v47|ocr:easyocr|ocrLang:eng|src:ja|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2404,8 +2404,8 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'easyocr');
-    const untranslatedKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
-    const thaiKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const untranslatedKey = 'ver:v47|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const thaiKey = 'ver:v47|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [untranslatedKey, {
         key: untranslatedKey,
@@ -2495,7 +2495,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2572,7 +2572,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2646,7 +2646,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2718,7 +2718,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2790,7 +2790,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2861,7 +2861,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:official|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -2967,7 +2967,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -3041,7 +3041,7 @@ describe('resolveTranslationOverlayContext duplicate collapse', () => {
     };
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'paddleocr');
-    const cacheKey = 'ver:v45|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:paddleocr|ocrLang:eng|src:es|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -3109,7 +3109,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
 
     const sourceFingerprint = buildOCRSourceFingerprint(currentPageOCR, 'easyocr');
     // Cache entry for 'offline' translator
-    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -3196,7 +3196,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
 
     const oldFingerprint = buildOCRSourceFingerprint(oldOCR, 'easyocr');
     // Cached translation using EasyOCR
-    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,
@@ -3290,7 +3290,7 @@ describe('resolveTranslationOverlayContext ultimate and cross-engine fallback', 
 
     const oldFingerprint = buildOCRSourceFingerprint(oldOCR, 'easyocr');
     // Cached translation using EasyOCR
-    const cacheKey = 'ver:v45|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
+    const cacheKey = 'ver:v47|ocr:easyocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline';
     const currentPageTranslationMap = new Map([
       [cacheKey, {
         key: cacheKey,

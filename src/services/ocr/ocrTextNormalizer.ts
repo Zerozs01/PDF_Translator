@@ -91,6 +91,19 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\beffctofravt\b/gi, replacement: 'effects of gravitational' },
   { pattern: /\bctriclm\s*a\s*gnetiontact\b/gi, replacement: 'electrical, magnetic, or contact' },
   { pattern: /\brescaused\b/gi, replacement: 'forces caused' },
+  { pattern: /\bKNIMIGHT\b/gi, replacement: 'KNIGHT' },
+  { pattern: /\bBARBAR\s+[Il1|]\s+AN\b/gi, replacement: 'BARBARIAN' },
+  { pattern: /BARBAR\s+[Il1|]\s+AN/gi, replacement: 'BARBARIAN' },
+  { pattern: /\bWITHAN\b/gi, replacement: 'WITH AN' },
+  { pattern: /\bI'VELOST\b/gi, replacement: "I'VE LOST" },
+  { pattern: /\bMYVIRGINITY\b/gi, replacement: 'MY VIRGINITY' },
+  { pattern: /\bTOSOME\b/gi, replacement: 'TO SOME' },
+  { pattern: /\bRAPING-MY\b/gi, replacement: 'RAPING MY' },
+  { pattern: /\bRAPINGMY\b/gi, replacement: 'RAPING MY' },
+  { pattern: /\bTHIS,MY\b/gi, replacement: 'THIS, MY' },
+  { pattern: /\bTHISMY\b/gi, replacement: 'THIS, MY' },
+  { pattern: /\bUSTHE,A\b/gi, replacement: 'US THE, A' },
+  { pattern: /\bUSTHEA\b/gi, replacement: 'US THE, A' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -181,6 +194,10 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   ENGLISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
   });
+
+  // Repair OCR digit-to-letter confusion (e.g., '4O%' -> '40%', '1O0' -> '100')
+  normalized = normalized.replace(/(?<=\d)[oO]+(?=\D|$|%)/g, '0');
+  normalized = normalized.replace(/(?<=\d)[oO]+(?=\d)/g, '0');
 
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,

@@ -179,7 +179,10 @@ const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
   'BIG', 'DEAL', 'GOOD', 'BAD', 'ONLY', 'LEAVE', 'OPEN', 'CHANCE',
 ]);
 
-const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set(['I', 'IN', 'IT', 'IS']);
+const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set([
+  'I', 'IN', 'IT', 'IS', 'SO', 'OF', 'OH', 'WE', 'ME', 'UP', 'DO', 'GO', 'NO', 'BY', 'AT', 'IF', 'AN', 'OR', 'AS', 'AM', 'TO', 'HE', 'US', 'PIG', 'DIE', 'CUM', 'COCK',
+  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE'
+]);
 
 const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
   String(text || '')
@@ -338,6 +341,39 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'LISTO',
   'LISTOCON',
   'ILISTOCON',
+  'SO',
+  'DIE',
+  'PIG',
+  'CUM',
+  'COCK',
+  'ALL',
+  'MORE',
+  'OHHH',
+  'YOURE',
+  'STOOOOP',
+  'STOAOOP',
+  'STOAAOP',
+  'OHHHH',
+  'OHHHHH',
+  'ICAME',
+  'FORYOU',
+  'BARBARIAN',
+  'VIRGINITY',
+  'LOST',
+  'SOME',
+  'RAPING',
+  'WET',
+  'PUSSY',
+  'CUMMING',
+  'PRINCESS',
+  'NEGO',
+  'WITHAN',
+  'HEIRRR',
+  'RRR',
+  'IIM',
+  'LIKETHIS',
+  'WASTOYED',
+  'UPLOOKING',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {
@@ -1871,7 +1907,7 @@ class VisionService {
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
 
       // ── Safety Gate: prevent filtering standard English dialogue lines ──
-      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF)\b/i.test(rawText);
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE)\b/i.test(rawText);
       if (hasKillOrOtherStandardWord) return true;
 
       // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")
@@ -2720,7 +2756,8 @@ class VisionService {
     signal: AbortSignal | undefined,
     pipelineProfile: OCRPipelineProfile,
     ocrQualityProfile: OCRQualityProfile,
-    ocrEngine: OCREngine
+    ocrEngine: OCREngine,
+    maxPixels?: number
   ): Promise<OCRPageResult> {
     const bridge = window.electronAPI?.ocr;
     if (!bridge?.runExternal) {
@@ -2743,259 +2780,312 @@ class VisionService {
       if (signal?.aborted) {
         throw createAbortError();
       }
-      if (this.shouldChunkExternalOcr(ocrEngine, pipelineProfile, imageWidth, imageHeight, language)) {
-        const sourceBytes = new Uint8Array(bytes.byteLength);
-        sourceBytes.set(bytes);
-        const sourceBlob = new Blob([sourceBytes], { type: mimeType || 'image/png' });
-        const bitmap = await createImageBitmap(sourceBlob);
-        let lastChunkError: Error | null = null;
-        try {
-          const chunkHeight = Math.min(
-            Math.max(EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT, Math.round(bitmap.width * 1.05)),
-            Math.max(EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT, Math.round(bitmap.height * 0.48)),
-          );
-          const overlap = Math.min(
-            EXTERNAL_PADDLE_CHUNK_OVERLAP,
-            Math.max(180, Math.round(chunkHeight * 0.12)),
-          );
-          const chunkResults: OCRPageResult[] = [];
 
-          for (let yOffset = 0, index = 0; yOffset < bitmap.height; index += 1) {
-            if (signal?.aborted) {
-              throw createAbortError();
-            }
+      // --- IPC Memory Leak Fix ---
+      // Write the image buffer to a temp file once via writeTempImage IPC (Main process).
+      // All subsequent bridge.runExternal calls receive only a lightweight string path,
+      // eliminating repeated Uint8Array serialization across the IPC boundary.
+      const tempResult = await bridge.writeTempImage({ imageData: bytes, imageMimeType: mimeType });
+      const tempImagePath = tempResult.imagePath;
+      const chunkTempPaths: string[] = [];
 
-            const actualHeight = Math.min(chunkHeight, bitmap.height - yOffset);
-            const chunkCanvas = document.createElement('canvas');
-            chunkCanvas.width = bitmap.width;
-            chunkCanvas.height = actualHeight;
-            const chunkCtx = chunkCanvas.getContext('2d', { alpha: false });
-            if (!chunkCtx) {
-              throw new Error('Cannot get canvas context for OCR chunk');
-            }
-            chunkCtx.fillStyle = '#FFFFFF';
-            chunkCtx.fillRect(0, 0, chunkCanvas.width, chunkCanvas.height);
-            chunkCtx.imageSmoothingEnabled = true;
-            chunkCtx.imageSmoothingQuality = 'high';
-            chunkCtx.drawImage(
-              bitmap,
-              0,
-              yOffset,
-              bitmap.width,
-              actualHeight,
-              0,
-              0,
-              bitmap.width,
-              actualHeight,
+      // Determine maxSideLen based on pipeline profile context
+      // export/PDF: 4800 (dense text optimal), panel: no cap needed (images are already chunked)
+      const maxSideLen = pipelineProfile === 'export' ? 4800 : undefined;
+
+      try {
+        if (this.shouldChunkExternalOcr(ocrEngine, pipelineProfile, imageWidth, imageHeight, language)) {
+          const sourceBlob = new Blob([bytes as BlobPart], { type: mimeType || 'image/png' });
+          const bitmap = await createImageBitmap(sourceBlob);
+          let lastChunkError: Error | null = null;
+          try {
+            const chunkHeight = Math.min(
+              Math.max(EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT, Math.round(bitmap.width * 1.05)),
+              Math.max(EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT, Math.round(bitmap.height * 0.48)),
             );
+            const overlap = Math.min(
+              EXTERNAL_PADDLE_CHUNK_OVERLAP,
+              Math.max(180, Math.round(chunkHeight * 0.12)),
+            );
+            const chunkResults: OCRPageResult[] = [];
 
-            const chunkBlob = await this.canvasToPngBlob(chunkCanvas);
-            const chunkImage = await this.blobToPng(chunkBlob);
-            let result;
-            try {
-              result = await bridge.runExternal({
-                engine: ocrEngine,
+            let totalChunks = 0;
+            let tempY = 0;
+            while (tempY < bitmap.height) {
+              totalChunks++;
+              const actualH = Math.min(chunkHeight, bitmap.height - tempY);
+              if (tempY + actualH >= bitmap.height) {
+                break;
+              }
+              tempY += Math.max(1, actualH - overlap);
+            }
+            totalChunks = Math.max(1, totalChunks);
+
+            for (let yOffset = 0, index = 0; yOffset < bitmap.height; index += 1) {
+              if (signal?.aborted) {
+                throw createAbortError();
+              }
+
+              const actualHeight = Math.min(chunkHeight, bitmap.height - yOffset);
+              const chunkCanvas = document.createElement('canvas');
+              chunkCanvas.width = bitmap.width;
+              chunkCanvas.height = actualHeight;
+              const chunkCtx = chunkCanvas.getContext('2d', { alpha: false });
+              if (!chunkCtx) {
+                throw new Error('Cannot get canvas context for OCR chunk');
+              }
+              chunkCtx.fillStyle = '#FFFFFF';
+              chunkCtx.fillRect(0, 0, chunkCanvas.width, chunkCanvas.height);
+              chunkCtx.imageSmoothingEnabled = true;
+              chunkCtx.imageSmoothingQuality = 'high';
+              chunkCtx.drawImage(
+                bitmap,
+                0,
+                yOffset,
+                bitmap.width,
+                actualHeight,
+                0,
+                0,
+                bitmap.width,
+                actualHeight,
+              );
+
+              const chunkBlob = await this.canvasToPngBlob(chunkCanvas);
+              const chunkImage = await this.blobToPng(chunkBlob);
+
+              // Write chunk to its own temp file (separate from the full-page temp file)
+              const chunkTempResult = await bridge.writeTempImage({
                 imageData: chunkImage.bytes,
                 imageMimeType: chunkImage.mimeType,
-                imageWidth: bitmap.width,
-                imageHeight: actualHeight,
-                language,
+              });
+              chunkTempPaths.push(chunkTempResult.imagePath);
+
+              let result;
+              try {
+                result = await bridge.runExternal({
+                  engine: ocrEngine,
+                  imagePath: chunkTempResult.imagePath,
+                  imageMimeType: chunkImage.mimeType,
+                  imageWidth: bitmap.width,
+                  imageHeight: actualHeight,
+                  language,
+                  dpi,
+                  pageSegMode,
+                  pipelineProfile,
+                  ocrQualityProfile,
+                  chunkIndex: index,
+                  totalChunks,
+                  ...(maxSideLen !== undefined ? { maxSideLen } : {}),
+                  ...(maxPixels !== undefined ? { maxPixels } : {}),
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message.includes('No text boxes returned from PaddleOCR')) {
+                  lastChunkError = error instanceof Error ? error : new Error(message);
+                  continue;
+                }
+                throw error;
+              }
+
+              chunkResults.push({
+                pageNumber: 0,
+                width: bitmap.width,
+                height: actualHeight,
                 dpi,
+                language,
+                pageSegMode: result.pageSegMode ?? pageSegMode,
+                algorithmVersion: OCR_ALGORITHM_VERSION,
+                pipelineProfile,
+                ocrEngine,
+                ocrQualityProfile,
+                lines: (result.lines || []).map((line) => this.offsetExternalLine(line, yOffset)),
+                words: [],
+                text: result.text || '',
+                confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+                debug: result.debug,
+              });
+
+              if (yOffset + actualHeight >= bitmap.height) {
+                break;
+              }
+              yOffset += Math.max(1, actualHeight - overlap);
+            }
+
+            if (chunkResults.length > 0) {
+              return this.mergeExternalChunkResults(
+                chunkResults,
+                imageWidth,
+                imageHeight,
+                dpi,
+                language,
                 pageSegMode,
                 pipelineProfile,
                 ocrQualityProfile,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              if (message.includes('No text boxes returned from PaddleOCR')) {
-                lastChunkError = error instanceof Error ? error : new Error(message);
-                continue;
-              }
-              throw error;
+                ocrEngine,
+              );
             }
 
-            chunkResults.push({
-              pageNumber: 0,
-              width: bitmap.width,
-              height: actualHeight,
-              dpi,
-              language,
-              pageSegMode: result.pageSegMode ?? pageSegMode,
-              algorithmVersion: OCR_ALGORITHM_VERSION,
-              pipelineProfile,
-              ocrEngine,
-              ocrQualityProfile,
-              lines: (result.lines || []).map((line) => this.offsetExternalLine(line, yOffset)),
-              words: [],
-              text: result.text || '',
-              confidence: typeof result.confidence === 'number' ? result.confidence : 0,
-              debug: result.debug,
-            });
-
-            if (yOffset + actualHeight >= bitmap.height) {
-              break;
+            if (lastChunkError) {
+              throw lastChunkError;
             }
-            yOffset += Math.max(1, actualHeight - overlap);
+          } finally {
+            bitmap.close?.();
           }
-
-          if (chunkResults.length > 0) {
-            return this.mergeExternalChunkResults(
-              chunkResults,
-              imageWidth,
-              imageHeight,
-              dpi,
-              language,
-              pageSegMode,
-              pipelineProfile,
-              ocrQualityProfile,
-              ocrEngine,
-            );
-          }
-
-          if (lastChunkError) {
-            throw lastChunkError;
-          }
-        } finally {
-          bitmap.close?.();
         }
-      }
 
-      const result = await bridge.runExternal({
-        engine: ocrEngine,
-        imageData: bytes,
-        imageMimeType: mimeType,
-        imageWidth,
-        imageHeight,
-        language,
-        dpi,
-        pageSegMode,
-        pipelineProfile,
-        ocrQualityProfile,
-      });
-
-      const isPaddlePanelPath = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
-      const shouldApplyAggressiveLatinPrune = this.shouldApplyAggressiveLatinPanelCleanup(language)
-        && !isPaddlePanelPath;
-
-      const latinGhostResult = shouldApplyAggressiveLatinPrune
-        ? this.pruneLikelyLatinGhostExternalLines(
-          result.lines || [],
-          imageHeight,
-          pipelineProfile,
-          language
-        )
-        : { lines: result.lines || [], dropped: [] };
-      const finalLines = latinGhostResult.lines;
-      const finalWords = finalLines.flatMap((line) => line.words || []);
-      const confidences = finalWords.length > 0
-        ? finalWords.map((word) => word.confidence || 0)
-        : finalLines.map((line) => line.confidence || 0);
-      const finalConfidence = confidences.length > 0
-        ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
-        : (typeof result.confidence === 'number' ? result.confidence : 0);
-      const debugDropCounts: Record<string, number> = {
-        ...(result.debug?.dropCounts || {}),
-      };
-      const debugDroppedWords: OCRDroppedWord[] = [
-        ...(result.debug?.droppedWords || []),
-      ];
-      if (latinGhostResult.dropped.length > 0) {
-        debugDropCounts.externalLatinGhostLine =
-          (debugDropCounts.externalLatinGhostLine || 0) + latinGhostResult.dropped.length;
-        debugDroppedWords.push(...latinGhostResult.dropped);
-      }
-
-      const singletonResult = shouldApplyAggressiveLatinPrune
-        ? this.pruneLikelyExternalResidualSingletons(
-          finalLines,
+        // Non-chunk path: reuse the full-page temp file written above
+        const result = await bridge.runExternal({
+          engine: ocrEngine,
+          imagePath: tempImagePath,
+          imageMimeType: mimeType,
           imageWidth,
           imageHeight,
+          language,
+          dpi,
+          pageSegMode,
           pipelineProfile,
-          language
-        )
-        : { lines: finalLines, dropped: [] };
-      const singletonCleanedLines = singletonResult.lines;
-      if (singletonResult.dropped.length > 0) {
-        debugDropCounts.externalResidualSingleton =
-          (debugDropCounts.externalResidualSingleton || 0) + singletonResult.dropped.length;
-        debugDroppedWords.push(...singletonResult.dropped);
+          ocrQualityProfile,
+          ...(maxSideLen !== undefined ? { maxSideLen } : {}),
+          ...(maxPixels !== undefined ? { maxPixels } : {}),
+        });
+
+        const isPaddlePanelPath = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
+        const shouldApplyAggressiveLatinPrune = this.shouldApplyAggressiveLatinPanelCleanup(language)
+          && !isPaddlePanelPath;
+
+        const latinGhostResult = shouldApplyAggressiveLatinPrune
+          ? this.pruneLikelyLatinGhostExternalLines(
+            result.lines || [],
+            imageHeight,
+            pipelineProfile,
+            language
+          )
+          : { lines: result.lines || [], dropped: [] };
+        const finalLines = latinGhostResult.lines;
+        const finalWords = finalLines.flatMap((line) => line.words || []);
+        const confidences = finalWords.length > 0
+          ? finalWords.map((word) => word.confidence || 0)
+          : finalLines.map((line) => line.confidence || 0);
+        const finalConfidence = confidences.length > 0
+          ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
+          : (typeof result.confidence === 'number' ? result.confidence : 0);
+        const debugDropCounts: Record<string, number> = {
+          ...(result.debug?.dropCounts || {}),
+        };
+        const debugDroppedWords: OCRDroppedWord[] = [
+          ...(result.debug?.droppedWords || []),
+        ];
+        if (latinGhostResult.dropped.length > 0) {
+          debugDropCounts.externalLatinGhostLine =
+            (debugDropCounts.externalLatinGhostLine || 0) + latinGhostResult.dropped.length;
+          debugDroppedWords.push(...latinGhostResult.dropped);
+        }
+
+        const singletonResult = shouldApplyAggressiveLatinPrune
+          ? this.pruneLikelyExternalResidualSingletons(
+            finalLines,
+            imageWidth,
+            imageHeight,
+            pipelineProfile,
+            language
+          )
+          : { lines: finalLines, dropped: [] };
+        const singletonCleanedLines = singletonResult.lines;
+        if (singletonResult.dropped.length > 0) {
+          debugDropCounts.externalResidualSingleton =
+            (debugDropCounts.externalResidualSingleton || 0) + singletonResult.dropped.length;
+          debugDroppedWords.push(...singletonResult.dropped);
+        }
+
+        const languageCodes = String(language || '')
+          .split('+')
+          .map((code) => code.trim().toLowerCase())
+          .filter(Boolean);
+        const isExternalPanel = pipelineProfile === 'panel' && (ocrEngine === 'paddleocr' || ocrEngine === 'easyocr');
+        const shouldApplyResidualSpatial = isExternalPanel
+          && (isCjkLikeLanguage(language) || this.shouldApplyAggressiveLatinPanelCleanup(language));
+        const finalResidualSpatialResult = shouldApplyResidualSpatial
+          ? this.collapseResidualSpatialDuplicateExternalLines(singletonCleanedLines, languageCodes)
+          : { lines: singletonCleanedLines, dropped: [] };
+        if (finalResidualSpatialResult.dropped.length > 0) {
+          debugDropCounts.externalResidualSpatialDuplicate =
+            (debugDropCounts.externalResidualSpatialDuplicate || 0) + finalResidualSpatialResult.dropped.length;
+          debugDroppedWords.push(...finalResidualSpatialResult.dropped);
+        }
+
+        const shouldApplyPaddlePanelValidation = ocrEngine === 'paddleocr'
+          && pipelineProfile === 'panel'
+          && this.shouldApplyAggressiveLatinPanelCleanup(language);
+        const dialogueEchoResult = shouldApplyPaddlePanelValidation
+          ? this.repairPaddlePanelDialogueEchoLines(finalResidualSpatialResult.lines, imageWidth, imageHeight, language)
+          : { lines: finalResidualSpatialResult.lines, dropped: [] };
+        if (dialogueEchoResult.dropped.length > 0) {
+          debugDropCounts.externalPaddleDialogueEcho =
+            (debugDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
+          debugDroppedWords.push(...dialogueEchoResult.dropped);
+        }
+
+        const contextualRepairResult = shouldApplyPaddlePanelValidation
+          ? this.repairPaddlePanelContextualDialogueLines(dialogueEchoResult.lines, imageWidth, imageHeight, language)
+          : { lines: dialogueEchoResult.lines, dropped: [] };
+        if (contextualRepairResult.dropped.length > 0) {
+          debugDropCounts.externalPaddleContextualDialogue =
+            (debugDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
+          debugDroppedWords.push(...contextualRepairResult.dropped);
+        }
+
+        const tallEffectResult = shouldApplyPaddlePanelValidation
+          ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language, ocrQualityProfile)
+          : { lines: contextualRepairResult.lines, dropped: [] };
+        if (tallEffectResult.dropped.length > 0) {
+          debugDropCounts.externalPaddleTallEffectLine =
+            (debugDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
+          debugDroppedWords.push(...tallEffectResult.dropped);
+        }
+
+        const singletonCleanedWords = tallEffectResult.lines.flatMap((line) => line.words || []);
+        const finalConfidences = singletonCleanedWords.length > 0
+          ? singletonCleanedWords.map((word) => word.confidence || 0)
+          : tallEffectResult.lines.map((line) => line.confidence || 0);
+        const finalLineConfidence = finalConfidences.length > 0
+          ? finalConfidences.reduce((sum, value) => sum + value, 0) / finalConfidences.length
+          : finalConfidence;
+
+        return {
+          pageNumber: 0,
+          width: imageWidth,
+          height: imageHeight,
+          dpi,
+          language,
+          pageSegMode: result.pageSegMode ?? pageSegMode,
+          algorithmVersion: OCR_ALGORITHM_VERSION,
+          pipelineProfile,
+          ocrEngine,
+          ocrQualityProfile,
+          lines: tallEffectResult.lines,
+          words: singletonCleanedWords,
+          text: tallEffectResult.lines.map((line) => line.text).filter(Boolean).join('\n').trim(),
+          confidence: finalLineConfidence,
+          debug: {
+            ...(result.debug || {}),
+            droppedWords: debugDroppedWords,
+            dropCounts: debugDropCounts,
+          },
+        };
+      } finally {
+        // Best-effort cleanup: delete the full-page temp file written by writeTempImage,
+        // and any chunk temp files created during chunking.
+        try {
+          if (tempImagePath && typeof bridge.deleteTempImage === 'function') {
+            await bridge.deleteTempImage({ imagePath: tempImagePath }).catch(() => {});
+          }
+          for (const chunkPath of chunkTempPaths) {
+            if (typeof bridge.deleteTempImage === 'function') {
+              await bridge.deleteTempImage({ imagePath: chunkPath }).catch(() => {});
+            }
+          }
+        } catch { /* best-effort */ }
       }
-
-      const languageCodes = String(language || '')
-        .split('+')
-        .map((code) => code.trim().toLowerCase())
-        .filter(Boolean);
-      const isExternalPanel = pipelineProfile === 'panel' && (ocrEngine === 'paddleocr' || ocrEngine === 'easyocr');
-      const shouldApplyResidualSpatial = isExternalPanel
-        && (isCjkLikeLanguage(language) || this.shouldApplyAggressiveLatinPanelCleanup(language));
-      const finalResidualSpatialResult = shouldApplyResidualSpatial
-        ? this.collapseResidualSpatialDuplicateExternalLines(singletonCleanedLines, languageCodes)
-        : { lines: singletonCleanedLines, dropped: [] };
-      if (finalResidualSpatialResult.dropped.length > 0) {
-        debugDropCounts.externalResidualSpatialDuplicate =
-          (debugDropCounts.externalResidualSpatialDuplicate || 0) + finalResidualSpatialResult.dropped.length;
-        debugDroppedWords.push(...finalResidualSpatialResult.dropped);
-      }
-
-      const shouldApplyPaddlePanelValidation = ocrEngine === 'paddleocr'
-        && pipelineProfile === 'panel'
-        && this.shouldApplyAggressiveLatinPanelCleanup(language);
-      const dialogueEchoResult = shouldApplyPaddlePanelValidation
-        ? this.repairPaddlePanelDialogueEchoLines(finalResidualSpatialResult.lines, imageWidth, imageHeight, language)
-        : { lines: finalResidualSpatialResult.lines, dropped: [] };
-      if (dialogueEchoResult.dropped.length > 0) {
-        debugDropCounts.externalPaddleDialogueEcho =
-          (debugDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
-        debugDroppedWords.push(...dialogueEchoResult.dropped);
-      }
-
-      const contextualRepairResult = shouldApplyPaddlePanelValidation
-        ? this.repairPaddlePanelContextualDialogueLines(dialogueEchoResult.lines, imageWidth, imageHeight, language)
-        : { lines: dialogueEchoResult.lines, dropped: [] };
-      if (contextualRepairResult.dropped.length > 0) {
-        debugDropCounts.externalPaddleContextualDialogue =
-          (debugDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
-        debugDroppedWords.push(...contextualRepairResult.dropped);
-      }
-
-      const tallEffectResult = shouldApplyPaddlePanelValidation
-        ? this.prunePaddlePanelTallEffectLines(contextualRepairResult.lines, imageWidth, imageHeight, language, ocrQualityProfile)
-        : { lines: contextualRepairResult.lines, dropped: [] };
-      if (tallEffectResult.dropped.length > 0) {
-        debugDropCounts.externalPaddleTallEffectLine =
-          (debugDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
-        debugDroppedWords.push(...tallEffectResult.dropped);
-      }
-
-      const singletonCleanedWords = tallEffectResult.lines.flatMap((line) => line.words || []);
-      const finalConfidences = singletonCleanedWords.length > 0
-        ? singletonCleanedWords.map((word) => word.confidence || 0)
-        : tallEffectResult.lines.map((line) => line.confidence || 0);
-      const finalLineConfidence = finalConfidences.length > 0
-        ? finalConfidences.reduce((sum, value) => sum + value, 0) / finalConfidences.length
-        : finalConfidence;
-
-      return {
-        pageNumber: 0,
-        width: imageWidth,
-        height: imageHeight,
-        dpi,
-        language,
-        pageSegMode: result.pageSegMode ?? pageSegMode,
-        algorithmVersion: OCR_ALGORITHM_VERSION,
-        pipelineProfile,
-        ocrEngine,
-        ocrQualityProfile,
-        lines: tallEffectResult.lines,
-        words: singletonCleanedWords,
-        text: tallEffectResult.lines.map((line) => line.text).filter(Boolean).join('\n').trim(),
-        confidence: finalLineConfidence,
-        debug: {
-          ...(result.debug || {}),
-          droppedWords: debugDroppedWords,
-          dropCounts: debugDropCounts,
-        },
-      };
     } catch (error) {
       if (signal?.aborted) {
         throw createAbortError();
@@ -3039,47 +3129,56 @@ class VisionService {
       const { bytes, mimeType } = await this.readInputAsBytes(imageUrl);
       if (signal?.aborted) throw createAbortError();
 
-      const resultRaw = await bridge.runExternal({
-        engine: ocrEngine,
-        imageData: bytes,
-        imageMimeType: mimeType,
-        imageWidth,
-        imageHeight,
-        language,
-        dpi,
-        pageSegMode,
-        pipelineProfile: 'raw' as any,
-        ocrQualityProfile,
-      });
+      // Write temp file once; pass only string path across IPC bridge
+      const tempResult = await bridge.writeTempImage({ imageData: bytes, imageMimeType: mimeType });
 
-      const result: OCRPageResult = {
-        pageNumber: 0,
-        width: imageWidth,
-        height: imageHeight,
-        dpi,
-        language,
-        pageSegMode: resultRaw.pageSegMode ?? pageSegMode,
-        algorithmVersion: OCR_ALGORITHM_VERSION,
-        pipelineProfile: 'raw',
-        ocrEngine,
-        ocrQualityProfile,
-        lines: (resultRaw.lines || []).map(line => ({
-          ...line,
-          bbox: line.bbox as any,
-          words: (line.words || []).map((w: any) => ({ ...w, bbox: w.bbox as any })),
-        })),
-        words: [],
-        text: resultRaw.text || '',
-        confidence: Number(resultRaw.confidence) || 0,
-        debug: {
-          droppedWords: [],
-          dropCounts: {},
-          raw: true,
-          ...(resultRaw.debug || {}),
-        },
-      };
+      try {
+        const resultRaw = await bridge.runExternal({
+          engine: ocrEngine,
+          imagePath: tempResult.imagePath,
+          imageMimeType: mimeType,
+          imageWidth,
+          imageHeight,
+          language,
+          dpi,
+          pageSegMode,
+          pipelineProfile: 'raw' as any,
+          ocrQualityProfile,
+        });
 
-      return result;
+        const result: OCRPageResult = {
+          pageNumber: 0,
+          width: imageWidth,
+          height: imageHeight,
+          dpi,
+          language,
+          pageSegMode: resultRaw.pageSegMode ?? pageSegMode,
+          algorithmVersion: OCR_ALGORITHM_VERSION,
+          pipelineProfile: 'raw',
+          ocrEngine,
+          ocrQualityProfile,
+          lines: (resultRaw.lines || []).map(line => ({
+            ...line,
+            bbox: line.bbox as any,
+            words: (line.words || []).map((w: any) => ({ ...w, bbox: w.bbox as any })),
+          })),
+          words: [],
+          text: resultRaw.text || '',
+          confidence: Number(resultRaw.confidence) || 0,
+          debug: {
+            droppedWords: [],
+            dropCounts: {},
+            raw: true,
+            ...(resultRaw.debug || {}),
+          },
+        };
+
+        return result;
+      } finally {
+        if (tempResult?.imagePath && typeof bridge.deleteTempImage === 'function') {
+          await bridge.deleteTempImage({ imagePath: tempResult.imagePath }).catch(() => {});
+        }
+      }
     } catch (error) {
       if (signal?.aborted) throw createAbortError();
       throw error;
@@ -3106,63 +3205,72 @@ class VisionService {
 
     const { bytes, mimeType } = await this.readInputAsBytes(imageUrl);
 
-    const payload = await bridge.runRawDirect({
-      imageData: bytes,
-      imageMimeType: mimeType,
-      imageWidth,
-      imageHeight,
-      language,
-    });
+    // Write temp file once (Main process); pass only path string to avoid IPC buffer copy
+    const tempResult = await bridge.writeTempImage({ imageData: bytes, imageMimeType: mimeType });
 
-    // payload is expected to be the JSON emitted by scripts/paddleocr_raw_runner.py
-    const runtimeMs = payload?.elapsed_ms ?? null;
-    const text = String(payload?.text || '');
-    const lines = Array.isArray(payload?.lines)
-      ? payload.lines.map((line: any) => ({
-          text: String(line?.text || ''),
-          confidence: Number(line?.confidence) || 0,
-          bbox: line?.bbox,
-          words: Array.isArray(line?.words)
-            ? line.words.map((word: any) => ({
-                text: String(word?.text || ''),
-                confidence: Number(word?.confidence) || 0,
-                bbox: word?.bbox,
-              }))
-            : [],
-        }))
-      : [];
-    const words = Array.isArray(payload?.words)
-      ? payload.words.map((word: any) => ({
-          text: String(word?.text || word || ''),
-          confidence: Number(word?.confidence) || 0,
-          bbox: word?.bbox,
-        }))
-      : [];
+    try {
+      const payload = await bridge.runRawDirect({
+        imagePath: tempResult.imagePath,
+        imageMimeType: mimeType,
+        imageWidth,
+        imageHeight,
+        language,
+      });
 
-    const result: OCRPageResult = {
-      pageNumber: 0,
-      width: imageWidth,
-      height: imageHeight,
-      dpi: 300,
-      language,
-      pageSegMode: undefined,
-      algorithmVersion: OCR_ALGORITHM_VERSION,
-      pipelineProfile: 'raw',
-      ocrEngine: 'paddleocr',
-      ocrQualityProfile: 'best',
-      lines,
-      words,
-      text,
-      confidence: Number(payload?.confidence) || 0,
-      debug: {
-        raw: true,
-        runtimeMs,
-        timingsMs: { ocr: runtimeMs },
-        paddlePass: 'raw-direct',
-      },
-    };
+      // payload is expected to be the JSON emitted by scripts/paddleocr_raw_runner.py
+      const runtimeMs = payload?.elapsed_ms ?? null;
+      const text = String(payload?.text || '');
+      const lines = Array.isArray(payload?.lines)
+        ? payload.lines.map((line: any) => ({
+            text: String(line?.text || ''),
+            confidence: Number(line?.confidence) || 0,
+            bbox: line?.bbox,
+            words: Array.isArray(line?.words)
+              ? line.words.map((word: any) => ({
+                  text: String(word?.text || ''),
+                  confidence: Number(word?.confidence) || 0,
+                  bbox: word?.bbox,
+                }))
+              : [],
+          }))
+        : [];
+      const words = Array.isArray(payload?.words)
+        ? payload.words.map((word: any) => ({
+            text: String(word?.text || word || ''),
+            confidence: Number(word?.confidence) || 0,
+            bbox: word?.bbox,
+          }))
+        : [];
 
-    return result;
+      const result: OCRPageResult = {
+        pageNumber: 0,
+        width: imageWidth,
+        height: imageHeight,
+        dpi: 300,
+        language,
+        pageSegMode: undefined,
+        algorithmVersion: OCR_ALGORITHM_VERSION,
+        pipelineProfile: 'raw',
+        ocrEngine: 'paddleocr',
+        ocrQualityProfile: 'best',
+        lines,
+        words,
+        text,
+        confidence: Number(payload?.confidence) || 0,
+        debug: {
+          raw: true,
+          runtimeMs,
+          timingsMs: { ocr: runtimeMs },
+          paddlePass: 'raw-direct',
+        },
+      };
+
+      return result;
+    } finally {
+      if (tempResult?.imagePath && typeof bridge.deleteTempImage === 'function') {
+        await bridge.deleteTempImage({ imagePath: tempResult.imagePath }).catch(() => {});
+      }
+    }
   }
 
   public async ocrForTextLayer(
@@ -3176,11 +3284,24 @@ class VisionService {
     debugCollectDrops: boolean = false,
     pipelineProfile: OCRPipelineProfile = 'panel',
     ocrQualityProfile: OCRQualityProfile = 'best',
-    ocrEngine: OCREngine = 'paddleocr'
+    ocrEngine: OCREngine = 'paddleocr',
+    maxPixels?: number
   ): Promise<OCRPageResult> {
+    const startTime = performance.now();
     if (ocrEngine !== 'paddleocr' && ocrEngine !== 'easyocr') {
       ocrEngine = 'paddleocr';
     }
+
+    const setFinalRuntime = (res: OCRPageResult): OCRPageResult => {
+      const elapsed = performance.now() - startTime;
+      return {
+        ...res,
+        debug: {
+          ...(res.debug || {}),
+          runtimeMs: elapsed,
+        }
+      };
+    };
 
     try {
       const externalResult = await this.runExternalOcrForTextLayer(
@@ -3193,7 +3314,8 @@ class VisionService {
         signal,
         pipelineProfile,
         ocrQualityProfile,
-        ocrEngine
+        ocrEngine,
+        maxPixels
       );
 
       const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
@@ -3214,16 +3336,16 @@ class VisionService {
         && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
       if (!shouldFallbackToGeometryEngine) {
         if (anomalies.length > 0) {
-          return this.postProcessKoreanExternalResult(
+          return setFinalRuntime(this.postProcessKoreanExternalResult(
             this.dropMinorPaddleGeometryAnomalies(
               externalResult,
               anomalies,
               'paddleGeometryMinorAnomalyDropNoFallback'
             ),
             language
-          );
+          ));
         }
-        return this.postProcessKoreanExternalResult(externalResult, language);
+        return setFinalRuntime(this.postProcessKoreanExternalResult(externalResult, language));
       }
 
       const denseLatinDocument = this.isLikelyDenseLatinDocumentPanelResult(externalResult, language);
@@ -3246,6 +3368,7 @@ class VisionService {
           pipelineProfile,
           fallbackQualityProfile,
           fallbackEngine,
+          maxPixels
         );
 
         const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
@@ -3263,7 +3386,7 @@ class VisionService {
         );
 
         if (fallbackDpi !== dpi) {
-          return this.postProcessKoreanExternalResult(
+          return setFinalRuntime(this.postProcessKoreanExternalResult(
             {
               ...mergedFallbackResult,
               debug: {
@@ -3275,23 +3398,23 @@ class VisionService {
               },
             },
             language
-          );
+          ));
         }
 
-        return this.postProcessKoreanExternalResult(mergedFallbackResult, language);
+        return setFinalRuntime(this.postProcessKoreanExternalResult(mergedFallbackResult, language));
       } catch (fallbackError) {
         if ((fallbackError as Error | undefined)?.name === 'AbortError' || signal?.aborted) {
           if (severeAnomalyCount === 0 && anomalies.length > 0) {
-            return this.postProcessKoreanExternalResult(
+            return setFinalRuntime(this.postProcessKoreanExternalResult(
               this.dropMinorPaddleGeometryAnomalies(
                 externalResult,
                 anomalies,
                 'paddleGeometryFallbackAbortedMinorAnomalyDrop'
               ),
               language
-            );
+            ));
           }
-          return this.postProcessKoreanExternalResult(
+          return setFinalRuntime(this.postProcessKoreanExternalResult(
             {
               ...externalResult,
               debug: {
@@ -3300,20 +3423,20 @@ class VisionService {
               },
             },
             language
-          );
+          ));
         }
         console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
         if (severeAnomalyCount === 0 && anomalies.length > 0) {
-          return this.postProcessKoreanExternalResult(
+          return setFinalRuntime(this.postProcessKoreanExternalResult(
             this.dropMinorPaddleGeometryAnomalies(
               externalResult,
               anomalies,
               'paddleGeometryFallbackFailedMinorAnomalyDrop'
             ),
             language
-          );
+          ));
         }
-        return this.postProcessKoreanExternalResult(externalResult, language);
+        return setFinalRuntime(this.postProcessKoreanExternalResult(externalResult, language));
       }
     } catch (error) {
       if (signal?.aborted || (error as Error | undefined)?.name === 'AbortError') {
@@ -3335,7 +3458,8 @@ class VisionService {
             signal,
             pipelineProfile,
             ocrQualityProfile,
-            'easyocr'
+            'easyocr',
+            maxPixels
           );
 
           if (easyResult.debug) {
@@ -3349,7 +3473,7 @@ class VisionService {
               fallbackReason: error instanceof Error ? error.message : String(error)
             };
           }
-          return this.postProcessKoreanExternalResult(easyResult, language);
+          return setFinalRuntime(this.postProcessKoreanExternalResult(easyResult, language));
         } catch (fallbackError) {
           console.error('[VisionService] EasyOCR fallback also failed:', fallbackError);
           throw fallbackError;

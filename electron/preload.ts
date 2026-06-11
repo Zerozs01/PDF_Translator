@@ -53,6 +53,8 @@ const ALLOWED_INVOKE_CHANNELS = [
   // OCR
   'ocr:get-engine-status',
   'ocr:prewarm-engine',
+  'ocr:write-temp-image',
+  'ocr:delete-temp-image',
   'ocr:run-raw-direct',
   'ocr:run-external',
   'ocr:cancel-external',
@@ -77,6 +79,7 @@ const ALLOWED_SEND_CHANNELS = [
 
 const ALLOWED_RECEIVE_CHANNELS = [
   'main-process-message',
+  'ocr:progress',
 ] as const;
 
 type AllowedInvokeChannel = typeof ALLOWED_INVOKE_CHANNELS[number];
@@ -260,9 +263,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('ocr:prewarm-engine', payload),
     cancelExternal: (payload?: { engine?: string }) =>
       safeInvoke('ocr:cancel-external', payload),
+    /**
+     * Write image bytes to a temp file on disk.
+     * Returns { imagePath } — a string path to pass to runExternal.
+     * Use this instead of embedding raw imageData in runExternal to eliminate
+     * the IPC buffer serialization overhead that causes memory leaks.
+     */
+    writeTempImage: (payload: {
+      imageData: Uint8Array | ArrayBuffer;
+      imageMimeType: string;
+    }) => safeInvoke<{ imagePath: string }>('ocr:write-temp-image', payload),
+    deleteTempImage: (payload: {
+      imagePath: string;
+    }) => safeInvoke<{ ok: boolean }>('ocr:delete-temp-image', payload),
     runExternal: (payload: {
       engine: string;
-      imageData: Uint8Array | ArrayBuffer;
+      /** Preferred: absolute path to an already-written temp file (zero-copy IPC). */
+      imagePath?: string;
+      /** @deprecated Use writeTempImage() + imagePath to avoid buffer serialization. */
+      imageData?: Uint8Array | ArrayBuffer;
       imageMimeType: string;
       imageWidth: number;
       imageHeight: number;
@@ -271,9 +290,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       pageSegMode?: number;
       pipelineProfile?: string;
       ocrQualityProfile?: string;
+      /** PaddleOCR det_limit_side_len cap. Default 4800, max 6000. */
+      maxSideLen?: number;
+      chunkIndex?: number;
+      totalChunks?: number;
     }) => safeInvoke('ocr:run-external', payload),
     runRawDirect: (payload: {
-      imageData: Uint8Array | ArrayBuffer;
+      /** Preferred: absolute path to an already-written temp file (zero-copy IPC). */
+      imagePath?: string;
+      /** @deprecated Use writeTempImage() + imagePath to avoid buffer serialization. */
+      imageData?: Uint8Array | ArrayBuffer;
       imageMimeType: string;
       imageWidth: number;
       imageHeight: number;

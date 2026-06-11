@@ -1524,6 +1524,13 @@ describe('applyThaiConversationalGlossary', () => {
     expect(translated).toBe('ฉันจะได้กำไร 40% หากฉันขายมัน.');
   });
 
+  test('maps I WOULD BE GETTING 4O% ... (OCR letter O) HAD I SOLD IT to conditional Thai', () => {
+    const source = 'I WOULD BE GETTING 4O% OF THE PROFITS HAD I SOLD IT.';
+    const translated = applyThaiConversationalGlossary(source, 'ฉันจะได้กําไร 4% ถ้าผมขายมัน', 'th');
+
+    expect(translated).toBe('ฉันจะได้กำไร 40% หากฉันขายมัน.');
+  });
+
   test('maps teammate stronger sentence to stable Thai meaning', () => {
     const source = "AND IT'S GOOD FOR\nUS IF OUR TeAMMATE\nBECOMES STRONGER.";
     const translated = applyThaiConversationalGlossary(
@@ -1638,6 +1645,20 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('TH-THIS LIGHT...!', 'TH-THIS LIGHT...!', 'th')).toBe('แส-แสงนี้...!');
     expect(applyThaiConversationalGlossary('SUPPORT YOU TO LIVE', 'SUPPORT YOU TO LIVE', 'th')).toBe('ฉันช่วยให้คุณมีชีวิตอยู่');
     expect(applyThaiConversationalGlossary('THE PEOPLE HERE?', 'THE PEOPLE HERE?', 'th')).toBe('คนที่นี่เหรอ?');
+  });
+
+  test('maps H-Manga conversational fragments to stable thai meaning', () => {
+    expect(applyThaiConversationalGlossary('I-IM', 'I-IM', 'th')).toBe('ฉ-ฉัน');
+    expect(applyThaiConversationalGlossary('YOU’RE', 'YOU’RE', 'th')).toBe('เธอ');
+    expect(applyThaiConversationalGlossary('raping-my', 'raping-my', 'th')).toBe('ข่มขืน-ฉัน');
+    expect(applyThaiConversationalGlossary('BARBAR I AN', 'I\'VELOST MYVIRGINITY TOSOME BARBAR I AN', 'th')).toBe('ข้าสูญเสียความบริสุทธิ์ให้กับคนป่าเถื่อน'); // (จะถูกส่งเข้าแปลปกติเนื่องจากไม่ใช่ exact match คำเดี่ยว แต่ normalize จะแก้คำให้อ่านเป็น BARBARIAN ได้ถูกต้อง)
+    expect(applyThaiConversationalGlossary('StOaaoP!', 'StOaaoP!', 'th')).toBe('หยุดดดดด!');
+    expect(applyThaiConversationalGlossary('OH,OHHH', 'OH,OHHH', 'th')).toBe('OH,OHHH'); // (คำครางไม่มีสระ/สะกดแปลกจะปล่อยทับศัพท์เพื่อความถูกต้อง)
+    expect(applyThaiConversationalGlossary('MY HEART\'S BEING TORN BY THEIR COCKS!', 'MY HEART\'S BEING TORN BY THEIR COCKS!', 'th')).toBe('หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!');
+    expect(applyThaiConversationalGlossary("HEART'S", "HEART'S", 'th')).toBe('หัวใจ');
+    expect(applyThaiConversationalGlossary("HEART'S!", "HEART'S!", 'th')).toBe('หัวใจ!');
+    expect(applyThaiConversationalGlossary("HEART’S...", "HEART’S...", 'th')).toBe('หัวใจ...');
+    expect(applyThaiConversationalGlossary("HEART", "HEART", 'th')).toBe('หัวใจ');
   });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
