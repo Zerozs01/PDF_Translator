@@ -957,7 +957,7 @@ export const isLikelyGhostTranslatableLine = (
   // Removed wordCoverage check because OCR sometimes creates word bboxes as large as the line bbox
   const isSparseSfxBox = (area >= 12000 && compact.length <= 14 && (area / Math.max(1, compact.length)) >= 1200)
     || (area >= 24000 && compact.length <= 22 && (area / Math.max(1, compact.length)) >= 1000);
-  const englishTokens = text.split(/\s+/g).map(t => t.replace(/[^A-Za-z]/g, '')).filter(t => t.length >= 2 && /[aeiouy]/i.test(t));
+  const englishTokens = text.split(/\s+/g).map(t => t.replace(/[^A-Za-z\u00C0-\u024F]/g, '')).filter(t => t.length >= 2 && /[aeiouy\u00C0-\u024F]/i.test(t));
   const isNaturalDialogue = englishTokens.length >= 2
     || (englishTokens.length === 1 && englishTokens[0].length >= 3 && readability >= 1.0)
     || isKnownShortWord

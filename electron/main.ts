@@ -14,7 +14,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
-import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage } from './ocrBridge'
+import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
 // BenchmarkDAO not implemented in this file (db.ts handles)
 
@@ -1224,17 +1224,33 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('fs:import-file', async (_event, payload: { name: string; mimeType: string; data: Uint8Array | ArrayBuffer }) => {
+  ipcMain.handle('fs:import-file', async (_event, payload: {
+    name: string;
+    mimeType: string;
+    data?: Uint8Array | ArrayBuffer;
+    filePath?: string;
+  }) => {
     try {
       if (!payload || typeof payload.name !== 'string' || !payload.name) {
         throw new Error('Invalid payload: name is required');
       }
 
-      const rawData = payload.data instanceof ArrayBuffer
-        ? new Uint8Array(payload.data)
-        : payload.data;
+      let rawData: Uint8Array | Buffer;
+      if (payload.filePath) {
+        if (!fs.existsSync(payload.filePath)) {
+          throw new Error(`Invalid filePath: ${payload.filePath} does not exist`);
+        }
+        rawData = await fs.promises.readFile(payload.filePath);
+      } else {
+        if (!payload.data) {
+          throw new Error('Invalid payload: either filePath or data is required');
+        }
+        rawData = payload.data instanceof ArrayBuffer
+          ? new Uint8Array(payload.data)
+          : payload.data;
+      }
 
-      if (!(rawData instanceof Uint8Array)) {
+      if (!(rawData instanceof Uint8Array) && !Buffer.isBuffer(rawData)) {
         throw new Error('Invalid payload: data must be Uint8Array or ArrayBuffer');
       }
 
@@ -1447,75 +1463,11 @@ app.whenReady().then(() => {
       throw new Error('Invalid OCR payload: either imagePath or imageData must be provided');
     }
 
-    const scriptPath = path.join(process.cwd(), 'scripts', 'paddleocr_raw_runner.py');
-    if (!fs.existsSync(scriptPath)) {
-      throw new Error(`Raw runner script not found: ${scriptPath}`);
-    }
-
-    const rawRunnerTimeoutMs = (() => {
-      const configured = Number(process.env.PDF_TRANSLATOR_RAW_OCR_TIMEOUT_MS || '0');
-      if (Number.isFinite(configured) && configured >= 60_000) {
-        return configured;
-      }
-      return 20 * 60 * 1000;
-    })();
-
-    // Resolve or write temp file — skip writeFile entirely when imagePath is already available
-    let resolvedTmpPath: string;
-    let ownsTmpFile: boolean;
-    if (payload.imagePath) {
-      resolvedTmpPath = payload.imagePath;
-      ownsTmpFile = false;
-    } else {
-      const tmpDir = app.getPath('temp') || os.tmpdir();
-      const ext = payload.imageMimeType.includes('png') ? '.png'
-        : (payload.imageMimeType.includes('jpeg') || payload.imageMimeType.includes('jpg') ? '.jpg' : '.img');
-      resolvedTmpPath = path.join(tmpDir, `pdf-translator-raw-${randomUUID()}${ext}`);
-      await fs.promises.writeFile(resolvedTmpPath, Buffer.from(payload.imageData as ArrayBuffer));
-      ownsTmpFile = true;
-    }
-
     try {
-      const pythonCmd = resolvePythonExecutable();
-      const args = [scriptPath, '--image', resolvedTmpPath, '--language', String(payload.language || 'en')];
-
-      const proc = spawn(pythonCmd, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-        env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONWARNINGS: 'ignore' },
-      });
-
-      let stdout = '';
-      let stderr = '';
-      proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-      proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-
-      const exitCode = await new Promise<number>((resolve, reject) => {
-        const to = setTimeout(() => {
-          try { proc.kill('SIGKILL'); } catch {}
-          reject(new Error(`Raw runner timed out after ${Math.round(rawRunnerTimeoutMs / 60000)} minutes`));
-        }, rawRunnerTimeoutMs);
-        proc.on('error', (err) => { clearTimeout(to); reject(err); });
-        proc.on('close', (code) => { clearTimeout(to); resolve(code ?? 0); });
-      });
-
-      if (exitCode !== 0) {
-        throw new Error(stderr.trim() || stdout.trim() || `Raw runner exited with code ${exitCode}`);
-      }
-
-      const trimmed = stdout.trim();
-      if (!trimmed) throw new Error(stderr.trim() || 'Raw runner returned empty output');
-      try {
-        const parsed = JSON.parse(trimmed);
-        return parsed;
-      } catch (err) {
-        throw new Error(`Failed to parse raw runner output: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    } finally {
-      // Only delete when we created the temp file; caller-supplied paths are cleaned up by the caller
-      if (ownsTmpFile) {
-        try { await fs.promises.unlink(resolvedTmpPath); } catch {};
-      }
+      return await runExternalOcrRaw(payload);
+    } catch (error) {
+      console.error('ocr:run-raw-direct error:', error);
+      throw error;
     }
   });
 

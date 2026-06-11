@@ -7166,6 +7166,10 @@ export default function App() {
       engine: (ocrOptions.engine || 'paddleocr') as OCREngine,
       type: 'offline_all',
       totalPages: Math.max(1, totalPages),
+      ocrLanguage: ocrOptions.language,
+      sourceLanguage: sourceLanguage,
+      targetLanguage: targetLanguage,
+      translationMode: translationMode,
     });
 
     // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที
@@ -7195,6 +7199,10 @@ export default function App() {
       engine: (ocrOptions.engine || 'paddleocr') as OCREngine,
       type: 'ai_all',
       totalPages: Math.max(1, totalPages),
+      ocrLanguage: ocrOptions.language,
+      sourceLanguage: sourceLanguage,
+      targetLanguage: targetLanguage,
+      translationMode: translationMode,
     });
 
     // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที

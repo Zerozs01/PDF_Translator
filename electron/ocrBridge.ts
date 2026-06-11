@@ -722,7 +722,7 @@ function coerceImageBuffer(raw: Uint8Array | ArrayBuffer): Buffer {
 export async function getExternalOcrEngineStatuses(): Promise<ExternalOcrEngineStatus[]> {
   return await Promise.all(EXTERNAL_ENGINES.map(async (engine) => {
     try {
-      const response = await runBridgeOnce(engine, ['--action', 'status', '--engine', engine]);
+      const response = await requestDaemon(engine, { action: 'status', engine });
       return {
         engine,
         available: Boolean(response.available),
@@ -899,6 +899,77 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
     }
   }
 }
+
+
+export async function runExternalOcrRaw(payload: {
+  imagePath?: string;
+  imageData?: Uint8Array | ArrayBuffer;
+  imageMimeType: string;
+  imageWidth: number;
+  imageHeight: number;
+  language: string;
+}): Promise<ExternalOcrBridgeResponse> {
+  if (!payload.imagePath && !payload.imageData) {
+    throw new Error('ExternalOcrRequestPayload must provide either imagePath or imageData');
+  }
+
+  const engine = 'paddleocr';
+
+  let resolvedImagePath: string;
+  let ownsTempFile: boolean;
+
+  if (payload.imagePath) {
+    resolvedImagePath = payload.imagePath;
+    ownsTempFile = false;
+  } else {
+    resolvedImagePath = path.join(
+      getExternalOcrTempRoot(),
+      `raw-${engine}-${randomUUID()}${mimeTypeToExtension(payload.imageMimeType)}`
+    );
+    await fs.promises.writeFile(resolvedImagePath, coerceImageBuffer(payload.imageData!));
+    ownsTempFile = true;
+  }
+
+  try {
+    const requestPayload: Record<string, unknown> = {
+      action: 'raw_ocr',
+      engine,
+      image: resolvedImagePath,
+      language: payload.language,
+      width: Math.round(payload.imageWidth),
+      height: Math.round(payload.imageHeight),
+    };
+
+    let response: ExternalOcrBridgeResponse;
+    try {
+      response = await requestDaemon(engine, requestPayload);
+    } catch (error) {
+      if (!isRecoverableDaemonError(error)) {
+        throw error;
+      }
+      teardownDaemon(
+        engine,
+        error instanceof Error ? error : new Error(String(error))
+      );
+      try {
+        response = await requestDaemon(engine, requestPayload);
+      } catch (retryError) {
+        throw retryError;
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(response.reason || `External OCR engine "${engine}" failed`);
+    }
+
+    return response;
+  } finally {
+    if (ownsTempFile) {
+      await fs.promises.rm(resolvedImagePath, { force: true });
+    }
+  }
+}
+
 
 export async function prewarmExternalOcrEngine(
   engine: ExternalBridgeEngine,

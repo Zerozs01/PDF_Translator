@@ -218,6 +218,12 @@ class BackgroundQueueProcessor {
         if (cached && cached.lines && cached.lines.length > 0) {
           ocrResult = cached;
           console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
+          
+          // ซิงก์ผลลัพธ์ OCR จากฐานข้อมูลลง Store เพื่อให้ขั้นตอนการแปลถัดไปดึงไปใช้ได้สำเร็จ ไม่โดนข้ามหน้า
+          const activeFile = useProjectStore.getState().file;
+          if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+            useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+          }
         }
       } catch (err) {
         console.warn(`[QueueProcessor] DB cache read warning for page ${pageNum}:`, err);

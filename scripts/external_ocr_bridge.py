@@ -4904,6 +4904,122 @@ def run_easy_yolo(args: argparse.Namespace) -> Dict[str, Any]:
     return cleaned
 
 
+def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
+    img_path = Path(args.image)
+    if not img_path.exists():
+        return {"ok": False, "reason": f"image not found: {img_path}"}
+
+    def bbox_from_points_raw(points):
+        try:
+            import numpy as np
+            if isinstance(points, np.ndarray):
+                arr = points
+                if arr.ndim == 1 and arr.size >= 4:
+                    x0, y0, x1, y1 = [float(v) for v in arr[:4]]
+                    return {"x0": min(x0, x1), "y0": min(y0, y1), "x1": max(x0, x1), "y1": max(y0, y1)}
+                if arr.ndim >= 2 and arr.shape[-1] >= 2:
+                    xs = [float(p[0]) for p in arr]
+                    ys = [float(p[1]) for p in arr]
+                    return {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
+        except Exception:
+            pass
+
+        xs = []
+        ys = []
+        if points is None:
+            iterable = []
+        else:
+            iterable = points
+        for point in iterable:
+            try:
+                xs.append(float(point[0]))
+                ys.append(float(point[1]))
+            except Exception:
+                continue
+        if not xs or not ys:
+            return {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
+        return {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
+
+    def read_field_raw(item, key, default=None):
+        try:
+            if isinstance(item, dict):
+                return item.get(key, default)
+            return item[key]
+        except Exception:
+            return getattr(item, key, default)
+
+    def as_list_raw(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        try:
+            return list(value)
+        except Exception:
+            return [value]
+
+    try:
+        lang = select_paddle_lang(args.language)
+        profile_key = get_paddle_profile_key(args)
+        quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
+        predict_kwargs = build_paddle_predict_kwargs(args)
+        ocr = get_paddle_ocr(lang, profile_key, quality_profile, predict_kwargs)
+
+        t0 = time.perf_counter()
+        if hasattr(ocr, "predict"):
+            raw = ocr.predict(str(img_path))
+        else:
+            raw = ocr.ocr(str(img_path))
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        words = []
+        lines = []
+        result_items = raw if isinstance(raw, list) else [raw]
+        for item in result_items:
+            rec_texts = as_list_raw(read_field_raw(item, "rec_texts", []))
+            rec_scores = as_list_raw(read_field_raw(item, "rec_scores", []))
+            rec_boxes = as_list_raw(read_field_raw(item, "rec_boxes", []))
+            rec_polys = as_list_raw(read_field_raw(item, "rec_polys", []))
+            for index, text in enumerate(rec_texts):
+                text_value = str(text or "").strip()
+                if not text_value:
+                    continue
+                score = 0.0
+                if index < len(rec_scores):
+                    try:
+                        score = float(rec_scores[index])
+                    except Exception:
+                        score = 0.0
+                points = None
+                if index < len(rec_boxes):
+                    points = rec_boxes[index]
+                elif index < len(rec_polys):
+                    points = rec_polys[index]
+                bbox = bbox_from_points_raw(points)
+                words.append(text_value)
+                lines.append({
+                    "text": text_value,
+                    "confidence": score,
+                    "bbox": bbox,
+                    "words": [{"text": text_value, "confidence": score, "bbox": bbox}],
+                })
+
+        return {
+            "ok": True,
+            "engine": "paddleocr-true-raw",
+            "elapsed_ms": round(elapsed_ms, 1),
+            "word_count": len(words),
+            "words": words,
+            "lines": lines,
+            "confidence": 0.0,
+            "text": " ".join(words),
+        }
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
 def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -> argparse.Namespace:
     return argparse.Namespace(
         id=payload.get("id"),
@@ -4969,6 +5085,10 @@ def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
         return status_easy_yolo()
     if args.action == "prewarm":
         return prewarm_engine(args)
+    if args.action == "raw_ocr":
+        if args.engine == "paddleocr":
+            return run_paddleocr_raw(args)
+        raise RuntimeError("raw_ocr action is only supported for paddleocr engine")
 
     if not args.image:
         raise RuntimeError("--image is required for OCR actions")
@@ -5004,7 +5124,7 @@ def serve_stdio(default_engine: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm"])
+    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr"])
     parser.add_argument("--engine", required=True, choices=["paddleocr", "easyocr"])
     parser.add_argument("--image")
     parser.add_argument("--language", default="eng")
