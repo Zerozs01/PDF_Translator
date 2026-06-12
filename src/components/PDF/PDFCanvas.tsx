@@ -383,8 +383,16 @@ const PDFPageOverlay: React.FC<{
       } else {
         const existingLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
         const existingGroups = useLayerStore.getState().groupsByPage.get(pageNum) || [];
-        const mergedResult = mergeLayersAndGroups(result, existingLayers, existingGroups);
-        useLayerStore.getState().setPageLayers(pageNum, mergedResult);
+        
+        const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+          || existingGroups.some(g => g.userCreated);
+
+        if (!hasUserModifications) {
+          useLayerStore.getState().setPageLayers(pageNum, result);
+        } else {
+          const mergedResult = mergeLayersAndGroups(result, existingLayers, existingGroups);
+          useLayerStore.getState().setPageLayers(pageNum, mergedResult);
+        }
       }
 
       lastBuiltEngineRef.current = newEngine;

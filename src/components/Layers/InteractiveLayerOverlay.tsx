@@ -455,13 +455,15 @@ interface SelectionBoxProps {
   onDoubleClick: (layerId: string) => void;
   onHover: (layerId: string | null) => void;
   layout?: OverlayLayout;
+  /** true = layer ถูก suppress โดย overlay dedup (hidden) — แสดง style จางลงแต่ยังเลือกได้ */
+  isLayoutHidden?: boolean;
 }
 
 const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
-  onDoubleClick, onHover, layout,
+  onDoubleClick, onHover, layout, isLayoutHidden,
 }) => {
   const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
   const effectiveBBox = (layout && !layer.userEdited)
@@ -514,12 +516,14 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
         border: isRotating
           ? '2px solid #8B5CF6' // กำลังหมุน -> เส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? '2px dashed #3B82F6' // ได้รับการเลือก -> เส้นประสีน้ำเงินบางตาขึ้น
+            ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.55)' : '#3B82F6'}` // ได้รับการเลือก (suppress = สีม่วง, ปกติ = น้ำเงิน)
             : isBoxHovered
-              ? '1.5px dashed #F97316' // ชี้เมาส์โดน -> เส้นประสีส้ม
-              : showDebugOverlay
-                ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
-                : 'none',
+              ? `1.5px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.4)' : '#F97316'}` // hover (suppress = ม่วงจาง, ปกติ = ส้ม)
+              : isLayoutHidden
+                ? '0.5px dashed rgba(99,102,241,0.18)' // suppress โดย overlay dedup → เส้นประม่วงจางมาก บอกว่า "มีอยู่แต่ถูกซ่อน"
+                : showDebugOverlay
+                  ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
+                  : 'none',
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
@@ -1150,12 +1154,14 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         // คัดกรองและซ่อนเลเยอร์ที่ถูกสั่ง hidden จาก layout map (เนื่องจากถูกผสานกลุ่ม)
         const layout = layouts?.get(layer.lineIndex);
         const isOcrLayer = layer.lineIndex >= 0 && !layer.id.startsWith('manual-');
+        // Layer ที่ไม่มีใน layout map และไม่ได้แก้ไขโดย user → ไม่ render (ยังไม่มีข้อมูลพอ)
         if (isOcrLayer && !layout && !layer.userEdited) {
           return null;
         }
-        if (layout?.hidden) {
-          return null;
-        }
+        // layout.hidden = true → layer ถูก suppress โดย overlay dedup
+        // ยังคง render SelectionBox เพื่อให้ user สามารถ select/interact ได้
+        // แต่จะแสดง style จางลงเพื่อบ่งบอกสถานะ suppress
+        const isLayoutHidden = layout?.hidden === true;
 
         // Viewport Virtualization check (Math-based, zero DOM metrics API overhead)
         const effectiveBBox = (layout && !layer.userEdited)
@@ -1218,6 +1224,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
                 onDoubleClick={handleDoubleClick}
                 onHover={setHoveredLayer}
                 layout={layout}
+                isLayoutHidden={isLayoutHidden}
               />
             )}
           </React.Fragment>

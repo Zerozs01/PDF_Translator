@@ -2,6 +2,12 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-06-13
+
+- Updated translation cache version from `v47` to `v48` in ARCHITECTURE.md to match implementation.
+- Documented background translation queue alignment fixes:
+  - Background queue now aggressively runs OCR split and cleaning (`splitAggressiveMergedLines` and `filterGhostOcrData`) to prevent Index Drift and Layout Grouping Mismatch between background processor and active UI canvas.
+
 ## 2026-06-01
 
 - Updated the OCR/translation docs to reflect current offline hardening:

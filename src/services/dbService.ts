@@ -107,6 +107,19 @@ export const dbService = {
     }
   },
 
+  async clearDocumentCache(docId: number): Promise<boolean> {
+    try {
+      if (!isDbAvailable()) {
+        console.warn('[DB] clearDocumentCache skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.clearDocumentCache(docId);
+    } catch (error) {
+      console.error('Failed to clear document cache:', error);
+      return false;
+    }
+  },
+
   async listBenchmarks(docId: number, pageNum: number): Promise<DBBenchmarkRecord[]> {
     try {
       if (!isDbAvailable()) return [];

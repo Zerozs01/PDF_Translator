@@ -60,6 +60,9 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'good luck': 'โชคดี', 'well done': 'เยี่ยมมาก', 'nice job': 'ทำได้ดี',
   'im sorry': 'ฉันขอโทษ', 'excuse me': 'ขอโทษนะ', 'be careful': 'ระวังด้วย',
   'dont move': 'อย่าขยับ', 'is that so': 'หรือจริงเหรอ',
+  // Common manga/technical short terms
+  'unit': 'หน่วย', 'units': 'หน่วย', 'all units': 'ทุกหน่วย',
+  'charge': 'ชาร์จ', 'princess': 'เจ้าหญิง', 'of all of us': 'ของพวกเราทุกคน',
 };
 
 export const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;

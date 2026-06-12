@@ -3,9 +3,28 @@ import { visionService } from '../vision/VisionService';
 import { OCREngine, OCRPageResult } from '../../types';
 import { useBackgroundQueueStore, BackgroundJob } from '../../stores/useBackgroundQueueStore';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore, filterGhostOcrData } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../dbService';
 import type { TranslationMode } from '../../stores/useProjectStore';
+import { useLayerStore } from '../../stores/useLayerStore';
+import { buildLayerGroupsFromOCR, mergeLayersAndGroups, splitAggressiveMergedLines } from '../layers/LayerGroupingService';
+import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
+import { applyPanelLanguageScriptGate } from '../vision/scriptGateService';
+import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+
+function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine): OCRPageResult {
+  const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
+  const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
+    processedLines,
+    result.words || [],
+    targetEngine
+  );
+  return {
+    ...result,
+    lines: cleanLines,
+    words: cleanWords
+  };
+}
 
 export interface BackgroundQueueHandlers {
   translatePage: (
@@ -216,7 +235,27 @@ class BackgroundQueueProcessor {
       try {
         const cached = await dbService.getOCR(job.documentId, pageNum, job.engine);
         if (cached && cached.lines && cached.lines.length > 0) {
-          ocrResult = cached;
+          // Normalization logic equivalent to UI's normalizeCacheProfile
+          const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+          const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+            ? cached
+            : {
+              ...cached,
+              pipelineProfile: 'panel' as const,
+            };
+          const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+          if (
+            scriptGated.pipelineProfile === 'panel'
+            && scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
+          ) {
+            ocrResult = scriptGated;
+          } else {
+            ocrResult = applyPanelSafetyLineDedup(scriptGated);
+          }
+
+          if (ocrResult) {
+            ocrResult = processAndCleanOCR(ocrResult, job.engine);
+          }
           console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
           
           // ซิงก์ผลลัพธ์ OCR จากฐานข้อมูลลง Store เพื่อให้ขั้นตอนการแปลถัดไปดึงไปใช้ได้สำเร็จ ไม่โดนข้ามหน้า
@@ -237,13 +276,23 @@ class BackgroundQueueProcessor {
         // 1.1 Render PDF หน้าดังกล่าวเป็น Canvas ในหน่วยความจำ
         const page = await pdfDoc.getPage(pageNum);
         
-        // ตั้งระดับสเกล DPI ให้เสถียร (DPI 150 = scale 2.083, DPI 200 = scale 2.778)
-        const scale = 2.0; 
+        const options = useOCRTextLayerStore.getState().options;
+        const targetDpi = job.ocrDpi || options.dpi || 300;
+        const ocrLanguage = job.ocrLanguage || options.language || 'eng';
+        const ocrQualityProfile = job.ocrQualityProfile || options.ocrQualityProfile || 'best';
+
+        const requestedScale = targetDpi / 72;
+        const requestedViewport = page.getViewport({ scale: requestedScale });
+        
+        const renderConstraints = resolveRenderConstraints(job.engine, ocrLanguage, ocrQualityProfile);
+        const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderConstraints);
+        const scale = requestedScale * fitted.scaleFactor;
+        
         const viewport = page.getViewport({ scale });
         
         const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Cannot create headless canvas 2D context');
 
@@ -263,8 +312,6 @@ class BackgroundQueueProcessor {
 
         const activeEngine = job.engine;
         const pipelineProfile = 'panel';
-        const options = useOCRTextLayerStore.getState().options;
-        const ocrLanguage = job.ocrLanguage || options.language || 'eng';
 
         const shouldPreferFastPaddleProfile = (() => {
           if (activeEngine !== 'paddleocr') return false;
@@ -290,7 +337,7 @@ class BackgroundQueueProcessor {
           .filter(Boolean)
           .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
-        const ocrQualityMode = options.ocrQualityProfile === 'balanced' || options.ocrQualityProfile === 'best' ? 'high' : 'fast';
+        const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
 
         const resolvedQualityProfile = activeEngine === 'paddleocr'
           ? (ocrQualityMode === 'fast'
@@ -298,19 +345,24 @@ class BackgroundQueueProcessor {
             : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
           : 'best';
 
+        const pageSegModeVal = job.ocrPageSegMode !== undefined
+          ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
+          : (options.pageSegMode === null ? undefined : options.pageSegMode);
+
         // 1.3 ส่งภาพไปทำ OCR
         const ocrPromise = visionService.ocrForTextLayer(
           imageBlob,
           canvas.width,
           canvas.height,
           ocrLanguage,
-          150, // DPI
-          undefined, // pageSegMode
+          targetDpi,
+          pageSegModeVal,
           signal,
           false, // debugCollectDrops
           'panel', // pipelineProfile
           resolvedQualityProfile, // qualityProfile
-          job.engine
+          job.engine,
+          canvas.width * canvas.height
         );
 
         ocrResult = await ocrPromise;
@@ -318,7 +370,15 @@ class BackgroundQueueProcessor {
         ocrResult.ocrEngine = job.engine;
         ocrResult.language = ocrLanguage;
 
+        // Apply same pipeline post-processing as the UI to ensure consistent coordinates and deduplication
+        ocrResult = applyPanelLanguageScriptGate(ocrResult, ocrLanguage);
+        ocrResult = applyPanelSafetyLineDedup(ocrResult);
+
+        // ทำการ split และ clean เพื่อให้ index ตรงกับ UI
+        ocrResult = processAndCleanOCR(ocrResult, job.engine);
+
         throwIfAborted();
+
 
         // 1.4 บันทึก OCR ผลลัพธ์ลงฐานข้อมูล
         await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
@@ -327,6 +387,29 @@ class BackgroundQueueProcessor {
         const activeFile = useProjectStore.getState().file;
         if (activeFile && useProjectStore.getState().documentId === job.documentId) {
           useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+        }
+      }
+
+      if (ocrResult) {
+        // สร้างโครงสร้าง Layers และ Groups เบื้องต้นลง Store ทันที เพื่อหลีกเลี่ยง Mismatch ในขั้นตอนการแปล
+        try {
+          const layerStore = useLayerStore.getState();
+          const existingLayers = layerStore.getPageLayers(pageNum);
+          const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
+          const existingGroups = layerStore.getPageGroups(pageNum);
+          const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+            || existingGroups.some(g => g.userCreated);
+
+          if (existingLayers.length === 0 || !hasUserModifications) {
+            layerStore.setPageLayers(pageNum, initialLayerResult);
+            console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
+          } else {
+            const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
+            layerStore.setPageLayers(pageNum, mergedResult);
+            console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
+          }
+        } catch (err) {
+          console.warn(`[QueueProcessor] Failed to initialize layers from OCR for page ${pageNum}:`, err);
         }
       }
 
@@ -379,3 +462,218 @@ class BackgroundQueueProcessor {
 }
 
 export const backgroundQueueProcessor = new BackgroundQueueProcessor();
+
+interface RenderConstraints {
+  maxSide: number | null;
+  maxPixels: number | null;
+  minWidth: number | null;
+  tallPageBoost?: {
+    minAspectRatio: number;
+    minLongSide: number;
+    boostedMaxSide: number;
+    boostedMaxPixels: number;
+  };
+}
+
+const hasCjkOrThaiOcrLanguage = (lang: string) => {
+  return lang.split('+').map(c => c.trim()).filter(Boolean).some(c => 
+    ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(c)
+  );
+};
+
+const hasKoreanOcrLanguage = (lang: string) => {
+  return lang.split('+').map(c => c.trim()).filter(Boolean).some(c => c === 'kor');
+};
+
+function resolveRenderConstraints(
+  engine: string,
+  ocrLanguage: string,
+  ocrQualityProfile: 'fast' | 'balanced' | 'best'
+): RenderConstraints {
+  const activePipelineProfile = 'panel';
+  
+  const cjkPanelExternal = activePipelineProfile === 'panel'
+    && hasCjkOrThaiOcrLanguage(ocrLanguage);
+  const koreanPaddlePanel = activePipelineProfile === 'panel'
+    && engine === 'paddleocr'
+    && hasKoreanOcrLanguage(ocrLanguage);
+
+  if (engine === 'paddleocr') {
+    if (koreanPaddlePanel) {
+      return {
+        maxSide: 20000,
+        maxPixels: 23500000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 20000,
+          boostedMaxPixels: 34000000,
+        },
+      };
+    }
+    if (cjkPanelExternal) {
+      return {
+        maxSide: 19000,
+        maxPixels: 28800000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 20000,
+          boostedMaxPixels: 28000000,
+        },
+      };
+    }
+    
+    const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
+    if (ocrQualityMode === 'high') {
+      return {
+        maxSide: 21500,
+        maxPixels: 37650000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 21500,
+          boostedMaxPixels: 37950000,
+        },
+      };
+    } else {
+      return {
+        maxSide: 19700,
+        maxPixels: 18800000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 19700,
+          boostedMaxPixels: 18800000,
+        },
+      };
+    }
+  }
+  
+  if (engine === 'easyocr') {
+    if (cjkPanelExternal) {
+      return {
+        maxSide: 21500,
+        maxPixels: 23800000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 21500,
+          boostedMaxPixels: 23800000,
+        },
+      };
+    }
+    
+    const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
+    if (ocrQualityMode === 'high') {
+      return {
+        maxSide: 21500,
+        maxPixels: 23800000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 21500,
+          boostedMaxPixels: 23800000,
+        },
+      };
+    } else {
+      return {
+        maxSide: 19700,
+        maxPixels: 12800000,
+        minWidth: null,
+        tallPageBoost: {
+          minAspectRatio: 2.35,
+          minLongSide: 9000,
+          boostedMaxSide: 19700,
+          boostedMaxPixels: 12800000,
+        },
+      };
+    }
+  }
+
+  return {
+    maxSide: 21500,
+    maxPixels: 23800000,
+    minWidth: null,
+  };
+}
+
+function fitDimensionsToConstraints(
+  width: number,
+  height: number,
+  constraints?: RenderConstraints
+) {
+  const maxSide = constraints?.maxSide ?? null;
+  const maxPixels = constraints?.maxPixels ?? null;
+  const minWidth = constraints?.minWidth ?? null;
+  
+  let effectiveMaxSide = maxSide;
+  let effectiveMaxPixels = maxPixels;
+  let appliedTallPageBoost = false;
+
+  const longSide = Math.max(width, height);
+  const shortSide = Math.max(1, Math.min(width, height));
+  const aspectRatio = longSide / shortSide;
+
+  if (effectiveMaxPixels && effectiveMaxPixels > 0) {
+    const baseMaxPixels = effectiveMaxPixels;
+    const subLinearMultiplier = Math.sqrt(aspectRatio);
+    let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
+
+    const MAX_PIXELS_CEILING = 37950000;
+    if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
+      dynamicMaxPixels = MAX_PIXELS_CEILING;
+    }
+
+    effectiveMaxPixels = dynamicMaxPixels;
+    appliedTallPageBoost = aspectRatio > 1.5;
+  }
+
+  if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
+    const baseMaxSide = effectiveMaxSide;
+    effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+  }
+
+  let scaleFactor = 1;
+
+  if (effectiveMaxSide && effectiveMaxSide > 0) {
+    const longestSide = Math.max(width, height);
+    if (longestSide > effectiveMaxSide) {
+      scaleFactor = Math.min(scaleFactor, effectiveMaxSide / longestSide);
+    }
+  }
+
+  if (effectiveMaxPixels && effectiveMaxPixels > 0) {
+    const pixelCount = width * height;
+    if (pixelCount > effectiveMaxPixels) {
+      scaleFactor = Math.min(scaleFactor, Math.sqrt(effectiveMaxPixels / pixelCount));
+    }
+  }
+
+  if (minWidth && minWidth > 0 && scaleFactor < 1 && width * scaleFactor < minWidth && width > minWidth) {
+    let minWidthScale = minWidth / width;
+    if (effectiveMaxSide && effectiveMaxSide > 0) {
+      minWidthScale = Math.min(minWidthScale, effectiveMaxSide / Math.max(width, height));
+    }
+    if (minWidthScale > scaleFactor) {
+      scaleFactor = minWidthScale;
+    }
+  }
+
+  if (scaleFactor >= 1) {
+    return { width, height, scaleFactor: 1, appliedTallPageBoost };
+  }
+
+  return {
+    width: Math.floor(width * scaleFactor),
+    height: Math.floor(height * scaleFactor),
+    scaleFactor,
+    appliedTallPageBoost,
+  };
+}

@@ -172,6 +172,7 @@ export interface ElectronAPI {
     saveOCR: (docId: number, pageNum: number, data: OCRPageResult, engine?: OCREngine) => Promise<boolean>;
     getOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<OCRPageResult | null>;
     clearOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
+    clearDocumentCache: (docId: number) => Promise<boolean>;
     getLatestOCR: (docId: number) => Promise<{
       page_number: number;
       updated_at: number;

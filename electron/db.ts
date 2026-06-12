@@ -381,6 +381,19 @@ export const DocumentDAO = {
     return db.prepare('SELECT * FROM documents WHERE filepath = ?').get(filepath);
   },
 
+  clearDocumentCache: (documentId: number) => {
+    if (!db) throw new Error('DB not initialized');
+    const clearTx = db.transaction(() => {
+      db.prepare('DELETE FROM ocr_cache WHERE document_id = ?').run(documentId);
+      db.prepare('DELETE FROM ocr_cache_engine WHERE document_id = ?').run(documentId);
+      db.prepare('DELETE FROM translation_cache WHERE document_id = ?').run(documentId);
+      db.prepare('DELETE FROM benchmarks WHERE document_id = ?').run(documentId);
+      db.prepare('DELETE FROM sentence_translation_cache').run();
+    });
+    clearTx();
+    return true;
+  },
+
   findByFilenameWithCacheStats: (filename: string, limit: number = 20) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare(`

@@ -3523,7 +3523,14 @@ const suppressOverlappingOverlayBorders = (
     if (iou >= 0.82) return true;
 
     if (displacedCoverageEcho) {
-      return true;
+      // RULE: ห้ามยุบหรือซ่อนกล่องที่มีคำต้นฉบับแตกต่างกันเกินไป (เช่น "of all of us" vs "us!")
+      // ป้องกันการลบข้อมูลสำคัญทิ้งโดยวิเคราะห์ความคล้ายคลึงของ source text (Deduplicate safety guard)
+      const hasHighDifference = (existingSourceKey && candidateSourceKey)
+        ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey) < 0.28
+        : false;
+      if (!hasHighDifference) {
+        return true;
+      }
     }
 
     if (stackedSourceEcho) {
@@ -3622,17 +3629,26 @@ const suppressOverlappingOverlayBorders = (
       return iou >= 0.58;
     }
 
-    if (existing.textKey === candidate.textKey) return true;
+    // มีคำแปลเหมือนกันเป๊ะ -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง (เช่น โดน OCR อ่านเบิ้ล)
+    if (existing.textKey === candidate.textKey) {
+      return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
+    }
 
     const minLength = Math.min(existing.textKey.length, candidate.textKey.length);
     const sameOrSubset = minLength >= 6 && (
       existing.textKey.includes(candidate.textKey)
       || candidate.textKey.includes(existing.textKey)
     );
-    if (sameOrSubset) return true;
+    // เป็นคำแปลที่เป็น subset ของกันและกัน -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง
+    if (sameOrSubset) {
+      return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
+    }
 
     const textSimilarity = overlayKeyDiceSimilarity(existing.textKey, candidate.textKey);
-    if (textSimilarity >= 0.9) return true;
+    // มีคำแปลคล้ายกันมาก -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง
+    if (textSimilarity >= 0.9) {
+      return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
+    }
     if (textSimilarity >= 0.74 && iou >= 0.44) return true;
 
     return false;

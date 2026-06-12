@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Korean offline translation** now prefers the `ko -> en -> th` pivot path more aggressively and applies Korean OCR noise cleanup before translation, improving Thai output quality on comic-style dialogue.
 - **OCR garbage filtering** now drops short mixed-symbol artifacts such as `[({2help)` before translation so they do not leak into translated output as bogus text.
 - **Korean phrase repair** adds local Thai fallbacks for common noisy lines such as `걸레년`, `미친`, `몸으로 때운다고?`, `그 사진 지워주면`, and `내가 뭐든 할게`.
+- **Background queue layout alignment:** Fixed a long-standing issue where background All-Pages translation produced scrambled layouts or left raw English text due to index drift. The background queue processor now aggressively splits and cleans OCR lines (`splitAggressiveMergedLines` and `filterGhostOcrData`) before starting translation, guaranteeing 100% alignment with the active UI canvas.
 
 ## [1.2.16] - 2026-05-21
 

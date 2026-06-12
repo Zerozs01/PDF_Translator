@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { translationCoordinator } from './services/translation/translationCoordinator';
 import { dbService } from './services/dbService';
+import { useGlossaryStore } from './stores/useGlossaryStore';
 
 type TranslatableLine = {
   index: number;
@@ -80,6 +81,8 @@ let cleanKoreanOcrSpacing: (text: string) => string;
 let normalizeJapaneseOcrNoiseForTranslation: (text: string) => string;
 let normalizeKoreanOcrNoiseForTranslation: (text: string) => string;
 let normalizeSourceForTranslation: (text: string, sourceLanguage?: string) => string;
+let protectTranslationTokens: (text: string, targetLanguage: string) => { protectedText: string; replacements: any[] };
+let restoreProtectedTokens: (text: string, replacements: any[]) => string;
 
 beforeAll(async () => {
   if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix === 'undefined') {
@@ -138,6 +141,8 @@ beforeAll(async () => {
   normalizeJapaneseOcrNoiseForTranslation = appModule.normalizeJapaneseOcrNoiseForTranslation;
   normalizeKoreanOcrNoiseForTranslation = appModule.normalizeKoreanOcrNoiseForTranslation;
   normalizeSourceForTranslation = appModule.normalizeSourceForTranslation;
+  protectTranslationTokens = appModule.protectTranslationTokens;
+  restoreProtectedTokens = appModule.restoreProtectedTokens;
 });
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
@@ -1840,5 +1845,57 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
 
     getSpy.mockRestore();
     saveSpy.mockRestore();
+  });
+
+  describe('Custom Glossary & Location Proper Noun Protection', () => {
+    test('protects and restores glossary terms using linguistically neutral proper nouns', () => {
+      // Mock useGlossaryStore values
+      const mockEntries = [
+        { id: 'g1', sourceText: 'magic sword', targetText: 'ดาบเวทมนตร์', isActive: true },
+        { id: 'g2', sourceText: 'dark lord', targetText: 'จอมมาร', isActive: true },
+      ];
+      const getGlossarySpy = vi.spyOn(useGlossaryStore, 'getState').mockReturnValue({
+        entries: mockEntries,
+      } as any);
+
+      const sourceText = 'He wields a Magic Sword to defeat the Dark Lord.';
+      const protectedResult = protectTranslationTokens(sourceText, 'th');
+
+      // Check that the placeholders are chosen from the proper noun pool (e.g. name-like)
+      expect(protectedResult.protectedText).not.toContain('Magic Sword');
+      expect(protectedResult.protectedText).not.toContain('Dark Lord');
+      expect(protectedResult.replacements).toHaveLength(2);
+
+      const firstToken = protectedResult.replacements[0].token;
+      const secondToken = protectedResult.replacements[1].token;
+
+      // Expect proper nouns like Zara, Kira (Capitalized alphabetic words of length 3-6)
+      expect(firstToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+      expect(secondToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+
+      // Verify that restore works properly
+      const translatedText = `เขากวัดแกว่ง ${firstToken} เพื่อปราบ ${secondToken}.`;
+      const restored = restoreProtectedTokens(translatedText, protectedResult.replacements);
+      expect(restored).toBe('เขากวัดแกว่ง ดาบเวทมนตร์ เพื่อปราบ จอมมาร.');
+
+      getGlossarySpy.mockRestore();
+    });
+
+    test('protects location phrases with proper nouns without collision', () => {
+      const sourceText = 'York City, London Town.';
+      const protectedResult = protectTranslationTokens(sourceText, 'th');
+
+      expect(protectedResult.replacements).toHaveLength(2);
+      const firstToken = protectedResult.replacements[0].token;
+      const secondToken = protectedResult.replacements[1].token;
+
+      expect(firstToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+      expect(secondToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+      expect(firstToken).not.toBe(secondToken);
+
+      const translated = `${firstToken}, ${secondToken}.`;
+      const restored = restoreProtectedTokens(translated, protectedResult.replacements);
+      expect(restored).toBe('เมือง York, เมือง London.');
+    });
   });
 });

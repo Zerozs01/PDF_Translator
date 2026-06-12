@@ -11,6 +11,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:save-ocr',
   'db:get-ocr',
   'db:clear-ocr',
+  'db:clear-document-cache',
   'db:get-latest-ocr',
   'db:get-ocr-cache-stats-for-document-ids',
   'db:save-translation-cache',
@@ -146,6 +147,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:get-ocr', { docId, pageNum, engine }),
     clearOCR: (docId: number, pageNum: number, engine?: string) =>
       safeInvoke('db:clear-ocr', { docId, pageNum, engine }),
+    clearDocumentCache: (docId: number) =>
+      safeInvoke('db:clear-document-cache', docId),
     getLatestOCR: (docId: number) =>
       safeInvoke('db:get-latest-ocr', { docId }),
     getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>

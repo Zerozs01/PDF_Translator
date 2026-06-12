@@ -989,6 +989,19 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:clear-document-cache', async (_, docId) => {
+    if (!isValidNumber(docId)) {
+      throw new Error('Invalid input: docId must be a positive number');
+    }
+
+    try {
+      return DocumentDAO.clearDocumentCache(docId);
+    } catch (error) {
+      console.error('db:clear-document-cache error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:get-latest-ocr', async (_, { docId }) => {
     if (!isValidNumber(docId)) {
       throw new Error('Invalid input: docId must be a positive number');

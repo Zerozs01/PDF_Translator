@@ -40,7 +40,8 @@ import {
   ChevronUp,
   Pause,
   Play,
-  Trash2
+  Trash2,
+  RotateCcw
 } from 'lucide-react';
 import { UploadScreen } from './components/Home/UploadScreen';
 import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
@@ -2809,10 +2810,35 @@ export const shouldPreserveSourceLineForTranslation = (
   return shouldSkipLineTranslationByScript(text, sourceLanguage, ocrLanguageHint);
 };
 
-const protectLocationPhrases = (
+const PROPER_NOUN_POOL = [
+  'Zara', 'Kira', 'Nexo', 'Valo', 'Mira', 'Taro', 'Seno', 'Pika', 'Reno', 'Luma',
+  'Gale', 'Vira', 'Zolo', 'Miko', 'Piku', 'Rana', 'Bolo', 'Fina', 'Dina', 'Tina',
+  'Juno', 'Yuna', 'Milo', 'Kael', 'Zina', 'Veda', 'Koda', 'Zola', 'Bena', 'Tavi',
+  'Remi', 'Vito', 'Zori', 'Bria', 'Roko', 'Nura', 'Palo', 'Koba', 'Tova', 'Sola'
+];
+
+const getAvailableProperNoun = (text: string, usedTokens: Set<string>): string => {
+  const textLower = text.toLowerCase();
+  for (const noun of PROPER_NOUN_POOL) {
+    if (!usedTokens.has(noun) && !textLower.includes(noun.toLowerCase())) {
+      return noun;
+    }
+  }
+  let counter = 1;
+  while (true) {
+    const fallbackNoun = `Zara${counter}`;
+    if (!usedTokens.has(fallbackNoun) && !textLower.includes(fallbackNoun.toLowerCase())) {
+      return fallbackNoun;
+    }
+    counter++;
+  }
+};
+
+export const protectLocationPhrases = (
   text: string,
   targetLanguage: string,
-  tokenOffset = 0
+  tokenOffset = 0,
+  usedTokens = new Set<string>()
 ): { protectedText: string; replacements: ProtectedTokenReplacement[] } => {
   const replacements: ProtectedTokenReplacement[] = [];
   let protectedText = text;
@@ -2820,7 +2846,6 @@ const protectLocationPhrases = (
   const locationRe = /\b([A-Za-z][A-Za-z'\-]{1,}(?:\s+[A-Za-z][A-Za-z'\-]{1,}){0,2})\s+(Town|City|Village|District)\b/g;
 
   protectedText = protectedText.replace(locationRe, (_match, rawName: string, rawType: string) => {
-    const token = `[[LOCMARK${tokenOffset + replacements.length}ZZ]]`;
     const name = rawName
       .split(/\s+/g)
       .map((word) => titleCaseWord(word))
@@ -2839,6 +2864,9 @@ const protectLocationPhrases = (
       }
     }
 
+    const token = getAvailableProperNoun(protectedText, usedTokens);
+    usedTokens.add(token);
+
     replacements.push({ token, replacement });
     return token;
   });
@@ -2846,11 +2874,12 @@ const protectLocationPhrases = (
   return { protectedText, replacements };
 };
 
-const protectTranslationTokens = (
+export const protectTranslationTokens = (
   text: string,
   targetLanguage: string
 ): { protectedText: string; replacements: ProtectedTokenReplacement[] } => {
-  const locationResult = protectLocationPhrases(text, targetLanguage, 0);
+  const usedTokens = new Set<string>();
+  const locationResult = protectLocationPhrases(text, targetLanguage, 0, usedTokens);
   // Normalize curly quotes/apostrophes in the input text to straight ones for uniform matching
   let protectedText = locationResult.protectedText.replace(/[\u2018\u2019\u201B\u201C\u201D`‘’“”]/g, "'");
   const replacements = [...locationResult.replacements];
@@ -2863,7 +2892,7 @@ const protectTranslationTokens = (
 
     const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    activeEntries.forEach((entry, idx) => {
+    activeEntries.forEach((entry) => {
       const source = entry.sourceText.trim();
       const target = entry.targetText.trim();
       
@@ -2882,9 +2911,10 @@ const protectTranslationTokens = (
       const patternStr = (hasWordStart ? '\\b' : '') + escapeRegExp(normalizedSource) + (hasWordEnd ? '\\b' : '');
       const pattern = new RegExp(patternStr, 'gi');
 
-      const token = `[[USERGLOS${idx}ZZ]]`;
+      const token = getAvailableProperNoun(protectedText, usedTokens);
       const nextText = protectedText.replace(pattern, token);
       if (nextText !== protectedText) {
+        usedTokens.add(token);
         protectedText = nextText;
         replacements.push({ token, replacement: target });
       }
@@ -2896,7 +2926,7 @@ const protectTranslationTokens = (
   return { protectedText, replacements };
 };
 
-const restoreProtectedTokens = (text: string, replacements: ProtectedTokenReplacement[]): string => {
+export const restoreProtectedTokens = (text: string, replacements: ProtectedTokenReplacement[]): string => {
   let restored = text;
   for (const item of replacements) {
     restored = restored.replace(buildLooseTokenPattern(item.token), item.replacement);
@@ -4386,7 +4416,10 @@ export default function App() {
   const [isDownloadingResult, setIsDownloadingResult] = useState(false);
   const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [translationStartTime, setTranslationStartTime] = useState<number | null>(null);
-  const [popupOcrQualityMode, setPopupOcrQualityMode] = useState<'high' | 'fast'>('fast');
+  const [popupOcrQualityMode, setPopupOcrQualityMode] = useState<'high' | 'fast'>(() => {
+    const saved = localStorage.getItem('pdf_translator_ocr_profile');
+    return (saved === 'high' || saved === 'fast') ? saved : 'fast';
+  });
   const [exportCacheHydrationTick, setExportCacheHydrationTick] = useState(0);
 
   const popupQualityToProfile = (mode: 'high' | 'fast'): OCRQualityProfile =>
@@ -4396,16 +4429,30 @@ export default function App() {
     setOcrOptions({ ocrQualityProfile: popupQualityToProfile(mode) });
   }, [popupOcrQualityMode, setOcrOptions]);
 
+  const changeOcrQualityMode = useCallback((mode: 'high' | 'fast') => {
+    setPopupOcrQualityMode(mode);
+    localStorage.setItem('pdf_translator_ocr_profile', mode);
+    setOcrOptions({ ocrQualityProfile: popupQualityToProfile(mode) });
+  }, [setOcrOptions]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('pdf_translator_ocr_profile') as 'high' | 'fast' | null;
+    const mode = (saved === 'high' || saved === 'fast') ? saved : 'fast';
+    setOcrOptions({ ocrQualityProfile: popupQualityToProfile(mode) });
+  }, [setOcrOptions]);
+
   useEffect(() => {
     if (!isDownloadMenuOpen) return;
     const syncedMode = ocrOptions.ocrQualityProfile === 'balanced' || ocrOptions.ocrQualityProfile === 'best'
       ? 'high'
       : 'fast';
-    setPopupOcrQualityMode(syncedMode);
+    if (syncedMode !== popupOcrQualityMode) {
+      setPopupOcrQualityMode(syncedMode);
+    }
     if (!selectedExportEngine) {
       setSelectedExportEngine((ocrOptions.engine || 'paddleocr') as OCREngine);
     }
-  }, [isDownloadMenuOpen, ocrOptions.engine, ocrOptions.ocrQualityProfile, selectedExportEngine]);
+  }, [isDownloadMenuOpen, ocrOptions.engine, ocrOptions.ocrQualityProfile, selectedExportEngine, popupOcrQualityMode]);
 
   useEffect(() => {
     if (!isDownloadMenuOpen) return undefined;
@@ -4532,6 +4579,41 @@ export default function App() {
     // ปลดปล่อยและ Resume งานประมวลผลพื้นหลังของไฟล์อื่นๆ ที่เคยโดน Pause เพื่อหลีกทาง
     useBackgroundQueueStore.getState().boostPriorityForDocument(0);
     closeProject();
+  };
+
+  const handleClearDocumentCache = async () => {
+    if (!documentId) return;
+    const confirmed = window.confirm(
+      "คุณต้องการรีเซ็ตเอกสารนี้ใช่หรือไม่?\n\nการดำเนินการนี้จะลบข้อมูล OCR และคำแปลทั้งหมดของทุกหน้าในไฟล์นี้ออกอย่างถาวร แต่ไฟล์เอกสารหลักจะไม่ถูกลบ"
+    );
+    if (!confirmed) return;
+
+    try {
+      const success = await dbService.clearDocumentCache(documentId);
+      if (success) {
+        // เคลียร์ memory cache ใน store
+        useLayerStore.getState().clearLayers();
+        useOCRTextLayerStore.getState().clearAllOCR();
+        useOCRTextLayerStore.getState().setCurrentPageOCR(null);
+        
+        // แจ้งเตือนความสำเร็จ
+        setTranslationStatus({
+          kind: 'success',
+          message: 'ล้างแคชและรีเซ็ตเอกสารสำเร็จแล้ว'
+        });
+      } else {
+        setTranslationStatus({
+          kind: 'error',
+          message: 'ไม่สามารถล้างแคชได้ในขณะนี้'
+        });
+      }
+    } catch (err) {
+      console.error('Failed to clear document cache:', err);
+      setTranslationStatus({
+        kind: 'error',
+        message: 'เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล'
+      });
+    }
   };
   
   useEffect(() => {
@@ -4660,6 +4742,9 @@ export default function App() {
           sourceLanguage: sourceLanguage,
           targetLanguage: targetLanguage,
           translationMode: translationMode,
+          ocrDpi: ocrOptions.dpi,
+          ocrPageSegMode: ocrOptions.pageSegMode,
+          ocrQualityProfile: ocrOptions.ocrQualityProfile,
         });
 
         // ลัดคิวเพื่อให้งานเริ่มประมวลผลในพื้นหลังทันที
@@ -4669,7 +4754,7 @@ export default function App() {
 
     prevPageRef.current = currentPage;
     prevDocIdRef.current = documentId;
-  }, [currentPage, documentId, isOfflineProcessingRaw, isAiProcessingRaw, file, filePath, ocrOptions.engine, ocrOptions.language, sourceLanguage, targetLanguage, translationMode]);
+  }, [currentPage, documentId, isOfflineProcessingRaw, isAiProcessingRaw, file, filePath, ocrOptions.engine, ocrOptions.language, sourceLanguage, targetLanguage, translationMode, ocrOptions.dpi, ocrOptions.pageSegMode, ocrOptions.ocrQualityProfile]);
 
   if (showOCRHarness) {
     return <OCRRegressionHarness />;
@@ -6460,8 +6545,6 @@ export default function App() {
   ): Promise<boolean> {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (options?.engineOverride || ocrOptions.engine || 'paddleocr') as OCREngine;
-    // ใช้ ocrResultOverride โดยตรงถ้ามี (จาก BackgroundQueueProcessor) เพื่อหลีกเลี่ยง race condition
-    // กับการ sync store ที่อาจยังไม่สมบูรณ์ขณะที่ handler ถูกเรียก
     const pageOCR = options?.ocrResultOverride ?? resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
     if (!pageOCR) {
       if (!options?.suppressStatus) {
@@ -6471,6 +6554,27 @@ export default function App() {
         });
       }
       return false;
+    }
+
+    // Ensure store layers are in sync with pageOCR before we collect translatable lines or resolve grouping.
+    try {
+      const layerStore = useLayerStore.getState();
+      const existingLayers = layerStore.getPageLayers(pageNum);
+      const existingGroups = layerStore.getPageGroups(pageNum);
+      const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+        || existingGroups.some(g => g.userCreated);
+      
+      const isStoreStale = existingLayers.length === 0 || 
+        existingLayers.some(l => l.lineIndex >= pageOCR.lines.length) ||
+        (existingLayers.length > 0 && !hasUserModifications && existingLayers[0].sourceText !== String(pageOCR.lines[0]?.text || '').replace(/\s+/g, ' ').trim());
+
+      if (isStoreStale && !hasUserModifications) {
+        const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
+        layerStore.setPageLayers(pageNum, initialLayerResult);
+        console.log(`[TranslationSync] Synchronously initialized/rebuilt stale store layers for page ${pageNum} before translation.`);
+      }
+    } catch (err) {
+      console.warn('[TranslationSync] Failed to verify/rebuild stale store layers:', err);
     }
 
     const pageEngine = (pageOCR.ocrEngine || selectedEngine) as OCREngine;
@@ -6609,14 +6713,8 @@ export default function App() {
         });
       }
 
-      if (matchingLayer) {
-        let layerSource = matchingLayer.sourceText;
-        if (!layerSource && matchingLayer.text) {
-          const hasThai = /[\u0E00-\u0E7F]/.test(matchingLayer.text);
-          if (!hasThai) {
-            layerSource = matchingLayer.text;
-          }
-        }
+      if (matchingLayer && (matchingLayer.userEdited || matchingLayer.id.startsWith('manual-layer-'))) {
+        const layerSource = matchingLayer.sourceText;
         if (layerSource && layerSource.trim()) {
           return {
             ...line,
@@ -7296,6 +7394,14 @@ export default function App() {
           layers: updatedPageLayers,
           groups: layerStore.getPageGroups(pageNum),
         });
+      } else {
+        // *** KEY FIX: Background Queue — หน้านี้ยังไม่เคยถูกเปิดใน UI
+        // ดังนั้น layer store ว่างอยู่ ต้องสร้าง layer groups ใหม่ทันที
+        // เพื่อให้ผู้ใช้ใช้ select tool และแก้ไข textbox ได้เมื่อเปิดหน้านั้นภายหลัง
+        // (เหมือน cache-hit path ที่เรียก buildLayerGroupsFromOCR ด้วย)
+        const result = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
+        layerStore.setPageLayers(pageNum, result);
+        console.log(`[TranslationSync] Built ${result.layers.length} layer(s) in ${result.groups.length} group(s) for page ${pageNum} (background queue new-translation path).`);
       }
     } catch (err) {
       console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
@@ -7512,6 +7618,9 @@ export default function App() {
       sourceLanguage: sourceLanguage,
       targetLanguage: targetLanguage,
       translationMode: translationMode,
+      ocrDpi: ocrOptions.dpi,
+      ocrPageSegMode: ocrOptions.pageSegMode,
+      ocrQualityProfile: ocrOptions.ocrQualityProfile,
     });
 
     // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที
@@ -7545,6 +7654,9 @@ export default function App() {
       sourceLanguage: sourceLanguage,
       targetLanguage: targetLanguage,
       translationMode: translationMode,
+      ocrDpi: ocrOptions.dpi,
+      ocrPageSegMode: ocrOptions.pageSegMode,
+      ocrQualityProfile: ocrOptions.ocrQualityProfile,
     });
 
     // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที
@@ -7814,6 +7926,16 @@ export default function App() {
             </button>
           )}
         </div>
+
+        {file && (
+          <button
+            onClick={handleClearDocumentCache}
+            className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-colors ml-1"
+            title="Reset Document Cache (Clear OCR & Translation for all pages)"
+          >
+            <RotateCcw size={16} />
+          </button>
+        )}
 
         {/* Spacer - push tools to center */}
         <div className="flex-1" />
@@ -8379,7 +8501,7 @@ export default function App() {
                           <div className="grid grid-cols-2 rounded-lg border border-white/10 bg-slate-950/90 p-0.5 h-[30px]">
                             <button
                               type="button"
-                              onClick={() => setPopupOcrQualityMode('high')}
+                              onClick={() => changeOcrQualityMode('high')}
                               className={`text-[9px] font-bold rounded transition-all ${
                                 popupOcrQualityMode === 'high'
                                   ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/30'
@@ -8390,7 +8512,7 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => setPopupOcrQualityMode('fast')}
+                              onClick={() => changeOcrQualityMode('fast')}
                               className={`text-[9px] font-bold rounded transition-all ${
                                 popupOcrQualityMode === 'fast'
                                   ? 'bg-orange-500 text-white shadow-sm shadow-orange-500/30'
