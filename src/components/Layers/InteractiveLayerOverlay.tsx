@@ -701,6 +701,52 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
   const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
   const activeTool = useUIStore((state) => state.activeTool);
+  const zoom = useUIStore((state) => state.zoom || 1);
+
+  // Ref and state for Viewport Virtualization (Correct coordinate space + zoom scale)
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el || !isActive) return;
+    const parent = el.parentElement;
+    if (!parent) return;
+
+    const handleUpdate = () => {
+      const elRect = el.getBoundingClientRect();
+      const parentRect = parent.getBoundingClientRect();
+
+      // Viewport boundaries in local CSS coordinate space (divided by zoom scale)
+      const MARGIN = 400; // 400px margin to load layers ahead during scroll/drag
+      const x0 = (parentRect.left - elRect.left) / zoom - MARGIN;
+      const y0 = (parentRect.top - elRect.top) / zoom - MARGIN;
+      const x1 = (parentRect.left - elRect.left + parentRect.width) / zoom + MARGIN;
+      const y1 = (parentRect.top - elRect.top + parentRect.height) / zoom + MARGIN;
+
+      setViewport({ x0, y0, x1, y1 });
+    };
+
+    // Initial update
+    handleUpdate();
+
+    // Listen to scroll/resize events
+    parent.addEventListener('scroll', handleUpdate, { passive: true });
+    window.addEventListener('resize', handleUpdate, { passive: true });
+
+    // Use ResizeObserver to detect layout changes on zoom or pan
+    const resizeObserver = new ResizeObserver(() => {
+      handleUpdate();
+    });
+    resizeObserver.observe(el);
+    resizeObserver.observe(parent);
+
+    return () => {
+      parent.removeEventListener('scroll', handleUpdate);
+      window.removeEventListener('resize', handleUpdate);
+      resizeObserver.disconnect();
+    };
+  }, [ocrTransform, isActive, zoom]);
 
   // States for hiding other elements during resizing/rotation
   const [activeResizeDir, setActiveResizeDir] = useState<ResizeDirection | null>(null);
@@ -1082,15 +1128,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   // ── Render ────────────────────────────────────────────────────
   if (!isActive) return null;
 
-  // คำนวณขอบเขต Viewport ในการทำ Virtualization ด้วยสูตรคณิตศาสตร์ (Math-based, zero layout thrashing)
-  const MARGIN = 400;
-  const viewportX0 = -MARGIN;
-  const viewportY0 = -MARGIN;
-  const viewportX1 = window.innerWidth + MARGIN;
-  const viewportY1 = window.innerHeight + MARGIN;
-
   return (
     <div
+      ref={overlayRef}
       id="interactive-overlay"
       style={{
         position: 'absolute',
@@ -1109,6 +1149,10 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
         // คัดกรองและซ่อนเลเยอร์ที่ถูกสั่ง hidden จาก layout map (เนื่องจากถูกผสานกลุ่ม)
         const layout = layouts?.get(layer.lineIndex);
+        const isOcrLayer = layer.lineIndex >= 0 && !layer.id.startsWith('manual-');
+        if (isOcrLayer && !layout && !layer.userEdited) {
+          return null;
+        }
         if (layout?.hidden) {
           return null;
         }
@@ -1119,12 +1163,15 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
           : layer.bbox;
         const screenBox = toScreen(effectiveBBox, ocrTransform);
         
-        const isVisible = (
-          screenBox.left + screenBox.width >= viewportX0 &&
-          screenBox.left <= viewportX1 &&
-          screenBox.top + screenBox.height >= viewportY0 &&
-          screenBox.top <= viewportY1
-        );
+        let isVisible = true;
+        if (viewport) {
+          isVisible = (
+            screenBox.left + screenBox.width >= viewport.x0 &&
+            screenBox.left <= viewport.x1 &&
+            screenBox.top + screenBox.height >= viewport.y0 &&
+            screenBox.top <= viewport.y1
+          );
+        }
 
         const isBoxSelected = selectedLayerIds.has(layer.id);
         const isEditing = editingLayerId === layer.id;

@@ -26,7 +26,7 @@ const LATIN_PROTECT_WORDS = new Set([
   'AYNAR', 'ESSENCE', 'KNEW', 'NYAH', 'HOW', 'MUCH', 'FOR',
   'YOURE', 'STOOOOP', 'STOAOOP', 'STOAAOP', 'MY', 'HEART', 'BEING', 'TORN', 'BY', 'THEIR', 'COCKS', 'VIRGINITY', 'LOST', 'SOME', 'BARBARIAN', 'RAPING', 'WET', 'PUSSY', 'AGAA',
   'CAME', 'CUMMING', 'PRINCESS', 'NEGO', 'WITHAN', 'HEIRRR', 'RRR',
-  'LIKETHIS', 'WASTOYED', 'UPLOOKING', 'CUTE', 'SOFT', 'FIRM', 'YET', 'STILL', 'ALIVE', 'FUCK', 'ISSOCUTE', 'SOTIGHT'
+  'LIKETHIS', 'WASTOYED', 'UPLOOKING', 'CUTE', 'SOFT', 'FIRM', 'YET', 'STILL', 'ALIVE', 'FUCK', 'ISSOCUTE', 'SOTIGHT', 'SMACK', 'SMACKV', 'PHEW'
 ]);
 
 function normalizeLatinToken(token: string): string {

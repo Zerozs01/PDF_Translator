@@ -1483,6 +1483,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       for (let i = rows.length - 1; i >= 0; i -= 1) {
         if (canceled) return;
         const row = rows[i];
+        if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+          continue;
+        }
         const normalizedEntry: OCRTranslationCacheEntry = {
           ...row,
           pageNum: currentPage,

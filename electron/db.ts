@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database from 'better-sqlite3-multiple-ciphers';
 import path from 'path';
 import { app } from 'electron';
 import { BenchmarkDAO } from './BenchmarkDAO';
@@ -21,15 +21,43 @@ function getStmt(sql: string): Database.Statement {
   return stmt;
 }
 
+// Close Database connection
+export function closeDB() {
+  if (db) {
+    try {
+      db.close();
+      console.log('[SQLite] Database connection closed successfully');
+    } catch (err) {
+      console.error('[SQLite] Failed to close database:', err);
+    }
+    db = null;
+    stmtCache.clear();
+  }
+}
+
 // Initialize Database
-export function initDB() {
+export function initDB(key?: string) {
   if (db) return db;
+
+  if (!key) {
+    console.warn('[SQLite] Attempted to initialize database without encryption key. Deferring.');
+    return null;
+  }
 
   const dbPath = path.join(app.getPath('userData'), 'pdf_translator.db');
   console.log('[SQLite] Database path:', dbPath);
 
   try {
     db = new Database(dbPath);
+    
+    // Explicitly configure SQLCipher cipher and apply the encryption key
+    db.pragma("cipher='sqlcipher'");
+    const escapedKey = key.replace(/'/g, "''");
+    db.pragma(`key = '${escapedKey}'`);
+    
+    // Force SQLite to run a fast query to verify if the key is valid.
+    // If the key is wrong, this will throw SQLITE_NOTADB or equivalent error.
+    db.pragma('user_version');
     
     // 🚀 Performance Optimization (The "Locus" Magic)
     // 0. Page Size: 4KB is optimal for modern SSD/Filesystems

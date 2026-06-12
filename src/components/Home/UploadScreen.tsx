@@ -19,6 +19,7 @@ import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stor
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
+import { SecuritySettings } from '../Auth/SecuritySettings';
 
 type SidebarPage = 'home' | 'projects' | 'settings';
 
@@ -1445,6 +1446,9 @@ export const UploadScreen: React.FC = () => {
                   </p>
                 )}
               </div>
+
+              {/* Security Settings */}
+              <SecuritySettings />
 
               {isThaiTargetLanguage && (
                 <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">

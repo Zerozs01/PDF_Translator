@@ -4,7 +4,7 @@ import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
-import { useOCRTextLayerStore, OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore, OCRTranslationCacheEntry, hasCurrentOCRTranslationCacheVersion } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../../services/dbService';
 import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
 import { OCREngine } from '../../types';
@@ -785,10 +785,11 @@ const PDFPageOverlay: React.FC<{
               expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
               Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
             );
-            const rawMaskLeft = ocrOverlayTransform.offsetX + maskRenderSourceLeft * ocrOverlayTransform.scaleX - maskExpandLeft;
-            const rawMaskTop = ocrOverlayTransform.offsetY + maskBbox.y0 * ocrOverlayTransform.scaleY - maskExpandTop;
-            const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
-            const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
+            const maskBleed = 2.5; // ถมสีกว้างกว่า border area เล็กน้อยเพื่อไม่ให้เหลือเศษตัวอักษรเดิม
+            const rawMaskLeft = ocrOverlayTransform.offsetX + maskRenderSourceLeft * ocrOverlayTransform.scaleX - maskExpandLeft - maskBleed;
+            const rawMaskTop = ocrOverlayTransform.offsetY + maskBbox.y0 * ocrOverlayTransform.scaleY - maskExpandTop - maskBleed;
+            const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight + (maskBleed * 2);
+            const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom + (maskBleed * 2);
             const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
               x0: ocrOverlayTransform.offsetX,
               y0: ocrOverlayTransform.offsetY,
@@ -1168,8 +1169,8 @@ const PDFPageContainer: React.FC<{
         });
       },
       {
-        threshold: 0.5,
-        rootMargin: '-10% 0px -10% 0px',
+        threshold: 0,
+        rootMargin: '-45% 0px -45% 0px',
       }
     );
 
@@ -1219,6 +1220,9 @@ const PDFPageContainer: React.FC<{
           if (Array.isArray(rows) && rows.length > 0 && !canceled) {
             console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
             for (const row of rows) {
+              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+                continue;
+              }
               const normalizedEntry: OCRTranslationCacheEntry = {
                 ...row,
                 pageNum,

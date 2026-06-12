@@ -13,7 +13,8 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'tessdata', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
   { scheme: 'pdf-export', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ]);
-import { initDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
+import { initDB, closeDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
+import * as authService from './authService'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
@@ -136,8 +137,18 @@ app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
 
 app.whenReady().then(() => {
 
-  // Initialize SQLite Database with Performance Pragmas
-  initDB();
+  // Attempt to perform auto-login if Relax mode is enabled and setup is complete
+  if (authService.isSetup()) {
+    const autoLoginPassword = authService.getAutoLoginPassword();
+    if (autoLoginPassword) {
+      try {
+        initDB(autoLoginPassword);
+        console.log('[Main] Auto-login successful. Database unlocked.');
+      } catch (err) {
+        console.error('[Main] Auto-login failed to unlock database:', err);
+      }
+    }
+  }
 
   // Register tessdata custom protocol handler
   protocol.handle('tessdata', (request) => {
@@ -185,6 +196,114 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('[PDF Export Protocol] Error:', error);
       return new Response('Internal Server Error', { status: 500 });
+    }
+  });
+
+  // 🔒 Advanced Security Phase 7: Auth IPC Handlers
+  ipcMain.handle('auth:check-status', async () => {
+    const config = authService.readAuthConfig();
+    return {
+      isSetup: authService.isSetup(),
+      mode: config ? config.appMode : 'SECURITY',
+    };
+  });
+
+  ipcMain.handle('auth:setup', async (_, { password, emergencyPin }) => {
+    try {
+      authService.setupCredentials(password, emergencyPin);
+      try {
+        // Immediately open DB with setup key
+        initDB(password);
+        return { success: true };
+      } catch (dbErr) {
+        // Rollback setup configuration if database initialization fails
+        console.error('[Main IPC] auth:setup DB init failed, rolling back auth config:', dbErr);
+        const configPath = authService.getAuthConfigPath();
+        if (fs.existsSync(configPath)) {
+          fs.unlinkSync(configPath);
+        }
+        throw dbErr;
+      }
+    } catch (err: any) {
+      console.error('[Main IPC] auth:setup error:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('auth:login', async (_, { password }) => {
+    try {
+      if (authService.verifyMasterPassword(password)) {
+        initDB(password); // will throw error if database is not unlockable
+        return { success: true };
+      } else {
+        return { success: false, error: 'Incorrect master password.' };
+      }
+    } catch (err: any) {
+      console.error('[Main IPC] auth:login error:', err);
+      return { success: false, error: err.message || 'Incorrect password or corrupted database.' };
+    }
+  });
+
+  ipcMain.handle('auth:auto-login', async () => {
+    try {
+      const autoLoginPassword = authService.getAutoLoginPassword();
+      if (autoLoginPassword) {
+        initDB(autoLoginPassword);
+        return { success: true };
+      }
+      return { success: false, error: 'Relax mode is disabled or safeStorage key missing.' };
+    } catch (err: any) {
+      console.error('[Main IPC] auth:auto-login error:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('auth:hard-reset', async (_, { emergencyPin }) => {
+    try {
+      if (authService.verifyEmergencyPin(emergencyPin)) {
+        console.warn('[Main IPC] HARD RESET / DATA WIPE TRIGGERED!');
+        
+        // Stop all background child processes / translation engines immediately
+        try {
+          disposeExternalOcrDaemons();
+          disposeArgosTranslateRuntime?.();
+          console.log('[Main IPC] Stopped background processes during emergency reset');
+        } catch (procErr) {
+          console.error('[Main IPC] Error stopping processes during reset:', procErr);
+        }
+
+        closeDB();
+        authService.deleteAppDataFiles();
+
+        // Force destroy all open windows to prevent hanging UI windows on Windows OS
+        BrowserWindow.getAllWindows().forEach((w) => {
+          try {
+            w.destroy();
+          } catch (e) {
+            console.error('[Main IPC] Error destroying window:', e);
+          }
+        });
+        
+        // Relaunch the app clean and exit
+        app.relaunch();
+        app.exit(0);
+        return { success: true };
+      } else {
+        return { success: false, error: 'Incorrect Emergency PIN.' };
+      }
+    } catch (err: any) {
+      console.error('[Main IPC] auth:hard-reset error:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('auth:set-mode', async (_, { mode, password }) => {
+    try {
+      authService.setAppMode(mode, password);
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Main IPC] auth:set-mode error:', err);
+      return { success: false, error: err.message || String(err) };
     }
   });
 

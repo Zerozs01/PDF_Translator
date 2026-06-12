@@ -311,6 +311,15 @@ export interface ElectronAPI {
     cancel: (jobId: string) => Promise<{ ok: boolean }>;
     onProgress: (callback: (progress: import('./pdfExport').PdfPrintExportProgress) => void) => () => void;
   };
+
+  auth: {
+    checkStatus: () => Promise<{ isSetup: boolean; mode: 'RELAX' | 'SECURITY' }>;
+    setup: (payload: { password: string; emergencyPin: string }) => Promise<{ success: boolean; error?: string }>;
+    login: (payload: { password: string }) => Promise<{ success: boolean; error?: string }>;
+    autoLogin: () => Promise<{ success: boolean; error?: string }>;
+    hardReset: (payload: { emergencyPin: string }) => Promise<{ success: boolean; error?: string }>;
+    setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) => Promise<{ success: boolean; error?: string }>;
+  };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }

@@ -678,10 +678,11 @@ export const ImageCanvas: React.FC = React.memo(() => {
                     expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
                     Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
                   );
-                  const rawMaskLeft = maskRenderSourceLeft * ocrScaleX - maskExpandLeft;
-                  const rawMaskTop = maskBbox.y0 * ocrScaleY - maskExpandTop;
-                  const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
-                  const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
+                  const maskBleed = 2.5; // ถมสีกว้างกว่า border area เล็กน้อยเพื่อไม่ให้เหลือเศษตัวอักษรเดิม
+                  const rawMaskLeft = maskRenderSourceLeft * ocrScaleX - maskExpandLeft - maskBleed;
+                  const rawMaskTop = maskBbox.y0 * ocrScaleY - maskExpandTop - maskBleed;
+                  const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight + (maskBleed * 2);
+                  const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom + (maskBleed * 2);
                   const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
                     x0: 0,
                     y0: 0,

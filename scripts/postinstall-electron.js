@@ -7,7 +7,7 @@ if (process.env.SKIP_ELECTRON_REBUILD === '1') {
 }
 
 const retryDelaysMs = [0, 1000, 2000, 4000];
-const rebuildArgs = ['-f', '-w', 'better-sqlite3'];
+const rebuildArgs = ['-f', '-w', 'better-sqlite3-multiple-ciphers'];
 const electronRebuildPackageJson = require.resolve('electron-rebuild/package.json');
 const electronRebuildCli = path.resolve(
   path.dirname(electronRebuildPackageJson),
@@ -21,7 +21,8 @@ function isLockError(result) {
     text.includes('eperm') ||
     text.includes('ebusy') ||
     text.includes('unlink') ||
-    text.includes('better_sqlite3.node')
+    text.includes('better_sqlite3.node') ||
+    text.includes('better-sqlite3-multiple-ciphers')
   );
 }
 

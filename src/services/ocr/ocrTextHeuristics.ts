@@ -825,7 +825,11 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^YOUR\s+CLITS[.!?…]*$/i,
   /^HHH\?[.!?…]*$/i,
   /^YOU\s+EJACULATE[!.,?…]*$/i,
-  /^[1I]S\s+S[0O]\s+CUTE[.!?…]*$/i,
+  /^[1I]?S\s*S[0O]\s*CUTE[.!?…]*$/i,
+  /^IS\s*SO\s*CUTE[.!?…]*$/i,
+  /^SMACK[VE]?([.!?…\s]*)$/i,
+  /^SO\s*TIGHT[.!?…]*$/i,
+  /^PHEW[.!?…]*$/i,
 ];
 
 export const shouldForceKeepComicTranslationLine = (

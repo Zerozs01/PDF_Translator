@@ -74,6 +74,13 @@ const ALLOWED_INVOKE_CHANNELS = [
   // PDF export
   'pdf-export:start',
   'pdf-export:cancel',
+  // Auth channels
+  'auth:check-status',
+  'auth:setup',
+  'auth:login',
+  'auth:auto-login',
+  'auth:hard-reset',
+  'auth:set-mode',
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -356,6 +363,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on(channel, subscription);
       return () => ipcRenderer.removeListener(channel, subscription);
     },
+  },
+
+  auth: {
+    checkStatus: () => safeInvoke<{ isSetup: boolean; mode: string }>('auth:check-status'),
+    setup: (payload: { password: string; emergencyPin: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:setup', payload),
+    login: (payload: { password: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:login', payload),
+    autoLogin: () => safeInvoke<{ success: boolean; error?: string }>('auth:auto-login'),
+    hardReset: (payload: { emergencyPin: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:hard-reset', payload),
+    setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:set-mode', payload),
   },
 
   // Message handling (restricted to allowed channels)

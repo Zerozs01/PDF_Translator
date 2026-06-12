@@ -218,11 +218,12 @@ const appendAutoOverlayElements = (
       expansion.maxExpandBottom * sy + mBoost + 2 * sy,
       Math.max(1, Math.round(mBH * expansion.expandBottomRatio)) + mBoost + 2 * sy
     );
+    const maskBleed = 2.0; // ถมสีกว้างกว่า border area เล็กน้อยในหน่วย pt เพื่อความมิดชิดของข้อความเดิม
     const maskRect = clampOverlayRect(
-      mrkLeft * sx - mExpL,
-      maskBbox.y0 * sy - mExpTop,
-      mBW + mExpL + mExpR,
-      mBH + mExpTop + mExpBot,
+      mrkLeft * sx - mExpL - maskBleed,
+      maskBbox.y0 * sy - mExpTop - maskBleed,
+      mBW + mExpL + mExpR + (maskBleed * 2),
+      mBH + mExpTop + mExpBot + (maskBleed * 2),
       pageBounds
     );
 

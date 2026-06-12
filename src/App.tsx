@@ -1949,13 +1949,16 @@ export const applyThaiConversationalGlossary = (
   if (compactSource === 'issocute') {
     return preserveSourceTrailingPunctuation(source, 'น่ารักจัง');
   }
+  if (compactSource === 'nnoway') {
+    return preserveSourceTrailingPunctuation(source, 'ม-ไม่มีทาง');
+  }
   if (compactSource === 'shmackipatv' || compactSource === 'shmackpat' || compactSource === 'shmackipat') {
     return preserveSourceTrailingPunctuation(source, 'ปั๊ก แต๊บ');
   }
   if (compactSource === 'bouncingy' || compactSource === 'bouncing' || compactSource === 'bouncy') {
     return preserveSourceTrailingPunctuation(source, 'กระเด้ง');
   }
-  if (compactSource === 'twitchy' || compactSource === 'twitch' || compactSource === 'twitchv') {
+  if (compactSource === 'twitchy' || compactSource === 'twitch' || compactSource === 'twitchv' || compactSource === 'twitches' || compactSource === 'twitchesd') {
     return preserveSourceTrailingPunctuation(source, 'กระตุก');
   }
   if (compactSource === 'plurge' || compactSource === 'splurge') {
@@ -4432,6 +4435,9 @@ export default function App() {
           if (!translationMap || translationMap.size === 0) {
             const rows = await dbService.getTranslationCachePage(docId, pageNum);
             for (const row of rows) {
+              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+                continue;
+              }
               const normalizedEntry: OCRTranslationCacheEntry = {
                 ...row,
                 pageNum,
@@ -5086,6 +5092,9 @@ export default function App() {
         if (!translationMap || translationMap.size === 0) {
           const rows = await dbService.getTranslationCachePage(docId, pageNum);
           for (const row of rows) {
+            if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+              continue;
+            }
             const normalizedEntry: OCRTranslationCacheEntry = {
               ...row,
               pageNum,
@@ -6440,6 +6449,7 @@ export default function App() {
     pageNum: number = currentPage,
     options?: { 
       suppressStatus?: boolean;
+      bypassPageCache?: boolean; // ข้าม DB page-level translation cache (สำหรับ batch re-translate)
       ocrLanguage?: string;
       sourceLanguage?: string;
       targetLanguage?: string;
@@ -6498,15 +6508,19 @@ export default function App() {
               hasThai = /[\u0E00-\u0E7F]/.test(sample);
             }
             
+            // ตรวจสอบเวอร์ชันของแคชเพื่อให้สอดคล้องกับ OCR_TRANSLATION_CACHE_VERSION ปัจจุบัน
+            const isVersionMatch = row.key ? hasCurrentOCRTranslationCacheVersion(row.key) : false;
+            
             return rowEngine === targetRowEngine &&
                    row.translationMode === effectiveTranslationMode &&
                    rowTargetLang === targetRowTargetLang &&
                    rowSourceLang === targetRowSourceLang &&
                    rowTranslatorEngine === targetTranslatorEngine &&
-                   hasThai;
+                   hasThai &&
+                   isVersionMatch;
           });
 
-          if (matchedCache) {
+          if (matchedCache && !options?.bypassPageCache) {
             console.log(`[Translation] Cache hit for page ${pageNum} via database! Skipping translation coordinator.`);
             
             // อัปเดตข้อมูลเข้า Store สำหรับหน้าจอ UI
@@ -6534,6 +6548,17 @@ export default function App() {
                   layers: updatedPageLayers,
                   groups: layerStore.getPageGroups(pageNum),
                 });
+              } else {
+                // หากยังไม่มีเลเยอร์ถูกสร้างขึ้นในหน้านี้ (เช่น แปลข้ามหน้า หรือแคชเก็บไว้)
+                // ให้สร้างเลเยอร์ขึ้นมาใหม่จาก OCR + แคชคำแปลทันที
+                const translatedMap = new Map<number, string>();
+                if (Array.isArray(matchedCache.translatedByIndex)) {
+                  matchedCache.translatedByIndex.forEach(item => {
+                    translatedMap.set(item.index, item.text);
+                  });
+                }
+                const result = buildLayerGroupsFromOCR(pageOCR, translatedMap);
+                layerStore.setPageLayers(pageNum, result);
               }
             } catch (err) {
               console.warn('[TranslationSync] Failed to sync cache to Layer Store:', err);
@@ -7332,7 +7357,10 @@ export default function App() {
       });
 
       try {
-        const translated = await runCurrentPageTranslation('offline', pageNum, { suppressStatus: true });
+        const translated = await runCurrentPageTranslation('offline', pageNum, {
+          suppressStatus: true,
+          bypassPageCache: true,
+        });
         if (translated) {
           translatedPages += 1;
         } else {
