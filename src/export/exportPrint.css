@@ -18,7 +18,7 @@ body {
 
 .export-page {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   background: transparent;
   box-sizing: border-box;
 }
@@ -31,19 +31,21 @@ body {
 .export-text {
   position: absolute;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.35;
+  line-height: 1.5;
+  padding: 2px 4px;
 }
 
 .export-user-layer {
   position: absolute;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.35;
+  line-height: 1.5;
+  padding: 2px 4px;
 }
 
 @media print {
@@ -52,12 +54,15 @@ body {
     size: auto;
   }
 
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
   html,
   body {
     margin: 0;
     background: transparent;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
   }
 
   .export-page {

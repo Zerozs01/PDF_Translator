@@ -92,7 +92,7 @@ const normalizeExternalDedupText = (text: string): string =>
   String(text || '')
     .trim()
     .replace(/\s+/g, ' ')
-    .replace(/[.,!?;:'"`~^]+/g, '')
+    .replace(/[.,!?;:'"`~^_+]+/g, '')
     .replace(/[|¦│┃￨︱︲]+/g, '')
     .toUpperCase();
 
@@ -185,7 +185,7 @@ const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
 
 const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set([
   'I', 'IN', 'IT', 'IS', 'SO', 'OF', 'OH', 'WE', 'ME', 'UP', 'DO', 'GO', 'NO', 'BY', 'AT', 'IF', 'AN', 'OR', 'AS', 'AM', 'TO', 'HE', 'US', 'PIG', 'DIE', 'CUM', 'COCK',
-  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE'
+  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE', 'HUH', 'HA', 'HEY', 'HMM', 'AH', 'UH', 'UGH', 'YA'
 ]);
 
 const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
@@ -929,6 +929,15 @@ class VisionService {
       || existingText.includes(candidateText)
       || candidateText.includes(existingText);
     if (sameOrSubset) {
+      // Fast-path: exactTokenMatch ที่อยู่ใกล้กัน ให้ยุบรวมได้เลย
+      if (exactTokenMatch && existingText === candidateText) {
+        const isCloseProximity = (
+          iou >= 0.08
+          || (overlapY >= 0.08 && overlapX >= 0.08)
+          || (centerDeltaY <= Math.max(minHeight * 4.0, 100) && centerDeltaX <= Math.max(minWidth * 1.8, 120))
+        );
+        if (isCloseProximity) return true;
+      }
       const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= minHeight * 1.35;
       const localStackedDuplicate = (
         exactTokenMatch
@@ -969,6 +978,7 @@ class VisionService {
         || looseSameOrSubsetSpatialMatch
       );
     }
+
 
     if (languageCodes.includes('kor')) {
       return false;
@@ -1912,7 +1922,7 @@ class VisionService {
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
 
       // ── Safety Gate: prevent filtering standard English dialogue lines ──
-      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE)\b/i.test(rawText);
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME)\b/i.test(rawText);
       if (hasKillOrOtherStandardWord) return true;
 
       // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")

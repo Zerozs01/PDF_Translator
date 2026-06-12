@@ -52,7 +52,15 @@ const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
 const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
   const source = normalizeOverlayInlineText(String(sourceText || ''));
   const translated = normalizeOverlayInlineText(String(translatedText || ''));
-  return Boolean(source && translated && source === translated);
+  if (Boolean(source && translated && source === translated)) return true;
+
+  const sourceKey = String(sourceText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  const translatedKey = String(translatedText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  return Boolean(sourceKey && translatedKey && sourceKey === translatedKey);
 };
 
 const clampOverlayTypographyScale = (value: number): number => {
@@ -280,7 +288,7 @@ const PDFPageOverlay: React.FC<{
         const area = width * height;
 
         const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP)$/i.test(asciiCompact);
+          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE)$/i.test(asciiCompact);
         const isTinyJunkBox = !hasCjkOrThai && asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
 
         if (isTinyJunkBox) return false;
@@ -755,10 +763,10 @@ const PDFPageOverlay: React.FC<{
             const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrOverlayTransform.scaleY);
             const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
             const expansion = resolveOverlayMaskExpansion(line);
-            const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
-            const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
-            const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
-            const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
+            const mergedMaskBoost = 0;
+            const comicMaskBoostX = 0;
+            const comicMaskBoostTop = 0;
+            const comicMaskBoostBottom = 0;
             const maskExpandX = Math.min(
               expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
               Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX

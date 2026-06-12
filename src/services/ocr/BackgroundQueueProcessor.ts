@@ -209,6 +209,53 @@ class BackgroundQueueProcessor {
           : `กำลังวิเคราะห์และแปลหน้าที่ ${pageNum}/${totalPages}...`
       );
 
+      // ตรวจสอบก่อนว่าหน้านี้มีแคชการแปลสำเร็จอยู่แล้วหรือไม่ เพื่อไม่ให้แปลซ้ำและทำให้เกิดผลย้อนกลับ
+      let hasValidTranslationCache = false;
+      try {
+        const transCache = await dbService.getTranslationCachePage(job.documentId, pageNum);
+        if (Array.isArray(transCache) && transCache.length > 0) {
+          const targetEngine = (job.type === 'offline_all' || job.type === 'offline_single') ? 'offline' : 'ai';
+          const matchedCache = transCache.find(row => {
+            const rowEngine = String(row.ocrEngine || 'paddleocr').toLowerCase();
+            const jobEngine = String(job.engine || 'paddleocr').toLowerCase();
+            const rowTargetLang = String(row.targetLanguage || 'th').toLowerCase();
+            const jobTargetLang = String(job.targetLanguage || 'th').toLowerCase();
+            
+            const sample = [
+              row.translatedText || '',
+              ...((row.translatedByIndex as Array<{ text?: string }> || []).map(item => String(item.text || '')))
+            ].join(' ');
+            const hasThai = /[\u0E00-\u0E7F]/.test(sample);
+            
+            return rowEngine === jobEngine &&
+                   row.translationMode === job.translationMode &&
+                   rowTargetLang === jobTargetLang &&
+                   row.translatorEngine === targetEngine &&
+                   hasThai;
+          });
+
+          if (matchedCache) {
+            hasValidTranslationCache = true;
+            console.log(`[QueueProcessor] Page ${pageNum} already has translation cache! Skipping re-translation.`);
+            
+            // ซิงก์ผลลัพธ์ OCR จากฐานข้อมูลลง Store ด้วยหากหน้าจอเปิดอยู่
+            const activeFile = useProjectStore.getState().file;
+            if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+              const cachedOCR = await dbService.getOCR(job.documentId, pageNum, job.engine);
+              if (cachedOCR) {
+                useOCRTextLayerStore.getState().setPageOCR(pageNum, cachedOCR);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[QueueProcessor] DB translation cache check warning for page ${pageNum}:`, err);
+      }
+
+      if (hasValidTranslationCache) {
+        continue;
+      }
+
       // --- ขั้นตอนที่ 1: ตรวจหาหรือทำ OCR ของหน้านั้นๆ ---
       let ocrResult: OCRPageResult | null = null;
       

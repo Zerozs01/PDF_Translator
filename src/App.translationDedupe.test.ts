@@ -1660,6 +1660,20 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary("HEART’S...", "HEART’S...", 'th')).toBe('หัวใจ...');
     expect(applyThaiConversationalGlossary("HEART", "HEART", 'th')).toBe('หัวใจ');
   });
+  
+  test('maps slang, stuttering, and repeated letters ignoring punctuation correctly', () => {
+    expect(applyThaiConversationalGlossary('COCK!!', 'COCK!!', 'th')).toBe('ควย!!');
+    expect(applyThaiConversationalGlossary('cocks.', 'cocks.', 'th')).toBe('ควย.');
+    expect(applyThaiConversationalGlossary('pussy’s', 'pussy’s', 'th')).toBe('หี');
+    expect(applyThaiConversationalGlossary('cumming!', 'cumming!', 'th')).toBe('น้ำแตกแล้ว!');
+    expect(applyThaiConversationalGlossary('MEEEE!!', 'MEEEE!!', 'th')).toBe('ฉันนนนน!!');
+    expect(applyThaiConversationalGlossary('MEEE!', 'MEEE!', 'th')).toBe('ฉันนนน!');
+    expect(applyThaiConversationalGlossary('ME?', 'ME?', 'th')).toBe('ฉัน?');
+    expect(applyThaiConversationalGlossary('I-I..', 'I-I..', 'th')).toBe('ฉ-ฉัน..');
+    expect(applyThaiConversationalGlossary('I-I', 'I-I', 'th')).toBe('ฉ-ฉัน');
+    expect(applyThaiConversationalGlossary('I.. I..', 'I.. I..', 'th')).toBe('ฉ-ฉัน..');
+    expect(applyThaiConversationalGlossary('US THE', 'US THE', 'th')).toBe('พวกเรา');
+  });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
     const algoAsi = applyThaiConversationalGlossary('ALGO ASi...', 'ALGO ASi...', 'th');

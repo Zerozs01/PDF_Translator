@@ -81,6 +81,19 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^화내지말고$/, replacement: 'อย่าโกรธสิ' },
   { pattern: /^내가어떡하면될까$/, replacement: 'ฉันควรทำยังไงดี?' },
   { pattern: /^뭐야갑자기이년이꼬랑지를내리네$/, replacement: 'อะไรนะ? จู่ๆ ยัยนี่ก็ยอมแล้วเหรอ?' },
+
+  // Conversational additions to clean up common Argos hallucinations
+  { pattern: /^그런데$/, replacement: 'อย่างไรก็ตาม' },
+  { pattern: /^저기요$/, replacement: 'ขอโทษนะ' },
+  { pattern: /^당연한거아니야$/, replacement: 'แน่นอนอยู่แล้วไม่ใช่เหรอ' },
+  { pattern: /^똑바로누워$/, replacement: 'นอนตรงๆ' },
+  { pattern: /^이런$/, replacement: 'แบบนี้' },
+  { pattern: /^자$/, replacement: 'เอาล่ะ' },
+  { pattern: /^이나이에섹스를하는것만으로도\D*죄책감이\d*장난아닌데\D*$/, replacement: 'ในวัยนี้ แค่มีเพศสัมพันธ์… ความรู้สึกผิดไม่ใช่เรื่องเล่นๆเลย…' },
+  { pattern: /^빨리지워응너그런거필요$/, replacement: 'ลบออกเร็วๆ สิ เธอจำเป็นต้องมีของแบบนั้นด้วยเหรอ?' },
+  { pattern: /^엇얘기끝났어$/, replacement: 'เอ๊ะ! คุยกันเสร็จแล้วเหรอ?' },
+  { pattern: /^수진짜알지$/, replacement: 'ซู!! รู้จริงๆ ใช่ไหม?' },
+  { pattern: /^짓이넘어가준다$/, replacement: 'ยอมมองข้ามการกระทำนี้ให้ก็ได้' },
 ];
 
 export const normalizeKoreanColloquialOcrText = (text: string): string => {
@@ -97,6 +110,35 @@ export const normalizeKoreanColloquialOcrText = (text: string): string => {
   });
 
   return normalizeWhitespace(normalized);
+};
+
+export const isBoilerplateHallucination = (sourceText: string, translatedText: string): boolean => {
+  const source = String(sourceText || '').toLowerCase();
+  const translated = String(translatedText || '').toLowerCase();
+
+  // If the source text contains Hangul (Korean), Kana (Japanese), or Han (Chinese)
+  const isCjkSource = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(sourceText);
+  if (!isCjkSource) return false;
+
+  // List of common boilerplate terms that are frequently hallucinated by Argos
+  const boilerplateTerms = [
+    'เกี่ยวกับเรา',
+    'เงื่อนไขการบริการ',
+    'นโยบายความเป็นส่วนตัว',
+    'ข้อตกลงในการให้บริการ',
+    'ผมตกลงในเงื่อนไข',
+    'ฉันตกลงในเงื่อนไข',
+    'ข้อมูลส่วนบุคคล'
+  ];
+
+  // If the source doesn't actually mean "about us" or "terms of service", but translation contains it
+  // Common Korean words for about us / terms of service are: "회사 소개", "이용 약관", "개인정보 처리방침"
+  const isActualBoilerplateSource = /회사\s*소개|이용\s*약관|개인정보|서비스\s*약관/.test(sourceText);
+
+  if (!isActualBoilerplateSource) {
+    return boilerplateTerms.some(term => translated.includes(term));
+  }
+  return false;
 };
 
 export const applyKoreanConversationalFallback = (

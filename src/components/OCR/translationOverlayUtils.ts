@@ -1390,6 +1390,15 @@ export const resolveOverlayMaskBBox = (line: OCRLine): BBox => {
 };
 
 export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean => {
+  const tText = normalizeOverlayInlineText(String(line.text || ''));
+  const tCompact = tText.replace(/\s+/g, '');
+  const asciiCompact = tCompact.replace(/[^A-Za-z0-9]/g, '');
+  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE)$/i.test(asciiCompact);
+  if (isKnownShortWord) {
+    return false;
+  }
+
   const sourceBbox = resolveOverlaySourceBBox(line);
   const maskBbox = resolveOverlayMaskBBox(line);
 
@@ -2488,20 +2497,20 @@ export const resolveOverlayMaskExpansion = (line: OCRLine): OverlayMaskExpansion
   const compactLabel = isSingleLineLabelCandidate(line.text, line.text) || (line.words?.length ?? 0) <= 3;
   return compactLabel
     ? {
-        expandXRatio: 0.04,
-        expandTopRatio: 0.02,
-        expandBottomRatio: 0.02,
-        maxExpandX: 4,
-        maxExpandTop: 3,
-        maxExpandBottom: 3,
+        expandXRatio: 0.01,
+        expandTopRatio: 0.005,
+        expandBottomRatio: 0.005,
+        maxExpandX: 1.5,
+        maxExpandTop: 1,
+        maxExpandBottom: 1,
       }
     : {
-        expandXRatio: 0.05,
-        expandTopRatio: 0.025,
-        expandBottomRatio: 0.03,
-        maxExpandX: 5,
-        maxExpandTop: 3,
-        maxExpandBottom: 4,
+        expandXRatio: 0.02,
+        expandTopRatio: 0.01,
+        expandBottomRatio: 0.015,
+        maxExpandX: 2,
+        maxExpandTop: 1,
+        maxExpandBottom: 2,
       };
 };
 

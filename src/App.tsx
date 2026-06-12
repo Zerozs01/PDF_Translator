@@ -64,6 +64,7 @@ import {
   applyKoreanConversationalFallback,
   shouldPreferKoreanPivotTranslation,
   hasKoreanTranslationCarryover,
+  isBoilerplateHallucination,
 } from './services/translation/koreanTranslationPolicy';
 import { translationCoordinator } from './services/translation/translationCoordinator';
 import { TranslatableItem } from './types/translation';
@@ -322,7 +323,13 @@ async function translateBatchGemini(
 ): Promise<string[]> {
   if (texts.length === 0) return [];
   return Promise.all(
-    texts.map((text) => translateWithGemini(text, type, mode, sourceLanguage, targetLanguage, contextOverrides))
+    texts.map((text) =>
+      translateWithGemini(text, type, mode, sourceLanguage, targetLanguage, contextOverrides)
+        .catch((err) => {
+          console.warn(`[translateBatchGemini] Gemini translation failed for "${text}":`, err);
+          return text; // Fallback to original source text on API error
+        })
+    )
   );
 }
 
@@ -1522,25 +1529,41 @@ export const applyThaiConversationalGlossary = (
 
   // Sex/Conversational slang & H-manga adjustments (exact / short matches)
   const cleanDialogueText = source.trim().toLowerCase();
-  if (cleanDialogueText === 'cock' || cleanDialogueText === 'cocks') {
+  if (compactSource === 'cock' || compactSource === 'cocks') {
     return preserveSourceTrailingPunctuation(source, 'ควย');
   }
-  if (cleanDialogueText === 'pussy' || cleanDialogueText === 'pussies') {
+  if (compactSource === 'pussy' || compactSource === 'pussies' || compactSource === 'pussys') {
     return preserveSourceTrailingPunctuation(source, 'หี');
   }
-  if (cleanDialogueText === 'pussy’s' || cleanDialogueText === 'pussys') {
-    return preserveSourceTrailingPunctuation(source, 'หี');
-  }
-  if (cleanDialogueText === 'cum' || cleanDialogueText === 'cums' || cleanDialogueText === 'cuuuum' || cleanDialogueText === 'cuuuuum') {
+  if (compactSource === 'cum' || compactSource === 'cums' || compactSource === 'cuuuum' || compactSource === 'cuuuuum') {
     return preserveSourceTrailingPunctuation(source, 'น้ำแตก');
   }
-  if (cleanDialogueText === 'cumming' || cleanDialogueText === 'cumming!') {
+  if (compactSource === 'cumming') {
     return preserveSourceTrailingPunctuation(source, 'น้ำแตกแล้ว');
   }
-  if (cleanDialogueText === 'wanna') {
+  if (compactSource === 'wanna') {
     return preserveSourceTrailingPunctuation(source, 'อยาก');
   }
-  if (/^i-i*[-'’]*i*m$/i.test(source.trim()) || compactSourceAlnumUpper === 'IIM' || compactSourceAlnumUpper === 'IIIM') {
+  if (/^me+$/i.test(compactSource)) {
+    const eCount = (compactSource.match(/e/g) || []).length;
+    if (eCount > 1) {
+      const totalNs = 'น'.repeat(eCount + 1);
+      return preserveSourceTrailingPunctuation(source, `ฉั${totalNs}`);
+    } else {
+      return preserveSourceTrailingPunctuation(source, 'ฉัน');
+    }
+  }
+  const cleanStutter = sourceOriginal.replace(/[.!?…\s_]+/g, '');
+  if (
+    /^i(?:-i)+$/i.test(cleanStutter) ||
+    /^i-i+$/i.test(cleanStutter) ||
+    /^i-i*[-'’]*i+$/i.test(sourceOriginal.trim()) ||
+    compactSource === 'ii' ||
+    compactSource === 'iii' ||
+    /^i-i*[-'’]*i*m$/i.test(source.trim()) ||
+    compactSourceAlnumUpper === 'IIM' ||
+    compactSourceAlnumUpper === 'IIIM'
+  ) {
     return preserveSourceTrailingPunctuation(source, 'ฉ-ฉัน');
   }
   if (/^sto[oa]+p*[!?…]*$/i.test(cleanDialogueText) || compactSourceAlnumUpper === 'STOOOOP' || compactSourceAlnumUpper === 'STOAOOP' || compactSourceAlnumUpper === 'STOAAOP') {
@@ -1852,8 +1875,142 @@ export const applyThaiConversationalGlossary = (
   if (/^BE\s+THE\s+ONE\s+THING\s+WE[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'เป็นสิ่งเดียวที่เรา');
   }
+  // --- Pre-translation substitutions and manga dialogue lines protection ---
+  if (compactSource === 'shaking') {
+    return preserveSourceTrailingPunctuation(source, 'เขย่า');
+  }
+  if (/^flutter(?:ing|s)?$/i.test(compactSource) || compactSource === 'fluttery') {
+    return preserveSourceTrailingPunctuation(source, 'พลิ้ว');
+  }
+  if (compactSource === 'lol') {
+    return preserveSourceTrailingPunctuation(source, 'ฮ่าๆ');
+  }
+  if (/^ah{1,3}\.{3,}/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อ่าห์...');
+  }
+  if (/^ahh{1,3}\.{3,}/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊าห์...');
+  }
+  if (/^ah+$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อา');
+  }
+  
+  // Adult Phrases protection from Hallucination (like "สืบค้นเมื่อ...")
+  if (/^ah+it'?scoming[oo]?$/i.test(compactSource) || /^ah+itscoming[oo]?$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊าห์... มันกำลังจะมาแล้ว... ♥');
+  }
+  if (/^cumingcummingcumming[cc]?$/i.test(compactSource) || /^cummingcummingcumming[cc]?$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'จะเสร็จ...จ-จะเสร็จ...จะแตกแล้ว... ♥');
+  }
+  if (/^cummin+g+[oo]?$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'แตกกออกมาแล้ววว...♥');
+  }
+  if (/^cumming$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'จะแตก...');
+  }
+  if (/^cuming$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'จะเสร็จ...');
+  }
+  if (/^fucktoy$/i.test(compactSource) || /^flicktoy$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ของเล่น');
+  }
+  if (/^tobemyf[ul]icktoy$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'เพื่อเป็นของเล่นของฉัน');
+  }
+
+  // User Dialogue Lines mapping
+  if (/^thisstrength\.?o?$/i.test(compactSource) || /^thisstrength$/i.test(compactSource) || compactSource === 'thisstrengtho') {
+    return preserveSourceTrailingPunctuation(source, 'ความแข็งแกร่งนี้...');
+  }
+  if (/^imquiteonthe$/i.test(compactSource) || /^i'mquiteonthe$/i.test(compactSource) || /^imquiteontheheavy$/i.test(compactSource) || /^i\s*mquite\s*on\s*the$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันค่อนข้าง...');
+  }
+  if (/^he?a?vysizeyet$/i.test(compactSource) || /^heavyyet$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ตัวใหญ่ทีเดียว แต่');
+  }
+  if (compactSource === 'immensethickness') {
+    return preserveSourceTrailingPunctuation(source, 'ความหนามหาศาล');
+  }
+  if (/^v?he'?streatingme$/i.test(compactSource) || /^v?he'?streating$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'เขากลับปฏิบัติต่อฉัน');
+  }
+  if (/^likebatoyd$/i.test(compactSource) || /^likeatoy$/i.test(compactSource) || compactSource === 'likbatoyd') {
+    return preserveSourceTrailingPunctuation(source, 'เหมือนของเล่น...');
+  }
+  if (/^areyou?really$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'คุณ... จริงๆ เหรอ');
+  }
+  if (/^thesameagbas$/i.test(compactSource) || /^thesameageas$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อายุเท่ากับ');
+  }
+  if (/^yu+to$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'ยูโตะ?');
+  }
+  if (compactSource === 'issocute') {
+    return preserveSourceTrailingPunctuation(source, 'น่ารักจัง');
+  }
+  if (compactSource === 'shmackipatv' || compactSource === 'shmackpat' || compactSource === 'shmackipat') {
+    return preserveSourceTrailingPunctuation(source, 'ปั๊ก แต๊บ');
+  }
+  if (compactSource === 'bouncingy' || compactSource === 'bouncing' || compactSource === 'bouncy') {
+    return preserveSourceTrailingPunctuation(source, 'กระเด้ง');
+  }
+  if (compactSource === 'twitchy' || compactSource === 'twitch' || compactSource === 'twitchv') {
+    return preserveSourceTrailingPunctuation(source, 'กระตุก');
+  }
+  if (compactSource === 'plurge' || compactSource === 'splurge') {
+    return preserveSourceTrailingPunctuation(source, 'ทะลัก');
+  }
+  if (compactSource === 'thismuchlol') {
+    return preserveSourceTrailingPunctuation(source, 'ขนาดนี้เลยเหรอ? ฮ่าๆ');
+  }
+  if (compactSource === 'thismuch') {
+    return preserveSourceTrailingPunctuation(source, 'ขนาดนี้เลยเหรอ?');
+  }
+
+  if (/^HHH\?[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ห..ห๊ะ?');
+  }
+  if (/^YOUR\s+CLIT['’]?S[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'คลิตอริสของคุณ');
+  }
+  if (/^PUSSY['’]?S\s+TIGHTENED[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'ช่องคลอดกระชับขึ้น');
+  }
+  if (/^MORE\s+THAN\s+QUALIFED[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีคุณสมบัติมากกว่าที่คาดหวัง');
+  }
+  if (/^MORE\s+THAN\s+QUALIFIED[.!?…]*$/i.test(source)) {
+    return preserveSourceTrailingPunctuation(source, 'มีคุณสมบัติมากกว่าที่คาดหวัง');
+  }
   if (/^TAKE\s+OUT\s+OF\s+HERE[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'นำออกไปจากที่นี่');
+  }
+
+  // Additional user requested translations
+  if (compactSource === 'phew') {
+    return preserveSourceTrailingPunctuation(source, 'ฟิ้ววว');
+  }
+  if (/^ah*shit$/i.test(compactSource)) {
+    return preserveSourceTrailingPunctuation(source, 'อ่า... แย่แล้ว...');
+  }
+  if (compactSource === 'sotight') {
+    return preserveSourceTrailingPunctuation(source, 'แน่นมาก...');
+  }
+  if (compactSource === 'throughoutmy') {
+    return preserveSourceTrailingPunctuation(source, 'ตลอดช่วงเวลาของฉัน');
+  }
+  if (compactSource.includes('icanfeelanimmensethicknessthroughoutmyvaginalwalls') || compactSource.includes('icanfeelanimmensethicknessthroughoutvaginalwalls')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันรู้สึกถึงความหนาอย่างมหาศาลตลอดผนังช่องคลอดของฉัน');
+  }
+  if (compactSource === 'smack' || compactSource === 'smackv' || compactSource === 'smacky' || compactSource === 'smacke') {
+    return preserveSourceTrailingPunctuation(source, 'ตั่บ');
+  }
+  if (compactSource === 'smacksmack') {
+    return preserveSourceTrailingPunctuation(source, 'ตั่บ ตั่บ');
+  }
+  if (compactSource === 'smacksmacksmack') {
+    return preserveSourceTrailingPunctuation(source, 'ตั่บ ตั่บ ตั่บ');
   }
 
   if (
@@ -2484,6 +2641,12 @@ const applyReceiptGlossary = (
 const finalizeTranslatedLine = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   const source = normalizeWhitespace(String(sourceText || ''));
   let resolved = normalizeWhitespace(String(translatedText || ''));
+
+  if (isBoilerplateHallucination(source, resolved)) {
+    console.warn(`[finalizeTranslatedLine] Detected boilerplate hallucination: "${resolved}" for source: "${source}". Falling back.`);
+    resolved = '';
+  }
+
   if (!resolved) {
     // Apply noise repair to source so we at least show cleaned text (e.g., "MYSTERIOUS CONCEPT" not "MY STERIOUS CONCEPT")
     resolved = normalizeSourceForTranslation(source, 'en');
@@ -4113,7 +4276,15 @@ export const resolveRedistributedLineFallback = (
 const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
   const source = normalizeOverlayInlineText(String(sourceText || ''));
   const translated = normalizeOverlayInlineText(String(translatedText || ''));
-  return Boolean(source && translated && source === translated);
+  if (Boolean(source && translated && source === translated)) return true;
+
+  const sourceKey = String(sourceText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  const translatedKey = String(translatedText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  return Boolean(sourceKey && translatedKey && sourceKey === translatedKey);
 };
 
 export default function App() {
@@ -4431,12 +4602,15 @@ export default function App() {
     backgroundQueueProcessor.registerHandlers({
       translatePage: async (docId, pageNum, ocrResult, engine, signal, options) => {
         try {
+          // ส่ง ocrResult โดยตรงผ่าน ocrResultOverride เพื่อให้ runCurrentPageTranslation
+          // ใช้ข้อมูลที่ processor มีอยู่แล้ว โดยไม่ต้องพึ่ง store ซึ่งอาจ sync ไม่ทัน
           const result = await runCurrentPageTranslation(engine, pageNum, { 
             suppressStatus: true,
             ocrLanguage: options?.ocrLanguage,
             sourceLanguage: options?.sourceLanguage,
             targetLanguage: options?.targetLanguage,
-            translationMode: options?.translationMode
+            translationMode: options?.translationMode,
+            ocrResultOverride: ocrResult, // ← key fix: bypass store lookup
           });
           return result;
         } catch (err) {
@@ -4456,14 +4630,16 @@ export default function App() {
     const pageChanged = prevPageRef.current !== currentPage;
     const docChanged = prevDocIdRef.current !== documentId;
 
-    if ((pageChanged || docChanged) && (isOfflineProcessing || isAiProcessing)) {
+    // ส่งเฉพาะกรณีที่เป็นการแปลหน้าเดี่ยว (single page inline) เท่านั้น
+    // หากเป็นการแปลทุกหน้า (batch / all pages) จะมีการประมวลผลครอบคลุมอยู่แล้ว ไม่ต้องแอด job เพิ่ม
+    if ((pageChanged || docChanged) && (isOfflineProcessingRaw || isAiProcessingRaw)) {
       const prevPage = prevPageRef.current;
       const prevDocId = prevDocIdRef.current;
       const prevFile = file; // ไฟล์ก่อนหน้า
       const prevFilePath = filePath;
 
       if (prevDocId && prevFile && prevFilePath) {
-        const engineType = isAiProcessing ? 'ai_single' : 'offline_single';
+        const engineType = isAiProcessingRaw ? 'ai_single' : 'offline_single';
         console.log(`[App] Switched page/file while translation was active. Delegating page ${prevPage} of doc ${prevDocId} to Background Queue.`);
         
         useBackgroundQueueStore.getState().addJob({
@@ -4487,7 +4663,7 @@ export default function App() {
 
     prevPageRef.current = currentPage;
     prevDocIdRef.current = documentId;
-  }, [currentPage, documentId, isOfflineProcessing, isAiProcessing, file, filePath, ocrOptions.engine, ocrOptions.language, sourceLanguage, targetLanguage, translationMode]);
+  }, [currentPage, documentId, isOfflineProcessingRaw, isAiProcessingRaw, file, filePath, ocrOptions.engine, ocrOptions.language, sourceLanguage, targetLanguage, translationMode]);
 
   if (showOCRHarness) {
     return <OCRRegressionHarness />;
@@ -5079,6 +5255,111 @@ export default function App() {
     return { width, height };
   };
 
+  /**
+   * Render แต่ละหน้า PDF เป็น canvas ขนาดเล็ก แล้ว sample สีพื้นหลัง/ข้อความของแต่ละ line
+   * เพื่อส่งเป็น paletteByPage ไปให้ export window ใช้แทน DEFAULT_OVERLAY_PALETTE (ขาวเสมอ)
+   * — ทำงานใน renderer หลักซึ่งมี access ไปยัง pdfjs และ canvas
+   */
+  const buildPaletteByPageForExport = async (
+    pageRange: number[],
+    localSourcePageMap: Map<number, OCRPageResult>,
+    localTranslatedEntryMap: Map<number, OCRTranslationCacheEntry>,
+  ): Promise<Map<number, import('./types/pdfExport').ExportOverlayPaletteEntry[]>> => {
+    const paletteByPage = new Map<number, import('./types/pdfExport').ExportOverlayPaletteEntry[]>();
+    if (!file) return paletteByPage;
+
+    const SAMPLE_MAX_SIDE = 1024; // ขนาด canvas สำหรับ sample — ไม่ต้องใหญ่มาก
+    let pdfDocForSample: import('pdfjs-dist').PDFDocumentProxy | null = null;
+
+    try {
+      if (fileType === 'pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+        pdfDocForSample = await (loadingTask as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
+      }
+
+      for (const pageNum of pageRange) {
+        const pageOCR = localSourcePageMap.get(pageNum);
+        const translatedEntry = localTranslatedEntryMap.get(pageNum);
+        if (!pageOCR || !translatedEntry) continue;
+
+        const translatedByIndex = new Map<number, string>(
+          translatedEntry.translatedByIndex
+            .filter((item) => Number.isFinite(item.index))
+            .map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
+        );
+        if (translatedByIndex.size === 0) continue;
+
+        const sampleCanvas = document.createElement('canvas');
+        const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+        if (!sampleCtx) continue;
+
+        try {
+          if (fileType === 'pdf' && pdfDocForSample) {
+            const page = await pdfDocForSample.getPage(pageNum);
+            const baseViewport = page.getViewport({ scale: 1 });
+            const scale = Math.min(SAMPLE_MAX_SIDE / Math.max(1, baseViewport.width), SAMPLE_MAX_SIDE / Math.max(1, baseViewport.height));
+            const viewport = page.getViewport({ scale });
+            sampleCanvas.width = Math.max(1, Math.round(viewport.width));
+            sampleCanvas.height = Math.max(1, Math.round(viewport.height));
+            sampleCtx.fillStyle = '#ffffff';
+            sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+            await page.render({ canvasContext: sampleCtx, viewport, canvas: sampleCanvas }).promise;
+          } else if (fileType !== 'pdf') {
+            const imageBlob = fileData
+              ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
+              : file;
+            const imageBitmap = await createImageBitmap(imageBlob);
+            const scale = Math.min(SAMPLE_MAX_SIDE / Math.max(1, imageBitmap.width), SAMPLE_MAX_SIDE / Math.max(1, imageBitmap.height));
+            sampleCanvas.width = Math.max(1, Math.round(imageBitmap.width * scale));
+            sampleCanvas.height = Math.max(1, Math.round(imageBitmap.height * scale));
+            sampleCtx.fillStyle = '#ffffff';
+            sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+            sampleCtx.drawImage(imageBitmap, 0, 0, sampleCanvas.width, sampleCanvas.height);
+            imageBitmap.close?.();
+          } else {
+            continue;
+          }
+
+          const sourceWidth = Math.max(1, Number(pageOCR.width || sampleCanvas.width));
+          const sourceHeight = Math.max(1, Number(pageOCR.height || sampleCanvas.height));
+          const pageEntries: import('./types/pdfExport').ExportOverlayPaletteEntry[] = [];
+
+          pageOCR.lines.forEach((line, index) => {
+            if (!translatedByIndex.has(index)) return;
+            if (shouldSkipOverlayRenderForSuspiciousLine(line)) return;
+            const palette = sampleOverlayPaletteFromLine(
+              sampleCtx,
+              line,
+              sourceWidth,
+              sourceHeight,
+              sampleCanvas.width,
+              sampleCanvas.height,
+            );
+            pageEntries.push({
+              index,
+              backgroundColor: palette.backgroundColor,
+              textColor: palette.textColor,
+              textStrokeWidth: palette.textStrokeWidth,
+              textStrokeColor: palette.textStrokeColor,
+              textFillWeight: palette.textFillWeight,
+            });
+          });
+
+          if (pageEntries.length > 0) {
+            paletteByPage.set(pageNum, pageEntries);
+          }
+        } catch {
+          // ถ้า sample ไม่ได้ (เช่น CORS, render error) ก็ข้ามไป — จะใช้ DEFAULT_OVERLAY_PALETTE แทน
+        }
+      }
+    } finally {
+      await (pdfDocForSample as { destroy?: () => Promise<void> } | null)?.destroy?.();
+    }
+
+    return paletteByPage;
+  };
+
   const exportTranslatedOverlayPngForSinglePage = async (
     pageNum: number,
     pageOCR: OCRPageResult,
@@ -5198,11 +5479,24 @@ export default function App() {
 
     const overlayLayoutByIndex = computeOverlayLayoutMap(
       pageOCR.lines.flatMap((line, index) => {
-        const translatedText = translatedByIndex.get(index);
+        const lineLayer = pageLayers.find(l => l.lineIndex === index && l.visible);
+        const translatedText = (() => {
+          if (lineLayer) {
+            const normalizedLayerText = normalizeWhitespace(String(lineLayer.text || ''));
+            const normalizedSourceText = normalizeWhitespace(String(lineLayer.sourceText || line.text || ''));
+            const hasTranslation = lineLayer.userEdited || (normalizedLayerText && normalizedLayerText !== normalizedSourceText);
+            const tText = translatedByIndex.get(index);
+            if (hasTranslation) {
+              return normalizedLayerText || tText;
+            }
+            return tText ?? (normalizedLayerText || line.text);
+          }
+          return translatedByIndex.get(index) || line.text;
+        })();
         if (!translatedText) return [];
         const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
-        if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
+        if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
+        if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
 
         const layer = pageLayers.find(l => l.lineIndex === index);
         const balloonId = layer?.groupId;
@@ -5289,11 +5583,24 @@ export default function App() {
     pageOCR.lines.forEach((line, index) => {
       // Skip lines ที่ถูก user ลบออก
       if (deletedLineIndexes.has(index)) return;
-      const translatedText = translatedByIndex.get(index);
+      const lineLayer = pageLayers.find(l => l.lineIndex === index && l.visible);
+      const translatedText = (() => {
+        if (lineLayer) {
+          const normalizedLayerText = normalizeWhitespace(String(lineLayer.text || ''));
+          const normalizedSourceText = normalizeWhitespace(String(lineLayer.sourceText || line.text || ''));
+          const hasTranslation = lineLayer.userEdited || (normalizedLayerText && normalizedLayerText !== normalizedSourceText);
+          const tText = translatedByIndex.get(index);
+          if (hasTranslation) {
+            return normalizedLayerText || tText;
+          }
+          return tText ?? (normalizedLayerText || line.text);
+        }
+        return translatedByIndex.get(index) || line.text;
+      })();
       if (!translatedText) return;
       const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
-      if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
+      if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
+      if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
 
       // Skip ถ้า layer นี้ userEdited → จะ render ด้วย user-layer pass แทน
       const matchedUserLayer = pageLayers.find(l => l.lineIndex === index && l.visible && l.userEdited);
@@ -5695,6 +6002,8 @@ export default function App() {
 
         if (scope === 'all' && fileType === 'pdf') {
           const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
+          // Sample สีพื้นหลัง/ข้อความจากรูปต้นฉบับแต่ละหน้า ก่อนส่งไป export window
+          const paletteByPage = await buildPaletteByPageForExport(pageRange, sourcePageMap, translatedEntryMap);
           const resultBytes = await exportTranslatedPdfViaPrint({
             fileType: 'pdf',
             sourceBytes: filePath ? undefined : await file.arrayBuffer(),
@@ -5708,6 +6017,7 @@ export default function App() {
             overlayThaiFontEnabled,
             targetLanguage,
             overlayFontSizeScale,
+            paletteByPage,
           });
 
           const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
@@ -6135,11 +6445,14 @@ export default function App() {
       targetLanguage?: string;
       translationMode?: TranslationMode;
       engineOverride?: OCREngine;
+      ocrResultOverride?: OCRPageResult; // ใช้ override OCR result โดยตรง (สำหรับ Background Queue ที่มี ocrResult อยู่แล้ว)
     }
   ): Promise<boolean> {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (options?.engineOverride || ocrOptions.engine || 'paddleocr') as OCREngine;
-    const pageOCR = resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
+    // ใช้ ocrResultOverride โดยตรงถ้ามี (จาก BackgroundQueueProcessor) เพื่อหลีกเลี่ยง race condition
+    // กับการ sync store ที่อาจยังไม่สมบูรณ์ขณะที่ handler ถูกเรียก
+    const pageOCR = options?.ocrResultOverride ?? resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
     if (!pageOCR) {
       if (!options?.suppressStatus) {
         setTranslationStatus({
@@ -6151,6 +6464,94 @@ export default function App() {
     }
 
     const pageEngine = (pageOCR.ocrEngine || selectedEngine) as OCREngine;
+    const ocrEngine = pageEngine;
+    const ocrLanguageKey = options?.ocrLanguage || pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
+    const normalizedTargetLanguage = normalizeTranslationLanguage(options?.targetLanguage || targetLanguage, 'th');
+    const normalizedUserSourceLanguage = normalizeTranslationLanguage(options?.sourceLanguage || sourceLanguage, 'en');
+    const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
+    const effectiveSourceLanguage = resolvedSourceFromOCR;
+    const effectiveTranslationMode = options?.translationMode || translationMode;
+
+    // ตรวจสอบ cache ก่อนเริ่มกระบวนการแปล เพื่อหลีกเลี่ยงการแปลซ้ำและทำให้คำแปลเปลี่ยนไป
+    const matchedDocId = await ensureDocumentId().catch(() => null);
+    if (matchedDocId) {
+      try {
+        const transCache = await dbService.getTranslationCachePage(matchedDocId, pageNum);
+        if (Array.isArray(transCache) && transCache.length > 0) {
+          const matchedCache = transCache.find(row => {
+            const rowEngine = String(row.ocrEngine || '').toLowerCase();
+            const targetRowEngine = String(ocrEngine).toLowerCase();
+            const rowTargetLang = String(row.targetLanguage || '').toLowerCase();
+            const targetRowTargetLang = String(normalizedTargetLanguage).toLowerCase();
+            const rowSourceLang = String(row.sourceLanguage || '').toLowerCase();
+            const targetRowSourceLang = String(resolvedSourceFromOCR).toLowerCase();
+            const rowTranslatorEngine = String(row.translatorEngine || 'offline').toLowerCase();
+            const targetTranslatorEngine = String(engine).toLowerCase();
+            
+            // ตรวจสอบว่า cache มีภาษาไทยอยู่จริง (ถ้าแปลปลายทางเป็นไทย)
+            let hasThai = true;
+            if (targetRowTargetLang === 'th') {
+              const sample = [
+                row.translatedText || '',
+                ...((row.translatedByIndex as Array<{ text?: string }> || []).map(item => String(item.text || '')))
+              ].join(' ');
+              hasThai = /[\u0E00-\u0E7F]/.test(sample);
+            }
+            
+            return rowEngine === targetRowEngine &&
+                   row.translationMode === effectiveTranslationMode &&
+                   rowTargetLang === targetRowTargetLang &&
+                   rowSourceLang === targetRowSourceLang &&
+                   rowTranslatorEngine === targetTranslatorEngine &&
+                   hasThai;
+          });
+
+          if (matchedCache) {
+            console.log(`[Translation] Cache hit for page ${pageNum} via database! Skipping translation coordinator.`);
+            
+            // อัปเดตข้อมูลเข้า Store สำหรับหน้าจอ UI
+            ocrState.setTranslationCacheEntry(pageNum, matchedCache.key, matchedCache);
+            ocrState.setActiveTranslationCacheKey(pageNum, matchedCache.key);
+            ocrState.setTranslationPreviewMode('translated');
+
+            // ซิงค์ผลการแปลกลับเข้าสู่ Layer Store ด้วย
+            try {
+              const layerStore = useLayerStore.getState();
+              const pageLayers = layerStore.getPageLayers(pageNum);
+              if (pageLayers.length > 0) {
+                const updatedPageLayers = pageLayers.map(layer => {
+                  const matchedItem = matchedCache.translatedByIndex.find(item => item.index === layer.lineIndex);
+                  if (!matchedItem) return layer;
+                  if (layer.userEdited) return layer;
+                  return {
+                    ...layer,
+                    translatedText: matchedItem.text,
+                    text: matchedItem.text,
+                    translationEngineUsed: engine,
+                  };
+                });
+                layerStore.setPageLayers(pageNum, {
+                  layers: updatedPageLayers,
+                  groups: layerStore.getPageGroups(pageNum),
+                });
+              }
+            } catch (err) {
+              console.warn('[TranslationSync] Failed to sync cache to Layer Store:', err);
+            }
+
+            if (!options?.suppressStatus) {
+              setTranslationStatus({
+                kind: 'success',
+                message: `${engine} | Cache Hit for Page ${pageNum} | Loaded from persistent translation cache.`,
+              });
+            }
+            return true;
+          }
+        }
+      } catch (err) {
+        console.warn(`[Translation] DB cache read warning for page ${pageNum}:`, err);
+      }
+    }
 
     const rawBaseLines = collectTranslatableLines(
       pageOCR.lines || [], 
@@ -6253,13 +6654,7 @@ export default function App() {
       return false;
     }
 
-    const ocrEngine = pageEngine;
-    const ocrLanguageKey = options?.ocrLanguage || pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
-    const normalizedTargetLanguage = normalizeTranslationLanguage(options?.targetLanguage || targetLanguage, 'th');
-    const normalizedUserSourceLanguage = normalizeTranslationLanguage(options?.sourceLanguage || sourceLanguage, 'en');
-    const resolvedSourceFromOCR = resolveSourceLanguageFromOCR(ocrLanguageKey, normalizedUserSourceLanguage);
-    const effectiveSourceLanguage = resolvedSourceFromOCR;
-    const effectiveTranslationMode = options?.translationMode || translationMode;
+    // Redundant declarations removed since they are declared at the beginning of the function
 
     const shouldUseCrossEngineAssist = pageEngine !== 'paddleocr' && (
       effectiveTranslationMode === 'official'

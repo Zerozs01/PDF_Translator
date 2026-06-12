@@ -1,34 +1,44 @@
-import sqlite3
 import os
-import sys
+import sqlite3
+import json
 
-sys.stdout.reconfigure(encoding='utf-8')
-db_path = os.path.join(os.environ['APPDATA'], 'pdf_translator', 'pdf_translator.db')
-if not os.path.exists(db_path):
-    print("No database found.")
-    sys.exit(0)
+db_path = os.path.expandvars(r'%APPDATA%\pdf_translator\pdf_translator.db')
+output_path = r'c:\App\Electron\PDF_Translator\scratch\db_queries\query_translations_result.json'
 
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
+result = {}
 
-lines_to_search = [
-    "I WOuLD BE",
-    "GETTING 4O% OF",
-    "GETTING 40% OF",
-    "THE PROFITS HAD",
-    "I SOLD it.",
-    "I would be getting 40% of the profits had i sold it."
-]
+try:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
 
-print("=== sentence_translation_cache ===")
-for line in lines_to_search:
-    cur.execute("""
-        SELECT source_text, translated_text, target_language 
-        FROM sentence_translation_cache 
-        WHERE source_text LIKE ?
-    """, (f"%{line}%",))
-    print(f"Searching for: {repr(line)}")
-    for row in cur.fetchall():
-        print(f"  SRC: {repr(row[0])} -> TGT: {repr(row[1])} (LANG: {row[2]})")
+    # 1. ดึงข้อมูลเอกสารล่าสุด
+    cursor.execute('SELECT id, filename, filepath FROM documents ORDER BY last_accessed DESC LIMIT 1')
+    latest_doc = cursor.fetchone()
+    if latest_doc:
+        result['latest_document'] = dict(latest_doc)
+        doc_id = latest_doc['id']
 
-conn.close()
+        # 2. ตรวจสอบ OCR Cache
+        cursor.execute('SELECT page_number, ocr_engine, length(ocr_data) as len FROM ocr_cache_engine WHERE document_id = ? ORDER BY page_number', (doc_id,))
+        result['ocr_cache'] = [dict(row) for row in cursor.fetchall()]
+
+        # 3. ตรวจสอบ Translation Cache
+        cursor.execute('''
+            SELECT page_number, cache_key, translator_engine, line_count, group_count, length(translated_text) as len, translated_text
+            FROM translation_cache 
+            WHERE document_id = ? 
+            ORDER BY page_number
+        ''', (doc_id,))
+        result['translation_cache'] = [dict(row) for row in cursor.fetchall()]
+    else:
+        result['error'] = 'No documents found'
+
+    conn.close()
+except Exception as err:
+    result['error'] = str(err)
+
+with open(output_path, 'w', encoding='utf-8') as f:
+    json.dump(result, f, ensure_ascii=False, indent=2)
+
+print('Done writing results to:', output_path)

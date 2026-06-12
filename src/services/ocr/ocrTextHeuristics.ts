@@ -787,6 +787,12 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^MORE[.!?…]*$/i,
   /^YOU[.!?…]*$/i,
   /^US\s+THE[.!?…]*$/i,
+  /^US\s+THE\s*,\s*SO\s*,\s*OF\s*,\s*ALL[.!?…]*$/i,
+  /^US\s+THE\s+SO\s+OF\s+ALL[.!?…]*$/i,
+  /^SIR[.!?…]*$/i,
+  /^YES\s+SIR[.!?…]*$/i,
+  /^QUCK[!.,?…]*$/i,
+  /^QUICK[!.,?…]*$/i,
   /^NOT\s+MY[.!?…]*$/i,
   /^ASS-[.!?…]*$/i,
   /^HOLE[.!?…]*$/i,
@@ -808,6 +814,18 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^WAS\s+TOYED[.!?…]*$/i,
   /^UP\s+LOOKING[.!?…]*$/i,
   /^UP\s+LOOKiNG[.!?…]*$/i,
+  /^CUMMING\s+IN[.!?…]*$/i,
+  /^LOOKING\s+AT\s+ME[.!?…]*$/i,
+  /^COMPLIMENTS[.!?…]*$/i,
+  /^YOU\s+GO\s+UNTIL[.!?…]*$/i,
+  /^LIKE\s+I'M\s+NOT[.!?…]*$/i,
+  /^LIKE\s+IM\s+NOT[.!?…]*$/i,
+  /^OOHH\s+YOUR[.!?…]*$/i,
+  /^YOUR\s+CLIT'S[.!?…]*$/i,
+  /^YOUR\s+CLITS[.!?…]*$/i,
+  /^HHH\?[.!?…]*$/i,
+  /^YOU\s+EJACULATE[!.,?…]*$/i,
+  /^[1I]S\s+S[0O]\s+CUTE[.!?…]*$/i,
 ];
 
 export const shouldForceKeepComicTranslationLine = (
@@ -876,7 +894,7 @@ export const isLikelyGhostTranslatableLine = (
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
   const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE)$/i.test(asciiCompact);
 
   const validWords = (Array.isArray(scaledLine.words) ? scaledLine.words : []).filter((word) => {
     const wordText = normalizeWhitespace(String(word?.text || ''));
@@ -961,12 +979,18 @@ export const isLikelyGhostTranslatableLine = (
   const isNaturalDialogue = englishTokens.length >= 2
     || (englishTokens.length === 1 && englishTokens[0].length >= 3 && readability >= 1.0)
     || isKnownShortWord
-    || /^(?:PRINCESS|PRiNCESS|DIE|PIG|CUM|COCK|OH|OHHH|OHHHH|OHHHHH|AGAA|SO|OF|ALL|MORE|YOU|US|THE|THIS|MY|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING)$/i.test(asciiCompact);
+    || /^(?:PRINCESS|PRiNCESS|DIE|PIG|CUM|COCK|OH|OHHH|OHHHH|OHHHHH|AGAA|SO|OF|ALL|MORE|YOU|US|THE|THIS|MY|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|USTHESOOFALL|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU)$/i.test(asciiCompact);
   if (isSparseSfxBox && !isNaturalDialogue && !shouldForceKeepComicTranslationLine(text, scaledLine)) {
     return true;
   }
 
   if (hasCjkOrThai) {
+    // Prevent dropping common Korean conversational words or SFX (e.g. "이런", "자", "녀석들", "쿠기사키", "제대로", etc.)
+    const isCommonKoreanWord = /^(?:이런|자|그|이|저|나|너|네|예|응|뭐|왜|안|못|잘|더|다|또|꾹|슥|헉|하|앗|어|오|엇|녀석|녀석들|쿠기사키|제대로|쪼여|쪼여라|크|윽|흐|음|읏|큭|읍|하앗|흐윽|후|휴|하아|하아아|으|으윽)$/.test(cjkCompact);
+    if (isCommonKoreanWord) {
+      return false;
+    }
+
     const tinyCjkSingleton = wordCount <= 1
       && cjkCompact.length <= 3
       && width <= 96

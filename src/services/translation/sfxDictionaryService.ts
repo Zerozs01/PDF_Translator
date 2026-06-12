@@ -59,6 +59,79 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
       { source: 'CLICK', target: 'คลิก!', notes: 'เสียงกดสวิตช์ หรือเสียงเมาส์' },
       { source: 'SHOCK', target: 'ช็อก!', notes: 'อาการตื่นตะลึง' },
       { source: 'PANT', target: 'แฮ่ก... แฮ่ก...', notes: 'เสียงหอบเหนื่อย' },
+      { source: 'Pinchy', target: 'หยิก', notes: 'เสียงหยิกหรือบีบดึง' },
+      { source: 'Pinch', target: 'หยิก', notes: 'เสียงหยิกหรือบีบดึง' },
+      { source: 'Smack', target: 'ตั่บ', notes: 'เสียงกระทบกัน ตั่บ' },
+      { source: 'SmackV', target: 'ตั่บ', notes: 'เสียงกระทบกัน ตั่บ (OCR trailing V variant)' },
+      { source: 'Smack Smack Smack', target: 'ตั่บ ตั่บ ตั่บ', notes: 'เสียงกระทบกัน ตั่บ ตั่บ ตั่บ' },
+      { source: 'Smack Smack', target: 'ตั่บ ตั่บ', notes: 'เสียงกระทบกัน ตั่บ ตั่บ' },
+      { source: 'Poke', target: 'กระทุ้ง', notes: 'เสียงกระทุ้งหรือจิ้ม' },
+      { source: 'Badum', target: 'ตึกตัก', notes: 'เสียงหัวใจเต้น' },
+      { source: 'Badumm', target: 'ตึกตัก', notes: 'เสียงหัวใจเต้น (variant)' },
+      // Fwoooshh variants — ต้องใส่ครบเพื่อให้ fuzzy match จับได้ทุกรูปแบบการสะกด
+      { source: 'Fwoooshh', target: 'ฟู่ววว', notes: 'เสียงลมพัดหรือพลังพวยพุ่ง' },
+      { source: 'Fwoosh', target: 'ฟู่ววว', notes: 'เสียงลมพัด' },
+      { source: 'Fwooosh', target: 'ฟู่ววว', notes: 'เสียงลมพัด (3o variant)' },
+      { source: 'Fwooshh', target: 'ฟู่ววว', notes: 'เสียงลมพัด (2h variant)' },
+      { source: 'Fwoooshhh', target: 'ฟู่ววว', notes: 'เสียงลมพัดยาว (3h variant)' },
+      { source: 'Fwsshhh', target: 'ฟซซซ์ชชช', notes: 'เสียงลมผ่านหรือเสียงทะเล' },
+      { source: 'Fwsshh', target: 'ฟซซซ์ชชช', notes: 'เสียงลมผ่าน (2h variant)' },
+      { source: 'Fwssh', target: 'ฟซซซ์ชชช', notes: 'เสียงลมผ่าน (1h variant)' },
+      { source: 'Fsssshhh', target: 'ฟซซซ์ชชช', notes: 'เสียงลมผ่านแบบลากยาวมาก' },
+      { source: 'Fwsssshh', target: 'ฟซซซ์ชชช', notes: 'เสียงลมผ่าน (w-s variant)' },
+      { source: 'Fwsshhh...', target: 'ฟซซซ์ชชช...', notes: 'เสียงลมผ่านยาว' },
+      { source: 'Fwsssshhh', target: 'ฟซซซ์ชชช', notes: 'เสียงลมผ่านลากยาว' },
+      { source: 'Phew', target: 'ฟิ้ววว', notes: 'เสียงถอนหายใจหรือโล่งอก' },
+      { source: 'Phew...', target: 'ฟิ้ววว...', notes: 'เสียงถอนหายใจ (ยาว)' },
+      { source: 'Gxp', target: 'บีบ', notes: 'เสียงกำหรือบีบ (Grip)' },
+      { source: 'Grip', target: 'บีบ', notes: 'เสียงกำหรือบีบ' },
+      // เสียงคราง/ร้องรับ — ตรงตาม Mapping Table ของผู้ใช้
+      { source: 'Aan', target: 'อ่าห์...', notes: 'OCR variant ของ Anh เสียงคราง' },
+      { source: 'Anh', target: 'อ่าห์...', notes: 'เสียงคราง อาห์' },
+      { source: 'Haa', target: 'ฮ่า...', notes: 'เสียงหายใจขาดห้วงกระชั้น' },
+      { source: 'Haa...', target: 'ฮ่า...', notes: 'เสียงหายใจขาดห้วงกระชั้น (ยาว)' },
+      { source: 'Hah', target: 'ฮ่าห์!', notes: 'เสียงหลุดจังหวะพีก' },
+      { source: 'Aaah', target: 'อ่าห์...', notes: 'เสียงคราง อ่าห์ ลากยาว' },
+      { source: 'Aaah...', target: 'อ่าห์... อาห์...', notes: 'เสียงคราง ลากยาว ต่อเนื่อง' },
+      { source: 'Ah...', target: 'อ่าห์...', notes: 'เสียงครางผ่อนคลาย' },
+      { source: 'Ah', target: 'อ่าห์...', notes: 'เสียงคราง' },
+      { source: 'Oon', target: 'อือออ...', notes: 'เสียงร้องครางเบาๆ' },
+      { source: 'Oon...', target: 'อือออ...', notes: 'เสียงร้องคราง (variant)' },
+      { source: 'Mm...', target: 'อื้ม...', notes: 'เสียงครางในลำคอออดอ้อน' },
+      { source: 'Mmm', target: 'อื้ม...', notes: 'เสียงคราง in ลำคอ' },
+      { source: 'Mm', target: 'อื้ม...', notes: 'เสียงครางในลำคอ (สั้น)' },
+      { source: 'Nnh...', target: 'อื้อ...', notes: 'เสียงครางกลั้นสะท้าน' },
+      { source: 'Nnh', target: 'อื้อ...', notes: 'เสียงครางกลั้น' },
+      { source: 'Ngh', target: 'อึก...', notes: 'เสียงครางสั่นสะท้านอัดอั้น' },
+      { source: 'Ngh...', target: 'อึก...', notes: 'เสียงครางกลั้นสั่นสะท้าน' },
+      { source: 'Nn...', target: 'อื้อ...', notes: 'เสียงครางกลั้น (nn variant)' },
+      { source: 'Oh!', target: 'อ๊าห์!', notes: 'เสียงอุทานตกใจ/ตื่นเต้น' },
+      { source: 'Ooh', target: 'โอ้...', notes: 'เสียงอุทานพึงพอใจ' },
+      { source: 'Oh', target: 'โอ้...', notes: 'เสียงอุทาน' },
+      { source: 'Shaking', target: 'เขย่า', notes: 'อาการหรือเสียงสั่นสะเทือน/เขย่า' },
+      { source: 'SO SO FTYETFIRM', target: 'นุ่มมาก...แต่ก็แน่นกระชับ', notes: 'SO SOFT.. YET FIRM' },
+      { source: 'SO SOFT.. YET FIRM', target: 'นุ่มมาก...แต่ก็แน่นกระชับ', notes: 'คำบรรยายความรู้สึก' },
+      { source: 'FTTITATERASE', target: 'นุ่มมาก...แต่ก็แน่นกระชับ', notes: 'SO SOFT YET FIRM OCR variant' },
+      { source: 'Smacky', target: 'ตั่บ', notes: 'เสียงกระทบกัน ตั่บ (Smack variant)' },
+      { source: 'Smacke', target: 'ตั่บ', notes: 'เสียงกระทบกัน ตั่บ (Smack OCR variant)' },
+      { source: 'Shmacki Patv', target: 'ปั๊ก แต๊บ', notes: 'เสียงเอวกระแทกร่องสะกดเพี้ยน' },
+      { source: 'Shmack Pat', target: 'ปั๊ก แต๊บ', notes: 'เสียงเอวกระแทกร่อง' },
+      { source: 'EJACULATED', target: 'หลั่งน้ำอสุจิ', notes: 'เสียงอุทาน/กริยาอนาจาร' },
+      { source: 'INTO...', target: 'เข้าไปข้างใน...', notes: 'คำบรรยายทิศทาง' },
+      { source: 'Gloop', target: 'กลูป', notes: 'เสียงน้ำหนืด/ของเหลวข้น' },
+      { source: 'Twitches', target: 'กระตุก', notes: 'เสียงหรืออาการกระตุก' },
+      { source: 'Twitchesd', target: 'กระตุก', notes: 'เสียงหรืออาการกระตุก (OCR variant)' },
+      { source: 'LIKE A TOY', target: 'เหมือนของเล่น', notes: 'ประโยคเปรียบเทียบ' },
+      { source: 'LikBatoyd', target: 'เหมือนของเล่น', notes: 'LIKE A TOY OCR variant' },
+      { source: 'FUCK TOY', target: 'ของเล่นทางเพศ', notes: 'คำสังขม แปลตรงตามบริบท' },
+      { source: 'LOL', target: 'ฮ่าๆ', notes: 'เสียงขำ Laughing Out Loud' },
+      { source: 'AHH ITS COMING', target: 'อ๊าห์... มันกำลังจะมาแล้ว... ♥', notes: 'AHH IT’S COMING' },
+      { source: "AHH IT'S COMING", target: 'อ๊าห์... มันกำลังจะมาแล้ว... ♥', notes: 'เสียงร้อง/อุทานทางเพศ' },
+      { source: 'AHH ITS COMINGO', target: 'อ๊าห์... มันกำลังจะมาแล้ว... ♥', notes: 'OCR trailing O variant' },
+      { source: 'CUMING CUMMING CUMMING', target: 'จะเสร็จ...จ-จะเสร็จ...จะแตกแล้ว... ♥', notes: 'เสียงสมมุติผู้ใหญ่' },
+      { source: 'CUMMINNGGG', target: 'แตกกออกมาแล้ววว...♥', notes: 'เสียงสมมุติลากเสียงยาว' },
+      { source: 'CUMMINNGGGO', target: 'แตกกออกมาแล้ววว...♥', notes: 'OCR trailing O variant' }
+
     ],
     ko: [
       { source: '쿵', target: 'ตึง!', notes: 'เสียงของหนักกระแทกพื้น' },
@@ -180,7 +253,8 @@ export function getMergedDictionary(): SFXDictionary {
 export function translateSFX(
   text: string,
   lang: SFXLanguage,
-  fuzzyThreshold = 0.75
+  fuzzyThreshold = 0.75,
+  _isEnFallback = false
 ): string | null {
   const dict = getMergedDictionary();
   const entries = dict.data[lang] || [];
@@ -209,5 +283,14 @@ export function translateSFX(
     }
   }
 
-  return bestMatch ? bestMatch.target : null;
+  if (bestMatch) return bestMatch.target;
+
+  // 3rd Phase: English Fallback
+  // หากไม่พบในภาษาหลัก และข้อความเป็นตัวอักษรละติน ให้ค้นหาในพจนานุกรมภาษาอังกฤษแทน
+  // (เช่น มังงะญี่ปุ่น/เกาหลีแต่มีเสียงเอฟเฟกต์ภาษาอังกฤษ เช่น Smack, Boom, Shaking)
+  if (lang !== 'en' && !_isEnFallback && /[a-zA-Z]/.test(text)) {
+    return translateSFX(text, 'en', fuzzyThreshold, true);
+  }
+
+  return null;
 }

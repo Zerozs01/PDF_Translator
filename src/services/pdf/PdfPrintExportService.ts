@@ -13,6 +13,7 @@ import type {
   PdfPrintExportFileType,
   PdfPrintExportJob,
   PdfPrintExportPageConfig,
+  ExportOverlayPaletteEntry,
 } from '../../types/pdfExport';
 import { useExportStore } from '../../stores/useExportStore';
 import { useLayerStore } from '../../stores/useLayerStore';
@@ -31,6 +32,8 @@ type ExportTranslatedPdfInput = {
   overlayThaiFontEnabled: boolean;
   targetLanguage: string;
   overlayFontSizeScale: number;
+  /** palette ที่ sample จากรูปต้นฉบับ — key = pageNum, value = array of palette per line */
+  paletteByPage?: Map<number, ExportOverlayPaletteEntry[]>;
 };
 
 const resolveOverlayLayoutProfile = (translationMode: string): OverlayLayoutProfile => {
@@ -67,6 +70,7 @@ const buildPageConfig = async (
     overlayFontFamily,
     overlayFontSizeScale: input.overlayFontSizeScale,
     targetLanguage: input.targetLanguage,
+    paletteByIndex: input.paletteByPage?.get(pageNum),
   };
 };
 

@@ -37,6 +37,7 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 ];
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\bFLICK\b/gi, replacement: 'FUCK' },
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
   { pattern: /\bA-\s*Are\s*y\b/gi, replacement: 'A-Are you' },
   { pattern: /\bAreyou\b/gi, replacement: 'Are you' },
@@ -105,6 +106,42 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bUSTHE,A\b/gi, replacement: 'US THE, A' },
   { pattern: /\bUSTHEA\b/gi, replacement: 'US THE, A' },
   { pattern: /\bdums\b/gi, replacement: 'dumb' },
+  { pattern: /\bQUCK\b/gi, replacement: 'QUICK' },
+  { pattern: /\bSmack\s*v\b/gi, replacement: 'Smack' },
+  { pattern: /\bPoke\s+v\b/gi, replacement: 'Poke' },
+  { pattern: /\bVAGINALWALLS\b/gi, replacement: 'VAGINAL WALLS' },
+  { pattern: /\bIM\s+ME\s+NSETH\s+I\s+CKNESS\b/gi, replacement: 'IMMENSE THICKNESS' },
+  { pattern: /\bIM\s+ME\s+NSETH\s+ICKNESS\b/gi, replacement: 'IMMENSE THICKNESS' },
+  { pattern: /\bTHE\s+SAME\s+AGBAS\b/gi, replacement: 'THE SAME AGE AS' },
+  { pattern: /\bHE\s+A\s+VYSIZEYET\b/gi, replacement: 'HEAVY SIZE YET,' },
+  { pattern: /\bHE\s+A\s+VYSIZE\s+YET\b/gi, replacement: 'HEAVY SIZE YET,' },
+  { pattern: /\bGO\s+IN\s+GYOUL\s+GET\b/gi, replacement: "GOING, YOU'LL GET" },
+  { pattern: /\bBouncingy\b/gi, replacement: 'Bouncing' },
+  { pattern: /\bplurge\b/gi, replacement: 'splurge' },
+  { pattern: /\bTwitchv\b/gi, replacement: 'Twitch' },
+  { pattern: /\bTHISSTRENGTH\.O\b/gi, replacement: 'THIS STRENGTH' },
+  { pattern: /\bTHISSTRENGTH\b/gi, replacement: 'THIS STRENGTH' },
+  { pattern: /\bI\s+MQUITE\s+ON\s+THE\b/gi, replacement: "I'M QUITE ON THE" },
+  { pattern: /\bSOTIGHT\b/gi, replacement: 'SO TIGHT' },
+  { pattern: /\bTHROUGHOUTMY\b/gi, replacement: 'THROUGHOUT MY' },
+  { pattern: /\b[1I]\s*S\s*S[0O]\s*CUTE\b/gi, replacement: 'IS SO CUTE' },
+  { pattern: /\b[1I]\s*S\s*SO\s*CUTE\b/gi, replacement: 'IS SO CUTE' },
+  { pattern: /\bIS\s*S[0O]\s*CUTE\b/gi, replacement: 'IS SO CUTE' },
+  // OCR trailing-char noise on manga SFX
+  { pattern: /\bCOMINGO\b/gi, replacement: 'COMING' },
+  { pattern: /\bCUMMINGC\b/gi, replacement: 'CUMMING' },
+  { pattern: /\bCUMMINNGGGO\b/gi, replacement: 'CUMMINNGGG' },
+  { pattern: /\bCUMMINN?GGGO\b/gi, replacement: 'CUMMINNGGG' },
+  { pattern: /\bFTTITATERASE\b/gi, replacement: 'SO SOFT YET FIRM' },
+  { pattern: /\bSO\s+SO\s+FTYETFIRM\b/gi, replacement: 'SO SOFT YET FIRM' },
+  { pattern: /\bFTYETFIRM\b/gi, replacement: 'YET FIRM' },
+  { pattern: /\bAM\s+A\s+ZINGAUINTIE\b/gi, replacement: 'AMAZING, AUNTIE' },
+  { pattern: /\bZINGAUINTIE\b/gi, replacement: 'AUNTIE' },
+  { pattern: /\bAND\s+BOLNCY\b/gi, replacement: 'AND BOUNCY' },
+  { pattern: /\bAND\s+BOLCY\b/gi, replacement: 'AND BOUNCY' },
+  { pattern: /\bBOLNCY\b/gi, replacement: 'BOUNCY' },
+  { pattern: /\bBOLCY\b/gi, replacement: 'BOUNCY' },
+  { pattern: /\bK-CUP\s+TITTIES\b/gi, replacement: 'K-CUP TITTIES' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -312,6 +349,24 @@ export const normalizeKoreanOcrNoiseForTranslation = (text: string): string => {
   return normalizeKoreanColloquialOcrText(text);
 };
 
+
+// ---------------------------------------------------------------------------
+// Pre-translation Thai Substitutions
+// คำและวลีย์ที่ Argos แปลผิดเสมอ — แทนที่ด้วยคำภาษาไทยก่อนส่งให้ Engine
+// Argos จะเห็นผลลัพธ์ภาษาไทยและไม่พยายามแปลซ้ำอีก (ตัวอักษรไทยจะผ่าน pass-through ไปยังผลลัพธ์ชั้นต่อไป)
+// ---------------------------------------------------------------------------
+export const ENGLISH_PRE_TRANSLATION_THAI_SUBS: Array<{ pattern: RegExp; replacement: string }> = [
+  // Moved to post-translation in App.tsx (applyThaiConversationalGlossary) to prevent Argos translation hallucinations
+];
+
+export const normalizeSourceForTranslationWithThaiSubs = (normalized: string): string => {
+  let result = normalized;
+  for (const { pattern, replacement } of ENGLISH_PRE_TRANSLATION_THAI_SUBS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+};
+
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely
   let raw = String(text || '').replace(/[\r\n]+/g, ' ');
@@ -353,6 +408,10 @@ export const normalizeSourceForTranslation = (text: string, sourceLanguage = '')
     const pattern = new RegExp(`\\b${acr}\\b`, 'gi');
     normalized = normalized.replace(pattern, acr);
   }
+
+  // สุดท้าย: Pre-translation Thai substitutions สำหรับคำที่ Argos แปลไม่ออก เช่น Shaking, LOL, CUMMING
+  // Thai chars จะผ่าน pass-through ไปยังผลลัพธ์ชั้นต่อไปโดยไม่ถูกแปลซ้ำ
+  normalized = normalizeSourceForTranslationWithThaiSubs(normalized);
 
   return normalized;
 };

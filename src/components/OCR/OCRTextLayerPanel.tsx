@@ -411,6 +411,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const etaUpdatedAtRef = useRef<number>(0);
   const benchmarkAbortRef = useRef<AbortController | null>(null);
   const translationContextKeyRef = useRef<string>('');
+  const lastPreferredKeyRef = useRef<string | null>(null);
   const currentPageRef = useRef(currentPage);
   const documentIdRef = useRef(documentId);
   const optionsRef = useRef(options);
@@ -1796,8 +1797,9 @@ export const OCRTextLayerPanel: React.FC = () => {
   useEffect(() => {
     const nextPreferred = fallbackEntryForCurrentModel;
     if (!nextPreferred) return;
-    if (activeTranslationKey === nextPreferred.key) return;
-    if (activeTranslationEntryMatchesContext) return;
+    if (activeTranslationKey === nextPreferred.key && translationPreviewMode === 'translated') return;
+    if (activeTranslationEntryMatchesContext && translationPreviewMode === 'translated') return;
+    if (translationPreviewMode === 'original') return;
     setActiveTranslationCacheKey(currentPage, nextPreferred.key);
     setTranslationPreviewMode('translated');
   }, [
@@ -1807,6 +1809,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     fallbackEntryForCurrentModel,
     setActiveTranslationCacheKey,
     setTranslationPreviewMode,
+    translationPreviewMode,
   ]);
 
   useEffect(() => {
@@ -1819,10 +1822,16 @@ export const OCRTextLayerPanel: React.FC = () => {
       normalizedContextTargetLanguage,
     ].join('|');
 
-    if (translationContextKeyRef.current === contextKey) return;
-    translationContextKeyRef.current = contextKey;
-
     const nextPreferred = fallbackEntryForCurrentModel;
+    const preferredKey = nextPreferred?.key || null;
+    const contextChanged = translationContextKeyRef.current !== contextKey;
+    const preferredChanged = lastPreferredKeyRef.current !== preferredKey;
+
+    if (!contextChanged && !preferredChanged) return;
+
+    translationContextKeyRef.current = contextKey;
+    lastPreferredKeyRef.current = preferredKey;
+
     if (nextPreferred) {
       setActiveTranslationCacheKey(currentPage, nextPreferred.key);
       setTranslationPreviewMode('translated');
