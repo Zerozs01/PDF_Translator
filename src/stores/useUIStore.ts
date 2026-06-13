@@ -29,6 +29,12 @@ interface UIState {
   // Global Loading State
   loadingState: GlobalLoadingState | null;
   setLoadingState: (state: GlobalLoadingState | null) => void;
+
+  // Split View & Page Modes
+  viewMode: 'overlay' | 'split';
+  setViewMode: (mode: 'overlay' | 'split') => void;
+  pageMode: 'single' | 'scroll';
+  setPageMode: (mode: 'single' | 'scroll') => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -43,7 +49,7 @@ export const useUIStore = create<UIState>((set) => ({
   setZoom: (zoom) => set({ zoom }),
   setPan: (x, y) => set({ pan: { x, y } }),
   setView: (pan, zoom) => set({ pan, zoom }),
-  resetView: () => set({ zoom: 1, pan: { x: 0, y: 0 } }),
+  resetView: () => set({ zoom: 1, pan: { x: 0, y: 0 }, viewMode: 'overlay' }),
 
   // Tools
   activeTool: 'select',
@@ -52,5 +58,11 @@ export const useUIStore = create<UIState>((set) => ({
   // Global Loading State
   loadingState: null,
   setLoadingState: (loadingState) => set({ loadingState }),
+
+  // Split View & Page Modes
+  viewMode: 'overlay',
+  setViewMode: (viewMode) => set({ viewMode }),
+  pageMode: 'single',
+  setPageMode: (pageMode) => set({ pageMode }),
 }));
 

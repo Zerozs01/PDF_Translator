@@ -565,3 +565,19 @@ if (initialOcrLang) {
   }
 }
 
+// Sync viewMode from useProjectStore to pageMode in useUIStore
+useProjectStore.subscribe((state) => {
+  const pageMode = state.viewMode === 'continuous' ? 'scroll' : 'single';
+  if (useUIStore.getState().pageMode !== pageMode) {
+    useUIStore.setState({ pageMode });
+  }
+});
+
+// Sync pageMode from useUIStore to viewMode in useProjectStore
+useUIStore.subscribe((state) => {
+  const projectViewMode = state.pageMode === 'scroll' ? 'continuous' : 'single';
+  if (useProjectStore.getState().viewMode !== projectViewMode) {
+    useProjectStore.setState({ viewMode: projectViewMode });
+  }
+});
+

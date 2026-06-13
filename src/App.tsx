@@ -128,6 +128,8 @@ const ImageCanvas = React.lazy(() => import('./components/Image/ImageCanvas').th
 import { visionService } from './services/vision/VisionService';
 import { dbService } from './services/dbService';
 import './types/electron.d';
+import { SplitViewToggle } from './components/Viewer/Toolbar';
+import { WorkspaceContainer } from './components/Viewer/WorkspaceContainer';
 
 import {
   countReadableLength,
@@ -4537,7 +4539,14 @@ const isSourceFallbackOverlayText = (sourceText: string, translatedText: string)
 export default function App() {
   const showOCRHarness = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
-  const { activeTool, setActiveTool, loadingState, setLoadingState } = useUIStore();
+  const { 
+    activeTool, 
+    setActiveTool, 
+    loadingState, 
+    setLoadingState,
+    viewMode: splitViewMode,
+    setViewMode: setSplitViewMode
+  } = useUIStore();
   const ocrOptions = useOCRTextLayerStore((state) => state.options);
   const ocrLanguage = ocrOptions.language;
   const setTranslationCacheEntry = useOCRTextLayerStore((state) => state.setTranslationCacheEntry);
@@ -4917,6 +4926,7 @@ export default function App() {
             targetLanguage: options?.targetLanguage,
             translationMode: options?.translationMode,
             ocrResultOverride: ocrResult, // ← key fix: bypass store lookup
+            documentIdOverride: docId, // ← คีย์หลัก: ส่ง docId ดั้งเดิมของงานเบื้องหลังเพื่อให้แคชทำงานได้แม้ปิดโปรเจกต์
           });
           return result;
         } catch (err) {
@@ -6759,6 +6769,7 @@ export default function App() {
       translationMode?: TranslationMode;
       engineOverride?: OCREngine;
       ocrResultOverride?: OCRPageResult; // ใช้ override OCR result โดยตรง (สำหรับ Background Queue ที่มี ocrResult อยู่แล้ว)
+      documentIdOverride?: number; // ← รองรับการระบุ documentId ของงานประมวลผลพื้นหลังเมื่อปิดหน้าต่างไปแล้ว
     }
   ): Promise<boolean> {
     const ocrState = useOCRTextLayerStore.getState();
@@ -6805,7 +6816,7 @@ export default function App() {
     const effectiveTranslationMode = options?.translationMode || translationMode;
 
     // ตรวจสอบ cache ก่อนเริ่มกระบวนการแปล เพื่อหลีกเลี่ยงการแปลซ้ำและทำให้คำแปลเปลี่ยนไป
-    const matchedDocId = await ensureDocumentId().catch(() => null);
+    const matchedDocId = options?.documentIdOverride ?? (await ensureDocumentId().catch(() => null));
     if (matchedDocId) {
       try {
         const transCache = await dbService.getTranslationCachePage(matchedDocId, pageNum);
@@ -7631,7 +7642,7 @@ export default function App() {
       console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
     }
 
-    const cacheDocId = await ensureDocumentId().catch(() => null);
+    const cacheDocId = options?.documentIdOverride ?? (await ensureDocumentId().catch(() => null));
     if (cacheDocId) {
       const persisted = await dbService.saveTranslationCache(cacheDocId, pageNum, cacheKey, translationEntry);
       if (!persisted) {
@@ -8423,6 +8434,14 @@ export default function App() {
           </div>
         </div>
 
+        {file && (
+          <SplitViewToggle 
+            viewMode={splitViewMode}
+            isActive={splitViewMode === 'split'}
+            onToggle={() => setSplitViewMode(splitViewMode === 'split' ? 'overlay' : 'split')}
+          />
+        )}
+
         <div className="relative">
           <button
             onClick={() => setIsDownloadMenuOpen((prev) => !prev)}
@@ -8451,11 +8470,7 @@ export default function App() {
         {/* 2. MAIN WORKSPACE (Canvas) */}
         <main className="flex-1 relative overflow-hidden bg-[#313741]">
           <React.Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500">Loading Canvas...</div>}>
-            {file.type === 'application/pdf' ? (
-              <PDFCanvas />
-            ) : (
-              <ImageCanvas />
-            )}
+            <WorkspaceContainer />
           </React.Suspense>
         </main>
 

@@ -42,6 +42,10 @@
 ### 1. Frontend Core (React App)
 - **Application Shell & Orchestrator:** [src/App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) — จัดการ logic การแปล, overlay rendering, และ line grouping/deduplication
 - **Export Print Page (Hidden Renderer):** [src/export/renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts) — DOM overlay บนพื้นหลังโปร่งใส (หน่วย `pt` ตรง PDF page size) ไม่ใช้ pdf.js
+- **Viewer & Workspace Layout:**
+  - [src/components/Viewer/Toolbar.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Viewer/Toolbar.tsx) — ปุ่มควบคุมหน้าจอ `SplitViewToggle` สำหรับสลับระหว่าง Overlay และ Split view
+  - [src/components/Viewer/WorkspaceContainer.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Viewer/WorkspaceContainer.tsx) — จัดการหน้าต่างแบ่งซีก (Split-Viewport) แสดงต้นฉบับคู่บทแปล
+  - [src/hooks/useSyncScroll.ts](file:///c:/App/Electron/PDF_Translator/src/hooks/useSyncScroll.ts) — Hook ซิงโครไนซ์ตำแหน่งการเลื่อนของ Pane ซ้ายและขวา
 - **Main Viewport & Canvas:**
   - [src/components/PDF/PDFCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx) — เรนเดอร์หน้าเอกสาร PDF และจัดการ overlay text layers
   - [src/components/Image/ImageCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Image/ImageCanvas.tsx) — เรนเดอร์หน้าเอกสารรูปภาพ และจัดการการวาดตรวจจับคำ
@@ -81,6 +85,7 @@
 - **OCR Text Layer Store:** [src/stores/useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts) — จัดการแคช OCR และแคชคำแปลในแต่หน้าและแต่ละโมเดล
 - **Layer Control Store:** [src/stores/useLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useLayerStore.ts) — ควบคุมการแก้ไขสไตล์, ขนาด, และพิกัดตำแหน่งของกล่องข้อความ
 - **Project Store:** [src/stores/useProjectStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useProjectStore.ts) — จัดการข้อมูลโปรเจกต์และไฟล์ PDF ปัจจุบัน
+- **UI Store:** [src/stores/useUIStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useUIStore.ts) — จัดการสถานะการซูม/แพน แถบข้าง และสลับโหมด Split View / Overlay
 - **Security & Authentication Store:** [src/stores/useAuthStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useAuthStore.ts) — จัดการสถานะ Unlock, โหมดความปลอดภัยของแอป และเชื่อมต่อ IPC API คีย์หลักของระบบ
 
 ---
@@ -131,6 +136,7 @@
 10. **AuthGuard Bypass in Harness:** เพิ่มการตรวจสอบ query param `ocr_harness=1` เพื่อ bypass AuthGuard ในระหว่างรัน regression test ใน Playwright เพื่อไม่ให้แอปพลิเคชันค้างในระบบ CI/CD ในวันที่ 2026-06-13
 11. **Benchmark & EasyOCR RAW Integration:** ปรับปรุงระบบประเมินเปรียบเทียบให้รองรับการรัน EasyOCR ในโหมดเปรียบเทียบ RAW vs FULL โดยสร้างฟังก์ชัน `run_easyocr_raw` ใน Python bridge daemon และขยายสัญญาณส่ง IPC จากฝั่ง UI ไปยัง main process สำเร็จในวันที่ 2026-06-13
 12. **Raw OCR Parsing & Confidence Fix:** แก้ไขบั๊กโครงสร้างใน `run_paddleocr_raw` ที่ดึงข้อมูลผ่านคีย์ `predict()` เปล่าๆ ทำให้คำที่แสกนได้กลายเป็น 0 ในระหว่างประมวลผลโมเดลที่ใช้ `ocr()` ในฝั่ง Python พร้อมทั้งเพิ่มฟังก์ชันคำนวณเฉลี่ยค่าความมั่นใจ (Average Confidence) ของ RAW pass ทั้งของ Paddle และ Easy ในวันที่ 2026-06-13
+13. **Split-View & Sync-Scroll:** เพิ่มฟังก์ชัน Side-by-Side Split View เพื่อให้ผู้ใช้สามารถตรวจสอบ Original OCR เคียงคู่กับบทแปลแบบเรียลไทม์ โดยรองรับการซิงโครไนซ์ตำแหน่งการเลื่อน (Synchronized Scrolling) และพิกัดซูมแบบ 60fps Zero-Latency ข้ามหน้าต่าง และจะปิดการแบ่งช่องแสดงผลโดยอัตโนมัติเมื่อเปลี่ยนหน้าหรือปิดไฟล์ถัดไปในวันที่ 2026-06-13
 
 
 ## 🛠️ Common Task Workflow (ทางลัดในการทำงาน)

@@ -17,6 +17,11 @@ This changelog tracks updates in `documents/` only.
   - Background queue now aggressively runs OCR split and cleaning (`splitAggressiveMergedLines` and `filterGhostOcrData`) to prevent Index Drift and Layout Grouping Mismatch between background processor and active UI canvas.
 - Re-integrated EasyOCR in the OCR Benchmark Panel and added support for RAW vs FULL pipeline evaluation for EasyOCR by developing `run_easyocr_raw` on the Python daemon and allowing dynamic IPC routing.
 - Fixed an issue in `run_paddleocr_raw` where word and line outputs resolved to 0 due to key mismatches with `ocr.ocr()` output structure, and calculated average confidence values for raw OCR runs (Paddle and Easy) instead of returning 0%.
+- Implemented Side-by-Side Split View & Synchronized Scrolling Architecture:
+  - Integrated `SplitViewToggle` button in the header and created `WorkspaceContainer` to manage dual-pane viewport rendering.
+  - Added bidirectional synchronization subscriptions between `useProjectStore`'s `viewMode` (`'single' | 'continuous'`) and `useUIStore`'s `pageMode` (`'single' | 'scroll'`).
+  - Added high-performance real-time DOM-based transform syncing during scrolls and drags in both `PDFCanvas` and `ImageCanvas` for smooth 60fps lockstep movement.
+  - Implemented automatic split screen reset (`resetView` resetting `viewMode` to `'overlay'`) on project load and close.
 
 ## 2026-06-01
 

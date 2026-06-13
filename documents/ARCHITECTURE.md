@@ -151,3 +151,16 @@ This reduces false drops for lines such as technical sentence fragments and numb
   - When loading a project (`loadProject`), the system retrieves the file-specific `language`, `engine`, and `ocrQualityProfile` configuration from `localStorage`.
   - To prevent inconsistencies in production mode (where file path resolution might alter/alias the `filePath` to map compatible databases), the storage retrieval key (`fileKey`) is normalized to evaluate `get().filePath || resolvedPath || file.name`.
   - Any changes to OCR options in `useOCRTextLayerStore` trigger a subscription sync that saves options into `localStorage` using the exact same active `filePath` from `useProjectStore`.
+
+## 11. Split-View & Synchronized Scrolling
+
+- **Viewport Split Mode Layout**: `src/components/Viewer/WorkspaceContainer.tsx` implements a dual-pane viewport layout inside the main React area. When `useUIStore.getState().viewMode === 'split'`, the viewport divides into a 50/50 split (Original OCR on the left, Translated result on the right).
+- **Zustand Store Extensions & Sync**:
+  - `useUIStore` manages `viewMode` (`'overlay' | 'split'`) and `pageMode` (`'single' | 'scroll'`).
+  - To prevent state desynchronization, `useProjectStore`'s `viewMode` (`'single' | 'continuous'`) is synchronized bidirectionally with `useUIStore`'s `pageMode` (`'single' | 'scroll'`) via store subscriptions.
+- **Canvas Overrides & Double Loading Prevention**: `PDFCanvas` and `ImageCanvas` support a `previewModeOverride?: 'original' | 'translated'` prop. This allows rendering both the original and translated layers side-by-side using the same layout caches, without re-triggering OCR or translation inferences.
+- **Zero-Latency DOM-based Synchronization Hook**:
+  - High-frequency wheel/drag event updates bypass React's standard re-rendering flow to maintain smooth 60fps lockstep scroll synchronization.
+  - In `syncContentTransform` and mouse-dragging `handleMouseMove`, the calculated CSS translation transform string is immediately written to both elements in the DOM.
+  - Once interaction settles down, final coordinates are committed back to Zustand in a single atomic update.
+- **Session Isolation & Auto-Reset**: Opening a new file or closing the workspace triggers `useUIStore.getState().resetView()`, which automatically resets the split screen viewMode to `'overlay'`. This prevents the side-by-side mode from persisting across different documents.
