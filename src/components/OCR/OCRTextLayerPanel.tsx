@@ -411,6 +411,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const etaUpdatedAtRef = useRef<number>(0);
   const benchmarkAbortRef = useRef<AbortController | null>(null);
   const translationContextKeyRef = useRef<string>('');
+  const lastPreferredKeyRef = useRef<string | null>(null);
   const currentPageRef = useRef(currentPage);
   const documentIdRef = useRef(documentId);
   const optionsRef = useRef(options);
@@ -1482,6 +1483,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       for (let i = rows.length - 1; i >= 0; i -= 1) {
         if (canceled) return;
         const row = rows[i];
+        if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+          continue;
+        }
         const normalizedEntry: OCRTranslationCacheEntry = {
           ...row,
           pageNum: currentPage,
@@ -1796,8 +1800,9 @@ export const OCRTextLayerPanel: React.FC = () => {
   useEffect(() => {
     const nextPreferred = fallbackEntryForCurrentModel;
     if (!nextPreferred) return;
-    if (activeTranslationKey === nextPreferred.key) return;
-    if (activeTranslationEntryMatchesContext) return;
+    if (activeTranslationKey === nextPreferred.key && translationPreviewMode === 'translated') return;
+    if (activeTranslationEntryMatchesContext && translationPreviewMode === 'translated') return;
+    if (translationPreviewMode === 'original') return;
     setActiveTranslationCacheKey(currentPage, nextPreferred.key);
     setTranslationPreviewMode('translated');
   }, [
@@ -1807,6 +1812,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     fallbackEntryForCurrentModel,
     setActiveTranslationCacheKey,
     setTranslationPreviewMode,
+    translationPreviewMode,
   ]);
 
   useEffect(() => {
@@ -1819,10 +1825,16 @@ export const OCRTextLayerPanel: React.FC = () => {
       normalizedContextTargetLanguage,
     ].join('|');
 
-    if (translationContextKeyRef.current === contextKey) return;
-    translationContextKeyRef.current = contextKey;
-
     const nextPreferred = fallbackEntryForCurrentModel;
+    const preferredKey = nextPreferred?.key || null;
+    const contextChanged = translationContextKeyRef.current !== contextKey;
+    const preferredChanged = lastPreferredKeyRef.current !== preferredKey;
+
+    if (!contextChanged && !preferredChanged) return;
+
+    translationContextKeyRef.current = contextKey;
+    lastPreferredKeyRef.current = preferredKey;
+
     if (nextPreferred) {
       setActiveTranslationCacheKey(currentPage, nextPreferred.key);
       setTranslationPreviewMode('translated');
@@ -3949,18 +3961,6 @@ export const OCRTextLayerPanel: React.FC = () => {
         {fileType === 'pdf' && !isProcessing && (
           <div className="flex gap-2">
             <button
-              onClick={() => handleStartOCR(undefined, true)}
-              disabled={!file || isProcessing}
-              className="flex-[1.2] bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(255,135,5,0.2)]"
-              title={selectedEngineWarming
-                ? 'Wait for selected model warm-up to finish'
-                : 'Force re-run OCR for all pages (ignore cache)'}
-            >
-              <RefreshCw size={13} />
-              Re-OCR All (Ignore Cache)
-            </button>
-
-            <button
               onClick={() => void handleClearCurrentModelCache()}
               disabled={!file || isProcessing}
               style={{
@@ -3973,6 +3973,18 @@ export const OCRTextLayerPanel: React.FC = () => {
             >
               <Trash2 size={12} style={{ color: '#CA7C4C' }} />
               Clear Cache P{currentPage}
+            </button>
+
+            <button
+              onClick={() => handleStartOCR(undefined, true)}
+              disabled={!file || isProcessing}
+              className="flex-[1.2] bg-gradient-to-r from-[#FF8705] to-[#FF9A3D] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-white py-1.5 rounded-lg font-semibold text-[10px] flex items-center justify-center gap-1.5 transition-all shadow-[0_5px_14px_rgba(255,135,5,0.2)]"
+              title={selectedEngineWarming
+                ? 'Wait for selected model warm-up to finish'
+                : 'Force re-run OCR for all pages (ignore cache)'}
+            >
+              <RefreshCw size={13} />
+              Re-OCR All (Ignore Cache)
             </button>
           </div>
         )}

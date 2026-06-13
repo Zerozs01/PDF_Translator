@@ -195,6 +195,8 @@ function Install-PaddleStack {
       if ($LASTEXITCODE -ne 0) {
         throw '[ocr:bootstrap] Failed to install paddlepaddle CPU base.'
       }
+      Write-Host '[ocr:bootstrap] Uninstalling conflicting standard onnxruntime if present'
+      & $PythonPath -m pip uninstall -y onnxruntime 2>&1 | Out-Null
       Write-Host '[ocr:bootstrap] Installing paddle2onnx and onnxruntime-directml'
       & $PythonPath -m pip install paddle2onnx==1.3.1 onnxruntime-directml
       if ($LASTEXITCODE -ne 0) {

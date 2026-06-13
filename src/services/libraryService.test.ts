@@ -53,6 +53,7 @@ const createDbClient = (overrides?: Partial<ElectronAPI['db']>): Pick<ElectronAP
     getDocumentTags: vi.fn(async () => []),
     touchDocument: vi.fn(async () => true),
     updateLastPage: vi.fn(async () => true),
+    clearDocumentCache: vi.fn(async () => true),
     ...overrides,
   },
 });

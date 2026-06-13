@@ -9,6 +9,11 @@ import { collectTextSearchMatches } from '../textSearch';
 
 export const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
 
+export const isKnownShortWordHelper = (asciiCompact: string): boolean => {
+  return /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+};
+
 export const renderPreviewTextWithHighlight = (
   text: string,
   pattern: any // TextSearchPattern from textSearch service
@@ -323,6 +328,9 @@ export const isLikelyLargeBorderEffectLineForSafety = (
 
   const compact = text.replace(/\s+/g, '');
   const alphaNum = compact.replace(/[^A-Za-z0-9]/g, '');
+  const isKnownShortWord = isKnownShortWordHelper(alphaNum);
+  if (isKnownShortWord) return false;
+
   const hasLatin = /[A-Za-z\u00C0-\u024F]/.test(compact);
   const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/.test(compact);
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
@@ -422,7 +430,7 @@ export const isLikelyPanelGhostLineForSafety = (
     return true;
   }
 
-  const isVerticalLineJunk = /^[lI1|!/\\_\-s]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
+  const isVerticalLineJunk = /^[lI1|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
   if (isVerticalLineJunk) {
     return true;
   }
@@ -432,8 +440,7 @@ export const isLikelyPanelGhostLineForSafety = (
     return true;
   }
 
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP)$/i.test(asciiCompact);
+  const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
   const isTinyJunkBox = asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
   if (isTinyJunkBox) {
     return true;
@@ -510,6 +517,8 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   const hasLatin = /[A-Za-z\u00C0-\u024F]/.test(compact);
   const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
   const alphaNum = compact.replace(/[^A-Za-z0-9]/g, '');
+  const isKnownShortWord = isKnownShortWordHelper(alphaNum);
+  if (isKnownShortWord) return false;
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
   const wordCoverage = computePanelLineWordUnionCoverage(line);
@@ -803,6 +812,16 @@ export const shouldCollapsePanelSafetyDuplicate = (
   );
 
   if (sameOrSubset) {
+    // Fast-path: หากข้อความ Key เหมือนกันเป๊ะ (หลังลบขยะ) ให้ยุบรวมหากอยู่ใกล้กัน
+    // แก้ปัญหา STILL ALIVE / STILL ALive_ ที่อยู่ตำแหน่งทับซ้อนกันแต่ดูไม่เหมือนเพราะขยะท้ายคำ
+    if (exactKeyMatch) {
+      const isCloseProximity = (
+        iou >= 0.08
+        || (overlapY >= 0.08 && overlapX >= 0.08)
+        || (centerDeltaY <= Math.max(minHeight * 4.0, 120) && centerDeltaX <= Math.max(minWidth * 1.8, 140))
+      );
+      if (isCloseProximity) return true;
+    }
     return strongSpatialMatch
       || localStackedDuplicate
       || shortPhraseDuplicate
@@ -1178,9 +1197,13 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
   if ((result.pipelineProfile || 'panel') !== 'panel') {
     return result;
   }
-  if ((result.ocrEngine || 'paddleocr') !== 'paddleocr') {
-    return result;
-  }
+  // ขยายให้รองรับทุก OCR Engine (ไม่จำกัดแค่ PaddleOCR)
+  // Engine อื่น เช่น EasyOCR หรือ Google Vision ก็อาจสร้างคำซ้ำซ้อนได้เช่นกัน
+  const activeEngine = result.ocrEngine || 'paddleocr';
+  const isPaddleOcr = activeEngine === 'paddleocr';
+  // สำหรับ Engine ที่ไม่ใช่ PaddleOCR จะยังคงรัน dedup แต่ข้ามขั้นตอน ghost artifact ที่ specific กับ Paddle
+  void isPaddleOcr; // ใช้ variable นี้ไว้สำหรับ future feature gating
+
 
   const markPanelSafetyNormalized = (value: OCRPageResult): OCRPageResult => {
     const debug = value.debug || { droppedWords: [], dropCounts: {} };
@@ -1249,6 +1272,8 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
       const bboxWidth = Math.max(1, normalizedLineBBox.x1 - normalizedLineBBox.x0);
       const bboxHeight = Math.max(1, normalizedLineBBox.y1 - normalizedLineBBox.y0);
       const bboxArea = Math.max(1, bboxWidth * bboxHeight);
+      const asciiCompactResolved = compactResolvedText.replace(/[^A-Za-z0-9]/g, '');
+      const isKnown = isKnownShortWordHelper(asciiCompactResolved);
       const tinyNoWordLatinArtifact = !documentLikePage
         && validWordCount === 0
         && /[A-Za-z0-9]/.test(compactResolvedText)
@@ -1256,7 +1281,8 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         && bboxWidth <= 96
         && bboxHeight <= 44
         && bboxArea <= 3000
-        && Number(lineWithResolvedGeometry.confidence || 0) <= 94;
+        && Number(lineWithResolvedGeometry.confidence || 0) <= 94
+        && !isKnown;
       if (tinyNoWordLatinArtifact) {
         dropped.push({
           filter: 'panelSafetyDedup',

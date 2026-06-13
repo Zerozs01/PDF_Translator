@@ -1390,6 +1390,15 @@ export const resolveOverlayMaskBBox = (line: OCRLine): BBox => {
 };
 
 export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean => {
+  const tText = normalizeOverlayInlineText(String(line.text || ''));
+  const tCompact = tText.replace(/\s+/g, '');
+  const asciiCompact = tCompact.replace(/[^A-Za-z0-9]/g, '');
+  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+  if (isKnownShortWord) {
+    return false;
+  }
+
   const sourceBbox = resolveOverlaySourceBBox(line);
   const maskBbox = resolveOverlayMaskBBox(line);
 
@@ -2488,20 +2497,20 @@ export const resolveOverlayMaskExpansion = (line: OCRLine): OverlayMaskExpansion
   const compactLabel = isSingleLineLabelCandidate(line.text, line.text) || (line.words?.length ?? 0) <= 3;
   return compactLabel
     ? {
-        expandXRatio: 0.04,
-        expandTopRatio: 0.02,
-        expandBottomRatio: 0.02,
-        maxExpandX: 4,
-        maxExpandTop: 3,
-        maxExpandBottom: 3,
+        expandXRatio: 0.01,
+        expandTopRatio: 0.005,
+        expandBottomRatio: 0.005,
+        maxExpandX: 1.5,
+        maxExpandTop: 1,
+        maxExpandBottom: 1,
       }
     : {
-        expandXRatio: 0.05,
-        expandTopRatio: 0.025,
-        expandBottomRatio: 0.03,
-        maxExpandX: 5,
-        maxExpandTop: 3,
-        maxExpandBottom: 4,
+        expandXRatio: 0.02,
+        expandTopRatio: 0.01,
+        expandBottomRatio: 0.015,
+        maxExpandX: 2,
+        maxExpandTop: 1,
+        maxExpandBottom: 2,
       };
 };
 
@@ -3514,7 +3523,14 @@ const suppressOverlappingOverlayBorders = (
     if (iou >= 0.82) return true;
 
     if (displacedCoverageEcho) {
-      return true;
+      // RULE: ห้ามยุบหรือซ่อนกล่องที่มีคำต้นฉบับแตกต่างกันเกินไป (เช่น "of all of us" vs "us!")
+      // ป้องกันการลบข้อมูลสำคัญทิ้งโดยวิเคราะห์ความคล้ายคลึงของ source text (Deduplicate safety guard)
+      const hasHighDifference = (existingSourceKey && candidateSourceKey)
+        ? overlayKeyDiceSimilarity(existingSourceKey, candidateSourceKey) < 0.28
+        : false;
+      if (!hasHighDifference) {
+        return true;
+      }
     }
 
     if (stackedSourceEcho) {
@@ -3613,17 +3629,26 @@ const suppressOverlappingOverlayBorders = (
       return iou >= 0.58;
     }
 
-    if (existing.textKey === candidate.textKey) return true;
+    // มีคำแปลเหมือนกันเป๊ะ -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง (เช่น โดน OCR อ่านเบิ้ล)
+    if (existing.textKey === candidate.textKey) {
+      return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
+    }
 
     const minLength = Math.min(existing.textKey.length, candidate.textKey.length);
     const sameOrSubset = minLength >= 6 && (
       existing.textKey.includes(candidate.textKey)
       || candidate.textKey.includes(existing.textKey)
     );
-    if (sameOrSubset) return true;
+    // เป็นคำแปลที่เป็น subset ของกันและกัน -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง
+    if (sameOrSubset) {
+      return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
+    }
 
     const textSimilarity = overlayKeyDiceSimilarity(existing.textKey, candidate.textKey);
-    if (textSimilarity >= 0.9) return true;
+    // มีคำแปลคล้ายกันมาก -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง
+    if (textSimilarity >= 0.9) {
+      return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
+    }
     if (textSimilarity >= 0.74 && iou >= 0.44) return true;
 
     return false;

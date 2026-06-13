@@ -39,6 +39,11 @@ describe('koreanTranslationPolicy', () => {
       expect(applyKoreanConversationalFallback('걸레년', '걸레년')).toBe('อีผู้หญิงสำส่อน');
       expect(applyKoreanConversationalFallback('몸으로 때운다고?', '')).toBe('จะใช้ร่างกายชดเชยงั้นเหรอ?');
       expect(applyKoreanConversationalFallback('미친색까 뒤지기 싫으면', '미친색까')).toBe('ไอ้สารเลว ถ้าไม่อยากตาย');
+      expect(applyKoreanConversationalFallback('그런데', '')).toBe('อย่างไรก็ตาม');
+      expect(applyKoreanConversationalFallback('저기요!', '')).toBe('ขอโทษนะ!');
+      expect(applyKoreanConversationalFallback('이런...', '')).toBe('แบบนี้...');
+      expect(applyKoreanConversationalFallback('자.', '')).toBe('เอาล่ะ.');
+      expect(applyKoreanConversationalFallback('이 나이에\n섹스를 하는 것\n만으로도…\n죄책감이 7\n장난 아닌데…', '')).toBe('ในวัยนี้ แค่มีเพศสัมพันธ์… ความรู้สึกผิดไม่ใช่เรื่องเล่นๆเลย…');
     });
 
     it('returns null when no pattern matches', () => {

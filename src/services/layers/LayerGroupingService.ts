@@ -244,8 +244,9 @@ const computeGroupConfidence = (lines: OCRLine[]): number => {
 let layerIdCounter = 0;
 let groupIdCounter = 0;
 
-const generateLayerId = (): string => `layer_${++layerIdCounter}_${Date.now().toString(36)}`;
-const generateGroupId = (): string => `group_${++groupIdCounter}_${Date.now().toString(36)}`;
+const generateLayerId = (): string => `layer_${++layerIdCounter}_${Math.random().toString(36).substring(2, 9)}`;
+const generateGroupId = (): string => `group_${++groupIdCounter}_${Math.random().toString(36).substring(2, 9)}`;
+
 
 /**
  * Pre-processor: สับเส้นที่ถูก OCR มัดรวมแนวนอนยาวเกินไป (Over-merging)
@@ -490,15 +491,14 @@ export const buildLayerGroupsFromOCR = (
       const layerId = generateLayerId();
       layerIds.push(layerId);
 
-      const originalIndex = typeof line.originalIndex === 'number' ? line.originalIndex : lineIdx;
-      const translatedText = translatedByIndex?.get(originalIndex);
+      const translatedText = translatedByIndex?.get(lineIdx);
       const displayText = translatedText || normalizeInlineText(line.text);
       const sourceText = normalizeInlineText(line.text);
       const h = bboxHeight(line.bbox);
 
       allLayers.push({
         id: layerId,
-        lineIndex: originalIndex,
+        lineIndex: lineIdx,
         groupId,
         text: displayText,
         sourceText,
@@ -571,15 +571,28 @@ export const mergeLayersAndGroups = (
 
   rebuilt.layers.forEach(rl => {
     const el = existingByLineIndex.get(rl.lineIndex);
-    // ถ้าผู้ใช้เคยแก้ไขเลเยอร์เดิมไว้ ให้รักษาพิกัดและการจัดแต่งของเลเยอร์เดิม แต่ใช้ข้อความและข้อมูลแปลใหม่จาก rl
-    if (el && (el.userEdited || el.id.startsWith('manual-layer-'))) {
-      const mergedLayer: TextLayer = {
-        ...el,
-        text: rl.text,
-        sourceText: rl.sourceText,
-        confidence: rl.confidence,
-        // ข้อมูลอื่น ๆ เช่น ID, bbox, rotation, styles ยังคงของ el ไว้
-      };
+    const isSameText = el && (el.sourceText || '').trim().toLowerCase() === (rl.sourceText || '').trim().toLowerCase();
+    
+    // เคลียร์เลเยอร์เก่าทิ้งไปถ้า Engine/Profile เปลี่ยนแปลง (ทำให้ sourceText ไม่ตรงกัน) และเลเยอร์เดิมไม่ได้ถูกแก้ไขโดยยูสเซอร์
+    if (el && (el.userEdited || el.id.startsWith('manual-layer-') || isSameText)) {
+      // รักษา ID เดิมไว้เสมอเพื่อไม่ให้เกิดการสุ่ม ID ใหม่และรักษาความสัมพันธ์ของกลุ่ม (Deduplication / Life cycle)
+      const mergedLayer: TextLayer = el.userEdited || el.id.startsWith('manual-layer-')
+        ? {
+            ...el,
+            text: rl.text,
+            sourceText: el.sourceText || rl.sourceText,
+            confidence: rl.confidence,
+          }
+        : {
+            ...rl,
+            id: el.id, // รักษา ID เดิม!
+            // รักษาคำแปลเดิมและเครื่องยนต์แปลเดิมหากมีอยู่แล้วเพื่อไม่ให้คำแปลหายไป
+            translatedText: el.translatedText || rl.translatedText,
+            text: el.translatedText || rl.translatedText || rl.text,
+            sourceText: el.sourceText || rl.sourceText,
+            translationEngineUsed: el.translationEngineUsed || rl.translationEngineUsed,
+            userEdited: el.userEdited || rl.userEdited,
+          };
       mergedLayers.push(mergedLayer);
       idMap.set(rl.id, el.id);
     } else {
@@ -599,6 +612,9 @@ export const mergeLayersAndGroups = (
     }
   });
 
+  // เก็บ ID กลุ่มเดิมที่ถูกดึงไปใช้งานแล้ว เพื่อป้องกันการใช้ ID ซ้ำ (Duplicate key warning)
+  const usedGroupIdSet = new Set<string>();
+
   // อัปเดตกลุ่มผลลัพธ์
   const mergedGroups = rebuilt.groups.map(rg => {
     const updatedLayerIds = rg.layerIds.map(id => idMap.get(id) || id);
@@ -607,12 +623,14 @@ export const mergeLayersAndGroups = (
       ? mergeBBoxes(memberLayers.map(l => l.bbox))
       : rg.mergedBBox;
 
-    // หาว่ามีกลุ่มเดิมที่มีสมาชิกตรงกันหรือไม่ เพื่อรักษาคุณสมบัติของกลุ่มเดิม (collapsed, locked, visible, color, id)
+    // หาว่ามีกลุ่มเดิมที่มีสมาชิกตรงกันหรือไม่ เพื่อรักษาคุณสมบัติของกลุ่มเดิม
+    // และต้องตรวจสอบว่ากลุ่มเดิมนี้ยังไม่เคยโดนนำ ID ไปใช้งานโดยกลุ่มอื่นในรอบการสร้างนี้
     const existingGroup = existingGroups.find(eg =>
-      eg.layerIds.some(eid => updatedLayerIds.includes(eid))
+      !usedGroupIdSet.has(eg.id) && eg.layerIds.some(eid => updatedLayerIds.includes(eid))
     );
 
     if (existingGroup) {
+      usedGroupIdSet.add(existingGroup.id);
       return {
         ...rg,
         id: existingGroup.id,

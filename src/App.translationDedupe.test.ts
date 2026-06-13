@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { translationCoordinator } from './services/translation/translationCoordinator';
 import { dbService } from './services/dbService';
+import { useGlossaryStore } from './stores/useGlossaryStore';
+import { useOCRTextLayerStore } from './stores/useOCRTextLayerStore';
 
 type TranslatableLine = {
   index: number;
@@ -80,6 +82,9 @@ let cleanKoreanOcrSpacing: (text: string) => string;
 let normalizeJapaneseOcrNoiseForTranslation: (text: string) => string;
 let normalizeKoreanOcrNoiseForTranslation: (text: string) => string;
 let normalizeSourceForTranslation: (text: string, sourceLanguage?: string) => string;
+let protectTranslationTokens: (text: string, targetLanguage: string) => { protectedText: string; replacements: any[] };
+let restoreProtectedTokens: (text: string, replacements: any[]) => string;
+let setSlangGroupContext: (groupLinesText: string) => void;
 
 beforeAll(async () => {
   if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix === 'undefined') {
@@ -138,6 +143,9 @@ beforeAll(async () => {
   normalizeJapaneseOcrNoiseForTranslation = appModule.normalizeJapaneseOcrNoiseForTranslation;
   normalizeKoreanOcrNoiseForTranslation = appModule.normalizeKoreanOcrNoiseForTranslation;
   normalizeSourceForTranslation = appModule.normalizeSourceForTranslation;
+  protectTranslationTokens = appModule.protectTranslationTokens;
+  restoreProtectedTokens = appModule.restoreProtectedTokens;
+  setSlangGroupContext = appModule.setSlangGroupContext;
 });
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
@@ -1654,11 +1662,184 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('BARBAR I AN', 'I\'VELOST MYVIRGINITY TOSOME BARBAR I AN', 'th')).toBe('ข้าสูญเสียความบริสุทธิ์ให้กับคนป่าเถื่อน'); // (จะถูกส่งเข้าแปลปกติเนื่องจากไม่ใช่ exact match คำเดี่ยว แต่ normalize จะแก้คำให้อ่านเป็น BARBARIAN ได้ถูกต้อง)
     expect(applyThaiConversationalGlossary('StOaaoP!', 'StOaaoP!', 'th')).toBe('หยุดดดดด!');
     expect(applyThaiConversationalGlossary('OH,OHHH', 'OH,OHHH', 'th')).toBe('OH,OHHH'); // (คำครางไม่มีสระ/สะกดแปลกจะปล่อยทับศัพท์เพื่อความถูกต้อง)
-    expect(applyThaiConversationalGlossary('MY HEART\'S BEING TORN BY THEIR COCKS!', 'MY HEART\'S BEING TORN BY THEIR COCKS!', 'th')).toBe('หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!');
+    expect(applyThaiConversationalGlossary('MY HEART\'S BEING TORN BY THEIR COCKS!', 'MY HEART\'S BEING TORN BY THEIR COCKS!', 'th')).toBe('หัวใจของฉันกำลังถูกฉีกกระชากด้วยควยของพวกมัน!');
     expect(applyThaiConversationalGlossary("HEART'S", "HEART'S", 'th')).toBe('หัวใจ');
     expect(applyThaiConversationalGlossary("HEART'S!", "HEART'S!", 'th')).toBe('หัวใจ!');
     expect(applyThaiConversationalGlossary("HEART’S...", "HEART’S...", 'th')).toBe('หัวใจ...');
     expect(applyThaiConversationalGlossary("HEART", "HEART", 'th')).toBe('หัวใจ');
+  });
+
+  test('maps individual slang lines using page context from store', () => {
+    // 1. Test DiE BY MY COCK! COME ON!!
+    useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
+      lines: [
+        { text: 'DiE', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
+        { text: 'BY MY', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
+        { text: 'COCK!', bbox: { x0: 0, y0: 20, x1: 10, y1: 30 }, confidence: 99, words: [] },
+        { text: 'COME', bbox: { x0: 0, y0: 30, x1: 10, y1: 40 }, confidence: 99, words: [] },
+        { text: 'ON!!', bbox: { x0: 0, y0: 40, x1: 10, y1: 50 }, confidence: 99, words: [] },
+      ],
+      words: [],
+      text: '',
+      confidence: 100,
+    });
+
+    expect(applyThaiConversationalGlossary('DiE', 'DiE', 'th')).toBe('ตายซะ');
+    expect(applyThaiConversationalGlossary('BY MY', 'BY MY', 'th')).toBe('ด้วย');
+    expect(applyThaiConversationalGlossary('COCK!', 'COCK!', 'th')).toBe('ไอ้จู๋ของฉัน!');
+    expect(applyThaiConversationalGlossary('COME', 'COME', 'th')).toBe('เร็วๆ');
+    expect(applyThaiConversationalGlossary('ON!!', 'ON!!', 'th')).toBe('เข้า!!');
+
+    // 2. Test HOW..? HOWDO...
+    useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
+      lines: [
+        { text: 'HOW..?', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
+        { text: 'HOWDO', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
+        { text: 'THEYKEEP', bbox: { x0: 0, y0: 20, x1: 10, y1: 30 }, confidence: 99, words: [] },
+        { text: 'MAKEING ME', bbox: { x0: 0, y0: 30, x1: 10, y1: 40 }, confidence: 99, words: [] },
+        { text: 'CUUUUM?', bbox: { x0: 0, y0: 40, x1: 10, y1: 50 }, confidence: 99, words: [] },
+      ],
+      words: [],
+      text: '',
+      confidence: 100,
+    });
+
+    expect(applyThaiConversationalGlossary('HOW..?', 'HOW..?', 'th')).toBe('ได้อย่างไร..?');
+    expect(applyThaiConversationalGlossary('HOWDO', 'HOWDO', 'th')).toBe('ทำไม');
+    expect(applyThaiConversationalGlossary('THEYKEEP', 'THEYKEEP', 'th')).toBe('พวกเขายัง');
+    expect(applyThaiConversationalGlossary('MAKEING ME', 'MAKEING ME', 'th')).toBe('ทำให้ฉัน');
+    expect(applyThaiConversationalGlossary('CUUUUM?', 'CUUUUM?', 'th')).toBe('น้ำแตกกกกได้อีก?');
+
+    // 3. Test MY HEART'S...
+    useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
+      lines: [
+        { text: 'MY', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
+        { text: 'HEART’S', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
+        { text: 'BEING', bbox: { x0: 0, y0: 20, x1: 10, y1: 30 }, confidence: 99, words: [] },
+        { text: 'TORN BY', bbox: { x0: 0, y0: 30, x1: 10, y1: 40 }, confidence: 99, words: [] },
+        { text: 'THEIR', bbox: { x0: 0, y0: 40, x1: 10, y1: 50 }, confidence: 99, words: [] },
+        { text: 'COCKS!', bbox: { x0: 0, y0: 50, x1: 10, y1: 60 }, confidence: 99, words: [] },
+      ],
+      words: [],
+      text: '',
+      confidence: 100,
+    });
+
+    expect(applyThaiConversationalGlossary('MY', 'MY', 'th')).toBe('หัวใจของฉัน');
+    expect(applyThaiConversationalGlossary('HEART’S', 'HEART’S', 'th')).toBe('กำลัง');
+    expect(applyThaiConversationalGlossary('BEING', 'BEING', 'th')).toBe('ถูก');
+    expect(applyThaiConversationalGlossary('TORN BY', 'TORN BY', 'th')).toBe('ฉีกกระชาก');
+    expect(applyThaiConversationalGlossary('THEIR', 'THEIR', 'th')).toBe('ด้วย');
+    expect(applyThaiConversationalGlossary('COCKS!', 'COCKS!', 'th')).toBe('ควยของพวกมัน!');
+
+    // 4. Test I'M SUCKING COCK...
+    useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
+      lines: [
+        { text: 'I’M', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
+        { text: 'SUCKING', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
+        { text: 'COCK AND', bbox: { x0: 0, y0: 20, x1: 10, y1: 30 }, confidence: 99, words: [] },
+        { text: 'GRUNTING', bbox: { x0: 0, y0: 30, x1: 10, y1: 40 }, confidence: 99, words: [] },
+        { text: 'LIKE A', bbox: { x0: 0, y0: 40, x1: 10, y1: 50 }, confidence: 99, words: [] },
+        { text: 'REAL PIG', bbox: { x0: 0, y0: 50, x1: 10, y1: 60 }, confidence: 99, words: [] },
+      ],
+      words: [],
+      text: '',
+      confidence: 100,
+    });
+
+    expect(applyThaiConversationalGlossary('I’M', 'I’M', 'th')).toBe('ฉัน');
+    expect(applyThaiConversationalGlossary('SUCKING', 'SUCKING', 'th')).toBe('กำลังดูด');
+    expect(applyThaiConversationalGlossary('COCK AND', 'COCK AND', 'th')).toBe('อวัยวะเพศชายและ');
+    expect(applyThaiConversationalGlossary('GRUNTING', 'GRUNTING', 'th')).toBe('คราง');
+    expect(applyThaiConversationalGlossary('LIKE A', 'LIKE A', 'th')).toBe('เหมือน');
+    expect(applyThaiConversationalGlossary('REAL PIG', 'REAL PIG', 'th')).toBe('หมูตัวจริง');
+
+    // Reset store
+    useOCRTextLayerStore.getState().setCurrentPageOCR(null);
+  });
+
+  test('maps individual slang lines using setSlangGroupContext (primary module-variable path)', () => {
+    // Verify that setting context via module variable (not store) correctly maps per-line slang
+    // This mimics what the translation pipeline does before processing each group's per-line retry
+
+    // 1. DiE BY MY COCK! COME ON!! group context
+    setSlangGroupContext("DiE BY MY COCK! COME ON!!");
+    expect(applyThaiConversationalGlossary('DiE', 'DiE', 'th')).toBe('ตายซะ');
+    expect(applyThaiConversationalGlossary('BY MY', 'BY MY', 'th')).toBe('ด้วย');
+    expect(applyThaiConversationalGlossary('COCK!', 'COCK!', 'th')).toBe('ไอ้จู๋ของฉัน!');
+    expect(applyThaiConversationalGlossary('COME', 'COME', 'th')).toBe('เร็วๆ');
+    expect(applyThaiConversationalGlossary('ON!!', 'ON!!', 'th')).toBe('เข้า!!');
+    setSlangGroupContext('');
+
+    // 2. MY HEART'S BEING TORN BY THEIR COCKS! group context
+    setSlangGroupContext("MY HEART'S BEING TORN BY THEIR COCKS!");
+    expect(applyThaiConversationalGlossary('MY', 'MY', 'th')).toBe('หัวใจของฉัน');
+    expect(applyThaiConversationalGlossary('BEING', 'BEING', 'th')).toBe('ถูก');
+    expect(applyThaiConversationalGlossary('TORN BY', 'TORN BY', 'th')).toBe('ฉีกกระชาก');
+    expect(applyThaiConversationalGlossary('THEIR', 'THEIR', 'th')).toBe('ด้วย');
+    expect(applyThaiConversationalGlossary('COCKS!', 'COCKS!', 'th')).toBe('ควยของพวกมัน!');
+    setSlangGroupContext('');
+
+    // 3. SHUP UP! context
+    setSlangGroupContext("SHUP UP! WE'VE ALWAYS WANTED TO FUCK THE SHIT OUTTA YOU, DUMB PRINCESS!!");
+    expect(applyThaiConversationalGlossary('SHUP', 'SHUP', 'th')).toBe('หุบปาก');
+    expect(applyThaiConversationalGlossary('UP!', 'UP!', 'th')).toBe('ซะ!');
+    expect(applyThaiConversationalGlossary('OUTTA', 'OUTTA', 'th')).toBe('เธอ');
+    expect(applyThaiConversationalGlossary('DUMB', 'DUMB', 'th')).toBe('อี');
+    expect(applyThaiConversationalGlossary('PRIN', 'PRIN', 'th')).toBe('เจ้าหญิง');
+    expect(applyThaiConversationalGlossary('CESS!!', 'CESS!!', 'th')).toBe('โง่!!');
+    setSlangGroupContext('');
+
+    // 4. HER PUSSY'S SO STINKY group context (per-line)
+    setSlangGroupContext("HER PuSSy's 6o STiNKY");
+    expect(applyThaiConversationalGlossary('STiNKY', 'STiNKY', 'th')).toBe('ตุๆ');
+    setSlangGroupContext('');
+  });
+  
+  test('maps slang, stuttering, and repeated letters ignoring punctuation correctly', () => {
+    expect(applyThaiConversationalGlossary('COCK!!', 'COCK!!', 'th')).toBe('ควย!!');
+    expect(applyThaiConversationalGlossary('cocks.', 'cocks.', 'th')).toBe('ควย.');
+    expect(applyThaiConversationalGlossary('pussy’s', 'pussy’s', 'th')).toBe('หี');
+    expect(applyThaiConversationalGlossary('cumming!', 'cumming!', 'th')).toBe('น้ำแตกแล้ว!');
+    expect(applyThaiConversationalGlossary('MEEEE!!', 'MEEEE!!', 'th')).toBe('ฉันนนนน!!');
+    expect(applyThaiConversationalGlossary('MEEE!', 'MEEE!', 'th')).toBe('ฉันนนน!');
+    expect(applyThaiConversationalGlossary('ME?', 'ME?', 'th')).toBe('ฉัน?');
+    expect(applyThaiConversationalGlossary('I-I..', 'I-I..', 'th')).toBe('ฉ-ฉัน..');
+    expect(applyThaiConversationalGlossary('I-I', 'I-I', 'th')).toBe('ฉ-ฉัน');
+    expect(applyThaiConversationalGlossary('I.. I..', 'I.. I..', 'th')).toBe('ฉ-ฉัน..');
+    expect(applyThaiConversationalGlossary('US THE', 'US THE', 'th')).toBe('พวกเรา');
+    // STiNKY standalone → ตุๆ
+    expect(applyThaiConversationalGlossary('STiNKY', 'STiNKY', 'th')).toBe('ตุๆ');
+    expect(applyThaiConversationalGlossary('STINKY', 'STINKY', 'th')).toBe('ตุๆ');
+    // HER PUSSY'S SO STINKY full sentence
+    expect(applyThaiConversationalGlossary("HER PUSSY'S SO STINKY", "HER PUSSY'S SO STINKY", 'th')).toBe('หีของเธอเหม็นตุมากเลย');
+    // die → ตายซะ (H-manga context)
+    expect(applyThaiConversationalGlossary('DiE', 'DiE', 'th')).toBe('ตายซะ');
+    expect(applyThaiConversationalGlossary('die', 'die', 'th')).toBe('ตายซะ');
   });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
@@ -1826,5 +2007,57 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
 
     getSpy.mockRestore();
     saveSpy.mockRestore();
+  });
+
+  describe('Custom Glossary & Location Proper Noun Protection', () => {
+    test('protects and restores glossary terms using linguistically neutral proper nouns', () => {
+      // Mock useGlossaryStore values
+      const mockEntries = [
+        { id: 'g1', sourceText: 'magic sword', targetText: 'ดาบเวทมนตร์', isActive: true },
+        { id: 'g2', sourceText: 'dark lord', targetText: 'จอมมาร', isActive: true },
+      ];
+      const getGlossarySpy = vi.spyOn(useGlossaryStore, 'getState').mockReturnValue({
+        entries: mockEntries,
+      } as any);
+
+      const sourceText = 'He wields a Magic Sword to defeat the Dark Lord.';
+      const protectedResult = protectTranslationTokens(sourceText, 'th');
+
+      // Check that the placeholders are chosen from the proper noun pool (e.g. name-like)
+      expect(protectedResult.protectedText).not.toContain('Magic Sword');
+      expect(protectedResult.protectedText).not.toContain('Dark Lord');
+      expect(protectedResult.replacements).toHaveLength(2);
+
+      const firstToken = protectedResult.replacements[0].token;
+      const secondToken = protectedResult.replacements[1].token;
+
+      // Expect proper nouns like Zara, Kira (Capitalized alphabetic words of length 3-6)
+      expect(firstToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+      expect(secondToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+
+      // Verify that restore works properly
+      const translatedText = `เขากวัดแกว่ง ${firstToken} เพื่อปราบ ${secondToken}.`;
+      const restored = restoreProtectedTokens(translatedText, protectedResult.replacements);
+      expect(restored).toBe('เขากวัดแกว่ง ดาบเวทมนตร์ เพื่อปราบ จอมมาร.');
+
+      getGlossarySpy.mockRestore();
+    });
+
+    test('protects location phrases with proper nouns without collision', () => {
+      const sourceText = 'York City, London Town.';
+      const protectedResult = protectTranslationTokens(sourceText, 'th');
+
+      expect(protectedResult.replacements).toHaveLength(2);
+      const firstToken = protectedResult.replacements[0].token;
+      const secondToken = protectedResult.replacements[1].token;
+
+      expect(firstToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+      expect(secondToken).toMatch(/^[A-Z][a-z]{3,5}$/);
+      expect(firstToken).not.toBe(secondToken);
+
+      const translated = `${firstToken}, ${secondToken}.`;
+      const restored = restoreProtectedTokens(translated, protectedResult.replacements);
+      expect(restored).toBe('เมือง York, เมือง London.');
+    });
   });
 });

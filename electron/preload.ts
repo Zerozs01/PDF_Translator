@@ -11,6 +11,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:save-ocr',
   'db:get-ocr',
   'db:clear-ocr',
+  'db:clear-document-cache',
   'db:get-latest-ocr',
   'db:get-ocr-cache-stats-for-document-ids',
   'db:save-translation-cache',
@@ -74,6 +75,13 @@ const ALLOWED_INVOKE_CHANNELS = [
   // PDF export
   'pdf-export:start',
   'pdf-export:cancel',
+  // Auth channels
+  'auth:check-status',
+  'auth:setup',
+  'auth:login',
+  'auth:auto-login',
+  'auth:hard-reset',
+  'auth:set-mode',
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -139,6 +147,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:get-ocr', { docId, pageNum, engine }),
     clearOCR: (docId: number, pageNum: number, engine?: string) =>
       safeInvoke('db:clear-ocr', { docId, pageNum, engine }),
+    clearDocumentCache: (docId: number) =>
+      safeInvoke('db:clear-document-cache', docId),
     getLatestOCR: (docId: number) =>
       safeInvoke('db:get-latest-ocr', { docId }),
     getOcrCacheStatsForDocumentIds: (documentIds: number[]) =>
@@ -356,6 +366,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on(channel, subscription);
       return () => ipcRenderer.removeListener(channel, subscription);
     },
+  },
+
+  auth: {
+    checkStatus: () => safeInvoke<{ isSetup: boolean; mode: string }>('auth:check-status'),
+    setup: (payload: { password: string; emergencyPin: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:setup', payload),
+    login: (payload: { password: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:login', payload),
+    autoLogin: () => safeInvoke<{ success: boolean; error?: string }>('auth:auto-login'),
+    hardReset: (payload: { emergencyPin: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:hard-reset', payload),
+    setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) =>
+      safeInvoke<{ success: boolean; error?: string }>('auth:set-mode', payload),
   },
 
   // Message handling (restricted to allowed channels)

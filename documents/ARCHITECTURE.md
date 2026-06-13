@@ -45,7 +45,7 @@ This document describes the architecture as implemented in the current working t
 
 ### Translation Cache
 
-- Version: `v47`
+- Version: `v48`
 - Key dimensions include:
   - OCR engine + OCR language
   - source language + target language
@@ -85,12 +85,13 @@ This reduces false drops for lines such as technical sentence fragments and numb
 
 ## 5. Translation Flow
 
-1. Collect translatable lines from OCR lines
-2. Skip ghost lines, but allow technical bypass for valid technical lines
-3. Build groups (`line-by-line`, `dense-dialogue`, or `default`)
-4. Translate by source-language buckets (`offline` or `ai`)
-5. Redistribute translated group text back to line indices
-6. Persist `translatedByIndex` and preview from cache aligned with OCR fingerprint
+1. **OCR Pre-processing & Alignment (UI & Background):** Before building groups or starting translation, the raw OCR results are normalized. Both the foreground UI and background queue (`BackgroundQueueProcessor`) run identical pre-processing via `splitAggressiveMergedLines` and `filterGhostOcrData` to ensure 100% layout and line index alignment (preventing Index Drift).
+2. **Collect & Synchronize Layers:** Collect translatable lines from OCR lines. In the UI, the Zustand layer store is checked for staleness and synchronously rebuilt using `buildLayerGroupsFromOCR` before proceeding.
+3. **Ghost Line Filtering:** Skip ghost lines, but allow technical bypass for valid technical lines.
+4. **Group Building:** Build groups (`line-by-line`, `dense-dialogue`, or `default`).
+5. **Batch Translation:** Translate by source-language buckets (`offline` or `ai`).
+6. **Redistribution:** Redistribute translated group text back to sequential line indices (`lineIdx`).
+7. **Persistence:** Persist `translatedByIndex` and preview from cache aligned with the OCR fingerprint.
 
 ## 6. Layer Store (Phase 3: Interactive Manipulation)
 
@@ -142,3 +143,11 @@ This reduces false drops for lines such as technical sentence fragments and numb
 - Renderer uses only preload-exposed API
 - DB/file/bridge execution stays in Electron main process
 - No direct Node API in renderer
+
+## 10. File-Specific OCR Options Persistence
+
+- **State Sync & Hydration**:
+  - `useProjectStore` tracks the currently active file and synchronizes with `useOCRTextLayerStore`'s active options.
+  - When loading a project (`loadProject`), the system retrieves the file-specific `language`, `engine`, and `ocrQualityProfile` configuration from `localStorage`.
+  - To prevent inconsistencies in production mode (where file path resolution might alter/alias the `filePath` to map compatible databases), the storage retrieval key (`fileKey`) is normalized to evaluate `get().filePath || resolvedPath || file.name`.
+  - Any changes to OCR options in `useOCRTextLayerStore` trigger a subscription sync that saves options into `localStorage` using the exact same active `filePath` from `useProjectStore`.

@@ -17,9 +17,7 @@ import {
   OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
 } from './ocr-timeout';
 
-// Static URL literals so Vite emits hashed worker chunks in production builds.
-const VISION_WORKER_BOOT_URL = new URL('./worker-boot.ts', import.meta.url);
-const VISION_WORKER_STABLE_URL = new URL('./worker-stable.ts', import.meta.url);
+
 
 const EXTERNAL_TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
 const EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX = /\b(?:table|continued|types?\s+of\s+connection|number\s+of\s+unknowns|reactions?|unknowns?|components?|couple\s+moment|magnitude|direction|resultant|smooth\s+pin|hinge|fixed\s+support|collar|rod|member\s+fixed|bridge|building|beam|welded|column)\b|^\(?\d+\)?$|^(?:fx|fy|fyt|f|m|or)$/i;
@@ -92,7 +90,7 @@ const normalizeExternalDedupText = (text: string): string =>
   String(text || '')
     .trim()
     .replace(/\s+/g, ' ')
-    .replace(/[.,!?;:'"`~^]+/g, '')
+    .replace(/[.,!?;:'"`~^_+]+/g, '')
     .replace(/[|¦│┃￨︱︲]+/g, '')
     .toUpperCase();
 
@@ -185,7 +183,7 @@ const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
 
 const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set([
   'I', 'IN', 'IT', 'IS', 'SO', 'OF', 'OH', 'WE', 'ME', 'UP', 'DO', 'GO', 'NO', 'BY', 'AT', 'IF', 'AN', 'OR', 'AS', 'AM', 'TO', 'HE', 'US', 'PIG', 'DIE', 'CUM', 'COCK',
-  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE'
+  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE', 'HUH', 'HA', 'HEY', 'HMM', 'AH', 'UH', 'UGH', 'YA'
 ]);
 
 const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
@@ -346,6 +344,7 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'LISTOCON',
   'ILISTOCON',
   'SO',
+  '6O',
   'DIE',
   'PIG',
   'CUM',
@@ -378,6 +377,8 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'LIKETHIS',
   'WASTOYED',
   'UPLOOKING',
+  'IS',
+  'USTHE',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {
@@ -443,12 +444,10 @@ class VisionService {
     // Stable mode loads worker-stable.ts directly.
     // NOTE: Each branch must use a string literal in new URL() so Vite can
     // emit separate worker chunks during production build.
-    const workerUrl = new URL(mode === 'stable' ? VISION_WORKER_STABLE_URL : VISION_WORKER_BOOT_URL);
-    workerUrl.searchParams.set('v', String(OCR_ALGORITHM_VERSION));
-    const worker = new Worker(workerUrl, {
-      type: 'module',
-    });
-    console.log(`[VisionService] Worker ${index} (${mode}) url=${workerUrl.toString()}`);
+    const worker = mode === 'stable'
+      ? new Worker(new URL('./worker-stable.ts', import.meta.url), { type: 'module' })
+      : new Worker(new URL('./worker-boot.ts', import.meta.url), { type: 'module' });
+    console.log(`[VisionService] Worker ${index} (${mode}) initialized.`);
     if (typeof this.workerCrashCounts[index] !== 'number') this.workerCrashCounts[index] = 0;
 
     worker.onmessage = (e) => {
@@ -925,10 +924,25 @@ class VisionService {
     const areaRatio = existingArea / candidateArea;
     const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
 
+    // Prevent merging distinct vertically-stacked lines of text (e.g. "PRINCESS" and "PRINCESS" on separate lines)
+    const isDistinctStackedLines = overlapY < 0.15 
+      && centerDeltaY >= minHeight * 0.85 
+      && (existingText.length <= 16 || candidateText.length <= 16);
+    if (isDistinctStackedLines) return false;
+
     const sameOrSubset = existingText === candidateText
       || existingText.includes(candidateText)
       || candidateText.includes(existingText);
     if (sameOrSubset) {
+      // Fast-path: exactTokenMatch ที่อยู่ใกล้กัน ให้ยุบรวมได้เลย
+      if (exactTokenMatch && existingText === candidateText) {
+        const isCloseProximity = (
+          iou >= 0.08
+          || (overlapY >= 0.08 && overlapX >= 0.08)
+          || (centerDeltaY <= Math.max(minHeight * 4.0, 100) && centerDeltaX <= Math.max(minWidth * 1.8, 120))
+        );
+        if (isCloseProximity) return true;
+      }
       const nearStackedBand = overlapY >= 0.02 || centerDeltaY <= minHeight * 1.35;
       const localStackedDuplicate = (
         exactTokenMatch
@@ -969,6 +983,7 @@ class VisionService {
         || looseSameOrSubsetSpatialMatch
       );
     }
+
 
     if (languageCodes.includes('kor')) {
       return false;
@@ -1912,7 +1927,7 @@ class VisionService {
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
 
       // ── Safety Gate: prevent filtering standard English dialogue lines ──
-      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE)\b/i.test(rawText);
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME)\b/i.test(rawText);
       if (hasKillOrOtherStandardWord) return true;
 
       // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")

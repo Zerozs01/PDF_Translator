@@ -21,6 +21,9 @@ export interface BackgroundJob {
   sourceLanguage?: string;  // ภาษาต้นทางสำหรับการแปล
   targetLanguage?: string;  // ภาษาปลายทางสำหรับการแปล
   translationMode?: TranslationMode; // โหมดแปลภาษา
+  ocrDpi?: number;
+  ocrPageSegMode?: number | null;
+  ocrQualityProfile?: 'fast' | 'balanced' | 'best';
 }
 
 interface BackgroundQueueState {

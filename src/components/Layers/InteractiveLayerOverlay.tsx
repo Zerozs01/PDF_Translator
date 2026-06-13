@@ -455,13 +455,15 @@ interface SelectionBoxProps {
   onDoubleClick: (layerId: string) => void;
   onHover: (layerId: string | null) => void;
   layout?: OverlayLayout;
+  /** true = layer ถูก suppress โดย overlay dedup (hidden) — แสดง style จางลงแต่ยังเลือกได้ */
+  isLayoutHidden?: boolean;
 }
 
 const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
-  onDoubleClick, onHover, layout,
+  onDoubleClick, onHover, layout, isLayoutHidden,
 }) => {
   const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
   const effectiveBBox = (layout && !layer.userEdited)
@@ -514,12 +516,14 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
         border: isRotating
           ? '2px solid #8B5CF6' // กำลังหมุน -> เส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? '2px dashed #3B82F6' // ได้รับการเลือก -> เส้นประสีน้ำเงินบางตาขึ้น
+            ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.55)' : '#3B82F6'}` // ได้รับการเลือก (suppress = สีม่วง, ปกติ = น้ำเงิน)
             : isBoxHovered
-              ? '1.5px dashed #F97316' // ชี้เมาส์โดน -> เส้นประสีส้ม
-              : showDebugOverlay
-                ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
-                : 'none',
+              ? `1.5px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.4)' : '#F97316'}` // hover (suppress = ม่วงจาง, ปกติ = ส้ม)
+              : isLayoutHidden
+                ? '0.5px dashed rgba(99,102,241,0.18)' // suppress โดย overlay dedup → เส้นประม่วงจางมาก บอกว่า "มีอยู่แต่ถูกซ่อน"
+                : showDebugOverlay
+                  ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
+                  : 'none',
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
@@ -701,6 +705,52 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
   const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
   const activeTool = useUIStore((state) => state.activeTool);
+  const zoom = useUIStore((state) => state.zoom || 1);
+
+  // Ref and state for Viewport Virtualization (Correct coordinate space + zoom scale)
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el || !isActive) return;
+    const parent = el.parentElement;
+    if (!parent) return;
+
+    const handleUpdate = () => {
+      const elRect = el.getBoundingClientRect();
+      const parentRect = parent.getBoundingClientRect();
+
+      // Viewport boundaries in local CSS coordinate space (divided by zoom scale)
+      const MARGIN = 400; // 400px margin to load layers ahead during scroll/drag
+      const x0 = (parentRect.left - elRect.left) / zoom - MARGIN;
+      const y0 = (parentRect.top - elRect.top) / zoom - MARGIN;
+      const x1 = (parentRect.left - elRect.left + parentRect.width) / zoom + MARGIN;
+      const y1 = (parentRect.top - elRect.top + parentRect.height) / zoom + MARGIN;
+
+      setViewport({ x0, y0, x1, y1 });
+    };
+
+    // Initial update
+    handleUpdate();
+
+    // Listen to scroll/resize events
+    parent.addEventListener('scroll', handleUpdate, { passive: true });
+    window.addEventListener('resize', handleUpdate, { passive: true });
+
+    // Use ResizeObserver to detect layout changes on zoom or pan
+    const resizeObserver = new ResizeObserver(() => {
+      handleUpdate();
+    });
+    resizeObserver.observe(el);
+    resizeObserver.observe(parent);
+
+    return () => {
+      parent.removeEventListener('scroll', handleUpdate);
+      window.removeEventListener('resize', handleUpdate);
+      resizeObserver.disconnect();
+    };
+  }, [ocrTransform, isActive, zoom]);
 
   // States for hiding other elements during resizing/rotation
   const [activeResizeDir, setActiveResizeDir] = useState<ResizeDirection | null>(null);
@@ -1082,15 +1132,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   // ── Render ────────────────────────────────────────────────────
   if (!isActive) return null;
 
-  // คำนวณขอบเขต Viewport ในการทำ Virtualization ด้วยสูตรคณิตศาสตร์ (Math-based, zero layout thrashing)
-  const MARGIN = 400;
-  const viewportX0 = -MARGIN;
-  const viewportY0 = -MARGIN;
-  const viewportX1 = window.innerWidth + MARGIN;
-  const viewportY1 = window.innerHeight + MARGIN;
-
   return (
     <div
+      ref={overlayRef}
       id="interactive-overlay"
       style={{
         position: 'absolute',
@@ -1109,9 +1153,15 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
         // คัดกรองและซ่อนเลเยอร์ที่ถูกสั่ง hidden จาก layout map (เนื่องจากถูกผสานกลุ่ม)
         const layout = layouts?.get(layer.lineIndex);
-        if (layout?.hidden) {
+        const isOcrLayer = layer.lineIndex >= 0 && !layer.id.startsWith('manual-');
+        // Layer ที่ไม่มีใน layout map และไม่ได้แก้ไขโดย user → ไม่ render (ยังไม่มีข้อมูลพอ) (เว้นแต่จะอยู่ในโหมด original OCR เพื่อให้ select/ขยับกล่องได้)
+        if (isOcrLayer && !layout && !layer.userEdited && translationPreviewMode !== 'original') {
           return null;
         }
+        // layout.hidden = true → layer ถูก suppress โดย overlay dedup
+        // ยังคง render SelectionBox เพื่อให้ user สามารถ select/interact ได้
+        // แต่จะแสดง style จางลงเพื่อบ่งบอกสถานะ suppress
+        const isLayoutHidden = layout?.hidden === true;
 
         // Viewport Virtualization check (Math-based, zero DOM metrics API overhead)
         const effectiveBBox = (layout && !layer.userEdited)
@@ -1119,12 +1169,15 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
           : layer.bbox;
         const screenBox = toScreen(effectiveBBox, ocrTransform);
         
-        const isVisible = (
-          screenBox.left + screenBox.width >= viewportX0 &&
-          screenBox.left <= viewportX1 &&
-          screenBox.top + screenBox.height >= viewportY0 &&
-          screenBox.top <= viewportY1
-        );
+        let isVisible = true;
+        if (viewport) {
+          isVisible = (
+            screenBox.left + screenBox.width >= viewport.x0 &&
+            screenBox.left <= viewport.x1 &&
+            screenBox.top + screenBox.height >= viewport.y0 &&
+            screenBox.top <= viewport.y1
+          );
+        }
 
         const isBoxSelected = selectedLayerIds.has(layer.id);
         const isEditing = editingLayerId === layer.id;
@@ -1171,6 +1224,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
                 onDoubleClick={handleDoubleClick}
                 onHover={setHoveredLayer}
                 layout={layout}
+                isLayoutHidden={isLayoutHidden}
               />
             )}
           </React.Fragment>

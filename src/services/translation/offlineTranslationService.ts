@@ -29,9 +29,11 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   // Pronouns
   'i': 'ฉัน', 'you': 'คุณ', 'he': 'เขา', 'she': 'เธอ',
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
-  'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา',
+  'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
   // Interjections / short responses
   'yes': 'ใช่', 'no': 'ไม่', 'ok': 'โอเค', 'okay': 'โอเค',
+  'sir': 'ท่าน', 'yes sir': 'ครับท่าน',
+  'quck': 'เร็ว', 'quick': 'เร็ว',
   'what': 'อะไร', 'why': 'ทำไม', 'how': 'อย่างไร', 'when': 'เมื่อไหร่',
   'where': 'ที่ไหน', 'who': 'ใคร', 'wait': 'รอก่อน', 'stop': 'หยุด',
   'go': 'ไป', 'run': 'วิ่ง', 'help': 'ช่วยด้วย', 'look': 'ดูสิ',
@@ -58,6 +60,9 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'good luck': 'โชคดี', 'well done': 'เยี่ยมมาก', 'nice job': 'ทำได้ดี',
   'im sorry': 'ฉันขอโทษ', 'excuse me': 'ขอโทษนะ', 'be careful': 'ระวังด้วย',
   'dont move': 'อย่าขยับ', 'is that so': 'หรือจริงเหรอ',
+  // Common manga/technical short terms
+  'unit': 'หน่วย', 'units': 'หน่วย', 'all units': 'ทุกหน่วย',
+  'charge': 'ชาร์จ', 'princess': 'เจ้าหญิง', 'of all of us': 'ของพวกเราทุกคน',
 };
 
 export const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
@@ -154,7 +159,27 @@ export async function translateBatchOffline(
     return normalizeSourceForTranslation(text, normalizedSource);
   };
 
-  const preparedTexts = texts.map((t) => {
+  // Short-circuit lookup for known short phrases to bypass NMT and prevent translation artifacts
+  const finalDirectTranslations = new Array<string>(texts.length).fill('');
+  const indicesToTranslate: number[] = [];
+  const textsToTranslate: string[] = [];
+
+  for (let i = 0; i < texts.length; i++) {
+    const originalText = texts[i] || '';
+    const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
+    if (lookupResult) {
+      finalDirectTranslations[i] = lookupResult;
+    } else {
+      indicesToTranslate.push(i);
+      textsToTranslate.push(originalText);
+    }
+  }
+
+  if (indicesToTranslate.length === 0) {
+    return finalDirectTranslations;
+  }
+
+  const preparedTexts = textsToTranslate.map((t) => {
     // Keep original case to improve NMT accuracy for English acronyms and proper nouns
     return normalizeOfflineSourceText(String(t || ''));
   });
@@ -186,6 +211,9 @@ export async function translateBatchOffline(
     sourceType: type,
     sourceLanguage: normalizedSource,
     targetLanguage: normalizedTarget,
+  }).catch((err) => {
+    console.error(`[translateBatchOffline] Direct translation call failed for ${normalizedSource}->${normalizedTarget}:`, err);
+    return new Array<string>(preparedTexts.length).fill('');
   });
 
   const pivotEnglishPromise = runPivotEnglish
@@ -194,30 +222,38 @@ export async function translateBatchOffline(
         sourceType: type,
         sourceLanguage: normalizedSource,
         targetLanguage: 'en',
+      }).catch((err) => {
+        console.error(`[translateBatchOffline] Pivot English translation call failed for ${normalizedSource}->en:`, err);
+        return new Array<string>(preparedTexts.length).fill('');
       })
     : Promise.resolve<string[]>([]);
 
-  const [directTranslations, pivotEnglish] = await Promise.all([
+  const [directResults, pivotEnglishResults] = await Promise.all([
     directPromise,
     pivotEnglishPromise,
   ]);
 
+  // Merge batch direct translations back
+  indicesToTranslate.forEach((originalIndex, batchIndex) => {
+    finalDirectTranslations[originalIndex] = directResults[batchIndex] || '';
+  });
+
   // Handle hybrid retry by batching the requests to reduce serial roundtrip IPC latency
-  const finalDirectTranslations = [...directTranslations];
   const retriesPending: Array<{ index: number; cleaned: string }> = [];
 
-  for (let i = 0; i < directTranslations.length; i++) {
-    const text = directTranslations[i] || '';
+  for (let i = 0; i < indicesToTranslate.length; i++) {
+    const originalIndex = indicesToTranslate[i];
+    const text = directResults[i] || '';
     const untranslated = isArgosUntranslated(text, normalizedTarget);
-    console.log(`[HybridRetry] i=${i} src="${preparedTexts[i]}" argosOut="${text}" untranslated=${untranslated}`);
+    console.log(`[HybridRetry] i=${originalIndex} src="${preparedTexts[i]}" argosOut="${text}" untranslated=${untranslated}`);
     if (!untranslated) continue;
 
-    const originalText = texts[i] ?? preparedTexts[i] ?? '';
+    const originalText = texts[originalIndex] ?? preparedTexts[i] ?? '';
 
     const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
     if (lookupResult) {
       console.log(`[HybridRetry] LOOKUP HIT: "${originalText}" → "${lookupResult}"`);
-      finalDirectTranslations[i] = lookupResult;
+      finalDirectTranslations[originalIndex] = lookupResult;
       continue;
     }
 
@@ -227,10 +263,10 @@ export async function translateBatchOffline(
       const cleanedLookup = normalizedTarget === 'th' ? lookupShortPhraseTh(cleaned) : null;
       if (cleanedLookup) {
         console.log(`[HybridRetry] CLEANED LOOKUP HIT: "${cleaned}" → "${cleanedLookup}"`);
-        finalDirectTranslations[i] = cleanedLookup;
+        finalDirectTranslations[originalIndex] = cleanedLookup;
         continue;
       }
-      retriesPending.push({ index: i, cleaned });
+      retriesPending.push({ index: originalIndex, cleaned });
     } else {
       console.log(`[HybridRetry] GAVE UP (no clean retry target): "${originalText}" → returning original Argos output`);
     }
@@ -257,7 +293,7 @@ export async function translateBatchOffline(
         }
       });
     } catch (_retryErr) {
-      console.warn('[HybridRetry] Batched retry error:', _retryErr);
+      console.error('[HybridRetry] Batched retry error:', _retryErr);
     }
   }
 
@@ -266,27 +302,35 @@ export async function translateBatchOffline(
   }
 
   try {
-    const pivotEnglishPrepared = pivotEnglish.map((line, index) => {
+    const pivotEnglishPrepared = pivotEnglishResults.map((line, i) => {
       const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
       if (normalizedPivot) return normalizedPivot;
-      return normalizeOfflineSourceText(String(texts[index] || ''));
+      const originalIndex = indicesToTranslate[i];
+      return normalizeOfflineSourceText(String(texts[originalIndex] || ''));
     });
-    const pivotThai = await offlineBatchBridge(pivotEnglishPrepared, {
+    const pivotThaiResults = await offlineBatchBridge(pivotEnglishPrepared, {
       mode,
       sourceType: type,
       sourceLanguage: 'en',
       targetLanguage: normalizedTarget,
     });
 
-    return texts.map((sourceText, index) => selectOfflinePivotCandidate(
-      String(sourceText || ''),
-      normalizedSource,
-      normalizedTarget,
-      String(finalDirectTranslations[index] || ''),
-      String(pivotThai[index] || '')
-    ));
+    indicesToTranslate.forEach((originalIndex, i) => {
+      const sourceText = texts[originalIndex] || '';
+      const directCandidate = finalDirectTranslations[originalIndex];
+      const pivotCandidate = pivotThaiResults[i] || '';
+      finalDirectTranslations[originalIndex] = selectOfflinePivotCandidate(
+        sourceText,
+        normalizedSource,
+        normalizedTarget,
+        directCandidate,
+        pivotCandidate
+      );
+    });
+
+    return finalDirectTranslations;
   } catch (error) {
-    console.warn(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
+    console.error(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
     return finalDirectTranslations;
   }
 }
@@ -306,6 +350,14 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const source = normalizeWhitespace(String(sourceText || ''));
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source || !translated) return false;
+
+  const compact = source.replace(/\s+/g, '');
+  const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
+  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+  if (isKnownShortWord) {
+    return false;
+  }
   
   // We check for scientific symbols or numbers
   const isScientificSymbolLikeLine = (val: string): boolean => {

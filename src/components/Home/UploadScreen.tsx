@@ -19,6 +19,7 @@ import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stor
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
+import { SecuritySettings } from '../Auth/SecuritySettings';
 
 type SidebarPage = 'home' | 'projects' | 'settings';
 
@@ -441,6 +442,8 @@ const DocumentCard = React.memo<{
   onCreateTag: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
+  isThumbnailHidden?: boolean;
+  onToggleHideThumbnail?: () => void;
 }>(({
   doc,
   viewMode,
@@ -459,9 +462,16 @@ const DocumentCard = React.memo<{
   onMoveToProject,
   onCreateTag,
   onDragStart,
-  onDragEnd
+  onDragEnd,
+  isThumbnailHidden = false,
+  onToggleHideThumbnail
 }) => {
-  const thumbnail = doc.thumbnail_path ? (
+  const thumbnail = isThumbnailHidden ? (
+    <div className="h-full w-full bg-[#f8fafc] border border-slate-200/80 shadow-inner flex flex-col items-center justify-center relative overflow-hidden group/paper">
+      <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1.2px,transparent_1.2px)] [background-size:12px_12px] opacity-35" />
+      <FileText size={viewMode === 'grid' ? 24 : 16} className="text-slate-400 relative z-10 animate-fade-in" />
+    </div>
+  ) : doc.thumbnail_path ? (
     <img src={doc.thumbnail_path} alt={doc.filename} className="h-full w-full object-cover" />
   ) : (
     <div className="text-slate-600">
@@ -492,7 +502,7 @@ const DocumentCard = React.memo<{
           onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
         }}
       >
-        <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5">
+        <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
           {thumbnail}
         </div>
         
@@ -502,8 +512,20 @@ const DocumentCard = React.memo<{
         </p>
         
         <button 
+          onClick={(e) => { e.stopPropagation(); onToggleHideThumbnail?.(); }}
+          className={`absolute top-2 left-2 p-1.5 rounded-lg transition-all z-10 ${
+            isThumbnailHidden 
+              ? 'bg-[#839958] text-white border border-[#839958] shadow-[0_0_8px_rgba(131,153,88,0.4)] opacity-100'
+              : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-slate-200'
+          }`}
+          title={isThumbnailHidden ? 'แสดงรูปภาพตัวอย่าง' : 'ซ่อนรูปภาพตัวอย่าง'}
+        >
+          {isThumbnailHidden ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
+
+        <button 
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-          className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all ${
+          className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all z-10 ${
             doc.is_favorite 
               ? 'bg-white/10 text-slate-100' 
               : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100'
@@ -567,6 +589,15 @@ const DocumentCard = React.memo<{
       <div className="text-xs text-slate-400 hidden md:block">
         {formatDate(doc.last_accessed)}
       </div>
+      <button 
+        onClick={(e) => { e.stopPropagation(); onToggleHideThumbnail?.(); }}
+        className={`p-1.5 rounded transition-all ${
+          isThumbnailHidden ? 'text-[#839958] bg-[#839958]/10' : 'text-slate-500 hover:text-slate-300'
+        }`}
+        title={isThumbnailHidden ? 'แสดงรูปภาพตัวอย่าง' : 'ซ่อนรูปภาพตัวอย่าง'}
+      >
+        {isThumbnailHidden ? <EyeOff size={14} /> : <Eye size={14} />}
+      </button>
       <button 
         onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
         className={`p-1.5 rounded transition-all ${
@@ -717,6 +748,28 @@ export const UploadScreen: React.FC = () => {
   } = useFileBrowserStore();
 
   const [isDragging, setIsDragging] = useState(false);
+  const [hiddenThumbnails, setHiddenThumbnails] = useState<Set<number>>(() => {
+    try {
+      const saved = localStorage.getItem('pdf_translator.hidden_thumbnails');
+      return saved ? new Set(JSON.parse(saved).map(Number)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const toggleHideThumbnail = useCallback((docId: number) => {
+    setHiddenThumbnails(prev => {
+      const next = new Set(prev);
+      if (next.has(docId)) {
+        next.delete(docId);
+      } else {
+        next.add(docId);
+      }
+      localStorage.setItem('pdf_translator.hidden_thumbnails', JSON.stringify(Array.from(next)));
+      return next;
+    });
+  }, []);
+
   const [activePage, setActivePage] = useState<SidebarPage>('home');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileOpenError, setFileOpenError] = useState<FileOpenErrorEntry | null>(null);
@@ -921,7 +974,7 @@ export const UploadScreen: React.FC = () => {
       
       // Create File object with path attached for database tracking
       const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
-      const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+      const file = new File([blob], doc.filename || result.name, { type: result.mimeType }) as File & { path: string };
       // Attach the filepath so loadProject can save to DB
       Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
       
@@ -1446,6 +1499,9 @@ export const UploadScreen: React.FC = () => {
                 )}
               </div>
 
+              {/* Security Settings */}
+              <SecuritySettings />
+
               {isThaiTargetLanguage && (
                 <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
                   <label className="text-[11px] font-semibold text-slate-300">Overlay Font</label>
@@ -1699,6 +1755,8 @@ export const UploadScreen: React.FC = () => {
                       setDraggedDocumentId(null);
                       setProjectDropTargetId(null);
                     }}
+                    isThumbnailHidden={hiddenThumbnails.has(doc.id)}
+                    onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
                   />
                 ))}
               </div>
@@ -1713,27 +1771,51 @@ export const UploadScreen: React.FC = () => {
                       Recent Files
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                      {documents.slice(0, 5).map(doc => (
-                        <button
-                          key={doc.id}
-                          onClick={() => handleOpenDocument(doc)}
-                          className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl"
-                        >
-                          <div className="h-14 w-10 overflow-hidden rounded-lg bg-[#111214]/90 border border-white/5 group-hover:border-white/10">
-                            {doc.thumbnail_path ? (
-                              <img src={doc.thumbnail_path} alt={doc.filename} className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center">
-                                {getFileIcon(doc.file_type)}
-                              </div>
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-slate-100 truncate">{doc.filename}</p>
-                            <p className="text-[10px] text-slate-400">{formatDate(doc.last_accessed)}</p>
-                          </div>
-                        </button>
-                      ))}
+                      {documents.slice(0, 5).map(doc => {
+                        const isHidden = hiddenThumbnails.has(doc.id);
+                        return (
+                          <button
+                            key={doc.id}
+                            onClick={() => handleOpenDocument(doc)}
+                            className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl relative"
+                          >
+                            <div className="h-14 w-10 overflow-hidden rounded-lg bg-[#111214]/90 border border-white/5 group-hover:border-white/10 flex items-center justify-center shrink-0 relative">
+                              {isHidden ? (
+                                <div className="h-full w-full bg-[#f8fafc] border border-slate-200 shadow-inner flex items-center justify-center relative overflow-hidden">
+                                  <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:6px_6px] opacity-25" />
+                                  <FileText size={14} className="text-slate-300 relative z-10" />
+                                </div>
+                              ) : doc.thumbnail_path ? (
+                                <img src={doc.thumbnail_path} alt={doc.filename} className="h-full w-full object-cover" />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center">
+                                  {getFileIcon(doc.file_type)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-slate-100 truncate">{doc.filename}</p>
+                              <p className="text-[10px] text-slate-400">{formatDate(doc.last_accessed)}</p>
+                            </div>
+                            
+                            {/* Toggle Button for Privacy on hover */}
+                            <button 
+                              onClick={(e) => { 
+                                e.stopPropagation(); 
+                                toggleHideThumbnail(doc.id); 
+                              }}
+                              className={`absolute top-2 right-2 p-1 rounded-md transition-all z-10 ${
+                                isHidden 
+                                  ? 'bg-[#839958] text-white border border-[#839958]' 
+                                  : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-slate-200'
+                              }`}
+                              title={isHidden ? 'แสดงรูปภาพตัวอย่าง' : 'ซ่อนรูปภาพตัวอย่าง'}
+                            >
+                              {isHidden ? <EyeOff size={10} /> : <Eye size={10} />}
+                            </button>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

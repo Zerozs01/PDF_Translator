@@ -5,10 +5,15 @@ import os from 'os';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
+declare const __DEV_PROJECT_ROOT__: string | undefined;
+
 // Load local .env file from project root if it exists
 function loadLocalEnv() {
   try {
-    const envPath = path.join(app.getAppPath(), '.env');
+    let envPath = path.join(app.getAppPath(), '.env');
+    if (!fs.existsSync(envPath) && typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
+      envPath = path.join(__DEV_PROJECT_ROOT__, '.env');
+    }
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split(/\r?\n/)) {
@@ -190,7 +195,12 @@ function findLocalPythonExecutable(roots: Array<string | null | undefined>): str
     : ['bin', 'python'];
   const seen = new Set<string>();
 
-  for (const root of roots) {
+  const searchRoots = [...roots];
+  if (typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
+    searchRoots.push(__DEV_PROJECT_ROOT__);
+  }
+
+  for (const root of searchRoots) {
     if (!root) continue;
     const resolvedRoot = path.resolve(root);
     if (seen.has(resolvedRoot)) continue;
@@ -222,8 +232,11 @@ function resolvePythonExecutable(engine: ExternalBridgeEngine): string {
     path.resolve(app.getAppPath(), '..'),
     path.resolve(__dirname, '..'),
     path.dirname(process.execPath),
+    path.resolve(path.dirname(process.execPath), '..'),
+    path.resolve(path.dirname(process.execPath), '../..'),
     process.resourcesPath,
     process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
+    process.env.PORTABLE_EXECUTABLE_DIR,
   ]);
   if (localVenvPython) return localVenvPython;
 

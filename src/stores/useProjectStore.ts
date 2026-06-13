@@ -333,15 +333,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }
 
-    // เรียกคืนภาษา OCR ล่าสุดของไฟล์นี้
-    const fileKey = resolvedPath || file.name;
+    // เรียกคืนการตั้งค่า OCR ล่าสุดของไฟล์นี้
+    const fileKey = get().filePath || resolvedPath || file.name;
     let savedOcrLang = 'eng';
+    let savedOcrEngine = 'paddleocr';
+    let savedOcrQualityProfile = 'fast';
     try {
       savedOcrLang = localStorage.getItem(`pdf_translator.ocr_lang.${fileKey}`) || 'eng';
+      savedOcrEngine = localStorage.getItem(`pdf_translator.ocr_engine.${fileKey}`) || 'paddleocr';
+      savedOcrQualityProfile = localStorage.getItem(`pdf_translator.ocr_quality_profile.${fileKey}`) || 'fast';
     } catch (e) {
-      console.warn('[Storage] Failed to read OCR language:', e);
+      console.warn('[Storage] Failed to read OCR options:', e);
     }
-    useOCRTextLayerStore.getState().setOptions({ language: savedOcrLang });
+    useOCRTextLayerStore.getState().setOptions({ 
+      language: savedOcrLang,
+      engine: savedOcrEngine as any,
+      ocrQualityProfile: savedOcrQualityProfile as any
+    });
   },
 
   ensureDocumentId: async () => {
@@ -501,27 +509,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   }))
 }));
 
-// Subscribe to ocrLanguage (options.language) changes in OCRTextLayerStore to prevent targetLanguage conflict
+// Subscribe to OCR options changes in OCRTextLayerStore to persist them per file and prevent targetLanguage conflicts
 useOCRTextLayerStore.subscribe((state) => {
-  const ocrLang = state.options?.language;
-  if (ocrLang) {
-    // บันทึกภาษา OCR ล่าสุดของไฟล์นี้ลง localStorage
+  const options = state.options;
+  if (options) {
     const { filePath, fileName } = useProjectStore.getState();
     const fileKey = filePath || fileName;
     if (fileKey) {
       try {
-        localStorage.setItem(`pdf_translator.ocr_lang.${fileKey}`, ocrLang);
+        if (options.language) {
+          localStorage.setItem(`pdf_translator.ocr_lang.${fileKey}`, options.language);
+        }
+        if (options.engine) {
+          localStorage.setItem(`pdf_translator.ocr_engine.${fileKey}`, options.engine);
+        }
+        if (options.ocrQualityProfile) {
+          localStorage.setItem(`pdf_translator.ocr_quality_profile.${fileKey}`, options.ocrQualityProfile);
+        }
       } catch (e) {
-        console.warn('[Storage] Failed to save OCR language:', e);
+        console.warn('[Storage] Failed to save OCR options:', e);
       }
     }
 
-    const isThaiOcr = ocrLang.split('+').some(lang => lang.trim().toLowerCase() === 'tha' || lang.trim().toLowerCase() === 'thai');
-    if (isThaiOcr) {
-      const currentTarget = useProjectStore.getState().targetLanguage;
-      if (currentTarget === 'th' || currentTarget === 'thai') {
-        // Automatically switch destination/target language to English ('en') to prevent conflict
-        useProjectStore.getState().setTargetLanguage('en');
+    const ocrLang = options.language;
+    if (ocrLang) {
+      const isThaiOcr = ocrLang.split('+').some(lang => lang.trim().toLowerCase() === 'tha' || lang.trim().toLowerCase() === 'thai');
+      if (isThaiOcr) {
+        const currentTarget = useProjectStore.getState().targetLanguage;
+        if (currentTarget === 'th' || currentTarget === 'thai') {
+          // Automatically switch destination/target language to English ('en') to prevent conflict
+          useProjectStore.getState().setTargetLanguage('en');
+        }
       }
     }
   }

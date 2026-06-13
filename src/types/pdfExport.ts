@@ -2,6 +2,16 @@ import type { OCRPageResult } from './index';
 import type { TextLayer } from './layers';
 import type { OverlayLayoutProfile } from '../components/OCR/translationOverlayUtils';
 
+/** สีของแต่ละ line ที่ sample จากรูปต้นฉบับก่อน export — ส่งมาจาก renderer หลัก */
+export type ExportOverlayPaletteEntry = {
+  index: number;
+  backgroundColor: string;
+  textColor: string;
+  textStrokeWidth?: number;
+  textStrokeColor?: string;
+  textFillWeight?: number;
+};
+
 export type PdfPrintExportFileType = 'pdf' | 'image';
 
 export type PdfPrintExportPageConfig = {
@@ -17,6 +27,8 @@ export type PdfPrintExportPageConfig = {
   /** PDF page size in points — filled by Main before print. */
   pageWidthPt?: number;
   pageHeightPt?: number;
+  /** สีพื้นหลัง/ข้อความของแต่ละ line ที่ sample จากรูปต้นฉบับ */
+  paletteByIndex?: ExportOverlayPaletteEntry[];
 };
 
 export type PdfPrintExportJob = {

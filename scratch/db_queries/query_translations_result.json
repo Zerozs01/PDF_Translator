@@ -1,0 +1,25 @@
+{
+  "latest_document": {
+    "id": 365,
+    "filename": "Paradise Finish.pdf",
+    "filepath": "C:\\Users\\auand\\AppData\\Roaming\\pdf_translator\\imports\\f2f805ee8083892eba5afd0a.pdf"
+  },
+  "ocr_cache": [
+    {
+      "page_number": 1,
+      "ocr_engine": "paddleocr",
+      "len": 21451
+    }
+  ],
+  "translation_cache": [
+    {
+      "page_number": 1,
+      "cache_key": "ver:v47|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:adaptive|translator:offline",
+      "translator_engine": "offline",
+      "line_count": 27,
+      "group_count": 7,
+      "len": 267,
+      "translated_text": "ไป Kruda 14 (14)\nนายต้องการ\nจะบอกอะไร\nฉัน?แค่\nเข้าประเด็น\nมิตกี\nฟูจิวาระc14\nจากที่\nข้าได้ยิน\nมาท่าน\nไม่มีแฟน\nเริ่มวัน\nที่เธอจะ\nเป็นแฟนฉันของฉัน\nผมไม่\nสนใจพวก\nอันธพาลอย่าง\nพวกคุณที่\nคิดว่าตัวเอง\nจะแตะต้อง\nผู้หญิงคน\nไหนก็ได้\nแล้วก็\nกลิ่น\nบุหรี่ก็\nเหม็นไปด้วยน่า\nขยะแขยง"
+    }
+  ]
+}

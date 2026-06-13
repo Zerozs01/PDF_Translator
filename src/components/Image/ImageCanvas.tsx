@@ -42,7 +42,15 @@ const shouldUseDocumentCoverageFallback = (sourceText: string): boolean => {
 const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
   const source = normalizeOverlayInlineText(String(sourceText || ''));
   const translated = normalizeOverlayInlineText(String(translatedText || ''));
-  return Boolean(source && translated && source === translated);
+  if (Boolean(source && translated && source === translated)) return true;
+
+  const sourceKey = String(sourceText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  const translatedKey = String(translatedText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  return Boolean(sourceKey && translatedKey && sourceKey === translatedKey);
 };
 
 const clampOverlayTypographyScale = (value: number): number => {
@@ -648,10 +656,10 @@ export const ImageCanvas: React.FC = React.memo(() => {
                   const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrScaleY);
                   const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
                   const expansion = resolveOverlayMaskExpansion(line);
-                  const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
-                  const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
-                  const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
-                  const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
+                  const mergedMaskBoost = 0;
+                  const comicMaskBoostX = 0;
+                  const comicMaskBoostTop = 0;
+                  const comicMaskBoostBottom = 0;
                   const maskExpandX = Math.min(
                     expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
                     Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
@@ -670,10 +678,11 @@ export const ImageCanvas: React.FC = React.memo(() => {
                     expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
                     Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
                   );
-                  const rawMaskLeft = maskRenderSourceLeft * ocrScaleX - maskExpandLeft;
-                  const rawMaskTop = maskBbox.y0 * ocrScaleY - maskExpandTop;
-                  const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
-                  const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
+                  const maskBleed = 2.5; // ถมสีกว้างกว่า border area เล็กน้อยเพื่อไม่ให้เหลือเศษตัวอักษรเดิม
+                  const rawMaskLeft = maskRenderSourceLeft * ocrScaleX - maskExpandLeft - maskBleed;
+                  const rawMaskTop = maskBbox.y0 * ocrScaleY - maskExpandTop - maskBleed;
+                  const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight + (maskBleed * 2);
+                  const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom + (maskBleed * 2);
                   const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
                     x0: 0,
                     y0: 0,

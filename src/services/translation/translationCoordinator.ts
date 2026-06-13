@@ -249,9 +249,16 @@ export class TranslationCoordinator {
 
     const results: TranslationResult[] = [];
 
+
     // 1.5 ลองดึงข้อมูลคำแปลจากระบบแคชประโยค (Sentence-level cache) ข้ามการประมวลผลเอนจินหลัก
+    // หมายเหตุ: SFX items ข้าม cache เสมอ เพื่อให้ SFX Dictionary ทำงานได้โดยตรง
+    // (ป้องกันกรณี cache มีคำแปลผิดๆ จาก Argos เช่น "Fwsshhh" → "นกกระจอก")
     const cachedLookup = await Promise.all(
       activeItems.map(async (item) => {
+        // SFX items: ข้าม cache ทุกกรณี ให้ Engine.translate() จัดการผ่าน SFX Dict
+        if (item.groupType === 'sfx') {
+          return { item, cachedText: null };
+        }
         try {
           const cachedText = await dbService.getSentenceTranslation(
             item.text,
@@ -267,6 +274,7 @@ export class TranslationCoordinator {
         }
       })
     );
+
 
     const cachedItems: { item: TranslatableItem; cachedText: string }[] = [];
     const uncachedItems: TranslatableItem[] = [];
@@ -304,6 +312,23 @@ export class TranslationCoordinator {
       if (sourceLen > 15 && resultLen < 4) return true; // collapsed to almost nothing
       const resultHasOnlyDots = /^[\s.·•\-_]+$/.test(trimmed);
       if (resultHasOnlyDots && sourceLen > 5) return true;
+
+      // Case 4: CJK boilerplate translation hallucinations (e.g. "เกี่ยวกับเรา", "เงื่อนไขการบริการ", etc.)
+      const isCjkSource = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(sourceText);
+      const isActualBoilerplateSource = /회사\s*소개|이용\s*약관|개인정보|서비스\s*약관/.test(sourceText);
+      if (isCjkSource && !isActualBoilerplateSource) {
+        const boilerplateTerms = [
+          'เกี่ยวกับเรา',
+          'เงื่อนไขการบริการ',
+          'นโยบายความเป็นส่วนตัว',
+          'ข้อตกลงในการให้บริการ',
+          'ผมตกลงในเงื่อนไข',
+          'ฉันตกลงในเงื่อนไข',
+          'ข้อมูลส่วนบุคคล'
+        ];
+        const hasBoilerplate = boilerplateTerms.some(term => trimmed.includes(term));
+        if (hasBoilerplate) return true;
+      }
 
       return false;
     };

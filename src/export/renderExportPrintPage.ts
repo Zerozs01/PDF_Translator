@@ -1,5 +1,6 @@
 import type { PdfPrintExportPageConfig } from '../types/pdfExport';
 import type { OCRLine } from '../types';
+import type { TextLayer } from '../types/layers';
 import {
   DEFAULT_OVERLAY_PALETTE,
   clampOverlayRect,
@@ -22,8 +23,39 @@ import { normalizeWhitespace } from '../services/ocr/ocrTextNormalizer';
 const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
   const source = normalizeOverlayInlineText(String(sourceText || ''));
   const translated = normalizeOverlayInlineText(String(translatedText || ''));
-  return Boolean(source && translated && source === translated);
+  if (Boolean(source && translated && source === translated)) return true;
+
+  const sourceKey = String(sourceText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  const translatedKey = String(translatedText || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
+  return Boolean(sourceKey && translatedKey && sourceKey === translatedKey);
 };
+
+export const resolveExportLineText = (
+  line: OCRLine,
+  index: number,
+  pageConfig: PdfPrintExportPageConfig,
+  translatedByIndex: Map<number, string>
+): string | undefined => {
+  const layer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible);
+  if (layer) {
+    const normalizedLayerText = normalizeWhitespace(String(layer.text || ''));
+    const normalizedSourceText = normalizeWhitespace(String(layer.sourceText || line.text || ''));
+    const hasTranslation = layer.userEdited || (normalizedLayerText && normalizedLayerText !== normalizedSourceText);
+    const translatedText = translatedByIndex.get(index);
+    if (hasTranslation) {
+      return normalizedLayerText || translatedText;
+    }
+    return translatedText ?? (normalizedLayerText || line.text);
+  }
+  return translatedByIndex.get(index) || line.text;
+};
+
+const isLineHiddenByLayer = (pageConfig: PdfPrintExportPageConfig, index: number): boolean =>
+  pageConfig.pageLayers.some((entry) => entry.lineIndex === index && !entry.visible);
 
 type LayoutDimensions = {
   pageWidthPt: number;
@@ -64,15 +96,17 @@ const buildOverlayLayoutInputs = (
 
   return computeOverlayLayoutMap(
     pageConfig.sourceOCR.lines.flatMap((line, index) => {
-      const translatedText = translatedByIndex.get(index);
+      if (isLineHiddenByLayer(pageConfig, index)) return [];
+      const lineLayer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible);
+      const translatedText = resolveExportLineText(line, index, pageConfig, translatedByIndex);
       if (!translatedText) return [];
       const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-      if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
-      if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, pageConfig.targetLanguage) && !sourceFallbackOverlay) {
+      if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
+      if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, pageConfig.targetLanguage) && !sourceFallbackOverlay) {
         return [];
       }
 
-      const layer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index);
+      const layer = lineLayer;
       const sourceBbox = resolveOverlaySourceBBox(line);
       const maskBbox = resolveOverlayMaskBBox(line);
       const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
@@ -124,14 +158,20 @@ const appendAutoOverlayElements = (
   const deletedIndexes = new Set(pageConfig.deletedLineIndexes);
   const overlayLayout = buildOverlayLayoutInputs(pageConfig, layout);
   const pageBounds = { x0: 0, y0: 0, x1: pageWidthPt, y1: pageHeightPt };
+  // Build palette map — ใช้สีที่ sample จากรูปต้นฉบับแทนสีขาว default
+  const paletteMap = new Map(
+    (pageConfig.paletteByIndex ?? []).map((p) => [p.index, p])
+  );
 
   sourceOCR.lines.forEach((line: OCRLine, index: number) => {
     if (deletedIndexes.has(index)) return;
-    const translatedText = translatedByIndex.get(index);
+    if (isLineHiddenByLayer(pageConfig, index)) return;
+    const lineLayer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible);
+    const translatedText = resolveExportLineText(line, index, pageConfig, translatedByIndex);
     if (!translatedText) return;
     const sourceFallback = isSourceFallbackOverlayText(line.text, translatedText);
-    if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallback) return;
-    if (shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallback) return;
+    if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallback) return;
+    if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallback) return;
 
     const matchLayer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible && entry.userEdited);
     if (matchLayer) return;
@@ -140,7 +180,7 @@ const appendAutoOverlayElements = (
     const isMaskOnly = Boolean(layoutEntry?.hidden);
     if (isMaskOnly && !layoutEntry?.preserveMaskWhenHidden) return;
 
-    const renderText = layoutEntry?.renderText || translatedText;
+    const renderText = layoutEntry?.renderText !== undefined ? layoutEntry.renderText : translatedText;
     const effectiveProfile = layoutEntry?.effectiveProfile || overlayLayoutProfile;
     const styleKind = layoutEntry?.styleKind;
     const isDocLike = styleKind
@@ -178,15 +218,16 @@ const appendAutoOverlayElements = (
       expansion.maxExpandBottom * sy + mBoost + 2 * sy,
       Math.max(1, Math.round(mBH * expansion.expandBottomRatio)) + mBoost + 2 * sy
     );
+    const maskBleed = 2.0; // ถมสีกว้างกว่า border area เล็กน้อยในหน่วย pt เพื่อความมิดชิดของข้อความเดิม
     const maskRect = clampOverlayRect(
-      mrkLeft * sx - mExpL,
-      maskBbox.y0 * sy - mExpTop,
-      mBW + mExpL + mExpR,
-      mBH + mExpTop + mExpBot,
+      mrkLeft * sx - mExpL - maskBleed,
+      maskBbox.y0 * sy - mExpTop - maskBleed,
+      mBW + mExpL + mExpR + (maskBleed * 2),
+      mBH + mExpTop + mExpBot + (maskBleed * 2),
       pageBounds
     );
 
-    const palette = DEFAULT_OVERLAY_PALETTE;
+    const palette = paletteMap.get(index) ?? DEFAULT_OVERLAY_PALETTE;
     const maskEl = document.createElement('div');
     maskEl.className = 'export-mask';
     maskEl.style.left = `${maskRect.left}pt`;

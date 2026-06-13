@@ -30,6 +30,11 @@
   3. ตรวจสอบ [PdfPrintExportService.ts](file:///c:/App/Electron/PDF_Translator/src/services/pdf/PdfPrintExportService.ts) (ใช้ `sourceFilePath` ก่อน, fallback เป็น raw bytes)
   4. ตรวจสอบ [renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts) (DOM overlay + `@media print` zero margin)
 
+* **โจทย์ "แอปพลิเคชันไม่ยอมเปิด / ติดล็อกอิน / บั๊กความปลอดภัย / รีเซ็ตระบบ":**
+  1. ตรวจสอบ [authService.ts](file:///c:/App/Electron/PDF_Translator/electron/authService.ts) (ระบบ Hash, Salt และ safeStorage)
+  2. ตรวจสอบ [AuthGuard.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/AuthGuard.tsx) (ดักและปิดกั้น UI ทั้งหมดก่อนปลดล็อกสำเร็จ)
+  3. ตรวจสอบ [useAuthStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useAuthStore.ts) และ IPC Handles ใน [main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) (ช่องทางสื่อสารปลดล็อก/สลับโหมด/รีเซ็ตระบบ)
+
 ---
 
 ## 🗺️ Project Structure Index
@@ -45,13 +50,20 @@
 - **Glossary UI Panel:**
   - [src/components/Layout/GlossarySidebarPanel.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layout/GlossarySidebarPanel.tsx) — หน้าจอด้านข้าง (Sidebar Panel) สำหรับจัดการคำเฉพาะพจนานุกรม
   - [src/components/Layout/LeftSidebar.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layout/LeftSidebar.tsx) — แถบเมนูด้านซ้ายที่ผูกแผงควบคุมหลักรวมถึง Glossary Panel
+- **Security & Authentication UI:**
+  - [src/components/Auth/AuthGuard.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/AuthGuard.tsx) — ตัวควบคุมปิดกั้นการเรนเดอร์แอปหลักก่อนการ Unlock
+  - [src/components/Auth/SetupScreen.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/SetupScreen.tsx) — หน้าตั้งรหัสผ่านหลักและรหัส PIN รีเซ็ตระบบครั้งแรก
+  - [src/components/Auth/LoginScreen.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/LoginScreen.tsx) — หน้าจอป้อนรหัสผ่านปลดล็อกและทางเข้ารีเซ็ตระบบ
+  - [src/components/Auth/EmergencyModal.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/EmergencyModal.tsx) — ป๊อปอัปกรอก PIN ยืนยันเพื่อกู้คืน/รีเซ็ตระบบ
+  - [src/components/Auth/SecuritySettings.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/SecuritySettings.tsx) — วิดเจ็ตตั้งค่าเปลี่ยนแอปโหมด (Relax vs Security) ในหน้า Settings หลัก
 
 ### 2. Electron Core (Main Process)
 - **IPC Main Handler:** [electron/main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) — จัดการการสื่อสารระหว่าง Renderer และ Main process
 - **PDF Print Export (Level 2):** [electron/pdfExportService.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportService.ts) — Hidden Window พิมพ์เฉพาะ overlay โปร่งใส → [pdfExportMerge.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportMerge.ts) stamp ทับ Source PDF ด้วย `pdf-lib`
 - **Preload API Wrapper:** [electron/preload.ts](file:///c:/App/Electron/PDF_Translator/electron/preload.ts) — กำหนด API ปลอดภัยที่อนุญาตให้ Renderer เรียกใช้งานระบบได้
-- **Local SQLite Database Layer:** [electron/db.ts](file:///c:/App/Electron/PDF_Translator/electron/db.ts) — จัดการการเชื่อมต่อ จัดเก็บแคช OCR และคำแปล
+- **Local SQLite Database Layer:** [electron/db.ts](file:///c:/App/Electron/PDF_Translator/electron/db.ts) — จัดการเชื่อมต่อเข้ารหัส SQLCipher, แคช OCR และคำแปล
 - **IPC Files Access Bridge:** [electron/documentFileAccess.ts](file:///c:/App/Electron/PDF_Translator/electron/documentFileAccess.ts) — จัดการการอ่านเขียนไฟล์ผ่าน IPC (รวมถึงฟังก์ชัน zero-copy path สำหรับการ import ไฟล์ขนาดใหญ่)
+- **Local Cryptography & safeStorage:** [electron/authService.ts](file:///c:/App/Electron/PDF_Translator/electron/authService.ts) — จัดการ Hash PBKDF2, จัดเก็บค่า Config และเข้ารหัส OS Keychain (Relax Mode)
 
 ### 3. OCR Engine & Processing Pipelines
 - **OCR Electron Bridge:** [electron/ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) — สื่อสารประสานงานระบบ OCR ฝั่ง Main Process
@@ -69,6 +81,7 @@
 - **OCR Text Layer Store:** [src/stores/useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts) — จัดการแคช OCR และแคชคำแปลในแต่หน้าและแต่ละโมเดล
 - **Layer Control Store:** [src/stores/useLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useLayerStore.ts) — ควบคุมการแก้ไขสไตล์, ขนาด, และพิกัดตำแหน่งของกล่องข้อความ
 - **Project Store:** [src/stores/useProjectStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useProjectStore.ts) — จัดการข้อมูลโปรเจกต์และไฟล์ PDF ปัจจุบัน
+- **Security & Authentication Store:** [src/stores/useAuthStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useAuthStore.ts) — จัดการสถานะ Unlock, โหมดความปลอดภัยของแอป และเชื่อมต่อ IPC API คีย์หลักของระบบ
 
 ---
 
@@ -105,12 +118,15 @@
 
 ## ✅ Document Sync Notes (บันทึกการปรับปรุงเอกสาร)
 
-เอกสารทั้งหมดได้รับการตรวจสอบและปรับปรุงให้ตรงกับโค้ดปัจจุบันในวันที่ 2026-06-11:
+เอกสารทั้งหมดได้รับการตรวจสอบและปรับปรุงให้ตรงกับโค้ดปัจจุบันในวันที่ 2026-06-13:
 
 1. **`OCR_ALGORITHM_VERSION`:** ปรับปรุงใน [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L41) ให้เป็นเวอร์ชันปัจจุบันคือ `214` ตรงกับ [ocrVersion.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/ocrVersion.ts#L1)
-2. **`OCR_TRANSLATION_CACHE_VERSION`:** ปรับปรุงใน [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L48) ให้เป็นเวอร์ชันปัจจุบันคือ `'v47'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L42)
+2. **`OCR_TRANSLATION_CACHE_VERSION`:** ปรับปรุงใน [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L48) ให้เป็นเวอร์ชันปัจจุบันคือ `'v48'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L42)
 3. **`Custom Glossary` System:** เพิ่มรายละเอียดของ `useGlossaryStore.ts` และ `GlossarySidebarPanel.tsx` ในโครงสร้างสถาปัตยกรรมของ [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md) เรียบร้อยแล้ว
 4. **Roadmap Progress (P4 & P5):** อัปเดตสถานะของ P4 (Performance) และ P5 (Glossary Pipeline Integration) ใน [Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) เป็น **Completed** เรียบร้อยแล้ว
+5. **Phase 7 Advanced Local Security:** อัปเดตสัญญาระบบความปลอดภัยแบบ Secure-by-default, การเข้ารหัส DB ด้วย SQLCipher (`better-sqlite3-multiple-ciphers`), ระบบ Offline Setup/Login, Relax (Keychain) vs Security App Modes และ Reset System wipe data ลงใน manifest นี้แล้วในวันที่ 2026-06-12
+6. **All Pages / Background Queue Alignment:** อัปเดตเอกสารสถาปัตยกรรมการแปลและการจัดกลุ่ม เพิ่มรายละเอียดการผูกฟังก์ชัน `splitAggressiveMergedLines` และ `filterGhostOcrData` ใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) เพื่อแก้ไขปัญหาคำแปลเหลื่อมดัชนี (Index Drift) เมื่อแปลในแบบ Background / All Pages ในวันที่ 2026-06-13
+7. **OCR Model Profile Persistence Alignment:** ปรับปรุงและบันทึกสถาปัตยกรรมการจำโมเดลและโปรไฟล์ OCR รายไฟล์ (per-file) โดยแก้ไขจุดที่คีย์ `fileKey` ในการดึงค่า (`loadProject`) และการบันทึกค่า (`subscribe`) ไม่ตรงกันเมื่อรันในสภาพแวดล้อม Production (ซึ่งระบบจะมีการสลับพาธเพื่อความเข้ากันได้ของ OCR Cache) ในวันที่ 2026-06-13
 
 ## 🛠️ Common Task Workflow (ทางลัดในการทำงาน)
 
