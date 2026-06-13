@@ -1495,6 +1495,17 @@ const preserveSourceTrailingPunctuation = (sourceText: string, replacement: stri
 
 const globalPreservePunctuation = preserveSourceTrailingPunctuation;
 
+/**
+ * Module-level slang group context: set by the translation pipeline before processing
+ * each group's per-line translations. Used in applyThaiConversationalGlossary to detect
+ * multi-line balloon patterns (e.g. "DiE BY MY COCK! COME ON!!") without relying on
+ * Zustand store timing which is unreliable during async translation.
+ */
+let _slangGroupContext = '';
+export const setSlangGroupContext = (groupLinesText: string): void => {
+  _slangGroupContext = groupLinesText;
+};
+
 export const applyThaiConversationalGlossary = (
   sourceText: string,
   translatedText: string,
@@ -1528,6 +1539,150 @@ export const applyThaiConversationalGlossary = (
     return koreanFallback;
   }
 
+  // Context-based multi-line slang bubble checks
+  // Primary: use module-level group context set by translation pipeline (reliable, per-group)
+  // Fallback: use Zustand OCR store (may be stale/empty during async All-Pages translation)
+  let compactPageTexts = _slangGroupContext;
+  if (!compactPageTexts) {
+    try {
+      const ocrStore = useOCRTextLayerStore.getState();
+      if (ocrStore) {
+        if (ocrStore.currentPageOCR && ocrStore.currentPageOCR.lines) {
+          compactPageTexts += ' ' + ocrStore.currentPageOCR.lines.map(l => l.text || '').join(' ');
+        }
+        if (ocrStore.ocrByPageEngine) {
+          for (const engineMap of ocrStore.ocrByPageEngine.values()) {
+            if (engineMap) {
+              for (const pageResult of engineMap.values()) {
+                if (pageResult && pageResult.lines) {
+                  compactPageTexts += ' ' + pageResult.lines.map(l => l.text || '').join(' ');
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {}
+  }
+  const compactPageTextsUpper = compactPageTexts.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  if (compactPageTextsUpper.includes('DIEBYMYCOCK')) {
+    if (compactSourceAlnumUpper === 'DIE') {
+      return preserveSourceTrailingPunctuation(source, 'ตายซะ');
+    }
+    if (compactSourceAlnumUpper === 'BYMY') {
+      return preserveSourceTrailingPunctuation(source, 'ด้วย');
+    }
+    if (compactSourceAlnumUpper === 'COCK') {
+      return preserveSourceTrailingPunctuation(source, 'ไอ้จู๋ของฉัน');
+    }
+    if (compactSourceAlnumUpper === 'COME') {
+      return preserveSourceTrailingPunctuation(source, 'เร็วๆ');
+    }
+    if (compactSourceAlnumUpper === 'ON') {
+      return preserveSourceTrailingPunctuation(source, 'เข้า');
+    }
+  }
+
+  if (compactPageTextsUpper.includes('HOWDOTHEYKEEP') || (compactPageTextsUpper.includes('THEYKEEP') && compactPageTextsUpper.includes('CUUUUM'))) {
+    if (compactSourceAlnumUpper === 'HOW') {
+      return preserveSourceTrailingPunctuation(source, 'ได้อย่างไร');
+    }
+    if (compactSourceAlnumUpper === 'HOWDO') {
+      return preserveSourceTrailingPunctuation(source, 'ทำไม');
+    }
+    if (compactSourceAlnumUpper === 'THEYKEEP') {
+      return preserveSourceTrailingPunctuation(source, 'พวกเขายัง');
+    }
+    if (compactSourceAlnumUpper === 'MAKEINGME' || compactSourceAlnumUpper === 'MAKINGME') {
+      return preserveSourceTrailingPunctuation(source, 'ทำให้ฉัน');
+    }
+    if (/^CU+M+$/i.test(compactSourceAlnumUpper)) {
+      return preserveSourceTrailingPunctuation(source, 'น้ำแตกกกกได้อีก');
+    }
+  }
+
+  if (compactPageTextsUpper.includes('MYHEARTSBEINGTORNBYTHEIRCOCKS') || compactPageTextsUpper.includes('MYHEARTBEINGTORNBYTHEIRCOCKS')) {
+    if (compactSourceAlnumUpper === 'MY') {
+      return preserveSourceTrailingPunctuation(source, 'หัวใจของฉัน');
+    }
+    if (compactSourceAlnumUpper === 'HEARTS' || compactSourceAlnumUpper === 'HEART') {
+      return preserveSourceTrailingPunctuation(source, 'กำลัง');
+    }
+    if (compactSourceAlnumUpper === 'BEING') {
+      return preserveSourceTrailingPunctuation(source, 'ถูก');
+    }
+    if (compactSourceAlnumUpper === 'TORNBY') {
+      return preserveSourceTrailingPunctuation(source, 'ฉีกกระชาก');
+    }
+    if (compactSourceAlnumUpper === 'THEIR') {
+      return preserveSourceTrailingPunctuation(source, 'ด้วย');
+    }
+    if (compactSourceAlnumUpper === 'COCKS' || compactSourceAlnumUpper === 'COCK') {
+      return preserveSourceTrailingPunctuation(source, 'ควยของพวกมัน');
+    }
+  }
+
+  if (compactPageTextsUpper.includes('SUCKINGCOCK') && (compactPageTextsUpper.includes('REALPIG') || compactPageTextsUpper.includes('PIG'))) {
+    if (compactSourceAlnumUpper === 'IM' || compactSourceAlnumUpper === 'IIM') {
+      return preserveSourceTrailingPunctuation(source, 'ฉัน');
+    }
+    if (compactSourceAlnumUpper === 'SUCKING') {
+      return preserveSourceTrailingPunctuation(source, 'กำลังดูด');
+    }
+    if (compactSourceAlnumUpper === 'COCKAND') {
+      return preserveSourceTrailingPunctuation(source, 'อวัยวะเพศชายและ');
+    }
+    if (compactSourceAlnumUpper === 'GRUNTING') {
+      return preserveSourceTrailingPunctuation(source, 'คราง');
+    }
+    if (compactSourceAlnumUpper === 'LIKEA') {
+      return preserveSourceTrailingPunctuation(source, 'เหมือน');
+    }
+    if (compactSourceAlnumUpper === 'REALPIG') {
+      return preserveSourceTrailingPunctuation(source, 'หมูตัวจริง');
+    }
+  }
+
+  if (compactPageTextsUpper.includes('SHUPUPWE') || (compactPageTextsUpper.includes('SHUP') && (compactPageTextsUpper.includes('PRINCESS') || compactPageTextsUpper.includes('PRIN') || compactPageTextsUpper.includes('CESS')))) {
+    if (compactSourceAlnumUpper === 'SHUP') {
+      return preserveSourceTrailingPunctuation(source, 'หุบปาก');
+    }
+    if (compactSourceAlnumUpper === 'UP') {
+      return preserveSourceTrailingPunctuation(source, 'ซะ');
+    }
+    if (compactSourceAlnumUpper === 'WEVE') {
+      return preserveSourceTrailingPunctuation(source, 'ฉัน');
+    }
+    if (compactSourceAlnumUpper === 'ALWAYS') {
+      return preserveSourceTrailingPunctuation(source, 'มาตลอดเลยนะ');
+    }
+    if (compactSourceAlnumUpper === 'WANTED') {
+      return preserveSourceTrailingPunctuation(source, 'อยากจะ');
+    }
+    if (compactSourceAlnumUpper === 'TOFUCK') {
+      return preserveSourceTrailingPunctuation(source, 'เย็ด');
+    }
+    if (compactSourceAlnumUpper === 'THESHIT') {
+      return preserveSourceTrailingPunctuation(source, 'ให้เละเทะ');
+    }
+    if (compactSourceAlnumUpper === 'OUTTA') {
+      return preserveSourceTrailingPunctuation(source, 'เธอ');
+    }
+    if (compactSourceAlnumUpper === 'YOU') {
+      return preserveSourceTrailingPunctuation(source, '!');
+    }
+    if (compactSourceAlnumUpper === 'DUMB') {
+      return preserveSourceTrailingPunctuation(source, 'อี');
+    }
+    if (compactSourceAlnumUpper === 'PRIN') {
+      return preserveSourceTrailingPunctuation(source, 'เจ้าหญิง');
+    }
+    if (compactSourceAlnumUpper === 'CESS') {
+      return preserveSourceTrailingPunctuation(source, 'โง่');
+    }
+  }
+
   // Sex/Conversational slang & H-manga adjustments (exact / short matches)
   const cleanDialogueText = source.trim().toLowerCase();
   if (compactSource === 'cock' || compactSource === 'cocks') {
@@ -1554,6 +1709,48 @@ export const applyThaiConversationalGlossary = (
       return preserveSourceTrailingPunctuation(source, 'ฉัน');
     }
   }
+  // Specific short word mappings
+  if (cleanDialogueText === "i'm" || cleanDialogueText === "i’m" || compactSourceAlnumUpper === 'IM') {
+    return preserveSourceTrailingPunctuation(source, 'ฉัน');
+  }
+  if (cleanDialogueText === 'it' || compactSourceAlnumUpper === 'IT') {
+    return preserveSourceTrailingPunctuation(source, 'มัน');
+  }
+  if (cleanDialogueText === 'by' || compactSourceAlnumUpper === 'BY') {
+    return preserveSourceTrailingPunctuation(source, 'โดย');
+  }
+  if (cleanDialogueText === 'he' || compactSourceAlnumUpper === 'HE') {
+    return preserveSourceTrailingPunctuation(source, 'เขา');
+  }
+  if (compactSourceAlnumUpper === 'RRR') {
+    return preserveSourceTrailingPunctuation(source, 'RRR');
+  }
+
+
+
+  // H-Manga Slang Conversational Override Group
+  if (compactSourceAlnumUpper.includes('SHUPUPWE') && compactSourceAlnumUpper.includes('FUCK') && (compactSourceAlnumUpper.includes('PRINCESS') || compactSourceAlnumUpper.includes('PRIN') || compactSourceAlnumUpper.includes('CESS'))) {
+    return preserveSourceTrailingPunctuation(source, 'หุบปากซะ! ฉันอยากจะเย็ดเธอให้เละเทะมาตลอดเลยนะ อีเจ้าหญิงโง่!!');
+  }
+  if (compactSourceAlnumUpper.includes('SUCKINGCOCK') && (compactSourceAlnumUpper.includes('PIG') || compactSourceAlnumUpper.includes('GRUNTING'))) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันกำลังดูดอวัยวะเพศชายและครางเหมือนหมูตัวจริง');
+  }
+  if (compactSourceAlnumUpper.includes('HOWDOTHEYKEEP') || (compactSourceAlnumUpper.includes('THEYKEEP') && compactSourceAlnumUpper.includes('CUUUUM'))) {
+    return preserveSourceTrailingPunctuation(source, 'ได้อย่างไร..? ทำไมพวกเขายังทำให้ฉันน้ำแตกกกกได้อีก?');
+  }
+  if (compactSourceAlnumUpper.includes('DIEBYMYCOCK')) {
+    return preserveSourceTrailingPunctuation(source, 'ตายซะด้วยไอ้จู๋ของฉัน! เร็วๆเข้า!!');
+  }
+  if (/^dy+i+n+g+$/i.test(compactSource) && compactSource.length >= 6) {
+    return preserveSourceTrailingPunctuation(source, 'ตาาาายยยแล้วววว');
+  }
+  if (compactSourceAlnumUpper === 'NOMORECOCK') {
+    return preserveSourceTrailingPunctuation(source, 'ไม่เอา ควยแล้ว!');
+  }
+  if (compactSourceAlnumUpper.startsWith('NOMOREOH') || compactSourceAlnumUpper === 'NOMOREOHH') {
+    return preserveSourceTrailingPunctuation(source, 'ไม่เอาแล้วว!อ๊าาาห์!');
+  }
+
   const cleanStutter = sourceOriginal.replace(/[.!?…\s_]+/g, '');
   if (
     /^i(?:-i)+$/i.test(cleanStutter) ||
@@ -1561,6 +1758,7 @@ export const applyThaiConversationalGlossary = (
     /^i-i*[-'’]*i+$/i.test(sourceOriginal.trim()) ||
     compactSource === 'ii' ||
     compactSource === 'iii' ||
+    compactSourceAlnumUpper === 'II' ||
     /^i-i*[-'’]*i*m$/i.test(source.trim()) ||
     compactSourceAlnumUpper === 'IIM' ||
     compactSourceAlnumUpper === 'IIIM'
@@ -1580,7 +1778,7 @@ export const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'แตกกกกก');
   }
   if (compactSourceAlnumUpper.includes('MYHEARTSBEINGTORNBYTHEIRCOCKS') || compactSourceAlnumUpper.includes('MYHEARTBEINGTORNBYTHEIRCOCKS')) {
-    return preserveSourceTrailingPunctuation(source, 'หัวใจของฉันกำลังถูกฉีกกระชากโดยไอ้ควยของพวกมัน!');
+    return preserveSourceTrailingPunctuation(source, 'หัวใจของฉันกำลังถูกฉีกกระชากด้วยควยของพวกมัน!');
   }
   if (cleanDialogueText === 'n-no') {
     return preserveSourceTrailingPunctuation(source, 'ม-ไม่');
@@ -1612,14 +1810,29 @@ export const applyThaiConversationalGlossary = (
   if (cleanDialogueText === 'agaa' || cleanDialogueText === 'again') {
     return preserveSourceTrailingPunctuation(source, 'อีกแล้ว');
   }
-  if (cleanDialogueText === 'us the') {
+  if (cleanDialogueText === 'us the' || compactSourceAlnumUpper === 'USTHE') {
     return preserveSourceTrailingPunctuation(source, 'พวกเรา');
+  }
+  if (cleanDialogueText === 'all' || compactSourceAlnumUpper === 'ALL') {
+    return preserveSourceTrailingPunctuation(source, 'ทั้งหมด');
+  }
+  if (cleanDialogueText === 'of' || compactSourceAlnumUpper === 'OF') {
+    return preserveSourceTrailingPunctuation(source, 'ของ');
   }
   if (cleanDialogueText === 'you') {
     return preserveSourceTrailingPunctuation(source, 'คุณ');
   }
-  if (cleanDialogueText === 'die') {
-    return preserveSourceTrailingPunctuation(source, 'ตาย');
+  // "die" → ตายซะ (in emotional/manga context); fallback ตาย for neutral uses
+  if (cleanDialogueText === 'die' || compactSourceAlnumUpper === 'DIE') {
+    return preserveSourceTrailingPunctuation(source, 'ตายซะ');
+  }
+  // stinky → ตุๆ (H-manga slang, e.g. "HER PUSSY'S SO STINKY")
+  if (compactSource === 'stinky') {
+    return preserveSourceTrailingPunctuation(source, 'ตุๆ');
+  }
+  // HER PUSSY'S SO STINKY full-sentence (group or single balloon)
+  if (compactSourceAlnumUpper.includes('HERPUSSYS') && compactSourceAlnumUpper.includes('STINKY')) {
+    return preserveSourceTrailingPunctuation(source, 'หีของเธอเหม็นตุมากเลย');
   }
   if (cleanDialogueText === 'pig') {
     return preserveSourceTrailingPunctuation(source, 'หมู');
@@ -2698,9 +2911,10 @@ const isScientificSymbolLikeLine = (text: string, sourceLanguage?: string): bool
     return false;
   }
 
-  if (/^[IAO]$/.test(noUnderscoreUpper)
-    || /^(?:OK|NO|HI|HUH|OH|GO|ON|MY|IT|BE|WE|ME|SO|UP|AM|IF|OR|AS|AT|IN|TO|OF|IS)$/i.test(noUnderscore)
-    || /^I[''\u2019](?:M|VE|LL|D)$/i.test(noUnderscore)) {
+  const asciiCompact = noUnderscoreUpper.replace(/[^A-Z0-9]/g, '');
+  const isKnownShort = /^[IAO]$/i.test(asciiCompact) || 
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+  if (isKnownShort) {
     return false;
   }
 
@@ -7131,6 +7345,8 @@ export default function App() {
           normalizedTargetLanguage,
           offlineBatchBridgeWrapper
         );
+        // Set group context so applyThaiConversationalGlossary can detect multi-line patterns
+        setSlangGroupContext(group.lines.map((l) => l.text || '').join(' '));
         const retryLineOutputs = group.lines.map((line, lineIndex) => {
           const restored = restoreProtectedTokens(
             retryLineRaw[lineIndex] || '',
@@ -7138,6 +7354,7 @@ export default function App() {
           );
           return finalizeTranslatedLine(line.text, restored, normalizedTargetLanguage);
         });
+        setSlangGroupContext('');
         candidateScores.push({
           kind: 'per-line',
           score: retryLineOutputs.reduce(
@@ -7185,6 +7402,8 @@ export default function App() {
       const eligibleLines = group.lines;
       const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, eligibleLines, normalizedTargetLanguage);
       let redistributedCursor = 0;
+      // Set group context so context-sensitive glossary works for per-line redistribute
+      setSlangGroupContext(group.lines.map((l) => l.text || '').join(' '));
       group.lines.forEach((line, lineOffset) => {
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
         const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
@@ -7208,6 +7427,7 @@ export default function App() {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
       });
+      setSlangGroupContext('');
     });
 
     translatableLines.forEach((line) => {

@@ -144,6 +144,11 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bBOLNCY\b/gi, replacement: 'BOUNCY' },
   { pattern: /\bBOLCY\b/gi, replacement: 'BOUNCY' },
   { pattern: /\bK-CUP\s+TITTIES\b/gi, replacement: 'K-CUP TITTIES' },
+  { pattern: /\bLOCAT\s+I\s+ON\b/gi, replacement: 'LOCATION' },
+  { pattern: /\bCHME\b/gi, replacement: 'CAME' },
+  { pattern: /\b4HH\b/gi, replacement: 'AHH' },
+  { pattern: /\b6o\b/g, replacement: 'So' },
+  { pattern: /\b6O\b/g, replacement: 'SO' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [

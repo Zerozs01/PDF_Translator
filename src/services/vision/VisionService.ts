@@ -344,6 +344,7 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'LISTOCON',
   'ILISTOCON',
   'SO',
+  '6O',
   'DIE',
   'PIG',
   'CUM',
@@ -376,6 +377,8 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'LIKETHIS',
   'WASTOYED',
   'UPLOOKING',
+  'IS',
+  'USTHE',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {
@@ -920,6 +923,12 @@ class VisionService {
     const candidateArea = Math.max(1, bboxArea(candidate.bbox));
     const areaRatio = existingArea / candidateArea;
     const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
+
+    // Prevent merging distinct vertically-stacked lines of text (e.g. "PRINCESS" and "PRINCESS" on separate lines)
+    const isDistinctStackedLines = overlapY < 0.15 
+      && centerDeltaY >= minHeight * 0.85 
+      && (existingText.length <= 16 || candidateText.length <= 16);
+    if (isDistinctStackedLines) return false;
 
     const sameOrSubset = existingText === candidateText
       || existingText.includes(candidateText)

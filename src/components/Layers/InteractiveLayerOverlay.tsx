@@ -1154,8 +1154,8 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         // คัดกรองและซ่อนเลเยอร์ที่ถูกสั่ง hidden จาก layout map (เนื่องจากถูกผสานกลุ่ม)
         const layout = layouts?.get(layer.lineIndex);
         const isOcrLayer = layer.lineIndex >= 0 && !layer.id.startsWith('manual-');
-        // Layer ที่ไม่มีใน layout map และไม่ได้แก้ไขโดย user → ไม่ render (ยังไม่มีข้อมูลพอ)
-        if (isOcrLayer && !layout && !layer.userEdited) {
+        // Layer ที่ไม่มีใน layout map และไม่ได้แก้ไขโดย user → ไม่ render (ยังไม่มีข้อมูลพอ) (เว้นแต่จะอยู่ในโหมด original OCR เพื่อให้ select/ขยับกล่องได้)
+        if (isOcrLayer && !layout && !layer.userEdited && translationPreviewMode !== 'original') {
           return null;
         }
         // layout.hidden = true → layer ถูก suppress โดย overlay dedup
