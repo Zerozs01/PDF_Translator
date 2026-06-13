@@ -22,6 +22,9 @@ export default defineConfig({
   plugins: [react(), electron([{
     entry: 'electron/main.ts',
     vite: {
+      define: {
+        __DEV_PROJECT_ROOT__: JSON.stringify(dirname),
+      },
       build: {
         rollupOptions: {
           external: ['better-sqlite3-multiple-ciphers']

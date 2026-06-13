@@ -27,6 +27,8 @@ import {
 } from './pdfExportStaging'
 // BenchmarkDAO not implemented in this file (db.ts handles)
 
+declare const __DEV_PROJECT_ROOT__: string | undefined;
+
 // The built directory structure
 //
 // ├─┬─┬ dist
@@ -528,7 +530,12 @@ app.whenReady().then(() => {
       : ['bin', 'python'];
     const seen = new Set<string>();
 
-    for (const root of roots) {
+    const searchRoots = [...roots];
+    if (typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
+      searchRoots.push(__DEV_PROJECT_ROOT__);
+    }
+
+    for (const root of searchRoots) {
       if (!root) continue;
       const resolvedRoot = path.resolve(root);
       if (seen.has(resolvedRoot)) continue;
@@ -558,9 +565,12 @@ app.whenReady().then(() => {
       path.resolve(app.getAppPath(), '..'),
       path.resolve(__dirname, '..'),
       path.dirname(process.execPath),
+      path.resolve(path.dirname(process.execPath), '..'),
+      path.resolve(path.dirname(process.execPath), '../..'),
       process.resourcesPath,
       process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
-    ], ['.venv', '.venv-argos']);
+      process.env.PORTABLE_EXECUTABLE_DIR,
+    ], ['.venv-ocr', '.venv-easy-yolo', '.venv', '.venv-argos']);
     if (localVenvPython) return localVenvPython;
 
     const virtualEnv = process.env.VIRTUAL_ENV;

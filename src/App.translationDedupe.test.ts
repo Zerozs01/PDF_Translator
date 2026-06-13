@@ -1672,6 +1672,12 @@ describe('applyThaiConversationalGlossary', () => {
   test('maps individual slang lines using page context from store', () => {
     // 1. Test DiE BY MY COCK! COME ON!!
     useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
       lines: [
         { text: 'DiE', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
         { text: 'BY MY', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
@@ -1680,8 +1686,8 @@ describe('applyThaiConversationalGlossary', () => {
         { text: 'ON!!', bbox: { x0: 0, y0: 40, x1: 10, y1: 50 }, confidence: 99, words: [] },
       ],
       words: [],
-      width: 100,
-      height: 100,
+      text: '',
+      confidence: 100,
     });
 
     expect(applyThaiConversationalGlossary('DiE', 'DiE', 'th')).toBe('ตายซะ');
@@ -1692,6 +1698,12 @@ describe('applyThaiConversationalGlossary', () => {
 
     // 2. Test HOW..? HOWDO...
     useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
       lines: [
         { text: 'HOW..?', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
         { text: 'HOWDO', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
@@ -1700,8 +1712,8 @@ describe('applyThaiConversationalGlossary', () => {
         { text: 'CUUUUM?', bbox: { x0: 0, y0: 40, x1: 10, y1: 50 }, confidence: 99, words: [] },
       ],
       words: [],
-      width: 100,
-      height: 100,
+      text: '',
+      confidence: 100,
     });
 
     expect(applyThaiConversationalGlossary('HOW..?', 'HOW..?', 'th')).toBe('ได้อย่างไร..?');
@@ -1712,6 +1724,12 @@ describe('applyThaiConversationalGlossary', () => {
 
     // 3. Test MY HEART'S...
     useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
       lines: [
         { text: 'MY', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
         { text: 'HEART’S', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
@@ -1721,8 +1739,8 @@ describe('applyThaiConversationalGlossary', () => {
         { text: 'COCKS!', bbox: { x0: 0, y0: 50, x1: 10, y1: 60 }, confidence: 99, words: [] },
       ],
       words: [],
-      width: 100,
-      height: 100,
+      text: '',
+      confidence: 100,
     });
 
     expect(applyThaiConversationalGlossary('MY', 'MY', 'th')).toBe('หัวใจของฉัน');
@@ -1734,6 +1752,12 @@ describe('applyThaiConversationalGlossary', () => {
 
     // 4. Test I'M SUCKING COCK...
     useOCRTextLayerStore.getState().setCurrentPageOCR({
+      pageNumber: 1,
+      width: 100,
+      height: 100,
+      dpi: 72,
+      language: 'en',
+      algorithmVersion: 1,
       lines: [
         { text: 'I’M', bbox: { x0: 0, y0: 0, x1: 10, y1: 10 }, confidence: 99, words: [] },
         { text: 'SUCKING', bbox: { x0: 0, y0: 10, x1: 10, y1: 20 }, confidence: 99, words: [] },
@@ -1743,8 +1767,8 @@ describe('applyThaiConversationalGlossary', () => {
         { text: 'REAL PIG', bbox: { x0: 0, y0: 50, x1: 10, y1: 60 }, confidence: 99, words: [] },
       ],
       words: [],
-      width: 100,
-      height: 100,
+      text: '',
+      confidence: 100,
     });
 
     expect(applyThaiConversationalGlossary('I’M', 'I’M', 'th')).toBe('ฉัน');

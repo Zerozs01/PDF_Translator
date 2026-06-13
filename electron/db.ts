@@ -383,12 +383,13 @@ export const DocumentDAO = {
 
   clearDocumentCache: (documentId: number) => {
     if (!db) throw new Error('DB not initialized');
-    const clearTx = db.transaction(() => {
-      db.prepare('DELETE FROM ocr_cache WHERE document_id = ?').run(documentId);
-      db.prepare('DELETE FROM ocr_cache_engine WHERE document_id = ?').run(documentId);
-      db.prepare('DELETE FROM translation_cache WHERE document_id = ?').run(documentId);
-      db.prepare('DELETE FROM benchmarks WHERE document_id = ?').run(documentId);
-      db.prepare('DELETE FROM sentence_translation_cache').run();
+    const activeDb = db;
+    const clearTx = activeDb.transaction(() => {
+      activeDb.prepare('DELETE FROM ocr_cache WHERE document_id = ?').run(documentId);
+      activeDb.prepare('DELETE FROM ocr_cache_engine WHERE document_id = ?').run(documentId);
+      activeDb.prepare('DELETE FROM translation_cache WHERE document_id = ?').run(documentId);
+      activeDb.prepare('DELETE FROM benchmarks WHERE document_id = ?').run(documentId);
+      activeDb.prepare('DELETE FROM sentence_translation_cache').run();
     });
     clearTx();
     return true;

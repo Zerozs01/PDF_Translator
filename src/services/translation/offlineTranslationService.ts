@@ -212,7 +212,7 @@ export async function translateBatchOffline(
     sourceLanguage: normalizedSource,
     targetLanguage: normalizedTarget,
   }).catch((err) => {
-    console.warn(`[translateBatchOffline] Direct translation call failed for ${normalizedSource}->${normalizedTarget}:`, err);
+    console.error(`[translateBatchOffline] Direct translation call failed for ${normalizedSource}->${normalizedTarget}:`, err);
     return new Array<string>(preparedTexts.length).fill('');
   });
 
@@ -223,7 +223,7 @@ export async function translateBatchOffline(
         sourceLanguage: normalizedSource,
         targetLanguage: 'en',
       }).catch((err) => {
-        console.warn(`[translateBatchOffline] Pivot English translation call failed for ${normalizedSource}->en:`, err);
+        console.error(`[translateBatchOffline] Pivot English translation call failed for ${normalizedSource}->en:`, err);
         return new Array<string>(preparedTexts.length).fill('');
       })
     : Promise.resolve<string[]>([]);
@@ -293,7 +293,7 @@ export async function translateBatchOffline(
         }
       });
     } catch (_retryErr) {
-      console.warn('[HybridRetry] Batched retry error:', _retryErr);
+      console.error('[HybridRetry] Batched retry error:', _retryErr);
     }
   }
 
@@ -330,7 +330,7 @@ export async function translateBatchOffline(
 
     return finalDirectTranslations;
   } catch (error) {
-    console.warn(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
+    console.error(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
     return finalDirectTranslations;
   }
 }
