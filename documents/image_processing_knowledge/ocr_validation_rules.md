@@ -1,7 +1,7 @@
 # OCR Validation Rules
 
 Version: 1.0
-Scope: PaddleOCR / EasyOCR / Tesseract / Electron OCR Runtime
+Scope: PaddleOCR / EasyOCR / Electron OCR Runtime
 Purpose: Define deterministic validation rules for deciding whether an OCR result is acceptable, weak, or should trigger fallback.
 
 ---

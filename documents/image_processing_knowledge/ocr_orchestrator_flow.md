@@ -1,7 +1,7 @@
 # OCR Orchestrator Flow
 
 Version: 1.0
-Scope: Electron OCR Runtime / PaddleOCR / EasyOCR / Tesseract
+Scope: Electron OCR Runtime / PaddleOCR / EasyOCR
 Purpose: Define the deterministic end-to-end execution flow for OCR requests from input receipt to final normalized result.
 
 ---
@@ -74,7 +74,7 @@ receive request
   -> choose final accepted candidate
   -> normalize to unified app schema
   -> return result + metadata
-````
+```
 
 This flow must be deterministic and fully traceable.
 
@@ -259,13 +259,12 @@ Select the primary OCR engine from policy.
 
 Primary rule set:
 
-- PaddleOCR = general default
-- Tesseract = clean controlled document specialist
-- EasyOCR = selective fallback for difficult visual text
+- PaddleOCR = general default and primary engine
+- EasyOCR = fallback engine for difficult visual text or secondary recovery
 
 Suggested mapping:
 
-- clean_document -> Tesseract or PaddleOCR
+- clean_document -> PaddleOCR
 - camera_document -> PaddleOCR
 - screenshot_ui -> PaddleOCR
 - receipt_thermal -> PaddleOCR
@@ -474,11 +473,13 @@ Do not:
 Attempt 1:
 
 - profile = clean_document
-- engine = tesseract or paddleocr
+- engine = paddleocr
 
 Attempt 2:
 
-- switch to alternate primary between tesseract and paddleocr
+- retry with camera_document profile or scene_text profile using paddleocr
+  or
+- fallback to easyocr
 
 ### camera_document
 
@@ -489,9 +490,9 @@ Attempt 1:
 
 Attempt 2:
 
-- same profile with tesseract only if image became well-flattened and high-contrast
-  or
 - retry with clean_document profile if preprocessing strongly simplified page geometry
+  or
+- fallback to easyocr
 
 ### screenshot_ui
 
@@ -502,9 +503,7 @@ Attempt 1:
 
 Attempt 2:
 
-- tesseract for simple block text
-  or
-- scene_text + easyocr if stylized colored text is suspected
+- fallback to easyocr if stylized colored text is suspected
 
 ### receipt_thermal
 
@@ -515,9 +514,9 @@ Attempt 1:
 
 Attempt 2:
 
-- same profile + tesseract if thresholded output looks stable
-  or
 - receipt_thermal variant without closing if characters merged
+  or
+- fallback to easyocr
 
 ### scene_text
 
@@ -528,7 +527,7 @@ Attempt 1:
 
 Attempt 2:
 
-- easyocr
+- fallback to easyocr
   or
 - screenshot_ui if classifier likely misread a digital UI image
 

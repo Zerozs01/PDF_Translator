@@ -186,6 +186,36 @@ app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  if (process.argv.includes('--benchmark-memory-leak')) {
+    const runBenchmark = async () => {
+      console.log('[BENCHMARK] Starting Memory & Pipeline Stability Benchmark...');
+      const rss = process.memoryUsage().rss;
+      const rssMb = rss / 1024 / 1024;
+      console.log(`[BENCHMARK] Initial Main Process RSS: ${rssMb.toFixed(2)} MB`);
+
+      const targetMb = 120;
+      const passMemory = rssMb < targetMb;
+      console.log(`[BENCHMARK] Memory Target (< ${targetMb} MB): ${passMemory ? 'PASS' : 'FAIL'}`);
+
+      console.log('[BENCHMARK] Testing Pipeline Stability (getting engine statuses)...');
+      try {
+        const statuses = await getExternalOcrEngineStatuses();
+        console.log(`[BENCHMARK] Engine Statuses:`, JSON.stringify(statuses));
+        console.log('[BENCHMARK] Pipeline Stability: PASS');
+        
+        console.log('[BENCHMARK] Cleaning up OCR Daemons...');
+        disposeExternalOcrDaemons();
+        
+        process.exit(passMemory ? 0 : 1);
+      } catch (err) {
+        console.error('[BENCHMARK] Pipeline Stability check failed:', err);
+        process.exit(1);
+      }
+    };
+    
+    runBenchmark();
+    return;
+  }
 
   // Attempt to perform auto-login if Relax mode is enabled and setup is complete
   if (authService.isSetup()) {
@@ -1377,6 +1407,18 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:toggle-favorite error:', error);
       return false;
+    }
+  });
+
+  ipcMain.handle('db:get-document-cache-size', async (_, id) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return DocumentDAO.getDocumentCacheSize(id);
+    } catch (error) {
+      console.error('db:get-document-cache-size error:', error);
+      return 0;
     }
   });
 

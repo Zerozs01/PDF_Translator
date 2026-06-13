@@ -107,6 +107,7 @@ interface ExternalOcrBridgeResponse {
 
 const EXTERNAL_ENGINES: ExternalBridgeEngine[] = ['paddleocr', 'easyocr'];
 const bridgeDaemons = new Map<ExternalBridgeEngine, BridgeDaemon>();
+const daemonIdleTimers = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
 let externalOcrTempRoot: string | null = null;
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /pin_memory.*no accelerator/i,
@@ -438,11 +439,35 @@ async function runBridgeOnce(
   });
 }
 
+export function resetDaemonIdleTimer(engine: ExternalBridgeEngine): void {
+  const existingTimer = daemonIdleTimers.get(engine);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  const timer = setTimeout(() => {
+    const daemon = bridgeDaemons.get(engine);
+    if (daemon) {
+      console.log(`[ocrBridge] Idle timeout reached. Releasing ${engine} daemon due to 5 minutes of inactivity.`);
+      teardownDaemon(engine, new Error(`OCR daemon released due to 5 minutes of inactivity`));
+    }
+    daemonIdleTimers.delete(engine);
+  }, 300000); // 5 minutes
+
+  daemonIdleTimers.set(engine, timer);
+}
+
 function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
   const daemon = bridgeDaemons.get(engine);
   if (!daemon) return;
 
   bridgeDaemons.delete(engine);
+
+  const existingTimer = daemonIdleTimers.get(engine);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+    daemonIdleTimers.delete(engine);
+  }
 
   if (daemon.queue) {
     for (const task of daemon.queue) {
@@ -663,10 +688,22 @@ async function requestDaemonInternal(
 }
 
 function processQueue(daemon: BridgeDaemon): void {
-  if (daemon.running || daemon.queue.length === 0) return;
+  if (daemon.running || daemon.queue.length === 0) {
+    if (!daemon.running && daemon.queue.length === 0 && daemon.pending.size === 0) {
+      resetDaemonIdleTimer(daemon.engine);
+    }
+    return;
+  }
 
   daemon.running = true;
   const task = daemon.queue.shift()!;
+
+  // Clear idle timer since a request has started
+  const existingTimer = daemonIdleTimers.get(daemon.engine);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+    daemonIdleTimers.delete(daemon.engine);
+  }
 
   requestDaemonInternal(daemon, task.payload, task.timeoutMs)
     .then(task.resolve)
@@ -682,6 +719,13 @@ async function requestDaemon(
   payload: Record<string, unknown>,
   timeoutMs: number = 30000
 ): Promise<ExternalOcrBridgeResponse> {
+  // Clear the idle timer since we are initiating a new request
+  const existingTimer = daemonIdleTimers.get(engine);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+    daemonIdleTimers.delete(engine);
+  }
+
   const daemon = ensureDaemon(engine);
 
   return await new Promise<ExternalOcrBridgeResponse>((resolve, reject) => {
@@ -921,12 +965,13 @@ export async function runExternalOcrRaw(payload: {
   imageWidth: number;
   imageHeight: number;
   language: string;
+  engine?: string;
 }): Promise<ExternalOcrBridgeResponse> {
   if (!payload.imagePath && !payload.imageData) {
     throw new Error('ExternalOcrRequestPayload must provide either imagePath or imageData');
   }
 
-  const engine = 'paddleocr';
+  const engine = payload.engine === 'easyocr' ? 'easyocr' : 'paddleocr';
 
   let resolvedImagePath: string;
   let ownsTempFile: boolean;

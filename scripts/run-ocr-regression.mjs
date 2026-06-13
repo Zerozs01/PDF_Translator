@@ -10,7 +10,7 @@ function parseArgs(argv) {
     manifest: 'public/fixtures/ocr/manga/expectations.json',
     out: '.tmp-ocr-current.json',
     skipMissing: false,
-    engine: 'tesseract',
+    engine: 'paddleocr',
     pipeline: 'panel',
     quality: 'best',
     noFallback: false,
@@ -95,12 +95,12 @@ function logMissingFixtureWarning(result) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const engine = String(args.engine || 'tesseract').toLowerCase();
+  const engine = String(args.engine || 'paddleocr').toLowerCase();
   const pipeline = String(args.pipeline || 'panel').toLowerCase();
   const quality = String(args.quality || 'best').toLowerCase();
 
-  if (!['tesseract', 'paddleocr', 'easyocr'].includes(engine)) {
-    throw new Error(`Invalid --engine "${args.engine}". Use tesseract, paddleocr, or easyocr.`);
+  if (!['paddleocr', 'easyocr'].includes(engine)) {
+    throw new Error(`Invalid --engine "${args.engine}". Use paddleocr or easyocr.`);
   }
   if (!['panel', 'export'].includes(pipeline)) {
     throw new Error(`Invalid --pipeline "${args.pipeline}". Use panel or export.`);
@@ -144,7 +144,7 @@ async function main() {
     for (const fixture of fixtures) {
       const noFallbackParam = args.noFallback ? '&no_fallback=1' : '';
       const url = `${args.baseUrl}/?ocr_harness=1&fixture=${encodeURIComponent(fixture.id)}&engine=${encodeURIComponent(engine)}&pipeline=${encodeURIComponent(pipeline)}&quality=${encodeURIComponent(quality)}${noFallbackParam}`;
-      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.goto(url, { waitUntil: 'load' });
       await page.waitForFunction(
         () => {
           const payload = window.__OCR_REGRESSION_RESULT__;

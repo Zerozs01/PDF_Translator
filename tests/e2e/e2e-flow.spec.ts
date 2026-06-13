@@ -87,10 +87,10 @@ test.describe('PDF_Translator Core E2E Flow (Renderer Mocked)', () => {
         },
         ocr: {
           getEngineStatus: async () => [
-            { engine: 'tesseract' as const, available: true, runtime: 'wasm', description: 'Tesseract WASM' },
-            { engine: 'paddleocr' as const, available: false, runtime: 'local', description: 'PaddleOCR python' }
+            { engine: 'paddleocr' as const, available: true, runtime: 'local', description: 'PaddleOCR python' },
+            { engine: 'easyocr' as const, available: true, runtime: 'local', description: 'EasyOCR python' }
           ],
-          prewarmEngine: async () => ({ ok: true, engine: 'tesseract' as const, runtime: 'wasm', description: 'Tesseract WASM' }),
+          prewarmEngine: async () => ({ ok: true, engine: 'paddleocr' as const, runtime: 'local', description: 'PaddleOCR python' }),
           cancelExternal: async () => true,
           runExternal: async () => ({ words: [], lines: [], text: 'Mock OCR text', confidence: 95 }),
         },

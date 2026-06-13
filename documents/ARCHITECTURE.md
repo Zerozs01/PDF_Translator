@@ -25,9 +25,9 @@ This document describes the architecture as implemented in the current working t
   - queue + timeout + retry + worker lifecycle
   - external OCR bridge orchestration
   - chunk merge + post-cleanup for external engines
-- `src/services/vision/worker.ts`: main Tesseract OCR pipeline
-- `src/services/vision/worker-boot.ts`: boot entry
-- `src/services/vision/worker-stable.ts`: fallback path
+- `src/services/vision/worker.ts`: Layout segmentation worker (Tesseract-free)
+- `src/services/vision/worker-boot.ts`: boot entry for layout segmentation
+- `src/services/vision/worker-stable.ts`: fallback path for layout segmentation
 
 ## 2. Cache And Identity
 
@@ -58,7 +58,7 @@ This document describes the architecture as implemented in the current working t
 1. Render page to canvas
 2. Attempt in-memory cache, then DB cache
 3. Resolve OCR quality profile (panel toggle + engine heuristics)
-4. Run OCR (Tesseract or external engine)
+4. Run OCR (PaddleOCR or EasyOCR)
 4. Apply panel normalization:
    - script gate
    - panel safety dedupe
@@ -69,7 +69,7 @@ This document describes the architecture as implemented in the current working t
 Quality profile resolution (panel):
 
 - PaddleOCR: `fast` or `balanced` (auto-prefer `fast` on large non-CJK pages)
-- Tesseract/EasyOCR: `best`
+- EasyOCR: `best`
 - Raw OCR is used only in benchmark mode and is not a pipeline profile
 
 ## 4. External OCR Guardrails
@@ -78,7 +78,7 @@ For `paddleocr` panel path, service-level safeguards now include:
 
 - malformed Latin geometry anomaly detection
 - technical caption/row protection to avoid dropping valid lines in dense document pages
-- fallback/merge behavior with Tesseract when anomaly severity requires recovery
+- fallback/merge behavior with EasyOCR when anomaly severity requires recovery
 - minor-anomaly drop only for non-critical lines
 
 This reduces false drops for lines such as technical sentence fragments and numbered caption rows.
@@ -151,3 +151,16 @@ This reduces false drops for lines such as technical sentence fragments and numb
   - When loading a project (`loadProject`), the system retrieves the file-specific `language`, `engine`, and `ocrQualityProfile` configuration from `localStorage`.
   - To prevent inconsistencies in production mode (where file path resolution might alter/alias the `filePath` to map compatible databases), the storage retrieval key (`fileKey`) is normalized to evaluate `get().filePath || resolvedPath || file.name`.
   - Any changes to OCR options in `useOCRTextLayerStore` trigger a subscription sync that saves options into `localStorage` using the exact same active `filePath` from `useProjectStore`.
+
+## 11. Split-View & Synchronized Scrolling
+
+- **Viewport Split Mode Layout**: `src/components/Viewer/WorkspaceContainer.tsx` implements a dual-pane viewport layout inside the main React area. When `useUIStore.getState().viewMode === 'split'`, the viewport divides into a 50/50 split (Original OCR on the left, Translated result on the right).
+- **Zustand Store Extensions & Sync**:
+  - `useUIStore` manages `viewMode` (`'overlay' | 'split'`) and `pageMode` (`'single' | 'scroll'`).
+  - To prevent state desynchronization, `useProjectStore`'s `viewMode` (`'single' | 'continuous'`) is synchronized bidirectionally with `useUIStore`'s `pageMode` (`'single' | 'scroll'`) via store subscriptions.
+- **Canvas Overrides & Double Loading Prevention**: `PDFCanvas` and `ImageCanvas` support a `previewModeOverride?: 'original' | 'translated'` prop. This allows rendering both the original and translated layers side-by-side using the same layout caches, without re-triggering OCR or translation inferences.
+- **Zero-Latency DOM-based Synchronization Hook**:
+  - High-frequency wheel/drag event updates bypass React's standard re-rendering flow to maintain smooth 60fps lockstep scroll synchronization.
+  - In `syncContentTransform` and mouse-dragging `handleMouseMove`, the calculated CSS translation transform string is immediately written to both elements in the DOM.
+  - Once interaction settles down, final coordinates are committed back to Zustand in a single atomic update.
+- **Session Isolation & Auto-Reset**: Opening a new file or closing the workspace triggers `useUIStore.getState().resetView()`, which automatically resets the split screen viewMode to `'overlay'`. This prevents the side-by-side mode from persisting across different documents.

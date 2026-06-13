@@ -142,7 +142,11 @@ const renderOverlayTextWithSearchHighlight = (
   return pieces;
 };
 
-export const ImageCanvas: React.FC = React.memo(() => {
+interface ImageCanvasProps {
+  previewModeOverride?: 'original' | 'translated';
+}
+
+export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewModeOverride }) => {
   const {
     fileUrl,
     currentPage,
@@ -159,11 +163,13 @@ export const ImageCanvas: React.FC = React.memo(() => {
     ocrByPageEngine,
     showDebugOverlay,
     options,
-    translationPreviewMode,
+    translationPreviewMode: storePreviewMode,
     translationCacheByPage,
     activeTranslationKeyByPage,
     ocrResultSearchQuery,
   } = useOCRTextLayerStore();
+
+  const translationPreviewMode = previewModeOverride || storePreviewMode;
   
   const layersByPage = useLayerStore((state) => state.layersByPage);
   const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
@@ -226,7 +232,22 @@ export const ImageCanvas: React.FC = React.memo(() => {
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;
-    contentRef.current.style.transform = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    const transformStr = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    contentRef.current.style.transform = transformStr;
+
+    // Real-time synchronization for split-view:
+    const isSplit = useUIStore.getState().viewMode === 'split';
+    if (isSplit) {
+      const workspace = contentRef.current.closest('.workspace-viewport');
+      if (workspace) {
+        const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
+        allContents.forEach((el) => {
+          if (el !== contentRef.current) {
+            (el as HTMLElement).style.transform = transformStr;
+          }
+        });
+      }
+    }
   }, []);
 
   const [imageDisplaySize, setImageDisplaySize] = useState({ width: 0, height: 0 });
@@ -401,7 +422,22 @@ export const ImageCanvas: React.FC = React.memo(() => {
     }
     dragTransformRafRef.current = requestAnimationFrame(() => {
       if (contentRef.current) {
-        contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+        const transformStr = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+        contentRef.current.style.transform = transformStr;
+
+        // Real-time synchronization for split-view:
+        const isSplit = useUIStore.getState().viewMode === 'split';
+        if (isSplit) {
+          const workspace = contentRef.current.closest('.workspace-viewport');
+          if (workspace) {
+            const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
+            allContents.forEach((el) => {
+              if (el !== contentRef.current) {
+                (el as HTMLElement).style.transform = transformStr;
+              }
+            });
+          }
+        }
       }
       dragTransformRafRef.current = null;
     });
@@ -589,7 +625,7 @@ export const ImageCanvas: React.FC = React.memo(() => {
           transition: isDragging ? 'none' : 'transform 0.1s ease-out',
           willChange: 'transform'
         }}
-        className="absolute top-0 left-0 origin-top-left"
+        className="absolute top-0 left-0 origin-top-left image-canvas-content"
       >
         {fileUrl ? (
           <div className="relative inline-block">

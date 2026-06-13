@@ -17,7 +17,7 @@ function parseArgs(argv) {
     requireLanguages: [],
     pipeline: 'panel',
     quality: 'best',
-    engines: ['tesseract', 'paddleocr', 'easyocr'],
+    engines: ['paddleocr', 'easyocr'],
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -64,8 +64,8 @@ function assertOptions(args) {
     throw new Error(`Invalid --quality \"${args.quality}\". Use fast, balanced, or best.`);
   }
   for (const engine of args.engines) {
-    if (!['tesseract', 'paddleocr', 'easyocr'].includes(engine)) {
-      throw new Error(`Invalid engine \"${engine}\" in --engines. Allowed: tesseract,paddleocr,easyocr.`);
+    if (!['paddleocr', 'easyocr'].includes(engine)) {
+      throw new Error(`Invalid engine "${engine}" in --engines. Allowed: paddleocr,easyocr.`);
     }
   }
 }
@@ -245,12 +245,9 @@ async function main() {
       runArgs.push('--skip-missing');
     }
     // Non-Tesseract engines require the Electron native bridge (Python process).
-    // In headless/CI environments that bridge is absent and VisionService silently
-    // falls back to Tesseract — recording the wrong engine's results.
+    // In headless/CI environments that bridge is absent.
     // --no-fallback tells the harness to fail-fast instead of masking the issue.
-    if (engine !== 'tesseract') {
-      runArgs.push('--no-fallback');
-    }
+    runArgs.push('--no-fallback');
 
     console.log(`\n[OCR Benchmark] Running candidate for engine=${engine}`);
     const runResult = runNodeScript('scripts/run-ocr-regression.mjs', runArgs);

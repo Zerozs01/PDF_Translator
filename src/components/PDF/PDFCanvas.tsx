@@ -172,7 +172,8 @@ const PDFPageOverlay: React.FC<{
   pageRef: React.RefObject<HTMLDivElement | null>;
   pageRenderTick: number;
   isVisible: boolean;
-}> = React.memo(({ pageNum, pageRef, pageRenderTick, isVisible }) => {
+  previewModeOverride?: 'original' | 'translated';
+}> = React.memo(({ pageNum, pageRef, pageRenderTick, isVisible, previewModeOverride }) => {
   const isCurrentPage = useProjectStore((s) => s.currentPage === pageNum);
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
   const targetLanguage = useProjectStore((s) => s.targetLanguage);
@@ -185,7 +186,8 @@ const PDFPageOverlay: React.FC<{
   const regions = useSegmentationStore((s) => s.regions);
 
   const showDebugOverlay = useOCRTextLayerStore((s) => s.showDebugOverlay);
-  const translationPreviewMode = useOCRTextLayerStore((s) => s.translationPreviewMode);
+  const storePreviewMode = useOCRTextLayerStore((s) => s.translationPreviewMode);
+  const translationPreviewMode = previewModeOverride || storePreviewMode;
   const ocrResultSearchQuery = useOCRTextLayerStore((s) => s.ocrResultSearchQuery);
   const options = useOCRTextLayerStore((s) => s.options);
 
@@ -1115,7 +1117,8 @@ const PDFPageContainer: React.FC<{
   onPageLoadSuccess?: (page: any) => void;
   onPageRenderSuccess?: () => void;
   isProgrammaticScrollRef?: React.RefObject<boolean>;
-}> = ({ pageNum, onPageLoadSuccess: externalOnLoadSuccess, onPageRenderSuccess: externalOnRenderSuccess, isProgrammaticScrollRef }) => {
+  previewModeOverride?: 'original' | 'translated';
+}> = ({ pageNum, onPageLoadSuccess: externalOnLoadSuccess, onPageRenderSuccess: externalOnRenderSuccess, isProgrammaticScrollRef, previewModeOverride }) => {
   const {
     viewMode,
     setPage,
@@ -1315,6 +1318,7 @@ const PDFPageContainer: React.FC<{
             pageRef={pageRef}
             pageRenderTick={pageRenderTick}
             isVisible={isVisible}
+            previewModeOverride={previewModeOverride}
           />
         </div>
       )}
@@ -1322,7 +1326,11 @@ const PDFPageContainer: React.FC<{
   );
 };
 
-export const PDFCanvas: React.FC = React.memo(() => {
+interface PDFCanvasProps {
+  previewModeOverride?: 'original' | 'translated';
+}
+
+export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOverride }) => {
   const {
     fileUrl,
     fileData,
@@ -1453,7 +1461,22 @@ export const PDFCanvas: React.FC = React.memo(() => {
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;
-    contentRef.current.style.transform = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    const transformStr = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    contentRef.current.style.transform = transformStr;
+
+    // Real-time synchronization for split-view:
+    const isSplit = useUIStore.getState().viewMode === 'split';
+    if (isSplit) {
+      const workspace = contentRef.current.closest('.workspace-viewport');
+      if (workspace) {
+        const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
+        allContents.forEach((el) => {
+          if (el !== contentRef.current) {
+            (el as HTMLElement).style.transform = transformStr;
+          }
+        });
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -1623,7 +1646,22 @@ export const PDFCanvas: React.FC = React.memo(() => {
       }
       dragTransformRafRef.current = requestAnimationFrame(() => {
         if (contentRef.current) {
-          contentRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+          const transformStr = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+          contentRef.current.style.transform = transformStr;
+
+          // Real-time synchronization for split-view:
+          const isSplit = useUIStore.getState().viewMode === 'split';
+          if (isSplit) {
+            const workspace = contentRef.current.closest('.workspace-viewport');
+            if (workspace) {
+              const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
+              allContents.forEach((el) => {
+                if (el !== contentRef.current) {
+                  (el as HTMLElement).style.transform = transformStr;
+                }
+              });
+            }
+          }
         }
         dragTransformRafRef.current = null;
       });
@@ -1687,7 +1725,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
           transition: isDragging ? 'none' : 'transform 0.1s ease-out',
           willChange: 'transform'
         }}
-        className="absolute top-0 left-0 origin-top-left"
+        className="absolute top-0 left-0 origin-top-left pdf-canvas-content"
       >
         <div className="relative shadow-2xl">
           <Document
@@ -1702,6 +1740,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
                 pageNum={currentPage}
                 onPageLoadSuccess={onPageLoadSuccess}
                 isProgrammaticScrollRef={isProgrammaticScrollRef}
+                previewModeOverride={previewModeOverride}
               />
             ) : (
               Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
@@ -1710,6 +1749,7 @@ export const PDFCanvas: React.FC = React.memo(() => {
                   pageNum={pageNum}
                   onPageLoadSuccess={pageNum === 1 ? onPageLoadSuccess : undefined}
                   isProgrammaticScrollRef={isProgrammaticScrollRef}
+                  previewModeOverride={previewModeOverride}
                 />
               ))
             )}

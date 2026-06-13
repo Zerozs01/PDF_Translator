@@ -217,6 +217,7 @@ export interface ElectronAPI {
     updateDocument: (id: number, updates: DocumentUpdate) => Promise<boolean>;
     deleteDocument: (id: number) => Promise<boolean>;
     toggleFavorite: (id: number) => Promise<boolean>;
+    getDocumentCacheSize?: (id: number) => Promise<number>;
     getDocumentsByTag: (tagId: number) => Promise<DBDocument[]>;
     addDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
     removeDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
@@ -290,6 +291,7 @@ export interface ElectronAPI {
       imageWidth: number;
       imageHeight: number;
       language: string;
+      engine?: string;
     }) => Promise<any>;
     writeTempImage: (payload: { imageData: Uint8Array | ArrayBuffer; imageMimeType: string }) => Promise<{ imagePath: string }>;
     deleteTempImage: (payload: { imagePath: string }) => Promise<{ ok: boolean }>;

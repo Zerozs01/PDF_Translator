@@ -381,6 +381,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     useOCRTextLayerStore.getState().reset();
     useLayerStore.getState().clearLayers();
     useUIStore.getState().resetView();
+
+    // Kill external OCR engines immediately when project is closed
+    if (window.electronAPI?.ocr?.cancelExternal) {
+      window.electronAPI.ocr.cancelExternal().catch((err) => {
+        console.error('[useProjectStore] Failed to cancel external OCR:', err);
+      });
+    }
+
     return { 
       file: null,
       fileUrl: null,
@@ -556,4 +564,20 @@ if (initialOcrLang) {
     }
   }
 }
+
+// Sync viewMode from useProjectStore to pageMode in useUIStore
+useProjectStore.subscribe((state) => {
+  const pageMode = state.viewMode === 'continuous' ? 'scroll' : 'single';
+  if (useUIStore.getState().pageMode !== pageMode) {
+    useUIStore.setState({ pageMode });
+  }
+});
+
+// Sync pageMode from useUIStore to viewMode in useProjectStore
+useUIStore.subscribe((state) => {
+  const projectViewMode = state.pageMode === 'scroll' ? 'continuous' : 'single';
+  if (useProjectStore.getState().viewMode !== projectViewMode) {
+    useProjectStore.setState({ viewMode: projectViewMode });
+  }
+});
 

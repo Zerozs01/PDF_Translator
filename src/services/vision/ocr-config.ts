@@ -11,10 +11,6 @@ export const CONFIG = {
   /** Enable verbose logging when words are dropped by filters */
   DEBUG_LOG_DROPS: false,
 
-  // Tesseract WASM core URL (stable version)
-  CORE_PATH: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/tesseract-core.wasm.js',
-  // Local language data path (served from app). Falls back to CDN if not found.
-  LANG_PATH: 'tessdata://',
 
   // Region classification thresholds
   MIN_REGION_AREA: 100,

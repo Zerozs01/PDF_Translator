@@ -81,6 +81,8 @@ import {
   BENCHMARK_COMPOSITE_WEIGHTS
 } from '../../services/vision/ocrBenchmarkService';
 
+const BENCHMARK_ENGINES = OCR_ENGINES;
+
 // PDF.js worker is configured via pdfjsWorker
 
 type EngineWarmPhase = 'idle' | 'checking' | 'warming' | 'ready' | 'error';
@@ -442,7 +444,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied'>('idle');
   const [ocrPreviewSearchActiveIndex, setOcrPreviewSearchActiveIndex] = useState<number>(0);
   const [benchmarkRows, setBenchmarkRows] = useState<BenchmarkRow[]>(() =>
-    OCR_ENGINES.map((engine) => ({
+    BENCHMARK_ENGINES.map((engine) => ({
       engine: engine.id,
       engineName: engine.name,
       status: 'idle',
@@ -2995,7 +2997,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   const resetBenchmarkRows = useCallback(() => {
     setBenchmarkRows(
-      OCR_ENGINES.map((engine) => ({
+      BENCHMARK_ENGINES.map((engine) => ({
         engine: engine.id,
         engineName: engine.name,
         status: 'idle',
@@ -3100,7 +3102,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     const cacheDocId = await ensureDocumentId().catch(() => null);
 
     try {
-      for (const engine of OCR_ENGINES) {
+      for (const engine of BENCHMARK_ENGINES) {
         if (controller.signal.aborted) break;
         updateBenchmarkRow(engine.id, {
           status: 'running',
@@ -3266,7 +3268,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         // Check in-memory per-engine cache from previous OCR runs first.
         // This avoids re-running OCR when the user has already run a model individually.
         const engineMemoryCache: Record<string, OCRPageResult | null> = {};
-        for (const engine of OCR_ENGINES) {
+        for (const engine of BENCHMARK_ENGINES) {
           if (ignoreCache) {
             engineMemoryCache[engine.id] = null;
             continue;
@@ -3281,7 +3283,7 @@ export const OCRTextLayerPanel: React.FC = () => {
 
         // Also check DB for engines not yet in memory
         const engineDbCache: Record<string, OCRPageResult | null> = {};
-        for (const engine of OCR_ENGINES) {
+        for (const engine of BENCHMARK_ENGINES) {
           if (engineMemoryCache[engine.id] !== null || ignoreCache) {
             engineDbCache[engine.id] = null;
             continue;
@@ -3304,7 +3306,7 @@ export const OCRTextLayerPanel: React.FC = () => {
         }
 
         try {
-          for (const engine of OCR_ENGINES) {
+          for (const engine of BENCHMARK_ENGINES) {
             if (controller.signal.aborted) break;
 
             const supportsRaw = true;
@@ -3386,7 +3388,7 @@ export const OCRTextLayerPanel: React.FC = () => {
               try {
               // Use a true raw direct model run (bypass bridge preprocessing)
               const rawResult = await visionService.runRawDirect(
-                imageBlob, imgW, imgH, options.language
+                imageBlob, imgW, imgH, options.language, engine.id
               );
               rawSummary = summarizeBenchmarkResult(rawResult);
             } catch (err) {
@@ -3731,20 +3733,10 @@ export const OCRTextLayerPanel: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => void handleRawBenchmark('baseline', true)}
-                disabled={isProcessing || !file}
-                className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-slate-800/70 px-2 py-1 text-[10px] font-semibold text-slate-200 transition-colors hover:bg-slate-700/80 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Benchmark RAW engines (no preprocessing/filter/grouping)"
-              >
-                <Cpu size={10} />
-                Base
-              </button>
-              <button
-                type="button"
                 onClick={() => void handleRawBenchmark('dual', true)}
                 disabled={isProcessing || !file}
                 className="inline-flex items-center gap-1 rounded-md border border-white/25 bg-black px-2 py-1 text-[10px] font-semibold text-white transition-all hover:bg-white/10 hover:border-white/45 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Benchmark RAW vs FULL pipeline → Δ metrics + side-by-side preview"
+                title="Compare Raw PaddleOCR vs. Optimized Pipeline (binarization, deskew, and Thai repair)."
               >
                 <Sparkles size={10} className="text-white" />
                 Improve
@@ -4294,7 +4286,7 @@ export const OCRTextLayerPanel: React.FC = () => {
                 </p>
                 {showMetricsInfo && (
                   <div className="mt-3 space-y-1 rounded-lg bg-slate-900/50 p-3 text-[11px] leading-relaxed border border-white/5">
-                    <p className="text-emerald-200/90 font-medium">✦ Improve Mode (RAW vs FULL Pipeline Comparison)</p>
+                    <p className="text-emerald-200/90 font-medium">✦ AI Pipeline + Heuristics Mode (RAW vs FULL Pipeline Comparison)</p>
                     <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
                       <li><span className="text-cyan-300">Composite Score:</span> คะแนนรวม (35% Raw Conf + 45% Lexical Quality + 20% Yield) <span className="text-emerald-400">↑ ยิ่งสูงยิ่งดี</span> แปลว่าผลลัพธ์โดยรวมสมบูรณ์และถูกต้องมากขึ้น</li>
                       <li><span className="text-cyan-300">Lexical & Yield:</span> ความถูกต้องของคำ (Lexical) และปริมาณข้อความที่รักษาไว้ได้ (Yield) <span className="text-emerald-400">↑ สูง=ดี</span> หมายถึงลด Garbage ได้โดยไม่ทำให้ข้อความหลักหาย</li>
@@ -4318,7 +4310,7 @@ export const OCRTextLayerPanel: React.FC = () => {
             <div className="mt-4 flex-1 overflow-auto rounded-xl border border-white/10">
               {benchmarkMode === 'dual' && (
                 <div className="flex items-center gap-2 border-b border-white/8 bg-gradient-to-r from-emerald-950/60 to-slate-950/60 px-3 py-2 text-[11px]">
-                  <span className="font-semibold text-emerald-300">✦ Improve Mode</span>
+                  <span className="font-semibold text-emerald-300">✦ AI Pipeline + Heuristics</span>
                   <span className="text-slate-500">·</span>
                   <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">RAW</span>
                   <span className="text-slate-500">= no pipeline</span>

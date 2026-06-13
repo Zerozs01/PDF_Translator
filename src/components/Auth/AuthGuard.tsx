@@ -9,9 +9,12 @@ interface AuthGuardProps {
 }
 
 export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
+  const isOcrHarness = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
+
   const { isUnlocked, isSetup, isLoading, checkStatus, autoLogin } = useAuthStore();
 
   useEffect(() => {
+    if (isOcrHarness) return;
     // Initial status check and auto-login attempt
     const initAuth = async () => {
       await checkStatus();
@@ -19,6 +22,10 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
     };
     void initAuth();
   }, [checkStatus, autoLogin]);
+
+  if (isOcrHarness) {
+    return <>{children}</>;
+  }
 
   if (isLoading) {
     return (

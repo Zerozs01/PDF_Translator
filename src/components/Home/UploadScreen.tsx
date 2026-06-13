@@ -245,6 +245,24 @@ const DocumentContextMenu: React.FC<{
     [tags]
   );
 
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (window.electronAPI.db.getDocumentCacheSize) {
+      window.electronAPI.db.getDocumentCacheSize(doc.id)
+        .then((size) => {
+          if (active) setCacheSize(size);
+        })
+        .catch((err) => console.error('Failed to get cache size:', err));
+    } else {
+      setCacheSize(0);
+    }
+    return () => {
+      active = false;
+    };
+  }, [doc.id]);
+
   return createPortal(
     <div
       data-library-floating-menu="true"
@@ -255,7 +273,12 @@ const DocumentContextMenu: React.FC<{
     >
       <div className="border-b border-white/10 px-2 pb-2">
         <div className="truncate text-xs font-semibold text-slate-100">{doc.filename}</div>
-        <div className="mt-1 text-[10px] text-slate-400">{formatDate(doc.last_accessed)}</div>
+        <div className="mt-1 text-[10px] text-slate-400 flex items-center justify-between gap-2">
+          <span>{formatDate(doc.last_accessed)}</span>
+          <span className="text-[9px] text-[#2B9BFF] bg-[#2B9BFF]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+            แคช: {cacheSize !== null ? formatFileSize(cacheSize) : 'คำนวณ...'}
+          </span>
+        </div>
       </div>
 
       <div className="space-y-1 px-1 py-2">
@@ -269,6 +292,22 @@ const DocumentContextMenu: React.FC<{
           <Heart size={12} fill={doc.is_favorite ? 'currentColor' : 'none'} />
           {doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
         </button>
+
+        {cacheSize !== null && cacheSize > 0 && (
+          <button
+            onClick={async () => {
+              const confirm = window.confirm(`ต้องการลบแคช (OCR + Overlay แปล) ของไฟล์นี้หรือไม่?\nขนาดแคช: ${formatFileSize(cacheSize)}`);
+              if (confirm) {
+                await window.electronAPI.db.clearDocumentCache(doc.id);
+                setCacheSize(0);
+              }
+            }}
+            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-amber-300 transition-colors hover:bg-amber-500/10"
+          >
+            <RefreshCw size={12} />
+            ล้างข้อมูลแคช (Clear Cache)
+          </button>
+        )}
       </div>
 
       <div className="border-t border-white/10 px-2 py-2">
@@ -2072,7 +2111,7 @@ export const UploadScreen: React.FC = () => {
                       {/* Progress and status message */}
                       <div className="space-y-1">
                         <div className="flex justify-between items-center text-[9px]">
-                          <span className={`truncate max-w-[170px] ${
+                          <span className={`truncate max-w-[175px] ${
                             isActive ? 'text-[#2B9BFF] animate-pulse font-medium' :
                             isJobPaused ? 'text-amber-400/90' :
                             job.status === 'completed' ? 'text-emerald-400/90' :
@@ -2081,6 +2120,16 @@ export const UploadScreen: React.FC = () => {
                             'text-slate-400'
                           }`}>
                             {job.message}
+                            {job.startTime && (
+                              <span className="text-[8px] text-slate-500 font-normal ml-1">
+                                ({(() => {
+                                  const end = job.completedTime || Date.now();
+                                  const diff = Math.max(0, Math.floor((end - job.startTime) / 1000));
+                                  if (diff < 60) return `${diff}s`;
+                                  return `${Math.floor(diff / 60)}m ${diff % 60}s`;
+                                })()})
+                              </span>
+                            )}
                           </span>
                           <span className="font-semibold text-slate-300">
                             {job.progress}%

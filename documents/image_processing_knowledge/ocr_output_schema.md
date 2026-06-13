@@ -1,7 +1,7 @@
 # OCR Output Schema
 
 Version: 1.0
-Scope: PaddleOCR / EasyOCR / Tesseract / Electron OCR Runtime
+Scope: PaddleOCR / EasyOCR / Electron OCR Runtime
 Purpose: Define a unified output contract so all OCR engines can be consumed through one consistent interface.
 
 ---
@@ -29,7 +29,7 @@ The application must consume one schema only.
 ```json
 {
   "requestId": "string",
-  "engine": "paddleocr | easyocr | tesseract",
+  "engine": "paddleocr | easyocr",
   "profile": "clean_document | camera_document | screenshot_ui | receipt_thermal | scene_text",
   "source": {
     "path": "string | null",
@@ -73,7 +73,7 @@ The application must consume one schema only.
   },
   "errors": []
 }
-````
+```
 
 ---
 
@@ -89,7 +89,6 @@ The engine that produced the final accepted result:
 
 - paddleocr
 - easyocr
-- tesseract
 
 ### profile
 
@@ -520,18 +519,9 @@ Map into:
 - lines or words depending on granularity
 - assemble fullText by spatial ordering
 
-### Tesseract
+### Tesseract (Deprecated & Removed)
 
-May return TSV/HOCR/ALTO-like hierarchy.
-Preferred mapping:
-
-- blocks
-- lines
-- words
-- confidence normalized from engine scale if needed
-
-Important:
-Do not expose raw engine format directly to app consumers.
+Tesseract engine has been completely removed from the pipeline.
 
 ---
 
@@ -568,7 +558,7 @@ This field should directly support fallback routing.
 
 ## 19. Final Contract Rule
 
-The UI and business logic must never care whether OCR came from PaddleOCR, EasyOCR, or Tesseract.
+The UI and business logic must never care whether OCR came from PaddleOCR or EasyOCR.
 
 They must consume:
 

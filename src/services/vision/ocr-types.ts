@@ -73,6 +73,7 @@ export interface OCRDebugInfo {
   qualityProfile?: OCRQualityProfile;
   fallbackFromEngine?: string;
   fallbackReason?: string;
+  preprocessing_latency_ms?: number;
 }
 
 export interface OCRFixtureExpectation {

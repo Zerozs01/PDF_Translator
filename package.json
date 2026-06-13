@@ -5,13 +5,13 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "set \"OCR_PYTHON_PATH=%CD%\\.venv-ocr\\Scripts\\python.exe\" && vite",
+    "benchmark:memory-leak": "electron . --benchmark-memory-leak",
     "build": "tsc && vite build && electron-builder",
     "test": "vitest run --project unit",
     "test:e2e": "playwright test",
     "preview": "vite preview",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
-    "tessdata:download": "node scripts/download-tessdata.js",
     "ocr:bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap_ocr_env.ps1",
     "fonts:overlay:download": "node scripts/download-overlay-fonts.js",
     "fonts:overlay:download:force": "node scripts/download-overlay-fonts.js --force",
@@ -32,6 +32,7 @@
     "ocr:gate": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
     "ocr:gate:kor": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk --require-language kor",
     "ocr:benchmark:ci": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
+    "test:ocr:compare-pipeline": "node scripts/compare-pipeline.mjs",
     "postinstall": "node scripts/postinstall-electron.js && node scripts/postinstall-ocr.js && node scripts/download-overlay-fonts.js"
   },
   "repository": {

@@ -31,65 +31,7 @@ export function createOCRLogger(
   };
 }
 
-export async function withWorkerInitLock(
-  getCurrentInit: () => Promise<void> | null,
-  setCurrentInit: (promise: Promise<void> | null) => void,
-  initTask: () => Promise<void>
-): Promise<void> {
-  while (getCurrentInit()) {
-    await getCurrentInit();
-  }
 
-  const initPromise = (async () => {
-    await initTask();
-  })();
-
-  setCurrentInit(initPromise);
-  try {
-    await initPromise;
-  } finally {
-    if (getCurrentInit() === initPromise) {
-      setCurrentInit(null);
-    }
-  }
-}
-
-type WorkerState<TWorker> = {
-  worker: TWorker | null;
-  lang: string;
-};
-
-export async function ensureWorkerForLanguage<TWorker>(
-  targetLang: string,
-  getState: () => WorkerState<TWorker>,
-  setState: (state: WorkerState<TWorker>) => void,
-  getCurrentInit: () => Promise<void> | null,
-  setCurrentInit: (promise: Promise<void> | null) => void,
-  createWorkerForLanguage: (targetLang: string, previous: WorkerState<TWorker>) => Promise<TWorker>
-): Promise<TWorker> {
-  const current = getState();
-  if (current.worker && current.lang === targetLang) {
-    return current.worker;
-  }
-
-  await withWorkerInitLock(
-    getCurrentInit,
-    setCurrentInit,
-    async () => {
-      const latest = getState();
-      if (latest.worker && latest.lang === targetLang) return;
-      const worker = await createWorkerForLanguage(targetLang, latest);
-      setState({ worker, lang: targetLang });
-    }
-  );
-
-  const next = getState().worker;
-  if (!next) {
-    throw new Error(`Worker initialization failed for language: ${targetLang}`);
-  }
-
-  return next;
-}
 
 /**
  * Get image dimensions without heavy pixel processing.

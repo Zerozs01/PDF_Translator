@@ -150,6 +150,7 @@ export const OCRRegressionHarness: React.FC = () => {
       const selectedEngine = normalizeHarnessEngine(params.get('engine'));
       const selectedPipeline = normalizeHarnessPipeline(params.get('pipeline'));
       const selectedQuality = normalizeHarnessQuality(params.get('quality'));
+      const configParam = params.get('config');
       // no_fallback=1: fail-fast mode for benchmark — do NOT silently return Tesseract
       // results when the requested engine is unavailable (no electronAPI bridge).
       const noFallback = params.get('no_fallback') === '1';
@@ -226,6 +227,35 @@ export const OCRRegressionHarness: React.FC = () => {
           qualityProfile: selectedQuality,
         });
 
+        const rawConfig = {
+          engine: 'paddle', // Hardcoded as primary
+          preprocessing: {
+            enabled: false, // Bypass all filters
+            binarization: false,
+            deskew: false
+          },
+          postprocessing: {
+            heuristics: false // No text correction
+          }
+        };
+
+        const optimizedConfig = {
+          engine: 'paddle',
+          preprocessing: {
+            enabled: true, // Apply rules from ocr_preprocessing_rules.md
+            binarization: true,
+            deskew: true
+          },
+          postprocessing: {
+            heuristics: true, // Enable Thai repair patterns
+            glossary: true    // Apply translation_glossary_seed.md
+          }
+        };
+
+        const configObj = configParam === 'raw'
+          ? rawConfig
+          : (configParam === 'optimized' ? optimizedConfig : undefined);
+
         const ocrResult = await visionService.ocrForTextLayer(
           sourceImageUrl,
           sourceWidth,
@@ -237,12 +267,14 @@ export const OCRRegressionHarness: React.FC = () => {
           true,
           selectedPipeline,
           selectedQuality,
-          selectedEngine
+          selectedEngine,
+          undefined,
+          configObj
         );
 
         // Detect silent fallback: VisionService sets debug.fallbackFromEngine = the
         // originally-requested engine (e.g. 'paddleocr') when it was unavailable and
-        // Tesseract was silently used instead.
+        // easyocr was silently used instead.
         // IMPORTANT: fellBackFrom holds the *requested* engine, NOT the fallback engine.
         // So the presence of fellBackFrom alone means a fallback occurred — we must NOT
         // compare it to selectedEngine (they would be equal and hide the issue).
@@ -250,8 +282,7 @@ export const OCRRegressionHarness: React.FC = () => {
         const fellBackFrom = debugInfo?.fallbackFromEngine as string | undefined;
         if (noFallback && fellBackFrom) {
           throw new Error(
-            `engine_unavailable:${selectedEngine} -- fell back to easyocr ` +
-            `(reason: ${String(debugInfo?.fallbackReason ?? 'no electronAPI bridge')})`
+            `engine_unavailable:${selectedEngine} -- fell back to easyocr `
           );
         }
 

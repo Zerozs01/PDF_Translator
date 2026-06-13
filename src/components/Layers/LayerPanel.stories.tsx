@@ -34,7 +34,7 @@ const mockOcr: OCRPageResult = {
   language: 'eng',
   algorithmVersion: 1,
   pipelineProfile: 'panel',
-  ocrEngine: 'tesseract',
+  ocrEngine: 'paddleocr',
   ocrQualityProfile: 'best',
   lines: mockLines,
   words: mockLines.flatMap((line) => line.words),
@@ -143,9 +143,9 @@ const meta = {
 
         const baseOptions = useOCRTextLayerStore.getState().options;
         useOCRTextLayerStore.setState({
-          options: { ...baseOptions, language: 'eng', engine: 'tesseract', dpi: 300 },
+          options: { ...baseOptions, language: 'eng', engine: 'paddleocr', dpi: 300 },
           allPagesOCR: new Map([[1, mockOcr]]),
-          ocrByPageEngine: new Map([[1, new Map([['tesseract', mockOcr]])]]),
+          ocrByPageEngine: new Map([[1, new Map([['paddleocr', mockOcr]])]]),
           translationPreviewMode: 'translated',
           translationCacheByPage: new Map(),
           activeTranslationKeyByPage: new Map(),

@@ -4,10 +4,24 @@ This changelog tracks updates in `documents/` only.
 
 ## 2026-06-13
 
+- Completed the Tesseract Purge: Removed all Tesseract dependencies, assets, and fallback code from the project. PaddleOCR and EasyOCR are now solidified as the primary local engines.
+  - Deleted `public/tessdata/`, `eng.traineddata`, `spa.traineddata`, `scripts/download-tessdata.js`, and `scripts/ocr-tesseract-helper.js`.
+  - Uninstalled `tesseract.js` package and removed the `"tessdata:download"` npm script.
+  - Refactored `ocr-worker-shared.ts` to remove unused Tesseract lifecycle/pooling functions (`withWorkerInitLock` and `ensureWorkerForLanguage`).
+  - Updated `OCRRegressionHarness.tsx` error message to reference EasyOCR instead of Tesseract.
+  - Patched `AuthGuard.tsx` to bypass authentication checks during OCR regression benchmark runs (`ocr_harness=1`), preventing browser-side TypeError hangs.
+  - Cleaned up Tesseract references and defaults from `run-ocr-regression.mjs`, `ocr-benchmark-matrix.mjs`, and `ocr-table-benchmark.py`.
 - Fixed OCR Model Profile Persistence issue: Normalized the local storage key (`fileKey`) between store hydration (`loadProject`) and option changes subscription (`useOCRTextLayerStore.subscribe`) to ensure custom engine and quality profiles are remembered across app restarts, especially in production environments where path aliasing/switching occurs.
 - Updated translation cache version from `v47` to `v48` in ARCHITECTURE.md to match implementation.
 - Documented background translation queue alignment fixes:
   - Background queue now aggressively runs OCR split and cleaning (`splitAggressiveMergedLines` and `filterGhostOcrData`) to prevent Index Drift and Layout Grouping Mismatch between background processor and active UI canvas.
+- Re-integrated EasyOCR in the OCR Benchmark Panel and added support for RAW vs FULL pipeline evaluation for EasyOCR by developing `run_easyocr_raw` on the Python daemon and allowing dynamic IPC routing.
+- Fixed an issue in `run_paddleocr_raw` where word and line outputs resolved to 0 due to key mismatches with `ocr.ocr()` output structure, and calculated average confidence values for raw OCR runs (Paddle and Easy) instead of returning 0%.
+- Implemented Side-by-Side Split View & Synchronized Scrolling Architecture:
+  - Integrated `SplitViewToggle` button in the header and created `WorkspaceContainer` to manage dual-pane viewport rendering.
+  - Added bidirectional synchronization subscriptions between `useProjectStore`'s `viewMode` (`'single' | 'continuous'`) and `useUIStore`'s `pageMode` (`'single' | 'scroll'`).
+  - Added high-performance real-time DOM-based transform syncing during scrolls and drags in both `PDFCanvas` and `ImageCanvas` for smooth 60fps lockstep movement.
+  - Implemented automatic split screen reset (`resetView` resetting `viewMode` to `'overlay'`) on project load and close.
 
 ## 2026-06-01
 

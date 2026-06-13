@@ -423,6 +423,26 @@ export const DocumentDAO = {
     `).all(filename, limit);
   },
 
+  getDocumentCacheSize: (documentId: number) => {
+    if (!db) throw new Error('DB not initialized');
+    const row = db.prepare(`
+      SELECT (
+        SELECT COALESCE(SUM(LENGTH(ocr_data)), 0) 
+        FROM ocr_cache_engine 
+        WHERE document_id = ?
+      ) + (
+        SELECT COALESCE(SUM(LENGTH(ocr_data)), 0) 
+        FROM ocr_cache 
+        WHERE document_id = ?
+      ) + (
+        SELECT COALESCE(SUM(LENGTH(translated_by_index) + LENGTH(translated_text)), 0) 
+        FROM translation_cache 
+        WHERE document_id = ?
+      ) AS cache_size
+    `).get(documentId, documentId, documentId) as { cache_size: number } | undefined;
+    return row ? row.cache_size : 0;
+  },
+
   getById: (id: number) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare('SELECT * FROM documents WHERE id = ?').get(id);
