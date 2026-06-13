@@ -44,6 +44,10 @@ describe('koreanTranslationPolicy', () => {
       expect(applyKoreanConversationalFallback('이런...', '')).toBe('แบบนี้...');
       expect(applyKoreanConversationalFallback('자.', '')).toBe('เอาล่ะ.');
       expect(applyKoreanConversationalFallback('이 나이에\n섹스를 하는 것\n만으로도…\n죄책감이 7\n장난 아닌데…', '')).toBe('ในวัยนี้ แค่มีเพศสัมพันธ์… ความรู้สึกผิดไม่ใช่เรื่องเล่นๆเลย…');
+      expect(applyKoreanConversationalFallback('어쩔수', '')).toBe('ช่วยไม่ได้นะ');
+      expect(applyKoreanConversationalFallback('밑으로...', '')).toBe('ข้างล่าง...');
+      expect(applyKoreanConversationalFallback('잠깐?!', '')).toBe('เดี๋ยวก่อน?!');
+      expect(applyKoreanConversationalFallback('뭐야!', '')).toBe('อะไรกัน!');
     });
 
     it('returns null when no pattern matches', () => {

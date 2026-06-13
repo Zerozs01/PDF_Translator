@@ -94,6 +94,24 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^엇얘기끝났어$/, replacement: 'เอ๊ะ! คุยกันเสร็จแล้วเหรอ?' },
   { pattern: /^수진짜알지$/, replacement: 'ซู!! รู้จริงๆ ใช่ไหม?' },
   { pattern: /^짓이넘어가준다$/, replacement: 'ยอมมองข้ามการกระทำนี้ให้ก็ได้' },
+  
+  // Conversational fallbacks for Korean Manhwa common words / Argos boilerplate prevention
+  { pattern: /^어쩔수$/, replacement: 'ช่วยไม่ได้นะ' },
+  { pattern: /^어쩔수없지$/, replacement: 'ช่วยไม่ได้ล่ะนะ' },
+  { pattern: /^밑으로$/, replacement: 'ข้างล่าง' },
+  { pattern: /^잠깐$/, replacement: 'เดี๋ยวก่อน' },
+  { pattern: /^잠깐만$/, replacement: 'แป๊บนึงนะ' },
+  { pattern: /^뭐야$/, replacement: 'อะไรกัน' },
+  { pattern: /^아직일러$/, replacement: 'ยังเร็วไป' },
+  { pattern: /^그렇게껴안지$/, replacement: 'กอดแน่นขนาดนั้น' },
+  { pattern: /^그렇게무서웠어$/, replacement: 'กลัวขนาดนั้นเลยเหรอ' },
+  { pattern: /^앉아도$/, replacement: 'ขอนั่งนะ' },
+  { pattern: /^이거놔$/, replacement: 'ปล่อยนะ' },
+  { pattern: /^이거봐$/, replacement: 'ดูนี่สิ' },
+  { pattern: /^너한테$/, replacement: 'กับเธอ' },
+  { pattern: /^읏$/, replacement: 'อ๊ะ' },
+  { pattern: /^에멕$/, replacement: 'เอ๊ะ' },
+  { pattern: /^잠들면$/, replacement: 'ถ้าหลับไป' },
 ];
 
 export const normalizeKoreanColloquialOcrText = (text: string): string => {

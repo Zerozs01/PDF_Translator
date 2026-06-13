@@ -380,7 +380,10 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   if (thaiChars > 0) return false;
 
   if (sourceKey === translatedKey) {
-    return tokenCount >= 1 && (sourceLatinChars >= 4 || source.length >= 4);
+    // ทำไมถึงเขียนแบบนี้: ใช้ >= 6 แทน >= 4 เพื่อป้องกันการ skip manga dialog สั้นๆ (FOOD, DUMB, PRIN-, I'LL ฯลฯ)
+    // ที่ translation engine ส่งกลับมาเป็นข้อความต้นฉบับ (carry-over) แต่ยังควรแสดงใน export
+    // text ที่สั้นกว่า 6 chars มักเป็น dialog ที่มีความหมาย ไม่ใช่ untranslated artifact
+    return tokenCount >= 1 && (sourceLatinChars >= 6 || source.length >= 6);
   }
 
   return latinChars >= 4 && sourceLatinChars >= 4 && tokenCount >= 2;

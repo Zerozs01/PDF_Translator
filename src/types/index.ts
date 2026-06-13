@@ -214,6 +214,12 @@ export interface OCRPageResult {
   text: string;
   confidence: number;
   debug?: OCRDebugInfo;
+  /**
+   * ทำไมถึงเขียนแบบนี้: Flag นี้ใช้เป็น guard ป้องกัน splitAggressiveMergedLines ถูกเรียกซ้ำ
+   * เมื่อ OCR result ถูกโหลดจาก DB แล้วผ่าน setPageOCR ซึ่ง split อีกครั้ง (double-split bug)
+   * ระบบจะ set flag นี้เป็น true หลังจาก split แล้ว และ store จะตรวจสอบก่อน split ซ้ำ
+   */
+  _splitDone?: boolean;
 }
 
 /** OCR Processing Options */

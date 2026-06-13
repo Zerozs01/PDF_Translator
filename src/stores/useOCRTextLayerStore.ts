@@ -8,6 +8,7 @@ import { ProcessingProgress } from '../services/pdf';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout';
 import { splitAggressiveMergedLines } from '../services/layers/LayerGroupingService';
 import { isBoilerplateHallucination, applyKoreanConversationalFallback } from '../services/translation/koreanTranslationPolicy';
+import { processKoreanManhwaPipeline } from '../services/ocr/ocrManhwaHeuristics';
 
 export type TranslatorEngine = 'offline' | 'ai';
 export type OCRPreviewMode = 'translated' | 'original';
@@ -306,8 +307,13 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   allPagesOCR: new Map(),
   ocrByPageEngine: new Map(),
   setPageOCR: (pageNum, result) => set((state) => {
-    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
     const engine = (result.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
+    // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag ก่อน split เพื่อป้องกัน double-split bug
+    // เมื่อโหลด OCR จาก DB (ซึ่งผ่าน split มาแล้วจาก BackgroundQueueProcessor)
+    // แล้วมาเรียก setPageOCR ซึ่งจะ split ซ้ำ ทำให้ lines array มีขนาดใหญ่ขึ้นและ index drift
+    const processedLines = result._splitDone
+      ? result.lines
+      : splitAggressiveMergedLines(result.lines || [], 2.2);
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
@@ -316,7 +322,26 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       engine
     );
 
-    const processedResult = { ...result, lines: cleanLines, words: cleanWords };
+    let processedResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+
+    // Apply Korean Manhwa Pipeline if it's Korean
+    const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
+    if (isKorean) {
+      const koreanResult = processKoreanManhwaPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 35,
+          minColumnOverlapRatio: 0.3,
+          maxGroupHeightRatio: 0.3,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
+      processedResult = { ...koreanResult, _splitDone: true };
+    }
+
     const newMap = new Map(state.allPagesOCR);
     newMap.set(pageNum, processedResult);
     const byPageEngine = new Map(state.ocrByPageEngine);
@@ -329,7 +354,12 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     };
   }),
   setPageOCRForEngine: (pageNum, engine, result) => set((state) => {
-    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
+    // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag ก่อน split เพื่อป้องกัน double-split bug
+    // เมื่อโหลด OCR จาก DB (ซึ่งผ่าน split มาแล้วจาก BackgroundQueueProcessor)
+    // แล้วมาเรียก setPageOCRForEngine ซึ่งจะ split ซ้ำ ทำให้ lines array มีขนาดใหญ่ขึ้นและ index drift
+    const processedLines = result._splitDone
+      ? result.lines
+      : splitAggressiveMergedLines(result.lines || [], 2.2);
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
@@ -338,7 +368,26 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       engine
     );
 
-    const processedResult = { ...result, lines: cleanLines, words: cleanWords };
+    let processedResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+
+    // Apply Korean Manhwa Pipeline if it's Korean
+    const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
+    if (isKorean) {
+      const koreanResult = processKoreanManhwaPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 35,
+          minColumnOverlapRatio: 0.3,
+          maxGroupHeightRatio: 0.3,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
+      processedResult = { ...koreanResult, _splitDone: true };
+    }
+
     const byPageEngine = new Map(state.ocrByPageEngine);
     const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
     perPage.set(engine, processedResult);

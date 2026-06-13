@@ -64,7 +64,7 @@ protocol.registerSchemesAsPrivileged([
 import { initDB, closeDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
 import * as authService from './authService'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
-import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw } from './ocrBridge'
+import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw, clearExternalOcrCudaCache } from './ocrBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
 import { cancelPdfPrintExport, startPdfPrintExport } from './pdfExportService'
 import {
@@ -1735,6 +1735,20 @@ app.whenReady().then(() => {
       return true;
     } catch (error) {
       console.error('ocr:cancel-external error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('ocr:clear-cuda-cache', async (_, payload: { engine: string }) => {
+    try {
+      const engine = payload?.engine;
+      if (engine !== 'paddleocr' && engine !== 'easyocr') {
+        throw new Error(`Unsupported OCR engine for CUDA clear: ${engine}`);
+      }
+      await clearExternalOcrCudaCache(engine);
+      return true;
+    } catch (error) {
+      console.error('ocr:clear-cuda-cache error:', error);
       return false;
     }
   });

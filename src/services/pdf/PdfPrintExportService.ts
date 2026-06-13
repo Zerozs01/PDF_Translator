@@ -4,8 +4,12 @@ import {
   resolveOverlayFontFamily,
   type OverlayFontPreset,
 } from '../../constants/overlayFonts';
-import type { OverlayLayoutProfile } from '../../components/OCR/translationOverlayUtils';
+import {
+  resolveTranslationOverlayContext,
+  type OverlayLayoutProfile,
+} from '../../components/OCR/translationOverlayUtils';
 import { buildCanvasFontFamily } from '../layout/canvasLayoutService';
+import { buildLayerGroupsFromOCR } from '../layers/LayerGroupingService';
 import type { OCRPageResult } from '../../types';
 import type { TextLayer } from '../../types/layers';
 import type { OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
@@ -50,23 +54,58 @@ const buildPageConfig = async (
   input: ExportTranslatedPdfInput,
   overlayFontFamily: string
 ): Promise<PdfPrintExportPageConfig> => {
-  const pageLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
+  const layerStore = useLayerStore.getState();
+  let pageLayers = layerStore.layersByPage.get(pageNum) || [];
   const deletedLineIndexes = Array.from(
-    useLayerStore.getState().deletedLineIndexesByPage.get(pageNum) || []
+    layerStore.deletedLineIndexesByPage.get(pageNum) || []
   );
+
+  // ทำไมถึงเขียนแบบนี้: ถ้าหน้านี้ยังไม่มี layers (ไม่เคยเปิดดู)
+  // ให้ build layers จาก OCR + translation cache ก่อน export
+  // มิฉะนั้น layer จะเป็น undefined ทุก line → เข้าเงื่อนไข !layer
+  // → shouldSkipOverlayRenderForSuspiciousLine และ shouldSkipOverlayForUntranslatedCarryOver
+  // จะ filter lines สั้น/ไม่มีภาษาไทยออก ทำให้ dialog สั้นๆ หายไปจาก export
+  if (pageLayers.length === 0) {
+    try {
+      const translatedMap = new Map<number, string>(
+        translatedEntry.translatedByIndex
+          .filter((item) => Number.isFinite(item.index) && String(item.text || '').trim().length > 0)
+          .map((item) => [item.index, item.text])
+      );
+      const layerResult = buildLayerGroupsFromOCR(sourceOCR, translatedMap);
+      pageLayers = layerResult.layers;
+    } catch (err) {
+      console.warn(`[ExportPageConfig] Failed to build layers for page ${pageNum}:`, err);
+    }
+  }
+
+  const translationMap = new Map<string, OCRTranslationCacheEntry>();
+  translationMap.set(translatedEntry.key, translatedEntry);
+
+  const overlayContext = resolveTranslationOverlayContext({
+    currentPageOCR: sourceOCR,
+    optionsEngine: (sourceOCR.ocrEngine || 'paddleocr') as any,
+    optionsLanguage: sourceOCR.language || 'eng',
+    translationMode: resolveOverlayLayoutProfile(input.translationMode),
+    sourceLanguage: 'en',
+    targetLanguage: input.targetLanguage,
+    translationPreviewMode: 'translated',
+    currentPageTranslationMap: translationMap,
+    activeTranslationKey: translatedEntry.key,
+  });
+
+  const translatedByIndex = Array.from(overlayContext.translatedByIndex.entries()).map(([index, text]) => ({
+    index,
+    text: normalizeWhitespace(String(text || '')),
+  }));
 
   return {
     pageNum,
     sourceOCR,
-    translatedByIndex: translatedEntry.translatedByIndex
-      .filter((item) => Number.isFinite(item.index))
-      .map((item) => ({
-        index: item.index,
-        text: normalizeWhitespace(String(item.text || '')),
-      })),
+    translatedByIndex,
     pageLayers: pageLayers as TextLayer[],
     deletedLineIndexes,
-    overlayLayoutProfile: resolveOverlayLayoutProfile(input.translationMode),
+    overlayLayoutProfile: resolveOverlayLayoutProfile(input.translationMode) as OverlayLayoutProfile,
     overlayFontFamily,
     overlayFontSizeScale: input.overlayFontSizeScale,
     targetLanguage: input.targetLanguage,

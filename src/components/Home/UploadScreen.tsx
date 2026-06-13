@@ -14,9 +14,10 @@ import {
   OverlayFontPreset,
   getOverlayPrimaryFontName,
 } from '../../constants/overlayFonts';
-import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore, SUPPORTED_LANGUAGES } from '../../stores/useOCRTextLayerStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
+import { OCREngine } from '../../types';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 import { SecuritySettings } from '../Auth/SecuritySettings';
@@ -222,6 +223,7 @@ const DocumentContextMenu: React.FC<{
   onMoveToProject: (projectId: number | null) => void;
   onDelete: () => void;
   onCreateTag: () => void;
+  onOCRAllPages: () => void;
 }> = ({
   doc,
   position,
@@ -233,7 +235,8 @@ const DocumentContextMenu: React.FC<{
   onToggleTag,
   onMoveToProject,
   onDelete,
-  onCreateTag
+  onCreateTag,
+  onOCRAllPages
 }) => {
   const assignedTagIds = useMemo(() => new Set(documentTags.map(tag => tag.id)), [documentTags]);
   const projectAccentById = useMemo(
@@ -291,6 +294,17 @@ const DocumentContextMenu: React.FC<{
         >
           <Heart size={12} fill={doc.is_favorite ? 'currentColor' : 'none'} />
           {doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
+        </button>
+
+        <button
+          onClick={() => {
+            onOCRAllPages();
+            onClose();
+          }}
+          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-[#2B9BFF] transition-colors hover:bg-[#2B9BFF]/10 font-medium"
+        >
+          <Cpu size={12} />
+          OCR / แปลทุกหน้า (OCR/Translate All)
         </button>
 
         {cacheSize !== null && cacheSize > 0 && (
@@ -483,6 +497,7 @@ const DocumentCard = React.memo<{
   onDragEnd: () => void;
   isThumbnailHidden?: boolean;
   onToggleHideThumbnail?: () => void;
+  onOCRAllPages: () => void;
 }>(({
   doc,
   viewMode,
@@ -503,7 +518,8 @@ const DocumentCard = React.memo<{
   onDragStart,
   onDragEnd,
   isThumbnailHidden = false,
-  onToggleHideThumbnail
+  onToggleHideThumbnail,
+  onOCRAllPages
 }) => {
   const thumbnail = isThumbnailHidden ? (
     <div className="h-full w-full bg-[#f8fafc] border border-slate-200/80 shadow-inner flex flex-col items-center justify-center relative overflow-hidden group/paper">
@@ -538,7 +554,7 @@ const DocumentCard = React.memo<{
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
+          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 460));
         }}
       >
         <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
@@ -576,7 +592,7 @@ const DocumentCard = React.memo<{
         {isMenuOpen && (
           <DocumentContextMenu
             doc={doc}
-            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 430)}
+            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 460)}
             documentTags={documentTags}
             tags={tags}
             projects={projects}
@@ -586,6 +602,7 @@ const DocumentCard = React.memo<{
             onMoveToProject={onMoveToProject}
             onDelete={onDelete}
             onCreateTag={onCreateTag}
+            onOCRAllPages={onOCRAllPages}
           />
         )}
       </div>
@@ -611,7 +628,7 @@ const DocumentCard = React.memo<{
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
+        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 460));
       }}
     >
       <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-[#090a0c]">
@@ -649,7 +666,7 @@ const DocumentCard = React.memo<{
         onClick={(e) => {
           e.stopPropagation();
           const rect = e.currentTarget.getBoundingClientRect();
-          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 430));
+          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 460));
         }}
         className="p-1.5 rounded text-slate-500 hover:text-slate-300"
       >
@@ -658,7 +675,7 @@ const DocumentCard = React.memo<{
       {isMenuOpen && (
         <DocumentContextMenu
           doc={doc}
-          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 430)}
+          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 460)}
           documentTags={documentTags}
           tags={tags}
           projects={projects}
@@ -668,6 +685,7 @@ const DocumentCard = React.memo<{
           onMoveToProject={onMoveToProject}
           onDelete={onDelete}
           onCreateTag={onCreateTag}
+          onOCRAllPages={onOCRAllPages}
         />
       )}
     </div>
@@ -819,8 +837,73 @@ export const UploadScreen: React.FC = () => {
   const [projectDialog, setProjectDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [tagDialog, setTagDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [deleteTagDialog, setDeleteTagDialog] = useState<DeleteTagDialogState>({ isOpen: false, tag: null, confirmation: '' });
-  const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
+  const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
+
+  const [ocrBackgroundDialog, setOcrBackgroundDialog] = useState<{
+    isOpen: boolean;
+    doc: DBDocument | null;
+    model: OCREngine;
+    profile: 'ocr_all' | 'offline_all';
+    ocrLanguage: string;
+  }>({
+    isOpen: false,
+    doc: null,
+    model: 'paddleocr',
+    profile: 'offline_all',
+    ocrLanguage: 'eng',
+  });
+
+  const openOcrBackgroundDialog = useCallback((doc: DBDocument) => {
+    const currentOcrLanguage = useOCRTextLayerStore.getState().options.language || 'eng';
+    const currentOcrEngine = (useOCRTextLayerStore.getState().options.engine || 'paddleocr') as OCREngine;
+    setOcrBackgroundDialog({
+      isOpen: true,
+      doc,
+      model: currentOcrEngine,
+      profile: 'offline_all',
+      ocrLanguage: currentOcrLanguage,
+    });
+  }, []);
+
+  const handleStartOcrBackground = useCallback(() => {
+    const { doc, model, profile, ocrLanguage } = ocrBackgroundDialog;
+    if (!doc) return;
+
+    const opt = useOCRTextLayerStore.getState().options;
+    const projectState = useProjectStore.getState();
+
+    if (profile === 'ocr_all') {
+      useBackgroundQueueStore.getState().addJob({
+        documentId: doc.id,
+        filename: doc.filename,
+        filepath: doc.filepath,
+        engine: model,
+        type: 'ocr_all',
+        totalPages: Math.max(1, doc.total_pages),
+        ocrLanguage: ocrLanguage,
+      });
+    } else {
+      useBackgroundQueueStore.getState().addJob({
+        documentId: doc.id,
+        filename: doc.filename,
+        filepath: doc.filepath,
+        engine: model,
+        type: 'offline_all',
+        totalPages: Math.max(1, doc.total_pages),
+        ocrLanguage: ocrLanguage,
+        sourceLanguage: projectState.sourceLanguage || 'eng',
+        targetLanguage: projectState.targetLanguage || 'th',
+        translationMode: projectState.translationMode || 'adaptive',
+        ocrDpi: opt.dpi || 300,
+        ocrPageSegMode: opt.pageSegMode,
+        ocrQualityProfile: opt.ocrQualityProfile || 'best',
+      });
+    }
+
+    useBackgroundQueueStore.getState().boostPriorityForDocument(doc.id);
+    setOcrBackgroundDialog(prev => ({ ...prev, isOpen: false, doc: null }));
+  }, [ocrBackgroundDialog]);
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
   const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
@@ -1796,6 +1879,7 @@ export const UploadScreen: React.FC = () => {
                     }}
                     isThumbnailHidden={hiddenThumbnails.has(doc.id)}
                     onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
+                    onOCRAllPages={() => openOcrBackgroundDialog(doc)}
                   />
                 ))}
               </div>
@@ -2208,6 +2292,127 @@ export const UploadScreen: React.FC = () => {
               });
             }}
           />
+        )}
+
+        {ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left">
+              <h3 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
+                <Cpu className="text-[#2B9BFF]" size={18} />
+                ประมวลผลทุกหน้าเบื้องหลัง
+              </h3>
+              <p className="mt-1 text-xs text-slate-400 truncate font-mono bg-white/5 px-2 py-1 rounded">
+                ไฟล์: {ocrBackgroundDialog.doc.filename}
+              </p>
+
+              {/* OCR Engine selection */}
+              <div className="mt-4">
+                <label className="text-xs font-semibold text-slate-300">โมเดล OCR (OCR Engine)</label>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'paddleocr' }))}
+                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 transition-all text-xs ${
+                      ocrBackgroundDialog.model === 'paddleocr'
+                        ? 'border-[#864E3E] bg-[#864E3E]/15 text-slate-100 shadow-[0_0_12px_rgba(134,78,62,0.25)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-400 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span>PaddleOCR</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">แนะนำ (Recommended)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'easyocr' }))}
+                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 transition-all text-xs ${
+                      ocrBackgroundDialog.model === 'easyocr'
+                        ? 'border-[#CA7C4C] bg-[#CA7C4C]/15 text-slate-100 shadow-[0_0_12px_rgba(202,124,76,0.25)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-400 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span>EasyOCR</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">ทางเลือก (Alternative)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Profile Selection */}
+              <div className="mt-4">
+                <label className="text-xs font-semibold text-slate-300">รูปแบบการทำงาน (Task Profile)</label>
+                <div className="mt-2 space-y-2">
+                  <label className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition-all ${
+                    ocrBackgroundDialog.profile === 'offline_all'
+                      ? 'border-[#8BC3E5] bg-[#8BC3E5]/10 text-slate-100'
+                      : 'border-white/5 bg-slate-900/30 text-slate-400 hover:border-white/10 hover:bg-slate-900/50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="background_ocr_profile"
+                      checked={ocrBackgroundDialog.profile === 'offline_all'}
+                      onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'offline_all' }))}
+                      className="mt-0.5 accent-[#8BC3E5]"
+                    />
+                    <div className="text-xs">
+                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'offline_all' ? 'text-[#8BC3E5]' : 'text-slate-200'}`}>แปลภาษาออฟไลน์ทุกหน้า (Offline Translate All)</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR พร้อมแปลภาษาเป็นไทย (th) ในคิวเบื้องหลังทันที</div>
+                    </div>
+                  </label>
+                  <label className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition-all ${
+                    ocrBackgroundDialog.profile === 'ocr_all'
+                      ? 'border-[#2B9BFF] bg-[#2B9BFF]/8 text-slate-100'
+                      : 'border-white/5 bg-slate-900/30 text-slate-400 hover:border-white/10 hover:bg-slate-900/50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="background_ocr_profile"
+                      checked={ocrBackgroundDialog.profile === 'ocr_all'}
+                      onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'ocr_all' }))}
+                      className="mt-0.5 accent-[#2B9BFF]"
+                    />
+                    <div className="text-xs">
+                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'ocr_all' ? 'text-[#2B9BFF]' : 'text-slate-200'}`}>ทำ OCR ทุกหน้าอย่างเดียว (OCR All Pages Only)</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR อย่างเดียวเพื่อเก็บข้อมูลตำแหน่งคำโดยไม่แปลภาษา</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Language Selector */}
+              <div className="mt-4">
+                <label htmlFor="ocr-bg-lang-select" className="text-xs font-semibold text-slate-300">ภาษาหลักสำหรับการทำ OCR (OCR Language)</label>
+                <select
+                  id="ocr-bg-lang-select"
+                  value={ocrBackgroundDialog.ocrLanguage}
+                  onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, ocrLanguage: e.target.value }))}
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-3 py-2.5 text-xs text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60 cursor-pointer"
+                >
+                  {SUPPORTED_LANGUAGES.map((lang) => (
+                    <option key={lang.code} value={lang.code} className="bg-slate-950 text-slate-100">
+                      {lang.name} ({lang.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Actions */}
+              <div className="mt-6 flex items-center justify-end gap-3 border-t border-white/5 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setOcrBackgroundDialog({ isOpen: false, doc: null, model: 'paddleocr', profile: 'offline_all', ocrLanguage: 'eng' })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  ยกเลิก (Cancel)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartOcrBackground}
+                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98]"
+                >
+                  เริ่มประมวลผล (Start)
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {projectDialog.isOpen && (

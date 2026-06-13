@@ -283,6 +283,7 @@ export interface ElectronAPI {
     getEngineStatus: () => Promise<ExternalOCREngineStatus[]>;
     prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
     cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
+    clearCudaCache: (payload: { engine: OCREngine }) => Promise<boolean>;
     runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
     runRawDirect?: (payload: {
       imagePath?: string;

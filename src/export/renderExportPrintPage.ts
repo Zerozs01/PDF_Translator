@@ -41,17 +41,14 @@ export const resolveExportLineText = (
   translatedByIndex: Map<number, string>
 ): string | undefined => {
   const layer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible);
-  if (layer) {
-    const normalizedLayerText = normalizeWhitespace(String(layer.text || ''));
-    const normalizedSourceText = normalizeWhitespace(String(layer.sourceText || line.text || ''));
-    const hasTranslation = layer.userEdited || (normalizedLayerText && normalizedLayerText !== normalizedSourceText);
-    const translatedText = translatedByIndex.get(index);
-    if (hasTranslation) {
-      return normalizedLayerText || translatedText;
-    }
-    return translatedText ?? (normalizedLayerText || line.text);
+  if (!layer) {
+    return translatedByIndex.get(index);
   }
-  return translatedByIndex.get(index) || line.text;
+  const hasTranslation = layer.userEdited || layer.text !== layer.sourceText;
+  if (hasTranslation) {
+    return layer.text;
+  }
+  return translatedByIndex.get(index) || layer.text;
 };
 
 const isLineHiddenByLayer = (pageConfig: PdfPrintExportPageConfig, index: number): boolean =>
@@ -92,7 +89,7 @@ const buildOverlayLayoutInputs = (
   const translatedByIndex = new Map(
     pageConfig.translatedByIndex.map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
   );
-  const { sx, sy, pageWidthPt, pageHeightPt } = layout;
+  const { sx, sy } = layout;
 
   return computeOverlayLayoutMap(
     pageConfig.sourceOCR.lines.flatMap((line, index) => {
@@ -158,7 +155,6 @@ const appendAutoOverlayElements = (
   const deletedIndexes = new Set(pageConfig.deletedLineIndexes);
   const overlayLayout = buildOverlayLayoutInputs(pageConfig, layout);
   const pageBounds = { x0: 0, y0: 0, x1: pageWidthPt, y1: pageHeightPt };
-  // Build palette map — ใช้สีที่ sample จากรูปต้นฉบับแทนสีขาว default
   const paletteMap = new Map(
     (pageConfig.paletteByIndex ?? []).map((p) => [p.index, p])
   );
@@ -166,29 +162,35 @@ const appendAutoOverlayElements = (
   sourceOCR.lines.forEach((line: OCRLine, index: number) => {
     if (deletedIndexes.has(index)) return;
     if (isLineHiddenByLayer(pageConfig, index)) return;
-    const lineLayer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible);
+    const layer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index);
     const translatedText = resolveExportLineText(line, index, pageConfig, translatedByIndex);
+    console.log(`[ExportDebug] Page ${pageConfig.pageNum} line ${index}: srcText="${line.text}" resolvedText="${translatedText}" pageLayersCount=${pageConfig.pageLayers.length}`);
     if (!translatedText) return;
     const sourceFallback = isSourceFallbackOverlayText(line.text, translatedText);
-    if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallback) return;
-    if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallback) return;
-
-    const matchLayer = pageConfig.pageLayers.find((entry) => entry.lineIndex === index && entry.visible && entry.userEdited);
-    if (matchLayer) return;
+    if (!layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallback) return;
+    if (!layer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallback) return;
 
     const layoutEntry = overlayLayout.get(index);
-    const isMaskOnly = Boolean(layoutEntry?.hidden);
+    const isMaskOnly = (layer && layer.userEdited) ? false : Boolean(layoutEntry?.hidden);
     if (isMaskOnly && !layoutEntry?.preserveMaskWhenHidden) return;
 
-    const renderText = layoutEntry?.renderText !== undefined ? layoutEntry.renderText : translatedText;
+    const renderText = (layer && layer.userEdited)
+      ? layer.text
+      : (layoutEntry?.renderText !== undefined ? layoutEntry.renderText : translatedText);
     const effectiveProfile = layoutEntry?.effectiveProfile || overlayLayoutProfile;
     const styleKind = layoutEntry?.styleKind;
     const isDocLike = styleKind
       ? styleKind === 'document-heading' || styleKind === 'document-body'
       : effectiveProfile === 'official';
     const isComicLike = !isDocLike;
-    const maskBbox = (!isMaskOnly && layoutEntry?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
-    const resolvedSrcBbox = resolveOverlaySourceBBox(line);
+    const useLayerBbox = Boolean(layer && layer.userEdited);
+
+    const maskBbox = useLayerBbox
+      ? layer!.bbox
+      : ((!isMaskOnly && layoutEntry?.mergedMaskBBox) || resolveOverlayMaskBBox(line));
+    const resolvedSrcBbox = useLayerBbox
+      ? layer!.bbox
+      : resolveOverlaySourceBBox(line);
     const mskW = Math.max(1, maskBbox.x1 - maskBbox.x0);
     const mskH = Math.max(1, maskBbox.y1 - maskBbox.y0);
     const srcWLine = Math.max(1, resolvedSrcBbox.x1 - resolvedSrcBbox.x0);
@@ -196,9 +198,11 @@ const appendAutoOverlayElements = (
     const wCov = srcWLine / mskW;
     const aCov = (srcWLine * srcHLine) / Math.max(1, mskW * mskH);
     const lowCov = shouldUseDocumentCoverageFallback(line.text) && wCov < 0.84 && aCov < 0.86;
-    const srcBbox = isMaskOnly
-      ? resolvedSrcBbox
-      : (layoutEntry?.mergedBBox || (isDocLike || lowCov ? maskBbox : resolvedSrcBbox));
+    const srcBbox = useLayerBbox
+      ? layer!.bbox
+      : (isMaskOnly
+        ? resolvedSrcBbox
+        : (layoutEntry?.mergedBBox || (isDocLike || lowCov ? maskBbox : resolvedSrcBbox)));
 
     const mrkLeft = maskBbox.x0;
     const rkLeft = layoutEntry?.alignment === 'left' && layoutEntry.sharedBoxLeftX !== undefined
@@ -208,85 +212,201 @@ const appendAutoOverlayElements = (
     const mBH = Math.max(1, (maskBbox.y1 - maskBbox.y0) * sy);
     const bW = Math.max(1, (srcBbox.x1 - rkLeft) * sx);
     const bH = Math.max(1, (srcBbox.y1 - srcBbox.y0) * sy);
+
+    const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
     const expansion = resolveOverlayMaskExpansion(line);
-    const mBoost = isComicLike && layoutEntry?.mergedBBox ? 4 * sx : 0;
-    const mExpX = Math.min(expansion.maxExpandX * sx + mBoost + 3 * sx, Math.max(1, Math.round(mBH * expansion.expandXRatio)) + mBoost + 3 * sx);
-    const mExpL = Math.min(isComicLike ? 4 * sx : 1 * sx, mExpX);
-    const mExpR = mExpX;
-    const mExpTop = Math.min(expansion.maxExpandTop * sy + mBoost + 3 * sy, Math.max(1, Math.round(mBH * expansion.expandTopRatio)) + mBoost + 3 * sy);
-    const mExpBot = Math.min(
-      expansion.maxExpandBottom * sy + mBoost + 2 * sy,
-      Math.max(1, Math.round(mBH * expansion.expandBottomRatio)) + mBoost + 2 * sy
+    const mergedMaskBoost = 0;
+    const comicMaskBoostX = 0;
+    const comicMaskBoostTop = 0;
+    const comicMaskBoostBottom = 0;
+
+    const maskExpandX = Math.min(
+      expansion.maxExpandX * sx + mergedMaskBoost + comicMaskBoostX,
+      Math.max(1, Math.round(mBH * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
     );
-    const maskBleed = 2.0; // ถมสีกว้างกว่า border area เล็กน้อยในหน่วย pt เพื่อความมิดชิดของข้อความเดิม
+    const maskExpandLeft = Math.min(isComicLike ? 4 * sx : 1 * sx, maskExpandX);
+    const maskExpandRight = maskExpandX;
+    const maskExpandTop = Math.min(
+      expansion.maxExpandTop * sy + mergedMaskBoost + comicMaskBoostTop,
+      Math.max(1, Math.round(mBH * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
+    );
+    const thaiBottomBoost = hasThaiText ? Math.min(3 * sy, Math.max(1 * sy, Math.round(mBH * 0.08))) : 0;
+    const documentBottomBoost = isDocLike
+      ? Math.min(8 * sy, Math.max(2 * sy, Math.round(mBH * 0.16)))
+      : 0;
+    const maskExpandBottom = Math.min(
+      expansion.maxExpandBottom * sy + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
+      Math.max(1, Math.round(mBH * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
+    );
+
+    const maskBleed = 2.5; // ถมสีกว้างกว่า border area เล็กน้อยในหน่วย pt เพื่อความมิดชิดของข้อความเดิม
     const maskRect = clampOverlayRect(
-      mrkLeft * sx - mExpL - maskBleed,
-      maskBbox.y0 * sy - mExpTop - maskBleed,
-      mBW + mExpL + mExpR + (maskBleed * 2),
-      mBH + mExpTop + mExpBot + (maskBleed * 2),
+      mrkLeft * sx - maskExpandLeft - maskBleed,
+      maskBbox.y0 * sy - maskExpandTop - maskBleed,
+      mBW + maskExpandLeft + maskExpandRight + (maskBleed * 2),
+      mBH + maskExpandTop + maskExpandBottom + (maskBleed * 2),
       pageBounds
     );
 
     const palette = paletteMap.get(index) ?? DEFAULT_OVERLAY_PALETTE;
+    const maskBackgroundColor = (layer && layer.backgroundColor !== undefined)
+      ? layer.backgroundColor
+      : palette.backgroundColor;
+
     const maskEl = document.createElement('div');
     maskEl.className = 'export-mask';
     maskEl.style.left = `${maskRect.left}pt`;
     maskEl.style.top = `${maskRect.top}pt`;
     maskEl.style.width = `${maskRect.width}pt`;
     maskEl.style.height = `${maskRect.height}pt`;
-    maskEl.style.backgroundColor = palette.backgroundColor;
+    maskEl.style.backgroundColor = maskBackgroundColor;
     root.appendChild(maskEl);
     if (isMaskOnly) return;
 
-    const useMergedComic = (styleKind === 'comic-bubble' || styleKind === 'comic-box')
+    const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box')
       && !isMaskOnly
       && Boolean(layoutEntry?.mergedMaskBBox);
-    const tSrcL = useMergedComic ? mrkLeft : rkLeft;
-    const tSrcT = useMergedComic ? maskBbox.y0 : srcBbox.y0;
-    const tBW = useMergedComic ? Math.max(bW, mBW) : bW;
-    const tBH = useMergedComic ? Math.max(bH, mBH) : bH;
-    const rawTL = tSrcL * sx - (layoutEntry?.alignment === 'center' ? 0 : mExpL);
-    const rawTT = tSrcT * sy - mExpTop;
-    const rawTW = tBW + (layoutEntry?.alignment === 'center' ? 0 : mExpL + mExpR);
-    const rawTH = tBH + mExpTop + mExpBot;
-    const textRect = clampOverlayRect(rawTL, rawTT, rawTW, rawTH, pageBounds);
+    const textSourceLeft = useMergedComicTextRect ? mrkLeft : rkLeft;
+    const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : srcBbox.y0;
+    const textBaseWidth = useMergedComicTextRect ? Math.max(bW, mBW) : bW;
+    const textBaseHeight = useMergedComicTextRect ? Math.max(bH, mBH) : bH;
 
-    const typoW = isDocLike ? Math.max(bW, textRect.width * 0.96) : textRect.width;
-    const typoH = isDocLike ? textRect.height : textRect.height;
-    const baseTypo = layoutEntry?.typography || computeOverlayTypography(renderText, typoW, typoH, {
+    const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(mBH * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
+    const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(mBH * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+
+    const rawTextLeft = textSourceLeft * sx - (layoutEntry?.alignment === 'center' ? 0 : maskExpandLeft);
+    const rawTextTop = textSourceTop * sy - maskExpandTop - mergedComicTextTopLift;
+    const rawTextWidth = textBaseWidth + (layoutEntry?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
+    const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
+
+    let textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, pageBounds);
+    if (isComicLike) {
+      textRect = clampOverlayRect(textRect.left, textRect.top, textRect.width, textRect.height, {
+        x0: Math.max(0, maskRect.left - 1),
+        y0: Math.max(0, maskRect.top - 1),
+        x1: Math.min(pageBounds.x1, maskRect.left + maskRect.width + 1),
+        y1: Math.min(pageBounds.y1, maskRect.top + maskRect.height + 1),
+      });
+    }
+
+    const thaiDocumentHeadroom = isDocLike && hasThaiText
+      ? Math.max(4, Math.round(Math.max(bW, mBW) * 0.4))
+      : 0;
+    const documentTypographyWidth = lowCov
+      ? Math.max(bW, mBW)
+      : Math.max(bW, textRect.width * 0.96);
+    const typographyWidth = isDocLike ? documentTypographyWidth : textRect.width;
+    const typographyHeight = isDocLike
+      ? Math.min(
+          textRect.height,
+          Math.max(bH + thaiDocumentHeadroom, (lowCov ? mBH : bH) + thaiDocumentHeadroom)
+        )
+      : textRect.height;
+
+    const baseTypo = layoutEntry?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
       sourceText: line.text,
-      sourceBoxWidth: bW,
-      sourceBoxHeight: bH,
+      sourceBoxWidth: isDocLike && lowCov ? Math.max(bW, mBW) : bW,
+      sourceBoxHeight: isDocLike
+        ? (lowCov ? Math.max(bH, mBH) : bH) + thaiDocumentHeadroom
+        : bH,
       sourceLineCount: 1,
       fontFamily: overlayFontFamily,
       profile: effectiveProfile,
       styleKind,
     });
     const typo = scaleOverlayTypography(baseTypo, overlayFontSizeScale);
-    const overlayText = typo.forceSingleLine ? normalizeOverlayInlineText(renderText) : renderText;
-    const rotDeg = estimateLineRotationDeg(line);
-    const textWeight = Math.max(400, Math.min(700, Math.round(Number(palette.textFillWeight || 400))));
-
-    const textEl = document.createElement('div');
-    textEl.className = 'export-text';
-    textEl.textContent = overlayText;
-    textEl.style.left = `${textRect.left}pt`;
-    textEl.style.top = `${textRect.top}pt`;
-    textEl.style.width = `${textRect.width}pt`;
-    textEl.style.height = `${textRect.height}pt`;
-    textEl.style.fontFamily = overlayFontFamily;
-    textEl.style.fontSize = `${typo.fontSize}pt`;
-    textEl.style.fontWeight = String(textWeight);
-    textEl.style.color = palette.textColor;
-    textEl.style.textAlign = layoutEntry?.alignment === 'center' ? 'center' : 'left';
-    textEl.style.padding = `${typo.padY}pt ${typo.padX}pt`;
-    textEl.style.lineHeight = String(typo.lineHeight);
-    if (rotDeg !== 0) {
-      textEl.style.transformOrigin = 'top left';
-      textEl.style.transform = `rotate(${rotDeg}deg)`;
+    if (layer && layer.userEdited) {
+      typo.fontSize = (layer.fontSize || 14) * sx;
     }
-    applyTextStroke(textEl, Number(palette.textStrokeWidth || 0), palette.textStrokeColor || '', typo.fontSize);
-    root.appendChild(textEl);
+
+    // ทำไมถึงเขียนแบบนี้: คำนวณขอบเขตและตำแหน่งความสูง/ความกว้างของกล่องข้อความภายใน
+    // ตามแบบที่ทำใน PDFCanvas.tsx เพื่อให้สัดส่วนการตัดคำและตำแหน่งแสดงผลตรงกันเป๊ะ 100%
+    const extraTopPad = hasThaiText ? Math.max(1, Math.round(typo.fontSize * 0.08)) : 0;
+    const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typo.fontSize * 0.06)) : 0;
+
+    const textStartOffset = layoutEntry?.sharedTextStartX !== undefined
+      ? Math.max(0, (layoutEntry.sharedTextStartX - textSourceLeft) * sx)
+      : 0;
+    const centerOffset = layoutEntry?.sharedCenterX !== undefined
+      ? ((layoutEntry.sharedCenterX - textSourceLeft) * sx) - (textRect.width * 0.5)
+      : 0;
+
+    const innerLeft = layoutEntry?.alignment === 'center'
+      ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+      : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
+
+    const innerWidth = layoutEntry?.alignment === 'center'
+      ? textRect.width
+      : Math.max(1, textRect.width - innerLeft);
+
+    const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+    const minFillRatio = typo.estimatedLines > 1
+      ? (thaiComicLine ? 0.82 : 0.74)
+      : (thaiComicLine ? 0.58 : 0.5);
+
+    const paintHeight = Math.min(
+      textRect.height * 1.25,
+      Math.max(
+        typo.contentHeight + typo.padY * 2 + extraTopPad + extraBottomPad,
+        textRect.height * minFillRatio
+      )
+    );
+    const paintOffsetTop = Math.max(
+      hasThaiText ? 1 * sy : 0,
+      Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+    );
+
+    const overlayText = typo.forceSingleLine ? normalizeOverlayInlineText(renderText) : renderText;
+    const rotDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
+    const textWeight = layer?.bold
+      ? '700'
+      : String(Math.max(400, Math.min(700, Math.round(Number(palette.textFillWeight || 400)))));
+    const textColor = (layer && layer.textColor !== undefined) ? layer.textColor : palette.textColor;
+
+    const outerEl = document.createElement('div');
+    outerEl.className = 'export-text-outer';
+    outerEl.style.left = `${textRect.left}pt`;
+    outerEl.style.top = `${textRect.top}pt`;
+    outerEl.style.width = `${textRect.width}pt`;
+    outerEl.style.height = `${textRect.height}pt`;
+
+    const rotationOrigin = layer ? 'center center' : 'left top';
+    if (rotDeg !== 0) {
+      outerEl.style.transformOrigin = rotationOrigin;
+      outerEl.style.transform = `rotate(${rotDeg}deg)`;
+    }
+
+    const innerEl = document.createElement('div');
+    innerEl.className = 'export-text-inner';
+    innerEl.style.left = `${innerLeft}pt`;
+    innerEl.style.top = `${paintOffsetTop}pt`;
+    innerEl.style.width = `${innerWidth}pt`;
+    innerEl.style.maxWidth = `${innerWidth}pt`;
+    innerEl.style.minWidth = `${innerWidth}pt`;
+    innerEl.style.height = `${paintHeight}pt`;
+    innerEl.style.maxHeight = `${paintHeight}pt`;
+    innerEl.style.minHeight = `${paintHeight}pt`;
+    innerEl.style.padding = `${typo.padY + extraTopPad}pt ${typo.padX}pt ${typo.padY + extraBottomPad}pt ${typo.padX}pt`;
+    innerEl.style.color = textColor;
+    innerEl.style.fontSize = `${typo.fontSize}pt`;
+    innerEl.style.lineHeight = String(typo.lineHeight);
+    innerEl.style.fontFamily = overlayFontFamily;
+    innerEl.style.fontWeight = textWeight;
+    innerEl.style.textAlign = layoutEntry?.alignment === 'center' ? 'center' : 'left';
+    
+    // ตั้งค่า word-break และ white-space เพื่อแก้ปัญหาวรรณยุกต์ภาษาไทยซ้อนหรือถูกดีดลงบรรทัดใหม่
+    innerEl.style.whiteSpace = typo.forceSingleLine ? 'nowrap' : 'normal';
+    innerEl.style.wordBreak = 'normal';
+    innerEl.style.lineBreak = hasThaiText ? 'auto' : 'normal';
+    innerEl.style.overflowWrap = typo.forceSingleLine
+      ? 'normal'
+      : (hasThaiText ? 'normal' : 'break-word');
+
+    innerEl.textContent = overlayText;
+    applyTextStroke(innerEl, Number(palette.textStrokeWidth || 0), palette.textStrokeColor || '', typo.fontSize);
+
+    outerEl.appendChild(innerEl);
+    root.appendChild(outerEl);
   });
 };
 
@@ -296,9 +416,10 @@ const appendUserLayerElements = (
   layout: LayoutDimensions,
 ): void => {
   const { sx, sy } = layout;
+  const ocrLinesCount = pageConfig.sourceOCR.lines.length;
 
   pageConfig.pageLayers
-    .filter((layer) => layer.visible && layer.userEdited)
+    .filter((layer) => layer.visible && layer.userEdited && (layer.lineIndex === undefined || layer.lineIndex === null || layer.lineIndex < 0 || layer.lineIndex >= ocrLinesCount))
     .forEach((layer) => {
       const left = layer.bbox.x0 * sx;
       const top = layer.bbox.y0 * sy;

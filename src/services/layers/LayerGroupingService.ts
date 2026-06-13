@@ -394,7 +394,12 @@ export const buildLayerGroupsFromOCR = (
   }));
 
   // Pre-process: หั่นบรรทัดที่โดน EasyOCR/PaddleOCR มัดรวมข้าม panel ออกจากกัน
-  const rawSplitLines = splitAggressiveMergedLines(linesWithIndex, 2.2) as Array<OCRLine & { originalIndex?: number }>;
+  // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag เพื่อป้องกัน triple-split bug
+  // เมื่อ ocrResult.lines ผ่าน splitAggressiveMergedLines มาจาก store แล้ว (ใน setPageOCR/setPageOCRForEngine)
+  // การ split ซ้ำจะทำให้ lineIndex ที่ถูก assign ให้ layer ไม่ตรงกับ index ใน source lines array ที่ใช้ใน export
+  const rawSplitLines = (ocrResult as any)._splitDone
+    ? (linesWithIndex as Array<OCRLine & { originalIndex?: number }>)
+    : (splitAggressiveMergedLines(linesWithIndex, 2.2) as Array<OCRLine & { originalIndex?: number }>);
 
   // Re-sanitize to ensure reconstructed word bboxes from splitAggressiveMergedLines don't bypass clamping
   const lines = rawSplitLines.map(line => {

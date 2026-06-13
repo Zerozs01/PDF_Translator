@@ -60,6 +60,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'ocr:run-raw-direct',
   'ocr:run-external',
   'ocr:cancel-external',
+  'ocr:clear-cuda-cache',
   // Gemini
   'gemini:get-api-key-status',
   'gemini:set-api-key',
@@ -280,6 +281,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('ocr:prewarm-engine', payload),
     cancelExternal: (payload?: { engine?: string }) =>
       safeInvoke('ocr:cancel-external', payload),
+    clearCudaCache: (payload: { engine: string }) =>
+      safeInvoke('ocr:clear-cuda-cache', payload),
     /**
      * Write image bytes to a temp file on disk.
      * Returns { imagePath } — a string path to pass to runExternal.

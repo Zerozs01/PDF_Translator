@@ -27,10 +27,15 @@ class PdfExportSession {
   ) {}
 
   async run(pages: PdfPrintExportPageConfig[], onProgress: ProgressCallback): Promise<Buffer> {
+    const maxPageWidthPt = Math.max(595, ...pages.map((p) => p.pageWidthPt ?? p.sourceOCR?.width ?? 0));
+    const maxPageHeightPt = Math.max(842, ...pages.map((p) => p.pageHeightPt ?? p.sourceOCR?.height ?? 0));
+    const windowWidth = Math.max(1600, Math.round(maxPageWidthPt * 1.5));
+    const windowHeight = Math.max(2000, Math.round(maxPageHeightPt * 1.5));
+
     this.win = new BrowserWindow({
       show: false,
-      width: 1400,
-      height: 1800,
+      width: windowWidth,
+      height: windowHeight,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

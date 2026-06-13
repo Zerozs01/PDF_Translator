@@ -328,10 +328,6 @@ async function translateBatchGemini(
   return Promise.all(
     texts.map((text) =>
       translateWithGemini(text, type, mode, sourceLanguage, targetLanguage, contextOverrides)
-        .catch((err) => {
-          console.warn(`[translateBatchGemini] Gemini translation failed for "${text}":`, err);
-          return text; // Fallback to original source text on API error
-        })
     )
   );
 }
@@ -4931,7 +4927,7 @@ export default function App() {
           return result;
         } catch (err) {
           console.error(`[AppQueueHandler] translatePage error on page ${pageNum}:`, err);
-          return false;
+          throw err;
         }
       }
     });
@@ -4993,7 +4989,7 @@ export default function App() {
     return <UploadScreen />;
   }
 
-  const resolveTranslatableLineBBox = (line?: OCRLine): BBox | undefined => {
+  function resolveTranslatableLineBBox(line?: OCRLine): BBox | undefined {
     const rawBBox = line?.bbox;
     const normalizedRawBBox = rawBBox && Number(rawBBox.x1) > Number(rawBBox.x0) && Number(rawBBox.y1) > Number(rawBBox.y0)
       ? {
@@ -5047,28 +5043,28 @@ export default function App() {
       );
 
     return rawLooksMalformed ? wordUnionBBox : normalizedRawBBox;
-  };
+  }
 
-  const resolveLineSortHintY = (line?: OCRLine): number | undefined => {
+  function resolveLineSortHintY(line?: OCRLine): number | undefined {
     const direct = Number(line?.sortHintY);
     if (Number.isFinite(direct)) return direct;
     const legacy = Number((line as OCRLine | undefined)?.['_sortY']);
     return Number.isFinite(legacy) ? legacy : undefined;
-  };
+  }
 
-  const resolveLineSortHintX = (line?: OCRLine): number | undefined => {
+  function resolveLineSortHintX(line?: OCRLine): number | undefined {
     const direct = Number(line?.sortHintX);
     if (Number.isFinite(direct)) return direct;
     const legacy = Number((line as OCRLine | undefined)?.['_sortX']);
     return Number.isFinite(legacy) ? legacy : undefined;
-  };
+  }
 
-  const collectTranslatableLines = (
+  function collectTranslatableLines(
     lines: OCRLine[],
     engineHint?: string,
     pageWidth?: number,
     pageHeight?: number
-  ): TranslatableLine[] => {
+  ): TranslatableLine[] {
     const collected: TranslatableLine[] = [];
     const pageWidthVal = pageWidth && pageWidth > 0 ? pageWidth : 1200;
     const scaleFactor = 1200 / pageWidthVal;
@@ -5235,13 +5231,13 @@ export default function App() {
     }
 
     return contextFiltered;
-  };
+  }
 
-  const resolveModelScopedOriginalPageOCR = (
+  function resolveModelScopedOriginalPageOCR(
     ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
     pageNum: number,
     selectedEngine: OCREngine
-  ): OCRPageResult | undefined => {
+  ): OCRPageResult | undefined {
     const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
     if (engineScoped) return engineScoped;
 
@@ -5253,7 +5249,7 @@ export default function App() {
 
     const fallback = ocrState.allPagesOCR.get(pageNum);
     return fallback || undefined;
-  };
+  }
 
   const hasModelScopedCachedOCR = (
     ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
@@ -5453,6 +5449,31 @@ export default function App() {
     pageOCR: OCRPageResult,
     selectedEngine: OCREngine
   ): OCRTranslationCacheEntry | undefined => {
+    // ทำไมถึงเขียนแบบนี้: หากหน้าดังกล่าวไม่มีบรรทัดข้อความใดๆ จาก OCR (lines.length === 0)
+    // ให้จำลอง (mock) cache entry เปล่าส่งกลับไปทันที เพื่อป้องกันไม่ให้หน้านี้โดนข้าม (skip)
+    // หายไปจากการส่งออกไฟล์ PDF (ทำให้หน้าเอกสารขาด) และช่วยให้ผ่านการแจ้งเตือนคำแปลขาดในหน้าแรก
+    if (!pageOCR.lines || pageOCR.lines.length === 0) {
+      const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
+      return {
+        key: `mock-empty-${pageNum}-${selectedEngine}`,
+        pageNum,
+        ocrEngine: selectedEngine,
+        ocrLanguage: pageOCR.language || 'eng',
+        sourceLanguage: 'en',
+        targetLanguage: normalizedTargetLanguage,
+        translationMode: translationMode as any,
+        translatorEngine: 'google' as any,
+        sourceFingerprint: buildOCRSourceFingerprint(pageOCR, selectedEngine),
+        translatedByIndex: [],
+        translatedText: '',
+        lineCount: 0,
+        groupCount: 0,
+        createdAt: Date.now(),
+        width: pageOCR.width,
+        height: pageOCR.height,
+      };
+    }
+
     const ocrState = useOCRTextLayerStore.getState();
     const pageMap = ocrState.translationCacheByPage.get(pageNum);
     if (!pageMap || pageMap.size === 0) return undefined;
@@ -6381,16 +6402,16 @@ export default function App() {
     }
   };
 
-  const buildGeminiContextOverrides = (
+  function buildGeminiContextOverrides(
     mode: TranslationMode,
     source: string,
     target: string
-  ): { baseSystemPrompt?: string } => {
+  ): { baseSystemPrompt?: string } {
     const baseSystemPrompt = buildGeminiBasePrompt(mode, source, target, safetySettings);
     return {
       baseSystemPrompt,
     };
-  };
+  }
 
   const runAiBatchDocumentTranslation = async () => {
     const ocrState = useOCRTextLayerStore.getState();
@@ -7222,14 +7243,46 @@ export default function App() {
         }
       );
 
+      // ตรวจสอบว่าในผลลัพธ์การแปลมี failure หรือไม่
+      const hasFailedItem = translationResults.some(r => !r.success);
+      if (hasFailedItem && coordinatorEngineId === 'gemini') {
+        throw new Error('Gemini API returned partial failure status');
+      }
+
       // แมปผลการแปลกลับเข้าสู่ translatedGroupsRaw ตามลำดับดัชนีของกลุ่ม
       translatedGroupsRaw = mapTranslationResults(translationResults);
-    } catch (err) {
-      console.error('[TranslationCoordinator] Run translation error:', err);
-      // Fallback: ใช้ข้อความเดิม
-      preparedGroups.forEach((group, index) => {
-        translatedGroupsRaw[index] = group.protectedText || group.sourceText || '';
-      });
+    } catch (err: any) {
+      if (coordinatorEngineId === 'gemini') {
+        console.warn(`[Translation] Gemini translation failed: ${err.message || err}. Initiating automatic fallback to Argos Translate...`);
+        if (!options?.suppressStatus) {
+          setTranslationStatus({
+            kind: 'error',
+            message: `Gemini API Error: ${err.message || 'API failed'}. Falling back to Argos Offline...`,
+          });
+        }
+        try {
+          const fallbackResults = await translationCoordinator.runTranslation(
+            'argos',
+            translatableItems,
+            {
+              sourceLanguage: translationSourceLanguage,
+              targetLanguage: normalizedTargetLanguage,
+              translationMode: effectiveTranslationMode,
+              translateBatchOffline: (texts, type, mode, src, tgt) => 
+                translateBatchOffline(texts, type, mode, src, tgt, offlineBatchBridgeWrapper),
+            }
+          );
+          translatedGroupsRaw = mapTranslationResults(fallbackResults);
+          effectiveEngine = 'offline';
+          fallbackNote = ' (auto-fallback: gemini failed, used argos)';
+        } catch (argosErr: any) {
+          console.error(`[Translation] Argos fallback also failed:`, argosErr);
+          throw new Error(`Both Gemini and Argos fallback failed: ${argosErr.message || argosErr}`);
+        }
+      } else {
+        console.error('[TranslationCoordinator] Run translation error:', err);
+        throw err;
+      }
     }
 
     let translatedGroups = translatedGroupsRaw.map((text, index) => {
