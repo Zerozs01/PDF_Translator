@@ -5,10 +5,15 @@ import os from 'os';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
+declare const __DEV_PROJECT_ROOT__: string | undefined;
+
 // Load local .env file from project root if it exists
 function loadLocalEnv() {
   try {
-    const envPath = path.join(app.getAppPath(), '.env');
+    let envPath = path.join(app.getAppPath(), '.env');
+    if (!fs.existsSync(envPath) && typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
+      envPath = path.join(__DEV_PROJECT_ROOT__, '.env');
+    }
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split(/\r?\n/)) {
@@ -183,8 +188,6 @@ function normalizePythonOverride(value: string | undefined): string | null {
   }
   return trimmed;
 }
-
-declare const __DEV_PROJECT_ROOT__: string | undefined;
 
 function findLocalPythonExecutable(roots: Array<string | null | undefined>): string | null {
   const pythonRelativePath = process.platform === 'win32'

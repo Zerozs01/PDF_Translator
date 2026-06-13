@@ -4,6 +4,7 @@ This changelog tracks updates in `documents/` only.
 
 ## 2026-06-13
 
+- Fixed OCR Model Profile Persistence issue: Normalized the local storage key (`fileKey`) between store hydration (`loadProject`) and option changes subscription (`useOCRTextLayerStore.subscribe`) to ensure custom engine and quality profiles are remembered across app restarts, especially in production environments where path aliasing/switching occurs.
 - Updated translation cache version from `v47` to `v48` in ARCHITECTURE.md to match implementation.
 - Documented background translation queue alignment fixes:
   - Background queue now aggressively runs OCR split and cleaning (`splitAggressiveMergedLines` and `filterGhostOcrData`) to prevent Index Drift and Layout Grouping Mismatch between background processor and active UI canvas.

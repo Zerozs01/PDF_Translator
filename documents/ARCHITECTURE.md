@@ -143,3 +143,11 @@ This reduces false drops for lines such as technical sentence fragments and numb
 - Renderer uses only preload-exposed API
 - DB/file/bridge execution stays in Electron main process
 - No direct Node API in renderer
+
+## 10. File-Specific OCR Options Persistence
+
+- **State Sync & Hydration**:
+  - `useProjectStore` tracks the currently active file and synchronizes with `useOCRTextLayerStore`'s active options.
+  - When loading a project (`loadProject`), the system retrieves the file-specific `language`, `engine`, and `ocrQualityProfile` configuration from `localStorage`.
+  - To prevent inconsistencies in production mode (where file path resolution might alter/alias the `filePath` to map compatible databases), the storage retrieval key (`fileKey`) is normalized to evaluate `get().filePath || resolvedPath || file.name`.
+  - Any changes to OCR options in `useOCRTextLayerStore` trigger a subscription sync that saves options into `localStorage` using the exact same active `filePath` from `useProjectStore`.

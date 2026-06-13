@@ -3386,12 +3386,17 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
         try:
             # Check DirectML (AMD/Intel) via ONNX Runtime
             import onnxruntime as ort
-            if "DmlExecutionProvider" in ort.get_available_providers():
+            providers = ort.get_available_providers()
+            print(f"[ocrBridge] Available ONNX Runtime providers: {providers}", file=sys.stderr)
+            if "DmlExecutionProvider" in providers:
                 use_gpu = True
                 use_onnx = True
                 GLOBAL_USE_DML = True
-        except Exception:
-            pass
+                print("[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider) enabled successfully", file=sys.stderr)
+            else:
+                print("[ocrBridge] PaddleOCR DirectML NOT available (DmlExecutionProvider not in providers)", file=sys.stderr)
+        except Exception as exc:
+            print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
 
     if profile_key == "cpu_korean_default":
         return {

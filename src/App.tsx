@@ -8456,7 +8456,7 @@ export default function App() {
         </main>
 
         {/* 3. RIGHT SIDEBAR - OCR & Settings */}
-        <React.Suspense fallback={<div className="w-80 bg-slate-950/55 border-l border-white/10" />}>
+        <React.Suspense fallback={<div className="w-65 bg-slate-950/55 border-l border-white/10" />}>
           <RightSidebar 
             isAiProcessing={isAiProcessing}
             isOfflineProcessing={isOfflineProcessing}
@@ -8470,10 +8470,10 @@ export default function App() {
       </div>
 
       {isDownloadMenuOpen && (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-950/60 backdrop-blur-md px-4 py-6 transition-all duration-300">
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-950/60 backdrop-blur-md px-4 py-3 transition-all duration-300">
           <div 
             ref={downloadMenuRef} 
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950/80 p-5 shadow-[0_0_50px_-12px_rgba(43,155,255,0.25)] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
+            className="w-full max-w-md max-h-[calc(100vh-1.5rem)] overflow-y-auto custom-scrollbar rounded-2xl border border-white/10 bg-slate-950/80 p-5 shadow-[0_0_50px_-12px_rgba(43,155,255,0.25)] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200"
           >
             {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-white/5 mb-4">
@@ -8751,19 +8751,19 @@ export default function App() {
                           type="button"
                           onClick={() => triggerPopupTranslation('offline')}
                           disabled={isAiProcessing || isOfflineProcessing}
-                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 text-[10px] font-bold text-teal-200 transition-all hover:bg-teal-500/20 hover:border-teal-500/40 disabled:cursor-not-allowed disabled:opacity-45"
+                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg text-[10px] font-bold text-white transition-all bg-[#864E3E] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45 border border-white/10"
                         >
                           <RefreshCw size={10} className={isOfflineProcessing ? 'animate-spin' : ''} />
-                          <span>แปลภาษาแบบออฟไลน์</span>
+                          <span>Offline All Pages</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => triggerPopupTranslation('ai')}
                           disabled={isAiProcessing || isOfflineProcessing}
-                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-[10px] font-bold text-cyan-200 transition-all hover:bg-cyan-500/20 hover:border-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-45"
+                          className="flex items-center justify-center gap-1 py-1.5 rounded-lg text-[10px] font-bold text-white transition-all bg-[#CA7C4C] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45 border border-white/10"
                         >
-                          <Sparkles size={10} className={isAiProcessing ? 'animate-pulse text-cyan-300' : ''} />
-                          <span>แปลภาษาด้วย AI</span>
+                          <Sparkles size={10} className={isAiProcessing ? 'animate-pulse' : ''} />
+                          <span>AI All Pages</span>
                         </button>
                       </div>
                       
@@ -8815,7 +8815,7 @@ export default function App() {
                 type="button"
                 onClick={() => void handleHeaderDownload(effectiveDownloadScope, downloadModeSelection)}
                 disabled={isDownloadingResult || (downloadModeSelection === 'original' ? !canExportOriginalSelection : !canExportTranslatedSelection)}
-                className="w-full relative overflow-hidden group rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold p-3 text-xs tracking-wider transition-all duration-300 shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:shadow-[0_0_25px_rgba(6,182,212,0.45)] hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+                className="w-full relative overflow-hidden group rounded-xl bg-gradient-to-r from-[#839958] to-[#0A3323] hover:from-[#95ad66] hover:to-[#0f4631] text-white font-bold p-3 text-xs tracking-wider transition-all duration-300 shadow-[0_0_20px_rgba(131,153,88,0.3)] hover:shadow-[0_0_25px_rgba(131,153,88,0.45)] hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-out" />
                 
@@ -8862,17 +8862,20 @@ export default function App() {
           : 0;
 
         return (
-          <div className="fixed bottom-4 right-4 z-50 w-96 rounded-2xl border border-white/10 bg-slate-950/90 shadow-2xl backdrop-blur-xl transition-all duration-300 overflow-hidden text-left font-sans">
+          <div className="fixed bottom-4 right-0 z-50 w-80 rounded-l-2xl border-y border-l border-white/10 bg-slate-950/90 shadow-2xl backdrop-blur-xl transition-all duration-300 overflow-hidden text-left font-sans">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-[linear-gradient(124deg,rgba(12,25,48,0.85)_0%,rgba(17,24,39,0.95)_100%)]">
               <div className="flex items-center gap-2">
                 <RefreshCw size={13} className={`text-cyan-400 ${activeJob.status === 'processing' ? 'animate-spin' : ''}`} />
-                <span className="text-xs font-bold text-slate-100 uppercase tracking-wider">คิวประมวลผลเบื้องหลัง</span>
+                <span className="text-xs font-bold text-slate-100 uppercase tracking-wider">OCR Queue</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-slate-400 font-mono">
                   {visibleQueueJobs.filter(j => ['pending', 'processing'].includes(j.status)).length}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
+                <span className="text-[9px] font-semibold text-slate-300 bg-white/5 px-2 py-0.5 rounded uppercase tracking-wider shrink-0">
+                  {activeJob.status === 'processing' ? 'กำลังรัน' : isPaused ? 'หยุดชั่วคราว' : 'กำลังเริ่ม'}
+                </span>
                 <button
                   type="button"
                   onClick={() => setIsQueuePanelExpanded(!isQueuePanelExpanded)}
@@ -8890,7 +8893,7 @@ export default function App() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <div className="text-[11px] font-bold text-slate-200 truncate flex-1" title={activeJob.filename}>
-                    {activeJob.filename}
+                     {activeJob.filename}
                   </div>
                   <div className="text-[9px] font-semibold text-cyan-300 capitalize">
                     {activeJob.type === 'offline_all' ? 'Offline' : 'AI'} All Pages
@@ -8899,7 +8902,10 @@ export default function App() {
 
                 <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1.5">
                   <div className="truncate flex-1 pr-2">
-                    {activeJob.message || (activeJob.status === 'processing' ? 'กำลังประมวลผล...' : 'รอดำเนินการ...')}
+                    {activeJob.message && !activeJob.message.includes('หน้าที่') && !activeJob.message.includes('วิเคราะห์และแปล')
+                      ? activeJob.message
+                      : ''
+                    }
                   </div>
                   <div className="shrink-0 font-mono">
                     {activeJob.currentPage}/{activeJob.totalPages} หน้า ({progressPercent}%)
@@ -8911,7 +8917,7 @@ export default function App() {
                   <div 
                     className={`h-full rounded-full transition-all duration-300 ${
                       isPaused 
-                        ? 'bg-amber-500' 
+                        ? 'bg-[#839958]' 
                         : activeJob.status === 'failed' 
                           ? 'bg-rose-500' 
                           : 'bg-gradient-to-r from-cyan-500 to-blue-500 shadow-[0_0_8px_rgba(6,182,212,0.5)]'
@@ -8922,9 +8928,9 @@ export default function App() {
 
                 {/* Active Controls */}
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[9px] text-slate-500">
-                    สถานะ: <span className="font-semibold text-slate-300">
-                      {activeJob.status === 'processing' ? 'กำลังรัน' : isPaused ? 'หยุดชั่วคราว' : 'กำลังเริ่ม'}
+                  <div className="text-[9px] text-slate-500 shrink-0 font-mono">
+                    Runtime: <span className="font-semibold text-slate-300">
+                      {Math.max(0, Math.floor((Date.now() - activeJob.createdAt) / 1000))}s
                     </span>
                   </div>
                   <div className="flex items-center gap-1">
@@ -8932,7 +8938,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => useBackgroundQueueStore.getState().pauseJob(activeJob.id)}
-                        className="flex items-center gap-1 px-2 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 border border-amber-500/20 text-[9.5px] font-semibold transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[9.5px] font-semibold transition-all bg-[#839958] hover:bg-[#5e7235] text-white border border-[#839958] hover:border-[#5e7235]"
                         title="หยุดประมวลผลชั่วคราว"
                       >
                         <Pause size={10} />
@@ -8953,7 +8959,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => useBackgroundQueueStore.getState().cancelJob(activeJob.id)}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 border border-rose-500/20 text-[9.5px] font-semibold transition-colors"
+                      className="flex items-center gap-1 px-2 py-1 rounded text-[9.5px] font-semibold transition-all bg-[#0A3323] hover:bg-[#062116] text-white border border-[#0A3323] hover:border-[#062116]"
                       title="ยกเลิกการประมวลผลไฟล์นี้"
                     >
                       <Trash2 size={10} />

@@ -126,6 +126,7 @@
 4. **Roadmap Progress (P4 & P5):** อัปเดตสถานะของ P4 (Performance) และ P5 (Glossary Pipeline Integration) ใน [Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) เป็น **Completed** เรียบร้อยแล้ว
 5. **Phase 7 Advanced Local Security:** อัปเดตสัญญาระบบความปลอดภัยแบบ Secure-by-default, การเข้ารหัส DB ด้วย SQLCipher (`better-sqlite3-multiple-ciphers`), ระบบ Offline Setup/Login, Relax (Keychain) vs Security App Modes และ Reset System wipe data ลงใน manifest นี้แล้วในวันที่ 2026-06-12
 6. **All Pages / Background Queue Alignment:** อัปเดตเอกสารสถาปัตยกรรมการแปลและการจัดกลุ่ม เพิ่มรายละเอียดการผูกฟังก์ชัน `splitAggressiveMergedLines` และ `filterGhostOcrData` ใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) เพื่อแก้ไขปัญหาคำแปลเหลื่อมดัชนี (Index Drift) เมื่อแปลในแบบ Background / All Pages ในวันที่ 2026-06-13
+7. **OCR Model Profile Persistence Alignment:** ปรับปรุงและบันทึกสถาปัตยกรรมการจำโมเดลและโปรไฟล์ OCR รายไฟล์ (per-file) โดยแก้ไขจุดที่คีย์ `fileKey` ในการดึงค่า (`loadProject`) และการบันทึกค่า (`subscribe`) ไม่ตรงกันเมื่อรันในสภาพแวดล้อม Production (ซึ่งระบบจะมีการสลับพาธเพื่อความเข้ากันได้ของ OCR Cache) ในวันที่ 2026-06-13
 
 ## 🛠️ Common Task Workflow (ทางลัดในการทำงาน)
 

@@ -8,6 +8,54 @@ import { pathToFileURL } from 'url'
 import https from 'https'
 import zlib from 'zlib'
 
+// --- Production Logger Fallback ---
+let logFilePath: string | null = null;
+function getLogFilePath() {
+  if (!logFilePath) {
+    try {
+      logFilePath = path.join(app.getPath('userData'), 'main.log');
+      if (!fs.existsSync(logFilePath)) {
+        fs.writeFileSync(logFilePath, '', 'utf8');
+      }
+    } catch (e) {
+      return null;
+    }
+  }
+  return logFilePath;
+}
+
+function logToFile(level: string, ...args: any[]) {
+  const file = getLogFilePath();
+  if (!file) return;
+  const message = args.map(arg => {
+    if (typeof arg === 'object') {
+      try { return JSON.stringify(arg); } catch (e) { return String(arg); }
+    }
+    return String(arg);
+  }).join(' ');
+  const logLine = `[${new Date().toISOString()}] [${level}] ${message}\n`;
+  try {
+    fs.appendFileSync(file, logLine, 'utf8');
+  } catch (e) {}
+}
+
+const originalLog = console.log;
+const originalWarn = console.warn;
+const originalError = console.error;
+
+console.log = (...args: any[]) => {
+  originalLog(...args);
+  logToFile('INFO', ...args);
+};
+console.warn = (...args: any[]) => {
+  originalWarn(...args);
+  logToFile('WARN', ...args);
+};
+console.error = (...args: any[]) => {
+  originalError(...args);
+  logToFile('ERROR', ...args);
+};
+
 // Register tessdata custom scheme before app ready
 protocol.registerSchemesAsPrivileged([
   { scheme: 'tessdata', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
