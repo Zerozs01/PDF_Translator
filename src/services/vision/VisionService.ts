@@ -10,6 +10,7 @@
 
 import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
 import { filterKoreanJamoNoise, filterWeakIsolatedCjkLines } from './ocr-filtering';
+import { preprocessImage } from './ocr-preprocessing';
 import { OCR_ALGORITHM_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
@@ -3216,7 +3217,8 @@ class VisionService {
     imageUrl: string | Blob,
     imageWidth: number,
     imageHeight: number,
-    language: string = 'eng'
+    language: string = 'eng',
+    ocrEngine: OCREngine = 'paddleocr'
   ): Promise<OCRPageResult> {
     const bridge = window.electronAPI?.ocr;
     if (!bridge?.runRawDirect) {
@@ -3235,6 +3237,7 @@ class VisionService {
         imageWidth,
         imageHeight,
         language,
+        engine: ocrEngine,
       });
 
       // payload is expected to be the JSON emitted by scripts/paddleocr_raw_runner.py
@@ -3271,7 +3274,7 @@ class VisionService {
         pageSegMode: undefined,
         algorithmVersion: OCR_ALGORITHM_VERSION,
         pipelineProfile: 'raw',
-        ocrEngine: 'paddleocr',
+        ocrEngine,
         ocrQualityProfile: 'best',
         lines,
         words,
@@ -3305,9 +3308,48 @@ class VisionService {
     pipelineProfile: OCRPipelineProfile = 'panel',
     ocrQualityProfile: OCRQualityProfile = 'best',
     ocrEngine: OCREngine = 'paddleocr',
-    maxPixels?: number
+    maxPixels?: number,
+    config?: {
+      engine?: string;
+      preprocessing?: {
+        enabled?: boolean;
+        binarization?: boolean;
+        deskew?: boolean;
+      };
+      postprocessing?: {
+        heuristics?: boolean;
+        glossary?: boolean;
+      };
+    }
   ): Promise<OCRPageResult> {
     const startTime = performance.now();
+
+    if (config?.preprocessing?.enabled === false) {
+      const rawRes = await this.runRawDirect(imageUrl, imageWidth, imageHeight, language, ocrEngine);
+      const elapsed = performance.now() - startTime;
+      return {
+        ...rawRes,
+        debug: {
+          ...(rawRes.debug || {}),
+          runtimeMs: elapsed,
+          preprocessing_latency_ms: 0,
+        }
+      };
+    }
+
+    let preprocessingLatencyMs = 0;
+    let finalImageUrl = imageUrl;
+    if (config?.preprocessing?.binarization === true) {
+      const prepStart = performance.now();
+      try {
+        const prepRes = await preprocessImage(imageUrl, { binarize: true });
+        finalImageUrl = prepRes.image;
+        preprocessingLatencyMs = performance.now() - prepStart;
+      } catch (err) {
+        console.warn('[VisionService] Preprocessing failed:', err);
+      }
+    }
+
     if (ocrEngine !== 'paddleocr' && ocrEngine !== 'easyocr') {
       ocrEngine = 'paddleocr';
     }
@@ -3319,13 +3361,20 @@ class VisionService {
         debug: {
           ...(res.debug || {}),
           runtimeMs: elapsed,
+          preprocessing_latency_ms: preprocessingLatencyMs,
         }
       };
     };
 
+    const postProcess = (res: OCRPageResult): OCRPageResult => {
+      return config?.postprocessing?.heuristics === false
+        ? res
+        : this.postProcessKoreanExternalResult(res, language);
+    };
+
     try {
       const externalResult = await this.runExternalOcrForTextLayer(
-        imageUrl,
+        finalImageUrl,
         imageWidth,
         imageHeight,
         language,
@@ -3340,7 +3389,8 @@ class VisionService {
 
       const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
         && pipelineProfile === 'panel'
-        && this.shouldApplyAggressiveLatinPanelCleanup(language);
+        && this.shouldApplyAggressiveLatinPanelCleanup(language)
+        && config?.postprocessing?.heuristics !== false;
       const anomalies = canApplyPaddleLatinGeometryGuard
         ? this.collectPaddlePanelGeometryAnomalies(externalResult)
         : [];
@@ -3356,16 +3406,15 @@ class VisionService {
         && this.shouldFallbackMalformedPaddlePanelResult(externalResult, language);
       if (!shouldFallbackToGeometryEngine) {
         if (anomalies.length > 0) {
-          return setFinalRuntime(this.postProcessKoreanExternalResult(
+          return setFinalRuntime(postProcess(
             this.dropMinorPaddleGeometryAnomalies(
               externalResult,
               anomalies,
               'paddleGeometryMinorAnomalyDropNoFallback'
-            ),
-            language
+            )
           ));
         }
-        return setFinalRuntime(this.postProcessKoreanExternalResult(externalResult, language));
+        return setFinalRuntime(postProcess(externalResult));
       }
 
       const denseLatinDocument = this.isLikelyDenseLatinDocumentPanelResult(externalResult, language);
@@ -3378,7 +3427,7 @@ class VisionService {
       const fallbackEngine: OCREngine = 'easyocr';
       try {
         const fallbackResult = await this.runExternalOcrForTextLayer(
-          imageUrl,
+          finalImageUrl,
           imageWidth,
           imageHeight,
           language,
@@ -3406,7 +3455,7 @@ class VisionService {
         );
 
         if (fallbackDpi !== dpi) {
-          return setFinalRuntime(this.postProcessKoreanExternalResult(
+          return setFinalRuntime(postProcess(
             {
               ...mergedFallbackResult,
               debug: {
@@ -3416,47 +3465,43 @@ class VisionService {
                   externalPaddleGeometryFallbackDpiDownshift: 1,
                 },
               },
-            },
-            language
+            }
           ));
         }
 
-        return setFinalRuntime(this.postProcessKoreanExternalResult(mergedFallbackResult, language));
+        return setFinalRuntime(postProcess(mergedFallbackResult));
       } catch (fallbackError) {
         if ((fallbackError as Error | undefined)?.name === 'AbortError' || signal?.aborted) {
           if (severeAnomalyCount === 0 && anomalies.length > 0) {
-            return setFinalRuntime(this.postProcessKoreanExternalResult(
+            return setFinalRuntime(postProcess(
               this.dropMinorPaddleGeometryAnomalies(
                 externalResult,
                 anomalies,
                 'paddleGeometryFallbackAbortedMinorAnomalyDrop'
-              ),
-              language
+              )
             ));
           }
-          return setFinalRuntime(this.postProcessKoreanExternalResult(
+          return setFinalRuntime(postProcess(
             {
               ...externalResult,
               debug: {
                 ...(externalResult.debug || { droppedWords: [], dropCounts: {} }),
                 skipReason: 'paddleGeometryFallbackAborted',
               },
-            },
-            language
+            }
           ));
         }
         console.warn(`[VisionService] Paddle geometry fallback to ${fallbackEngine} failed:`, fallbackError);
         if (severeAnomalyCount === 0 && anomalies.length > 0) {
-          return setFinalRuntime(this.postProcessKoreanExternalResult(
+          return setFinalRuntime(postProcess(
             this.dropMinorPaddleGeometryAnomalies(
               externalResult,
               anomalies,
               'paddleGeometryFallbackFailedMinorAnomalyDrop'
-            ),
-            language
+            )
           ));
         }
-        return setFinalRuntime(this.postProcessKoreanExternalResult(externalResult, language));
+        return setFinalRuntime(postProcess(externalResult));
       }
     } catch (error) {
       if (signal?.aborted || (error as Error | undefined)?.name === 'AbortError') {
@@ -3469,7 +3514,7 @@ class VisionService {
         console.warn(`[VisionService] Performing seamless fallback to easyocr...`);
         try {
           const easyResult = await this.runExternalOcrForTextLayer(
-            imageUrl,
+            finalImageUrl,
             imageWidth,
             imageHeight,
             language,
@@ -3493,7 +3538,7 @@ class VisionService {
               fallbackReason: error instanceof Error ? error.message : String(error)
             };
           }
-          return setFinalRuntime(this.postProcessKoreanExternalResult(easyResult, language));
+          return setFinalRuntime(postProcess(easyResult));
         } catch (fallbackError) {
           console.error('[VisionService] EasyOCR fallback also failed:', fallbackError);
           throw fallbackError;

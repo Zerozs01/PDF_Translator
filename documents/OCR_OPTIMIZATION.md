@@ -6,7 +6,7 @@ This is the active OCR optimization playbook. Historical version-by-version logs
 
 - OCR algorithm version: `210`
 - Translation cache version: `v45`
-- Engines: `tesseract`, `paddleocr`, `easyocr`
+- Engines: `paddleocr`, `easyocr`
 - Pipeline profiles: `panel`, `export`
 - Quality profiles: `fast`, `balanced`, `best`
 
@@ -14,7 +14,7 @@ Notes:
 - "Raw" is a benchmark-only path (raw OCR vs full pipeline), not a pipeline profile.
 - OCR quality toggle in the panel maps to:
    - PaddleOCR (panel): `fast` or `balanced` (auto-downgrade to `fast` on large/non-CJK pages)
-   - Tesseract/EasyOCR: `best`
+   - EasyOCR: `best`
 
 ## 2. Current Stability Strategy
 
@@ -109,3 +109,13 @@ The offline pipeline now includes a few targeted protections to keep Korean comi
 - **Pivot bias**: Korean `ko -> th` routes prefer the `ko -> en -> th` pivot path more aggressively when direct output still looks weak or untranslated.
 - **Garbage token filter**: short OCR artifacts with mixed brackets/symbols and digits are dropped before translation.
 - **Phrase repair**: a small local fallback glossary handles a few recurring noisy comic lines so they do not degrade the final Thai output.
+
+## 9. PaddleOCR Cold Start & Memory Optimization (2026-06-13)
+
+To optimize memory usage and keep the startup footprint minimal, a series of lazy loading and process recycling policies were implemented:
+
+- **Zero Startup Footprint**: Delayed/automatic boot-time prewarming in `src/App.tsx` has been disabled. Python/PaddleOCR subprocesses are only spawned when a document is actually opened or OCR is explicitly requested.
+- **Aggressive Memory Cleanup**: Post-processing now runs `cleanup_memory()` in `external_ocr_bridge.py` which forces Python garbage collection (`gc.collect()`) and releases CUDA cache for both PyTorch and PaddlePaddle immediately.
+- **5-Minute Idle Timeout**: A timer-based lifecycle is enforced. Subprocesses are automatically terminated and released after 5 minutes of total inactivity.
+- **Workspace Close Teardown**: Closing a document/workspace triggers an immediate `cancelExternal` call to forcefully terminate all running OCR processes.
+- **Memory & Stability Verification Gate**: Added `--benchmark-memory-leak` main process startup flag and `"benchmark:memory-leak"` npm script to audit and guarantee initial main process RSS < 120MB (achieved `109.82 MB`).

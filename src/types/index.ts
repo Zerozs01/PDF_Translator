@@ -172,6 +172,7 @@ export interface OCRDebugInfo {
   panelSafetyNormalizedVersion?: number;
   fallbackFromEngine?: string;
   fallbackReason?: string;
+  preprocessing_latency_ms?: number;
 }
 
 /** Benchmark result for a doc/page */

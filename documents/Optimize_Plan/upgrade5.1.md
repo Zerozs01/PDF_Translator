@@ -23,9 +23,9 @@
 **เป้าหมาย:** ลดขนาดของแอปพลิเคชัน (Installer) และจัดการการใช้หน่วยความจำไม่ให้แอปค้างเมื่อเปิด PDF ไฟล์ใหญ่
 
 - [ ] **2.1 Lazy/On-Demand Model Downloader**
-  - **ไฟล์ที่เกี่ยวข้อง:** `scripts/download-tessdata.js`, `scripts/download-paddle-thai-models.py`
+  - **ไฟล์ที่เกี่ยวข้อง:** `scripts/download-paddle-thai-models.py`
   - **งานที่ต้องทำ:**
-    - นำโมเดลภาษา (Tesseract/PaddleOCR) และโมเดลแปลภาษา (Argos) ที่ไม่ค่อยได้ใช้ออกจาก Bundle เริ่มต้น
+    - นำโมเดลภาษา (PaddleOCR) และโมเดลแปลภาษา (Argos) ที่ไม่ค่อยได้ใช้ออกจาก Bundle เริ่มต้น
     - สร้าง UI ในฝั่ง React เพื่อให้ผู้ใช้กด "ดาวน์โหลดโมเดล" เมื่อต้องการใช้ภาษานั้นๆ (ทำ Progress bar แจ้งสถานะ)
 - [ ] **2.2 Canvas & Layer Memory Optimization**
   - **ไฟล์ที่เกี่ยวข้อง:** `src/components/PDF/PDFCanvas.tsx`, `src/components/Layers/InteractiveLayerOverlay.tsx`
@@ -39,9 +39,9 @@
 **เป้าหมาย:** สร้างระบบสำรองเมื่อ AI ทำงานพลาด และทำให้ผู้ใช้รู้สถานะการทำงานของแอปเสมอ
 
 - [ ] **3.1 Graceful Degradation สำหรับระบบ OCR**
-  - **ไฟล์ที่เกี่ยวข้อง:** `src/services/vision/ocr-fallback.ts`, `src/services/vision/ocr-timeout.ts`
+  - **ไฟล์ที่เกี่ยวข้อง:** `src/services/vision/ocr-timeout.ts`, `src/services/vision/VisionService.ts`
   - **งานที่ต้องทำ:**
-    - หาก PaddleOCR พังหรือไม่ตอบสนอง ให้มีระบบ Fallback กลับไปใช้ Tesseract อัตโนมัติ (หรือสลับเป็น Engine ที่เบากว่า)
+    - หาก PaddleOCR พังหรือไม่ตอบสนอง ให้มีระบบ Fallback กลับไปใช้ EasyOCR อัตโนมัติ (หรือสลับเป็น Engine ที่เบากว่า)
     - เพิ่ม Timeout สำหรับการรัน Python Script หากค้างเกิน 30 วินาที ให้ Terminate Process แล้วแจ้ง Error ที่เป็นมิตรทางหน้าจอ
 - [ ] **3.2 Global Loading State & Feedback**
   - **ไฟล์ที่เกี่ยวข้อง:** `src/stores/useUIStore.ts`, UI Components

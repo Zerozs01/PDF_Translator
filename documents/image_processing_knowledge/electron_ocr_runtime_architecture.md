@@ -456,7 +456,7 @@ Rules:
 
 ## 16. Memory Policy
 
-OCR on large images can explode memory usage.
+OCR on large images and daemon processes can explode memory usage over long uptimes.
 
 Rules:
 
@@ -465,6 +465,10 @@ Rules:
 - avoid multiple full-frame copies
 - use streaming/temp files when needed
 - limit concurrent OCR jobs
+- **Lazy Loading**: Spawn python/engine subprocesses only when explicitly requested, preventing idle resource usage on startup.
+- **Explicit Cleanup**: Run garbage collection (`gc.collect()`) and release CUDA cache (e.g. `torch.cuda.empty_cache()` / `paddle.device.cuda.empty_cache()`) immediately after completing each request inside the daemon.
+- **Idle Process Lifecycle**: Track inactive workers and automatically terminate daemon processes after 5 minutes of total inactivity.
+- **Workspace-based Teardown**: Gracefully kill daemon processes immediately when the active document or workspace is closed by the user.
 
 Recommended:
 

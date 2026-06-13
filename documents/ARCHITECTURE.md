@@ -25,9 +25,9 @@ This document describes the architecture as implemented in the current working t
   - queue + timeout + retry + worker lifecycle
   - external OCR bridge orchestration
   - chunk merge + post-cleanup for external engines
-- `src/services/vision/worker.ts`: main Tesseract OCR pipeline
-- `src/services/vision/worker-boot.ts`: boot entry
-- `src/services/vision/worker-stable.ts`: fallback path
+- `src/services/vision/worker.ts`: Layout segmentation worker (Tesseract-free)
+- `src/services/vision/worker-boot.ts`: boot entry for layout segmentation
+- `src/services/vision/worker-stable.ts`: fallback path for layout segmentation
 
 ## 2. Cache And Identity
 
@@ -58,7 +58,7 @@ This document describes the architecture as implemented in the current working t
 1. Render page to canvas
 2. Attempt in-memory cache, then DB cache
 3. Resolve OCR quality profile (panel toggle + engine heuristics)
-4. Run OCR (Tesseract or external engine)
+4. Run OCR (PaddleOCR or EasyOCR)
 4. Apply panel normalization:
    - script gate
    - panel safety dedupe
@@ -69,7 +69,7 @@ This document describes the architecture as implemented in the current working t
 Quality profile resolution (panel):
 
 - PaddleOCR: `fast` or `balanced` (auto-prefer `fast` on large non-CJK pages)
-- Tesseract/EasyOCR: `best`
+- EasyOCR: `best`
 - Raw OCR is used only in benchmark mode and is not a pipeline profile
 
 ## 4. External OCR Guardrails
@@ -78,7 +78,7 @@ For `paddleocr` panel path, service-level safeguards now include:
 
 - malformed Latin geometry anomaly detection
 - technical caption/row protection to avoid dropping valid lines in dense document pages
-- fallback/merge behavior with Tesseract when anomaly severity requires recovery
+- fallback/merge behavior with EasyOCR when anomaly severity requires recovery
 - minor-anomaly drop only for non-critical lines
 
 This reduces false drops for lines such as technical sentence fragments and numbered caption rows.

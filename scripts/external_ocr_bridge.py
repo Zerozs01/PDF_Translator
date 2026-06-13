@@ -4981,35 +4981,81 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
 
         words = []
         lines = []
-        result_items = raw if isinstance(raw, list) else [raw]
-        for item in result_items:
-            rec_texts = as_list_raw(read_field_raw(item, "rec_texts", []))
-            rec_scores = as_list_raw(read_field_raw(item, "rec_scores", []))
-            rec_boxes = as_list_raw(read_field_raw(item, "rec_boxes", []))
-            rec_polys = as_list_raw(read_field_raw(item, "rec_polys", []))
-            for index, text in enumerate(rec_texts):
-                text_value = str(text or "").strip()
-                if not text_value:
-                    continue
-                score = 0.0
-                if index < len(rec_scores):
-                    try:
-                        score = float(rec_scores[index])
-                    except Exception:
-                        score = 0.0
-                points = None
-                if index < len(rec_boxes):
-                    points = rec_boxes[index]
-                elif index < len(rec_polys):
-                    points = rec_polys[index]
-                bbox = bbox_from_points_raw(points)
-                words.append(text_value)
-                lines.append({
-                    "text": text_value,
-                    "confidence": score,
-                    "bbox": bbox,
-                    "words": [{"text": text_value, "confidence": score, "bbox": bbox}],
-                })
+
+        # Check if output is from ocr.ocr() (nested list format)
+        if isinstance(raw, list) and len(raw) > 0 and not hasattr(raw[0], "json") and not isinstance(raw[0], dict):
+            pages = raw[0] if isinstance(raw[0], list) else raw
+            if len(pages) > 0 and isinstance(pages[0], (list, tuple)) and len(pages[0]) >= 2:
+                for item in pages:
+                    if not isinstance(item, (list, tuple)) or len(item) < 2:
+                        continue
+                    points = item[0]
+                    rec = item[1]
+                    if not isinstance(rec, (list, tuple)) or len(rec) < 2:
+                        continue
+                    text_value = str(rec[0] or "").strip()
+                    score = float(rec[1] or 0.0)
+                    if not text_value:
+                        continue
+                    bbox = bbox_from_points_raw(points)
+                    words.append(text_value)
+                    lines.append({
+                        "text": text_value,
+                        "confidence": score,
+                        "bbox": bbox,
+                        "words": [{"text": text_value, "confidence": score, "bbox": bbox}],
+                    })
+
+        # Fallback to dict/predict structure if no lines processed yet
+        if not lines:
+            result_items = raw if isinstance(raw, list) else [raw]
+            for item in result_items:
+                if hasattr(item, "json") and isinstance(item.json, dict):
+                    item = item.json.get("res", item.json)
+                if hasattr(item, "to_dict"):
+                    item = item.to_dict()
+
+                rec_texts = as_list_raw(read_field_raw(item, "rec_texts", []))
+                if not rec_texts:
+                    rec_texts = as_list_raw(read_field_raw(item, "texts", []))
+                rec_scores = as_list_raw(read_field_raw(item, "rec_scores", []))
+                if not rec_scores:
+                    rec_scores = as_list_raw(read_field_raw(item, "scores", []))
+                rec_boxes = as_list_raw(read_field_raw(item, "rec_boxes", []))
+                if not rec_boxes:
+                    rec_boxes = as_list_raw(read_field_raw(item, "boxes", []))
+                rec_polys = as_list_raw(read_field_raw(item, "rec_polys", []))
+                if not rec_polys:
+                    rec_polys = as_list_raw(read_field_raw(item, "polys", []))
+
+                for index, text in enumerate(rec_texts):
+                    text_value = str(text or "").strip()
+                    if not text_value:
+                        continue
+                    score = 0.0
+                    if index < len(rec_scores):
+                        try:
+                            score = float(rec_scores[index])
+                        except Exception:
+                            score = 0.0
+                    points = None
+                    if index < len(rec_boxes):
+                        points = rec_boxes[index]
+                    elif index < len(rec_polys):
+                        points = rec_polys[index]
+                    bbox = bbox_from_points_raw(points)
+                    words.append(text_value)
+                    lines.append({
+                        "text": text_value,
+                        "confidence": score,
+                        "bbox": bbox,
+                        "words": [{"text": text_value, "confidence": score, "bbox": bbox}],
+                    })
+
+        # Calculate average confidence for the raw run
+        avg_confidence = 0.0
+        if lines:
+            avg_confidence = sum(line["confidence"] for line in lines) / len(lines)
 
         return {
             "ok": True,
@@ -5018,7 +5064,63 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
             "word_count": len(words),
             "words": words,
             "lines": lines,
-            "confidence": 0.0,
+            "confidence": round(avg_confidence * 100, 2) if avg_confidence <= 1.0 else round(avg_confidence, 2),
+            "text": " ".join(words),
+        }
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
+    img_path = Path(args.image)
+    if not img_path.exists():
+        return {"ok": False, "reason": f"image not found: {img_path}"}
+
+    try:
+        langs = select_easyocr_langs(args.language)
+        reader = get_easyocr_reader(langs)
+
+        t0 = time.perf_counter()
+        raw = reader.readtext(str(img_path), detail=1, paragraph=False)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        words = []
+        lines = []
+        for item in raw:
+            if len(item) < 3:
+                continue
+            points, text, confidence = item
+            text_value = str(text or "").strip()
+            if not text_value:
+                continue
+
+            try:
+                xs = [float(p[0]) for p in points]
+                ys = [float(p[1]) for p in points]
+                bbox = {"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys)}
+            except Exception:
+                bbox = {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
+
+            words.append(text_value)
+            lines.append({
+                "text": text_value,
+                "confidence": float(confidence),
+                "bbox": bbox,
+                "words": [{"text": text_value, "confidence": float(confidence), "bbox": bbox}],
+            })
+
+        avg_confidence = 0.0
+        if lines:
+            avg_confidence = sum(line["confidence"] for line in lines) / len(lines)
+
+        return {
+            "ok": True,
+            "engine": "easyocr-true-raw",
+            "elapsed_ms": round(elapsed_ms, 1),
+            "word_count": len(words),
+            "words": words,
+            "lines": lines,
+            "confidence": round(avg_confidence * 100, 2) if avg_confidence <= 1.0 else round(avg_confidence, 2),
             "text": " ".join(words),
         }
     except Exception as exc:
@@ -5093,7 +5195,9 @@ def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
     if args.action == "raw_ocr":
         if args.engine == "paddleocr":
             return run_paddleocr_raw(args)
-        raise RuntimeError("raw_ocr action is only supported for paddleocr engine")
+        if args.engine == "easyocr":
+            return run_easyocr_raw(args)
+        raise RuntimeError(f"raw_ocr action is only supported for paddleocr or easyocr engine")
 
     if not args.image:
         raise RuntimeError("--image is required for OCR actions")
@@ -5101,6 +5205,23 @@ def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
     if args.engine == "paddleocr":
         return run_paddleocr(args)
     return run_easy_yolo(args)
+
+
+def cleanup_memory() -> None:
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    try:
+        import paddle
+        if paddle.device.is_compiled_with_cuda():
+            paddle.device.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def serve_stdio(default_engine: str) -> None:
@@ -5125,6 +5246,12 @@ def serve_stdio(default_engine: str) -> None:
 
         sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
         sys.stdout.flush()
+
+        try:
+            cleanup_memory()
+        except Exception:
+            pass
+
 
 
 def main() -> None:

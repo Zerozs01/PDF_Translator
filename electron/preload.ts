@@ -31,6 +31,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:update-document',
   'db:delete-document',
   'db:toggle-favorite',
+  'db:get-document-cache-size',
   'db:get-documents-by-tag',
   'db:add-document-tag',
   'db:remove-document-tag',
@@ -189,6 +190,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:delete-document', id),
     toggleFavorite: (id: number) =>
       safeInvoke('db:toggle-favorite', id),
+    getDocumentCacheSize: (id: number) =>
+      safeInvoke('db:get-document-cache-size', id),
     getDocumentsByTag: (tagId: number) =>
       safeInvoke('db:get-documents-by-tag', tagId),
     addDocumentTag: (documentId: number, tagId: number) =>

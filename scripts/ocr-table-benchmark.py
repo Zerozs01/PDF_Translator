@@ -32,22 +32,6 @@ DEFAULT_IMAGES = [
 ]
 
 
-# ─── Tesseract via pytesseract ────────────────────────────────────────────────
-
-def run_tesseract(image_path: Path, language: str = "eng") -> dict[str, Any]:
-    cmd = [
-        "node", str(SCRIPT_DIR / "ocr-tesseract-helper.js"),
-        str(image_path), language
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60)
-        if proc.returncode != 0:
-            err = proc.stderr.strip() or proc.stdout.strip()
-            return {"ok": False, "error": f"node error: {err[:200]}"}
-        result = json.loads(proc.stdout.strip())
-        return result
-    except Exception as exc:
-        return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
 
 
 # ─── PaddleOCR / EasyOCR via external_ocr_bridge.py ─────────────────────────
@@ -375,8 +359,8 @@ def build_summary_table(rows: list[dict]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="OCR Engine Direct Benchmark")
-    parser.add_argument("--engines", nargs="+", default=["tesseract", "paddleocr"],
-                        choices=["tesseract", "paddleocr", "easyocr", "paddleocr-true-raw"],
+    parser.add_argument("--engines", nargs="+", default=["paddleocr", "easyocr"],
+                        choices=["paddleocr", "easyocr", "paddleocr-true-raw"],
                         help="Engines to benchmark")
     parser.add_argument("--images", nargs="+", default=None,
                         help="Image paths (default: public/fixtures/ocr/manga/*.png)")
@@ -406,9 +390,7 @@ def main() -> None:
             print(f"  [{engine}] {img_name} ... ", end="", flush=True)
             t0 = time.perf_counter()
 
-            if engine == "tesseract":
-                result = run_tesseract(img_path, args.language)
-            elif engine == "paddleocr-true-raw":
+            if engine == "paddleocr-true-raw":
                 result = run_true_raw_paddle(img_path, args.language)
             else:
                 result = run_bridge(engine, img_path, args.language)

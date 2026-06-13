@@ -4,11 +4,11 @@
 
 All content here is kept in sync with the current codebase and should be preferred over older ad-hoc notes.
 
-## Current Snapshot (2026-05-29)
+## Current Snapshot (2026-06-13)
 
 - OCR algorithm version: `210`
 - Translation cache version: `v45`
-- OCR engines in UI: `tesseract`, `paddleocr`, `easyocr`
+- OCR engines in UI: `paddleocr`, `easyocr`
 - OCR profiles: `pipelineProfile = panel | export`, `ocrQualityProfile = fast | balanced | best`
 - Translation modes: `adaptive | manga | manhwa | official`
 - OCR panel now includes:
@@ -20,14 +20,13 @@ All content here is kept in sync with the current codebase and should be preferr
 
 Notes:
 - "Base" benchmark runs the full pipeline for each engine.
-- "Improve" runs raw OCR vs full pipeline side-by-side; raw is a benchmark path, not a pipeline profile.
+- "Improve" runs raw OCR vs full pipeline side-by-side for both PaddleOCR and EasyOCR; raw is a benchmark path, not a pipeline profile.
 
 ## Canonical Files
 
 - `ARCHITECTURE.md`: runtime topology, data flow, OCR/translation cache flow
 - `OCR_OPTIMIZATION.md`: active OCR tuning rules and validation policy
 - `Roadmap.md`: prioritized implementation plan
-- `LOCAL_TESSDATA.md`: local language pack setup and troubleshooting
 - `Knowledge.md`: compact operating principles and lessons that still apply
 - `CHANGELOG.md`: documentation change history in this folder
 
@@ -39,7 +38,6 @@ Notes:
 - `npm run ocr:regression:paddle`
 - `npm run ocr:regression:easy`
 - `npm run ocr:benchmark`
-- `npm run tessdata:download`
 
 ## Before Release
 

@@ -381,6 +381,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     useOCRTextLayerStore.getState().reset();
     useLayerStore.getState().clearLayers();
     useUIStore.getState().resetView();
+
+    // Kill external OCR engines immediately when project is closed
+    if (window.electronAPI?.ocr?.cancelExternal) {
+      window.electronAPI.ocr.cancelExternal().catch((err) => {
+        console.error('[useProjectStore] Failed to cancel external OCR:', err);
+      });
+    }
+
     return { 
       file: null,
       fileUrl: null,

@@ -1,7 +1,7 @@
 # OCR Preprocessing Rules
 
 Version: 1.0
-Scope: PaddleOCR / EasyOCR / Tesseract
+Scope: PaddleOCR / EasyOCR
 Purpose: Define image preprocessing policies that improve OCR accuracy without causing unnecessary distortion.
 
 ---
@@ -108,8 +108,7 @@ Preferred fixes:
 
 Important:
 
-- Tesseract benefits heavily from deskew
-- PaddleOCR is more tolerant, but still improves with corrected geometry
+- PaddleOCR is geometrically tolerant, but still improves with corrected geometry
 
 #### 2. Perspective Correction
 
@@ -242,7 +241,7 @@ Avoid:
 
 ## 6. Binarization Rules
 
-Binarization is highly useful for Tesseract and classic document OCR.
+Binarization is highly useful for classic document OCR.
 It is not always the best first move for scene text.
 
 ### Use global thresholding when
@@ -271,7 +270,6 @@ It is not always the best first move for scene text.
 
 Practical rule:
 
-- **Tesseract often wants better binarization**
 - **PaddleOCR often wants cleaner but not necessarily fully binarized input**
 - **EasyOCR usually benefits from readable contrast, not aggressive threshold damage**
 
@@ -452,20 +450,6 @@ Avoid:
 
 ---
 
-### Tesseract
-
-Best with:
-
-- deskewed image
-- clean binarization
-- simple layout
-- strong foreground/background separation
-- adequate DPI / scale
-
-Avoid:
-
-- feeding raw camera photos without cleanup
-- complex textured scene text
 
 ---
 
@@ -477,7 +461,7 @@ Avoid:
 - deskew
 - Otsu or simple threshold
 - optional light median filter
-- send to Tesseract or PaddleOCR
+- send to PaddleOCR
 
 ### Profile B: Camera Document
 
@@ -504,7 +488,7 @@ Avoid:
 - adaptive threshold
 - closing or dilation if broken strokes
 - deskew
-- send to PaddleOCR first, Tesseract second
+- send to PaddleOCR first
 
 ### Profile E: Scene Text
 
@@ -563,6 +547,5 @@ Use preprocessing as a controlled decision system:
 
 Bottom line:
 
-- **Tesseract wants stronger preprocessing**
 - **PaddleOCR wants smarter preprocessing**
 - **EasyOCR wants readable preprocessing**

@@ -67,7 +67,7 @@
 
 ### 3. OCR Engine & Processing Pipelines
 - **OCR Electron Bridge:** [electron/ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) — สื่อสารประสานงานระบบ OCR ฝั่ง Main Process
-- **OCR Main Orchestrator (Frontend):** [src/services/vision/VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) — จัดการคิวงาน, worker lifecycle, และการรวมผลลัพธ์ของ OCR
+- **OCR Main Orchestrator (Frontend):** [src/services/vision/VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) — จัดการคิวงาน, worker lifecycle (Tesseract-free layout segmentation), และการรวมผลลัพธ์ของ OCR
 - **Python OCR Pipeline (Daemon/External):** [scripts/external_ocr_bridge.py](file:///c:/App/Electron/PDF_Translator/scripts/external_ocr_bridge.py) — รันโมเดล OCR ภายนอก (เช่น PaddleOCR/EasyOCR) ทำงานเป็น Daemon เพื่อลดเวลาบูตระบบ
 - **OCR Geometry Normalization:** [src/services/ocr/ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) — จัดการความเสถียรของกล่องข้อความ คำที่ซ้อนทับกัน และการขจัดสถิติ ghost lines
 
@@ -95,7 +95,6 @@
 
 ### 👁️ Image & OCR Processing
 - [documents/OCR_OPTIMIZATION.md](file:///c:/App/Electron/PDF_Translator/documents/OCR_OPTIMIZATION.md) — เทคนิคการปรับปรุงความเร็วและความแม่นยำของ OCR
-- [documents/LOCAL_TESSDATA.md](file:///c:/App/Electron/PDF_Translator/documents/LOCAL_TESSDATA.md) — การตั้งค่าและการดาวน์โหลดไฟล์ข้อมูลโมเดล Tesseract ในเครื่อง (Tessdata)
 - [documents/image_processing_knowledge/electron_ocr_runtime_architecture.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/electron_ocr_runtime_architecture.md) — โครงสร้างและ IPC Contract ระหว่าง Node.js และ Python OCR
 - [documents/image_processing_knowledge/ocr_engine_selection_policy.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_engine_selection_policy.md) — นโยบายการเลือกใช้ OCR Engine ให้เหมาะสมกับชนิดของหน้าเอกสาร
 - [documents/image_processing_knowledge/ocr_preprocessing_rules.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_preprocessing_rules.md) — กฎการบีบอัดและปรับคุณภาพภาพก่อนส่งให้ OCR Engine
@@ -127,6 +126,12 @@
 5. **Phase 7 Advanced Local Security:** อัปเดตสัญญาระบบความปลอดภัยแบบ Secure-by-default, การเข้ารหัส DB ด้วย SQLCipher (`better-sqlite3-multiple-ciphers`), ระบบ Offline Setup/Login, Relax (Keychain) vs Security App Modes และ Reset System wipe data ลงใน manifest นี้แล้วในวันที่ 2026-06-12
 6. **All Pages / Background Queue Alignment:** อัปเดตเอกสารสถาปัตยกรรมการแปลและการจัดกลุ่ม เพิ่มรายละเอียดการผูกฟังก์ชัน `splitAggressiveMergedLines` และ `filterGhostOcrData` ใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) เพื่อแก้ไขปัญหาคำแปลเหลื่อมดัชนี (Index Drift) เมื่อแปลในแบบ Background / All Pages ในวันที่ 2026-06-13
 7. **OCR Model Profile Persistence Alignment:** ปรับปรุงและบันทึกสถาปัตยกรรมการจำโมเดลและโปรไฟล์ OCR รายไฟล์ (per-file) โดยแก้ไขจุดที่คีย์ `fileKey` ในการดึงค่า (`loadProject`) และการบันทึกค่า (`subscribe`) ไม่ตรงกันเมื่อรันในสภาพแวดล้อม Production (ซึ่งระบบจะมีการสลับพาธเพื่อความเข้ากันได้ของ OCR Cache) ในวันที่ 2026-06-13
+8. **PaddleOCR Cold Start & Memory Optimization:** ปรับปรุงประสิทธิภาพของ OCR Daemon และหน่วยความจำของ Main process โดยทำระบบ Lazy Loading (เอาตัว prewarm ตอนบูตออก), เพิ่มฟังก์ชัน `cleanup_memory` (สั่ง GC และ CUDA cache empty ใน Python หลังทำงานเสร็จ), เพิ่มระบบ Idle Process Lifecycle (ปิดตัวเองหลังไม่มีงานวิ่ง 5 นาที หรือเมื่อปิด Workspace) และสร้างระบบตรวจสอบประสิทธิภาพผ่าน `--benchmark-memory-leak` วัดหน่วยความจำเริ่มต้น RSS ได้ 109.82 MB (เป้าหมาย < 120MB) ในวันที่ 2026-06-13
+9. **The Tesseract Purge:** ลบ Tesseract dependencies, assets และ fallback logic ออกจากโปรเจกต์อย่างสมบูรณ์เพื่อทำให้ตัวแอปพลิเคชันมีขนาดเบาลงและมีความเสถียรมากขึ้นโดยอิงเฉพาะ PaddleOCR และ EasyOCR เป็นหลักในวันที่ 2026-06-13
+10. **AuthGuard Bypass in Harness:** เพิ่มการตรวจสอบ query param `ocr_harness=1` เพื่อ bypass AuthGuard ในระหว่างรัน regression test ใน Playwright เพื่อไม่ให้แอปพลิเคชันค้างในระบบ CI/CD ในวันที่ 2026-06-13
+11. **Benchmark & EasyOCR RAW Integration:** ปรับปรุงระบบประเมินเปรียบเทียบให้รองรับการรัน EasyOCR ในโหมดเปรียบเทียบ RAW vs FULL โดยสร้างฟังก์ชัน `run_easyocr_raw` ใน Python bridge daemon และขยายสัญญาณส่ง IPC จากฝั่ง UI ไปยัง main process สำเร็จในวันที่ 2026-06-13
+12. **Raw OCR Parsing & Confidence Fix:** แก้ไขบั๊กโครงสร้างใน `run_paddleocr_raw` ที่ดึงข้อมูลผ่านคีย์ `predict()` เปล่าๆ ทำให้คำที่แสกนได้กลายเป็น 0 ในระหว่างประมวลผลโมเดลที่ใช้ `ocr()` ในฝั่ง Python พร้อมทั้งเพิ่มฟังก์ชันคำนวณเฉลี่ยค่าความมั่นใจ (Average Confidence) ของ RAW pass ทั้งของ Paddle และ Easy ในวันที่ 2026-06-13
+
 
 ## 🛠️ Common Task Workflow (ทางลัดในการทำงาน)
 

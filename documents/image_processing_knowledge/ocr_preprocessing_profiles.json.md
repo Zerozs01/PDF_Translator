@@ -1,7 +1,7 @@
 # OCR Preprocessing Profiles JSON Spec
 
 Version: 1.0
-Scope: PaddleOCR / EasyOCR / Tesseract / Electron OCR Runtime
+Scope: PaddleOCR / EasyOCR / Electron OCR Runtime
 Purpose: Define deterministic preprocessing profiles as configuration data instead of hardcoded logic.
 
 ---
@@ -108,8 +108,8 @@ Each profile should follow this structure:
     "receiptLike": false
   },
   "enginePreference": {
-    "primary": ["tesseract", "paddleocr"],
-    "fallback": ["paddleocr", "easyocr"]
+    "primary": ["paddleocr"],
+    "fallback": ["easyocr"]
   },
   "steps": [],
   "validationHints": {
@@ -298,8 +298,8 @@ Below is the full recommended starter config.
         "receiptLike": false
       },
       "enginePreference": {
-        "primary": ["tesseract", "paddleocr"],
-        "fallback": ["paddleocr", "easyocr"]
+        "primary": ["paddleocr"],
+        "fallback": ["easyocr"]
       },
       "steps": [
         {
@@ -373,7 +373,7 @@ Below is the full recommended starter config.
       },
       "enginePreference": {
         "primary": ["paddleocr"],
-        "fallback": ["tesseract", "easyocr"]
+        "fallback": ["easyocr"]
       },
       "steps": [
         {
@@ -461,7 +461,7 @@ Below is the full recommended starter config.
       },
       "enginePreference": {
         "primary": ["paddleocr"],
-        "fallback": ["tesseract", "easyocr"]
+        "fallback": ["easyocr"]
       },
       "steps": [
         {
@@ -523,7 +523,7 @@ Below is the full recommended starter config.
       },
       "enginePreference": {
         "primary": ["paddleocr"],
-        "fallback": ["tesseract", "easyocr"]
+        "fallback": ["easyocr"]
       },
       "steps": [
         {
@@ -612,7 +612,7 @@ Below is the full recommended starter config.
       },
       "enginePreference": {
         "primary": ["paddleocr"],
-        "fallback": ["easyocr", "tesseract"]
+        "fallback": ["easyocr"]
       },
       "steps": [
         {
@@ -781,7 +781,6 @@ Do not:
 
 Best with:
 
-- Tesseract
 - PaddleOCR
 
 ### camera_document
@@ -795,14 +794,12 @@ Best with:
 Best with:
 
 - PaddleOCR
-- Tesseract for simple block text
 
 ### receipt_thermal
 
 Best with:
 
 - PaddleOCR first
-- Tesseract after successful thresholding
 
 ### scene_text
 

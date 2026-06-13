@@ -1,8 +1,8 @@
 # OCR Engine Selection Policy
 
-Version: 1.0
+Version: 1.1
 Scope: Electron / Offline-first OCR Pipeline
-Target Engines: PaddleOCR, EasyOCR, Tesseract
+Target Engines: PaddleOCR, EasyOCR
 Purpose: Define when each OCR engine should be used, in what order, and under what fallback conditions.
 
 ---
@@ -22,14 +22,7 @@ Each engine has different strengths:
 - **EasyOCR**
   - Good fallback engine when PaddleOCR underperforms on stylized or irregular scene text
   - Useful for quick experimentation and some multilingual cases
-  - Less controllable than Tesseract for classic document OCR
   - Less ideal as the sole engine in a production pipeline
-
-- **Tesseract**
-  - Best for clean scanned documents with predictable layout
-  - Strong when preprocessing is good and page segmentation mode is tuned correctly
-  - Weak on messy scene text, perspective distortion, heavy blur, and complex layouts
-  - Best used as a specialized engine, not the universal default
 
 ---
 
@@ -38,13 +31,11 @@ Each engine has different strengths:
 Primary execution order:
 
 1. **PaddleOCR**
-2. **Tesseract** for clean-document fallback or verification
-3. **EasyOCR** for hard visual text cases or secondary recovery
+2. **EasyOCR** for hard visual text cases or secondary recovery
 
 Default strategy:
 
 - Start with **PaddleOCR** for most inputs
-- Route to **Tesseract** when the image is document-like and well-binarized
 - Route to **EasyOCR** when the text is visually complex, stylized, low-structure, or scene-like
 
 ---
@@ -66,12 +57,11 @@ Characteristics:
 
 Preferred engine:
 
-- Tesseract or PaddleOCR
+- PaddleOCR
 
 Best choice:
 
-- Use **Tesseract** if image is already clean, binarized, and deskewed
-- Otherwise use **PaddleOCR**
+- Use **PaddleOCR** for all document layouts.
 
 ---
 
@@ -91,7 +81,7 @@ Preferred engine:
 
 Fallback:
 
-- Tesseract after strong preprocessing if layout is simple
+- EasyOCR after strong preprocessing or layout normalization.
 
 ---
 
@@ -113,11 +103,6 @@ Fallback:
 
 - EasyOCR
 
-Tesseract:
-
-- only use after aggressive cropping and cleanup
-- not first choice
-
 ---
 
 ### D. Screenshot / UI Text
@@ -135,7 +120,6 @@ Preferred engine:
 
 Fallback:
 
-- Tesseract for block text or menus
 - EasyOCR for stylized titles or mixed-language UI
 
 ---
@@ -144,11 +128,11 @@ Fallback:
 
 Characteristics:
 
-- faded text
-- broken strokes
-- noisy background
-- curved paper
-- low contrast
+- Faded text
+- Broken strokes
+- Noisy background
+- Curved paper
+- Low contrast
 
 Preferred engine:
 
@@ -156,11 +140,7 @@ Preferred engine:
 
 Fallback:
 
-- Tesseract only after adaptive threshold + morphology + deskew
-
-EasyOCR:
-
-- optional fallback if text shape remains inconsistent
+- EasyOCR if text shape remains inconsistent after preprocessing
 
 ---
 
@@ -168,16 +148,12 @@ EasyOCR:
 
 Characteristics:
 
-- already cropped text ROI
-- recognition more important than detection
+- Already cropped text ROI
+- Recognition more important than detection
 
 Preferred engine:
 
 - PaddleOCR or EasyOCR
-
-Tesseract:
-
-- useful for clean machine text if psm is tuned
 
 ---
 
@@ -192,15 +168,6 @@ Tesseract:
 - layout is unknown
 - multilingual OCR is needed
 - image comes from camera capture
-
-### Use Tesseract as primary when
-
-- image is a clean scanned page
-- text is horizontal
-- layout is simple
-- text/background separation is already strong
-- you can control page segmentation mode
-- deterministic output is preferred over flexible detection
 
 ### Use EasyOCR as primary only when
 
@@ -228,12 +195,9 @@ Fallback must not be random. Use measurable triggers.
 
 1. Run PaddleOCR
 2. Validate output
-3. If document-like and Paddle result is weak:
-   - preprocess harder
-   - run Tesseract
-4. If scene-like and Paddle result is weak:
-   - run EasyOCR
-5. If both are weak:
+3. If result is weak:
+   - Run EasyOCR
+4. If both are weak:
    - retry with alternate preprocessing profile
 
 ---
@@ -263,23 +227,23 @@ Example:
 ### General app OCR
 
 - Primary: PaddleOCR
-- Fallback: Tesseract for clean docs, EasyOCR for scene text
+- Fallback: EasyOCR for scene text and complex documents
 
 ### PDF page OCR
 
 - If text layer exists: do not OCR
-- If scanned clean page: Tesseract or PaddleOCR
-- If photographed/warped page: PaddleOCR
+- If scanned or photographed page: PaddleOCR
+- Fallback: EasyOCR if layout is complex
 
 ### Screenshot OCR
 
 - Primary: PaddleOCR
-- Secondary: Tesseract for dense clean text
+- Secondary: EasyOCR
 
 ### Receipt OCR
 
 - Primary: PaddleOCR
-- Secondary: Tesseract after thermal-print preprocessing
+- Secondary: EasyOCR after thermal-print preprocessing
 
 ### Stylized poster/signboard OCR
 
@@ -289,7 +253,7 @@ Example:
 ### Structured form OCR
 
 - Detection: PaddleOCR
-- Recognition/verification: Tesseract for specific fields if needed
+- Recognition/verification: EasyOCR for specific fields if needed
 
 ---
 
@@ -297,8 +261,7 @@ Example:
 
 Do not:
 
-- always run all 3 engines on every image
-- use Tesseract first on camera photos
+- always run all engines on every image
 - assume EasyOCR is more robust than PaddleOCR by default
 - trust confidence alone
 - apply the same preprocessing to every image
@@ -311,13 +274,11 @@ Do not:
 Recommended production default:
 
 - **PaddleOCR = system default**
-- **Tesseract = clean document specialist**
 - **EasyOCR = fallback specialist for difficult visual text**
 
 If no classifier exists yet:
 
 - choose PaddleOCR first
-- only call Tesseract after document-style preprocessing
 - only call EasyOCR when PaddleOCR output is weak on scene/stylized text
 
 ---
@@ -328,19 +289,12 @@ If no classifier exists yet:
 if text_layer_exists:
     use text extraction, not OCR
 
-else if image_type in [camera_document, receipt, scene_text, mixed_layout, screenshot]:
+else if image_type in [camera_document, receipt, scene_text, mixed_layout, screenshot, clean_document]:
     run PaddleOCR first
 
-    if result weak and image looks like clean document after preprocessing:
-        run Tesseract
-    else if result weak and image looks like scene/stylized text:
+    if result weak and image looks like scene/stylized/complex text:
         run EasyOCR
-
-else if image_type == clean_document:
-    run Tesseract or PaddleOCR
-    prefer Tesseract if page is clean, deskewed, binarized, and line-based
-    otherwise prefer PaddleOCR
-````
+```
 
 ---
 
@@ -362,7 +316,6 @@ A result is considered weak when one or more are true:
 Use:
 
 - **PaddleOCR for most real-world OCR**
-- **Tesseract for clean controlled documents**
 - **EasyOCR as a selective fallback, not the architecture center**
 
 ---

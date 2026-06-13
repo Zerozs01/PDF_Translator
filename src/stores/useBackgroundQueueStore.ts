@@ -24,6 +24,8 @@ export interface BackgroundJob {
   ocrDpi?: number;
   ocrPageSegMode?: number | null;
   ocrQualityProfile?: 'fast' | 'balanced' | 'best';
+  startTime?: number;
+  completedTime?: number;
 }
 
 interface BackgroundQueueState {
@@ -128,7 +130,7 @@ export const useBackgroundQueueStore = create<BackgroundQueueState>((set, get) =
   cancelJob: (id) => {
     set((state) => {
       const nextJobs = state.jobs.map((job) =>
-        job.id === id ? { ...job, status: 'cancelled' as const, message: 'ยกเลิกแล้ว', progress: 0 } : job
+        job.id === id ? { ...job, status: 'cancelled' as const, message: 'ยกเลิกแล้ว', progress: 0, completedTime: Date.now() } : job
       );
       const nextActiveJobId = state.activeJobId === id ? null : state.activeJobId;
       persistQueue(nextJobs, state.isPaused);
@@ -173,7 +175,17 @@ export const useBackgroundQueueStore = create<BackgroundQueueState>((set, get) =
           status === 'processing' ? 'กำลังประมวลผล...' : job.message
         );
         const progress = status === 'completed' ? 100 : job.progress;
-        return { ...job, status, message: msg, progress };
+
+        let startTime = job.startTime;
+        let completedTime = job.completedTime;
+        if (status === 'processing' && !startTime) {
+          startTime = Date.now();
+        }
+        if (['completed', 'failed', 'cancelled'].includes(status)) {
+          completedTime = Date.now();
+        }
+
+        return { ...job, status, message: msg, progress, startTime, completedTime };
       });
       
       // เมื่อ Active Job ปัจจุบันเสร็จสิ้นหรือยกเลิก/ล้มเหลว

@@ -4027,29 +4027,6 @@ const resolveTranslationGroupsWithLayout = (
     };
   }
 
-  const flagEnabled = isBalloonAwareGroupingEnabled();
-  const shouldGroup = shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode);
-  console.log(`[resolveTranslationGroupsWithLayout] page=${pageNum} flagEnabled=${flagEnabled} shouldGroup=${shouldGroup} lines=${lines.length} mode=${mode}`);
-
-  if (!flagEnabled) {
-    return {
-      groups: fallbackGroups,
-      groupingProfile: fallbackProfile,
-      groupingDecision: {
-        ...fallbackDecision,
-        fallbackReason: 'feature_flag_disabled',
-      },
-    };
-  }
-
-  if (!shouldGroup) {
-    return {
-      groups: fallbackGroups,
-      groupingProfile: fallbackProfile,
-      groupingDecision: fallbackDecision,
-    };
-  }
-
   // 1. Try to load groups from useLayerStore to preserve user adjustments and high quality 2D spatial clustering
   try {
     const storeGroups = useLayerStore.getState().getPageGroups(pageNum);
@@ -4114,6 +4091,29 @@ const resolveTranslationGroupsWithLayout = (
     }
   } catch (err) {
     console.warn('[resolveTranslationGroupsWithLayout] Failed to resolve groups from store:', err);
+  }
+
+  const flagEnabled = isBalloonAwareGroupingEnabled();
+  const shouldGroup = shouldUseBalloonAwareGrouping(lines, sourceLanguage, targetLanguage, mode);
+  console.log(`[resolveTranslationGroupsWithLayout] page=${pageNum} flagEnabled=${flagEnabled} shouldGroup=${shouldGroup} lines=${lines.length} mode=${mode}`);
+
+  if (!flagEnabled) {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: {
+        ...fallbackDecision,
+        fallbackReason: 'feature_flag_disabled',
+      },
+    };
+  }
+
+  if (!shouldGroup) {
+    return {
+      groups: fallbackGroups,
+      groupingProfile: fallbackProfile,
+      groupingDecision: fallbackDecision,
+    };
   }
 
   const layoutResult = deriveBalloonAwareLayoutGrouping(
@@ -4844,6 +4844,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [showOCRHarness]);
 
+  // Disabled background prewarm on startup to achieve a true Zero Startup Footprint.
+  // OCR processes will be spawned lazily when a file is loaded or OCR is initiated.
+  /*
   useEffect(() => {
     if (showOCRHarness) return undefined;
     if (!window.electronAPI?.ocr?.prewarmEngine) return undefined;
@@ -4892,6 +4895,7 @@ export default function App() {
 
     return () => clearTimeout(timer);
   }, [file, ocrLanguage, showOCRHarness]);
+  */
 
   // Update editedName when file changes
   useEffect(() => {
@@ -9020,6 +9024,19 @@ export default function App() {
                               <span className="capitalize">{job.type === 'offline_all' ? 'Offline' : 'AI'} All</span>
                               <span>•</span>
                               <span>{job.currentPage}/{job.totalPages} หน้า</span>
+                              {job.startTime && (
+                                <>
+                                  <span>•</span>
+                                  <span>
+                                    {(() => {
+                                      const end = job.completedTime || Date.now();
+                                      const diff = Math.max(0, Math.floor((end - job.startTime) / 1000));
+                                      if (diff < 60) return `${diff}s`;
+                                      return `${Math.floor(diff / 60)}m ${diff % 60}s`;
+                                    })()}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
