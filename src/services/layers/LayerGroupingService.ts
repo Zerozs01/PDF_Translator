@@ -289,10 +289,17 @@ export const splitAggressiveMergedLines = (
       if (/[!?.,;]$/.test(prevText)) {
         effectiveGapMultiplier = 0.85;
       } else if (/^[A-Z]/.test(currText)) {
-        effectiveGapMultiplier = 0.9;
+        // ทำไม: ลดจาก 2.2 เป็น 1.1 เพื่อจับ cross-balloon merging เช่น "PLEEA FOR THE"
+        // ช่องว่างระหว่างคำใน balloon เดียวกันมักน้อยกว่า avgHeight มาก (~0.2-0.5x)
+        // ส่วนช่องว่างระหว่าง balloon ต่างกันมักใหญ่กว่า 1.5-2x avgHeight
+        // threshold 1.1 จึงสามารถจับ cross-balloon ได้โดยไม่ทำลาย intra-balloon spacing
+        effectiveGapMultiplier = 1.1;
       }
 
-      if (gap > effectiveGapMultiplier * avgHeight) {
+      // ทำไม: ถ้า gap ใหญ่มากผิดปกติ (> 2x avgHeight) ให้ split เสมอ ไม่ว่าคำก่อนจะจบด้วยอะไร
+      // เพราะ gap ขนาดนี้บ่งชี้ว่าคำสองคำนี้น่าจะมาจากคนละ panel / balloon
+      const absoluteSplitThreshold = 2.0;
+      if (gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * avgHeight) {
         result.push({
           ...line, // preserve original confidence, engine hints, etc.
           text: currentGroup.map(w => w.text).join(' '),
