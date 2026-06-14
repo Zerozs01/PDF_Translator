@@ -45,7 +45,7 @@ This document describes the architecture as implemented in the current working t
 
 ### Translation Cache
 
-- Version: `v48`
+- Version: `v49`
 - Key dimensions include:
   - OCR engine + OCR language
   - source language + target language

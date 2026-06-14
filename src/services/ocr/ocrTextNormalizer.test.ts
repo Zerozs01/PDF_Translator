@@ -99,6 +99,20 @@ describe('normalizeSourceForTranslation', () => {
   test('should repair dums to dumb', () => {
     expect(normalizeSourceForTranslation('DUMS PRINCESS!!', 'en')).toBe('Dumb princess!!');
   });
+
+  test('should repair newly added english ocr noise lines correctly', () => {
+    // 1. Any-MORE -> Anymore
+    expect(normalizeSourceForTranslation('IT ANY- MORE...', 'en')).toBe('It anymore...');
+    expect(normalizeSourceForTranslation('IT ANY-MORE...', 'en')).toBe('It anymore...');
+
+    // 2. CUM-MING -> CUMMING
+    expect(normalizeSourceForTranslation('CUM- MING', 'en')).toBe('Cumming');
+    expect(normalizeSourceForTranslation('CUM-MING', 'en')).toBe('Cumming');
+
+    // 3. NOT NEC-ESSARY -> NOT NECESSARY
+    expect(normalizeSourceForTranslation('NOT NEC- ESSARY', 'en')).toBe('Not necessary');
+    expect(normalizeSourceForTranslation('NOT NEC-ESSARY', 'en')).toBe('Not necessary');
+  });
 });
 
 

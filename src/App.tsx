@@ -185,6 +185,14 @@ import {
   normalizeEnglishOcrNoiseForTranslation,
 } from './services/ocr/ocrTextNormalizer';
 
+import {
+  DehyphenatedJoin,
+  detectDehyphenatedJoins,
+  mergeDehyphenatedSource,
+  getMergedTranslatableLines,
+  mapSlotsToLines
+} from './services/translation/dehyphenation';
+
 export {
   normalizeSourceForTranslation,
   normalizeTranslationLanguage,
@@ -1509,6 +1517,25 @@ export const applyThaiConversationalGlossary = (
   translatedText: string,
   targetLanguage: string
 ): string => {
+  let finalResult = applyThaiConversationalGlossaryInternal(sourceText, translatedText, targetLanguage);
+
+  // Rule 4.1: จิ๋ม ห้ามอยู่ใน balloon เดียวกับ หี
+  if (finalResult.includes('หี') && finalResult.includes('จิ๋ม')) {
+    finalResult = finalResult.replace(/จิ๋ม/g, 'หี');
+  }
+  // Rule 4.2: ไก่ ห้ามอยู่ใน balloon เดียวกับ ควย
+  if (finalResult.includes('ควย') && finalResult.includes('ไก่')) {
+    finalResult = finalResult.replace(/ไก่/g, 'ควย');
+  }
+
+  return finalResult;
+};
+
+const applyThaiConversationalGlossaryInternal = (
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string
+): string => {
   if (normalizeTranslationLanguage(targetLanguage, 'th') !== 'th') {
     return translatedText;
   }
@@ -1681,7 +1708,48 @@ export const applyThaiConversationalGlossary = (
     }
   }
 
+  // ─── Page-context word-order fix: YOU FOUND A DISEASE? ─────────────────────
+  // When each line of the balloon is translated separately, we need context to
+  // reassemble the correct Thai sentence order.
+  if (
+    compactPageTextsUpper.includes('YOUFOUNDADISEASE') ||
+    (compactPageTextsUpper.includes('FOUNDA') && compactPageTextsUpper.includes('DISEASE'))
+  ) {
+    if (compactSourceAlnumUpper === 'YOU' || compactSourceAlnumUpper === 'NOU') {
+      return preserveSourceTrailingPunctuation(source, 'คุณ');
+    }
+    if (compactSourceAlnumUpper === 'FOUNDA' || compactSourceAlnumUpper === 'FOUND') {
+      return preserveSourceTrailingPunctuation(source, 'พบ');
+    }
+    if (compactSourceAlnumUpper === 'A') {
+      return preserveSourceTrailingPunctuation(source, '');
+    }
+    if (compactSourceAlnumUpper === 'DISEASE') {
+      return preserveSourceTrailingPunctuation(source, 'โรคเหรอ');
+    }
+  }
+
+  // ─── Page-context word-order fix: HEAD NURSE multi-line balloon ─────────────
+  if (
+    compactPageTextsUpper.includes('HEADNURS') ||
+    (compactPageTextsUpper.includes('HEAD') && compactPageTextsUpper.includes('NURSE'))
+  ) {
+    if (compactSourceAlnumUpper.includes('FORSOME')) {
+      return preserveSourceTrailingPunctuation(source, 'สำหรับเหตุผลบางอย่าง');
+    }
+    if (compactSourceAlnumUpper.includes('HEAD')) {
+      return preserveSourceTrailingPunctuation(source, 'หัวหน้า');
+    }
+    if (compactSourceAlnumUpper.includes('NURSE') || (compactSourceAlnumUpper.includes('NUR') && compactSourceAlnumUpper.includes('SE'))) {
+      return preserveSourceTrailingPunctuation(source, 'พยาบาล');
+    }
+    if (compactSourceAlnumUpper.includes('RIGHTNOW')) {
+      return preserveSourceTrailingPunctuation(source, 'ในตอนนี้');
+    }
+  }
+
   // Sex/Conversational slang & H-manga adjustments (exact / short matches)
+
   const cleanDialogueText = source.trim().toLowerCase();
   if (compactSource === 'cock' || compactSource === 'cocks') {
     return preserveSourceTrailingPunctuation(source, 'ควย');
@@ -1722,6 +1790,224 @@ export const applyThaiConversationalGlossary = (
   }
   if (compactSourceAlnumUpper === 'RRR') {
     return preserveSourceTrailingPunctuation(source, 'RRR');
+  }
+
+  // User-requested slang fixes & conversions
+  if (compactSourceAlnumUpper.includes('BLOWJOB') || compactSourceAlnumUpper.includes('BLOWTOB')) {
+    if (compactSourceAlnumUpper.includes('MEABLOWJOB') || compactSourceAlnumUpper.includes('MEABLOWTOB')) {
+      return preserveSourceTrailingPunctuation(source, 'อมควยให้ฉัน');
+    }
+    return preserveSourceTrailingPunctuation(source, 'อมควย');
+  }
+  if (compactSourceAlnumUpper === 'SQUEEZING') {
+    return preserveSourceTrailingPunctuation(source, 'บีบ');
+  }
+  if (compactSourceAlnumUpper === 'APRETTYTHICKLOAD') {
+    return preserveSourceTrailingPunctuation(source, 'ค่อนข้างเยอะทีเดียว');
+  }
+  if (compactSourceAlnumUpper.includes('YOULETOUTAPRETTYTHICKLOAD') || compactSourceAlnumUpper.includes('LETOUTAPRETTYTHICKLOAD')) {
+    return preserveSourceTrailingPunctuation(source, 'คุณปล่อยน้ำอสุจิออกมาค่อนข้างเยอะทีเดียว');
+  }
+  if (compactSourceAlnumUpper === 'MYPUSSY') {
+    return preserveSourceTrailingPunctuation(source, 'หีของฉัน');
+  }
+  if (compactSourceAlnumUpper === 'COCKSLEEVE') {
+    return preserveSourceTrailingPunctuation(source, 'ปลอกหุ้มควย');
+  }
+  if (compactSourceAlnumUpper === 'SSHIT') {
+    return preserveSourceTrailingPunctuation(source, 'ช-เชี่ยเอ้ย');
+  }
+  if (compactSourceAlnumUpper === 'ITANYMORE') {
+    return preserveSourceTrailingPunctuation(source, 'มันอีกต่อไป');
+  }
+  if (compactSourceAlnumUpper.includes('ICANTHOLDITANYMORE')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันทนมันไม่ไหวอีกต่อไปแล้ว');
+  }
+  if (compactSourceAlnumUpper === 'CUMINSIDE') {
+    return preserveSourceTrailingPunctuation(source, 'แตกข้างใน');
+  }
+  if (compactSourceAlnumUpper === 'MYWOMB') {
+    return preserveSourceTrailingPunctuation(source, 'มดลูกของฉัน');
+  }
+  if (
+    compactSourceAlnumUpper === 'CUMMING' ||
+    compactSource.includes('cumming') ||
+    source.toLowerCase().includes('cum-ming') ||
+    source.toLowerCase().includes('cumming') ||
+    (compactPageTextsUpper.includes('CUMMING') && (compactSourceAlnumUpper === 'CUM' || compactSourceAlnumUpper === 'CUM-' || compactSourceAlnumUpper === 'MING'))
+  ) {
+    if (compactSourceAlnumUpper === 'CUM' || compactSourceAlnumUpper === 'CUM-') {
+      return preserveSourceTrailingPunctuation(source, 'ทะ-');
+    }
+    if (compactSourceAlnumUpper === 'MING') {
+      return preserveSourceTrailingPunctuation(source, 'ทะลักออกมาแล้ววว!');
+    }
+    return preserveSourceTrailingPunctuation(source, 'ทะ-ทะลักออกมาแล้ววว!');
+  }
+  if (
+    compactSourceAlnumUpper === 'ITFELTWAYTOOGOOD' ||
+    compactSourceAlnumUpper.includes('ITFELTWAYTOOGOOD') ||
+    (compactPageTextsUpper.includes('ITFELTWAYTOOGOOD') && (compactSourceAlnumUpper.includes('ITFELT') || compactSourceAlnumUpper.includes('WAYTOO') || compactSourceAlnumUpper === 'GOOD'))
+  ) {
+    if (compactSourceAlnumUpper.includes('ITFELT')) {
+      return preserveSourceTrailingPunctuation(source, 'ดีเกินไป');
+    }
+    if (compactSourceAlnumUpper.includes('WAYTOO') || compactSourceAlnumUpper === 'GOOD') {
+      return preserveSourceTrailingPunctuation(source, '');
+    }
+    return preserveSourceTrailingPunctuation(source, 'ดีเกินไป');
+  }
+  if (compactSourceAlnumUpper.includes('TOMAKETHREADS')) {
+    return preserveSourceTrailingPunctuation(source, 'ที่จะสร้างของเหลวข้นหนืดยืดเป็นสาย');
+  }
+  if (compactSourceAlnumUpper === 'MYCUM') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำว่าวของฉัน');
+  }
+  if (compactSourceAlnumUpper === 'THATS') {
+    return preserveSourceTrailingPunctuation(source, 'นั่นมัน');
+  }
+  if (
+    compactSourceAlnumUpper === 'NOTNECESSARY' ||
+    compactSourceAlnumUpper === 'NOTNEC' ||
+    compactSourceAlnumUpper === 'ESSARY'
+  ) {
+    if (compactSourceAlnumUpper === 'ESSARY') {
+      return preserveSourceTrailingPunctuation(source, '');
+    }
+    return preserveSourceTrailingPunctuation(source, 'ไม่สำคัญ');
+  }
+  if (compactSourceAlnumUpper === 'ADYDO') {
+    return preserveSourceTrailingPunctuation(source, '..ร้อม”ที่จะทำ');
+  }
+  if (compactSourceAlnumUpper === 'UMEAN') {
+    return preserveSourceTrailingPunctuation(source, '..มายถึงอะไร');
+  }
+  if (compactSourceAlnumUpper === 'WERE') {
+    return preserveSourceTrailingPunctuation(source, 'คือ');
+  }
+  if (compactSourceAlnumUpper.includes('PLEASECUMALOTJUSTLIKETHAT')) {
+    return preserveSourceTrailingPunctuation(source, 'ได้โปรด แตกเข้ามา เยอะ อย่างนั้น แหละ');
+  }
+  if (compactSourceAlnumUpper === 'DISEASE') {
+    return preserveSourceTrailingPunctuation(source, 'โรค');
+  }
+  if (compactSourceAlnumUpper.includes('YOUFOUNDADISEASE')) {
+    return preserveSourceTrailingPunctuation(source, 'คุณพบโรคเหรอ');
+  }
+  if (compactSourceAlnumUpper === 'RESTRAINT') {
+    return preserveSourceTrailingPunctuation(source, 'การยับยั้งชั่งใจ');
+  }
+  if (compactSourceAlnumUpper === 'GOOD') {
+    return preserveSourceTrailingPunctuation(source, 'ดี');
+  }
+  if (compactSourceAlnumUpper === 'ALOT') {
+    return preserveSourceTrailingPunctuation(source, 'เยอะมาก');
+  }
+  // HEAD NUR-SEEE!! / HEAD NURSE variants — OCR often splits hyphenated exclamations
+  if (
+    compactSourceAlnumUpper === 'HEADNURSEEE' ||
+    compactSourceAlnumUpper === 'HEADNURSEEEE' ||
+    compactSourceAlnumUpper === 'HEADNURSE' ||
+    /^HEADNURS/.test(compactSourceAlnumUpper)
+  ) {
+    return preserveSourceTrailingPunctuation(source, 'หัวหน้า พยา-บาลลล!!');
+  }
+  if (compactSourceAlnumUpper === 'SHES') {
+    return preserveSourceTrailingPunctuation(source, 'เธอคือ');
+  }
+  if (compactSourceAlnumUpper === 'INSIDE') {
+    return preserveSourceTrailingPunctuation(source, 'ข้างใน');
+  }
+  if (compactSourceAlnumUpper === 'ITWITHOUT') {
+    return preserveSourceTrailingPunctuation(source, 'มันโดยไม่มี');
+  }
+  if (compactSourceAlnumUpper === 'HUH') {
+    return preserveSourceTrailingPunctuation(source, 'ฮะ');
+  }
+  if (compactSourceAlnumUpper === 'THIS' && source.includes('?')) {
+    return 'นี่น่ะเหรอ?';
+  }
+  if (compactSourceAlnumUpper === 'WOW') {
+    return preserveSourceTrailingPunctuation(source, 'ว้าว');
+  }
+  // I'LL DO (OCR reads as ILLDO) → ฉันจะทำ
+  if (compactSourceAlnumUpper === 'ILLDO') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะทำ');
+  }
+  if (compactSourceAlnumUpper === 'DAYS') {
+    return preserveSourceTrailingPunctuation(source, 'หลายวัน');
+  }
+  // ILL alone → ฉันจะ (in manga dialogue context, standalone "ILL" is always OCR noise for "I'LL")
+  if (compactSourceAlnumUpper === 'ILL') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะ');
+  }
+  if (compactSourceAlnumUpper === 'BELIEVE') {
+    return preserveSourceTrailingPunctuation(source, 'เชื่อ');
+  }
+  if (compactSourceAlnumUpper === 'WITHOUT') {
+    return preserveSourceTrailingPunctuation(source, 'โดยไม่มี');
+  }
+  if (compactSourceAlnumUpper === 'HERPUSSY') {
+    return preserveSourceTrailingPunctuation(source, 'หีของเธอ');
+  }
+
+  // ─── Missing manga dialogue fragment translations ────────────────────────────
+  // ทำไม: คำเหล่านี้อยู่ใน whitelist (ไม่โดน skip) แต่ไม่มี glossary rule แปลเป็นไทย
+  // Argos มักจะ carry-over กลับมาเป็น English ทำให้ดูเหมือนไม่ได้แปล
+  if (compactSourceAlnumUpper === 'OFME' || compactSourceAlnumUpper === 'OFMEEROMANGA' || compactSourceAlnumUpper === 'EROMANGA') {
+    // "OF ME!!" หรือ "OF ME, ero-manga" ในบริบทของหัวเรื่องหรือชื่อตอน
+    if (compactSourceAlnumUpper.includes('EROMANGA')) {
+      return preserveSourceTrailingPunctuation(source, 'ของฉัน, อีโระมังงะ');
+    }
+    return preserveSourceTrailingPunctuation(source, 'ของฉัน');
+  }
+  if (compactSourceAlnumUpper === 'NURSE') {
+    return preserveSourceTrailingPunctuation(source, 'พยาบาล');
+  }
+  if (compactSourceAlnumUpper === 'BEINGTOO') {
+    return preserveSourceTrailingPunctuation(source, 'มันมากเกินไป');
+  }
+  if (compactSourceAlnumUpper === 'SUDDENLY') {
+    return preserveSourceTrailingPunctuation(source, 'อยู่ดีๆ');
+  }
+  if (compactSourceAlnumUpper === 'RESTA') {
+    return preserveSourceTrailingPunctuation(source, 'พัก...');
+  }
+  if (compactSourceAlnumUpper === 'THESEX') {
+    return preserveSourceTrailingPunctuation(source, 'เซ็กส์นั้น');
+  }
+  if (compactSourceAlnumUpper === 'WELLSINCE') {
+    return preserveSourceTrailingPunctuation(source, 'ก็... เนื่องจาก');
+  }
+  if (compactSourceAlnumUpper === 'JUST') {
+    return preserveSourceTrailingPunctuation(source, 'แค่');
+  }
+  if (compactSourceAlnumUpper === 'ILLNESSBE') {
+    return preserveSourceTrailingPunctuation(source, 'ความเจ็บป่วย');
+  }
+  if (compactSourceAlnumUpper === 'METHOD') {
+    return preserveSourceTrailingPunctuation(source, 'วิธีการ');
+  }
+  if (compactSourceAlnumUpper === 'FROMTHE') {
+    return preserveSourceTrailingPunctuation(source, 'จาก');
+  }
+  if (compactSourceAlnumUpper === 'ITFEELS') {
+    return preserveSourceTrailingPunctuation(source, 'มันรู้สึก');
+  }
+  if (compactSourceAlnumUpper === 'OUTINSIDE') {
+    return preserveSourceTrailingPunctuation(source, 'ออกมาข้างใน');
+  }
+  if (compactSourceAlnumUpper === 'STILLFULL') {
+    return preserveSourceTrailingPunctuation(source, 'ยังเต็มอยู่');
+  }
+  if (compactSourceAlnumUpper === 'NOWI') {
+    return preserveSourceTrailingPunctuation(source, 'ตอนนี้ฉัน');
+  }
+  if (compactSourceAlnumUpper === 'WOMB') {
+    return preserveSourceTrailingPunctuation(source, 'มดลูก');
+  }
+  if (compactSourceAlnumUpper === 'WAYTOO') {
+    return preserveSourceTrailingPunctuation(source, 'มากเกินไป');
   }
 
 
@@ -2353,6 +2639,9 @@ export const applyThaiConversationalGlossary = (
     return preserveSourceTrailingPunctuation(source, 'สารสกัดนี้');
   }
   if (/^EH[!?…]*$/i.test(source)) {
+    if (source.includes('!')) {
+      return preserveSourceTrailingPunctuation(source, 'เอ๊');
+    }
     return preserveSourceTrailingPunctuation(source, 'เอ๋');
   }
   if (/\bRAPIDO\b/i.test(source) && /\bPRI\b/i.test(source)) {
@@ -2770,7 +3059,8 @@ export const applyThaiConversationalGlossary = (
       .replace(/มาถึง/g, 'น้ำแตก').replace(/เสร็จสม/g, 'น้ำแตก')
       .replace(/กำลังมาถึง/g, 'น้ำแตก').replace(/กำลังมา/g, 'น้ำแตก')
       .replace(/เร่ง!*/g, 'น้ำแตกแล้ว!').replace(/เร่ง/g, 'น้ำแตกแล้ว')
-      .replace(/คิวอึม/g, 'แตกกกกก').replace(/คิวมู/g, 'แตกกกกก');
+      .replace(/คิวอึม/g, 'แตกกกกก').replace(/คิวมู/g, 'แตกกกกก')
+      .replace(/ว่าว/g, 'น้ำแตก');
   }
   if (/\bcu+u+m+\b/i.test(source)) {
     finalResult = finalResult.replace(/คิวอึม/g, 'แตกกกกก').replace(/คิวมู/g, 'แตกกกกก');
@@ -2805,6 +3095,33 @@ export const applyThaiConversationalGlossary = (
   }
   if (/\bus\s+the\b/i.test(source)) {
     finalResult = finalResult.replace(/เรา/g, 'พวกเรา');
+  }
+  if (/\b(?:blowjob|blowjobs)\b/i.test(source)) {
+    finalResult = finalResult.replace(/ดูดงาน/g, 'อมควย').replace(/งานเป่า/g, 'อมควย');
+  }
+  if (/\bsqueezing\b/i.test(source)) {
+    finalResult = finalResult.replace(/กระแทก/g, 'บีบ');
+  }
+  if (/\bcock\s+sleeve\b/i.test(source)) {
+    finalResult = finalResult.replace(/ปลอกหุ้ม/g, 'ปลอกหุ้มควย');
+  }
+  if (/\bshit\b/i.test(source)) {
+    finalResult = finalResult.replace(/อึ/g, 'เชี่ยเอ้ย').replace(/ขี้/g, 'เชี่ยเอ้ย');
+  }
+  if (/\bwomb\b/i.test(source)) {
+    finalResult = finalResult.replace(/ครรภ์/g, 'มดลูก');
+  }
+  if (/\bthreads\b/i.test(source)) {
+    finalResult = finalResult.replace(/กระทู้/g, 'ของเหลวข้นหนืดยืดเป็นสาย').replace(/เส้นด้าย/g, 'ของเหลวข้นหนืดยืดเป็นสาย');
+  }
+
+  // Rule 4.1: จิ๋ม ห้ามอยู่ใน balloon เดียวกับ หี
+  if (finalResult.includes('หี') && finalResult.includes('จิ๋ม')) {
+    finalResult = finalResult.replace(/จิ๋ม/g, 'หี');
+  }
+  // Rule 4.2: ไก่ ห้ามอยู่ใน balloon เดียวกับ ควย
+  if (finalResult.includes('ควย') && finalResult.includes('ไก่')) {
+    finalResult = finalResult.replace(/ไก่/g, 'ควย');
   }
 
   return finalResult;
@@ -2911,7 +3228,7 @@ const isScientificSymbolLikeLine = (text: string, sourceLanguage?: string): bool
 
   const asciiCompact = noUnderscoreUpper.replace(/[^A-Z0-9]/g, '');
   const isKnownShort = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|CUMALOTJUSTLIKETHAT)$/i.test(asciiCompact);
   if (isKnownShort) {
     return false;
   }
@@ -3838,21 +4155,33 @@ const composeGroupSourceText = (
   lines: TranslatableLine[],
   groupType: LayoutGroupType = 'unknown',
   groupingProfile: TranslationGroupingProfile = 'default'
-): string => {
+): { composed: string; dehyphenJoins: DehyphenatedJoin[] } => {
   const normalized = lines
-    .map((line) => normalizeWhitespace(String(line.text || '')))
+    .map((line) => {
+      const rawText = line.text != null ? String(line.text) : '';
+      const cleaned = normalizeEnglishOcrNoiseForTranslation(rawText);
+      return normalizeWhitespace(cleaned);
+    })
     .filter(Boolean);
+
   if (normalized.length <= 1) {
-    return normalized[0] || '';
+    return { composed: (normalized[0] ?? '').replace(/-$/, ''), dehyphenJoins: [] };
   }
 
-  if (groupType === 'narration' || groupType === 'dialogue' || groupType === 'unknown') {
-    // Joining with space is much better for Argos (offline) and most LLMs to see full sentence context.
-    // Line breaks (\n) often cause translators to treat lines as isolated fragments.
-    return normalized.join(' ');
+  const isNarrative =
+    groupType === 'narration' ||
+    groupType === 'dialogue' ||
+    groupType === 'unknown';
+
+  if (!isNarrative) {
+    return { composed: normalized.join('\n'), dehyphenJoins: [] };
   }
 
-  return normalized.join('\n');
+  const joins = detectDehyphenatedJoins(normalized);
+  const { merged, childSet } = mergeDehyphenatedSource(normalized, joins);
+  const composed = merged.filter((_, idx) => !childSet.has(idx)).join(' ');
+
+  return { composed, dehyphenJoins: joins };
 };
 
 const createBalloonAwareGroupingInput = (
@@ -3993,7 +4322,7 @@ const pushLayoutGroupingDebugPayload = (
       groupType: group.groupType || 'unknown',
       confidence: group.confidence || 0,
       lineIndexes: group.lines.map((line) => line.index),
-      text: composeGroupSourceText(group.lines, group.groupType || 'unknown', groupingProfile),
+      text: composeGroupSourceText(group.lines, group.groupType || 'unknown', groupingProfile).composed,
     })),
   };
 
@@ -4040,6 +4369,9 @@ const resolveTranslationGroupsWithLayout = (
           .filter((l): l is TextLayer => Boolean(l))
           .map((l) => lineMap.get(l.lineIndex))
           .filter((line): line is TranslatableLine => Boolean(line));
+
+        // Sort lines vertically (top-to-bottom) to ensure correct reading order for translation
+        groupLines.sort((a, b) => a.top - b.top);
 
         if (groupLines.length > 0) {
           let groupType: LayoutGroupType = 'unknown';
@@ -4305,6 +4637,54 @@ const rebalanceRedistributedParts = (
   return normalizedParts;
 };
 
+const THAI_PARTICLES = /^(นะ|ครับ|ค่ะ|สิ|นา|ด้วย|เลย|หน่อย|ล่ะ|จ้า|จ๊ะ|นี่)$/;
+
+const glueTrailingParticles = (slots: string[]): string[] => {
+  const result = [...slots];
+  for (let i = 0; i < result.length - 1; i++) {
+    const nextSlot = result[i + 1].trim();
+    if (!nextSlot) continue;
+
+    const intlWithSegmenter = Intl as unknown as {
+      Segmenter?: new (
+        locales?: string | string[],
+        options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
+      ) => {
+        segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }>;
+      };
+    };
+
+    if (intlWithSegmenter.Segmenter) {
+      const segmenter = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
+      const segments = Array.from(segmenter.segment(nextSlot));
+      const firstWordSeg = segments.find((s) => s.segment.trim().length > 0);
+
+      if (firstWordSeg && THAI_PARTICLES.test(firstWordSeg.segment)) {
+        const particle = firstWordSeg.segment;
+        result[i] = result[i] + particle;
+        const particleIdx = result[i + 1].indexOf(particle);
+        if (particleIdx >= 0) {
+          result[i + 1] = (
+            result[i + 1].slice(0, particleIdx) +
+            result[i + 1].slice(particleIdx + particle.length)
+          ).trim();
+        }
+      }
+    }
+  }
+  return result;
+};
+
+const isRedistributionPlausible = (
+  sourceLinesCount: number,
+  redistributedSlots: string[]
+): boolean => {
+  if (sourceLinesCount <= 1) return true;
+  const emptySlots = redistributedSlots.filter((s) => !s.trim()).length;
+  const emptyRatio = emptySlots / sourceLinesCount;
+  return emptyRatio < 0.4;
+};
+
 const splitTranslatedTextBySourceWeights = (
   translatedText: string,
   sourceLines: TranslatableLine[],
@@ -4351,9 +4731,7 @@ const splitTranslatedTextBySourceWeights = (
     const buildSegments = (): string[] => {
       if (intlWithSegmenter.Segmenter) {
         const wordSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
-        const wordSegments = Array.from(wordSeg.segment(target))
-          .map((item) => item.segment)
-          .filter((segment) => segment.trim().length > 0);
+        const wordSegments = Array.from(wordSeg.segment(target)).map((item) => item.segment);
         if (wordSegments.length > 0) {
           return wordSegments;
         }
@@ -4362,67 +4740,84 @@ const splitTranslatedTextBySourceWeights = (
     };
 
     const segments = buildSegments();
-    const cumulative: number[] = [];
-    let rolling = 0;
-    for (const segment of segments) {
-      rolling += segment.length;
-      cumulative.push(rolling);
+    const totalSourceChars = sourceLines.reduce((sum, l) => sum + (l.text || '').length, 0) || 1;
+
+    // Calculate cumulative character weights of source lines
+    const cumulativeSourceWeights: number[] = [];
+    let currentSum = 0;
+    for (let i = 0; i < sourceLines.length; i++) {
+      currentSum += (sourceLines[i].text || '').length;
+      cumulativeSourceWeights.push(currentSum);
     }
 
-    const totalSource = sourceLines
-      .map((line) => computeLineSplitWeight(line))
-      .reduce((acc, n) => acc + n, 0);
+    // Calculate cumulative char budgets in target string
+    const cumulativeTargetBudgets = cumulativeSourceWeights.map((w) =>
+      Math.round((w / totalSourceChars) * target.length)
+    );
+
+    // Compute segment lengths and cumulative lengths
+    const segmentLengths = segments.map((s) => s.length);
+    const cumulativeSegmentLengths: number[] = [];
+    let segSum = 0;
+    for (let i = 0; i < segments.length; i++) {
+      segSum += segmentLengths[i];
+      cumulativeSegmentLengths.push(segSum);
+    }
 
     const thaiParts: string[] = [];
-    let startIndex = 0;
+    let currentSegStart = 0;
 
-    for (let i = 0; i < sourceLines.length; i += 1) {
-      if (i === sourceLines.length - 1) {
-        thaiParts.push(segments.slice(startIndex).join('').trim());
+    for (let slot = 0; slot < sourceLines.length; slot++) {
+      const isLast = slot === sourceLines.length - 1;
+      if (isLast) {
+        thaiParts.push(segments.slice(currentSegStart).join('').trim());
         break;
       }
 
-      const consumedSource = sourceLines
-        .slice(0, i + 1)
-        .map((line) => computeLineSplitWeight(line))
-        .reduce((acc, n) => acc + n, 0);
-      const desiredEnd = Math.round((consumedSource / totalSource) * target.length);
+      const targetCumulativeEnd = cumulativeTargetBudgets[slot];
 
-      const minBoundary = startIndex + 1;
-      const maxBoundary = Math.max(minBoundary, segments.length - (sourceLines.length - i - 1));
-      let bestBoundary = minBoundary;
-      let bestDistance = Number.POSITIVE_INFINITY;
+      // Find the segment index that gets closest to targetCumulativeEnd
+      let bestSegEnd = currentSegStart;
+      let minDifference = Infinity;
 
-      for (let boundary = minBoundary; boundary <= maxBoundary; boundary += 1) {
-        const endChar = cumulative[boundary - 1] || 0;
-        let distance = Math.abs(endChar - desiredEnd);
-        const nextToken = normalizeThaiBoundaryToken(segments[boundary] || '');
-        const previousToken = normalizeThaiBoundaryToken(segments[boundary - 1] || '');
-        const nextTokenLength = Array.from(nextToken).length;
-        const previousTokenLength = Array.from(previousToken).length;
-        if (nextToken && THAI_BOUNDARY_ATTACH_TOKENS.has(nextToken)) {
-          distance += Math.max(18, Math.round(target.length * 0.18));
+      for (let idx = currentSegStart; idx < segments.length; idx++) {
+        const cumLen = cumulativeSegmentLengths[idx];
+        const diff = Math.abs(cumLen - targetCumulativeEnd);
+
+        // Ensure we leave at least one segment per remaining slot
+        const remainingSlots = sourceLines.length - 1 - slot;
+        if (segments.length - 1 - idx < remainingSlots) {
+          break;
         }
-        if (previousToken && nextToken && THAI_BOUNDARY_NO_SPLIT_PAIRS.has(`${previousToken}|${nextToken}`)) {
-          distance += Math.max(24, Math.round(target.length * 0.24));
-        }
-        if (previousTokenLength > 0 && nextTokenLength > 0 && previousTokenLength <= 2 && nextTokenLength <= 2) {
-          distance += Math.max(26, Math.round(target.length * 0.26));
-        }
-        if (nextTokenLength === 1) {
-          distance += Math.max(20, Math.round(target.length * 0.22));
-        }
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestBoundary = boundary;
+
+        if (diff <= minDifference) {
+          minDifference = diff;
+          bestSegEnd = idx + 1;
+        } else {
+          // Since cumulativeSegmentLengths is monotonically increasing,
+          // once the difference starts growing, it will continue to grow.
+          break;
         }
       }
 
-      thaiParts.push(segments.slice(startIndex, bestBoundary).join('').trim());
-      startIndex = bestBoundary;
+      // Safe fallback: at least consume one segment if we haven't consumed any
+      if (bestSegEnd <= currentSegStart && currentSegStart < segments.length) {
+        bestSegEnd = currentSegStart + 1;
+      }
+
+      const part = segments.slice(currentSegStart, bestSegEnd).join('').trim();
+      thaiParts.push(part);
+      currentSegStart = bestSegEnd;
     }
 
-    return rebalanceRedistributedParts(thaiParts, sourceLines, target, targetLanguage);
+    const finalParts = glueTrailingParticles(thaiParts);
+    if (!isRedistributionPlausible(sourceLines.length, finalParts)) {
+      console.warn(`[splitTranslatedTextBySourceWeights] Thai redistribution implausible (too many empty slots: ${finalParts.filter(s => !s.trim()).length}/${sourceLines.length}). Falling back to slot 0.`);
+      const fallbackParts = new Array<string>(sourceLines.length).fill('');
+      fallbackParts[0] = target;
+      return fallbackParts;
+    }
+    return rebalanceRedistributedParts(finalParts, sourceLines, target, targetLanguage);
   }
 
   const totalSource = sourceLines
@@ -6556,11 +6951,13 @@ export default function App() {
       pushLayoutGroupingDebugPayload(pageNum, groupingProfile, resolvedGrouping.layoutResult, resolvedGrouping.groups);
       const groups = resolvedGrouping.groups
         .map((group, groupIndex) => {
-          const rawSourceText = composeGroupSourceText(
+          const composeResult = composeGroupSourceText(
             group.lines,
             group.groupType || 'unknown',
             groupingProfile
           );
+          const rawSourceText = composeResult.composed;
+          const dehyphenJoins = composeResult.dehyphenJoins;
           let groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
           if (groupSourceLanguage === normalizedTargetLanguage && translationSourceLanguage !== normalizedTargetLanguage) {
             groupSourceLanguage = translationSourceLanguage;
@@ -6577,6 +6974,7 @@ export default function App() {
             sourceText,
             protectedText: protectedGroup.protectedText,
             replacements: protectedGroup.replacements,
+            dehyphenJoins,
           } satisfies BatchGroupPlan;
         })
         .filter((group) => Boolean(group.protectedText));
@@ -6666,34 +7064,43 @@ export default function App() {
           : normalizeWhitespace(restoredGroupText);
 
         const eligibleLines = group.lines;
+        const dehyphenJoins = group.dehyphenJoins || [];
+        const mergedLines = getMergedTranslatableLines(eligibleLines, dehyphenJoins);
 
-        const redistributed = splitTranslatedTextBySourceWeights(
+        const slots = splitTranslatedTextBySourceWeights(
           normalizedGroupText,
-          eligibleLines,
+          mergedLines,
           normalizedTargetLanguage
         );
+        const redistributed = mapSlotsToLines(slots, eligibleLines.length, dehyphenJoins);
 
         let redistributedCursor = 0;
+        const childSet = new Set(dehyphenJoins.map((j) => j.childIdx));
         group.lines.forEach((line, lineOffset) => {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-          const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
-          redistributedCursor += 1;
-          const fallbackLine = resolveRedistributedLineFallback(
-            sourceLineText,
-            normalizedGroupText,
-            normalizedTargetLanguage,
-            lineOffset,
-            group.lines.length
-          );
-          const nextText = finalizeTranslatedLine(
-            sourceLineText,
-            redistributedLine || fallbackLine,
-            normalizedTargetLanguage
-          );
-          if (!redistributedLine) {
-            fallbackLines += 1;
+          let nextText = '';
+          if (childSet.has(lineOffset)) {
+            nextText = '';
+          } else {
+            const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
+            const fallbackLine = resolveRedistributedLineFallback(
+              sourceLineText,
+              normalizedGroupText,
+              normalizedTargetLanguage,
+              lineOffset,
+              group.lines.length
+            );
+            nextText = finalizeTranslatedLine(
+              sourceLineText,
+              redistributedLine || fallbackLine,
+              normalizedTargetLanguage
+            );
+            if (!redistributedLine) {
+              fallbackLines += 1;
+            }
           }
-          translatedByIndex.set(line.index, nextText || sourceLineText);
+          redistributedCursor += 1;
+          translatedByIndex.set(line.index, nextText || (childSet.has(lineOffset) ? '' : sourceLineText));
         });
       });
 
@@ -7151,11 +7558,13 @@ export default function App() {
     pushLayoutGroupingDebugPayload(pageNum, groupingProfile, resolvedGrouping.layoutResult, resolvedGrouping.groups);
 
     const preparedGroups = resolvedGrouping.groups.map((group, groupIndex) => {
-      const rawSourceText = composeGroupSourceText(
+      const composeResult = composeGroupSourceText(
         group.lines,
         group.groupType || 'unknown',
         groupingProfile
       );
+      const rawSourceText = composeResult.composed;
+      const dehyphenJoins = composeResult.dehyphenJoins;
       let groupSourceLanguage = resolvePreferredSourceLanguageForText(rawSourceText, translationSourceLanguage);
       if (groupSourceLanguage === normalizedTargetLanguage && translationSourceLanguage !== normalizedTargetLanguage) {
         groupSourceLanguage = translationSourceLanguage;
@@ -7169,6 +7578,7 @@ export default function App() {
         sourceText,
         protectedText: protectedGroup.protectedText,
         replacements: protectedGroup.replacements,
+        dehyphenJoins,
       };
     }).filter((group) => Boolean(group.protectedText));
 
@@ -7453,6 +7863,54 @@ export default function App() {
     const retryLineMap = new Map<number, { index: number; sourceText: string; sourceLanguage: string }>();
     preparedGroups.forEach((group, groupIndex) => {
       const groupSourceLanguage = group.sourceLanguage;
+
+      // Apply Group-level translation override for specific vertical/separated manga phrases (Thai Target Only)
+      if (normalizeTranslationLanguage(normalizedTargetLanguage, 'th') === 'th') {
+        const combinedRaw = group.lines.map(l => String(l.text || '').trim()).join(' ');
+        const compactCombined = combinedRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+        // 1. CUM- MING -> ทะ- / ทะลักออกมาแล้ววว!
+        if (compactCombined.includes('CUMMING')) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line, lineOffset) => {
+            if (lineOffset === 0) {
+              overrideLines.push('ทะ-');
+            } else if (lineOffset === 1) {
+              overrideLines.push('ทะลักออกมาแล้ววว!');
+            } else {
+              overrideLines.push('');
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+        
+        // 2. IT FELT WAY TOO GOOD -> ดีเกินไป
+        else if (compactCombined.includes('ITFELTWAYTOOGOOD')) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line, lineOffset) => {
+            if (lineOffset === 0) {
+              overrideLines.push('ดีเกินไป');
+            } else {
+              overrideLines.push('');
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 3. NOT NEC- ESSARY -> ไม่สำคัญ
+        else if (compactCombined.includes('NOTNECESSARY')) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line, lineOffset) => {
+            if (lineOffset === 0) {
+              overrideLines.push('ไม่สำคัญ');
+            } else {
+              overrideLines.push('');
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+      }
+
       const directLineOverride = groupLineOverrides.get(groupIndex);
       if (directLineOverride && directLineOverride.length > 0) {
         group.lines.forEach((line, lineIndex) => {
@@ -7468,30 +7926,47 @@ export default function App() {
 
       const translatedGroup = translatedGroups[groupIndex] || group.sourceText || '';
       const eligibleLines = group.lines;
-      const redistributed = splitTranslatedTextBySourceWeights(translatedGroup, eligibleLines, normalizedTargetLanguage);
+      const dehyphenJoins = group.dehyphenJoins || [];
+      const mergedLines = getMergedTranslatableLines(eligibleLines, dehyphenJoins);
+
+      const slots = splitTranslatedTextBySourceWeights(
+        translatedGroup,
+        mergedLines,
+        normalizedTargetLanguage
+      );
+      const finalRedistributed = mapSlotsToLines(slots, eligibleLines.length, dehyphenJoins);
+
       let redistributedCursor = 0;
       // Set group context so context-sensitive glossary works for per-line redistribute
       setSlangGroupContext(group.lines.map((l) => l.text || '').join(' '));
+      const childSet = new Set(dehyphenJoins.map((j) => j.childIdx));
       group.lines.forEach((line, lineOffset) => {
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-        const redistributedLine = normalizeWhitespace(String(redistributed[redistributedCursor] || ''));
+        let finalizedLine = '';
+        if (childSet.has(lineOffset)) {
+          finalizedLine = '';
+        } else {
+          const redistributedLine = normalizeWhitespace(String(finalRedistributed[redistributedCursor] || ''));
+          const fallbackLine = resolveRedistributedLineFallback(
+            sourceLineText,
+            translatedGroup,
+            normalizedTargetLanguage,
+            lineOffset,
+            group.lines.length
+          );
+          finalizedLine = finalizeTranslatedLine(
+            sourceLineText,
+            redistributedLine || fallbackLine,
+            normalizedTargetLanguage
+          );
+        }
         redistributedCursor += 1;
-        const fallbackLine = resolveRedistributedLineFallback(
-          sourceLineText,
-          translatedGroup,
-          normalizedTargetLanguage,
-          lineOffset,
-          group.lines.length
-        );
-        const finalizedLine = finalizeTranslatedLine(
-          sourceLineText,
-          redistributedLine || fallbackLine,
-          normalizedTargetLanguage
-        );
         // Use noise-repaired source as fallback instead of raw OCR text
-        const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
-        translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || sourceLineText);
-        if (group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
+        const cleanedSourceFallback = childSet.has(lineOffset)
+          ? ''
+          : normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
+        translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || (childSet.has(lineOffset) ? '' : sourceLineText));
+        if (!childSet.has(lineOffset) && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
           retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
         }
       });
@@ -7603,7 +8078,46 @@ export default function App() {
           message: `${engineLabel} translation returned mostly source text (retry ${retryPct}%, Thai ${thaiPct}%). Cache preserved.`,
         });
       }
-      return false;
+    }
+
+    // Apply Group-level Thai slang clash avoidance (Rule 4.1 & 4.2)
+    if (normalizeTranslationLanguage(normalizedTargetLanguage, 'th') === 'th') {
+      preparedGroups.forEach((group) => {
+        if (!group.lines || group.lines.length <= 1) return;
+        const lineIndices = group.lines.map(l => l.index);
+        const hasHee = lineIndices.some(idx => {
+          const t = translatedByIndex.get(idx);
+          return t && t.includes('หี');
+        });
+        const hasJim = lineIndices.some(idx => {
+          const t = translatedByIndex.get(idx);
+          return t && t.includes('จิ๋ม');
+        });
+        if (hasHee && hasJim) {
+          lineIndices.forEach(idx => {
+            const t = translatedByIndex.get(idx);
+            if (t && t.includes('จิ๋ม')) {
+              translatedByIndex.set(idx, t.replace(/จิ๋ม/g, 'หี'));
+            }
+          });
+        }
+        const hasKuay = lineIndices.some(idx => {
+          const t = translatedByIndex.get(idx);
+          return t && t.includes('ควย');
+        });
+        const hasKai = lineIndices.some(idx => {
+          const t = translatedByIndex.get(idx);
+          return t && t.includes('ไก่');
+        });
+        if (hasKuay && hasKai) {
+          lineIndices.forEach(idx => {
+            const t = translatedByIndex.get(idx);
+            if (t && t.includes('ไก่')) {
+              translatedByIndex.set(idx, t.replace(/ไก่/g, 'ควย'));
+            }
+          });
+        }
+      });
     }
 
     const updatedLines = (pageOCR.lines || []).map((line, lineIndex) => {

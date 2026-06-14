@@ -95,6 +95,28 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bKNIMIGHT\b/gi, replacement: 'KNIGHT' },
   { pattern: /\bBARBAR\s+[Il1|]\s+AN\b/gi, replacement: 'BARBARIAN' },
   { pattern: /BARBAR\s+[Il1|]\s+AN/gi, replacement: 'BARBARIAN' },
+  // OCR lowercase 'i' confused for 'I' in ALL-CAPS manga text
+  { pattern: /\bYQU'?RE\b/gi, replacement: "YOU'RE" },
+  { pattern: /\bYQU\b/gi, replacement: 'YOU' },
+  { pattern: /\bWiTH\b/g, replacement: 'WITH' },
+  { pattern: /\biT\b/g, replacement: 'IT' },
+  { pattern: /\bSiDE\b/g, replacement: 'SIDE' },
+  { pattern: /\bTHiNG\b/g, replacement: 'THING' },
+  { pattern: /\bSiDe\b/g, replacement: 'SIDE' },
+  { pattern: /\bMiND\b/g, replacement: 'MIND' },
+  { pattern: /\bLiFE\b/g, replacement: 'LIFE' },
+  { pattern: /\bFiGHT\b/g, replacement: 'FIGHT' },
+  { pattern: /\bNiGHT\b/g, replacement: 'NIGHT' },
+  { pattern: /\bLiKE\b/g, replacement: 'LIKE' },
+  { pattern: /\bTiME\b/g, replacement: 'TIME' },
+  { pattern: /\bKiLL\b/g, replacement: 'KILL' },
+  { pattern: /\bRiGHT\b/g, replacement: 'RIGHT' },
+  { pattern: /\bDiE\b/g, replacement: 'DIE' },
+  { pattern: /\bDiED\b/g, replacement: 'DIED' },
+  { pattern: /\bDYiNG\b/g, replacement: 'DYING' },
+  // SOW in military/attack context is likely SHOW or a command; handle cautiously via lookup
+  // WiTH iT: fix together
+  { pattern: /\bWiTH\s+iT\b/g, replacement: 'WITH IT' },
   { pattern: /\bWITHAN\b/gi, replacement: 'WITH AN' },
   { pattern: /\bI'VELOST\b/gi, replacement: "I'VE LOST" },
   { pattern: /\bMYVIRGINITY\b/gi, replacement: 'MY VIRGINITY' },
@@ -149,6 +171,34 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\b4HH\b/gi, replacement: 'AHH' },
   { pattern: /\b6o\b/g, replacement: 'So' },
   { pattern: /\b6O\b/g, replacement: 'SO' },
+  { pattern: /BLOWTOB/gi, replacement: 'BLOWJOB' },
+  { pattern: /\bnou\b/gi, replacement: 'you' },
+  { pattern: /\bDIseASe\b/gi, replacement: 'DISEASE' },
+  { pattern: /\bFOuND\s+A\b/gi, replacement: 'FOUND A' },
+  { pattern: /\bS3HS\b/gi, replacement: "SHE'S" },
+  { pattern: /\bINSIDEI\b/gi, replacement: 'INSIDE!' },
+  { pattern: /\bINSIDEI\?(?!\?)/gi, replacement: 'INSIDE!?' },
+  { pattern: /\bWHTTT\s+TT\b/gi, replacement: 'IT WITHOUT' },
+  { pattern: /\bRESTRAINT\s*[…\.]+/gi, replacement: 'RESTRAINT.' },
+  { pattern: /\bGOO\s*[…\.]+/gi, replacement: 'GOOD...' },
+  { pattern: /\biHnH\b/gi, replacement: 'HUH?' },
+  { pattern: /\biSIhs\b/gi, replacement: 'THIS?' },
+  { pattern: /\b2iHg\b/gi, replacement: 'EH!?' },
+  { pattern: /\bEiH3\b/gi, replacement: 'EH!?' },
+  { pattern: /\bIimom\b/gi, replacement: 'WOW!' },
+  { pattern: /\bOd\s+11\.1\b/gi, replacement: "I'LL DO" },
+  { pattern: /\bVAYS\b/gi, replacement: 'DAYS' },
+  { pattern: /\bILL\b/g, replacement: "I'LL" },
+  { pattern: /\bBEEELEE\b/gi, replacement: 'BELIEVE' },
+  { pattern: /\bWNTTTT\b/gi, replacement: 'WITHOUT' },
+  { pattern: /\bHERPUSSY\b/gi, replacement: 'HER PUSSY' },
+  { pattern: /\bii333s\b/gi, replacement: 'SEEE!!' },
+  { pattern: /\bHEAD\s+NUR-?\s*SEEE!!/gi, replacement: 'HEAD NUR-SEEE!!' },
+  { pattern: /\bHEAD\s+NUR-?\s*ii333s/gi, replacement: 'HEAD NUR-SEEE!!' },
+  { pattern: /\bAny\s*-?\s*MORE\b/gi, replacement: 'Anymore' },
+  { pattern: /\bCUM\s*-?\s*MING\b/gi, replacement: 'CUMMING' },
+  { pattern: /\bNOT\s+NEC\s*-?\s*ESSARY\b/gi, replacement: 'NOT NECESSARY' },
+  { pattern: /\bNEC\s*-?\s*ESSARY\b/gi, replacement: 'NECESSARY' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -223,7 +273,17 @@ export const THAI_BOUNDARY_NO_SPLIT_PAIRS = new Set([
   'ปิ|ด',
 ]);
 
-export const normalizeWhitespace = (text: string): string => text.replace(/\s+/g, ' ').trim();
+export const safeStr = (val: unknown): string => {
+  if (val == null) return '';
+  const s = String(val).trim();
+  if (s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined') return '';
+  return s;
+};
+
+export const normalizeWhitespace = (text: unknown): string => {
+  return safeStr(text).replace(/\s+/g, ' ');
+};
+
 
 export const normalizeTranslationLanguage = (value: string, fallback: string): string => {
   const raw = String(value || '').trim().toLowerCase();

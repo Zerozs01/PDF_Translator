@@ -125,7 +125,7 @@
 เอกสารทั้งหมดได้รับการตรวจสอบและปรับปรุงให้ตรงกับโค้ดปัจจุบันในวันที่ 2026-06-13:
 
 1. **`OCR_ALGORITHM_VERSION`:** ปรับปรุงใน [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L41) ให้เป็นเวอร์ชันปัจจุบันคือ `214` ตรงกับ [ocrVersion.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/ocrVersion.ts#L1)
-2. **`OCR_TRANSLATION_CACHE_VERSION`:** ปรับปรุงใน [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L48) ให้เป็นเวอร์ชันปัจจุบันคือ `'v48'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L42)
+2. **`OCR_TRANSLATION_CACHE_VERSION`:** ปรับปรุงใน [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L48) ให้เป็นเวอร์ชันปัจจุบันคือ `'v49'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L42)
 3. **`Custom Glossary` System:** เพิ่มรายละเอียดของ `useGlossaryStore.ts` และ `GlossarySidebarPanel.tsx` ในโครงสร้างสถาปัตยกรรมของ [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md) เรียบร้อยแล้ว
 4. **Roadmap Progress (P4 & P5):** อัปเดตสถานะของ P4 (Performance) และ P5 (Glossary Pipeline Integration) ใน [Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) เป็น **Completed** เรียบร้อยแล้ว
 5. **Phase 7 Advanced Local Security:** อัปเดตสัญญาระบบความปลอดภัยแบบ Secure-by-default, การเข้ารหัส DB ด้วย SQLCipher (`better-sqlite3-multiple-ciphers`), ระบบ Offline Setup/Login, Relax (Keychain) vs Security App Modes และ Reset System wipe data ลงใน manifest นี้แล้วในวันที่ 2026-06-12

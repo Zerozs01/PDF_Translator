@@ -2,6 +2,7 @@ import type { OCREngine, OCRPageResult } from '../../types';
 import type { TranslationMode } from '../../stores/useProjectStore';
 import type { OCRLineWithLayout } from '../layout/balloonAwareGroupingService';
 import { sanitizeTranslationResult } from './translationCoordinator';
+import type { DehyphenatedJoin } from './dehyphenation';
 
 export type ProtectedTokenReplacement = {
   token: string;
@@ -43,6 +44,7 @@ export type BatchGroupPlan = {
   sourceText: string;
   protectedText: string;
   replacements: ProtectedTokenReplacement[];
+  dehyphenJoins?: DehyphenatedJoin[];
 };
 
 export type BatchPageTranslationPlan = {

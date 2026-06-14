@@ -145,7 +145,7 @@ const areSameScriptLines = (a: string, b: string): boolean => {
 
   const hasLatinA = /[A-Za-z]/.test(cleanA);
   const hasLatinB = /[A-Za-z]/.test(cleanB);
-  if (hasLatinA || hasLatinB) return false;
+  if (hasLatinA || hasLatinB) return hasLatinA && hasLatinB;
 
   return false;
 };

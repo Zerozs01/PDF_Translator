@@ -62,8 +62,37 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'dont move': 'อย่าขยับ', 'is that so': 'หรือจริงเหรอ',
   // Common manga/technical short terms
   'unit': 'หน่วย', 'units': 'หน่วย', 'all units': 'ทุกหน่วย',
-  'charge': 'ชาร์จ', 'princess': 'เจ้าหญิง', 'of all of us': 'ของพวกเราทุกคน',
+  'charge': 'บุกเลย!', 'charge!': 'บุกเลย!',
+  'princess': 'เจ้าหญิง', 'of all of us': 'ของพวกเราทุกคน',
+  // Action words that Argos translates wrong
+  'much': 'มาก', 'much...': 'มาก...', 'so much': 'มากนัก',
+  'fool': 'คนโง่', 'fool...': 'คนโง่...', 'you fool': 'แกโง่ชัด',
+  'sow': 'หว่าน',
+  'nonstop': 'ไม่หยุด', 'non-stop': 'ไม่หยุด',
+  'be': 'เป็น', 'be...': 'เป็น...',
+  'more': 'อีก', 'more!': 'อีก!', 'one more': 'อีกครั้ง',
+  'you!': 'แก!', 'you!?': 'แก!?',
+  'oh!': 'โอ้!', 'ohhh': 'โอ้หน่อ', 'ohh': 'โอ้โห',
+  'of': 'ของ', 'all': 'ทั้งหมด', 'all!': 'ทุกคน!',
+  'one battle': 'การต่อสู้ครั้งหนึ่ง', 'one battle!': 'สู้แค่ครั้งเดียว!',
+  'gonna die': 'จะตาย', 'gonna die!': 'จะตายแล้ว!',
+  'to be dead now': 'ต้องตายไปแล้ว', 'to be dead now!': 'ต้องตายไปแล้วนะ!',
+  'so please': 'ดังนั้นขอร้อง', 'so please!': 'ขอร้องนะ!',
+  'why!?': 'ทำไม!?', 'why?': 'ทำไม?',
+  'ass': 'ก้น', 'ass-': 'ก้น', 'hole': 'รู', 'asshole': 'ไอ้สัตว์',
+  'ass- hole': 'ไอ้สัตว์', 'ass-hole': 'ไอ้สัตว์',
+  'ha!': 'ฮ่า!', 'ha ha': 'ฮ่าฮ่า', 'ha ha ha': 'ฮ่าฮ่าฮ่า',
+  'hehe': 'เฮ้เฮ้', 'hehe!': 'เฮ้เฮ้!', 'hehehe': 'เฮ้เฮ้เฮ้', 'hehehe!': 'เฮ้เฮ้เฮ้!',
+  'meeeeeee': 'ฉันน!', 'meeeeee': 'ฉันน!', 'meeeee': 'ฉันน!',
+  'i cant believe it': 'ไม่อยากเชื่อเลย...', 'i cannot believe it': 'ไม่อยากเชื่อเลย...',
+  'cant believe it': 'เชื่อไม่ได้เลย...', 'cannot believe it': 'เชื่อไม่ได้เลย...',
+  'i cant believe it...': 'ไม่อยากเชื่อเลย...', 'i cant believe this': 'ไม่อยากเชื่อเลย',
+  'her pussys so stinky': 'หีเธอช่างเหม็นตุๆ',
+  'her pussy is so stinky': 'หีเธอช่างเหม็นตุๆ',
+  'pussys so stinky': 'หีช่างเหม็นตุๆ',
+  'with it': 'ไปด้วยกัน!',
 };
+
 
 export const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
 
@@ -354,8 +383,14 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const compact = source.replace(/\s+/g, '');
   const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
   const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|CUMMING)$/i.test(asciiCompact);
   if (isKnownShortWord) {
+    return false;
+  }
+
+  // ทำไม: ถ้า source มีคำที่อยู่ใน glossary แล้วจะแปลถูกแน่นอน ไม่ควร skip ออกไป
+  const glossaryLookup = lookupShortPhraseTh(source);
+  if (glossaryLookup !== null) {
     return false;
   }
   
@@ -379,14 +414,21 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const tokenCount = source.split(/\s+/g).filter(Boolean).length;
   if (thaiChars > 0) return false;
 
+  // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
+  // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
+  const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const KNOWN_MANGA_PHRASES = /^(?:SUDDENLY|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT)$/i.test(compactUpper);
+  if (KNOWN_MANGA_PHRASES) return false;
+
   if (sourceKey === translatedKey) {
-    // ทำไมถึงเขียนแบบนี้: ใช้ >= 6 แทน >= 4 เพื่อป้องกันการ skip manga dialog สั้นๆ (FOOD, DUMB, PRIN-, I'LL ฯลฯ)
-    // ที่ translation engine ส่งกลับมาเป็นข้อความต้นฉบับ (carry-over) แต่ยังควรแสดงใน export
-    // text ที่สั้นกว่า 6 chars มักเป็น dialog ที่มีความหมาย ไม่ใช่ untranslated artifact
-    return tokenCount >= 1 && (sourceLatinChars >= 6 || source.length >= 6);
+    // ทำไมถึงเขียนแบบนี้: เพิ่ม threshold จาก >= 6 เป็น >= 10 เพราะ manga phrases อย่าง
+    // "SUDDENLY" (8 chars), "BEING TOO" (8 chars), "FROM THE" (7 chars) ฯลฯ
+    // ต้องไม่โดน skip แม้ Argos จะส่ง carry-over กลับมา
+    return tokenCount >= 1 && (sourceLatinChars >= 10 || source.length >= 10);
   }
 
-  return latinChars >= 4 && sourceLatinChars >= 4 && tokenCount >= 2;
+  // เพิ่ม threshold: >= 6 แทน >= 4 เพื่อป้องกัน multi-word dialogue fragments โดน skip
+  return latinChars >= 6 && sourceLatinChars >= 6 && tokenCount >= 3;
 };
 
 export const buildTranslationComparisonKey = (value: string): string =>

@@ -16,6 +16,7 @@ import {
 } from '../../constants/overlayFonts';
 import { useOCRTextLayerStore, SUPPORTED_LANGUAGES } from '../../stores/useOCRTextLayerStore';
 import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
+import { useLayerStore } from '../../stores/useLayerStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { OCREngine } from '../../types';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
@@ -313,6 +314,12 @@ const DocumentContextMenu: React.FC<{
               const confirm = window.confirm(`ต้องการลบแคช (OCR + Overlay แปล) ของไฟล์นี้หรือไม่?\nขนาดแคช: ${formatFileSize(cacheSize)}`);
               if (confirm) {
                 await window.electronAPI.db.clearDocumentCache(doc.id);
+                
+                // Clear React memory store cache to ensure a fresh reload upon opening
+                useLayerStore.getState().clearLayers();
+                useOCRTextLayerStore.getState().clearAllOCR();
+                useOCRTextLayerStore.getState().setCurrentPageOCR(null);
+                
                 setCacheSize(0);
               }
             }}

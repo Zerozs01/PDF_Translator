@@ -1842,6 +1842,56 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('die', 'die', 'th')).toBe('ตายซะ');
   });
 
+  test('maps newly tuned eng-to-thai slang and normalization repairs correctly', () => {
+    // 1. HEAD NUR-SEEE!!
+    expect(applyThaiConversationalGlossary('HEAD NUR-SEEE!!', 'HEAD NUR-SEEE!!', 'th')).toBe('หัวหน้า พยา-บาลลล!!');
+    
+    // 2. SHE'S -> เธอคือ
+    expect(applyThaiConversationalGlossary("SHE'S", "SHE'S", 'th')).toBe('เธอคือ');
+
+    // 3. INSIDE!? -> ข้างใน!?
+    expect(applyThaiConversationalGlossary("INSIDE!?", "INSIDE!?", 'th')).toBe('ข้างใน!?');
+
+    // 4. IT WITHOUT -> มันโดยไม่มี
+    expect(applyThaiConversationalGlossary("IT WITHOUT", "IT WITHOUT", 'th')).toBe('มันโดยไม่มี');
+
+    // 5. HUH? -> ฮะ?
+    expect(applyThaiConversationalGlossary("HUH?", "HUH?", 'th')).toBe('ฮะ?');
+
+    // 6. THIS? -> นี่น่ะเหรอ?
+    expect(applyThaiConversationalGlossary("THIS?", "THIS?", 'th')).toBe('นี่น่ะเหรอ?');
+    expect(applyThaiConversationalGlossary("THIS", "THIS", 'th')).toBe('นี่');
+
+    // 7. EH!? -> เอ๊!? vs EH? -> เอ๋?
+    expect(applyThaiConversationalGlossary("EH!?", "EH!?", 'th')).toBe('เอ๊!?');
+    expect(applyThaiConversationalGlossary("EH?", "EH?", 'th')).toBe('เอ๋?');
+
+    // 8. WOW! -> ว้าว!
+    expect(applyThaiConversationalGlossary("WOW!", "WOW!", 'th')).toBe('ว้าว!');
+
+    // 9. I'LL DO -> ฉันจะทำ
+    expect(applyThaiConversationalGlossary("I'LL DO", "I'LL DO", 'th')).toBe('ฉันจะทำ');
+
+    // 10. DAYS -> หลายวัน
+    expect(applyThaiConversationalGlossary("DAYS", "DAYS", 'th')).toBe('หลายวัน');
+
+    // 11. I'LL -> ฉันจะ
+    expect(applyThaiConversationalGlossary("I'LL", "I'LL", 'th')).toBe('ฉันจะ');
+
+    // 12. BELIEVE -> เชื่อ
+    expect(applyThaiConversationalGlossary("BELIEVE", "BELIEVE", 'th')).toBe('เชื่อ');
+
+    // 13. WITHOUT -> โดยไม่มี
+    expect(applyThaiConversationalGlossary("WITHOUT", "WITHOUT", 'th')).toBe('โดยไม่มี');
+
+    // 14. HER PUSSY -> หีของเธอ
+    expect(applyThaiConversationalGlossary("HER PUSSY..!", "HER PUSSY..!", 'th')).toBe('หีของเธอ..!');
+
+    // 15. Balloon dedupe: จิ๋ม vs หี, ไก่ vs ควย
+    expect(applyThaiConversationalGlossary("SOME TEXT", "จิ๋มและหี", 'th')).toBe('หีและหี');
+    expect(applyThaiConversationalGlossary("SOME TEXT", "ไก่และควย", 'th')).toBe('ควยและควย');
+  });
+
   test('maps spanish conversational fragments to stable thai meaning', () => {
     const algoAsi = applyThaiConversationalGlossary('ALGO ASi...', 'ALGO ASi...', 'th');
     const ceh = applyThaiConversationalGlossary('CEH?', 'CEH?', 'th');
