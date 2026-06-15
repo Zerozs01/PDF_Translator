@@ -6,6 +6,7 @@ import {
   normalizeSourceForTranslation,
   normalizeTranslationLanguage,
 } from './ocrTextNormalizer';
+import { isKnownShortWordHelper } from './ocrSafetyLineDedup';
 
 export const HANGUL_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/;
 export const THAI_REGEX = /[\u0E00-\u0E7F]/;
@@ -830,6 +831,11 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^SMACK[VE]?([.!?…\s]*)$/i,
   /^SO\s*TIGHT[.!?…]*$/i,
   /^PHEW[.!?…]*$/i,
+  /^FRONT[.!?…]*$/i,
+  /^WOULD[.!?…]*$/i,
+  /^HE['’]?S[.!?…]*$/i,
+  /^THiS\s+MY[.!?…]*$/i,
+  /^HEHEHE[!.,?…]*$/i,
 ];
 
 export const shouldForceKeepComicTranslationLine = (
@@ -897,8 +903,7 @@ export const isLikelyGhostTranslatableLine = (
   const cjkCompact = compact.replace(/[^\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|CUMALOTJUSTLIKETHAT)$/i.test(asciiCompact);
+  const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
 
   const validWords = (Array.isArray(scaledLine.words) ? scaledLine.words : []).filter((word) => {
     const wordText = normalizeWhitespace(String(word?.text || ''));
@@ -957,7 +962,7 @@ export const isLikelyGhostTranslatableLine = (
 
   const giantLineBox = (
     (width >= 180 && height >= 110 && area >= 18000)
-    || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2)
+    || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2 && validWords.length > 0)
     || (width >= 320 && height >= 98 && area >= 32000)
   );
   const noWordOversizedShortPhrase = validWords.length === 0
@@ -973,7 +978,7 @@ export const isLikelyGhostTranslatableLine = (
   }
 
   const sparseLargePhrase = wordCount <= 4 && compact.length <= 24;
-  const lowCoverageLargeBox = wordCoverage <= 0.26;
+  const lowCoverageLargeBox = wordCoverage <= 0.26 && validWords.length > 0;
   const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
   if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox) {
     return true;
@@ -988,7 +993,8 @@ export const isLikelyGhostTranslatableLine = (
     || (englishTokens.length === 1 && englishTokens[0].length >= 3 && readability >= 1.0)
     || isKnownShortWord
     || /^(?:PRINCESS|PRiNCESS|DIE|PIG|CUM|COCK|OH|OHHH|OHHHH|OHHHHH|AGAA|SO|OF|ALL|MORE|YOU|US|THE|THIS|MY|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|USTHESOOFALL|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU)$/i.test(asciiCompact);
-  if (isSparseSfxBox && !isNaturalDialogue && !shouldForceKeepComicTranslationLine(text, scaledLine)) {
+  const isHighConfidenceText = avgConfidence >= 90 && asciiCompact.length > 0 && !isPureSymbolNoise && !isVerticalLineJunk;
+  if (isSparseSfxBox && !isNaturalDialogue && !isHighConfidenceText && !shouldForceKeepComicTranslationLine(text, scaledLine)) {
     return true;
   }
 
@@ -1093,6 +1099,7 @@ export const isLikelyGhostTranslatableLine = (
     && area <= Math.max(5200, latinCompact.length * 520)
     && (area / Math.max(1, latinCompact.length)) <= 430
     && wordCoverage <= 0.24
+    && validWords.length > 0
     && avgConfidence <= 94
     && !/[.!?…]\s*$/.test(text);
   if (compressedSparseShortPhrase) {

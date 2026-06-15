@@ -3667,26 +3667,26 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 if shortest <= 420:
                     det_limit = 2000
                 elif shortest <= 720:
-                    det_limit = 2200
-                else:
                     det_limit = 2400
+                else:
+                    det_limit = 3200
                 rec_batch = 10
-                det_thresh = 0.18 if is_cjk_like else 0.20
-                det_box_thresh = 0.44 if is_cjk_like else 0.46
-                det_unclip_ratio = 1.60 if is_cjk_like else 1.75
+                det_thresh = 0.15
+                det_box_thresh = 0.40
+                det_unclip_ratio = 1.80
                 rec_score_thresh = 0.22 if is_cjk_like else 0.24
             else:  # "best"
                 if shortest <= 420:
                     det_limit = 2400
                 elif shortest <= 720:
-                    det_limit = 2600
-                else:
                     det_limit = 2800
+                else:
+                    det_limit = 3600
                 rec_batch = 8
                 det_thresh = 0.12
-                det_box_thresh = 0.38 if is_cjk_like else 0.40
-                det_unclip_ratio =  1.90
-                rec_score_thresh = 0.3
+                det_box_thresh = 0.3
+                det_unclip_ratio = 1.96
+                rec_score_thresh = 0.36
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300

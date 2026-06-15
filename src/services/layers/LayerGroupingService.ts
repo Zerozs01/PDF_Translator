@@ -170,8 +170,8 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   }
 
   // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
-  // 4. Vertical gap <= 1.5x ความสูงเฉลี่ยของสอง lines
-  return horizOverlap >= 0.30 && vertGap <= 1.5 * avgHeight;
+  // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines
+  return horizOverlap >= 0.30 && vertGap <= 2.2 * avgHeight;
 };
 
 /**
@@ -288,12 +288,14 @@ export const splitAggressiveMergedLines = (
 
       if (/[!?.,;]$/.test(prevText)) {
         effectiveGapMultiplier = 0.85;
+      } else if (/-$/.test(prevText)) {
+        // ทำไม: ถ้าคำก่อนหน้าลงท้ายด้วยยัติภังค์ (-) แสดงว่าเป็นคำผสม (เช่น one-on-one)
+        // ไม่ควรทำการแบ่งบรรทัดเด็ดขาด ให้ใช้เกณฑ์ขนาดใหญ่เพื่อป้องกันการแยกออกจากกัน
+        effectiveGapMultiplier = 2.5;
       } else if (/^[A-Z]/.test(currText)) {
-        // ทำไม: ลดจาก 2.2 เป็น 1.1 เพื่อจับ cross-balloon merging เช่น "PLEEA FOR THE"
-        // ช่องว่างระหว่างคำใน balloon เดียวกันมักน้อยกว่า avgHeight มาก (~0.2-0.5x)
-        // ส่วนช่องว่างระหว่าง balloon ต่างกันมักใหญ่กว่า 1.5-2x avgHeight
-        // threshold 1.1 จึงสามารถจับ cross-balloon ได้โดยไม่ทำลาย intra-balloon spacing
-        effectiveGapMultiplier = 1.1;
+        // ทำไม: ปรับเป็น 0.98 (เดิม 1.1) เพื่อแยก FiTTiNG FOR BEING (gap ratio 1.0) 
+        // แต่ยังปลอดภัยพอที่จะไม่หั่นแยกคำทั่วไปในบอลลูนเดียวกัน
+        effectiveGapMultiplier = 0.98;
       }
 
       // ทำไม: ถ้า gap ใหญ่มากผิดปกติ (> 2x avgHeight) ให้ split เสมอ ไม่ว่าคำก่อนจะจบด้วยอะไร

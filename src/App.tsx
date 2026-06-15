@@ -7536,6 +7536,8 @@ export default function App() {
       engine === 'offline'
       && pageEngine === 'paddleocr'
       && groupingProfile === 'dense-dialogue'
+      && effectiveTranslationMode !== 'manga'
+      && effectiveTranslationMode !== 'manhwa'
       && shouldForceLineByLineForOfflinePanel(translatableLines)
     ) {
       groupingProfile = 'line-by-line';

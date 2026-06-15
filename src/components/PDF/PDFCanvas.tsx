@@ -33,6 +33,7 @@ import {
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
+import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
 const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
@@ -292,8 +293,7 @@ const PDFPageOverlay: React.FC<{
         const height = Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
         const area = width * height;
 
-        const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+        const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
         const isTinyJunkBox = !hasCjkOrThai && asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
 
         if (isTinyJunkBox) return false;

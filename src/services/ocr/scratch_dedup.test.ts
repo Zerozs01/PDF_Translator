@@ -1,7 +1,8 @@
-import { describe, it } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
 import { OCRPageResult } from '../../types';
+import { normalizeSourceForTranslation } from './ocrTextNormalizer';
 
 describe('Scratch Dedup Test', () => {
   it('checks if CAN DO and IS TO SEARCH are dropped', () => {
@@ -33,4 +34,47 @@ describe('Scratch Dedup Test', () => {
       console.log(`[${i}] reason=${d.reason} filter=${d.filter} text="${d.text}"`);
     });
   });
+
+  it('ensures manga-specific short words are not dropped by applyPanelSafetyLineDedup', () => {
+    const testLines = [
+      { text: "YQU'RE", confidence: 90, bbox: { x0: 100, y0: 100, x1: 180, y1: 130 } },
+      { text: "WiTH", confidence: 90, bbox: { x0: 200, y0: 100, x1: 250, y1: 130 } },
+      { text: "HEHEHE!", confidence: 90, bbox: { x0: 300, y0: 100, x1: 380, y1: 130 } },
+      { text: "COOOOOOCKS", confidence: 90, bbox: { x0: 400, y0: 100, x1: 520, y1: 130 } },
+      { text: "SQIiRT-", confidence: 90, bbox: { x0: 530, y0: 100, x1: 610, y1: 130 } },
+      { text: "iNG", confidence: 90, bbox: { x0: 620, y0: 100, x1: 660, y1: 130 } }
+    ];
+
+    const ocrResult: OCRPageResult = {
+      pageNumber: 1,
+      width: 1000,
+      height: 1000,
+      dpi: 72,
+      language: 'eng',
+      algorithmVersion: 1,
+      lines: testLines,
+      words: [],
+      text: '',
+      pipelineProfile: 'panel',
+      ocrEngine: 'paddleocr'
+    };
+
+    const finalResult = applyPanelSafetyLineDedup(ocrResult);
+    const keptTexts = finalResult.lines.map(l => l.text);
+    
+    console.log('--- Kept texts in manga short words regression:', keptTexts);
+    console.log('--- Dropped in manga short words regression:', finalResult.debug?.droppedWords);
+
+    // Verify all critical words are kept (as raw OCR texts before spelling normalizer)
+    expect(keptTexts).toContain("YQU'RE");
+    expect(keptTexts).toContain("WiTH");
+    expect(keptTexts).toContain("HEHEHE!");
+    expect(keptTexts).toContain("COOOOOOCKS");
+
+    // Verify spelling normalization works correctly on these kept texts
+    expect(normalizeSourceForTranslation("YQU'RE", 'en')).toBe("You're");
+    expect(normalizeSourceForTranslation("WiTH", 'en')).toBe("With");
+    expect(normalizeSourceForTranslation("HEHEHE!", 'en')).toBe("Hehehe!"); // normalizes casing for English translation sentences
+  });
 });
+

@@ -11,6 +11,7 @@ import {
   normalizeKoreanOcrNoiseForTranslation,
   normalizeEnglishOcrNoiseForTranslation,
 } from '../ocr/ocrTextNormalizer';
+import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
 
 import {
   hasKoreanTranslationCarryover,
@@ -41,7 +42,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'get': 'รับ', 'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
   'ah': 'อา', 'oh': 'โอ้', 'uh': 'เอ่อ', 'ugh': 'โอ๊ย',
   'wow': 'ว้าว', 'whoa': 'โว้ว', 'ha': 'ฮ่า',
-  'thanks': 'ขอบคุณ', 'sorry': 'ขอโทษ', 'please': 'กรุณา',
+  'thanks': 'ขอบคุณ', 'sorry': 'ขอโทษ', 'please': 'ได้โปรด', 'please!': 'ได้โปรด!', 'please...': 'ได้โปรด...',
   'right': 'ใช่แล้ว', 'wrong': 'ผิดแล้ว', 'really': 'จริงเหรอ',
   'seriously': 'จริงจังเหรอ', 'impossible': 'เป็นไปไม่ได้',
   'unbelievable': 'เชื่อไม่ได้', 'of course': 'แน่นอน',
@@ -77,20 +78,41 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'one battle': 'การต่อสู้ครั้งหนึ่ง', 'one battle!': 'สู้แค่ครั้งเดียว!',
   'gonna die': 'จะตาย', 'gonna die!': 'จะตายแล้ว!',
   'to be dead now': 'ต้องตายไปแล้ว', 'to be dead now!': 'ต้องตายไปแล้วนะ!',
-  'so please': 'ดังนั้นขอร้อง', 'so please!': 'ขอร้องนะ!',
+  'so please': 'ดังนั้นได้โปรด', 'so please!': 'ดังนั้นได้โปรด!', 'soplease': 'ดังนั้นได้โปรด', 'soplease!': 'ดังนั้นได้โปรด!',
   'why!?': 'ทำไม!?', 'why?': 'ทำไม?',
   'ass': 'ก้น', 'ass-': 'ก้น', 'hole': 'รู', 'asshole': 'ไอ้สัตว์',
   'ass- hole': 'ไอ้สัตว์', 'ass-hole': 'ไอ้สัตว์',
   'ha!': 'ฮ่า!', 'ha ha': 'ฮ่าฮ่า', 'ha ha ha': 'ฮ่าฮ่าฮ่า',
   'hehe': 'เฮ้เฮ้', 'hehe!': 'เฮ้เฮ้!', 'hehehe': 'เฮ้เฮ้เฮ้', 'hehehe!': 'เฮ้เฮ้เฮ้!',
   'meeeeeee': 'ฉันน!', 'meeeeee': 'ฉันน!', 'meeeee': 'ฉันน!',
-  'i cant believe it': 'ไม่อยากเชื่อเลย...', 'i cannot believe it': 'ไม่อยากเชื่อเลย...',
+  'i cant believe it': 'ไมยากเชื่อเลย...', 'i cannot believe it': 'ไม่อยากเชื่อเลย...',
   'cant believe it': 'เชื่อไม่ได้เลย...', 'cannot believe it': 'เชื่อไม่ได้เลย...',
   'i cant believe it...': 'ไม่อยากเชื่อเลย...', 'i cant believe this': 'ไม่อยากเชื่อเลย',
   'her pussys so stinky': 'หีเธอช่างเหม็นตุๆ',
   'her pussy is so stinky': 'หีเธอช่างเหม็นตุๆ',
   'pussys so stinky': 'หีช่างเหม็นตุๆ',
   'with it': 'ไปด้วยกัน!',
+  'cum miiinn nngg ggg': 'น้ำแตก-แล้วว วววว ววว',
+  'cum miiinn nngg ggg!': 'น้ำแตก-แล้วว วววว ววว!',
+  'cum miiinn nngg ggg!!': 'น้ำแตก-แล้วว วววว ววว!!',
+  'cum miiinn nngg ggg!!?': 'น้ำแตก-แล้วว วววว ววว!!?',
+  'cum miiinn nngg ggg!!??': 'น้ำแตก-แล้วว วววว ววว!!??',
+  'when youre wildly squirting with your nipples and clit totally erect': 'เมื่อคุณกำลังหลั่งน้ำออกมาอย่างรุนแรงโดยที่หัวนมและคลิตอริสแข็งตัวเต็มที่?',
+  'when youre wildly squirting with your nipples and clit totally erect?': 'เมื่อคุณกำลังหลั่งน้ำออกมาอย่างรุนแรงโดยที่หัวนมและคลิตอริสแข็งตัวเต็มที่?',
+  'lets have a oneonone battle': 'มาดวลกันแบบหนึ่งต่อหนึ่งเถอะ',
+  'lets have a oneonone battle!': 'มาดวลกันแบบหนึ่งต่อหนึ่งเถอะ!',
+  'a oneonone battle': 'การดวลแบบหนึ่งต่อหนึ่ง',
+  'a oneonone battle!': 'การดวลแบบหนึ่งต่อหนึ่ง!',
+  'squiring so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
+  'squirting so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
+  'youre squiring so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
+  'youre squirting so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
+  'coooooocks': 'ควยยยยยยพวกนี้',
+  'cooooocks': 'ควยยยยยยพวกนี้',
+  'cooocks': 'ควยยยยยยพวกนี้',
+  'coocks': 'ควยยยยยยพวกนี้',
+  'cocks': 'ควยพวกนี้',
+  'cock': 'ควย',
 };
 
 
@@ -368,6 +390,22 @@ export async function translateBatchOffline(
 // Translation Quality Assessment Helpers
 // -------------------------------------------------------------
 
+const ENGLISH_COMMON_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'else', 'when',
+  'at', 'by', 'for', 'from', 'in', 'into', 'of', 'off', 'on', 'onto',
+  'out', 'over', 'to', 'up', 'with', 'was', 'were', 'is', 'are', 'am',
+  'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+  'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might',
+  'must', 'go', 'went', 'gone', 'come', 'came', 'get', 'got', 'put',
+  'take', 'took', 'give', 'gave', 'find', 'found', 'think', 'thought',
+  'say', 'said', 'tell', 'told', 'you', 'your', 'he', 'his', 'him',
+  'she', 'her', 'it', 'its', 'we', 'our', 'us', 'they', 'their', 'them',
+  'who', 'whom', 'whose', 'what', 'which', 'where', 'when', 'why', 'how',
+  'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some',
+  'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too',
+  'very', 's', 't', 'don', 'just', 'shouldn', 'now'
+]);
+
 export const shouldSkipOverlayForUntranslatedCarryOver = (
   sourceText: string,
   translatedText: string,
@@ -382,8 +420,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
 
   const compact = source.replace(/\s+/g, '');
   const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|CUMMING)$/i.test(asciiCompact);
+  const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
   if (isKnownShortWord) {
     return false;
   }
@@ -417,10 +454,15 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:SUDDENLY|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:SUDDENLY|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {
+    const wordsList = source.toLowerCase().split(/[^a-z]+/g).filter(Boolean);
+    const hasCommonWord = wordsList.some(w => ENGLISH_COMMON_WORDS.has(w));
+    if (hasCommonWord) {
+      return false;
+    }
     // ทำไมถึงเขียนแบบนี้: เพิ่ม threshold จาก >= 6 เป็น >= 10 เพราะ manga phrases อย่าง
     // "SUDDENLY" (8 chars), "BEING TOO" (8 chars), "FROM THE" (7 chars) ฯลฯ
     // ต้องไม่โดน skip แม้ Argos จะส่ง carry-over กลับมา

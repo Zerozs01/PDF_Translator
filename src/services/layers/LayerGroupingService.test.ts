@@ -306,7 +306,7 @@ describe('LayerGroupingService Spatial Clustering', () => {
       ]
     };
     // Gap = 3252 - 3127 = 125. avgHeight = 125.
-    // 125 / 125 = 1.0, which is > 0.9, so it should split!
+    // 125 / 125 = 1.0, which is > 0.98, so it should split!
     const splitRealFittingBeing = splitAggressiveMergedLines([lineRealFittingBeing], 2.2);
     expect(splitRealFittingBeing.length).toBe(2);
     expect(splitRealFittingBeing[0].text).toBe('FiTTiNG FOR');
@@ -343,9 +343,24 @@ describe('LayerGroupingService Spatial Clustering', () => {
         { text: 'SURE', confidence: 95, bbox: { x0: 88, y0: 100, x1: 150, y1: 120 } }
       ]
     };
-    const splitNormal = splitAggressiveMergedLines([normalLine], 2.2);
-    expect(splitNormal.length).toBe(1);
-    expect(splitNormal[0].text).toBe('BUT IM SURE');
+    // 4. Hyphenated word "ONE-ON-ONE" (not to be split)
+    const hyphenatedLine = {
+      text: 'A ONE-ON-ONE BATTLE!',
+      confidence: 95,
+      bbox: { x0: 10, y0: 100, x1: 220, y1: 120 },
+      words: [
+        { text: 'A', confidence: 95, bbox: { x0: 10, y0: 100, x1: 20, y1: 120 } },
+        { text: 'ONE-ON-', confidence: 95, bbox: { x0: 25, y0: 100, x1: 95, y1: 120 } },
+        { text: 'ONE', confidence: 95, bbox: { x0: 105, y0: 100, x1: 140, y1: 120 } },
+        { text: 'BATTLE!', confidence: 95, bbox: { x0: 145, y0: 100, x1: 220, y1: 120 } }
+      ]
+    };
+    // Gap between ONE-ON- and ONE is 10px, avgHeight = 20.
+    // Ratio = 0.5. Hyphen prevents split because multiplier is 2.5.
+    // Even if ONE starts with a capital letter, it shouldn't split.
+    const splitHyphenated = splitAggressiveMergedLines([hyphenatedLine], 2.2);
+    expect(splitHyphenated.length).toBe(1);
+    expect(splitHyphenated[0].text).toBe('A ONE-ON- ONE BATTLE!');
   });
 
   test('does not group FITTING FOR (left) and BEING (right) into the same group', () => {

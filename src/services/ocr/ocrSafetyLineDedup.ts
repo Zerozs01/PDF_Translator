@@ -11,7 +11,7 @@ export const normalizePreviewText = (text: string): string => String(text || '')
 
 export const isKnownShortWordHelper = (asciiCompact: string): boolean => {
   return /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|CUMALOTJUSTLIKETHAT)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|HES|FRONT|WOULD|THISMY|CUMMING)$/i.test(asciiCompact);
 };
 
 export const renderPreviewTextWithHighlight = (
@@ -681,16 +681,23 @@ export const shouldCollapsePanelSafetyDuplicate = (
   }
 
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
+  const centerDeltaY = Math.abs(panelLineCenterY(existingLine) - panelLineCenterY(candidateLine));
+  const centerDeltaX = Math.abs(panelLineCenterX(existingLine) - panelLineCenterX(candidateLine));
+  const minHeight = Math.max(8, Math.min(panelLineHeight(existingLine), panelLineHeight(candidateLine)));
+  const minWidth = Math.max(24, Math.min(panelLineWidth(existingLine), panelLineWidth(candidateLine)));
+
+  // กรองคำซ้ำ (เช่น CAME ซ้ำกับ CHME ที่ถูก normalized มาเป็น CAME ในจุดเดียวกัน)
+  // หากคำศัพท์เหมือนกัน และทับซ้อนในแนวดิ่งอย่างน้อย 45% และศูนย์กลางอยู่ใกล้กัน ถือว่าเป็นคำซ้ำทันที
+  if (existingKey === candidateKey && overlapY >= 0.45 && centerDeltaX <= minWidth * 1.5 && centerDeltaY <= minHeight * 1.5) {
+    return true;
+  }
+
   // ป้องกันไม่ให้ลบคำศัพท์ซ้ำที่อยู่คนละบรรทัดกัน (เช่น FOR YOU / FOR YOU, I CAME / I CAME)
   if (overlapY <= 0.48 && !isBoxContained) {
     return false;
   }
   const overlapX = panelOverlapRatioX(existingLine, candidateLine);
   const iou = panelIoURatio(existingLine, candidateLine);
-  const centerDeltaY = Math.abs(panelLineCenterY(existingLine) - panelLineCenterY(candidateLine));
-  const centerDeltaX = Math.abs(panelLineCenterX(existingLine) - panelLineCenterX(candidateLine));
-  const minHeight = Math.max(8, Math.min(panelLineHeight(existingLine), panelLineHeight(candidateLine)));
-  const minWidth = Math.max(24, Math.min(panelLineWidth(existingLine), panelLineWidth(candidateLine)));
   const areaRatio = existingArea / candidateArea;
   const areaSpanRatio = Math.max(existingArea, candidateArea) / Math.max(1, Math.min(existingArea, candidateArea));
   const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;

@@ -2194,6 +2194,10 @@ class VisionService {
     if (alphaLength < 6) return false;
     if (tokenCount < 1 || tokenCount > 8) return false;
 
+    // หากคำมีความมั่นใจสูง (>= 99%) ให้ถือว่าเป็นคำมังงะจริง ไม่ใช่ geometry artifact
+    // เช่น STINKY (99.7%), BELIEVE (99.2%) ที่ถูกมองผิดว่าเป็น compressedTiny
+    if (Number(line.confidence || 0) >= 99) return false;
+
     const compressedTiny = tokenCount <= 6
       && pxPerChar < 5.8
       && width <= Math.max(96, pageWidth * 0.045)
@@ -2214,6 +2218,10 @@ class VisionService {
     const { alphaLength, tokenCount, width, height, pxPerChar, areaPerChar } = metrics;
     if (alphaLength < 6) return false;
     if (tokenCount < 1 || tokenCount > 8) return false;
+
+    // คำที่มีความมั่นใจสูง (>= 99%) ไม่ควรถูกมองว่าเป็น severe malformed line
+    // การ fallback ไป EasyOCR จะทำให้คุณภาพแย่ลงสำหรับคำพวกนี้
+    if (Number(line.confidence || 0) >= 99) return false;
 
     const compressedTiny = tokenCount <= 6
       && width <= Math.max(52, pageWidth * 0.028)

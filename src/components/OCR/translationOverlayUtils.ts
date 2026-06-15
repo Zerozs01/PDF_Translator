@@ -1,6 +1,7 @@
 import { BBox, OCRLine, OCREngine, OCRPageResult } from '../../types';
 import { hasCurrentOCRTranslationCacheVersion, OCRPreviewMode, OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
+import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 
 const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
@@ -1393,8 +1394,7 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
   const tText = normalizeOverlayInlineText(String(line.text || ''));
   const tCompact = tText.replace(/\s+/g, '');
   const asciiCompact = tCompact.replace(/[^A-Za-z0-9]/g, '');
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+  const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
   if (isKnownShortWord) {
     return false;
   }
@@ -3868,7 +3868,7 @@ export const computeOverlayLayoutMap = (
       && mergedStyleKind === 'comic-bubble'
       && (
         hasBalloonMember || (
-          compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
+          compactTextLength(mergedText) >= (isMangaOrManhwa ? 3 : Math.max(8, Math.round(group.length * 3.4)))
           && groupGeometry.maxGap <= mergeGapLimit
           && groupGeometry.compactness <= mergeCompactnessLimit
         )

@@ -2525,7 +2525,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
       const aspectRatio = longest / shortest;
       const pixelCount = imageWidth * imageHeight;
-      return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+      return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
     })();
 
     const isSensitiveFastLanguage = options.language
@@ -2535,9 +2535,11 @@ export const OCRTextLayerPanel: React.FC = () => {
       .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
     let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
-      ? (ocrQualityMode === 'fast'
-        ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
-        : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
+      ? (shouldPreferFastPaddleProfile
+        ? 'fast'
+        : (ocrQualityMode === 'fast'
+          ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
+          : (isSensitiveFastLanguage ? 'balanced' : 'best')))
       : 'best';
     let ocrResult: import('../../types').OCRPageResult;
     try {

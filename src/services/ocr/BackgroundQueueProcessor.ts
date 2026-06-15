@@ -364,7 +364,7 @@ class BackgroundQueueProcessor {
               const shortest = Math.max(1, Math.min(canvas.width, canvas.height));
               const aspectRatio = longest / shortest;
               const pixelCount = canvas.width * canvas.height;
-              return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+              return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
             })();
 
             const isSensitiveFastLanguage = ocrLanguage
@@ -376,9 +376,11 @@ class BackgroundQueueProcessor {
             const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
 
             const resolvedQualityProfile = activeEngine === 'paddleocr'
-              ? (ocrQualityMode === 'fast'
-                ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
-                : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
+              ? (shouldPreferFastPaddleProfile
+                ? 'fast'
+                : (ocrQualityMode === 'fast'
+                  ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
+                  : (isSensitiveFastLanguage ? 'balanced' : 'best')))
               : 'best';
 
             const pageSegModeVal = job.ocrPageSegMode !== undefined
