@@ -9,6 +9,7 @@ import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout
 import { splitAggressiveMergedLines } from '../services/layers/LayerGroupingService';
 import { isBoilerplateHallucination, applyKoreanConversationalFallback } from '../services/translation/koreanTranslationPolicy';
 import { processKoreanManhwaPipeline } from '../services/ocr/ocrManhwaHeuristics';
+import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from '../services/ocr/ocrJapaneseVerticalHeuristics';
 import { isKnownShortWordHelper } from '../services/ocr/ocrSafetyLineDedup';
 
 export type TranslatorEngine = 'offline' | 'ai';
@@ -42,7 +43,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v49';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v50';
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
@@ -342,6 +343,22 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       processedResult = { ...koreanResult, _splitDone: true };
     }
 
+    const isJapanese = String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja';
+    if (isJapanese && isVerticalJapaneseLayout(processedResult.lines)) {
+      const japaneseResult = processJapaneseVerticalPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 18,
+          minColumnOverlapRatio: 0.35,
+          maxGroupHeightRatio: 0.45,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      processedResult = { ...japaneseResult, _splitDone: true };
+    }
+
     const newMap = new Map(state.allPagesOCR);
     newMap.set(pageNum, processedResult);
     const byPageEngine = new Map(state.ocrByPageEngine);
@@ -386,6 +403,22 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       });
       // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
       processedResult = { ...koreanResult, _splitDone: true };
+    }
+
+    const isJapanese = String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja';
+    if (isJapanese && isVerticalJapaneseLayout(processedResult.lines)) {
+      const japaneseResult = processJapaneseVerticalPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 18,
+          minColumnOverlapRatio: 0.35,
+          maxGroupHeightRatio: 0.45,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      processedResult = { ...japaneseResult, _splitDone: true };
     }
 
     const byPageEngine = new Map(state.ocrByPageEngine);
@@ -471,9 +504,16 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     // Find OCR result to get the original source text if not present in items
     const ocr = state.ocrByPageEngine.get(pageNum)?.get(entry.ocrEngine) || state.allPagesOCR.get(pageNum);
 
+    // Regex helpers for CJK carryover detection
+    const HANGUL_REGEX = /[\uAC00-\uD7AF]/;
+    const KANA_REGEX = /[\u3040-\u30FF]/;
+    const THAI_REGEX = /[\u0E00-\u0E7F]/;
+
     sanitizedEntry.translatedByIndex = entry.translatedByIndex.map((item) => {
       const ocrLine = ocr?.lines[item.index];
       const sourceText = item.sourceText || ocrLine?.text || '';
+
+      // Guard 1: Boilerplate hallucination (existing check)
       if (sourceText && isBoilerplateHallucination(sourceText, item.text)) {
         const fallback = applyKoreanConversationalFallback(sourceText, item.text);
         const nextText = fallback !== null ? fallback : sourceText;
@@ -482,6 +522,31 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
           return { ...item, text: nextText, sourceText };
         }
       }
+
+      // Guard 2: CJK/Hangul carryover — translation result still contains the source script
+      // This catches cases where Argos failed and returned the original Korean/Japanese text
+      // without translating it (e.g. "안갔지" → "안갔지", "코토미" → "코토미")
+      const translatedHasHangul = HANGUL_REGEX.test(item.text);
+      const translatedHasKana = KANA_REGEX.test(item.text);
+      const translatedHasThai = THAI_REGEX.test(item.text);
+      const sourceHasHangul = HANGUL_REGEX.test(sourceText);
+      const sourceHasKana = KANA_REGEX.test(sourceText);
+
+      // If translation contains CJK script from source but no Thai → untranslated carryover
+      const isHangulCarryover = translatedHasHangul && !translatedHasThai && sourceHasHangul;
+      const isKanaCarryover = translatedHasKana && !translatedHasThai && sourceHasKana;
+
+      if (isHangulCarryover || isKanaCarryover) {
+        // Try conversational fallback dict first
+        const fallback = sourceText ? applyKoreanConversationalFallback(sourceText, item.text) : null;
+        const nextText = fallback !== null ? fallback : (sourceText || item.text);
+        if (nextText !== item.text) {
+          hasChanges = true;
+          console.warn(`[setTranslationCacheEntry] CJK carryover detected on page ${pageNum} index ${item.index}: "${item.text}" → "${nextText}" (source: "${sourceText}")`);
+          return { ...item, text: nextText, sourceText };
+        }
+      }
+
       return item;
     });
 

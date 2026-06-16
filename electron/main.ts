@@ -1041,6 +1041,15 @@ app.whenReady().then(() => {
         : isValidEngine((data as { ocrEngine?: unknown } | null)?.ocrEngine)
           ? (data as { ocrEngine: string }).ocrEngine
           : 'tesseract';
+      
+      if (docId === 3 && pageNum === 25) {
+        console.log('=== DB_SAVE_OCR FOR DOC 3 PAGE 25 ===');
+        const linesSample = (data as any)?.lines?.map((l: any) => l.text) || [];
+        console.log('Lines found:', linesSample);
+        const droppedSample = (data as any)?.debug?.droppedWords?.map((d: any) => d.text) || [];
+        console.log('Dropped words:', droppedSample);
+      }
+
       OCRCacheDAO.save(docId, pageNum, data, selectedEngine);
       return true;
     } catch (error) {
@@ -1056,7 +1065,17 @@ app.whenReady().then(() => {
 
     try {
       const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
-      return OCRCacheDAO.get(docId, pageNum, selectedEngine);
+      const result = OCRCacheDAO.get(docId, pageNum, selectedEngine);
+
+      if (docId === 3 && pageNum === 25 && result) {
+        console.log('=== DB_GET_OCR FOR DOC 3 PAGE 25 ===');
+        const linesSample = (result as any)?.lines?.map((l: any) => l.text) || [];
+        console.log('Lines in database:', linesSample);
+        const droppedSample = (result as any)?.debug?.droppedWords?.map((d: any) => d.text) || [];
+        console.log('Dropped words in database:', droppedSample);
+      }
+
+      return result;
     } catch (error) {
       console.error('db:get-ocr error:', error);
       return null;

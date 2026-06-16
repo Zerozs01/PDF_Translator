@@ -295,12 +295,24 @@ export class TranslationCoordinator {
       // Case 1: Still English → was never translated
       if (hasLatinLetters && !hasThaiChars) return true;
 
-      // Case 2: Still contains source-script characters (Hangul, Kana, CJK) in the result
+      // Case 1.5: Spanish Pivot Failure check (same alphabet, so it can return identical untranslated source)
+      const normSource = String(sourceLang || '').toLowerCase();
+      if ((normSource === 'es' || normSource === 'spa') && hasLatinLetters && !hasThaiChars) {
+        const lenDelta = Math.abs(trimmed.length - sourceText.length) / Math.max(1, sourceText.length);
+        if (lenDelta < 0.20 && trimmed.toLowerCase() === sourceText.toLowerCase().trim()) {
+          return true;
+        }
+      }
+
+      // Case 2: Still contains source-script characters (Hangul, Kana, CJK) in the result (failed translation)
+      const hasCjkResidual = /[\uAC00-\uD7A3\u3040-\u30FF\u4E00-\u9FFF]/.test(trimmed);
+      if (hasCjkResidual) return true;
+
       const sourceHasHangul = /[\uAC00-\uD7AF]/.test(sourceText);
-      if (hasKoreanTranslationCarryover(trimmed) && (sourceLang === 'ko' || sourceHasHangul)) return true;
+      if (hasKoreanTranslationCarryover(trimmed) && (normSource === 'ko' || normSource === 'kor' || sourceHasHangul)) return true;
       const hasKana = /[\u3040-\u30FF]/.test(trimmed);
       const sourceHasKana = /[\u3040-\u30FF]/.test(sourceText);
-      if (hasKana && (sourceLang === 'ja' || sourceHasKana)) return true;
+      if (hasKana && (normSource === 'ja' || normSource === 'jpn' || sourceHasKana)) return true;
       const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(trimmed);
       const sourceHasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(sourceText);
       if (hasHan && sourceHasHan) return true;

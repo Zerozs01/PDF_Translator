@@ -100,7 +100,7 @@ import {
 } from './components/OCR/translationOverlayUtils';
 import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
 import { BBox, OCRLine, OCREngine, OCRPageResult, OCRQualityProfile } from './types';
-import { OCR_ALGORITHM_VERSION } from './services/vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from './services/vision/ocrVersion';
 import { buildLayerGroupsFromOCR } from './services/layers/LayerGroupingService';
 import {
   translateBatchOffline,
@@ -1540,6 +1540,9 @@ const applyThaiConversationalGlossaryInternal = (
     return translatedText;
   }
 
+  const rawLang = useOCRTextLayerStore.getState().options.language || useProjectStore.getState().sourceLanguage || 'en';
+  const sourceLang = normalizeTranslationLanguage(rawLang, 'en');
+
   const sourceOriginal = normalizeWhitespace(String(sourceText || ''));
   const preserveSourceTrailingPunctuation = (dummy: string, replacement: string): string => {
     return globalPreservePunctuation(sourceOriginal, replacement);
@@ -1549,6 +1552,71 @@ const applyThaiConversationalGlossaryInternal = (
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source) return translated;
   const normalizedSpanishSource = normalizeSpanishOcrNoiseForTranslation(source);
+
+  // Dispatch localized slang tables
+  if (sourceLang === 'es') {
+    let esResult = translated;
+    const compactES = sourceOriginal.toLowerCase().replace(/[^a-z¡!¿?]/g, '');
+    
+    if (compactES.includes('joder')) {
+      const isAngry = sourceOriginal.includes('!') || sourceOriginal.includes('¡') || esResult.includes('โกรธ') || esResult.includes('ตาย');
+      esResult = isAngry ? 'เชี่ยเอ๊ย!' : 'เวรเอ๊ย!';
+    } else if (compactES.includes('coño') || compactES.includes('cono')) {
+      esResult = 'บ้าเอ๊ย!';
+    } else if (compactES.includes('maldicion') || compactES.includes('maldición')) {
+      esResult = sourceOriginal.includes('!') ? 'แม่งเอ๊ย!' : 'ซวยแล้ว!';
+    } else if (compactES.includes('mierda')) {
+      esResult = sourceOriginal.includes('!') ? 'ฉิบหาย!' : 'แย่แล้ว';
+    } else if (compactES.includes('ay')) {
+      esResult = sourceOriginal.includes('!') || sourceOriginal.includes('¡') ? 'โอ๊ย!' : 'เอ๊ะ!';
+    }
+    
+    if (esResult !== translated) {
+      return preserveSourceTrailingPunctuation(sourceOriginal, esResult);
+    }
+  }
+
+  if (sourceLang === 'ja') {
+    let jaResult = translated;
+    const compactJA = sourceOriginal.trim();
+    
+    if (compactJA === 'えっ' || compactJA === 'エッ' || compactJA === 'えっ!?' || compactJA === 'エッ!?') {
+      jaResult = 'เอ๊ะ!?';
+    } else if (compactJA === 'えっ!' || compactJA === 'エッ!') {
+      jaResult = 'เอ๊ะ!';
+    } else if (compactJA === 'はあ' || compactJA === 'はぁ') {
+      jaResult = 'เฮ้อ...';
+    } else if (compactJA === 'はあ...' || compactJA === 'はぁ...') {
+      jaResult = 'เฮ้อ...';
+    } else if (compactJA === 'うう' || compactJA === 'うぅ') {
+      jaResult = 'อึ้ก...';
+    } else if (compactJA === 'うう...' || compactJA === 'うぅ...') {
+      jaResult = 'อึ้ก...';
+    }
+    
+    if (jaResult !== translated) {
+      return preserveSourceTrailingPunctuation(sourceOriginal, jaResult);
+    }
+  }
+
+  if (sourceLang === 'ko') {
+    let koResult = translated;
+    const compactKO = sourceOriginal.trim();
+    
+    if (compactKO.includes('씨발')) {
+      koResult = 'เชี่ยเอ๊ย!';
+    } else if (compactKO === '헐' || compactKO === '헐!') {
+      koResult = 'เห้ย!';
+    } else if (compactKO === '아저씨') {
+      koResult = 'คุณลุง';
+    } else if (compactKO === '아줌마') {
+      koResult = 'คุณป้า';
+    }
+    
+    if (koResult !== translated) {
+      return preserveSourceTrailingPunctuation(sourceOriginal, koResult);
+    }
+  }
 
   const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
   const compactSourceUpper = source.toUpperCase().replace(/[^A-Z]/g, '');
@@ -3764,6 +3832,11 @@ const shouldPreferEnglishSourceForMixedTechnicalPage = (
   return technicalHintCount >= 2 || longLatinSentenceCount >= 2;
 };
 
+const isHesitantSpeech = (text: string): boolean => {
+  const normalized = (text || '').trim();
+  return /^[A-Za-z]\s*-\s*[A-Za-z][A-Za-z]{0,3}$/i.test(normalized);
+};
+
 const shouldMergeLines = (
   previous: TranslatableLine,
   current: TranslatableLine,
@@ -3778,6 +3851,15 @@ const shouldMergeLines = (
   const previousCenter = (previous.left + previous.right) * 0.5;
   const currentCenter = (current.left + current.right) * 0.5;
   const centerDelta = Math.abs(currentCenter - previousCenter);
+
+  if (isHesitantSpeech(previous.text) || isHesitantSpeech(current.text)) {
+    const tightSameBubble = overlapRatio >= 0.75
+      && centerDelta <= baseHeight * 0.8
+      && Math.abs(verticalGap) <= baseHeight * 0.25;
+    if (!tightSameBubble) {
+      return false;
+    }
+  }
   const centeredStack = isDense && centerDelta <= baseHeight * 1.7;
   const aligned = overlapRatio >= (isDense ? 0.14 : 0.18)
     || leftDelta <= baseHeight * (isDense ? 2.4 : 1.8)
@@ -5086,7 +5168,7 @@ export default function App() {
           const ocrState = useOCRTextLayerStore.getState();
           if (!ocrState.ocrByPageEngine.get(pageNum)?.has(engine)) {
             const cached = await dbService.getOCR(docId, pageNum, engine);
-            if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION) {
+            if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
               cached.pageNumber = pageNum;
               ocrState.setPageOCRForEngine(pageNum, engine, cached);
             }
@@ -5786,7 +5868,7 @@ export default function App() {
         const ocrState = useOCRTextLayerStore.getState();
         if (!ocrState.ocrByPageEngine.get(pageNum)?.has(engine)) {
           const cached = await dbService.getOCR(docId, pageNum, engine);
-          if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION) {
+          if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
             cached.pageNumber = pageNum;
             ocrState.setPageOCRForEngine(pageNum, engine, cached);
           }
@@ -7872,7 +7954,7 @@ export default function App() {
         const compactCombined = combinedRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
         // 1. CUM- MING -> ทะ- / ทะลักออกมาแล้ววว!
-        if (compactCombined.includes('CUMMING')) {
+        if (compactCombined.includes('CUMMING') && compactCombined.replace(/[^A-Z]/g, '').length <= 25) {
           const overrideLines: string[] = [];
           group.lines.forEach((line, lineOffset) => {
             if (lineOffset === 0) {

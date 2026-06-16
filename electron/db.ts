@@ -929,6 +929,14 @@ export const TranslationCacheDAO = {
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
     const result = getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
       .run(documentId, pageNumber, normalizedEngine);
+    
+    // Clear global sentence cache to force re-translating bad cached translations
+    try {
+      db.prepare('DELETE FROM sentence_translation_cache').run();
+    } catch (err) {
+      console.warn('[DB] Failed to clear sentence translation cache:', err);
+    }
+    
     return result.changes > 0;
   },
 };

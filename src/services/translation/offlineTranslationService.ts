@@ -11,7 +11,7 @@ import {
   normalizeKoreanOcrNoiseForTranslation,
   normalizeEnglishOcrNoiseForTranslation,
 } from '../ocr/ocrTextNormalizer';
-import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
+import { isKnownShortWordHelper, isLikelyEnglishDialogue } from '../ocr/ocrSafetyLineDedup';
 
 import {
   hasKoreanTranslationCarryover,
@@ -31,6 +31,34 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'i': 'ฉัน', 'you': 'คุณ', 'he': 'เขา', 'she': 'เธอ',
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
   'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
+  'front': 'ข้างหน้า', 'front.': 'ข้างหน้า',
+  'kniiiiiight': 'อัศวิน', 'kniiiiight': 'อัศวิน', 'kniiiiight!': 'อัศวิน!',
+  'youre': 'คุณคือ', 'you\'re': 'คุณคือ',
+  'hes': 'เขาคือ', 'he\'s': 'เขาคือ',
+  'to be dead now': 'ต้องตายไปแล้ว', 'to be dead now!': 'ต้องตายไปแล้ว!',
+  'get': 'เอา', 'get!': 'เอา!',
+  'cum': 'แตก', 'cum!': 'แตก!', 'cum!!': 'แตก!!',
+  'i-i': 'ฉัน...', 'ii': 'ฉัน...', 'i-im': 'ฉัน...', 'i-i\'m': 'ฉัน...', 'i-i\'ll': 'ฉัน...',
+  'nipples': 'หัวนม',
+  'longer': 'นานขึ้น',
+  'longer!': 'นานขึ้น!',
+  'today again': 'วันนี้อีกแล้ว',
+  'her posi': 'ท่าของเธอ',
+  'her position': 'ท่าของเธอ',
+  'suits': 'เหมาะกับ',
+  'so': 'ช่าง...',
+  'nipples and': 'หัวนมและ',
+  'cervix': 'ปากมดลูก',
+  'general': 'นายพล',
+  'die along': 'ตายตามกันไป',
+  'also': 'ด้วยเหมือนกัน',
+  'her place': 'ที่ของเธอ',
+  'make sure': 'ให้แน่ใจ',
+  'sadness': 'ความเศร้า',
+  'all arstocrats': 'เหล่าขุนนางทั้งหมด',
+  'all aristocrats': 'เหล่าขุนนางทั้งหมด',
+  'king and': 'ราชาและ',
+  'but in any age': 'แต่ไม่ว่าจะในยุคสมัยใด',
   // Interjections / short responses
   'yes': 'ใช่', 'no': 'ไม่', 'ok': 'โอเค', 'okay': 'โอเค',
   'sir': 'ท่าน', 'yes sir': 'ครับท่าน',
@@ -39,7 +67,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'where': 'ที่ไหน', 'who': 'ใคร', 'wait': 'รอก่อน', 'stop': 'หยุด',
   'go': 'ไป', 'run': 'วิ่ง', 'help': 'ช่วยด้วย', 'look': 'ดูสิ',
   'now': 'ตอนนี้', 'here': 'ที่นี่', 'there': 'ที่นั่น', 'come': 'มา',
-  'get': 'รับ', 'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
+  'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
   'ah': 'อา', 'oh': 'โอ้', 'uh': 'เอ่อ', 'ugh': 'โอ๊ย',
   'wow': 'ว้าว', 'whoa': 'โว้ว', 'ha': 'ฮ่า',
   'thanks': 'ขอบคุณ', 'sorry': 'ขอโทษ', 'please': 'ได้โปรด', 'please!': 'ได้โปรด!', 'please...': 'ได้โปรด...',
@@ -77,7 +105,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'of': 'ของ', 'all': 'ทั้งหมด', 'all!': 'ทุกคน!',
   'one battle': 'การต่อสู้ครั้งหนึ่ง', 'one battle!': 'สู้แค่ครั้งเดียว!',
   'gonna die': 'จะตาย', 'gonna die!': 'จะตายแล้ว!',
-  'to be dead now': 'ต้องตายไปแล้ว', 'to be dead now!': 'ต้องตายไปแล้วนะ!',
   'so please': 'ดังนั้นได้โปรด', 'so please!': 'ดังนั้นได้โปรด!', 'soplease': 'ดังนั้นได้โปรด', 'soplease!': 'ดังนั้นได้โปรด!',
   'why!?': 'ทำไม!?', 'why?': 'ทำไม?',
   'ass': 'ก้น', 'ass-': 'ก้น', 'hole': 'รู', 'asshole': 'ไอ้สัตว์',
@@ -113,6 +140,90 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'coocks': 'ควยยยยยยพวกนี้',
   'cocks': 'ควยพวกนี้',
   'cock': 'ควย',
+  // Manga dialogue phrases requested by the user
+  'and was at a': 'และกำลังตกอยู่ใน',
+  'recapturina': 'การยึดกลับคืน',
+  'kina and': 'และไคนา',
+  'an allout': 'อย่างเต็มรูปแบบ',
+  'an all out': 'อย่างเต็มรูปแบบ',
+  'a normal': 'ธรรมดา',
+  'all cold': 'เย็นเฉียบ',
+  'suck my': 'ดูดของฉัน',
+  'cock while': 'ควยในขณะที่',
+  'tangling': 'เกี่ยวกระหวัด',
+  'your': 'ของคุณ',
+  'tongue': 'ลิ้น',
+  'onto it': 'เข้ากับมัน',
+  'like the': 'เหมือนกับ',
+  'pig you': 'หมูอย่างแก',
+  'are': 'ที่เป็นอยู่',
+  'bitch hey': 'ยัยตัวแสบ... เฮ้!',
+  'shut her up': 'หุบปากเธอซะ',
+  'her up': 'หุบปากเธอซะ',
+  'and shut': 'และหุบปาก',
+  'what a': 'ช่าง...',
+  'noisy': 'เสียงดัง',
+  'bitch': 'ยัยตัวแสบ',
+  'shove one': 'ยัดมันเข้าไป',
+  'in her other': 'เข้าไปในอีกรูของเธอ',
+  'hole too': 'ด้วยเหมือนกัน',
+  // Spanish exclamations
+  'joder': 'เชี่ยเอ๊ย!',
+  'cono': 'บ้าเอ๊ย!',
+  'coño': 'บ้าเอ๊ย!',
+  'maldicion': 'แม่งเอ๊ย!',
+  'maldición': 'แม่งเอ๊ย!',
+  'mierda': 'ฉิบหาย!',
+  'ay': 'โอ๊ย!',
+  // Japanese exclamations
+  'えっ': 'เอ๊ะ!',
+  'えっ!': 'เอ๊ะ!',
+  'えっ!?': 'เอ๊ะ!?',
+  'エッ': 'เอ๊ะ!',
+  'エッ!': 'เอ๊ะ!',
+  'エッ!?': 'เอ๊ะ!?',
+  'あっ': 'อ๊ะ!',
+  'あっ!': 'อ๊ะ!',
+  'はあ': 'เฮ้อ...',
+  'はあ...': 'เฮ้อ...',
+  'うう': 'อึ้ก...',
+  'うう...': 'อึ้ก...',
+  // Korean slang
+  '아저씨': 'คุณลุง',
+  '아줌마': 'คุณป้า',
+  '씨발': 'เชี่ยเอ๊ย!',
+  '헐': 'เห้ย!',
+  '헐!': 'เห้ย!',
+  // Korean manhwa common phrases (pre-bypass for Argos failures)
+  '뭐야': 'อะไรกัน',
+  '뭐야?': 'อะไรกัน?',
+  '뭐야!': 'อะไรกัน!',
+  '안갔지': 'ไม่ได้ไปหรอก',
+  '가야해서': 'เพราะต้องไปแล้ว',
+  '가야해': 'ต้องไปแล้ว',
+  '왜같이': 'ทำไมถึงมาด้วยกัน',
+  '잘부탁해': 'ยินดีที่ได้รู้จัก',
+  '잘부탁해!': 'ยินดีที่ได้รู้จัก!',
+  '잘부탁드려요': 'ยินดีที่ได้รู้จักครับ',
+  '반가워': 'ยินดีที่ได้รู้จัก',
+  '반가워요': 'ยินดีที่ได้รู้จักครับ',
+  '엄마사촌': 'ลูกพี่ลูกน้องของแม่',
+  '속마음': 'ความคิดในใจ',
+  '읽지만': 'อ่านได้แต่...',
+  '속마음읽지만': 'อ่านความคิดในใจได้แต่...',
+  '괜찮아': 'ไม่เป็นไร',
+  '괜찮아요': 'ไม่เป็นไรครับ',
+  '알겠어': 'เข้าใจแล้ว',
+  '알겠습니다': 'เข้าใจแล้วครับ',
+  '몰라': 'ไม่รู้',
+  '싫어': 'ไม่อยาก',
+  '좋아': 'โอเค',
+  '고마워': 'ขอบคุณ',
+  '미안': 'ขอโทษ',
+  '잠깐': 'เดี๋ยวก่อน',
+  '잠깐만': 'แป๊บนึงนะ',
+  '빨리': 'เร็วๆ',
+  '조심해': 'ระวังด้วย',
 };
 
 
@@ -403,7 +514,10 @@ const ENGLISH_COMMON_WORDS = new Set([
   'who', 'whom', 'whose', 'what', 'which', 'where', 'when', 'why', 'how',
   'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some',
   'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too',
-  'very', 's', 't', 'don', 'just', 'shouldn', 'now'
+  'very', 's', 't', 'don', 'just', 'shouldn', 'now',
+  // Added common pronouns, interjections and common dialogue keywords
+  'i', 'my', 'me', 'hey', 'oh', 'ah', 'yeah', 'like', 'dont', 'cant', 'didnt',
+  'suck', 'cock', 'bitch', 'pig', 'hell', 'damn', 'ass', 'fuck', 'shit'
 ]);
 
 export const shouldSkipOverlayForUntranslatedCarryOver = (
@@ -449,12 +563,36 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const latinChars = (translated.match(/[A-Za-z]/g) || []).length;
   const sourceLatinChars = (source.match(/[A-Za-z]/g) || []).length;
   const tokenCount = source.split(/\s+/g).filter(Boolean).length;
+
+  // Check for residual CJK characters in the translated output -> if CJK remains, it failed translation
+  const hasCjkResidual = /[\uAC00-\uD7A3\u3040-\u30FF\u4E00-\u9FFF]/.test(translated);
+  if (hasCjkResidual) {
+    return true; // Skip overlay since CJK text is leaked
+  }
+
+  // Check for common watermark layouts (URLs, domain names, or scanlation watermarks)
+  const isUrlOrDomain = /\.(com|net|org|io|gg|co|info|cc|to|xyz|me)\b/i.test(source)
+    || /www\./i.test(source)
+    || /^(?:colamanga|cloudmerge|asurascans|mangatio|likemanga|scans|newtoki)/i.test(source.replace(/[^A-Za-z0-9]/g, ''));
+
+  // บายพาสการข้าม: หากตรวจพบว่าเป็นบทสนทนาภาษาอังกฤษทั่วไป ห้าม Skip overlay เด็ดขาด เพื่อเปิดโอกาสให้แก้ไขได้
+  if (isLikelyEnglishDialogue(source) && !isUrlOrDomain) {
+    return false;
+  }
+
+  // Check for pivot/NMT translation failure -> if it returned untranslated or hallucinated Latin output without any Thai chars
+  const hasLatinLetters = /[a-zA-Z]/.test(translated);
+  const hasThai = thaiChars > 0;
+  if (hasLatinLetters && !hasThai) {
+    return true; // Skip overlay directly to preserve original background image
+  }
+
   if (thaiChars > 0) return false;
 
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:SUDDENLY|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:SUDDENLY|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIIIIIIGHT|KNIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {
@@ -463,10 +601,13 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
     if (hasCommonWord) {
       return false;
     }
-    // ทำไมถึงเขียนแบบนี้: เพิ่ม threshold จาก >= 6 เป็น >= 10 เพราะ manga phrases อย่าง
-    // "SUDDENLY" (8 chars), "BEING TOO" (8 chars), "FROM THE" (7 chars) ฯลฯ
-    // ต้องไม่โดน skip แม้ Argos จะส่ง carry-over กลับมา
-    return tokenCount >= 1 && (sourceLatinChars >= 10 || source.length >= 10);
+    // Check for common watermark layouts (URLs, domain names, or scanlation watermarks)
+    const isUrlOrDomain = /\.(com|net|org|io|gg|co|info|cc|to|xyz|me)\b/i.test(source)
+      || /www\./i.test(source)
+      || /^(?:colamanga|cloudmerge|asurascans|mangatio|likemanga|scans|newtoki)/i.test(source.replace(/[^A-Za-z0-9]/g, ''));
+
+    const threshold = isUrlOrDomain ? 8 : 18;
+    return tokenCount >= 1 && (sourceLatinChars >= threshold || source.length >= threshold);
   }
 
   // เพิ่ม threshold: >= 6 แทน >= 4 เพื่อป้องกัน multi-word dialogue fragments โดน skip
@@ -677,6 +818,21 @@ export const shouldRetryLineTranslation = (
 
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!translated) return true;
+
+  // Bypass low-quality retry classification for normal English dialogue/narrative
+  const wordsList = source.toLowerCase().split(/[^a-z]+/g).filter(Boolean);
+  const hasCommonWord = wordsList.some(w => ENGLISH_COMMON_WORDS.has(w));
+  if (hasCommonWord) {
+    return false;
+  }
+
+  const isUrlOrDomain = /\.(com|net|org|io|gg|co|info|cc|to|xyz|me)\b/i.test(source)
+    || /www\./i.test(source)
+    || /^(?:colamanga|cloudmerge|asurascans|mangatio|likemanga|scans|newtoki)/i.test(source.replace(/[^A-Za-z0-9]/g, ''));
+  const threshold = isUrlOrDomain ? 8 : 18;
+  if (source.length < threshold && !isUrlOrDomain) {
+    return false;
+  }
 
   const sourceKey = buildTranslationComparisonKey(source);
   const translatedKey = buildTranslationComparisonKey(translated);

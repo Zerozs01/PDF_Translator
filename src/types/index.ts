@@ -206,6 +206,7 @@ export interface OCRPageResult {
   language: string;
   pageSegMode?: number;
   algorithmVersion: number;
+  ocrRawVersion?: number;
   pipelineProfile?: OCRPipelineProfile;
   ocrEngine?: OCREngine;
   ocrQualityProfile?: OCRQualityProfile;

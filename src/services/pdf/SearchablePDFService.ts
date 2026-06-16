@@ -9,7 +9,7 @@
 
 import { PDFDocument } from 'pdf-lib';
 import { visionService } from '../vision/VisionService';
-import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../vision/ocrVersion';
 import { resolvePerPageTimeoutSec, withPerPageOCRTimeout } from '../vision/ocr-timeout';
 import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions, OCRPipelineProfile, OCRQualityProfile } from '../../types';
@@ -184,6 +184,7 @@ export class SearchablePDFService {
       const activeEngine = options.engine || 'paddleocr';
       
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
+      if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return 'ocrRawVersion mismatch';
       if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
       if ((cached.ocrEngine || 'paddleocr') !== activeEngine) return 'ocrEngine mismatch';
       return null;

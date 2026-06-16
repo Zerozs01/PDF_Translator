@@ -3686,7 +3686,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 det_thresh = 0.12
                 det_box_thresh = 0.3
                 det_unclip_ratio = 1.96
-                rec_score_thresh = 0.36
+                rec_score_thresh = 0.24
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300

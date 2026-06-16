@@ -37,6 +37,17 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 ];
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\ball\s+arstocrats\b/gi, replacement: 'all aristocrats' },
+  { pattern: /\bTODAY\s+AGAiN\b/gi, replacement: 'TODAY AGAIN' },
+  { pattern: /\bHER\s+POSi-\b/gi, replacement: 'HER POSITION' },
+  { pattern: /\bNiPPLES\b/gi, replacement: 'NIPPLES' },
+  { pattern: /\bSUiTS\b/gi, replacement: 'SUITS' },
+  { pattern: /\bDiE\b/gi, replacement: 'DIE' },
+  { pattern: /\bFEEE5\b/gi, replacement: 'FEELS' },
+  { pattern: /\brecapturina\b/gi, replacement: 'recapturing' },
+  { pattern: /\bkina\b/gi, replacement: 'king' },
+  { pattern: /\bKNii+GHT\b/gi, replacement: 'KNIGHT' },
+  { pattern: /\bHES\b/gi, replacement: "HE'S" },
   { pattern: /\bFLICK\b/gi, replacement: 'FUCK' },
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
   { pattern: /\bA-\s*Are\s*y\b/gi, replacement: 'A-Are you' },
@@ -257,6 +268,14 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;
 
+// V2: Insert space when an uppercase function word is followed by a new Title-Case or uppercase word
+export const SPANISH_FUNCTION_WORD_GLUE_PATTERN_V2 = /\b(QUE|ME|TE|SE|LO|LA|LE|NOS|LOS|LAS|DE|UN|UNA|ES|NO|SI|MI|TU|SU)(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/g;
+
+// Split enclitics attached to verbs, e.g., dímelo, cuéntame
+// Whitelist common legitimately glued forms like dime, dame, cuéntame, dile, házmelo to avoid double splitting
+export const SPANISH_ENCLITIC_SPLIT_PATTERN = /\b([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,})(me|te|se|lo|la|nos)\b/gi;
+export const SPANISH_LEGITIMATE_ENCLITICS = new Set(['dime', 'dame', 'cuéntame', 'dile', 'házmelo', 'hazmelo', 'cuentame', 'dimelo', 'dámelo', 'damelo']);
+
 export const THAI_BOUNDARY_ATTACH_TOKENS = new Set([
   'ไป',
   'นะ',
@@ -356,6 +375,18 @@ export const splitSpanishUppercaseCompounds = (text: string): string => {
   for (let i = 0; i < 2; i += 1) {
     normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, '$1 $2 $3');
   }
+  // Apply V2
+  normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN_V2, '$1 ');
+  
+  // Apply enclitic split with whitelist guard
+  normalized = normalized.replace(SPANISH_ENCLITIC_SPLIT_PATTERN, (match, verb, pronoun) => {
+    const lowerMatch = match.toLowerCase();
+    if (SPANISH_LEGITIMATE_ENCLITICS.has(lowerMatch)) {
+      return match; // Keep as is
+    }
+    return `${verb} ${pronoun}`;
+  });
+  
   return normalized;
 };
 
@@ -410,8 +441,24 @@ export const cleanKoreanOcrSpacing = (text: string): string => {
   return text.replace(/([\uac00-\ud7af])\s(?=[\uac00-\ud7af])/g, '$1');
 };
 
+export const JA_PARTICLE_BOUNDARY_PATTERN = /([。、！？])(?=[^\s])/g;
+export const JA_REPEATED_SOKUON_COLLAPSE = /ッ{2,}/g;
+export const JA_ELONGATION_NORMALIZE = /ー{2,}/g;
+
+export const cleanJapaneseOcrNoise = (text: string): string => {
+  let normalized = String(text || '');
+  normalized = normalized.replace(JA_PARTICLE_BOUNDARY_PATTERN, '$1 ');
+  normalized = normalized.replace(JA_REPEATED_SOKUON_COLLAPSE, 'ッ');
+  normalized = normalized.replace(JA_ELONGATION_NORMALIZE, 'ー');
+  
+  // Remove stray middle dots ・ from broken glyphs if isolated
+  normalized = normalized.replace(/(?<=^|\s)・(?=\s|$)/g, ' ');
+  return normalized;
+};
+
 export const normalizeJapaneseOcrNoiseForTranslation = (text: string): string => {
   let normalized = String(text || '');
+  normalized = cleanJapaneseOcrNoise(normalized);
   normalized = normalized
     .replace(/。/g, '. ')
     .replace(/、/g, ', ')

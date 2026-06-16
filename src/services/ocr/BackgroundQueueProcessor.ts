@@ -10,8 +10,9 @@ import { useLayerStore } from '../../stores/useLayerStore';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups, splitAggressiveMergedLines } from '../layers/LayerGroupingService';
 import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
 import { applyPanelLanguageScriptGate } from '../vision/scriptGateService';
-import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../vision/ocrVersion';
 import { processKoreanManhwaPipeline } from './ocrManhwaHeuristics';
+import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from './ocrJapaneseVerticalHeuristics';
 
 function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job: BackgroundJob): OCRPageResult {
   // ถ้า result ผ่าน split มาแล้ว (flag _splitDone) ให้ข้ามขั้นตอน split เพื่อป้องกัน double-split bug
@@ -39,6 +40,21 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
         maxHorizontalGap: 35,
         minColumnOverlapRatio: 0.3,
         maxGroupHeightRatio: 0.3,
+        pageHeight: ocrResult.height || 1200,
+        readingDirection: "rtl-ttb",
+      },
+      debug: false
+    });
+  }
+
+  const isJapanese = job.ocrLanguage === 'jpn' || job.sourceLanguage === 'ja' || job.targetLanguage === 'ja';
+  if (isJapanese && isVerticalJapaneseLayout(ocrResult.lines)) {
+    ocrResult = processJapaneseVerticalPipeline(ocrResult, {
+      merge: {
+        maxVerticalGap: 25,
+        maxHorizontalGap: 18,
+        minColumnOverlapRatio: 0.35,
+        maxGroupHeightRatio: 0.45,
         pageHeight: ocrResult.height || 1200,
         readingDirection: "rtl-ttb",
       },
@@ -275,31 +291,36 @@ class BackgroundQueueProcessor {
           try {
             const cached = await dbService.getOCR(job.documentId, pageNum, job.engine);
             if (cached && cached.lines && cached.lines.length > 0) {
-              const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
-              const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
-                ? cached
-                : {
-                  ...cached,
-                  pipelineProfile: 'panel' as const,
-                };
-              const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
-              if (
-                scriptGated.pipelineProfile === 'panel'
-                && scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
-              ) {
-                ocrResult = scriptGated;
+              const cachedRawVersion = cached.ocrRawVersion ?? 0;
+              if (cachedRawVersion < OCR_RAW_VERSION) {
+                console.log(`[QueueProcessor] Page ${pageNum} raw OCR version mismatch (${cachedRawVersion} < ${OCR_RAW_VERSION}). Re-running OCR...`);
               } else {
-                ocrResult = applyPanelSafetyLineDedup(scriptGated);
-              }
+                const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+                const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+                  ? cached
+                  : {
+                    ...cached,
+                    pipelineProfile: 'panel' as const,
+                  };
+                const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+                if (
+                  scriptGated.pipelineProfile === 'panel'
+                  && scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
+                ) {
+                  ocrResult = scriptGated;
+                } else {
+                  ocrResult = applyPanelSafetyLineDedup(scriptGated);
+                }
 
-              if (ocrResult) {
-                ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
-              }
-              console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
-              
-              const activeFile = useProjectStore.getState().file;
-              if (activeFile && useProjectStore.getState().documentId === job.documentId) {
-                useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+                if (ocrResult) {
+                  ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
+                }
+                console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
+                
+                const activeFile = useProjectStore.getState().file;
+                if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+                  useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+                }
               }
             }
           } catch (err) {

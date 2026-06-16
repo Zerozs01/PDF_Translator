@@ -6,7 +6,7 @@ import {
   normalizeSourceForTranslation,
   normalizeTranslationLanguage,
 } from './ocrTextNormalizer';
-import { isKnownShortWordHelper } from './ocrSafetyLineDedup';
+import { isKnownShortWordHelper, isLikelyEnglishDialogue } from './ocrSafetyLineDedup';
 
 export const HANGUL_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/;
 export const THAI_REGEX = /[\u0E00-\u0E7F]/;
@@ -920,6 +920,11 @@ export const isLikelyGhostTranslatableLine = (
   const readability = scoreSourceLineReadability(text);
   const wordCoverage = computeLineWordUnionCoverage(scaledLine);
 
+  const isEnglishDialogue = isLikelyEnglishDialogue(text);
+  const wordCountRatio = validWords.length / Math.max(1, sourceTokenCount);
+  const hasCompleteWordCoverage = wordCountRatio >= 0.75 || validWords.length >= sourceTokenCount - 1;
+  const isLikelyLegitimateDialogue = isEnglishDialogue && hasCompleteWordCoverage;
+
   if (shouldForceKeepComicTranslationLine(text, scaledLine)) {
     return false;
   }
@@ -992,6 +997,7 @@ export const isLikelyGhostTranslatableLine = (
   const isNaturalDialogue = englishTokens.length >= 2
     || (englishTokens.length === 1 && englishTokens[0].length >= 3 && readability >= 1.0)
     || isKnownShortWord
+    || isEnglishDialogue
     || /^(?:PRINCESS|PRiNCESS|DIE|PIG|CUM|COCK|OH|OHHH|OHHHH|OHHHHH|AGAA|SO|OF|ALL|MORE|YOU|US|THE|THIS|MY|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|USTHESOOFALL|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU)$/i.test(asciiCompact);
   const isHighConfidenceText = avgConfidence >= 90 && asciiCompact.length > 0 && !isPureSymbolNoise && !isVerticalLineJunk;
   if (isSparseSfxBox && !isNaturalDialogue && !isHighConfidenceText && !shouldForceKeepComicTranslationLine(text, scaledLine)) {
@@ -1091,6 +1097,7 @@ export const isLikelyGhostTranslatableLine = (
   }
 
   const compressedSparseShortPhrase = !hasCjkOrThai
+    && !isLikelyLegitimateDialogue
     && sourceTokenCount >= 2
     && sourceTokenCount <= 4
     && latinCompact.length >= 8

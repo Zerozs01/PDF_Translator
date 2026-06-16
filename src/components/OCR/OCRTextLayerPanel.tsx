@@ -51,7 +51,7 @@ import {
   resolvePerPageTimeoutSec,
   withPerPageOCRTimeout,
 } from '../../services/vision/ocr-timeout';
-import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
 import { pdfjs } from '../../services/pdf/pdfjsWorker';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 import { resolveMissingOverlayLineFallbackText } from './translationOverlayUtils';
@@ -1028,6 +1028,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     const activeEngine = options.engine || 'paddleocr';
     
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== activeEngine) return false;
     return true;
   }, [options, normalizeLanguage]);
@@ -1037,6 +1038,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.dpi !== options.dpi) return false;
     
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== engine) return false;
     return true;
   }, [normalizeLanguage, options.dpi, options.language, options.pageSegMode]);
@@ -1046,6 +1048,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== (options.engine || 'paddleocr')) return false;
     return true;
   }, [normalizeLanguage, options.engine, options.language]);
@@ -1055,6 +1058,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== eng) return false;
     return true;
   }, [normalizeLanguage, options.language]);

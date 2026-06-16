@@ -41,7 +41,7 @@ export function bboxToRect(bbox: BBox): Rect {
   };
 }
 
-function unionRect(a: Rect, b: Rect): Rect {
+export function unionRect(a: Rect, b: Rect): Rect {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
   const x2 = Math.max(a.x + a.w, b.x + b.w);
@@ -119,7 +119,7 @@ export interface MergeOptions {
   readingDirection?: "rtl-ttb" | "ltr-ttb";
 }
 
-interface BoxWithRect {
+export interface BoxWithRect {
   box: OcrBox;
   rect: Rect;
 }
@@ -168,7 +168,7 @@ function isHorizontallyAdjacent(a: Rect, b: Rect, maxGap: number): boolean {
   return minHeight > 0 && verticalOverlap / minHeight >= 0.4;
 }
 
-class UnionFind {
+export class UnionFind {
   private parent: number[];
   private rank: number[];
 

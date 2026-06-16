@@ -11,7 +11,7 @@
 import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
 import { filterKoreanJamoNoise, filterWeakIsolatedCjkLines } from './ocr-filtering';
 import { preprocessImage } from './ocr-preprocessing';
-import { OCR_ALGORITHM_VERSION } from './ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from './ocrVersion';
 import {
   OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
   OCR_WORKER_RETRY_ATTEMPTS_DEFAULT,
@@ -2760,6 +2760,7 @@ class VisionService {
       language,
       pageSegMode,
       algorithmVersion: OCR_ALGORITHM_VERSION,
+      ocrRawVersion: OCR_RAW_VERSION,
       pipelineProfile,
       ocrEngine,
       ocrQualityProfile,
@@ -2924,6 +2925,7 @@ class VisionService {
                 language,
                 pageSegMode: result.pageSegMode ?? pageSegMode,
                 algorithmVersion: OCR_ALGORITHM_VERSION,
+                ocrRawVersion: OCR_RAW_VERSION,
                 pipelineProfile,
                 ocrEngine,
                 ocrQualityProfile,
@@ -3088,6 +3090,7 @@ class VisionService {
           language,
           pageSegMode: result.pageSegMode ?? pageSegMode,
           algorithmVersion: OCR_ALGORITHM_VERSION,
+          ocrRawVersion: OCR_RAW_VERSION,
           pipelineProfile,
           ocrEngine,
           ocrQualityProfile,
@@ -3183,6 +3186,7 @@ class VisionService {
           language,
           pageSegMode: resultRaw.pageSegMode ?? pageSegMode,
           algorithmVersion: OCR_ALGORITHM_VERSION,
+          ocrRawVersion: OCR_RAW_VERSION,
           pipelineProfile: 'raw',
           ocrEngine,
           ocrQualityProfile,
@@ -3281,6 +3285,7 @@ class VisionService {
         language,
         pageSegMode: undefined,
         algorithmVersion: OCR_ALGORITHM_VERSION,
+        ocrRawVersion: OCR_RAW_VERSION,
         pipelineProfile: 'raw',
         ocrEngine,
         ocrQualityProfile: 'best',

@@ -37,12 +37,12 @@ describe('Scratch Dedup Test', () => {
 
   it('ensures manga-specific short words are not dropped by applyPanelSafetyLineDedup', () => {
     const testLines = [
-      { text: "YQU'RE", confidence: 90, bbox: { x0: 100, y0: 100, x1: 180, y1: 130 } },
-      { text: "WiTH", confidence: 90, bbox: { x0: 200, y0: 100, x1: 250, y1: 130 } },
-      { text: "HEHEHE!", confidence: 90, bbox: { x0: 300, y0: 100, x1: 380, y1: 130 } },
-      { text: "COOOOOOCKS", confidence: 90, bbox: { x0: 400, y0: 100, x1: 520, y1: 130 } },
-      { text: "SQIiRT-", confidence: 90, bbox: { x0: 530, y0: 100, x1: 610, y1: 130 } },
-      { text: "iNG", confidence: 90, bbox: { x0: 620, y0: 100, x1: 660, y1: 130 } }
+      { text: "YQU'RE", confidence: 90, bbox: { x0: 100, y0: 100, x1: 180, y1: 130 }, words: [] },
+      { text: "WiTH", confidence: 90, bbox: { x0: 200, y0: 100, x1: 250, y1: 130 }, words: [] },
+      { text: "HEHEHE!", confidence: 90, bbox: { x0: 300, y0: 100, x1: 380, y1: 130 }, words: [] },
+      { text: "COOOOOOCKS", confidence: 90, bbox: { x0: 400, y0: 100, x1: 520, y1: 130 }, words: [] },
+      { text: "SQIiRT-", confidence: 90, bbox: { x0: 530, y0: 100, x1: 610, y1: 130 }, words: [] },
+      { text: "iNG", confidence: 90, bbox: { x0: 620, y0: 100, x1: 660, y1: 130 }, words: [] }
     ];
 
     const ocrResult: OCRPageResult = {
@@ -55,6 +55,7 @@ describe('Scratch Dedup Test', () => {
       lines: testLines,
       words: [],
       text: '',
+      confidence: 90,
       pipelineProfile: 'panel',
       ocrEngine: 'paddleocr'
     };
@@ -76,5 +77,32 @@ describe('Scratch Dedup Test', () => {
     expect(normalizeSourceForTranslation("WiTH", 'en')).toBe("With");
     expect(normalizeSourceForTranslation("HEHEHE!", 'en')).toBe("Hehehe!"); // normalizes casing for English translation sentences
   });
+
+  it('runs on page 25 raw OCR data', () => {
+    const rawOcrPath = 'c:\\App\\Electron\\PDF_Translator\\scratch\\ocr_page_25_raw.json';
+    if (!fs.existsSync(rawOcrPath)) {
+      console.log('ocr_page_25_raw.json not found');
+      return;
+    }
+    const ocrResult = JSON.parse(fs.readFileSync(rawOcrPath, 'utf8')) as OCRPageResult;
+    ocrResult.pipelineProfile = 'panel';
+    ocrResult.ocrEngine = 'paddleocr';
+
+    console.log('=== Page 25 initial lines count:', ocrResult.lines.length);
+    const finalResult = applyPanelSafetyLineDedup(ocrResult);
+    console.log('=== Page 25 final lines count:', finalResult.lines.length);
+    
+    console.log('=== Kept Lines:');
+    finalResult.lines.forEach((l, i) => {
+      console.log(`[${i}] text="${l.text}"`);
+    });
+
+    console.log('=== Dropped Words/Lines:');
+    const dropped = finalResult.debug?.droppedWords || [];
+    dropped.forEach((d, i) => {
+      console.log(`[${i}] reason=${d.reason} filter=${d.filter} text="${d.text}"`);
+    });
+  });
 });
+
 

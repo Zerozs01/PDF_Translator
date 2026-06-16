@@ -112,6 +112,53 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^읏$/, replacement: 'อ๊ะ' },
   { pattern: /^에멕$/, replacement: 'เอ๊ะ' },
   { pattern: /^잠들면$/, replacement: 'ถ้าหลับไป' },
+
+  // Greetings / Social phrases
+  { pattern: /^잘부탁해$/, replacement: 'ยินดีที่ได้รู้จัก' },
+  { pattern: /^잘부탁드려요$/, replacement: 'ยินดีที่ได้รู้จักครับ' },
+  { pattern: /^잘부탁합니다$/, replacement: 'ยินดีที่ได้รู้จักครับ' },
+  { pattern: /^반가워$/, replacement: 'ยินดีที่ได้รู้จัก' },
+  { pattern: /^반가워요$/, replacement: 'ยินดีที่ได้รู้จักครับ' },
+  { pattern: /^처음뵙겠습니다$/, replacement: 'ยินดีที่ได้พบครับ' },
+
+  // Common negative/question phrases
+  { pattern: /^안갔지$/, replacement: 'ไม่ได้ไปหรอก' },
+  { pattern: /^안갔어$/, replacement: 'ไม่ได้ไปนะ' },
+  { pattern: /^가야해서$/, replacement: 'เพราะต้องไปแล้ว' },
+  { pattern: /^가야해$/, replacement: 'ต้องไปแล้ว' },
+  { pattern: /^가야돼$/, replacement: 'ต้องไปแล้ว' },
+  { pattern: /^왜같이$/, replacement: 'ทำไมถึงมาด้วยกัน' },
+  { pattern: /^왜같이왔어$/, replacement: 'ทำไมถึงมาด้วยกัน' },
+  { pattern: /^왜왔어$/, replacement: 'ทำไมถึงมา' },
+  { pattern: /^얘는$/, replacement: 'เธอเป็นใคร' },
+  { pattern: /^얘는\?$/, replacement: 'เธอเป็นใคร?' },
+  { pattern: /^뭐야얘는$/, replacement: 'นี่มันเป็นใคร' },
+
+  // Family relationships
+  { pattern: /^엄마사촌$/, replacement: 'ลูกพี่ลูกน้องของแม่' },
+  { pattern: /^아빠사촌$/, replacement: 'ลูกพี่ลูกน้องของพ่อ' },
+  { pattern: /^사촌오빠$/, replacement: 'พี่ชายลูกพี่ลูกน้อง' },
+  { pattern: /^사촌언니$/, replacement: 'พี่สาวลูกพี่ลูกน้อง' },
+  { pattern: /^사촌동생$/, replacement: 'น้องลูกพี่ลูกน้อง' },
+
+  // Reading inner thoughts (manhwa trope)
+  { pattern: /^속마음$/, replacement: 'ความคิดในใจ' },
+  { pattern: /^속마음읽지만$/, replacement: 'อ่านความคิดในใจได้แต่...' },
+  { pattern: /^읽지만$/, replacement: 'แต่อ่านได้' },
+
+  // Common action phrases
+  { pattern: /^뛰어$/, replacement: 'วิ่งไป' },
+  { pattern: /^도망쳐$/, replacement: 'หนีไป' },
+  { pattern: /^따라와$/, replacement: 'ตามมาด้วย' },
+  { pattern: /^빨리$/, replacement: 'เร็วๆ' },
+  { pattern: /^조심해$/, replacement: 'ระวังด้วย' },
+  { pattern: /^괜찮아$/, replacement: 'ไม่เป็นไร' },
+  { pattern: /^알겠어$/, replacement: 'เข้าใจแล้ว' },
+  { pattern: /^몰라$/, replacement: 'ไม่รู้' },
+  { pattern: /^싫어$/, replacement: 'ไม่อยาก' },
+  { pattern: /^좋아$/, replacement: 'โอเค' },
+  { pattern: /^고마워$/, replacement: 'ขอบคุณ' },
+  { pattern: /^미안$/, replacement: 'ขอโทษ' },
 ];
 
 export const normalizeKoreanColloquialOcrText = (text: string): string => {

@@ -2,6 +2,13 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-06-16
+
+- Fixed OCR Ghost Line filtering for PaddleOCR when word details are missing (preventing valid English text lines like `and was at a` or `all aristocrats` from being dropped as low-signal/no-word boxes).
+- Resolved translation carry-over skip issues for short dialogue phrases by mapping direct Thai translations in `ARGOS_SHORT_PHRASE_LOOKUP_TH` (for phrases like `and was at a`, `recapturina`, `all aristocrats`, `kina and`, `an all-out`, and `but in any age`).
+- Integrated local debugging tools in electron's main process database handlers (`db:save-ocr` and `db:get-ocr` in `main.ts`) for Doc 3 Page 25 to help audit raw OCR lines.
+- Updated `documents/Knowledge.md` to define translation carry-over rules and short phrase bypass guidelines.
+
 ## 2026-06-13
 
 - Completed the Tesseract Purge: Removed all Tesseract dependencies, assets, and fallback code from the project. PaddleOCR and EasyOCR are now solidified as the primary local engines.

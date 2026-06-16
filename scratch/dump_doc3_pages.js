@@ -44,7 +44,7 @@ app.whenReady().then(function() {
     db.pragma("key = '" + masterPassword.replace(/'/g, "''") + "'");
 
     const docId = 3;
-    const pagesToDump = [2, 3];
+    const pagesToDump = [25];
 
     pagesToDump.forEach(function(pageNum) {
       console.log('\n==================================================');

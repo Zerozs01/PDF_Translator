@@ -84,7 +84,21 @@ const endsGroup = (text: string): boolean => {
 /**
  * ตรวจสอบความเชื่อมโยงเชิงพื้นที่ (Proximity & Overlap Alignment) ระหว่าง 2 Lines
  */
+const isHesitantSpeech = (text: string): boolean => {
+  const normalized = (text || '').trim();
+  return /^[A-Za-z]\s*-\s*[A-Za-z][A-Za-z]{0,3}$/i.test(normalized);
+};
+
 const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean => {
+  if (isHesitantSpeech(a.text) || isHesitantSpeech(b.text)) {
+    const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
+    const vertGap = getVerticalGap(a.bbox, b.bbox);
+    const minH = Math.min(bboxHeight(a.bbox), bboxHeight(b.bbox));
+    if (horizOverlap < 0.75 || vertGap > minH * 0.25) {
+      return false;
+    }
+  }
+
   const hA = bboxHeight(a.bbox);
   const hB = bboxHeight(b.bbox);
   const minHeight = Math.min(hA, hB);
@@ -184,13 +198,24 @@ const classifyGroup = (lines: OCRLine[], pageWidth: number, pageHeight: number):
   const groupWidth = bboxWidth(mergedBBox);
   const groupHeight = bboxHeight(mergedBBox);
   const totalText = lines.map(l => normalizeInlineText(l.text)).join(' ');
+  
+  const hasCjk = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(totalText);
   const wordCount = totalText.split(/\s+/).filter(Boolean).length;
 
-  // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยว)
-  if (lines.length <= 2 && wordCount <= 3) {
-    const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
-    const isShortWord = totalText.length <= 6;
-    if (isTall || isShortWord) return 'sfx';
+  if (hasCjk) {
+    // สำหรับภาษาเกาหลี/ญี่ปุ่น (CJK): SFX ต้องเป็นคำสั้นสากลจริงๆ (ความยาว <= 3 อักขระ) และไม่มีเครื่องหมายคำถาม
+    if (lines.length <= 2 && totalText.length <= 3 && !totalText.includes('?')) {
+      const isTall = groupHeight / Math.max(1, groupWidth) > 1.2;
+      const isShortWord = totalText.length <= 2;
+      if (isTall || isShortWord) return 'sfx';
+    }
+  } else {
+    // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยว)
+    if (lines.length <= 2 && wordCount <= 3) {
+      const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
+      const isShortWord = totalText.length <= 6;
+      if (isTall || isShortWord) return 'sfx';
+    }
   }
 
   // Narration: กว้างมากครอบคลุมเกือบครึ่งหน้า หรือขอบซ้ายขวาเหยียดกว้างแบบจดหมาย
