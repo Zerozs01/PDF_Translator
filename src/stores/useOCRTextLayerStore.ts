@@ -78,10 +78,12 @@ export const hasCurrentOCRTranslationCacheVersion = (key: string): boolean =>
 export const filterGhostOcrData = (
   lines: OCRLine[],
   words: any[],
-  engine: OCREngine
+  engine: OCREngine,
+  dpi: number = 300
 ): { lines: OCRLine[]; words: any[] } => {
   const ocrEngine = String(engine || '').toLowerCase();
   const isExternal = ocrEngine === 'paddleocr' || ocrEngine === 'easyocr';
+  const dpiScale = Math.max(0.2, dpi / 300);
 
   // 1. Clean and filter ghost noise lines
   const filteredLines = (lines || []).filter((line) => {
@@ -142,7 +144,7 @@ export const filterGhostOcrData = (
       const containsAlphanumeric = /[a-zA-Z0-9]/.test(asciiCompact);
       const isTinyJunkBox = !hasCjkOrThai
         && asciiCompact.length <= 3
-        && area <= 8000
+        && area <= 8000 * dpiScale * dpiScale
         && (containsAlphanumeric
           ? (isExternal ? avgConfidence <= 85 : avgConfidence <= 75)
           : (isExternal ? avgConfidence <= 98 : avgConfidence <= 85)
@@ -320,7 +322,8 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
       processedLines,
       result.words || [],
-      engine
+      engine,
+      result.dpi || state.options.dpi || 300
     );
 
     let processedResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
@@ -382,7 +385,8 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
       processedLines,
       result.words || [],
-      engine
+      engine,
+      result.dpi || state.options.dpi || 300
     );
 
     let processedResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };

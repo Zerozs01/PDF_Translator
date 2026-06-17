@@ -355,6 +355,7 @@ export const isLikelyLargeBorderEffectLineForSafety = (
   resolvedText: string,
   pageWidth: number,
   pageHeight: number,
+  dpi: number = 300,
 ): boolean => {
   const text = normalizePreviewText(String(resolvedText || ''));
   if (!text || !line?.bbox) return false;
@@ -392,12 +393,14 @@ export const isLikelyLargeBorderEffectLineForSafety = (
     && compact.length >= 16;
   if (looksLikeWideDocumentRow) return false;
 
+  const dpiScale = Math.max(0.2, dpi / 300);
+
   const hugeBorderBox = areaRatio >= 0.038
     || (widthRatio >= 0.34 && heightRatio >= 0.16)
     || (widthRatio >= 0.2 && heightRatio >= 0.24);
   const mediumBorderBox = areaRatio >= 0.026
     && (widthRatio >= 0.18 || heightRatio >= 0.16)
-    && (width >= 120 || height >= 92);
+    && (width >= 120 * dpiScale || height >= 92 * dpiScale);
   if (!hugeBorderBox && !mediumBorderBox) return false;
 
   const sparsePhrase = wordCount <= 3 || compact.length <= 16;
@@ -441,7 +444,8 @@ export const isLikelyLargeBorderEffectLineForSafety = (
 export const isLikelyPanelGhostLineForSafety = (
   line: OCRLine,
   resolvedText: string,
-  pageWidth: number
+  pageWidth: number,
+  dpi: number = 300,
 ): boolean => {
   const text = normalizePreviewText(String(resolvedText || ''));
   if (!text) return true;
@@ -462,7 +466,9 @@ export const isLikelyPanelGhostLineForSafety = (
     : text.split(/\s+/g).filter(Boolean).length;
   const avgConfidence = computePanelLineAverageConfidence(line);
 
-  if (PANEL_GHOST_PUNCT_ONLY_REGEX.test(compact) && width <= 112 && height <= 44) {
+  const dpiScale = Math.max(0.2, dpi / 300);
+
+  if (PANEL_GHOST_PUNCT_ONLY_REGEX.test(compact) && width <= 112 * dpiScale && height <= 44 * dpiScale) {
     return true;
   }
 
@@ -485,7 +491,7 @@ export const isLikelyPanelGhostLineForSafety = (
   if (isKnownShortWord) {
     return false;
   }
-  const isTinyJunkBox = asciiCompact.length <= 3 && area <= 8000;
+  const isTinyJunkBox = asciiCompact.length <= 3 && area <= 8000 * dpiScale * dpiScale;
   if (isTinyJunkBox) {
     return true;
   }
@@ -494,17 +500,17 @@ export const isLikelyPanelGhostLineForSafety = (
   const shortDigitArtifact = PANEL_GHOST_SHORT_TOKEN_REGEX.test(compactUpper)
     && /\d/.test(compactUpper)
     && !/[a-z]/.test(compact);
-  if (shortDigitArtifact && wordCount <= 1 && width <= 96 && height <= 42 && avgConfidence <= 82) {
+  if (shortDigitArtifact && wordCount <= 1 && width <= 96 * dpiScale && height <= 42 * dpiScale && avgConfidence <= 82) {
     return true;
   }
 
   const pxPerLatinChar = width / Math.max(1, latinCompact.length);
   const suspiciousTinyLongLatin = latinCompact.length >= 10
     && wordCount >= 3
-    && pxPerLatinChar < 2.85
-    && width <= Math.max(72, latinCompact.length * 5.4)
-    && width <= Math.max(96, pageWidth * 0.06)
-    && height <= 28
+    && pxPerLatinChar < 2.85 * dpiScale
+    && width <= Math.max(72 * dpiScale, latinCompact.length * 5.4 * dpiScale)
+    && width <= Math.max(96 * dpiScale, pageWidth * 0.06)
+    && height <= 28 * dpiScale
     && avgConfidence <= 84;
   if (suspiciousTinyLongLatin) {
     return true;
@@ -514,9 +520,9 @@ export const isLikelyPanelGhostLineForSafety = (
   const tinyDenseAsciiArtifact = wordCount <= 2
     && asciiCompact.length >= 6
     && asciiCompact.length <= 14
-    && pxPerAsciiChar < 2.9
-    && width <= Math.max(118, pageWidth * 0.07)
-    && height <= 30
+    && pxPerAsciiChar < 2.9 * dpiScale
+    && width <= Math.max(118 * dpiScale, pageWidth * 0.07)
+    && height <= 30 * dpiScale
     && avgConfidence <= 82;
   if (tinyDenseAsciiArtifact) {
     return true;
@@ -525,9 +531,9 @@ export const isLikelyPanelGhostLineForSafety = (
   const lowSignalTinySingleton = wordCount <= 1
     && asciiCompact.length > 0
     && asciiCompact.length <= 4
-    && area <= 2600
-    && width <= 104
-    && height <= 40
+    && area <= 2600 * dpiScale * dpiScale
+    && width <= 104 * dpiScale
+    && height <= 40 * dpiScale
     && avgConfidence <= 78;
   if (lowSignalTinySingleton) {
     return true;
@@ -542,6 +548,7 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   pageWidth: number,
   pageHeight: number,
   latinDominantPage: boolean,
+  dpi: number = 300,
 ): boolean => {
   const text = normalizePreviewText(String(resolvedText || ''));
   if (!text) return true;
@@ -567,7 +574,9 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
   const wordCoverage = computePanelLineWordUnionCoverage(line);
 
-  if (wordCount <= 1 && width <= 68 && height <= 34 && area <= 1700) {
+  const dpiScale = Math.max(0.2, dpi / 300);
+
+  if (wordCount <= 1 && width <= 68 * dpiScale && height <= 34 * dpiScale && area <= 1700 * dpiScale * dpiScale) {
     if (hasCjkOrThai && compact.length <= 2 && confidence <= 90) {
       return true;
     }
@@ -576,7 +585,7 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
     }
   }
 
-  if (wordCount <= 2 && width <= 84 && height <= 38 && area <= 2200) {
+  if (wordCount <= 2 && width <= 84 * dpiScale && height <= 38 * dpiScale && area <= 2200 * dpiScale * dpiScale) {
     if (hasCjkOrThai && compact.length <= 3 && confidence <= 80) {
       return true;
     }
@@ -586,32 +595,32 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   }
 
   const narrowTallLowSignalArtifact = wordCount <= 2
-    && width <= Math.max(52, pageWidth * 0.03)
-    && height <= Math.max(188, pageHeight * 0.08)
-    && height >= Math.max(44, width * 1.2)
+    && width <= Math.max(52 * dpiScale, pageWidth * 0.03)
+    && height <= Math.max(188 * dpiScale, pageHeight * 0.08)
+    && height >= Math.max(44 * dpiScale, width * 1.2)
     && confidence <= 86;
   if (narrowTallLowSignalArtifact) {
     if (hasCjkOrThai && compact.length <= 2) return true;
     if (hasLatin && alphaNum.length <= 3) return true;
   }
 
-  if (wordCount <= 2 && area <= 2800 && unknownCharRatio >= 0.45 && confidence <= 88) {
+  if (wordCount <= 2 && area <= 2800 * dpiScale * dpiScale && unknownCharRatio >= 0.45 && confidence <= 88) {
     return true;
   }
 
   const shortStylizedNonLatinSfx = hasCjkOrThai
     && wordCount <= 1
     && compact.length <= 3
-    && width <= Math.max(132, pageWidth * 0.085)
-    && height <= Math.max(112, pageHeight * 0.12)
-    && area <= Math.max(11500, pageWidth * pageHeight * 0.008)
+    && width <= Math.max(132 * dpiScale, pageWidth * 0.085)
+    && height <= Math.max(112 * dpiScale, pageHeight * 0.12)
+    && area <= Math.max(11500 * dpiScale * dpiScale, pageWidth * pageHeight * 0.008)
     && confidence <= 92
     && (unknownCharRatio >= 0.08 || height >= width * 0.6);
   if (shortStylizedNonLatinSfx) {
     return true;
   }
 
-  if (hasCjkOrThai && wordCount <= 2 && compact.length <= 5 && area <= 6200 && wordCoverage <= 0.26) {
+  if (hasCjkOrThai && wordCount <= 2 && compact.length <= 5 && area <= 6200 * dpiScale * dpiScale && wordCoverage <= 0.26) {
     if (confidence <= 92 || unknownCharRatio >= 0.2) {
       return true;
     }
@@ -622,9 +631,9 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
     && !hasLatin
     && wordCount <= 3
     && compact.length <= 12
-    && width <= Math.max(220, pageWidth * 0.18)
-    && height <= Math.max(220, pageHeight * 0.22)
-    && area <= Math.max(26000, pageWidth * pageHeight * 0.015)
+    && width <= Math.max(220 * dpiScale, pageWidth * 0.18)
+    && height <= Math.max(220 * dpiScale, pageHeight * 0.22)
+    && area <= Math.max(26000 * dpiScale * dpiScale, pageWidth * pageHeight * 0.015)
     && confidence <= 96;
   if (shortForeignSfxOnLatinPage) {
     return true;
@@ -1375,8 +1384,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         return null;
       }
 
+      const dpi = Number(result.dpi || 300);
+
       const technicalDocumentLine = isLikelyTechnicalDocumentLineForSafety(resolvedText);
-      if (documentLikePage && !technicalDocumentLine && !isEnglishDialogue && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth)) {
+      if (documentLikePage && !technicalDocumentLine && !isEnglishDialogue && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, dpi)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostLowSignalLine',
@@ -1387,7 +1398,7 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         return null;
       }
 
-      if (!documentLikePage && !isEnglishDialogue && isLikelyLargeBorderEffectLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight)) {
+      if (!documentLikePage && !isEnglishDialogue && isLikelyLargeBorderEffectLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, dpi)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostLargeBorderEffectLine',
@@ -1398,7 +1409,7 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         return null;
       }
 
-      if (!documentLikePage && !isEnglishDialogue && isLikelyTinyMangaArtifactLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, latinDominantPage)) {
+      if (!documentLikePage && !isEnglishDialogue && isLikelyTinyMangaArtifactLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, latinDominantPage, dpi)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostTinyArtifactLine',

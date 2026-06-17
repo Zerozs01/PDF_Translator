@@ -22,7 +22,8 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
   const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
     processedLines,
     result.words || [],
-    targetEngine
+    targetEngine,
+    result.dpi || job.ocrDpi || 300
   );
   
   let ocrResult: OCRPageResult = {
