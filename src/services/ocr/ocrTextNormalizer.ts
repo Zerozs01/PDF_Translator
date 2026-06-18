@@ -46,7 +46,8 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bFEEE5\b/gi, replacement: 'FEELS' },
   { pattern: /\brecapturina\b/gi, replacement: 'recapturing' },
   { pattern: /\bkina\b/gi, replacement: 'king' },
-  { pattern: /\bKNii+GHT\b/gi, replacement: 'KNIGHT' },
+  { pattern: /,?KN[iI]+GHT\b/gi, replacement: 'KNIGHT' },
+  { pattern: /HCTAKCEP/gi, replacement: '' },
   { pattern: /\bHES\b/gi, replacement: "HE'S" },
   { pattern: /\bFLICK\b/gi, replacement: 'FUCK' },
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
@@ -196,8 +197,11 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bLOCAT\s+I\s+ON\b/gi, replacement: 'LOCATION' },
   { pattern: /\bCHME\b/gi, replacement: 'CAME' },
   { pattern: /\b4HH\b/gi, replacement: 'AHH' },
-  { pattern: /\b6o\b/g, replacement: 'So' },
-  { pattern: /\b6O\b/g, replacement: 'SO' },
+  // 6O เป็น OCR noise ที่ไม่มีความหมาย ตัดทิ้งเลย
+  { pattern: /\b6[oO]\b/g, replacement: '' },
+  // S0 (เลขศูนย์) → SO (ตัวอักษร O)
+  { pattern: /\bS0\b/g, replacement: 'SO' },
+  { pattern: /\bs0\b/g, replacement: 'so' },
   { pattern: /BLOWTOB/gi, replacement: 'BLOWJOB' },
   { pattern: /\bnou\b/gi, replacement: 'you' },
   { pattern: /\bDIseASe\b/gi, replacement: 'DISEASE' },

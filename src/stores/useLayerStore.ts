@@ -23,8 +23,8 @@ interface LayerStoreState {
   editingLayerId: string | null;
   activeDragItem: { type: 'layer' | 'group'; id: string; index: number } | null;
 
-  // Undo stack — เก็บ snapshot ของ layers ก่อนแต่ละ commit
-  undoStackByPage: Map<number, TextLayer[][]>;
+  // Undo stack — เก็บ snapshot ของ layers + groups + deletedLineIndexes ก่อนแต่ละ commit
+  undoStackByPage: Map<number, Array<{ layers: TextLayer[]; groups: TextLayerGroup[]; deletedLineIndexes: Set<number> }>>;
 
   // Actions: Read
   getPageLayers: (pageNum: number) => TextLayer[];
@@ -587,10 +587,16 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
   pushUndoSnapshot: (pageNum) => set((state) => {
     const currentLayers = state.layersByPage.get(pageNum);
     if (!currentLayers) return {};
+    const currentGroups = state.groupsByPage.get(pageNum) || [];
+    const currentDeletedIndexes = state.deletedLineIndexesByPage.get(pageNum) || new Set<number>();
     const undoStack = new Map(state.undoStackByPage);
     const stack = [...(undoStack.get(pageNum) || [])];
-    // Deep clone snapshot
-    stack.push(currentLayers.map(l => ({ ...l })));
+    // Deep clone snapshot — เก็บทั้ง layers, groups, และ deletedLineIndexes
+    stack.push({
+      layers: currentLayers.map(l => ({ ...l })),
+      groups: currentGroups.map(g => ({ ...g, layerIds: [...g.layerIds] })),
+      deletedLineIndexes: new Set(currentDeletedIndexes),
+    });
     if (stack.length > MAX_UNDO_DEPTH) stack.shift();
     undoStack.set(pageNum, stack);
     return { undoStackByPage: undoStack };
@@ -600,11 +606,20 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const undoStack = new Map(state.undoStackByPage);
     const stack = [...(undoStack.get(pageNum) || [])];
     if (stack.length === 0) return {};
-    const previousLayers = stack.pop()!;
+    const snapshot = stack.pop()!;
     undoStack.set(pageNum, stack);
     const nextLayers = new Map(state.layersByPage);
-    nextLayers.set(pageNum, previousLayers);
-    return { undoStackByPage: undoStack, layersByPage: nextLayers };
+    nextLayers.set(pageNum, snapshot.layers);
+    const nextGroups = new Map(state.groupsByPage);
+    nextGroups.set(pageNum, snapshot.groups);
+    const nextDeletedIndexes = new Map(state.deletedLineIndexesByPage);
+    nextDeletedIndexes.set(pageNum, snapshot.deletedLineIndexes);
+    return {
+      undoStackByPage: undoStack,
+      layersByPage: nextLayers,
+      groupsByPage: nextGroups,
+      deletedLineIndexesByPage: nextDeletedIndexes,
+    };
   }),
 
   // ── Reset ─────────────────────────────────────────────────────

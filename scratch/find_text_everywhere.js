@@ -48,7 +48,7 @@ app.whenReady().then(() => {
       const ocr = JSON.parse(r.ocr_data);
       ocr.lines.forEach((l, idx) => {
         const txt = l.text.toUpperCase();
-        if (txt.includes('LUDMER')) {
+        if (txt.includes('EXPECT') || txt.includes('AND HER') || txt.includes('YOU') || txt.includes('FRONT') || txt.includes('ANY AGE')) {
           console.log(`[ocr_cache_engine] MATCH! Doc ${r.document_id} Page ${r.page_number} (${r.ocr_engine}) Line ${idx}: "${l.text}"`);
         }
       });
@@ -58,7 +58,7 @@ app.whenReady().then(() => {
     console.log(`Checking ${transRows.length} rows in translation_cache...`);
     for (const r of transRows) {
       const txt = (r.translated_text || '').toUpperCase();
-      if (txt.includes('LUDMER') || txt.includes('ROSERIA') || txt.includes('STALEMATE') || txt.includes('WAR')) {
+      if (txt.includes('EXPECT') || txt.includes('AND HER') || txt.includes('YOU') || txt.includes('FRONT') || txt.includes('ANY AGE')) {
         console.log(`[translation_cache] MATCH! Doc ${r.document_id} Page ${r.page_number}: "${txt.substring(0, 150)}"`);
       }
     }

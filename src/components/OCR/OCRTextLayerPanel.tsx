@@ -1847,7 +1847,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       return;
     }
 
-    setTranslationPreviewMode('original');
+    if (contextChanged) {
+      setTranslationPreviewMode('original');
+    }
   }, [
     currentPage,
     normalizedContextOCRLanguage,

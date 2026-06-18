@@ -2165,6 +2165,15 @@ const applyThaiConversationalGlossaryInternal = (
   if (cleanDialogueText === 'us the' || compactSourceAlnumUpper === 'USTHE') {
     return preserveSourceTrailingPunctuation(source, 'พวกเรา');
   }
+  if (compactSource === 'butinanyage' || compactSourceAlnumUpper === 'BUTINANYAGE') {
+    return preserveSourceTrailingPunctuation(source, 'แต่ไม่ว่าจะในยุคสมัยใด');
+  }
+  if (compactSource === 'awaywith' || compactSourceAlnumUpper === 'AWAYWITH') {
+    return preserveSourceTrailingPunctuation(source, 'ไปให้พ้นกับ');
+  }
+  if (compactSource === 'getting' || compactSourceAlnumUpper === 'GETTING') {
+    return preserveSourceTrailingPunctuation(source, 'ได้รับ');
+  }
   if (cleanDialogueText === 'all' || compactSourceAlnumUpper === 'ALL') {
     return preserveSourceTrailingPunctuation(source, 'ทั้งหมด');
   }

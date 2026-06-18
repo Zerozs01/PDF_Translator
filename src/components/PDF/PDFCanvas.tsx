@@ -264,6 +264,10 @@ const PDFPageOverlay: React.FC<{
 
   // Real-Time Layer Ghost Noise Filter: surgical cleanup of spiky balloon border layers in frontend view
   const currentPageLayers = useMemo(() => {
+    const thaiLayers = rawCurrentPageLayers.filter(l => 
+      l && l.visible && /[\u0E00-\u0E7F]/.test(String(l.text || ''))
+    );
+
     return rawCurrentPageLayers.filter((layer) => {
       if (!layer) return false;
       if (layer.userEdited) return true;
@@ -274,6 +278,25 @@ const PDFPageOverlay: React.FC<{
       const compact = text.replace(/\s+/g, '');
       const compactUpper = compact.toUpperCase();
       if (compactUpper === 'AAAANLWAL') return false; // Garbage filter
+
+      if (compactUpper === 'BELIEVE') {
+        const hasOverlapWithThai = thaiLayers.some(thaiLayer => {
+          if (!layer.bbox || !thaiLayer.bbox) return false;
+          const areaA = (layer.bbox.x1 - layer.bbox.x0) * (layer.bbox.y1 - layer.bbox.y0);
+          if (areaA <= 0) return false;
+          
+          const interX0 = Math.max(layer.bbox.x0, thaiLayer.bbox.x0);
+          const interY0 = Math.max(layer.bbox.y0, thaiLayer.bbox.y0);
+          const interX1 = Math.min(layer.bbox.x1, thaiLayer.bbox.x1);
+          const interY1 = Math.min(layer.bbox.y1, thaiLayer.bbox.y1);
+          
+          const interArea = Math.max(0, interX1 - interX0) * Math.max(0, interY1 - interY0);
+          return (interArea / areaA) >= 0.7;
+        });
+        if (hasOverlapWithThai) {
+          return false;
+        }
+      }
 
       const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
       const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);

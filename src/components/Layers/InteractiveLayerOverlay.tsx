@@ -789,15 +789,21 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         setEditingLayerId(null);
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !editingLayerId && selectedLayerIds.size > 0) {
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable
+        );
+        if (isTyping) return;
+
         e.preventDefault();
-        if (confirm(`คุณต้องการลบ ${selectedLayerIds.size} ข้อความที่เลือกใช่หรือไม่?`)) {
-          // ลบ snapshot ก่อนลบจริงเพื่อให้ undo ทำงานได้ถูกต้อง
-          pushUndoSnapshot(pageNum);
-          selectedLayerIds.forEach((id) => {
-            deleteLayer(pageNum, id);
-          });
-          clearSelection();
-        }
+        // ลบ snapshot ก่อนลบจริงเพื่อให้ undo ทำงานได้ถูกต้อง
+        pushUndoSnapshot(pageNum);
+        selectedLayerIds.forEach((id) => {
+          deleteLayer(pageNum, id);
+        });
+        clearSelection();
       }
     };
     window.addEventListener('keydown', handleKeyDown);

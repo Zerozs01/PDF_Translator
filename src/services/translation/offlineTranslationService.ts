@@ -54,8 +54,16 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'i': 'ฉัน', 'you': 'คุณ', 'he': 'เขา', 'she': 'เธอ',
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
   'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
+  'expect': 'คาดคิด', 'expect...': 'คาดคิด...', 'expect!': 'คาดคิด!',
+  'and her': 'และเธอ', 'and her...': 'และเธอ...', 'and her!': 'และเธอ!',
+  'you front us the getting away with': 'แกที่อยู่ข้างหน้า คิดว่าจะหนีพวกเราพ้นงั้นเหรอ!',
+  'you re': 'คุณคือ', 'you re...': 'คุณคือ...', 'you re!': 'คุณคือ!',
+  'knight': 'อัศวิน', 'knight...': 'อัศวิน...', 'knight!': 'อัศวิน!',
+  'kniiight': 'อัศวิน', 'kniiight...': 'อัศวิน...', 'kniiight!': 'อัศวิน!',
+  'kniiiight': 'อัศวิน', 'kniiiight...': 'อัศวิน...', 'kniiiight!': 'อัศวิน!',
   'that': 'นั่น', 'feels': 'รู้สึก', 'that-': 'นั่น-',
   'front': 'ข้างหน้า', 'front.': 'ข้างหน้า',
+  'you front': 'แกอยู่ข้างหน้า', 'you front!': 'แกอยู่ข้างหน้า!',
   'kniiiiiight': 'อัศวิน', 'kniiiiight': 'อัศวิน', 'kniiiiight!': 'อัศวิน!',
   'youre': 'คุณคือ', 'you\'re': 'คุณคือ',
   'hes': 'เขาคือ', 'he\'s': 'เขาคือ',
@@ -99,7 +107,10 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'now': 'ตอนนี้', 'here': 'ที่นี่', 'there': 'ที่นั่น', 'come': 'มา',
   'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
   'ah': 'อา', 'oh': 'โอ้', 'uh': 'เอ่อ', 'ugh': 'โอ๊ย',
+  'ugh!': 'โอ๊ย!', 'ugh!!': 'โอ๊ย!!', 'ugh,': 'โอ๊ย!',
   'wow': 'ว้าว', 'whoa': 'โว้ว', 'ha': 'ฮ่า',
+  'haa': 'ฮ่าฮ่า', 'haa!': 'ฮ่าฮ่า!', 'haa!!': 'ฮ่าฮ่า!!', 'haa...': 'ฮ่าฮ่า...',
+  'even': 'แม้แต่', 'even!': 'แม้แต่!',
   'thanks': 'ขอบคุณ', 'sorry': 'ขอโทษ', 'please': 'ได้โปรด', 'please!': 'ได้โปรด!', 'please...': 'ได้โปรด...',
   'right': 'ใช่แล้ว', 'wrong': 'ผิดแล้ว', 'really': 'จริงเหรอ',
   'seriously': 'จริงจังเหรอ', 'impossible': 'เป็นไปไม่ได้',
@@ -112,6 +123,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'watch out': 'ระวัง', 'calm down': 'ใจเย็นๆ', 'shut up': 'หุบปาก',
   'back off': 'ถอยออกไป', 'stand up': 'ลุกขึ้น', 'get up': 'ลุกขึ้น',
   'get out': 'ออกไป', 'get away': 'หนีออกไป', 'go away': 'ไปให้พ้น',
+  'getting': 'ได้รับ', 'getting away': 'รอดตัวไปได้', 'getting away with': 'รอดตัวไปได้',
   'go on': 'ดำเนินต่อไป', 'move it': 'รีบไป', 'hurry up': 'รีบขึ้น',
   'give up': 'ยอมแพ้', 'hold on': 'รอสักครู่', 'hang on': 'รอสักครู่',
   'come here': 'มาที่นี่', 'over here': 'ที่นี่', 'over there': 'ที่นั่น',
@@ -207,10 +219,14 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'the war': 'สงคราม',
   'we deal': 'พวกเราจะจัดการเอง',
   'we deal!': 'พวกเราจะจัดการเอง!',
-  'away with': 'ไปให้พ้นกับ',
-  'away with!': 'ไปให้พ้นกับ!',
-  'away... with': 'ไปให้พ้นกับ',
-  'away... with!': 'ไปให้พ้นกับ!',
+  'away with': 'ไปให้พ้นกับ', 'away with!': 'ไปให้พ้นกับ!',
+  'away... with': 'ไปให้พ้นกับ', 'away... with!': 'ไปให้พ้นกับ!',
+  // THE PiG YOU ARE,GETTING,AWAY...WiTH variants — comma-separated form from OCR
+  'getting away with us the pig you are': 'รอดตัวไปได้หรอกับหมูอย่างแก',
+  'getting away with us the pig you are!': 'รอดตัวไปได้หรอกับหมูอย่างแก!',
+  'us the pig you are': 'ด้วยหมูอย่างแก',
+  'even getting away with': 'แม้แต่จะรอดตัวไปได้กับ',
+  'even getting away with!': 'แม้แต่จะรอดตัวไปได้กับ!',
   'than any': 'ยิ่งกว่าใคร',
   'than any-': 'ยิ่งกว่าใคร',
   'feelings': 'ความรู้สึก',
@@ -294,7 +310,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   '미안': 'ขอโทษ',
   '잠깐': 'เดี๋ยวก่อน',
   '잠깐만': 'แป๊บนึงนะ',
-  '빨리': 'เร็วๆ',
+  '빨리': 'รีบๆ',
   '조심해': 'ระวังด้วย',
 };
 
@@ -696,7 +712,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIIIIIIGHT|KNIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {

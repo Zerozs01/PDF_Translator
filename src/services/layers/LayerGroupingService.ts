@@ -81,6 +81,10 @@ const endsGroup = (text: string): boolean => {
   return END_BALLOON_PATTERNS.some((p) => p.test(text));
 };
 
+const isLikelyEnglishDialogue = (text: string): boolean => {
+  return /[a-z]/i.test(text) && text.length > 3;
+};
+
 /**
  * ตรวจสอบความเชื่อมโยงเชิงพื้นที่ (Proximity & Overlap Alignment) ระหว่าง 2 Lines
  */
@@ -104,16 +108,18 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   const minHeight = Math.min(hA, hB);
   const avgHeight = (hA + hB) * 0.5;
 
+  const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
+
   // 0. Side-by-side guard: หากกล่องสองกล่องมีการทับซ้อนแนวตั้ง (Vertical Overlap) มากเกินไป 
   // แสดงว่าเป็นข้อความที่อยู่แถวเดียวกันหรือข้างกัน (side-by-side) ไม่ใช่การต่อบรรทัดแนวตั้ง (vertical stack)
   // ให้ปฏิเสธการจัดกลุ่มทันที เพื่อไม่ให้ข้ามคอลัมน์หรือพาเนล
+  // ยกเว้นในกรณีที่มีการทับซ้อนแนวนอน (horizOverlap >= 0.50) ซึ่งบ่งชี้ว่าอยู่ในคอลัมน์เดียวกัน/กล่องข้อความแนวตั้งเดียวกัน
   const overlapHeight = Math.max(0, Math.min(a.bbox.y1, b.bbox.y1) - Math.max(a.bbox.y0, b.bbox.y0));
   const vertOverlapRatio = overlapHeight / Math.max(1, minHeight);
-  if (vertOverlapRatio > 0.25) {
+  if (vertOverlapRatio > 0.25 && horizOverlap < 0.50) {
     return false;
   }
 
-  const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
   const vertGap = getVerticalGap(a.bbox, b.bbox);
 
   const topLine = a.bbox.y0 <= b.bbox.y0 ? a : b;
@@ -184,8 +190,10 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   }
 
   // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
-  // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines
-  return horizOverlap >= 0.30 && vertGap <= 2.2 * avgHeight;
+  // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines (หรือ 3.2x สำหรับภาษาอังกฤษแนวตั้งที่จัดระนาบเดียวกัน)
+  const isBothEnglish = isLikelyEnglishDialogue(a.text) && isLikelyEnglishDialogue(b.text);
+  const maxVertGap = isBothEnglish && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
+  return horizOverlap >= 0.30 && vertGap <= maxVertGap;
 };
 
 /**

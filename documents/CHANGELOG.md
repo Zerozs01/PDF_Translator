@@ -2,6 +2,12 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-06-19
+
+- **Configurable PaddleOCR Angle Classification (`use_angle_cls`):** ปรับปรุงโครงสร้างของระบบ OCR Bridge และ Python daemon ให้สามารถเลือกเปิด/ปิดการแยกแยะทิศทางตัวอักษรได้ตามต้องการ โดยตั้งค่าเริ่มต้นให้เป็น `False` สำหรับ `panel` profile เพื่อแก้ไขปัญหากล่องข้อความเอียงหรือเพี้ยนในมังงะ/การ์ตูน
+- **Line Grouping Fix for Vertical Speech Columns:** ปรับปรุงเงื่อนไข `shouldGroupLines` ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts) โดยยกเว้นการตรวจสอบ `vertOverlapRatio > 0.25` (Side-by-side guard) หากกล่องข้อความเหล่านั้นมีการทับซ้อนในแนวนอนสูง (`horizOverlap >= 0.50`) ซึ่งชี้ว่าอยู่ในแนวตั้งเดียวกัน และขยายระยะห่างการจัดกลุ่มบรรทัดภาษาอังกฤษที่เรียงตรงกันจาก `2.2 * avgHeight` เป็น `3.2 * avgHeight` เพื่อไม่ให้กลุ่มข้อความแนวตั้งในช่องคำพูดโดนตัดแบ่งท่อน
+- **Conversational Glossary & Offline Translation Lookup:** เพิ่มกฎการซ่อมคำแปลหลังประมวลผล (Post-processing glossary rules) ใน `applyThaiConversationalGlossaryInternal` ของ [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) สำหรับคำแปลพิเศษ เช่น `But in any age...` -> `'แต่ไม่ว่าจะในยุคสมัยใด...'`, `AWAY...WiTH` -> `'ไปให้พ้นกับ'`, และ `getting` -> `'ได้รับ'` พร้อมทั้งบันทึก whitelist คำสั้นใน `ARGOS_SHORT_PHRASE_LOOKUP_TH` ของ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) สำหรับประโยคสนทนาภาษาอังกฤษทั่วไป ป้องกันปัญหาโดนกรองข้าม (Carry-over skip)
+
 ## 2026-06-16
 
 - Fixed OCR Ghost Line filtering for PaddleOCR when word details are missing (preventing valid English text lines like `and was at a` or `all aristocrats` from being dropped as low-signal/no-word boxes).
