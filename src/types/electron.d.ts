@@ -127,6 +127,8 @@ export interface ExternalOCRRequest {
   maxPixels?: number;
   chunkIndex?: number;
   totalChunks?: number;
+  useAngleCls?: boolean;
+  use_angle_cls?: boolean;
 }
 
 export interface ExternalOCRResult {

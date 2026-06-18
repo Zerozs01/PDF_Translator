@@ -2787,7 +2787,8 @@ class VisionService {
     pipelineProfile: OCRPipelineProfile,
     ocrQualityProfile: OCRQualityProfile,
     ocrEngine: OCREngine,
-    maxPixels?: number
+    maxPixels?: number,
+    useAngleCls?: boolean
   ): Promise<OCRPageResult> {
     const bridge = window.electronAPI?.ocr;
     if (!bridge?.runExternal) {
@@ -2907,6 +2908,7 @@ class VisionService {
                   totalChunks,
                   ...(maxSideLen !== undefined ? { maxSideLen } : {}),
                   ...(maxPixels !== undefined ? { maxPixels } : {}),
+                  ...(useAngleCls !== undefined ? { useAngleCls } : {}),
                 });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -2978,6 +2980,7 @@ class VisionService {
           ocrQualityProfile,
           ...(maxSideLen !== undefined ? { maxSideLen } : {}),
           ...(maxPixels !== undefined ? { maxPixels } : {}),
+          ...(useAngleCls !== undefined ? { useAngleCls } : {}),
         });
 
         const isPaddlePanelPath = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
@@ -3324,6 +3327,7 @@ class VisionService {
     maxPixels?: number,
     config?: {
       engine?: string;
+      useAngleCls?: boolean;
       preprocessing?: {
         enabled?: boolean;
         binarization?: boolean;
@@ -3397,7 +3401,8 @@ class VisionService {
         pipelineProfile,
         ocrQualityProfile,
         ocrEngine,
-        maxPixels
+        maxPixels,
+        config?.useAngleCls
       );
 
       const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
@@ -3450,7 +3455,8 @@ class VisionService {
           pipelineProfile,
           fallbackQualityProfile,
           fallbackEngine,
-          maxPixels
+          maxPixels,
+          config?.useAngleCls
         );
 
         const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
@@ -3537,7 +3543,8 @@ class VisionService {
             pipelineProfile,
             ocrQualityProfile,
             'easyocr',
-            maxPixels
+            maxPixels,
+            config?.useAngleCls
           );
 
           if (easyResult.debug) {

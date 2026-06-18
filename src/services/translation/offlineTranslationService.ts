@@ -28,9 +28,33 @@ import {
 
 export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   // Pronouns
+  'way too good': 'ดีงามเกินไปแล้ว', 'way too good...': 'ดีงามเกินไปแล้ว...', 'way too good,': 'ดีงามเกินไปแล้ว', 'way too good,,': 'ดีงามเกินไปแล้ว',
+  'not nec': 'ไม่จำเป็น', 'not nec...': 'ไม่จำเป็น...',
+  'not necessary': 'ไม่จำเป็น', 'not necessary...': 'ไม่จำเป็น...', 'not necessary.': 'ไม่จำเป็น.',
+  'excuse': 'ขอโทษนะ', 'excuse...': 'ขอโทษนะ...',
+  'cumming': 'แตกแล้ว', 'cumming...': 'แตกแล้ว...', 'cumming!': 'แตกแล้ว!',
+  'about the foreplay': 'แล้วบทนำล่ะ', 'about the foreplay?': 'แล้วบทนำล่ะ?', 'about the foreplay!?': 'แล้วบทนำล่ะ!?',
+  'ment after': 'การรักษาหลังจากนี้', 'ment after...': 'การรักษาหลังจากนี้...',
+  'row': 'แถว', 'row...': 'แถว...',
+  'suddenly': 'ทันใดนั้น', 'suddenly...': 'ทันใดนั้น...', 'suddenly!': 'ทันใดนั้น!',
+  'but...': 'แต่...', 'but': 'แต่',
+  'form a medical': 'การตรวจทางการแพทย์', 'form a medical...': 'การตรวจทางการแพทย์...',
+  'blowjob': 'อมควย', 'blowjob...': 'อมควย...', 'blowjob!': 'อมควย!',
+  'barbarians!!': 'ไอ่พวกบา-บาเรียน!!', 'barbarians': 'ไอ่พวกบา-บาเรียน',
+  'pregnant': 'ตั้งท้อง', 'pregnant...': 'ตั้งท้อง...', 'pregnant!': 'ตั้งท้อง!',
+  's-sto ooo op...': 'ห-หยุด ดดด ดดด...', 's-stooooop...': 'ห-หยุด ดดด ดดด...',
+  'frfo': '', 'frfo...': '',
+  'stinky': 'เหม็นตุๆ', 'stinky!': 'เหม็นตุๆ!', 'stinky...': 'เหม็นตุๆ...',
+  'kill me': 'ฆ่าฉันที', 'kill me!': 'ฆ่าฉันที!', 'kill me!!': 'ฆ่าฉันที!!',
+  'with procreation': 'ด้วยการสืบพันธุ์', 'with procreation...': 'ด้วยการสืบพันธุ์...',
+  'pregnant with': 'ตั้งท้องกับ', 'pregnant with...': 'ตั้งท้องกับ...',
+  'then try and hold back your orgasm you pig': 'ถ้าอย่างนั้นก็พยายามกลั้นจุดสุดยอดของแกไว้ซะสิ ไอ้หมูโสโครก!',
+  'then try and hold back your orgasm you pig!': 'ถ้าอย่างนั้นก็พยายามกลั้นจุดสุดยอดของแกไว้ซะสิ ไอ้หมูโสโครก!',
+  'then try and hold back your orgasm you pig!!': 'ถ้าอย่างนั้นก็พยายามกลั้นจุดสุดยอดของแกไว้ซะสิ ไอ้หมูโสโครก!!',
   'i': 'ฉัน', 'you': 'คุณ', 'he': 'เขา', 'she': 'เธอ',
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
   'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
+  'that': 'นั่น', 'feels': 'รู้สึก', 'that-': 'นั่น-',
   'front': 'ข้างหน้า', 'front.': 'ข้างหน้า',
   'kniiiiiight': 'อัศวิน', 'kniiiiight': 'อัศวิน', 'kniiiiight!': 'อัศวิน!',
   'youre': 'คุณคือ', 'you\'re': 'คุณคือ',
@@ -57,8 +81,14 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'sadness': 'ความเศร้า',
   'all arstocrats': 'เหล่าขุนนางทั้งหมด',
   'all aristocrats': 'เหล่าขุนนางทั้งหมด',
+  'praise': 'ชื่นชม', 'praise...': 'ชื่นชม...', 'praise!': 'ชื่นชม!',
+  'roseria': 'โรเซเรีย', 'roseria...': 'โรเซเรีย...', 'roseria!': 'โรเซเรีย!',
   'king and': 'ราชาและ',
   'but in any age': 'แต่ไม่ว่าจะในยุคสมัยใด',
+  'if i': 'ถ้าฉัน',
+  'toyed with': 'เล่นสนุกกับ',
+  'dead': 'ตาย',
+  'recapturing': 'การยึดกลับคืน',
   // Interjections / short responses
   'yes': 'ใช่', 'no': 'ไม่', 'ok': 'โอเค', 'okay': 'โอเค',
   'sir': 'ท่าน', 'yes sir': 'ครับท่าน',
@@ -157,7 +187,14 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'like the': 'เหมือนกับ',
   'pig you': 'หมูอย่างแก',
   'are': 'ที่เป็นอยู่',
-  'bitch hey': 'ยัยตัวแสบ... เฮ้!',
+  'bitch hey': 'ยัยตัวแสบ... เฮ้ย!',
+  'bitch hey!': 'ยัยตัวแสบ... เฮ้ย!',
+  'the pig you are': 'เหมือนหมูอย่างแก!',
+  'the pig you are!': 'เหมือนหมูอย่างแก!',
+  'the pig you are!!': 'เหมือนหมูอย่างแก!!',
+  'pig you are': 'เหมือนหมูอย่างแก',
+  'pig you are!': 'เหมือนหมูอย่างแก!',
+  'pig you are!!': 'เหมือนหมูอย่างแก!!',
   'shut her up': 'หุบปากเธอซะ',
   'her up': 'หุบปากเธอซะ',
   'and shut': 'และหุบปาก',
@@ -167,6 +204,41 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'shove one': 'ยัดมันเข้าไป',
   'in her other': 'เข้าไปในอีกรูของเธอ',
   'hole too': 'ด้วยเหมือนกัน',
+  'the war': 'สงคราม',
+  'we deal': 'พวกเราจะจัดการเอง',
+  'we deal!': 'พวกเราจะจัดการเอง!',
+  'away with': 'ไปให้พ้นกับ',
+  'away with!': 'ไปให้พ้นกับ!',
+  'away... with': 'ไปให้พ้นกับ',
+  'away... with!': 'ไปให้พ้นกับ!',
+  'than any': 'ยิ่งกว่าใคร',
+  'than any-': 'ยิ่งกว่าใคร',
+  'feelings': 'ความรู้สึก',
+  'feelings!': 'ความรู้สึก!',
+  'cant': 'ไม่สามารถ',
+  'cant!': 'ไม่สามารถ!',
+  'cant...': 'ไม่สามารถ...',
+  'cant believe': 'ไม่อยากเชื่อ',
+  'cant believe!': 'ไม่อยากเชื่อ!',
+  'cant believe...': 'ไม่อยากเชื่อ...',
+  'cannot': 'ไม่สามารถ',
+  'lady roseria is dead': 'เลดี้ โรสเรีย นั้น ตายไปแล้ว',
+  'lady roseria is dead!': 'เลดี้ โรสเรีย นั้น ตายไปแล้ว!',
+  'lady roseria is dead!!': 'เลดี้ โรสเรีย นั้น ตายไปแล้ว!!',
+  'lady roseria': 'เลดี้ โรสเรีย',
+  'roseria is dead': 'โรสเรีย นั้น ตายไปแล้ว',
+  'roseria is dead!': 'โรสเรีย นั้น ตายไปแล้ว!',
+  'roseria is dead!!': 'โรสเรีย นั้น ตายไปแล้ว!!',
+  'lady roseria is': 'เลดี้ โรสเรีย นั้น',
+  'a nor mal': 'ธรรมดา',
+  'duin e ospe': 'ก็เป็นช่วงเวลาที่',
+  'duin espe': 'ก็เป็นช่วงเวลาที่',
+  'borrm': 'กำเนิด',
+  'borrm.': 'กำเนิด',
+  '774': 'ทั้งหมด',
+  'this my': 'นี่คือ... ของฉัน',
+  'we deal with it': 'เราจะจัดการกับมันเอง',
+  'we deal with it!': 'เราจะจัดการกับมันเอง!',
   // Spanish exclamations
   'joder': 'เชี่ยเอ๊ย!',
   'cono': 'บ้าเอ๊ย!',
@@ -236,10 +308,42 @@ export const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00
 export const lookupShortPhraseTh = (text: string): string | null => {
   const key = text.trim().toLowerCase()
     .replace(/[_]+/g, ' ')
+    .replace(/[\-\/\.\,\!\?]+/g, ' ')
     .replace(/[^\p{L}\p{N}\s]/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
-  return ARGOS_SHORT_PHRASE_LOOKUP_TH[key] ?? null;
+  
+  // 1. ลองค้นหาแบบตรงตัวใน dictionary ก่อน
+  const directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[key];
+  if (directMatch) return directMatch;
+
+  // 2. ถ้าไม่พบแบบตรงตัว ลองตรวจสอบความลากเสียงยาว (Elongation) สำหรับคำการ์ตูนยอดนิยม
+  // สำหรับ please (เช่น pleea +aaseee, pleeease)
+  if (/^p[le]*[ea]*\s*\+?\s*[ea]*s[e]+$/i.test(key)) {
+    return 'ได้โปรด ดดดดดด';
+  }
+  // สำหรับ more (เช่น moreeeeee)
+  if (/^m[o]+r[e]+$/i.test(key)) {
+    return 'มากกกกว่าาาานี้';
+  }
+  // สำหรับ out (เช่น ouuuut)
+  if (/^[o]+[u]+[t]+$/i.test(key)) {
+    return 'ออกไปปปป';
+  }
+  // สำหรับ knight (เช่น kniiiiight)
+  if (/^k[n]+[i]+[g]+[h]+[t]+$/i.test(key)) {
+    return 'อัศวิน';
+  }
+  // สำหรับ dead (เช่น deeead)
+  if (/^d[e]+[a]+d[d]*$/i.test(key)) {
+    return 'ตาย';
+  }
+  // สำหรับ cocks (เช่น cooooocks)
+  if (/^c[o]+ck[s]*$/i.test(key)) {
+    return 'ควยยยยยยพวกนี้';
+  }
+
+  return null;
 };
 
 const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko', 'ja']);
@@ -592,7 +696,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:SUDDENLY|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIIIIIIGHT|KNIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIIIIIIGHT|KNIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {

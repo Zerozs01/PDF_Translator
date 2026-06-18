@@ -698,6 +698,7 @@ function fitDimensionsToConstraints(
   const maxSide = constraints?.maxSide ?? null;
   const maxPixels = constraints?.maxPixels ?? null;
   const minWidth = constraints?.minWidth ?? null;
+  const tallPageBoost = constraints?.tallPageBoost ?? null;
   
   let effectiveMaxSide = maxSide;
   let effectiveMaxPixels = maxPixels;
@@ -707,23 +708,39 @@ function fitDimensionsToConstraints(
   const shortSide = Math.max(1, Math.min(width, height));
   const aspectRatio = longSide / shortSide;
 
-  if (effectiveMaxPixels && effectiveMaxPixels > 0) {
-    const baseMaxPixels = effectiveMaxPixels;
-    const subLinearMultiplier = Math.sqrt(aspectRatio);
-    let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
-
-    const MAX_PIXELS_CEILING = 37950000;
-    if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
-      dynamicMaxPixels = MAX_PIXELS_CEILING;
+  if (tallPageBoost) {
+    const qualifiesTallPage = longSide >= Math.max(1, tallPageBoost.minLongSide)
+      && aspectRatio >= Math.max(1, tallPageBoost.minAspectRatio);
+    if (qualifiesTallPage) {
+      appliedTallPageBoost = true;
+      if (tallPageBoost.boostedMaxSide > 0) {
+        effectiveMaxSide = tallPageBoost.boostedMaxSide;
+      }
+      if (tallPageBoost.boostedMaxPixels > 0) {
+        effectiveMaxPixels = tallPageBoost.boostedMaxPixels;
+      }
     }
-
-    effectiveMaxPixels = dynamicMaxPixels;
-    appliedTallPageBoost = aspectRatio > 1.5;
   }
 
-  if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
-    const baseMaxSide = effectiveMaxSide;
-    effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+  if (!appliedTallPageBoost) {
+    if (effectiveMaxPixels && effectiveMaxPixels > 0) {
+      const baseMaxPixels = effectiveMaxPixels;
+      const subLinearMultiplier = Math.sqrt(aspectRatio);
+      let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
+
+      const MAX_PIXELS_CEILING = 37950000;
+      if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
+        dynamicMaxPixels = MAX_PIXELS_CEILING;
+      }
+
+      effectiveMaxPixels = dynamicMaxPixels;
+      appliedTallPageBoost = aspectRatio > 1.5;
+    }
+
+    if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
+      const baseMaxSide = effectiveMaxSide;
+      effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+    }
   }
 
   let scaleFactor = 1;

@@ -49,7 +49,7 @@ describe('Scratch Dedup Test', () => {
       pageNumber: 1,
       width: 1000,
       height: 1000,
-      dpi: 72,
+      dpi:300,
       language: 'eng',
       algorithmVersion: 1,
       lines: testLines,

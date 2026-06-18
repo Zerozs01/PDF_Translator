@@ -1,0 +1,142 @@
+﻿commit 2296eb0e00a12229201e0499ada523f15b3c5f53
+Author: Zerozs01 <auandmaxma@gmail.com>
+Date:   Sun Jun 14 00:04:13 2026 +0700
+
+    Fix Export bug v0 + homepage ocr all page queue menu
+
+diff --git a/scripts/external_ocr_bridge.py b/scripts/external_ocr_bridge.py
+index ef74ef0..41b675e 100644
+--- a/scripts/external_ocr_bridge.py
++++ b/scripts/external_ocr_bridge.py
+@@ -3412,6 +3412,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
+             "use_doc_unwarping": False,
+             "use_textline_orientation": True,
+             "show_log": False,
++            "use_angle_cls": True,
+         }
+ 
+     enable_textline_orientation = (
+@@ -3437,6 +3438,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
+         "use_doc_unwarping": False,
+         "use_textline_orientation": enable_textline_orientation,
+         "show_log": False,
++        "use_angle_cls": True,
+     }
+ 
+     if text_detection_model_name:
+@@ -3592,6 +3594,9 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
+             det_limit = min(3600, int(det_limit * 1.08))
+             rec_batch = 8
+ 
++    if lang == "korean":
++        det_unclip_ratio = 1.2
++
+     predict_kwargs: Dict[str, Any] = {
+         "text_det_limit_type": "max",
+         "text_det_limit_side_len": det_limit,
+@@ -3715,6 +3720,10 @@ def normalize_paddle_v2_output(raw_result: Any) -> Dict[str, Any]:
+         if not text:
+             continue
+         bbox = bbox_from_points(points)
++        w = max(0.0, bbox["x1"] - bbox["x0"])
++        h = max(0.0, bbox["y1"] - bbox["y0"])
++        if confidence < 0.5 and w < 10.0 and h < 10.0:
++            continue
+         quad = normalize_quad_points(points)
+         angle_deg = angle_deg_from_points(points)
+         sort_y, sort_x = sort_hint_from_points(points)
+@@ -3778,6 +3787,10 @@ def normalize_paddle_v3_output(raw_result: Any) -> Dict[str, Any]:
+             if hasattr(raw_score, "item"):
+                 raw_score = raw_score.item()
+             confidence = float(raw_score or 0.0)
++            w = max(0.0, bbox["x1"] - bbox["x0"])
++            h = max(0.0, bbox["y1"] - bbox["y0"])
++            if confidence < 0.5 and w < 10.0 and h < 10.0:
++                continue
+             line_words = explode_line_to_words(text_value, confidence, bbox)
+             lines.append(make_line(text_value, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "paddleocr"))
+             words.extend(line_words)
+@@ -4285,7 +4298,7 @@ def run_paddleocr_pass(
+ 
+     if hasattr(ocr, "ocr"):
+         try:
+-            raw = ocr.ocr(image_path, cls=False)
++            raw = ocr.ocr(image_path, cls=True)
+         except TypeError:
+             raw = ocr.ocr(image_path)
+ 
+@@ -4722,6 +4735,10 @@ def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
+         confidence = float(item[2] or 0.0)
+         if not text:
+             continue
++        w = max(0.0, bbox["x1"] - bbox["x0"])
++        h = max(0.0, bbox["y1"] - bbox["y0"])
++        if confidence < 0.5 and w < 10.0 and h < 10.0:
++            continue
+         line_words = explode_line_to_words(text, confidence, bbox)
+         lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "easyocr"))
+         words.extend(line_words)
+@@ -4976,7 +4993,10 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
+         if hasattr(ocr, "predict"):
+             raw = ocr.predict(str(img_path))
+         else:
+-            raw = ocr.ocr(str(img_path))
++            try:
++                raw = ocr.ocr(str(img_path), cls=True)
++            except TypeError:
++                raw = ocr.ocr(str(img_path))
+         elapsed_ms = (time.perf_counter() - t0) * 1000.0
+ 
+         words = []
+@@ -4998,6 +5018,10 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
+                     if not text_value:
+                         continue
+                     bbox = bbox_from_points_raw(points)
++                    w = max(0.0, bbox["x1"] - bbox["x0"])
++                    h = max(0.0, bbox["y1"] - bbox["y0"])
++                    if score < 0.5 and w < 10.0 and h < 10.0:
++                        continue
+                     words.append(text_value)
+                     lines.append({
+                         "text": text_value,
+@@ -5044,6 +5068,10 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
+                     elif index < len(rec_polys):
+                         points = rec_polys[index]
+                     bbox = bbox_from_points_raw(points)
++                    w = max(0.0, bbox["x1"] - bbox["x0"])
++                    h = max(0.0, bbox["y1"] - bbox["y0"])
++                    if score < 0.5 and w < 10.0 and h < 10.0:
++                        continue
+                     words.append(text_value)
+                     lines.append({
+                         "text": text_value,
+@@ -5101,6 +5129,10 @@ def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
+             except Exception:
+                 bbox = {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
+ 
++            w = max(0.0, bbox["x1"] - bbox["x0"])
++            h = max(0.0, bbox["y1"] - bbox["y0"])
++            if float(confidence) < 0.5 and w < 10.0 and h < 10.0:
++                continue
+             words.append(text_value)
+             lines.append({
+                 "text": text_value,
+@@ -5192,6 +5224,9 @@ def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
+         return status_easy_yolo()
+     if args.action == "prewarm":
+         return prewarm_engine(args)
++    if args.action == "cleanup":
++        cleanup_memory()
++        return {"ok": True, "message": "CUDA cache and system memory cleared successfully"}
+     if args.action == "raw_ocr":
+         if args.engine == "paddleocr":
+             return run_paddleocr_raw(args)
+@@ -5256,7 +5291,7 @@ def serve_stdio(default_engine: str) -> None:
+ 
+ def main() -> None:
+     parser = argparse.ArgumentParser()
+-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr"])
++    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup"])
+     parser.add_argument("--engine", required=True, choices=["paddleocr", "easyocr"])
+     parser.add_argument("--image")
+     parser.add_argument("--language", default="eng")

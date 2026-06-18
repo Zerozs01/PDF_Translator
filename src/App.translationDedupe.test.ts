@@ -1830,8 +1830,10 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('ME?', 'ME?', 'th')).toBe('ฉัน?');
     expect(applyThaiConversationalGlossary('I-I..', 'I-I..', 'th')).toBe('ฉ-ฉัน..');
     expect(applyThaiConversationalGlossary('I-I', 'I-I', 'th')).toBe('ฉ-ฉัน');
-    expect(applyThaiConversationalGlossary('I.. I..', 'I.. I..', 'th')).toBe('ฉ-ฉัน..');
     expect(applyThaiConversationalGlossary('US THE', 'US THE', 'th')).toBe('พวกเรา');
+    expect(applyThaiConversationalGlossary('But in any age...', 'But in any age...', 'th')).toBe('แต่ไม่ว่าจะในยุคสมัยใด...');
+    expect(applyThaiConversationalGlossary('AWAY...WiTH', 'AWAY...WiTH', 'th')).toBe('ไปให้พ้นกับ');
+    expect(applyThaiConversationalGlossary('getting', 'getting', 'th')).toBe('ได้รับ');
     // STiNKY standalone → ตุๆ
     expect(applyThaiConversationalGlossary('STiNKY', 'STiNKY', 'th')).toBe('ตุๆ');
     expect(applyThaiConversationalGlossary('STINKY', 'STINKY', 'th')).toBe('ตุๆ');

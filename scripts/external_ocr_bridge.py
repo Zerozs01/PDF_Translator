@@ -3531,7 +3531,7 @@ def resolve_local_model_dir(model_subdir: str) -> str | None:
     return None
 
 
-def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, Any]:
+def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: bool = True) -> Dict[str, Any]:
     # Dynamic hardware acceleration detection
     # NOTE: When running under ZLUDA (AMD GPU via CUDA emulation), PaddlePaddle-GPU
     # requires cublasLt64_11.dll which ZLUDA does NOT implement (it only stubs cuBLAS,
@@ -3585,7 +3585,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
             "use_doc_unwarping": False,
             "use_textline_orientation": True,
             "show_log": False,
-            "use_angle_cls": True,
+            "use_angle_cls": use_angle_cls,
         }
 
     enable_textline_orientation = (
@@ -3611,7 +3611,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
         "use_doc_unwarping": False,
         "use_textline_orientation": enable_textline_orientation,
         "show_log": False,
-        "use_angle_cls": True,
+        "use_angle_cls": use_angle_cls,
     }
 
     if text_detection_model_name:
@@ -3677,16 +3677,16 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 rec_score_thresh = 0.22 if is_cjk_like else 0.24
             else:  # "best"
                 if shortest <= 420:
-                    det_limit = 2400
+                    det_limit = 3000
                 elif shortest <= 720:
-                    det_limit = 2800
+                    det_limit = 3100
                 else:
                     det_limit = 3600
                 rec_batch = 8
-                det_thresh = 0.12
+                det_thresh = 0.1
                 det_box_thresh = 0.3
                 det_unclip_ratio = 1.96
-                rec_score_thresh = 0.24
+                rec_score_thresh = 0.225
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300
@@ -3753,6 +3753,23 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     det_limit = min(2300, int(det_limit * 1.08))
                     rec_batch = 8
+            
+            if pipeline == "panel":
+                if profile_key == "cpu_panel_accurate":
+                    det_thresh = 0.15
+                    det_box_thresh = 0.30
+                    det_unclip_ratio = 1.95
+                    rec_score_thresh = 0.20
+                elif profile_key == "cpu_panel_fast":
+                    det_thresh = 0.22
+                    det_box_thresh = 0.44
+                    det_unclip_ratio = 1.80
+                    rec_score_thresh = 0.28
+                else:
+                    det_thresh = 0.18
+                    det_box_thresh = 0.38
+                    det_unclip_ratio = 1.90
+                    rec_score_thresh = 0.24
     else:
         if is_cjk_like:
             det_limit = 2800 if shortest <= 1200 else 3200
@@ -3774,6 +3791,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
         "text_det_limit_type": "max",
         "text_det_limit_side_len": det_limit,
         "text_recognition_batch_size": rec_batch,
+        "use_angle_cls": getattr(args, "use_angle_cls", True),
     }
     if det_thresh is not None:
         predict_kwargs["text_det_thresh"] = det_thresh
@@ -4012,7 +4030,10 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
 
     from paddleocr import PaddleOCR  # type: ignore
 
-    constructor_kwargs = build_paddle_constructor_kwargs(lang, profile_key)
+    use_angle_cls = True
+    if predict_kwargs and "use_angle_cls" in predict_kwargs:
+        use_angle_cls = bool(predict_kwargs["use_angle_cls"])
+    constructor_kwargs = build_paddle_constructor_kwargs(lang, profile_key, use_angle_cls)
 
     # Automatically download models if specified directories don't exist
     det_dir = constructor_kwargs.get("det_model_dir")
@@ -4470,8 +4491,11 @@ def run_paddleocr_pass(
         return cleaned
 
     if hasattr(ocr, "ocr"):
+        use_cls = getattr(ocr, "use_angle_cls", False)
+        if predict_kwargs and "use_angle_cls" in predict_kwargs:
+            use_cls = bool(predict_kwargs["use_angle_cls"])
         try:
-            raw = ocr.ocr(image_path, cls=True)
+            raw = ocr.ocr(image_path, cls=use_cls)
         except TypeError:
             raw = ocr.ocr(image_path)
 
@@ -5166,8 +5190,11 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         if hasattr(ocr, "predict"):
             raw = ocr.predict(str(img_path))
         else:
+            use_cls = getattr(ocr, "use_angle_cls", False)
+            if hasattr(args, "use_angle_cls") and args.use_angle_cls is not None:
+                use_cls = bool(args.use_angle_cls)
             try:
-                raw = ocr.ocr(str(img_path), cls=True)
+                raw = ocr.ocr(str(img_path), cls=use_cls)
             except TypeError:
                 raw = ocr.ocr(str(img_path))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -5349,6 +5376,11 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
         max_side_len=int(payload.get("maxSideLen") or payload.get("max_side_len") or 0),
         # maxPixels (camelCase from TS) or max_pixels (snake_case)
         max_pixels=int(payload.get("maxPixels") or payload.get("max_pixels") or 0),
+        use_angle_cls=payload.get("useAngleCls") if payload.get("useAngleCls") is not None else (
+            payload.get("use_angle_cls") if payload.get("use_angle_cls") is not None else (
+                False if str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel").strip().lower() == "panel" else True
+            )
+        ),
         stdio_server=False,
     )
 

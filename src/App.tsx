@@ -6300,7 +6300,7 @@ export default function App() {
     const overlayLayoutByIndex = computeOverlayLayoutMap(
       pageOCR.lines.flatMap((line, index) => {
         const lineLayer = pageLayers.find(l => l.lineIndex === index && l.visible);
-        const translatedText = (() => {
+        let translatedText = (() => {
           if (lineLayer) {
             const normalizedLayerText = normalizeWhitespace(String(lineLayer.text || ''));
             const normalizedSourceText = normalizeWhitespace(String(lineLayer.sourceText || line.text || ''));
@@ -6309,10 +6309,14 @@ export default function App() {
             if (hasTranslation) {
               return normalizedLayerText || tText;
             }
-            return tText ?? (normalizedLayerText || line.text);
+            return tText !== undefined ? tText : (normalizedLayerText || line.text);
           }
-          return translatedByIndex.get(index) || line.text;
+          const tText = translatedByIndex.get(index);
+          return tText !== undefined ? tText : line.text;
         })();
+        if (translatedText === '') {
+          translatedText = ' ';
+        }
         if (!translatedText) return [];
         const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
         if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
@@ -6404,7 +6408,7 @@ export default function App() {
       // Skip lines ที่ถูก user ลบออก
       if (deletedLineIndexes.has(index)) return;
       const lineLayer = pageLayers.find(l => l.lineIndex === index && l.visible);
-      const translatedText = (() => {
+      let translatedText = (() => {
         if (lineLayer) {
           const normalizedLayerText = normalizeWhitespace(String(lineLayer.text || ''));
           const normalizedSourceText = normalizeWhitespace(String(lineLayer.sourceText || line.text || ''));
@@ -6413,10 +6417,14 @@ export default function App() {
           if (hasTranslation) {
             return normalizedLayerText || tText;
           }
-          return tText ?? (normalizedLayerText || line.text);
+          return tText !== undefined ? tText : (normalizedLayerText || line.text);
         }
-        return translatedByIndex.get(index) || line.text;
+        const tText = translatedByIndex.get(index);
+        return tText !== undefined ? tText : line.text;
       })();
+      if (translatedText === '') {
+        translatedText = ' ';
+      }
       if (!translatedText) return;
       const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
       if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
@@ -7182,6 +7190,14 @@ export default function App() {
             }
           }
           redistributedCursor += 1;
+
+          if (normalizedTargetLanguage === 'th') {
+            const directTranslation = lookupShortPhraseTh(sourceLineText);
+            if (directTranslation) {
+              nextText = directTranslation;
+            }
+          }
+
           translatedByIndex.set(line.index, nextText || (childSet.has(lineOffset) ? '' : sourceLineText));
         });
       });
@@ -7304,8 +7320,9 @@ export default function App() {
         || existingGroups.some(g => g.userCreated);
       
       const isStoreStale = existingLayers.length === 0 || 
+        existingLayers.length !== pageOCR.lines.length ||
         existingLayers.some(l => l.lineIndex >= pageOCR.lines.length) ||
-        (existingLayers.length > 0 && !hasUserModifications && existingLayers[0].sourceText !== String(pageOCR.lines[0]?.text || '').replace(/\s+/g, ' ').trim());
+        (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
 
       if (isStoreStale && !hasUserModifications) {
         const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
@@ -7375,9 +7392,33 @@ export default function App() {
             try {
               const layerStore = useLayerStore.getState();
               const pageLayers = layerStore.getPageLayers(pageNum);
+
+              // Helper ในการจับคู่แคชคำแปลอย่างปลอดภัยโดยเช็คจากข้อความดิบ
+              const findBestCacheMatch = (sourceText: string, lineIndex: number, cacheItems: any[]) => {
+                if (!Array.isArray(cacheItems)) return undefined;
+                const cleanSource = String(sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                if (!cleanSource) return undefined;
+                
+                // 1. Exact match (case-insensitive)
+                const exact = cacheItems.find(item => 
+                  String(item.sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase() === cleanSource
+                );
+                if (exact) return exact;
+                
+                // 2. Substring match
+                const partial = cacheItems.find(item => {
+                  const itemText = String(item.sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                  return itemText.includes(cleanSource) || cleanSource.includes(itemText);
+                });
+                if (partial) return partial;
+                
+                // 3. Fallback to Index match
+                return cacheItems.find(item => item.index === lineIndex);
+              };
+
               if (pageLayers.length > 0) {
                 const updatedPageLayers = pageLayers.map(layer => {
-                  const matchedItem = matchedCache.translatedByIndex.find(item => item.index === layer.lineIndex);
+                  const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, matchedCache.translatedByIndex);
                   if (!matchedItem) return layer;
                   if (layer.userEdited) return layer;
                   return {
@@ -7395,9 +7436,12 @@ export default function App() {
                 // หากยังไม่มีเลเยอร์ถูกสร้างขึ้นในหน้านี้ (เช่น แปลข้ามหน้า หรือแคชเก็บไว้)
                 // ให้สร้างเลเยอร์ขึ้นมาใหม่จาก OCR + แคชคำแปลทันที
                 const translatedMap = new Map<number, string>();
-                if (Array.isArray(matchedCache.translatedByIndex)) {
-                  matchedCache.translatedByIndex.forEach(item => {
-                    translatedMap.set(item.index, item.text);
+                if (Array.isArray(pageOCR?.lines)) {
+                  pageOCR.lines.forEach((line, idx) => {
+                    const matchedItem = findBestCacheMatch(line.text, idx, matchedCache.translatedByIndex);
+                    if (matchedItem) {
+                      translatedMap.set(idx, matchedItem.text);
+                    }
                   });
                 }
                 const result = buildLayerGroupsFromOCR(pageOCR, translatedMap);
@@ -8045,13 +8089,24 @@ export default function App() {
           );
         }
         redistributedCursor += 1;
+
+        if (normalizedTargetLanguage === 'th') {
+          const directTranslation = lookupShortPhraseTh(sourceLineText);
+          if (directTranslation) {
+            finalizedLine = directTranslation;
+          }
+        }
+
         // Use noise-repaired source as fallback instead of raw OCR text
         const cleanedSourceFallback = childSet.has(lineOffset)
           ? ''
           : normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
         translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || (childSet.has(lineOffset) ? '' : sourceLineText));
         if (!childSet.has(lineOffset) && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
-          retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
+          const hasGlossaryMatch = normalizedTargetLanguage === 'th' && lookupShortPhraseTh(sourceLineText);
+          if (!hasGlossaryMatch) {
+            retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
+          }
         }
       });
       setSlangGroupContext('');
@@ -8064,14 +8119,25 @@ export default function App() {
       if (translatedByIndex.has(line.index)) {
         return;
       }
-      const finalizedFallback = finalizeTranslatedLine(line.text, line.text, normalizedTargetLanguage);
+      let finalizedFallback = finalizeTranslatedLine(line.text, line.text, normalizedTargetLanguage);
+
+      if (normalizedTargetLanguage === 'th') {
+        const directTranslation = lookupShortPhraseTh(line.text);
+        if (directTranslation) {
+          finalizedFallback = directTranslation;
+        }
+      }
+
       translatedByIndex.set(line.index, finalizedFallback || line.text);
       if (shouldRetryLineTranslation(line.text, finalizedFallback, translationSourceLanguage, normalizedTargetLanguage)) {
-        retryLineMap.set(line.index, {
-          index: line.index,
-          sourceText: line.text,
-          sourceLanguage: translationSourceLanguage,
-        });
+        const hasGlossaryMatch = normalizedTargetLanguage === 'th' && lookupShortPhraseTh(line.text);
+        if (!hasGlossaryMatch) {
+          retryLineMap.set(line.index, {
+            index: line.index,
+            sourceText: line.text,
+            sourceLanguage: translationSourceLanguage,
+          });
+        }
       }
     });
 
@@ -8126,9 +8192,20 @@ export default function App() {
         const retried = normalizeWhitespace(retryOutputs[idx] || '');
         if (!retried) return;
 
-        const finalizedRetry = finalizeTranslatedLine(item.sourceText, retried, normalizedTargetLanguage);
+        let finalizedRetry = finalizeTranslatedLine(item.sourceText, retried, normalizedTargetLanguage);
+
+        if (normalizedTargetLanguage === 'th') {
+          const directTranslation = lookupShortPhraseTh(item.sourceText);
+          if (directTranslation) {
+            finalizedRetry = directTranslation;
+          }
+        }
+
         if (shouldRetryLineTranslation(item.sourceText, finalizedRetry, item.sourceLanguage, normalizedTargetLanguage)) {
-          return;
+          const hasGlossaryMatch = normalizedTargetLanguage === 'th' && lookupShortPhraseTh(item.sourceText);
+          if (!hasGlossaryMatch) {
+            return;
+          }
         }
         translatedByIndex.set(item.index, finalizedRetry);
         retryAppliedCount += 1;

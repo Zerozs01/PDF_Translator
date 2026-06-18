@@ -233,6 +233,7 @@ export interface OCROptions {
   /** Per-page OCR timeout in seconds (0 = no timeout). Default: 120 */
   perPageTimeoutSec?: number;
   ocrQualityProfile?: OCRQualityProfile;
+  useAngleCls?: boolean;
 }
 
 /** Text Layer Generation Options */

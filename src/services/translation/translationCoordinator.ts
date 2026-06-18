@@ -2,6 +2,7 @@ import { TranslatableItem, TranslationResult, TranslationEngine } from '../../ty
 import { translateSFX, SFXLanguage } from './sfxDictionaryService';
 import { dbService } from '../dbService';
 import { hasKoreanTranslationCarryover } from './koreanTranslationPolicy';
+import { lookupShortPhraseTh } from './offlineTranslationService';
 
 /**
  * Argos Offline Engine Implementation
@@ -258,6 +259,14 @@ export class TranslationCoordinator {
         // SFX items: ข้าม cache ทุกกรณี ให้ Engine.translate() จัดการผ่าน SFX Dict
         if (item.groupType === 'sfx') {
           return { item, cachedText: null };
+        }
+        // Direct Dictionary Lookup Bypass: If we have a dictionary translation, bypass database cache and return it directly.
+        if (options.targetLanguage === 'th') {
+          const directDictTranslation = lookupShortPhraseTh(item.text);
+          if (directDictTranslation) {
+            console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directDictTranslation}"`);
+            return { item, cachedText: directDictTranslation };
+          }
         }
         try {
           const cachedText = await dbService.getSentenceTranslation(

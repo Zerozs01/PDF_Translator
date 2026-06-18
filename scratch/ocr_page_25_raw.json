@@ -4,7 +4,8 @@
   "height": 7430,
   "dpi": 300,
   "language": "eng",
-  "algorithmVersion": 214,
+  "algorithmVersion": 215,
+  "ocrRawVersion": 1,
   "pipelineProfile": "panel",
   "ocrEngine": "paddleocr",
   "ocrQualityProfile": "best",
@@ -476,12 +477,12 @@
       "_sourceIndex": 7
     },
     {
-      "text": "Who gave be filled with",
+      "text": "Who gave",
       "confidence": 94.45104002952576,
       "bbox": {
         "x0": 567,
-        "y0": 1167,
-        "x1": 4745,
+        "y0": 1192,
+        "x1": 976,
         "y1": 1344
       },
       "words": [
@@ -504,7 +505,24 @@
             "x1": 976,
             "y1": 1344
           }
-        },
+        }
+      ],
+      "_sortY": 1162.0055847278838,
+      "sortHintY": 1162.0055847278838,
+      "_sortX": 632.5211625402019,
+      "sortHintX": 632.5211625402019,
+      "_sourceIndex": 8
+    },
+    {
+      "text": "be filled with",
+      "confidence": 94.45104002952576,
+      "bbox": {
+        "x0": 4362,
+        "y0": 1167,
+        "x1": 4745,
+        "y1": 1258
+      },
+      "words": [
         {
           "text": "be",
           "confidence": 90.86747765541077,
@@ -942,12 +960,12 @@
       "_sourceIndex": 15
     },
     {
-      "text": "a fight Finally,",
+      "text": "a fight",
       "confidence": 98.32776983579,
       "bbox": {
         "x0": 628,
-        "y0": 1465,
-        "x1": 4660,
+        "y0": 1475,
+        "x1": 915,
         "y1": 1613
       },
       "words": [
@@ -970,7 +988,24 @@
             "x1": 915,
             "y1": 1613
           }
-        },
+        }
+      ],
+      "_sortY": 1465,
+      "sortHintY": 1465,
+      "_sortX": 628,
+      "sortHintX": 628,
+      "_sourceIndex": 17
+    },
+    {
+      "text": "Finally,",
+      "confidence": 98.32776983579,
+      "bbox": {
+        "x0": 4442,
+        "y0": 1465,
+        "x1": 4660,
+        "y1": 1544
+      },
+      "words": [
         {
           "text": "Finally,",
           "confidence": 98.78990054130554,
@@ -1197,12 +1232,12 @@
       "_sourceIndex": 22
     },
     {
-      "text": "stalemate ended under the",
+      "text": "stalemate ended",
       "confidence": 97.98752963542938,
       "bbox": {
         "x0": 3027,
-        "y0": 1741,
-        "x1": 4708,
+        "y0": 1756,
+        "x1": 3490,
         "y1": 1852
       },
       "words": [
@@ -1225,7 +1260,24 @@
             "x1": 3490,
             "y1": 1852
           }
-        },
+        }
+      ],
+      "_sortY": 1741,
+      "sortHintY": 1741,
+      "_sortX": 3027,
+      "sortHintX": 3027,
+      "_sourceIndex": 23
+    },
+    {
+      "text": "under the",
+      "confidence": 97.98752963542938,
+      "bbox": {
+        "x0": 4405,
+        "y0": 1741,
+        "x1": 4708,
+        "y1": 1831
+      },
+      "words": [
         {
           "text": "under",
           "confidence": 97.81308770179749,
@@ -3745,8 +3797,9 @@
       "inlineAdWord": 3,
       "panelSafetyDuplicate": 3
     },
-    "runtimeMs": 5290.299999999814,
+    "runtimeMs": 8802.29999999993,
     "preprocessing_latency_ms": 0,
-    "panelSafetyNormalizedVersion": 214
-  }
+    "panelSafetyNormalizedVersion": 215
+  },
+  "_splitDone": true
 }

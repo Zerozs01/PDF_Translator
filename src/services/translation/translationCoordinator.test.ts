@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { translationCoordinator } from './translationCoordinator';
 import { TranslatableItem } from '../../types/translation';
+import { dbService } from '../dbService';
 
 // Polyfill localStorage for node environment
 if (typeof localStorage === 'undefined') {
@@ -19,6 +20,12 @@ if (typeof localStorage === 'undefined') {
 describe('TranslationCoordinator & Engines', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.spyOn(dbService, 'getSentenceTranslation').mockResolvedValue(null);
+    vi.spyOn(dbService, 'saveSentenceTranslation').mockResolvedValue(undefined as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('ArgosTranslationEngine', () => {
@@ -85,6 +92,112 @@ describe('TranslationCoordinator & Engines', () => {
       expect(results[0]?.translatedText).toBe('Hello');
       expect(results[0]?.success).toBe(false);
       expect(results[0]?.error).toBe('Offline core error');
+    });
+
+    it('bypasses database cache lookup for phrases found in ARGOS_SHORT_PHRASE_LOOKUP_TH', async () => {
+      const mockGetSentenceTranslation = vi.fn().mockResolvedValue('แปลกๆ');
+      const getSpy = vi.spyOn(dbService, 'getSentenceTranslation').mockImplementation(mockGetSentenceTranslation);
+
+      const items: TranslatableItem[] = [
+        { id: '1', text: 'YOU', groupType: 'balloon' },
+        { id: '2', text: 'MOREEEEEE!', groupType: 'balloon' },
+        { id: '3', text: 'PLEEA +AASEEE!', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official',
+        translateBatchOffline: vi.fn(),
+      });
+
+      const youResult = results.find((r) => r.id === '1');
+      const moreResult = results.find((r) => r.id === '2');
+      const pleaseResult = results.find((r) => r.id === '3');
+
+      expect(youResult?.translatedText).toBe('คุณ');
+      expect(moreResult?.translatedText).toBe('มากกกกว่าาาานี้');
+      expect(pleaseResult?.translatedText).toBe('ได้โปรด ดดดดดด');
+
+      // dbService.getSentenceTranslation should not be called because all 3 items matched the dictionary/elongation bypass
+      expect(getSpy).not.toHaveBeenCalled();
+      
+      getSpy.mockRestore();
+    });
+
+    it('successfully translates all user-reported short manga phrases', async () => {
+      const items: TranslatableItem[] = [
+        { id: '1', text: 'YOU', groupType: 'balloon' },
+        { id: '2', text: 'FRONT', groupType: 'balloon' },
+        { id: '3', text: 'NiPPLES', groupType: 'balloon' },
+        { id: '4', text: 'LONGER', groupType: 'balloon' },
+        { id: '5', text: 'TODAY AGAiN', groupType: 'balloon' },
+        { id: '6', text: 'KNiiiiiGHT', groupType: 'balloon' },
+        { id: '7', text: 'HER POSi-', groupType: 'balloon' },
+        { id: '8', text: 'SUiTS', groupType: 'balloon' },
+        { id: '9', text: 'SO', groupType: 'balloon' },
+        { id: '10', text: 'NiPPLES AND', groupType: 'balloon' },
+        { id: '11', text: 'CERVIX', groupType: 'balloon' },
+        { id: '12', text: 'COCK', groupType: 'balloon' },
+        { id: '13', text: 'US THE', groupType: 'balloon' },
+        { id: '14', text: 'GENERAL', groupType: 'balloon' },
+        { id: '15', text: 'DiE ALONG', groupType: 'balloon' },
+        { id: '16', text: 'ALSO', groupType: 'balloon' },
+        { id: '17', text: 'HER PLACE', groupType: 'balloon' },
+        { id: '18', text: 'MAKE SURE', groupType: 'balloon' },
+        { id: '19', text: 'and was at a', groupType: 'balloon' },
+        { id: '20', text: 'recapturina', groupType: 'balloon' },
+        { id: '21', text: 'sadness', groupType: 'balloon' },
+        { id: '22', text: 'all arstocrats', groupType: 'balloon' },
+        { id: '23', text: 'king and', groupType: 'balloon' },
+        { id: '24', text: 'an all-out', groupType: 'balloon' },
+        { id: '25', text: 'But in any age...', groupType: 'balloon' },
+        { id: '26', text: 'MOREEEEEE!', groupType: 'balloon' },
+        { id: '27', text: 'PLEEA +AASEEE!', groupType: 'balloon' }
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official',
+        translateBatchOffline: vi.fn(),
+      });
+
+      const expected: Record<string, string> = {
+        '1': 'คุณ',
+        '2': 'ข้างหน้า',
+        '3': 'หัวนม',
+        '4': 'นานขึ้น',
+        '5': 'วันนี้อีกแล้ว',
+        '6': 'อัศวิน',
+        '7': 'ท่าของเธอ',
+        '8': 'เหมาะกับ',
+        '9': 'ช่าง...',
+        '10': 'หัวนมและ',
+        '11': 'ปากมดลูก',
+        '12': 'ควย',
+        '13': 'พวกเรา',
+        '14': 'นายพล',
+        '15': 'ตายตามกันไป',
+        '16': 'ด้วยเหมือนกัน',
+        '17': 'ที่ของเธอ',
+        '18': 'ให้แน่ใจ',
+        '19': 'และกำลังตกอยู่ใน',
+        '20': 'การยึดกลับคืน',
+        '21': 'ความเศร้า',
+        '22': 'เหล่าขุนนางทั้งหมด',
+        '23': 'ราชาและ',
+        '24': 'อย่างเต็มรูปแบบ',
+        '25': 'แต่ไม่ว่าจะในยุคสมัยใด',
+        '26': 'มากกกกว่าาาานี้',
+        '27': 'ได้โปรด ดดดดดด'
+      };
+
+      Object.entries(expected).forEach(([id, val]) => {
+        const item = results.find(r => r.id === id);
+        expect(item?.translatedText).toBe(val);
+        expect(item?.success).toBe(true);
+      });
     });
   });
 

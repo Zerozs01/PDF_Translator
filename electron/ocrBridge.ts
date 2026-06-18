@@ -87,6 +87,8 @@ export interface ExternalOcrRequestPayload {
    */
   maxSideLen?: number;
   maxPixels?: number;
+  useAngleCls?: boolean;
+  use_angle_cls?: boolean;
 }
 
 interface ExternalOcrBridgeResponse {
@@ -1013,6 +1015,8 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
         ? { maxSideLen: Math.min(Math.max(1, payload.maxSideLen), 6000) }
         : {}),
       ...(typeof payload.maxPixels === 'number' ? { maxPixels: payload.maxPixels } : {}),
+      ...(typeof payload.useAngleCls === 'boolean' ? { useAngleCls: payload.useAngleCls } : {}),
+      ...(typeof payload.use_angle_cls === 'boolean' ? { use_angle_cls: payload.use_angle_cls } : {}),
     };
 
     let response: ExternalOcrBridgeResponse;

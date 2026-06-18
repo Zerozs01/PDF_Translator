@@ -959,7 +959,7 @@ export const isLikelyGhostTranslatableLine = (
   const isTinyJunkBox = !hasCjkOrThai
     && asciiCompact.length <= 3
     && area <= 8000
-    && (isExternalEngine ? avgConfidence <= 98 : avgConfidence <= 85)
+    && (isExternalEngine ? avgConfidence <= 88 : avgConfidence <= 80)
     && !isKnownShortWord;
   if (isTinyJunkBox) {
     return true;

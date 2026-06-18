@@ -2079,6 +2079,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     const maxSide = constraints?.maxSide ?? null;
     const maxPixels = constraints?.maxPixels ?? null;
     const minWidth = constraints?.minWidth ?? null;
+    const tallPageBoost = constraints?.tallPageBoost ?? null;
     
     let effectiveMaxSide = maxSide;
     let effectiveMaxPixels = maxPixels;
@@ -2088,29 +2089,45 @@ export const OCRTextLayerPanel: React.FC = () => {
     const shortSide = Math.max(1, Math.min(width, height));
     const aspectRatio = longSide / shortSide;
 
-    // Use a sub-linear dynamic scaling multiplier instead of a hardcoded threshold
-    if (effectiveMaxPixels && effectiveMaxPixels > 0) {
-      const baseMaxPixels = effectiveMaxPixels;
-      // Scale dynamically using the square root of the aspect ratio
-      const subLinearMultiplier = Math.sqrt(aspectRatio);
-      let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
-
-      // Hard ceiling of 20M pixels to prevent memory exhaustion and "donut effect"
-      const MAX_PIXELS_CEILING = 37_950_000;
-      if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
-        dynamicMaxPixels = MAX_PIXELS_CEILING;
+    if (tallPageBoost) {
+      const qualifiesTallPage = longSide >= Math.max(1, tallPageBoost.minLongSide)
+        && aspectRatio >= Math.max(1, tallPageBoost.minAspectRatio);
+      if (qualifiesTallPage) {
+        appliedTallPageBoost = true;
+        if (tallPageBoost.boostedMaxSide > 0) {
+          effectiveMaxSide = tallPageBoost.boostedMaxSide;
+        }
+        if (tallPageBoost.boostedMaxPixels > 0) {
+          effectiveMaxPixels = tallPageBoost.boostedMaxPixels;
+        }
       }
-
-      effectiveMaxPixels = dynamicMaxPixels;
-      // Mark as boosted if aspect ratio is noticeably non-square (e.g. > 1.5)
-      appliedTallPageBoost = aspectRatio > 1.5;
     }
 
-    // Adjust effectiveMaxSide sub-linearly to prevent the width from being crushed
-    // on images with extreme aspect ratios
-    if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
-      const baseMaxSide = effectiveMaxSide;
-      effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+    if (!appliedTallPageBoost) {
+      // Use a sub-linear dynamic scaling multiplier instead of a hardcoded threshold
+      if (effectiveMaxPixels && effectiveMaxPixels > 0) {
+        const baseMaxPixels = effectiveMaxPixels;
+        // Scale dynamically using the square root of the aspect ratio
+        const subLinearMultiplier = Math.sqrt(aspectRatio);
+        let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
+
+        // Hard ceiling of 20M pixels to prevent memory exhaustion and "donut effect"
+        const MAX_PIXELS_CEILING = 37_950_000;
+        if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
+          dynamicMaxPixels = MAX_PIXELS_CEILING;
+        }
+
+        effectiveMaxPixels = dynamicMaxPixels;
+        // Mark as boosted if aspect ratio is noticeably non-square (e.g. > 1.5)
+        appliedTallPageBoost = aspectRatio > 1.5;
+      }
+
+      // Adjust effectiveMaxSide sub-linearly to prevent the width from being crushed
+      // on images with extreme aspect ratios
+      if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
+        const baseMaxSide = effectiveMaxSide;
+        effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+      }
     }
 
     let scaleFactor = 1;

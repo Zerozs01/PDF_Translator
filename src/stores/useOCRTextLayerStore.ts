@@ -10,7 +10,7 @@ import { splitAggressiveMergedLines } from '../services/layers/LayerGroupingServ
 import { isBoilerplateHallucination, applyKoreanConversationalFallback } from '../services/translation/koreanTranslationPolicy';
 import { processKoreanManhwaPipeline } from '../services/ocr/ocrManhwaHeuristics';
 import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from '../services/ocr/ocrJapaneseVerticalHeuristics';
-import { isKnownShortWordHelper } from '../services/ocr/ocrSafetyLineDedup';
+import { isKnownShortWordHelper, applyPanelSafetyLineDedup } from '../services/ocr/ocrSafetyLineDedup';
 
 export type TranslatorEngine = 'offline' | 'ai';
 export type OCRPreviewMode = 'translated' | 'original';
@@ -43,7 +43,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v50';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v51';
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
@@ -326,7 +326,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       result.dpi || state.options.dpi || 300
     );
 
-    let processedResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+    let processedResult: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
 
     // Apply Korean Manhwa Pipeline if it's Korean
     const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
@@ -361,6 +361,8 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       });
       processedResult = { ...japaneseResult, _splitDone: true };
     }
+
+    processedResult = { ...applyPanelSafetyLineDedup(processedResult), _splitDone: true };
 
     const newMap = new Map(state.allPagesOCR);
     newMap.set(pageNum, processedResult);
@@ -389,7 +391,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       result.dpi || state.options.dpi || 300
     );
 
-    let processedResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+    let processedResult: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
 
     // Apply Korean Manhwa Pipeline if it's Korean
     const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
@@ -424,6 +426,8 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       });
       processedResult = { ...japaneseResult, _splitDone: true };
     }
+
+    processedResult = { ...applyPanelSafetyLineDedup(processedResult), _splitDone: true };
 
     const byPageEngine = new Map(state.ocrByPageEngine);
     const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
