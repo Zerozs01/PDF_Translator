@@ -112,6 +112,41 @@ describe('normalizeSourceForTranslation', () => {
     // 3. NOT NEC-ESSARY -> NOT NECESSARY
     expect(normalizeSourceForTranslation('NOT NEC- ESSARY', 'en')).toBe('Not necessary');
     expect(normalizeSourceForTranslation('NOT NEC-ESSARY', 'en')).toBe('Not necessary');
+
+    // 4. IMPRESSION, EXPRESSION, THATCANTBE IT
+    expect(normalizeSourceForTranslation('A BAD I MPRESS I ON', 'en')).toBe('A bad impression');
+    expect(normalizeSourceForTranslation('THATCANTBE IT', 'en')).toBe("That can't be it");
+    expect(normalizeSourceForTranslation('EXPRESS I ON', 'en')).toBe('Expression');
+  });
+
+  test('should restore hyphenated words with Unicode characters and no spaces', () => {
+    expect(normalizeSourceForTranslation('AC-TUALDAD', 'es')).toBe('actualidad');
+    expect(normalizeSourceForTranslation('servi-cio', 'es')).toBe('servicio');
+    expect(normalizeSourceForTranslation('strea-ming', 'es')).toBe('streaming');
+    expect(normalizeSourceForTranslation('PRO-FESORA', 'es')).toBe('Profesora');
+  });
+
+  test('should repair Spanish OCR noises', () => {
+    expect(normalizeSourceForTranslation('MENTE UN REGALO.', 'es')).toBe('un regalo para la mente.');
+    expect(normalizeSourceForTranslation('DO DE ESTUDIAR', 'es')).toBe('donde estudiar');
+    expect(normalizeSourceForTranslation('RIO MUY', 'es')).toBe('río muy');
+    expect(normalizeSourceForTranslation('GO QUE TENDRE QUE', 'es')).toBe('tengo que ir');
+    expect(normalizeSourceForTranslation('VERSACION', 'es')).toBe('versión');
+    expect(normalizeSourceForTranslation('iUNA SENAL', 'es')).toBe('¡una señal');
+    expect(normalizeSourceForTranslation('CCPELICULA', 'es')).toBe('película');
+    expect(normalizeSourceForTranslation('TAMENTO DE INGLES', 'es')).toBe('Departamento de inglés');
+    expect(normalizeSourceForTranslation('CEN,TODOSSON', 'es')).toBe('Cen todosson');
+    expect(normalizeSourceForTranslation('que?', 'es')).toBe('¿qué?');
+    expect(normalizeSourceForTranslation('BIRME A', 'es')).toBe('suscribir me a');
+    expect(normalizeSourceForTranslation('TIDO PRESTADO', 'es')).toBe('tiempo prestado');
+    expect(normalizeSourceForTranslation('PRAR', 'es')).toBe('comprar');
+    expect(normalizeSourceForTranslation('RON UNA FIESTA', 'es')).toBe('organizaron una fiesta');
+    expect(normalizeSourceForTranslation('BIEN TE GUSTAN', 'es')).toBe('también te gustan');
+    expect(normalizeSourceForTranslation('SECUNDA RIA', 'es')).toBe('secundaria');
+    expect(normalizeSourceForTranslation('FRAZ PARA', 'es')).toBe('disfraz para');
+    expect(normalizeSourceForTranslation('TONCES', 'es')).toBe('entonces');
+    expect(normalizeSourceForTranslation('RATURA DELAIRE', 'es')).toBe('temperatura del aire');
+    expect(normalizeSourceForTranslation('GUIDA.', 'es')).toBe('seguida.');
   });
 });
 

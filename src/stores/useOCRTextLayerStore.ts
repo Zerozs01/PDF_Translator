@@ -156,6 +156,11 @@ export const filterGhostOcrData = (
       }
     }
 
+    // E. Watermark/bracket junk (e.g. "? [({2help)")
+    if (/[\?\[\(\{\}\)\]]{2,}/.test(compact) && /help/i.test(compact)) {
+      return false;
+    }
+
     return true;
   });
 

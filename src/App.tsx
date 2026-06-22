@@ -793,7 +793,30 @@ export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[])
       - (Math.log10(area) * 1.45);
   };
 
-  for (const candidate of ordered) {
+  const processed = ordered.filter(line => {
+    const txt = String(line.text || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    if (txt.includes('AN A PPKADEK') || txt.includes('ANA PPKADEK') || txt.includes('PPKADEK')) {
+      const hasAppraiser = ordered.some(other => {
+        const otherTxt = String(other.text || '').replace(/\s+/g, ' ').trim().toUpperCase();
+        if (otherTxt.includes('APPRAISER') || otherTxt.includes('APPRENTICE')) {
+          // If it overlaps vertically and horizontally to any degree (since they are basically the same text box)
+          const overlapW = Math.max(0, Math.min(other.right, line.right) - Math.max(other.left, line.left));
+          const overlapH = Math.max(0, Math.min(other.bottom, line.bottom) - Math.max(other.top, line.top));
+          const overlapArea = overlapW * overlapH;
+          if (overlapArea > 0) {
+            return true;
+          }
+        }
+        return false;
+      });
+      if (hasAppraiser) {
+        return false; // Skip/drop this line completely
+      }
+    }
+    return true;
+  });
+
+  for (const candidate of processed) {
     const candidateKey = normalizeTranslatableDedupKey(candidate.text);
     if (!candidateKey) {
       kept.push(candidate);
@@ -3399,7 +3422,10 @@ const shouldSkipLineTranslationByScript = (
   const compactLength = normalized.replace(/\s+/g, '').length;
   const shortTokenLike = compactLength <= 10 || tokenCount <= 2;
 
-  if (!hasLatin && shortTokenLike && (hasHangul || hasKana || hasHan || hasThai)) {
+  const isCjkText = hasHangul || hasKana;
+  const skipCondition = isCjkText ? (compactLength <= 3) : shortTokenLike;
+  
+  if (!hasLatin && skipCondition && (hasHangul || hasKana || hasHan || hasThai)) {
     return true;
   }
 
@@ -5455,6 +5481,7 @@ export default function App() {
           ocrDpi: ocrOptions.dpi,
           ocrPageSegMode: ocrOptions.pageSegMode,
           ocrQualityProfile: ocrOptions.ocrQualityProfile,
+          useAngleCls: ocrOptions.useAngleCls,
         });
 
         // ลัดคิวเพื่อให้งานเริ่มประมวลผลในพื้นหลังทันที
@@ -8593,6 +8620,7 @@ export default function App() {
       ocrDpi: ocrOptions.dpi,
       ocrPageSegMode: ocrOptions.pageSegMode,
       ocrQualityProfile: ocrOptions.ocrQualityProfile,
+      useAngleCls: ocrOptions.useAngleCls,
     });
 
     // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที
@@ -8629,6 +8657,7 @@ export default function App() {
       ocrDpi: ocrOptions.dpi,
       ocrPageSegMode: ocrOptions.pageSegMode,
       ocrQualityProfile: ocrOptions.ocrQualityProfile,
+      useAngleCls: ocrOptions.useAngleCls,
     });
 
     // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที

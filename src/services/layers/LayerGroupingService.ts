@@ -430,10 +430,43 @@ export const buildLayerGroupsFromOCR = (
   });
 
   // Attach original index before splitting
-  const linesWithIndex = sanitizedRawLines.map((line, idx) => ({
-    ...line,
-    originalIndex: idx
-  }));
+  // Clean Korean spacing prior to building layers to ensure matches are normalized
+  const cleanKoreanOcrSpacing = (t: string): string => {
+    if (!t) return '';
+    const words = t.split(/(\s+)/);
+    const result: string[] = [];
+    for (let i = 0; i < words.length; i++) {
+      const item = words[i];
+      if (!/^[ ]$/.test(item)) {
+        result.push(item);
+        continue;
+      }
+      const prevWord = result[result.length - 1] || '';
+      const nextWord = words[i + 1] || '';
+      const prevKoMatches = prevWord.match(/[\uac00-\ud7af]/g);
+      const nextKoMatches = nextWord.match(/[\uac00-\ud7af]/g);
+      if (prevKoMatches && nextKoMatches) {
+        if (prevKoMatches.length === 1 || nextKoMatches.length === 1) {
+          result[result.length - 1] = prevWord + nextWord;
+          i++;
+          continue;
+        }
+      }
+      result.push(item);
+    }
+    return result.join('');
+  };
+
+  const linesWithIndex = sanitizedRawLines.map((line, idx) => {
+    // If the language is Korean, clean Korean spacing immediately so that it matches fallback dictionary keys
+    const isKorean = /[\uAC00-\uD7AF]/.test(line.text);
+    const cleanedText = isKorean ? cleanKoreanOcrSpacing(line.text) : line.text;
+    return {
+      ...line,
+      text: cleanedText,
+      originalIndex: idx
+    };
+  });
 
   // Pre-process: หั่นบรรทัดที่โดน EasyOCR/PaddleOCR มัดรวมข้าม panel ออกจากกัน
   // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag เพื่อป้องกัน triple-split bug
@@ -505,8 +538,16 @@ export const buildLayerGroupsFromOCR = (
     component.sort((a, b) => {
       const lineA = lines[a];
       const lineB = lines[b];
-      if (lineA.bbox.y0 !== lineB.bbox.y0) return lineA.bbox.y0 - lineB.bbox.y0;
-      return lineA.bbox.x0 - lineB.bbox.x0;
+      const hA = lineA.bbox.y1 - lineA.bbox.y0;
+      const hB = lineB.bbox.y1 - lineB.bbox.y0;
+      const avgH = (hA + hB) * 0.5;
+
+      const yDiff = Math.abs(lineA.bbox.y0 - lineB.bbox.y0);
+      // หากอยู่ในแนวบรรทัดเดียวกัน (ต่างกันไม่เกิน 50% ของความสูงเฉลี่ย) ให้เรียงจากซ้ายไปขวา
+      if (yDiff < avgH * 0.5) {
+        return lineA.bbox.x0 - lineB.bbox.x0;
+      }
+      return lineA.bbox.y0 - lineB.bbox.y0;
     });
 
     components.push(component);

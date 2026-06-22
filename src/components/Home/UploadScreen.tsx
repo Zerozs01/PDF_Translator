@@ -889,6 +889,7 @@ export const UploadScreen: React.FC = () => {
         type: 'ocr_all',
         totalPages: Math.max(1, doc.total_pages),
         ocrLanguage: ocrLanguage,
+        useAngleCls: opt.useAngleCls,
       });
     } else {
       useBackgroundQueueStore.getState().addJob({
@@ -905,6 +906,7 @@ export const UploadScreen: React.FC = () => {
         ocrDpi: opt.dpi || 300,
         ocrPageSegMode: opt.pageSegMode,
         ocrQualityProfile: opt.ocrQualityProfile || 'best',
+        useAngleCls: opt.useAngleCls,
       });
     }
 

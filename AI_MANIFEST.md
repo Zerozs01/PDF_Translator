@@ -139,22 +139,4 @@
 13. **Split-View & Sync-Scroll:** เพิ่มฟังก์ชัน Side-by-Side Split View เพื่อให้ผู้ใช้สามารถตรวจสอบ Original OCR เคียงคู่กับบทแปลแบบเรียลไทม์ โดยรองรับการซิงโครไนซ์ตำแหน่งการเลื่อน (Synchronized Scrolling) และพิกัดซูมแบบ 60fps Zero-Latency ข้ามหน้าต่าง และจะปิดการแบ่งช่องแสดงผลโดยอัตโนมัติเมื่อเปลี่ยนหน้าหรือปิดไฟล์ถัดไปในวันที่ 2026-06-13
 14. **OCR Ghost Line & Translation Carry-over Repairs:** แก้ไขปัญหาคำแปลโดนเมินหรือไม่แสดง Overlay ทับตัวอักษรภาษาอังกฤษในหน้า 25 โดยทำการอัปเดต [ocrTextHeuristics.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrTextHeuristics.ts) และ [ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) เพื่อป้องกันการลบประโยคภาษาอังกฤษจริงออกเป็น Ghost line สำหรับ PaddleOCR ที่ไม่มีข้อมูลคำย่อย (validWords.length = 0) พร้อมทั้งเพิ่มคำแปลภาษาไทยโดยตรงสำหรับประโยคที่มีแนวโน้มเป็นภาษาอังกฤษ carry-over (เช่น `and was at a`, `recapturina`, `all aristocrats` ฯลฯ) ใน `ARGOS_SHORT_PHRASE_LOOKUP_TH` ของ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) และเพิ่มกลไกสืบค้นประมวลผล OCR ใน [main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) เมื่อวันที่ 2026-06-16
 15. **Configurable PaddleOCR Angle Classification & Vertical Line Grouping Fixes:** เพิ่มตัวเลือก `useAngleCls` เพื่อให้ผู้ใช้สามารถกำหนดเปิด/ปิด Angle Classification ของ PaddleOCR เพื่อหลีกเลี่ยงข้อความเอียงในโหมดมังงะ (ตั้งค่าเริ่มต้นเป็น false สำหรับ panel profile) พร้อมแก้ปัญหากลุ่มข้อความแนวตั้งในช่องคำพูดโดนแบ่งครึ่งเนื่องจากทับซ้อนแนวตั้ง โดยปรับปรุง `shouldGroupLines` ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts) ให้ข้าม side-by-side guard เมื่อ horizontal overlap >= 50% และขยายขนาดช่องไฟดักภาษาอังกฤษแนวตั้งเพิ่มขึ้นเป็น `3.2 * avgHeight` นอกจากนี้ยังเพิ่มคีย์แปลภาษาใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) และ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) สำหรับประโยคยอดฮิต เช่น `"but in any age"`, `"away with"`, `"getting"` ให้แสดงผลแปลไทยสนทนาที่เหมาะสม ในวันที่ 2026-06-19
-
-
-## 🛠️ Common Task Workflow (ทางลัดในการทำงาน)
-
-เมื่อคุณต้องแก้ปัญหาเหล่านี้ ให้ใช้ Workflow การเข้าถึงไฟล์ตามลำดับนี้:
-
-* **โจทย์ "OCR อ่านผิด / ผลลัพธ์เพี้ยน":**
-  1. ตรวจสอบ [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) (Orchestrator)
-  2. ตรวจสอบ [ocrTextNormalizer.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrTextNormalizer.ts) (Normalizer)
-  3. ดู [ocr_orchestrator_flow.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_orchestrator_flow.md) (Flow logic)
-
-* **โจทย์ "แปลภาษาผิด / ไม่ยอมใช้ Glossary":**
-  1. ดู [translationCoordinator.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationCoordinator.ts) (Coordinator)
-  2. ตรวจสอบ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) (Engine)
-  3. ตรวจสอบข้อมูลใน [useGlossaryStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useGlossaryStore.ts) (User Data)
-
-* **โจทย์ "แอปกระตุก / UI ค้าง":**
-  1. ดู [InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx) (Renderer)
-  2. ดู [ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) (Bridge/IPC Load)
+

@@ -792,7 +792,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                     ? ((layout.sharedCenterX - renderSourceLeft) * ocrScaleX) - (textRect.width * 0.5)
                     : 0;
                   const innerLeft = layout?.alignment === 'center'
-                    ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+                    ? (effectiveProfile === 'manga' || effectiveProfile === 'manhwa'
+                      ? centerOffset
+                      : Math.max(0, Math.min(textRect.width * 0.12, centerOffset)))
                     : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
                   const innerWidth = layout?.alignment === 'center'
                     ? textRect.width
@@ -872,7 +874,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                             height: textRect.height,
                             maxHeight: textRect.height,
                             minHeight: textRect.height,
-                            overflow: 'hidden',
+                            overflow: 'visible',
                             zIndex: 1000 + Math.max(1, Math.round(textRect.top)),
                             transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
                             transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,

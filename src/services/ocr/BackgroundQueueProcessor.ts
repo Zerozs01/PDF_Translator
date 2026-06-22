@@ -421,7 +421,10 @@ class BackgroundQueueProcessor {
               'panel',
               resolvedQualityProfile,
               job.engine,
-              canvas.width * canvas.height
+              canvas.width * canvas.height,
+              {
+                useAngleCls: job.useAngleCls !== undefined ? job.useAngleCls : options.useAngleCls
+              }
             );
 
             ocrResult = await ocrPromise;

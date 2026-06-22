@@ -332,7 +332,9 @@ const appendAutoOverlayElements = (
       : 0;
 
     const innerLeft = layoutEntry?.alignment === 'center'
-      ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+      ? (effectiveProfile === 'manga' || effectiveProfile === 'manhwa'
+        ? centerOffset
+        : Math.max(0, Math.min(textRect.width * 0.12, centerOffset)))
       : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
 
     const innerWidth = layoutEntry?.alignment === 'center'

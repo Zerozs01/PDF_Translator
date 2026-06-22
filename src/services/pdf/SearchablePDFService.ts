@@ -15,6 +15,7 @@ import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions, OCRPipelineProfile, OCRQualityProfile } from '../../types';
 import { dbService } from '../dbService';
 import { pdfjs } from './pdfjsWorker';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 
 export interface ProcessingProgress {
   stage: 'init' | 'rendering' | 'ocr' | 'text-layer' | 'saving' | 'complete';
@@ -343,7 +344,11 @@ export class SearchablePDFService {
               debugCollectDrops,
               pipelineProfile,
               resolvedQualityProfile,
-              options.engine
+              options.engine,
+              undefined,
+              {
+                useAngleCls: options.useAngleCls
+              }
             );
 
             try {
@@ -523,6 +528,7 @@ export class SearchablePDFService {
     pageSegMode?: number,
     pipelineProfile: OCRPipelineProfile = 'panel'
   ): Promise<OCRPageResult> {
+    const options = useOCRTextLayerStore.getState().options;
     return visionService.ocrForTextLayer(
       imageDataUrl,
       imageWidth,
@@ -532,7 +538,13 @@ export class SearchablePDFService {
       pageSegMode,
       undefined,
       false,
-      pipelineProfile
+      pipelineProfile,
+      undefined,
+      undefined,
+      undefined,
+      {
+        useAngleCls: options.useAngleCls
+      }
     );
   }
 }

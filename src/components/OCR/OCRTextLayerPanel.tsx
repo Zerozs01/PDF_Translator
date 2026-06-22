@@ -2001,27 +2001,27 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
         return {
-          maxSide: 20000,
-          maxPixels: 23_500_000,
+          maxSide: 21500,
+          maxPixels: 37_650_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
-            boostedMaxSide: 20000,
-            boostedMaxPixels: 34_000_000,
+            boostedMaxSide: 21500,
+            boostedMaxPixels: 37_950_000,
           },
         };
       }
       if (cjkPanelExternal) {
         return {
-          maxSide: 19000,
-          maxPixels: 28_800_000,
+          maxSide:  21500,
+          maxPixels:37_950_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
-            boostedMaxSide: 20000,
-            boostedMaxPixels: 28_000_000,
+            boostedMaxSide:  21500,
+            boostedMaxPixels: 37_950_000,
           },
         };
       }

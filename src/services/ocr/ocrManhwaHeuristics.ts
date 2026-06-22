@@ -336,7 +336,8 @@ export function processKoreanManhwaPipeline(
 
   for (const [, indices] of uf.groups()) {
     const groupItems = indices.map((i) => items[i]);
-    const sorted = sortGroupByReadingOrder(groupItems, readingDirection);
+    // Inside a single speech bubble / merged block, CJK/Korean text is read LTR (Left-to-Right)
+    const sorted = sortGroupByReadingOrder(groupItems, "ltr-ttb");
 
     const text = sorted
       .map((item) => item.box.text.trim())

@@ -571,7 +571,9 @@ export const scoreSourceLineReadability = (text: string): number => {
 
   const hasLatin = /[A-Za-z]/.test(normalized);
   if (!hasLatin) {
-    return normalized.length * 0.22;
+    // CJK/Thai text: use a higher multiplier so short-but-valid Korean phrases
+    // score safely above the 1.5 ghost-filter threshold (was 0.22, too conservative)
+    return normalized.length * 0.55;
   }
 
   const tokens = normalized.split(/\s+/g).filter(Boolean);
@@ -970,7 +972,7 @@ export const isLikelyGhostTranslatableLine = (
     || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2 && validWords.length > 0)
     || (width >= 320 && height >= 98 && area >= 32000)
   );
-  const noWordOversizedShortPhrase = validWords.length === 0
+  const noWordOversizedShortPhrase = !hasCjkOrThai && validWords.length === 0
     && wordCount >= 2
     && wordCount <= 6
     && compact.length <= 30
@@ -984,15 +986,26 @@ export const isLikelyGhostTranslatableLine = (
 
   const sparseLargePhrase = wordCount <= 4 && compact.length <= 24;
   const lowCoverageLargeBox = wordCoverage <= 0.26 && validWords.length > 0;
-  const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
-  if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox) {
+  const lowSignalLargeBox = avgConfidence <= 93 
+    || unknownCharRatio >= 0.24 
+    || (hasCjkOrThai ? readability <= 1.5 : readability <= 8.8);
+  // For Korean (Hangul) / Japanese (Kana) text with >= 2 script chars, skip this compound
+  // check and defer to the dedicated CJK-specific sub-filters below. Thai text is intentionally
+  // excluded — Thai OCR artifacts can also appear in large sparse border captures and should
+  // continue to be filtered. Without this bypass, valid Korean speech-bubble phrases were ghosted
+  // before the isCommonKoreanWord allowlist had a chance to protect them.
+  const hangulOrKanaInCompact = (compact.match(/[\uAC00-\uD7AF\u3040-\u30FF]/g) || []).length;
+  if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox
+      && !(hangulOrKanaInCompact >= 2)) {
     return true;
   }
 
   // New aggressive sparse SFX filter: large area but very few characters
   // Removed wordCoverage check because OCR sometimes creates word bboxes as large as the line bbox
-  const isSparseSfxBox = (area >= 12000 && compact.length <= 14 && (area / Math.max(1, compact.length)) >= 1200)
-    || (area >= 24000 && compact.length <= 22 && (area / Math.max(1, compact.length)) >= 1000);
+  const isSparseSfxBox = !hasCjkOrThai && (
+    (area >= 12000 && compact.length <= 14 && (area / Math.max(1, compact.length)) >= 1200)
+    || (area >= 24000 && compact.length <= 22 && (area / Math.max(1, compact.length)) >= 1000)
+  );
   const englishTokens = text.split(/\s+/g).map(t => t.replace(/[^A-Za-z\u00C0-\u024F]/g, '')).filter(t => t.length >= 2 && /[aeiouy\u00C0-\u024F]/i.test(t));
   const isNaturalDialogue = englishTokens.length >= 2
     || (englishTokens.length === 1 && englishTokens[0].length >= 3 && readability >= 1.0)
@@ -1006,7 +1019,7 @@ export const isLikelyGhostTranslatableLine = (
 
   if (hasCjkOrThai) {
     // Prevent dropping common Korean conversational words or SFX (e.g. "이런", "자", "녀석들", "쿠기사키", "제대로", etc.)
-    const isCommonKoreanWord = /^(?:이런|자|그|이|저|나|너|네|예|응|뭐|왜|안|못|잘|더|다|또|꾹|슥|헉|하|앗|어|오|엇|녀석|녀석들|쿠기사키|제대로|쪼여|쪼여라|크|윽|흐|음|읏|큭|읍|하앗|흐윽|후|휴|하아|하아아|으|으윽)$/.test(cjkCompact);
+    const isCommonKoreanWord = /^(?:이런|자|그|이|저|나|너|네|예|응|뭐|왜|안|못|잘|더|다|또|꾹|슥|헉|하|앗|어|오|엇|녀석|녀석들|쿠기사키|제대로|쪼여|쪼여라|크|윽|흐|음|읏|큭|읍|하앗|흐윽|후|휴|하아|하아아|으|으윽|진짜)$/.test(cjkCompact);
     if (isCommonKoreanWord) {
       return false;
     }

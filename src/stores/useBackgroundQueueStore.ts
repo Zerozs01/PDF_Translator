@@ -24,6 +24,7 @@ export interface BackgroundJob {
   ocrDpi?: number;
   ocrPageSegMode?: number | null;
   ocrQualityProfile?: 'fast' | 'balanced' | 'best';
+  useAngleCls?: boolean;
   startTime?: number;
   completedTime?: number;
 }

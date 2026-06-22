@@ -66,7 +66,93 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'you front': 'แกอยู่ข้างหน้า', 'you front!': 'แกอยู่ข้างหน้า!',
   'kniiiiiight': 'อัศวิน', 'kniiiiight': 'อัศวิน', 'kniiiiight!': 'อัศวิน!',
   'youre': 'คุณคือ', 'you\'re': 'คุณคือ',
-  'hes': 'เขาคือ', 'he\'s': 'เขาคือ',
+  'hes': 'เขาคือ', 'he\'s': 'เขาคือ', 'he s': 'เขาคือ', 'he s...': 'เขาคือ...', 'he s!': 'เขาคือ!',
+  'would': 'จะ', 'would...': 'จะ...', 'would!': 'จะ!',
+  'cen todosson': 'เซน โทดอสสัน',
+  // Spanish specific lookups to guarantee user-defined translation accuracy
+  'un regalo para la mente': 'ของขวัญสำหรับจิตใจของคุณ',
+  'un regalo para la mente.': 'ของขวัญสำหรับจิตใจของคุณ.',
+  'donde estudiar': 'ควรไปเรียนที่ไหนดี',
+  'donde estudiar...': 'ควรไปเรียนที่ไหนดี...',
+  'río muy variado': 'แม่น้ำที่มีความหลากหลายมาก',
+  'rio muy variado': 'แม่น้ำที่มีความหลากหลายมาก',
+  'río muy variado.': 'แม่น้ำที่มีความหลากหลายมาก.',
+  'rio muy variado.': 'แม่น้ำที่มีความหลากหลายมาก.',
+  'mente en la actualidad': 'จิตใจอยู่ในปัจจุบัน',
+  'mente en la ac tualidad': 'จิตใจอยู่ในปัจจุบัน',
+  'me estaba cambiando de': 'ฉันกำลังเปลี่ยนเสื้อผ้า',
+  'me estaba cam biando de': 'ฉันกำลังเปลี่ยนเสื้อผ้า',
+  'mente un regalo': 'ของขวัญสำหรับจิตใจของคุณ',
+  'mente un regalo.': 'ของขวัญสำหรับจิตใจของคุณ.',
+  'do de estudiar': 'ควรไปเรียนที่ไหนดี',
+  'do de estudiar...': 'ควรไปเรียนที่ไหนดี...',
+  'se usa comunmente en la actualidad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comunmente en la actualidad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'se usa comunmente en la actualdad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comunmente en la actualdad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'se usa comun mente en la actualidad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comun mente en la ac tualidad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comun mente en la ac tualidad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'se usa comun mente en la actualidad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'se usa comunmente en la ac tualidad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comunmente en la ac tualidad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'se usa comunmente en la ac tualdad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comunmente en la ac tualdad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'se usa comun mente en la ac tualdad': 'นิยมใช้กันทั่วไปในปัจจุบัน',
+  'se usa comun mente en la ac tualdad...': 'นิยมใช้กันทั่วไปในปัจจุบัน...',
+  'tengo que ir': 'ฉันจะต้องไป',
+  'tengo que ir...': 'ฉันจะต้องไป...',
+  'versión en': 'เวอร์ชันใน',
+  'version en': 'เวอร์ชันใน',
+  'una señal': 'ลางบอกเหตุ',
+  'una señal!': 'ลางบอกเหตุ!',
+  'una señal...': 'ลางบอกเหตุ...',
+  'una señal...!': 'ลางบอกเหตุ...!',
+  '¡una señal...!': 'ลางบอกเหตุ...!',
+  'novela romántica ambientada en la': 'นิยายรักโรแมนติกที่ดำเนินเรื่องใน...',
+  'novela romantica ambientada en la': 'นิยายรักโรแมนติกที่ดำเนินเรื่องใน...',
+  'película': 'ภาพยนตร์',
+  'pelicula': 'ภาพยนตร์',
+  'película??': 'ภาพยนตร์??',
+  'pelicula??': 'ภาพยนตร์??',
+  'departamento de inglés del': 'ครูสอนภาษาอังกฤษของ',
+  'departamento de ingles del': 'ครูสอนภาษาอังกฤษของ',
+  'qué': 'อะไร',
+  '¿qué?': 'อะไร',
+  'qué?': 'อะไร',
+  'suscribirme a un servicio de streaming': 'สมัครใช้บริการสตรีมมิ่ง',
+  'suscribir me a un servicio de streaming': 'สมัครใช้บริการสตรีมมิ่ง',
+  'suscribir me a un servicio de streaming...': 'สมัครใช้บริการสตรีมมิ่ง...',
+  'suscribirme a un servicio de streaming...': 'สมัครใช้บริการสตรีมมิ่ง...',
+  'tiempo prestado ya que': 'เวลาที่ยืมมานับตั้งแต่',
+  'de gran ayuda durante todo el festival': 'ให้ความช่วยเหลือเป็นอย่างดีตลอดงานเทศกาล',
+  'de gran ayuda durante todo el festival.': 'ให้ความช่วยเหลือเป็นอย่างดีตลอดงานเทศกาล.',
+  'incluso el disfraz de la professora bruja y el soporte para cartas': 'แม้กระทั่งชุดครูแม่มดและที่ใส่บัตร...',
+  'incluso el disfraz de la profesora bruja y el soporte para cartas': 'แม้กระทั่งชุดครูแม่มดและที่ใส่บัตร...',
+  'incluso el disfraz de la profesora bruja y el soporte para cartas...': 'แม้กระทั่งชุดครูแม่มดและที่ใส่บัตร...',
+  'comprar bocadillos': 'สำหรับแซนด์วิช',
+  'comprar bocadillos?': 'สำหรับแซนด์วิช?',
+  'comprar bocadillos...?': 'สำหรับแซนด์วิช...?',
+  'organizaron una fiesta': 'จัดงานปาร์ตี้',
+  'organizaron una fiesta!': 'จัดงานปาร์ตี้!',
+  'dieron una fiesta': 'จัดงานปาร์ตี้',
+  'ron una fiesta': 'จัดงานปาร์ตี้',
+  'también te gustan': 'คุณชอบพวกเขา',
+  'tambien te gustan': 'คุณชอบพวกเขา',
+  'bien te gustan': 'คุณชอบพวกเขา',
+  'en realidad como fui a una escuela secundaria y preparatoria solo para chicos': 'ที่จริงแล้ว ตั้งแต่ผมเรียนในโรงเรียนมัธยมชายล้วนและโรงเรียนเตรียมอุดมศึกษา...',
+  'en realidad como fui a una escuela secundaria y preparatoria solo para chicos...': 'ที่จริงแล้ว ตั้งแต่ผมเรียนในโรงเรียนมัธยมชายล้วนและโรงเรียนเตรียมอุดมศึกษา...',
+  'disfraz para el': 'ชุดแต่งกายสำหรับเขา',
+  'disfraz para': 'ชุดแต่งกายสำหรับ',
+  'fraz para el': 'ชุดแต่งกายสำหรับเขา',
+  'entonces': 'แล้ว',
+  'entonces...': 'แล้ว...',
+  'temperatura del aire': 'อุณหภูมิอากาศ',
+  'temperatura del aire.': 'อุณหภูมิอากาศ.',
+  'cambiando de': 'การเปลี่ยนจาก',
+  'seguida': 'แนะนำ',
+  'seguida.': 'แนะนำ.',
+  'guida.': 'แนะนำ.',
   'to be dead now': 'ต้องตายไปแล้ว', 'to be dead now!': 'ต้องตายไปแล้ว!',
   'get': 'เอา', 'get!': 'เอา!',
   'cum': 'แตก', 'cum!': 'แตก!', 'cum!!': 'แตก!!',
@@ -166,6 +252,16 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'cum miiinn nngg ggg!!': 'น้ำแตก-แล้วว วววว ววว!!',
   'cum miiinn nngg ggg!!?': 'น้ำแตก-แล้วว วววว ววว!!?',
   'cum miiinn nngg ggg!!??': 'น้ำแตก-แล้วว วววว ววว!!??',
+  'catch the brainwashing': 'จับการล้างสมองให้ได้',
+  'catch the brainwashing!': 'จับการล้างสมองให้ได้!',
+  'already': 'เรียบร้อยแล้ว',
+  'already...': 'เรียบร้อยแล้ว...',
+  'already?': 'เรียบร้อยแล้วเหรอ?',
+  'already!?': 'เรียบร้อยแล้วเหรอ!?',
+  'the nakchal temple': 'วิหารนัคชาล',
+  'nakchal temple': 'วิหารนัคชาล',
+  'eunpyeong': 'อึนพยอง',
+  '은평': 'อึนพยอง',
   'when youre wildly squirting with your nipples and clit totally erect': 'เมื่อคุณกำลังหลั่งน้ำออกมาอย่างรุนแรงโดยที่หัวนมและคลิตอริสแข็งตัวเต็มที่?',
   'when youre wildly squirting with your nipples and clit totally erect?': 'เมื่อคุณกำลังหลั่งน้ำออกมาอย่างรุนแรงโดยที่หัวนมและคลิตอริสแข็งตัวเต็มที่?',
   'lets have a oneonone battle': 'มาดวลกันแบบหนึ่งต่อหนึ่งเถอะ',
@@ -312,6 +408,18 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   '잠깐만': 'แป๊บนึงนะ',
   '빨리': 'รีบๆ',
   '조심해': 'ระวังด้วย',
+  // Korean specific manhwa dialogue overrides
+  '안지우면': 'ถ้าไม่ลบ',
+  '그래하는짓이 귀여우니넘어가준다': 'โอเค ฉันจะปล่อยผ่านไป เพราะการกระทำของคุณน่ารักดี',
+  '그래 하는 짓이 귀여우니 넘어가준다': 'โอเค ฉันจะปล่อยผ่านไป เพราะการกระทำของคุณน่ารักดี',
+  '뭔가이거 혼자할때보다 기분좋아': 'ด้วยเหตุผลบางอย่าง การทำแบบนี้... รู้สึกดีกว่าการทำคนเดียว',
+  '매일 다른 컨셉으로 ok': 'เปลี่ยนคอนเซปต์ใหม่ทุกวัน โอเคไหม?',
+  '미친색까뒤지기 싫으면': 'ไอ้สารเลว ถ้าไม่อยากตาย',
+  '미친색까 뒤지기 싫으면': 'ไอ้สารเลว ถ้าไม่อยากตาย',
+  '미친색까뒤지기싫으면': 'ไอ้สารเลว ถ้าไม่อยากตาย',
+  '또라이같은년이 지가보내놓고왜지랄이지': 'ยัยบ้าคนนั้นกำลังโวยวายทั้งที่ตัวเองเป็นคนส่งมาเหรอ?',
+  '또라이같은년이 지가보내놓고왜지랄이야': 'ยัยบ้าคนนั้นกำลังโวยวายทั้งที่ตัวเองเป็นคนส่งมาเหรอ?',
+  '또라이같은년이지가보내놓고왜지랄이지': 'ยัยบ้าคนนั้นกำลังโวยวายทั้งที่ตัวเองเป็นคนส่งมาเหรอ?',
 };
 
 
@@ -433,7 +541,7 @@ export async function translateBatchOffline(
       return normalizeJapaneseOcrNoiseForTranslation(cleanJapaneseOcrSpacing(text));
     }
     if (normalizedSource === 'es') {
-      return normalizeSpanishOcrNoiseForTranslation(text);
+      return normalizeSourceForTranslation(text, 'es');
     }
     if (normalizedSource === 'en') {
       return normalizeSourceForTranslation(text, 'en');
@@ -466,12 +574,16 @@ export async function translateBatchOffline(
     return normalizeOfflineSourceText(String(t || ''));
   });
 
-  const isArgosUntranslated = (result: string, targetLang: string): boolean => {
+  const isArgosUntranslated = (result: string, targetLang: string, sourceLang?: string): boolean => {
     const trimmed = result.trim();
     if (!trimmed) return false;
     if (targetLang === 'th') {
       const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
       const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
+      // Korean carryover: Argos returned Hangul instead of translating to Thai
+      if ((sourceLang === 'ko') && /[\uAC00-\uD7AF]/.test(trimmed) && !hasThaiChars) {
+        return true;
+      }
       return hasLatinLetters && !hasThaiChars;
     }
     return false;
@@ -526,7 +638,7 @@ export async function translateBatchOffline(
   for (let i = 0; i < indicesToTranslate.length; i++) {
     const originalIndex = indicesToTranslate[i];
     const text = directResults[i] || '';
-    const untranslated = isArgosUntranslated(text, normalizedTarget);
+    const untranslated = isArgosUntranslated(text, normalizedTarget, normalizedSource);
     console.log(`[HybridRetry] i=${originalIndex} src="${preparedTexts[i]}" argosOut="${text}" untranslated=${untranslated}`);
     if (!untranslated) continue;
 
@@ -566,7 +678,7 @@ export async function translateBatchOffline(
 
       retriesPending.forEach((retry, batchIdx) => {
         const retryResult = retryResults[batchIdx] ?? '';
-        const stillUntranslated = isArgosUntranslated(retryResult, normalizedTarget);
+        const stillUntranslated = isArgosUntranslated(retryResult, normalizedTarget, normalizedSource);
         console.log(`[HybridRetry] BATCHED ARGOS RETRY: index=${retry.index} cleaned="${retry.cleaned}" → "${retryResult}" stillUntranslated=${stillUntranslated}`);
         if (!stillUntranslated) {
           finalDirectTranslations[retry.index] = retryResult;

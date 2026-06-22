@@ -3782,7 +3782,9 @@ export const computeOverlayLayoutMap = (
     const shouldNormalize = effectiveDocumentProfile
       ? (allDocumentBody && group.length >= 2 && (maxFontSize - minFontSize) >= 0.18)
       : (group.length >= 2 && (isCenteredBlock || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind === 'comic-box') || (maxFontSize - minFontSize) >= 0.35));
-    const alignment: 'left' | 'center' = isCenteredBlock ? 'center' : 'left';
+    const alignment: 'left' | 'center' = ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind !== 'comic-box')
+      ? 'center'
+      : (isCenteredBlock ? 'center' : 'left');
     const sharedTextStartX = group.length >= 2
       ? (alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles ? minStartX : (effectiveDocumentProfile ? resolveMedian(startXs) : undefined))
       : undefined;
@@ -4073,7 +4075,7 @@ export const computeOverlayLayoutMap = (
         && compactTextLength(item.text) <= 36
         && ((item.bbox.x1 - item.bbox.x0) / Math.max(1, item.bbox.y1 - item.bbox.y0)) >= 1.35;
       const itemAlignment: 'left' | 'center' = singleLineCenterCandidate ? 'center' : alignment;
-      const itemSharedCenterX = singleLineCenterCandidate
+      const itemSharedCenterX = (singleLineCenterCandidate || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind !== 'comic-box' && group.length === 1))
         ? (item.bbox.x0 + item.bbox.x1) * 0.5
         : sharedCenterX;
       const itemSharedTextStartX = itemAlignment === 'left' ? sharedTextStartX : undefined;
