@@ -22,7 +22,10 @@ export const normalizeBenchmarkToken = (token: string): string =>
 
 export const isCjkLikeLanguage = (language: string): boolean => {
   const lang = String(language || '').toLowerCase();
-  return lang.includes('kor') || lang.includes('jpn') || lang.includes('chi') || lang.includes('tha');
+  return lang.includes('kor') || lang.includes('ko') ||
+         lang.includes('jpn') || lang.includes('ja') ||
+         lang.includes('chi') || lang.includes('zh') ||
+         lang.includes('tha') || lang.includes('thai') || lang.includes('th');
 };
 
 export const toBenchmarkTokens = (result: OCRPageResult): string[] => {
@@ -55,6 +58,8 @@ export const computeSuspiciousCount = (tokens: string[], language: string): numb
 
   let suspicious = 0;
 
+  const isThai = language.includes('tha') || language.includes('thai') || language.includes('th');
+
   for (const token of tokens) {
     const clean = token.trim();
     if (!clean) continue;
@@ -76,7 +81,7 @@ export const computeSuspiciousCount = (tokens: string[], language: string): numb
     if (hasSyllable && edgeJamoRe.test(clean) && clean.length <= 4) { suspicious += 1; continue; }
     
     // Thai-specific noise: String of consonants with no vowels/tones
-    if (language.includes('tha') && thaiConsoOnly.test(clean)) {
+    if (isThai && thaiConsoOnly.test(clean)) {
       if (clean.length === 1 && !['ก็','ณ','ธ'].includes(clean)) {
         suspicious += 1; continue;
       }
@@ -102,7 +107,7 @@ export const computeLexicalQuality = (tokens: string[], language: string): numbe
   if (tokens.length === 0) return 0;
   
   const isCjk = isCjkLikeLanguage(language);
-  const isThai = language.includes('tha');
+  const isThai = language.includes('tha') || language.includes('thai') || language.includes('th');
   const vowelLike = /[aeiouyаеёиоуыэюя]/i; // Includes Latin and Cyrillic vowels
   const thaiVowelTone = /[\u0E30-\u0E4E]/;
   const cjkChars = /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7A3]/;

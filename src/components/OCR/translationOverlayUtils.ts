@@ -3838,7 +3838,7 @@ export const computeOverlayLayoutMap = (
       || glossaryCriticalSourceCount >= 1
       || perLineComicFragmentSourceCount >= 1
     );
-    const shouldBlockSectionMergeForDocumentLike = (
+    const shouldBlockSectionMergeForDocumentLike = !hasBalloonMember && (
       documentLikeMergeSignalCount >= Math.max(2, Math.ceil(group.length * 0.5))
       || (
         effectiveProfile === 'adaptive'
@@ -3850,7 +3850,7 @@ export const computeOverlayLayoutMap = (
         )
       )
     );
-    const shouldBlockSectionMergeForTechnicalRows = (
+    const shouldBlockSectionMergeForTechnicalRows = !hasBalloonMember && (
       technicalDocumentSignalCount >= 1
       && (
         structuredDocumentSignalCount >= 1
@@ -3949,21 +3949,29 @@ export const computeOverlayLayoutMap = (
       const mergedTextContainsCjk = CJK_CHAR_REGEX.test(mergedText);
       const mergedSourceDrivenFont = sourceLineHeightMedian
         * (mergedTextContainsThai
-          ? (mergedStyleKind === 'comic-bubble' ? 1.14 : 1.08)
+          ? (mergedStyleKind === 'comic-bubble' ? 1.02 : 0.98)
           : mergedTextContainsCjk
             ? (mergedStyleKind === 'comic-bubble' ? 1.02 : 1)
             : 1)
         * Math.sqrt(group.length / Math.max(1, mergedTypography.estimatedLines));
       const mergedPromotionFactor = mergedStyleKind === 'comic-bubble'
-        ? (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 1.08 : 1.24)
-        : (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 1.05 : 1.12);
-      const promotedMergedFont = Math.min(
-        mergedStyleKind === 'comic-bubble' ? 32 : 28,
-        Math.max(
-          mergedTypography.fontSize,
-          mergedBaselineFont * mergedPromotionFactor,
-          mergedSourceDrivenFont * (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 0.94 : 1)
-        )
+        ? (mergedTextContainsThai ? 1.04 : (mergedTypography.estimatedLines >= 3 ? 1.08 : 1.24))
+        : (mergedTextContainsThai ? 1.02 : (mergedTypography.estimatedLines >= 3 ? 1.05 : 1.12));
+      const maxFontCap = mergedTextContainsThai
+        ? Math.max(14, Math.min(21, mergedBaselineFont * 1.12))
+        : (mergedStyleKind === 'comic-bubble' ? 32 : 28);
+       const promotedMergedFont = Math.min(
+        maxFontCap,
+        mergedTextContainsThai
+          ? Math.max(
+              10.5,
+              Math.min(mergedBaselineFont * 1.08, mergedTypography.fontSize)
+            )
+          : Math.max(
+              mergedTypography.fontSize,
+              mergedBaselineFont * mergedPromotionFactor,
+              mergedSourceDrivenFont * (mergedTextContainsThai && mergedTypography.estimatedLines >= 3 ? 0.94 : 1)
+            )
       );
       const mergedTypographyAdjusted = (() => {
         if (promotedMergedFont <= mergedTypography.fontSize + 0.01) return mergedTypography;
@@ -4009,8 +4017,10 @@ export const computeOverlayLayoutMap = (
       const mergedFillRatio = mergedTypographyAdjusted.contentHeight / Math.max(1, mergedHeightBudget);
       const mergeIsUseful = hasBalloonMember || (
         mergedTypographyAdjusted.estimatedLines >= 1
-        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
-        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52)
+        && (mergedTextContainsThai || (
+          mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
+          && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52)
+        ))
       );
       if (mergeIsUseful) {
         const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';

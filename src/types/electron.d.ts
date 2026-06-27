@@ -326,6 +326,11 @@ export interface ElectronAPI {
     hardReset: (payload: { emergencyPin: string }) => Promise<{ success: boolean; error?: string }>;
     setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) => Promise<{ success: boolean; error?: string }>;
   };
+
+  power?: {
+    preventSleep: () => Promise<number>;
+    allowSleep: () => Promise<boolean>;
+  };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }

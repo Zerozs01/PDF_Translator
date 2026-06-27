@@ -753,12 +753,13 @@ const PDFPageOverlay: React.FC<{
             }
 
             const layout = overlayLayoutByIndex.get(idx);
-            const isMaskOnlyLine = (layer && layer.userEdited) ? false : Boolean(layout?.hidden);
+            const isMaskOnlyLine = Boolean(layout?.hidden);
             if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
               return null;
             }
-            const renderText = (layer && layer.userEdited)
-              ? (translationPreviewMode === 'original' ? (layer.sourceText || layer.text) : layer.text)
+            const isTextEdited = layer && layer.userEdited && layer.text !== layer.sourceText && layer.text !== translationOverlayContext.translatedByIndex.get(idx);
+            const renderText = isTextEdited
+              ? (translationPreviewMode === 'original' ? (layer!.sourceText || layer!.text) : layer!.text)
               : (layout?.renderText !== undefined ? layout.renderText : translatedText);
             const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
             const styleKind = layout?.styleKind;
@@ -932,20 +933,26 @@ const PDFPageOverlay: React.FC<{
             const rotationDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
             const rotationOrigin = layer ? 'center center' : 'left top';
             const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+            const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
             const minFillRatio = typography.estimatedLines > 1
               ? (thaiComicLine ? 0.82 : 0.74)
               : (thaiComicLine ? 0.58 : 0.5);
-            const paintHeight = Math.min(
-              textRect.height * 1.25,
-              Math.max(
-                typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
-                textRect.height * minFillRatio
-              )
-            );
-            const paintOffsetTop = Math.max(
-              hasThaiText ? 1 : 0,
-              Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-            );
+            const naturalPaintHeight = typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad;
+            const paintHeight = isComicCenter
+              ? Math.min(textRect.height * 1.25, naturalPaintHeight)
+              : Math.min(
+                  textRect.height * 1.25,
+                  Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+                );
+            const thaiVisualShift = (isComicCenter && hasThaiText)
+              ? Math.round(maskRect.height * 0.035)
+              : 0;
+            const paintOffsetTop = isComicCenter
+              ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+              : Math.max(
+                  hasThaiText ? 1 : 0,
+                  Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+                );
 
             return (
               <React.Fragment key={`ocr-translation-line-${idx}`}>
@@ -1006,7 +1013,8 @@ const PDFPageOverlay: React.FC<{
                         fontWeight: layer?.bold ? 'bold' : overlayTextWeight,
                         boxSizing: 'border-box',
                         display: 'flex',
-                        alignItems: 'flex-start',
+                        alignItems: isComicCenter ? 'center' : 'flex-start',
+                        justifyContent: (effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && layout?.alignment === 'center' ? 'center' : 'flex-start',
                         textAlign: layout?.alignment === 'center' ? 'center' : 'left',
                         whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
                         wordBreak: 'normal',

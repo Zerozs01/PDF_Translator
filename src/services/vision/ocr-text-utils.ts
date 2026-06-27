@@ -16,11 +16,11 @@ export const hasLangCode = (lang: string, code: string): boolean =>
   splitLangCodes(lang).includes(code);
 
 export function isCjkLanguage(lang: string): boolean {
-  return splitLangCodes(lang).some(code => /^(kor|jpn|jpn_vert|chi_sim|chi_tra)$/.test(code));
+  return splitLangCodes(lang).some(code => /^(kor|jpn|jpn_vert|chi_sim|chi_tra|ko|ja|zh)$/.test(code));
 }
 
 export function isThaiLanguage(lang: string): boolean {
-  return hasLangCode(lang, 'tha');
+  return hasLangCode(lang, 'tha') || hasLangCode(lang, 'th') || hasLangCode(lang, 'thai');
 }
 
 export const normalizeOcrText = (text: string): string => {

@@ -7,4 +7,6 @@ export const OCR_ALGORITHM_VERSION = 215;
 // Tracks the raw PaddleOCR/EasyOCR engine output version.
 // Increment this when PaddleOCR model, quality profile logic, or bridge script changes
 // so that stale raw-engine cache can be detected and invalidated separately from TS dedup.
-export const OCR_RAW_VERSION = 1;
+// v2: Bumped to force invalidation of raw cache after PaddleX Thai OCR integration & config fixes.
+export const OCR_RAW_VERSION = 2;
+

@@ -38,22 +38,24 @@ export const buildLanguageScriptAllowance = (language: string): LanguageScriptAl
 
   const hasCode = (value: string): boolean => codes.includes(value);
   const hasPrefix = (value: string): boolean => codes.some((code) => code.startsWith(value));
-  const hasNonLatinRequested = hasCode('kor')
-    || hasCode('jpn')
-    || hasCode('jpn_vert')
-    || hasPrefix('chi')
-    || hasCode('tha')
-    || hasCode('rus');
+
+  const hasKorean = hasCode('kor') || hasCode('ko');
+  const hasJapanese = hasCode('jpn') || hasCode('jpn_vert') || hasCode('ja');
+  const hasChinese = hasPrefix('chi') || hasPrefix('zh');
+  const hasThai = hasCode('tha') || hasCode('th') || hasCode('thai');
+  const hasRussian = hasCode('rus') || hasCode('ru');
+
+  const hasNonLatinRequested = hasKorean || hasJapanese || hasChinese || hasThai || hasRussian;
   const englishRequested = hasCode('eng') || hasCode('en');
 
   return {
     // Keep Latin only when explicitly requested (eng) or when no non-Latin OCR language is selected.
     latin: englishRequested || !hasNonLatinRequested,
-    hangul: hasCode('kor'),
-    kana: hasCode('jpn') || hasCode('jpn_vert'),
-    han: hasPrefix('chi') || hasCode('jpn') || hasCode('jpn_vert'),
-    thai: hasCode('tha'),
-    cyrillic: hasCode('rus'),
+    hangul: hasKorean,
+    kana: hasJapanese,
+    han: hasChinese || hasJapanese,
+    thai: hasThai,
+    cyrillic: hasRussian,
   };
 };
 
@@ -118,9 +120,10 @@ export const isLineLikelyScriptMismatch = (
 
   const allowedRatio = stats.allowed / Math.max(1, stats.total);
   if (isStrictSingleLanguageScriptGate(allowance)) {
-    const minAllowedChars = allowance.latin ? 1 : 2;
-    const minAllowedRatio = allowance.latin ? 0.62 : 0.8;
-    const lowConfidenceThreshold = allowance.latin ? 76 : 82;
+    const isThai = allowance.thai;
+    const minAllowedChars = allowance.latin ? 1 : (isThai ? 1 : 2);
+    const minAllowedRatio = allowance.latin ? 0.62 : (isThai ? 0.50 : 0.8);
+    const lowConfidenceThreshold = allowance.latin ? 76 : (isThai ? 70 : 82);
     if (stats.allowed <= minAllowedChars && stats.disallowed >= 2) return true;
     if (allowedRatio < minAllowedRatio) return true;
     if (averageConfidence < lowConfidenceThreshold && stats.disallowed >= stats.allowed) return true;
@@ -165,6 +168,10 @@ export const isWordAllowedByScriptGate = (text: string, allowance: LanguageScrip
   if (strictGate) {
     const stats = collectScriptCharStats(normalized, allowance);
     if (stats.disallowed <= 0) return true;
+    if (allowance.thai) {
+      const allowedRatio = stats.allowed / Math.max(1, stats.total);
+      return allowedRatio >= 0.40;
+    }
     if (!allowance.latin && stats.allowed < 2) return false;
     if (stats.allowed <= 1) return false;
     const allowedRatio = stats.allowed / Math.max(1, stats.total);

@@ -84,6 +84,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   'auth:auto-login',
   'auth:hard-reset',
   'auth:set-mode',
+  // Power sleep prevention
+  'power:prevent-sleep',
+  'power:allow-sleep',
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -385,6 +388,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke<{ success: boolean; error?: string }>('auth:hard-reset', payload),
     setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) =>
       safeInvoke<{ success: boolean; error?: string }>('auth:set-mode', payload),
+  },
+
+  power: {
+    preventSleep: () => safeInvoke<number>('power:prevent-sleep'),
+    allowSleep: () => safeInvoke<boolean>('power:allow-sleep'),
   },
 
   // Message handling (restricted to allowed channels)

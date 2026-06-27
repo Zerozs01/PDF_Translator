@@ -605,7 +605,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
           </span>
         </div>
         <button
-          onClick={() => handleBuildLayers()}
+          onClick={() => handleBuildLayers(true)}
           className="p-1 rounded text-slate-600 hover:text-white transition-colors"
           title="Rebuild layers from OCR"
         >

@@ -132,58 +132,76 @@ class BackgroundQueueProcessor {
     void (async () => {
       console.log('[QueueProcessor] Starting background processing loop...');
       
-      while (true) {
-        // ตรวจสอบสถานะการ pause ของคิวภาพรวม
-        const isPaused = useBackgroundQueueStore.getState().isPaused;
-        if (isPaused) {
-          console.log('[QueueProcessor] Queue processor is paused globally. Exiting loop.');
-          break;
+      try {
+        if (window.electronAPI?.power?.preventSleep) {
+          await window.electronAPI.power.preventSleep();
         }
-
-        // หางานถัดไปในคิวที่มีลำดับความสำคัญสูงสุด
-        const job = useBackgroundQueueStore.getState().getNextPendingJob();
-        if (!job) {
-          console.log('[QueueProcessor] No pending jobs in queue. Exiting loop.');
-          break;
-        }
-
-        try {
-          this.activeJobId = job.id;
-          useBackgroundQueueStore.getState().updateJobStatus(job.id, 'processing', 'เริ่มกระบวนการ...');
-          this.currentAbortController = new AbortController();
-
-          console.log(`[QueueProcessor] Running Job ${job.id}: ${job.filename} (${job.type})`);
-          await this.processJob(job, this.currentAbortController.signal);
-          
-          useBackgroundQueueStore.getState().updateJobStatus(job.id, 'completed', 'เสร็จสมบูรณ์!');
-        } catch (error) {
-          // ดึงสถานะปัจจุบันของ Job จาก Store
-          const currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
-          
-          if (currentJob?.status === 'cancelled') {
-            console.log(`[QueueProcessor] Job ${job.id} was cancelled.`);
-          } else if (currentJob?.status === 'paused') {
-            console.log(`[QueueProcessor] Job ${job.id} was paused.`);
-          } else if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('canceled') || error.message.includes('aborted'))) {
-            // หากเกิดการ Abort (เช่น ตอนสลับไฟล์) แต่สถานะใน Store ยังไม่ได้อัปเดต ให้ตั้งค่าเป็น cancelled
-            console.log(`[QueueProcessor] Job ${job.id} aborted via signal.`);
-            useBackgroundQueueStore.getState().updateJobStatus(job.id, 'cancelled', 'ยกเลิกแล้ว');
-          } else {
-            console.error(`[QueueProcessor] Job ${job.id} failed with error:`, error);
-            const errMsg = error instanceof Error ? error.message : 'Unknown processor error';
-            useBackgroundQueueStore.getState().updateJobStatus(job.id, 'failed', `ล้มเหลว: ${errMsg}`);
-          }
-        } finally {
-          this.activeJobId = null;
-          this.currentAbortController = null;
-        }
-        
-        // หน่วงเวลาเล็กน้อยก่อนประมวลผลงานชิ้นถัดไป เพื่อให้ JS event loop ได้หายใจ
-        await new Promise(resolve => setTimeout(resolve, 160));
+      } catch (err) {
+        console.warn('[QueueProcessor] Failed to prevent sleep:', err);
       }
 
-      this.isProcessing = false;
-      console.log('[QueueProcessor] Background processing loop ended.');
+      try {
+        while (true) {
+          // ตรวจสอบสถานะการ pause ของคิวภาพรวม
+          const isPaused = useBackgroundQueueStore.getState().isPaused;
+          if (isPaused) {
+            console.log('[QueueProcessor] Queue processor is paused globally. Exiting loop.');
+            break;
+          }
+
+          // หางานถัดไปในคิวที่มีลำดับความสำคัญสูงสุด
+          const job = useBackgroundQueueStore.getState().getNextPendingJob();
+          if (!job) {
+            console.log('[QueueProcessor] No pending jobs in queue. Exiting loop.');
+            break;
+          }
+
+          try {
+            this.activeJobId = job.id;
+            useBackgroundQueueStore.getState().updateJobStatus(job.id, 'processing', 'เริ่มกระบวนการ...');
+            this.currentAbortController = new AbortController();
+
+            console.log(`[QueueProcessor] Running Job ${job.id}: ${job.filename} (${job.type})`);
+            await this.processJob(job, this.currentAbortController.signal);
+            
+            useBackgroundQueueStore.getState().updateJobStatus(job.id, 'completed', 'เสร็จสมบูรณ์!');
+          } catch (error) {
+            // ดึงสถานะปัจจุบันของ Job จาก Store
+            const currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
+            
+            if (currentJob?.status === 'cancelled') {
+              console.log(`[QueueProcessor] Job ${job.id} was cancelled.`);
+            } else if (currentJob?.status === 'paused') {
+              console.log(`[QueueProcessor] Job ${job.id} was paused.`);
+            } else if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('canceled') || error.message.includes('aborted'))) {
+              // หากเกิดการ Abort (เช่น ตอนสลับไฟล์) แต่สถานะใน Store ยังไม่ได้อัปเดต ให้ตั้งค่าเป็น cancelled
+              console.log(`[QueueProcessor] Job ${job.id} aborted via signal.`);
+              useBackgroundQueueStore.getState().updateJobStatus(job.id, 'cancelled', 'ยกเลิกแล้ว');
+            } else {
+              console.error(`[QueueProcessor] Job ${job.id} failed with error:`, error);
+              const errMsg = error instanceof Error ? error.message : 'Unknown processor error';
+              useBackgroundQueueStore.getState().updateJobStatus(job.id, 'failed', `ล้มเหลว: ${errMsg}`);
+            }
+          } finally {
+            this.activeJobId = null;
+            this.currentAbortController = null;
+          }
+          
+          // หน่วงเวลาเล็กน้อยก่อนประมวลผลงานชิ้นถัดไป เพื่อให้ JS event loop ได้หายใจ
+          await new Promise(resolve => setTimeout(resolve, 160));
+        }
+      } finally {
+        this.isProcessing = false;
+        console.log('[QueueProcessor] Background processing loop ended.');
+
+        try {
+          if (window.electronAPI?.power?.allowSleep) {
+            await window.electronAPI.power.allowSleep();
+          }
+        } catch (err) {
+          console.warn('[QueueProcessor] Failed to allow sleep:', err);
+        }
+      }
     })();
   }
 

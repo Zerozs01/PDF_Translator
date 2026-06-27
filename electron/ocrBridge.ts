@@ -256,7 +256,16 @@ function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
   
   const isWin = process.platform === 'win32';
   const sep = isWin ? ';' : ':';
-  const currentPath = baseEnv.PATH || '';
+  
+  let currentPath = '';
+  let pathKey = 'PATH';
+  for (const k of Object.keys(baseEnv)) {
+    if (k.toUpperCase() === 'PATH') {
+      currentPath = baseEnv[k] || '';
+      pathKey = k;
+      break;
+    }
+  }
   
   const priorityPaths: string[] = [];
   
@@ -319,7 +328,13 @@ function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
     }
   }
   
-  baseEnv.PATH = finalPaths.join(sep);
+  baseEnv[pathKey] = finalPaths.join(sep);
+  // Remove other casings of PATH to avoid duplicates
+  for (const k of Object.keys(baseEnv)) {
+    if (k.toUpperCase() === 'PATH' && k !== pathKey) {
+      delete baseEnv[k];
+    }
+  }
   
   return {
     ...baseEnv,
@@ -603,8 +618,22 @@ function killProcessPact(child: ReturnType<typeof spawn>, pid: number) {
   }, 2000);
 }
 
-function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
+function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error, daemonToKill?: BridgeDaemon): void {
   const daemon = bridgeDaemons.get(engine);
+
+  if (daemonToKill && daemon !== daemonToKill) {
+    // If the daemon we want to tear down is not the one currently in the bridgeDaemons map,
+    // it means it's an old/outdated daemon (e.g. timed out). We only terminate its child process,
+    // but do NOT modify the active daemon or clear the active daemon's queue/pending tasks.
+    if (!daemonToKill.child.killed) {
+      const pid = daemonToKill.child.pid;
+      if (pid) {
+        killProcessPact(daemonToKill.child, pid);
+      }
+    }
+    return;
+  }
+
   if (!daemon) return;
 
   bridgeDaemons.delete(engine);
@@ -760,12 +789,13 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
     }
   });
   child.on('error', (error) => {
-    teardownDaemon(engine, error);
+    teardownDaemon(engine, error, daemon);
   });
   child.on('close', (code, signal) => {
     teardownDaemon(
       engine,
-      new Error(`OCR daemon for ${engine} exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`)
+      new Error(`OCR daemon for ${engine} exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`),
+      daemon
     );
   });
 
@@ -790,7 +820,7 @@ async function requestDaemonInternal(
         const timeoutError = new Error(`OCR daemon request timed out after ${timeoutMs / 1000} seconds`);
         reject(timeoutError);
         // Forcefully terminate the daemon process to prevent it from hanging/blocking subsequent requests.
-        teardownDaemon(daemon.engine, timeoutError);
+        teardownDaemon(daemon.engine, timeoutError, daemon);
       }, timeoutMs);
     }
 
@@ -818,7 +848,8 @@ async function requestDaemonInternal(
       reject(error instanceof Error ? error : new Error(String(error)));
       teardownDaemon(
         daemon.engine,
-        error instanceof Error ? error : new Error(String(error))
+        error instanceof Error ? error : new Error(String(error)),
+        daemon
       );
     }
   });
@@ -1035,9 +1066,10 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
       },
     };
 
+    const daemon = ensureDaemon(engine);
     try {
       try {
-        response = await requestDaemon(engine, requestPayload);
+        response = await requestDaemon(engine, requestPayload, 90000);
       } catch (error) {
         if (isNoTextBoxesError(error)) {
           return emptyNoTextResponse;
@@ -1047,10 +1079,11 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
         }
         teardownDaemon(
           engine,
-          error instanceof Error ? error : new Error(String(error))
+          error instanceof Error ? error : new Error(String(error)),
+          daemon
         );
         try {
-          response = await requestDaemon(engine, requestPayload);
+          response = await requestDaemon(engine, requestPayload, 90000);
         } catch (retryError) {
           if (isNoTextBoxesError(retryError)) {
             return emptyNoTextResponse;
@@ -1137,19 +1170,21 @@ export async function runExternalOcrRaw(payload: {
       height: Math.round(payload.imageHeight),
     };
 
+    const daemon = ensureDaemon(engine);
     let response: ExternalOcrBridgeResponse;
     try {
-      response = await requestDaemon(engine, requestPayload);
+      response = await requestDaemon(engine, requestPayload, 90000);
     } catch (error) {
       if (!isRecoverableDaemonError(error)) {
         throw error;
       }
       teardownDaemon(
         engine,
-        error instanceof Error ? error : new Error(String(error))
+        error instanceof Error ? error : new Error(String(error)),
+        daemon
       );
       try {
-        response = await requestDaemon(engine, requestPayload);
+        response = await requestDaemon(engine, requestPayload, 90000);
       } catch (retryError) {
         throw retryError;
       }

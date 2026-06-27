@@ -6616,20 +6616,26 @@ export default function App() {
       const rotationDeg = estimateLineRotationDeg(line);
       const rotationRad = (rotationDeg * Math.PI) / 180;
       const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+      const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
       const minFillRatio = typography.estimatedLines > 1
         ? (thaiComicLine ? 0.82 : 0.74)
         : (thaiComicLine ? 0.58 : 0.5);
-      const paintHeight = Math.min(
-        textRect.height * 1.8,
-        Math.max(
-          typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
-          textRect.height * minFillRatio
-        )
-      );
-      const paintOffsetTop = Math.max(
-        hasThaiText ? 1 : 0,
-        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-      );
+      const naturalPaintHeight = typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad;
+      const paintHeight = isComicCenter
+        ? Math.min(textRect.height * 1.8, naturalPaintHeight)
+        : Math.min(
+            textRect.height * 1.8,
+            Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+          );
+      const thaiVisualShift = (isComicCenter && hasThaiText)
+        ? Math.round(maskRect.height * 0.035)
+        : 0;
+      const paintOffsetTop = isComicCenter
+        ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+        : Math.max(
+            hasThaiText ? 1 : 0,
+            Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+          );
 
       ctx.save();
       if (rotationDeg !== 0) {

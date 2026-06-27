@@ -6,6 +6,9 @@ import json
 import math
 import numpy as np
 import os
+os.environ["FLAGS_enable_pir_api"] = "0"
+os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+os.environ["FLAGS_use_mkldnn"] = "0"
 import socket
 import subprocess
 import sys
@@ -3861,7 +3864,10 @@ def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any
 
     while True:
         try:
-            return ocr.predict(input=image_path, **adaptive_kwargs), adaptive_kwargs
+            res = ocr.predict(input=image_path, **adaptive_kwargs)
+            if not isinstance(res, list):
+                res = list(res)
+            return res, adaptive_kwargs
         except TypeError as exc:
             message = str(exc)
             lowered = message.lower()
@@ -3882,7 +3888,10 @@ def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any
                 break
 
     try:
-        return ocr.predict(input=image_path), {}
+        res = ocr.predict(input=image_path)
+        if not isinstance(res, list):
+            res = list(res)
+        return res, {}
     except TypeError as exc:
         last_error = exc
 
@@ -4027,6 +4036,22 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
                 pass
     except Exception:
         pass
+
+    if lang == "th":
+        from paddlex import create_pipeline
+        device_str = "cpu"
+        try:
+            import paddle
+            if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+                device_str = "gpu:0"
+        except Exception:
+            pass
+            
+        yaml_path = os.path.join(os.path.dirname(__file__), "paddle_thai_ocr.yaml")
+        print(f"[ocrBridge] Initializing PaddleX Thai OCR Pipeline on {device_str} using {yaml_path}...", file=sys.stderr)
+        ocr = create_pipeline(pipeline=yaml_path, device=device_str)
+        PADDLE_OCR_CACHE[cache_key] = ocr
+        return ocr
 
     from paddleocr import PaddleOCR  # type: ignore
 
@@ -5189,6 +5214,8 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         t0 = time.perf_counter()
         if hasattr(ocr, "predict"):
             raw = ocr.predict(str(img_path))
+            if not isinstance(raw, list):
+                raw = list(raw)
         else:
             use_cls = getattr(ocr, "use_angle_cls", False)
             if hasattr(args, "use_angle_cls") and args.use_angle_cls is not None:

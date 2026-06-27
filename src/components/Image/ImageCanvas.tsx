@@ -825,20 +825,26 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                   const rotationDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
                   const rotationOrigin = layer ? 'center center' : 'left top';
                   const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+                  const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
                   const minFillRatio = typography.estimatedLines > 1
                     ? (thaiComicLine ? 0.82 : 0.74)
                     : (thaiComicLine ? 0.58 : 0.5);
-                  const paintHeight = Math.min(
-                    textRect.height,
-                    Math.max(
-                      typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
-                      textRect.height * minFillRatio
-                    )
-                  );
-                  const paintOffsetTop = Math.max(
-                    hasThaiText ? 1 : 0,
-                    Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-                  );
+                  const naturalPaintHeight = typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad;
+                  const paintHeight = isComicCenter
+                    ? Math.min(textRect.height, naturalPaintHeight)
+                    : Math.min(
+                        textRect.height,
+                        Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+                      );
+                  const thaiVisualShift = (isComicCenter && hasThaiText)
+                    ? Math.round(maskRect.height * 0.035)
+                    : 0;
+                  const paintOffsetTop = isComicCenter
+                    ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+                    : Math.max(
+                        hasThaiText ? 1 : 0,
+                        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+                      );
 
                   const widthRatio = textRect.width / Math.max(1, baseWidth);
                   const heightRatio = paintHeight / Math.max(1, baseHeight);
@@ -895,7 +901,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                               padding: `${typography.padY + extraTopPad}px ${typography.padX}px ${typography.padY + extraBottomPad}px ${typography.padX}px`,
                               boxSizing: 'border-box',
                               display: 'flex',
-                              alignItems: 'flex-start',
+                              alignItems: isComicCenter ? 'center' : 'flex-start',
+                              justifyContent: ((layout?.effectiveProfile || overlayLayoutProfile) === 'manga' || (layout?.effectiveProfile || overlayLayoutProfile) === 'manhwa') && layout?.alignment === 'center' ? 'center' : 'flex-start',
                               color: layerTextColor,
                               fontSize: typography.fontSize,
                               lineHeight: typography.lineHeight,

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net, powerSaveBlocker } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -91,6 +91,7 @@ process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.
 
 let win: BrowserWindow | null
 let disposeArgosTranslateRuntime: (() => void) | null = null
+let powerSaveBlockerId: number | null = null
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
@@ -99,7 +100,7 @@ function createWindow() {
   Menu.setApplicationMenu(null)
   
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
+    icon: path.join(process.env.VITE_PUBLIC || '', 'image/Pdf_Translator.png'),
     show: false,
     width: 1440,
     height: 960,
@@ -113,6 +114,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: false, // Prevent Chromium from throttling timers when backgrounded
     },
   })
 
@@ -163,6 +165,10 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
+  if (powerSaveBlockerId !== null) {
+    powerSaveBlocker.stop(powerSaveBlockerId)
+    powerSaveBlockerId = null
+  }
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
   void disposeAllStagedPdfExportJobs()
@@ -173,6 +179,11 @@ app.on('before-quit', () => {
 // Last-resort cleanup: ensure all child processes are killed even if
 // 'before-quit' or 'window-all-closed' fail to run (e.g. Vite HMR restart).
 process.on('exit', () => {
+  if (powerSaveBlockerId !== null) {
+    try {
+      powerSaveBlocker.stop(powerSaveBlockerId)
+    } catch (e) {}
+  }
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
 })
@@ -183,6 +194,9 @@ process.on('exit', () => {
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 // Suppress AMD DirectComposition VideoProcessorGetOutputExtension error spam
 app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
+// Disable renderer backgrounding and background timer throttling to keep background queue tasks running when window is backgrounded or system is locked
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -277,6 +291,24 @@ app.whenReady().then(() => {
       console.error('[PDF Export Protocol] Error:', error);
       return new Response('Internal Server Error', { status: 500 });
     }
+  });
+
+  // Power management IPC handlers
+  ipcMain.handle('power:prevent-sleep', () => {
+    if (powerSaveBlockerId === null) {
+      powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+      console.log(`[Main] Started powerSaveBlocker (ID: ${powerSaveBlockerId}) to prevent app suspension.`);
+    }
+    return powerSaveBlockerId;
+  });
+
+  ipcMain.handle('power:allow-sleep', () => {
+    if (powerSaveBlockerId !== null) {
+      powerSaveBlocker.stop(powerSaveBlockerId);
+      console.log(`[Main] Stopped powerSaveBlocker (ID: ${powerSaveBlockerId}).`);
+      powerSaveBlockerId = null;
+    }
+    return true;
   });
 
   // 🔒 Advanced Security Phase 7: Auth IPC Handlers

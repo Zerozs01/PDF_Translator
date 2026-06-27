@@ -342,21 +342,27 @@ const appendAutoOverlayElements = (
       : Math.max(1, textRect.width - innerLeft);
 
     const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+    const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layoutEntry?.alignment === 'center';
     const minFillRatio = typo.estimatedLines > 1
       ? (thaiComicLine ? 0.82 : 0.74)
       : (thaiComicLine ? 0.58 : 0.5);
 
-    const paintHeight = Math.min(
-      textRect.height * 1.25,
-      Math.max(
-        typo.contentHeight + typo.padY * 2 + extraTopPad + extraBottomPad,
-        textRect.height * minFillRatio
-      )
-    );
-    const paintOffsetTop = Math.max(
-      hasThaiText ? 1 * sy : 0,
-      Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-    );
+    const naturalPaintHeight = typo.contentHeight + typo.padY * 2 + extraTopPad + extraBottomPad;
+    const paintHeight = isComicCenter
+      ? Math.min(textRect.height * 1.25, naturalPaintHeight)
+      : Math.min(
+          textRect.height * 1.25,
+          Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+        );
+    const thaiVisualShift = (isComicCenter && hasThaiText)
+      ? Math.round(maskRect.height * 0.035)
+      : 0;
+    const paintOffsetTop = isComicCenter
+      ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+      : Math.max(
+          hasThaiText ? 1 * sy : 0,
+          Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+        );
 
     const overlayText = typo.forceSingleLine ? normalizeOverlayInlineText(renderText) : renderText;
     const rotDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
@@ -394,6 +400,10 @@ const appendAutoOverlayElements = (
     innerEl.style.lineHeight = String(typo.lineHeight);
     innerEl.style.fontFamily = overlayFontFamily;
     innerEl.style.fontWeight = textWeight;
+    const layoutProfile = layoutEntry?.effectiveProfile || pageConfig.overlayLayoutProfile;
+    const isMangaOrManhwa = layoutProfile === 'manga' || layoutProfile === 'manhwa';
+    innerEl.style.alignItems = isComicCenter ? 'center' : 'flex-start';
+    innerEl.style.justifyContent = isMangaOrManhwa && layoutEntry?.alignment === 'center' ? 'center' : 'flex-start';
     innerEl.style.textAlign = layoutEntry?.alignment === 'center' ? 'center' : 'left';
     
     // ตั้งค่า word-break และ white-space เพื่อแก้ปัญหาวรรณยุกต์ภาษาไทยซ้อนหรือถูกดีดลงบรรทัดใหม่
