@@ -298,6 +298,13 @@ export interface ElectronAPI {
     }) => Promise<any>;
     writeTempImage: (payload: { imageData: Uint8Array | ArrayBuffer; imageMimeType: string }) => Promise<{ imagePath: string }>;
     deleteTempImage: (payload: { imagePath: string }) => Promise<{ ok: boolean }>;
+    getGpuInfo: () => Promise<{
+      gpus: string[];
+      hasDirectML: boolean;
+      hasCuda: boolean;
+      mode: 'CUDA' | 'DirectML' | 'CPU';
+      gpuVendor: 'intel' | 'amd' | 'nvidia' | 'unknown';
+    }>;
   };
 
   models: {

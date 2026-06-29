@@ -835,6 +835,39 @@ export const UploadScreen: React.FC = () => {
   }, []);
 
   const [activePage, setActivePage] = useState<SidebarPage>('home');
+  const [gpuInfo, setGpuInfo] = useState<{
+    gpus: string[];
+    hasDirectML: boolean;
+    hasCuda: boolean;
+    mode: 'CUDA' | 'DirectML' | 'CPU';
+    gpuVendor: 'intel' | 'amd' | 'nvidia' | 'unknown';
+  } | null>(null);
+
+  // Returns vendor-aware mode label: "Intel DirectML", "AMD DirectML", "CUDA", or "CPU"
+  const getGpuModeLabel = (info: typeof gpuInfo): string => {
+    if (!info) return 'CPU';
+    if (info.mode === 'DirectML') {
+      if (info.gpuVendor === 'intel') return 'Intel DirectML';
+      if (info.gpuVendor === 'amd') return 'AMD DirectML';
+      return 'DirectML';
+    }
+    return info.mode;
+  };
+
+  useEffect(() => {
+    let active = true;
+    if (window.electronAPI?.ocr?.getGpuInfo) {
+      window.electronAPI.ocr.getGpuInfo()
+        .then((info) => {
+          if (active) setGpuInfo(info);
+        })
+        .catch((err) => console.error('Failed to get GPU info:', err));
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileOpenError, setFileOpenError] = useState<FileOpenErrorEntry | null>(null);
   const [activeDocumentMenuId, setActiveDocumentMenuId] = useState<number | null>(null);
@@ -1633,6 +1666,50 @@ export const UploadScreen: React.FC = () => {
               {/* Security Settings */}
               <SecuritySettings />
 
+              {/* Hardware Acceleration GPU Status */}
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
+                <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                  <Cpu size={12} className="text-slate-400" />
+                  Hardware Acceleration / GPU Status
+                </label>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Acceleration Mode</span>
+                    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                      gpuInfo && gpuInfo.mode !== 'CPU'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    }`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                      {getGpuModeLabel(gpuInfo)}
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-slate-400 shrink-0">Detected GPUs</span>
+                    <div className="text-slate-200 text-right truncate font-mono text-[10px]" title={gpuInfo?.gpus.join(', ')}>
+                      {gpuInfo?.gpus.join(', ') || 'None'}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">DirectML Support</span>
+                    <span className={`text-[10px] font-semibold ${gpuInfo?.hasDirectML ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {gpuInfo?.hasDirectML ? 'Available' : 'Unavailable'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">CUDA Support</span>
+                    <span className={`text-[10px] font-semibold ${gpuInfo?.hasCuda ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {gpuInfo?.hasCuda ? 'Available' : 'Unavailable'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 leading-normal border-t border-white/5 pt-2">
+                    {gpuInfo && gpuInfo.mode !== 'CPU'
+                      ? 'GPU Acceleration is active. The system will leverage DirectML/CUDA for OCR processing.'
+                      : 'Running on CPU. If you have an AMD/Intel/NVIDIA GPU, make sure you ran setup correctly to enable hardware acceleration.'}
+                  </p>
+                </div>
+              </div>
+
               {isThaiTargetLanguage && (
                 <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
                   <label className="text-[11px] font-semibold text-slate-300">Overlay Font</label>
@@ -2113,6 +2190,36 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
           </details>
+
+          {/* Hardware Acceleration GPU Status */}
+          <div className="mt-2 mb-6 border-t border-white/6 pt-5">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">
+              Hardware Acceleration
+            </label>
+            <div className="rounded-xl border border-white/8 bg-[#13151a]/92 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-slate-300">GPU Acceleration</span>
+                <span className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                  gpuInfo && gpuInfo.mode !== 'CPU'
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                }`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  {getGpuModeLabel(gpuInfo)}
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-400 leading-normal">
+                <div className="font-semibold text-slate-200 truncate" title={gpuInfo?.gpus.join(', ')}>
+                  Device: {gpuInfo?.gpus[0] || 'Loading...'}
+                </div>
+                <div className="mt-1 text-slate-500 leading-relaxed">
+                  {gpuInfo && gpuInfo.mode !== 'CPU'
+                    ? `Running on ${getGpuModeLabel(gpuInfo)} engine. GPU tasks will run at max speed.`
+                    : 'Running in CPU fallback mode. Install GPU dependencies for faster speeds.'}
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Background Queue Monitor */}
           <div className="mt-4 border-t border-white/6 pt-5">

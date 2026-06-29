@@ -112,21 +112,5 @@
     "react-dom": "^19.2.3",
     "react-pdf": "^10.2.0",
     "zustand": "^5.0.9"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@parcel/watcher",
-      "@tailwindcss/oxide",
-      "@tailwindcss/postcss",
-      "better-sqlite3",
-      "better-sqlite3-multiple-ciphers",
-      "electron",
-      "electron-builder",
-      "electron-rebuild",
-      "electron-winstaller",
-      "esbuild",
-      "lzma-native",
-      "playwright"
-    ]
   }
 }

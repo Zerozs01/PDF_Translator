@@ -4977,19 +4977,23 @@ def _detect_torch_device() -> Tuple[Any, bool, bool]:
     - is_directml=True means device is a torch_directml device object
       (must be injected after EasyOCR Reader init, NOT passed as constructor arg)
     """
-    # 1. Check for DirectML (High priority for Windows/AMD stability — no CUDA DLLs)
+    gpu_vendor = os.environ.get("OCR_GPU_VENDOR", "").strip().lower()
+
+    # 1. Check for DirectML (High priority for Windows/AMD/Intel stability — no CUDA DLLs)
     if os.environ.get("OCR_USE_DIRECTML", "0") == "1":
         try:
             import torch_directml  # type: ignore
             if torch_directml.is_available():
-                return torch_directml.device(), False, True  # gpu=False to skip CUDA init
+                device = _select_directml_device(torch_directml, gpu_vendor)
+                return device, False, True  # gpu=False to skip CUDA init
         except Exception:
             pass
 
     try:
         import torch_directml  # type: ignore
         if torch_directml.is_available():
-            return torch_directml.device(), False, True
+            device = _select_directml_device(torch_directml, gpu_vendor)
+            return device, False, True
     except Exception:
         pass
 
@@ -5015,6 +5019,41 @@ def _detect_torch_device() -> Tuple[Any, bool, bool]:
         return "cpu", False, False
 
 
+def _select_directml_device(torch_directml: Any, gpu_vendor: str) -> Any:
+    """
+    Selects the best DirectML device based on gpu_vendor hint.
+    - For Intel: try to find Intel device by enumerating device descriptions.
+    - For AMD/others: default device() (index 0).
+    Returns a torch_directml device object.
+    """
+    try:
+        device_count = torch_directml.device_count() if hasattr(torch_directml, "device_count") else 1
+    except Exception:
+        device_count = 1
+
+    if device_count <= 1 or gpu_vendor not in ("intel", "amd"):
+        # Single device or unspecified vendor — use default
+        return torch_directml.device()
+
+    # Try to enumerate and find the right vendor device
+    for idx in range(device_count):
+        try:
+            desc_fn = getattr(torch_directml, "device_name", None) or getattr(torch_directml, "get_device_name", None)
+            desc = str(desc_fn(idx) if desc_fn else "").lower()
+            if gpu_vendor == "intel" and "intel" in desc:
+                print(f"[ocrBridge] DirectML: selected Intel device index {idx}: {desc}", file=sys.stderr)
+                return torch_directml.device(idx)
+            if gpu_vendor == "amd" and ("amd" in desc or "radeon" in desc):
+                print(f"[ocrBridge] DirectML: selected AMD device index {idx}: {desc}", file=sys.stderr)
+                return torch_directml.device(idx)
+        except Exception:
+            continue
+
+    # Fallback: default device (index 0)
+    print(f"[ocrBridge] DirectML: vendor '{gpu_vendor}' device not found by name, using default device()", file=sys.stderr)
+    return torch_directml.device()
+
+
 def get_easyocr_reader(langs: List[str]) -> Any:
     cache_key = tuple(langs)
     cached = EASYOCR_READER_CACHE.get(cache_key)
@@ -5022,6 +5061,7 @@ def get_easyocr_reader(langs: List[str]) -> Any:
         return cached
 
     import easyocr  # type: ignore
+    gpu_vendor = os.environ.get("OCR_GPU_VENDOR", "").strip().lower()
     device, use_gpu, is_directml = _detect_torch_device()
 
     if is_directml:
@@ -5030,6 +5070,7 @@ def get_easyocr_reader(langs: List[str]) -> Any:
         # with 'aten::_thnn_fused_lstm_cell'.
         # Solution: Use Hybrid Approach. Keep detector (CRAFT, CNN-only) on DirectML GPU
         # and keep recognizer (CRNN, LSTM) on CPU.
+        # This applies to both AMD and Intel GPUs via DirectML.
         reader = easyocr.Reader(langs, gpu=False, quantize=False, verbose=False)
         try:
             reader.detector = reader.detector.to(device)
@@ -5046,7 +5087,8 @@ def get_easyocr_reader(langs: List[str]) -> Any:
                     reader.device = old_device
             
             reader.detect = custom_detect
-            print(f"[ocrBridge] EasyOCR using Hybrid GPU-CPU setup (Detector: {device}, Recognizer: CPU)", file=sys.stderr)
+            vendor_label = gpu_vendor.upper() if gpu_vendor else "DirectML"
+            print(f"[ocrBridge] EasyOCR using Hybrid GPU-CPU setup (Detector: {device} [{vendor_label}], Recognizer: CPU)", file=sys.stderr)
         except Exception as e:
             print(f"[WARN] Failed to setup EasyOCR Hybrid DirectML mode: {e}", file=sys.stderr)
             reader.device = "cpu"
@@ -5487,6 +5529,26 @@ def cleanup_memory() -> None:
         import paddle
         if paddle.device.is_compiled_with_cuda():
             paddle.device.cuda.empty_cache()
+    except Exception:
+        pass
+    # P3: Flush DirectML buffers for Intel/AMD GPUs to prevent memory fragmentation.
+    # torch_directml does not have empty_cache() but synchronizing all pending ops
+    # allows the driver to reclaim tile-mode memory before the next OCR request.
+    try:
+        import torch_directml  # type: ignore
+        if torch_directml.is_available():
+            # Synchronize all DML devices to flush queued GPU operations
+            device_count = torch_directml.device_count() if hasattr(torch_directml, "device_count") else 1
+            for idx in range(device_count):
+                try:
+                    dml_device = torch_directml.device(idx)
+                    # Create and immediately destroy a tiny tensor to force a DML sync point
+                    import torch
+                    t = torch.zeros(1, device=dml_device)
+                    del t
+                except Exception:
+                    pass
+            gc.collect()
     except Exception:
         pass
 

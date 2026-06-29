@@ -54,6 +54,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'fs:import-file',
   // OCR
   'ocr:get-engine-status',
+  'ocr:get-gpu-info',
   'ocr:prewarm-engine',
   'ocr:write-temp-image',
   'ocr:delete-temp-image',
@@ -280,6 +281,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   ocr: {
     getEngineStatus: () => safeInvoke('ocr:get-engine-status'),
+    getGpuInfo: () => safeInvoke('ocr:get-gpu-info'),
     prewarmEngine: (payload: { engine: string; language?: string }) =>
       safeInvoke('ocr:prewarm-engine', payload),
     cancelExternal: (payload?: { engine?: string }) =>

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Generic Intel GPU Support & Automated Offline Translation Setup
+
+- **Generic Intel GPU Auto-detection**: Enhanced `bootstrap_ocr_env.ps1` to detect generic Intel GPUs (e.g. `Intel(R) Graphics` on Mini PCs) and automatically set up DirectML GPU acceleration via ONNX Runtime & PyTorch-DirectML.
+- **Hardware Acceleration Monitor Widget**: Added a premium hardware acceleration status card on the homepage settings and sidebar panels to display the active GPU model (e.g. `Intel(R) Graphics`), mode (`DirectML` or `CUDA`), and package availability status.
+- **Strict CUDA Verification**: Corrected standard CPU-build library false-positives by strictly limiting CUDA mode activation to devices with active NVIDIA graphics adapters, preventing false-positive CUDA reporting on AMD or Intel graphics controllers.
+- **Automated Argos Translation Setup**: Integrated `argostranslate` installation and automatic downloading of default offline translation model pairs (`en->th`, `ko->en`, `es->en`) directly into the `pnpm install` / `ocr:bootstrap` lifecycle to make the app fully ready for offline translation out-of-the-box.
+
 ### Fixed — Offline Translation Hardening
 
 - **Offline all-pages translation** now accepts any cached OCR page instead of being blocked by a single selected-engine gate when page OCR already exists in memory or cache.

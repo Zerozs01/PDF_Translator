@@ -1638,6 +1638,132 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('ocr:get-gpu-info', async () => {
+    try {
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+
+      let gpuNames: string[] = [];
+      if (process.platform === 'win32') {
+        try {
+          const { stdout } = await execAsync('powershell -Command "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"', { windowsHide: true });
+          gpuNames = stdout.split('\n').map((x: string) => x.trim()).filter(Boolean);
+          if (gpuNames.length === 0) {
+            const { stdout: wmiStdout } = await execAsync('powershell -Command "Get-WmiObject Win32_VideoController | Select-Object -ExpandProperty Name"', { windowsHide: true });
+            gpuNames = wmiStdout.split('\n').map((x: string) => x.trim()).filter(Boolean);
+          }
+        } catch (err) {
+          console.warn('[Main] Failed to query GPU names via PowerShell:', err);
+        }
+      }
+
+      if (gpuNames.length === 0) {
+        try {
+          const gpuInfo = await app.getGPUInfo('basic');
+          if (gpuInfo?.gpuDevice) {
+            gpuNames = gpuInfo.gpuDevice.map((device: any) => device.deviceString || device.vendorString || 'Unknown GPU');
+          }
+        } catch (err) {
+          console.warn('[Main] Failed to query GPU info via Electron getGPUInfo:', err);
+        }
+      }
+
+      // Filter out duplicate or empty values
+      gpuNames = Array.from(new Set(gpuNames.map(g => g.trim()))).filter(Boolean);
+
+      const hasNvidia = gpuNames.some(g => g.toLowerCase().includes('nvidia'));
+      const hasIntel = gpuNames.some(g => g.toLowerCase().includes('intel'));
+      const hasAmd = gpuNames.some(g => {
+        const lower = g.toLowerCase();
+        return lower.includes('amd') || lower.includes('radeon');
+      });
+
+      // Determine primary GPU vendor (priority: nvidia > amd > intel)
+      let gpuVendor: 'nvidia' | 'amd' | 'intel' | 'unknown' = 'unknown';
+      if (hasNvidia) {
+        gpuVendor = 'nvidia';
+      } else if (hasAmd) {
+        gpuVendor = 'amd';
+      } else if (hasIntel) {
+        gpuVendor = 'intel';
+      }
+
+      // Find local virtualenv path to check if DirectML / CUDA is installed
+      let hasDirectML = false;
+      let hasCuda = false;
+
+      const seen = new Set<string>();
+      const searchRoots = [
+        process.cwd(),
+        app.getAppPath(),
+        path.resolve(app.getAppPath(), '..'),
+        path.resolve(__dirname, '..'),
+        path.dirname(process.execPath),
+        process.resourcesPath
+      ];
+      if (typeof (global as any).__DEV_PROJECT_ROOT__ !== 'undefined' && (global as any).__DEV_PROJECT_ROOT__) {
+        searchRoots.push((global as any).__DEV_PROJECT_ROOT__);
+      }
+
+      for (const root of searchRoots) {
+        if (!root) continue;
+        const resolvedRoot = path.resolve(root);
+        if (seen.has(resolvedRoot)) continue;
+        seen.add(resolvedRoot);
+
+        for (const venvDir of ['.venv-ocr', '.venv']) {
+          const venvPath = path.join(resolvedRoot, venvDir);
+          if (fs.existsSync(venvPath)) {
+            const sitePackagesPath = path.join(venvPath, 'Lib', 'site-packages');
+            if (fs.existsSync(sitePackagesPath)) {
+              if (fs.existsSync(path.join(sitePackagesPath, 'torch_directml')) || 
+                  fs.existsSync(path.join(sitePackagesPath, 'onnxruntime_directml')) || 
+                  fs.existsSync(path.join(sitePackagesPath, 'onnxruntime-directml'))) {
+                hasDirectML = true;
+              }
+              if (fs.existsSync(path.join(sitePackagesPath, 'torch', 'cuda'))) {
+                hasCuda = true;
+              }
+            }
+          }
+        }
+      }
+
+      // Check environment override
+      if (process.env.OCR_USE_DIRECTML === '1') {
+        hasDirectML = true;
+      }
+      if (process.env.OCR_USE_GPU === '1') {
+        hasCuda = true;
+      }
+
+      let mode: 'CUDA' | 'DirectML' | 'CPU' = 'CPU';
+      if (hasCuda && hasNvidia) {
+        mode = 'CUDA';
+      } else if (hasDirectML) {
+        mode = 'DirectML';
+      }
+
+      return {
+        gpus: gpuNames.length > 0 ? gpuNames : ['CPU Display Adapter'],
+        hasDirectML,
+        hasCuda: hasCuda && hasNvidia, // Only report CUDA as active/available if Nvidia GPU is present
+        mode,
+        gpuVendor,  // 'intel' | 'amd' | 'nvidia' | 'unknown' — used by UI to show "Intel DirectML" etc.
+      };
+    } catch (error) {
+      console.error('ocr:get-gpu-info error:', error);
+      return {
+        gpus: ['Unknown GPU'],
+        hasDirectML: false,
+        hasCuda: false,
+        mode: 'CPU' as const,
+        gpuVendor: 'unknown' as const,
+      };
+    }
+  });
+
   ipcMain.handle('ocr:prewarm-engine', async (_, payload: { engine: string; language?: string }) => {
     if (!payload || typeof payload !== 'object' || !isValidString(payload.engine)) {
       throw new Error('Invalid OCR prewarm payload');
