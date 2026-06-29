@@ -78,7 +78,7 @@ async function run() {
     console.warn('[postinstall:electron] Native rebuild hit a Windows file lock while updating better-sqlite3');
   }
 
-  console.warn('[postinstall:electron] Native rebuild still hit a Windows file lock after retries. Skipping the rebuild so npm install can continue; rerun npm install after closing any Electron/Node process that may be holding better_sqlite3.node.');
+  console.warn('[postinstall:electron] Native rebuild still hit a Windows file lock after retries. Skipping the rebuild so pnpm install can continue; rerun pnpm install after closing any Electron/Node process that may be holding better_sqlite3.node.');
   return 0;
 }
 
