@@ -735,6 +735,9 @@ const PDFPageOverlay: React.FC<{
             if (hiddenLineIndexes.has(idx)) {
               return null;
             }
+            const layout = overlayLayoutByIndex.get(idx);
+            const isMaskOnlyLine = Boolean(layout?.hidden);
+
             const layer = currentPageLayers.find(l => l.lineIndex === idx);
             const translatedText = (() => {
               if (!layer) {
@@ -747,20 +750,21 @@ const PDFPageOverlay: React.FC<{
               if (hasTranslation) return layer.text;
               return translationOverlayContext.translatedByIndex.get(idx) || layer.text;
             })();
-            if (!translatedText) return null;
-            if (!layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
+
+            if (!translatedText && !(isMaskOnlyLine && layout?.preserveMaskWhenHidden)) {
+              return null;
+            }
+            if (translatedText && !layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
               return null;
             }
 
-            const layout = overlayLayoutByIndex.get(idx);
-            const isMaskOnlyLine = Boolean(layout?.hidden);
             if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
               return null;
             }
             const isTextEdited = layer && layer.userEdited && layer.text !== layer.sourceText && layer.text !== translationOverlayContext.translatedByIndex.get(idx);
             const renderText = isTextEdited
               ? (translationPreviewMode === 'original' ? (layer!.sourceText || layer!.text) : layer!.text)
-              : (layout?.renderText !== undefined ? layout.renderText : translatedText);
+              : (layout?.renderText !== undefined ? layout.renderText : (translatedText || ''));
             const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
             const styleKind = layout?.styleKind;
             const isDocumentLikeOverlay = styleKind

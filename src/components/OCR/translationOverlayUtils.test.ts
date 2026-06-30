@@ -1410,8 +1410,8 @@ describe('translationOverlayUtils typography', () => {
     expect(layoutMap.get(0)?.renderText).toBe('นั่น เป็นไปได้แน่นอน.... คิดว่าไง ริฟรีด');
     expect(layoutMap.get(1)?.hidden).toBe(true);
     expect(layoutMap.get(2)?.hidden).toBe(true);
-    expect(layoutMap.get(1)?.preserveMaskWhenHidden).not.toBe(true);
-    expect(layoutMap.get(2)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(1)?.preserveMaskWhenHidden).toBe(true);
+    expect(layoutMap.get(2)?.preserveMaskWhenHidden).toBe(true);
     expect(layoutMap.get(0)?.mergedBBox).toEqual({ x0: 150, y0: 100, x1: 348, y1: 178 });
     expect(layoutMap.get(0)?.mergedMaskBBox).toEqual({ x0: 140, y0: 100, x1: 360, y1: 178 });
   });

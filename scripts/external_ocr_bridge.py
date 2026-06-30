@@ -4939,7 +4939,7 @@ def normalize_easy_yolo_response(payload: Any, width: int, height: int) -> Dict[
     return make_text_result(fallback_lines, fallback_words)
 
 
-def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
+def normalize_easyocr_output(raw_result: Any, scale_x: float = 1.0, scale_y: float = 1.0) -> Dict[str, Any]:
     lines: List[Dict[str, Any]] = []
     words: List[Dict[str, Any]] = []
     if not isinstance(raw_result, list):
@@ -4948,7 +4948,8 @@ def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
     for item in raw_result:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
-        points = item[0]
+        # Scale back the points to match original image size
+        points = [[float(pt[0]) * scale_x, float(pt[1]) * scale_y] for pt in item[0]]
         bbox = bbox_from_points(points)
         quad = normalize_quad_points(points)
         angle_deg = angle_deg_from_points(points)
@@ -5109,9 +5110,16 @@ def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
     langs = select_easyocr_langs(args.language)
     reader = get_easyocr_reader(langs)
     started_at = time.perf_counter()
-    result = reader.readtext(args.image, detail=1, paragraph=False)
+
+    # Downscale image before inference to prevent CPU stalling on large images.
+    # 3.5MP cap (~1920x1820) is sufficient for Thai/Latin OCR accuracy.
+    # resize_image_if_large returns scale factors to map coords back to original size.
+    EASYOCR_CPU_MAX_PIXELS = 3_500_000
+    img_working, scale_x, scale_y = resize_image_if_large(args.image, max_pixels=EASYOCR_CPU_MAX_PIXELS)
+
+    result = reader.readtext(img_working, detail=1, paragraph=False)
     cleaned = cleanup_external_result(
-        normalize_easyocr_output(result),
+        normalize_easyocr_output(result, scale_x, scale_y),
         "easyocr",
         args.pipeline_profile,
         args.width,

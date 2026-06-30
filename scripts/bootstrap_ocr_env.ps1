@@ -367,9 +367,21 @@ if ($Engines -contains 'easyocr') {
 Write-Host '[ocr:bootstrap] Ensuring argostranslate is installed for offline translation'
 Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'argostranslate') -Step 'Installing argostranslate'
 
-Write-Host '[ocr:bootstrap] Enforcing final numpy<2 and opencv<4.10 downgrade for PaddleOCR/EasyOCR compatibility'
+Write-Host '[ocr:bootstrap] Enforcing final numpy<2, opencv<4.10, and DirectML overrides for compatibility'
 Get-Process | Where-Object { $_.Path -like "*$venvPath*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
+
+# DirectML fix: argostranslate or other packages might have pulled in CPU onnxruntime, overriding onnxruntime-directml.
+# Re-enforce onnxruntime-directml over CPU build for non-NVIDIA GPUs.
+if ($UseGPU -and $DetectedGpuVendor -ne 'nvidia') {
+  Write-Host '[ocr:bootstrap] Final DirectML check: Re-enforcing onnxruntime-directml over CPU build'
+  $oldPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & $pythonExe -m pip uninstall -y onnxruntime --quiet
+  $ErrorActionPreference = $oldPreference
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', '--force-reinstall', 'paddle2onnx==1.3.1', 'onnxruntime-directml') -Step 'Re-enforcing onnxruntime-directml'
+}
+
 Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'numpy<2', 'opencv-python-headless<4.10', 'opencv-python<4.10') -Step 'Enforcing final numpy<2'
 
 $argosInstallScript = Join-Path $PSScriptRoot 'argos_install_pair.py'

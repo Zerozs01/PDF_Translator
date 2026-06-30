@@ -127,6 +127,10 @@ const LeftSidebar = React.lazy(() => import('./components/Layout/LeftSidebar').t
 const ImageCanvas = React.lazy(() => import('./components/Image/ImageCanvas').then(module => ({ default: module.ImageCanvas })));
 import { visionService } from './services/vision/VisionService';
 import { dbService } from './services/dbService';
+import { useTranslationLoadingState } from './hooks/useTranslationLoadingState';
+import { useDownloadMenuState } from './hooks/useDownloadMenuState';
+import { useExportCacheHydration } from './hooks/useExportCacheHydration';
+import { useExportOcrResolvers } from './hooks/useExportOcrResolvers';
 import './types/electron.d';
 import { SplitViewToggle } from './components/Viewer/Toolbar';
 import { WorkspaceContainer } from './components/Viewer/WorkspaceContainer';
@@ -5139,20 +5143,32 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
-  const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
+  const {
+    isDownloadMenuOpen,
+    setIsDownloadMenuOpen,
+    downloadScopeSelection,
+    setDownloadScopeSelection,
+    downloadModeSelection,
+    setDownloadModeSelection,
+    selectedExportEngine,
+    setSelectedExportEngine,
+    isDownloadingResult,
+    setIsDownloadingResult,
+    exportCacheHydrationTick,
+    setExportCacheHydrationTick,
+    downloadMenuRef,
+  } = useDownloadMenuState();
   const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
-  const [downloadScopeSelection, setDownloadScopeSelection] = useState<DownloadScope>('current');
-  const [downloadModeSelection, setDownloadModeSelection] = useState<DownloadContentMode>('original');
-  const [selectedExportEngine, setSelectedExportEngine] = useState<OCREngine | null>(null);
-  const [isDownloadingResult, setIsDownloadingResult] = useState(false);
-  const downloadMenuRef = React.useRef<HTMLDivElement | null>(null);
-  const [translationStartTime, setTranslationStartTime] = useState<number | null>(null);
+  const translationStartTime = useTranslationLoadingState({
+    isAiProcessing,
+    isOfflineProcessing,
+    isDownloadingResult,
+    setLoadingState,
+  });
   const [popupOcrQualityMode, setPopupOcrQualityMode] = useState<'high' | 'fast'>(() => {
     const saved = localStorage.getItem('pdf_translator_ocr_profile');
     return (saved === 'high' || saved === 'fast') ? saved : 'fast';
   });
-  const [exportCacheHydrationTick, setExportCacheHydrationTick] = useState(0);
-
   const popupQualityToProfile = (mode: 'high' | 'fast'): OCRQualityProfile =>
     mode === 'high' ? 'balanced' : 'fast';
 
@@ -5185,125 +5201,41 @@ export default function App() {
     }
   }, [isDownloadMenuOpen, ocrOptions.engine, ocrOptions.ocrQualityProfile, selectedExportEngine, popupOcrQualityMode]);
 
-  useEffect(() => {
-    if (!isDownloadMenuOpen) return undefined;
-    let canceled = false;
-    const engine = selectedExportEngine || (ocrOptions.engine || 'paddleocr') as OCREngine;
+  const { hydrateExportCachesForDownload } = useExportCacheHydration({
+    isDownloadMenuOpen,
+    selectedExportEngine,
+    defaultEngine: (ocrOptions.engine || 'paddleocr') as OCREngine,
+    totalPages,
+    fileType,
+    documentId,
+    ensureDocumentId,
+    setExportCacheHydrationTick,
+  });
 
-    void (async () => {
-      const docId = await ensureDocumentId().catch(() => null);
-      if (!docId || canceled) return;
-
-      const pageNumbers = fileType === 'pdf'
-        ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
-        : [1];
-
-      await Promise.all(pageNumbers.map(async (pageNum) => {
-        try {
-          const ocrState = useOCRTextLayerStore.getState();
-          if (!ocrState.ocrByPageEngine.get(pageNum)?.has(engine)) {
-            const cached = await dbService.getOCR(docId, pageNum, engine);
-            if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
-              cached.pageNumber = pageNum;
-              ocrState.setPageOCRForEngine(pageNum, engine, cached);
-            }
-          }
-
-          const translationMap = useOCRTextLayerStore.getState().translationCacheByPage.get(pageNum);
-          if (!translationMap || translationMap.size === 0) {
-            const rows = await dbService.getTranslationCachePage(docId, pageNum);
-            for (const row of rows) {
-              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-                continue;
-              }
-              const normalizedEntry: OCRTranslationCacheEntry = {
-                ...row,
-                pageNum,
-                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-                translationMode: row.translationMode === 'official'
-                  ? 'official'
-                  : row.translationMode === 'adaptive'
-                    ? 'adaptive'
-                    : row.translationMode === 'manhwa'
-                      ? 'manhwa'
-                      : 'manga',
-                translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
-                translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
-              };
-              useOCRTextLayerStore.getState().setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
-            }
-          }
-        } catch (err) {
-          console.warn(`[ExportHydrate] Failed for page ${pageNum}:`, err);
-        }
-      }));
-
-      if (!canceled) {
-        setExportCacheHydrationTick((tick) => tick + 1);
-      }
-    })();
-
-    return () => {
-      canceled = true;
-    };
-  }, [isDownloadMenuOpen, selectedExportEngine, ocrOptions.engine, totalPages, fileType, documentId]);
-
-  useEffect(() => {
-    if (isAiProcessing || isOfflineProcessing) {
-      if (translationStartTime === null) {
-        setTranslationStartTime(Date.now());
-      }
-    } else {
-      setTranslationStartTime(null);
-    }
-  }, [isAiProcessing, isOfflineProcessing, translationStartTime]);
+  const {
+    resolveModelScopedOriginalPageOCR,
+    hasModelScopedCachedOCR,
+    getModelScopedCachedPageNumbers,
+    resolveModelScopedPagesForExport,
+    resolveTranslatedEntryForExport,
+    resolveLineBBoxForExport,
+    buildTranslatedPageOCRForExport,
+    resolveVisibleOverlayExportSize,
+  } = useExportOcrResolvers({
+    currentPage,
+    fileType,
+    totalPages,
+    targetLanguage,
+    translationMode,
+    defaultEngine: (ocrOptions.engine || 'paddleocr') as OCREngine,
+  });
 
   // Sync global loading state in useUIStore reactively
   const ocrProgress = useOCRTextLayerStore((state) => state.progress);
 
   useEffect(() => {
-    if (isAiProcessing) {
-      setLoadingState({
-        active: true,
-        message: 'กำลังแปลภาษาด้วย AI (Gemini)...',
-      });
-    } else if (isDownloadingResult) {
-      setLoadingState({
-        active: true,
-        message: 'กำลังรวบรวมไฟล์และส่งออก (Export)...',
-      });
-    } else {
-      setLoadingState(null);
-    }
-  }, [isAiProcessing, isOfflineProcessing, isDownloadingResult, setLoadingState]);
-
-  useEffect(() => {
     void hydrateGeminiApiKey();
   }, [hydrateGeminiApiKey]);
-
-  useEffect(() => {
-    if (!isDownloadMenuOpen) return undefined;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const targetNode = event.target as Node | null;
-      if (downloadMenuRef.current && targetNode && !downloadMenuRef.current.contains(targetNode)) {
-        setIsDownloadMenuOpen(false);
-      }
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsDownloadMenuOpen(false);
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleEscape);
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleEscape);
-    };
-  }, [isDownloadMenuOpen]);
 
   const handleBackToHome = () => {
     visionService.cancelAll('Project closed');
@@ -5746,62 +5678,7 @@ export default function App() {
     return contextFiltered;
   }
 
-  function resolveModelScopedOriginalPageOCR(
-    ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
-    pageNum: number,
-    selectedEngine: OCREngine
-  ): OCRPageResult | undefined {
-    const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
-    if (engineScoped) return engineScoped;
 
-    const pageScopedEntries = ocrState.ocrByPageEngine.get(pageNum);
-    if (pageScopedEntries && pageScopedEntries.size > 0) {
-      const fallbackEntry = Array.from(pageScopedEntries.entries())[0]?.[1];
-      if (fallbackEntry) return fallbackEntry;
-    }
-
-    const fallback = ocrState.allPagesOCR.get(pageNum);
-    return fallback || undefined;
-  }
-
-  const hasModelScopedCachedOCR = (
-    ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
-    pageNum: number,
-    selectedEngine: OCREngine
-  ): boolean => {
-    const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
-    if (engineScoped) return true;
-
-    const fallback = ocrState.allPagesOCR.get(pageNum);
-    if (fallback && (fallback.ocrEngine || 'paddleocr') === selectedEngine) {
-      return true;
-    }
-    return false;
-  };
-
-  const getModelScopedCachedPageNumbers = (engineOverride?: OCREngine): number[] => {
-    const ocrState = useOCRTextLayerStore.getState();
-    const selectedEngine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
-    const pages = new Set<number>();
-
-    // ตรวจจาก ocrByPageEngine (primary store)
-    ocrState.ocrByPageEngine.forEach((byEngine, pageNum) => {
-      if (byEngine.has(selectedEngine)) {
-        pages.add(pageNum);
-      }
-    });
-
-    // fallback: ตรวจจาก allPagesOCR ด้วย
-    ocrState.allPagesOCR.forEach((result, pageNum) => {
-      if (!pages.has(pageNum)) {
-        if (result && (result.ocrEngine || 'paddleocr') === selectedEngine) {
-          pages.add(pageNum);
-        }
-      }
-    });
-
-    return Array.from(pages).sort((a, b) => a - b);
-  };
 
   const requestAutoOCRFromPanel = (scope: AutoOCRScope): Promise<boolean> => {
     if (typeof window === 'undefined') return Promise.resolve(false);
@@ -5890,226 +5767,7 @@ export default function App() {
     return refreshedPages.length > 0;
   };
 
-  const hydrateExportCachesForDownload = async (engineOverride?: OCREngine): Promise<void> => {
-    const docId = await ensureDocumentId().catch(() => null);
-    if (!docId) return;
 
-    const engine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
-    const pageNumbers = fileType === 'pdf'
-      ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
-      : [1];
-
-    await Promise.all(pageNumbers.map(async (pageNum) => {
-      try {
-        const ocrState = useOCRTextLayerStore.getState();
-        if (!ocrState.ocrByPageEngine.get(pageNum)?.has(engine)) {
-          const cached = await dbService.getOCR(docId, pageNum, engine);
-          if (cached && cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
-            cached.pageNumber = pageNum;
-            ocrState.setPageOCRForEngine(pageNum, engine, cached);
-          }
-        }
-
-        const translationMap = useOCRTextLayerStore.getState().translationCacheByPage.get(pageNum);
-        if (!translationMap || translationMap.size === 0) {
-          const rows = await dbService.getTranslationCachePage(docId, pageNum);
-          for (const row of rows) {
-            if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-              continue;
-            }
-            const normalizedEntry: OCRTranslationCacheEntry = {
-              ...row,
-              pageNum,
-              ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-              translationMode: row.translationMode === 'official'
-                ? 'official'
-                : row.translationMode === 'adaptive'
-                  ? 'adaptive'
-                  : row.translationMode === 'manhwa'
-                    ? 'manhwa'
-                    : 'manga',
-              translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
-              translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
-            };
-            useOCRTextLayerStore.getState().setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
-          }
-        }
-      } catch (err) {
-        console.warn(`[ExportHydrate] Failed for page ${pageNum}:`, err);
-      }
-    }));
-  };
-
-  const resolveModelScopedPagesForExport = (scope: DownloadScope, engineOverride?: OCREngine): Array<{ pageNum: number; ocr: OCRPageResult }> => {
-    const ocrState = useOCRTextLayerStore.getState();
-    const selectedEngine = engineOverride || (ocrOptions.engine || 'paddleocr') as OCREngine;
-    const targetPages = scope === 'current'
-      ? [currentPage]
-      : (fileType === 'pdf'
-        ? Array.from({ length: Math.max(1, totalPages) }, (_, index) => index + 1)
-        : [1]);
-
-    return targetPages
-      .map((pageNum) => {
-        const ocr = resolveModelScopedOriginalPageOCR(ocrState, pageNum, selectedEngine);
-        return ocr ? { pageNum, ocr } : null;
-      })
-      .filter((item): item is { pageNum: number; ocr: OCRPageResult } => Boolean(item));
-  };
-
-  const resolveTranslatedEntryForExport = (
-    pageNum: number,
-    pageOCR: OCRPageResult,
-    selectedEngine: OCREngine
-  ): OCRTranslationCacheEntry | undefined => {
-    // ทำไมถึงเขียนแบบนี้: หากหน้าดังกล่าวไม่มีบรรทัดข้อความใดๆ จาก OCR (lines.length === 0)
-    // ให้จำลอง (mock) cache entry เปล่าส่งกลับไปทันที เพื่อป้องกันไม่ให้หน้านี้โดนข้าม (skip)
-    // หายไปจากการส่งออกไฟล์ PDF (ทำให้หน้าเอกสารขาด) และช่วยให้ผ่านการแจ้งเตือนคำแปลขาดในหน้าแรก
-    if (!pageOCR.lines || pageOCR.lines.length === 0) {
-      const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
-      return {
-        key: `mock-empty-${pageNum}-${selectedEngine}`,
-        pageNum,
-        ocrEngine: selectedEngine,
-        ocrLanguage: pageOCR.language || 'eng',
-        sourceLanguage: 'en',
-        targetLanguage: normalizedTargetLanguage,
-        translationMode: translationMode as any,
-        translatorEngine: 'google' as any,
-        sourceFingerprint: buildOCRSourceFingerprint(pageOCR, selectedEngine),
-        translatedByIndex: [],
-        translatedText: '',
-        lineCount: 0,
-        groupCount: 0,
-        createdAt: Date.now(),
-        width: pageOCR.width,
-        height: pageOCR.height,
-      };
-    }
-
-    const ocrState = useOCRTextLayerStore.getState();
-    const pageMap = ocrState.translationCacheByPage.get(pageNum);
-    if (!pageMap || pageMap.size === 0) return undefined;
-
-    const normalizedTargetLanguage = normalizeTranslationLanguage(targetLanguage, 'th');
-    const sourceFingerprint = buildOCRSourceFingerprint(pageOCR, selectedEngine);
-    const entries = Array.from(pageMap.values())
-      .filter((entry) => {
-        if (!hasCurrentOCRTranslationCacheVersion(entry.key)) return false;
-        if (entry.ocrEngine !== selectedEngine) return false;
-        return normalizeTranslationLanguage(entry.targetLanguage, 'th') === normalizedTargetLanguage;
-      })
-      .sort((a, b) => b.createdAt - a.createdAt);
-    if (entries.length === 0) return undefined;
-
-    const exactFingerprintMatches = entries.filter((entry) => entry.sourceFingerprint === sourceFingerprint);
-    const fingerprintPool = exactFingerprintMatches.length > 0 ? exactFingerprintMatches : entries;
-
-    const activeKey = ocrState.activeTranslationKeyByPage.get(pageNum);
-    if (activeKey) {
-      const active = pageMap.get(activeKey);
-      if (active && fingerprintPool.some((entry) => entry.key === active.key)) {
-        return active;
-      }
-    }
-
-    const withContent = fingerprintPool.filter(
-      (entry) => entry.translatedByIndex.length > 0 || Boolean(entry.translatedText?.trim())
-    );
-    return withContent[0] || fingerprintPool[0];
-  };
-
-  const resolveLineBBoxForExport = (line: OCRLine): BBox | undefined => {
-    const rawBBox = line?.bbox;
-    const rawValid = rawBBox
-      && Number(rawBBox.x1) > Number(rawBBox.x0)
-      && Number(rawBBox.y1) > Number(rawBBox.y0);
-    if (rawValid) {
-      return {
-        x0: Number(rawBBox.x0),
-        y0: Number(rawBBox.y0),
-        x1: Number(rawBBox.x1),
-        y1: Number(rawBBox.y1),
-      };
-    }
-
-    const validWords = (Array.isArray(line?.words) ? line.words : [])
-      .map((word) => word?.bbox)
-      .filter((bbox): bbox is BBox => Boolean(
-        bbox
-        && Number(bbox.x1) > Number(bbox.x0)
-        && Number(bbox.y1) > Number(bbox.y0)
-      ));
-
-    if (validWords.length === 0) return undefined;
-
-    return {
-      x0: Math.min(...validWords.map((bbox) => Number(bbox.x0))),
-      y0: Math.min(...validWords.map((bbox) => Number(bbox.y0))),
-      x1: Math.max(...validWords.map((bbox) => Number(bbox.x1))),
-      y1: Math.max(...validWords.map((bbox) => Number(bbox.y1))),
-    };
-  };
-
-  const buildTranslatedPageOCRForExport = (
-    pageOCR: OCRPageResult,
-    translatedEntry: OCRTranslationCacheEntry
-  ): OCRPageResult => {
-    const translatedByIndex = new Map<number, string>(
-      translatedEntry.translatedByIndex.map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
-    );
-
-    const translatedLines = (pageOCR.lines || []).map((line, lineIndex) => {
-      const translatedText = translatedByIndex.get(lineIndex) || normalizeWhitespace(String(line.text || ''));
-      const lineBBox = resolveLineBBoxForExport(line);
-      const confidence = Number(line.confidence || pageOCR.confidence || 0);
-      const translatedWords = lineBBox
-        ? [{
-          text: translatedText,
-          confidence,
-          bbox: lineBBox,
-        }]
-        : [];
-
-      return {
-        ...line,
-        text: translatedText,
-        words: translatedWords,
-        bbox: lineBBox || line.bbox,
-      };
-    });
-
-    const translatedWords = translatedLines.flatMap((line) => Array.isArray(line.words) ? line.words : []);
-    const translatedText = translatedLines
-      .map((line) => normalizeWhitespace(String(line.text || '')))
-      .filter(Boolean)
-      .join('\n')
-      .trim();
-
-    return {
-      ...pageOCR,
-      lines: translatedLines,
-      words: translatedWords,
-      text: translatedText,
-      confidence: Number(pageOCR.confidence || 0),
-    };
-  };
-
-  const resolveVisibleOverlayExportSize = (pageNum: number): { width: number; height: number } | undefined => {
-    if (typeof document === 'undefined') return undefined;
-
-    const candidate = fileType === 'pdf'
-      ? document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${pageNum}"] canvas`)
-      : document.querySelector('img[data-export-overlay-image="true"]');
-    if (!(candidate instanceof HTMLElement)) return undefined;
-
-    const rect = candidate.getBoundingClientRect();
-    const width = Math.max(1, Math.round(rect.width));
-    const height = Math.max(1, Math.round(rect.height));
-    if (width <= 1 || height <= 1) return undefined;
-
-    return { width, height };
-  };
 
   /**
    * Render แต่ละหน้า PDF เป็น canvas ขนาดเล็ก แล้ว sample สีพื้นหลัง/ข้อความของแต่ละ line
@@ -6462,18 +6120,24 @@ export default function App() {
         translatedText = ' ';
       }
       if (!translatedText) return;
-      const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-      if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
-      if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
 
-      // Skip ถ้า layer นี้ userEdited → จะ render ด้วย user-layer pass แทน
-      const matchedUserLayer = pageLayers.find(l => l.lineIndex === index && l.visible && l.userEdited);
-      if (matchedUserLayer) return;
-
+      // ต้อง resolve layout ก่อน guard อื่นๆ เพื่อให้ mask-only lines ที่มี preserveMaskWhenHidden=true
+      // (เช่น YOU, FRONT. ที่ถูก merge เข้าไปแปลรวมกัน) ยังคงผ่านมาวาด background mask ได้
+      // แม้ว่า translatedText จะยังเป็นตัวอักษรภาษาอังกฤษ (เพราะ translatedByIndex ไม่มี entry ให้)
       const layout = overlayLayoutByIndex.get(index);
       const isMaskOnlyLine = Boolean(layout?.hidden);
       if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
         return;
+      }
+      // Mask-only lines ที่ preserveMaskWhenHidden=true → ข้ามผ่าน guard ด้านล่างทั้งหมด
+      if (!isMaskOnlyLine) {
+        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
+        if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
+        if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
+
+        // Skip ถ้า layer นี้ userEdited → จะ render ด้วย user-layer pass แทน
+        const matchedUserLayer = pageLayers.find(l => l.lineIndex === index && l.visible && l.userEdited);
+        if (matchedUserLayer) return;
       }
 
       const renderText = layout?.renderText || translatedText;

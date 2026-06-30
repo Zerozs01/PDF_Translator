@@ -647,19 +647,22 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                 className="absolute inset-0 pointer-events-none"
               >
                 {currentPageOCR.lines.map((line, idx) => {
+                  const layout = overlayLayoutByIndex.get(idx);
+                  const isMaskOnlyLine = Boolean(layout?.hidden);
+                  
                   const translatedText = translationOverlayContext.translatedByIndex.get(idx);
-                  if (!translatedText) return null;
-                  if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
+                  if (!translatedText && !(isMaskOnlyLine && layout?.preserveMaskWhenHidden)) {
+                    return null;
+                  }
+                  if (translatedText && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
                     return null;
                   }
 
-                  const layout = overlayLayoutByIndex.get(idx);
                   const layer = currentPageLayers.find(l => l.lineIndex === idx);
-                  const isMaskOnlyLine = Boolean(layout?.hidden);
                   if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
                     return null;
                   }
-                  const renderText = layout?.renderText || translatedText;
+                  const renderText = layout?.renderText || translatedText || '';
                   const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
                   const styleKind = layout?.styleKind;
                   const isDocumentLikeOverlay = styleKind

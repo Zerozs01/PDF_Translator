@@ -4038,7 +4038,7 @@ export const computeOverlayLayoutMap = (
             mergedMaskBBox,
             renderText: index === 0 ? mergedText : '',
             hidden: index !== 0,
-            preserveMaskWhenHidden: false,
+            preserveMaskWhenHidden: index !== 0,
           });
         });
         return;

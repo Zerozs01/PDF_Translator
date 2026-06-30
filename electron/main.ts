@@ -2,8 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net, powerSaveBloc
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
-import { createHash, randomUUID } from 'crypto'
-import { spawn } from 'child_process'
+import { createHash } from 'crypto'
 import { pathToFileURL } from 'url'
 import https from 'https'
 import zlib from 'zlib'
@@ -65,6 +64,7 @@ import { initDB, closeDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, Ta
 import * as authService from './authService'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
 import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw, clearExternalOcrCudaCache } from './ocrBridge'
+import { disposeArgosTranslateRuntime, LANGUAGE_DISPLAY_NAMES, normalizeArgosLanguage, runArgosTranslateBatch, type TranslationContext } from './argosBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
 import { cancelPdfPrintExport, startPdfPrintExport } from './pdfExportService'
 import {
@@ -90,7 +90,6 @@ process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public')
 
 let win: BrowserWindow | null
-let disposeArgosTranslateRuntime: (() => void) | null = null
 let powerSaveBlockerId: number | null = null
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
@@ -567,449 +566,6 @@ app.whenReady().then(() => {
     throw new Error('File access denied')
   }
 
-  type TranslationContext = {
-    mode?: string;
-    sourceType?: string;
-    sourceLanguage?: string;
-    targetLanguage?: string;
-    timeoutMs?: number;
-  };
-
-  const ARGOS_LANG_ALIASES: Record<string, string> = {
-    en: 'en',
-    eng: 'en',
-    english: 'en',
-    th: 'th',
-    tha: 'th',
-    thai: 'th',
-    ja: 'ja',
-    jpn: 'ja',
-    ko: 'ko',
-    kor: 'ko',
-    zh: 'zh',
-    chi: 'zh',
-    chi_sim: 'zh',
-    chi_tra: 'zh',
-    vi: 'vi',
-    vie: 'vi',
-    de: 'de',
-    deu: 'de',
-    fr: 'fr',
-    fra: 'fr',
-    ru: 'ru',
-    rus: 'ru',
-    es: 'es',
-    spa: 'es',
-  };
-
-  const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
-    en: 'English',
-    th: 'Thai',
-    ja: 'Japanese',
-    ko: 'Korean',
-    zh: 'Chinese',
-    vi: 'Vietnamese',
-    de: 'German',
-    fr: 'French',
-    ru: 'Russian',
-    es: 'Spanish',
-  };
-
-  const normalizeArgosLanguage = (value: unknown, fallback: string): string => {
-    const raw = String(value || '').trim().toLowerCase();
-    if (!raw) return fallback;
-    return ARGOS_LANG_ALIASES[raw] || raw.split('-')[0] || fallback;
-  };
-
-  const normalizePythonOverride = (value: string | undefined): string | null => {
-    const trimmed = String(value || '').trim();
-    if (!trimmed) return null;
-    if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
-      const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
-      return fs.existsSync(resolved) ? resolved : null;
-    }
-    return trimmed;
-  };
-
-  const findLocalPythonExecutable = (
-    roots: Array<string | null | undefined>,
-    venvDirs: string[] = ['.venv-ocr', '.venv']
-  ): string | null => {
-    const pythonRelativePath = process.platform === 'win32'
-      ? ['Scripts', 'python.exe']
-      : ['bin', 'python'];
-    const seen = new Set<string>();
-
-    const searchRoots = [...roots];
-    if (typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
-      searchRoots.push(__DEV_PROJECT_ROOT__);
-    }
-
-    for (const root of searchRoots) {
-      if (!root) continue;
-      const resolvedRoot = path.resolve(root);
-      if (seen.has(resolvedRoot)) continue;
-      seen.add(resolvedRoot);
-
-      for (const venvDir of venvDirs) {
-        const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-
-    return null;
-  };
-
-  const resolvePythonExecutable = (): string => {
-    const argosOverride = normalizePythonOverride(process.env.ARGOS_PYTHON_PATH);
-    if (argosOverride) return argosOverride;
-
-    const appOverride = normalizePythonOverride(process.env.PDF_TRANSLATOR_PYTHON);
-    if (appOverride) return appOverride;
-
-    const localVenvPython = findLocalPythonExecutable([
-      process.cwd(),
-      app.getAppPath(),
-      path.resolve(app.getAppPath(), '..'),
-      path.resolve(__dirname, '..'),
-      path.dirname(process.execPath),
-      path.resolve(path.dirname(process.execPath), '..'),
-      path.resolve(path.dirname(process.execPath), '../..'),
-      process.resourcesPath,
-      process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
-      process.env.PORTABLE_EXECUTABLE_DIR,
-    ], ['.venv-ocr', '.venv-easy-yolo', '.venv', '.venv-argos']);
-    if (localVenvPython) return localVenvPython;
-
-    const virtualEnv = process.env.VIRTUAL_ENV;
-    if (virtualEnv) {
-      const windowsPython = path.join(virtualEnv, 'Scripts', 'python.exe');
-      if (fs.existsSync(windowsPython)) return windowsPython;
-      const posixPython = path.join(virtualEnv, 'bin', 'python');
-      if (fs.existsSync(posixPython)) return posixPython;
-    }
-    return process.platform === 'win32' ? 'python' : 'python3';
-  };
-
-  const resolveArgosBridgePath = (): string => {
-    const candidates = [
-      path.join(process.cwd(), 'scripts', 'argos_translate_bridge.py'),
-      path.join(__dirname, '../scripts/argos_translate_bridge.py'),
-      path.join(process.resourcesPath, 'ocr-bridge', 'argos_translate_bridge.py'),
-    ];
-    const found = candidates.find((candidate) => fs.existsSync(candidate));
-    if (!found) {
-      throw new Error('Argos bridge script not found. Expected scripts/argos_translate_bridge.py');
-    }
-    return found;
-  };
-
-  const resolveArgosBridgeEnv = (): NodeJS.ProcessEnv => {
-    const userDataRoot = path.join(app.getPath('userData'), 'argos-runtime');
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(userDataRoot, 'config');
-    const cacheHome = process.env.XDG_CACHE_HOME || path.join(userDataRoot, 'cache');
-    fs.mkdirSync(configHome, { recursive: true });
-    fs.mkdirSync(cacheHome, { recursive: true });
-
-    const packageDirCandidates = [
-      process.env.ARGOS_PACKAGES_DIR,
-      process.env.ARGOS_TRANSLATE_PACKAGE_DIR,
-      path.join(app.getPath('home'), '.local', 'share', 'argos-translate', 'packages'),
-      path.join(userDataRoot, 'packages'),
-    ].filter((candidate): candidate is string => Boolean(candidate));
-
-    const packageDir = packageDirCandidates.find((candidate) => {
-      try {
-        return fs.existsSync(candidate);
-      } catch {
-        return false;
-      }
-    });
-
-    return {
-      ...process.env,
-      PYTHONUTF8: '1',
-      XDG_CONFIG_HOME: configHome,
-      XDG_CACHE_HOME: cacheHome,
-      ...(packageDir ? {
-        ARGOS_PACKAGES_DIR: packageDir,
-        ARGOS_TRANSLATE_PACKAGE_DIR: packageDir,
-      } : {}),
-    };
-  };
-
-  interface ArgosBridgeResponse {
-    ok?: boolean;
-    id?: string;
-    translations?: unknown;
-    reason?: string;
-    warning?: string;
-    fallbackReason?: string;
-  }
-
-  interface ArgosPendingRequest {
-    resolve: (response: ArgosBridgeResponse) => void;
-    reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }
-
-  interface ArgosBridgeDaemon {
-    child: ReturnType<typeof spawn>;
-    stdoutBuffer: string;
-    stderrBuffer: string;
-    pending: Map<string, ArgosPendingRequest>;
-    pythonExecutable: string;
-    bridgePath: string;
-    bridgeSignature: string;
-  }
-
-  const argosBridgeScriptSignature = (bridgePath: string): string => {
-    try {
-      const stat = fs.statSync(bridgePath);
-      return `${bridgePath}:${Math.floor(stat.mtimeMs)}`;
-    } catch {
-      return `${bridgePath}:unknown`;
-    }
-  };
-
-  let argosBridgeDaemon: ArgosBridgeDaemon | null = null;
-
-  const teardownArgosDaemon = (reason?: Error, targetDaemon?: ArgosBridgeDaemon | null): void => {
-    const daemon = targetDaemon || argosBridgeDaemon;
-    if (!daemon) return;
-
-    if (daemon === argosBridgeDaemon) {
-      argosBridgeDaemon = null;
-    }
-
-    for (const [, pending] of daemon.pending) {
-      clearTimeout(pending.timeout);
-      pending.reject(reason ?? new Error('Argos translation daemon stopped unexpectedly'));
-    }
-    daemon.pending.clear();
-    if (!daemon.child.killed) {
-      daemon.child.kill();
-    }
-  };
-
-  disposeArgosTranslateRuntime = () => {
-    teardownArgosDaemon(new Error('Argos translation runtime disposed'));
-  };
-
-  const handleArgosDaemonStdout = (chunk: Buffer, targetDaemon?: ArgosBridgeDaemon | null): void => {
-    const daemon = targetDaemon || argosBridgeDaemon;
-    if (!daemon) return;
-
-    daemon.stdoutBuffer += chunk.toString();
-    const lines = daemon.stdoutBuffer.split(/\r?\n/);
-    daemon.stdoutBuffer = lines.pop() ?? '';
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line) continue;
-
-      let payload: ArgosBridgeResponse;
-      try {
-        payload = JSON.parse(line) as ArgosBridgeResponse;
-      } catch {
-        console.warn(`[argosBridge] Ignoring non-JSON stdout: ${line}`);
-        continue;
-      }
-
-      if (!payload.id) {
-        console.warn('[argosBridge] Ignoring daemon response without request id');
-        continue;
-      }
-
-      const pending = daemon.pending.get(payload.id);
-      if (!pending) {
-        console.warn(`[argosBridge] Received orphaned daemon response ${payload.id}`);
-        continue;
-      }
-
-      daemon.pending.delete(payload.id);
-      clearTimeout(pending.timeout);
-      if (payload.ok === false) {
-        pending.reject(new Error(payload.reason || 'Argos translation bridge failed'));
-        continue;
-      }
-      pending.resolve(payload);
-    }
-  };
-
-  const ensureArgosDaemon = (): ArgosBridgeDaemon => {
-      const pythonExecutable = resolvePythonExecutable();
-      const bridgePath = resolveArgosBridgePath();
-      const bridgeSignature = argosBridgeScriptSignature(bridgePath);
-      const env = {
-        ...resolveArgosBridgeEnv(),
-        // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
-        ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
-      };
-
-      // Reuse existing daemon if: not killed, path/executable/signature unchanged, and process still alive
-      if (
-        argosBridgeDaemon
-        && !argosBridgeDaemon.child.killed
-        && argosBridgeDaemon.pythonExecutable === pythonExecutable
-        && argosBridgeDaemon.bridgePath === bridgePath
-        && argosBridgeDaemon.bridgeSignature === bridgeSignature
-      ) {
-        // Double-check: is the child process actually alive? (handles orphaned state)
-        try {
-          process.kill(argosBridgeDaemon.child.pid!, 0); // Signal 0 = check-only, doesn't kill
-          return argosBridgeDaemon; // Process is alive, reuse it
-        } catch {
-          // Process is dead (pid doesn't exist or already exited), continue to spawn new
-        }
-      }
-
-      if (argosBridgeDaemon) {
-        teardownArgosDaemon(new Error('Argos bridge runtime changed or process died; restarting daemon'));
-      }
-
-      const child = spawn(pythonExecutable, [bridgePath, '--stdio-server'], {
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env,
-      });
-
-      const daemon: ArgosBridgeDaemon = {
-        child,
-        stdoutBuffer: '',
-        stderrBuffer: '',
-        pending: new Map(),
-        pythonExecutable,
-        bridgePath,
-        bridgeSignature,
-      };
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        handleArgosDaemonStdout(chunk, daemon);
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        daemon.stderrBuffer += chunk.toString();
-        const message = chunk.toString().trim();
-        if (argosBridgeDaemon && argosBridgeDaemon.child === child && message) {
-          console.warn(`[argosBridge] ${message}`);
-        }
-      });
-      child.on('error', (error) => {
-        teardownArgosDaemon(error, daemon);
-      });
-      child.on('close', (code, signal) => {
-        const stderr = daemon.stderrBuffer.trim();
-        const exitMessage = `Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
-        teardownArgosDaemon(
-          new Error(stderr ? `${exitMessage}: ${stderr}` : exitMessage),
-          daemon
-        );
-      });
-
-      argosBridgeDaemon = daemon;
-      return daemon;
-    };
-
-  const requestArgosDaemon = async (
-    payload: Record<string, unknown>,
-    requestTimeoutMs: number
-  ): Promise<ArgosBridgeResponse> => {
-    const daemon = ensureArgosDaemon();
-    const id = randomUUID();
-
-    return await new Promise<ArgosBridgeResponse>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        daemon.pending.delete(id);
-        teardownArgosDaemon(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
-        reject(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
-      }, requestTimeoutMs);
-
-      daemon.pending.set(id, { resolve, reject, timeout });
-
-      try {
-        const stdin = daemon.child.stdin;
-        if (!stdin) {
-          throw new Error('Argos daemon stdin is unavailable');
-        }
-        stdin.write(`${JSON.stringify({ id, ...payload })}\n`);
-      } catch (error) {
-        daemon.pending.delete(id);
-        clearTimeout(timeout);
-        reject(error instanceof Error ? error : new Error(String(error)));
-        teardownArgosDaemon(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  };
-
-  const runArgosTranslateBatch = async (
-    texts: string[],
-    context?: TranslationContext
-  ): Promise<string[]> => {
-    if (!Array.isArray(texts)) {
-      throw new Error('Invalid input: texts must be an array');
-    }
-    if (texts.length === 0) return [];
-
-    const timeoutMs = Math.max(3000, Math.min(120000, Number(context?.timeoutMs || 45000)));
-    const sourceLanguage = normalizeArgosLanguage(context?.sourceLanguage, 'en');
-    const targetLanguage = normalizeArgosLanguage(context?.targetLanguage, 'th');
-    if (sourceLanguage === targetLanguage) {
-      return texts.map((text) => String(text || ''));
-    }
-
-    const payload = {
-      texts: texts.map((text) => String(text || '')),
-      sourceLanguage,
-      targetLanguage,
-      mode: String(context?.mode || 'manga'),
-      sourceType: String(context?.sourceType || 'text'),
-    };
-
-    const dedupedTexts: string[] = [];
-    const dedupeIndexByText = new Map<string, number>();
-    const textOrder: number[] = [];
-    for (const text of payload.texts) {
-      const key = String(text);
-      const existing = dedupeIndexByText.get(key);
-      if (existing !== undefined) {
-        textOrder.push(existing);
-        continue;
-      }
-      const nextIndex = dedupedTexts.length;
-      dedupeIndexByText.set(key, nextIndex);
-      dedupedTexts.push(key);
-      textOrder.push(nextIndex);
-    }
-
-    const dedupedPayload = {
-      ...payload,
-      texts: dedupedTexts,
-    };
-
-    let response: ArgosBridgeResponse;
-    try {
-      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
-    } catch (error) {
-      teardownArgosDaemon(
-        error instanceof Error ? error : new Error(String(error))
-      );
-      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
-    }
-
-    if (!Array.isArray(response.translations)) {
-      throw new Error('Argos translation bridge returned invalid payload');
-    }
-
-    const dedupedTranslations = response.translations.map((item) => String(item ?? ''));
-    if (dedupedTranslations.length !== dedupedTexts.length) {
-      throw new Error(`Argos translation count mismatch: expected ${dedupedTexts.length}, got ${dedupedTranslations.length}`);
-    }
-
-    return textOrder.map((index) => dedupedTranslations[index] ?? '');
-  };
-
   // ============================================
   // Database IPC Handlers (with validation)
   // ============================================
@@ -1073,15 +629,6 @@ app.whenReady().then(() => {
         : isValidEngine((data as { ocrEngine?: unknown } | null)?.ocrEngine)
           ? (data as { ocrEngine: string }).ocrEngine
           : 'tesseract';
-      
-      if (docId === 3 && pageNum === 25) {
-        console.log('=== DB_SAVE_OCR FOR DOC 3 PAGE 25 ===');
-        const linesSample = (data as any)?.lines?.map((l: any) => l.text) || [];
-        console.log('Lines found:', linesSample);
-        const droppedSample = (data as any)?.debug?.droppedWords?.map((d: any) => d.text) || [];
-        console.log('Dropped words:', droppedSample);
-      }
-
       OCRCacheDAO.save(docId, pageNum, data, selectedEngine);
       return true;
     } catch (error) {
@@ -1098,14 +645,6 @@ app.whenReady().then(() => {
     try {
       const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
       const result = OCRCacheDAO.get(docId, pageNum, selectedEngine);
-
-      if (docId === 3 && pageNum === 25 && result) {
-        console.log('=== DB_GET_OCR FOR DOC 3 PAGE 25 ===');
-        const linesSample = (result as any)?.lines?.map((l: any) => l.text) || [];
-        console.log('Lines in database:', linesSample);
-        const droppedSample = (result as any)?.debug?.droppedWords?.map((d: any) => d.text) || [];
-        console.log('Dropped words in database:', droppedSample);
-      }
 
       return result;
     } catch (error) {
@@ -1318,68 +857,7 @@ app.whenReady().then(() => {
     // 🚀 Startup optimization: batch load all needed data in 1 round-trip
       ipcMain.handle('db:startup-load', async () => {
         try {
-          const db = initDB();
-          // Run all queries in parallel — SQLite with WAL handles concurrency well
-          const [recentDocs, allTags, allProjects, latestOcr] = await Promise.all([
-            Promise.resolve().then(() => {
-              // Fast path: get recent docs WITHOUT tags join (hydrate in JS instead)
-              if (!db) throw new Error('DB not initialized');
-              return db.prepare(`
-                SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
-                       d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
-                FROM documents d
-                ORDER BY d.last_accessed DESC
-                LIMIT 50
-              `).all();
-            }),
-            Promise.resolve().then(() => TagDAO.getAll()),
-            Promise.resolve().then(() => ProjectDAO.getAll()),
-            Promise.resolve().then(() => {
-              if (!db) return null;
-              const latestDoc = db.prepare(`
-                SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
-              `).get() as { id: number } | undefined;
-              return latestDoc ? OCRCacheDAO.getLatestForDocument(latestDoc.id) : null;
-            }),
-          ]);
-
-          // Hydrate tag_names/tag_colors from document_tags in JS (faster than SQL JOIN per row)
-          const docIds = (recentDocs as Array<{ id: number }>).map(d => d.id);
-          let tagMap: Map<number, { names: string[]; colors: string[] }> = new Map();
-          if (docIds.length > 0 && db) {
-            const placeholders = docIds.map(() => '?').join(', ');
-            const tagRows = db.prepare(`
-              SELECT dt.document_id, t.name, t.color
-              FROM document_tags dt
-              JOIN tags t ON t.id = dt.tag_id
-              WHERE dt.document_id IN (${placeholders})
-              ORDER BY t.name
-            `).all(...docIds) as Array<{ document_id: number; name: string; color: string }>;
-            for (const row of tagRows) {
-              if (!tagMap.has(row.document_id)) {
-                tagMap.set(row.document_id, { names: [], colors: [] });
-              }
-              const entry = tagMap.get(row.document_id)!;
-              entry.names.push(row.name);
-              entry.colors.push(row.color);
-            }
-          }
-
-          const hydratedDocs = (recentDocs as Array<{ id: number }>).map(doc => {
-            const tags = tagMap.get(doc.id);
-            return {
-              ...doc,
-              tag_names: tags ? tags.names.join(',') : null,
-              tag_colors: tags ? tags.colors.join(',') : null,
-            };
-          });
-
-          return {
-            recentDocuments: hydratedDocs,
-            allTags,
-            allProjects,
-            latestOcrDocId: (recentDocs as Array<{ id: number }>)?.[0]?.id ?? null,
-          };
+          return DocumentDAO.getStartupBatch();
         } catch (error) {
           console.error('db:startup-load error:', error);
           return { recentDocuments: [], allTags: [], allProjects: [], latestOcrDocId: null };
@@ -1660,7 +1138,7 @@ app.whenReady().then(() => {
 
       if (gpuNames.length === 0) {
         try {
-          const gpuInfo = await app.getGPUInfo('basic');
+          const gpuInfo: any = await app.getGPUInfo('basic');
           if (gpuInfo?.gpuDevice) {
             gpuNames = gpuInfo.gpuDevice.map((device: any) => device.deviceString || device.vendorString || 'Unknown GPU');
           }
@@ -1700,26 +1178,68 @@ app.whenReady().then(() => {
         path.resolve(app.getAppPath(), '..'),
         path.resolve(__dirname, '..'),
         path.dirname(process.execPath),
-        process.resourcesPath
+        path.resolve(path.dirname(process.execPath), '..'),
+        path.resolve(path.dirname(process.execPath), '../..'),
+        process.resourcesPath,
+        process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
+        process.env.PORTABLE_EXECUTABLE_DIR,
       ];
       if (typeof (global as any).__DEV_PROJECT_ROOT__ !== 'undefined' && (global as any).__DEV_PROJECT_ROOT__) {
         searchRoots.push((global as any).__DEV_PROJECT_ROOT__);
       }
 
+      // Add roots from environment variables if present (especially for packaged environments inheriting variables)
+      const envPythonPaths = [
+        process.env.OCR_PYTHON_PATH,
+        process.env.PADDLE_OCR_PYTHON_PATH,
+        process.env.EASY_YOLO_OCR_PYTHON_PATH,
+      ];
+      for (const envPath of envPythonPaths) {
+        if (envPath) {
+          const resolvedEnv = path.resolve(envPath);
+          if (resolvedEnv.toLowerCase().endsWith('python.exe') || resolvedEnv.toLowerCase().endsWith('python')) {
+            const venvRoot = path.resolve(path.dirname(resolvedEnv), '..');
+            searchRoots.push(venvRoot);
+            searchRoots.push(path.resolve(venvRoot, '..'));
+          } else {
+            searchRoots.push(resolvedEnv);
+          }
+        }
+      }
+
+      console.log('[ocr:get-gpu-info] Scanning searchRoots:', searchRoots);
       for (const root of searchRoots) {
         if (!root) continue;
         const resolvedRoot = path.resolve(root);
         if (seen.has(resolvedRoot)) continue;
         seen.add(resolvedRoot);
 
+        // Check if the resolvedRoot is directly a virtual environment itself (e.g. env overrides)
+        const directSitePackages = path.join(resolvedRoot, 'Lib', 'site-packages');
+        if (fs.existsSync(directSitePackages)) {
+          const hasTorchDml = fs.existsSync(path.join(directSitePackages, 'torch_directml'));
+          const hasOnnxDml1 = fs.existsSync(path.join(directSitePackages, 'onnxruntime_directml'));
+          const hasOnnxDml2 = fs.existsSync(path.join(directSitePackages, 'onnxruntime-directml'));
+          if (hasTorchDml || hasOnnxDml1 || hasOnnxDml2) {
+            hasDirectML = true;
+          }
+          if (fs.existsSync(path.join(directSitePackages, 'torch', 'cuda'))) {
+            hasCuda = true;
+          }
+        }
+
         for (const venvDir of ['.venv-ocr', '.venv']) {
           const venvPath = path.join(resolvedRoot, venvDir);
           if (fs.existsSync(venvPath)) {
+            console.log(`[ocr:get-gpu-info] Found venvPath: ${venvPath}`);
             const sitePackagesPath = path.join(venvPath, 'Lib', 'site-packages');
             if (fs.existsSync(sitePackagesPath)) {
-              if (fs.existsSync(path.join(sitePackagesPath, 'torch_directml')) || 
-                  fs.existsSync(path.join(sitePackagesPath, 'onnxruntime_directml')) || 
-                  fs.existsSync(path.join(sitePackagesPath, 'onnxruntime-directml'))) {
+              console.log(`[ocr:get-gpu-info] Found sitePackagesPath: ${sitePackagesPath}`);
+              const hasTorchDml = fs.existsSync(path.join(sitePackagesPath, 'torch_directml'));
+              const hasOnnxDml1 = fs.existsSync(path.join(sitePackagesPath, 'onnxruntime_directml'));
+              const hasOnnxDml2 = fs.existsSync(path.join(sitePackagesPath, 'onnxruntime-directml'));
+              console.log(`[ocr:get-gpu-info] Checks - torchDml: ${hasTorchDml}, onnxDml1: ${hasOnnxDml1}, onnxDml2: ${hasOnnxDml2}`);
+              if (hasTorchDml || hasOnnxDml1 || hasOnnxDml2) {
                 hasDirectML = true;
               }
               if (fs.existsSync(path.join(sitePackagesPath, 'torch', 'cuda'))) {
@@ -1729,6 +1249,7 @@ app.whenReady().then(() => {
           }
         }
       }
+      console.log(`[ocr:get-gpu-info] Final hasDirectML: ${hasDirectML}`);
 
       // Check environment override
       if (process.env.OCR_USE_DIRECTML === '1') {

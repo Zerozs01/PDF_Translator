@@ -7,6 +7,10 @@ import { normalizeSourceForTranslation } from './ocrTextNormalizer';
 describe('Scratch Dedup Test', () => {
   it('checks if CAN DO and IS TO SEARCH are dropped', () => {
     const logPath = 'C:\\Users\\auand\\.gemini\\antigravity-ide\\brain\\e4b0aed9-e4d9-43cb-9a00-c0b1a2c23338\\.system_generated\\tasks\\task-1512.log';
+    if (!fs.existsSync(logPath)) {
+      console.warn('task-1512.log not found, skipping scratch check');
+      return;
+    }
     const content = fs.readFileSync(logPath, 'utf8');
     const jsonLine = content.split('\n').find(line => line.trim().startsWith('{"ok"'));
     if (!jsonLine) {

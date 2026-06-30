@@ -23,11 +23,11 @@ SubPipelines:
 SubModules:
   TextDetection:
     module_name: text_detection
-    model_name: PP-OCRv5_server_det
+    model_name: PP-OCRv5_mobile_det
     model_dir: null
-    limit_side_len: 3000
+    limit_side_len: 1920
     limit_type: max
-    max_side_limit: 4000
+    max_side_limit: 2560
     thresh: 0.1
     box_thresh: 0.3
     unclip_ratio: 1.8

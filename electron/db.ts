@@ -276,6 +276,49 @@ console.log('[DB] BenchmarkDAO ready');
 
 // --- Data Access Objects (DAO) ---
 
+type StartupDocumentRow = {
+  id: number;
+  filepath: string;
+  filename: string;
+  total_pages: number;
+  last_accessed: number | null;
+  is_favorite: number;
+  project_id: number | null;
+  last_page: number;
+  file_type: string;
+  file_size: number;
+};
+
+type StartupDocument = StartupDocumentRow & {
+  tag_names: string | null;
+  tag_colors: string | null;
+};
+
+type StartupTag = {
+  id: number;
+  name: string;
+  color: string;
+  created_at: number | null;
+};
+
+type StartupProject = {
+  id: number;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  color: string;
+  parent_id: number | null;
+  created_at: number | null;
+  updated_at: number | null;
+};
+
+export type DocumentStartupBatch = {
+  recentDocuments: StartupDocument[];
+  allTags: StartupTag[];
+  allProjects: StartupProject[];
+  latestOcrDocId: number | null;
+};
+
 // ===== Tag DAO =====
 export const TagDAO = {
   getAll: () => {
@@ -459,6 +502,64 @@ export const DocumentDAO = {
       ORDER BY d.last_accessed DESC
       LIMIT ?
     `).all(limit);
+  },
+
+  getStartupBatch: (): DocumentStartupBatch => {
+    if (!db) throw new Error('DB not initialized');
+
+    const recentDocs = db.prepare(`
+      SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
+             d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
+      FROM documents d
+      ORDER BY d.last_accessed DESC
+      LIMIT 50
+    `).all() as StartupDocumentRow[];
+
+    const allTags = TagDAO.getAll() as StartupTag[];
+    const allProjects = ProjectDAO.getAll() as StartupProject[];
+    const latestDoc = db.prepare(`
+      SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
+    `).get() as { id: number } | undefined;
+    if (latestDoc) {
+      OCRCacheDAO.getLatestForDocument(latestDoc.id);
+    }
+
+    const docIds = recentDocs.map(d => d.id);
+    let tagMap: Map<number, { names: string[]; colors: string[] }> = new Map();
+    if (docIds.length > 0) {
+      const placeholders = docIds.map(() => '?').join(', ');
+      const tagRows = db.prepare(`
+        SELECT dt.document_id, t.name, t.color
+        FROM document_tags dt
+        JOIN tags t ON t.id = dt.tag_id
+        WHERE dt.document_id IN (${placeholders})
+        ORDER BY t.name
+      `).all(...docIds) as Array<{ document_id: number; name: string; color: string }>;
+      for (const row of tagRows) {
+        if (!tagMap.has(row.document_id)) {
+          tagMap.set(row.document_id, { names: [], colors: [] });
+        }
+        const entry = tagMap.get(row.document_id)!;
+        entry.names.push(row.name);
+        entry.colors.push(row.color);
+      }
+    }
+
+    const hydratedDocs: StartupDocument[] = recentDocs.map(doc => {
+      const tags = tagMap.get(doc.id);
+      return {
+        ...doc,
+        tag_names: tags ? tags.names.join(',') : null,
+        tag_colors: tags ? tags.colors.join(',') : null,
+      };
+    });
+
+    return {
+      recentDocuments: hydratedDocs,
+      allTags,
+      allProjects,
+      latestOcrDocId: recentDocs?.[0]?.id ?? null,
+    };
   },
 
   getByProject: (projectId: number | null) => {
