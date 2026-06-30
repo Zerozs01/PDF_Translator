@@ -334,7 +334,9 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     let processedResult: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
 
     // Apply Korean Manhwa Pipeline if it's Korean
-    const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
+    const isKorean = (String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor')
+      && !result._splitDone
+      && !(processedResult as any)._manhwaDone;
     if (isKorean) {
       const koreanResult = processKoreanManhwaPipeline(processedResult, {
         merge: {
@@ -347,11 +349,13 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
         },
         debug: false
       });
-      // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
-      processedResult = { ...koreanResult, _splitDone: true };
+      // preserve flags after Korean pipeline
+      processedResult = { ...koreanResult, _splitDone: true, _manhwaDone: true };
     }
 
-    const isJapanese = String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja';
+    const isJapanese = (String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja')
+      && !result._splitDone
+      && !(processedResult as any)._japaneseDone;
     if (isJapanese && isVerticalJapaneseLayout(processedResult.lines)) {
       const japaneseResult = processJapaneseVerticalPipeline(processedResult, {
         merge: {
@@ -364,7 +368,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
         },
         debug: false
       });
-      processedResult = { ...japaneseResult, _splitDone: true };
+      processedResult = { ...japaneseResult, _splitDone: true, _japaneseDone: true };
     }
 
     processedResult = { ...applyPanelSafetyLineDedup(processedResult), _splitDone: true };
@@ -399,7 +403,9 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     let processedResult: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
 
     // Apply Korean Manhwa Pipeline if it's Korean
-    const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
+    const isKorean = (String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor')
+      && !result._splitDone
+      && !(processedResult as any)._manhwaDone;
     if (isKorean) {
       const koreanResult = processKoreanManhwaPipeline(processedResult, {
         merge: {
@@ -412,11 +418,13 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
         },
         debug: false
       });
-      // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
-      processedResult = { ...koreanResult, _splitDone: true };
+      // preserve flags after Korean pipeline
+      processedResult = { ...koreanResult, _splitDone: true, _manhwaDone: true };
     }
 
-    const isJapanese = String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja';
+    const isJapanese = (String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja')
+      && !result._splitDone
+      && !(processedResult as any)._japaneseDone;
     if (isJapanese && isVerticalJapaneseLayout(processedResult.lines)) {
       const japaneseResult = processJapaneseVerticalPipeline(processedResult, {
         merge: {
@@ -429,7 +437,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
         },
         debug: false
       });
-      processedResult = { ...japaneseResult, _splitDone: true };
+      processedResult = { ...japaneseResult, _splitDone: true, _japaneseDone: true };
     }
 
     processedResult = { ...applyPanelSafetyLineDedup(processedResult), _splitDone: true };

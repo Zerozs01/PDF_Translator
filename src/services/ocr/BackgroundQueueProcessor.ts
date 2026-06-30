@@ -33,7 +33,9 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
     _splitDone: true, // Mark ว่า split เสร็จแล้ว ป้องกัน store split ซ้ำ
   };
 
-  const isKorean = job.ocrLanguage === 'kor' || job.sourceLanguage === 'kor' || job.targetLanguage === 'kor';
+  const isKorean = (job.ocrLanguage === 'kor' || job.sourceLanguage === 'kor' || job.targetLanguage === 'kor')
+    && !result._splitDone
+    && !(ocrResult as any)._manhwaDone;
   if (isKorean) {
     ocrResult = processKoreanManhwaPipeline(ocrResult, {
       merge: {
@@ -46,9 +48,12 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
       },
       debug: false
     });
+    (ocrResult as any)._manhwaDone = true;
   }
 
-  const isJapanese = job.ocrLanguage === 'jpn' || job.sourceLanguage === 'ja' || job.targetLanguage === 'ja';
+  const isJapanese = (job.ocrLanguage === 'jpn' || job.sourceLanguage === 'ja' || job.targetLanguage === 'ja')
+    && !result._splitDone
+    && !(ocrResult as any)._japaneseDone;
   if (isJapanese && isVerticalJapaneseLayout(ocrResult.lines)) {
     ocrResult = processJapaneseVerticalPipeline(ocrResult, {
       merge: {
@@ -61,7 +66,10 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
       },
       debug: false
     });
+    (ocrResult as any)._japaneseDone = true;
   }
+
+  ocrResult = { ...applyPanelSafetyLineDedup(ocrResult), _splitDone: true };
 
   return ocrResult;
 }
@@ -376,7 +384,12 @@ class BackgroundQueueProcessor {
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            await page.render({ canvasContext: ctx, viewport } as any).promise;
+            await page.render({
+              canvasContext: ctx,
+              viewport,
+              intent: 'print',
+              background: 'rgba(255,255,255,1)'
+            } as any).promise;
 
             throwIfAborted();
 
@@ -452,11 +465,14 @@ class BackgroundQueueProcessor {
 
             ocrResult = applyPanelLanguageScriptGate(ocrResult, ocrLanguage);
             ocrResult = applyPanelSafetyLineDedup(ocrResult);
-            ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
 
             throwIfAborted();
 
+            // Save the raw/unmerged OCR result to the DB (matching OCRTextLayerPanel.tsx)
             await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
+
+            // Process (split, filter, merge) the result for the active session
+            ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
             
             const activeFile = useProjectStore.getState().file;
             if (activeFile && useProjectStore.getState().documentId === job.documentId) {
@@ -608,27 +624,27 @@ function resolveRenderConstraints(
   if (engine === 'paddleocr') {
     if (koreanPaddlePanel) {
       return {
-        maxSide: 20000,
-        maxPixels: 23500000,
+        maxSide: 21500,
+        maxPixels: 37650000,
         minWidth: null,
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
-          boostedMaxSide: 20000,
-          boostedMaxPixels: 34000000,
+          boostedMaxSide: 21500,
+          boostedMaxPixels: 37950000,
         },
       };
     }
     if (cjkPanelExternal) {
       return {
-        maxSide: 19000,
-        maxPixels: 28800000,
+        maxSide: 21500,
+        maxPixels: 37950000,
         minWidth: null,
         tallPageBoost: {
           minAspectRatio: 2.35,
           minLongSide: 9000,
-          boostedMaxSide: 20000,
-          boostedMaxPixels: 28000000,
+          boostedMaxSide: 21500,
+          boostedMaxPixels: 37950000,
         },
       };
     }

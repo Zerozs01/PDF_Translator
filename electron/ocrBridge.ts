@@ -1174,7 +1174,7 @@ export async function prewarmExternalOcrEngine(
     action: 'prewarm',
     engine,
     language,
-  });
+  }, 120000);
 
   if (!response.ok) {
     throw new Error(response.reason || `Failed to prewarm external OCR engine "${engine}"`);

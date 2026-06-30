@@ -221,6 +221,8 @@ export interface OCRPageResult {
    * ระบบจะ set flag นี้เป็น true หลังจาก split แล้ว และ store จะตรวจสอบก่อน split ซ้ำ
    */
   _splitDone?: boolean;
+  _manhwaDone?: boolean;
+  _japaneseDone?: boolean;
 }
 
 /** OCR Processing Options */
