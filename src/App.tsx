@@ -3913,10 +3913,12 @@ const shouldMergeLines = (
 
   const previousInterjection = isLikelyStandaloneInterjectionLine(previous.text);
   const currentInterjection = isLikelyStandaloneInterjectionLine(current.text);
+
+
   if (previousInterjection || currentInterjection) {
     const tightSameBubble = overlapRatio >= 0.56
       && centerDelta <= baseHeight * 1.05
-      && Math.abs(verticalGap) <= baseHeight * 0.28;
+      && Math.abs(verticalGap) <= baseHeight * 1.25;
     if (!tightSameBubble) {
       return false;
     }
@@ -4119,12 +4121,14 @@ const shouldConnectDenseDialogueLines = (
   const widthB = Math.max(1, b.right - b.left);
   const minWidth = Math.max(1, Math.min(widthA, widthB));
 
+
+
   const interjectionA = isLikelyStandaloneInterjectionLine(a.text);
   const interjectionB = isLikelyStandaloneInterjectionLine(b.text);
   if (interjectionA || interjectionB) {
     const tightSameBubble = overlapX >= 0.56
       && centerDeltaX <= baseHeight * 1.05
-      && verticalGap <= baseHeight * 0.3;
+      && verticalGap <= baseHeight * 1.3;
     if (!tightSameBubble) {
       return false;
     }
@@ -7077,13 +7081,17 @@ export default function App() {
             // ตรวจสอบเวอร์ชันของแคชเพื่อให้สอดคล้องกับ OCR_TRANSLATION_CACHE_VERSION ปัจจุบัน
             const isVersionMatch = row.key ? hasCurrentOCRTranslationCacheVersion(row.key) : false;
             
+            const activeFingerprint = buildOCRSourceFingerprint(pageOCR, ocrEngine);
+            const isFingerprintMatch = row.sourceFingerprint === activeFingerprint;
+            
             return rowEngine === targetRowEngine &&
                    row.translationMode === effectiveTranslationMode &&
                    rowTargetLang === targetRowTargetLang &&
                    rowSourceLang === targetRowSourceLang &&
                    rowTranslatorEngine === targetTranslatorEngine &&
                    hasThai &&
-                   isVersionMatch;
+                   isVersionMatch &&
+                   isFingerprintMatch;
           });
 
           if (matchedCache && !options?.bypassPageCache) {
