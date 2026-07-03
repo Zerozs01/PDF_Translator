@@ -12,7 +12,7 @@
  * กด Layer icon จะ flip sidebar เป็น Layer management panel
  */
 
-import React, { useMemo, useState, lazy, Suspense, useCallback } from 'react';
+import React, { useMemo, useState, lazy, Suspense, useCallback, useEffect } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -164,7 +164,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
   const viewMode = useProjectStore((state) => state.viewMode);
   const setViewMode = useProjectStore((state) => state.setViewMode);
   const [displayMode, setDisplayMode] = useState<'gallery' | 'list'>('gallery');
-  const [sidebarView, setSidebarView] = useState<SidebarView>('pages');
+  const fileType = useProjectStore((state) => state.fileType);
+  const [sidebarView, setSidebarView] = useState<SidebarView>(fileType === 'pdf' ? 'pages' : 'layers');
+
+  useEffect(() => {
+    if (fileType !== 'pdf') {
+      setSidebarView('layers');
+    } else {
+      setSidebarView('pages');
+    }
+  }, [fileType]);
+
 
 
 
@@ -191,106 +201,112 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
             {/* Left section: Display Mode Toggle + Layer Toggle */}
             <div className="flex items-center gap-1">
               {/* Display Mode Toggle (Gallery/List) - visible only in pages view */}
-              <div className={`flex bg-slate-900/70 border border-white/10 rounded p-0.5 transition-opacity ${
-                sidebarView === 'pages' ? 'opacity-100' : 'opacity-30 pointer-events-none'
-              }`}>
-                <button 
-                  onClick={() => setDisplayMode('gallery')}
-                  className={`p-1 rounded transition-colors ${
-                    displayMode === 'gallery' 
-                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title="Gallery View"
-                >
-                  <Grid3X3 size={12} />
-                </button>
-                <button 
-                  onClick={() => setDisplayMode('list')}
-                  className={`p-1 rounded transition-colors ${
-                    displayMode === 'list' 
-                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title="List View"
-                >
-                  <List size={12} />
-                </button>
-              </div>
+              {fileType === 'pdf' && (
+                <div className={`flex bg-slate-900/70 border border-white/10 rounded p-0.5 transition-opacity ${
+                  sidebarView === 'pages' ? 'opacity-100' : 'opacity-30 pointer-events-none'
+                }`}>
+                  <button 
+                    onClick={() => setDisplayMode('gallery')}
+                    className={`p-1 rounded transition-colors ${
+                      displayMode === 'gallery' 
+                        ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="Gallery View"
+                  >
+                    <Grid3X3 size={12} />
+                  </button>
+                  <button 
+                    onClick={() => setDisplayMode('list')}
+                    className={`p-1 rounded transition-colors ${
+                      displayMode === 'list' 
+                        ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="List View"
+                  >
+                    <List size={12} />
+                  </button>
+                </div>
+              )}
 
               {/* Layer Toggle Button */}
               <button
-                onClick={() => setSidebarView(sidebarView === 'layers' ? 'pages' : 'layers')}
+                onClick={() => setSidebarView(fileType === 'pdf' ? (sidebarView === 'layers' ? 'pages' : 'layers') : 'layers')}
                 className={`p-1 rounded transition-all duration-200 border ${
                   sidebarView === 'layers'
                     ? 'bg-gradient-to-r from-[#8B5CF6]/90 to-[#6366F1]/90 text-white border-[#8B5CF6]/50 shadow-[0_0_8px_rgba(139,92,246,0.35)]'
                     : 'bg-slate-900/70 border-white/10 text-slate-400 hover:text-[#8B5CF6] hover:border-[#8B5CF6]/30'
                 }`}
-                title={sidebarView === 'layers' ? 'Back to Pages' : 'Open Layer Panel'}
+                title={sidebarView === 'layers' ? (fileType === 'pdf' ? 'Back to Pages' : 'Layer Panel') : 'Open Layer Panel'}
               >
                 <Layers size={12} />
               </button>
 
               {/* Glossary Toggle Button */}
               <button
-                onClick={() => setSidebarView(sidebarView === 'glossary' ? 'pages' : 'glossary')}
+                onClick={() => setSidebarView(fileType === 'pdf' ? (sidebarView === 'glossary' ? 'pages' : 'glossary') : 'glossary')}
                 className={`p-1 rounded transition-all duration-200 border ${
                   sidebarView === 'glossary'
                     ? 'bg-gradient-to-r from-pink-500/90 to-rose-500/90 text-white border-pink-500/50 shadow-[0_0_8px_rgba(236,72,153,0.35)]'
                     : 'bg-slate-900/70 border-white/10 text-slate-400 hover:text-pink-400 hover:border-pink-500/30'
                 }`}
-                title={sidebarView === 'glossary' ? 'Back to Pages' : 'Open Glossary Panel'}
+                title={sidebarView === 'glossary' ? (fileType === 'pdf' ? 'Back to Pages' : 'Glossary Panel') : 'Open Glossary Panel'}
               >
                 <BookOpen size={12} />
               </button>
             </div>
 
             {/* Right section: View Mode Toggle (Single/Scroll) */}
-            <div className="flex bg-slate-900/70 border border-white/10 rounded p-0.5">
-              <button 
-                onClick={() => setViewMode('single')}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                  viewMode === 'single' 
-                    ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Single Page"
-              >
-                Single
-              </button>
-              <button 
-                onClick={() => setViewMode('continuous')}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                  viewMode === 'continuous' 
-                    ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Continuous Scroll"
-              >
-                Scroll
-              </button>
-            </div>
+            {fileType === 'pdf' && (
+              <div className="flex bg-slate-900/70 border border-white/10 rounded p-0.5">
+                <button 
+                  onClick={() => setViewMode('single')}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                    viewMode === 'single' 
+                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Single Page"
+                >
+                  Single
+                </button>
+                <button 
+                  onClick={() => setViewMode('continuous')}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                    viewMode === 'continuous' 
+                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Continuous Scroll"
+                >
+                  Scroll
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Page Navigation Input — visible in both views */}
-        <div className="p-2 border-b border-white/10 bg-slate-950/25">
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] text-slate-500">Go to:</span>
-            <input 
-              type="number" 
-              value={currentPage}
-              onChange={(e) => {
-                const page = parseInt(e.target.value);
-                if (page >= 1 && page <= totalPages) setPage(page);
-              }}
-              className="flex-1 w-full bg-slate-900/70 border border-white/15 rounded px-2 py-1 text-xs text-center text-white focus:outline-none focus:border-[#2B9BFF]/65"
-              min={1}
-              max={totalPages}
-            />
-            <span className="text-[10px] text-slate-500">/ {totalPages}</span>
+        {fileType === 'pdf' && (
+          <div className="p-2 border-b border-white/10 bg-slate-950/25">
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-slate-500">Go to:</span>
+              <input 
+                type="number" 
+                value={currentPage}
+                onChange={(e) => {
+                  const page = parseInt(e.target.value);
+                  if (page >= 1 && page <= totalPages) setPage(page);
+                }}
+                className="flex-1 w-full bg-slate-900/70 border border-white/15 rounded px-2 py-1 text-xs text-center text-white focus:outline-none focus:border-[#2B9BFF]/65"
+                min={1}
+                max={totalPages}
+              />
+              <span className="text-[10px] text-slate-500">/ {totalPages}</span>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Main Content Area — flips between pages and layers */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">

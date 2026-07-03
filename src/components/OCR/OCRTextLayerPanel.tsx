@@ -841,6 +841,10 @@ export const OCRTextLayerPanel: React.FC = () => {
         }
         return true;
       } catch (error) {
+        if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('abort'))) {
+          console.log(`[OCRPanel] Prewarming for engine ${engine} was aborted.`);
+          return false;
+        }
         stopWarmAnimation(engine);
         setEngineWarmState(engine, {
           phase: 'error',

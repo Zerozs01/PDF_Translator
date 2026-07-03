@@ -1115,6 +1115,44 @@ export const SentenceTranslationDAO = {
       console.error('[DB] Failed to get sentence translation:', error);
       return null;
     }
+  },
+
+  getBatch: (
+    sourceTexts: string[],
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string
+  ): Record<string, string> => {
+    if (!db) throw new Error('DB not initialized');
+    const results: Record<string, string> = {};
+    if (sourceTexts.length === 0) return results;
+    try {
+      const stmt = getStmt(`
+        SELECT translated_text 
+        FROM sentence_translation_cache 
+        WHERE source_text = ? 
+          AND source_language = ? 
+          AND target_language = ? 
+          AND translator_engine = ? 
+          AND translation_mode = ?
+      `);
+      const srcLang = sourceLanguage.toLowerCase();
+      const tgtLang = targetLanguage.toLowerCase();
+      const engine = translatorEngine.toLowerCase();
+      const mode = translationMode.toLowerCase();
+      
+      for (const text of sourceTexts) {
+        const row = stmt.get(text, srcLang, tgtLang, engine, mode) as { translated_text: string } | undefined;
+        if (row) {
+          results[text] = row.translated_text;
+        }
+      }
+      return results;
+    } catch (error) {
+      console.error('[DB] Failed to get sentence translations batch:', error);
+      return results;
+    }
   }
 };
 

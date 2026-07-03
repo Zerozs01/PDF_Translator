@@ -1377,7 +1377,12 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     viewMode,
   } = useProjectStore();
 
-  const { zoom, pan, setZoom, setPan, setView, activeTool } = useUIStore();
+  const zoom = useUIStore((s) => s.zoom);
+  const pan = useUIStore((s) => s.pan);
+  const setZoom = useUIStore((s) => s.setZoom);
+  const setPan = useUIStore((s) => s.setPan);
+  const setView = useUIStore((s) => s.setView);
+  const activeTool = useUIStore((s) => s.activeTool);
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
 

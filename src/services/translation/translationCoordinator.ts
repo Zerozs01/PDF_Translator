@@ -254,35 +254,50 @@ export class TranslationCoordinator {
     // 1.5 ลองดึงข้อมูลคำแปลจากระบบแคชประโยค (Sentence-level cache) ข้ามการประมวลผลเอนจินหลัก
     // หมายเหตุ: SFX items ข้าม cache เสมอ เพื่อให้ SFX Dictionary ทำงานได้โดยตรง
     // (ป้องกันกรณี cache มีคำแปลผิดๆ จาก Argos เช่น "Fwsshhh" → "นกกระจอก")
-    const cachedLookup = await Promise.all(
-      activeItems.map(async (item) => {
-        // SFX items: ข้าม cache ทุกกรณี ให้ Engine.translate() จัดการผ่าน SFX Dict
-        if (item.groupType === 'sfx') {
-          return { item, cachedText: null };
+    const dbQueryItems: TranslatableItem[] = [];
+    const directResults = new Map<string, string | null>();
+
+    for (const item of activeItems) {
+      if (item.groupType === 'sfx') {
+        directResults.set(item.id, null);
+        continue;
+      }
+      
+      if (options.targetLanguage === 'th') {
+        const directDictTranslation = lookupShortPhraseTh(item.text);
+        if (directDictTranslation) {
+          console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directDictTranslation}"`);
+          directResults.set(item.id, directDictTranslation);
+          continue;
         }
-        // Direct Dictionary Lookup Bypass: If we have a dictionary translation, bypass database cache and return it directly.
-        if (options.targetLanguage === 'th') {
-          const directDictTranslation = lookupShortPhraseTh(item.text);
-          if (directDictTranslation) {
-            console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directDictTranslation}"`);
-            return { item, cachedText: directDictTranslation };
-          }
-        }
-        try {
-          const cachedText = await dbService.getSentenceTranslation(
-            item.text,
-            options.sourceLanguage,
-            options.targetLanguage,
-            engineId,
-            options.translationMode
-          );
-          return { item, cachedText };
-        } catch (error) {
-          console.warn('[TranslationCoordinator] Cache lookup error for text:', item.text, error);
-          return { item, cachedText: null };
-        }
-      })
-    );
+      }
+      
+      dbQueryItems.push(item);
+    }
+
+    let batchCacheResults: Record<string, string> = {};
+    if (dbQueryItems.length > 0) {
+      const sourceTexts = dbQueryItems.map(item => item.text);
+      try {
+        batchCacheResults = await dbService.getSentenceTranslationBatch(
+          sourceTexts,
+          options.sourceLanguage,
+          options.targetLanguage,
+          engineId,
+          options.translationMode
+        );
+      } catch (error) {
+        console.warn('[TranslationCoordinator] Batch cache lookup error:', error);
+      }
+    }
+
+    const cachedLookup = activeItems.map((item) => {
+      if (directResults.has(item.id)) {
+        return { item, cachedText: directResults.get(item.id) || null };
+      }
+      const cachedText = batchCacheResults[item.text] || null;
+      return { item, cachedText };
+    });
 
 
     const cachedItems: { item: TranslatableItem; cachedText: string }[] = [];

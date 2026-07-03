@@ -426,24 +426,6 @@ app.whenReady().then(() => {
     
     const lang = language.trim().toLowerCase();
     
-    if (engine === 'tesseract') {
-      const fileName = `${lang}.traineddata`;
-      
-      // Check in userData/tessdata
-      const userPath = path.join(app.getPath('userData'), 'tessdata', fileName);
-      if (fs.existsSync(userPath)) return { installed: true };
-      
-      // Check in dist/tessdata
-      const appPath = path.join(process.env.DIST || '', 'tessdata', fileName);
-      if (fs.existsSync(appPath)) return { installed: true };
-      
-      // Check in public/tessdata (dev mode)
-      const devPath = path.join(process.cwd(), 'public', 'tessdata', fileName);
-      if (fs.existsSync(devPath)) return { installed: true };
-      
-      return { installed: false };
-    }
-    
     if (engine === 'paddleocr') {
       try {
         const statuses = await getExternalOcrEngineStatuses();
@@ -468,60 +450,6 @@ app.whenReady().then(() => {
     
     const lang = language.trim().toLowerCase();
     
-    if (engine === 'tesseract') {
-      const url = `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${lang}/4.0.0_best_int/${lang}.traineddata.gz`;
-      const destDir = path.join(app.getPath('userData'), 'tessdata');
-      await fs.promises.mkdir(destDir, { recursive: true });
-      const gzPath = path.join(destDir, `${lang}.traineddata.gz`);
-      const finalPath = path.join(destDir, `${lang}.traineddata`);
-      
-      return new Promise<boolean>((resolve, reject) => {
-        https.get(url, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`Tesseract CDN returned HTTP ${res.statusCode}`));
-            return;
-          }
-          const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
-          let downloadedBytes = 0;
-          const file = fs.createWriteStream(gzPath);
-          
-          res.on('data', (chunk) => {
-            downloadedBytes += chunk.length;
-            if (totalBytes > 0) {
-              const progress = Math.round((downloadedBytes / totalBytes) * 100);
-              event.sender.send('main-process-message', {
-                type: 'model-download-progress',
-                engine: 'tesseract',
-                language: lang,
-                progress,
-              });
-            }
-          });
-
-          res.pipe(file);
-          file.on('finish', () => {
-            file.close(async () => {
-              try {
-                const gzBytes = await fs.promises.readFile(gzPath);
-                const rawBytes = zlib.gunzipSync(gzBytes);
-                await fs.promises.writeFile(finalPath, rawBytes);
-                // Also keep gz final path
-                const gzFinalPath = path.join(destDir, `${lang}.traineddata.gz`);
-                await fs.promises.rename(gzPath, gzFinalPath);
-                resolve(true);
-              } catch (err) {
-                reject(err);
-              }
-            });
-          });
-
-          file.on('error', (err) => {
-            reject(err);
-          });
-        }).on('error', reject);
-      });
-    }
-
     if (engine === 'paddleocr') {
       try {
         await prewarmExternalOcrEngine('paddleocr', lang);
@@ -545,7 +473,7 @@ app.whenReady().then(() => {
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
   const isValidEngine = (value: unknown): value is string =>
-    typeof value === 'string' && ['tesseract', 'paddleocr', 'easyocr'].includes(value);
+    typeof value === 'string' && ['paddleocr', 'easyocr'].includes(value);
 
   const getImportsDirectory = (): string => path.join(app.getPath('userData'), 'imports')
 
@@ -847,6 +775,18 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:get-sentence-translation error:', error);
       return null;
+    }
+  });
+
+  ipcMain.handle('db:get-sentence-translation-batch', async (_, { sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode }) => {
+    if (!Array.isArray(sourceTexts) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode)) {
+      throw new Error('Invalid input: sourceTexts must be an array, other arguments must be non-empty strings');
+    }
+    try {
+      return SentenceTranslationDAO.getBatch(sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode);
+    } catch (error) {
+      console.error('db:get-sentence-translation-batch error:', error);
+      return {};
     }
   });
 

@@ -1260,6 +1260,85 @@ export const suppressDisplacedPanelLongPhraseEchoes = (
   };
 };
 
+export const mergeHorizontalCloseLines = (lines: OCRLine[]): OCRLine[] => {
+  if (lines.length <= 1) return lines;
+
+  // 1. Sort lines primarily by baseline Y-center, and secondarily left-to-right if they are on the same baseline
+  const sorted = [...lines].sort((a, b) => {
+    const cyA = panelLineCenterY(a);
+    const cyB = panelLineCenterY(b);
+    const hA = panelLineHeight(a);
+    const hB = panelLineHeight(b);
+    const minHeight = Math.max(8, Math.min(hA, hB));
+    
+    if (Math.abs(cyA - cyB) <= minHeight * 0.45) {
+      return Number(a.bbox?.x0 || 0) - Number(b.bbox?.x0 || 0);
+    }
+    return cyA - cyB;
+  });
+
+  const merged: OCRLine[] = [];
+  let current = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+
+    const hA = panelLineHeight(current);
+    const hB = panelLineHeight(next);
+    const minHeight = Math.max(8, Math.min(hA, hB));
+    const verticalOverlap = panelOverlapRatioY(current, next);
+
+    const gapX = Number(next.bbox?.x0 || 0) - Number(current.bbox?.x1 || 0);
+    const maxGap = Math.max(36, minHeight * 1.8);
+    const heightRatio = Math.max(hA, hB) / Math.max(1, Math.min(hA, hB));
+
+    // Allow merging only if baselines are highly overlapping, the gap is small, and heights are comparable.
+    // We use a generous heightRatio threshold (3.0) because OCR tight character cropping can crop simple words (like "of", "a")
+    // much shorter than capitalized words/technical symbols on the same line, despite having the same font size.
+    const shouldMerge = verticalOverlap >= 0.70 
+      && gapX >= -16 
+      && gapX <= maxGap 
+      && heightRatio <= 3.0;
+
+    if (shouldMerge) {
+      // Concatenate text
+      const newText = `${current.text || ''} ${next.text || ''}`.replace(/\s+/g, ' ').trim();
+      
+      // Merge bounding boxes
+      const newBBox: BBox = {
+        x0: Math.min(Number(current.bbox?.x0 || 0), Number(next.bbox?.x0 || 0)),
+        y0: Math.min(Number(current.bbox?.y0 || 0), Number(next.bbox?.y0 || 0)),
+        x1: Math.max(Number(current.bbox?.x1 || 0), Number(next.bbox?.x1 || 0)),
+        y1: Math.max(Number(current.bbox?.y1 || 0), Number(next.bbox?.y1 || 0)),
+      };
+
+      // Merge words (adjust/concatenate)
+      const currentWords = Array.isArray(current.words) ? current.words : [];
+      const nextWords = Array.isArray(next.words) ? next.words : [];
+      const mergedWords = [...currentWords, ...nextWords];
+
+      // Average confidence
+      const currentConf = Number(current.confidence || 0);
+      const nextConf = Number(next.confidence || 0);
+      const newConf = (currentConf + nextConf) * 0.5;
+
+      current = {
+        ...current,
+        text: newText,
+        bbox: newBBox,
+        words: mergedWords,
+        confidence: newConf,
+      };
+    } else {
+      merged.push(current);
+      current = next;
+    }
+  }
+  
+  merged.push(current);
+  return merged;
+};
+
 export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const inputLines = Array.isArray(result.lines) ? result.lines : [];
   if ((result.pipelineProfile || 'panel') !== 'panel') {
@@ -1594,10 +1673,6 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
     }
   }
 
-  if (dropped.length === 0 && normalizedTextChanges === 0 && normalizedGeometryChanges === 0 && preparedLines.length === inputLines.length) {
-    return markPanelSafetyNormalized(result);
-  }
-
   const originalOrder = new Map<OCRLine, number>();
   dedupInputLines.forEach(({ line, index }) => {
     originalOrder.set(line, index);
@@ -1625,11 +1700,18 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
     return 0;
   });
 
-  const dedupedWords = dedupedLines.flatMap((line) => line.words || []);
-  const confidenceSource = dedupedWords.length > 0
-    ? dedupedWords.map((word) => Number(word.confidence || 0))
-    : dedupedLines.map((line) => Number(line.confidence || 0));
-  const dedupedConfidence = confidenceSource.length > 0
+  // Apply horizontal merger for adjacent lines on the same baseline
+  const finalLines = mergeHorizontalCloseLines(dedupedLines);
+
+  if (dropped.length === 0 && normalizedTextChanges === 0 && normalizedGeometryChanges === 0 && preparedLines.length === inputLines.length && finalLines.length === inputLines.length) {
+    return markPanelSafetyNormalized(result);
+  }
+
+  const finalWords = finalLines.flatMap((line) => line.words || []);
+  const confidenceSource = finalWords.length > 0
+    ? finalWords.map((word) => Number(word.confidence || 0))
+    : finalLines.map((line) => Number(line.confidence || 0));
+  const finalConfidence = confidenceSource.length > 0
     ? (confidenceSource.reduce((sum, value) => sum + value, 0) / confidenceSource.length)
     : Number(result.confidence || 0);
 
@@ -1644,10 +1726,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
 
   return markPanelSafetyNormalized({
     ...result,
-    lines: dedupedLines,
-    words: dedupedWords,
-    text: dedupedLines.map((line) => String(line.text || '')).filter(Boolean).join('\n').trim(),
-    confidence: dedupedConfidence,
+    lines: finalLines,
+    words: finalWords,
+    text: finalLines.map((line) => String(line.text || '')).filter(Boolean).join('\n').trim(),
+    confidence: finalConfidence,
     debug: {
       ...(result.debug || {}),
       dropCounts,

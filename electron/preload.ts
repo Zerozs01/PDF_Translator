@@ -19,6 +19,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:clear-translation-cache-by-engine',
   'db:save-sentence-translation',
   'db:get-sentence-translation',
+  'db:get-sentence-translation-batch',
   'db:save-benchmark',
   'db:get-benchmark',
   'db:clear-benchmark',
@@ -169,6 +170,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:save-sentence-translation', { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText }),
     getSentenceTranslation: (sourceText: string, sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string) =>
       safeInvoke('db:get-sentence-translation', { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }),
+    getSentenceTranslationBatch: (sourceTexts: string[], sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string) =>
+      safeInvoke('db:get-sentence-translation-batch', { sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode }),
 
     // Benchmark CRUD (Phase 1.3)
     saveBenchmark: (params: { docId: number; pageNum: number; key: string; payload: string }) =>

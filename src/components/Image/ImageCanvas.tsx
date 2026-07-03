@@ -3,6 +3,7 @@ import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useLayerStore } from '../../stores/useLayerStore';
+import { InteractiveLayerOverlay } from '../Layers/InteractiveLayerOverlay';
 import {
   clampOverlayRect,
   computeOverlayTypography,
@@ -157,7 +158,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     overlayFontPreset,
     overlayFontSizeScale,
   } = useProjectStore();
-  const { zoom, pan, setZoom, setPan, setView, activeTool } = useUIStore();
+  const zoom = useUIStore((s) => s.zoom);
+  const pan = useUIStore((s) => s.pan);
+  const setZoom = useUIStore((s) => s.setZoom);
+  const setPan = useUIStore((s) => s.setPan);
+  const setView = useUIStore((s) => s.setView);
+  const activeTool = useUIStore((s) => s.activeTool);
   const {
     allPagesOCR,
     ocrByPageEngine,
@@ -173,6 +179,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
   
   const layersByPage = useLayerStore((state) => state.layersByPage);
   const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
+  const groupsByPage = useLayerStore((state) => state.groupsByPage);
+  const currentPageGroups = useMemo(() => groupsByPage.get(currentPage) || groupsByPage.get(1) || [], [groupsByPage, currentPage]);
   const selectedEngine = (options.engine || 'paddleocr');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
@@ -1013,6 +1021,19 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                 ))}
               </div>
             )}
+            <InteractiveLayerOverlay
+              pageNum={currentPage || 1}
+              layers={currentPageLayers}
+              groups={currentPageGroups}
+              ocrTransform={{
+                scaleX: ocrScaleX,
+                scaleY: ocrScaleY,
+                offsetX: 0,
+                offsetY: 0
+              }}
+              isActive={activeTool === 'select' || activeTool === 'region'}
+              layouts={overlayLayoutByIndex}
+            />
           </div>
         ) : (
           <div className="text-slate-500 p-6">Loading image...</div>

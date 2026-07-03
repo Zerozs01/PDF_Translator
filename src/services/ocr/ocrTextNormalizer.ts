@@ -37,6 +37,8 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 ];
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\bPDF\s*TRANSL\s*AT\s*OR\b/gi, replacement: 'PDF TRANSLATOR' },
+  { pattern: /\bPDF\s*TRANSLATOR\b/gi, replacement: 'PDF TRANSLATOR' },
   { pattern: /\bI\s*M\s*P\s*R\s*E\s*S\s*S\s*I\s*O\s*N\b/gi, replacement: 'IMPRESSION' },
   { pattern: /\bE\s*X\s*P\s*R\s*E\s*S\s*S\s*I\s*O\s*N\b/gi, replacement: 'EXPRESSION' },
   { pattern: /\bTHATCANTBE\s+IT\b/gi, replacement: "THAT CAN'T BE IT" },

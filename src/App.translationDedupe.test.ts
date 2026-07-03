@@ -125,11 +125,12 @@ beforeAll(async () => {
 
   const appModule = await import('./App');
   const heuristicsModule = await import('./services/ocr/ocrTextHeuristics');
+  const glossaryModule = await import('./services/translation/thaiConversationalGlossary');
   dedupeTranslatableLinesForTranslation = appModule.dedupeTranslatableLinesForTranslation;
   resolveBestOcrLineText = heuristicsModule.resolveBestOcrLineText;
   buildTranslationGroups = appModule.buildTranslationGroups;
   shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
-  applyThaiConversationalGlossary = appModule.applyThaiConversationalGlossary;
+  applyThaiConversationalGlossary = glossaryModule.applyThaiConversationalGlossary;
   applyThaiTechnicalGlossary = appModule.applyThaiTechnicalGlossary;
   resolveRedistributedLineFallback = appModule.resolveRedistributedLineFallback;
   shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
@@ -145,7 +146,7 @@ beforeAll(async () => {
   normalizeSourceForTranslation = appModule.normalizeSourceForTranslation;
   protectTranslationTokens = appModule.protectTranslationTokens;
   restoreProtectedTokens = appModule.restoreProtectedTokens;
-  setSlangGroupContext = appModule.setSlangGroupContext;
+  setSlangGroupContext = glossaryModule.setSlangGroupContext;
 });
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
@@ -2003,14 +2004,15 @@ describe('shouldPreserveSourceLineForTranslation', () => {
 
 describe('Sentence-level Translation Caching & Deduplication', () => {
   test('retrieves translation from sentence cache and bypasses offline/online engine', async () => {
-    const getSpy = vi.spyOn(dbService, 'getSentenceTranslation');
+    const getSpy = vi.spyOn(dbService, 'getSentenceTranslationBatch');
     const saveSpy = vi.spyOn(dbService, 'saveSentenceTranslation');
 
-    getSpy.mockImplementation(async (text, src, tgt, engine, mode) => {
-      if (text === 'Hello' && engine === 'argos') {
-        return 'สวัสดี (จากแคชระดับประโยค)';
+    getSpy.mockImplementation(async (texts, src, tgt, engine, mode) => {
+      const results: Record<string, string> = {};
+      if (texts.includes('Hello') && engine === 'argos') {
+        results['Hello'] = 'สวัสดี (จากแคชระดับประโยค)';
       }
-      return null;
+      return results;
     });
 
     saveSpy.mockResolvedValue(true);

@@ -415,6 +415,30 @@ export const dbService = {
     }
   },
 
+  async getSentenceTranslationBatch(
+    sourceTexts: string[],
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string
+  ): Promise<Record<string, string>> {
+    try {
+      if (!isDbAvailable() || sourceTexts.length === 0) {
+        return {};
+      }
+      return await window.electronAPI.db.getSentenceTranslationBatch?.(
+        sourceTexts,
+        sourceLanguage,
+        targetLanguage,
+        translatorEngine,
+        translationMode
+      ) ?? {};
+    } catch (error) {
+      console.error('Failed to get sentence translation batch:', error);
+      return {};
+    }
+  },
+
   async touchDocument(docId: number): Promise<boolean> {
     try {
       if (!isDbAvailable()) {

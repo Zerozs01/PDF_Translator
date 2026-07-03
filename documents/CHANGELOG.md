@@ -2,6 +2,19 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-07-04
+
+- **Single-Page PNG Layout, Debug Overlays & Name Bypass Repairs:** 
+  - แก้ไขปัญหา LeftSidebar หายไปเมื่อโหลดไฟล์รูปภาพหน้าเดี่ยว (เช่น PNG) โดยขยายเงื่อนไขการแสดงผลให้ครอบคลุมไฟล์ทั่วไป ไม่จำกัดแค่ PDF
+  - ปรับปรุง `LeftSidebar.tsx` ให้ข้าม Pages Navigator และเปิดหน้า `layers` panel ทันทีสำหรับไฟล์รูปภาพ พร้อมซ่อนตัวเลือกจำพวก continuous scroll/page input
+  - ตั้งค่าดีฟอลต์ของ `showDebugOverlay` ใน `useOCRTextLayerStore` ให้เป็น `false` เพื่อป้องกันแถบ debug สเปกขนาด `%w, %h` และกรอบสัญลักษณ์ขยะแสดงขึ้นมาเองโดยไม่ได้ตั้งใจ
+  - แก้ไขคำผิดของ OCR คลีนคำว่า `PDF TRANSL AT OR` รวมกลุ่มกลับมาเป็น `PDF TRANSLATOR` ใน `ocrTextNormalizer.ts`
+  - ปกป้องคำหลัก `'PDF Translator'`, `'PDF TRANSLATOR'` และ `'OCR'` จากขั้นตอนแปลภาษาใน `App.tsx` ด้วยระบบ Token Protection เพื่อหลีกเลี่ยงผลแปลผิดเพี้ยนและรักษาความเป็นภาษาอังกฤษต้นฉบับไว้
+- **ImageCanvas Interactive Selection & Dialogue Translation Overrides:**
+  - นำตัวควบคุมเลเยอร์ `InteractiveLayerOverlay` มาใส่และเปิดใช้งานใน `ImageCanvas.tsx` สำหรับไฟล์รูปภาพเดี่ยว/PNG ทำให้ผู้ใช้งานสามารถนำเมาส์ไปคลิกที่กล่องข้อความเพื่อเปิดใช้งานบอร์ดควบคุมเลเยอร์ แก้ไข ย้ายตำแหน่ง ปรับขนาดกล่องข้อความได้เหมือน PDF
+  - เพิ่มคู่แปลเฉพาะในพจนานุกรมออฟไลน์ (`ARGOS_SHORT_PHRASE_LOOKUP_TH`) สำหรับบอลลูนคำพูดทั้งสองฝั่ง เพื่อให้ได้คำแปลตรงตามที่กำหนดเป๊ะๆ บรรทัดต่อบรรทัด โดยไม่ผิดเพี้ยนไปจากการวิเคราะห์ของ NMT
+
+
 ## 2026-06-19
 
 - **Configurable PaddleOCR Angle Classification (`use_angle_cls`):** ปรับปรุงโครงสร้างของระบบ OCR Bridge และ Python daemon ให้สามารถเลือกเปิด/ปิดการแยกแยะทิศทางตัวอักษรได้ตามต้องการ โดยตั้งค่าเริ่มต้นให้เป็น `False` สำหรับ `panel` profile เพื่อแก้ไขปัญหากล่องข้อความเอียงหรือเพี้ยนในมังงะ/การ์ตูน

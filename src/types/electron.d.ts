@@ -204,6 +204,13 @@ export interface ElectronAPI {
       translatorEngine: string,
       translationMode: string
     ) => Promise<string | null>;
+    getSentenceTranslationBatch?: (
+      sourceTexts: string[],
+      sourceLanguage: string,
+      targetLanguage: string,
+      translatorEngine: string,
+      translationMode: string
+    ) => Promise<Record<string, string>>;
     
     // Benchmark CRUD
     saveBenchmark?: (params: { docId: number; pageNum: number; key: string; payload: string }) => Promise<boolean>;
