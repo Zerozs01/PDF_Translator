@@ -28,10 +28,11 @@ import {
 
 export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   // App specific sentence mapping overrides
-  'ehm i just used a pdf translator to scan and translate it then printed out the results': 'เอ่อ... ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
-  'ehm i just used a pdf translator to scan and translate it then printed out the result': 'เอ่อ... ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
-  'ehm i just used a zara to scan and translate it then printed out the results': 'เอ่อ... ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
-  'ehm i just used a zara to scan and translate it then printed out the result': 'เอ่อ... ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
+  'ehm i just used a pdf translator to scan and translate it then printed out the results': 'เอ่อ.. ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
+  'ehm i just used a pdf translator to scan and translate it then printed out the result': 'เอ่อ.. ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
+  'ehm i just used a zara to scan and translate it then printed out the results': 'เอ่อ.. ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
+  'ehm i just used a zara to scan and translate it then printed out the result': 'เอ่อ.. ผมใช้โปรแกรม PDF TRANSLATOR สแกนและแปลไฟล์ จากนั้นก็พิมพ์ผลลัพธ์ออกมาครับ',
+  'hey how is it that youre the only one with thai version of that book': 'เฮ้ ทำไมคุณเป็นคนเดียวที่มีหนังสือเล่มนั้นฉบับภาษาไทยล่ะ',
   'hey how is it that you re the only one with thai version of that book': 'เฮ้ ทำไมคุณเป็นคนเดียวที่มีหนังสือเล่มนั้นฉบับภาษาไทยล่ะ',
   // Pronouns
   'way too good': 'ดีงามเกินไปแล้ว', 'way too good...': 'ดีงามเกินไปแล้ว...', 'way too good,': 'ดีงามเกินไปแล้ว', 'way too good,,': 'ดีงามเกินไปแล้ว',

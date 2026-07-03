@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore, OCRTranslationCacheEntry, hasCurrentOCRTranslationCacheVersion } from '../../stores/useOCRTextLayerStore';
+import { dbService } from '../../services/dbService';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
+import type { OCREngine } from '../../types';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { InteractiveLayerOverlay } from '../Layers/InteractiveLayerOverlay';
 import {
@@ -149,6 +152,7 @@ interface ImageCanvasProps {
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewModeOverride }) => {
   const {
+    documentId,
     fileUrl,
     currentPage,
     sourceLanguage,
@@ -191,6 +195,70 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     const fallbackEngine = (fallback.ocrEngine || selectedEngine);
     return fallbackEngine === selectedEngine ? fallback : undefined;
   };
+
+  // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
+  useEffect(() => {
+    if (!documentId) return;
+    let canceled = false;
+    const pageNum = currentPage || 1;
+    const activeEngine = (options.engine || 'paddleocr') as OCREngine;
+    const ocrState = useOCRTextLayerStore.getState();
+
+    const loadCache = async () => {
+      // 1. Load OCR cache if not in memory
+      const hasOcr = ocrState.ocrByPageEngine.get(pageNum)?.has(activeEngine);
+      if (!hasOcr) {
+        try {
+          const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
+          if (cached && !canceled) {
+            if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+              cached.pageNumber = pageNum;
+              ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+              console.log(`[ImageCanvas] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+            } else {
+              console.log(`[ImageCanvas] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
+            }
+          }
+        } catch (err) {
+          console.warn(`[ImageCanvas] Failed to load OCR cache for page ${pageNum}:`, err);
+        }
+      }
+
+      // 2. Load Translation cache if not in memory
+      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
+      if (!hasTranslation) {
+        try {
+          const rows = await dbService.getTranslationCachePage(documentId, pageNum);
+          if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+            console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+            for (const row of rows) {
+              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+                continue;
+              }
+              const normalizedEntry: OCRTranslationCacheEntry = {
+                ...row,
+                pageNum,
+                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+              };
+              ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
+              if (row.key && row.key.includes(activeEngine)) {
+                // If it matches activeEngine, set it active
+                ocrState.setActiveTranslationCacheKey(pageNum, row.key);
+                ocrState.setTranslationPreviewMode('translated');
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`[ImageCanvas] Failed to load translation cache for page ${pageNum}:`, err);
+        }
+      }
+    };
+
+    loadCache();
+    return () => {
+      canceled = true;
+    };
+  }, [documentId, currentPage, options.engine]);
 
   const currentPageOCR = resolveEngineScopedPageOCR(currentPage)
     || resolveEngineScopedPageOCR(1);

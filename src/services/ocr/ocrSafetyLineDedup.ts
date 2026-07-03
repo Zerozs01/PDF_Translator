@@ -1298,7 +1298,7 @@ export const mergeHorizontalCloseLines = (lines: OCRLine[]): OCRLine[] => {
     const shouldMerge = verticalOverlap >= 0.70 
       && gapX >= -16 
       && gapX <= maxGap 
-      && heightRatio <= 3.0;
+      && heightRatio <= 2.5;
 
     if (shouldMerge) {
       // Concatenate text

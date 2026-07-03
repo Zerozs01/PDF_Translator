@@ -6070,7 +6070,6 @@ export default function App() {
               overrideLines.push('');
             }
           });
-          groupLineOverrides.set(groupIndex, overrideLines);
         }
       }
 
@@ -6078,7 +6077,7 @@ export default function App() {
       if (directLineOverride && directLineOverride.length > 0) {
         group.lines.forEach((line, lineIndex) => {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-          const overrideText = directLineOverride[lineIndex] || sourceLineText;
+          const overrideText = directLineOverride[lineIndex] !== undefined ? directLineOverride[lineIndex] : sourceLineText;
           translatedByIndex.set(line.index, overrideText || sourceLineText);
           if (group.replacements.length === 0 && shouldRetryLineTranslation(line.text, overrideText, groupSourceLanguage, normalizedTargetLanguage)) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
