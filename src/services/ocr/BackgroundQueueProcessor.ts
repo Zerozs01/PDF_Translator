@@ -102,20 +102,41 @@ class BackgroundQueueProcessor {
     // สมัครรับข้อมูลการเปลี่ยนแปลงในคิว เพื่อให้เริ่มประมวลผลทันทีเมื่อมีงาน pending
     if (typeof window !== 'undefined') {
       useBackgroundQueueStore.subscribe((state, prevState) => {
-        // ถ้าคิวไม่ได้ paused และมีงาน pending และระบบไม่ได้กำลังประมวลผลอยู่ -> เริ่มรันทันที
-        if (!state.isPaused && !this.isProcessing) {
+        // ถ้าคิวไม่ได้ paused, Foreground ไม่ได้ทำงาน, มีงาน pending และระบบไม่ได้กำลังประมวลผลอยู่ -> เริ่มรันทันที
+        if (!state.isPaused && !state.isPausedForForeground && !this.isProcessing) {
           const nextJob = useBackgroundQueueStore.getState().getNextPendingJob();
           if (nextJob) {
             this.startProcessingLoop();
           }
         }
 
-        // หากผู้ใช้สั่งยกเลิกหรือหยุดชั่วคราวงานที่กำลังทำงานอยู่ (Active Job)
+        // ตรวจสอบการ Preemption ของ Active Job
         if (this.activeJobId) {
-          const activeJob = state.jobs.find(j => j.id === this.activeJobId);
-          if (activeJob && ['cancelled', 'paused', 'failed'].includes(activeJob.status)) {
+          const activeJobIdx = state.jobs.findIndex(j => j.id === this.activeJobId);
+          const activeJob = activeJobIdx >= 0 ? state.jobs[activeJobIdx] : null;
+
+          if (!activeJob) return;
+
+          if (['cancelled', 'paused', 'failed'].includes(activeJob.status)) {
+            // ถูกสั่งยกเลิก/หยุดโดยตรง
             console.log(`[QueueProcessor] Active job ${this.activeJobId} state changed to ${activeJob.status}. Aborting...`);
             this.abortCurrentJob();
+          } else if (activeJob.status === 'processing' || activeJob.status === 'queued') {
+            // ตรวจ Positional Preemption: สถานะของงานใน Store อาจยังเป็น 'processing' อยู่ แต่ถ้ามีงานอื่นเข้ามาอยู่หน้า = ต้องหยุด
+            const hasHigherJob = activeJobIdx > 0 && state.jobs.some(
+              (j, i) => i < activeJobIdx && (j.status === 'pending' || j.status === 'queued')
+            );
+
+            if (hasHigherJob || state.isPausedForForeground) {
+              console.log(`[QueueProcessor] Preempting job ${this.activeJobId} (idx=${activeJobIdx}). Higher job exists or foreground active. Pausing...`);
+              // ตั้งสถานะเป็น 'queued' (Pause) ก่อน abort เพื่อให้ Error Handler รู้ว่าไม่ควร Cancel
+              if (activeJob.status === 'processing') {
+                useBackgroundQueueStore.getState().updateJobStatus(
+                  this.activeJobId, 'queued', 'รอคิว (ถูกแทรก)...'
+                );
+              }
+              this.abortCurrentJob();
+            }
           }
         }
       });
@@ -150,10 +171,10 @@ class BackgroundQueueProcessor {
 
       try {
         while (true) {
-          // ตรวจสอบสถานะการ pause ของคิวภาพรวม
-          const isPaused = useBackgroundQueueStore.getState().isPaused;
-          if (isPaused) {
-            console.log('[QueueProcessor] Queue processor is paused globally. Exiting loop.');
+          // ตรวจสอบสถานะการ pause ของคิวภาพรวม และการประมวลผล Foreground
+          const storeState = useBackgroundQueueStore.getState();
+          if (storeState.isPaused || storeState.isPausedForForeground) {
+            console.log('[QueueProcessor] Queue processor is paused (global or foreground). Exiting loop.');
             break;
           }
 
@@ -176,15 +197,32 @@ class BackgroundQueueProcessor {
           } catch (error) {
             // ดึงสถานะปัจจุบันของ Job จาก Store
             const currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
-            
+
+            const isAbortLike = error instanceof Error && (
+              error.name === 'AbortError' ||
+              error.message.includes('canceled') ||
+              error.message.includes('aborted') ||
+              error.message.includes('aborted by signal') ||
+              error.message.includes('Worker was terminated') // PDF.js worker terminated เพราะ abort
+            );
+
             if (currentJob?.status === 'cancelled') {
               console.log(`[QueueProcessor] Job ${job.id} was cancelled.`);
             } else if (currentJob?.status === 'paused') {
               console.log(`[QueueProcessor] Job ${job.id} was paused.`);
-            } else if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('canceled') || error.message.includes('aborted'))) {
-              // หากเกิดการ Abort (เช่น ตอนสลับไฟล์) แต่สถานะใน Store ยังไม่ได้อัปเดต ให้ตั้งค่าเป็น cancelled
-              console.log(`[QueueProcessor] Job ${job.id} aborted via signal.`);
-              useBackgroundQueueStore.getState().updateJobStatus(job.id, 'cancelled', 'ยกเลิกแล้ว');
+            } else if (currentJob?.status === 'queued' || currentJob?.status === 'pending') {
+              // งานถูก abort เพื่อหลีกทางให้งานอื่นที่มีลำดับสูงกว่า (Preemption) หรือ Foreground
+              // สถานะ queued ถูกตั้งค่าไว้แล้วโดย Subscriber ก่อน abort ไม่ต้องทำอะไรเพิ่ม
+              console.log(`[QueueProcessor] Job ${job.id} was preempted. Keeping queued status.`);
+            } else if (isAbortLike) {
+              // Abort/Worker terminated ที่ไม่ได้ตั้งใจ: ตรวจสอบสถานะล่าสุดอีกครั้ง
+              const freshState = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
+              if (freshState?.status === 'queued' || freshState?.status === 'pending') {
+                console.log(`[QueueProcessor] Job ${job.id} aborted for preemption, keeping queued status.`);
+              } else {
+                console.log(`[QueueProcessor] Job ${job.id} aborted via signal. Marking cancelled.`);
+                useBackgroundQueueStore.getState().updateJobStatus(job.id, 'cancelled', 'ยกเลิกแล้ว');
+              }
             } else {
               console.error(`[QueueProcessor] Job ${job.id} failed with error:`, error);
               const errMsg = error instanceof Error ? error.message : 'Unknown processor error';
@@ -245,10 +283,14 @@ class BackgroundQueueProcessor {
       }
     };
 
-    throwIfAborted();
+    // ตรวจ abort ก่อน throw เสมอ
+    if (signal.aborted) {
+      throw new Error('Process aborted by signal');
+    }
 
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 0, 1, 'กำลังอ่านไฟล์เอกสาร...');
+    // แสดง immediate feedback บอก user ว่าเริ่มงานแล้ว (ลด delay การ perceive)
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 0, 0, 'เตรียมงาน...');
     let fileData: ArrayBuffer;
     try {
       const fileRes = await window.electronAPI.fs.readFile(job.filepath);
@@ -542,6 +584,10 @@ class BackgroundQueueProcessor {
           throwIfAborted();
         }
       } catch (err: any) {
+        // ถ้า signal ถูก abort เจตนา (Preemption/Foreground) → re-throw ทันที ไม่ treat เป็น chunk failure
+        if (signal.aborted) {
+          throw err; // re-throw ให้ main catch handle ตาม job status ที่ตั้งไว้แล้ว
+        }
         console.error(`[QueueProcessor] Error processing chunk ${chunk.join(', ')}:`, err);
         lastErrorMessage = err.message || String(err);
         if (lastErrorMessage.toLowerCase().includes('gemini') || lastErrorMessage.toLowerCase().includes('api')) {
@@ -563,6 +609,12 @@ class BackgroundQueueProcessor {
       } catch (cudaErr) {
         console.warn(`[QueueProcessor] Failed to clear CUDA cache:`, cudaErr);
       }
+    }
+
+    // ถ้า signal ถูก abort เจตนา (Preemption) → ออกจาก processJob โดยไม่ mark ว่า failed
+    // สถานะ 'queued' ถูกตั้งไว้โดย Subscriber ก่อน abort แล้ว ไม่ต้องทำอะไรเพิ่ม
+    if (signal.aborted) {
+      throw new Error('Process aborted by signal');
     }
 
     if (processedCount < pagesCount) {

@@ -33,9 +33,12 @@ interface BackgroundQueueState {
   jobs: BackgroundJob[];
   activeJobId: string | null;
   isPaused: boolean; // การควบคุมคิวภาพรวม (Pause/Resume Queue Processor)
+  isPausedForForeground: boolean; // true เมื่อการประมวลผลหน้าหลัก (Foreground) กำลังทำงานอยู่
 
   // Actions
   addJob: (jobData: Omit<BackgroundJob, 'id' | 'createdAt' | 'status' | 'progress' | 'currentPage' | 'message' | 'priority'>) => string;
+  // Foreground-priority add: แทรกขึ้นด้านบนสุดของคิว (หลัง running job) ลบ duplicate ที่ค้างอยู่ก่อน (Case 2)
+  addJobAsForeground: (jobData: Omit<BackgroundJob, 'id' | 'createdAt' | 'status' | 'progress' | 'currentPage' | 'message' | 'priority'>) => string;
   pauseJob: (id: string) => void;
   resumeJob: (id: string) => void;
   cancelJob: (id: string) => void;
@@ -47,6 +50,13 @@ interface BackgroundQueueState {
   setQueuePaused: (paused: boolean) => void;
   clearCompletedJobs: () => void;
   
+  // Queue reordering (used by Queue Monitor ^\/v buttons)
+  moveJobUp: (id: string) => void;
+  moveJobDown: (id: string) => void;
+
+  // Foreground preemption: สั่งพักคิวเบื้องหลังชั่วคราวเมื่อหน้าหลักกำลังประมวลผล
+  setForegroundProcessingActive: (active: boolean) => void;
+
   // Persistence helpers
   loadPersistedQueue: () => void;
 }
@@ -72,6 +82,7 @@ export const useBackgroundQueueStore = create<BackgroundQueueState>((set, get) =
   jobs: [],
   activeJobId: null,
   isPaused: false,
+  isPausedForForeground: false,
 
   addJob: (jobData) => {
     const id = `${jobData.documentId}_${Date.now()}`;
@@ -100,6 +111,43 @@ export const useBackgroundQueueStore = create<BackgroundQueueState>((set, get) =
       }
 
       const nextJobs = [...state.jobs, newJob];
+      persistQueue(nextJobs, state.isPaused);
+      return { jobs: nextJobs };
+    });
+
+    return id;
+  },
+
+  addJobAsForeground: (jobData) => {
+    const id = `${jobData.documentId}_fg_${Date.now()}`;
+    const newJob: BackgroundJob = {
+      ...jobData,
+      id,
+      status: 'queued',
+      progress: 0,
+      currentPage: 0,
+      message: 'ลัดคิว (Foreground)...',
+      priority: 50,
+      createdAt: Date.now(),
+    };
+
+    set((state) => {
+      // ลบ duplicate ที่ค้างอยู่ (queued/paused/pending) ก่อน เพื่อให้เพิ่มงานใหม่ได้เสมอ
+      const filteredJobs = state.jobs.filter(
+        (j) => !(
+          j.documentId === jobData.documentId &&
+          j.type === jobData.type &&
+          j.engine === jobData.engine &&
+          j.targetPage === jobData.targetPage &&
+          ['pending', 'queued', 'paused'].includes(j.status) // ไม่ลบ processing
+        )
+      );
+
+      // แทรกที่ position 0 เสมอ (ก่อน running job ทุกชนิด)
+      // Subscriber จะ detect positional preemption: running job (index > 0) มีงาน queued อยู่ข้างหน้า
+      // → Subscriber จะ set running job เป็น 'queued' (Pause) แล้ว abort อัตโนมัติ
+      const nextJobs = [newJob, ...filteredJobs];
+
       persistQueue(nextJobs, state.isPaused);
       return { jobs: nextJobs };
     });
@@ -258,20 +306,59 @@ export const useBackgroundQueueStore = create<BackgroundQueueState>((set, get) =
   },
 
   getNextPendingJob: () => {
-    const { jobs, isPaused } = get();
-    if (isPaused) return null;
+    const { jobs, isPaused, isPausedForForeground } = get();
+    // หากคิวภาพรวมถูก pause หรือ Foreground กำลังทำงานอยู่ ให้ไม่ดึงงานใหม่เลย
+    if (isPaused || isPausedForForeground) return null;
 
-    // หาเฉพาะงานที่มีสถานะ pending หรือ queued
-    const pendingJobs = jobs.filter((job) => job.status === 'pending' || job.status === 'queued');
-    if (pendingJobs.length === 0) return null;
+    // ใช้ FIFO ตามลำดับใน array (ตำแหน่งในอาร์เรย์คือลำดับคิวที่ผู้ใช้เรียงไว้แล้ว)
+    // สแกนหางานชิ้นแรกในอาร์เรย์ที่สถานะเป็น pending หรือ queued
+    return jobs.find((job) => job.status === 'pending' || job.status === 'queued') ?? null;
+  },
 
-    // เรียงลำดับงานตาม Priority (สูงไปต่ำ) จากนั้นเรียงตาม createdAt (เก่าไปใหม่)
-    return pendingJobs.sort((a, b) => {
-      if (b.priority !== a.priority) {
-        return b.priority - a.priority;
+  moveJobUp: (id) => {
+    set((state) => {
+      const idx = state.jobs.findIndex((j) => j.id === id);
+      if (idx <= 0) return { jobs: state.jobs }; // อยู่บนสุดแล้วหรือหาไม่เจอ
+      const nextJobs = [...state.jobs];
+      // สลับตำแหน่งกับงานด้านบน
+      [nextJobs[idx - 1], nextJobs[idx]] = [nextJobs[idx], nextJobs[idx - 1]];
+      persistQueue(nextJobs, state.isPaused);
+      return { jobs: nextJobs };
+    });
+  },
+
+  moveJobDown: (id) => {
+    set((state) => {
+      const idx = state.jobs.findIndex((j) => j.id === id);
+      if (idx < 0 || idx >= state.jobs.length - 1) return { jobs: state.jobs }; // อยู่ล่างสุดแล้ว
+      const nextJobs = [...state.jobs];
+      // สลับตำแหน่งกับงานด้านล่าง
+      [nextJobs[idx], nextJobs[idx + 1]] = [nextJobs[idx + 1], nextJobs[idx]];
+      persistQueue(nextJobs, state.isPaused);
+      return { jobs: nextJobs };
+    });
+  },
+
+  setForegroundProcessingActive: (active) => {
+    set((state) => {
+      if (state.isPausedForForeground === active) return {}; // ไม่มีการเปลี่ยนแปลง
+
+      let nextJobs = state.jobs;
+      let nextActiveJobId = state.activeJobId;
+
+      if (active && state.activeJobId) {
+        // Foreground เริ่มทำงาน: พักงานเบื้องหลังที่กำลังรันอยู่ชั่วคราว
+        nextJobs = state.jobs.map((job) =>
+          job.id === state.activeJobId && job.status === 'processing'
+            ? { ...job, status: 'queued' as const, message: 'พักชั่วคราว (รอหน้าหลักเสร็จ)...' }
+            : job
+        );
+        nextActiveJobId = null;
       }
-      return a.createdAt - b.createdAt;
-    })[0];
+
+      persistQueue(nextJobs, state.isPaused);
+      return { isPausedForForeground: active, jobs: nextJobs, activeJobId: nextActiveJobId };
+    });
   },
 
   setQueuePaused: (paused) => {

@@ -897,7 +897,7 @@ app.whenReady().then(() => {
   ipcMain.handle('fs:open-file', async () => {
     try {
       const result = await dialog.showOpenDialog({
-        properties: ['openFile'],
+        properties: ['openFile', 'multiSelections'],
         filters: [
           { name: 'Documents', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff'] },
           { name: 'All Files', extensions: ['*'] },
@@ -908,17 +908,21 @@ app.whenReady().then(() => {
         return null;
       }
 
-      const filepath = result.filePaths[0];
-      const documentFile = await inspectExistingDocumentFile(filepath)
-      const buffer = await fs.promises.readFile(documentFile.canonicalPath)
+      const files = await Promise.all(
+        result.filePaths.map(async (filepath) => {
+          const documentFile = await inspectExistingDocumentFile(filepath);
+          const buffer = await fs.promises.readFile(documentFile.canonicalPath);
+          return {
+            filepath: documentFile.canonicalPath,
+            data: buffer,
+            mimeType: documentFile.mimeType,
+            size: documentFile.size,
+            name: documentFile.name,
+          };
+        })
+      );
 
-      return {
-        filepath: documentFile.canonicalPath,
-        data: buffer,
-        mimeType: documentFile.mimeType,
-        size: documentFile.size,
-        name: documentFile.name,
-      };
+      return files;
     } catch (error) {
       console.error('fs:open-file error:', error);
       throw error;

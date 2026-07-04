@@ -562,8 +562,9 @@ export const OCRTextLayerPanel: React.FC = () => {
           targetPage: currentPageRef.current,
           ocrLanguage: optionsRef.current.language,
         });
-        useBackgroundQueueStore.getState().boostPriorityForDocument(documentIdRef.current || 0);
-        console.log(`[OCRPanel] Unmounted with active OCR page ${currentPageRef.current}. Delegated to Background Queue.`);
+        // ไม่เรียก boostPriorityForDocument — งานที่ถูก delegate จาก Panel จะต่อท้ายคิวตาม FIFO
+        // ไม่ควรขัดจังหวะงานที่กำลังทำอยู่ใน Background Queue
+        console.log(`[OCRPanel] Unmounted with active OCR page ${currentPageRef.current}. Delegated to Background Queue (FIFO).`);
       }
 
       pdfDocRef.current?.destroy();

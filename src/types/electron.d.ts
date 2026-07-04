@@ -15,6 +15,7 @@ export interface DBDocument {
   thumbnail_path: string | null;
   project_id: number | null;
   is_favorite: boolean;
+  rating?: number;
   last_page: number;
   created_at: string;
   last_accessed: string;
@@ -79,6 +80,7 @@ export interface DocumentUpdate {
   thumbnail_path?: string;
   is_favorite?: boolean;
   total_pages?: number;
+  rating?: number;
 }
 
 export interface ProjectCreate {
@@ -268,13 +270,13 @@ export interface ElectronAPI {
       size: number;
       name: string;
     }>;
-    openFile: () => Promise<{
+    openFile: () => Promise<Array<{
       filepath: string;
       data: Uint8Array | ArrayBuffer | string;
       mimeType: string;
       size: number;
       name: string;
-    } | null>;
+    }> | null>;
     importFile: (payload: {
       name: string;
       mimeType: string;

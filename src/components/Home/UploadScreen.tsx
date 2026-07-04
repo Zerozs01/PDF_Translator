@@ -5,7 +5,8 @@ import {
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
-  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play, Filter, Edit3
+  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play, Filter, Edit3, Zap, Award,
+  ChevronUp, ChevronDown
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
@@ -22,6 +23,12 @@ import { OCREngine } from '../../types';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 import { SecuritySettings } from '../Auth/SecuritySettings';
+import { dbService } from '../../services/dbService';
+import {
+  prepareProjectDocumentLoad,
+  ensureProjectDocumentRecord,
+  touchProjectDocumentActivity
+} from '../../services/projectDocumentService';
 
 type SidebarPage = 'home' | 'projects' | 'settings';
 
@@ -176,6 +183,7 @@ type MenuActionDialogState = {
   isOpen: boolean;
   name: string;
   documentId: number | null;
+  parentId?: number | null;
 };
 
 type MenuPosition = {
@@ -232,6 +240,7 @@ const DocumentContextMenu: React.FC<{
   onDelete: () => void;
   onCreateTag: () => void;
   onOCRAllPages: () => void;
+  onUpdateRating: (rating: number) => void;
 }> = ({
   doc,
   position,
@@ -244,7 +253,8 @@ const DocumentContextMenu: React.FC<{
   onMoveToProject,
   onDelete,
   onCreateTag,
-  onOCRAllPages
+  onOCRAllPages,
+  onUpdateRating
 }) => {
   const assignedTagIds = useMemo(() => new Set(documentTags.map(tag => tag.id)), [documentTags]);
   const projectAccentById = useMemo(
@@ -282,28 +292,45 @@ const DocumentContextMenu: React.FC<{
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="border-b border-white/10 px-2 pb-2">
-        <div className="truncate text-xs font-semibold text-slate-100">{doc.filename}</div>
-        <div className="mt-1 text-[10px] text-slate-400 flex items-center justify-between gap-2">
-          <span>{formatDate(doc.last_accessed)}</span>
-          <span className="text-[9px] text-[#2B9BFF] bg-[#2B9BFF]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
-            แคช: {cacheSize !== null ? formatFileSize(cacheSize) : 'คำนวณ...'}
-          </span>
+      <div className="border-b border-white/10 px-2 pb-2.5 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-slate-100" title={doc.filename}>{doc.filename}</div>
+          <div className="mt-1 flex items-center gap-1.5">
+            <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Rating:</span>
+            <div className="flex items-center">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  onClick={() => onUpdateRating((doc.rating || 0) === star ? 0 : star)}
+                  className="p-0.5 text-slate-500 hover:text-amber-400 transition-colors"
+                >
+                  <Star
+                    size={13}
+                    className={star <= (doc.rating || 0) ? 'text-amber-400 fill-amber-400' : 'text-slate-600'}
+                  />
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div className="space-y-1 px-1 py-2">
         <button
           onClick={() => {
             onToggleFavorite();
             onClose();
           }}
-          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-200 transition-colors hover:bg-white/10"
+          className={`p-1.5 rounded-lg border transition-all shrink-0 ${
+            doc.is_favorite 
+              ? 'border-rose-500/25 bg-rose-500/10 text-rose-500' 
+              : 'border-white/10 bg-slate-900/30 text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title={doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
         >
-          <Heart size={12} fill={doc.is_favorite ? 'currentColor' : 'none'} />
-          {doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
+          <Heart size={13} fill={doc.is_favorite ? 'currentColor' : 'none'} />
         </button>
+      </div>
 
+      <div className="space-y-1 px-1 py-2">
         <button
           onClick={() => {
             onOCRAllPages();
@@ -312,30 +339,8 @@ const DocumentContextMenu: React.FC<{
           className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-[#2B9BFF] transition-colors hover:bg-[#2B9BFF]/10 font-medium"
         >
           <Cpu size={12} />
-          OCR / แปลทุกหน้า (OCR/Translate All)
+          OCR Panel
         </button>
-
-        {cacheSize !== null && cacheSize > 0 && (
-          <button
-            onClick={async () => {
-              const confirm = window.confirm(`ต้องการลบแคช (OCR + Overlay แปล) ของไฟล์นี้หรือไม่?\nขนาดแคช: ${formatFileSize(cacheSize)}`);
-              if (confirm) {
-                await window.electronAPI.db.clearDocumentCache(doc.id);
-                
-                // Clear React memory store cache to ensure a fresh reload upon opening
-                useLayerStore.getState().clearLayers();
-                useOCRTextLayerStore.getState().clearAllOCR();
-                useOCRTextLayerStore.getState().setCurrentPageOCR(null);
-                
-                setCacheSize(0);
-              }
-            }}
-            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-amber-300 transition-colors hover:bg-amber-500/10"
-          >
-            <RefreshCw size={12} />
-            ล้างข้อมูลแคช (Clear Cache)
-          </button>
-        )}
       </div>
 
       <div className="border-t border-white/10 px-2 py-2">
@@ -431,15 +436,42 @@ const DocumentContextMenu: React.FC<{
         </div>
       </div>
 
-      <div className="border-t border-white/10 px-1 pt-2">
+      <div className="border-t border-white/10 px-1 pt-2 flex gap-1.5">
+        {cacheSize !== null && cacheSize > 0 ? (
+          <button
+            onClick={async () => {
+              const confirm = window.confirm(`ต้องการลบแคช (OCR + Overlay แปล) ของไฟล์นี้หรือไม่?\nขนาดแคช: ${formatFileSize(cacheSize)}`);
+              if (confirm) {
+                await window.electronAPI.db.clearDocumentCache(doc.id);
+                useLayerStore.getState().clearLayers();
+                useOCRTextLayerStore.getState().clearAllOCR();
+                useOCRTextLayerStore.getState().setCurrentPageOCR(null);
+                setCacheSize(0);
+              }
+            }}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#d97706]/10 border border-[#d97706]/20 py-2 text-[10px] font-semibold text-amber-500 hover:text-amber-400 transition-colors hover:bg-[#d97706]/20"
+          >
+            <RefreshCw size={11} />
+            Clear Cache
+          </button>
+        ) : (
+          <button
+            disabled
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-slate-900/40 border border-white/5 py-2 text-[10px] font-semibold text-slate-500 cursor-not-allowed"
+          >
+            <RefreshCw size={11} />
+            Clear Cache
+          </button>
+        )}
+
         <button
           onClick={() => {
             onDelete();
             onClose();
           }}
-          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-white text-[#EA580C] hover:bg-white/90 py-2 text-[10px] font-bold transition-all shadow-sm"
         >
-          <Trash2 size={12} />
+          <Trash2 size={11} className="text-[#EA580C]" />
           Delete
         </button>
       </div>
@@ -496,7 +528,8 @@ const ProjectContextMenu: React.FC<{
   onClose: () => void;
   onDelete: () => void;
   onEdit: () => void;
-}> = ({ project, position, onClose, onDelete, onEdit }) => {
+  onCreateSubfolder: () => void;
+}> = ({ project, position, onClose, onDelete, onEdit, onCreateSubfolder }) => {
   const accent = project.color || resolveStableAccent(project.id);
   return createPortal(
   <div
@@ -514,6 +547,16 @@ const ProjectContextMenu: React.FC<{
       <div className="mt-1 text-[10px] text-slate-400">Deleting a folder does not delete the documents inside it.</div>
     </div>
     <div className="pt-2 space-y-0.5">
+      <button
+        onClick={() => {
+          onCreateSubfolder();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10"
+      >
+        <FolderPlus size={12} className="text-slate-400" />
+        Create Subfolder
+      </button>
       <button
         onClick={() => {
           onEdit();
@@ -544,13 +587,34 @@ const SortContextMenu: React.FC<{
   position: MenuPosition;
   sortBy: SortBy;
   sortOrder: SortOrder;
+  ratingFilterMode: 'only' | 'range';
+  ratingFilterOnly: number | null;
+  ratingFilterMin: number | null;
+  ratingFilterMax: number | null;
+  onUpdateFilters: (updates: {
+    mode?: 'only' | 'range';
+    only?: number | null;
+    min?: number | null;
+    max?: number | null;
+  }) => void;
   onSelect: (key: SortBy, order: SortOrder) => void;
   onClose: () => void;
-}> = ({ position, sortBy, sortOrder, onSelect, onClose }) => {
+}> = ({
+  position,
+  sortBy,
+  sortOrder,
+  ratingFilterMode,
+  ratingFilterOnly,
+  ratingFilterMin,
+  ratingFilterMax,
+  onUpdateFilters,
+  onSelect,
+  onClose
+}) => {
   return createPortal(
     <div
       data-library-floating-menu="true"
-      className="fixed z-[160] w-48 rounded-2xl border border-white/15 bg-slate-950/95 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl flex flex-col gap-0.5"
+      className="fixed z-[160] w-[270px] rounded-2xl border border-white/15 bg-slate-950/95 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl flex flex-col gap-0.5"
       style={{ left: position.x, top: position.y }}
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
@@ -558,32 +622,183 @@ const SortContextMenu: React.FC<{
       <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-white/5 mb-1">
         Sort Documents
       </div>
-      {[
-        { label: 'Newest', key: 'date', order: 'desc' as const },
-        { label: 'Oldest', key: 'date', order: 'asc' as const },
-        { label: 'A-Z', key: 'name', order: 'asc' as const },
-        { label: 'Z-A', key: 'name', order: 'desc' as const },
-        { label: 'Rating', key: 'rating', order: 'desc' as const }
-      ].map((opt) => {
-        const isActive = sortBy === opt.key && sortOrder === opt.order;
-        return (
+      <div className="grid grid-cols-2 gap-1 p-1">
+        {[
+          { label: 'Newest', key: 'date', order: 'desc' as const, labelComponent: <span>Newest</span> },
+          { label: 'Oldest', key: 'date', order: 'asc' as const, labelComponent: <span>Oldest</span> },
+          { label: 'A-Z', key: 'name', order: 'asc' as const, labelComponent: <span>A-Z</span> },
+          { label: 'Z-A', key: 'name', order: 'desc' as const, labelComponent: <span>Z-A</span> },
+          { 
+            label: 'Rating: High to Low', 
+            key: 'rating', 
+            order: 'desc' as const, 
+            labelComponent: <span className="flex items-center gap-1"><Star size={11} className="fill-amber-400 text-amber-400 shrink-0" /> High ▲</span> 
+          },
+          { 
+            label: 'Rating: Low to High', 
+            key: 'rating', 
+            order: 'asc' as const, 
+            labelComponent: <span className="flex items-center gap-1"><Star size={11} className="fill-amber-400 text-amber-400 shrink-0" /> Low ▼</span> 
+          }
+        ].map((opt) => {
+          const isActive = sortBy === opt.key && sortOrder === opt.order;
+          return (
+            <button
+              key={`${opt.key}-${opt.order}`}
+              onClick={() => {
+                onSelect(opt.key as SortBy, opt.order);
+                onClose();
+              }}
+              className={`flex items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-xs transition-all border ${
+                isActive
+                  ? 'bg-white/10 text-white font-medium border-white/10'
+                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200 border-transparent'
+              }`}
+            >
+              {opt.labelComponent}
+              {isActive && <Check size={10} className="text-[#5CC6F2] shrink-0" />}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-t border-b border-white/5 my-1 mt-2">
+        Filter by Rating
+      </div>
+
+      <div className="flex flex-col gap-2 p-2 bg-white/[0.02] rounded-xl border border-white/5 my-1 mx-0.5">
+        {/* Only Rating Row */}
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="text-[11px] font-medium text-slate-400 select-none min-w-[32px]">Only:</span>
+          <div className="flex items-center gap-0.5">
+            {[1, 2, 3, 4, 5].map((stars) => {
+              const isSelected = ratingFilterMode === 'only' && ratingFilterOnly === stars;
+              return (
+                <button
+                  key={stars}
+                  onClick={() => {
+                    if (ratingFilterMode === 'only' && ratingFilterOnly === stars) {
+                      onUpdateFilters({ mode: 'only', only: null });
+                    } else {
+                      onUpdateFilters({ mode: 'only', only: stars });
+                    }
+                  }}
+                  className="p-0.5 hover:scale-110 active:scale-95 transition-all text-slate-600 hover:text-amber-400"
+                  title={`Only ${stars} stars`}
+                >
+                  <Star 
+                    size={12} 
+                    className={isSelected ? "fill-amber-400 text-amber-400" : "text-slate-600 hover:text-amber-400"} 
+                  />
+                </button>
+              );
+            })}
+          </div>
           <button
-            key={`${opt.key}-${opt.order}`}
             onClick={() => {
-              onSelect(opt.key as SortBy, opt.order);
-              onClose();
+              if (ratingFilterMode === 'only' && ratingFilterOnly === 0) {
+                onUpdateFilters({ mode: 'only', only: null });
+              } else {
+                onUpdateFilters({ mode: 'only', only: 0 });
+              }
             }}
-            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-all ${
-              isActive
-                ? 'bg-white/10 text-white font-medium'
-                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+            className={`px-1.5 py-0.5 rounded text-[10px] transition-all border ${
+              ratingFilterMode === 'only' && ratingFilterOnly === 0
+                ? 'bg-[#5CC6F2]/10 text-[#5CC6F2] border-[#5CC6F2]/30 font-semibold animate-pulse'
+                : 'text-slate-500 hover:text-slate-300 border-transparent hover:border-white/5'
             }`}
           >
-            <span>{opt.label}</span>
-            {isActive && <Check size={12} className="text-[#5CC6F2]" />}
+            ☆ None
           </button>
-        );
-      })}
+        </div>
+
+        {/* Min/Max Rating Row */}
+        <div className="flex flex-col gap-1.5 pt-1.5 border-t border-white/5">
+          {/* Min row */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-slate-400 select-none min-w-[32px]">Min:</span>
+            <button
+              onClick={() => {
+                onUpdateFilters({ mode: 'range', min: null });
+              }}
+              className={`p-0.5 rounded hover:bg-white/5 text-slate-500 hover:text-slate-300 transition-colors ${
+                ratingFilterMode === 'range' && ratingFilterMin === null ? 'text-[#5CC6F2]' : ''
+              }`}
+              title="Reset Min"
+            >
+              <RefreshCw size={10} />
+            </button>
+            <div className="flex items-center gap-0.5">
+              {[1, 2, 3, 4, 5].map((stars) => {
+                const isSelected = ratingFilterMode === 'range' && ratingFilterMin !== null && ratingFilterMin === stars;
+                const isPassive = ratingFilterMode === 'range' && ratingFilterMin !== null && stars <= ratingFilterMin;
+                return (
+                  <button
+                    key={stars}
+                    onClick={() => {
+                      onUpdateFilters({ mode: 'range', min: stars });
+                    }}
+                    className="p-0.5 hover:scale-110 active:scale-95 transition-all"
+                  >
+                    <Star 
+                      size={11} 
+                      className={
+                        isSelected 
+                          ? "fill-blue-400 text-blue-400" 
+                          : isPassive 
+                            ? "fill-blue-400/40 text-blue-400/40" 
+                            : "text-slate-600 hover:text-blue-400"
+                      } 
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Max row */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-slate-400 select-none min-w-[32px]">Max:</span>
+            <button
+              onClick={() => {
+                onUpdateFilters({ mode: 'range', max: null });
+              }}
+              className={`p-0.5 rounded hover:bg-white/5 text-slate-500 hover:text-slate-300 transition-colors ${
+                ratingFilterMode === 'range' && ratingFilterMax === null ? 'text-[#5CC6F2]' : ''
+              }`}
+              title="Reset Max"
+            >
+              <RefreshCw size={10} />
+            </button>
+            <div className="flex items-center gap-0.5">
+              {[1, 2, 3, 4, 5].map((stars) => {
+                const isSelected = ratingFilterMode === 'range' && ratingFilterMax !== null && ratingFilterMax === stars;
+                const isPassive = ratingFilterMode === 'range' && ratingFilterMax !== null && stars <= ratingFilterMax;
+                return (
+                  <button
+                    key={stars}
+                    onClick={() => {
+                      onUpdateFilters({ mode: 'range', max: stars });
+                    }}
+                    className="p-0.5 hover:scale-110 active:scale-95 transition-all"
+                  >
+                    <Star 
+                      size={11} 
+                      className={
+                        isSelected 
+                          ? "fill-amber-400 text-amber-400" 
+                          : isPassive 
+                            ? "fill-amber-400/40 text-amber-400/40" 
+                            : "text-slate-600 hover:text-amber-400"
+                      } 
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>,
     document.body
   );
@@ -593,7 +808,9 @@ const DocumentCard = React.memo<{
   doc: DBDocument;
   viewMode: FileBrowserViewMode;
   isSelected: boolean;
+  isMultiSelectActive?: boolean;
   onOpen: () => void;
+  onToggleSelect?: () => void;
   onToggleFavorite: () => void;
   onDelete: () => void;
   isMenuOpen: boolean;
@@ -606,16 +823,19 @@ const DocumentCard = React.memo<{
   onToggleTag: (tag: DBTag) => void;
   onMoveToProject: (projectId: number | null) => void;
   onCreateTag: () => void;
-  onDragStart: () => void;
+  onDragStart: (event: React.DragEvent) => void;
   onDragEnd: () => void;
   isThumbnailHidden?: boolean;
   onToggleHideThumbnail?: () => void;
   onOCRAllPages: () => void;
+  onUpdateRating: (rating: number) => void;
 }>(({
   doc,
   viewMode,
   isSelected,
+  isMultiSelectActive = false,
   onOpen,
+  onToggleSelect,
   onToggleFavorite,
   onDelete,
   isMenuOpen,
@@ -632,7 +852,8 @@ const DocumentCard = React.memo<{
   onDragEnd,
   isThumbnailHidden = false,
   onToggleHideThumbnail,
-  onOCRAllPages
+  onOCRAllPages,
+  onUpdateRating
 }) => {
   const thumbnail = isThumbnailHidden ? (
     <div className="h-full w-full bg-[#f8fafc] border border-slate-200/80 shadow-inner flex flex-col items-center justify-center relative overflow-hidden group/paper">
@@ -653,17 +874,23 @@ const DocumentCard = React.memo<{
         data-document-card="true"
         className={`group relative p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-xl ${
           isSelected 
-            ? 'bg-[#090a0d] border-white/14 shadow-[0_14px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]' 
+            ? 'bg-[#090a0d] border-[#2B9BFF]/60 shadow-[0_14px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]' 
             : 'bg-[#08090c]/96 border-white/8 hover:border-white/12 hover:bg-[#101216]'
         }`}
         draggable
         onDragStart={(e) => {
-          e.dataTransfer.setData('application/x-document-id', String(doc.id));
-          e.dataTransfer.effectAllowed = 'move';
-          onDragStart();
+          onDragStart(e);
         }}
         onDragEnd={onDragEnd}
-        onClick={onOpen}
+        onClick={(e) => {
+          if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleSelect?.();
+          } else {
+            onOpen();
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -672,11 +899,22 @@ const DocumentCard = React.memo<{
       >
         <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
           {thumbnail}
+          {isSelected && (
+            <div className="absolute top-2 left-2 h-5 w-5 rounded-md bg-[#2B9BFF] text-white flex items-center justify-center shadow-md border border-white/20 z-20 animate-fade-in">
+              <Check size={12} className="stroke-[3]" />
+            </div>
+          )}
         </div>
         
         <h3 className="font-medium text-sm text-slate-100 truncate mb-1">{doc.filename}</h3>
-        <p className="text-[10px] text-slate-400">
-          {formatDate(doc.last_accessed)} • {doc.total_pages} pages
+        <p className="text-[10px] text-slate-400 flex items-center justify-between gap-1">
+          <span>{formatDate(doc.last_accessed)} • {doc.total_pages} pages</span>
+          {(doc.rating || 0) > 0 && (
+            <span className="flex items-center text-amber-400 gap-0.5 shrink-0">
+              <Star size={10} className="fill-amber-400" />
+              <span className="text-[9px] font-bold">{doc.rating}</span>
+            </span>
+          )}
         </p>
         
         <button 
@@ -684,7 +922,9 @@ const DocumentCard = React.memo<{
           className={`absolute top-2 left-2 p-1.5 rounded-lg transition-all z-10 ${
             isThumbnailHidden 
               ? 'bg-[#839958] text-white border border-[#839958] shadow-[0_0_8px_rgba(131,153,88,0.4)] opacity-100'
-              : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-slate-200'
+              : isSelected 
+                ? 'opacity-0 pointer-events-none'
+                : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-slate-200'
           }`}
           title={isThumbnailHidden ? 'แสดงรูปภาพตัวอย่าง' : 'ซ่อนรูปภาพตัวอย่าง'}
         >
@@ -716,6 +956,7 @@ const DocumentCard = React.memo<{
             onDelete={onDelete}
             onCreateTag={onCreateTag}
             onOCRAllPages={onOCRAllPages}
+            onUpdateRating={onUpdateRating}
           />
         )}
       </div>
@@ -727,30 +968,49 @@ const DocumentCard = React.memo<{
       data-document-card="true"
       className={`group relative flex items-center gap-4 p-3 rounded-xl border transition-all cursor-pointer backdrop-blur-xl ${
         isSelected 
-          ? 'bg-[#0a0b0e] border-white/14' 
+          ? 'bg-[#0a0b0e] border-[#2B9BFF]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]' 
           : 'bg-[#08090c]/94 border-white/8 hover:border-white/12 hover:bg-[#101216]'
       }`}
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData('application/x-document-id', String(doc.id));
-        e.dataTransfer.effectAllowed = 'move';
-        onDragStart();
+        onDragStart(e);
       }}
       onDragEnd={onDragEnd}
-      onClick={onOpen}
+      onClick={(e) => {
+        if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggleSelect?.();
+        } else {
+          onOpen();
+        }
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
         onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 560));
       }}
     >
+      {isSelected && (
+        <div className="h-4 w-4 rounded bg-[#2B9BFF] text-white flex items-center justify-center shrink-0 shadow-sm border border-white/10">
+          <Check size={10} className="stroke-[3]" />
+        </div>
+      )}
       <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-[#090a0c]">
         <div className="absolute inset-0 flex items-center justify-center">
           {thumbnail}
         </div>
       </div>
       <div className="flex-1 min-w-0">
-        <h3 className="font-medium text-sm text-slate-100 truncate">{doc.filename}</h3>
+        <h3 className="font-medium text-sm text-slate-100 truncate flex items-center gap-2">
+          <span>{doc.filename}</span>
+          {(doc.rating || 0) > 0 && (
+            <span className="inline-flex items-center text-amber-400 gap-0.5 shrink-0">
+              <Star size={10} className="fill-amber-400" />
+              <span className="text-[9px] font-bold">{doc.rating}</span>
+            </span>
+          )}
+        </h3>
         <p className="text-[10px] text-slate-400">
           {doc.total_pages} pages • {formatFileSize(doc.file_size)}
         </p>
@@ -799,6 +1059,7 @@ const DocumentCard = React.memo<{
           onDelete={onDelete}
           onCreateTag={onCreateTag}
           onOCRAllPages={onOCRAllPages}
+          onUpdateRating={onUpdateRating}
         />
       )}
     </div>
@@ -816,7 +1077,11 @@ const ProjectItem = React.memo<{
   onDragLeave: () => void;
   onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
   onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop, onContextMenu }) => {
+  level?: number;
+  hasChildren?: boolean;
+  isExpanded?: boolean;
+  onToggleExpand?: () => void;
+}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop, onContextMenu, level = 0, hasChildren = false, isExpanded = false, onToggleExpand }) => {
   const accent = displayColor || resolveStableAccent(project.id);
   return (
   <button 
@@ -825,7 +1090,7 @@ const ProjectItem = React.memo<{
     onDragOver={onDragOver}
     onDragLeave={onDragLeave}
     onDrop={onDrop}
-    className={`w-full p-3 rounded-xl text-left transition-all flex items-center gap-3 border ${
+    className={`w-full p-3 rounded-xl text-left transition-all flex items-center border ${
       isDropTarget
         ? 'border-white/16 bg-[#20242b] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
         : 
@@ -835,14 +1100,45 @@ const ProjectItem = React.memo<{
     }`}
     style={isSelected ? { backgroundColor: hexToRgba(accent, 0.14) } : undefined}
   >
+    {/* Tree line connector */}
+    {level > 0 && (
+      <div 
+        className="flex items-center justify-end shrink-0 text-slate-600/60"
+        style={{ width: `${level * 16}px`, height: '24px' }}
+      >
+        <span className="w-2.5 h-4 border-l border-b border-white/20 rounded-bl mr-1.5 mt-[-8px]" />
+      </div>
+    )}
+
     <div 
-      className="p-2 rounded-lg border border-white/5"
+      className="p-2 rounded-lg border border-white/5 flex items-center justify-center shrink-0 mr-3"
       style={{ backgroundColor: hexToRgba(accent, 0.14) }}
     >
       <Folder size={16} style={{ color: accent }} />
     </div>
     <span className="flex-1 truncate text-sm text-slate-200">{project.name}</span>
-    <ChevronRight size={14} className="text-slate-500" />
+    {hasChildren ? (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleExpand?.();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.stopPropagation();
+            onToggleExpand?.();
+          }
+        }}
+        className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-all shrink-0 ml-1 cursor-pointer"
+        title={isExpanded ? 'Collapse subfolders' : 'Expand subfolders'}
+      >
+        <ChevronRight size={14} className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
+      </div>
+    ) : (
+      <div className="w-7 shrink-0" />
+    )}
   </button>
   );
 });
@@ -901,6 +1197,8 @@ export const UploadScreen: React.FC = () => {
   const cancelJob = useBackgroundQueueStore((state) => state.cancelJob);
   const removeJob = useBackgroundQueueStore((state) => state.removeJob);
   const clearCompletedJobs = useBackgroundQueueStore((state) => state.clearCompletedJobs);
+  const moveJobUp = useBackgroundQueueStore((state) => state.moveJobUp);
+  const moveJobDown = useBackgroundQueueStore((state) => state.moveJobDown);
 
   const {
     viewMode, setViewMode,
@@ -995,10 +1293,29 @@ export const UploadScreen: React.FC = () => {
     name: string;
     color: string;
   }>({ isOpen: false, project: null, name: '', color: '' });
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
   const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortMenuPosition, setSortMenuPosition] = useState<MenuPosition | null>(null);
+  const [ratingFilterMode, setRatingFilterMode] = useState<'only' | 'range'>('only');
+  const [ratingFilterOnly, setRatingFilterOnly] = useState<number | null>(null);
+  const [ratingFilterMin, setRatingFilterMin] = useState<number | null>(null);
+  const [ratingFilterMax, setRatingFilterMax] = useState<number | null>(null);
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<number>>(new Set());
+  const [isProfileListOpen, setIsProfileListOpen] = useState(false);
+
+  const toggleProjectExpanded = useCallback((projectId: number) => {
+    setExpandedProjectIds(current => {
+      const newSet = new Set(current);
+      if (newSet.has(projectId)) {
+        newSet.delete(projectId);
+      } else {
+        newSet.add(projectId);
+      }
+      return newSet;
+    });
+  }, []);
 
   const [ocrBackgroundDialog, setOcrBackgroundDialog] = useState<{
     isOpen: boolean;
@@ -1006,28 +1323,60 @@ export const UploadScreen: React.FC = () => {
     model: OCREngine;
     profile: 'ocr_all' | 'offline_all';
     ocrLanguage: string;
+    ocrQualityProfile: 'fast' | 'best';
+    targetLanguage: string;
   }>({
     isOpen: false,
     doc: null,
     model: 'paddleocr',
     profile: 'offline_all',
     ocrLanguage: 'eng',
+    ocrQualityProfile: 'best',
+    targetLanguage: 'th',
   });
+
+  const [dialogCachePages, setDialogCachePages] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc) {
+      setDialogCachePages(null); // Reset
+      if (window.electronAPI?.db?.getOcrCacheStatsForDocumentIds) {
+        window.electronAPI.db.getOcrCacheStatsForDocumentIds([ocrBackgroundDialog.doc.id])
+          .then((rows) => {
+            if (rows && rows.length > 0) {
+              setDialogCachePages(rows[0].cache_pages);
+            } else {
+              setDialogCachePages(0);
+            }
+          })
+          .catch((err) => {
+            console.error('Failed to get cache pages stats for dialog:', err);
+            setDialogCachePages(0);
+          });
+      } else {
+        setDialogCachePages(0);
+      }
+    }
+  }, [ocrBackgroundDialog.isOpen, ocrBackgroundDialog.doc]);
 
   const openOcrBackgroundDialog = useCallback((doc: DBDocument) => {
     const currentOcrLanguage = useOCRTextLayerStore.getState().options.language || 'eng';
     const currentOcrEngine = (useOCRTextLayerStore.getState().options.engine || 'paddleocr') as OCREngine;
+    const currentTargetLanguage = useProjectStore.getState().targetLanguage || 'th';
+    const currentOcrQuality = useOCRTextLayerStore.getState().options.ocrQualityProfile || 'best';
     setOcrBackgroundDialog({
       isOpen: true,
       doc,
       model: currentOcrEngine,
       profile: 'offline_all',
       ocrLanguage: currentOcrLanguage,
+      ocrQualityProfile: currentOcrQuality === 'fast' ? 'fast' : 'best',
+      targetLanguage: currentTargetLanguage,
     });
   }, []);
 
   const handleStartOcrBackground = useCallback(() => {
-    const { doc, model, profile, ocrLanguage } = ocrBackgroundDialog;
+    const { doc, model, profile, ocrLanguage, ocrQualityProfile, targetLanguage } = ocrBackgroundDialog;
     if (!doc) return;
 
     const opt = useOCRTextLayerStore.getState().options;
@@ -1042,6 +1391,7 @@ export const UploadScreen: React.FC = () => {
         type: 'ocr_all',
         totalPages: Math.max(1, doc.total_pages),
         ocrLanguage: ocrLanguage,
+        ocrQualityProfile: ocrQualityProfile,
         useAngleCls: opt.useAngleCls,
       });
     } else {
@@ -1054,16 +1404,17 @@ export const UploadScreen: React.FC = () => {
         totalPages: Math.max(1, doc.total_pages),
         ocrLanguage: ocrLanguage,
         sourceLanguage: projectState.sourceLanguage || 'eng',
-        targetLanguage: projectState.targetLanguage || 'th',
+        targetLanguage: targetLanguage,
         translationMode: projectState.translationMode || 'adaptive',
         ocrDpi: opt.dpi || 300,
         ocrPageSegMode: opt.pageSegMode,
-        ocrQualityProfile: opt.ocrQualityProfile || 'best',
+        ocrQualityProfile: ocrQualityProfile,
         useAngleCls: opt.useAngleCls,
       });
     }
 
-    useBackgroundQueueStore.getState().boostPriorityForDocument(doc.id);
+    // ไม่เรียก boostPriorityForDocument สำหรับคิวเบื้องหลัง (Case 1)
+    // งานที่เพิ่มจาก OCR Panel จะต่อท้ายคิวตาม FIFO โดยไม่แทรกคิวหรือยกเลิกงานที่กำลังรันอยู่
     setOcrBackgroundDialog(prev => ({ ...prev, isOpen: false, doc: null }));
   }, [ocrBackgroundDialog]);
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
@@ -1193,6 +1544,7 @@ export const UploadScreen: React.FC = () => {
         setDeleteTagDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
         setDeleteProjectDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
         setEditProjectDialog((current) => ({ ...current, isOpen: false }));
+        useFileBrowserStore.getState().clearSelection();
       }
     };
 
@@ -1204,51 +1556,184 @@ export const UploadScreen: React.FC = () => {
     };
   }, []);
 
+  const refreshLibraryView = useCallback(async () => {
+    const activeSearch = searchQuery.trim();
+    if (activeSearch) {
+      await searchDocuments(activeSearch);
+      return;
+    }
+
+    if (filterType === 'favorites') {
+      await loadFavoriteDocuments();
+      return;
+    }
+
+    if (filterType === 'tag' && selectedTagId !== null) {
+      await loadDocumentsByTag(selectedTagId);
+      return;
+    }
+
+    if (filterType === 'project') {
+      await loadDocumentsByProject(selectedProjectId ?? null);
+      return;
+    }
+
+    await loadRecentDocuments();
+  }, [
+    filterType,
+    loadDocumentsByProject,
+    loadDocumentsByTag,
+    loadFavoriteDocuments,
+    loadRecentDocuments,
+    searchDocuments,
+    searchQuery,
+    selectedProjectId,
+    selectedTagId,
+  ]);
+
+  const handleImportFiles = useCallback(async (files: FileList | File[]) => {
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+
+    if (fileList.length === 1) {
+      const file = fileList[0];
+      try {
+        await loadProject(file);
+        setFileOpenError(null);
+        
+        // Auto assign to selectedProjectId if inside a folder
+        const documentId = useProjectStore.getState().documentId;
+        if (documentId && selectedProjectId) {
+          await moveToProject(documentId, selectedProjectId);
+        }
+      } catch (error) {
+        reportFileOpenError('file_input', error, {
+          filename: file.name,
+          filepath: (file as unknown as { path?: string }).path
+        });
+      }
+      return;
+    }
+
+    setImportProgress({ current: 0, total: fileList.length });
+    try {
+      for (let i = 0; i < fileList.length; i++) {
+        setImportProgress({ current: i + 1, total: fileList.length });
+        const file = fileList[i];
+        
+        const prepared = await prepareProjectDocumentLoad({
+          db: dbService,
+          file: file as File & { path?: string },
+          importFile: window.electronAPI?.fs?.importFile,
+        });
+        
+        const resolvedPath = prepared.resolvedPath;
+        if (resolvedPath && dbService.isAvailable()) {
+          const ensured = await ensureProjectDocumentRecord({
+            db: dbService,
+            documentId: null,
+            file: file as File & { path?: string },
+            filePath: resolvedPath,
+          });
+          
+          if (ensured.documentId) {
+            await touchProjectDocumentActivity(dbService, ensured.documentId);
+            
+            if (selectedProjectId) {
+              await moveToProject(ensured.documentId, selectedProjectId);
+            }
+          }
+        }
+      }
+      
+      await refreshLibraryView();
+    } catch (error) {
+      console.error('Failed to import multiple files:', error);
+    } finally {
+      setImportProgress(null);
+    }
+  }, [selectedProjectId, moveToProject, refreshLibraryView, loadProject]);
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      try {
-        await loadProject(droppedFile);
-        setFileOpenError(null);
-      } catch (error) {
-        reportFileOpenError('drag_drop', error, {
-          filename: droppedFile.name,
-          filepath: (droppedFile as unknown as { path?: string }).path
-        });
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const isFile = Array.from(e.dataTransfer.types).includes('Files');
+      if (isFile) {
+        void handleImportFiles(e.dataTransfer.files);
       }
     }
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      try {
-        await loadProject(selectedFile);
-        setFileOpenError(null);
-      } catch (error) {
-        reportFileOpenError('file_input', error, {
-          filename: selectedFile.name,
-          filepath: (selectedFile as unknown as { path?: string }).path
-        });
-      }
+    if (e.target.files && e.target.files.length > 0) {
+      void handleImportFiles(e.target.files);
     }
   };
 
   const handleBrowse = async () => {
     if (window.electronAPI?.fs?.openFile) {
       try {
-        const result = await window.electronAPI.fs.openFile();
-        if (!result) return;
+        const results = await window.electronAPI.fs.openFile();
+        if (!results || !Array.isArray(results) || results.length === 0) return;
 
-        const bytes = decodeFileData(result.data);
+        if (results.length === 1) {
+          const result = results[0];
+          const bytes = decodeFileData(result.data);
+          const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
+          const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+          Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
+          await loadProject(file, bytes);
+          setFileOpenError(null);
+          
+          // Auto assign to selectedProjectId if inside a folder
+          const documentId = useProjectStore.getState().documentId;
+          if (documentId && selectedProjectId) {
+            await moveToProject(documentId, selectedProjectId);
+          }
+        } else {
+          setImportProgress({ current: 0, total: results.length });
+          try {
+            for (let i = 0; i < results.length; i++) {
+              setImportProgress({ current: i + 1, total: results.length });
+              const result = results[i];
+              const bytes = decodeFileData(result.data);
+              const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
+              const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+              Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
 
-        const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
-        const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
-        Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
-        await loadProject(file, bytes);
-        setFileOpenError(null);
+              const prepared = await prepareProjectDocumentLoad({
+                db: dbService,
+                file: file as File & { path?: string },
+                fileData: bytes,
+                importFile: window.electronAPI?.fs?.importFile,
+              });
+              
+              const resolvedPath = prepared.resolvedPath;
+              if (resolvedPath && dbService.isAvailable()) {
+                const ensured = await ensureProjectDocumentRecord({
+                  db: dbService,
+                  documentId: null,
+                  file: file as File & { path?: string },
+                  filePath: resolvedPath,
+                });
+                
+                if (ensured.documentId) {
+                  await touchProjectDocumentActivity(dbService, ensured.documentId);
+                  
+                  if (selectedProjectId) {
+                    await moveToProject(ensured.documentId, selectedProjectId);
+                  }
+                }
+              }
+            }
+            await refreshLibraryView();
+          } catch (error) {
+            console.error('Failed to import multiple files via browse:', error);
+          } finally {
+            setImportProgress(null);
+          }
+        }
         return;
       } catch (error) {
         reportFileOpenError('browse', error);
@@ -1291,41 +1776,6 @@ export const UploadScreen: React.FC = () => {
     }
   };
 
-  const refreshLibraryView = useCallback(async () => {
-    const activeSearch = searchQuery.trim();
-    if (activeSearch) {
-      await searchDocuments(activeSearch);
-      return;
-    }
-
-    if (filterType === 'favorites') {
-      await loadFavoriteDocuments();
-      return;
-    }
-
-    if (filterType === 'tag' && selectedTagId !== null) {
-      await loadDocumentsByTag(selectedTagId);
-      return;
-    }
-
-    if (filterType === 'project') {
-      await loadDocumentsByProject(selectedProjectId ?? null);
-      return;
-    }
-
-    await loadRecentDocuments();
-  }, [
-    filterType,
-    loadDocumentsByProject,
-    loadDocumentsByTag,
-    loadFavoriteDocuments,
-    loadRecentDocuments,
-    searchDocuments,
-    searchQuery,
-    selectedProjectId,
-    selectedTagId,
-  ]);
-
   useEffect(() => {
     const trimmed = searchQuery.trim();
     const timer = window.setTimeout(() => {
@@ -1340,17 +1790,82 @@ export const UploadScreen: React.FC = () => {
   }, [refreshLibraryView, searchDocuments, searchQuery]);
 
   const handleDeleteDocument = useCallback(async (documentId: number) => {
-    await deleteDocument(documentId);
-    setDocumentTagsById((current) => {
-      if (!(documentId in current)) return current;
-      const next = { ...current };
-      delete next[documentId];
-      return next;
-    });
+    if (selectedDocumentIds.has(documentId)) {
+      const confirm = window.confirm(`ต้องการลบไฟล์ที่เลือกทั้งหมด (${selectedDocumentIds.size} ไฟล์) หรือไม่?`);
+      if (!confirm) return;
+      await Promise.all(
+        Array.from(selectedDocumentIds).map(async (id) => {
+          await deleteDocument(id);
+          setDocumentTagsById((current) => {
+            if (!(id in current)) return current;
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+        })
+      );
+      clearSelection();
+    } else {
+      const confirm = window.confirm('ต้องการลบไฟล์นี้หรือไม่?');
+      if (!confirm) return;
+      await deleteDocument(documentId);
+      setDocumentTagsById((current) => {
+        if (!(documentId in current)) return current;
+        const next = { ...current };
+        delete next[documentId];
+        return next;
+      });
+    }
     await refreshLibraryView();
-  }, [deleteDocument, refreshLibraryView]);
+  }, [deleteDocument, refreshLibraryView, selectedDocumentIds, clearSelection]);
 
-  const sortedDocuments = getSortedDocuments();
+  const handleToggleFavorite = useCallback(async (docId: number) => {
+    if (selectedDocumentIds.has(docId)) {
+      await Promise.all(
+        Array.from(selectedDocumentIds).map((id) => toggleFavorite(id))
+      );
+    } else {
+      await toggleFavorite(docId);
+    }
+  }, [selectedDocumentIds, toggleFavorite]);
+
+  const handleUpdateRating = useCallback(async (doc: DBDocument, rating: number) => {
+    const isMulti = selectedDocumentIds.has(doc.id);
+    const targetDocIds = isMulti ? Array.from(selectedDocumentIds) : [doc.id];
+    
+    await Promise.all(
+      targetDocIds.map(async (docId) => {
+        await window.electronAPI.db.updateDocument(docId, { rating });
+      })
+    );
+    
+    await refreshLibraryView();
+  }, [selectedDocumentIds, refreshLibraryView]);
+
+  const rawSortedDocuments = getSortedDocuments();
+  const sortedDocuments = useMemo(() => {
+    return rawSortedDocuments.filter(doc => {
+      const rating = doc.rating || 0;
+      if (ratingFilterMode === 'only') {
+        if (ratingFilterOnly === null) return true;
+        return rating === ratingFilterOnly;
+      } else {
+        if (ratingFilterMin !== null && rating < ratingFilterMin) return false;
+        if (ratingFilterMax !== null && rating > ratingFilterMax) return false;
+        return true;
+      }
+    });
+  }, [rawSortedDocuments, ratingFilterMode, ratingFilterOnly, ratingFilterMin, ratingFilterMax]);
+
+  const currentSubprojects = useMemo(() => {
+    if (filterType === 'favorites' || filterType === 'tag') {
+      return [];
+    }
+    if (selectedProjectId !== null) {
+      return projects.filter(p => p.parent_id === selectedProjectId);
+    }
+    return projects.filter(p => p.parent_id === null);
+  }, [projects, selectedProjectId, filterType]);
 
   const openDocumentMenu = useCallback(async (docId: number, position: MenuPosition) => {
     setActiveTagMenu(null);
@@ -1381,7 +1896,7 @@ export const UploadScreen: React.FC = () => {
     });
   }, []);
 
-  const openProjectMenu = useCallback((project: DBProject, event: React.MouseEvent<HTMLButtonElement>) => {
+  const openProjectMenu = useCallback((project: DBProject, event: React.MouseEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
     setActiveDocumentMenuId(null);
@@ -1411,38 +1926,64 @@ export const UploadScreen: React.FC = () => {
   }, []);
 
   const handleToggleDocumentTag = useCallback(async (doc: DBDocument, tag: DBTag) => {
+    const isMulti = selectedDocumentIds.has(doc.id);
+    const targetDocIds = isMulti ? Array.from(selectedDocumentIds) : [doc.id];
+    
     const currentTags = documentTagsById[doc.id] ?? [];
     const hasTag = currentTags.some(item => item.id === tag.id);
 
     try {
       if (hasTag) {
-        await removeTagFromDocument(doc.id, tag.id);
-        setDocumentTagsById((current) => ({
-          ...current,
-          [doc.id]: (current[doc.id] ?? []).filter(item => item.id !== tag.id)
-        }));
+        await Promise.all(
+          targetDocIds.map(async (docId) => {
+            const docTags = documentTagsById[docId] ?? [];
+            if (docTags.some(item => item.id === tag.id)) {
+              await removeTagFromDocument(docId, tag.id);
+              setDocumentTagsById((current) => ({
+                ...current,
+                [docId]: (current[docId] ?? []).filter(item => item.id !== tag.id)
+              }));
+            }
+          })
+        );
       } else {
-        await addTagToDocument(doc.id, tag.id);
-        setDocumentTagsById((current) => ({
-          ...current,
-          [doc.id]: [...(current[doc.id] ?? []), tag].sort((a, b) => a.name.localeCompare(b.name))
-        }));
+        await Promise.all(
+          targetDocIds.map(async (docId) => {
+            const docTags = documentTagsById[docId] ?? [];
+            if (!docTags.some(item => item.id === tag.id)) {
+              await addTagToDocument(docId, tag.id);
+              setDocumentTagsById((current) => ({
+                ...current,
+                [docId]: [...(current[docId] ?? []), tag].sort((a, b) => a.name.localeCompare(b.name))
+              }));
+            }
+          })
+        );
       }
     } catch (error) {
       console.error('Failed to update document tag:', error);
     }
-  }, [addTagToDocument, documentTagsById, removeTagFromDocument]);
+  }, [addTagToDocument, documentTagsById, removeTagFromDocument, selectedDocumentIds]);
 
   const handleMoveDocumentToProject = useCallback(async (doc: DBDocument, projectId: number | null) => {
-    await moveToProject(doc.id, projectId);
-  }, [moveToProject]);
+    const isMulti = selectedDocumentIds.has(doc.id);
+    const targetDocIds = isMulti ? Array.from(selectedDocumentIds) : [doc.id];
+    
+    await Promise.all(
+      targetDocIds.map((docId) => moveToProject(docId, projectId))
+    );
+    
+    if (isMulti) {
+      clearSelection();
+    }
+  }, [moveToProject, selectedDocumentIds, clearSelection]);
 
-  const openProjectDialog = useCallback((documentId: number | null = null) => {
+  const openProjectDialog = useCallback((documentId: number | null = null, parentId: number | null = null) => {
     setActiveDocumentMenuId(null);
     setActiveDocumentMenuPosition(null);
     setActiveTagMenu(null);
     setLibraryMenuPosition(null);
-    setProjectDialog({ isOpen: true, name: '', documentId });
+    setProjectDialog({ isOpen: true, name: '', documentId, parentId });
   }, []);
 
   const openTagDialog = useCallback((documentId: number | null = null) => {
@@ -1458,7 +1999,7 @@ export const UploadScreen: React.FC = () => {
     if (!name) return;
 
     const color = fallbackFolderColors[projects.length % fallbackFolderColors.length];
-    const parentId = selectedProjectId ?? null;
+    const parentId = (projectDialog.parentId !== undefined && projectDialog.parentId !== null) ? projectDialog.parentId : (selectedProjectId ?? null);
     const project = await createProject(name, parentId, color);
     if (!project) return;
 
@@ -1466,8 +2007,8 @@ export const UploadScreen: React.FC = () => {
       await moveToProject(projectDialog.documentId, project.id);
     }
 
-    setProjectDialog({ isOpen: false, name: '', documentId: null });
-  }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
+    setProjectDialog({ isOpen: false, name: '', documentId: null, parentId: null });
+  }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projectDialog.parentId, projects.length, selectedProjectId]);
 
   const handleEditProject = useCallback(async () => {
     const { project, name, color } = editProjectDialog;
@@ -1545,14 +2086,39 @@ export const UploadScreen: React.FC = () => {
     setDeleteProjectDialog({ isOpen: false, project: null, confirmation: '' });
   }, [deleteProject, deleteProjectDialog.confirmation, deleteProjectDialog.project, loadRecentDocuments, loadProjects, selectedProjectId, setSelectedProjectId]);
 
-  const handleProjectDrop = useCallback(async (projectId: number | null) => {
-    if (!draggedDocumentId) return;
-    const draggedDocument = sortedDocuments.find((doc) => doc.id === draggedDocumentId);
-    if (!draggedDocument) return;
-    await handleMoveDocumentToProject(draggedDocument, projectId);
+  const handleProjectDrop = useCallback(async (projectId: number | null, event?: React.DragEvent) => {
+    let ids: number[] = [];
+    if (event) {
+      try {
+        const rawIds = event.dataTransfer.getData('application/x-document-ids');
+        if (rawIds) {
+          ids = JSON.parse(rawIds);
+        }
+      } catch (e) {
+        console.error('Failed to parse dragged document IDs:', e);
+      }
+    }
+    
+    if (ids.length === 0 && draggedDocumentId) {
+      ids = [draggedDocumentId];
+    }
+
+    if (ids.length === 0) return;
+
+    await Promise.all(
+      ids.map(async (docId) => {
+        const doc = sortedDocuments.find((d) => d.id === docId);
+        if (doc) {
+          await handleMoveDocumentToProject(doc, projectId);
+        }
+      })
+    );
+
+    // Clear selection after moving
+    clearSelection();
     setDraggedDocumentId(null);
     setProjectDropTargetId(null);
-  }, [draggedDocumentId, handleMoveDocumentToProject, sortedDocuments]);
+  }, [draggedDocumentId, handleMoveDocumentToProject, sortedDocuments, clearSelection]);
 
   useEffect(() => {
     const pendingDocs = sortedDocuments
@@ -1587,6 +2153,55 @@ export const UploadScreen: React.FC = () => {
       })();
     });
   }, [persistDocumentPatch, sortedDocuments, viewMode]);
+
+  const renderProjectTree = useCallback((parentId: number | null, level: number = 0) => {
+    const levelProjects = projects.filter(p => p.parent_id === parentId);
+    return levelProjects.map((project, index) => {
+      const displayColor = project.color || resolveThemedAccent(index);
+      const hasChildren = projects.some(p => p.parent_id === project.id);
+      const isExpanded = expandedProjectIds.has(project.id);
+
+      return (
+        <React.Fragment key={project.id}>
+          <ProjectItem
+            project={project}
+            displayColor={displayColor}
+            isSelected={selectedProjectId === project.id}
+            isDropTarget={projectDropTargetId === project.id}
+            level={level}
+            hasChildren={hasChildren}
+            isExpanded={isExpanded}
+            onToggleExpand={() => toggleProjectExpanded(project.id)}
+            onDragOver={(event) => {
+              if (!draggedDocumentId) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              setProjectDropTargetId(project.id);
+            }}
+            onDragLeave={() => {
+              if (projectDropTargetId === project.id) {
+                setProjectDropTargetId(null);
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              void handleProjectDrop(project.id, event);
+            }}
+            onSelect={() => {
+              if (selectedProjectId === project.id) {
+                setSelectedProjectId(null);
+                loadRecentDocuments();
+              } else {
+                loadDocumentsByProject(project.id);
+              }
+            }}
+            onContextMenu={(event) => openProjectMenu(project, event)}
+          />
+          {isExpanded && renderProjectTree(project.id, level + 1)}
+        </React.Fragment>
+      );
+    });
+  }, [projects, selectedProjectId, projectDropTargetId, draggedDocumentId, expandedProjectIds, toggleProjectExpanded, handleProjectDrop, loadRecentDocuments, loadDocumentsByProject, openProjectMenu]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
@@ -1727,39 +2342,32 @@ export const UploadScreen: React.FC = () => {
               </button>
             </h2>
             <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
-              {projects.map((project, index) => (
-                <ProjectItem
-                  key={project.id}
-                  project={project}
-                  displayColor={project.color || resolveThemedAccent(index)}
-                  isSelected={selectedProjectId === project.id}
-                  isDropTarget={projectDropTargetId === project.id}
-                  onDragOver={(event) => {
-                    if (!draggedDocumentId) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                    setProjectDropTargetId(project.id);
-                  }}
-                  onDragLeave={() => {
-                    if (projectDropTargetId === project.id) {
-                      setProjectDropTargetId(null);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    void handleProjectDrop(project.id);
-                  }}
-                  onSelect={() => {
-                    if (selectedProjectId === project.id) {
-                      setSelectedProjectId(null);
-                      loadRecentDocuments();
-                    } else {
-                      loadDocumentsByProject(project.id);
-                    }
-                  }}
-                  onContextMenu={(event) => openProjectMenu(project, event)}
-                />
-              ))}
+              {renderProjectTree(null)}
+            </div>
+
+            {/* Hardware Acceleration GPU Status */}
+            <div className="mt-4 border-t border-white/6 pt-4 shrink-0">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 block">
+                Hardware Acceleration
+              </label>
+              <div className="rounded-xl border border-white/8 bg-slate-950/40 p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-slate-400">GPU Acceleration</span>
+                  <span className={`inline-flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                    gpuInfo && gpuInfo.mode !== 'CPU'
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  }`}>
+                    <span className={`h-1 w-1 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                    {getGpuModeLabel(gpuInfo)}
+                  </span>
+                </div>
+                <div className="text-[9px] text-slate-500 leading-normal">
+                  <div className="font-semibold text-slate-300 truncate" title={gpuInfo?.gpus.join(', ')}>
+                    Device: {gpuInfo?.gpus[0] || 'Loading...'}
+                  </div>
+                </div>
+              </div>
             </div>
           </>
         ) : activePage === 'projects' ? (
@@ -1775,32 +2383,7 @@ export const UploadScreen: React.FC = () => {
               <Plus size={16} /> New Project
             </button>
             <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
-              {projects.map((project, index) => (
-                <ProjectItem
-                  key={project.id}
-                  project={project}
-                  displayColor={project.color || resolveThemedAccent(index)}
-                  isSelected={selectedProjectId === project.id}
-                  isDropTarget={projectDropTargetId === project.id}
-                  onDragOver={(event) => {
-                    if (!draggedDocumentId) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                    setProjectDropTargetId(project.id);
-                  }}
-                  onDragLeave={() => {
-                    if (projectDropTargetId === project.id) {
-                      setProjectDropTargetId(null);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    void handleProjectDrop(project.id);
-                  }}
-                  onSelect={() => loadDocumentsByProject(project.id)}
-                  onContextMenu={(event) => openProjectMenu(project, event)}
-                />
-              ))}
+              {renderProjectTree(null)}
             </div>
           </>
         ) : (
@@ -2147,48 +2730,139 @@ export const UploadScreen: React.FC = () => {
               <div className="flex items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-slate-300/80"></div>
               </div>
-            ) : sortedDocuments.length > 0 ? (
-              <div className={viewMode === 'grid'
-                ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
-                : 'space-y-2'
-              }>
-                {sortedDocuments.map(doc => (
-                  <DocumentCard
-                    key={doc.id}
-                    doc={doc}
-                    viewMode={viewMode}
-                    isSelected={selectedDocumentIds.has(doc.id)}
-                    onOpen={() => handleOpenDocument(doc)}
-                    onToggleFavorite={() => toggleFavorite(doc.id)}
-                    onDelete={() => void handleDeleteDocument(doc.id)}
-                    isMenuOpen={activeDocumentMenuId === doc.id}
-                    menuPosition={activeDocumentMenuPosition}
-                    documentTags={documentTagsById[doc.id] ?? []}
-                    tags={tags}
-                    projects={projects}
-                    onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
-                    onCloseMenu={() => {
-                      setActiveDocumentMenuId(null);
-                      setActiveDocumentMenuPosition(null);
-                    }}
-                    onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
-                    onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
-                    onCreateTag={() => openTagDialog(doc.id)}
-                    onDragStart={() => {
-                      setDraggedDocumentId(doc.id);
-                      setActiveDocumentMenuId(null);
-                      setActiveDocumentMenuPosition(null);
-                      setLibraryMenuPosition(null);
-                    }}
-                    onDragEnd={() => {
-                      setDraggedDocumentId(null);
-                      setProjectDropTargetId(null);
-                    }}
-                    isThumbnailHidden={hiddenThumbnails.has(doc.id)}
-                    onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
-                    onOCRAllPages={() => openOcrBackgroundDialog(doc)}
-                  />
-                ))}
+            ) : (sortedDocuments.length > 0 || currentSubprojects.length > 0) ? (
+              <div className="h-full overflow-y-auto pr-1 custom-scrollbar pb-20">
+                {/* 📂 Render Folder Grid/List first */}
+                {viewMode === 'grid' ? (
+                  currentSubprojects.length > 0 && (
+                    <div className="mb-6">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 px-1">Folders ({currentSubprojects.length})</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                        {currentSubprojects.map((subproj, index) => {
+                          const accent = subproj.color || resolveStableAccent(subproj.id);
+                          return (
+                            <div
+                              key={subproj.id}
+                              onClick={() => {
+                                loadDocumentsByProject(subproj.id);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                openProjectMenu(subproj, e);
+                              }}
+                              className="group p-3 rounded-xl border border-white/5 hover:border-white/12 bg-[#16181c]/70 hover:bg-[#1b1e23] transition-all flex items-center gap-3 cursor-pointer select-none"
+                            >
+                              <div 
+                                className="p-1.5 rounded-lg shrink-0 flex items-center justify-center"
+                                style={{ backgroundColor: hexToRgba(accent, 0.14) }}
+                              >
+                                <Folder size={16} style={{ color: accent }} />
+                              </div>
+                              <span className="flex-1 truncate text-xs font-medium text-slate-200 group-hover:text-white">{subproj.name}</span>
+                              <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  currentSubprojects.length > 0 && (
+                    <div className="mb-4 space-y-1">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">Folders ({currentSubprojects.length})</h3>
+                      {currentSubprojects.map((subproj, index) => {
+                        const accent = subproj.color || resolveStableAccent(subproj.id);
+                        return (
+                          <div
+                            key={subproj.id}
+                            onClick={() => {
+                              loadDocumentsByProject(subproj.id);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              openProjectMenu(subproj, e);
+                            }}
+                            className="group px-4 py-2.5 rounded-xl border border-white/5 hover:border-white/12 bg-[#16181c]/50 hover:bg-[#1b1e23] transition-all flex items-center gap-3 cursor-pointer select-none"
+                          >
+                            <div 
+                              className="p-1.5 rounded-lg shrink-0 flex items-center justify-center"
+                              style={{ backgroundColor: hexToRgba(accent, 0.14) }}
+                            >
+                              <Folder size={14} style={{ color: accent }} />
+                            </div>
+                            <span className="flex-1 truncate text-xs font-medium text-slate-200 group-hover:text-white">{subproj.name}</span>
+                            <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
+
+                {/* 📄 Render Documents Grid/List */}
+                {sortedDocuments.length > 0 ? (
+                  <>
+                    {currentSubprojects.length > 0 && (
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 mt-2 px-1">Files ({sortedDocuments.length})</h3>
+                    )}
+                    <div className={viewMode === 'grid'
+                      ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
+                      : 'space-y-2'
+                    }>
+                      {sortedDocuments.map(doc => (
+                        <DocumentCard
+                          key={doc.id}
+                          doc={doc}
+                          viewMode={viewMode}
+                          isSelected={selectedDocumentIds.has(doc.id)}
+                          isMultiSelectActive={selectedDocumentIds.size > 0}
+                          onOpen={() => handleOpenDocument(doc)}
+                          onToggleFavorite={() => void handleToggleFavorite(doc.id)}
+                          onDelete={() => void handleDeleteDocument(doc.id)}
+                          isMenuOpen={activeDocumentMenuId === doc.id}
+                          menuPosition={activeDocumentMenuPosition}
+                          documentTags={documentTagsById[doc.id] ?? []}
+                          tags={tags}
+                          projects={projects}
+                          onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
+                          onCloseMenu={() => {
+                            setActiveDocumentMenuId(null);
+                            setActiveDocumentMenuPosition(null);
+                          }}
+                          onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
+                          onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
+                          onToggleSelect={() => toggleDocumentSelection(doc.id)}
+                          onCreateTag={() => openTagDialog(doc.id)}
+                          onDragStart={(e) => {
+                            const ids = selectedDocumentIds.has(doc.id)
+                              ? Array.from(selectedDocumentIds)
+                              : [doc.id];
+                            e.dataTransfer.setData('application/x-document-ids', JSON.stringify(ids));
+                            e.dataTransfer.effectAllowed = 'move';
+                            setDraggedDocumentId(doc.id);
+                            setActiveDocumentMenuId(null);
+                            setActiveDocumentMenuPosition(null);
+                            setLibraryMenuPosition(null);
+                          }}
+                          onDragEnd={() => {
+                            setDraggedDocumentId(null);
+                            setProjectDropTargetId(null);
+                          }}
+                          isThumbnailHidden={hiddenThumbnails.has(doc.id)}
+                          onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
+                          onOCRAllPages={() => openOcrBackgroundDialog(doc)}
+                          onUpdateRating={(rating) => void handleUpdateRating(doc, rating)}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  currentSubprojects.length > 0 && (
+                    <div className="rounded-xl border border-white/5 bg-[#16181c]/30 p-8 text-center text-xs text-slate-500 mt-2 select-none">
+                      No documents in this folder level. Drag and drop files here to upload.
+                    </div>
+                  )
+                )}
               </div>
             ) : (
               // Empty State / Upload Area with Recent Files
@@ -2291,8 +2965,8 @@ export const UploadScreen: React.FC = () => {
 
         {/* Right: Project Settings */}
         <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl">
-          <h2 className="text-base font-bold mb-5 flex items-center gap-2">
-            <Settings2 className="text-slate-300" size={18} /> Quick Start
+         <h2 className="text-base font-bold mb-3 flex items-center gap-1">
+            Import
           </h2>
 
           {/* Quick Upload */}
@@ -2300,7 +2974,7 @@ export const UploadScreen: React.FC = () => {
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            className={`p-4 rounded-xl border-2 border-dashed mb-6 text-center transition-all ${
+            className={`p-4 rounded-xl border-2 border-dashed mb-4 text-center transition-all ${
               isDragging ? 'border-white/18 bg-white/[0.04]' : 'border-white/10 hover:border-white/16 bg-[#13151a]/92'
             }`}
           >
@@ -2317,72 +2991,80 @@ export const UploadScreen: React.FC = () => {
           {/* Profile Selection */}
           <div className="mb-6">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Profile</label>
-            <div className="space-y-2">
-              <button
-                onClick={() => setTranslationMode('adaptive')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'adaptive'
-                    ? 'border-[#14B8A6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'adaptive' ? { background: 'linear-gradient(180deg, rgba(20,184,166,0.22) 0%, rgba(19,48,58,0.92) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <Compass size={14} className={translationMode === 'adaptive' ? 'text-[#99F6E4]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'adaptive' ? 'text-[#E6FFF9]' : 'text-slate-300'}`}>Flexibility</span>
-                </div>
-              </button>
+            <div className="relative">
+              {(() => {
+                const profiles = [
+                  { id: 'adaptive', name: 'Flexibility', icon: Compass, activeBg: 'linear-gradient(180deg, rgba(20,184,166,0.22) 0%, rgba(19,48,58,0.92) 100%)', textTheme: 'text-[#E6FFF9]', iconTheme: 'text-[#99F6E4]' },
+                  { id: 'manga', name: 'Manga Style', icon: Sparkles, activeBg: 'linear-gradient(180deg, rgba(139,92,246,0.28) 0%, rgba(46,28,82,0.92) 100%)', textTheme: 'text-[#F4E8FF]', iconTheme: 'text-[#D8B4FE]' },
+                  { id: 'manhwa', name: 'Manhwa Style', icon: Flame, activeBg: 'linear-gradient(180deg, rgba(236,72,153,0.24) 0%, rgba(66,24,44,0.92) 100%)', textTheme: 'text-[#FFE7F3]', iconTheme: 'text-[#F9A8D4]' },
+                  { id: 'official', name: 'Official Doc', icon: ScrollText, activeBg: 'linear-gradient(180deg, rgba(67,135,255,0.2) 0%, rgba(17,28,48,0.9) 100%)', textTheme: 'text-[#EDF4FF]', iconTheme: 'text-[#A8CFFF]' }
+                ];
+                const activeProfile = profiles.find(p => p.id === translationMode) || profiles[0];
+                const ActiveIcon = activeProfile.icon;
 
-              <button
-                onClick={() => setTranslationMode('manga')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'manga'
-                    ? 'border-[#8B5CF6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'manga' ? { background: 'linear-gradient(180deg, rgba(139,92,246,0.28) 0%, rgba(46,28,82,0.92) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <Sparkles size={14} className={translationMode === 'manga' ? 'text-[#D8B4FE]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'manga' ? 'text-[#F4E8FF]' : 'text-slate-300'}`}>Manga Style</span>
-                </div>
-              </button>
+                return (
+                  <div className="relative space-y-1">
+                    {/* Main Active Button */}
+                    <button
+                      onClick={() => setIsProfileListOpen(!isProfileListOpen)}
+                      className={`w-full p-3 rounded-xl border text-left transition-all flex items-center justify-between ${
+                        isProfileListOpen 
+                          ? 'border-[#2B9BFF]/60 bg-slate-900/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]' 
+                          : activeProfile.id === 'adaptive' ? 'border-[#14B8A6]/45' 
+                          : activeProfile.id === 'manga' ? 'border-[#8B5CF6]/45'
+                          : activeProfile.id === 'manhwa' ? 'border-[#EC4899]/45'
+                          : 'border-[#4387FF]/42'
+                      }`}
+                      style={!isProfileListOpen ? { background: activeProfile.activeBg } : undefined}
+                    >
+                      <div className="flex items-center gap-2">
+                        <ActiveIcon size={14} className={activeProfile.iconTheme} />
+                        <span className={`font-semibold text-sm ${activeProfile.textTheme}`}>{activeProfile.name}</span>
+                      </div>
+                      <ChevronRight 
+                        size={14} 
+                        className={`text-slate-400 transition-transform duration-200 ${isProfileListOpen ? 'rotate-90 text-white' : ''}`} 
+                      />
+                    </button>
 
-              <button
-                onClick={() => setTranslationMode('manhwa')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'manhwa'
-                    ? 'border-[#EC4899]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'manhwa' ? { background: 'linear-gradient(180deg, rgba(236,72,153,0.24) 0%, rgba(66,24,44,0.92) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <Flame size={14} className={translationMode === 'manhwa' ? 'text-[#F9A8D4]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'manhwa' ? 'text-[#FFE7F3]' : 'text-slate-300'}`}>Manhwa Style</span>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setTranslationMode('official')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'official'
-                    ? 'border-[#4387FF]/42 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'official' ? { background: 'linear-gradient(180deg, rgba(67,135,255,0.2) 0%, rgba(17,28,48,0.9) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <ScrollText size={14} className={translationMode === 'official' ? 'text-[#A8CFFF]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'official' ? 'text-[#EDF4FF]' : 'text-slate-300'}`}>Official Doc</span>
-                </div>
-              </button>
+                    {/* Expanded Dropdown List */}
+                    {isProfileListOpen && (
+                      <div className="absolute left-0 right-0 mt-1 z-[160] rounded-xl border border-white/10 bg-slate-950/98 p-1 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl flex flex-col gap-0.5 max-h-56 overflow-y-auto">
+                        {profiles.map((prof) => {
+                          const isSelected = prof.id === translationMode;
+                          const Icon = prof.icon;
+                          return (
+                            <button
+                              key={prof.id}
+                              onClick={() => {
+                                setTranslationMode(prof.id as any);
+                                setIsProfileListOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-xs transition-all ${
+                                isSelected
+                                  ? 'bg-white/10 text-white font-medium'
+                                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <Icon size={13} className={isSelected ? prof.iconTheme : 'text-slate-500'} />
+                                <span className={isSelected ? 'font-semibold' : ''}>{prof.name}</span>
+                              </div>
+                              {isSelected && <Check size={12} className="text-[#5CC6F2]" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
           {/* Safety Settings (Collapsed by default) */}
-          <details className="mb-6">
-            <summary className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 cursor-pointer flex items-center gap-2">
+          <details className="mb-1">
+            <summary className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-0 cursor-pointer flex items-center gap-2">
               <Shield size={12} /> Safety Filters
             </summary>
             <div className="space-y-4 mt-3">
@@ -2411,36 +3093,6 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
           </details>
-
-          {/* Hardware Acceleration GPU Status */}
-          <div className="mt-2 mb-6 border-t border-white/6 pt-5">
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">
-              Hardware Acceleration
-            </label>
-            <div className="rounded-xl border border-white/8 bg-[#13151a]/92 p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-300">GPU Acceleration</span>
-                <span className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase ${
-                  gpuInfo && gpuInfo.mode !== 'CPU'
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                }`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                  {getGpuModeLabel(gpuInfo)}
-                </span>
-              </div>
-              <div className="text-[10px] text-slate-400 leading-normal">
-                <div className="font-semibold text-slate-200 truncate" title={gpuInfo?.gpus.join(', ')}>
-                  Device: {gpuInfo?.gpus[0] || 'Loading...'}
-                </div>
-                <div className="mt-1 text-slate-500 leading-relaxed">
-                  {gpuInfo && gpuInfo.mode !== 'CPU'
-                    ? `Running on ${getGpuModeLabel(gpuInfo)} engine. GPU tasks will run at max speed.`
-                    : 'Running in CPU fallback mode. Install GPU dependencies for faster speeds.'}
-                </div>
-              </div>
-            </div>
-          </div>
 
           {/* Background Queue Monitor */}
           <div className="mt-4 border-t border-white/6 pt-5">
@@ -2489,6 +3141,28 @@ export const UploadScreen: React.FC = () => {
                           </p>
                         </div>
                         
+                        {/* Queue reorder buttons: ^ and v */}
+                        {!isFinished && (
+                          <div className="flex flex-col items-center gap-0.5 shrink-0 mr-0.5">
+                            <button
+                              onClick={() => moveJobUp(job.id)}
+                              disabled={jobs.indexOf(job) === 0}
+                              className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
+                              title="เลื่อนขึ้นในคิว"
+                            >
+                              <ChevronUp size={10} />
+                            </button>
+                            <button
+                              onClick={() => moveJobDown(job.id)}
+                              disabled={jobs.indexOf(job) === jobs.length - 1}
+                              className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
+                              title="เลื่อนลงในคิว"
+                            >
+                              <ChevronDown size={10} />
+                            </button>
+                          </div>
+                        )}
+
                         <div className="flex items-center gap-1 shrink-0">
                           {isActive && (
                             <button
@@ -2651,6 +3325,9 @@ export const UploadScreen: React.FC = () => {
                 color: activeProjectMenu.project.color || resolveStableAccent(activeProjectMenu.project.id)
               });
             }}
+            onCreateSubfolder={() => {
+              openProjectDialog(null, activeProjectMenu.project.id);
+            }}
           />
         )}
 
@@ -2659,6 +3336,16 @@ export const UploadScreen: React.FC = () => {
             position={sortMenuPosition}
             sortBy={sortBy}
             sortOrder={sortOrder}
+            ratingFilterMode={ratingFilterMode}
+            ratingFilterOnly={ratingFilterOnly}
+            ratingFilterMin={ratingFilterMin}
+            ratingFilterMax={ratingFilterMax}
+            onUpdateFilters={(updates) => {
+              if (updates.mode !== undefined) setRatingFilterMode(updates.mode);
+              if (updates.only !== undefined) setRatingFilterOnly(updates.only);
+              if (updates.min !== undefined) setRatingFilterMin(updates.min);
+              if (updates.max !== undefined) setRatingFilterMax(updates.max);
+            }}
             onSelect={(key, order) => {
               setSortBy(key);
               setSortOrder(order);
@@ -2671,118 +3358,203 @@ export const UploadScreen: React.FC = () => {
         )}
 
         {ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left">
-              <h3 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
-                <Cpu className="text-[#2B9BFF]" size={18} />
-                ประมวลผลทุกหน้าเบื้องหลัง
-              </h3>
-              <p className="mt-1 text-xs text-slate-400 truncate font-mono bg-white/5 px-2 py-1 rounded">
-                ไฟล์: {ocrBackgroundDialog.doc.filename}
-              </p>
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/65 backdrop-blur-md">
+            <div className="w-full max-w-md rounded-3xl border border-white/12 bg-[#0e1116]/96 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                  <Cpu className="text-cyan-400" size={18} />
+                  ประมวลผลทุกหน้าเบื้องหลัง
+                </h3>
+                <div className="mt-2 flex flex-col gap-1 bg-white/[0.03] border border-white/5 p-2.5 rounded-2xl">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ชื่อไฟล์:</span>
+                  <span className="text-xs font-semibold text-slate-300 truncate font-mono">{ocrBackgroundDialog.doc.filename}</span>
+                  {dialogCachePages !== null && (
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-[10px] font-semibold text-emerald-400">
+                        แปล/ทำ OCR ไปแล้ว {dialogCachePages} จาก {ocrBackgroundDialog.doc.total_pages} หน้า ({Math.round((dialogCachePages / ocrBackgroundDialog.doc.total_pages) * 100)}%)
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
 
               {/* OCR Engine selection */}
-              <div className="mt-4">
-                <label className="text-xs font-semibold text-slate-300">โมเดล OCR (OCR Engine)</label>
-                <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Model Engine</label>
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'paddleocr' }))}
-                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 transition-all text-xs ${
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs ${
                       ocrBackgroundDialog.model === 'paddleocr'
-                        ? 'border-[#864E3E] bg-[#864E3E]/15 text-slate-100 shadow-[0_0_12px_rgba(134,78,62,0.25)] font-semibold'
-                        : 'border-white/5 bg-slate-900/40 text-slate-400 hover:border-white/10 hover:text-slate-300'
+                        ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
                     }`}
                   >
-                    <span>PaddleOCR</span>
-                    <span className="text-[9px] opacity-75 mt-0.5">แนะนำ (Recommended)</span>
+                    <span className="font-semibold">PaddleOCR</span>
+                    <span className="text-[8px] opacity-75 mt-0.5">แนะนำสำหรับมังงะ/รูปภาพ</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'easyocr' }))}
-                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 transition-all text-xs ${
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs ${
                       ocrBackgroundDialog.model === 'easyocr'
-                        ? 'border-[#CA7C4C] bg-[#CA7C4C]/15 text-slate-100 shadow-[0_0_12px_rgba(202,124,76,0.25)] font-semibold'
-                        : 'border-white/5 bg-slate-900/40 text-slate-400 hover:border-white/10 hover:text-slate-300'
+                        ? 'border-violet-500/50 bg-violet-500/10 text-violet-200 shadow-[0_0_15px_rgba(139,92,246,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
                     }`}
                   >
-                    <span>EasyOCR</span>
-                    <span className="text-[9px] opacity-75 mt-0.5">ทางเลือก (Alternative)</span>
+                    <span className="font-semibold">EasyOCR</span>
+                    <span className="text-[8px] opacity-75 mt-0.5">ทางเลือก (เอกสารทั่วไป)</span>
                   </button>
                 </div>
               </div>
 
               {/* Profile Selection */}
-              <div className="mt-4">
-                <label className="text-xs font-semibold text-slate-300">รูปแบบการทำงาน (Task Profile)</label>
-                <div className="mt-2 space-y-2">
-                  <label className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition-all ${
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">รูปแบบการทำงาน</label>
+                <div className="space-y-2">
+                  <label className={`flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-all ${
                     ocrBackgroundDialog.profile === 'offline_all'
-                      ? 'border-[#8BC3E5] bg-[#8BC3E5]/10 text-slate-100'
-                      : 'border-white/5 bg-slate-900/30 text-slate-400 hover:border-white/10 hover:bg-slate-900/50'
+                      ? 'border-sky-500/50 bg-sky-500/10 text-slate-100 shadow-[0_0_15px_rgba(14,165,233,0.12)]'
+                      : 'border-white/5 bg-slate-900/30 text-slate-500 hover:border-white/10 hover:bg-slate-900/50'
                   }`}>
                     <input
                       type="radio"
                       name="background_ocr_profile"
                       checked={ocrBackgroundDialog.profile === 'offline_all'}
                       onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'offline_all' }))}
-                      className="mt-0.5 accent-[#8BC3E5]"
+                      className="mt-0.5 accent-sky-400"
                     />
-                    <div className="text-xs">
-                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'offline_all' ? 'text-[#8BC3E5]' : 'text-slate-200'}`}>แปลภาษาออฟไลน์ทุกหน้า (Offline Translate All)</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR พร้อมแปลภาษาเป็นไทย (th) ในคิวเบื้องหลังทันที</div>
+                    <div className="text-xs flex-1">
+                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'offline_all' ? 'text-sky-300' : 'text-slate-300'}`}>Offline Translate All</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR พร้อมแปลเนื้อหาเป้าหมายลงฐานข้อมูล</div>
                     </div>
                   </label>
-                  <label className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition-all ${
+
+                  <label className={`flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-all ${
                     ocrBackgroundDialog.profile === 'ocr_all'
-                      ? 'border-[#2B9BFF] bg-[#2B9BFF]/8 text-slate-100'
-                      : 'border-white/5 bg-slate-900/30 text-slate-400 hover:border-white/10 hover:bg-slate-900/50'
+                      ? 'border-indigo-500/50 bg-indigo-500/10 text-slate-100 shadow-[0_0_15px_rgba(99,102,241,0.12)]'
+                      : 'border-white/5 bg-slate-900/30 text-slate-500 hover:border-white/10 hover:bg-slate-900/50'
                   }`}>
                     <input
                       type="radio"
                       name="background_ocr_profile"
                       checked={ocrBackgroundDialog.profile === 'ocr_all'}
                       onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'ocr_all' }))}
-                      className="mt-0.5 accent-[#2B9BFF]"
+                      className="mt-0.5 accent-indigo-400"
                     />
                     <div className="text-xs">
-                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'ocr_all' ? 'text-[#2B9BFF]' : 'text-slate-200'}`}>ทำ OCR ทุกหน้าอย่างเดียว (OCR All Pages Only)</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR อย่างเดียวเพื่อเก็บข้อมูลตำแหน่งคำโดยไม่แปลภาษา</div>
+                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'ocr_all' ? 'text-indigo-300' : 'text-slate-300'}`}>OCR All Pages Only</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">ค้นหาพิกัดและแกะข้อความเก็บไว้โดยยังไม่แปลภาษา</div>
                     </div>
                   </label>
                 </div>
               </div>
 
-              {/* Language Selector */}
-              <div className="mt-4">
-                <label htmlFor="ocr-bg-lang-select" className="text-xs font-semibold text-slate-300">ภาษาหลักสำหรับการทำ OCR (OCR Language)</label>
-                <select
-                  id="ocr-bg-lang-select"
-                  value={ocrBackgroundDialog.ocrLanguage}
-                  onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, ocrLanguage: e.target.value }))}
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-3 py-2.5 text-xs text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60 cursor-pointer"
-                >
-                  {SUPPORTED_LANGUAGES.map((lang) => (
-                    <option key={lang.code} value={lang.code} className="bg-slate-950 text-slate-100">
-                      {lang.name} ({lang.code})
-                    </option>
-                  ))}
-                </select>
+              {/* Processing Quality (Fast vs High) */}
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Processing Quality</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile: 'fast' }))}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs gap-1.5 ${
+                      ocrBackgroundDialog.ocrQualityProfile === 'fast'
+                        ? 'border-amber-500/50 bg-amber-500/10 text-amber-200 shadow-[0_0_15px_rgba(245,158,11,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Zap size={13} className={ocrBackgroundDialog.ocrQualityProfile === 'fast' ? 'text-amber-400 animate-pulse' : 'text-slate-400'} />
+                      Fast (เน้นความเร็ว)
+                    </span>
+                   
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile: 'best' }))}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs gap-1.5 ${
+                      ocrBackgroundDialog.ocrQualityProfile === 'best'
+                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Award size={13} className={ocrBackgroundDialog.ocrQualityProfile === 'best' ? 'text-emerald-400 animate-pulse' : 'text-slate-400'} />
+                      High (ความแม่นยำสูง)
+                    </span>
+                   
+                  </button>
+                </div>
+              </div>
+
+              {/* Languages Row */}
+              <div className="grid grid-cols-2 gap-3">
+                {/* Source Language */}
+                <div>
+                  <label htmlFor="ocr-bg-lang-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-cyan-400" />
+                    ภาษาต้นทาง 
+                  </label>
+                  <select
+                    id="ocr-bg-lang-select"
+                    value={ocrBackgroundDialog.ocrLanguage}
+                    onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, ocrLanguage: e.target.value }))}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-100 outline-none transition-colors focus:border-cyan-400/50 cursor-pointer"
+                  >
+                    <option value="eng">🇬🇧 EN (English)</option>
+                    <option value="tha">🇹🇭 TH (Thai)</option>
+                    <option value="jpn">🇯🇵 JA (Japanese)</option>
+                    <option value="jpn_vert">🇯🇵 JA-V (Japanese Vert)</option>
+                    <option value="kor">🇰🇷 KO (Korean)</option>
+                    <option value="chi_sim">🇨🇳 ZH-S (Chinese Simp)</option>
+                    <option value="chi_tra">🇨🇳 ZH-T (Chinese Trad)</option>
+                    <option value="vie">🇻🇳 VI (Vietnamese)</option>
+                    <option value="deu">🇩🇪 DE (German)</option>
+                    <option value="fra">🇫🇷 FR (French)</option>
+                    <option value="spa">🇪🇸 ES (Spanish)</option>
+                    <option value="rus">🇷🇺 RU (Russian)</option>
+                  </select>
+                </div>
+
+                {/* Target Language */}
+                <div>
+                  <label htmlFor="ocr-bg-target-lang-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    ภาษาปลายทาง
+                  </label>
+                  <select
+                    id="ocr-bg-target-lang-select"
+                    value={ocrBackgroundDialog.targetLanguage}
+                    disabled={ocrBackgroundDialog.profile !== 'offline_all'}
+                    onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, targetLanguage: e.target.value }))}
+                    className={`w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-100 outline-none transition-colors focus:border-emerald-500/50 cursor-pointer ${
+                      ocrBackgroundDialog.profile !== 'offline_all' ? 'opacity-40 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <option value="th">🇹🇭 TH (Thai)</option>
+                    <option value="en">🇬🇧 EN (English)</option>
+                    <option value="ja">🇯🇵 JA (Japanese)</option>
+                    <option value="ko">🇰🇷 KO (Korean)</option>
+                    <option value="zh">🇨🇳 ZH (Chinese)</option>
+                  </select>
+                </div>
               </div>
 
               {/* Actions */}
-              <div className="mt-6 flex items-center justify-end gap-3 border-t border-white/5 pt-4">
+              <div className="flex items-center justify-end gap-3 border-t border-white/5 pt-4">
                 <button
                   type="button"
-                  onClick={() => setOcrBackgroundDialog({ isOpen: false, doc: null, model: 'paddleocr', profile: 'offline_all', ocrLanguage: 'eng' })}
-                  className="rounded-xl border border-white/10 px-4 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10"
+                  onClick={() => setOcrBackgroundDialog({ isOpen: false, doc: null, model: 'paddleocr', profile: 'offline_all', ocrLanguage: 'eng', ocrQualityProfile: 'best', targetLanguage: 'th' })}
+                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs text-slate-300 transition-colors hover:bg-white/10"
                 >
                   ยกเลิก (Cancel)
                 </button>
                 <button
                   type="button"
                   onClick={handleStartOcrBackground}
-                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98]"
+                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98]"
                 >
                   เริ่มประมวลผล (Start)
                 </button>
@@ -3071,9 +3843,34 @@ export const UploadScreen: React.FC = () => {
           </div>
         )}
 
+        {/* Import Progress Dialog */}
+        {importProgress !== null && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md">
+            <div className="w-96 rounded-3xl border border-white/10 bg-slate-900/90 p-6 shadow-[0_30px_70px_rgba(0,0,0,0.6)] backdrop-blur-2xl flex flex-col items-center text-center gap-4">
+              <div className="relative flex items-center justify-center">
+                <div className="h-12 w-12 rounded-full border-2 border-white/5 border-t-[#2B9BFF] animate-spin"></div>
+                <div className="absolute h-8 w-8 rounded-full border-2 border-white/5 border-b-[#839958] animate-spin [animation-direction:reverse]"></div>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100 mb-1">กำลังนำเข้าไฟล์...</h3>
+                <p className="text-xs text-slate-400">
+                  กำลังประมวลผลไฟล์ที่ {importProgress.current} จาก {importProgress.total} ไฟล์
+                </p>
+              </div>
+              <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-gradient-to-r from-[#2B9BFF] to-[#839958] h-full transition-all duration-300"
+                  style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="hidden"
           accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
           onChange={handleFileSelect}

@@ -142,6 +142,7 @@ console.log('[DB] BenchmarkDAO ready');
         thumbnail_path TEXT,
         project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
         is_favorite INTEGER DEFAULT 0,
+        rating INTEGER DEFAULT 0,
         last_page INTEGER DEFAULT 1,
         last_accessed INTEGER,
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
@@ -253,18 +254,33 @@ console.log('[DB] BenchmarkDAO ready');
       INSERT INTO document_search(document_id, search_text)
       SELECT id, filename FROM documents 
       WHERE id NOT IN (SELECT document_id FROM document_search);
-
-      -- Insert default tags if not exists
-      INSERT OR IGNORE INTO tags (name, color) VALUES 
-        ('Manga', '#ef4444'),
-        ('Document', '#3b82f6'),
-        ('Novel', '#8b5cf6'),
-        ('Textbook', '#10b981'),
-        ('Work', '#f59e0b'),
-        ('Personal', '#ec4899');
     `;
 
     db.exec(schema);
+
+    // Migration: Add rating column to documents table if it doesn't exist
+    try {
+      db.exec('ALTER TABLE documents ADD COLUMN rating INTEGER DEFAULT 0');
+      console.log('[DB] Added column "rating" to documents table');
+    } catch (e) {
+      // Column probably already exists, which is expected
+    }
+
+    // Seed default tags only if the tags table is completely empty
+    const tagCount = (db.prepare('SELECT COUNT(*) as count FROM tags').get() as { count: number }).count;
+    if (tagCount === 0) {
+      db.prepare(`
+        INSERT INTO tags (name, color) VALUES 
+          ('Manga', '#ef4444'),
+          ('Document', '#3b82f6'),
+          ('Novel', '#8b5cf6'),
+          ('Textbook', '#10b981'),
+          ('Work', '#f59e0b'),
+          ('Personal', '#ec4899')
+      `).run();
+      console.log('[SQLite] Seeded default tags into empty tags table');
+    }
+
     console.log('[SQLite] Database initialized successfully with WAL, FTS5 & MMap');
     
     return db;
@@ -667,7 +683,7 @@ export const DocumentDAO = {
     `).all(tagId);
   },
 
-  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number }) => {
+  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number; rating?: number }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
@@ -677,6 +693,7 @@ export const DocumentDAO = {
     if (data.thumbnail_path !== undefined) { sets.push('thumbnail_path = ?'); values.push(data.thumbnail_path); }
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
     if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
+    if (data.rating !== undefined) { sets.push('rating = ?'); values.push(data.rating); }
     
     if (sets.length === 0) return true;
     values.push(id);

@@ -114,7 +114,7 @@ const getDocumentSortValue = (document: DBDocument, sortBy: LibrarySortBy): numb
     case 'type':
       return document.file_type;
     case 'rating':
-      return document.is_favorite ? 1 : 0;
+      return document.rating || 0;
   }
 };
 

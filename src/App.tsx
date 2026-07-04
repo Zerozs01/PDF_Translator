@@ -3375,6 +3375,85 @@ const isSourceFallbackOverlayText = (sourceText: string, translatedText: string)
   return Boolean(sourceKey && translatedKey && sourceKey === translatedKey);
 };
 
+/** Floating Queue Status Badge แสดงสถานะ Background Queue ขณะอยู่ในหน้า File Preview */
+const BackgroundQueueBadge: React.FC = () => {
+  const liveJobs = useBackgroundQueueStore((s) => s.jobs);
+  const [showQueuePanel, setShowQueuePanel] = React.useState(false);
+
+  const activeJobs = liveJobs.filter(j => ['processing', 'queued', 'pending'].includes(j.status));
+  const runningJob = activeJobs.find(j => j.status === 'processing');
+
+  if (activeJobs.length === 0) return null;
+
+  return (
+    <div className="fixed bottom-4 left-4 z-[190] flex flex-col items-start gap-1.5">
+      {/* Main badge */}
+      <button
+        onClick={() => setShowQueuePanel(p => !p)}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#0f1117]/90 border border-white/10 shadow-xl backdrop-blur-md hover:border-[#2B9BFF]/40 transition-all"
+      >
+        <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
+          <div className="absolute w-3 h-3 rounded-full bg-[#2B9BFF] opacity-30 animate-ping" />
+          <div className="w-2 h-2 rounded-full bg-[#2B9BFF]" />
+        </div>
+        <div className="text-left min-w-0">
+          {runningJob ? (
+            <>
+              <p className="text-[10px] font-semibold text-slate-200 truncate max-w-[140px]">{runningJob.filename}</p>
+              <p className="text-[9px] text-[#2B9BFF]">
+                หน้า {runningJob.currentPage}/{runningJob.totalPages} · {runningJob.progress}%
+              </p>
+            </>
+          ) : (
+            <p className="text-[10px] font-semibold text-slate-400">{activeJobs.length} งานรอคิว...</p>
+          )}
+        </div>
+        <span className="ml-1 text-[9px] text-slate-500 font-mono bg-white/5 px-1.5 py-0.5 rounded-md border border-white/[0.08]">
+          {activeJobs.length}
+        </span>
+      </button>
+
+      {/* Mini queue panel */}
+      {showQueuePanel && (
+        <div className="w-64 rounded-xl bg-[#0f1117]/95 border border-white/10 shadow-2xl backdrop-blur-xl overflow-hidden animate-in slide-in-from-bottom-2 duration-150">
+          <div className="px-3 py-2 border-b border-white/5 flex items-center justify-between">
+            <span className="text-[10px] font-bold text-slate-300 tracking-wider uppercase">Queue</span>
+            <button onClick={() => setShowQueuePanel(false)} className="text-slate-500 hover:text-slate-300 transition-colors">
+              <X size={11} />
+            </button>
+          </div>
+          <div className="max-h-48 overflow-y-auto custom-scrollbar divide-y divide-white/5">
+            {activeJobs.map((job, idx) => {
+              const isRunning = job.status === 'processing';
+              return (
+                <div key={job.id} className={`px-3 py-2 flex items-center gap-2 ${isRunning ? 'bg-[#2B9BFF]/5' : ''}`}>
+                  <div className="shrink-0">
+                    {isRunning ? (
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#2B9BFF] animate-pulse" />
+                    ) : (
+                      <div className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[9px] font-semibold text-slate-300 truncate">{job.filename}</p>
+                    <p className="text-[8px] text-slate-500 truncate">{job.message}</p>
+                  </div>
+                  {isRunning && (
+                    <span className="text-[8px] text-[#2B9BFF] font-mono shrink-0">{job.progress}%</span>
+                  )}
+                  {!isRunning && (
+                    <span className="text-[8px] text-slate-600 shrink-0">#{idx + 1}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function App() {
   const showOCRHarness = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
@@ -3564,8 +3643,8 @@ export default function App() {
 
   const handleBackToHome = () => {
     visionService.cancelAll('Project closed');
-    // ปลดปล่อยและ Resume งานประมวลผลพื้นหลังของไฟล์อื่นๆ ที่เคยโดน Pause เพื่อหลีกทาง
-    useBackgroundQueueStore.getState().boostPriorityForDocument(0);
+    // ปลดสถานะ Foreground Processing เพื่อให้คิวเบื้องหลังทำงานต่อได้
+    useBackgroundQueueStore.getState().setForegroundProcessingActive(false);
     closeProject();
   };
 
@@ -3740,15 +3819,22 @@ export default function App() {
           ocrQualityProfile: ocrOptions.ocrQualityProfile,
           useAngleCls: ocrOptions.useAngleCls,
         });
-
-        // ลัดคิวเพื่อให้งานเริ่มประมวลผลในพื้นหลังทันที
-        useBackgroundQueueStore.getState().boostPriorityForDocument(prevDocId);
+        // ไม่เรียก boostPriorityForDocument — งาน single page ที่ delegate ต่อท้ายคิวตาม FIFO
+        // ไม่ควรแทรกหรือยกเลิกงานที่กำลังรันอยู่ใน Background Queue
       }
     }
 
     prevPageRef.current = currentPage;
     prevDocIdRef.current = documentId;
   }, [currentPage, documentId, isOfflineProcessingRaw, isAiProcessingRaw, file, filePath, ocrOptions.engine, ocrOptions.language, sourceLanguage, targetLanguage, translationMode, ocrOptions.dpi, ocrOptions.pageSegMode, ocrOptions.ocrQualityProfile]);
+
+  // Sync สถานะการประมวลผล Foreground (OCR/แปลภาษา Inline) ไปยัง Queue Store
+  // เพื่อให้คิวเบื้องหลังพักงานชั่วคราวเมื่อผู้ใช้สั่งประมวลผลหน้าปัจจุบันเอง
+  // และกลับมารันงานเบื้องหลังต่อโดยอัตโนมัติเมื่อ Foreground เสร็จสิ้น
+  useEffect(() => {
+    const isForegroundActive = isOfflineProcessingRaw || isAiProcessingRaw;
+    useBackgroundQueueStore.getState().setForegroundProcessingActive(isForegroundActive);
+  }, [isOfflineProcessingRaw, isAiProcessingRaw]);
 
   if (showOCRHarness) {
     return <OCRRegressionHarness />;
@@ -6604,7 +6690,17 @@ export default function App() {
       return;
     }
 
-    const jobId = useBackgroundQueueStore.getState().addJob({
+    // แสดง immediate feedback ทันที ก่อนการ preemption จะเริ่ม (ให้ user รู้ว่ากดปุ่มแล้วมีผล)
+    const hasRunningJob = useBackgroundQueueStore.getState().jobs.some(j => j.status === 'processing');
+    setTranslationStatus({
+      kind: 'info',
+      message: hasRunningJob
+        ? 'กำลังแทรคิวและหยุดงานเดิมชั่วคราว... รอสักครู่'
+        : 'เพิ่มงานเข้าคิว...',
+    });
+
+    // Case 2 (Foreground All Pages): ใช้ addJobAsForeground เพื่อแทรกคิวลัด (หลัง running job) และลบ duplicate ที่ค้างอยู่อัตโนมัติ
+    const jobId = useBackgroundQueueStore.getState().addJobAsForeground({
       documentId: docId,
       filename: fileName,
       filepath: filePath,
@@ -6621,8 +6717,7 @@ export default function App() {
       useAngleCls: ocrOptions.useAngleCls,
     });
 
-    // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที
-    useBackgroundQueueStore.getState().boostPriorityForDocument(docId);
+    // (Foreground preemption จัดการผ่าน setForegroundProcessingActive จาก useEffect แล้ว)
 
     setTranslationStatus({
       kind: 'success',
@@ -6641,7 +6736,8 @@ export default function App() {
       return;
     }
 
-    const jobId = useBackgroundQueueStore.getState().addJob({
+    // Case 2 (Foreground All Pages): ใช้ addJobAsForeground เพื่อแทรกคิวลัด (หลัง running job) และลบ duplicate ที่ค้างอยู่อัตโนมัติ
+    const jobId = useBackgroundQueueStore.getState().addJobAsForeground({
       documentId: docId,
       filename: fileName,
       filepath: filePath,
@@ -6658,8 +6754,7 @@ export default function App() {
       useAngleCls: ocrOptions.useAngleCls,
     });
 
-    // ลัดคิวให้กับไฟล์ปัจจุบันที่เปิดอยู่ เพื่อเริ่มประมวลผลทันที
-    useBackgroundQueueStore.getState().boostPriorityForDocument(docId);
+    // (Foreground preemption จัดการผ่าน setForegroundProcessingActive จาก useEffect แล้ว)
 
     setTranslationStatus({
       kind: 'success',
@@ -7252,6 +7347,9 @@ export default function App() {
         </React.Suspense>
       </div>
 
+      {/* ─── Floating Queue Status Badge (File Preview) ─── */}
+      <BackgroundQueueBadge />
+
       {isDownloadMenuOpen && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-950/60 backdrop-blur-md px-4 py-3 transition-all duration-300">
           <div 
@@ -7825,11 +7923,11 @@ export default function App() {
                             {!isDone && !isActive && (
                               <button
                                 type="button"
-                                onClick={() => useBackgroundQueueStore.getState().boostPriorityForDocument(job.documentId)}
+                                onClick={() => useBackgroundQueueStore.getState().moveJobUp(job.id)}
                                 className="px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 border border-cyan-500/20 text-[8.5px] font-semibold transition-colors"
-                                title="ลัดคิวให้ไฟล์นี้ทำงานก่อน"
+                                title="เลื่อนขึ้นในคิว"
                               >
-                                ลัดคิว
+                                เลื่อนขึ้น
                               </button>
                             )}
                             <button
