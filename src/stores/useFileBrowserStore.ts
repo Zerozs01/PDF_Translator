@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DBDocument, DBTag, DBProject, DocumentUpdate } from '../types/electron.d';
+import type { DBDocument, DBTag, DBProject, DocumentUpdate, ProjectUpdate } from '../types/electron.d';
 import {
   applyLibraryFavoriteToggle,
   applyLibraryProjectMove,
@@ -9,6 +9,7 @@ import {
   deleteLibraryDocument,
   deleteLibraryProject,
   deleteLibraryTag,
+  updateLibraryProject,
   loadFavoriteLibraryDocuments,
   loadLibraryDocumentTags,
   loadLibraryDocumentsByProject,
@@ -27,7 +28,7 @@ import {
 } from '../services/libraryService';
 
 export type ViewMode = 'grid' | 'detail';
-export type SortBy = 'name' | 'date' | 'size' | 'type';
+export type SortBy = 'name' | 'date' | 'size' | 'type' | 'rating';
 export type SortOrder = 'asc' | 'desc';
 export type FilterType = 'all' | 'favorites' | 'recent' | 'tag' | 'project';
 
@@ -100,6 +101,7 @@ interface FileBrowserState {
   // Actions - Project Operations
   createProject: (name: string, parentId?: number | null, color?: string) => Promise<DBProject | null>;
   deleteProject: (id: number) => Promise<void>;
+  updateProject: (id: number, updates: ProjectUpdate) => Promise<boolean>;
   
   // Computed/Helpers
   getSortedDocuments: () => DBDocument[];
@@ -399,6 +401,22 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       set((state) => ({ projects: state.projects.filter(p => p.id !== id) }));
     } catch (error) {
       console.error('Failed to delete project:', error);
+    }
+  },
+
+  updateProject: async (id, updates) => {
+    try {
+      const updated = await updateLibraryProject(id, updates);
+      if (updated) {
+        set((state) => ({
+          projects: state.projects.map((p) => (p.id === id ? { ...p, ...updates } : p)),
+        }));
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to update project:', error);
+      return false;
     }
   },
   

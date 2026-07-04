@@ -5,9 +5,10 @@ import type {
   DocumentUpdate,
   ElectronAPI,
   ProjectCreate,
+  ProjectUpdate,
 } from '../types/electron.d';
 
-export type LibrarySortBy = 'name' | 'date' | 'size' | 'type';
+export type LibrarySortBy = 'name' | 'date' | 'size' | 'type' | 'rating';
 export type LibrarySortOrder = 'asc' | 'desc';
 export type LibraryFilterType = 'all' | 'favorites' | 'recent' | 'tag' | 'project';
 
@@ -112,6 +113,8 @@ const getDocumentSortValue = (document: DBDocument, sortBy: LibrarySortBy): numb
       return document.file_size;
     case 'type':
       return document.file_type;
+    case 'rating':
+      return document.is_favorite ? 1 : 0;
   }
 };
 
@@ -124,6 +127,12 @@ export const sortLibraryDocuments = (
   return [...documents].sort((left, right) => {
     const leftValue = getDocumentSortValue(left, sortBy);
     const rightValue = getDocumentSortValue(right, sortBy);
+
+    if (leftValue === rightValue) {
+      const leftDate = new Date(left.last_accessed).getTime();
+      const rightDate = new Date(right.last_accessed).getTime();
+      return (rightDate - leftDate);
+    }
 
     if (typeof leftValue === 'string' && typeof rightValue === 'string') {
       return leftValue.localeCompare(rightValue) * multiplier;
@@ -318,3 +327,10 @@ export const deleteLibraryProject = async (
   client?: LibraryProjectsClient | null
 ): Promise<boolean> =>
   withProjectsClient(client, 'deleteProject', false, async ({ projects }) => projects.delete(projectId));
+
+export const updateLibraryProject = async (
+  projectId: number,
+  updates: ProjectUpdate,
+  client?: LibraryProjectsClient | null
+): Promise<boolean> =>
+  withProjectsClient(client, 'updateProject', false, async ({ projects }) => projects.update(projectId, updates));

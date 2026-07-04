@@ -5,7 +5,7 @@ import {
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
-  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play
+  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play, Filter, Edit3
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
@@ -15,7 +15,7 @@ import {
   getOverlayPrimaryFontName,
 } from '../../constants/overlayFonts';
 import { useOCRTextLayerStore, SUPPORTED_LANGUAGES } from '../../stores/useOCRTextLayerStore';
-import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
+import { useFileBrowserStore, ViewMode as FileBrowserViewMode, SortBy, SortOrder } from '../../stores/useFileBrowserStore';
 import { useLayerStore } from '../../stores/useLayerStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
 import { OCREngine } from '../../types';
@@ -189,6 +189,13 @@ type DeleteTagDialogState = {
   confirmation: string;
 };
 
+type DeleteProjectDialogState = {
+  isOpen: boolean;
+  project: DBProject | null;
+  confirmation: string;
+};
+
+
 const getFloatingMenuPosition = (
   x: number,
   y: number,
@@ -241,7 +248,7 @@ const DocumentContextMenu: React.FC<{
 }) => {
   const assignedTagIds = useMemo(() => new Set(documentTags.map(tag => tag.id)), [documentTags]);
   const projectAccentById = useMemo(
-    () => new Map(projects.map((project, index) => [project.id, resolveThemedAccent(index)])),
+    () => new Map(projects.map((project, index) => [project.id, project.color || resolveThemedAccent(index)])),
     [projects]
   );
   const tagAccentById = useMemo(
@@ -483,6 +490,105 @@ const TagContextMenu: React.FC<{
 );
 };
 
+const ProjectContextMenu: React.FC<{
+  project: DBProject;
+  position: MenuPosition;
+  onClose: () => void;
+  onDelete: () => void;
+  onEdit: () => void;
+}> = ({ project, position, onClose, onDelete, onEdit }) => {
+  const accent = project.color || resolveStableAccent(project.id);
+  return createPortal(
+  <div
+    data-library-floating-menu="true"
+    className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+    style={{ left: position.x, top: position.y }}
+    onClick={(e) => e.stopPropagation()}
+    onContextMenu={(e) => e.preventDefault()}
+  >
+    <div className="border-b border-white/10 px-2 pb-2">
+      <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
+        <Folder size={14} style={{ color: accent }} />
+        <span className="truncate">{project.name}</span>
+      </div>
+      <div className="mt-1 text-[10px] text-slate-400">Deleting a folder does not delete the documents inside it.</div>
+    </div>
+    <div className="pt-2 space-y-0.5">
+      <button
+        onClick={() => {
+          onEdit();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10"
+      >
+        <Edit3 size={12} className="text-slate-400" />
+        Edit Folder
+      </button>
+      <button
+        onClick={() => {
+          onDelete();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
+      >
+        <Trash2 size={12} />
+        Delete Folder
+      </button>
+    </div>
+  </div>,
+  document.body
+  );
+};
+
+const SortContextMenu: React.FC<{
+  position: MenuPosition;
+  sortBy: SortBy;
+  sortOrder: SortOrder;
+  onSelect: (key: SortBy, order: SortOrder) => void;
+  onClose: () => void;
+}> = ({ position, sortBy, sortOrder, onSelect, onClose }) => {
+  return createPortal(
+    <div
+      data-library-floating-menu="true"
+      className="fixed z-[160] w-48 rounded-2xl border border-white/15 bg-slate-950/95 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl flex flex-col gap-0.5"
+      style={{ left: position.x, top: position.y }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-white/5 mb-1">
+        Sort Documents
+      </div>
+      {[
+        { label: 'Newest', key: 'date', order: 'desc' as const },
+        { label: 'Oldest', key: 'date', order: 'asc' as const },
+        { label: 'A-Z', key: 'name', order: 'asc' as const },
+        { label: 'Z-A', key: 'name', order: 'desc' as const },
+        { label: 'Rating', key: 'rating', order: 'desc' as const }
+      ].map((opt) => {
+        const isActive = sortBy === opt.key && sortOrder === opt.order;
+        return (
+          <button
+            key={`${opt.key}-${opt.order}`}
+            onClick={() => {
+              onSelect(opt.key as SortBy, opt.order);
+              onClose();
+            }}
+            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-all ${
+              isActive
+                ? 'bg-white/10 text-white font-medium'
+                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+            }`}
+          >
+            <span>{opt.label}</span>
+            {isActive && <Check size={12} className="text-[#5CC6F2]" />}
+          </button>
+        );
+      })}
+    </div>,
+    document.body
+  );
+};
+
 const DocumentCard = React.memo<{
   doc: DBDocument;
   viewMode: FileBrowserViewMode;
@@ -561,7 +667,7 @@ const DocumentCard = React.memo<{
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 460));
+          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 560));
         }}
       >
         <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
@@ -599,7 +705,7 @@ const DocumentCard = React.memo<{
         {isMenuOpen && (
           <DocumentContextMenu
             doc={doc}
-            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 460)}
+            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 560)}
             documentTags={documentTags}
             tags={tags}
             projects={projects}
@@ -635,7 +741,7 @@ const DocumentCard = React.memo<{
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 460));
+        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 560));
       }}
     >
       <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-[#090a0c]">
@@ -673,7 +779,7 @@ const DocumentCard = React.memo<{
         onClick={(e) => {
           e.stopPropagation();
           const rect = e.currentTarget.getBoundingClientRect();
-          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 460));
+          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 560));
         }}
         className="p-1.5 rounded text-slate-500 hover:text-slate-300"
       >
@@ -682,7 +788,7 @@ const DocumentCard = React.memo<{
       {isMenuOpen && (
         <DocumentContextMenu
           doc={doc}
-          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 460)}
+          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 560)}
           documentTags={documentTags}
           tags={tags}
           projects={projects}
@@ -709,11 +815,13 @@ const ProjectItem = React.memo<{
   onDragOver: (event: React.DragEvent<HTMLButtonElement>) => void;
   onDragLeave: () => void;
   onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
-}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop }) => {
+  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop, onContextMenu }) => {
   const accent = displayColor || resolveStableAccent(project.id);
   return (
   <button 
     onClick={onSelect}
+    onContextMenu={onContextMenu}
     onDragOver={onDragOver}
     onDragLeave={onDragLeave}
     onDrop={onDrop}
@@ -796,6 +904,8 @@ export const UploadScreen: React.FC = () => {
 
   const {
     viewMode, setViewMode,
+    sortBy, setSortBy,
+    sortOrder, setSortOrder,
     filterType,
     selectedTagId, setSelectedTagId,
     selectedProjectId, setSelectedProjectId,
@@ -806,7 +916,7 @@ export const UploadScreen: React.FC = () => {
           searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
-    createTag, createProject, deleteTag, loadDocumentTags, persistDocumentPatch,
+    createTag, createProject, deleteTag, deleteProject, updateProject, loadDocumentTags, persistDocumentPatch,
     selectedDocumentIds, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
@@ -877,8 +987,18 @@ export const UploadScreen: React.FC = () => {
   const [projectDialog, setProjectDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [tagDialog, setTagDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [deleteTagDialog, setDeleteTagDialog] = useState<DeleteTagDialogState>({ isOpen: false, tag: null, confirmation: '' });
+  const [activeProjectMenu, setActiveProjectMenu] = useState<{ project: DBProject; position: MenuPosition } | null>(null);
+  const [deleteProjectDialog, setDeleteProjectDialog] = useState<DeleteProjectDialogState>({ isOpen: false, project: null, confirmation: '' });
+  const [editProjectDialog, setEditProjectDialog] = useState<{
+    isOpen: boolean;
+    project: DBProject | null;
+    name: string;
+    color: string;
+  }>({ isOpen: false, project: null, name: '', color: '' });
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
   const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [sortMenuPosition, setSortMenuPosition] = useState<MenuPosition | null>(null);
 
   const [ocrBackgroundDialog, setOcrBackgroundDialog] = useState<{
     isOpen: boolean;
@@ -1053,7 +1173,10 @@ export const UploadScreen: React.FC = () => {
       setActiveDocumentMenuId(null);
       setActiveDocumentMenuPosition(null);
       setActiveTagMenu(null);
+      setActiveProjectMenu(null);
       setLibraryMenuPosition(null);
+      setIsSortMenuOpen(false);
+      setSortMenuPosition(null);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1061,10 +1184,15 @@ export const UploadScreen: React.FC = () => {
         setActiveDocumentMenuId(null);
         setActiveDocumentMenuPosition(null);
         setActiveTagMenu(null);
+        setActiveProjectMenu(null);
         setLibraryMenuPosition(null);
+        setIsSortMenuOpen(false);
+        setSortMenuPosition(null);
         setProjectDialog((current) => ({ ...current, isOpen: false }));
         setTagDialog((current) => ({ ...current, isOpen: false }));
         setDeleteTagDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
+        setDeleteProjectDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
+        setEditProjectDialog((current) => ({ ...current, isOpen: false }));
       }
     };
 
@@ -1246,10 +1374,40 @@ export const UploadScreen: React.FC = () => {
     setActiveDocumentMenuId(null);
     setActiveDocumentMenuPosition(null);
     setLibraryMenuPosition(null);
+    setActiveProjectMenu(null);
     setActiveTagMenu({
       tag,
       position: getFloatingMenuPosition(event.clientX, event.clientY, 224, 120)
     });
+  }, []);
+
+  const openProjectMenu = useCallback((project: DBProject, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setLibraryMenuPosition(null);
+    setActiveTagMenu(null);
+    setActiveProjectMenu({
+      project,
+      position: getFloatingMenuPosition(event.clientX, event.clientY, 224, 120)
+    });
+  }, []);
+
+  const openSortMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setLibraryMenuPosition(null);
+    setActiveTagMenu(null);
+    setActiveProjectMenu(null);
+    const rect = event.currentTarget.getBoundingClientRect();
+    setSortMenuPosition({
+      x: rect.right - 192, // 192px is w-48
+      y: rect.bottom + 8
+    });
+    setIsSortMenuOpen(true);
   }, []);
 
   const handleToggleDocumentTag = useCallback(async (doc: DBDocument, tag: DBTag) => {
@@ -1311,6 +1469,18 @@ export const UploadScreen: React.FC = () => {
     setProjectDialog({ isOpen: false, name: '', documentId: null });
   }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
 
+  const handleEditProject = useCallback(async () => {
+    const { project, name, color } = editProjectDialog;
+    if (!project) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    const success = await updateProject(project.id, { name: trimmedName, color });
+    if (success) {
+      setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' });
+    }
+  }, [editProjectDialog, updateProject]);
+
   const handleCreateTag = useCallback(async () => {
     const name = tagDialog.name.trim();
     if (!name) return;
@@ -1356,6 +1526,24 @@ export const UploadScreen: React.FC = () => {
     setActiveTagMenu(null);
     setDeleteTagDialog({ isOpen: false, tag: null, confirmation: '' });
   }, [deleteTag, deleteTagDialog.confirmation, deleteTagDialog.tag, loadRecentDocuments, loadTags, selectedTagId, setSelectedTagId]);
+
+  const handleDeleteProject = useCallback(async () => {
+    const targetProject = deleteProjectDialog.project;
+    if (!targetProject) return;
+    if (deleteProjectDialog.confirmation.trim() !== targetProject.name) return;
+
+    await deleteProject(targetProject.id);
+
+    if (selectedProjectId === targetProject.id) {
+      setSelectedProjectId(null);
+      void loadRecentDocuments();
+    } else {
+      void loadProjects();
+    }
+
+    setActiveProjectMenu(null);
+    setDeleteProjectDialog({ isOpen: false, project: null, confirmation: '' });
+  }, [deleteProject, deleteProjectDialog.confirmation, deleteProjectDialog.project, loadRecentDocuments, loadProjects, selectedProjectId, setSelectedProjectId]);
 
   const handleProjectDrop = useCallback(async (projectId: number | null) => {
     if (!draggedDocumentId) return;
@@ -1492,6 +1680,21 @@ export const UploadScreen: React.FC = () => {
               </button>
             </h2>
             <div className="flex flex-wrap gap-2 mb-6">
+              <TagPill
+                tag={{ id: 0, name: 'No tags', color: '#64748b', created_at: '' }}
+                displayColor="#64748b"
+                isSelected={selectedTagId === 0}
+                onContextMenu={(event) => event.preventDefault()}
+                onClick={() => {
+                  setActiveTagMenu(null);
+                  if (selectedTagId === 0) {
+                    setSelectedTagId(null);
+                    loadRecentDocuments();
+                  } else {
+                    loadDocumentsByTag(0);
+                  }
+                }}
+              />
               {tags.map((tag, index) => (
                 <TagPill 
                   key={tag.id} 
@@ -1528,7 +1731,7 @@ export const UploadScreen: React.FC = () => {
                 <ProjectItem
                   key={project.id}
                   project={project}
-                  displayColor={resolveThemedAccent(index)}
+                  displayColor={project.color || resolveThemedAccent(index)}
                   isSelected={selectedProjectId === project.id}
                   isDropTarget={projectDropTargetId === project.id}
                   onDragOver={(event) => {
@@ -1554,6 +1757,7 @@ export const UploadScreen: React.FC = () => {
                       loadDocumentsByProject(project.id);
                     }
                   }}
+                  onContextMenu={(event) => openProjectMenu(project, event)}
                 />
               ))}
             </div>
@@ -1575,7 +1779,7 @@ export const UploadScreen: React.FC = () => {
                 <ProjectItem
                   key={project.id}
                   project={project}
-                  displayColor={resolveThemedAccent(index)}
+                  displayColor={project.color || resolveThemedAccent(index)}
                   isSelected={selectedProjectId === project.id}
                   isDropTarget={projectDropTargetId === project.id}
                   onDragOver={(event) => {
@@ -1594,6 +1798,7 @@ export const UploadScreen: React.FC = () => {
                     void handleProjectDrop(project.id);
                   }}
                   onSelect={() => loadDocumentsByProject(project.id)}
+                  onContextMenu={(event) => openProjectMenu(project, event)}
                 />
               ))}
             </div>
@@ -1833,6 +2038,22 @@ export const UploadScreen: React.FC = () => {
                   }`}
                 >
                   <List size={16} />
+                </button>
+              </div>
+
+              {/* Spacer to push filter button to the right corner */}
+              <div className="flex-1" />
+
+              {/* Sort / Filter Button */}
+              <div className="relative">
+                <button
+                  onClick={openSortMenu}
+                  className={`p-2 rounded-lg bg-[#202329]/90 border border-white/8 text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0 ${
+                    isSortMenuOpen ? 'text-[#5CC6F2] border-[#5CC6F2]/30' : ''
+                  }`}
+                  title="Sort options"
+                >
+                  <Filter size={16} />
                 </button>
               </div>
             </div>
@@ -2410,6 +2631,45 @@ export const UploadScreen: React.FC = () => {
           />
         )}
 
+        {activeProjectMenu && (
+          <ProjectContextMenu
+            project={activeProjectMenu.project}
+            position={activeProjectMenu.position}
+            onClose={() => setActiveProjectMenu(null)}
+            onDelete={() => {
+              setDeleteProjectDialog({
+                isOpen: true,
+                project: activeProjectMenu.project,
+                confirmation: ''
+              });
+            }}
+            onEdit={() => {
+              setEditProjectDialog({
+                isOpen: true,
+                project: activeProjectMenu.project,
+                name: activeProjectMenu.project.name,
+                color: activeProjectMenu.project.color || resolveStableAccent(activeProjectMenu.project.id)
+              });
+            }}
+          />
+        )}
+
+        {isSortMenuOpen && sortMenuPosition && (
+          <SortContextMenu
+            position={sortMenuPosition}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSelect={(key, order) => {
+              setSortBy(key);
+              setSortOrder(order);
+            }}
+            onClose={() => {
+              setIsSortMenuOpen(false);
+              setSortMenuPosition(null);
+            }}
+          />
+        )}
+
         {ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc && (
           <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left">
@@ -2569,6 +2829,88 @@ export const UploadScreen: React.FC = () => {
           </div>
         )}
 
+        {editProjectDialog.isOpen && editProjectDialog.project && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left">
+              <h3 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
+                <Edit3 size={18} className="text-[#2B9BFF]" />
+                แก้ไขโฟลเดอร์ (Edit Folder)
+              </h3>
+              <p className="mt-1 text-sm text-slate-400">
+                เปลี่ยนชื่อหรือเลือกสีไอคอนสำหรับโฟลเดอร์นี้
+              </p>
+              
+              <div className="mt-5 space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">ชื่อโฟลเดอร์ (Folder Name)</label>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editProjectDialog.name}
+                    onChange={(e) => setEditProjectDialog((current) => ({ ...current, name: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        void handleEditProject();
+                      }
+                    }}
+                    placeholder="Folder name"
+                    className="mt-1.5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">สีไอคอนโฟลเดอร์ (Folder Icon Color)</label>
+                  <div className="grid grid-cols-5 gap-3">
+                    {[
+                      '#7C5CFF', // Indigo
+                      '#4387FF', // Blue
+                      '#59C8F6', // Sky
+                      '#10B981', // Emerald/Green
+                      '#06B6D4', // Cyan
+                      '#F59A3A', // Orange
+                      '#F1C85B', // Yellow
+                      '#EC4899', // Rose/Pink
+                      '#EF4444', // Red
+                      '#64748B'  // Slate
+                    ].map((color) => {
+                      const isSelected = editProjectDialog.color === color;
+                      return (
+                        <button
+                          key={color}
+                          onClick={() => setEditProjectDialog((current) => ({ ...current, color }))}
+                          className="h-9 w-9 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-105 active:scale-95"
+                          style={{ 
+                            backgroundColor: color,
+                            boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${color}` : 'none'
+                          }}
+                          title={color}
+                        >
+                          {isSelected && <Check size={14} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleEditProject()}
+                  className="rounded-xl bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {tagDialog.isOpen && (
           <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
@@ -2662,6 +3004,67 @@ export const UploadScreen: React.FC = () => {
                   className="rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(239,68,68,0.28)] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   Delete Tag
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {deleteProjectDialog.isOpen && deleteProjectDialog.project && (
+          <div className="absolute inset-0 z-[175] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-red-400/25 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-2xl bg-red-500/12 p-2 text-red-300">
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-100">Delete Project Folder</h3>
+                  <p className="mt-1 text-sm text-slate-400">
+                    This removes the project folder. Documents in this project will not be deleted, but will be moved out of the project folder.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-white/10 bg-slate-900/55 p-4">
+                <div className="flex items-center gap-2 text-sm text-slate-200">
+                  <Folder
+                    size={16}
+                    style={{ color: resolveStableAccent(deleteProjectDialog.project.id) }}
+                  />
+                  <span className="font-medium">{deleteProjectDialog.project.name}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  Type <span className="font-semibold text-slate-200">{deleteProjectDialog.project.name}</span> to confirm deletion.
+                </p>
+              </div>
+
+              <input
+                autoFocus
+                type="text"
+                value={deleteProjectDialog.confirmation}
+                onChange={(e) => setDeleteProjectDialog((current) => ({ ...current, confirmation: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleDeleteProject();
+                  }
+                }}
+                placeholder={deleteProjectDialog.project.name}
+                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-red-400/60"
+              />
+
+              <div className="mt-5 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteProjectDialog({ isOpen: false, project: null, confirmation: '' })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleDeleteProject()}
+                  disabled={deleteProjectDialog.confirmation.trim() !== deleteProjectDialog.project.name}
+                  className="rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(239,68,68,0.28)] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Delete Folder
                 </button>
               </div>
             </div>

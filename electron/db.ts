@@ -647,6 +647,15 @@ export const DocumentDAO = {
 
   getByTag: (tagId: number) => {
     if (!db) throw new Error('DB not initialized');
+    if (tagId === 0) {
+      return db.prepare(`
+        SELECT d.*, NULL as tag_names, NULL as tag_colors
+        FROM documents d
+        LEFT JOIN document_tags dt ON d.id = dt.document_id
+        WHERE dt.document_id IS NULL
+        ORDER BY d.last_accessed DESC
+      `).all();
+    }
     return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
