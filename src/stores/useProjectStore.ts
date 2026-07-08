@@ -355,6 +355,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   ensureDocumentId: async () => {
     if (!dbService.isAvailable()) return null;
     const { documentId, file, filePath } = get();
+    if (documentId) {
+      return documentId;
+    }
     const hadDocumentId = Boolean(documentId);
 
     const ensured = await ensureProjectDocumentRecord({

@@ -693,19 +693,27 @@ def merge_near_duplicate_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, An
                 or alpha in existing_alpha
                 or are_near_duplicate_tokens(existing_alpha, alpha)
             )
-            if not same_or_subset:
-                continue
 
             existing_bbox = existing.get("bbox") or {}
-            min_height = max(8.0, min(bbox_height(existing_bbox), bbox_height(line_bbox)))
-            center_delta = abs(line_sort_y(existing) - line_sort_y(line))
+            iou = bbox_iou_ratio(existing_bbox, line_bbox)
             overlap_x = horizontal_overlap_ratio(existing_bbox, line_bbox)
             overlap_y = vertical_overlap_ratio(existing_bbox, line_bbox)
+
+            # --- HIGH OVERLAP OVERRIDE ---
+            # หากกล่องข้อความทับซ้อนกันสูงมากในเชิงพื้นที่ (IoU >= 0.78 หรือทับซ้อนแกน X/Y เกิน 88%)
+            # แสดงว่าเป็นคำเดียวกันที่ตรวจพบซ้ำแน่นอน (เช่น จากรอบปกติและรอบกลับสี) 
+            # เราจะอนุญาตให้ผ่านไปขั้นตอนยุบรวม (merge) ได้เลยโดยไม่สนใจความต่างของข้อความ
+            extremely_high_overlap = (iou >= 0.78) or (overlap_y >= 0.88 and overlap_x >= 0.88)
+
+            if not same_or_subset and not extremely_high_overlap:
+                continue
+
+            min_height = max(8.0, min(bbox_height(existing_bbox), bbox_height(line_bbox)))
+            center_delta = abs(line_sort_y(existing) - line_sort_y(line))
             contained = (
                 horizontal_containment_ratio(existing_bbox, line_bbox) >= 0.65
                 or horizontal_containment_ratio(line_bbox, existing_bbox) >= 0.65
             )
-            iou = bbox_iou_ratio(existing_bbox, line_bbox)
             near_same_box = (
                 iou >= 0.56
                 or (overlap_y >= 0.82 and overlap_x >= 0.62)
@@ -3541,6 +3549,9 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
     # not cuBLASLt). Forcing CPU avoids the fatal crash. EasyOCR (PyTorch-based) handles
     # GPU acceleration via ZLUDA instead, which has proper cuBLAS support.
     global GLOBAL_USE_DML
+    
+    force_cpu = os.environ.get("OCR_FORCE_CPU", "0") == "1" or os.environ.get("OCR_USE_GPU", "1") == "0"
+    
     running_under_zluda = (
         os.environ.get("OCR_USE_ZLUDA", "0") == "1"
         or os.environ.get("USE_ZLUDA", "0") == "1"
@@ -3548,31 +3559,36 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
     use_gpu = False
     use_onnx = False
     paddle_device = "cpu"
-    if not running_under_zluda:
-        try:
-            import paddle
-            # Check CUDA (Nvidia)
-            if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
-                use_gpu = True
-                paddle_device = "gpu"
-        except Exception:
-            pass
+    
+    if force_cpu:
+        GLOBAL_USE_DML = False
+        print("[ocrBridge] PaddleOCR forcing CPU mode via environment override.", file=sys.stderr)
+    else:
+        if not running_under_zluda:
+            try:
+                import paddle
+                # Check CUDA (Nvidia)
+                if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+                    use_gpu = True
+                    paddle_device = "gpu"
+            except Exception:
+                pass
 
-    if not use_gpu:
-        try:
-            # Check DirectML (AMD/Intel) via ONNX Runtime
-            import onnxruntime as ort
-            providers = ort.get_available_providers()
-            print(f"[ocrBridge] Available ONNX Runtime providers: {providers}", file=sys.stderr)
-            if "DmlExecutionProvider" in providers:
-                use_gpu = True
-                use_onnx = True
-                GLOBAL_USE_DML = True
-                print("[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider) enabled successfully", file=sys.stderr)
-            else:
-                print("[ocrBridge] PaddleOCR DirectML NOT available (DmlExecutionProvider not in providers)", file=sys.stderr)
-        except Exception as exc:
-            print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
+        if not use_gpu:
+            try:
+                # Check DirectML (AMD/Intel) via ONNX Runtime
+                import onnxruntime as ort
+                providers = ort.get_available_providers()
+                print(f"[ocrBridge] Available ONNX Runtime providers: {providers}", file=sys.stderr)
+                if "DmlExecutionProvider" in providers:
+                    use_gpu = True
+                    use_onnx = True
+                    GLOBAL_USE_DML = True
+                    print("[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider) enabled successfully", file=sys.stderr)
+                else:
+                    print("[ocrBridge] PaddleOCR DirectML NOT available (DmlExecutionProvider not in providers)", file=sys.stderr)
+            except Exception as exc:
+                print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
 
     if profile_key == "cpu_korean_default":
         return {
@@ -4979,6 +4995,11 @@ def _detect_torch_device() -> Tuple[Any, bool, bool]:
       (must be injected after EasyOCR Reader init, NOT passed as constructor arg)
     """
     gpu_vendor = os.environ.get("OCR_GPU_VENDOR", "").strip().lower()
+
+    if os.environ.get("OCR_FORCE_CPU", "0") == "1" or os.environ.get("OCR_USE_GPU", "1") == "0":
+        import torch
+        print("[ocrBridge] PyTorch forcing CPU mode via environment override.", file=sys.stderr)
+        return torch.device("cpu"), False, False
 
     # 1. Check for DirectML (High priority for Windows/AMD/Intel stability — no CUDA DLLs)
     if os.environ.get("OCR_USE_DIRECTML", "0") == "1":

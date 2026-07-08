@@ -181,6 +181,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
   const translationPreviewMode = previewModeOverride || storePreviewMode;
   
+  const [isCacheLoading, setIsCacheLoading] = useState(false);
   const layersByPage = useLayerStore((state) => state.layersByPage);
   const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
   const groupsByPage = useLayerStore((state) => state.groupsByPage);
@@ -207,49 +208,62 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     const loadCache = async () => {
       // 1. Load OCR cache if not in memory
       const hasOcr = ocrState.ocrByPageEngine.get(pageNum)?.has(activeEngine);
-      if (!hasOcr) {
-        try {
-          const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
-          if (cached && !canceled) {
-            if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
-              cached.pageNumber = pageNum;
-              ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
-              console.log(`[ImageCanvas] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
-            } else {
-              console.log(`[ImageCanvas] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
-            }
-          }
-        } catch (err) {
-          console.warn(`[ImageCanvas] Failed to load OCR cache for page ${pageNum}:`, err);
-        }
+      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
+
+      let startedLoading = false;
+      if (!hasOcr || !hasTranslation) {
+        setIsCacheLoading(true);
+        startedLoading = true;
       }
 
-      // 2. Load Translation cache if not in memory
-      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
-      if (!hasTranslation) {
-        try {
-          const rows = await dbService.getTranslationCachePage(documentId, pageNum);
-          if (Array.isArray(rows) && rows.length > 0 && !canceled) {
-            console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-            for (const row of rows) {
-              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-                continue;
-              }
-              const normalizedEntry: OCRTranslationCacheEntry = {
-                ...row,
-                pageNum,
-                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-              };
-              ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
-              if (row.key && row.key.includes(activeEngine)) {
-                // If it matches activeEngine, set it active
-                ocrState.setActiveTranslationCacheKey(pageNum, row.key);
-                ocrState.setTranslationPreviewMode('translated');
+      try {
+        if (!hasOcr) {
+          try {
+            const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
+            if (cached && !canceled) {
+              if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+                cached.pageNumber = pageNum;
+                ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+                console.log(`[ImageCanvas] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+              } else {
+                console.log(`[ImageCanvas] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
               }
             }
+          } catch (err) {
+            console.warn(`[ImageCanvas] Failed to load OCR cache for page ${pageNum}:`, err);
           }
-        } catch (err) {
-          console.warn(`[ImageCanvas] Failed to load translation cache for page ${pageNum}:`, err);
+        }
+
+        // 2. Load Translation cache if not in memory
+        if (!hasTranslation) {
+          try {
+            const rows = await dbService.getTranslationCachePage(documentId, pageNum);
+            if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+              console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+              for (const row of rows) {
+                if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+                  continue;
+                }
+                const normalizedEntry: OCRTranslationCacheEntry = {
+                  ...row,
+                  pageNum,
+                  ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+                };
+                ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
+                if (row.key && row.key.includes(activeEngine)) {
+                  // If it matches activeEngine, set it active
+                  ocrState.setActiveTranslationCacheKey(pageNum, row.key);
+                  ocrState.setTranslationPreviewMode('translated');
+                }
+              }
+            }
+          } catch (err) {
+            console.warn(`[ImageCanvas] Failed to load translation cache for page ${pageNum}:`, err);
+          }
+        }
+      } finally {
+        if (startedLoading && !canceled) {
+          setIsCacheLoading(false);
         }
       }
     };
@@ -714,6 +728,15 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
               draggable={false}
               className="max-w-none border border-slate-700 bg-white shadow-2xl select-none block"
             />
+            {isCacheLoading && (
+              <div className="absolute top-4 right-4 z-50 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 text-xs text-slate-200 shadow-lg animate-pulse pointer-events-none select-none">
+                <svg className="animate-spin h-3.5 w-3.5 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span className="font-medium tracking-wide">กำลังโหลดแคช...</span>
+              </div>
+            )}
             {translationOverlayContext.shouldRender && currentPageOCR && imageDisplaySize.width > 0 && imageDisplaySize.height > 0 && (
               <div 
                 style={{

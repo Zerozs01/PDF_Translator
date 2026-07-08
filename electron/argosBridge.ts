@@ -11,6 +11,7 @@ export type TranslationContext = {
   sourceLanguage?: string;
   targetLanguage?: string;
   timeoutMs?: number;
+  engine?: string;
 };
 
 interface ArgosBridgeResponse {
@@ -362,6 +363,7 @@ export const runArgosTranslateBatch = async (
     targetLanguage,
     mode: String(context?.mode || 'manga'),
     sourceType: String(context?.sourceType || 'text'),
+    engine: String(context?.engine || 'argos'),
   };
 
   const dedupedTexts: string[] = [];

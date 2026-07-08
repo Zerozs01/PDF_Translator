@@ -12,7 +12,7 @@ import { processKoreanManhwaPipeline } from '../services/ocr/ocrManhwaHeuristics
 import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from '../services/ocr/ocrJapaneseVerticalHeuristics';
 import { isKnownShortWordHelper, applyPanelSafetyLineDedup } from '../services/ocr/ocrSafetyLineDedup';
 
-export type TranslatorEngine = 'offline' | 'ai';
+export type TranslatorEngine = 'offline' | 'ai' | 'm2m100';
 export type OCRPreviewMode = 'translated' | 'original';
 
 export type OCRTranslationCacheKeyParts = {

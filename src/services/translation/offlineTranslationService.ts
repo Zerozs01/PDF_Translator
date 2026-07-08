@@ -437,6 +437,17 @@ export const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00
 // -------------------------------------------------------------
 
 export const lookupShortPhraseTh = (text: string): string | null => {
+  // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
+  const trimmed = text.trim();
+  const tempAlertMatch = trimmed.match(/^temp:\s*(\d+)\s*c\s*\[alert\]$/i);
+  if (tempAlertMatch) {
+    return `อุณหภูมิ: ${tempAlertMatch[1]}°C [แจ้งเตือน]`;
+  }
+  const tempNormalMatch = trimmed.match(/^temp:\s*(\d+)\s*c$/i);
+  if (tempNormalMatch) {
+    return `อุณหภูมิ: ${tempNormalMatch[1]}°C`;
+  }
+
   const key = text.trim().toLowerCase()
     .replace(/[_]+/g, ' ')
     .replace(/[\-\/\.\,\!\?]+/g, ' ')
@@ -532,7 +543,8 @@ export async function translateBatchOffline(
   mode: TranslationMode,
   sourceLanguage: string,
   targetLanguage: string,
-  offlineBatchBridge: (texts: string[], options: any) => Promise<string[]>
+  offlineBatchBridge: (texts: string[], options: any) => Promise<string[]>,
+  engine?: string
 ): Promise<string[]> {
   if (texts.length === 0) return [];
 
@@ -606,12 +618,13 @@ export async function translateBatchOffline(
       .trim();
 
   // Run Direct translation and Pivot English translation in parallel to minimize IPC latency
-  const runPivotEnglish = shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget);
+  const runPivotEnglish = engine === 'm2m100' ? false : shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget);
   const directPromise = offlineBatchBridge(preparedTexts, {
     mode,
     sourceType: type,
     sourceLanguage: normalizedSource,
     targetLanguage: normalizedTarget,
+    engine: engine || 'argos',
   }).catch((err) => {
     console.error(`[translateBatchOffline] Direct translation call failed for ${normalizedSource}->${normalizedTarget}:`, err);
     return new Array<string>(preparedTexts.length).fill('');
@@ -623,6 +636,7 @@ export async function translateBatchOffline(
         sourceType: type,
         sourceLanguage: normalizedSource,
         targetLanguage: 'en',
+        engine: engine || 'argos',
       }).catch((err) => {
         console.error(`[translateBatchOffline] Pivot English translation call failed for ${normalizedSource}->en:`, err);
         return new Array<string>(preparedTexts.length).fill('');

@@ -48,6 +48,10 @@ describe('koreanTranslationPolicy', () => {
       expect(applyKoreanConversationalFallback('밑으로...', '')).toBe('ข้างล่าง...');
       expect(applyKoreanConversationalFallback('잠깐?!', '')).toBe('เดี๋ยวก่อน?!');
       expect(applyKoreanConversationalFallback('뭐야!', '')).toBe('อะไรกัน!');
+      expect(applyKoreanConversationalFallback('자신이무시하던남자에게 엉덩이활짝내밀고든', '')).toBe('เธอยื่นก้นออกไปให้ผู้ชายที่เธอเคยเมินเฉย');
+      expect(applyKoreanConversationalFallback('쾌락에패배하고굴복해서', '')).toBe('พ่ายแพ้และยอมจำนนต่อความสุข');
+      expect(applyKoreanConversationalFallback('가장무방비한자세로 보지대주고있는상황을', '')).toBe('สถานการณ์ที่เสนออวัยวะเพศหญิงของตนเองในตำแหน่งที่ไร้การป้องกันที่สุด');
+      expect(applyKoreanConversationalFallback('하앙!?', '')).toBe('ฮ๊าง!?');
     });
 
     it('returns null when no pattern matches', () => {

@@ -3530,6 +3530,7 @@ export default function App() {
   
   const [isAiProcessingRaw, setIsAiProcessing] = useState(false);
   const [isOfflineProcessingRaw, setIsOfflineProcessing] = useState(false);
+  const [offlineEngine, setOfflineEngine] = useState<'argos' | 'm2m100'>('argos');
 
   // เชื่อมโยงความคืบหน้าของเอกสารปัจจุบันจากระบบคิวประมวลผลเบื้องหลัง
   const queueJobs = useBackgroundQueueStore((state) => state.jobs);
@@ -3757,13 +3758,18 @@ export default function App() {
     }
   }, [file]);
 
+  const runCurrentPageTranslationRef = React.useRef(runCurrentPageTranslation);
+  useEffect(() => {
+    runCurrentPageTranslationRef.current = runCurrentPageTranslation;
+  }, [runCurrentPageTranslation]);
+
   useEffect(() => {
     backgroundQueueProcessor.registerHandlers({
       translatePage: async (docId, pageNum, ocrResult, engine, signal, options) => {
         try {
           // ส่ง ocrResult โดยตรงผ่าน ocrResultOverride เพื่อให้ runCurrentPageTranslation
           // ใช้ข้อมูลที่ processor มีอยู่แล้ว โดยไม่ต้องพึ่ง store ซึ่งอาจ sync ไม่ทัน
-          const result = await runCurrentPageTranslation(engine, pageNum, { 
+          const result = await runCurrentPageTranslationRef.current(engine, pageNum, { 
             suppressStatus: true,
             ocrLanguage: options?.ocrLanguage,
             sourceLanguage: options?.sourceLanguage,
@@ -3779,7 +3785,7 @@ export default function App() {
         }
       }
     });
-  }, [runCurrentPageTranslation]);
+  }, []);
 
   // ดักจับเมื่อผู้เปลี่ยนหน้าหรือไฟล์ ขณะที่การแปลหน้าเดี่ยวยังทำงาน inline ค้างอยู่
   // เพื่อนำไปประมวลผลต่อใน Background Queue
@@ -5401,7 +5407,7 @@ export default function App() {
   };
 
   async function runCurrentPageTranslation(
-    engine: 'offline' | 'ai',
+    engine: 'offline' | 'ai' | 'm2m100',
     pageNum: number = currentPage,
     options?: { 
       suppressStatus?: boolean;
@@ -5875,8 +5881,8 @@ export default function App() {
       };
     });
 
-    const coordinatorEngineId = engine === 'offline' ? 'argos' : 'gemini';
-    let effectiveEngine: 'offline' | 'ai' = engine;
+    const coordinatorEngineId = engine === 'offline' ? 'argos' : (engine === 'ai' ? 'gemini' : 'm2m100');
+    let effectiveEngine: TranslatorEngine = engine;
     let fallbackNote = '';
     
     try {
@@ -5888,8 +5894,8 @@ export default function App() {
           sourceLanguage: translationSourceLanguage,
           targetLanguage: normalizedTargetLanguage,
           translationMode: effectiveTranslationMode,
-          translateBatchOffline: (texts, type, mode, src, tgt) => 
-            translateBatchOffline(texts, type, mode, src, tgt, offlineBatchBridgeWrapper),
+          translateBatchOffline: (texts, type, mode, src, tgt, batchEngine) => 
+            translateBatchOffline(texts, type, mode, src, tgt, offlineBatchBridgeWrapper, batchEngine),
           translateBatchGemini: (texts, type, mode, src, tgt) => 
             translateBatchGemini(
               texts, 
@@ -5927,8 +5933,8 @@ export default function App() {
               sourceLanguage: translationSourceLanguage,
               targetLanguage: normalizedTargetLanguage,
               translationMode: effectiveTranslationMode,
-              translateBatchOffline: (texts, type, mode, src, tgt) => 
-                translateBatchOffline(texts, type, mode, src, tgt, offlineBatchBridgeWrapper),
+              translateBatchOffline: (texts, type, mode, src, tgt, batchEngine) => 
+                translateBatchOffline(texts, type, mode, src, tgt, offlineBatchBridgeWrapper, batchEngine),
             }
           );
           translatedGroupsRaw = mapTranslationResults(fallbackResults);
@@ -6528,9 +6534,10 @@ export default function App() {
   const runOfflineBatchDocumentTranslation = async () => {
     const selectedEngine = (ocrOptions.engine || 'paddleocr') as OCREngine;
     const sortedPageNums = getModelScopedCachedPageNumbers();
+    const targetEngine = offlineEngine === 'm2m100' ? 'm2m100' : 'offline';
 
     if (sortedPageNums.length === 0) {
-      await runCurrentPageTranslation('offline');
+      await runCurrentPageTranslation(targetEngine);
       return;
     }
 
@@ -6546,7 +6553,7 @@ export default function App() {
       });
 
       try {
-        const translated = await runCurrentPageTranslation('offline', pageNum, {
+        const translated = await runCurrentPageTranslation(targetEngine, pageNum, {
           suppressStatus: true,
           bypassPageCache: true,
         });
@@ -6609,7 +6616,7 @@ export default function App() {
       });
 
       setTranslationStatus({ kind: 'info', message: 'Running offline translation on current page...' });
-      await runCurrentPageTranslation('offline');
+      await runCurrentPageTranslation(offlineEngine === 'm2m100' ? 'm2m100' : 'offline');
 
       // อัปเดตสถานะความสำเร็จสุดท้ายไปที่ progress bar และหน่วงเวลา 800ms ให้ผู้ใช้เห็น 100% ครบถ้วนอย่างสวยงาม
       setProgress({
@@ -7343,6 +7350,8 @@ export default function App() {
             onAiTranslateAllPages={handleAiTranslateAllPages}
             onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
             translationStatus={translationStatus}
+            offlineEngine={offlineEngine}
+            onOfflineEngineChange={setOfflineEngine}
           />
         </React.Suspense>
       </div>

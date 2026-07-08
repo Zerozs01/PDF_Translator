@@ -859,23 +859,42 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       setViewport({ x0, y0, x1, y1 });
     };
 
-    // Initial update
+    // Initial update is synchronous to prevent layout flicker
     handleUpdate();
 
+    // Throttled update helper (minimum 100ms between calls during continuous scrolling/resize)
+    let lastRun = 0;
+    let throttleTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const handleUpdateThrottled = () => {
+      const now = Date.now();
+      if (now - lastRun >= 100) {
+        handleUpdate();
+        lastRun = now;
+      } else {
+        if (throttleTimeout) clearTimeout(throttleTimeout);
+        throttleTimeout = setTimeout(() => {
+          handleUpdate();
+          lastRun = Date.now();
+        }, 100 - (now - lastRun));
+      }
+    };
+
     // Listen to scroll/resize events
-    parent.addEventListener('scroll', handleUpdate, { passive: true });
-    window.addEventListener('resize', handleUpdate, { passive: true });
+    parent.addEventListener('scroll', handleUpdateThrottled, { passive: true });
+    window.addEventListener('resize', handleUpdateThrottled, { passive: true });
 
     // Use ResizeObserver to detect layout changes on zoom or pan
     const resizeObserver = new ResizeObserver(() => {
-      handleUpdate();
+      handleUpdateThrottled();
     });
     resizeObserver.observe(el);
     resizeObserver.observe(parent);
 
     return () => {
-      parent.removeEventListener('scroll', handleUpdate);
-      window.removeEventListener('resize', handleUpdate);
+      parent.removeEventListener('scroll', handleUpdateThrottled);
+      window.removeEventListener('resize', handleUpdateThrottled);
+      if (throttleTimeout) clearTimeout(throttleTimeout);
       resizeObserver.disconnect();
     };
   }, [ocrTransform, isActive, zoom]);
@@ -1142,6 +1161,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
   // ── Handlers ─────────────────────────────────────────────────
   const handleMouseDownBody = useCallback((e: React.MouseEvent, layerId: string) => {
+    if (e.button !== 0) return; // Only trigger for left-click to allow middle-click panning
     e.stopPropagation();
     if (activeTool === 'region' || activeTool === 'text') return;
 
@@ -1172,6 +1192,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   }, [editingLayerId, layers, pageNum, pushUndoSnapshot, selectLayer, activeTool, setEditingLayerId]);
 
   const handleMouseDownHandle = useCallback((e: React.MouseEvent, layerId: string, dir: ResizeDirection) => {
+    if (e.button !== 0) return; // Only trigger for left-click
     e.stopPropagation();
     const layer = layers.find(l => l.id === layerId);
     if (!layer || layer.locked || activeTool === 'region' || activeTool === 'text') return;
@@ -1189,6 +1210,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   }, [layers, pageNum, pushUndoSnapshot, activeTool]);
 
   const handleMouseDownRotate = useCallback((e: React.MouseEvent, layerId: string) => {
+    if (e.button !== 0) return; // Only trigger for left-click
     e.stopPropagation();
     const layer = layers.find(l => l.id === layerId);
     if (!layer || layer.locked || activeTool === 'region' || activeTool === 'text') return;
@@ -1241,6 +1263,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   }, [pageNum, layers, translationPreviewMode, pushUndoSnapshot, updateLayerText]);
 
   const handleOverlayMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Only trigger for left-click
     if (activeTool === 'region' || activeTool === 'text') {
       e.stopPropagation();
       e.preventDefault();

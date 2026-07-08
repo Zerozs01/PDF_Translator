@@ -367,6 +367,13 @@ if ($Engines -contains 'easyocr') {
 Write-Host '[ocr:bootstrap] Ensuring argostranslate is installed for offline translation'
 Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'argostranslate') -Step 'Installing argostranslate'
 
+Write-Host '[ocr:bootstrap] Ensuring kiwipiepy is installed for Korean spacing correction'
+Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'kiwipiepy') -Step 'Installing kiwipiepy'
+
+Write-Host '[ocr:bootstrap] Ensuring ctranslate2, transformers, sentencepiece, and huggingface_hub are installed for M2M100 translation'
+Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'ctranslate2', 'transformers', 'sentencepiece', 'huggingface_hub') -Step 'Installing CTranslate2 and HuggingFace dependencies'
+
+
 Write-Host '[ocr:bootstrap] Enforcing final numpy<2, opencv<4.10, and DirectML overrides for compatibility'
 Get-Process | Where-Object { $_.Path -like "*$venvPath*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
@@ -405,6 +412,14 @@ try {
 } catch {
   Write-Warning "[ocr:bootstrap] Failed to install Argos es-en model: $_"
 }
+$m2mDownloadScript = Join-Path $PSScriptRoot 'download_m2m100.py'
+try {
+  Write-Host '[ocr:bootstrap] Downloading M2M100 CTranslate2 quantized model...'
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @($m2mDownloadScript) -Step 'Downloading M2M100 model'
+} catch {
+  Write-Warning "[ocr:bootstrap] Failed to download M2M100 model: $_"
+}
+
 
 if (-not $SkipPrewarm) {
   if (-not (Test-Path $bridgePath)) {

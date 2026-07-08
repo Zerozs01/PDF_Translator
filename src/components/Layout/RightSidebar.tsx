@@ -81,6 +81,8 @@ interface RightSidebarProps {
   onAiTranslateAllPages?: () => void;
   onOfflineTranslateAllPages?: () => void;
   translationStatus?: { kind: 'info' | 'success' | 'error'; message: string } | null;
+  offlineEngine?: 'argos' | 'm2m100';
+  onOfflineEngineChange?: (engine: 'argos' | 'm2m100') => void;
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({ 
@@ -91,6 +93,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
   onAiTranslateAllPages,
   onOfflineTranslateAllPages,
   translationStatus = null,
+  offlineEngine = 'argos',
+  onOfflineEngineChange,
 }) => {
   const { 
     targetLanguage,
@@ -351,6 +355,20 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
                 <Info size={11} />
               </button>
             </div>
+            
+            {/* Offline Engine Selector */}
+            <div className="mb-2 flex items-center justify-between gap-1.5 bg-slate-900/40 p-1.5 rounded border border-white/5">
+              <span className="text-[9px] uppercase font-bold text-slate-400">Offline Engine:</span>
+              <select
+                value={offlineEngine}
+                onChange={(e) => onOfflineEngineChange?.(e.target.value as 'argos' | 'm2m100')}
+                className="rounded border border-white/12 bg-slate-950 px-1.5 py-0.5 text-[10px] text-slate-200 focus:outline-none focus:border-[#2B9BFF]/60"
+              >
+                <option value="argos">Argos Offline</option>
+                <option value="m2m100">M2M100 Offline</option>
+              </select>
+            </div>
+
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 onClick={onOfflineTranslate}

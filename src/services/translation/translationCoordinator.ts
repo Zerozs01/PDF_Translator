@@ -96,6 +96,89 @@ export class ArgosTranslationEngine implements TranslationEngine {
 }
 
 /**
+ * M2M100 Offline Engine Implementation
+ * แปลภาษาออฟไลน์ผ่าน Meta M2M100 โดยข้าม SFX และใช้วิธีดัชนี Index-based Mapping
+ */
+export class M2M100TranslationEngine implements TranslationEngine {
+  readonly id = 'm2m100';
+  readonly name = 'M2M100 Offline Translator';
+
+  async translate(
+    items: TranslatableItem[],
+    options: {
+      sourceLanguage: string;
+      targetLanguage: string;
+      translationMode: string;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string) => Promise<string[]>;
+    }
+  ): Promise<TranslationResult[]> {
+    const nonSfxItems = items.filter((item) => item.groupType !== 'sfx');
+    const sfxItems = items.filter((item) => item.groupType === 'sfx');
+
+    const results: TranslationResult[] = [];
+
+    const sfxLang = (options.sourceLanguage.substring(0, 2).toLowerCase()) as SFXLanguage;
+    for (const item of sfxItems) {
+      const sfxTranslated = translateSFX(item.text, sfxLang);
+      if (sfxTranslated) {
+        results.push({
+          id: item.id,
+          translatedText: sfxTranslated,
+          success: true,
+          engineUsed: 'sfx-dict',
+        });
+      } else {
+        results.push({
+          id: item.id,
+          translatedText: item.text,
+          success: true,
+          engineUsed: 'sfx-dict-fallback',
+        });
+      }
+    }
+
+    if (nonSfxItems.length === 0) {
+      return results;
+    }
+
+    try {
+      const textsToTranslate = nonSfxItems.map((item) => item.text);
+
+      const translatedTexts = await options.translateBatchOffline(
+        textsToTranslate,
+        'text',
+        options.translationMode,
+        options.sourceLanguage,
+        options.targetLanguage,
+        'm2m100'
+      );
+
+      nonSfxItems.forEach((item, index) => {
+        results.push({
+          id: item.id,
+          translatedText: translatedTexts[index] || item.text,
+          success: true,
+          engineUsed: this.id,
+        });
+      });
+    } catch (error: any) {
+      console.error('[M2M100TranslationEngine] Offline translation failed:', error);
+      nonSfxItems.forEach((item) => {
+        results.push({
+          id: item.id,
+          translatedText: item.text,
+          success: false,
+          error: error.message || 'Unknown offline translation error',
+          engineUsed: this.id,
+        });
+      });
+    }
+
+    return results;
+  }
+}
+
+/**
  * Gemini Online Engine Implementation
  * แปลภาษาออนไลน์ผ่าน Gemini API โดยรองรับระบบรักษาบริบทและการแปล SFX แบบ Local Dictionary
  */
@@ -217,6 +300,7 @@ export class TranslationCoordinator {
   constructor() {
     // ลงทะเบียน Engine ทั้งหมด
     this.engines.set('argos', new ArgosTranslationEngine());
+    this.engines.set('m2m100', new M2M100TranslationEngine());
     this.engines.set('gemini', new GeminiTranslationEngine());
   }
 
@@ -235,7 +319,7 @@ export class TranslationCoordinator {
       sourceLanguage: string;
       targetLanguage: string;
       translationMode: string;
-      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string) => Promise<string[]>;
       translateBatchGemini?: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {

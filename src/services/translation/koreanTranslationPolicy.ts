@@ -24,6 +24,9 @@ const preserveSourceTrailingPunctuation = (sourceText: string, replacement: stri
 
 const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: string }> = [
   // Short SFX / single-word fallbacks
+  { pattern: /^하앙$/, replacement: 'ฮ๊าง' },
+  { pattern: /^하앙\?+$/, replacement: 'ฮ๊าง!?' },
+  { pattern: /^하앙!+$/, replacement: 'ฮ๊าง!!' },
   { pattern: /^헉$/, replacement: 'เฮือก' },
   { pattern: /^헉헉$/, replacement: 'แฮ่กๆ' },
   { pattern: /^하하$/, replacement: 'ฮ่าๆ' },
@@ -51,6 +54,9 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^제발$/, replacement: 'ได้โปรด' },
 
   // Phrases & colloquial patterns
+  { pattern: /^자신이무시하던남자에게엉덩이활짝내밀고든$/, replacement: 'เธอยื่นก้นออกไปให้ผู้ชายที่เธอเคยเมินเฉย' },
+  { pattern: /^쾌락에패배하고굴복해서$/, replacement: 'พ่ายแพ้และยอมจำนนต่อความสุข' },
+  { pattern: /^가장무방비한자세로보지대주고있는상황을$/, replacement: 'สถานการณ์ที่เสนออวัยวะเพศหญิงของตนเองในตำแหน่งที่ไร้การป้องกันที่สุด' },
   { pattern: /^걸레년$/, replacement: 'อีผู้หญิงสำส่อน' },
   { pattern: /^이거이거$/, replacement: 'เรื่องนี้ เรื่องนี้' },
   { pattern: /^넘어가줘말[어아]$/, replacement: 'ฉันควรปล่อยผ่านไปหรือไม่?' },

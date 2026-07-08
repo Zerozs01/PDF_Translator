@@ -1166,6 +1166,7 @@ const PDFPageContainer: React.FC<{
   const options = useOCRTextLayerStore((s) => s.options);
 
   const [pageRenderTick, setPageRenderTick] = useState(0);
+  const [isCacheLoading, setIsCacheLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(viewMode === 'single');
   const [hasBeenVisible, setHasBeenVisible] = useState(viewMode === 'single');
   const pageRef = useRef<HTMLDivElement>(null);
@@ -1239,6 +1240,7 @@ const PDFPageContainer: React.FC<{
   // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
   useEffect(() => {
     if (!documentId) return;
+    if (!isVisible) return; // Only load cache if page is visible or preloading
     let canceled = false;
     const activeEngine = (options.engine || 'paddleocr') as OCREngine;
     const ocrState = useOCRTextLayerStore.getState();
@@ -1246,47 +1248,60 @@ const PDFPageContainer: React.FC<{
     const loadCache = async () => {
       // 1. Load OCR cache if not in memory
       const hasOcr = ocrState.ocrByPageEngine.get(pageNum)?.has(activeEngine);
-      if (!hasOcr) {
-        try {
-          const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
-          if (cached && !canceled) {
-            if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
-              cached.pageNumber = pageNum;
-              ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
-              console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
-            } else {
-              console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
-            }
-          }
-        } catch (err) {
-          console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);
-        }
+      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
+
+      let startedLoading = false;
+      if (!hasOcr || !hasTranslation) {
+        setIsCacheLoading(true);
+        startedLoading = true;
       }
 
-      // 2. Load Translation cache if not in memory
-      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
-      if (!hasTranslation) {
-        try {
-          const rows = await dbService.getTranslationCachePage(documentId, pageNum);
-          if (Array.isArray(rows) && rows.length > 0 && !canceled) {
-            console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-            for (const row of rows) {
-              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-                continue;
+      try {
+        if (!hasOcr) {
+          try {
+            const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
+            if (cached && !canceled) {
+              if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+                cached.pageNumber = pageNum;
+                ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+                console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+              } else {
+                console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
               }
-              const normalizedEntry: OCRTranslationCacheEntry = {
-                ...row,
-                pageNum,
-                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-                translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
-                translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
-                translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
-              };
-              ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
             }
+          } catch (err) {
+            console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);
           }
-        } catch (err) {
-          console.warn(`[PDFPageContainer] Failed to load translation cache for page ${pageNum}:`, err);
+        }
+
+        // 2. Load Translation cache if not in memory
+        if (!hasTranslation) {
+          try {
+            const rows = await dbService.getTranslationCachePage(documentId, pageNum);
+            if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+              console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+              for (const row of rows) {
+                if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+                  continue;
+                }
+                const normalizedEntry: OCRTranslationCacheEntry = {
+                  ...row,
+                  pageNum,
+                  ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+                  translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
+                  translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
+                  translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
+                };
+                ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
+              }
+            }
+          } catch (err) {
+            console.warn(`[PDFPageContainer] Failed to load translation cache for page ${pageNum}:`, err);
+          }
+        }
+      } finally {
+        if (startedLoading && !canceled) {
+          setIsCacheLoading(false);
         }
       }
     };
@@ -1307,7 +1322,7 @@ const PDFPageContainer: React.FC<{
       canceled = true;
       clearTimeout(timer);
     };
-  }, [pageNum, documentId, options.engine, fileUrl]);
+  }, [pageNum, documentId, options.engine, fileUrl, isVisible]);
 
   const handlePageClick = useCallback(() => {
     if (useProjectStore.getState().currentPage !== pageNum) {
@@ -1345,6 +1360,15 @@ const PDFPageContainer: React.FC<{
         onLoadSuccess={onPageLoadSuccess}
         onRenderSuccess={onPageRenderSuccess}
       />
+      {isCacheLoading && (
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 text-xs text-slate-200 shadow-lg animate-pulse pointer-events-none select-none">
+          <svg className="animate-spin h-3.5 w-3.5 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="font-medium tracking-wide">กำลังโหลดแคช...</span>
+        </div>
+      )}
       {hasBeenVisible && (
         <div
           className="absolute inset-0 pointer-events-none"

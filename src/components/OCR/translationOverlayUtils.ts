@@ -2725,13 +2725,14 @@ export const computeOverlayTypography = (
   const containsCjk = CJK_CHAR_REGEX.test(text);
   const sourceAspectRatio = sourceWidth / Math.max(1, sourceHeight);
   const profile = hints?.profile || 'official';
+  const profileForTypography = profile === 'manga' ? 'adaptive' : profile;
   const styleKind = hints?.styleKind || (
-    shouldUseDocumentTypographyProfile(profile, text, hints)
+    shouldUseDocumentTypographyProfile(profileForTypography, text, hints)
       ? resolveDocumentStyleKind(hints?.sourceText || text)
       : 'comic-line'
   );
   const useDocumentTypographyProfile = styleKind === 'document-heading' || styleKind === 'document-body';
-  const isAdaptiveProfile = profile === 'adaptive';
+  const isAdaptiveProfile = profileForTypography === 'adaptive';
   const isComicLikeProfile = styleKind === 'comic-bubble' || styleKind === 'comic-box' || styleKind === 'comic-line';
   const isComicBubble = styleKind === 'comic-bubble';
   const isComicBox = styleKind === 'comic-box';
@@ -2741,14 +2742,14 @@ export const computeOverlayTypography = (
     ? (documentBodyLike ? (containsThai ? 1.72 : 1.18) : (containsThai ? 1.58 : 1.12))
     : 1;
   const comicProfileScale = isComicBubble
-    ? (profile === 'manga' ? 1.12 : profile === 'manhwa' ? 1.08 : 1.04)
+    ? (profileForTypography === 'manga' ? 1.12 : profileForTypography === 'manhwa' ? 1.08 : 1.04)
     : isComicBox
-      ? (profile === 'manga' ? 1.06 : profile === 'manhwa' ? 1.04 : 1)
-      : (profile === 'manga' ? 1 : profile === 'manhwa' ? 0.98 : 0.95);
+      ? (profileForTypography === 'manga' ? 1.06 : profileForTypography === 'manhwa' ? 1.04 : 1)
+      : (profileForTypography === 'manga' ? 1 : profileForTypography === 'manhwa' ? 0.98 : 0.95);
   const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
   const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
   const sourceSingleLineHint = !useDocumentTypographyProfile
-    && sourceAspectRatio >= (profile === 'manga' || profile === 'manhwa' ? 2.8 : 3.2)
+    && sourceAspectRatio >= (profileForTypography === 'manga' || profileForTypography === 'manhwa' ? 2.8 : 3.2)
     && sourceWordCount >= 2
     && sourceLength >= 8;
   const preferSingleLine = !isComicBubble && (
@@ -2849,9 +2850,9 @@ export const computeOverlayTypography = (
                 ? (
                   isAdaptiveProfile
                     ? 1.12
-                    : profile === 'manga'
+                    : profileForTypography === 'manga'
                       ? 1.2
-                      : profile === 'manhwa'
+                      : profileForTypography === 'manhwa'
                         ? 1.16
                         : 1.14
                 )
@@ -2970,7 +2971,10 @@ const joinOverlayGroupSegments = (segments: string[]): string => {
       continue;
     }
 
-    const compactScript = CJK_TEXT_REGEX.test(merged) || CJK_TEXT_REGEX.test(segment);
+    const compactScript = CJK_TEXT_REGEX.test(merged)
+      || CJK_TEXT_REGEX.test(segment)
+      || THAI_CHAR_REGEX.test(merged)
+      || THAI_CHAR_REGEX.test(segment);
     const needsNoSpace = compactScript
       || OVERLAY_NEXT_NO_SPACE_PUNCT_REGEX.test(segment)
       || OVERLAY_PREV_NO_SPACE_TRAILING_REGEX.test(merged);
@@ -3791,8 +3795,7 @@ export const computeOverlayLayoutMap = (
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
       : undefined;
-    const allowSectionMerge = effectiveProfile === 'manga'
-      || effectiveProfile === 'manhwa';
+    const allowSectionMerge = effectiveProfile === 'manhwa';
     const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
     const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile

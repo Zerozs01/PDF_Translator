@@ -6,7 +6,7 @@ import {
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
   PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play, Filter, Edit3, Zap, Award,
-  ChevronUp, ChevronDown
+  ChevronUp, ChevronDown, ArrowRight
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
@@ -1769,6 +1769,29 @@ export const UploadScreen: React.FC = () => {
     }
   };
 
+  const handleOpenJobFile = async (job: any) => {
+    let docToOpen: any = {
+      id: job.documentId,
+      filename: job.filename,
+      filepath: job.filepath,
+      last_page: 1
+    };
+    
+    try {
+      if (window.electronAPI?.db?.getDocument) {
+        const realDoc = await window.electronAPI.db.getDocument(job.documentId);
+        if (realDoc) {
+          docToOpen = realDoc;
+        }
+      }
+    } catch (err) {
+      console.warn('[UploadScreen] Failed to fetch real document from DB, falling back to job metadata:', err);
+    }
+
+    handleOpenDocument(docToOpen);
+  };
+
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
@@ -3192,13 +3215,24 @@ export const UploadScreen: React.FC = () => {
                             </button>
                           )}
                           {isFinished && (
-                            <button
-                              onClick={() => removeJob(job.id)}
-                              className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
-                              title="Remove"
-                            >
-                              <Trash2 size={10} />
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {job.status === 'completed' && (
+                                <button
+                                  onClick={() => handleOpenJobFile(job)}
+                                  className="p-1 rounded bg-[#EAB308]/15 hover:bg-[#EAB308]/25 text-[#EAB308] hover:text-yellow-400 transition-all flex items-center justify-center"
+                                  title="เปิดไฟล์นี้"
+                                >
+                                  <ArrowRight size={10} className="animate-pulse" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => removeJob(job.id)}
+                                className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
+                                title="Remove"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
