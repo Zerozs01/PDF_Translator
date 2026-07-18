@@ -243,10 +243,13 @@ const classifyGroup = (lines: OCRLine[], pageWidth: number, pageHeight: number):
     }
   } else {
     // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยว)
-    if (lines.length <= 2 && wordCount <= 3) {
-      const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
+    const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
+    if (isTall) return 'sfx'; // Tall vertical blocks are always SFX
+
+    const isEnglishDialogue = isLikelyEnglishDialogue(totalText);
+    if (!isEnglishDialogue && lines.length <= 2 && wordCount <= 3) {
       const isShortWord = totalText.length <= 6;
-      if (isTall || isShortWord) return 'sfx';
+      if (isShortWord) return 'sfx';
     }
   }
 
@@ -683,7 +686,8 @@ export const buildLayerGroupsFromOCR = (
 
   const sanitizedRawLines = rawLines.map(line => {
     const height = line.bbox.y1 - line.bbox.y0;
-    if (height > baseHeight * 2.5) {
+    const isSingleWordShort = (line.text || '').trim().split(/\s+/).filter(Boolean).length <= 1;
+    if (height > baseHeight * 2.5 && !isSingleWordShort) {
       const centerY = (line.bbox.y0 + line.bbox.y1) * 0.5;
       return {
         ...line,
@@ -748,7 +752,8 @@ export const buildLayerGroupsFromOCR = (
   // Re-sanitize to ensure reconstructed word bboxes from splitAggressiveMergedLines don't bypass clamping
   const lines = rawSplitLines.map(line => {
     const height = line.bbox.y1 - line.bbox.y0;
-    if (height > baseHeight * 2.5) {
+    const isSingleWordShort = (line.text || '').trim().split(/\s+/).filter(Boolean).length <= 1;
+    if (height > baseHeight * 2.5 && !isSingleWordShort) {
       const centerY = (line.bbox.y0 + line.bbox.y1) * 0.5;
       return {
         ...line,

@@ -728,13 +728,11 @@ export const shouldCollapsePanelSafetyDuplicate = (
   const isBoxContained = candidateOverlapRatio >= 0.85 || existingOverlapRatio >= 0.85;
   const isSamePosition = candidateOverlapRatio >= 0.82 && existingOverlapRatio >= 0.82;
 
-  if (isSamePosition) {
-    return true;
-  }
-
-  if (isBoxContained) {
+  if (isSamePosition || isBoxContained) {
     const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
-    if (textSimilarity >= 0.15 || existingKey.includes(candidateKey) || candidateKey.includes(existingKey)) {
+    const minLen = Math.min(existingKey.length, candidateKey.length);
+    const isSub = minLen >= 4 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey));
+    if (textSimilarity >= 0.55 || isSub || existingKey === candidateKey) {
       return true;
     }
   }
@@ -793,7 +791,12 @@ export const shouldCollapsePanelSafetyDuplicate = (
     && (technicalLinePair || Math.max(existingArea, candidateArea) >= 9000 || iou >= 0.22)
   );
   if (severeGeometryEcho) {
-    return true;
+    const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
+    const minLen = Math.min(existingKey.length, candidateKey.length);
+    const isSub = minLen >= 4 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey));
+    if (textSimilarity >= 0.55 || isSub || existingKey === candidateKey) {
+      return true;
+    }
   }
 
   const minLength = Math.min(existingKey.length, candidateKey.length);

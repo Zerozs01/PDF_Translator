@@ -1239,15 +1239,43 @@ export const OCRTextLayerPanel: React.FC = () => {
 
       const cached = await dbService.getOCR(cacheDocId, pageNum, activeEngine);
       let activeLoaded = false;
-      if (cached && isDisplayCacheCompatible(cached)) {
-        if (useProjectStore.getState().file !== activeFile) return false;
+      if (cached) {
+        const isLangMatch = normalizeLanguage(cached.language) === normalizeLanguage(options.language);
+        const isEngineMatch = (cached.ocrEngine || 'paddleocr').toLowerCase() === activeEngine.toLowerCase();
+        const isRawMatch = (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION;
 
-        // Final sanity check: ensure the engine in the data matches what we asked for
-        const dataEngine = (cached.ocrEngine || 'paddleocr').toLowerCase();
-        if (dataEngine === activeEngine.toLowerCase()) {
-          cached.pageNumber = pageNum;
-          setPageOCR(pageNum, normalizeCacheProfile(cached));
-          activeLoaded = true;
+        if (isLangMatch && isEngineMatch && isRawMatch) {
+          if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION)) {
+            if (useProjectStore.getState().file === activeFile) {
+              cached.pageNumber = pageNum;
+              setPageOCR(pageNum, normalizeCacheProfile(cached));
+              activeLoaded = true;
+            }
+          } else {
+            console.log(`[OCRPanel] Upgrading cached OCR profile for page ${pageNum} on-the-fly: version ${cached.algorithmVersion} -> ${OCR_ALGORITHM_VERSION}`);
+            const targetOcrLanguage = options.language || 'eng';
+            const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+              ? cached
+              : {
+                  ...cached,
+                  pipelineProfile: 'panel' as const,
+                };
+            const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+            const upgraded = applyPanelSafetyLineDedup(scriptGated);
+            upgraded.algorithmVersion = OCR_ALGORITHM_VERSION;
+            if (!upgraded.debug) upgraded.debug = { droppedWords: [], dropCounts: {} };
+            upgraded.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
+
+            void dbService.saveOCR(cacheDocId, pageNum, upgraded, activeEngine).catch((err) => {
+              console.warn('[OCRPanel] Failed to save upgraded OCR cache on-the-fly:', err);
+            });
+
+            if (useProjectStore.getState().file === activeFile) {
+              upgraded.pageNumber = pageNum;
+              setPageOCR(pageNum, normalizeCacheProfile(upgraded));
+              activeLoaded = true;
+            }
+          }
         }
       }
 

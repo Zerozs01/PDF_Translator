@@ -51,7 +51,14 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
     (ocrResult as any)._manhwaDone = true;
   }
 
-  const isJapanese = (job.ocrLanguage === 'jpn' || job.sourceLanguage === 'ja' || job.targetLanguage === 'ja')
+  const isJapanese = (
+    String(job.ocrLanguage || '').toLowerCase().startsWith('jpn') ||
+    String(job.ocrLanguage || '').toLowerCase() === 'ja' ||
+    String(job.sourceLanguage || '').toLowerCase().startsWith('jpn') ||
+    String(job.sourceLanguage || '').toLowerCase() === 'ja' ||
+    String(job.targetLanguage || '').toLowerCase().startsWith('jpn') ||
+    String(job.targetLanguage || '').toLowerCase() === 'ja'
+  )
     && !result._splitDone
     && !(ocrResult as any)._japaneseDone;
   if (isJapanese && isVerticalJapaneseLayout(ocrResult.lines)) {
@@ -372,6 +379,7 @@ class BackgroundQueueProcessor {
                     pipelineProfile: 'panel' as const,
                   };
                 const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+                let needResave = false;
                 if (
                   scriptGated.pipelineProfile === 'panel'
                   && scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
@@ -379,6 +387,10 @@ class BackgroundQueueProcessor {
                   ocrResult = scriptGated;
                 } else {
                   ocrResult = applyPanelSafetyLineDedup(scriptGated);
+                  ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+                  if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+                  ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
+                  needResave = true;
                 }
 
                 if (ocrResult) {
@@ -386,6 +398,11 @@ class BackgroundQueueProcessor {
                 }
                 console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
                 
+                if (needResave) {
+                  await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
+                  console.log(`[QueueProcessor] Saved updated OCR cache for page ${pageNum} after background deduplication upgrade (v${OCR_ALGORITHM_VERSION}).`);
+                }
+
                 const activeFile = useProjectStore.getState().file;
                 if (activeFile && useProjectStore.getState().documentId === job.documentId) {
                   useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);

@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as path from 'path';
 import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
 import { OCRPageResult } from '../../types';
 import { normalizeSourceForTranslation } from './ocrTextNormalizer';
+import { applyPanelLanguageScriptGate } from '../vision/scriptGateService';
 
 describe('Scratch Dedup Test', () => {
   it('checks if CAN DO and IS TO SEARCH are dropped', () => {
@@ -140,6 +142,67 @@ describe('Scratch Dedup Test', () => {
     expect(finalResult.lines.length).toBe(1);
     expect(finalResult.lines[0].bbox).toEqual({ x0: 100, y0: 80, x1: 360, y1: 140 });
     expect(finalResult.lines[0].words.length).toBe(5);
+  });
+
+  it('runs simulation to see why targets are missing on all pages of doc3', () => {
+    const scratchDir = 'C:\\Users\\auand\\.gemini\\antigravity-ide\\brain\\ed2ec8a4-c4e2-4fd0-907b-b12a49c1e034\\scratch';
+    
+    const targetPages = {
+      3: ["I CAN'T", "DEFEAT"],
+      7: ["NiPPLES"],
+      8: ["ON THE", "SUPPOSED", "OF", "TiGHT", "TRAiNiNG"],
+      9: ["BiTCH", "S-STOP"],
+      14: ["KNiiiiGHT", "KNIGHT", "DIRTY"],
+      15: ["YOU'RE", "POSI"],
+      17: ["ING WITH YOUR", "NiPPLES AND"]
+    };
+
+    for (const [pageStr, targets] of Object.entries(targetPages)) {
+      const pageNum = Number(pageStr);
+      const filePath = path.join(scratchDir, `page${pageNum}_doc3_raw.json`);
+      if (!fs.existsSync(filePath)) {
+        console.warn(`File page${pageNum}_doc3_raw.json not found`);
+        continue;
+      }
+      
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8')) as OCRPageResult;
+      console.log(`\n=== PAGE ${pageNum} SIMULATION ===`);
+      console.log('Total Raw Lines:', data.lines.length);
+      
+      // Run script gate with 'jpn' (Japanese)
+      const gated = applyPanelLanguageScriptGate(data, 'jpn');
+      console.log('After Script Gate (jpn) Lines:', gated.lines.length);
+      
+      const deduped = applyPanelSafetyLineDedup(gated);
+      console.log('After Safety Dedup Lines:', deduped.lines.length);
+      
+      // Check if targets are found in deduped lines
+      for (const target of targets) {
+        const found = deduped.lines.some(l => l.text.toUpperCase().includes(target.toUpperCase()));
+        if (found) {
+          console.log(`  🟢 KEPT: "${target}"`);
+        } else {
+          // Find where it was dropped
+          const inRaw = data.lines.some(l => l.text.toUpperCase().includes(target.toUpperCase()));
+          if (!inRaw) {
+            console.log(`  ⚪ NOT IN RAW OCR: "${target}"`);
+          } else {
+            console.log(`  🔴 DROPPED: "${target}"`);
+            // Show details of the dropped line
+            const rawLine = data.lines.find(l => l.text.toUpperCase().includes(target.toUpperCase()));
+            console.log(`    Raw Line: "${rawLine?.text}" bbox=[${rawLine?.bbox.x0}, ${rawLine?.bbox.y0}, ${rawLine?.bbox.x1}, ${rawLine?.bbox.y1}]`);
+            
+            // Check if dropped in script gate
+            const inGated = gated.lines.some(l => l.text.toUpperCase().includes(target.toUpperCase()));
+            if (!inGated) {
+              console.log(`      -> Dropped by SCRIPT GATE`);
+            } else {
+              console.log(`      -> Dropped by SAFETY DEDUP`);
+            }
+          }
+        }
+      }
+    }
   });
 });
 

@@ -21,8 +21,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
       translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
-    // 1. แยกกลุ่มเพื่อจัดการ: Argos จะ bypass กลุ่ม 'sfx' ไปยัง Local Dictionary
-    const nonSfxItems = items.filter((item) => item.groupType !== 'sfx');
+    const nonSfxItems: TranslatableItem[] = [];
     const sfxItems = items.filter((item) => item.groupType === 'sfx');
 
     const results: TranslationResult[] = [];
@@ -39,17 +38,25 @@ export class ArgosTranslationEngine implements TranslationEngine {
           engineUsed: 'sfx-dict',
         });
       } else {
-        // หากค้นหาในพจนานุกรมไม่เจอ ให้ส่งคำเดิมกลับคืนเพื่อให้ระบบสามารถ fallback หรือส่งไปแปลออฟไลน์ได้ (ในกรณีที่อยากลอง)
-        // หรือให้ Argos รันแปลทับเป็นภาษาไทยแบบดั้งเดิม (แต่ในสเปกแจ้งให้ Bypass Argos ทิ้งไป 100% สำหรับ SFX และ lookup local dict)
-        // ดังนั้นหากไม่พบ ให้ส่งข้อความเดิมกลับไป
-        results.push({
-          id: item.id,
-          translatedText: item.text,
-          success: true,
-          engineUsed: 'sfx-dict-fallback',
-        });
+        const shortPhraseMatch = lookupShortPhraseTh(item.text);
+        if (shortPhraseMatch) {
+          results.push({
+            id: item.id,
+            translatedText: shortPhraseMatch,
+            success: true,
+            engineUsed: 'short-phrase-dict',
+          });
+        } else {
+          nonSfxItems.push(item);
+        }
       }
     }
+
+    items.forEach((item) => {
+      if (item.groupType !== 'sfx') {
+        nonSfxItems.push(item);
+      }
+    });
 
     if (nonSfxItems.length === 0) {
       return results;
@@ -114,7 +121,7 @@ export class M2M100TranslationEngine implements TranslationEngine {
       translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
-    const nonSfxItems = items.filter((item) => item.groupType !== 'sfx');
+    const nonSfxItems: TranslatableItem[] = [];
     const sfxItems = items.filter((item) => item.groupType === 'sfx');
 
     const results: TranslationResult[] = [];
@@ -130,14 +137,25 @@ export class M2M100TranslationEngine implements TranslationEngine {
           engineUsed: 'sfx-dict',
         });
       } else {
-        results.push({
-          id: item.id,
-          translatedText: item.text,
-          success: true,
-          engineUsed: 'sfx-dict-fallback',
-        });
+        const shortPhraseMatch = lookupShortPhraseTh(item.text);
+        if (shortPhraseMatch) {
+          results.push({
+            id: item.id,
+            translatedText: shortPhraseMatch,
+            success: true,
+            engineUsed: 'short-phrase-dict',
+          });
+        } else {
+          nonSfxItems.push(item);
+        }
       }
     }
+
+    items.forEach((item) => {
+      if (item.groupType !== 'sfx') {
+        nonSfxItems.push(item);
+      }
+    });
 
     if (nonSfxItems.length === 0) {
       return results;

@@ -1,4 +1,5 @@
 import type { BBox, OCRDroppedWord, OCREngine, OCRLine, OCRPageResult } from '../../types';
+import { isLikelyEnglishDialogue } from '../ocr/ocrSafetyLineDedup';
 
 export type LanguageScriptAllowance = {
   latin: boolean;
@@ -264,6 +265,11 @@ export const applyPanelLanguageScriptGate = (result: OCRPageResult, requestedLan
 
   const gatedLines = (Array.isArray(result.lines) ? result.lines : [])
     .map((line) => {
+      const rawLineText = normalizePreviewText(String(line.text || ''));
+      if (rawLineText && isLikelyEnglishDialogue(rawLineText)) {
+        return line; // Bypass script gate for valid English dialogue lines
+      }
+
       const lineWords = Array.isArray(line.words) ? line.words : [];
       const keptWords = lineWords.filter((word) => {
         const wordText = normalizePreviewText(String(word?.text || ''));
@@ -286,7 +292,6 @@ export const applyPanelLanguageScriptGate = (result: OCRPageResult, requestedLan
         return allowed;
       });
 
-      const rawLineText = normalizePreviewText(String(line.text || ''));
       const rawLineAllowed = rawLineText ? isWordAllowedByScriptGate(rawLineText, allowance) : false;
       const rebuiltFromWords = normalizePreviewText(keptWords.map((word) => String(word.text || '')).join(' '));
       const resolvedLineText = rawLineAllowed

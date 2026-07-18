@@ -87,15 +87,13 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'i lose': 'ฉันแพ้แล้ว',
   "i can't": 'ฉันทำไม่ได้', "i cant": 'ฉันทำไม่ได้', "i can't!": 'ฉันทำไม่ได้!', "i cant!": 'ฉันทำไม่ได้!',
   'defeat': 'ความพ่ายแพ้', 'defeat!': 'ความพ่ายแพ้!',
-  'nipples': 'หัวนม', 'nipples and': 'หัวนมและ',
   'on the': 'บน', 'you\'re supposed': 'เธอควรจะ', 'youre supposed': 'เธอควรจะ',
   'tight': 'แน่น', 'tight!': 'แน่น!', 'your training': 'การฝึกของคุณ',
   'bitch... hey!': 'ยัยเวร... เฮ้ย!', 'bitch hey!': 'ยัยเวร... เฮ้ย!', 'bitch... hey': 'ยัยเวร... เฮ้ย!', 'bitch hey': 'ยัยเวร... เฮ้ย!',
   's-stop!': 'ห-หยุดนะ!', 's-stop': 'ห-หยุดนะ!', 's stop!': 'ห-หยุดนะ!', 's stop': 'ห-หยุดนะ!',
-  'a dirty': 'ที่โสโครก', 'her posi-': 'ตำแหน่งของเธอ-', 'her posi': 'ตำแหน่งของเธอ-',
+  'a dirty': 'ที่โสโครก', 'her posi-': 'ท่าของเธอ', 'her posi': 'ท่าของเธอ',
   'ing with your': 'กับของคุณ', 'i\'ll have a': 'ฉันจะมี', 'ill have a': 'ฉันจะมี',
-  'with his': 'กับของเขา', 'the woman\'s': 'ของผู้หญิง', 'the womans': 'ของผู้หญิง', 'general': 'นายพล', 'general!': 'นายพล!',
-  'inside': 'ข้างใน', 'let her': 'ปล่อยให้เธอ', 'praise': 'สรรเสริญ', 'praise...': 'สรรเสริญ...',
+  'with his': 'กับของเขา', 'the woman\'s': 'ของผู้หญิง', 'the womans': 'ของผู้หญิง',
   // Spanish specific lookups to guarantee user-defined translation accuracy
   'un regalo para la mente': 'ของขวัญสำหรับจิตใจของคุณ',
   'un regalo para la mente.': 'ของขวัญสำหรับจิตใจของคุณ.',
@@ -188,7 +186,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'longer': 'นานขึ้น',
   'longer!': 'นานขึ้น!',
   'today again': 'วันนี้อีกแล้ว',
-  'her posi': 'ท่าของเธอ',
   'her position': 'ท่าของเธอ',
   'suits': 'เหมาะกับ',
   'so': 'ช่าง...',
@@ -324,8 +321,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'like the': 'เหมือนกับ',
   'pig you': 'หมูอย่างแก',
   'are': 'ที่เป็นอยู่',
-  'bitch hey': 'ยัยตัวแสบ... เฮ้ย!',
-  'bitch hey!': 'ยัยตัวแสบ... เฮ้ย!',
   'the pig you are': 'เหมือนหมูอย่างแก!',
   'the pig you are!': 'เหมือนหมูอย่างแก!',
   'the pig you are!!': 'เหมือนหมูอย่างแก!!',
@@ -487,62 +482,6 @@ export const TRANSLATION_LETTER_REGEX = /[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00
 // Core Translation & Retry logic
 // -------------------------------------------------------------
 
-export const lookupShortPhraseTh = (text: string): string | null => {
-  // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
-  const trimmed = text.trim();
-  const tempAlertMatch = trimmed.match(/^temp:\s*(\d+)\s*c\s*\[alert\]$/i);
-  if (tempAlertMatch) {
-    return `อุณหภูมิ: ${tempAlertMatch[1]}°C [แจ้งเตือน]`;
-  }
-  const tempNormalMatch = trimmed.match(/^temp:\s*(\d+)\s*c$/i);
-  if (tempNormalMatch) {
-    return `อุณหภูมิ: ${tempNormalMatch[1]}°C`;
-  }
-
-  const rawKey = trimmed.toLowerCase();
-  const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey];
-  if (directRawMatch) return directRawMatch;
-
-  const key = rawKey
-    .replace(/[_]+/g, ' ')
-    .replace(/[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g, ' ')
-    .replace(/[^\p{L}\p{N}\s]/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  
-  // 1. ลองค้นหาแบบตรงตัวใน dictionary ก่อน
-  const directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[key];
-  if (directMatch) return directMatch;
-
-  // 2. ถ้าไม่พบแบบตรงตัว ลองตรวจสอบความลากเสียงยาว (Elongation) สำหรับคำการ์ตูนยอดนิยม
-  // สำหรับ please (เช่น pleea +aaseee, pleeease)
-  if (/^p[le]*[ea]*\s*\+?\s*[ea]*s[e]+$/i.test(key)) {
-    return 'ได้โปรด ดดดดดด';
-  }
-  // สำหรับ more (เช่น moreeeeee)
-  if (/^m[o]+r[e]+$/i.test(key)) {
-    return 'มากกกกว่าาาานี้';
-  }
-  // สำหรับ out (เช่น ouuuut)
-  if (/^[o]+[u]+[t]+$/i.test(key)) {
-    return 'ออกไปปปป';
-  }
-  // สำหรับ knight (เช่น kniiiiight)
-  if (/^k[n]+[i]+[g]+[h]+[t]+$/i.test(key)) {
-    return 'อัศวิน';
-  }
-  // สำหรับ dead (เช่น deeead)
-  if (/^d[e]+a[d]+$/i.test(key)) {
-    return 'ตายแล้ว';
-  }
-  // สำหรับ cocks (เช่น cooooocks)
-  if (/^c[o]+ck[s]*$/i.test(key)) {
-    return 'ควยยยยยยพวกนี้';
-  }
-
-  return GENERAL_ENGLISH_DICTIONARY_TH[key] || null;
-};
-
 export const GENERAL_ENGLISH_DICTIONARY_TH: Record<string, string> = {
   // Prepositions & Connectors
   'without': 'โดยไม่มี', 'without!': 'โดยไม่มี!', 'without...': 'โดยไม่มี...',
@@ -574,6 +513,62 @@ export const GENERAL_ENGLISH_DICTIONARY_TH: Record<string, string> = {
   'enemies': 'ศัตรู', 'enemy': 'ศัตรู', 'moving': 'เคลื่อนไหว', 'move': 'เคลื่อนไหว',
   'front': 'ข้างหน้า', 'back': 'ข้างหลัง', 'side': 'ด้าน', 'top': 'ด้านบน', 'bottom': 'ด้านล่าง',
   'inside': 'ข้างใน', 'outside': 'ข้างนอก', 'defeat': 'เอาชนะ', 'fight': 'ต่อสู้',
+};
+
+export const lookupShortPhraseTh = (text: string): string | null => {
+  // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
+  const trimmed = text.trim();
+  const tempAlertMatch = trimmed.match(/^temp:\s*(\d+)\s*c\s*\[alert\]$/i);
+  if (tempAlertMatch) {
+    return `อุณหภูมิ: ${tempAlertMatch[1]}°C [แจ้งเตือน]`;
+  }
+  const tempNormalMatch = trimmed.match(/^temp:\s*(\d+)\s*c$/i);
+  if (tempNormalMatch) {
+    return `อุณหภูมิ: ${tempNormalMatch[1]}°C`;
+  }
+
+  const rawKey = trimmed.toLowerCase();
+  const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey] || GENERAL_ENGLISH_DICTIONARY_TH[rawKey];
+  if (directRawMatch) return directRawMatch;
+
+  const key = rawKey
+    .replace(/[_]+/g, ' ')
+    .replace(/[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  // 1. ลองค้นหาแบบตรงตัวใน dictionary ก่อน
+  const directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[key] || GENERAL_ENGLISH_DICTIONARY_TH[key];
+  if (directMatch) return directMatch;
+
+  // 2. ถ้าไม่พบแบบตรงตัว ลองตรวจสอบความลากเสียงยาว (Elongation) สำหรับคำการ์ตูนยอดนิยม
+  // สำหรับ please (เช่น pleea +aaseee, pleeease)
+  if (/^p[le]*[ea]*\s*\+?\s*[ea]*s[e]+$/i.test(key)) {
+    return 'ได้โปรด ดดดดดด';
+  }
+  // สำหรับ more (เช่น moreeeeee)
+  if (/^m[o]+r[e]+$/i.test(key)) {
+    return 'มากกกกว่าาาานี้';
+  }
+  // สำหรับ out (เช่น ouuuut)
+  if (/^[o]+[u]+[t]+$/i.test(key)) {
+    return 'ออกไปปปป';
+  }
+  // สำหรับ knight (เช่น kniiiiight)
+  if (/^k[n]+[i]+[g]+[h]+[t]+$/i.test(key)) {
+    return 'อัศวิน';
+  }
+  // สำหรับ dead (เช่น deeead)
+  if (/^d[e]+a[d]+$/i.test(key)) {
+    return 'ตายแล้ว';
+  }
+  // สำหรับ cocks (เช่น cooooocks)
+  if (/^c[o]+ck[s]*$/i.test(key)) {
+    return 'ควยยยยยยพวกนี้';
+  }
+
+  return GENERAL_ENGLISH_DICTIONARY_TH[key] || null;
 };
 
 export const systemicWordFallbackTranslate = (text: string): string | null => {

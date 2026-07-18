@@ -1808,7 +1808,10 @@ def is_probable_panel_watermark_line(
     compact_long = len(tokens) == 1 and len(alpha) >= 8
     symbol_noise = bool(re.search(r"[\\/|_{}\[\]~`]+", text))
     low_confidence = confidence < 88
-    likely_garbage_line = compact_long and lexical_hits == 0
+    has_vowels = any(c in "AEIOUY" for c in alpha)
+    has_consonants = any(c in "BCDFGHJKLMNPQRSTVWXZ" for c in alpha)
+    is_real_word = has_vowels and has_consonants
+    likely_garbage_line = compact_long and lexical_hits == 0 and not is_real_word
 
     if low_confidence and (likely_garbage_line or symbol_noise):
         return True

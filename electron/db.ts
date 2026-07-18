@@ -1016,7 +1016,7 @@ export const TranslationCacheDAO = {
       created_at: number;
     }>;
 
-    const CURRENT_CACHE_VERSION_TAG = 'ver:v55';
+    const CURRENT_CACHE_VERSION_TAG = 'ver:v59';
     return rows
       .filter((row) => String(row.cache_key || '').includes(CURRENT_CACHE_VERSION_TAG))
       .map((row) => {
