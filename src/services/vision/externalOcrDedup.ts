@@ -2121,6 +2121,30 @@ export const mergeExternalChunkResults = (
       mergedDroppedWords.push(...residualSpatialResult.dropped);
     }
 
+    const dialogueEchoResult = repairPaddlePanelDialogueEchoLines(finalLines, width, height, language);
+    finalLines = dialogueEchoResult.lines;
+    if (dialogueEchoResult.dropped.length > 0) {
+      mergedDropCounts.externalPaddleDialogueEcho =
+        (mergedDropCounts.externalPaddleDialogueEcho || 0) + dialogueEchoResult.dropped.length;
+      mergedDroppedWords.push(...dialogueEchoResult.dropped);
+    }
+
+    const contextualRepairResult = repairPaddlePanelContextualDialogueLines(finalLines, width, height, language);
+    finalLines = contextualRepairResult.lines;
+    if (contextualRepairResult.dropped.length > 0) {
+      mergedDropCounts.externalPaddleContextualDialogue =
+        (mergedDropCounts.externalPaddleContextualDialogue || 0) + contextualRepairResult.dropped.length;
+      mergedDroppedWords.push(...contextualRepairResult.dropped);
+    }
+
+    const tallEffectResult = prunePaddlePanelTallEffectLines(finalLines, width, height, language, ocrQualityProfile);
+    finalLines = tallEffectResult.lines;
+    if (tallEffectResult.dropped.length > 0) {
+      mergedDropCounts.externalPaddleTallEffectLine =
+        (mergedDropCounts.externalPaddleTallEffectLine || 0) + tallEffectResult.dropped.length;
+      mergedDroppedWords.push(...tallEffectResult.dropped);
+    }
+
     // DEBUG: Log all lines to find missing ones
     if (CONFIG_DEDUPE.DEBUG_LOG_MISSING_LINES) {
       console.log(`[DEBUG-MERGE] After residual collapse: ${finalLines.length} lines`);

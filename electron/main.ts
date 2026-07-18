@@ -103,8 +103,8 @@ function createWindow() {
     show: false,
     width: 1440,
     height: 960,
-    minWidth: 1200,
-    minHeight: 780,
+    minWidth: 480,
+    minHeight: 600,
     autoHideMenuBar: true, // Hide menu bar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

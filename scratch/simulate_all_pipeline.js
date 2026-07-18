@@ -546,8 +546,8 @@ app.whenReady().then(function() {
     db.pragma("cipher='sqlcipher'");
     db.pragma("key = '" + masterPassword.replace(/'/g, "''") + "'");
 
-    const docId = 3;
-    const pageNum = 25;
+    const docId = 311;
+    const pageNum = 17;
 
     const row = db.prepare('SELECT ocr_engine, ocr_data FROM ocr_cache_engine WHERE document_id = ? AND page_number = ?').get(docId, pageNum);
     if (row) {

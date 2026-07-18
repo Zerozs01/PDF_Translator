@@ -140,10 +140,18 @@ const applyThaiConversationalGlossaryInternal = (
     }
   }
 
-  const compactSource = source.toLowerCase().replace(/[^a-z]/g, '');
-  const compactSourceUpper = source.toUpperCase().replace(/[^A-Z]/g, '');
-  const compactSourceAlnumUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const compactSourceAsciiUpper = source
+  // A version of source that is repaired for OCR noise but not collapsed for vocal elongations.
+  const sourceUncollapsed = normalizeWhitespace(String(sourceOriginal || ''))
+    .replace(/\b7OCKS\b/gi, 'COCKS')
+    .replace(/\b70CKS\b/gi, 'COCKS')
+    .replace(/\bC0CKS?\b/gi, 'COCKS')
+    .replace(/\bC0CK\b/gi, 'COCK')
+    .replace(/,?KN[iI]+GHT\b/gi, 'KNIGHT');
+
+  const compactSource = sourceUncollapsed.toLowerCase().replace(/[^a-z]/g, '');
+  const compactSourceUpper = sourceUncollapsed.toUpperCase().replace(/[^A-Z]/g, '');
+  const compactSourceAlnumUpper = sourceUncollapsed.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const compactSourceAsciiUpper = sourceUncollapsed
     .normalize('NFD')
     .replace(/\p{M}+/gu, '')
     .toUpperCase()
@@ -1586,6 +1594,97 @@ const applyThaiConversationalGlossaryInternal = (
   if (/\bthreads\b/i.test(source)) {
     finalResult = finalResult.replace(/กระทู้/g, 'ของเหลวข้นหนืดยืดเป็นสาย').replace(/เส้นด้าย/g, 'ของเหลวข้นหนืดยืดเป็นสาย');
   }
+
+  // --- Comprehensive Forced Thai Fallbacks ---
+  // ทำไมถึงเขียนแบบนี้: ตรวจสอบทั้ง SOURCE (ข้อความต้นฉบับ) และ finalResult (ผลแปล)
+  // หากผลแปลยังมีคำอังกฤษค้างอยู่ ให้บังคับแทนที่ด้วยคำไทยทันที
+  // ตรวจ source ก่อนเพราะอาจเกิดกรณี Argos แปลคำอังกฤษเป็นคำไทยที่ผิด (เช่น general -> ทั่วไป)
+
+  // Normalize curly quotes/apostrophes/dashes in the finalResult for uniform matching
+  finalResult = finalResult
+    .replace(/[\u2018\u2019\u201B\u201C\u201D`‘’“”]/g, "'")
+    .replace(/…/g, '...');
+
+  const hasFinalThai = /[\u0E00-\u0E7F]/.test(finalResult);
+  const compactFinalLatin = finalResult.replace(/[^a-zA-Z]/g, '').toLowerCase();
+
+  // --- Source-aware fallbacks: ถ้า source มีคำเหล่านี้ และ finalResult ยังไม่มีภาษาไทยเลย ---
+  if (!hasFinalThai && compactFinalLatin.length > 0) {
+    // ใช้ word-level replacement เพื่อรักษาคำอื่นในบรรทัดเดียวกัน
+    finalResult = finalResult
+      .replace(/\bkn[iI]+ght\b/gi, 'อัศวิน')
+      .replace(/\bnipples?\b/gi, 'หัวนม')
+      .replace(/\bsadness\b/gi, 'ความเศร้า')
+      .replace(/\bcervix\b/gi, 'ปากมดลูก')
+      .replace(/\bstoo*p\b/gi, 'หยุด')
+      .replace(/\bstop\b/gi, 'หยุด')
+      .replace(/\bvirgin\s*hole/gi, 'รูพรหมจรรย์')
+      .replace(/\bvirgin\b/gi, 'เวอร์จิ้น')
+      .replace(/\bgeneral\b/gi, 'ท่านนายพล')
+      .replace(/\bhole\b/gi, 'รู')
+      .replace(/\bmake\s*sure/gi, 'แน่ใจ')
+      .replace(/\bbut\b/gi, 'แต่')
+      .replace(/\bin\s+any\b/gi, 'ไม่ว่าจะ')
+      .replace(/\bage\b/gi, 'ยุคสมัย')
+      .replace(/\bus\s+the\b/gi, 'พวกเรา')
+      .replace(/\bbe\b/gi, 'เป็น')
+      .replace(/\band\b/gi, 'และ')
+      .replace(/\blet\s+her\b/gi, 'ปล่อยเธอ')
+      .replace(/\ba\s+woman\b/gi, 'ผู้หญิง')
+      .replace(/\bwoman\b/gi, 'ผู้หญิง')
+      .replace(/\band\s+march\b/gi, 'และเดินทัพ')
+      .replace(/\bout\s+to\s+war\b/gi, 'ออกไปรบ')
+      .replace(/\bwar\b/gi, 'สงคราม')
+      .replace(/\bon\s+mine\s+too\b/gi, 'บนตัวข้าด้วย')
+      .replace(/\bbody\b/gi, 'ร่างกาย')
+      .replace(/\bfirst\b/gi, 'ก่อน')
+      .replace(/\bdon'?t\s+say\b/gi, 'อย่าพูด')
+      .replace(/\bhe'?s\b/gi, 'เขา')
+      .replace(/\byou'?re\b/gi, 'นาย')
+      .replace(/\byou\s*'\s*re\b/gi, 'นาย')
+      .replace(/\bif\s+you\s+cum\b/gi, 'ถ้าแกน้ำแตก')
+      .replace(/\bso\s+please\b/gi, 'ได้โปรด')
+      .replace(/\bthe\s+pig\b/gi, 'หมู')
+      .replace(/\bpig\b/gi, 'หมู')
+      .replace(/\bgetting\b/gi, 'กำลัง')
+      .replace(/\bpunching\s+my\b/gi, 'ต่อยฉัน')
+      .replace(/\balso\s+say\s+that\b/gi, 'ยังบอกอีกว่า')
+      .replace(/\bthe\s+babar[a-z\-]*/gi, 'พวกคนเถื่อน')
+      .replace(/\bthe\s+barba[a-z\-]*/gi, 'พวกคนเถื่อน')
+      .replace(/\bher\s+posi[a-z\-]*/gi, 'ท่าของเธอ')
+      .replace(/\bbut\s+in\s+any\s+age\b/gi, 'แต่ไม่ว่าจะในยุคสมัยใด')
+      .replace(/\bbut\s+in\s+any\s+age\.\.\./gi, 'แต่ไม่ว่าจะในยุคสมัยใด...')
+      .replace(/\bbut\s+in\s+any\s+age\.\./gi, 'แต่ไม่ว่าจะในยุคสมัยใด...')
+      .replace(/\bbut\s+in\s+any\b/gi, 'แต่ไม่ว่าจะยังไง')
+      .replace(/\bso\b/gi, 'ดังนั้น');
+  }
+
+  // --- finalResult-based fallbacks: จับคำอังกฤษค้างแม้ผลแปลมีไทยปนอยู่บ้าง ---
+  finalResult = finalResult
+    .replace(/\bkn[iI]+ght\b/gi, 'อัศวิน')
+    .replace(/\bnipples?\b/gi, 'หัวนม')
+    .replace(/\bsadness\b/gi, 'ความเศร้า')
+    .replace(/\bcervix\b/gi, 'ปากมดลูก')
+    .replace(/\bvirgin\s*hole/gi, 'รูพรหมจรรย์')
+    .replace(/\bvirgin\b/gi, 'เวอร์จิ้น')
+    .replace(/\bgeneral\b/gi, 'ท่านนายพล')
+    .replace(/\bhole\b/gi, 'รู')
+    .replace(/\bstoo*p\b/gi, 'หยุด')
+    .replace(/\bstop\b/gi, 'หยุด')
+    .replace(/\bmake\s*sure/gi, 'แน่ใจ')
+    .replace(/\bus\s+the\b/gi, 'พวกเรา')
+    .replace(/\blet\s+her\b/gi, 'ปล่อยเธอ')
+    .replace(/\bbe\b/gi, 'เป็น')
+    .replace(/\byou'?re\b/gi, 'นาย')
+    .replace(/\byou\s*'\s*re\b/gi, 'นาย')
+    .replace(/\bher\s+posi[a-z\-]*/gi, 'ท่าของเธอ')
+    .replace(/\bthe\s+babar[a-z\-]*/gi, 'พวกคนเถื่อน')
+    .replace(/\bthe\s+barba[a-z\-]*/gi, 'พวกคนเถื่อน')
+    .replace(/\balso\s+say\s+that\b/gi, 'ยังบอกอีกว่า')
+    .replace(/\bbut\s+in\s+any\s+age[a-z\.\-]*/gi, 'แต่ไม่ว่าจะในยุคสมัยใด')
+    .replace(/\bbut\s+in\s+any\b/gi, 'แต่ไม่ว่าจะยังไง')
+    .replace(/\bgetting\b/gi, 'กำลัง')
+    .replace(/\bpunching\s+my\b/gi, 'ต่อยฉัน');
 
   // Rule 4.1: จิ๋ม ห้ามอยู่ใน balloon เดียวกับ หี
   if (finalResult.includes('หี') && finalResult.includes('จิ๋ม')) {

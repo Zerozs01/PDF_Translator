@@ -1166,19 +1166,21 @@ export const OCRTextLayerPanel: React.FC = () => {
           (eng) => eng !== actEngine
         );
 
-        for (const eng of enginesToLoad) {
-          try {
-            const otherCached = await dbService.getOCR(docId, pNum, eng);
-            if (otherCached && isDisplayCacheCompatibleForEngine(otherCached, eng)) {
-              if (useProjectStore.getState().file !== actFile) continue;
-              otherCached.pageNumber = pNum;
-              setPageOCRForEngine(pNum, eng, normalizeCacheProfile(otherCached));
-              console.log(`[OCRPanel] Background loaded DB cache for page ${pNum} engine=${eng}`);
+        await Promise.all(
+          enginesToLoad.map(async (eng) => {
+            try {
+              const otherCached = await dbService.getOCR(docId, pNum, eng);
+              if (otherCached && isDisplayCacheCompatibleForEngine(otherCached, eng)) {
+                if (useProjectStore.getState().file !== actFile) return;
+                otherCached.pageNumber = pNum;
+                setPageOCRForEngine(pNum, eng, normalizeCacheProfile(otherCached));
+                console.log(`[OCRPanel] Background loaded DB cache for page ${pNum} engine=${eng}`);
+              }
+            } catch (err) {
+              console.warn(`[OCRPanel] Failed to load background cache for page ${pNum} engine=${eng}:`, err);
             }
-          } catch (err) {
-            console.warn(`[OCRPanel] Failed to load background cache for page ${pNum} engine=${eng}:`, err);
-          }
-        }
+          })
+        );
       };
 
       const loadOtherEnginesBackground = async (pNum: number) => {
@@ -1190,18 +1192,20 @@ export const OCRTextLayerPanel: React.FC = () => {
           return !cachedInMemory;
         });
 
-        for (const eng of enginesToLoad) {
-          try {
-            const otherCached = await dbService.getOCR(docId, pNum, eng);
-            if (otherCached && isDisplayCacheCompatibleForEngine(otherCached, eng)) {
-              otherCached.pageNumber = pNum;
-              setPageOCRForEngine(pNum, eng, normalizeCacheProfile(otherCached));
-              console.log(`[OCRPanel] Background loaded DB cache (memory hit pathway) for page ${pNum} engine=${eng}`);
+        await Promise.all(
+          enginesToLoad.map(async (eng) => {
+            try {
+              const otherCached = await dbService.getOCR(docId, pNum, eng);
+              if (otherCached && isDisplayCacheCompatibleForEngine(otherCached, eng)) {
+                otherCached.pageNumber = pNum;
+                setPageOCRForEngine(pNum, eng, normalizeCacheProfile(otherCached));
+                console.log(`[OCRPanel] Background loaded DB cache (memory hit pathway) for page ${pNum} engine=${eng}`);
+              }
+            } catch (err) {
+              console.warn(`[OCRPanel] Background loading other engine ${eng} failed:`, err);
             }
-          } catch (err) {
-            console.warn(`[OCRPanel] Background loading other engine ${eng} failed:`, err);
-          }
-        }
+          })
+        );
       };
 
       const memoryCachedByEngine = state.ocrByPageEngine.get(pageNum)?.get(activeEngine);
@@ -2590,10 +2594,49 @@ export const OCRTextLayerPanel: React.FC = () => {
     } finally {
       stopExternalProgress();
     }
+    // ─── DIAGNOSTIC: Raw OCR output (before any filter) ───
+    console.log(`[DIAG] page ${pageNum} RAW OCR: ${ocrResult.lines?.length || 0} lines, ${ocrResult.words?.length || 0} words`);
+    (ocrResult.lines || []).forEach((l: any, i: number) => {
+      console.log(`  [DIAG-RAW] [${i}] "${String(l.text || '').slice(0, 60)}" conf=${Number(l.confidence || 0).toFixed(1)} y=${l.bbox?.y0?.toFixed?.(0)}-${l.bbox?.y1?.toFixed?.(0)}`);
+    });
 
     if (activePipelineProfile === 'panel') {
+      // ─── DIAGNOSTIC: Before Script Gate ───
+      const preGateLineCount = ocrResult.lines?.length || 0;
+      const preGateTexts = (ocrResult.lines || []).map((l: any) => String(l.text || '').trim()).filter(Boolean);
+      console.log(`[DIAG] page ${pageNum} BEFORE scriptGate: ${preGateLineCount} lines, lang=${options.language}`);
+
       ocrResult = applyPanelLanguageScriptGate(ocrResult, options.language);
+
+      // ─── DIAGNOSTIC: After Script Gate ───
+      const postGateLineCount = ocrResult.lines?.length || 0;
+      const gateDropped = ocrResult.debug?.droppedWords?.filter((d: any) => d.filter === 'panelLanguageScriptGate') || [];
+      if (preGateLineCount !== postGateLineCount || gateDropped.length > 0) {
+        console.warn(`[DIAG] page ${pageNum} scriptGate DROPPED ${preGateLineCount - postGateLineCount} lines, ${gateDropped.length} words`);
+        gateDropped.forEach((d: any) => {
+          console.warn(`  [DIAG-GATE] reason=${d.reason} text="${d.text}" conf=${d.confidence?.toFixed?.(1)}`);
+        });
+        // Show which original texts are now missing
+        const postGateTexts = new Set((ocrResult.lines || []).map((l: any) => String(l.text || '').trim()));
+        preGateTexts.forEach((t: string) => {
+          if (!postGateTexts.has(t)) {
+            console.warn(`  [DIAG-GATE] MISSING LINE: "${t}"`);
+          }
+        });
+      }
+
+      const preDedupLineCount = ocrResult.lines?.length || 0;
       ocrResult = applyPanelSafetyLineDedup(ocrResult);
+
+      // ─── DIAGNOSTIC: After Safety Dedup ───
+      const postDedupLineCount = ocrResult.lines?.length || 0;
+      if (preDedupLineCount !== postDedupLineCount) {
+        const dedupDropped = ocrResult.debug?.droppedWords?.filter((d: any) => d.filter === 'panelSafetyDedup') || [];
+        console.warn(`[DIAG] page ${pageNum} safetyDedup DROPPED ${preDedupLineCount - postDedupLineCount} lines`);
+        dedupDropped.forEach((d: any) => {
+          console.warn(`  [DIAG-DEDUP] reason=${d.reason} text="${d.text}" conf=${d.confidence?.toFixed?.(1)}`);
+        });
+      }
     }
 
     console.log(`[OCRPanel] OCR request resolved for page ${pageNum} with ${ocrResult.words.length} words`);
@@ -2604,7 +2647,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       `drops=${JSON.stringify(debugDrops)} droppedWords=${debugDropWords.length}`
     );
     if (debugDropWords.length > 0) {
-      console.log('[OCRPanel] OCR droppedWords sample:', debugDropWords.slice(0, 8));
+      console.log('[OCRPanel] ALL droppedWords:', debugDropWords);
       const prefixEchoDrops = debugDropWords.filter((d: any) => d.reason === 'displacedPrefixEcho');
       if (prefixEchoDrops.length > 0) {
         console.log(`[OCRPanel] displacedPrefixEcho drops page ${pageNum}:`, prefixEchoDrops);

@@ -217,48 +217,49 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
       }
 
       try {
-        if (!hasOcr) {
-          try {
-            const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
-            if (cached && !canceled) {
-              if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
-                cached.pageNumber = pageNum;
-                ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
-                console.log(`[ImageCanvas] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
-              } else {
-                console.log(`[ImageCanvas] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
-              }
-            }
-          } catch (err) {
-            console.warn(`[ImageCanvas] Failed to load OCR cache for page ${pageNum}:`, err);
+        const ocrPromise = !hasOcr
+          ? dbService.getOCR(documentId, pageNum, activeEngine).catch((err) => {
+              console.warn(`[ImageCanvas] Failed to load OCR cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const transPromise = !hasTranslation
+          ? dbService.getTranslationCachePage(documentId, pageNum).catch((err) => {
+              console.warn(`[ImageCanvas] Failed to load translation cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const [cached, rows] = await Promise.all([ocrPromise, transPromise]);
+
+        if (cached && !canceled) {
+          if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+            cached.pageNumber = pageNum;
+            ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+            console.log(`[ImageCanvas] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+          } else {
+            console.log(`[ImageCanvas] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
           }
         }
 
-        // 2. Load Translation cache if not in memory
-        if (!hasTranslation) {
-          try {
-            const rows = await dbService.getTranslationCachePage(documentId, pageNum);
-            if (Array.isArray(rows) && rows.length > 0 && !canceled) {
-              console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-              for (const row of rows) {
-                if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-                  continue;
-                }
-                const normalizedEntry: OCRTranslationCacheEntry = {
-                  ...row,
-                  pageNum,
-                  ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-                };
-                ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
-                if (row.key && row.key.includes(activeEngine)) {
-                  // If it matches activeEngine, set it active
-                  ocrState.setActiveTranslationCacheKey(pageNum, row.key);
-                  ocrState.setTranslationPreviewMode('translated');
-                }
-              }
+        if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+          console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+          for (const row of rows) {
+            if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+              continue;
             }
-          } catch (err) {
-            console.warn(`[ImageCanvas] Failed to load translation cache for page ${pageNum}:`, err);
+            const normalizedEntry: OCRTranslationCacheEntry = {
+              ...row,
+              pageNum,
+              ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+            };
+            ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
+            if (row.key && row.key.includes(activeEngine)) {
+              // If it matches activeEngine, set it active
+              ocrState.setActiveTranslationCacheKey(pageNum, row.key);
+              ocrState.setTranslationPreviewMode('translated');
+            }
           }
         }
       } finally {
@@ -390,6 +391,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
         if (!canceled) {
           setTranslatedLinePalette(next);
         }
+
+        // Optimize Memory: Explicitly release memory by resizing to 0x0
+        try {
+          sampleCanvas.width = 0;
+          sampleCanvas.height = 0;
+        } catch (e) { /* ignore */ }
       };
 
       if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {

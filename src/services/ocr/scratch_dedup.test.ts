@@ -84,9 +84,9 @@ describe('Scratch Dedup Test', () => {
   });
 
   it('runs on page 25 raw OCR data', () => {
-    const rawOcrPath = 'c:\\App\\Electron\\PDF_Translator\\scratch\\ocr_page_25_raw.json';
+    const rawOcrPath = 'c:\\App\\Electron\\PDF_Translator\\scratch\\ocr_raw_300.json';
     if (!fs.existsSync(rawOcrPath)) {
-      console.log('ocr_page_25_raw.json not found');
+      console.log('ocr_raw_300.json not found');
       return;
     }
     const ocrResult = JSON.parse(fs.readFileSync(rawOcrPath, 'utf8')) as OCRPageResult;

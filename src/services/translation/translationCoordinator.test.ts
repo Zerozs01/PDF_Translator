@@ -20,6 +20,7 @@ if (typeof localStorage === 'undefined') {
 describe('TranslationCoordinator & Engines', () => {
   beforeEach(() => {
     localStorage.clear();
+    translationCoordinator.clearMemoryCache();
     vi.spyOn(dbService, 'getSentenceTranslation').mockResolvedValue(null);
     vi.spyOn(dbService, 'saveSentenceTranslation').mockResolvedValue(undefined as any);
   });
@@ -153,7 +154,13 @@ describe('TranslationCoordinator & Engines', () => {
         { id: '24', text: 'an all-out', groupType: 'balloon' },
         { id: '25', text: 'But in any age...', groupType: 'balloon' },
         { id: '26', text: 'MOREEEEEE!', groupType: 'balloon' },
-        { id: '27', text: 'PLEEA +AASEEE!', groupType: 'balloon' }
+        { id: '27', text: 'PLEEA +AASEEE!', groupType: 'balloon' },
+        { id: '28', text: 'TELL HiS', groupType: 'balloon' },
+        { id: '29', text: 'THE BARBA', groupType: 'balloon' },
+        { id: '30', text: 'SCREAMS', groupType: 'balloon' },
+        { id: '31', text: 'STOOOOP', groupType: 'balloon' },
+        { id: '32', text: 'ST0000P', groupType: 'balloon' },
+        { id: '33', text: 'THAT iTS', groupType: 'balloon' }
       ];
 
       const results = await translationCoordinator.runTranslation('argos', items, {
@@ -190,7 +197,13 @@ describe('TranslationCoordinator & Engines', () => {
         '24': 'อย่างเต็มรูปแบบ',
         '25': 'แต่ไม่ว่าจะในยุคสมัยใด',
         '26': 'มากกกกว่าาาานี้',
-        '27': 'ได้โปรด ดดดดดด'
+        '27': 'ได้โปรด ดดดดดด',
+        '28': 'บอกเรื่องของเขา',
+        '29': 'พวกบาบาเรียน',
+        '30': 'กรีดร้อง',
+        '31': 'หยุดดดด',
+        '32': 'หยุดดดด',
+        '33': 'ว่ามัน',
       };
 
       Object.entries(expected).forEach(([id, val]) => {

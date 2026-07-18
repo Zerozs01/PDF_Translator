@@ -7,6 +7,7 @@
 
 import type { BBox, OCRLine, OCRPageResult } from '../../types';
 import type { TextLayer, TextLayerGroup, LayerGroupType, LayerGroupingResult } from '../../types/layers';
+import { isLikelyEnglishDialogue } from '../ocr/ocrSafetyLineDedup';
 
 // Group color palette (Canva-style)
 const GROUP_COLORS = [
@@ -81,9 +82,7 @@ const endsGroup = (text: string): boolean => {
   return END_BALLOON_PATTERNS.some((p) => p.test(text));
 };
 
-const isLikelyEnglishDialogue = (text: string): boolean => {
-  return /[a-z]/i.test(text) && text.length > 3;
-};
+
 
 /**
  * ตรวจสอบความเชื่อมโยงเชิงพื้นที่ (Proximity & Overlap Alignment) ระหว่าง 2 Lines
@@ -118,6 +117,15 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   const vertOverlapRatio = overlapHeight / Math.max(1, minHeight);
   if (vertOverlapRatio > 0.25 && horizOverlap < 0.50) {
     return false;
+  }
+
+  // สกัดกั้นการจัดกลุ่มคำที่อยู่ระนาบเดียวกันแต่คนละคอลัมน์ซ้ายขวาในระดับ Store
+  if (vertOverlapRatio > 0.20) {
+    const centerDelta = Math.abs((a.bbox.x0 + a.bbox.x1) * 0.5 - (b.bbox.x0 + b.bbox.x1) * 0.5);
+    const minWidth = Math.min(a.bbox.x1 - a.bbox.x0, b.bbox.x1 - b.bbox.x0);
+    if (centerDelta > minWidth * 1.4) {
+      return false;
+    }
   }
 
   const vertGap = getVerticalGap(a.bbox, b.bbox);
@@ -192,6 +200,22 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
   // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines (หรือ 3.2x สำหรับภาษาอังกฤษแนวตั้งที่จัดระนาบเดียวกัน)
   const isBothEnglish = isLikelyEnglishDialogue(a.text) && isLikelyEnglishDialogue(b.text);
+  if (isBothEnglish) {
+    const centerDelta = Math.abs((a.bbox.x0 + a.bbox.x1) * 0.5 - (b.bbox.x0 + b.bbox.x1) * 0.5);
+    const maxVertGap = 3.25 * avgHeight;
+    const minWidth = Math.max(1, Math.min(a.bbox.x1 - a.bbox.x0, b.bbox.x1 - b.bbox.x0));
+    
+    // ห้ามผสานข้ามคอลัมน์ซ้ายขวาในระดับ Store
+    // หากมี horizOverlap สูง (>= 0.30) ให้ใช้เกณฑ์ปกติ (centerDelta <= minWidth * 2.1)
+    // แต่หาก overlap น้อย (< 0.30) หรือเป็น side-by-side ให้คุมเข้มมาก (centerDelta <= minWidth * 0.8)
+    const overlapThreshold = horizOverlap >= 0.30 ? 2.1 : 0.8;
+    const isNotSeparatedColumns = centerDelta <= minWidth * overlapThreshold;
+    
+    if (isNotSeparatedColumns && vertGap <= maxVertGap && (horizOverlap >= 0.22 || (horizOverlap >= 0.06 && centerDelta <= Math.min(22, minWidth * 0.35)))) {
+      return true;
+    }
+  }
+
   const maxVertGap = isBothEnglish && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
   return horizOverlap >= 0.30 && vertGap <= maxVertGap;
 };
@@ -289,9 +313,241 @@ export const splitAggressiveMergedLines = (
   lines: OCRLine[],
   gapMultiplier = 2.2
 ): OCRLine[] => {
-  const result: OCRLine[] = [];
+  if (lines.length === 0) return [];
 
+  // 1. ค้นหาขนาดหน้ากระดาษจำลองเพื่อสเกลค่าพารามิเตอร์ให้ตรงหน้าจริง
+  let maxPageX = 0;
   for (const line of lines) {
+    if (line.bbox.x1 > maxPageX) maxPageX = line.bbox.x1;
+  }
+  const pageWidth = Math.max(1, maxPageX);
+
+  const widths = lines.map(l => Math.max(1, l.bbox.x1 - l.bbox.x0));
+  const sortedWidths = [...widths].sort((a, b) => a - b);
+  const medianWidth = sortedWidths.length > 0 ? sortedWidths[Math.floor(sortedWidths.length / 2)] : 100;
+
+  // คัดแยกสะพานเชื่อมข้ามฝั่งแนวนอน (Bridge Candidates)
+  const bridgeCandidates = lines.filter(line => {
+    const lineW = line.bbox.x1 - line.bbox.x0;
+    const lineH = line.bbox.y1 - line.bbox.y0;
+    const aspect = lineW / Math.max(1, lineH);
+    return lineW > medianWidth * 1.7 && aspect > 2.5 && (line.text || '').trim().includes(' ');
+  });
+
+  const normalLines = lines.filter(line => {
+    const lineW = line.bbox.x1 - line.bbox.x0;
+    const lineH = line.bbox.y1 - line.bbox.y0;
+    const aspect = lineW / Math.max(1, lineH);
+    return !(lineW > medianWidth * 1.7 && aspect > 2.5 && (line.text || '').trim().includes(' '));
+  });
+
+  let splitLines = [...lines];
+
+  // จำเป็นต้องมีกล่องข้อความปกติอย่างน้อย 2 กล่องเพื่อสร้างโครงสร้างคอลัมน์ซ้ายขวาได้
+  if (normalLines.length >= 2) {
+    const steps = Math.ceil(pageWidth);
+    const projection = new Array(steps).fill(0);
+
+    for (const line of normalLines) {
+      const startX = Math.max(0, Math.floor(line.bbox.x0));
+      const endX = Math.min(steps - 1, Math.ceil(line.bbox.x1));
+      for (let x = startX; x <= endX; x++) {
+        projection[x]++;
+      }
+    }
+
+    // กำหนดเกณฑ์สำหรับ Gutter (ระยะความกว้างของคอลัมน์เปล่าที่ปลอดภัย)
+    const minGutterWidth = Math.max(15, Math.round(pageWidth * 0.03));
+    const leftMargin = Math.round(pageWidth * 0.05);
+    const rightMargin = Math.round(pageWidth * 0.95);
+
+    const gutters: Array<{ start: number; end: number; center: number }> = [];
+    let inGutter = false;
+    let gutterStart = 0;
+
+    for (let x = leftMargin; x < rightMargin; x++) {
+      if (projection[x] === 0) {
+        if (!inGutter) {
+          inGutter = true;
+          gutterStart = x;
+        }
+      } else {
+        if (inGutter) {
+          inGutter = false;
+          const gutterWidth = x - gutterStart;
+          if (gutterWidth >= minGutterWidth) {
+            gutters.push({
+              start: gutterStart,
+              end: x,
+              center: (gutterStart + x) * 0.5
+            });
+          }
+        }
+      }
+    }
+    if (inGutter) {
+      const gutterWidth = rightMargin - gutterStart;
+      if (gutterWidth >= minGutterWidth) {
+        gutters.push({
+          start: gutterStart,
+          end: rightMargin,
+          center: (gutterStart + rightMargin) * 0.5
+        });
+      }
+    }
+
+    // หากพบ Gutter แนวดิ่ง ให้หั่นสะพานเชื่อมแนวนอนทิ้งทั้งหมด
+    if (gutters.length > 0) {
+      const newSplitLines: OCRLine[] = [];
+
+      for (const line of lines) {
+        const lineW = line.bbox.x1 - line.bbox.x0;
+        const lineH = line.bbox.y1 - line.bbox.y0;
+        const aspect = lineW / Math.max(1, lineH);
+        const isBridge = aspect > 2.5 && (line.text || '').trim().includes(' ');
+
+        if (!isBridge) {
+          newSplitLines.push(line);
+          continue;
+        }
+
+        const intersectingGutters = gutters.filter(g => line.bbox.x0 < g.start && line.bbox.x1 > g.end);
+        if (intersectingGutters.length === 0) {
+          newSplitLines.push(line);
+          continue;
+        }
+
+        // คืนรูปข้อมูลคำย่อย (Word-level simulation)
+        const isSimulated = (line.words || []).length <= 1;
+        let wordsToSplit = line.words || [];
+        if (isSimulated) {
+          const text = (line.text || '').trim();
+          const tokens = text.split(/\s+/).filter(Boolean);
+          if (tokens.length > 1) {
+            const totalChars = tokens.reduce((sum, t) => sum + t.length, 0) + (tokens.length - 1);
+            const charW = lineW / Math.max(1, totalChars);
+            let currentX = line.bbox.x0;
+            wordsToSplit = tokens.map(token => {
+              const tokenW = token.length * charW;
+              const wordBox = {
+                x0: currentX,
+                y0: line.bbox.y0,
+                x1: currentX + tokenW,
+                y1: line.bbox.y1
+              };
+              currentX += tokenW + charW;
+              return {
+                text: token,
+                confidence: line.confidence || 0.9,
+                bbox: wordBox
+              };
+            });
+          }
+        }
+
+        if (wordsToSplit.length <= 1) {
+          newSplitLines.push(line);
+          continue;
+        }
+
+        intersectingGutters.sort((a, b) => a.center - b.center);
+
+        // แบ่งออกเป็นส่วนย่อยซ้ายขวาตามแนว Gutter Centers
+        const splitSegments: Array<{ words: typeof wordsToSplit; minX: number; maxX: number }> = [];
+        const boundaries = [-Infinity, ...intersectingGutters.map(g => g.center), Infinity];
+
+        for (let bIdx = 0; bIdx < boundaries.length - 1; bIdx++) {
+          const leftBound = boundaries[bIdx];
+          const rightBound = boundaries[bIdx + 1];
+          const segmentWords = wordsToSplit.filter(w => {
+            const wordCenterX = (w.bbox.x0 + w.bbox.x1) * 0.5;
+            return wordCenterX >= leftBound && wordCenterX < rightBound;
+          });
+
+          if (segmentWords.length > 0) {
+            const colX0 = leftBound === -Infinity 
+              ? line.bbox.x0 
+              : intersectingGutters[bIdx - 1].end;
+            const colX1 = rightBound === Infinity 
+              ? line.bbox.x1 
+              : intersectingGutters[bIdx].start;
+
+            splitSegments.push({
+              words: segmentWords,
+              minX: colX0,
+              maxX: colX1
+            });
+          }
+        }
+
+        if (splitSegments.length <= 1) {
+          newSplitLines.push(line);
+          continue;
+        }
+
+        // ประกอบร่างกลับเข้ามาเป็น Lines ใหม่โดยบีบความกว้างตามความกว้างคอลัมน์ที่แท้จริง
+        for (const segment of splitSegments) {
+          const segmentText = segment.words.map(w => w.text).join(' ');
+          const rawBBox = mergeBBoxes(segment.words.map(w => w.bbox));
+          const clippedBBox = {
+            x0: Math.max(segment.minX, rawBBox.x0),
+            y0: line.bbox.y0,
+            x1: Math.min(segment.maxX, rawBBox.x1),
+            y1: line.bbox.y1
+          };
+
+          newSplitLines.push({
+            ...line,
+            text: segmentText,
+            bbox: clippedBBox,
+            words: isSimulated ? [] : segment.words
+          });
+        }
+      }
+
+      splitLines = newSplitLines;
+    }
+  }
+
+  const result: OCRLine[] = [];
+  const reconstructedLines = splitLines.map(line => {
+    if (line.words && line.words.length > 1) {
+      return line;
+    }
+    const text = (line.text || '').trim();
+    const tokens = text.split(/\s+/).filter(Boolean);
+    if (tokens.length <= 1) {
+      return line;
+    }
+
+    const totalChars = tokens.reduce((sum, t) => sum + t.length, 0) + (tokens.length - 1);
+    const lineW = line.bbox.x1 - line.bbox.x0;
+    const charW = lineW / Math.max(1, totalChars);
+    
+    let currentX = line.bbox.x0;
+    const simulatedWords = tokens.map(token => {
+      const tokenW = token.length * charW;
+      const wordBox = {
+        x0: currentX,
+        y0: line.bbox.y0,
+        x1: currentX + tokenW,
+        y1: line.bbox.y1
+      };
+      currentX += tokenW + charW;
+      return {
+        text: token,
+        confidence: line.confidence || 0.9,
+        bbox: wordBox
+      };
+    });
+
+    return {
+      ...line,
+      words: simulatedWords
+    };
+  });
+
+  for (const line of reconstructedLines) {
     if (!line.words || line.words.length <= 1) {
       result.push(line);
       continue;
@@ -315,11 +571,20 @@ export const splitAggressiveMergedLines = (
       // เราจึงลดเกณฑ์ตัวคูณช่องว่าง (effectiveGapMultiplier) ลงเมื่อพบเบาะแสคำจบประโยคด้วยเครื่องหมายวรรคตอน (เหลือ 0.85)
       // หรือเมื่อคำถัดไปขึ้นต้นด้วยอักษรตัวใหญ่ (เช่น BEING, YOu!, SLASHED) ซึ่งเป็นสัญญาณของการเริ่มคำพูด/ประโยคใหม่ (เหลือ 1.35)
       // เพื่อให้สามารถหั่นแบ่งบรรทัดออกจากกันได้อย่างแม่นยำขึ้นโดยไม่ไปรบกวนช่องว่างคำตามปกติในประโยคเดียวกัน
+      const lineW = line.bbox.x1 - line.bbox.x0;
+      const lineH = line.bbox.y1 - line.bbox.y0;
+      const aspect = lineW / Math.max(1, lineH);
+      
+      // บังคับสลับเกณฑ์ให้แคบลงอย่างรวดเร็ว (forceSplitByAspect) เพื่อแยกคำที่รวมกันข้ามฝั่งแนวนอนในโหมดมังงะ
+      const forceSplitByAspect = aspect > 3.0;
+
       let effectiveGapMultiplier = gapMultiplier;
       const prevText = prev.text.trim();
       const currText = curr.text.trim();
 
-      if (/[!?.,;]$/.test(prevText)) {
+      if (forceSplitByAspect) {
+        effectiveGapMultiplier = 0.50; // ลดเกณฑ์เพื่อบังคับหั่นแยกเด็ดขาด
+      } else if (/[!?.,;]$/.test(prevText)) {
         effectiveGapMultiplier = 0.85;
       } else if (/-$/.test(prevText)) {
         // ทำไม: ถ้าคำก่อนหน้าลงท้ายด้วยยัติภังค์ (-) แสดงว่าเป็นคำผสม (เช่น one-on-one)
@@ -333,8 +598,12 @@ export const splitAggressiveMergedLines = (
 
       // ทำไม: ถ้า gap ใหญ่มากผิดปกติ (> 2x avgHeight) ให้ split เสมอ ไม่ว่าคำก่อนจะจบด้วยอะไร
       // เพราะ gap ขนาดนี้บ่งชี้ว่าคำสองคำนี้น่าจะมาจากคนละ panel / balloon
-      const absoluteSplitThreshold = 2.0;
-      if (gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * avgHeight) {
+      const estimatedCharW = lineW / Math.max(1, line.text.length);
+      // ห้าม split เด็ดขาดถ้า gap มีขนาดเล็กกว่า 1.6 เท่าของความกว้างตัวอักษรเฉลี่ย (ซึ่งหมายถึงเป็นช่องว่างปกติระหว่างคำ)
+      const isLargeEnoughGap = gap > estimatedCharW * 1.6;
+
+      const absoluteSplitThreshold = forceSplitByAspect ? 0.50 : 2.0;
+      if (isLargeEnoughGap && (gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * avgHeight)) {
         result.push({
           ...line, // preserve original confidence, engine hints, etc.
           text: currentGroup.map(w => w.text).join(' '),

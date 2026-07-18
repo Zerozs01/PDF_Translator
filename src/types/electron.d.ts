@@ -66,7 +66,7 @@ export interface DBOCRTranslationCacheEntry {
   translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
   translatorEngine: 'offline' | 'ai' | 'm2m100';
   sourceFingerprint: string;
-  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: BBox }>;
   translatedText: string;
   lineCount: number;
   groupCount: number;

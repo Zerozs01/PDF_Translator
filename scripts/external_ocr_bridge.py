@@ -625,16 +625,16 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 )
                 is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
         else:
-            # Tightened: prevent vertically stacked short words (EH/ME) from merging
+            # Tightened: prevent separate vertical English dialogue lines from merging horizontally
             same_band = (
                 center_delta <= min_height * 0.24
                 or (overlap_y >= 0.82 and center_delta <= min_height * 0.38)
             )
             close_enough = (
-                (gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34)
+                (gap_x <= max(22.0, min_height * 1.35) or overlap_x >= 0.34)
                 and overlap_x <= 0.88  # block near-full vertical stacking
             )
-            is_very_close = gap_x <= max(36.0, min_height * 1.6)
+            is_very_close = gap_x <= max(18.0, min_height * 1.1)
 
         should_merge = fragment_like or is_very_close
 
@@ -4604,6 +4604,13 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     CHUNK_HEIGHT = 2800
     CHUNK_OVERLAP = 120
     MAX_PIXELS = args.max_pixels if getattr(args, "max_pixels", 0) > 0 else 9_000_000
+    # Enforce quality-profile safety ceilings to prevent running out of GPU VRAM / CPU lag on massive images:
+    if quality_profile == "fast":
+        MAX_PIXELS = min(MAX_PIXELS, 6_500_000)
+    elif quality_profile == "balanced":
+        MAX_PIXELS = min(MAX_PIXELS, 10_000_000)
+    else:
+        MAX_PIXELS = min(MAX_PIXELS, 16_000_000)
 
     try:
         with Image.open(args.image) as _probe:
@@ -5135,7 +5142,7 @@ def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
     # Downscale image before inference to prevent CPU stalling on large images.
     # 3.5MP cap (~1920x1820) is sufficient for Thai/Latin OCR accuracy.
     # resize_image_if_large returns scale factors to map coords back to original size.
-    EASYOCR_CPU_MAX_PIXELS = 3_500_000
+    EASYOCR_CPU_MAX_PIXELS = 6_500_000
     img_working, scale_x, scale_y = resize_image_if_large(args.image, max_pixels=EASYOCR_CPU_MAX_PIXELS)
 
     result = reader.readtext(img_working, detail=1, paragraph=False)
@@ -5282,9 +5289,20 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         predict_kwargs = build_paddle_predict_kwargs(args)
         ocr = get_paddle_ocr(lang, profile_key, quality_profile, predict_kwargs)
 
+        # Downscale image if large to prevent VRAM / CPU stall
+        MAX_PIXELS = args.max_pixels if getattr(args, "max_pixels", 0) > 0 else 9_000_000
+        if quality_profile == "fast":
+            MAX_PIXELS = min(MAX_PIXELS, 6_500_000)
+        elif quality_profile == "balanced":
+            MAX_PIXELS = min(MAX_PIXELS, 10_000_000)
+        else:
+            MAX_PIXELS = min(MAX_PIXELS, 16_000_000)
+
+        working_image, scale_x, scale_y = resize_image_if_large(str(img_path), max_pixels=MAX_PIXELS)
+
         t0 = time.perf_counter()
         if hasattr(ocr, "predict"):
-            raw = ocr.predict(str(img_path))
+            raw = ocr.predict(working_image)
             if not isinstance(raw, list):
                 raw = list(raw)
         else:
@@ -5292,9 +5310,9 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
             if hasattr(args, "use_angle_cls") and args.use_angle_cls is not None:
                 use_cls = bool(args.use_angle_cls)
             try:
-                raw = ocr.ocr(str(img_path), cls=use_cls)
+                raw = ocr.ocr(working_image, cls=use_cls)
             except TypeError:
-                raw = ocr.ocr(str(img_path))
+                raw = ocr.ocr(working_image)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         words = []
@@ -5378,6 +5396,23 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
                         "words": [{"text": text_value, "confidence": score, "bbox": bbox}],
                     })
 
+        if scale_x != 1.0 or scale_y != 1.0:
+            for line in lines:
+                if "bbox" in line:
+                    b = line["bbox"]
+                    b["x0"] = float(b["x0"]) * scale_x
+                    b["x1"] = float(b["x1"]) * scale_x
+                    b["y0"] = float(b["y0"]) * scale_y
+                    b["y1"] = float(b["y1"]) * scale_y
+                if "words" in line:
+                    for wd in line["words"]:
+                        if "bbox" in wd:
+                            wb = wd["bbox"]
+                            wb["x0"] = float(wb["x0"]) * scale_x
+                            wb["x1"] = float(wb["x1"]) * scale_x
+                            wb["y0"] = float(wb["y0"]) * scale_y
+                            wb["y1"] = float(wb["y1"]) * scale_y
+
         # Calculate average confidence for the raw run
         avg_confidence = 0.0
         if lines:
@@ -5406,8 +5441,12 @@ def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         langs = select_easyocr_langs(args.language)
         reader = get_easyocr_reader(langs)
 
+        # Downscale image if large to prevent CPU stalling
+        EASYOCR_CPU_MAX_PIXELS = 6_500_000
+        img_working, scale_x, scale_y = resize_image_if_large(str(img_path), max_pixels=EASYOCR_CPU_MAX_PIXELS)
+
         t0 = time.perf_counter()
-        raw = reader.readtext(str(img_path), detail=1, paragraph=False)
+        raw = reader.readtext(img_working, detail=1, paragraph=False)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         words = []
@@ -5438,6 +5477,23 @@ def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
                 "bbox": bbox,
                 "words": [{"text": text_value, "confidence": float(confidence), "bbox": bbox}],
             })
+
+        if scale_x != 1.0 or scale_y != 1.0:
+            for line in lines:
+                if "bbox" in line:
+                    b = line["bbox"]
+                    b["x0"] = float(b["x0"]) * scale_x
+                    b["x1"] = float(b["x1"]) * scale_x
+                    b["y0"] = float(b["y0"]) * scale_y
+                    b["y1"] = float(b["y1"]) * scale_y
+                if "words" in line:
+                    for wd in line["words"]:
+                        if "bbox" in wd:
+                            wb = wd["bbox"]
+                            wb["x0"] = float(wb["x0"]) * scale_x
+                            wb["x1"] = float(wb["x1"]) * scale_x
+                            wb["y0"] = float(wb["y0"]) * scale_y
+                            wb["y1"] = float(wb["y1"]) * scale_y
 
         avg_confidence = 0.0
         if lines:

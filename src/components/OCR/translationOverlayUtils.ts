@@ -1426,7 +1426,7 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
   });
 
   const sparseSignal = meaningfulChars.length <= 6 && validWords.length <= 1 && tokenCount <= 2;
-  const lowConfidence = Number(line.confidence || 0) <= 93;
+  const lowConfidence = Number(line.confidence || 0) <= 91;
 
   // 1. Existing oversized mask condition
   const oversizedMask = maskArea >= 17000 && (maskWidth >= 170 || maskHeight >= 96);
@@ -2742,14 +2742,14 @@ export const computeOverlayTypography = (
     ? (documentBodyLike ? (containsThai ? 1.72 : 1.18) : (containsThai ? 1.58 : 1.12))
     : 1;
   const comicProfileScale = isComicBubble
-    ? (profileForTypography === 'manga' ? 1.12 : profileForTypography === 'manhwa' ? 1.08 : 1.04)
+    ? (profile === 'manga' ? 1.12 : profileForTypography === 'manhwa' ? 1.08 : 1.04)
     : isComicBox
-      ? (profileForTypography === 'manga' ? 1.06 : profileForTypography === 'manhwa' ? 1.04 : 1)
-      : (profileForTypography === 'manga' ? 1 : profileForTypography === 'manhwa' ? 0.98 : 0.95);
+      ? (profile === 'manga' ? 1.06 : profileForTypography === 'manhwa' ? 1.04 : 1)
+      : (profile === 'manga' ? 1 : profileForTypography === 'manhwa' ? 0.98 : 0.95);
   const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
   const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
   const sourceSingleLineHint = !useDocumentTypographyProfile
-    && sourceAspectRatio >= (profileForTypography === 'manga' || profileForTypography === 'manhwa' ? 2.8 : 3.2)
+    && sourceAspectRatio >= (profile === 'manga' || profileForTypography === 'manhwa' ? 2.8 : 3.2)
     && sourceWordCount >= 2
     && sourceLength >= 8;
   const preferSingleLine = !isComicBubble && (
@@ -2850,7 +2850,7 @@ export const computeOverlayTypography = (
                 ? (
                   isAdaptiveProfile
                     ? 1.12
-                    : profileForTypography === 'manga'
+                    : profile === 'manga'
                       ? 1.2
                       : profileForTypography === 'manhwa'
                         ? 1.16
@@ -2971,15 +2971,24 @@ const joinOverlayGroupSegments = (segments: string[]): string => {
       continue;
     }
 
-    const compactScript = CJK_TEXT_REGEX.test(merged)
-      || CJK_TEXT_REGEX.test(segment)
-      || THAI_CHAR_REGEX.test(merged)
-      || THAI_CHAR_REGEX.test(segment);
-    const needsNoSpace = compactScript
-      || OVERLAY_NEXT_NO_SPACE_PUNCT_REGEX.test(segment)
-      || OVERLAY_PREV_NO_SPACE_TRAILING_REGEX.test(merged);
+    const trimmedMerged = merged.trim();
+    const endsWithHyphen = trimmedMerged.endsWith('-');
+    const nextStartWithLetter = /^[A-Za-z]/.test(segment);
 
-    merged += `${needsNoSpace ? '' : ' '}${segment}`;
+    if (endsWithHyphen && nextStartWithLetter) {
+      // Strip the trailing hyphen and join without space
+      merged = trimmedMerged.slice(0, -1) + segment;
+    } else {
+      const compactScript = CJK_TEXT_REGEX.test(merged)
+        || CJK_TEXT_REGEX.test(segment)
+        || THAI_CHAR_REGEX.test(merged)
+        || THAI_CHAR_REGEX.test(segment);
+      const needsNoSpace = compactScript
+        || OVERLAY_NEXT_NO_SPACE_PUNCT_REGEX.test(segment)
+        || OVERLAY_PREV_NO_SPACE_TRAILING_REGEX.test(merged);
+
+      merged += `${needsNoSpace ? '' : ' '}${segment}`;
+    }
   }
 
   return normalizeOverlayInlineText(merged);
@@ -3153,7 +3162,7 @@ const shouldHarmonizeOverlayBlock = (
     const generousComicStack = isComicProfile
       && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
       && verticalGap >= -avgHeight * 0.4
-      && verticalGap <= Math.max(36, avgHeight * 1.85)
+      && verticalGap <= Math.max(48, avgHeight * (profile === 'manga' || profile === 'manhwa' ? 3.25 : 1.85))
       && heightRatio <= 3.2;
     if (generousComicStack) {
       return true;
@@ -3178,7 +3187,7 @@ const shouldHarmonizeOverlayBlock = (
       && centeredStack
       && heightRatio <= 2.8
       && verticalGap >= -avgHeight * 0.32
-      && verticalGap <= Math.max(36, avgHeight * (profile === 'manga' ? 1.85 : profile === 'adaptive' ? 1.75 : 1.25))
+      && verticalGap <= Math.max(48, avgHeight * (profile === 'manga' || profile === 'manhwa' ? 3.25 : (profile === 'adaptive' ? 1.75 : 1.25)))
     ) {
       return true;
     }
@@ -3725,7 +3734,7 @@ export const computeOverlayLayoutMap = (
       && sharedLeftEdgeCount >= Math.max(2, Math.ceil(group.length * 0.6));
     const documentLikeItemCount = group.filter((item) => shouldUseDocumentTypographyProfile(profile, item.text, item.hints)).length;
     const effectiveProfile: OverlayLayoutProfile = (
-      profile === 'adaptive' && (
+      (profile === 'adaptive' || profile === 'manga' || profile === 'manhwa') && (
         isDocumentLikeOverlayGroup(group, hasSharedLeftEdge, maxHeight, startXs, profile)
         || (group.length === 1 && documentLikeItemCount === 1)
       )
@@ -3799,7 +3808,9 @@ export const computeOverlayLayoutMap = (
     const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
     const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      ? (defaultStyleKind === 'comic-box'
+          ? 'comic-box'
+          : (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -3841,7 +3852,7 @@ export const computeOverlayLayoutMap = (
       || glossaryCriticalSourceCount >= 1
       || perLineComicFragmentSourceCount >= 1
     );
-    const shouldBlockSectionMergeForDocumentLike = !hasBalloonMember && (
+    const shouldBlockSectionMergeForDocumentLike = !isMangaOrManhwa && !hasBalloonMember && (
       documentLikeMergeSignalCount >= Math.max(2, Math.ceil(group.length * 0.5))
       || (
         effectiveProfile === 'adaptive'
@@ -3860,12 +3871,35 @@ export const computeOverlayLayoutMap = (
         || (hasSharedLeftEdge && group.length >= 2)
       )
     );
+    
+    // ป้องกันการรวมกลุ่มคำสั้น ๆ แนวตั้งที่ไม่มีบอลลูนล้อมรอบ (เช่น "Princess" และ "Ordinary")
+    // ซึ่งมักจะเป็นป้ายกำกับ, เมนู หรือสเตตัสคนละเรื่องกัน
+    const isFragmentedNonBalloonLabels = !hasBalloonMember && (() => {
+      const lineWords = group.map(item => {
+        const text = item.hints?.sourceText || item.line?.text || '';
+        return text.trim().split(/\s+/g).filter(Boolean);
+      });
+      if (lineWords.some(w => w.length === 0)) return false;
+      
+      const hasLongLine = lineWords.some(w => w.length >= 3);
+      if (hasLongLine) return false;
+      
+      const englishSentenceSignpost = /^(?:the|a|an|and|or|but|if|then|else|of|in|on|at|to|for|with|by|from|about|you|i|he|she|it|we|they|my|your|his|her|its|our|their|is|am|are|was|were|be|been|have|has|had|do|does|did|can|could|will|would|shall|should|may|might|must|not|no|yes|oh|ok|any|some|all|more|who|what|where|when|why|how|get|go|me|him|them|us|this|that)$/i;
+      
+      const hasSentenceSignpost = lineWords.some(words => 
+        words.some(w => englishSentenceSignpost.test(w.replace(/[^A-Za-z]/g, '')))
+      );
+      
+      return !hasSentenceSignpost;
+    })();
+
     const mergeGapLimit = mergedStyleKind === 'comic-bubble'
       ? Math.max(34, maxHeight * (effectiveProfile === 'manga' ? 2.8 : 2.5))
       : Math.max(30, maxHeight * (effectiveProfile === 'manga' ? 2.35 : 2.15));
     const mergeCompactnessLimit = mergedStyleKind === 'comic-bubble' ? 2.95 : 2.65;
     const shouldMergeAsSectionBlock = !effectiveDocumentProfile
       && allowSectionMerge
+      && !isFragmentedNonBalloonLabels
       && !shouldBlockSectionMergeForDocumentLike
       && !shouldBlockSectionMergeForTechnicalRows
       && !shouldPreservePerLineNarrative
@@ -3879,6 +3913,11 @@ export const computeOverlayLayoutMap = (
         )
       );
 
+    const uniqueBalloonIds = new Set(
+      group.map((item) => item.balloonId).filter((id): id is string => id !== undefined)
+    );
+    const hasMultipleBalloons = uniqueBalloonIds.size >= 2;
+
     const groupColumnCoherence = computeOverlayGroupColumnCoherence(group);
     const hasStrongColumnContinuity = (
       groupColumnCoherence.minOverlapX >= 0.2
@@ -3888,8 +3927,15 @@ export const computeOverlayLayoutMap = (
       groupColumnCoherence.medianWidth * (mergedStyleKind === 'comic-bubble' ? 2.1 : 1.9)
     );
 
+    const hasSignificantVerticalOverlap = group.some((item, i) => i > 0 && item.bbox.y0 < group[i - 1].bbox.y1 - Math.max(3, maxHeight * 0.15));
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && (hasBalloonMember || (hasStrongColumnContinuity && !overlyWideSectionSpan));
+      && !hasMultipleBalloons
+      && !overlyWideSectionSpan
+      && (!hasSignificantVerticalOverlap || hasBalloonMember)
+      && (hasBalloonMember
+        ? (groupColumnCoherence.minOverlapX >= 0.05 || groupColumnCoherence.maxCenterDelta <= Math.max(96, maxHeight * 3.5))
+        : hasStrongColumnContinuity
+      );
 
     if (canMergeSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
@@ -3961,14 +4007,19 @@ export const computeOverlayLayoutMap = (
         ? (mergedTextContainsThai ? 1.04 : (mergedTypography.estimatedLines >= 3 ? 1.08 : 1.24))
         : (mergedTextContainsThai ? 1.02 : (mergedTypography.estimatedLines >= 3 ? 1.05 : 1.12));
       const maxFontCap = mergedTextContainsThai
-        ? Math.max(14, Math.min(21, mergedBaselineFont * 1.12))
-        : (mergedStyleKind === 'comic-bubble' ? 32 : 28);
+        ? (isMangaOrManhwa ? 22 : 28)
+        : Math.max(
+            14,
+            isMangaOrManhwa
+              ? Math.min(23, mergedBaselineFont * 1.12)
+              : 28
+          );
        const promotedMergedFont = Math.min(
         maxFontCap,
         mergedTextContainsThai
           ? Math.max(
               10.5,
-              Math.min(mergedBaselineFont * 1.08, mergedTypography.fontSize)
+              Math.min(isMangaOrManhwa ? 21 : 28, mergedTypography.fontSize * (isMangaOrManhwa ? 0.82 : 0.95))
             )
           : Math.max(
               mergedTypography.fontSize,
@@ -3978,7 +4029,8 @@ export const computeOverlayLayoutMap = (
       );
       const mergedTypographyAdjusted = (() => {
         if (promotedMergedFont <= mergedTypography.fontSize + 0.01) return mergedTypography;
-        const lineHeight = resolveOverlayLineHeight(mergedText) + (mergedTextContainsThai ? (mergedStyleKind === 'comic-bubble' ? 0.08 : 0.04) : 0);
+        const lineGapBoost = isMangaOrManhwa ? 0.18 : (mergedStyleKind === 'comic-bubble' ? 0.08 : 0.04);
+        const lineHeight = resolveOverlayLineHeight(mergedText) + (mergedTextContainsThai ? lineGapBoost : 0);
         const { padX, padY } = resolveOverlayPadding(promotedMergedFont, mergedText);
         const usableWidth = Math.max(4, mergedWidth - padX * 2);
         const estimatedLines = resolveWrappedLineEstimate(
@@ -4003,7 +4055,8 @@ export const computeOverlayLayoutMap = (
         const ascenderSafety = Math.max(1, Math.round(promotedMergedFont * (THAI_CHAR_REGEX.test(mergedText) ? 0.1 : 0.05)));
         const descenderSafety = Math.max(1, Math.round(promotedMergedFont * (THAI_CHAR_REGEX.test(mergedText) ? 0.18 : 0.14)));
         const contentHeight = adjustedEstimatedLines * promotedMergedFont * lineHeight + ascenderSafety + descenderSafety;
-        if (contentHeight > mergedHeightBudget * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.92)) {
+        const heightCheckLimit = isMangaOrManhwa ? 1.25 : (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.92);
+        if (contentHeight > mergedHeightBudget * heightCheckLimit) {
           return mergedTypography;
         }
         return {
@@ -4115,7 +4168,7 @@ export const computeOverlayLayoutMap = (
         continue;
       }
 
-      const lineHeight = resolveOverlayLineHeight(renderText);
+      const lineHeight = resolveOverlayLineHeight(renderText) + (THAI_CHAR_REGEX.test(renderText) && (effectiveProfile === 'manga' || effectiveProfile === 'manhwa') ? 0.18 : 0);
       const { padX, padY } = resolveOverlayPadding(normalizedFontSize, renderText);
       const estimatedLines = item.typography.estimatedLines;
       const ascenderSafety = Math.max(1, Math.round(normalizedFontSize * (THAI_CHAR_REGEX.test(renderText) ? 0.1 : 0.05)));
@@ -4171,6 +4224,13 @@ export const computeOverlayLayoutMap = (
     }
   };
 
+  const overlyWidePairSpan = (boxA: BBox, boxB: BBox): boolean => {
+    const minWidth = Math.min(boxA.x1 - boxA.x0, boxB.x1 - boxB.x0);
+    const spanWidth = Math.max(boxA.x1, boxB.x1) - Math.min(boxA.x0, boxB.x0);
+    const centerDeltaX = Math.abs((boxA.x0 + boxA.x1) * 0.5 - (boxB.x0 + boxB.x1) * 0.5);
+    return spanWidth > minWidth * 2.25 && centerDeltaX > Math.max(34, minWidth * 1.05);
+  };
+
   // Compare potential harmonizable pairs (optimized early exit since orderedComputed is Y-sorted)
   for (let i = 0; i < orderedComputed.length; i += 1) {
     const nodeA = orderedComputed[i];
@@ -4196,7 +4256,8 @@ export const computeOverlayLayoutMap = (
 
       const sameBalloon = nodeA.balloonId !== undefined &&
         nodeB.balloonId !== undefined &&
-        nodeA.balloonId === nodeB.balloonId;
+        nodeA.balloonId === nodeB.balloonId
+        && !overlyWidePairSpan(nodeA.bbox, nodeB.bbox);
 
       if (sameBalloon || shouldHarmonizeOverlayBlock(nodeA, nodeB, profile) || shouldHarmonizeOverlayBlock(nodeB, nodeA, profile)) {
         ufUnion(i, j);

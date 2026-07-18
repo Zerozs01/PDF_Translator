@@ -887,7 +887,7 @@ type TranslationCacheEntryRecord = {
   translationMode: string;
   translatorEngine: string;
   sourceFingerprint: string;
-  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: any }>;
   translatedText: string;
   lineCount: number;
   groupCount: number;
@@ -1016,16 +1016,25 @@ export const TranslationCacheDAO = {
       created_at: number;
     }>;
 
-    return rows.map((row) => {
-      let translatedByIndex: Array<{ index: number; text: string }> = [];
+    const CURRENT_CACHE_VERSION_TAG = 'ver:v55';
+    return rows
+      .filter((row) => String(row.cache_key || '').includes(CURRENT_CACHE_VERSION_TAG))
+      .map((row) => {
+      let translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: any }> = [];
       try {
         const parsed = JSON.parse(row.translated_by_index);
         if (Array.isArray(parsed)) {
           translatedByIndex = parsed
-            .map((item) => ({
-              index: Number((item as { index?: unknown }).index || 0),
-              text: String((item as { text?: unknown }).text || ''),
-            }))
+            .map((item: any) => {
+              const indexVal = item.index !== undefined ? item.index : item.lineIndex;
+              const sourceTextVal = item.sourceText !== undefined ? item.sourceText : item.rawText;
+              return {
+                index: Number(indexVal !== undefined ? indexVal : 0),
+                text: String(item.text || ''),
+                sourceText: sourceTextVal !== undefined ? String(sourceTextVal) : undefined,
+                bbox: item.bbox,
+              };
+            })
             .filter((item) => Number.isFinite(item.index));
         }
       } catch {

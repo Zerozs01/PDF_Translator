@@ -96,6 +96,7 @@ interface ExternalOcrBridgeResponse {
   ok: boolean;
   id?: string;
   engine?: string;
+  message?: string;
   words?: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
   lines?: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number }; words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }> }>;
   text?: string;
@@ -111,6 +112,7 @@ interface ExternalOcrBridgeResponse {
 const EXTERNAL_ENGINES: ExternalBridgeEngine[] = ['paddleocr', 'easyocr'];
 const bridgeDaemons = new Map<ExternalBridgeEngine, BridgeDaemon>();
 const daemonIdleTimers = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
+const daemonCleanupTimers = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
 let externalOcrTempRoot: string | null = null;
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /pin_memory.*no accelerator/i,
@@ -425,6 +427,30 @@ export function resetDaemonIdleTimer(engine: ExternalBridgeEngine): void {
     clearTimeout(existingTimer);
   }
 
+  const existingCleanup = daemonCleanupTimers.get(engine);
+  if (existingCleanup) {
+    clearTimeout(existingCleanup);
+    daemonCleanupTimers.delete(engine);
+  }
+
+  // 1. Evict GPU VRAM and clean up Python memory after 2 minutes of inactivity
+  const cleanupTimer = setTimeout(() => {
+    const daemon = bridgeDaemons.get(engine);
+    if (daemon && !daemon.running && daemon.queue.length === 0 && daemon.pending.size === 0) {
+      console.log(`[ocrBridge] Idle timeout (2 minutes) reached. Evicting GPU VRAM and cleaning up memory for ${engine} daemon.`);
+      requestDaemonInternal(daemon, { action: 'cleanup', engine }, 15000)
+        .then((res) => {
+          console.log(`[ocrBridge] Idle cleanup for ${engine} daemon finished:`, res.message || 'success');
+        })
+        .catch((err) => {
+          console.warn(`[ocrBridge] Idle cleanup for ${engine} daemon failed:`, err);
+        });
+    }
+    daemonCleanupTimers.delete(engine);
+  }, 120000); // 2 minutes
+  daemonCleanupTimers.set(engine, cleanupTimer);
+
+  // 2. Shut down daemon process after 5 minutes of inactivity
   const timer = setTimeout(() => {
     const daemon = bridgeDaemons.get(engine);
     if (daemon) {
@@ -606,6 +632,12 @@ function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error, daemonToKi
   if (existingTimer) {
     clearTimeout(existingTimer);
     daemonIdleTimers.delete(engine);
+  }
+
+  const existingCleanup = daemonCleanupTimers.get(engine);
+  if (existingCleanup) {
+    clearTimeout(existingCleanup);
+    daemonCleanupTimers.delete(engine);
   }
 
   if (daemon.queue) {
@@ -829,11 +861,16 @@ function processQueue(daemon: BridgeDaemon): void {
   daemon.running = true;
   const task = daemon.queue.shift()!;
 
-  // Clear idle timer since a request has started
+  // Clear idle timers since a request has started
   const existingTimer = daemonIdleTimers.get(daemon.engine);
   if (existingTimer) {
     clearTimeout(existingTimer);
     daemonIdleTimers.delete(daemon.engine);
+  }
+  const existingCleanup = daemonCleanupTimers.get(daemon.engine);
+  if (existingCleanup) {
+    clearTimeout(existingCleanup);
+    daemonCleanupTimers.delete(daemon.engine);
   }
 
   requestDaemonInternal(daemon, task.payload, task.timeoutMs)
@@ -850,11 +887,16 @@ async function requestDaemon(
   payload: Record<string, unknown>,
   timeoutMs: number = 30000
 ): Promise<ExternalOcrBridgeResponse> {
-  // Clear the idle timer since we are initiating a new request
+  // Clear the idle timers since we are initiating a new request
   const existingTimer = daemonIdleTimers.get(engine);
   if (existingTimer) {
     clearTimeout(existingTimer);
     daemonIdleTimers.delete(engine);
+  }
+  const existingCleanup = daemonCleanupTimers.get(engine);
+  if (existingCleanup) {
+    clearTimeout(existingCleanup);
+    daemonCleanupTimers.delete(engine);
   }
 
   const daemon = ensureDaemon(engine);

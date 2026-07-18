@@ -765,6 +765,9 @@ const PDFPageOverlay: React.FC<{
             const renderText = isTextEdited
               ? (translationPreviewMode === 'original' ? (layer!.sourceText || layer!.text) : layer!.text)
               : (layout?.renderText !== undefined ? layout.renderText : (translatedText || ''));
+
+            const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
+
             const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
             const styleKind = layout?.styleKind;
             const isDocumentLikeOverlay = styleKind
@@ -802,7 +805,6 @@ const PDFPageOverlay: React.FC<{
             const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * ocrOverlayTransform.scaleY);
             const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * ocrOverlayTransform.scaleX);
             const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrOverlayTransform.scaleY);
-            const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
             const expansion = resolveOverlayMaskExpansion(line);
             const mergedMaskBoost = 0;
             const comicMaskBoostX = 0;
@@ -1018,7 +1020,7 @@ const PDFPageOverlay: React.FC<{
                         boxSizing: 'border-box',
                         display: 'flex',
                         alignItems: isComicCenter ? 'center' : 'flex-start',
-                        justifyContent: (effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && layout?.alignment === 'center' ? 'center' : 'flex-start',
+                        justifyContent: layout?.alignment === 'center' ? 'center' : 'flex-start',
                         textAlign: layout?.alignment === 'center' ? 'center' : 'left',
                         whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
                         wordBreak: 'normal',
@@ -1026,9 +1028,7 @@ const PDFPageOverlay: React.FC<{
                         WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,
                         WebkitTextStrokeColor: overlayStrokeWidth > 0 ? palette.textStrokeColor : undefined,
                         textShadow: palette.textShadow,
-                        overflowWrap: typography.forceSingleLine
-                          ? 'normal'
-                          : (hasThaiText ? 'normal' : 'break-word'),
+                        overflowWrap: 'break-word',
                         overflow: 'visible',
                       }}
                     >
@@ -1257,46 +1257,48 @@ const PDFPageContainer: React.FC<{
       }
 
       try {
-        if (!hasOcr) {
-          try {
-            const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
-            if (cached && !canceled) {
-              if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
-                cached.pageNumber = pageNum;
-                ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
-                console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
-              } else {
-                console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
-              }
-            }
-          } catch (err) {
-            console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);
+        const ocrPromise = !hasOcr
+          ? dbService.getOCR(documentId, pageNum, activeEngine).catch((err) => {
+              console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const transPromise = !hasTranslation
+          ? dbService.getTranslationCachePage(documentId, pageNum).catch((err) => {
+              console.warn(`[PDFPageContainer] Failed to load translation cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const [cached, rows] = await Promise.all([ocrPromise, transPromise]);
+
+        if (cached && !canceled) {
+          if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+            cached.pageNumber = pageNum;
+            ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+            console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+          } else {
+            console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
           }
         }
 
         // 2. Load Translation cache if not in memory
-        if (!hasTranslation) {
-          try {
-            const rows = await dbService.getTranslationCachePage(documentId, pageNum);
-            if (Array.isArray(rows) && rows.length > 0 && !canceled) {
-              console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-              for (const row of rows) {
-                if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-                  continue;
-                }
-                const normalizedEntry: OCRTranslationCacheEntry = {
-                  ...row,
-                  pageNum,
-                  ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-                  translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
-                  translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
-                  translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
-                };
-                ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
-              }
+        if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+          console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+          for (const row of rows) {
+            if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+              continue;
             }
-          } catch (err) {
-            console.warn(`[PDFPageContainer] Failed to load translation cache for page ${pageNum}:`, err);
+            const normalizedEntry: OCRTranslationCacheEntry = {
+              ...row,
+              pageNum,
+              ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+              translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
+              translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
+              translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
+            };
+            ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
           }
         }
       } finally {

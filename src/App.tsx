@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -122,6 +122,7 @@ import {
 
 // Lazy Load Heavy Components
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
+const CompactTopToolbar = React.lazy(() => import('./components/Layout/CompactTopToolbar').then(module => ({ default: module.CompactTopToolbar })));
 const PDFCanvas = React.lazy(() => import('./components/PDF/PDFCanvas').then(module => ({ default: module.PDFCanvas })));
 const LeftSidebar = React.lazy(() => import('./components/Layout/LeftSidebar').then(module => ({ default: module.LeftSidebar })));
 const ImageCanvas = React.lazy(() => import('./components/Image/ImageCanvas').then(module => ({ default: module.ImageCanvas })));
@@ -1997,7 +1998,7 @@ export const shouldUseLineByLineGrouping = (
   lines: TranslatableLine[],
   sourceLanguage: string,
   targetLanguage: string,
-  engine: 'offline' | 'ai',
+  engine: 'offline' | 'ai' | 'm2m100',
   mode: TranslationMode
 ): boolean => {
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
@@ -2196,7 +2197,7 @@ const shouldPreferEnglishSourceForMixedTechnicalPage = (
 
 const isHesitantSpeech = (text: string): boolean => {
   const normalized = (text || '').trim();
-  return /^[A-Za-z]\s*-\s*[A-Za-z][A-Za-z]{0,3}$/i.test(normalized);
+  return /^[A-Za-z]\s*-\s*[A-Za-z][A-Za-z]{0,3}[!?….-]*$/i.test(normalized);
 };
 
 const shouldMergeLines = (
@@ -2445,6 +2446,17 @@ const shouldConnectDenseDialogueLines = (
   const minWidth = Math.max(1, Math.min(widthA, widthB));
 
 
+
+  const hesitantA = isHesitantSpeech(a.text);
+  const hesitantB = isHesitantSpeech(b.text);
+  if (hesitantA || hesitantB) {
+    const tightSameBubble = overlapX >= 0.75
+      && centerDeltaX <= baseHeight * 0.8
+      && verticalGap <= baseHeight * 0.25;
+    if (!tightSameBubble) {
+      return false;
+    }
+  }
 
   const interjectionA = isLikelyStandaloneInterjectionLine(a.text);
   const interjectionB = isLikelyStandaloneInterjectionLine(b.text);
@@ -3545,6 +3557,30 @@ export default function App() {
   const handleToggleLeftSidebar = useCallback(() => {
     setIsLeftSidebarOpen((prev) => !prev);
   }, []);
+
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const lastWidthRef = useRef(window.innerWidth);
+  useEffect(() => {
+    const currentWidth = windowWidth;
+    const prevWidth = lastWidthRef.current;
+    if (currentWidth < 1024 && prevWidth >= 1024) {
+      setIsLeftSidebarOpen(false);
+    } else if (currentWidth >= 1024 && prevWidth < 1024) {
+      setIsLeftSidebarOpen(true);
+    }
+    lastWidthRef.current = currentWidth;
+  }, [windowWidth]);
+
+  const isNarrow = windowWidth < 820;
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(file?.name || '');
   const [translationStatus, setTranslationStatus] = useState<{ kind: 'info' | 'success' | 'error'; message: string } | null>(null);
@@ -5447,10 +5483,10 @@ export default function App() {
         existingLayers.some(l => l.lineIndex >= pageOCR.lines.length) ||
         (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
 
-      if (isStoreStale && !hasUserModifications) {
+      if ((isStoreStale || !hasUserModifications) && !hasUserModifications) {
         const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
         layerStore.setPageLayers(pageNum, initialLayerResult);
-        console.log(`[TranslationSync] Synchronously initialized/rebuilt stale store layers for page ${pageNum} before translation.`);
+        console.log(`[TranslationSync] Synchronously initialized/rebuilt store layers for page ${pageNum} before translation.`);
       }
     } catch (err) {
       console.warn('[TranslationSync] Failed to verify/rebuild stale store layers:', err);
@@ -5527,20 +5563,24 @@ export default function App() {
                 if (!cleanSource) return undefined;
                 
                 // 1. Exact match (case-insensitive)
-                const exact = cacheItems.find(item => 
-                  String(item.sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase() === cleanSource
-                );
+                const exact = cacheItems.find(item => {
+                  const itemSource = String(item.sourceText !== undefined ? item.sourceText : (item.rawText || '')).replace(/\s+/g, ' ').trim().toLowerCase();
+                  return itemSource === cleanSource;
+                });
                 if (exact) return exact;
                 
                 // 2. Substring match
                 const partial = cacheItems.find(item => {
-                  const itemText = String(item.sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                  return itemText.includes(cleanSource) || cleanSource.includes(itemText);
+                  const itemSource = String(item.sourceText !== undefined ? item.sourceText : (item.rawText || '')).replace(/\s+/g, ' ').trim().toLowerCase();
+                  return itemSource.includes(cleanSource) || cleanSource.includes(itemSource);
                 });
                 if (partial) return partial;
                 
                 // 3. Fallback to Index match
-                return cacheItems.find(item => item.index === lineIndex);
+                return cacheItems.find(item => {
+                  const idxVal = item.index !== undefined ? item.index : item.lineIndex;
+                  return idxVal === lineIndex;
+                });
               };
 
               if (pageLayers.length > 0) {
@@ -5878,11 +5918,12 @@ export default function App() {
         id: String(groupIndex),
         text: group.protectedText || group.sourceText || '',
         groupType: groupType,
+        sourceLanguage: group.sourceLanguage,
       };
     });
 
     const coordinatorEngineId = engine === 'offline' ? 'argos' : (engine === 'ai' ? 'gemini' : 'm2m100');
-    let effectiveEngine: TranslatorEngine = engine;
+    let effectiveEngine: 'offline' | 'ai' | 'm2m100' = engine;
     let fallbackNote = '';
     
     try {
@@ -7321,39 +7362,59 @@ export default function App() {
       </header>
 
       {/* MAIN CONTENT AREA */}
-      <div className="relative z-10 flex flex-1 overflow-hidden">
+      <div className="relative z-10 flex flex-col flex-1 overflow-hidden">
         
-        {/* 1. LEFT SIDEBAR - Pages Navigator Only */}
-        {file && (
-          <React.Suspense fallback={<div className="w-48 bg-slate-950/55 border-r border-white/10" />}>
-            <LeftSidebar 
-              isOpen={isLeftSidebarOpen} 
-              onToggle={handleToggleLeftSidebar} 
+        {isNarrow && file && (
+          <React.Suspense fallback={<div className="h-10 bg-slate-950/55 border-b border-white/10" />}>
+            <CompactTopToolbar 
+              isAiProcessing={isAiProcessing}
+              isOfflineProcessing={isOfflineProcessing}
+              onAiTranslate={handleAiTranslate}
+              onOfflineTranslate={handleOfflineTranslate}
+              onAiTranslateAllPages={handleAiTranslateAllPages}
+              onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
+              translationStatus={translationStatus}
+              offlineEngine={offlineEngine}
+              onOfflineEngineChange={setOfflineEngine}
             />
           </React.Suspense>
         )}
 
-        {/* 2. MAIN WORKSPACE (Canvas) */}
-        <main className="flex-1 relative overflow-hidden bg-[#313741]">
-          <React.Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500">Loading Canvas...</div>}>
-            <WorkspaceContainer />
-          </React.Suspense>
-        </main>
+        <div className="relative z-10 flex flex-1 overflow-hidden">
+          {/* 1. LEFT SIDEBAR - Pages Navigator Only */}
+          {file && (
+            <React.Suspense fallback={<div className="w-48 bg-slate-950/55 border-r border-white/10" />}>
+              <LeftSidebar 
+                isOpen={isLeftSidebarOpen} 
+                onToggle={handleToggleLeftSidebar} 
+              />
+            </React.Suspense>
+          )}
 
-        {/* 3. RIGHT SIDEBAR - OCR & Settings */}
-        <React.Suspense fallback={<div className="w-65 bg-slate-950/55 border-l border-white/10" />}>
-          <RightSidebar 
-            isAiProcessing={isAiProcessing}
-            isOfflineProcessing={isOfflineProcessing}
-            onAiTranslate={handleAiTranslate}
-            onOfflineTranslate={handleOfflineTranslate}
-            onAiTranslateAllPages={handleAiTranslateAllPages}
-            onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
-            translationStatus={translationStatus}
-            offlineEngine={offlineEngine}
-            onOfflineEngineChange={setOfflineEngine}
-          />
-        </React.Suspense>
+          {/* 2. MAIN WORKSPACE (Canvas) */}
+          <main className="flex-1 relative overflow-hidden bg-[#313741]">
+            <React.Suspense fallback={<div className="flex items-center justify-center h-full text-slate-500">Loading Canvas...</div>}>
+              <WorkspaceContainer />
+            </React.Suspense>
+          </main>
+
+          {/* 3. RIGHT SIDEBAR - OCR & Settings */}
+          {!isNarrow && (
+            <React.Suspense fallback={<div className="w-65 bg-slate-950/55 border-l border-white/10" />}>
+              <RightSidebar 
+                isAiProcessing={isAiProcessing}
+                isOfflineProcessing={isOfflineProcessing}
+                onAiTranslate={handleAiTranslate}
+                onOfflineTranslate={handleOfflineTranslate}
+                onAiTranslateAllPages={handleAiTranslateAllPages}
+                onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
+                translationStatus={translationStatus}
+                offlineEngine={offlineEngine}
+                onOfflineEngineChange={setOfflineEngine}
+              />
+            </React.Suspense>
+          )}
+        </div>
       </div>
 
       {/* ─── Floating Queue Status Badge (File Preview) ─── */}

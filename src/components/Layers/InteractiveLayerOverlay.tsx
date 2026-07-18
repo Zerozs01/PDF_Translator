@@ -587,6 +587,79 @@ interface SelectionBoxProps {
   isLayoutHidden?: boolean;
 }
 
+const areEqualSelectionBox = (prev: SelectionBoxProps, next: SelectionBoxProps) => {
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.isEditing !== next.isEditing) return false;
+  if (prev.isMultiSelected !== next.isMultiSelected) return false;
+  if (prev.activeResizeDir !== next.activeResizeDir) return false;
+  if (prev.isRotating !== next.isRotating) return false;
+  if (prev.startRotation !== next.startRotation) return false;
+  if (prev.activeTool !== next.activeTool) return false;
+  if (prev.isLayoutHidden !== next.isLayoutHidden) return false;
+
+  // ocrTransform check (deep fields check)
+  if (
+    prev.ocrTransform.scaleX !== next.ocrTransform.scaleX ||
+    prev.ocrTransform.scaleY !== next.ocrTransform.scaleY ||
+    prev.ocrTransform.offsetX !== next.ocrTransform.offsetX ||
+    prev.ocrTransform.offsetY !== next.ocrTransform.offsetY
+  ) {
+    return false;
+  }
+
+  // layer check (deep fields check)
+  const pl = prev.layer;
+  const nl = next.layer;
+  if (
+    pl.id !== nl.id ||
+    pl.rotation !== nl.rotation ||
+    pl.locked !== nl.locked ||
+    pl.visible !== nl.visible ||
+    pl.userEdited !== nl.userEdited ||
+    pl.text !== nl.text ||
+    pl.sourceText !== nl.sourceText
+  ) {
+    return false;
+  }
+
+  // BBox check
+  if (
+    pl.bbox.x0 !== nl.bbox.x0 ||
+    pl.bbox.y0 !== nl.bbox.y0 ||
+    pl.bbox.x1 !== nl.bbox.x1 ||
+    pl.bbox.y1 !== nl.bbox.y1
+  ) {
+    return false;
+  }
+
+  // layout check
+  if (prev.layout !== next.layout) {
+    const playout = prev.layout;
+    const nlayout = next.layout;
+    if (!playout || !nlayout) return false;
+    if (
+      playout.hidden !== nlayout.hidden ||
+      playout.renderText !== nlayout.renderText ||
+      playout.alignment !== nlayout.alignment ||
+      playout.styleKind !== nlayout.styleKind
+    ) {
+      return false;
+    }
+    
+    // mergedBBox check
+    const pm = playout.mergedBBox;
+    const nm = nlayout.mergedBBox;
+    if (Boolean(pm) !== Boolean(nm)) return false;
+    if (pm && nm) {
+      if (pm.x0 !== nm.x0 || pm.y0 !== nm.y0 || pm.x1 !== nm.x1 || pm.y1 !== nm.y1) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+};
+
 const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
@@ -812,7 +885,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
       )}
     </div>
   );
-});
+}, areEqualSelectionBox);
 
 // ─── Main Component: InteractiveLayerOverlay ──────────────────────
 export const InteractiveLayerOverlay: React.FC<Props> = ({

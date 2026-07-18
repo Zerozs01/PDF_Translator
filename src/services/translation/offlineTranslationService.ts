@@ -75,7 +75,27 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'youre': 'คุณคือ', 'you\'re': 'คุณคือ',
   'hes': 'เขาคือ', 'he\'s': 'เขาคือ', 'he s': 'เขาคือ', 'he s...': 'เขาคือ...', 'he s!': 'เขาคือ!',
   'would': 'จะ', 'would...': 'จะ...', 'would!': 'จะ!',
+  'gonna': 'จะ', 'gonna...': 'จะ...', 'gonna!': 'จะ!',
+  'away': 'หนีไป', 'away...': 'หนีไป...', 'away!': 'หนีไป!',
+  'ahh': 'อา', 'ahh...': 'อา...', 'ahh!': 'อา!',
+  'majesty': 'ฝ่าบาท', 'majesty...': 'ฝ่าบาท...', 'majesty?': 'ฝ่าบาท?', 'majesty...?': 'ฝ่าบาท...?',
+  'get rusty': 'ฝีมือตก', 'get rusty...': 'ฝีมือตก...', 'get rusty!': 'ฝีมือตก!',
+  'you upright': 'แกที่ชอบอ้างความชอบธรรม', 'you upright!': 'แกที่ชอบอ้างความชอบธรรม!',
   'cen todosson': 'เซน โทดอสสัน',
+  'virgin': 'เวอร์จิ้น',
+  'also say that': 'ยังบอกอีกว่า',
+  'i lose': 'ฉันแพ้แล้ว',
+  "i can't": 'ฉันทำไม่ได้', "i cant": 'ฉันทำไม่ได้', "i can't!": 'ฉันทำไม่ได้!', "i cant!": 'ฉันทำไม่ได้!',
+  'defeat': 'ความพ่ายแพ้', 'defeat!': 'ความพ่ายแพ้!',
+  'nipples': 'หัวนม', 'nipples and': 'หัวนมและ',
+  'on the': 'บน', 'you\'re supposed': 'เธอควรจะ', 'youre supposed': 'เธอควรจะ',
+  'tight': 'แน่น', 'tight!': 'แน่น!', 'your training': 'การฝึกของคุณ',
+  'bitch... hey!': 'ยัยเวร... เฮ้ย!', 'bitch hey!': 'ยัยเวร... เฮ้ย!', 'bitch... hey': 'ยัยเวร... เฮ้ย!', 'bitch hey': 'ยัยเวร... เฮ้ย!',
+  's-stop!': 'ห-หยุดนะ!', 's-stop': 'ห-หยุดนะ!', 's stop!': 'ห-หยุดนะ!', 's stop': 'ห-หยุดนะ!',
+  'a dirty': 'ที่โสโครก', 'her posi-': 'ตำแหน่งของเธอ-', 'her posi': 'ตำแหน่งของเธอ-',
+  'ing with your': 'กับของคุณ', 'i\'ll have a': 'ฉันจะมี', 'ill have a': 'ฉันจะมี',
+  'with his': 'กับของเขา', 'the woman\'s': 'ของผู้หญิง', 'the womans': 'ของผู้หญิง', 'general': 'นายพล', 'general!': 'นายพล!',
+  'inside': 'ข้างใน', 'let her': 'ปล่อยให้เธอ', 'praise': 'สรรเสริญ', 'praise...': 'สรรเสริญ...',
   // Spanish specific lookups to guarantee user-defined translation accuracy
   'un regalo para la mente': 'ของขวัญสำหรับจิตใจของคุณ',
   'un regalo para la mente.': 'ของขวัญสำหรับจิตใจของคุณ.',
@@ -190,12 +210,14 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'toyed with': 'เล่นสนุกกับ',
   'dead': 'ตาย',
   'recapturing': 'การยึดกลับคืน',
+  'let her': 'ปล่อยเธอ',
+  'the babar': 'พวกคนเถื่อน',
+  'punching my': 'ต่อยฉัน',
   // Interjections / short responses
   'yes': 'ใช่', 'no': 'ไม่', 'ok': 'โอเค', 'okay': 'โอเค',
   'sir': 'ท่าน', 'yes sir': 'ครับท่าน',
   'quck': 'เร็ว', 'quick': 'เร็ว',
   'what': 'อะไร', 'why': 'ทำไม', 'how': 'อย่างไร', 'when': 'เมื่อไหร่',
-  'where': 'ที่ไหน', 'who': 'ใคร', 'wait': 'รอก่อน', 'stop': 'หยุด',
   'go': 'ไป', 'run': 'วิ่ง', 'help': 'ช่วยด้วย', 'look': 'ดูสิ',
   'now': 'ตอนนี้', 'here': 'ที่นี่', 'there': 'ที่นั่น', 'come': 'มา',
   'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
@@ -427,6 +449,35 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   '또라이같은년이 지가보내놓고왜지랄이지': 'ยัยบ้าคนนั้นกำลังโวยวายทั้งที่ตัวเองเป็นคนส่งมาเหรอ?',
   '또라이같은년이 지가보내놓고왜지랄이야': 'ยัยบ้าคนนั้นกำลังโวยวายทั้งที่ตัวเองเป็นคนส่งมาเหรอ?',
   '또라이같은년이지가보내놓고왜지랄이지': 'ยัยบ้าคนนั้นกำลังโวยวายทั้งที่ตัวเองเป็นคนส่งมาเหรอ?',
+  // Mappings for short manga/comic phrases reported by user
+  'tell his': 'บอกเรื่องของเขา', 'tell his!': 'บอกเรื่องของเขา!',
+  'the barba': 'พวกบาบาเรียน', 'the barba!': 'พวกบาบาเรียน!',
+  'screams': 'กรีดร้อง', 'screams!': 'กรีดร้อง!',
+  'like': 'เหมือน', 'likes': 'ชอบ',
+  'stop': 'หยุด', 'stop!': 'หยุด!', 'stop!!': 'หยุด!!',
+  'stooop': 'หยุดดดด', 'stooop!': 'หยุดดดด!',
+  'stoooop': 'หยุดดดด', 'stoooop!': 'หยุดดดด!',
+  'stooooop': 'หยุดดดด', 'stooooop!': 'หยุดดดด!',
+  'st0000p': 'หยุดดดด', 'st0000p!': 'หยุดดดด!',
+  'pleea': 'ได้โปรด', 'pleea!': 'ได้โปรด!', 'aaseee': 'ดดดดดด', 'aaseee!': 'ดดดดดด!',
+  'pleeaaseee': 'ได้โปรดดดด', 'pleeaaseee!': 'ได้โปรดดดด!',
+  'pleeaaaseee': 'ได้โปรดดดด', 'pleeaaaseee!': 'ได้โปรดดดด!',
+  'n00': 'ไม่ๆๆ', 'noo': 'ไม่ๆๆ', 'n00!': 'ไม่ๆๆ!', 'noo!': 'ไม่ๆๆ!',
+  'affairs': 'เรื่องชู้สาว',
+  'roleplay': 'สวมบทบาท', 'role play': 'สวมบทบาท',
+  'birthday': 'วันเกิด', 'a birthday': 'วันเกิด',
+  'memory': 'ความทรงจำ', 'memories': 'ความทรงจำ',
+  'know': 'รู้จัก', 'better': 'ดีขึ้น', 'know better': 'รู้จักดีขึ้น',
+  'tonight': 'คืนนี้', 'going to do': 'กำลังจะทำ', 'going to do it': 'กำลังจะทำ',
+  'stuff': 'ของพวกนั้น', 'that kind': 'ประเภทนั้น',
+  'tasty': 'อร่อย', 'oolong': 'อูหลง',
+  'make sure!': 'ให้แน่ใจ!',
+  'that its': 'ว่ามัน', 'that its!': 'ว่ามัน!',
+  'general!': 'นายพล!',
+  'cervix!': 'ปากมดลูก!',
+  'us the!': 'พวกเรา!',
+  'posi': 'ท่า', 'posi!': 'ท่า!',
+  'but in any': 'แต่ไม่ว่าจะใน...', 'but in any!': 'แต่ไม่ว่าจะใน...!',
 };
 
 
@@ -448,9 +499,13 @@ export const lookupShortPhraseTh = (text: string): string | null => {
     return `อุณหภูมิ: ${tempNormalMatch[1]}°C`;
   }
 
-  const key = text.trim().toLowerCase()
+  const rawKey = trimmed.toLowerCase();
+  const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey];
+  if (directRawMatch) return directRawMatch;
+
+  const key = rawKey
     .replace(/[_]+/g, ' ')
-    .replace(/[\-\/\.\,\!\?]+/g, ' ')
+    .replace(/[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g, ' ')
     .replace(/[^\p{L}\p{N}\s]/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -477,12 +532,72 @@ export const lookupShortPhraseTh = (text: string): string | null => {
     return 'อัศวิน';
   }
   // สำหรับ dead (เช่น deeead)
-  if (/^d[e]+[a]+d[d]*$/i.test(key)) {
-    return 'ตาย';
+  if (/^d[e]+a[d]+$/i.test(key)) {
+    return 'ตายแล้ว';
   }
   // สำหรับ cocks (เช่น cooooocks)
   if (/^c[o]+ck[s]*$/i.test(key)) {
     return 'ควยยยยยยพวกนี้';
+  }
+
+  return GENERAL_ENGLISH_DICTIONARY_TH[key] || null;
+};
+
+export const GENERAL_ENGLISH_DICTIONARY_TH: Record<string, string> = {
+  // Prepositions & Connectors
+  'without': 'โดยไม่มี', 'without!': 'โดยไม่มี!', 'without...': 'โดยไม่มี...',
+  'with': 'ด้วย', 'within': 'ภายใน', 'before': 'ก่อน', 'after': 'หลังจาก',
+  'between': 'ระหว่าง', 'through': 'ผ่าน', 'against': 'ต่อสู้กับ', 'during': 'ในระหว่าง',
+  'under': 'ภายใต้', 'over': 'เหนือ', 'above': 'ด้านบน', 'below': 'ด้านล่าง',
+  'behind': 'ด้านหลัง', 'beside': 'ข้างๆ', 'beyond': 'เหนือกว่า', 'about': 'เกี่ยวกับ',
+  'around': 'รอบๆ', 'across': 'ข้าม', 'along': 'ตาม', 'toward': 'ไปยัง',
+  'towards': 'ไปยัง', 'into': 'เข้าไปใน', 'onto': 'ไปยัง', 'upon': 'บน',
+  'from': 'จาก', 'since': 'ตั้งแต่', 'until': 'จนกระทั่ง', 'till': 'จนกระทั่ง',
+  'despite': 'ทั้งๆ ที่', 'except': 'ยกเว้น', 'unlike': 'ไม่เหมือน', 'like': 'เหมือน',
+  'near': 'ใกล้', 'far': 'ไกล',
+  // Conjunctions & Adverbs
+  'because': 'เพราะว่า', 'although': 'แม้ว่า', 'unless': 'เว้นแต่', 'while': 'ในขณะที่',
+  'however': 'อย่างไรก็ตาม', 'therefore': 'ดังนั้น', 'otherwise': 'มิฉะนั้น',
+  'instead': 'แทนที่จะ', 'besides': 'นอกจากนี้', 'furthermore': 'ยิ่งกว่านั้น',
+  'always': 'เสมอ', 'never': 'ไม่เคย', 'sometimes': 'บางครั้ง', 'often': 'มักจะ',
+  'usually': 'โดยปกติ', 'rarely': 'นานๆ ครั้ง', 'already': 'เรียบร้อยแล้ว',
+  'still': 'ยังคง', 'almost': 'เกือบจะ', 'nearly': 'เกือบ', 'quite': 'ค่อนข้าง',
+  'enough': 'เพียงพอ', 'too': 'เกินไป', 'very': 'มาก', 'really': 'จริงๆ',
+  'actually': 'จริงๆ แล้ว', 'probably': 'น่าจะ', 'maybe': 'อาจจะ', 'perhaps': 'อาจจะ',
+  'definitely': 'แน่นอน', 'certainly': 'แน่นอน', 'indeed': 'จริงๆ', 'anyway': 'อย่างไรก็ตาม',
+  // Pronouns & Nouns/Verbs
+  'myself': 'ตัวฉันเอง', 'yourself': 'ตัวคุณเอง', 'himself': 'ตัวเขาเอง',
+  'herself': 'ตัวเธอเอง', 'itself': 'ตัวมันเอง', 'ourselves': 'ตัวพวกเราเอง',
+  'themselves': 'ตัวพวกเขาเอง', 'someone': 'ใครบางคน', 'anyone': 'ใครก็ตาม',
+  'everyone': 'ทุกคน', 'nobody': 'ไม่มีใคร', 'something': 'บางอย่าง',
+  'anything': 'อะไรก็ตาม', 'everything': 'ทุกอย่าง', 'nothing': 'ไม่มีอะไร',
+  'enemies': 'ศัตรู', 'enemy': 'ศัตรู', 'moving': 'เคลื่อนไหว', 'move': 'เคลื่อนไหว',
+  'front': 'ข้างหน้า', 'back': 'ข้างหลัง', 'side': 'ด้าน', 'top': 'ด้านบน', 'bottom': 'ด้านล่าง',
+  'inside': 'ข้างใน', 'outside': 'ข้างนอก', 'defeat': 'เอาชนะ', 'fight': 'ต่อสู้',
+};
+
+export const systemicWordFallbackTranslate = (text: string): string | null => {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const words = trimmed.split(/[\s,!?.-]+/g).filter(Boolean);
+  if (words.length === 0 || words.length > 4) return null;
+
+  const translatedWords: string[] = [];
+  let matchedCount = 0;
+
+  for (const word of words) {
+    const key = word.toLowerCase();
+    const directLookup = lookupShortPhraseTh(word) || GENERAL_ENGLISH_DICTIONARY_TH[key];
+    if (directLookup) {
+      translatedWords.push(directLookup);
+      matchedCount += 1;
+    } else {
+      translatedWords.push(word);
+    }
+  }
+
+  if (matchedCount > 0) {
+    return translatedWords.join(' ');
   }
 
   return null;
@@ -683,7 +798,13 @@ export async function translateBatchOffline(
       }
       retriesPending.push({ index: originalIndex, cleaned });
     } else {
-      console.log(`[HybridRetry] GAVE UP (no clean retry target): "${originalText}" → returning original Argos output`);
+      const fallback = systemicWordFallbackTranslate(originalText);
+      if (fallback) {
+        console.log(`[SystemicFallback] DIRECT WORD FALLBACK: "${originalText}" → "${fallback}"`);
+        finalDirectTranslations[originalIndex] = fallback;
+      } else {
+        console.log(`[HybridRetry] GAVE UP (no clean retry target): "${originalText}" → returning original Argos output`);
+      }
     }
   }
 
@@ -704,7 +825,14 @@ export async function translateBatchOffline(
         if (!stillUntranslated) {
           finalDirectTranslations[retry.index] = retryResult;
         } else {
-          console.log(`[HybridRetry] GAVE UP (still untranslated after retry): index=${retry.index} → returning original Argos output`);
+          const origText = texts[retry.index] || retry.cleaned;
+          const fallback = systemicWordFallbackTranslate(origText);
+          if (fallback) {
+            console.log(`[SystemicFallback] RESOLVED UNTRANSLATED WORD: "${origText}" → "${fallback}"`);
+            finalDirectTranslations[retry.index] = fallback;
+          } else {
+            console.log(`[HybridRetry] GAVE UP (still untranslated after retry): index=${retry.index} → returning original Argos output`);
+          }
         }
       });
     } catch (_retryErr) {
@@ -769,7 +897,6 @@ const ENGLISH_COMMON_WORDS = new Set([
   'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too',
   'very', 's', 't', 'don', 'just', 'shouldn', 'now',
   // Added common pronouns, interjections and common dialogue keywords
-  'i', 'my', 'me', 'hey', 'oh', 'ah', 'yeah', 'like', 'dont', 'cant', 'didnt',
   'suck', 'cock', 'bitch', 'pig', 'hell', 'damn', 'ass', 'fuck', 'shit'
 ]);
 
@@ -845,7 +972,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH|BE|STOP|HOLE|LETHER|THEBABAR|THEBARBA|PUNCHINGMY|GETTING|ALSOSAYTHAT|BUTINANY)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {

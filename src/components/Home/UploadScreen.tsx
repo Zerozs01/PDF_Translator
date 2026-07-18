@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { 
-  Upload, FileText, Clock, Star, FolderOpen, Settings2, 
+  Upload, Download, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
@@ -1251,6 +1251,56 @@ export const UploadScreen: React.FC = () => {
     gpuVendor: 'intel' | 'amd' | 'nvidia' | 'unknown';
   } | null>(null);
 
+  const [paddleThaiStatus, setPaddleThaiStatus] = useState<{ installed: boolean; checking: boolean; downloading: boolean }>({
+    installed: false,
+    checking: true,
+    downloading: false,
+  });
+  const [paddleEnglishStatus, setPaddleEnglishStatus] = useState<{ installed: boolean; checking: boolean; downloading: boolean }>({
+    installed: false,
+    checking: true,
+    downloading: false,
+  });
+
+  const checkModelStatus = useCallback(async () => {
+    if (!window.electronAPI?.models) return;
+    try {
+      const thaiRes = await window.electronAPI.models.getStatus({ engine: 'paddleocr', language: 'th' });
+      setPaddleThaiStatus(prev => ({ ...prev, installed: thaiRes.installed, checking: false }));
+    } catch (err) {
+      setPaddleThaiStatus(prev => ({ ...prev, checking: false }));
+    }
+    try {
+      const engRes = await window.electronAPI.models.getStatus({ engine: 'paddleocr', language: 'en' });
+      setPaddleEnglishStatus(prev => ({ ...prev, installed: engRes.installed, checking: false }));
+    } catch (err) {
+      setPaddleEnglishStatus(prev => ({ ...prev, checking: false }));
+    }
+  }, []);
+
+  const handleDownloadModel = useCallback(async (lang: 'th' | 'en') => {
+    if (!window.electronAPI?.models) return;
+    const setStatus = lang === 'th' ? setPaddleThaiStatus : setPaddleEnglishStatus;
+    setStatus(prev => ({ ...prev, downloading: true }));
+    try {
+      const success = await window.electronAPI.models.download({ engine: 'paddleocr', language: lang });
+      if (success) {
+        setStatus(prev => ({ ...prev, installed: true, downloading: false }));
+      } else {
+        setStatus(prev => ({ ...prev, downloading: false }));
+      }
+    } catch (err) {
+      console.error(`Failed to download ${lang} model:`, err);
+      setStatus(prev => ({ ...prev, downloading: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activePage === 'settings') {
+      void checkModelStatus();
+    }
+  }, [activePage, checkModelStatus]);
+
   // Returns vendor-aware mode label: "Intel DirectML", "AMD DirectML", "CUDA", or "CPU"
   const getGpuModeLabel = (info: typeof gpuInfo): string => {
     if (!info) return 'CPU';
@@ -2472,6 +2522,80 @@ export const UploadScreen: React.FC = () => {
                     {geminiApiKeyError}
                   </p>
                 )}
+              </div>
+
+              {/* Model Downloader / Management */}
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
+                <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                  <Download size={12} className="text-slate-400" />
+                  การจัดการโมเดล OCR (Model Management)
+                </label>
+                
+                <div className="space-y-3 text-xs">
+                  {/* Thai OCR Model */}
+                  <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-200">โมเดลภาษาไทย (Thai Model)</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                        paddleThaiStatus.downloading
+                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                          : paddleThaiStatus.installed
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-500/10 text-slate-400 border border-white/10'
+                      }`}>
+                        {paddleThaiStatus.downloading ? 'กำลังดาวน์โหลด...' : paddleThaiStatus.installed ? 'ติดตั้งแล้ว' : 'ไม่ได้ติดตั้ง'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-slate-400">PaddleOCR PP-OCRv5 Thai Model (~15MB)</span>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadModel('th')}
+                        disabled={paddleThaiStatus.checking || paddleThaiStatus.downloading || paddleThaiStatus.installed}
+                        className="rounded bg-[#2B9BFF] hover:bg-[#1a85e8] disabled:bg-slate-800 disabled:text-slate-500 px-2 py-1 text-[10px] font-semibold text-white transition-colors"
+                      >
+                        {paddleThaiStatus.downloading ? 'Downloading...' : paddleThaiStatus.installed ? 'Installed' : 'Download'}
+                      </button>
+                    </div>
+                    {paddleThaiStatus.downloading && (
+                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
+                        <div className="bg-[#2B9BFF] h-1 rounded-full animate-pulse" style={{ width: '65%' }}></div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* English OCR Model */}
+                  <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-200">โมเดลภาษาอังกฤษ (English Model)</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                        paddleEnglishStatus.downloading
+                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                          : paddleEnglishStatus.installed
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-500/10 text-slate-400 border border-white/10'
+                      }`}>
+                        {paddleEnglishStatus.downloading ? 'กำลังดาวน์โหลด...' : paddleEnglishStatus.installed ? 'ติดตั้งแล้ว' : 'ไม่ได้ติดตั้ง'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-slate-400">PaddleOCR English Model (~10MB)</span>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadModel('en')}
+                        disabled={paddleEnglishStatus.checking || paddleEnglishStatus.downloading || paddleEnglishStatus.installed}
+                        className="rounded bg-[#2B9BFF] hover:bg-[#1a85e8] disabled:bg-slate-800 disabled:text-slate-500 px-2 py-1 text-[10px] font-semibold text-white transition-colors"
+                      >
+                        {paddleEnglishStatus.downloading ? 'Downloading...' : paddleEnglishStatus.installed ? 'Installed' : 'Download'}
+                      </button>
+                    </div>
+                    {paddleEnglishStatus.downloading && (
+                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
+                        <div className="bg-[#2B9BFF] h-1 rounded-full animate-pulse" style={{ width: '65%' }}></div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Security Settings */}

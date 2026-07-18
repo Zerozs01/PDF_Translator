@@ -546,9 +546,9 @@ class VisionService {
     const shortest = Math.max(1, Math.min(width, height));
     const aspectRatio = longest / shortest;
     if (isKorean) {
-      return height >= 6200 || aspectRatio >= 2.4;
+      return height >= 6200 && aspectRatio >= 2.4;
     }
-    return height >= EXTERNAL_PADDLE_CHUNK_MIN_HEIGHT || aspectRatio >= 2.3;
+    return height >= EXTERNAL_PADDLE_CHUNK_MIN_HEIGHT && aspectRatio >= 2.3;
   }
 
   private async blobToPng(blob: Blob): Promise<{ bytes: Uint8Array; mimeType: string }> {

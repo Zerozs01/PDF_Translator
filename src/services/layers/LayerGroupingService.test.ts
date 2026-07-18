@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { buildLayerGroupsFromOCR, splitAggressiveMergedLines } from './LayerGroupingService';
-import type { OCRPageResult } from '../../types';
+import type { OCRPageResult, OCRLine } from '../../types';
 
 describe('LayerGroupingService Spatial Clustering', () => {
   test('separates side-by-side columns or two-panel layouts even at the same Y level', () => {
@@ -408,6 +408,108 @@ describe('LayerGroupingService Spatial Clustering', () => {
     expect(fittingLayer).toBeDefined();
     expect(beingLayer).toBeDefined();
     expect(fittingLayer!.groupId).not.toBe(beingLayer!.groupId);
+  });
+
+  test('splitAggressiveMergedLines splits horizontal bridge lines based on vertical gutter projection', () => {
+    // 2 normal lines defining a left column (x0: 100, x1: 200)
+    // 2 normal lines defining a right column (x0: 350, x1: 450)
+    // 1 bridge line spanning from 100 to 450: "ONE OPPONENT BATTLE WITH"
+    const lines: OCRLine[] = [
+      {
+        text: 'LEFT COLUMN TOP',
+        bbox: { x0: 100, y0: 50, x1: 200, y1: 70 },
+        confidence: 90,
+        words: [],
+      },
+      {
+        text: 'LEFT COLUMN BOTTOM',
+        bbox: { x0: 100, y0: 150, x1: 200, y1: 170 },
+        confidence: 90,
+        words: [],
+      },
+      {
+        text: 'RIGHT COLUMN TOP',
+        bbox: { x0: 350, y0: 50, x1: 450, y1: 70 },
+        confidence: 90,
+        words: [],
+      },
+      {
+        text: 'RIGHT COLUMN BOTTOM',
+        bbox: { x0: 350, y0: 150, x1: 450, y1: 170 },
+        confidence: 90,
+        words: [],
+      },
+      {
+        text: 'ONE OPPONENT BATTLE WITH',
+        bbox: { x0: 100, y0: 100, x1: 450, y1: 120 },
+        confidence: 90,
+        words: [],
+      },
+    ];
+
+    const result = splitAggressiveMergedLines(lines, 2.2);
+
+    // The bridge line should be split, so total lines should increase to 6 (left/right normal + 2 split halves of the bridge)
+    expect(result.length).toBe(6);
+
+    const splitLeft = result.find(l => l.text === 'ONE OPPONENT');
+    const splitRight = result.find(l => l.text === 'BATTLE WITH');
+
+    expect(splitLeft).toBeDefined();
+    expect(splitRight).toBeDefined();
+
+    // Check that the left split box is clipped to not cross the gutter (x1 should be <= 201)
+    expect(splitLeft!.bbox.x0).toBeGreaterThanOrEqual(100);
+    expect(splitLeft!.bbox.x1).toBeLessThanOrEqual(201);
+
+    // Check that the right split box is clipped to not cross the gutter (x0 should be >= 350)
+    expect(splitRight!.bbox.x0).toBeGreaterThanOrEqual(350);
+    expect(splitRight!.bbox.x1).toBeLessThanOrEqual(450);
+  });
+
+  test('correctly groups short English dialogue lines like "But" and "in any" and "age..." into a single group', () => {
+    const ocrResult: OCRPageResult = {
+      pageNumber: 1,
+      width: 800,
+      height: 1200,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 1,
+      words: [],
+      text: '',
+      confidence: 90,
+      lines: [
+        {
+          text: 'But',
+          bbox: { x0: 200, y0: 100, x1: 280, y1: 130 },
+          confidence: 92,
+          words: [],
+        },
+        {
+          text: 'in any',
+          bbox: { x0: 180, y0: 160, x1: 300, y1: 190 },
+          confidence: 93,
+          words: [],
+        },
+        {
+          text: 'age...',
+          bbox: { x0: 190, y0: 220, x1: 290, y1: 250 },
+          confidence: 91,
+          words: [],
+        },
+      ],
+    };
+
+    const result = buildLayerGroupsFromOCR(ocrResult);
+
+    expect(result.layers.length).toBe(3);
+    const g0 = result.layers[0].groupId;
+    const g1 = result.layers[1].groupId;
+    const g2 = result.layers[2].groupId;
+
+    expect(g0).toBeDefined();
+    expect(g0).toBe(g1);
+    expect(g0).toBe(g2);
   });
 });
 

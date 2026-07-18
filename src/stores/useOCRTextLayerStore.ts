@@ -43,7 +43,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v51';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v55';
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
