@@ -3739,19 +3739,14 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     rec_score_thresh = 0.28
         else:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
-                if shortest <= 420:
-                    det_limit = 2300
-                elif shortest <= 720:
-                    det_limit = 1900
-                else:
-                    det_limit = 1536
+                det_limit = 2560 if shortest <= 900 else 2800
                 if quality_profile == "fast":
-                    det_limit = max(1280, int(det_limit * 0.85))
+                    det_limit = max(1800, int(det_limit * 0.88))
                     rec_batch = 12
                 elif quality_profile == "balanced":
                     rec_batch = 10
                 else:
-                    det_limit = min(2300, int(det_limit * 1.08))
+                    det_limit = min(3200, int(det_limit * 1.08))
                     rec_batch = 8
             
             if pipeline == "panel":
@@ -3774,9 +3769,9 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
         if is_cjk_like:
             det_limit = 2800 if shortest <= 1200 else 3200
         else:
-            det_limit = 2200 if shortest <= 900 else 1800
+            det_limit = 2560 if shortest <= 900 else 2800
         if quality_profile == "fast":
-            det_limit = max(1280, int(det_limit * 0.85))
+            det_limit = max(1800, int(det_limit * 0.88))
             rec_batch = 12
         elif quality_profile == "balanced":
             rec_batch = 10

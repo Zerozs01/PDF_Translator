@@ -368,10 +368,14 @@ class BackgroundQueueProcessor {
             const cached = await dbService.getOCR(job.documentId, pageNum, job.engine);
             if (cached && cached.lines && cached.lines.length > 0) {
               const cachedRawVersion = cached.ocrRawVersion ?? 0;
+              const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+              const languageMismatch = normalizeLanguage(cached.language || '') !== normalizeLanguage(targetOcrLanguage);
+              
               if (cachedRawVersion < OCR_RAW_VERSION) {
                 console.log(`[QueueProcessor] Page ${pageNum} raw OCR version mismatch (${cachedRawVersion} < ${OCR_RAW_VERSION}). Re-running OCR...`);
+              } else if (languageMismatch) {
+                console.log(`[QueueProcessor] Page ${pageNum} language mismatch (cached: "${cached.language}", target: "${targetOcrLanguage}"). Re-running OCR...`);
               } else {
-                const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
                 const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
                   ? cached
                   : {
@@ -437,7 +441,7 @@ class BackgroundQueueProcessor {
             const canvas = document.createElement('canvas');
             canvas.width = Math.floor(viewport.width);
             canvas.height = Math.floor(viewport.height);
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d', { alpha: false });
             if (!ctx) throw new Error('Cannot create headless canvas 2D context');
 
             ctx.fillStyle = '#FFFFFF';
@@ -447,7 +451,8 @@ class BackgroundQueueProcessor {
               canvasContext: ctx,
               viewport,
               intent: 'print',
-              background: 'rgba(255,255,255,1)'
+              background: 'rgba(255,255,255,1)',
+              canvas
             } as any).promise;
 
             throwIfAborted();
@@ -486,7 +491,6 @@ class BackgroundQueueProcessor {
               .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
             const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
-
             const resolvedQualityProfile = activeEngine === 'paddleocr'
               ? (shouldPreferFastPaddleProfile
                 ? 'fast'
@@ -666,6 +670,15 @@ interface RenderConstraints {
     boostedMaxPixels: number;
   };
 }
+
+const normalizeLanguage = (value: string): string => {
+  return (value || '')
+    .split('+')
+    .map(v => v.trim().toLowerCase())
+    .filter(Boolean)
+    .sort()
+    .join('+');
+};
 
 const hasCjkOrThaiOcrLanguage = (lang: string) => {
   return lang.split('+').map(c => c.trim()).filter(Boolean).some(c => 

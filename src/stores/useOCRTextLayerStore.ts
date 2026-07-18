@@ -298,7 +298,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     engine: 'paddleocr',
     skipIfTextExists: true,
     perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
-    ocrQualityProfile: 'fast',
+    ocrQualityProfile: 'best',
   },
   
   setOptions: (newOptions) => set((state) => ({

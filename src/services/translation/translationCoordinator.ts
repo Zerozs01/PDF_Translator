@@ -427,7 +427,13 @@ export class TranslationCoordinator {
       if (directResults.has(item.id)) {
         return { item, cachedText: directResults.get(item.id) || null };
       }
-      const cachedText = batchCacheResults[item.text] || null;
+      let cachedText = batchCacheResults[item.text] || null;
+      if (options.targetLanguage === 'th') {
+        const dictFallback = lookupShortPhraseTh(item.text);
+        if (dictFallback && (!cachedText || (/[a-zA-Z]/.test(cachedText) && !/[\u0E00-\u0E7F]/.test(cachedText)))) {
+          cachedText = dictFallback;
+        }
+      }
       return { item, cachedText };
     });
 

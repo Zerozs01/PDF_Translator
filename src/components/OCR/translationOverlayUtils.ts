@@ -1455,6 +1455,12 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
     return true;
   }
 
+  // 5. Sparse noisy letter fragments (like "-X F" or "X F" from background speedlines/screentone)
+  const isNoisyLetterFragment = /^-?\s*[A-Z]\s+[A-Z]\s*$/i.test(normalizedText) && lowConfidence;
+  if (isNoisyLetterFragment) {
+    return true;
+  }
+
   return false;
 };
 
@@ -2741,10 +2747,10 @@ export const computeOverlayTypography = (
     ? (documentBodyLike ? (containsThai ? 1.72 : 1.18) : (containsThai ? 1.58 : 1.12))
     : 1;
   const comicProfileScale = isComicBubble
-    ? (profile === 'manga' ? 1.12 : profile === 'manhwa' ? 1.08 : 1.04)
+    ? (profile === 'manga' ? 1.01 : profile === 'manhwa' ? 1.04 : 1.02)
     : isComicBox
-      ? (profile === 'manga' ? 1.06 : profile === 'manhwa' ? 1.04 : 1)
-      : (profile === 'manga' ? 1 : profile === 'manhwa' ? 0.98 : 0.95);
+      ? (profile === 'manga' ? 1.01 : profile === 'manhwa' ? 1.02 : 1)
+      : (profile === 'manga' ? 0.98 : profile === 'manhwa' ? 0.98 : 0.95);
   const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
   const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
   const sourceSingleLineHint = !useDocumentTypographyProfile
@@ -3867,7 +3873,7 @@ export const computeOverlayLayoutMap = (
       && !shouldBlockSectionMergeForTechnicalRows
       && !shouldPreservePerLineNarrative
       && group.length >= 2
-      && mergedStyleKind === 'comic-bubble'
+      && (mergedStyleKind === 'comic-bubble' || mergedStyleKind === 'comic-box' || mergedStyleKind === 'comic-line')
       && (
         hasBalloonMember || (
           compactTextLength(mergedText) >= (isMangaOrManhwa ? 3 : Math.max(8, Math.round(group.length * 3.4)))
@@ -3920,13 +3926,16 @@ export const computeOverlayLayoutMap = (
       const mergedLineHeightMedian = resolveMedian(
         group.map((item) => Math.max(1, item.hints?.sourceBoxHeight ?? (item.bbox.y1 - item.bbox.y0)))
       ) ?? mergedHeight;
-      const mergedHeightBudget = Math.max(
-        mergedHeight,
-        mergedHeight + Math.max(
-          mergedLineHeightMedian * (mergedStyleKind === 'comic-bubble'
-            ? Math.min(1.2, Math.max(0.45, group.length * 0.22))
-            : Math.min(0.85, Math.max(0.3, group.length * 0.16))),
-          mergedHeight * (mergedStyleKind === 'comic-bubble' ? 0.1 : 0.06)
+      const mergedHeightBudget = Math.min(
+        mergedHeight * 1.04,
+        Math.max(
+          mergedHeight,
+          mergedHeight + Math.max(
+            mergedLineHeightMedian * (mergedStyleKind === 'comic-bubble'
+              ? Math.min(0.35, Math.max(0.15, group.length * 0.08))
+              : Math.min(0.25, Math.max(0.1, group.length * 0.05))),
+            mergedHeight * 0.03
+          )
         )
       );
       const mergedTypography = computeOverlayTypography(

@@ -117,6 +117,16 @@ describe('normalizeSourceForTranslation', () => {
     expect(normalizeSourceForTranslation('A BAD I MPRESS I ON', 'en')).toBe('A bad impression');
     expect(normalizeSourceForTranslation('THATCANTBE IT', 'en')).toBe("That can't be it");
     expect(normalizeSourceForTranslation('EXPRESS I ON', 'en')).toBe('Expression');
+
+    // 5. GETTiNG, FiRST, 455, A55, YOU FUR KRASHING MY BAEBY
+    expect(normalizeSourceForTranslation('GETTiNG', 'en')).toBe('Getting');
+    expect(normalizeSourceForTranslation('FiRST', 'en')).toBe('First');
+    expect(normalizeSourceForTranslation('AGAA', 'en')).toBe('Again');
+    expect(normalizeSourceForTranslation('455', 'en')).toBe('Ass');
+    expect(normalizeSourceForTranslation('A55', 'en')).toBe('Ass');
+    expect(normalizeSourceForTranslation('YOU FUR KRASHING MY BAEBY', 'en')).toBe("You're crushing my baby");
+    expect(normalizeSourceForTranslation('YOU FUR CRUNCHING MY BAEBY', 'en')).toBe("You're crushing my baby");
+    expect(normalizeSourceForTranslation('COO+000+7OCKS', 'en')).toBe('Cooooooocks');
   });
 
   test('should restore hyphenated words with Unicode characters and no spaces', () => {

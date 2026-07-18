@@ -291,10 +291,31 @@ export const splitAggressiveMergedLines = (
 ): OCRLine[] => {
   const result: OCRLine[] = [];
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    let line = lines[lineIndex];
     if (!line.words || line.words.length <= 1) {
-      result.push(line);
-      continue;
+      const textWords = (line.text || '').trim().split(/\s+/).filter(Boolean);
+      if (textWords.length > 1 && line.bbox && (line.bbox.x1 - line.bbox.x0) > 0) {
+        const totalChars = Math.max(1, (line.text || '').length);
+        const width = line.bbox.x1 - line.bbox.x0;
+        let charCursor = 0;
+        const synthWords = textWords.map((word) => {
+          const wStartChar = (line.text || '').indexOf(word, charCursor);
+          const startIdx = wStartChar >= 0 ? wStartChar : charCursor;
+          charCursor = startIdx + word.length;
+          const x0 = line.bbox.x0 + startIdx * (width / totalChars);
+          const x1 = line.bbox.x0 + charCursor * (width / totalChars);
+          return {
+            text: word,
+            confidence: line.confidence || 90,
+            bbox: { x0, y0: line.bbox.y0, x1, y1: line.bbox.y1 },
+          };
+        });
+        line = { ...line, words: synthWords };
+      } else {
+        result.push(line);
+        continue;
+      }
     }
 
     const { words } = line;
@@ -307,14 +328,11 @@ export const splitAggressiveMergedLines = (
       const prevHeight = bboxHeight(prev.bbox);
       const currHeight = bboxHeight(curr.bbox);
       const avgHeight = (prevHeight + currHeight) * 0.5;
+      const minHeight = Math.min(prevHeight, currHeight);
+      const effectiveHeight = Math.min(avgHeight, minHeight * 1.4);
 
       const gap = curr.bbox.x0 - prev.bbox.x1;
 
-      // ทำไมถึงเขียนแบบนี้: เนื่องจากในการ์ตูน OCR มักจะรวมประโยคจากคนละบอลลูนหรือต่างคอลัมน์กันในแนวนอน
-      // การใช้ตัวคูณช่องว่างคงที่ (เช่น 2.2 หรือ 2.8) อาจไม่เพียงพอในการแยกข้อความที่อยู่ต่างกล่องคำพูด
-      // เราจึงลดเกณฑ์ตัวคูณช่องว่าง (effectiveGapMultiplier) ลงเมื่อพบเบาะแสคำจบประโยคด้วยเครื่องหมายวรรคตอน (เหลือ 0.85)
-      // หรือเมื่อคำถัดไปขึ้นต้นด้วยอักษรตัวใหญ่ (เช่น BEING, YOu!, SLASHED) ซึ่งเป็นสัญญาณของการเริ่มคำพูด/ประโยคใหม่ (เหลือ 1.35)
-      // เพื่อให้สามารถหั่นแบ่งบรรทัดออกจากกันได้อย่างแม่นยำขึ้นโดยไม่ไปรบกวนช่องว่างคำตามปกติในประโยคเดียวกัน
       let effectiveGapMultiplier = gapMultiplier;
       const prevText = prev.text.trim();
       const currText = curr.text.trim();
@@ -322,21 +340,23 @@ export const splitAggressiveMergedLines = (
       if (/[!?.,;]$/.test(prevText)) {
         effectiveGapMultiplier = 0.85;
       } else if (/-$/.test(prevText)) {
-        // ทำไม: ถ้าคำก่อนหน้าลงท้ายด้วยยัติภังค์ (-) แสดงว่าเป็นคำผสม (เช่น one-on-one)
-        // ไม่ควรทำการแบ่งบรรทัดเด็ดขาด ให้ใช้เกณฑ์ขนาดใหญ่เพื่อป้องกันการแยกออกจากกัน
-        effectiveGapMultiplier = 2.5;
+        effectiveGapMultiplier = 3.5;
       } else if (/^[A-Z]/.test(currText)) {
-        // ทำไม: ปรับเป็น 0.98 (เดิม 1.1) เพื่อแยก FiTTiNG FOR BEING (gap ratio 1.0) 
-        // แต่ยังปลอดภัยพอที่จะไม่หั่นแยกคำทั่วไปในบอลลูนเดียวกัน
-        effectiveGapMultiplier = 0.98;
+        effectiveGapMultiplier = 0.75;
       }
 
-      // ทำไม: ถ้า gap ใหญ่มากผิดปกติ (> 2x avgHeight) ให้ split เสมอ ไม่ว่าคำก่อนจะจบด้วยอะไร
-      // เพราะ gap ขนาดนี้บ่งชี้ว่าคำสองคำนี้น่าจะมาจากคนละ panel / balloon
-      const absoluteSplitThreshold = 2.0;
-      if (gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * avgHeight) {
+      const isHyphenated = /-$/.test(prevText);
+      const isHeightMismatch = prevHeight > currHeight * 2.2 || currHeight > prevHeight * 2.2;
+      // cross-balloon gap: ปรับความละเอียดลดขีดจำกัดล่างลงเพื่อป้องกันเคสคำพิมพ์ใหญ่โดนรวม (เช่น FiTTiNG FOR BEING)
+      const isCapitalizedWordBoundary = /^[A-Z]/.test(currText) && gap >= Math.max(20, minHeight * 1.15);
+      const isCrossBalloonCandidate = !isHyphenated && (
+        isHeightMismatch || isCapitalizedWordBoundary || gap > 1.25 * minHeight
+      );
+
+      const absoluteSplitThreshold = 1.25;
+      if (!isHyphenated && (isCrossBalloonCandidate || gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * minHeight)) {
         result.push({
-          ...line, // preserve original confidence, engine hints, etc.
+          ...line,
           text: currentGroup.map(w => w.text).join(' '),
           bbox: mergeBBoxes(currentGroup.map(w => w.bbox)),
           words: currentGroup,

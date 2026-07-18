@@ -2389,7 +2389,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
 
-      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'print', canvas: outputCanvas });
+      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'display', canvas: outputCanvas });
       await Promise.race([
         renderTask.promise,
         new Promise<never>((_, reject) => {
