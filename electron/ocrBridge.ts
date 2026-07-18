@@ -4,7 +4,6 @@ import fs from 'fs';
 import os from 'os';
 import { spawn, exec } from 'child_process';
 import { randomUUID } from 'crypto';
-import { findLocalPythonExecutable, normalizePythonOverride } from './pythonRuntime';
 
 declare const __DEV_PROJECT_ROOT__: string | undefined;
 
@@ -96,7 +95,6 @@ interface ExternalOcrBridgeResponse {
   ok: boolean;
   id?: string;
   engine?: string;
-  message?: string;
   words?: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
   lines?: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number }; words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }> }>;
   text?: string;
@@ -112,7 +110,6 @@ interface ExternalOcrBridgeResponse {
 const EXTERNAL_ENGINES: ExternalBridgeEngine[] = ['paddleocr', 'easyocr'];
 const bridgeDaemons = new Map<ExternalBridgeEngine, BridgeDaemon>();
 const daemonIdleTimers = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
-const daemonCleanupTimers = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
 let externalOcrTempRoot: string | null = null;
 const BENIGN_BRIDGE_STDERR_PATTERNS = [
   /pin_memory.*no accelerator/i,
@@ -185,6 +182,44 @@ function resolveBridgeScriptSignature(scriptPath: string): string {
   }
 }
 
+function normalizePythonOverride(value: string | undefined): string | null {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return null;
+  if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
+    const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
+    return fs.existsSync(resolved) ? resolved : null;
+  }
+  return trimmed;
+}
+
+function findLocalPythonExecutable(roots: Array<string | null | undefined>): string | null {
+  const pythonRelativePath = process.platform === 'win32'
+    ? ['Scripts', 'python.exe']
+    : ['bin', 'python'];
+  const seen = new Set<string>();
+
+  const searchRoots = [...roots];
+  if (typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
+    searchRoots.push(__DEV_PROJECT_ROOT__);
+  }
+
+  for (const root of searchRoots) {
+    if (!root) continue;
+    const resolvedRoot = path.resolve(root);
+    if (seen.has(resolvedRoot)) continue;
+    seen.add(resolvedRoot);
+
+    for (const venvDir of ['.venv-ocr', '.venv']) {
+      const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
 function resolvePythonExecutable(engine: ExternalBridgeEngine): string {
   const engineOverride = engine === 'paddleocr'
     ? normalizePythonOverride(process.env.PADDLE_OCR_PYTHON_PATH)
@@ -221,16 +256,7 @@ function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
   
   const isWin = process.platform === 'win32';
   const sep = isWin ? ';' : ':';
-  
-  let currentPath = '';
-  let pathKey = 'PATH';
-  for (const k of Object.keys(baseEnv)) {
-    if (k.toUpperCase() === 'PATH') {
-      currentPath = baseEnv[k] || '';
-      pathKey = k;
-      break;
-    }
-  }
+  const currentPath = baseEnv.PATH || '';
   
   const priorityPaths: string[] = [];
   
@@ -293,13 +319,7 @@ function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
     }
   }
   
-  baseEnv[pathKey] = finalPaths.join(sep);
-  // Remove other casings of PATH to avoid duplicates
-  for (const k of Object.keys(baseEnv)) {
-    if (k.toUpperCase() === 'PATH' && k !== pathKey) {
-      delete baseEnv[k];
-    }
-  }
+  baseEnv.PATH = finalPaths.join(sep);
   
   return {
     ...baseEnv,
@@ -427,30 +447,6 @@ export function resetDaemonIdleTimer(engine: ExternalBridgeEngine): void {
     clearTimeout(existingTimer);
   }
 
-  const existingCleanup = daemonCleanupTimers.get(engine);
-  if (existingCleanup) {
-    clearTimeout(existingCleanup);
-    daemonCleanupTimers.delete(engine);
-  }
-
-  // 1. Evict GPU VRAM and clean up Python memory after 2 minutes of inactivity
-  const cleanupTimer = setTimeout(() => {
-    const daemon = bridgeDaemons.get(engine);
-    if (daemon && !daemon.running && daemon.queue.length === 0 && daemon.pending.size === 0) {
-      console.log(`[ocrBridge] Idle timeout (2 minutes) reached. Evicting GPU VRAM and cleaning up memory for ${engine} daemon.`);
-      requestDaemonInternal(daemon, { action: 'cleanup', engine }, 15000)
-        .then((res) => {
-          console.log(`[ocrBridge] Idle cleanup for ${engine} daemon finished:`, res.message || 'success');
-        })
-        .catch((err) => {
-          console.warn(`[ocrBridge] Idle cleanup for ${engine} daemon failed:`, err);
-        });
-    }
-    daemonCleanupTimers.delete(engine);
-  }, 120000); // 2 minutes
-  daemonCleanupTimers.set(engine, cleanupTimer);
-
-  // 2. Shut down daemon process after 5 minutes of inactivity
   const timer = setTimeout(() => {
     const daemon = bridgeDaemons.get(engine);
     if (daemon) {
@@ -607,22 +603,8 @@ function killProcessPact(child: ReturnType<typeof spawn>, pid: number) {
   }, 2000);
 }
 
-function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error, daemonToKill?: BridgeDaemon): void {
+function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
   const daemon = bridgeDaemons.get(engine);
-
-  if (daemonToKill && daemon !== daemonToKill) {
-    // If the daemon we want to tear down is not the one currently in the bridgeDaemons map,
-    // it means it's an old/outdated daemon (e.g. timed out). We only terminate its child process,
-    // but do NOT modify the active daemon or clear the active daemon's queue/pending tasks.
-    if (!daemonToKill.child.killed) {
-      const pid = daemonToKill.child.pid;
-      if (pid) {
-        killProcessPact(daemonToKill.child, pid);
-      }
-    }
-    return;
-  }
-
   if (!daemon) return;
 
   bridgeDaemons.delete(engine);
@@ -632,12 +614,6 @@ function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error, daemonToKi
   if (existingTimer) {
     clearTimeout(existingTimer);
     daemonIdleTimers.delete(engine);
-  }
-
-  const existingCleanup = daemonCleanupTimers.get(engine);
-  if (existingCleanup) {
-    clearTimeout(existingCleanup);
-    daemonCleanupTimers.delete(engine);
   }
 
   if (daemon.queue) {
@@ -784,13 +760,12 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
     }
   });
   child.on('error', (error) => {
-    teardownDaemon(engine, error, daemon);
+    teardownDaemon(engine, error);
   });
   child.on('close', (code, signal) => {
     teardownDaemon(
       engine,
-      new Error(`OCR daemon for ${engine} exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`),
-      daemon
+      new Error(`OCR daemon for ${engine} exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`)
     );
   });
 
@@ -815,7 +790,7 @@ async function requestDaemonInternal(
         const timeoutError = new Error(`OCR daemon request timed out after ${timeoutMs / 1000} seconds`);
         reject(timeoutError);
         // Forcefully terminate the daemon process to prevent it from hanging/blocking subsequent requests.
-        teardownDaemon(daemon.engine, timeoutError, daemon);
+        teardownDaemon(daemon.engine, timeoutError);
       }, timeoutMs);
     }
 
@@ -843,8 +818,7 @@ async function requestDaemonInternal(
       reject(error instanceof Error ? error : new Error(String(error)));
       teardownDaemon(
         daemon.engine,
-        error instanceof Error ? error : new Error(String(error)),
-        daemon
+        error instanceof Error ? error : new Error(String(error))
       );
     }
   });
@@ -861,16 +835,11 @@ function processQueue(daemon: BridgeDaemon): void {
   daemon.running = true;
   const task = daemon.queue.shift()!;
 
-  // Clear idle timers since a request has started
+  // Clear idle timer since a request has started
   const existingTimer = daemonIdleTimers.get(daemon.engine);
   if (existingTimer) {
     clearTimeout(existingTimer);
     daemonIdleTimers.delete(daemon.engine);
-  }
-  const existingCleanup = daemonCleanupTimers.get(daemon.engine);
-  if (existingCleanup) {
-    clearTimeout(existingCleanup);
-    daemonCleanupTimers.delete(daemon.engine);
   }
 
   requestDaemonInternal(daemon, task.payload, task.timeoutMs)
@@ -887,16 +856,11 @@ async function requestDaemon(
   payload: Record<string, unknown>,
   timeoutMs: number = 30000
 ): Promise<ExternalOcrBridgeResponse> {
-  // Clear the idle timers since we are initiating a new request
+  // Clear the idle timer since we are initiating a new request
   const existingTimer = daemonIdleTimers.get(engine);
   if (existingTimer) {
     clearTimeout(existingTimer);
     daemonIdleTimers.delete(engine);
-  }
-  const existingCleanup = daemonCleanupTimers.get(engine);
-  if (existingCleanup) {
-    clearTimeout(existingCleanup);
-    daemonCleanupTimers.delete(engine);
   }
 
   const daemon = ensureDaemon(engine);
@@ -1071,10 +1035,9 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
       },
     };
 
-    const daemon = ensureDaemon(engine);
     try {
       try {
-        response = await requestDaemon(engine, requestPayload, 90000);
+        response = await requestDaemon(engine, requestPayload);
       } catch (error) {
         if (isNoTextBoxesError(error)) {
           return emptyNoTextResponse;
@@ -1084,11 +1047,10 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
         }
         teardownDaemon(
           engine,
-          error instanceof Error ? error : new Error(String(error)),
-          daemon
+          error instanceof Error ? error : new Error(String(error))
         );
         try {
-          response = await requestDaemon(engine, requestPayload, 90000);
+          response = await requestDaemon(engine, requestPayload);
         } catch (retryError) {
           if (isNoTextBoxesError(retryError)) {
             return emptyNoTextResponse;
@@ -1175,21 +1137,19 @@ export async function runExternalOcrRaw(payload: {
       height: Math.round(payload.imageHeight),
     };
 
-    const daemon = ensureDaemon(engine);
     let response: ExternalOcrBridgeResponse;
     try {
-      response = await requestDaemon(engine, requestPayload, 90000);
+      response = await requestDaemon(engine, requestPayload);
     } catch (error) {
       if (!isRecoverableDaemonError(error)) {
         throw error;
       }
       teardownDaemon(
         engine,
-        error instanceof Error ? error : new Error(String(error)),
-        daemon
+        error instanceof Error ? error : new Error(String(error))
       );
       try {
-        response = await requestDaemon(engine, requestPayload, 90000);
+        response = await requestDaemon(engine, requestPayload);
       } catch (retryError) {
         throw retryError;
       }
@@ -1216,7 +1176,7 @@ export async function prewarmExternalOcrEngine(
     action: 'prewarm',
     engine,
     language,
-  }, 120000);
+  });
 
   if (!response.ok) {
     throw new Error(response.reason || `Failed to prewarm external OCR engine "${engine}"`);

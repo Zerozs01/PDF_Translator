@@ -318,11 +318,9 @@ const shouldLinkGeometryLines = (
     return null;
   }
 
-  // ทำไมถึงเขียนแบบนี้: เพิ่มการตรวจจับข้ามคอลัมน์แนวนอนเดียวกันโดยอิงจากความสูงของฟอนต์ (baseHeight) 
-  // หากสองบรรทัดอยู่ในระดับความสูงใกล้เคียงกัน (Y-range ซ้อนทับกัน หรือ Y-delta น้อย) แต่มีช่องว่างแนวนอนและจุดศูนย์กลางห่างกัน
-  // ให้ถือว่าเป็นคอลัมน์/บอลลูนคนละลูกกันและห้ามเชื่อมโยงโดยเด็ดขาด
-  const sameRowSeparatedColumns = (overlapY >= 0.26 || Math.abs(a.top - b.top) <= baseHeight * 1.45)
-    && overlapX <= 0.34
+  const sameRowSeparatedColumns = overlapY >= 0.26
+    && overlapX <= 0.18
+    && horizontalGap >= baseHeight * 0.85
     && centerDeltaX >= baseHeight * 1.8;
   if (sameRowSeparatedColumns) return null;
 
@@ -331,28 +329,26 @@ const shouldLinkGeometryLines = (
     && centerDeltaX >= Math.max(120, minWidth * 1.7);
   if (wideDistantColumns) return null;
 
-  // ทำไมถึงเขียนแบบนี้: ปรับเพิ่มลิมิต centerDeltaX และ looseColumnStack ให้ยืดหยุ่นขึ้น (จากเดิมที่เคยโดนบีบให้เข้มงวดเกินไป)
-  // เพื่อรองรับกลุ่มบรรทัดแนวตั้งที่เขียนเยื้องศูนย์กลางในการ์ตูน (เช่น But in any age..) ให้จัดกลุ่มรวมกันได้สมบูรณ์แบบ
   const verticallyStacked = overlapX >= 0.18
     && verticalGap <= baseHeight * 2.2
-    && centerDeltaX <= Math.max(76, minWidth * 0.95);
+    && centerDeltaX <= Math.max(92, minWidth * 1.05);
   const tightlyStacked = overlapX >= 0.12
     && verticalGap <= baseHeight * 1.2
-    && centerDeltaX <= Math.max(60, minWidth * 0.78);
+    && centerDeltaX <= Math.max(72, minWidth * 0.82);
   const diagonalStack = overlapX >= 0.1
     && verticalGap <= baseHeight * 1.45
     && horizontalGap <= Math.max(64, baseHeight * 1.7)
-    && centerDeltaX <= Math.max(72, minWidth * 1.25);
+    && centerDeltaX <= Math.max(96, minWidth * 1.35);
   const looseColumnStack = overlapY <= 0.38
     && verticalGap <= baseHeight * 2.2
-    && centerDeltaX <= Math.max(86, maxWidth * 0.62, baseHeight * 2.8)
+    && centerDeltaX <= Math.max(128, maxWidth * 0.72, baseHeight * 3.4)
     && (overlapX >= 0.055 || horizontalGap <= Math.max(70, baseHeight * 2.6, minWidth * 0.55))
     && localAngleDelta <= 24;
   const contained = overlapX >= 0.52 && overlapY >= 0.22;
   const hintedSequence = Number.isFinite(a.sortHintY) && Number.isFinite(b.sortHintY)
     && Math.abs(Number(a.sortHintY) - Number(b.sortHintY)) <= Math.max(28, baseHeight * 1.2)
     && (!Number.isFinite(a.sortHintX) || !Number.isFinite(b.sortHintX) || Math.abs(Number(a.sortHintX) - Number(b.sortHintX)) <= Math.max(120, baseHeight * 1.5))
-    && centerDeltaX <= Math.max(96, Math.max(a.width, b.width) * 1.2)
+    && centerDeltaX <= Math.max(116, Math.max(a.width, b.width) * 1.45)
     && verticalGap <= baseHeight * 2.2;
 
   if (!verticallyStacked && !tightlyStacked && !diagonalStack && !looseColumnStack && !contained && !hintedSequence) {
@@ -366,16 +362,7 @@ const shouldLinkGeometryLines = (
   const aIsLatinOnly = /[A-Za-z]/.test(a.text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(a.text);
   const bIsLatinOnly = /[A-Za-z]/.test(b.text) && !/[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(b.text);
   if ((aHasThai && bIsLatinOnly) || (bHasThai && aIsLatinOnly)) {
-    // ทำไมถึงเขียนแบบนี้: ผ่อนปรน script separation สำหรับประโยคภาษาอังกฤษที่แทรกอยู่ในกล่องภาษาไทย (เช่น sadness)
-    // หากช่องว่างแนวดิ่งสั้นมาก ( verticalGap <= baseHeight * 1.35) และแนวนอนทับซ้อนกันดี (overlapX >= 0.45) 
-    // แสดงว่าอยู่ภายในกล่องคำพูดเดียวกัน ให้จัดกลุ่มร่วมกันเพื่อรองรับการถมขาว Mask และพิมพ์ข้อความทับได้อย่างสมบูรณ์แบบ
-    // แต่ยกเว้นคำอุทานสั้นที่มี stuttering หรือเครื่องหมายคำถาม/ตกใจ (เช่น H-HOW?, Oh!) เพื่อไม่ให้ดึงคำอุทานของตัวละครอื่นมารวมกลุ่ม
-    const tightlySpacedInSameBubble = verticalGap <= baseHeight * 1.35 && overlapX >= 0.45;
-    const latinText = aIsLatinOnly ? a.text : b.text;
-    const isInterjectionLike = /^[A-Z]\s*-\s*[A-Z]+/i.test(latinText) || /[!?…]$/.test(latinText.trim());
-    if (!tightlySpacedInSameBubble || isInterjectionLike) {
-      return null;
-    }
+    return null;
   }
 
   let score = 0;

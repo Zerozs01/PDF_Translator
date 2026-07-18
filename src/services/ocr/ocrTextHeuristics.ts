@@ -838,28 +838,6 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^HE['’]?S[.!?…]*$/i,
   /^THiS\s+MY[.!?…]*$/i,
   /^HEHEHE[!.,?…]*$/i,
-  /^I\s+CAN['’]?T[!.,?…]*$/i,
-  /^DEFEAT[!.,?…]*$/i,
-  /^Ni*PPLES[!.,?…]*$/i,
-  /^Ni*PPLES\s+AND[!.,?…]*$/i,
-  /^ON\s+THE[!.,?…]*$/i,
-  /^YOU['’]?RE\s+SUPPOSED[!.,?…]*$/i,
-  /^OF[!.,?…]*$/i,
-  /^Ti*GHT[!.,?…]*$/i,
-  /^YOUR\s+TRAi*Ni*NG[!.,?…]*$/i,
-  /^Bi*TCH[.!?…\s]*HEY[!.,?…]*$/i,
-  /^S-STOP[!.,?…]*$/i,
-  /^KN[iI]+GHT[!.,?…]*$/i,
-  /^A\s+DIRTY[!.,?…]*$/i,
-  /^HER\s+POSi*[-_!.,?…]*$/i,
-  /^i*NG\s+Wi*TH\s+YOUR[!.,?…]*$/i,
-  /^I['’]?LL\s+HAVE\s+A[!.,?…]*$/i,
-  /^Wi*TH\s+HIS[!.,?…]*$/i,
-  /^THE\s+WOMAN['’]?S[!.,?…]*$/i,
-  /^GENERAL[!.,?…]*$/i,
-  /^i*NSi*DE[!.,?…]*$/i,
-  /^LET\s+HER[!.,?…]*$/i,
-  /^PRAISE[!.,?…]*$/i,
 ];
 
 export const shouldForceKeepComicTranslationLine = (
@@ -964,8 +942,8 @@ export const isLikelyGhostTranslatableLine = (
     return true;
   }
 
-  // 2. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky/dashed balloon borders, e.g. "lll", "III", "111", "I l I", "┊┊")
-  const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-\u2500-\u257F\u2010-\u2015:\.⋮┊╎┆│]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
+  // 2. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky balloon borders, e.g. "lll", "III", "111", "I l I")
+  const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
   if (isVerticalLineJunk) {
     return true;
   }

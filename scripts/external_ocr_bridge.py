@@ -6,9 +6,6 @@ import json
 import math
 import numpy as np
 import os
-os.environ["FLAGS_enable_pir_api"] = "0"
-os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
-os.environ["FLAGS_use_mkldnn"] = "0"
 import socket
 import subprocess
 import sys
@@ -625,16 +622,16 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 )
                 is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
         else:
-            # Tightened: prevent separate vertical English dialogue lines from merging horizontally
+            # Tightened: prevent vertically stacked short words (EH/ME) from merging
             same_band = (
                 center_delta <= min_height * 0.24
                 or (overlap_y >= 0.82 and center_delta <= min_height * 0.38)
             )
             close_enough = (
-                (gap_x <= max(22.0, min_height * 1.35) or overlap_x >= 0.34)
+                (gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34)
                 and overlap_x <= 0.88  # block near-full vertical stacking
             )
-            is_very_close = gap_x <= max(18.0, min_height * 1.1)
+            is_very_close = gap_x <= max(36.0, min_height * 1.6)
 
         should_merge = fragment_like or is_very_close
 
@@ -693,27 +690,19 @@ def merge_near_duplicate_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, An
                 or alpha in existing_alpha
                 or are_near_duplicate_tokens(existing_alpha, alpha)
             )
-
-            existing_bbox = existing.get("bbox") or {}
-            iou = bbox_iou_ratio(existing_bbox, line_bbox)
-            overlap_x = horizontal_overlap_ratio(existing_bbox, line_bbox)
-            overlap_y = vertical_overlap_ratio(existing_bbox, line_bbox)
-
-            # --- HIGH OVERLAP OVERRIDE ---
-            # หากกล่องข้อความทับซ้อนกันสูงมากในเชิงพื้นที่ (IoU >= 0.78 หรือทับซ้อนแกน X/Y เกิน 88%)
-            # แสดงว่าเป็นคำเดียวกันที่ตรวจพบซ้ำแน่นอน (เช่น จากรอบปกติและรอบกลับสี) 
-            # เราจะอนุญาตให้ผ่านไปขั้นตอนยุบรวม (merge) ได้เลยโดยไม่สนใจความต่างของข้อความ
-            extremely_high_overlap = (iou >= 0.78) or (overlap_y >= 0.88 and overlap_x >= 0.88)
-
-            if not same_or_subset and not extremely_high_overlap:
+            if not same_or_subset:
                 continue
 
+            existing_bbox = existing.get("bbox") or {}
             min_height = max(8.0, min(bbox_height(existing_bbox), bbox_height(line_bbox)))
             center_delta = abs(line_sort_y(existing) - line_sort_y(line))
+            overlap_x = horizontal_overlap_ratio(existing_bbox, line_bbox)
+            overlap_y = vertical_overlap_ratio(existing_bbox, line_bbox)
             contained = (
                 horizontal_containment_ratio(existing_bbox, line_bbox) >= 0.65
                 or horizontal_containment_ratio(line_bbox, existing_bbox) >= 0.65
             )
+            iou = bbox_iou_ratio(existing_bbox, line_bbox)
             near_same_box = (
                 iou >= 0.56
                 or (overlap_y >= 0.82 and overlap_x >= 0.62)
@@ -1808,10 +1797,7 @@ def is_probable_panel_watermark_line(
     compact_long = len(tokens) == 1 and len(alpha) >= 8
     symbol_noise = bool(re.search(r"[\\/|_{}\[\]~`]+", text))
     low_confidence = confidence < 88
-    has_vowels = any(c in "AEIOUY" for c in alpha)
-    has_consonants = any(c in "BCDFGHJKLMNPQRSTVWXZ" for c in alpha)
-    is_real_word = has_vowels and has_consonants
-    likely_garbage_line = compact_long and lexical_hits == 0 and not is_real_word
+    likely_garbage_line = compact_long and lexical_hits == 0
 
     if low_confidence and (likely_garbage_line or symbol_noise):
         return True
@@ -3552,9 +3538,6 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
     # not cuBLASLt). Forcing CPU avoids the fatal crash. EasyOCR (PyTorch-based) handles
     # GPU acceleration via ZLUDA instead, which has proper cuBLAS support.
     global GLOBAL_USE_DML
-    
-    force_cpu = os.environ.get("OCR_FORCE_CPU", "0") == "1" or os.environ.get("OCR_USE_GPU", "1") == "0"
-    
     running_under_zluda = (
         os.environ.get("OCR_USE_ZLUDA", "0") == "1"
         or os.environ.get("USE_ZLUDA", "0") == "1"
@@ -3562,36 +3545,31 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
     use_gpu = False
     use_onnx = False
     paddle_device = "cpu"
-    
-    if force_cpu:
-        GLOBAL_USE_DML = False
-        print("[ocrBridge] PaddleOCR forcing CPU mode via environment override.", file=sys.stderr)
-    else:
-        if not running_under_zluda:
-            try:
-                import paddle
-                # Check CUDA (Nvidia)
-                if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
-                    use_gpu = True
-                    paddle_device = "gpu"
-            except Exception:
-                pass
+    if not running_under_zluda:
+        try:
+            import paddle
+            # Check CUDA (Nvidia)
+            if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
+                use_gpu = True
+                paddle_device = "gpu"
+        except Exception:
+            pass
 
-        if not use_gpu:
-            try:
-                # Check DirectML (AMD/Intel) via ONNX Runtime
-                import onnxruntime as ort
-                providers = ort.get_available_providers()
-                print(f"[ocrBridge] Available ONNX Runtime providers: {providers}", file=sys.stderr)
-                if "DmlExecutionProvider" in providers:
-                    use_gpu = True
-                    use_onnx = True
-                    GLOBAL_USE_DML = True
-                    print("[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider) enabled successfully", file=sys.stderr)
-                else:
-                    print("[ocrBridge] PaddleOCR DirectML NOT available (DmlExecutionProvider not in providers)", file=sys.stderr)
-            except Exception as exc:
-                print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
+    if not use_gpu:
+        try:
+            # Check DirectML (AMD/Intel) via ONNX Runtime
+            import onnxruntime as ort
+            providers = ort.get_available_providers()
+            print(f"[ocrBridge] Available ONNX Runtime providers: {providers}", file=sys.stderr)
+            if "DmlExecutionProvider" in providers:
+                use_gpu = True
+                use_onnx = True
+                GLOBAL_USE_DML = True
+                print("[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider) enabled successfully", file=sys.stderr)
+            else:
+                print("[ocrBridge] PaddleOCR DirectML NOT available (DmlExecutionProvider not in providers)", file=sys.stderr)
+        except Exception as exc:
+            print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
 
     if profile_key == "cpu_korean_default":
         return {
@@ -3883,10 +3861,7 @@ def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any
 
     while True:
         try:
-            res = ocr.predict(input=image_path, **adaptive_kwargs)
-            if not isinstance(res, list):
-                res = list(res)
-            return res, adaptive_kwargs
+            return ocr.predict(input=image_path, **adaptive_kwargs), adaptive_kwargs
         except TypeError as exc:
             message = str(exc)
             lowered = message.lower()
@@ -3907,10 +3882,7 @@ def call_paddle_predict(ocr: Any, image_path: str, predict_kwargs: Dict[str, Any
                 break
 
     try:
-        res = ocr.predict(input=image_path)
-        if not isinstance(res, list):
-            res = list(res)
-        return res, {}
+        return ocr.predict(input=image_path), {}
     except TypeError as exc:
         last_error = exc
 
@@ -4055,22 +4027,6 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
                 pass
     except Exception:
         pass
-
-    if lang == "th":
-        from paddlex import create_pipeline
-        device_str = "cpu"
-        try:
-            import paddle
-            if paddle.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0:
-                device_str = "gpu:0"
-        except Exception:
-            pass
-            
-        yaml_path = os.path.join(os.path.dirname(__file__), "paddle_thai_ocr.yaml")
-        print(f"[ocrBridge] Initializing PaddleX Thai OCR Pipeline on {device_str} using {yaml_path}...", file=sys.stderr)
-        ocr = create_pipeline(pipeline=yaml_path, device=device_str)
-        PADDLE_OCR_CACHE[cache_key] = ocr
-        return ocr
 
     from paddleocr import PaddleOCR  # type: ignore
 
@@ -4607,13 +4563,6 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
     CHUNK_HEIGHT = 2800
     CHUNK_OVERLAP = 120
     MAX_PIXELS = args.max_pixels if getattr(args, "max_pixels", 0) > 0 else 9_000_000
-    # Enforce quality-profile safety ceilings to prevent running out of GPU VRAM / CPU lag on massive images:
-    if quality_profile == "fast":
-        MAX_PIXELS = min(MAX_PIXELS, 6_500_000)
-    elif quality_profile == "balanced":
-        MAX_PIXELS = min(MAX_PIXELS, 10_000_000)
-    else:
-        MAX_PIXELS = min(MAX_PIXELS, 16_000_000)
 
     try:
         with Image.open(args.image) as _probe:
@@ -4965,7 +4914,7 @@ def normalize_easy_yolo_response(payload: Any, width: int, height: int) -> Dict[
     return make_text_result(fallback_lines, fallback_words)
 
 
-def normalize_easyocr_output(raw_result: Any, scale_x: float = 1.0, scale_y: float = 1.0) -> Dict[str, Any]:
+def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
     lines: List[Dict[str, Any]] = []
     words: List[Dict[str, Any]] = []
     if not isinstance(raw_result, list):
@@ -4974,8 +4923,7 @@ def normalize_easyocr_output(raw_result: Any, scale_x: float = 1.0, scale_y: flo
     for item in raw_result:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
-        # Scale back the points to match original image size
-        points = [[float(pt[0]) * scale_x, float(pt[1]) * scale_y] for pt in item[0]]
+        points = item[0]
         bbox = bbox_from_points(points)
         quad = normalize_quad_points(points)
         angle_deg = angle_deg_from_points(points)
@@ -5004,28 +4952,19 @@ def _detect_torch_device() -> Tuple[Any, bool, bool]:
     - is_directml=True means device is a torch_directml device object
       (must be injected after EasyOCR Reader init, NOT passed as constructor arg)
     """
-    gpu_vendor = os.environ.get("OCR_GPU_VENDOR", "").strip().lower()
-
-    if os.environ.get("OCR_FORCE_CPU", "0") == "1" or os.environ.get("OCR_USE_GPU", "1") == "0":
-        import torch
-        print("[ocrBridge] PyTorch forcing CPU mode via environment override.", file=sys.stderr)
-        return torch.device("cpu"), False, False
-
-    # 1. Check for DirectML (High priority for Windows/AMD/Intel stability — no CUDA DLLs)
+    # 1. Check for DirectML (High priority for Windows/AMD stability — no CUDA DLLs)
     if os.environ.get("OCR_USE_DIRECTML", "0") == "1":
         try:
             import torch_directml  # type: ignore
             if torch_directml.is_available():
-                device = _select_directml_device(torch_directml, gpu_vendor)
-                return device, False, True  # gpu=False to skip CUDA init
+                return torch_directml.device(), False, True  # gpu=False to skip CUDA init
         except Exception:
             pass
 
     try:
         import torch_directml  # type: ignore
         if torch_directml.is_available():
-            device = _select_directml_device(torch_directml, gpu_vendor)
-            return device, False, True
+            return torch_directml.device(), False, True
     except Exception:
         pass
 
@@ -5051,41 +4990,6 @@ def _detect_torch_device() -> Tuple[Any, bool, bool]:
         return "cpu", False, False
 
 
-def _select_directml_device(torch_directml: Any, gpu_vendor: str) -> Any:
-    """
-    Selects the best DirectML device based on gpu_vendor hint.
-    - For Intel: try to find Intel device by enumerating device descriptions.
-    - For AMD/others: default device() (index 0).
-    Returns a torch_directml device object.
-    """
-    try:
-        device_count = torch_directml.device_count() if hasattr(torch_directml, "device_count") else 1
-    except Exception:
-        device_count = 1
-
-    if device_count <= 1 or gpu_vendor not in ("intel", "amd"):
-        # Single device or unspecified vendor — use default
-        return torch_directml.device()
-
-    # Try to enumerate and find the right vendor device
-    for idx in range(device_count):
-        try:
-            desc_fn = getattr(torch_directml, "device_name", None) or getattr(torch_directml, "get_device_name", None)
-            desc = str(desc_fn(idx) if desc_fn else "").lower()
-            if gpu_vendor == "intel" and "intel" in desc:
-                print(f"[ocrBridge] DirectML: selected Intel device index {idx}: {desc}", file=sys.stderr)
-                return torch_directml.device(idx)
-            if gpu_vendor == "amd" and ("amd" in desc or "radeon" in desc):
-                print(f"[ocrBridge] DirectML: selected AMD device index {idx}: {desc}", file=sys.stderr)
-                return torch_directml.device(idx)
-        except Exception:
-            continue
-
-    # Fallback: default device (index 0)
-    print(f"[ocrBridge] DirectML: vendor '{gpu_vendor}' device not found by name, using default device()", file=sys.stderr)
-    return torch_directml.device()
-
-
 def get_easyocr_reader(langs: List[str]) -> Any:
     cache_key = tuple(langs)
     cached = EASYOCR_READER_CACHE.get(cache_key)
@@ -5093,7 +4997,6 @@ def get_easyocr_reader(langs: List[str]) -> Any:
         return cached
 
     import easyocr  # type: ignore
-    gpu_vendor = os.environ.get("OCR_GPU_VENDOR", "").strip().lower()
     device, use_gpu, is_directml = _detect_torch_device()
 
     if is_directml:
@@ -5102,7 +5005,6 @@ def get_easyocr_reader(langs: List[str]) -> Any:
         # with 'aten::_thnn_fused_lstm_cell'.
         # Solution: Use Hybrid Approach. Keep detector (CRAFT, CNN-only) on DirectML GPU
         # and keep recognizer (CRNN, LSTM) on CPU.
-        # This applies to both AMD and Intel GPUs via DirectML.
         reader = easyocr.Reader(langs, gpu=False, quantize=False, verbose=False)
         try:
             reader.detector = reader.detector.to(device)
@@ -5119,8 +5021,7 @@ def get_easyocr_reader(langs: List[str]) -> Any:
                     reader.device = old_device
             
             reader.detect = custom_detect
-            vendor_label = gpu_vendor.upper() if gpu_vendor else "DirectML"
-            print(f"[ocrBridge] EasyOCR using Hybrid GPU-CPU setup (Detector: {device} [{vendor_label}], Recognizer: CPU)", file=sys.stderr)
+            print(f"[ocrBridge] EasyOCR using Hybrid GPU-CPU setup (Detector: {device}, Recognizer: CPU)", file=sys.stderr)
         except Exception as e:
             print(f"[WARN] Failed to setup EasyOCR Hybrid DirectML mode: {e}", file=sys.stderr)
             reader.device = "cpu"
@@ -5141,16 +5042,9 @@ def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
     langs = select_easyocr_langs(args.language)
     reader = get_easyocr_reader(langs)
     started_at = time.perf_counter()
-
-    # Downscale image before inference to prevent CPU stalling on large images.
-    # 3.5MP cap (~1920x1820) is sufficient for Thai/Latin OCR accuracy.
-    # resize_image_if_large returns scale factors to map coords back to original size.
-    EASYOCR_CPU_MAX_PIXELS = 6_500_000
-    img_working, scale_x, scale_y = resize_image_if_large(args.image, max_pixels=EASYOCR_CPU_MAX_PIXELS)
-
-    result = reader.readtext(img_working, detail=1, paragraph=False)
+    result = reader.readtext(args.image, detail=1, paragraph=False)
     cleaned = cleanup_external_result(
-        normalize_easyocr_output(result, scale_x, scale_y),
+        normalize_easyocr_output(result),
         "easyocr",
         args.pipeline_profile,
         args.width,
@@ -5292,30 +5186,17 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         predict_kwargs = build_paddle_predict_kwargs(args)
         ocr = get_paddle_ocr(lang, profile_key, quality_profile, predict_kwargs)
 
-        # Downscale image if large to prevent VRAM / CPU stall
-        MAX_PIXELS = args.max_pixels if getattr(args, "max_pixels", 0) > 0 else 9_000_000
-        if quality_profile == "fast":
-            MAX_PIXELS = min(MAX_PIXELS, 6_500_000)
-        elif quality_profile == "balanced":
-            MAX_PIXELS = min(MAX_PIXELS, 10_000_000)
-        else:
-            MAX_PIXELS = min(MAX_PIXELS, 16_000_000)
-
-        working_image, scale_x, scale_y = resize_image_if_large(str(img_path), max_pixels=MAX_PIXELS)
-
         t0 = time.perf_counter()
         if hasattr(ocr, "predict"):
-            raw = ocr.predict(working_image)
-            if not isinstance(raw, list):
-                raw = list(raw)
+            raw = ocr.predict(str(img_path))
         else:
             use_cls = getattr(ocr, "use_angle_cls", False)
             if hasattr(args, "use_angle_cls") and args.use_angle_cls is not None:
                 use_cls = bool(args.use_angle_cls)
             try:
-                raw = ocr.ocr(working_image, cls=use_cls)
+                raw = ocr.ocr(str(img_path), cls=use_cls)
             except TypeError:
-                raw = ocr.ocr(working_image)
+                raw = ocr.ocr(str(img_path))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         words = []
@@ -5399,23 +5280,6 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
                         "words": [{"text": text_value, "confidence": score, "bbox": bbox}],
                     })
 
-        if scale_x != 1.0 or scale_y != 1.0:
-            for line in lines:
-                if "bbox" in line:
-                    b = line["bbox"]
-                    b["x0"] = float(b["x0"]) * scale_x
-                    b["x1"] = float(b["x1"]) * scale_x
-                    b["y0"] = float(b["y0"]) * scale_y
-                    b["y1"] = float(b["y1"]) * scale_y
-                if "words" in line:
-                    for wd in line["words"]:
-                        if "bbox" in wd:
-                            wb = wd["bbox"]
-                            wb["x0"] = float(wb["x0"]) * scale_x
-                            wb["x1"] = float(wb["x1"]) * scale_x
-                            wb["y0"] = float(wb["y0"]) * scale_y
-                            wb["y1"] = float(wb["y1"]) * scale_y
-
         # Calculate average confidence for the raw run
         avg_confidence = 0.0
         if lines:
@@ -5444,12 +5308,8 @@ def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         langs = select_easyocr_langs(args.language)
         reader = get_easyocr_reader(langs)
 
-        # Downscale image if large to prevent CPU stalling
-        EASYOCR_CPU_MAX_PIXELS = 6_500_000
-        img_working, scale_x, scale_y = resize_image_if_large(str(img_path), max_pixels=EASYOCR_CPU_MAX_PIXELS)
-
         t0 = time.perf_counter()
-        raw = reader.readtext(img_working, detail=1, paragraph=False)
+        raw = reader.readtext(str(img_path), detail=1, paragraph=False)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         words = []
@@ -5480,23 +5340,6 @@ def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
                 "bbox": bbox,
                 "words": [{"text": text_value, "confidence": float(confidence), "bbox": bbox}],
             })
-
-        if scale_x != 1.0 or scale_y != 1.0:
-            for line in lines:
-                if "bbox" in line:
-                    b = line["bbox"]
-                    b["x0"] = float(b["x0"]) * scale_x
-                    b["x1"] = float(b["x1"]) * scale_x
-                    b["y0"] = float(b["y0"]) * scale_y
-                    b["y1"] = float(b["y1"]) * scale_y
-                if "words" in line:
-                    for wd in line["words"]:
-                        if "bbox" in wd:
-                            wb = wd["bbox"]
-                            wb["x0"] = float(wb["x0"]) * scale_x
-                            wb["x1"] = float(wb["x1"]) * scale_x
-                            wb["y0"] = float(wb["y0"]) * scale_y
-                            wb["y1"] = float(wb["y1"]) * scale_y
 
         avg_confidence = 0.0
         if lines:
@@ -5617,26 +5460,6 @@ def cleanup_memory() -> None:
         import paddle
         if paddle.device.is_compiled_with_cuda():
             paddle.device.cuda.empty_cache()
-    except Exception:
-        pass
-    # P3: Flush DirectML buffers for Intel/AMD GPUs to prevent memory fragmentation.
-    # torch_directml does not have empty_cache() but synchronizing all pending ops
-    # allows the driver to reclaim tile-mode memory before the next OCR request.
-    try:
-        import torch_directml  # type: ignore
-        if torch_directml.is_available():
-            # Synchronize all DML devices to flush queued GPU operations
-            device_count = torch_directml.device_count() if hasattr(torch_directml, "device_count") else 1
-            for idx in range(device_count):
-                try:
-                    dml_device = torch_directml.device(idx)
-                    # Create and immediately destroy a tiny tensor to force a DML sync point
-                    import torch
-                    t = torch.zeros(1, device=dml_device)
-                    del t
-                except Exception:
-                    pass
-            gc.collect()
     except Exception:
         pass
 

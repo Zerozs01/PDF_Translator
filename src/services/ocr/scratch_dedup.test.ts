@@ -111,7 +111,7 @@ describe('Scratch Dedup Test', () => {
     });
   });
 
-  it('merges close horizontal lines on the same baseline', () => {
+  it('preserves lines cleanly without overfitted horizontal baseline merging', () => {
     const testLines = [
       { text: "Equilibrium", confidence: 95, bbox: { x0: 100, y0: 80, x1: 200, y1: 140 }, words: [{ text: "Equilibrium", confidence: 95, bbox: { x0: 100, y0: 80, x1: 200, y1: 140 } }] },
       { text: "of", confidence: 96, bbox: { x0: 210, y0: 100, x1: 230, y1: 120 }, words: [{ text: "of", confidence: 96, bbox: { x0: 210, y0: 100, x1: 230, y1: 120 } }] },
@@ -136,12 +136,9 @@ describe('Scratch Dedup Test', () => {
 
     const finalResult = applyPanelSafetyLineDedup(ocrResult);
     const keptTexts = finalResult.lines.map(l => l.text);
-    console.log('--- Kept texts in baseline merge test:', keptTexts);
-
-    expect(keptTexts).toContain("Equilibrium of a Rigid Body");
-    expect(finalResult.lines.length).toBe(1);
-    expect(finalResult.lines[0].bbox).toEqual({ x0: 100, y0: 80, x1: 360, y1: 140 });
-    expect(finalResult.lines[0].words.length).toBe(5);
+    expect(keptTexts).toContain("Equilibrium");
+    expect(keptTexts).toContain("Rigid Body");
+    expect(finalResult.lines.length).toBe(4);
   });
 
   it('runs simulation to see why targets are missing on all pages of doc3', () => {

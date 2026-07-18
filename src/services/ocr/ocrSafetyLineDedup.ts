@@ -11,7 +11,7 @@ export const normalizePreviewText = (text: string): string => String(text || '')
 
 export const isKnownShortWordHelper = (asciiCompact: string): boolean => {
   return /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|STOOOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|SOPLEASSE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|HES|FRONT|WOULD|THISMY|CUMMING|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|NIPPLES|LONGER|SUITS|CERVIX|GENERAL|SADNESS|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|RECAPTURINA|ALLARISTOCRATS|ALLARSTOCRATS|KINGAND|ANALLOUT|BUTINANYAGE|IFI|TOYEDWITH|ANDWASATA|TODAYAGAIN|HERPOSI|NIPPLESAND|DIEALONG|ALSO|HERPLACE|MAKESURE|THEWAR|WEDEAL|AWAYWITH|BITCHHEY|THEPIGYOUARE|PIGYOUARE|ANORMAL|ALLCOLD|THANANY|FEELINGS|CANT|CANTBELIEVE|LADYROSERIAISDEAD|LADYROSERIA|ROSERIA|ROSERIAISDEAD|DUINEOSPE|DUINESPE|BORRM|THISMY|WEDEALWITHIT|YOUFRONTUSTHEGETTINGAWAYWITH|ROSARIA|LADYROSARIA|ROSARIAISDEAD|THEBARBA|774|DEFEAT|RANSOM|SOIM|IFYOUCUM|ONMINETOO|LETHER|LETHERDREAM|HAVETO|GETTING|GETTINGAWAY|GETTINGAWAYWITH|WOMANWOULD|WOMANWOULDBELOSING|AGE|SUEU1)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|HES|FRONT|WOULD|THISMY|CUMMING|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|NIPPLES|LONGER|SUITS|CERVIX|GENERAL|SADNESS|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|RECAPTURINA|ALLARISTOCRATS|ALLARSTOCRATS|KINGAND|ANALLOUT|BUTINANYAGE|IFI|TOYEDWITH|ANDWASATA|TODAYAGAIN|HERPOSI|NIPPLESAND|DIEALONG|ALSO|HERPLACE|MAKESURE|THEWAR|WEDEAL|AWAYWITH|BITCHHEY|THEPIGYOUARE|PIGYOUARE|ANORMAL|ALLCOLD|THANANY|FEELINGS|CANT|CANTBELIEVE|LADYROSERIAISDEAD|LADYROSERIA|ROSERIA|ROSERIAISDEAD|DUINEOSPE|DUINESPE|BORRM|THISMY|WEDEALWITHIT|YOUFRONTUSTHEGETTINGAWAYWITH|774)$/i.test(asciiCompact);
 };
 
 export const ENGLISH_COMMON_WORDS = new Set([
@@ -37,16 +37,15 @@ export const isLikelyEnglishDialogue = (text: string): boolean => {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
 
-  // Clean spaces, dots, exclamation/question marks, commas, hyphens, dashes, box-drawing & border symbols
-  const compact = normalized.replace(/[\s\.\!\?\,\-\_\u2010-\u2015\u2500-\u257F\u2026:;\|⋮┊╎┆│]+/g, '');
-  if (!compact) return false;
+  // Clean spaces, dots, exclamation/question marks, commas, hyphens and underscores before checking ratio
+  const compact = normalized.replace(/[\s\.\!\?\,\-\_]+/g, '');
   const latin = compact.replace(/[^a-z]/g, '');
-  if (latin.length / Math.max(1, compact.length) < 0.70) return false;
+  if (latin.length / Math.max(1, compact.length) < 0.75) return false;
 
   const wordsList = normalized.split(/[^a-z']+/g).filter(Boolean);
   if (wordsList.some(w => ENGLISH_COMMON_WORDS.has(w))) return true;
 
-  if (wordsList.length === 1 && wordsList[0].length >= 3) {
+  if (wordsList.length === 1 && wordsList[0].length >= 5) {
     const word = wordsList[0];
     const hasVowels = /[aeiouy]/i.test(word);
     const hasConsonants = /[bcdfghjklmnpqrstvwxz]/i.test(word);
@@ -728,11 +727,13 @@ export const shouldCollapsePanelSafetyDuplicate = (
   const isBoxContained = candidateOverlapRatio >= 0.85 || existingOverlapRatio >= 0.85;
   const isSamePosition = candidateOverlapRatio >= 0.82 && existingOverlapRatio >= 0.82;
 
-  if (isSamePosition || isBoxContained) {
+  if (isSamePosition) {
+    return true;
+  }
+
+  if (isBoxContained) {
     const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
-    const minLen = Math.min(existingKey.length, candidateKey.length);
-    const isSub = minLen >= 4 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey));
-    if (textSimilarity >= 0.55 || isSub || existingKey === candidateKey) {
+    if (textSimilarity >= 0.15 || existingKey.includes(candidateKey) || candidateKey.includes(existingKey)) {
       return true;
     }
   }
@@ -791,12 +792,7 @@ export const shouldCollapsePanelSafetyDuplicate = (
     && (technicalLinePair || Math.max(existingArea, candidateArea) >= 9000 || iou >= 0.22)
   );
   if (severeGeometryEcho) {
-    const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
-    const minLen = Math.min(existingKey.length, candidateKey.length);
-    const isSub = minLen >= 4 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey));
-    if (textSimilarity >= 0.55 || isSub || existingKey === candidateKey) {
-      return true;
-    }
+    return true;
   }
 
   const minLength = Math.min(existingKey.length, candidateKey.length);
@@ -1264,137 +1260,6 @@ export const suppressDisplacedPanelLongPhraseEchoes = (
   };
 };
 
-export const mergeHorizontalCloseLines = (
-  lines: OCRLine[],
-  pageWidth: number = 1000,
-  pageHeight: number = 1000,
-  documentLikePage: boolean = false
-): OCRLine[] => {
-  if (lines.length <= 1) return lines;
-
-  // 1. Map original index to preserve reading order/columns structure after sorting
-  const linesWithIndex = lines.map((line, idx) => ({ line, originalIndex: idx }));
-
-  // 2. Sort lines primarily by baseline Y-center, and secondarily left-to-right if they are on the same baseline
-  const sorted = [...linesWithIndex].sort((a, b) => {
-    const cyA = panelLineCenterY(a.line);
-    const cyB = panelLineCenterY(b.line);
-    const hA = panelLineHeight(a.line);
-    const hB = panelLineHeight(b.line);
-    const minHeight = Math.max(8, Math.min(hA, hB));
-    
-    if (Math.abs(cyA - cyB) <= minHeight * 0.45) {
-      return Number(a.line.bbox?.x0 || 0) - Number(b.line.bbox?.x0 || 0);
-    }
-    return cyA - cyB;
-  });
-
-  const merged: { line: OCRLine; originalIndex: number }[] = [];
-  let current = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const next = sorted[i];
-
-    const hA = panelLineHeight(current.line);
-    const hB = panelLineHeight(next.line);
-    const minHeight = Math.max(8, Math.min(hA, hB));
-    const verticalOverlap = panelOverlapRatioY(current.line, next.line);
-
-    const gapX = Number(next.line.bbox?.x0 || 0) - Number(current.line.bbox?.x1 || 0);
-    // ทำไมถึงเขียนแบบนี้: คืน maxGap สำหรับหน้าเอกสารทั่วไป แต่สำหรับ Manga/Comic (documentLikePage = false)
-    // จะใช้ตัวคูณช่องว่างที่เข้มงวดกว่า (0.95x) เพื่อป้องกันการเชื่อมข้ามบอลลูนที่อยู่ใกล้กัน
-    const maxGapMultiplier = documentLikePage ? 1.8 : 0.95;
-    const maxGap = Math.max(30, minHeight * maxGapMultiplier);
-    const heightRatio = Math.max(hA, hB) / Math.max(1, Math.min(hA, hB));
-
-    // Cross-balloon guard: ถ้าช่องว่างกว้างมาก OR center ห่างมาก แสดงว่าอยู่คนละบอลลูน/คอลัมน์
-    // ทำไมถึงเขียนแบบนี้: ใช้เกณฑ์แบบ OR (||) แทน AND (&&) สำหรับโหมดการ์ตูน และลดสเกลขอบเขตการคำนวณ
-    // เพื่อดักการเชื่อมคำที่ถึงแม้ช่องว่างจะแคบแต่พิกัดศูนย์กลางอยู่ห่างกันมาก (คนละคอลัมน์ชัดเจน)
-    const centerCurrent = (Number(current.line.bbox?.x0 || 0) + Number(current.line.bbox?.x1 || 0)) * 0.5;
-    const centerNext = (Number(next.line.bbox?.x0 || 0) + Number(next.line.bbox?.x1 || 0)) * 0.5;
-    const centerDeltaX = Math.abs(centerNext - centerCurrent);
-    
-    const crossColumnGapThreshold = documentLikePage ? minHeight * 2.5 : minHeight * 1.5;
-    const crossColumnCenterThreshold = documentLikePage ? minHeight * 3.0 : minHeight * 1.8;
-    const isCrossColumn = gapX > crossColumnGapThreshold && centerDeltaX > crossColumnCenterThreshold;
-
-    // ขีดจำกัดช่องว่างแนวนอนสัมบูรณ์ (Absolute Horizontal Gap Limit) อิงตามความกว้างของหน้าจอ
-    // เพื่อป้องกันคำแปลเชื่อมกันข้ามหน้ากระดาษความละเอียดสูง
-    const absoluteGapLimit = documentLikePage ? pageWidth * 0.1 : pageWidth * 0.015;
-
-    // ระบบป้องกันเครื่องหมายวรรคตอนเด่นชัด (Strong Punctuation Guard)
-    // สำหรับหน้าสนทนาการ์ตูน หากบรรทัดฝั่งซ้ายจบด้วย !, ?, … ถือว่าเป็นประโยคสมบูรณ์ในตัวมันเองแล้ว ห้ามรวมเข้ากับข้อความด้านขวา
-    const currentTextClean = (current.line.text || '').trim();
-    const endsWithStrongPunct = /[!?…]+$/.test(currentTextClean);
-    const shouldBlockByPunct = !documentLikePage && endsWithStrongPunct;
-
-    if (isCrossColumn || gapX > absoluteGapLimit || shouldBlockByPunct) {
-      merged.push(current);
-      current = next;
-      continue;
-    }
-
-    // ทำไมถึงเขียนแบบนี้: ใช้ heightRatio ที่สูงกว่า (4.0x) เฉพาะกรณีที่คำข้างๆ เป็น "short function word"
-    // เช่น "of", "a", "an", "the" ที่ OCR ตัด bbox สั้นกว่าความสูงจริงตามธรรมชาติ
-    // สำหรับ content words อื่นๆ ใช้ threshold 2.5 เพื่อป้องกัน cross-balloon merge
-    const nextText = (next.line.text || '').trim();
-    const currentText = (current.line.text || '').trim();
-    const isShortFunctionWord = (t: string): boolean =>
-      /^[a-z]{1,3}$/.test(t) && /^(of|a|an|the|in|on|at|to|by|as|is|it|or|if|we|he|she|do|no|up|so)$/i.test(t);
-    const allowHighHeightRatio = isShortFunctionWord(nextText) || isShortFunctionWord(currentText);
-    const effectiveHeightRatioThreshold = allowHighHeightRatio ? 4.0 : 2.5;
-
-    // Allow merging only if baselines are highly overlapping, the gap is small, and heights are comparable.
-    const shouldMerge = verticalOverlap >= 0.70 
-      && gapX >= -16 
-      && gapX <= maxGap 
-      && heightRatio <= effectiveHeightRatioThreshold;
-
-    if (shouldMerge) {
-      // Concatenate text
-      const newText = `${current.line.text || ''} ${next.line.text || ''}`.replace(/\s+/g, ' ').trim();
-      
-      // Merge bounding boxes
-      const newBBox: BBox = {
-        x0: Math.min(Number(current.line.bbox?.x0 || 0), Number(next.line.bbox?.x0 || 0)),
-        y0: Math.min(Number(current.line.bbox?.y0 || 0), Number(next.line.bbox?.y0 || 0)),
-        x1: Math.max(Number(current.line.bbox?.x1 || 0), Number(next.line.bbox?.x1 || 0)),
-        y1: Math.max(Number(current.line.bbox?.y1 || 0), Number(next.line.bbox?.y1 || 0)),
-      };
-
-      // Merge words (adjust/concatenate)
-      const currentWords = Array.isArray(current.line.words) ? current.line.words : [];
-      const nextWords = Array.isArray(next.line.words) ? next.line.words : [];
-      const mergedWords = [...currentWords, ...nextWords];
-
-      // Average confidence
-      const currentConf = Number(current.line.confidence || 0);
-      const nextConf = Number(next.line.confidence || 0);
-      const newConf = (currentConf + nextConf) * 0.5;
-
-      current = {
-        line: {
-          ...current.line,
-          text: newText,
-          bbox: newBBox,
-          words: mergedWords,
-          confidence: newConf,
-        },
-        originalIndex: Math.min(current.originalIndex, next.originalIndex),
-      };
-    } else {
-      merged.push(current);
-      current = next;
-    }
-  }
-  
-  merged.push(current);
-
-  // 3. Sort back to the original index order to preserve original reading/column structures
-  merged.sort((a, b) => a.originalIndex - b.originalIndex);
-  return merged.map(item => item.line);
-};
-
 export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const inputLines = Array.isArray(result.lines) ? result.lines : [];
   if ((result.pipelineProfile || 'panel') !== 'panel') {
@@ -1729,6 +1594,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
     }
   }
 
+  if (dropped.length === 0 && normalizedTextChanges === 0 && normalizedGeometryChanges === 0 && preparedLines.length === inputLines.length) {
+    return markPanelSafetyNormalized(result);
+  }
+
   const originalOrder = new Map<OCRLine, number>();
   dedupInputLines.forEach(({ line, index }) => {
     originalOrder.set(line, index);
@@ -1756,18 +1625,11 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
     return 0;
   });
 
-  // Apply horizontal merger for adjacent lines on the same baseline
-  const finalLines = mergeHorizontalCloseLines(dedupedLines, pageWidth, pageHeight, documentLikePage);
-
-  if (dropped.length === 0 && normalizedTextChanges === 0 && normalizedGeometryChanges === 0 && preparedLines.length === inputLines.length && finalLines.length === inputLines.length) {
-    return markPanelSafetyNormalized(result);
-  }
-
-  const finalWords = finalLines.flatMap((line) => line.words || []);
-  const confidenceSource = finalWords.length > 0
-    ? finalWords.map((word) => Number(word.confidence || 0))
-    : finalLines.map((line) => Number(line.confidence || 0));
-  const finalConfidence = confidenceSource.length > 0
+  const dedupedWords = dedupedLines.flatMap((line) => line.words || []);
+  const confidenceSource = dedupedWords.length > 0
+    ? dedupedWords.map((word) => Number(word.confidence || 0))
+    : dedupedLines.map((line) => Number(line.confidence || 0));
+  const dedupedConfidence = confidenceSource.length > 0
     ? (confidenceSource.reduce((sum, value) => sum + value, 0) / confidenceSource.length)
     : Number(result.confidence || 0);
 
@@ -1782,10 +1644,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
 
   return markPanelSafetyNormalized({
     ...result,
-    lines: finalLines,
-    words: finalWords,
-    text: finalLines.map((line) => String(line.text || '')).filter(Boolean).join('\n').trim(),
-    confidence: finalConfidence,
+    lines: dedupedLines,
+    words: dedupedWords,
+    text: dedupedLines.map((line) => String(line.text || '')).filter(Boolean).join('\n').trim(),
+    confidence: dedupedConfidence,
     debug: {
       ...(result.debug || {}),
       dropCounts,

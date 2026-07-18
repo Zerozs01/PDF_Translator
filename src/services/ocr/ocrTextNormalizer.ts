@@ -37,8 +37,6 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 ];
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
-  { pattern: /\bPDF\s*TRANSL\s*AT\s*OR\b/gi, replacement: 'PDF TRANSLATOR' },
-  { pattern: /\bPDF\s*TRANSLATOR\b/gi, replacement: 'PDF TRANSLATOR' },
   { pattern: /\bI\s*M\s*P\s*R\s*E\s*S\s*S\s*I\s*O\s*N\b/gi, replacement: 'IMPRESSION' },
   { pattern: /\bE\s*X\s*P\s*R\s*E\s*S\s*S\s*I\s*O\s*N\b/gi, replacement: 'EXPRESSION' },
   { pattern: /\bTHATCANTBE\s+IT\b/gi, replacement: "THAT CAN'T BE IT" },
@@ -53,10 +51,6 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\brecapturina\b/gi, replacement: 'recapturing' },
   { pattern: /\bkina\b/gi, replacement: 'king' },
   { pattern: /,?KN[iI]+GHT\b/gi, replacement: 'KNIGHT' },
-  { pattern: /\b7OCKS\b/gi, replacement: 'COCKS' },
-  { pattern: /\b70CKS\b/gi, replacement: 'COCKS' },
-  { pattern: /\bC0CKS?\b/gi, replacement: 'COCKS' },
-  { pattern: /\bC0CK\b/gi, replacement: 'COCK' },
   { pattern: /HCTAKCEP/gi, replacement: '' },
   { pattern: /\bHES\b/gi, replacement: "HE'S" },
   { pattern: /\bFLICK\b/gi, replacement: 'FUCK' },
@@ -470,36 +464,9 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/(?<!\.)\.{2}(?!\.)/g, '...');
   normalized = normalized.replace(/(?<=^|\s)[|¦│┃￨︱︲_](?=\s|$)/g, ' ');
 
-  // Fix OCR digit confusion: 0 read as O inside words (e.g. ST0000P -> STOOOOOP, C00CKS -> COOCKS)
-  // ทำไมถึงเขียนแบบนี้: OCR มักอ่านตัว O เป็นเลข 0 เมื่ออยู่ท่ามกลางตัวอักษร ต้องแปลงกลับก่อนส่งแปล
-  normalized = normalized.replace(/(?<=[A-Za-z])0+(?=[A-Za-z])/g, (match) => 'O'.repeat(match.length));
-
   // Strip trailing underscores from English words that often appear in OCR artifacts
   normalized = normalized.replace(/([A-Za-z]{2,})_+(\s|$)/g, '$1$2');
   normalized = normalized.replace(/([A-Za-z]+)_+([A-Za-z]+)/g, '$1 $2'); // Fix mid-word underscores
-
-  // Collapse vocal elongations: 3+ repeated chars -> 2 (preserve double-letter words like LOOK, FEEL, KISS)
-  // ทำไมถึงเขียนแบบนี้: ยุบ STOOOOOP->STOP, DIEEEE->DIE แต่ไม่ทำลาย OO/LL/SS ที่ปกติ
-  normalized = normalized.replace(/([a-zA-Z])\1{2,}/gi, '$1$1');
-  // Then collapse exactly-doubled vowels that are clearly elongated manga speech (OO->O, EE->E) only at word boundaries
-  normalized = normalized.replace(/\b([A-Za-z]*?)([AEIOU])\2([A-Za-z]*?)\b/gi, (match, pre, vowel, post) => {
-    // Keep legitimate double-vowel words: LOOK, FEEL, COOL, FOOD, GOOD, NEED, KEEP, SEED, FEET, MEET, BEER, DEER, GEEK, PEEK, SEEK, WEEK, BEES, FEES, SEES, FREE, TREE, TEEN
-    const word = match.toUpperCase();
-    const KEEP_DOUBLES = new Set(['LOOK','FEEL','COOL','FOOD','GOOD','NEED','KEEP','SEED','FEET','MEET','BEER','DEER','GEEK','PEEK','SEEK','WEEK','FREE','TREE','TEEN','BEEN','SEEN','ROOM','MOON','NOON','SOON','TOOL','POOL','FOOL','HOOK','BOOK','COOK','TOOK','WOOD','MOOD','HOOD','LOOP','HOOP','ROOF','POOR','DOOR','BOOT','ROOT','LOOT','HOOT','TOOT','POOP','BOOM','DOOM','ZOOM','LOOM','GLOOMY','BLOOM','BROOM','TEETH','SLEEP','CREEP','SHEEP','STEEL','WHEEL','BREED','BLEED','SPEED','GREED','CREED','STEED','FREED','TREED','KNEEL','SWEET','FLEET','SHEET','QUEEN','GREEN','SCREEN','TOO','SEE','SEEM','SEEMS','FEE','FEES','BEE','BEES','FLEE','HEEL','HEELS','PEEL','PEELS']);
-    if (KEEP_DOUBLES.has(word)) return match;
-    return `${pre}${vowel}${post}`;
-  });
-
-  // ทำไมถึงเขียนแบบนี้: แก้ปัญหาคำที่ OCR สแกนติดกัน (Glued words) จนโปรแกรมแปลภาษาข้ามหรือแปลไม่ได้
-  // เช่น GETRUSTY -> GET RUSTY, NIDDLES -> NIPPLES (สะกดผิดบ่อยในการ์ตูน), HOWDARE -> HOW DARE
-  normalized = normalized.replace(/\bGETRUSTY\b/gi, 'GET RUSTY');
-  normalized = normalized.replace(/\bYOUUPRIGHT\b/gi, 'YOU UPRIGHT');
-  normalized = normalized.replace(/\bNIDDLES\b/gi, 'NIPPLES');
-  normalized = normalized.replace(/\bHOWDARE\b/gi, 'HOW DARE');
-  normalized = normalized.replace(/\bANDMARCH\b/gi, 'AND MARCH');
-  normalized = normalized.replace(/\bERAUNPOCO\b/gi, 'ERA UN POCO');
-  normalized = normalized.replace(/\bILOSE\b/gi, 'I LOSE');
-  normalized = normalized.replace(/\bSue\s+u1\b/gi, 'in any');
 
   // Semicolons often confuse Argos offline models; replace with commas for better flow
   normalized = normalized.replace(/([A-Za-z])\s*;\s*(\s|$)/g, '$1, $2');

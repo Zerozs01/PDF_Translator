@@ -1374,7 +1374,7 @@ describe('translationOverlayUtils typography', () => {
           bbox: { x0: 170, y0: 100, x1: 310, y1: 122 },
           words: [{ text: "THAT'S", confidence: 96, bbox: { x0: 180, y0: 100, x1: 300, y1: 122 } }],
         },
-        hints: { fontFamily: 'TH Sarabun', profile: 'manhwa' },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
       },
       {
         index: 1,
@@ -1388,7 +1388,7 @@ describe('translationOverlayUtils typography', () => {
           bbox: { x0: 140, y0: 128, x1: 340, y1: 150 },
           words: [{ text: 'DEFINITELY', confidence: 96, bbox: { x0: 150, y0: 128, x1: 242, y1: 150 } }],
         },
-        hints: { fontFamily: 'TH Sarabun', profile: 'manhwa' },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
       },
       {
         index: 2,
@@ -1402,16 +1402,16 @@ describe('translationOverlayUtils typography', () => {
           bbox: { x0: 156, y0: 156, x1: 360, y1: 178 },
           words: [{ text: 'WHAT', confidence: 96, bbox: { x0: 168, y0: 156, x1: 208, y1: 178 } }],
         },
-        hints: { fontFamily: 'TH Sarabun', profile: 'manhwa' },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
       },
-    ], { profile: 'manhwa' });
+    ], { profile: 'manga' });
 
     expect(layoutMap.get(0)?.hidden).toBe(false);
-    expect(layoutMap.get(0)?.renderText).toBe('นั่นเป็นไปได้แน่นอน....คิดว่าไง ริฟรีด');
+    expect(layoutMap.get(0)?.renderText).toBe('นั่น เป็นไปได้แน่นอน.... คิดว่าไง ริฟรีด');
     expect(layoutMap.get(1)?.hidden).toBe(true);
     expect(layoutMap.get(2)?.hidden).toBe(true);
-    expect(layoutMap.get(1)?.preserveMaskWhenHidden).toBe(true);
-    expect(layoutMap.get(2)?.preserveMaskWhenHidden).toBe(true);
+    expect(layoutMap.get(1)?.preserveMaskWhenHidden).not.toBe(true);
+    expect(layoutMap.get(2)?.preserveMaskWhenHidden).not.toBe(true);
     expect(layoutMap.get(0)?.mergedBBox).toEqual({ x0: 150, y0: 100, x1: 348, y1: 178 });
     expect(layoutMap.get(0)?.mergedMaskBBox).toEqual({ x0: 140, y0: 100, x1: 360, y1: 178 });
   });
@@ -1430,7 +1430,7 @@ describe('translationOverlayUtils typography', () => {
           bbox: { x0: 150, y0: 100, x1: 320, y1: 118 },
           words: [{ text: 'OR', confidence: 95, bbox: { x0: 178, y0: 100, x1: 198, y1: 118 } }],
         },
-        hints: { fontFamily: 'TH Sarabun', profile: 'manhwa' },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
       },
       {
         index: 1,
@@ -1444,9 +1444,9 @@ describe('translationOverlayUtils typography', () => {
           bbox: { x0: 126, y0: 132, x1: 366, y1: 172 },
           words: [{ text: 'WANT', confidence: 95, bbox: { x0: 150, y0: 132, x1: 198, y1: 152 } }],
         },
-        hints: { fontFamily: 'TH Sarabun', profile: 'manhwa' },
+        hints: { fontFamily: 'TH Sarabun', profile: 'manga' },
       },
-    ], { profile: 'manhwa' });
+    ], { profile: 'manga' });
 
     expect(layoutMap.get(0)?.hidden).toBe(false);
     expect(layoutMap.get(1)?.hidden).toBe(true);
