@@ -160,7 +160,9 @@ describe('TranslationCoordinator & Engines', () => {
         { id: '30', text: 'SCREAMS', groupType: 'balloon' },
         { id: '31', text: 'STOOOOP', groupType: 'balloon' },
         { id: '32', text: 'ST0000P', groupType: 'balloon' },
-        { id: '33', text: 'THAT iTS', groupType: 'balloon' }
+        { id: '33', text: 'THAT iTS', groupType: 'balloon' },
+        { id: '34', text: 'YOU,FRONT', groupType: 'balloon' },
+        { id: '35', text: 'YOU, FRONT', groupType: 'balloon' }
       ];
 
       const results = await translationCoordinator.runTranslation('argos', items, {
@@ -179,7 +181,7 @@ describe('TranslationCoordinator & Engines', () => {
         '6': 'อัศวิน',
         '7': 'ท่าของเธอ',
         '8': 'เหมาะกับ',
-        '9': 'ช่าง...',
+        '9': 'ดังนั้น',
         '10': 'หัวนมและ',
         '11': 'ปากมดลูก',
         '12': 'ควย',
@@ -195,15 +197,17 @@ describe('TranslationCoordinator & Engines', () => {
         '22': 'เหล่าขุนนางทั้งหมด',
         '23': 'ราชาและ',
         '24': 'อย่างเต็มรูปแบบ',
-        '25': 'แต่ไม่ว่าจะในยุคสมัยใด',
+        '25': 'แต่ในทุกยุคสมัย...',
         '26': 'มากกกกว่าาาานี้',
         '27': 'ได้โปรด ดดดดดด',
         '28': 'บอกเรื่องของเขา',
         '29': 'พวกบาบาเรียน',
         '30': 'กรีดร้อง',
-        '31': 'หยุดดดด',
+        '31': 'หยุดดดด!',
         '32': 'หยุดดดด',
         '33': 'ว่ามัน',
+        '34': 'แกอยู่ข้างหน้า',
+        '35': 'แกอยู่ข้างหน้า',
       };
 
       Object.entries(expected).forEach(([id, val]) => {

@@ -38,6 +38,7 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /\bNat\s+My\b/gi, replacement: 'NOT MY' },
+  { pattern: /^\s*168\s*$/gi, replacement: '' },
   { pattern: /\b4SS-?\s*HOLE\b/gi, replacement: 'ASSHOLE' },
   { pattern: /\b4SS\b/gi, replacement: 'ASS' },
   { pattern: /\b455-?\s*HOLE\b/gi, replacement: 'ASSHOLE' },
@@ -149,7 +150,7 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bCUM\s*-\s*\*?\+?\s*M+I+N+\s+N+G+\s+G+\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
   { pattern: /\bCUM\s*-\s*\*?\+?\s*M+I+N+\+\s*N+G+\+\s*G+\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
   { pattern: /\bCUM-?\s*\*?\+?\s*M+I+N+N+G+G+\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
-  { pattern: /\bCOO\s+[O0]+\s*F?OCKS\b/gi, replacement: 'COOOOOOCKS' },
+  { pattern: /\bC[O0]{2,}\s*[+\s0]*[0-9]*\s*7?F?CKS\b/gi, replacement: 'COOOOOOOCKS' },
   { pattern: /\bWiTH\b/g, replacement: 'WITH' },
   { pattern: /\biT\b/g, replacement: 'IT' },
   { pattern: /\bSiDE\b/g, replacement: 'SIDE' },

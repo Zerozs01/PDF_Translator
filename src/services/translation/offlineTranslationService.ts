@@ -62,8 +62,8 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
   'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
   'so': 'ดังนั้น', 'so...': 'ดังนั้น...', 'so!': 'ดังนั้น!',
-  'hole': 'รู', 'hole!': 'รู!', 'asshole': 'รูทวาร', 'ass': 'ตูด', '4ss': 'ตูด', '4ss!': 'ตูด!',
-  'getting': 'กำลังได้', 'getting...': 'กำลังได้...',
+  'hole': 'รู', 'hole!': 'รู!', 'asshole': 'รูตูด', 'asshole!': 'รูตูด!', 'asshole!!': 'รูตูด!!', 'ass-hole': 'รูตูด', 'ass-hole!': 'รูตูด!', 'ass-hole!!': 'รูตูด!!', 'ass': 'ตูด', '4ss': 'ตูด', '4ss!': 'ตูด!',
+  'getting': 'กำลัง', 'getting...': 'กำลัง...', 'getting!': 'กำลัง!',
   'first': 'ครั้งแรก', 'first!': 'ครั้งแรก!', 'first...': 'ครั้งแรก...',
   'again': 'อีกครั้ง', 'again!': 'อีกครั้ง!', 'again...': 'อีกครั้ง...',
   'leave it to me, sir!': 'ปล่อยให้เป็นหน้าที่ของผมเองครับท่าน!',
@@ -85,12 +85,14 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'that': 'นั่น', 'feels': 'รู้สึก', 'that-': 'นั่น-',
   'front': 'ข้างหน้า', 'front.': 'ข้างหน้า', 'front!': 'ข้างหน้า!',
   'you front': 'แกอยู่ข้างหน้า', 'you front!': 'แกอยู่ข้างหน้า!',
+  'you,front': 'แกอยู่ข้างหน้า', 'you,front!': 'แกอยู่ข้างหน้า!',
+  'you, front': 'แกอยู่ข้างหน้า', 'you, front!': 'แกอยู่ข้างหน้า!',
   'kniiiiiight': 'อัศวิน', 'kniiiiight': 'อัศวิน', 'kniiiiight!': 'อัศวิน!',
   'youre': 'คุณคือ', 'you\'re': 'คุณคือ', 'you\'re!': 'คุณคือ!', 'youre!': 'คุณคือ!',
   'hes': 'เขาคือ', 'he\'s': 'เขาคือ', 'he s': 'เขาคือ', 'he s...': 'เขาคือ...', 'he s!': 'เขาคือ!', 'he\'s!': 'เขาคือ!',
   'meeeeeee': 'ฉันนนนนนน!', 'meeeeeee!': 'ฉันนนนนนน!', 'meefffee!': 'ฉันนนนนนน!', 'meeeeee': 'ฉันนนนนนน!', 'meeeee': 'ฉันนนนนนน!',
   'would': 'จะ', 'would...': 'จะ...', 'would!': 'จะ!',
-  'the pig you are': 'ไอ้หมูโสโครกอย่างแก', 'the pig you are!': 'ไอ้หมูโสโครกอย่างแก!',
+  'the pig you are': 'เจ้าหมูอย่างคุณ', 'the pig you are!': 'เจ้าหมูอย่างคุณ!',
   'pig you are': 'ไอ้หมูโสโครก', 'pig you are!': 'ไอ้หมูโสโครก!',
   'a pig like you': 'หมูอย่างแก', 'a pig like you!': 'หมูอย่างแก!',
   'a pig like': 'หมูแบบ', 'pig like you': 'หมูอย่างแก',
@@ -307,7 +309,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'so please': 'ดังนั้นได้โปรด', 'so please!': 'ดังนั้นได้โปรด!', 'soplease': 'ดังนั้นได้โปรด', 'soplease!': 'ดังนั้นได้โปรด!',
   'why!?': 'ทำไม!?', 'why?': 'ทำไม?',
   'ass-': 'ก้น',
-  'ass- hole': 'ไอ้สัตว์', 'ass-hole': 'ไอ้สัตว์',
+  'ass- hole': 'รูตูด',
   'ha!': 'ฮ่า!', 'ha ha': 'ฮ่าฮ่า', 'ha ha ha': 'ฮ่าฮ่าฮ่า',
   'hehe': 'เฮ้เฮ้', 'hehe!': 'เฮ้เฮ้!', 'hehehe': 'เฮ้เฮ้เฮ้', 'hehehe!': 'เฮ้เฮ้เฮ้!',
   'i cant believe it': 'ไมยากเชื่อเลย...', 'i cannot believe it': 'ไม่อยากเชื่อเลย...',
@@ -342,15 +344,21 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'squirting so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
   'youre squiring so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
   'youre squirting so much as usual': 'น้ำพุ่งออกมาเยอะเหมือนเคย',
+  'cooooooocks': 'ควยยยยยยพวกนี้',
   'coooooocks': 'ควยยยยยยพวกนี้',
   'cooooocks': 'ควยยยยยยพวกนี้',
+  'coooocks': 'ควยยยยยยพวกนี้',
   'cooocks': 'ควยยยยยยพวกนี้',
   'coocks': 'ควยยยยยยพวกนี้',
   'cocks': 'ควยพวกนี้',
+  'by cooooooocks': 'โดย ควยย ยยย ยเหล่านี้',
+  'by cooooooocks!': 'โดย ควยย ยยย ยเหล่านี้!',
   'by coooooocks': 'โดย ควยย ยยย ยเหล่านี้',
   'by coooooocks!': 'โดย ควยย ยยย ยเหล่านี้!',
   'by cooooocks': 'โดย ควยย ยยย ยเหล่านี้',
   'by cooooocks!': 'โดย ควยย ยยย ยเหล่านี้!',
+  'by coooocks': 'โดย ควยย ยยย ยเหล่านี้',
+  'by coooocks!': 'โดย ควยย ยยย ยเหล่านี้!',
   'by cooocks': 'โดย ควยย ยยย ยเหล่านี้',
   'by cooocks!': 'โดย ควยย ยยย ยเหล่านี้!',
   'by coocks': 'โดย ควยย ยยย ยเหล่านี้',
@@ -358,8 +366,18 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'by cocks': 'โดย ควยพวกนี้',
   'by cocks!': 'โดย ควยพวกนี้!',
   'by cock': 'โดย ควย',
+  'being slashed by cooooooocks': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้',
+  'being slashed by cooooooocks!': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้!',
   'being slashed by coooooocks': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้',
   'being slashed by coooooocks!': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้!',
+  'being slashed by cooooocks': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้',
+  'being slashed by cooooocks!': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้!',
+  'being slashed by coooocks': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้',
+  'being slashed by coooocks!': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้!',
+  'being slashed by cooocks': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้',
+  'being slashed by cooocks!': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้!',
+  'being slashed by coocks': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้',
+  'being slashed by coocks!': 'ถูกฟันโดย ควยย ยยย ยเหล่านี้!',
   'being slashed by cocks': 'ถูกฟันโดยควยพวกนี้',
   'being slashed by cocks!': 'ถูกฟันโดยควยพวกนี้!',
   'my heart\'s being torn by their cocks': 'หัวใจ\nของฉัน\nกำลัง\nถูก\nฉีกกระชาก\nด้วย\nควยพวกนี้',
@@ -528,6 +546,14 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'cervix!': 'ปากมดลูก!',
   'us the!': 'พวกเรา!',
   'posi': 'ท่า', 'posi!': 'ท่า!',
+  'pig': 'หมู', 'pig!': 'หมู!',
+  'coo': 'ควย', 'coo!': 'ควย!',
+  '000': 'ยยย', '000!': 'ยยย!', 'ooo': 'ยยย', 'ooo!': 'ยยย!',
+  '7ocks': 'ควย', '7ocks!': 'ควย!', 'ocks': 'ควย', 'ocks!': 'ควย!', 'cks': 'ควย', 'cks!': 'ควย!',
+  'coo 000 7ocks': 'ควยยยยยย', 'coo 000 7ocks!': 'ควยยยยยย!',
+  'coo 000 ocks': 'ควยยยยยย', 'coo 000 ocks!': 'ควยยยยยย!',
+  'coo ooo cks': 'ควยยยยยย', 'coo ooo cks!': 'ควยยยยยย!',
+  'coo ooo ocks': 'ควยยยยยย', 'coo ooo ocks!': 'ควยยยยยย!',
   'but in any': 'แต่ไม่ว่าจะใน...', 'but in any!': 'แต่ไม่ว่าจะใน...!',
 };
 
@@ -620,7 +646,10 @@ export const lookupShortPhraseTh = (text: string): string | null => {
     return 'ตายแล้ว';
   }
   // สำหรับ cocks (เช่น cooooocks)
-  if (/^c[o]+ck[s]*$/i.test(key)) {
+  if (/^c[o]+ck$/i.test(key)) {
+    return 'ควย';
+  }
+  if (/^c[o]+cks$/i.test(key)) {
     return 'ควยยยยยยพวกนี้';
   }
 
@@ -1023,7 +1052,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH|BE|STOP|HOLE|LETHER|THEBABAR|THEBARBA|PUNCHINGMY|GETTING|ALSOSAYTHAT|BUTINANY|FIRST|AGAIN|ASS|ASSHOLE|ISDEAD|MYHEARTSBEINGTORNBYTHEIRCOCKS|BEINGSLASHEDBYCOOOOOOCKS|BYCOOOOOOCKS)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|C[O]+CKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH|BE|STOP|HOLE|LETHER|THEBABAR|THEBARBA|PUNCHINGMY|GETTING|ALSOSAYTHAT|BUTINANY|FIRST|AGAIN|ASS|ASSHOLE|ISDEAD|MYHEARTSBEINGTORNBYTHEIRCOCKS|BEINGSLASHEDBYC[O]+CKS|BYC[O]+CKS)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {

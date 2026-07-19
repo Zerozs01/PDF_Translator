@@ -1037,6 +1037,7 @@ export type OverlayTypographyHints = {
   fontFamily?: string;
   profile?: OverlayLayoutProfile;
   styleKind?: OverlayStyleKind;
+  groupType?: string;
 };
 
 export type OverlayTypographyInput = {
@@ -3153,34 +3154,34 @@ const shouldHarmonizeOverlayBlock = (
   if (!effectiveDocumentProfile) {
     const isComicProfile = profile === 'manga' || profile === 'manhwa' || profile === 'adaptive';
     const generousComicStack = isComicProfile
-      && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
-      && verticalGap >= -avgHeight * 0.4
-      && verticalGap <= Math.max(36, avgHeight * 1.85)
-      && heightRatio <= 3.2;
+      && (overlapRatio >= 0.45 || (centerDelta <= Math.max(18, avgHeight * 0.5) && overlapRatio >= 0.18))
+      && verticalGap >= -avgHeight * 0.3
+      && verticalGap <= Math.max(28, avgHeight * 1.15)
+      && heightRatio <= 2.8;
     if (generousComicStack) {
       return true;
     }
     if (boxedFragmentContinuity) {
       return true;
     }
-    const centeredStack = centerDelta <= Math.max(18, avgHeight * (profile === 'manga' ? 1.55 : profile === 'adaptive' ? 1.42 : 1.4));
+    const centeredStack = centerDelta <= Math.max(18, avgHeight * (profile === 'manga' ? 1.25 : profile === 'adaptive' ? 1.25 : 1.15));
     const centeredFragmentContinuity = shortComicFragmentPair
-      && centerDelta <= Math.max(24, avgHeight * 1.9);
+      && centerDelta <= Math.max(24, avgHeight * 1.35);
     const centeredFragmentMerge = centeredFragmentContinuity
       && centeredStack
-      && heightRatio <= 3.2
-      && verticalGap >= -avgHeight * 0.38
-      && verticalGap <= Math.max(36, avgHeight * 1.85);
+      && heightRatio <= 2.8
+      && verticalGap >= -avgHeight * 0.3
+      && verticalGap <= Math.max(28, avgHeight * 1.25);
     if (centeredFragmentMerge) {
       return true;
     }
     if (
       centeredStackContinuity
-      && overlapRatio >= 0.04
+      && overlapRatio >= 0.08
       && centeredStack
-      && heightRatio <= 2.8
-      && verticalGap >= -avgHeight * 0.32
-      && verticalGap <= Math.max(36, avgHeight * (profile === 'manga' ? 1.85 : profile === 'adaptive' ? 1.75 : 1.25))
+      && heightRatio <= 2.5
+      && verticalGap >= -avgHeight * 0.28
+      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 1.25 : profile === 'adaptive' ? 1.25 : 1.15))
     ) {
       return true;
     }
@@ -3797,8 +3798,8 @@ export const computeOverlayLayoutMap = (
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
       : undefined;
-    const allowSectionMerge = effectiveProfile === 'manga'
-      || effectiveProfile === 'manhwa';
+    const allowSectionMerge = (effectiveProfile === 'manga' || effectiveProfile === 'manhwa')
+      && !group.some((item) => item.hints?.groupType === 'sfx');
     const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
     const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
     const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile

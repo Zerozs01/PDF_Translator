@@ -188,11 +188,11 @@ const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onComm
 
   const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && Boolean(layout?.mergedMaskBBox);
   const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-  const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+  const textSourceTop = sourceBbox.y0;
   const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-  const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
-  const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-  const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+  const textBaseHeight = baseHeight;
+  const mergedComicTextTopLift = 0;
+  const mergedComicTextExtraHeight = 0;
 
   const rawTextLeft = textSourceLeft * scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
   const rawTextTop = textSourceTop * scaleY - maskExpandTop - mergedComicTextTopLift;

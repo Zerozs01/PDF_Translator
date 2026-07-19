@@ -1151,7 +1151,6 @@ app.whenReady().then(() => {
         }
       }
 
-      console.log('[ocr:get-gpu-info] Scanning searchRoots:', searchRoots);
       for (const root of searchRoots) {
         if (!root) continue;
         const resolvedRoot = path.resolve(root);
@@ -1175,14 +1174,11 @@ app.whenReady().then(() => {
         for (const venvDir of ['.venv-ocr', '.venv']) {
           const venvPath = path.join(resolvedRoot, venvDir);
           if (fs.existsSync(venvPath)) {
-            console.log(`[ocr:get-gpu-info] Found venvPath: ${venvPath}`);
             const sitePackagesPath = path.join(venvPath, 'Lib', 'site-packages');
             if (fs.existsSync(sitePackagesPath)) {
-              console.log(`[ocr:get-gpu-info] Found sitePackagesPath: ${sitePackagesPath}`);
               const hasTorchDml = fs.existsSync(path.join(sitePackagesPath, 'torch_directml'));
               const hasOnnxDml1 = fs.existsSync(path.join(sitePackagesPath, 'onnxruntime_directml'));
               const hasOnnxDml2 = fs.existsSync(path.join(sitePackagesPath, 'onnxruntime-directml'));
-              console.log(`[ocr:get-gpu-info] Checks - torchDml: ${hasTorchDml}, onnxDml1: ${hasOnnxDml1}, onnxDml2: ${hasOnnxDml2}`);
               if (hasTorchDml || hasOnnxDml1 || hasOnnxDml2) {
                 hasDirectML = true;
               }
@@ -1193,7 +1189,6 @@ app.whenReady().then(() => {
           }
         }
       }
-      console.log(`[ocr:get-gpu-info] Final hasDirectML: ${hasDirectML}`);
 
       // Check environment override
       if (process.env.OCR_USE_DIRECTML === '1') {
@@ -1209,6 +1204,8 @@ app.whenReady().then(() => {
       } else if (hasDirectML) {
         mode = 'DirectML';
       }
+
+      console.log(`[ocr:get-gpu-info] Mode resolved: ${mode} (gpus: ${gpuNames.join(', ') || 'none'})`);
 
       return {
         gpus: gpuNames.length > 0 ? gpuNames : ['CPU Display Adapter'],

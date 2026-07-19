@@ -189,11 +189,27 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
     }
   }
 
+  // (e) Hyphen continuation override (e.g., "ASS-" on top line, "HOLE" on bottom line)
+  const isHyphenContinuation = /[A-Za-z][\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/.test(topText)
+    && /^[A-Za-z]/.test(bottomLine.text.trim());
+  if (isHyphenContinuation && horizOverlap >= 0.25 && vertGap <= 3.0 * avgHeight) {
+    return true;
+  }
+
+  // (f) Standalone imperative/exclamation clause guard (e.g., "SUCK" top line vs "YOU KEEP" bottom line)
+  const SINGLE_IMPERATIVE_OR_EXCLAMATION_RE = /^(?:SUCK|STOP|S-STOP|LOOK|WAIT|HELP|NO|YES|CUM|FU*CK|SHIT|DAMN|HEY|AH|OH|WOW|PLEASE)[!.,?…]*$/i;
+  const NEW_CLAUSE_START_RE = /^(?:YOU|I|HE|SHE|WE|THEY|IT|IF|BUT|DON['’]?T|CAN['’]?T|WONT|THAT['’]?S|THIS|THERE)[!.,?\s]/i;
+  if (SINGLE_IMPERATIVE_OR_EXCLAMATION_RE.test(topText) && NEW_CLAUSE_START_RE.test(bottomLine.text.trim())) {
+    if (vertGap > minHeight * 0.2) {
+      return false;
+    }
+  }
+
   // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
   // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines (หรือ 3.2x สำหรับภาษาอังกฤษแนวตั้งที่จัดระนาบเดียวกัน)
   const isBothEnglish = isLikelyEnglishDialogue(a.text) && isLikelyEnglishDialogue(b.text);
   const maxVertGap = isBothEnglish && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
-  return horizOverlap >= 0.30 && vertGap <= maxVertGap;
+  return horizOverlap >= 0.48 && vertGap <= maxVertGap;
 };
 
 /**
@@ -345,15 +361,15 @@ export const splitAggressiveMergedLines = (
         effectiveGapMultiplier = 0.75;
       }
 
-      const isHyphenated = /-$/.test(prevText);
+      const isHyphenated = /-$/.test(prevText) && gap < avgHeight * 0.75;
       const isHeightMismatch = prevHeight > currHeight * 2.2 || currHeight > prevHeight * 2.2;
       // cross-balloon gap: ปรับความละเอียดลดขีดจำกัดล่างลงเพื่อป้องกันเคสคำพิมพ์ใหญ่โดนรวม (เช่น FiTTiNG FOR BEING)
-      const isCapitalizedWordBoundary = /^[A-Z]/.test(currText) && gap >= Math.max(20, minHeight * 1.15);
+      const isCapitalizedWordBoundary = /^[A-Z]/.test(currText) && gap >= Math.max(14, minHeight * 0.75);
       const isCrossBalloonCandidate = !isHyphenated && (
-        isHeightMismatch || isCapitalizedWordBoundary || gap > 1.25 * minHeight
+        isHeightMismatch || isCapitalizedWordBoundary || gap > 0.9 * minHeight
       );
 
-      const absoluteSplitThreshold = 1.25;
+      const absoluteSplitThreshold = 0.9;
       if (!isHyphenated && (isCrossBalloonCandidate || gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * minHeight)) {
         result.push({
           ...line,

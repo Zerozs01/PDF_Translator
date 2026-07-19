@@ -361,6 +361,22 @@ describe('LayerGroupingService Spatial Clustering', () => {
     const splitHyphenated = splitAggressiveMergedLines([hyphenatedLine], 2.2);
     expect(splitHyphenated.length).toBe(1);
     expect(splitHyphenated[0].text).toBe('A ONE-ON- ONE BATTLE!');
+
+    // 5. "SUCK" and "YOU KEEP" merged horizontal line simulation
+    const lineSuckYouKeep = {
+      text: 'SUCK YOU KEEP',
+      confidence: 90,
+      bbox: { x0: 10, y0: 100, x1: 220, y1: 130 },
+      words: [
+        { text: 'SUCK', confidence: 90, bbox: { x0: 10, y0: 100, x1: 70, y1: 130 } },
+        { text: 'YOU', confidence: 90, bbox: { x0: 110, y0: 100, x1: 160, y1: 130 } },
+        { text: 'KEEP', confidence: 90, bbox: { x0: 170, y0: 100, x1: 220, y1: 130 } }
+      ]
+    };
+    const splitSuckYouKeep = splitAggressiveMergedLines([lineSuckYouKeep], 2.2);
+    expect(splitSuckYouKeep.length).toBe(2);
+    expect(splitSuckYouKeep[0].text).toBe('SUCK');
+    expect(splitSuckYouKeep[1].text).toBe('YOU KEEP');
   });
 
   test('does not group FITTING FOR (left) and BEING (right) into the same group', () => {

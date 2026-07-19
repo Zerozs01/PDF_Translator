@@ -1703,6 +1703,12 @@ export const shouldPreserveSourceLineForTranslation = (
   sourceLanguage: string,
   ocrLanguageHint?: string
 ): boolean => {
+  const normSrc = normalizeTranslationLanguage(sourceLanguage, 'en');
+  const isNonLatinScript = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(text);
+  if (!isNonLatinScript || ['ja', 'ko', 'zh'].includes(normSrc)) {
+    if (lookupShortPhraseTh(text)) return false;
+  }
+  if (/^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)) return true;
   if (isLikelyStructuredOcrGarbageToken(text)) return true;
   if (isScientificSymbolLikeLine(text, sourceLanguage)) return true;
   return shouldSkipLineTranslationByScript(text, sourceLanguage, ocrLanguageHint);
@@ -2613,33 +2619,110 @@ export const buildTranslationGroups = (
 
 const composeGroupSourceText = (
   lines: TranslatableLine[],
-  groupType: LayoutGroupType = 'unknown',
+  groupType: string = 'unknown',
   groupingProfile: TranslationGroupingProfile = 'default'
 ): { composed: string; dehyphenJoins: DehyphenatedJoin[] } => {
-  const normalized = lines
-    .map((line) => {
-      const rawText = line.text != null ? String(line.text) : '';
-      const cleaned = normalizeEnglishOcrNoiseForTranslation(rawText);
-      return normalizeWhitespace(cleaned);
-    })
-    .filter(Boolean);
+  const items = lines.map((line, originalIdx) => {
+    const rawText = line.text != null ? String(line.text) : '';
+    const cleaned = normalizeEnglishOcrNoiseForTranslation(rawText);
+    return {
+      text: normalizeWhitespace(cleaned),
+      originalIdx,
+    };
+  });
 
-  if (normalized.length <= 1) {
-    return { composed: (normalized[0] ?? '').replace(/-$/, ''), dehyphenJoins: [] };
+  const activeItems = items.filter((item) => Boolean(item.text));
+
+  if (activeItems.length === 0) {
+    return { composed: '', dehyphenJoins: [] };
+  }
+  if (activeItems.length === 1) {
+    return { composed: activeItems[0].text.replace(/-$/, ''), dehyphenJoins: [] };
   }
 
   const isNarrative =
+    groupType === 'balloon' ||
     groupType === 'narration' ||
     groupType === 'dialogue' ||
     groupType === 'unknown';
 
   if (!isNarrative) {
-    return { composed: normalized.join('\n'), dehyphenJoins: [] };
+    const composed = activeItems.map((item) => item.text).join('\n');
+    return { composed, dehyphenJoins: [] };
   }
 
-  const joins = detectDehyphenatedJoins(normalized);
-  const { merged, childSet } = mergeDehyphenatedSource(normalized, joins);
-  const composed = merged.filter((_, idx) => !childSet.has(idx)).join(' ');
+  const joins: DehyphenatedJoin[] = [];
+
+  // 1. Merge split COOOOOOOCKS across lines
+  for (let i = 0; i < activeItems.length; i++) {
+    const currItem = activeItems[i];
+    if (!currItem.text) continue;
+    const curr = currItem.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    
+    // Case 1: COO + OOO + OCKS (3 lines)
+    if (i < activeItems.length - 2) {
+      const n1Item = activeItems[i + 1];
+      const n2Item = activeItems[i + 2];
+      if (n1Item.text && n2Item.text) {
+        const next1 = n1Item.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const next2 = n2Item.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (
+          /^COO+$/i.test(curr) &&
+          /^[0O]{3,}$/i.test(next1) &&
+          /^[70Z]?OCKS$/i.test(next2)
+        ) {
+          currItem.text = 'COOOOOOOCKS';
+          n1Item.text = '';
+          n2Item.text = '';
+          joins.push({ parentIdx: currItem.originalIdx, childIdx: n1Item.originalIdx });
+          joins.push({ parentIdx: currItem.originalIdx, childIdx: n2Item.originalIdx });
+          continue;
+        }
+      }
+    }
+    
+    // Case 2: COO + OCKS (2 lines)
+    if (i < activeItems.length - 1) {
+      const n1Item = activeItems[i + 1];
+      if (n1Item.text) {
+        const next = n1Item.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (
+          /^COO+$/i.test(curr) &&
+          /^[70Z]?OCKS$/i.test(next)
+        ) {
+          currItem.text = 'COOOOOOOCKS';
+          n1Item.text = '';
+          joins.push({ parentIdx: currItem.originalIdx, childIdx: n1Item.originalIdx });
+          continue;
+        }
+      }
+    }
+  }
+
+  // Filter out any blanked items from step 1
+  const remainingItems = activeItems.filter((item) => Boolean(item.text));
+
+  // 2. Perform hyphenation merges on the remaining lines
+  for (let i = 0; i < remainingItems.length - 1; i++) {
+    const currItem = remainingItems[i];
+    const nextItem = remainingItems[i + 1];
+    
+    if (
+      currItem.text &&
+      nextItem.text &&
+      /[A-Za-z][\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/.test(currItem.text) &&
+      /^[A-Za-z0-9]/.test(nextItem.text)
+    ) {
+      const cleanParentText = currItem.text.replace(/[\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/, '');
+      currItem.text = cleanParentText + nextItem.text;
+      nextItem.text = '';
+      joins.push({ parentIdx: currItem.originalIdx, childIdx: nextItem.originalIdx });
+    }
+  }
+
+  // Filter out any blanked items from step 2
+  const finalItems = remainingItems.filter((item) => Boolean(item.text));
+  const composed = finalItems.map((item) => item.text).join(' ');
 
   return { composed, dehyphenJoins: joins };
 };
@@ -4662,11 +4745,11 @@ export default function App() {
 
       const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
       const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-      const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+      const textSourceTop = sourceBbox.y0;
       const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-      const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
-      const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-      const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+      const textBaseHeight = baseHeight;
+      const mergedComicTextTopLift = 0;
+      const mergedComicTextExtraHeight = 0;
       const rawTextLeft = textSourceLeft * scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
       const rawTextTop = textSourceTop * scaleY - maskExpandTop - mergedComicTextTopLift;
       const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
@@ -5350,7 +5433,9 @@ export default function App() {
           }
           redistributedCursor += 1;
 
-          if (normalizedTargetLanguage === 'th') {
+          const cleanFinal = nextText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (normalizedTargetLanguage === 'th' && (!nextText || nextText === sourceLineText || cleanFinal === cleanSource)) {
             const directTranslation = lookupShortPhraseTh(sourceLineText);
             if (directTranslation) {
               nextText = directTranslation;
@@ -5546,9 +5631,32 @@ export default function App() {
           if (matchedCache && !options?.bypassPageCache) {
             console.log(`[Translation] Cache hit for page ${pageNum} via database! Skipping translation coordinator.`);
             
+            let safeMatchedCache = matchedCache;
+            if (normalizedTargetLanguage === 'th' && matchedCache && Array.isArray(matchedCache.translatedByIndex)) {
+              safeMatchedCache = {
+                ...matchedCache,
+                translatedByIndex: matchedCache.translatedByIndex.map((item: any) => {
+                  if (item && item.text) {
+                    const source = String(item.sourceText || item.rawText || '').trim();
+                    const translated = String(item.text).trim();
+                    const cleanSource = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    const cleanTrans = translated.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    
+                    if (cleanSource === cleanTrans || !translated || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
+                      const glossaryMatch = lookupShortPhraseTh(source);
+                      if (glossaryMatch) {
+                        return { ...item, text: glossaryMatch };
+                      }
+                    }
+                  }
+                  return item;
+                })
+              };
+            }
+
             // อัปเดตข้อมูลเข้า Store สำหรับหน้าจอ UI
-            ocrState.setTranslationCacheEntry(pageNum, matchedCache.key, matchedCache);
-            ocrState.setActiveTranslationCacheKey(pageNum, matchedCache.key);
+            ocrState.setTranslationCacheEntry(pageNum, safeMatchedCache.key, safeMatchedCache);
+            ocrState.setActiveTranslationCacheKey(pageNum, safeMatchedCache.key);
             ocrState.setTranslationPreviewMode('translated');
 
             // ซิงค์ผลการแปลกลับเข้าสู่ Layer Store ด้วย
@@ -5585,7 +5693,7 @@ export default function App() {
 
               if (pageLayers.length > 0) {
                 const updatedPageLayers = pageLayers.map(layer => {
-                  const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, matchedCache.translatedByIndex);
+                  const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, safeMatchedCache.translatedByIndex);
                   if (!matchedItem) return layer;
                   if (layer.userEdited) return layer;
                   return {
@@ -5605,7 +5713,7 @@ export default function App() {
                 const translatedMap = new Map<number, string>();
                 if (Array.isArray(pageOCR?.lines)) {
                   pageOCR.lines.forEach((line, idx) => {
-                    const matchedItem = findBestCacheMatch(line.text, idx, matchedCache.translatedByIndex);
+                    const matchedItem = findBestCacheMatch(line.text, idx, safeMatchedCache.translatedByIndex);
                     if (matchedItem) {
                       translatedMap.set(idx, matchedItem.text);
                     }
@@ -5782,13 +5890,13 @@ export default function App() {
     const rawTranslatableLines = assistedLines
       .filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) return false;
-        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
+        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text) && !lookupShortPhraseTh(line.text)) return false;
         return true;
       });
     let translatableLines = dedupedTranslatableLines
       .filter((line) => {
         if (shouldPreserveSourceLineForTranslation(line.text, translationSourceLanguage, ocrLanguageKey)) return false;
-        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text)) return false;
+        if (latinDominantPage && isLikelyShortForeignSfxLine(line.text) && !lookupShortPhraseTh(line.text)) return false;
         return true;
       });
     const preservedSourceLineCount = dedupedTranslatableLines.length - translatableLines.length;
@@ -6203,6 +6311,48 @@ export default function App() {
               overrideLines.push('');
             }
           });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 4. COO + OOO + OCKS / COO + OCKS / COOOOOOOCKS -> ควยย ยยย ยพวกนี้ / โดย ควยย ยยย ยเหล่านี้
+        else if (
+          (() => {
+            const normalizedCombined = compactCombined
+              .replace(/[07QDZ]/g, 'O')
+              .replace(/G/g, 'C')
+              .replace(/5/g, 'S');
+            return /CO+C?KS/i.test(normalizedCombined) || /C[O0]{2,}CKS/i.test(compactCombined);
+          })()
+        ) {
+          const overrideLines: string[] = [];
+          let foundMain = false;
+          group.lines.forEach((line, lineOffset) => {
+            const lineTextClean = line.text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const isCocksLinePart = (() => {
+              const clean = lineTextClean.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+              if (!clean) return false;
+              if (/^[O0QD7]{2,}$/.test(clean)) return true;
+              const normalized = clean
+                .replace(/[07QDZ]/g, 'O')
+                .replace(/G/g, 'C')
+                .replace(/5/g, 'S');
+              return /^[CO]*C?KS$/.test(normalized) || /^[CO]{2,}$/.test(normalized) || /^[CO]+C?K?S?$/.test(normalized);
+            })();
+
+            if (lineTextClean === 'BY') {
+              overrideLines.push('โดย');
+            } else if (isCocksLinePart) {
+              if (!foundMain) {
+                overrideLines.push('ควยย ยยย ยพวกนี้');
+                foundMain = true;
+              } else {
+                overrideLines.push('');
+              }
+            } else {
+              overrideLines.push(line.text);
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
         }
       }
 
@@ -6210,7 +6360,15 @@ export default function App() {
       if (directLineOverride && directLineOverride.length > 0) {
         group.lines.forEach((line, lineIndex) => {
           const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
-          const overrideText = directLineOverride[lineIndex] !== undefined ? directLineOverride[lineIndex] : sourceLineText;
+          let overrideText = directLineOverride[lineIndex] !== undefined ? directLineOverride[lineIndex] : sourceLineText;
+          const cleanOverride = overrideText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (normalizedTargetLanguage === 'th' && (overrideText === sourceLineText || cleanOverride === cleanSource)) {
+            const glossaryMatch = lookupShortPhraseTh(sourceLineText);
+            if (glossaryMatch) {
+              overrideText = glossaryMatch;
+            }
+          }
           translatedByIndex.set(line.index, overrideText || sourceLineText);
           if (group.replacements.length === 0 && shouldRetryLineTranslation(line.text, overrideText, groupSourceLanguage, normalizedTargetLanguage)) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
@@ -6257,7 +6415,9 @@ export default function App() {
         }
         redistributedCursor += 1;
 
-        if (normalizedTargetLanguage === 'th') {
+        const cleanFinal = finalizedLine.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (normalizedTargetLanguage === 'th' && (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource)) {
           const directTranslation = lookupShortPhraseTh(sourceLineText);
           if (directTranslation) {
             finalizedLine = directTranslation;

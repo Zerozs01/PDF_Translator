@@ -530,6 +530,9 @@ const PDFPageOverlay: React.FC<{
         const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
         const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
 
+        const group = layer ? rawCurrentPageGroups.find(g => g.id === layer.groupId) : undefined;
+        const groupType = group?.groupType;
+
         return [{
           index,
           text: translatedText,
@@ -545,6 +548,7 @@ const PDFPageOverlay: React.FC<{
             sourceLineCount: 1,
             fontFamily: overlayFontFamily,
             profile: overlayLayoutProfile,
+            groupType,
           },
         }];
       }),
@@ -731,7 +735,9 @@ const PDFPageOverlay: React.FC<{
           }}
           className="absolute inset-0 pointer-events-none"
         >
-          {currentPageOCRResolved.lines.map((line, idx) => {
+          {(() => {
+            const renderedOverlayTracker: Array<{ centerX: number; centerY: number; width: number; height: number; text: string }> = [];
+            return currentPageOCRResolved.lines.map((line, idx) => {
             if (hiddenLineIndexes.has(idx)) {
               return null;
             }
@@ -739,6 +745,8 @@ const PDFPageOverlay: React.FC<{
             const isMaskOnlyLine = Boolean(layout?.hidden);
 
             const layer = currentPageLayers.find(l => l.lineIndex === idx);
+            const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+            const isSfxGroup = group?.groupType === 'sfx';
             const translatedText = (() => {
               if (!layer) {
                 return translationOverlayContext.translatedByIndex.get(idx);
@@ -841,11 +849,11 @@ const PDFPageOverlay: React.FC<{
             });
             const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
             const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-            const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+            const textSourceTop = sourceBbox.y0;
             const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-            const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
-            const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-            const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+            const textBaseHeight = baseHeight;
+            const mergedComicTextTopLift = 0;
+            const mergedComicTextExtraHeight = 0;
             const rawTextLeft = ocrOverlayTransform.offsetX + textSourceLeft * ocrOverlayTransform.scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
             const rawTextTop = ocrOverlayTransform.offsetY + textSourceTop * ocrOverlayTransform.scaleY - maskExpandTop - mergedComicTextTopLift;
             const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
@@ -960,6 +968,24 @@ const PDFPageOverlay: React.FC<{
                   Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
                 );
 
+            const centerX = textRect.left + textRect.width * 0.5;
+            const centerY = textRect.top + textRect.height * 0.5;
+            const normalizedText = renderText.trim().replace(/\s+/g, ' ');
+            if (normalizedText) {
+              const isDuplicateOverlay = renderedOverlayTracker.some((prev) => {
+                const dx = Math.abs(prev.centerX - centerX);
+                const dy = Math.abs(prev.centerY - centerY);
+                const dw = Math.abs(prev.width - textRect.width);
+                const dh = Math.abs(prev.height - textRect.height);
+                const isExactColocation = dx < 4 && dy < 4 && dw < 8 && dh < 8;
+                return isExactColocation && (prev.text === normalizedText || prev.text.includes(normalizedText) || normalizedText.includes(prev.text));
+              });
+              if (isDuplicateOverlay) {
+                return null;
+              }
+              renderedOverlayTracker.push({ centerX, centerY, width: textRect.width, height: textRect.height, text: normalizedText });
+            }
+
             return (
               <React.Fragment key={`ocr-translation-line-${idx}`}>
                 <div
@@ -1022,7 +1048,7 @@ const PDFPageOverlay: React.FC<{
                         alignItems: isComicCenter ? 'center' : 'flex-start',
                         justifyContent: layout?.alignment === 'center' ? 'center' : 'flex-start',
                         textAlign: layout?.alignment === 'center' ? 'center' : 'left',
-                        whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                        whiteSpace: typography.forceSingleLine ? 'nowrap' : 'pre-wrap',
                         wordBreak: 'normal',
                         lineBreak: hasThaiText ? 'auto' : 'normal',
                         WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,
@@ -1038,7 +1064,8 @@ const PDFPageOverlay: React.FC<{
                 )}
               </React.Fragment>
             );
-          })}
+          });
+          })()}
         </div>
       )}
       {translationPreviewMode === 'original' && currentPageOCRResolved && originalOCRMatchedLineIndexes.length > 0 && (

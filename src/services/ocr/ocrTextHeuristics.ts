@@ -7,6 +7,7 @@ import {
   normalizeTranslationLanguage,
 } from './ocrTextNormalizer';
 import { isKnownShortWordHelper, isLikelyEnglishDialogue } from './ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../translation/offlineTranslationService';
 
 export const HANGUL_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/;
 export const THAI_REGEX = /[\u0E00-\u0E7F]/;
@@ -834,10 +835,25 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^SO\s*TIGHT[.!?…]*$/i,
   /^PHEW[.!?…]*$/i,
   /^FRONT[.!?…]*$/i,
+  /^GETT[Ii1]NG(?:\s+WiTH|\s+WITH|\s+YOUR)?[.!?…]*$/i,
+  /^KNII*GHT[.!?…]*$/i,
+  /^SUCK[.!?…]*$/i,
+  /^C[O0]{2,}[O0]*F?CKS[.!?…]*$/i,
+  /^COCKS?[.!?…]*$/i,
+  /^COO[.!?…]*$/i,
+  /^OOO[.!?…]*$/i,
+  /^CKS[.!?…]*$/i,
   /^WOULD[.!?…]*$/i,
   /^HE['’]?S[.!?…]*$/i,
+  /^YOU['’]?RE[.!?…]*$/i,
+  /^YOU[.!?…]*$/i,
+  /^(?:THE\s+)?PIG(?:\s+YOU\s+ARE|\s+LiKE\s+YOU|\s+LIKE\s+YOU)?[.!?…]*$/i,
   /^THiS\s+MY[.!?…]*$/i,
   /^HEHEHE[!.,?…]*$/i,
+  /^HOLE[.!?…]*$/i,
+  /^US\s+THE[.!?…]*$/i,
+  /^BUT\s+IN\s+ANY\s+AGE[.!?…]*$/i,
+  /^BUT\s+IN\s+ANY[.!?…]*$/i,
 ];
 
 export const shouldForceKeepComicTranslationLine = (
@@ -847,6 +863,7 @@ export const shouldForceKeepComicTranslationLine = (
 ): boolean => {
   const normalized = normalizeWhitespace(String(resolvedText || ''));
   if (!normalized) return false;
+  if (lookupShortPhraseTh(normalized)) return true;
   if (!FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES.some((regex) => regex.test(normalized))) return false;
 
   if (!line?.bbox) return true;
@@ -936,6 +953,11 @@ export const isLikelyGhostTranslatableLine = (
   }
 
   // Apply these safety filters to ALL OCR engines to guarantee obvious ghost noise is always dropped
+  const isPageNumberOrPureNumber = /^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text);
+  if (isPageNumberOrPureNumber) {
+    return true;
+  }
+
   // 1. Pure non-alphanumeric symbol noise (e.g., "|||", "///", "\\", "---")
   const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
   if (isPureSymbolNoise) {

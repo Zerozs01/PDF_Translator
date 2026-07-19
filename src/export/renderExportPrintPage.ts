@@ -267,12 +267,12 @@ const appendAutoOverlayElements = (
       && !isMaskOnly
       && Boolean(layoutEntry?.mergedMaskBBox);
     const textSourceLeft = useMergedComicTextRect ? mrkLeft : rkLeft;
-    const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : srcBbox.y0;
+    const textSourceTop = srcBbox.y0;
     const textBaseWidth = useMergedComicTextRect ? Math.max(bW, mBW) : bW;
-    const textBaseHeight = useMergedComicTextRect ? Math.max(bH, mBH) : bH;
+    const textBaseHeight = bH;
 
-    const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(mBH * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-    const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(mBH * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+    const mergedComicTextTopLift = 0;
+    const mergedComicTextExtraHeight = 0;
 
     const rawTextLeft = textSourceLeft * sx - (layoutEntry?.alignment === 'center' ? 0 : maskExpandLeft);
     const rawTextTop = textSourceTop * sy - maskExpandTop - mergedComicTextTopLift;
@@ -407,7 +407,7 @@ const appendAutoOverlayElements = (
     innerEl.style.textAlign = layoutEntry?.alignment === 'center' ? 'center' : 'left';
     
     // ตั้งค่า word-break และ white-space เพื่อแก้ปัญหาวรรณยุกต์ภาษาไทยซ้อนหรือถูกดีดลงบรรทัดใหม่
-    innerEl.style.whiteSpace = typo.forceSingleLine ? 'nowrap' : 'normal';
+    innerEl.style.whiteSpace = typo.forceSingleLine ? 'nowrap' : 'pre-wrap';
     innerEl.style.wordBreak = 'normal';
     innerEl.style.lineBreak = hasThaiText ? 'auto' : 'normal';
     innerEl.style.overflowWrap = typo.forceSingleLine

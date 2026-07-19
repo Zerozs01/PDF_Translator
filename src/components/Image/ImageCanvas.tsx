@@ -672,6 +672,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
         const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
         const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
 
+        const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+        const groupType = group?.groupType;
+
         return [{
           index,
           text: translatedText,
@@ -687,6 +690,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
             sourceLineCount: 1,
             fontFamily: overlayFontFamily,
             profile: overlayLayoutProfile,
+            groupType,
           },
         }];
       }),
@@ -765,6 +769,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                   }
 
                   const layer = currentPageLayers.find(l => l.lineIndex === idx);
+                  const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+                  const isSfxGroup = group?.groupType === 'sfx';
                   if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
                     return null;
                   }
@@ -836,11 +842,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                   });
                   const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
                   const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-                  const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
+                  const textSourceTop = sourceBbox.y0;
                   const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-                  const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
-                  const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-                  const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+                  const textBaseHeight = baseHeight;
+                  const mergedComicTextTopLift = 0;
+                  const mergedComicTextExtraHeight = 0;
                   const rawTextLeft = textSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
                   const rawTextTop = textSourceTop * ocrScaleY - maskExpandTop - mergedComicTextTopLift;
                   const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
@@ -1018,7 +1024,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                               fontFamily: overlayFontFamily,
                               fontWeight: layer?.bold ? 'bold' : overlayTextWeight,
                               textAlign: layout?.alignment === 'center' ? 'center' : 'left',
-                              whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                              whiteSpace: typography.forceSingleLine ? 'nowrap' : 'pre-wrap',
                               wordBreak: 'normal',
                               lineBreak: hasThaiText ? 'auto' : 'normal',
                               WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,

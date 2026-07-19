@@ -8,7 +8,7 @@ export interface DehyphenatedJoin {
 }
 
 const DEHYPHEN_RE = {
-  trailingHyphen: /[A-Za-z][\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/,
+  trailingHyphen: /[A-Za-z][\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]\s*$/,
   leadingAlphaNum: /^[A-Za-z0-9]/,
 } as const;
 

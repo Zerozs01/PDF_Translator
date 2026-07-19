@@ -43,7 +43,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v51';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v53'; // v53: ASS-HOLE merge, SUCK/YOU KEEP split, 168 filter, COOOOOOCKS, spatial overlay dedup
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')

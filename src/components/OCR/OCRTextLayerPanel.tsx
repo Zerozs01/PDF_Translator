@@ -2382,20 +2382,29 @@ export const OCRTextLayerPanel: React.FC = () => {
       const outputCanvas = document.createElement('canvas');
       outputCanvas.width = Math.floor(viewport.width);
       outputCanvas.height = Math.floor(viewport.height);
+      outputCanvas.style.position = 'absolute';
+      outputCanvas.style.left = '-99999px';
+      outputCanvas.style.top = '-99999px';
+      outputCanvas.style.visibility = 'hidden';
+      document.body.appendChild(outputCanvas);
 
-      const ctx = outputCanvas.getContext('2d', { alpha: false });
-      if (!ctx) throw new Error('Cannot get canvas context');
+      try {
+        const ctx = outputCanvas.getContext('2d', { alpha: false });
+        if (!ctx) throw new Error('Cannot get canvas context');
 
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
 
-      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'display', canvas: outputCanvas });
-      await Promise.race([
-        renderTask.promise,
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error(`Direct pdf.js render timeout after ${DIRECT_RENDER_TIMEOUT_MS}ms for page ${pageNum}`)), DIRECT_RENDER_TIMEOUT_MS);
-        })
-      ]);
+        const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'display', canvas: outputCanvas });
+        await Promise.race([
+          renderTask.promise,
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error(`Direct pdf.js render timeout after ${DIRECT_RENDER_TIMEOUT_MS}ms for page ${pageNum}`)), DIRECT_RENDER_TIMEOUT_MS);
+          })
+        ]);
+      } finally {
+        outputCanvas.remove();
+      }
 
       console.log(`[OCRPanel] Direct pdf.js render complete for page ${pageNum}: ${outputCanvas.width}x${outputCanvas.height}`);
 

@@ -441,25 +441,36 @@ class BackgroundQueueProcessor {
             const canvas = document.createElement('canvas');
             canvas.width = Math.floor(viewport.width);
             canvas.height = Math.floor(viewport.height);
-            const ctx = canvas.getContext('2d', { alpha: false });
-            if (!ctx) throw new Error('Cannot create headless canvas 2D context');
+            canvas.style.position = 'absolute';
+            canvas.style.left = '-99999px';
+            canvas.style.top = '-99999px';
+            canvas.style.visibility = 'hidden';
+            document.body.appendChild(canvas);
 
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            await page.render({
-              canvasContext: ctx,
-              viewport,
-              intent: 'print',
-              background: 'rgba(255,255,255,1)',
-              canvas
-            } as any).promise;
+            let imageBlob: Blob;
+            try {
+              const ctx = canvas.getContext('2d', { alpha: false });
+              if (!ctx) throw new Error('Cannot create headless canvas 2D context');
 
-            throwIfAborted();
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              
+              await page.render({
+                canvasContext: ctx,
+                viewport,
+                intent: 'display',
+                background: 'rgba(255,255,255,1)',
+                canvas
+              } as any).promise;
 
-            const imageBlob = await new Promise<Blob>((res, rej) => {
-              canvas.toBlob((b) => b ? res(b) : rej(new Error('Headless Canvas to Blob failed')), 'image/png');
-            });
+              throwIfAborted();
+
+              imageBlob = await new Promise<Blob>((res, rej) => {
+                canvas.toBlob((b) => b ? res(b) : rej(new Error('Headless Canvas to Blob failed')), 'image/png');
+              });
+            } finally {
+              canvas.remove();
+            }
 
             throwIfAborted();
 
@@ -524,7 +535,9 @@ class BackgroundQueueProcessor {
             ocrResult = await ocrPromise;
             ocrResult.pageNumber = pageNum;
             ocrResult.ocrEngine = job.engine;
-            ocrResult.language = ocrLanguage;
+            ocrResult.language = normalizeLanguage(ocrLanguage);
+            ocrResult.pipelineProfile = 'panel';
+            ocrResult.ocrQualityProfile = resolvedQualityProfile;
 
             ocrResult = applyPanelLanguageScriptGate(ocrResult, ocrLanguage);
             ocrResult = applyPanelSafetyLineDedup(ocrResult);

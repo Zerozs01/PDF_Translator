@@ -127,6 +127,7 @@ describe('normalizeSourceForTranslation', () => {
     expect(normalizeSourceForTranslation('YOU FUR KRASHING MY BAEBY', 'en')).toBe("You're crushing my baby");
     expect(normalizeSourceForTranslation('YOU FUR CRUNCHING MY BAEBY', 'en')).toBe("You're crushing my baby");
     expect(normalizeSourceForTranslation('COO+000+7OCKS', 'en')).toBe('Cooooooocks');
+    expect(normalizeSourceForTranslation('168', 'en')).toBe('');
   });
 
   test('should restore hyphenated words with Unicode characters and no spaces', () => {
