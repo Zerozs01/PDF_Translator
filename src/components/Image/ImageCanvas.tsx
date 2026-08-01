@@ -245,7 +245,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
         if (Array.isArray(rows) && rows.length > 0 && !canceled) {
           console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-          for (const row of rows) {
+          let preferredKey: string | null = null;
+          const sortedRows = [...rows].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+          for (const row of sortedRows) {
             if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
               continue;
             }
@@ -255,11 +258,19 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
               ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
             };
             ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
-            if (row.key && row.key.includes(activeEngine)) {
-              // If it matches activeEngine, set it active
-              ocrState.setActiveTranslationCacheKey(pageNum, row.key);
-              ocrState.setTranslationPreviewMode('translated');
+
+            if (!preferredKey && row.key && row.key.includes(activeEngine)) {
+              preferredKey = row.key;
             }
+          }
+
+          if (!preferredKey && sortedRows.length > 0 && sortedRows[0].key) {
+            preferredKey = sortedRows[0].key;
+          }
+
+          if (preferredKey) {
+            ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
+            ocrState.setTranslationPreviewMode('translated');
           }
         }
       } finally {

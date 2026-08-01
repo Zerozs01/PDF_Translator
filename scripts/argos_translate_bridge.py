@@ -392,19 +392,14 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     fallback_reason: str | None = None
-    try:
-        translations = translate_texts(
-            argos_translate_module,
-            texts,
-            source_language,
-            target_language,
-            force_noop_sentencizer=False,
-        )
-    except Exception as primary_error:
-        if not is_sentence_split_network_error(primary_error):
-            raise
+    force_noop = (
+        os.getenv("ARGOS_FORCE_NOOP_SENTENCIZER", "1") == "1"
+        or bool(payload.get("forceNoOpSentencizer"))
+        or payload.get("sourceType") in ("ocr_lines", "text")
+        or payload.get("mode") in ("manga", "panel")
+    )
 
-        fallback_reason = str(primary_error)
+    if force_noop:
         translations = translate_texts(
             argos_translate_module,
             texts,
@@ -412,6 +407,27 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             target_language,
             force_noop_sentencizer=True,
         )
+    else:
+        try:
+            translations = translate_texts(
+                argos_translate_module,
+                texts,
+                source_language,
+                target_language,
+                force_noop_sentencizer=False,
+            )
+        except Exception as primary_error:
+            if not is_sentence_split_network_error(primary_error):
+                raise
+
+            fallback_reason = str(primary_error)
+            translations = translate_texts(
+                argos_translate_module,
+                texts,
+                source_language,
+                target_language,
+                force_noop_sentencizer=True,
+            )
 
     output: Dict[str, Any] = {
         "ok": True,
@@ -427,6 +443,7 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def serve_stdio() -> None:
+    request_count = 0
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
@@ -447,6 +464,10 @@ def serve_stdio() -> None:
 
         sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         sys.stdout.flush()
+
+        request_count += 1
+        if request_count % 10 == 0:
+            gc.collect()
 
 
 def init_argos_module() -> Any:

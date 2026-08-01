@@ -992,6 +992,13 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source || !translated) return false;
 
+  // 1. Direct check for translation failure: If output contains Latin letters and ZERO Thai characters, skip overlay
+  const thaiChars = (translated.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const hasLatinLetters = /[a-zA-Z]/.test(translated);
+  if (hasLatinLetters && thaiChars === 0) {
+    return true; // Skip overlay directly to preserve clean original image
+  }
+
   const compact = source.replace(/\s+/g, '');
   const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
   const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
@@ -1019,7 +1026,6 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const translatedKey = buildTranslationComparisonKey(translated);
   if (!sourceKey || !translatedKey) return false;
 
-  const thaiChars = (translated.match(/[\u0E00-\u0E7F]/g) || []).length;
   const latinChars = (translated.match(/[A-Za-z]/g) || []).length;
   const sourceLatinChars = (source.match(/[A-Za-z]/g) || []).length;
   const tokenCount = source.split(/\s+/g).filter(Boolean).length;
@@ -1035,16 +1041,8 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
     || /www\./i.test(source)
     || /^(?:colamanga|cloudmerge|asurascans|mangatio|likemanga|scans|newtoki)/i.test(source.replace(/[^A-Za-z0-9]/g, ''));
 
-  // บายพาสการข้าม: หากตรวจพบว่าเป็นบทสนทนาภาษาอังกฤษทั่วไป ห้าม Skip overlay เด็ดขาด เพื่อเปิดโอกาสให้แก้ไขได้
   if (isLikelyEnglishDialogue(source) && !isUrlOrDomain) {
     return false;
-  }
-
-  // Check for pivot/NMT translation failure -> if it returned untranslated or hallucinated Latin output without any Thai chars
-  const hasLatinLetters = /[a-zA-Z]/.test(translated);
-  const hasThai = thaiChars > 0;
-  if (hasLatinLetters && !hasThai) {
-    return true; // Skip overlay directly to preserve original background image
   }
 
   if (thaiChars > 0) return false;

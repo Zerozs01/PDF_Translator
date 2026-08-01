@@ -3355,10 +3355,27 @@ const splitTranslatedTextBySourceWeights = (
 
     const finalParts = glueTrailingParticles(thaiParts);
     if (!isRedistributionPlausible(sourceLines.length, finalParts)) {
-      console.warn(`[splitTranslatedTextBySourceWeights] Thai redistribution implausible (too many empty slots: ${finalParts.filter(s => !s.trim()).length}/${sourceLines.length}). Falling back to slot 0.`);
-      const fallbackParts = new Array<string>(sourceLines.length).fill('');
-      fallbackParts[0] = target;
-      return fallbackParts;
+      console.warn(`[splitTranslatedTextBySourceWeights] Thai redistribution implausible. Rebalancing segments across all slots.`);
+      const intlWithSeg = Intl as unknown as { Segmenter?: new (locales?: string, options?: any) => any };
+      let allWords: string[] = [];
+      if (intlWithSeg.Segmenter) {
+        const seg = new intlWithSeg.Segmenter('th', { granularity: 'word' });
+        allWords = Array.from(seg.segment(target)).map((item: any) => item.segment);
+      } else {
+        allWords = Array.from(target);
+      }
+      
+      const count = sourceLines.length;
+      const rebalanced: string[] = [];
+      let wIdx = 0;
+      for (let s = 0; s < count; s++) {
+        const remainingSlots = count - s;
+        const targetWordsForSlot = Math.max(1, Math.ceil((allWords.length - wIdx) / remainingSlots));
+        const endWIdx = s === count - 1 ? allWords.length : Math.min(allWords.length, wIdx + targetWordsForSlot);
+        rebalanced.push(allWords.slice(wIdx, endWIdx).join('').trim());
+        wIdx = endWIdx;
+      }
+      return rebalanced;
     }
     return rebalanceRedistributedParts(finalParts, sourceLines, target, targetLanguage);
   }
@@ -6424,12 +6441,32 @@ export default function App() {
           }
         }
 
-        // Use noise-repaired source as fallback instead of raw OCR text
-        const cleanedSourceFallback = childSet.has(lineOffset)
-          ? ''
-          : normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
-        translatedByIndex.set(line.index, finalizedLine || cleanedSourceFallback || (childSet.has(lineOffset) ? '' : sourceLineText));
-        if (!childSet.has(lineOffset) && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalizedLine, groupSourceLanguage, normalizedTargetLanguage)) {
+        // Prevent raw English text from leaking into multi-line balloons or single lines when target is Thai
+        const groupHasThaiTranslation = normalizedTargetLanguage === 'th' && /[\u0E00-\u0E7F]/.test(translatedGroup);
+        const hasThaiInFinal = /[\u0E00-\u0E7F]/.test(finalizedLine);
+        
+        let finalLineText = '';
+        if (childSet.has(lineOffset)) {
+          finalLineText = '';
+        } else if (hasThaiInFinal) {
+          finalLineText = finalizedLine;
+        } else if (normalizedTargetLanguage === 'th') {
+          const dictFallback = lookupShortPhraseTh(sourceLineText);
+          if (dictFallback && /[\u0E00-\u0E7F]/.test(dictFallback)) {
+            finalLineText = dictFallback;
+          } else if (groupHasThaiTranslation || group.lines.length > 1) {
+            finalLineText = ''; // Suppress raw English leak in manga balloons
+          } else {
+            const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
+            finalLineText = finalizedLine || cleanedSourceFallback || sourceLineText;
+          }
+        } else {
+          const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
+          finalLineText = finalizedLine || cleanedSourceFallback || sourceLineText;
+        }
+
+        translatedByIndex.set(line.index, finalLineText);
+        if (!childSet.has(lineOffset) && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalLineText, groupSourceLanguage, normalizedTargetLanguage)) {
           const hasGlossaryMatch = normalizedTargetLanguage === 'th' && lookupShortPhraseTh(sourceLineText);
           if (!hasGlossaryMatch) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });

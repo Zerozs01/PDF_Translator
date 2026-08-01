@@ -1313,7 +1313,10 @@ const PDFPageContainer: React.FC<{
         // 2. Load Translation cache if not in memory
         if (Array.isArray(rows) && rows.length > 0 && !canceled) {
           console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-          for (const row of rows) {
+          let preferredKey: string | null = null;
+          const sortedRows = [...rows].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+          for (const row of sortedRows) {
             if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
               continue;
             }
@@ -1326,6 +1329,19 @@ const PDFPageContainer: React.FC<{
               translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
             };
             ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
+
+            if (!preferredKey && row.key && row.key.includes(activeEngine)) {
+              preferredKey = row.key;
+            }
+          }
+
+          if (!preferredKey && sortedRows.length > 0 && sortedRows[0].key) {
+            preferredKey = sortedRows[0].key;
+          }
+
+          if (preferredKey) {
+            ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
+            ocrState.setTranslationPreviewMode('translated');
           }
         }
       } finally {
