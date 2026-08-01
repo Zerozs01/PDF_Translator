@@ -992,13 +992,6 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!source || !translated) return false;
 
-  // 1. Direct check for translation failure: If output contains Latin letters and ZERO Thai characters, skip overlay
-  const thaiChars = (translated.match(/[\u0E00-\u0E7F]/g) || []).length;
-  const hasLatinLetters = /[a-zA-Z]/.test(translated);
-  if (hasLatinLetters && thaiChars === 0) {
-    return true; // Skip overlay directly to preserve clean original image
-  }
-
   const compact = source.replace(/\s+/g, '');
   const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
   const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
@@ -1026,6 +1019,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   const translatedKey = buildTranslationComparisonKey(translated);
   if (!sourceKey || !translatedKey) return false;
 
+  const thaiChars = (translated.match(/[\u0E00-\u0E7F]/g) || []).length;
   const latinChars = (translated.match(/[A-Za-z]/g) || []).length;
   const sourceLatinChars = (source.match(/[A-Za-z]/g) || []).length;
   const tokenCount = source.split(/\s+/g).filter(Boolean).length;
@@ -1277,6 +1271,11 @@ export const shouldRetryLineTranslation = (
   const translated = normalizeWhitespace(String(translatedText || ''));
   if (!translated) return true;
 
+  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
+  if (normalizedTarget === 'th' && !/[\u0E00-\u0E7F]/.test(translated)) {
+    return true;
+  }
+
   // Bypass low-quality retry classification for normal English dialogue/narrative
   const wordsList = source.toLowerCase().split(/[^a-z]+/g).filter(Boolean);
   const hasCommonWord = wordsList.some(w => ENGLISH_COMMON_WORDS.has(w));
@@ -1299,7 +1298,6 @@ export const shouldRetryLineTranslation = (
   }
 
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
-  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
 
   if (normalizedTarget === 'th') {
     const letterChars = translated.match(/[A-Za-z\u0E00-\u0E7F]/g) || [];

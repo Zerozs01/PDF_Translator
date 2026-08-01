@@ -266,6 +266,13 @@ console.log('[DB] BenchmarkDAO ready');
       // Column probably already exists, which is expected
     }
 
+    try {
+      db.exec('ALTER TABLE translation_cache ADD COLUMN width INTEGER DEFAULT 0');
+      db.exec('ALTER TABLE translation_cache ADD COLUMN height INTEGER DEFAULT 0');
+    } catch (e) {
+      // Columns probably already exist
+    }
+
     // Seed default tags only if the tags table is completely empty
     const tagCount = (db.prepare('SELECT COUNT(*) as count FROM tags').get() as { count: number }).count;
     if (tagCount === 0) {
