@@ -853,9 +853,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                   });
                   const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
                   const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-                  const textSourceTop = sourceBbox.y0;
+                  const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
                   const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-                  const textBaseHeight = baseHeight;
+                  const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
                   const mergedComicTextTopLift = 0;
                   const mergedComicTextExtraHeight = 0;
                   const rawTextLeft = textSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
@@ -888,18 +888,20 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                     ? Math.max(baseWidth, maskBaseWidth)
                     : Math.max(baseWidth, textRect.width * 0.96);
                   const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
+                  const mergedBalloonHeight = useMergedComicTextRect ? maskBaseHeight : 0;
                   const typographyHeight = isDocumentLikeOverlay
                     ? Math.min(
                       textRect.height,
                       Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
                     )
-                    : textRect.height;
+                    : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : textRect.height);
+                  const sourceBoxHeightForTypography = isDocumentLikeOverlay
+                    ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+                    : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : baseHeight);
                   const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
                     sourceText: line.text,
                     sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
-                    sourceBoxHeight: isDocumentLikeOverlay
-                      ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
-                      : baseHeight,
+                    sourceBoxHeight: sourceBoxHeightForTypography,
                     sourceLineCount: 1,
                     fontFamily: overlayFontFamily,
                     profile: effectiveProfile,

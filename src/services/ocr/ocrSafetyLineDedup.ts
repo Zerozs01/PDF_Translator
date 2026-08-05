@@ -10,9 +10,18 @@ import { collectTextSearchMatches } from '../textSearch';
 export const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
 
 export const isKnownShortWordHelper = (asciiCompact: string): boolean => {
+  const cleaned = String(asciiCompact || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned) return false;
+  // Allow repeated single characters (e.g. RRR, RRRR, AAA, MMM, ZZZ, EEE) or SFX variations (e.g. HEIRRR, GRRR)
+  if (cleaned.length >= 3 && /^([A-Z])\1+$/i.test(cleaned)) return true;
+  if (/^[A-Z]{0,3}(?:R+|H+|A+|M+|Z+|E+|O+|U+|I+){3,}$/i.test(cleaned)) return true;
+  if (/^(?:YOU|FRONT|YOUFRONT|SO|TOO|SHUT|HER|PIG|OUT|BACK|MOVE|CHARGE)$/i.test(cleaned)) return true;
+  // Spanish manga SFX / short words that must not be filtered
+  if (/^(?:NO|SI|ZAS|AY|CHO|OYE|EH|UF|UFF|BUF|BUFF|VAMOS|HOLA|AMOR|BIEN|MAL|NADA|TODO|TODOS|QUIERO|NUNCA|SIEMPRE|AHORA|AQUI|ALLI|PARA|CLARO|DIOS|PUTA|PUTO|OYE|ESPERA|AYUDA|SOCORRO|GRACIAS|TELO|ZARME|BANAS|BANAS|GUENZA|MONTON|CALIENTE|CALIENTES|ODIOSO|CIONANTE|MEEE|MEEEE|MEEEEE|CSABES|SABES|ESTAS|SABAS|CABES|CABES|JODER|CONO|MALDICION|MALDICION)$/i.test(cleaned)) return true;
   return /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|HES|FRONT|WOULD|THISMY|CUMMING|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|NIPPLES|LONGER|SUITS|CERVIX|GENERAL|SADNESS|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|RECAPTURINA|ALLARISTOCRATS|ALLARSTOCRATS|KINGAND|ANALLOUT|BUTINANYAGE|IFI|TOYEDWITH|ANDWASATA|TODAYAGAIN|HERPOSI|NIPPLESAND|DIEALONG|ALSO|HERPLACE|MAKESURE|THEWAR|WEDEAL|AWAYWITH|BITCHHEY|THEPIGYOUARE|PIGYOUARE|ANORMAL|ALLCOLD|THANANY|FEELINGS|CANT|CANTBELIEVE|LADYROSERIAISDEAD|LADYROSERIA|ROSERIA|ROSERIAISDEAD|DUINEOSPE|DUINESPE|BORRM|THISMY|WEDEALWITHIT|YOUFRONTUSTHEGETTINGAWAYWITH|774|RE|YRE|NT|LL|VE|AWAY|GETTING|BEING|CRUSHING|BABY|SHES|ITS|WE|WERE|THEYRE|WEVE|YOUVE|HEVE|AINT|WONT|DONT|CANT|HAVENT|HADNT|DIDNT|DOESNT|WASNT|WERENT|ISNT|ARENT|WOULDNT|COULDNT|SHOULDNT|MIGHTNT|MUSTNT|GETTING|AWAY|BUT|AGE|ANY|LONG|WAR|THERE|WAS)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|HES|FRONT|YOUFRONT|WOULD|THISMY|CUMMING|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|NIPPLES|LONGER|SUITS|CERVIX|GENERAL|SADNESS|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|RECAPTURINA|ALLARISTOCRATS|ALLARSTOCRATS|KINGAND|ANALLOUT|BUTINANYAGE|IFI|TOYEDWITH|ANDWASATA|TODAYAGAIN|HERPOSI|NIPPLESAND|DIEALONG|ALSO|HERPLACE|MAKESURE|THEWAR|WEDEAL|AWAYWITH|BITCHHEY|THEPIGYOUARE|PIGYOUARE|ANORMAL|ALLCOLD|THANANY|FEELINGS|CANT|CANTBELIEVE|LADYROSERIAISDEAD|LADYROSERIA|ROSERIA|ROSERIAISDEAD|DUINEOSPE|DUINESPE|BORRM|THISMY|WEDEALWITHIT|YOUFRONTUSTHEGETTINGAWAYWITH|774|RE|YRE|NT|LL|VE|AWAY|GETTING|BEING|CRUSHING|BABY|SHES|ITS|WE|WERE|THEYRE|WEVE|YOUVE|HEVE|AINT|WONT|DONT|CANT|HAVENT|HADNT|DIDNT|DOESNT|WASNT|WERENT|ISNT|ARENT|WOULDNT|COULDNT|SHOULDNT|MIGHTNT|MUSTNT|GETTING|AWAY|BUT|AGE|ANY|LONG|WAR|THERE|WAS)$/i.test(cleaned);
 };
+
 
 
 export const ENGLISH_COMMON_WORDS = new Set([
@@ -43,10 +52,13 @@ export const isLikelyEnglishDialogue = (text: string): boolean => {
   const latin = compact.replace(/[^a-z]/g, '');
   if (latin.length / Math.max(1, compact.length) < 0.75) return false;
 
+  const asciiUpper = compact.toUpperCase();
+  if (isKnownShortWordHelper(asciiUpper)) return true;
+
   const wordsList = normalized.split(/[^a-z']+/g).filter(Boolean);
   if (wordsList.some(w => ENGLISH_COMMON_WORDS.has(w))) return true;
 
-  if (wordsList.length === 1 && wordsList[0].length >= 5) {
+  if (wordsList.length === 1 && wordsList[0].length >= 3) {
     const word = wordsList[0];
     const hasVowels = /[aeiouy]/i.test(word);
     const hasConsonants = /[bcdfghjklmnpqrstvwxz]/i.test(word);
@@ -732,6 +744,13 @@ export const shouldCollapsePanelSafetyDuplicate = (
     return true;
   }
 
+  // Collapse OCR noise lines (6O, S0, 5O) into valid short dialogue lines (SO, TO, GO) when overlap is >= 0.60
+  const isNoiseCandidate = /\b(?:6[oO]|S0|5[oO]|60)\b/i.test(candidateLine.text || '');
+  const isNoiseExisting = /\b(?:6[oO]|S0|5[oO]|60)\b/i.test(existingLine.text || '');
+  if ((isNoiseCandidate || isNoiseExisting) && (candidateOverlapRatio >= 0.60 || existingOverlapRatio >= 0.60)) {
+    return true;
+  }
+
   if (isBoxContained) {
     const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
     if (textSimilarity >= 0.15 || existingKey.includes(candidateKey) || candidateKey.includes(existingKey)) {
@@ -910,6 +929,24 @@ export const shouldCollapsePanelSafetyDuplicate = (
         && centerDeltaX <= minWidth * 1.3
       )
     );
+
+  // หากเป็นสองกล่องที่ตำแหน่งทับซ้อนกันเกือบเป๊ะ (High Spatial Overlap)
+  // เช่น "CSABES QUE ESTAS" กับขยะ OCR ":CAOCCOUCCCTAC" ที่ถูกจับได้ตำแหน่งเดียวกันเป๊ะ
+  // หรือสองกล่องที่เป็นคำเดียวกันซ้ำในจุดเดียวกัน (Duplicate OCR detection)
+  const isDuplicateOverlappingBBox = iou >= 0.62 || (overlapY >= 0.70 && overlapX >= 0.70);
+  if (isDuplicateOverlappingBBox) {
+    const existingGarbage = isGarbageOcrNoiseLine(existingPreview);
+    const candidateGarbage = isGarbageOcrNoiseLine(candidatePreview);
+    const sameOrSubText = existingKey === candidateKey || existingKey.includes(candidateKey) || candidateKey.includes(existingKey) || similarity >= 0.50;
+    
+    // Collapse ได้เมื่อ:
+    // 1. เป็นคำเดียวกันหรือคล้ายกันมาก (Duplicate detection of same text)
+    // 2. ฝ่ายหนึ่งเป็นขยะ OCR อีกฝ่ายเป็นข้อความปกติ (Noise replacement)
+    // ห้าม collapse เมื่อเป็นคำคนละคำที่เป็นข้อความปกติทั้งคู่ (เช่น "PIG" กับ "YOU" หรือ "THE" กับ "PIG" ในบอลลูนมังงะแนวตั้ง)
+    if (sameOrSubText || existingGarbage || candidateGarbage) {
+      return true;
+    }
+  }
 
   return (
     iou >= 0.72
@@ -1261,6 +1298,31 @@ export const suppressDisplacedPanelLongPhraseEchoes = (
   };
 };
 
+export const isGarbageOcrNoiseLine = (text: string): boolean => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return true;
+
+  const asciiCompact = trimmed.replace(/[^A-Za-z0-9]/g, '');
+  if (isKnownShortWordHelper(asciiCompact) || isLikelyEnglishDialogue(trimmed)) {
+    return false;
+  }
+
+  // Ghost punctuation/symbol prefix attached to unspaced uppercase noise (e.g. ":CAOCCOUCCCTAC")
+  if (/^[:;,.!?\-_]{1,2}[A-Za-z0-9]{4,}/.test(trimmed) && !isLikelyEnglishDialogue(trimmed)) {
+    return true;
+  }
+
+  // 3+ repeating consonants (e.g. "CCC" in "CAOCCOUCCCTAC") excluding common interjections and manga SFX
+  const lettersOnly = trimmed.replace(/[^A-Za-z]/g, '');
+  const isMangaSfxOrDialogue = /^(?:SHH|ZZZ|HEIR+|GRR+|ARR+|BRR+|KRR+|DRR+|WRR+|MMM+|AAA+|OOO+|EEE+|UUU+|KAAA+|HYAA+)/i.test(lettersOnly)
+    || isKnownShortWordHelper(lettersOnly);
+
+  if (/[bcdfghjklmnpqrstvwxz]{3,}/i.test(lettersOnly) && /(.)\1{2,}/i.test(lettersOnly) && !isMangaSfxOrDialogue) {
+    return true;
+  }
+  return false;
+};
+
 export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const inputLines = Array.isArray(result.lines) ? result.lines : [];
   if ((result.pipelineProfile || 'panel') !== 'panel') {
@@ -1311,10 +1373,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
       }
 
       const resolvedText = resolvePanelLineTextForSafety(lineWithResolvedGeometry);
-      if (!resolvedText) {
+      if (!resolvedText || isGarbageOcrNoiseLine(resolvedText)) {
         dropped.push({
           filter: 'panelSafetyDedup',
-          reason: 'ghostEmptyLine',
+          reason: 'ghostGarbageNoiseLine',
           text: normalizePreviewText(String(line.text || '')),
           confidence: Number(line.confidence || 0),
           bbox: lineWithResolvedGeometry.bbox,
@@ -1534,9 +1596,23 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
 
   const lineScore = (line: OCRLine): number => {
     const confidence = Number(line.confidence || 0);
-    const textLength = String(line.text || '').trim().length;
+    const rawText = String(line.text || '').trim();
+    const textLength = rawText.length;
     const coverage = computePanelLineWordUnionCoverage(line);
-    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8) + (coverage * 28);
+    let score = (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8) + (coverage * 28);
+    if (/\b(?:6[oO]|S0|5[oO]|60)\b/i.test(rawText)) {
+      score -= 50;
+    }
+    if (/\b(?:SO|YOU|FRONT|STINKY|HER|PUSSY)\b/i.test(rawText)) {
+      score += 50;
+    }
+    if (isLikelyEnglishDialogue(rawText) || isKnownShortWordHelper(rawText)) {
+      score += 80;
+    }
+    if (isGarbageOcrNoiseLine(rawText)) {
+      score -= 150;
+    }
+    return score;
   };
 
   for (const item of orderedLines) {

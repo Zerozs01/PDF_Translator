@@ -15,7 +15,7 @@ export interface SFXDictionaryEntry {
   notes?: string;
 }
 
-export type SFXLanguage = 'en' | 'jp' | 'ko';
+export type SFXLanguage = 'en' | 'jp' | 'ko' | 'es';
 
 export interface SFXDictionary {
   version: string;
@@ -196,6 +196,22 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
       { source: '앗', target: 'อ๊ะ!', notes: 'คำอุทานกระทันหัน' },
       { source: '윽', target: 'อึ้ก!', notes: 'เสียงสะอึกหรือเจ็บ' },
     ],
+    es: [
+      { source: 'ZAS', target: 'ฉับ!', notes: 'เสียงฟัน/ตัด/พุ่งฟึ่บ' },
+      { source: 'ZAS...', target: 'ฉับ!...', notes: 'เสียงฟัน/ตัด/พุ่ง' },
+      { source: 'ZAS!', target: 'ฉับ!', notes: 'เสียงฟัน/ตัด/พุ่ง' },
+      { source: '¡ZAS!', target: 'ฉับ!', notes: 'เสียงฟัน/ตัด/พุ่ง' },
+      { source: '¡ZAS...!', target: 'ฉับ!...', notes: 'เสียงฟัน/ตัด/พุ่ง' },
+      { source: 'BANG', target: 'ปัง!', notes: 'เสียงปืนหรือเสียงกระแทก' },
+      { source: 'BOOM', target: 'ตูม!', notes: 'เสียงระเบิด' },
+      { source: 'POW', target: 'ผัวะ!', notes: 'เสียงชกกระแทก' },
+      { source: 'CLACK', target: 'คลิ๊ก!', notes: 'เสียงกระทบ' },
+      { source: 'MEEE', target: 'ฉันนน!', notes: 'คำร้องอุทานสเปน' },
+      { source: 'MEEE...!!', target: 'ฉันนน...!!', notes: 'คำร้องอุทานสเปน' },
+      { source: '¡MEEE...!!', target: 'ฉันนน...!!', notes: 'คำร้องอุทานสเปน' },
+      { source: 'AHH', target: 'อ๊าห์...', notes: 'เสียงอุทาน' },
+      { source: 'UGH', target: 'อึ้ก...', notes: 'เสียงร้องอึ้ก' },
+    ],
   },
 };
 
@@ -238,11 +254,12 @@ export function getStringSimilarity(a: string, b: string): number {
 export function getUserDictionary(): Record<SFXLanguage, SFXDictionaryEntry[]> {
   try {
     const raw = localStorage.getItem(USER_DICT_STORAGE_KEY);
-    if (!raw) return { en: [], jp: [], ko: [] };
-    return JSON.parse(raw);
+    if (!raw) return { en: [], jp: [], ko: [], es: [] };
+    const parsed = JSON.parse(raw);
+    return { en: [], jp: [], ko: [], es: [], ...parsed };
   } catch (e) {
     console.error('Failed to parse User SFX Dictionary from localStorage', e);
-    return { en: [], jp: [], ko: [] };
+    return { en: [], jp: [], ko: [], es: [] };
   }
 }
 
@@ -277,9 +294,10 @@ export function getMergedDictionary(): SFXDictionary {
   const merged: SFXDictionary = {
     version: '1.0',
     data: {
-      en: [...customSfxEntries, ...userDict.en, ...DEFAULT_SFX_DICTIONARY.data.en],
-      jp: [...customSfxEntries, ...userDict.jp, ...DEFAULT_SFX_DICTIONARY.data.jp],
-      ko: [...customSfxEntries, ...userDict.ko, ...DEFAULT_SFX_DICTIONARY.data.ko],
+      en: [...customSfxEntries, ...(userDict.en || []), ...(DEFAULT_SFX_DICTIONARY.data.en || [])],
+      jp: [...customSfxEntries, ...(userDict.jp || []), ...(DEFAULT_SFX_DICTIONARY.data.jp || [])],
+      ko: [...customSfxEntries, ...(userDict.ko || []), ...(DEFAULT_SFX_DICTIONARY.data.ko || [])],
+      es: [...customSfxEntries, ...(userDict.es || []), ...(DEFAULT_SFX_DICTIONARY.data.es || [])],
     },
   };
   
@@ -297,6 +315,7 @@ export function getMergedDictionary(): SFXDictionary {
   merged.data.en = deduplicate(merged.data.en);
   merged.data.jp = deduplicate(merged.data.jp);
   merged.data.ko = deduplicate(merged.data.ko);
+  merged.data.es = deduplicate(merged.data.es);
 
   return merged;
 }

@@ -293,7 +293,7 @@ const applyThaiConversationalGlossaryInternal = (
       return preserveSourceTrailingPunctuation(source, 'เธอ');
     }
     if (compactSourceAlnumUpper === 'YOU') {
-      return preserveSourceTrailingPunctuation(source, '!');
+      return preserveSourceTrailingPunctuation(source, 'แก');
     }
     if (compactSourceAlnumUpper === 'DUMB') {
       return preserveSourceTrailingPunctuation(source, 'อี');
@@ -1655,8 +1655,7 @@ const applyThaiConversationalGlossaryInternal = (
       .replace(/\bbut\s+in\s+any\s+age\b/gi, 'แต่ไม่ว่าจะในยุคสมัยใด')
       .replace(/\bbut\s+in\s+any\s+age\.\.\./gi, 'แต่ไม่ว่าจะในยุคสมัยใด...')
       .replace(/\bbut\s+in\s+any\s+age\.\./gi, 'แต่ไม่ว่าจะในยุคสมัยใด...')
-      .replace(/\bbut\s+in\s+any\b/gi, 'แต่ไม่ว่าจะยังไง')
-      .replace(/\bso\b/gi, 'ดังนั้น');
+      .replace(/\bbut\s+in\s+any\b/gi, 'แต่ไม่ว่าจะยังไง');
   }
 
   // --- finalResult-based fallbacks: จับคำอังกฤษค้างแม้ผลแปลมีไทยปนอยู่บ้าง ---

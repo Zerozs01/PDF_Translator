@@ -11,6 +11,7 @@ import { isBoilerplateHallucination, applyKoreanConversationalFallback } from '.
 import { processKoreanManhwaPipeline } from '../services/ocr/ocrManhwaHeuristics';
 import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from '../services/ocr/ocrJapaneseVerticalHeuristics';
 import { isKnownShortWordHelper, applyPanelSafetyLineDedup } from '../services/ocr/ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../services/translation/offlineTranslationService';
 
 export type TranslatorEngine = 'offline' | 'ai' | 'm2m100';
 export type OCRPreviewMode = 'translated' | 'original';
@@ -557,6 +558,17 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
           hasChanges = true;
           console.warn(`[setTranslationCacheEntry] CJK carryover detected on page ${pageNum} index ${item.index}: "${item.text}" → "${nextText}" (source: "${sourceText}")`);
           return { ...item, text: nextText, sourceText };
+        }
+      }
+
+      // Guard 3: Spanish / Latin short phrase dictionary fallback (e.g. "MENTE CALIENTES Y" -> "รู้สึกอุ่นและ...")
+      const isLatinCarryover = !translatedHasThai && /[a-zA-Z]/.test(item.text);
+      if ((isLatinCarryover || !item.text) && sourceText) {
+        const dictHit = lookupShortPhraseTh(sourceText);
+        if (dictHit && /[\u0E00-\u0E7F]/.test(dictHit) && dictHit !== item.text) {
+          hasChanges = true;
+          console.log(`[setTranslationCacheEntry] Short phrase dictionary upgrade on page ${pageNum} index ${item.index}: "${item.text}" → "${dictHit}" (source: "${sourceText}")`);
+          return { ...item, text: dictHit, sourceText };
         }
       }
 

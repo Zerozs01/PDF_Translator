@@ -667,9 +667,21 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   onDoubleClick, onHover, layout, isLayoutHidden,
 }) => {
   const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
-  const effectiveBBox = (layout && !layer.userEdited)
-    ? (layout.mergedBBox || layer.bbox)
-    : layer.bbox;
+  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const viewMode = useUIStore((state) => state.viewMode);
+  
+  // ป้ายนี้ถือว่าเป็นฝั่งขวาในโหมดเปรียบเทียบ (split view) ก็ต่อเมื่อ viewMode === 'split' และมีข้อความแปลแล้ว/ภาษาไทย
+  const currentRenderText = (layout && typeof layout.renderText === 'string') ? layout.renderText : layer.text;
+  const hasThaiText = /[\u0E00-\u0E7F]/.test(currentRenderText);
+  const isSplitView = viewMode === 'split';
+  const isTranslatedAreaInSplitView = isSplitView && (translationPreviewMode === 'translated' || hasThaiText || (layer.text !== layer.sourceText));
+
+  // ซ่อน child line ที่ถูก dehyphenate รวมกับบรรทัดหลักไปแล้ว (renderText === '')
+  if (layout && layout.renderText === '' && !layer.userEdited && !isSelected && !isMultiSelected) {
+    return null;
+  }
+
+  const effectiveBBox = layer.bbox || layout?.mergedBBox || { x0: 0, y0: 0, x1: 0, y1: 0 };
   const { left, top, width, height } = toScreen(effectiveBBox, ocrTransform);
   const isHighlighted = isSelected || isMultiSelected;
   const rotation = layer.rotation || 0;
@@ -717,30 +729,34 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
         border: isRotating
           ? '2px solid #8B5CF6' // กำลังหมุน -> เส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.55)' : '#3B82F6'}` // ได้รับการเลือก (suppress = สีม่วง, ปกติ = น้ำเงิน)
+            ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.85)' : (isTranslatedAreaInSplitView ? '#00D2FF' : '#3B82F6')}` // กดเลือก Layer -> เส้นประ dashed ชัดเจน!
             : isBoxHovered
-              ? `1.5px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.4)' : '#F97316'}` // hover (suppress = ม่วงจาง, ปกติ = ส้ม)
+              ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.9)' : (isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316')}` // hover -> สีเข้มสว่าง + เส้นประ dashed ชัดเจน!
               : isLayoutHidden
-                ? '0.5px dashed rgba(99,102,241,0.18)' // suppress โดย overlay dedup → เส้นประม่วงจางมาก บอกว่า "มีอยู่แต่ถูกซ่อน"
-                : showDebugOverlay
-                  ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
+                ? '0.75px solid rgba(99,102,241,0.25)' // suppress โดย overlay dedup
+                : (showDebugOverlay || isTranslatedAreaInSplitView)
+                  ? `1.5px solid ${isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316'}` // ปกติ -> เส้นทึบ solid (ฝั่งขวาSplit = สีฟ้าสด #00D2FF, โหมดปกติ/ฝั่งซ้าย = สีส้มสด #F97316)
                   : 'none',
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
         boxSizing: 'border-box',
         background: isRotating 
-          ? 'rgba(139, 92, 246, 0.05)' // ไฮไลท์สีม่วงจางๆ ตอนหมุน
+          ? 'rgba(139, 92, 246, 0.08)' // ไฮไลท์สีม่วงจางๆ ตอนหมุน
           : isHighlighted 
-            ? 'rgba(59,130,246,0.06)' 
-            : 'transparent',
+            ? 'rgba(59,130,246,0.10)' 
+            : isBoxHovered
+              ? (isTranslatedAreaInSplitView ? 'rgba(0, 210, 255, 0.16)' : 'rgba(249, 115, 22, 0.16)') // hover -> สีเข้มชัดเจน!
+              : 'transparent',
         transition: 'border-color 0.12s, background 0.12s, box-shadow 0.12s',
-        // Glow Effect ตอนหมุนเพื่อความเด่นบนมังงะขาวดำ
+        // Glow Effect ตอนหมุนหรือ hover เพื่อความเด่นบนมังงะขาวดำ
         boxShadow: isRotating
           ? '0 0 12px rgba(139, 92, 246, 0.35)' 
-          : isMultiSelected && !isSelected
-            ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
-            : undefined,
+          : isBoxHovered
+            ? `0 0 8px ${isTranslatedAreaInSplitView ? 'rgba(0, 210, 255, 0.35)' : 'rgba(249, 115, 22, 0.35)'}`
+            : isMultiSelected && !isSelected
+              ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
+              : undefined,
       }}
       onMouseEnter={() => {
         setIsBoxHovered(true);
@@ -1065,11 +1081,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
 
       if (ds.type === 'drag' && ds.layerId) {
         // Multi-drag or single-drag optimistic DOM update to achieve 60FPS!
-        const draggedLayer = layers.find(l => l.id === ds.layerId);
-        const group = draggedLayer?.groupId ? groups.find(g => g.id === draggedLayer.groupId) : null;
         const idsToMove = (selectedLayerIds.size > 1 && selectedLayerIds.has(ds.layerId))
           ? Array.from(selectedLayerIds)
-          : (group ? group.layerIds : [ds.layerId]);
+          : [ds.layerId];
 
         idsToMove.forEach(id => {
           const l = layers.find(x => x.id === id);
@@ -1161,11 +1175,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         const screenDy = (e.clientY - ds.startMouseY) / zoom;
         const { dx, dy } = toPDFDelta(screenDx, screenDy, ocrTransform);
 
-        const draggedLayer = layers.find(l => l.id === ds.layerId);
-        const group = draggedLayer?.groupId ? groups.find(g => g.id === draggedLayer.groupId) : null;
         const idsToMove = (selectedLayerIds.size > 1 && selectedLayerIds.has(ds.layerId))
           ? Array.from(selectedLayerIds)
-          : (group ? group.layerIds : [ds.layerId]);
+          : [ds.layerId];
 
         // Clean up temporary DOM transform styles for all elements
         idsToMove.forEach(id => {

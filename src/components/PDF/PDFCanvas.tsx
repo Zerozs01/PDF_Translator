@@ -397,16 +397,26 @@ const PDFPageOverlay: React.FC<{
 
     // Trigger rebuild only if:
     // 1. We have never built layers for this page view yet (layers.length === 0 and hasBuiltLayersForCurrentPageRef is false)
-    // 2. OR one of the essential input state changed (engine, OCR source object, preview mode, or translated texts content)
     const isFirstBuild = layers.length === 0 && !hasBuiltLayersForCurrentPageRef.current;
+    const storeLayers = useLayerStore.getState().getPageLayers(pageNum);
+    const existingGroups = useLayerStore.getState().getPageGroups(pageNum);
+    const hasUserModifications = storeLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+      || existingGroups.some(g => g.userCreated);
+    const isStoreStale = storeLayers.length === 0 ||
+      storeLayers.length !== currentPageOCRResolved.lines.length ||
+      storeLayers.some((l, idx) => {
+        const ocrLine = currentPageOCRResolved.lines[l.lineIndex] || currentPageOCRResolved.lines[idx];
+        if (!ocrLine) return true;
+        return String(l.sourceText || '').replace(/\s+/g, ' ').trim() !== String(ocrLine.text || '').replace(/\s+/g, ' ').trim();
+      });
 
-    if (isFirstBuild || engineChanged || ocrDataChanged || previewModeChanged || translationChanged) {
+    if (isFirstBuild || engineChanged || ocrDataChanged || previewModeChanged || translationChanged || (isStoreStale && !hasUserModifications)) {
       const result = buildLayerGroupsFromOCR(
         currentPageOCRResolved,
         translationPreviewMode === 'translated' ? currentTranslationMap : undefined
       );
 
-      if (isFirstBuild || !lastEngine) {
+      if (isFirstBuild || !lastEngine || (isStoreStale && !hasUserModifications)) {
         useLayerStore.getState().setPageLayers(pageNum, result);
       } else {
         const existingLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
@@ -756,7 +766,8 @@ const PDFPageOverlay: React.FC<{
               }
               const hasTranslation = layer.userEdited || layer.text !== layer.sourceText;
               if (hasTranslation) return layer.text;
-              return translationOverlayContext.translatedByIndex.get(idx) || layer.text;
+              const cachedText = translationOverlayContext.translatedByIndex.get(idx);
+              return cachedText !== undefined ? cachedText : layer.text;
             })();
 
             if (!translatedText && !(isMaskOnlyLine && layout?.preserveMaskWhenHidden)) {
@@ -770,9 +781,31 @@ const PDFPageOverlay: React.FC<{
               return null;
             }
             const isTextEdited = layer && layer.userEdited && layer.text !== layer.sourceText && layer.text !== translationOverlayContext.translatedByIndex.get(idx);
-            const renderText = isTextEdited
-              ? (translationPreviewMode === 'original' ? (layer!.sourceText || layer!.text) : layer!.text)
-              : (layout?.renderText !== undefined ? layout.renderText : (translatedText || ''));
+            const renderText = (() => {
+              if (isTextEdited) {
+                return translationPreviewMode === 'original' ? (layer!.sourceText || layer!.text) : layer!.text;
+              }
+              if (translationPreviewMode === 'original') {
+                return layer?.sourceText || line.text;
+              }
+              // 1. ถ้า layout.renderText มีข้อมูลและเป็นภาษาไทย (รวมถึงกรณี Manga Bubble Merge ที่รวมข้อความทุกบรรทัดในบอลลูนเข้าด้วยกัน) ให้ใช้ layout.renderText
+              if (layout?.renderText !== undefined && layout.renderText.trim()) {
+                if (/[\u0E00-\u0E7F]/.test(layout.renderText)) {
+                  return layout.renderText;
+                }
+                // ถ้า layout.renderText เป็นภาษาต่างประเทศ และมีคำแปลภาษาไทย ให้ใช้คำแปลภาษาไทยแทน
+                if (translatedText && /[\u0E00-\u0E7F]/.test(translatedText)) {
+                  return translatedText;
+                }
+                return layout.renderText;
+              }
+              // 2. Fallback เป็น translatedText
+              return translatedText || '';
+            })();
+
+            if (!renderText.trim() && !isMaskOnlyLine) {
+              return null;
+            }
 
             const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
 
@@ -849,9 +882,9 @@ const PDFPageOverlay: React.FC<{
             });
             const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
             const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-            const textSourceTop = sourceBbox.y0;
+            const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
             const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-            const textBaseHeight = baseHeight;
+            const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
             const mergedComicTextTopLift = 0;
             const mergedComicTextExtraHeight = 0;
             const rawTextLeft = ocrOverlayTransform.offsetX + textSourceLeft * ocrOverlayTransform.scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
@@ -884,23 +917,27 @@ const PDFPageOverlay: React.FC<{
               ? Math.max(baseWidth, maskBaseWidth)
               : Math.max(baseWidth, textRect.width * 0.96);
             const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
+            // Manga bubble merge: use the full balloon height for font sizing, not just the first line height
+            const mergedBalloonHeight = useMergedComicTextRect ? maskBaseHeight : 0;
             const typographyHeight = isDocumentLikeOverlay
               ? Math.min(
                 textRect.height,
                 Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
               )
-              : textRect.height;
+              : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : textRect.height);
+            const sourceBoxHeightForTypography = isDocumentLikeOverlay
+              ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+              : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : baseHeight);
             const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
               sourceText: line.text,
               sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
-              sourceBoxHeight: isDocumentLikeOverlay
-                ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
-                : baseHeight,
+              sourceBoxHeight: sourceBoxHeightForTypography,
               sourceLineCount: 1,
               fontFamily: overlayFontFamily,
               profile: effectiveProfile,
               styleKind,
             });
+
             const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
             if (layer && layer.userEdited) {
               typography.fontSize = (layer.fontSize || 14) * ocrOverlayTransform.scaleX;

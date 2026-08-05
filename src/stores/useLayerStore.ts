@@ -53,6 +53,7 @@ interface LayerStoreState {
   // Phase 3 Actions: Interactive Manipulation
   updateLayerBBox: (pageNum: number, layerId: string, newBBox: BBox) => void;
   updateLayerText: (pageNum: number, layerId: string, newText: string, isSource?: boolean) => void;
+  batchUpdateLayerTexts: (pageNum: number, updates: Array<{ id: string; text: string }>, isAutoTranslation?: boolean) => void;
   updateLayerRotation: (pageNum: number, layerId: string, degrees: number) => void;
   updateLayerFontSize: (pageNum: number, layerId: string, size: number) => void;
   updateLayerBackgroundColor: (pageNum: number, layerId: string, color: string) => void;
@@ -229,6 +230,24 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
           userEdited: true, // Mark as user edited to protect from being auto-translated over!
         };
       }
+    });
+    const next = new Map(state.layersByPage);
+    next.set(pageNum, updated);
+    return { layersByPage: next };
+  }),
+
+  batchUpdateLayerTexts: (pageNum, updates, isAutoTranslation = false) => set((state) => {
+    const layers = state.layersByPage.get(pageNum);
+    if (!layers || updates.length === 0) return {};
+    const updateMap = new Map(updates.map(u => [u.id, u.text]));
+    const updated = layers.map(l => {
+      if (!updateMap.has(l.id)) return l;
+      const newText = updateMap.get(l.id)!;
+      return {
+        ...l,
+        text: newText,
+        userEdited: isAutoTranslation ? l.userEdited : true,
+      };
     });
     const next = new Map(state.layersByPage);
     next.set(pageNum, updated);

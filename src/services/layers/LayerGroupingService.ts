@@ -7,6 +7,7 @@
 
 import type { BBox, OCRLine, OCRPageResult } from '../../types';
 import type { TextLayer, TextLayerGroup, LayerGroupType, LayerGroupingResult } from '../../types/layers';
+import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
 
 // Group color palette (Canva-style)
 const GROUP_COLORS = [
@@ -82,7 +83,11 @@ const endsGroup = (text: string): boolean => {
 };
 
 const isLikelyEnglishDialogue = (text: string): boolean => {
-  return /[a-z]/i.test(text) && text.length > 3;
+  const cleaned = String(text || '').trim();
+  if (!cleaned) return false;
+  const ascii = cleaned.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (ascii && isKnownShortWordHelper(ascii)) return true;
+  return /[a-z]/i.test(cleaned) && cleaned.length >= 2;
 };
 
 /**
@@ -234,10 +239,12 @@ const classifyGroup = (lines: OCRLine[], pageWidth: number, pageHeight: number):
       if (isTall || isShortWord) return 'sfx';
     }
   } else {
-    // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยว)
+    // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยวที่ไม่ใช่คำพูดทั่วไป)
+    const asciiCompact = totalText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const isCommonDialogueWord = /^(YOU|FRONT|YOUFRONT|ME|HE|SHE|WE|US|THEY|HER|HIM|IT|IN|ON|AT|TO|OF|IS|ARE|WAS|WERE|DO|DID|GO|BE|MY|BY|SO|NO|YES|HI|OH|AH|OK|IF|OR|AM|AN|AS)$/i.test(asciiCompact);
     if (lines.length <= 2 && wordCount <= 3) {
       const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
-      const isShortWord = totalText.length <= 6;
+      const isShortWord = totalText.length <= 6 && !isCommonDialogueWord;
       if (isTall || isShortWord) return 'sfx';
     }
   }
@@ -615,14 +622,15 @@ export const buildLayerGroupsFromOCR = (
       const layerId = generateLayerId();
       layerIds.push(layerId);
 
-      const translatedText = translatedByIndex?.get(lineIdx);
+      const targetIdx = typeof line.originalIndex === 'number' ? line.originalIndex : lineIdx;
+      const translatedText = translatedByIndex?.get(targetIdx) ?? translatedByIndex?.get(lineIdx);
       const displayText = translatedText || normalizeInlineText(line.text);
       const sourceText = normalizeInlineText(line.text);
       const h = bboxHeight(line.bbox);
 
       allLayers.push({
         id: layerId,
-        lineIndex: lineIdx,
+        lineIndex: targetIdx,
         groupId,
         text: displayText,
         sourceText,

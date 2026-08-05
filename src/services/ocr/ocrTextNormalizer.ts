@@ -37,6 +37,15 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 ];
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\b\(?GTiNKY\)?\b/gi, replacement: 'STINKY' },
+  { pattern: /\b\(?GTINKY\)?\b/gi, replacement: 'STINKY' },
+  { pattern: /\b6[oO]\b/gi, replacement: 'SO' },
+  { pattern: /\bIi['’]?m\b/gi, replacement: "I-I'm" },
+  { pattern: /\bII['’]?m\b/gi, replacement: "I-I'm" },
+  { pattern: /\bii([a-zA-Z]{3,})\b/gi, replacement: "$1" },
+  { pattern: /\b5[oO]\b/gi, replacement: 'SO' },
+  { pattern: /\bS0\b/gi, replacement: 'SO' },
+  { pattern: /\b60\b/gi, replacement: 'SO' },
   { pattern: /\bNat\s+My\b/gi, replacement: 'NOT MY' },
   { pattern: /^\s*168\s*$/gi, replacement: '' },
   { pattern: /\b4SS-?\s*HOLE\b/gi, replacement: 'ASSHOLE' },
@@ -385,6 +394,12 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bratura\s+del\s+aire\b/gi, replacement: 'temperatura del aire' },
   { pattern: /\bguida\b/gi, replacement: 'seguida' },
   { pattern: /\bactualdad\b/gi, replacement: 'actualidad' },
+  { pattern: /\bE\s*-\s*ES\s+QUE\b/gi, replacement: 'E-ES QUE' },
+  { pattern: /\bTE\s*-\s*LO\b/gi, replacement: 'TE LO' },
+  { pattern: /\bMON\s*-\s*TON\b/gi, replacement: 'MONTÓN' },
+  { pattern: /\bGUENZA\b/gi, replacement: 'VERGÜENZA' },
+  { pattern: /\bCIONANTE\b/gi, replacement: 'EMOCIONANTE' },
+  { pattern: /\bMENTE\s+ODIOSO\b/gi, replacement: 'REALMENTE ODIOSO' },
 ];
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;

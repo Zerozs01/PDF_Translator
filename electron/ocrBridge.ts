@@ -328,12 +328,10 @@ function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
 }
 
 function getExternalOcrTempRoot(): string {
-  if (externalOcrTempRoot) {
-    return externalOcrTempRoot;
+  const tempRoot = externalOcrTempRoot || path.join(os.tmpdir(), 'pdf-translator-ocr');
+  if (!fs.existsSync(tempRoot)) {
+    fs.mkdirSync(tempRoot, { recursive: true });
   }
-
-  const tempRoot = path.join(os.tmpdir(), 'pdf-translator-ocr');
-  fs.mkdirSync(tempRoot, { recursive: true });
   externalOcrTempRoot = tempRoot;
   return tempRoot;
 }
@@ -944,6 +942,7 @@ export async function writeOcrTempImage(
   mimeType: string
 ): Promise<string> {
   const tempRoot = getExternalOcrTempRoot();
+  await fs.promises.mkdir(tempRoot, { recursive: true });
   const ext = mimeTypeToExtension(mimeType);
   const imagePath = path.join(tempRoot, `ocr-tmp-${randomUUID()}${ext}`);
   await fs.promises.writeFile(imagePath, coerceImageBuffer(imageData));

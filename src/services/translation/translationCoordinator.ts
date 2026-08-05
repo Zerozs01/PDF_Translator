@@ -52,20 +52,32 @@ export class ArgosTranslationEngine implements TranslationEngine {
       }
     }
 
+    const batchItems: TranslatableItem[] = [];
+
     items.forEach((item) => {
-      if (item.groupType !== 'sfx') {
-        nonSfxItems.push(item);
+      if (item.groupType === 'sfx') return; // Handled above
+      if (options.targetLanguage === 'th') {
+        const directMatch = lookupShortPhraseTh(item.text);
+        if (directMatch) {
+          console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directMatch}"`);
+          results.push({
+            id: item.id,
+            translatedText: directMatch,
+            success: true,
+            engineUsed: 'short-phrase-dict',
+          });
+          return;
+        }
       }
+      batchItems.push(item);
     });
 
-    if (nonSfxItems.length === 0) {
+    if (batchItems.length === 0) {
       return results;
     }
 
     try {
-      // ทำไมถึงเขียนแบบนี้: ไม่ Deduplicate ก่อนส่งแปล เพราะคำที่ซ้ำในหลายบอลลูนจำเป็นต้องได้รับบริบทแยกกันตาม Context
-      // การกรองคำซ้ำออกแล้วเอาคำแปลไปแปะทำให้ตัว engine ไม่ได้เห็น Context ที่สมบูรณ์ ทำให้คำแปลทื่อหรือผิดความหมาย
-      const allTexts = nonSfxItems.map((item) => item.text);
+      const allTexts = batchItems.map((item) => item.text);
 
       // 4. สั่งแปล Batch ด้วยข้อความทั้งหมด (context-aware)
       const translatedTexts = await options.translateBatchOffline(
@@ -77,8 +89,17 @@ export class ArgosTranslationEngine implements TranslationEngine {
       );
 
       // 5. Post-processing: คืนค่าไปตามลำดับ ID ตามลำดับของ items
-      nonSfxItems.forEach((item, index) => {
-        const translatedText = translatedTexts[index] || item.text;
+      batchItems.forEach((item, index) => {
+        let translatedText = translatedTexts[index] || item.text;
+        
+        // Safety Fallback: ถ้าเป็นภาษาไทย แต่ Argos คืนผลลัพธ์ภาษาอังกฤษกลับมา ให้ลองค้นหา short phrase dict อีกครั้ง
+        if (options.targetLanguage === 'th' && !/[\u0E00-\u0E7F]/.test(translatedText)) {
+          const dictFallback = lookupShortPhraseTh(item.text);
+          if (dictFallback) {
+            translatedText = dictFallback;
+          }
+        }
+
         results.push({
           id: item.id,
           translatedText,
@@ -89,7 +110,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
     } catch (error: any) {
       console.error('[ArgosTranslationEngine] Offline translation failed:', error);
       // แนบประวัติการล้มเหลวให้กับกลุ่ม Balloon / Narration
-      nonSfxItems.forEach((item) => {
+      batchItems.forEach((item) => {
         results.push({
           id: item.id,
           translatedText: item.text,

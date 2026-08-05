@@ -136,7 +136,7 @@ describe('TranslationCoordinator & Engines', () => {
         { id: '6', text: 'KNiiiiiGHT', groupType: 'balloon' },
         { id: '7', text: 'HER POSi-', groupType: 'balloon' },
         { id: '8', text: 'SUiTS', groupType: 'balloon' },
-        { id: '9', text: 'SO', groupType: 'balloon' },
+        { id: '9', text: 'SO...', groupType: 'balloon' },
         { id: '10', text: 'NiPPLES AND', groupType: 'balloon' },
         { id: '11', text: 'CERVIX', groupType: 'balloon' },
         { id: '12', text: 'COCK', groupType: 'balloon' },
@@ -181,7 +181,7 @@ describe('TranslationCoordinator & Engines', () => {
         '6': 'อัศวิน',
         '7': 'ท่าของเธอ',
         '8': 'เหมาะกับ',
-        '9': 'ดังนั้น',
+        '9': 'ช่าง...',
         '10': 'หัวนมและ',
         '11': 'ปากมดลูก',
         '12': 'ควย',
@@ -208,6 +208,55 @@ describe('TranslationCoordinator & Engines', () => {
         '33': 'ว่ามัน',
         '34': 'แกอยู่ข้างหน้า',
         '35': 'แกอยู่ข้างหน้า',
+      };
+
+      Object.entries(expected).forEach(([id, val]) => {
+        const item = results.find(r => r.id === id);
+        expect(item?.translatedText).toBe(val);
+        expect(item?.success).toBe(true);
+      });
+    });
+
+    it('successfully translates all user-reported Spanish manga phrases', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'es1', text: 'BANAS...', groupType: 'balloon' },
+        { id: 'es2', text: 'TELO..', groupType: 'balloon' },
+        { id: 'es3', text: 'ZARME...', groupType: 'balloon' },
+        { id: 'es4', text: 'MEEE...!!', groupType: 'balloon' },
+        { id: 'es5', text: 'CHO...', groupType: 'balloon' },
+        { id: 'es6', text: 'E-ES QUE', groupType: 'balloon' },
+        { id: 'es7', text: 'MONTON..', groupType: 'balloon' },
+        { id: 'es8', text: 'CIONANTE...', groupType: 'balloon' },
+        { id: 'es9', text: 'MENTE ODIOSO...', groupType: 'balloon' },
+        { id: 'es10', text: 'GUENZA, NO', groupType: 'balloon' },
+        { id: 'es11', text: 'ZAS...', groupType: 'sfx' },
+        { id: 'es12', text: 'MENTE CALIENTES Y', groupType: 'balloon' },
+        { id: 'es13', text: 'TELO', groupType: 'balloon' },
+        { id: 'es14', text: 'ZARME', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'es',
+        targetLanguage: 'th',
+        translationMode: 'official',
+        translateBatchOffline: vi.fn(),
+      });
+
+      const expected: Record<string, string> = {
+        'es1': 'อาบน้ำ...',
+        'es2': 'บอกคุณ..',
+        'es3': 'กอดฉัน...',
+        'es4': 'ฉันนน...!!',
+        'es5': 'มาก...',
+        'es6': 'คื-คือว่า...',
+        'es7': 'ตั้งเยอะ..',
+        'es8': 'น่าตื่นเต้น...',
+        'es9': 'น่าเกลียดจริงๆ...',
+        'es10': 'น่าอับอาย ไม่นะ',
+        'es11': 'ฉับ!...',
+        'es12': 'รู้สึกอุ่นและ...',
+        'es13': 'บอกคุณ',
+        'es14': 'กอดฉัน',
       };
 
       Object.entries(expected).forEach(([id, val]) => {

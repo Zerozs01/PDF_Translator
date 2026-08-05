@@ -119,6 +119,7 @@ import {
   scoreTranslationCandidate,
   lookupShortPhraseTh
 } from './services/translation/offlineTranslationService';
+import { isKnownShortWordHelper, isLikelyEnglishDialogue } from './services/ocr/ocrSafetyLineDedup';
 
 // Lazy Load Heavy Components
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
@@ -1705,8 +1706,11 @@ export const shouldPreserveSourceLineForTranslation = (
 ): boolean => {
   const normSrc = normalizeTranslationLanguage(sourceLanguage, 'en');
   const isNonLatinScript = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(text);
-  if (!isNonLatinScript || ['ja', 'ko', 'zh'].includes(normSrc)) {
-    if (lookupShortPhraseTh(text)) return false;
+  if (!isNonLatinScript && (normSrc === 'en' || normSrc === 'es')) {
+    return false; // Valid Latin dialogue lines on English/Spanish pages must NEVER be preserved/skipped!
+  }
+  if (!isNonLatinScript || ['ja', 'ko', 'zh', 'es'].includes(normSrc)) {
+    if (lookupShortPhraseTh(text) || isLikelyEnglishDialogue(text) || isKnownShortWordHelper(text)) return false;
   }
   if (/^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)) return true;
   if (isLikelyStructuredOcrGarbageToken(text)) return true;
@@ -2905,12 +2909,19 @@ const resolveTranslationGroupsWithLayout = (
       const lineMap = new Map<number, TranslatableLine>(lines.map((line) => [line.index, line]));
       const layerMap = new Map<string, TextLayer>(storeLayers.map((l) => [l.id, l]));
       
+      let matchedLayerCount = 0;
+      let totalStoreLayers = 0;
       const translationGroups: TranslationGroup[] = [];
       storeGroups.forEach((sg) => {
+        totalStoreLayers += sg.layerIds.length;
         const groupLines = sg.layerIds
           .map((id) => layerMap.get(id))
           .filter((l): l is TextLayer => Boolean(l))
-          .map((l) => lineMap.get(l.lineIndex))
+          .map((l) => {
+            const line = lineMap.get(l.lineIndex);
+            if (line) matchedLayerCount += 1;
+            return line;
+          })
           .filter((line): line is TranslatableLine => Boolean(line));
 
         // Sort lines vertically (top-to-bottom) to ensure correct reading order for translation
@@ -2933,7 +2944,8 @@ const resolveTranslationGroupsWithLayout = (
         }
       });
 
-      if (translationGroups.length > 0) {
+      const matchRatio = totalStoreLayers > 0 ? matchedLayerCount / totalStoreLayers : 0;
+      if (translationGroups.length > 0 && matchRatio >= 0.75) {
         // Add any lines from `lines` that are not in any group as singleton groups
         const groupedLineIndexes = new Set<number>();
         translationGroups.forEach((tg) => {
@@ -6407,8 +6419,10 @@ export default function App() {
       const finalRedistributed = mapSlotsToLines(slots, eligibleLines.length, dehyphenJoins);
 
       let redistributedCursor = 0;
+      let prevLineTextInGroup = '';
       // Set group context so context-sensitive glossary works for per-line redistribute
-      setSlangGroupContext(group.lines.map((l) => l.text || '').join(' '));
+      const cleanedGroupContext = group.lines.map((l) => normalizeEnglishOcrNoiseForTranslation(l.text || '')).join(' ');
+      setSlangGroupContext(cleanedGroupContext);
       const childSet = new Set(dehyphenJoins.map((j) => j.childIdx));
       group.lines.forEach((line, lineOffset) => {
         const sourceLineText = normalizeWhitespace(String(line.text || '')) || String(line.text || '');
@@ -6432,12 +6446,33 @@ export default function App() {
         }
         redistributedCursor += 1;
 
-        const cleanFinal = finalizedLine.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-        if (normalizedTargetLanguage === 'th' && (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource)) {
-          const directTranslation = lookupShortPhraseTh(sourceLineText);
-          if (directTranslation) {
+        let directTranslation = normalizedTargetLanguage === 'th' ? lookupShortPhraseTh(sourceLineText) : null;
+        if (normalizedTargetLanguage === 'th' && !directTranslation) {
+          const words = sourceLineText.trim().split(/\s+/);
+          if (words.length > 1) {
+            const translatedWords = words.map(w => lookupShortPhraseTh(w) || w);
+            if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+              directTranslation = translatedWords.join(' ');
+            }
+          }
+        }
+
+        if (normalizedTargetLanguage === 'th' && directTranslation && /[\u0E00-\u0E7F]/.test(directTranslation)) {
+          const cleanFinal = finalizedLine.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource || !/[\u0E00-\u0E7F]/.test(finalizedLine)) {
             finalizedLine = directTranslation;
+          }
+        }
+
+        // Clean up any remaining raw English words in finalizedLine to prevent leaking raw English text on Canvas
+        if (normalizedTargetLanguage === 'th' && finalizedLine && /[a-zA-Z]{2,}/.test(finalizedLine)) {
+          let sanitized = finalizedLine.replace(/\b[a-zA-Z]{2,}\b/g, (word) => {
+            const wordTh = lookupShortPhraseTh(word);
+            return (wordTh && /[\u0E00-\u0E7F]/.test(wordTh)) ? wordTh : word;
+          });
+          if (/[\u0E00-\u0E7F]/.test(sanitized)) {
+            finalizedLine = sanitized.replace(/\b[a-zA-Z]{2,}\b/g, '').replace(/\s+/g, ' ').trim();
           }
         }
 
@@ -6451,7 +6486,7 @@ export default function App() {
         } else if (hasThaiInFinal) {
           finalLineText = finalizedLine;
         } else if (normalizedTargetLanguage === 'th') {
-          const dictFallback = lookupShortPhraseTh(sourceLineText);
+          const dictFallback = directTranslation || lookupShortPhraseTh(sourceLineText);
           if (dictFallback && /[\u0E00-\u0E7F]/.test(dictFallback)) {
             finalLineText = dictFallback;
           } else if (groupHasThaiTranslation || group.lines.length > 1) {
@@ -6466,6 +6501,16 @@ export default function App() {
         }
 
         translatedByIndex.set(line.index, finalLineText);
+
+        // Consecutive Duplicate Line Deduplication: Prevent identical short Thai words (e.g. "หี" / "หี") from repeating consecutively
+        if (normalizedTargetLanguage === 'th' && finalLineText.trim()) {
+          const trimmedLine = finalLineText.trim();
+          if (trimmedLine.length <= 6 && prevLineTextInGroup === trimmedLine) {
+            translatedByIndex.set(line.index, ''); // Suppress duplicate short word in balloon
+          } else {
+            prevLineTextInGroup = trimmedLine;
+          }
+        }
         if (!childSet.has(lineOffset) && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalLineText, groupSourceLanguage, normalizedTargetLanguage)) {
           const hasGlossaryMatch = normalizedTargetLanguage === 'th' && lookupShortPhraseTh(sourceLineText);
           if (!hasGlossaryMatch) {
@@ -6702,7 +6747,7 @@ export default function App() {
       if (pageLayers.length > 0) {
         const updatedPageLayers = pageLayers.map(layer => {
           const translatedText = translatedByIndex.get(layer.lineIndex);
-          if (!translatedText) return layer;
+          if (translatedText === undefined) return layer;
 
           // RULE 1: หากผู้ใช้เคยแก้ไขเลเยอร์นี้เองแล้ว ให้ข้ามการแปลทับ! (Manual Edit Protection)
           if (layer.userEdited) {

@@ -36,6 +36,11 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'hey how is it that you re the only one with thai version of that book': 'เฮ้ ทำไมคุณเป็นคนเดียวที่มีหนังสือเล่มนั้นฉบับภาษาไทยล่ะ',
   // Pronouns
   'way too good': 'ดีงามเกินไปแล้ว', 'way too good...': 'ดีงามเกินไปแล้ว...', 'way too good,': 'ดีงามเกินไปแล้ว', 'way too good,,': 'ดีงามเกินไปแล้ว',
+  'too': 'เกินไป', 'too!': 'เกินไป!', 'too...': 'เกินไป...', 'too,': 'เกินไป',
+  'shut': 'หุบ', 'shut!': 'หุบ!', 'shut...': 'หุบ...', 'shut up': 'หุบปากซะ', 'shut up!': 'หุบปากซะ!',
+  'and shut': 'และหุบ', 'shut her up': 'หุบปากเธอซะ', 'shut her up!': 'หุบปากเธอซะ!',
+  'gtinky': 'เหม็นตุๆ', 'gtinky!': 'เหม็นตุๆ!', 'gtinky...': 'เหม็นตุๆ...',
+  '6o': 'ช่าง', 's0': 'ช่าง', 's0...': 'ช่าง...',
   'not nec': 'ไม่จำเป็น', 'not nec...': 'ไม่จำเป็น...',
   'not necessary': 'ไม่จำเป็น', 'not necessary...': 'ไม่จำเป็น...', 'not necessary.': 'ไม่จำเป็น.',
   'excuse': 'ขอโทษนะ', 'excuse...': 'ขอโทษนะ...',
@@ -61,7 +66,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'i': 'ฉัน', 'you': 'คุณ', 'you!': 'คุณ!', 'you!!': 'คุณ!!', 'he': 'เขา', 'she': 'เธอ',
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
   'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
-  'so': 'ดังนั้น', 'so...': 'ดังนั้น...', 'so!': 'ดังนั้น!',
+  'so...': 'ช่าง...', 'so!': 'ช่าง!',
   'hole': 'รู', 'hole!': 'รู!', 'asshole': 'รูตูด', 'asshole!': 'รูตูด!', 'asshole!!': 'รูตูด!!', 'ass-hole': 'รูตูด', 'ass-hole!': 'รูตูด!', 'ass-hole!!': 'รูตูด!!', 'ass': 'ตูด', '4ss': 'ตูด', '4ss!': 'ตูด!',
   'getting': 'กำลัง', 'getting...': 'กำลัง...', 'getting!': 'กำลัง!',
   'first': 'ครั้งแรก', 'first!': 'ครั้งแรก!', 'first...': 'ครั้งแรก...',
@@ -92,9 +97,16 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'hes': 'เขาคือ', 'he\'s': 'เขาคือ', 'he s': 'เขาคือ', 'he s...': 'เขาคือ...', 'he s!': 'เขาคือ!', 'he\'s!': 'เขาคือ!',
   'meeeeeee': 'ฉันนนนนนน!', 'meeeeeee!': 'ฉันนนนนนน!', 'meefffee!': 'ฉันนนนนนน!', 'meeeeee': 'ฉันนนนนนน!', 'meeeee': 'ฉันนนนนนน!',
   'would': 'จะ', 'would...': 'จะ...', 'would!': 'จะ!',
-  'the pig you are': 'เจ้าหมูอย่างคุณ', 'the pig you are!': 'เจ้าหมูอย่างคุณ!',
-  'pig you are': 'ไอ้หมูโสโครก', 'pig you are!': 'ไอ้หมูโสโครก!',
+  'woman would': 'ผู้หญิงจะ', 'woman would be': 'ผู้หญิงจะ...', 'a normal woman would': 'ผู้หญิงธรรมดาจะ',
+  'would be dead': 'คงตายไปแล้ว', 'would be dead by now': 'ป่านนี้คงตายไปแล้ว', 'would be dead by now!': 'ป่านนี้คงตายไปแล้ว!',
+  'the pig you are': 'เจ้าหมูอย่างคุณ', 'the pig you are!': 'เจ้าหมูอย่างคุณ!', 'the pig you are!!': 'เจ้าหมูอย่างคุณ!!',
+  'like the pig you are': 'เหมือนเจ้าหมูอย่างคุณ', 'like the pig you are!': 'เหมือนเจ้าหมูอย่างคุณ!', 'like the pig you are!!': 'เหมือนเจ้าหมูอย่างคุณ!!',
+  'pig you are': 'ไอ้หมูโสโครก', 'pig you are!': 'ไอ้หมูโสโครก!', 'pig you are!!': 'ไอ้หมูโสโครก!!',
   'a pig like you': 'หมูอย่างแก', 'a pig like you!': 'หมูอย่างแก!',
+  'serve as': 'ทำหน้าที่เป็น', 'to serve as': 'เพื่อทำหน้าที่เป็น', 'must be': 'ต้องเป็น', 'must be...': 'ต้องเป็น...', 'must be!': 'ต้องเป็น!',
+  'ing with your': 'พร้อมกับของคุณ', 'ing with your nipples': 'พร้อมกับหัวนมของคุณ',
+  'one battle': 'การดวลครั้งเดียว', 'one battle!': 'การดวลครั้งเดียว!', 'onebattle': 'การดวลครั้งเดียว',
+  'i-i\'m': 'ฉัน...', 'i-im': 'ฉัน...', 'ii\'m': 'ฉัน...', 'iim': 'ฉัน...',
   'a pig like': 'หมูแบบ', 'pig like you': 'หมูอย่างแก',
   'you are': 'คุณเป็น', 'you are!': 'คุณเป็น!',
   'suck': 'ดูด', 'suck!': 'ดูด!', 'suck on': 'ดูด',
@@ -123,7 +135,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'bitch... hey!': 'ยัยเวร... เฮ้ย!', 'bitch hey!': 'ยัยเวร... เฮ้ย!', 'bitch... hey': 'ยัยเวร... เฮ้ย!', 'bitch hey': 'ยัยเวร... เฮ้ย!',
   's-stop!': 'ห-หยุดนะ!', 's-stop': 'ห-หยุดนะ!', 's stop!': 'ห-หยุดนะ!', 's stop': 'ห-หยุดนะ!',
   'a dirty': 'ที่โสโครก', 'her posi-': 'ท่าของเธอ', 'her posi': 'ท่าของเธอ',
-  'ing with your': 'กับของคุณ', 'i\'ll have a': 'ฉันจะมี', 'ill have a': 'ฉันจะมี',
+  'i\'ll have a': 'ฉันจะมี', 'ill have a': 'ฉันจะมี',
   'with his': 'กับของเขา', 'the woman\'s': 'ของผู้หญิง', 'the womans': 'ของผู้หญิง',
   // YOU'RE / HE'S contractions that sometimes get split (non-duplicates only)
   "you're?": 'คุณ?', "you're...": 'คุณ...',
@@ -229,7 +241,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'to be dead now': 'ต้องตายไปแล้ว', 'to be dead now!': 'ต้องตายไปแล้ว!',
   'get': 'เอา', 'get!': 'เอา!',
   'cum': 'แตก', 'cum!': 'แตก!', 'cum!!': 'แตก!!',
-  'i-i': 'ฉัน...', 'ii': 'ฉัน...', 'i-im': 'ฉัน...', 'i-i\'m': 'ฉัน...', 'i-i\'ll': 'ฉัน...',
+  'i-i': 'ฉัน...', 'ii': 'ฉัน...', 'i-i\'ll': 'ฉัน...',
   'nipples': 'หัวนม',
   'longer': 'นานขึ้น',
   'longer!': 'นานขึ้น!',
@@ -279,7 +291,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'got it': 'เข้าใจแล้ว', 'got you': 'จับได้แล้ว', 'come on': 'เร็วเข้า',
   'let go': 'ปล่อยไป', 'let me': 'ให้ฉัน', 'lets go': 'ไปกันเถอะ',
   'thank you': 'ขอบคุณ', 'no way': 'ไม่มีทาง', 'no problem': 'ไม่มีปัญหา',
-  'watch out': 'ระวัง', 'calm down': 'ใจเย็นๆ', 'shut up': 'หุบปาก',
+  'watch out': 'ระวัง', 'calm down': 'ใจเย็นๆ',
   'back off': 'ถอยออกไป', 'stand up': 'ลุกขึ้น', 'get up': 'ลุกขึ้น',
   'get out': 'ออกไป', 'get away': 'หนีออกไป', 'go away': 'ไปให้พ้น',
   'getting away': 'รอดตัวไปได้', 'getting away with': 'รอดตัวไปได้',
@@ -304,7 +316,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'you!?': 'แก!?',
   'oh!': 'โอ้!', 'ohhh': 'โอ้หน่อ', 'ohh': 'โอ้โห',
   'of': 'ของ', 'all': 'ทั้งหมด', 'all!': 'ทุกคน!',
-  'one battle': 'การต่อสู้ครั้งหนึ่ง', 'one battle!': 'สู้แค่ครั้งเดียว!',
   'gonna die': 'จะตาย', 'gonna die!': 'จะตายแล้ว!',
   'so please': 'ดังนั้นได้โปรด', 'so please!': 'ดังนั้นได้โปรด!', 'soplease': 'ดังนั้นได้โปรด', 'soplease!': 'ดังนั้นได้โปรด!',
   'why!?': 'ทำไม!?', 'why?': 'ทำไม?',
@@ -315,8 +326,52 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'i cant believe it': 'ไมยากเชื่อเลย...', 'i cannot believe it': 'ไม่อยากเชื่อเลย...',
   'cant believe it': 'เชื่อไม่ได้เลย...', 'cannot believe it': 'เชื่อไม่ได้เลย...',
   'i cant believe it...': 'ไม่อยากเชื่อเลย...', 'i cant believe this': 'ไม่อยากเชื่อเลย',
-  'her pussys so stinky': 'หีเธอช่างเหม็นตุๆ',
-  'her pussy is so stinky': 'หีเธอช่างเหม็นตุๆ',
+  'her pussy': 'หีของเธอ',
+  'her pussys': 'หีของเธอ',
+  'her pussy\'s': 'หีของเธอ',
+  'her pussy\'s so': 'หีของเธอช่าง',
+  'her pussys so': 'หีของเธอช่าง',
+  'her pussys so stinky': 'หีของเธอช่างเหม็นตุๆ',
+  'her pussy\'s so stinky': 'หีของเธอช่างเหม็นตุๆ',
+  'her pussy is so stinky': 'หีของเธอช่างเหม็นตุๆ',
+  'ugh haa her pussy\'s s0 gtinky': 'แหวะ! ฮ่าฮ่า! หีของเธอช่างเหม็นตุๆ',
+  'ugh haa her pussys s0 gtinky': 'แหวะ! ฮ่าฮ่า! หีของเธอช่างเหม็นตุๆ',
+  'ugh, haa! her pussy\'s s0 (gtinky': 'แหวะ! ฮ่าฮ่า! หีของเธอช่างเหม็นตุๆ',
+  'ugh, haa! her pussys s0 (gtinky': 'แหวะ! ฮ่าฮ่า! หีของเธอช่างเหม็นตุๆ',
+  'ugh, haa! her pussy\'s s0 (gtinky!!': 'แหวะ! ฮ่าฮ่า! หีของเธอช่างเหม็นตุๆ!!',
+  'ugh, haa! her pussys s0 (gtinky!!': 'แหวะ! ฮ่าฮ่า! หีของเธอช่างเหม็นตุๆ!!',
+  'her pussy\'s s0 (gtinky': 'หีของเธอช่างเหม็นตุๆ',
+  'her pussys s0 (gtinky': 'หีของเธอช่างเหม็นตุๆ',
+  'her pussy\'s s0': 'หีของเธอช่าง',
+  'her pussys s0': 'หีของเธอช่าง',
+  's0 stinky': 'ช่างเหม็นตุๆ',
+  's0 (gtinky': 'ช่างเหม็นตุๆ',
+  // --- Spanish Conversational & Noise Mappings ---
+  'basura': 'สวะ!', 'basura!': 'สวะ!', 'basura!!': 'สวะ!!', 'iibasura': 'สวะ!', 'iibasura!': 'สวะ!', 'iibasura!!': 'สวะ!!',
+  'maldito': 'ไอ้สารเลว!', 'maldito!': 'ไอ้สารเลว!', 'imbecil': 'ไอ้โง่!', 'imbecil!': 'ไอ้โง่!', 'mierda': 'พับผ่าสิ!', 'mierda!': 'พับผ่าสิ!',
+  'es increiblemente grande': 'มันใหญ่อย่างไม่น่าเชื่อ!', 'es increiblemente grande!': 'มันใหญ่อย่างไม่น่าเชื่อ!', 'es increi- blemente grande!': 'มันใหญ่อย่างไม่น่าเชื่อ!', 'es increíblemente grande!': 'มันใหญ่อย่างไม่น่าเชื่อ!',
+  'increíblemente': 'อย่างไม่น่าเชื่อ', 'increiblemente': 'อย่างไม่น่าเชื่อ', 'blemente': 'อย่างไม่น่าเชื่อ',
+  'se sienten extranamente calientes y humedas': 'รู้สึกอุ่นและชื้นอย่างแปลกประหลาด',
+  'ademas, mis piernas se sienten extranamente calientes y humedas...': 'นอกจากนี้ ขาของฉันก็รู้สึกอุ่นและชื้นอย่างแปลกประหลาด...',
+  'se volvió a mojar todo hasta las sábanas...': 'เขาเปียกอีกครั้งจนถึงผ้าปูที่นอน...',
+  'se volvio a mojar todo hasta las sabanas...': 'เขาเปียกอีกครั้งจนถึงผ้าปูที่นอน...',
+  'hasta las sábanas...': 'จนถึงผ้าปูที่นอน...', 'hasta las sabanas...': 'จนถึงผ้าปูที่นอน...', 'sábanas...': 'ผ้าปูที่นอน...', 'sabanas...': 'ผ้าปูที่นอน...', 'banas...': 'อาบน้ำ...', 'banas..': 'อาบน้ำ..', 'banas': 'อาบน้ำ', 'bañas': 'อาบน้ำ',
+  'mántelo...': 'รักษามันไว้...', 'mantelo...': 'รักษามันไว้...', 'telo...': 'บอกคุณ...', 'telo..': 'บอกคุณ..', 'telo': 'บอกคุณ', 'te lo': 'บอกคุณ',
+  'abrazarme...': 'กอดฉัน...', 'zarme...': 'กอดฉัน...', 'zarme..': 'กอดฉัน..', 'zarme': 'กอดฉัน',
+  'llámameee...!!': 'โทรหาฉันนน...!!', 'llamameee...!!': 'โทรหาฉันนน...!!', 'meee...!!': 'ฉันนน...!!', 'meee...!': 'ฉันนน...!', 'meee...': 'ฉันนน...', 'meee': 'ฉันนน',
+  'no he hecho...': 'ฉันไม่ได้ทำ...', 'hecho...': 'ทำ...', 'cho...': 'มาก...', 'cho..': 'มาก..', 'cho': 'มาก', 'mucho...': 'มาก...', 'mucho': 'มาก',
+  'e-es que': 'คื-คือว่า...', 'e-es que...': 'คื-คือว่า...', 'e-es que..': 'คื-คือว่า..', 'e-es que!': 'คื-คือว่า!',
+  'un montón...': 'ตั้งเยอะ...', 'montón...': 'ตั้งเยอะ...', 'monton...': 'ตั้งเยอะ...', 'monton..': 'ตั้งเยอะ..', 'montón..': 'ตั้งเยอะ..', 'monton': 'ตั้งเยอะ', 'montón': 'ตั้งเยอะ',
+  'impresionante...': 'น่าประทับใจ...', 'cionante...': 'น่าตื่นเต้น...', 'cionante..': 'น่าตื่นเต้น..', 'cionante': 'น่าตื่นเต้น',
+  'simplemente odioso...': 'น่าเกลียดจริงๆ...', 'mente odioso...': 'น่าเกลียดจริงๆ...', 'mente odioso..': 'น่าเกลียดจริงๆ..', 'odioso...': 'น่าเกลียด...', 'mente odioso': 'น่าเกลียดจริงๆ',
+  'qué vergüenza, no': 'น่าอับอาย ไม่นะ', 'vergüenza, no': 'น่าอับอาย ไม่นะ', 'verguenza, no': 'น่าอับอาย ไม่นะ', 'guenza, no': 'น่าอับอาย ไม่นะ', 'guenza, no!': 'น่าอับอาย ไม่นะ!', 'guenza': 'น่าอับอาย',
+  'fuerzas...': 'เข้มแข็งไว้...', 'zas...': 'ฉับ!...', 'zas..': 'ฉับ!..', 'zas': 'ฉับ!', 'mente calientes y': 'รู้สึกอุ่นและ...', 'mente calientes y...': 'รู้สึกอุ่นและ...', 'mente calientes y..': 'รู้สึกอุ่นและ..', 'calientes y': 'รู้สึกอุ่นและ...', 'calientes y...': 'รู้สึกอุ่นและ...',
+  'you\'re too far out in front, princess roseria! please move back!': 'คุณอยู่ข้างหน้าไกลเกินไปแล้ว องค์หญิงโรเซเรีย! ได้โปรดถอยกลับมาด้วย!',
+  'youre too far out in front, princess roseria! please move back!': 'คุณอยู่ข้างหน้าไกลเกินไปแล้ว องค์หญิงโรเซเรีย! ได้โปรดถอยกลับมาด้วย!',
+  'you stubborn bitch... you\'re always making us charge!': 'ยัยคนดื้อดึง... เธอเอาแต่สั่งให้พวกเราบุกตลอดเลย!',
+  'you stubborn bitch... youre always making us charge!': 'ยัยคนดื้อดึง... เธอเอาแต่สั่งให้พวกเราบุกตลอดเลย!',
+  'what are you talking about, general garcia? i can\'t defeat enemies without moving out in front!': 'นายพูดเรื่องอะไรของนาย นายพลการ์เซีย? ฉันไม่สามารถเอาชนะศัตรูได้โดยไม่บุกออกไปข้างหน้าหรอกนะ!',
+  'what are you talking about, general garcia? i cant defeat enemies without moving out in front!': 'นายพูดเรื่องอะไรของนาย นายพลการ์เซีย? ฉันไม่สามารถเอาชนะศัตรูได้โดยไม่บุกออกไปข้างหน้าหรอกนะ!',
   'pussys so stinky': 'หีช่างเหม็นตุๆ',
   'with it': 'ไปด้วยกัน!',
   'cum miiinn nngg ggg': 'น้ำแตก-แล้วว วววว ววว',
@@ -401,10 +456,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'onto it': 'เข้ากับมัน',
   'like the': 'เหมือนกับ',
   'pig you': 'หมูอย่างแก',
-  'are': 'ที่เป็นอยู่',
-  'shut her up': 'หุบปากเธอซะ',
   'her up': 'หุบปากเธอซะ',
-  'and shut': 'และหุบปาก',
   'what a': 'ช่าง...',
   'noisy': 'เสียงดัง',
   'bitch': 'ยัยตัวแสบ',
@@ -450,14 +502,85 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'this my': 'นี่คือ... ของฉัน',
   'we deal with it': 'เราจะจัดการกับมันเอง',
   'we deal with it!': 'เราจะจัดการกับมันเอง!',
-  // Spanish exclamations
-  'joder': 'เชี่ยเอ๊ย!',
-  'cono': 'บ้าเอ๊ย!',
-  'coño': 'บ้าเอ๊ย!',
-  'maldicion': 'แม่งเอ๊ย!',
-  'maldición': 'แม่งเอ๊ย!',
-  'mierda': 'ฉิบหาย!',
-  'ay': 'โอ๊ย!',
+  // Spanish exclamations & SFX — new entries
+  'joder': 'เชี่ยเอ๊ย!', 'joder!': 'เชี่ยเอ๊ย!!', 'joder...': 'เชี่ยเอ๊ย...',
+
+  'cono': 'บ้าเอ๊ย!', 'cono!': 'บ้าเอ๊ย!!',
+  'coño': 'บ้าเอ๊ย!', 'coño!': 'บ้าเอ๊ย!!',
+  'maldicion': 'แม่งเอ๊ย!', 'maldicion!': 'แม่งเอ๊ย!!',
+  'maldición': 'แม่งเอ๊ย!', 'maldición!': 'แม่งเอ๊ย!!',
+  'ay': 'โอ๊ย!', 'ay!': 'โอ๊ย!!', 'ay...': 'โอ๊ย...',
+  'no!': 'ไม่!', 'no!!': 'ไม่!!', 'no...': 'ไม่...', 'no,': 'ไม่,', '¡no!': 'ไม่!!', '¡no!!': 'ไม่!!!',
+  'si!': 'ใช่!', 'sí': 'ใช่', 'sí!': 'ใช่!',
+  'por que': 'ทำไม', 'por qué': 'ทำไม', 'por que?': 'ทำไม?', 'por qué?': 'ทำไมนะ?',
+  'cómo': 'อย่างไร', 'como?': 'ยังไงนะ?', 'cómo?': 'ยังไงนะ?',
+  'cuando': 'เมื่อไหร่', 'cuándo': 'เมื่อไหร่', 'donde': 'ที่ไหน', 'dónde': 'ที่ไหน',
+  'e es que': 'ก็...ก็คือว่า',
+  'es que!': 'ก็คือว่า!',
+  'monton!': 'มากมายเลย!', 'montón!': 'มากมายเลย!',
+  'un monton': 'เยอะมาก', 'un montón': 'เยอะมาก', 'un monton!': 'เยอะมากเลย!', 'un montón!': 'เยอะมากเลย!',
+  'me da guenza': 'ฉันรู้สึกอาย', 'me da vergüenza': 'ฉันรู้สึกอาย',
+  'vergüenza': 'ความอาย', 'verguenza': 'ความอาย',
+  'que verguenza': 'น่าอายจริงๆ', 'qué vergüenza': 'น่าอายจริงๆ',
+  'vergüenza!': 'น่าอาย!', 'verguenza!': 'น่าอาย!',
+  'no, guenza': 'ไม่... น่าอาย', 'no, vergüenza': 'ไม่... น่าอาย',
+  'acionante': 'น่า...มาก',
+  'odioso!': 'น่าเกลียด!',
+  'mente calientes': 'รู้สึกร้อน', 'mente calientes y!': 'รู้สึกร้อนและ!',
+  'caliente': 'ร้อน', 'caliente!': 'ร้อน!',
+  'amor': 'ความรัก', 'amor!': 'รัก!', 'amor...': 'รัก...',
+  'mi amor': 'ที่รักของฉัน', 'mi amor!': 'ที่รักของฉัน!',
+  'por favor': 'ได้โปรด', 'por favor!': 'ได้โปรด!', 'por favor...': 'ได้โปรด...',
+  'lo siento': 'ขอโทษ', 'lo siento!': 'ขอโทษมากนะ!', 'lo siento...': 'ขอโทษ...',
+  'gracias': 'ขอบคุณ', 'gracias!': 'ขอบคุณมาก!',
+  'de nada': 'ยินดีมาก', 'de nada!': 'ยินดีมาก!',
+  'hola': 'สวัสดี', 'hola!': 'สวัสดี!', 'adios': 'ลาก่อน', 'adiós': 'ลาก่อน',
+  'vamos': 'ไปกัน', 'vamos!': 'ไปกัน!', 'vamos...': 'ไปกัน...',
+  'ayuda': 'ช่วยด้วย', 'ayuda!': 'ช่วยด้วย!', '¡ayuda!': 'ช่วยด้วย!!',
+  'socorro': 'ช่วยด้วย!', 'socorro!': 'ช่วยด้วย!!',
+  'dios': 'พระเจ้า', 'dios mio': 'พระเจ้าของฉัน', 'dios mío': 'พระเจ้าของฉัน',
+  'dios mio!': 'พระเจ้าของฉัน!', 'dios mío!': 'พระเจ้าของฉัน!',
+  'madre mia': 'พระแม่ของฉัน', 'madre mía': 'พระแม่ของฉัน', 'madre mia!': 'พระแม่ของฉัน!',
+  'que diablos': 'นรกอะไรกัน', 'qué diablos': 'นรกอะไรกัน', 'que diablos!': 'นรกอะไรกันนี่!',
+  'idiota': 'คนงี่เง่า', 'idiota!': 'คนงี่เง่า!',
+  'estupido': 'โง่เง่า', 'estúpido': 'โง่เง่า', 'estupida': 'โง่เง่า', 'estúpida': 'โง่เง่า',
+  'cabrón': 'ไอ้หน้าหมา', 'cabron': 'ไอ้หน้าหมา', 'cabrón!': 'ไอ้หน้าหมา!', 'cabron!': 'ไอ้หน้าหมา!',
+  'puta': 'อีสาด', 'puta!': 'อีสาด!', 'puto': 'ไอ้สาด', 'puto!': 'ไอ้สาด!',
+  'espera un momento': 'รอสักครู่นะ', 'espera un momento!': 'รอสักครู่ก่อน!',
+  'que haces': 'ทำอะไรอยู่', 'qué haces': 'ทำอะไรอยู่', 'que haces?': 'ทำอะไรอยู่?', 'qué haces?': 'ทำอะไรอยู่?',
+  'que es eso': 'นั่นคืออะไร', 'qué es eso': 'นั่นคืออะไร', 'que es eso?': 'นั่นคืออะไร?',
+  'no puedo': 'ฉันไม่สามารถ', 'no puedo!': 'ฉันไม่สามารถ!', 'no puedo...': 'ฉันไม่สามารถ...',
+  'no puede': 'มันไม่สามารถ', 'no puedes': 'คุณไม่สามารถ',
+  'que pasa': 'เกิดอะไรขึ้น', 'qué pasa': 'เกิดอะไรขึ้น', 'que pasa?': 'เกิดอะไรขึ้น?',
+  'claro': 'แน่นอน', 'claro!': 'แน่นอน!', 'claro que si': 'แน่นอนเลย', 'claro que sí': 'แน่นอนเลย',
+  'nunca': 'ไม่มีวัน', 'nunca!': 'ไม่มีวันเลย!', 'nunca...': 'ไม่มีวัน...',
+  'siempre': 'เสมอ', 'siempre!': 'เสมอ!', 'siempre...': 'เสมอ...',
+  'ahora': 'ตอนนี้', 'ahora!': 'ตอนนี้!', 'ahora mismo': 'ทันที', 'ahora mismo!': 'ทันทีเลย!',
+  'aqui': 'ที่นี่', 'aquí': 'ที่นี่', 'alli': 'ที่นั่น', 'allí': 'ที่นั่น',
+  'nada': 'ไม่มีอะไร', 'nada!': 'ไม่มีอะไรเลย!', 'nada...': 'ไม่มีอะไร...',
+  'todo': 'ทุกอย่าง', 'todo!': 'ทุกอย่าง!', 'todos': 'ทุกคน', 'todos!': 'ทุกคน!',
+  'bien': 'ดี', 'bien!': 'ดีมาก!', 'muy bien': 'ดีมาก', 'muy bien!': 'ดีมากเลย!',
+  'muy mal': 'แย่มาก',
+  'quiero': 'ฉันต้องการ', 'quiero!': 'ฉันต้องการ!', 'quiero...': 'ฉันต้องการ...',
+  'te quiero': 'ฉันรักคุณ', 'te quiero!': 'ฉันรักคุณ!', 'te amo': 'ฉันรักคุณมาก', 'te amo!': 'ฉันรักคุณมาก!',
+  'no cabes': 'ไม่จุ',
+  'besarme': 'จูบฉัน', 'besarme!': 'จูบฉันซะ!',
+  'abrazarme': 'กอดฉัน', 'abrazarme!': 'กอดฉันซะ!',
+  'ayudarme': 'ช่วยฉัน', 'ayudarme!': 'ช่วยฉันซะ!',
+  'dejarme': 'ปล่อยฉัน', 'dejarme!': 'ปล่อยฉันซะ!', 'dejarme...': 'ปล่อยฉัน...',
+  'escucharme': 'ฟังฉัน', 'escucharme!': 'ฟังฉันบ้างสิ!',
+  'mirarme': 'มองฉัน', 'mirarme!': 'มองฉันบ้างสิ!',
+  'tocame': 'แตะฉัน', 'tocame!': 'แตะฉันบ้างสิ!', 'tócame': 'แตะฉัน', 'tócame!': 'แตะฉันบ้างสิ!',
+  'excitante': 'น่าตื่นเต้น', 'excitante!': 'น่าตื่นเต้นมาก!',
+  'impresionante': 'น่าทึ่ง', 'impresionante!': 'น่าทึ่งมาก!',
+  'fascinante': 'น่าหลงใหล', 'emocionante': 'น่าตื่นเต้น', 'emocionante!': 'น่าตื่นเต้นมาก!',
+  'sorprendente': 'น่าประหลาดใจ', 'increible': 'ไม่น่าเชื่อ', 'increíble': 'ไม่น่าเชื่อ',
+  'increible!': 'ไม่น่าเชื่อ!', 'increíble!': 'ไม่น่าเชื่อ!',
+  'csabes que estas': 'รู้ไหมว่าคุณ', 'sabes que estas': 'รู้ไหมว่าคุณ', 'sabes que estás': 'รู้ไหมว่าคุณ',
+  'estas bien': 'คุณสบายดีไหม', 'estás bien': 'คุณสบายดีไหม', 'estas bien?': 'คุณสบายดีไหม?',
+  'oye': 'เฮ้/ดูนั่น', 'oye!': 'เฮ้!', 'oye...': 'เฮ้...',
+  'uf': 'อุ๊ฟ', 'uf!': 'อุ๊ฟ!', 'uff': 'อุ๊ฟ', 'uff!': 'อุ๊ฟ!', 'ufff': 'อุ๊ฟฟ', 'ufff!': 'อุ๊ฟฟ!',
+  'buf': 'อุ๊ฟ', 'buf!': 'อุ๊ฟ!', 'buff': 'อุ๊ฟ', 'buff!': 'อุ๊ฟ!',
   // Japanese exclamations
   'えっ': 'เอ๊ะ!',
   'えっ!': 'เอ๊ะ!',
@@ -613,6 +736,20 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey] || GENERAL_ENGLISH_DICTIONARY_TH[rawKey];
   if (directRawMatch) return directRawMatch;
 
+  const cleanedRawKey = rawKey.replace(/^[¡¿\s]+/, '').replace(/^ii(?=[a-z])/i, '');
+  const directCleanedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[cleanedRawKey] || GENERAL_ENGLISH_DICTIONARY_TH[cleanedRawKey];
+  if (directCleanedMatch) return directCleanedMatch;
+
+  const strippedDotsKey = cleanedRawKey.replace(/^[\.\,\-\s]+/, '').replace(/[\.\,\-\s]+$/, '').trim();
+  if (strippedDotsKey && (ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey])) {
+    const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey];
+    const trailingPunct = text.match(/([\!\?\.…]+)$/);
+    if (trailingPunct && !/[\!\?\.…]$/.test(match)) {
+      return match + trailingPunct[1];
+    }
+    return match;
+  }
+
   const key = rawKey
     .replace(/[_]+/g, ' ')
     .replace(/[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g, ' ')
@@ -621,21 +758,39 @@ export const lookupShortPhraseTh = (text: string): string | null => {
     .trim();
   
   // 1. ลองค้นหาแบบตรงตัวใน dictionary ก่อน
-  const directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[key] || GENERAL_ENGLISH_DICTIONARY_TH[key];
-  if (directMatch) return directMatch;
+  let directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[key] || GENERAL_ENGLISH_DICTIONARY_TH[key];
+  
+  // Try Spanish diacritic stripping fallback (e.g. bañas -> banas, montón -> monton)
+  if (!directMatch) {
+    const strippedKey = key.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ñ/g, 'n');
+    directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedKey];
+  }
 
-  // 2. ถ้าไม่พบแบบตรงตัว ลองตรวจสอบความลากเสียงยาว (Elongation) สำหรับคำการ์ตูนยอดนิยม
-  // สำหรับ please (เช่น pleea +aaseee, pleeease)
+  if (directMatch) {
+    const trailingPunct = text.match(/([\!\?\.…]+)$/);
+    if (trailingPunct && !/[\!\?\.…]$/.test(directMatch)) {
+      return directMatch + trailingPunct[1];
+    }
+    return directMatch;
+  }
+
+  // 2. ตรวจสอบความลากเสียงยาว (Elongation) สำหรับคำการ์ตูนยอดนิยม
   if (/^p[le]*[ea]*\s*\+?\s*[ea]*s[e]+$/i.test(key)) {
     return 'ได้โปรด ดดดดดด';
   }
-  // สำหรับ more (เช่น moreeeeee)
   if (/^m[o]+r[e]+$/i.test(key)) {
     return 'มากกกกว่าาาานี้';
   }
-  // สำหรับ out (เช่น ouuuut)
   if (/^[o]+[u]+[t]+$/i.test(key)) {
     return 'ออกไปปปป';
+  }
+
+  const compactKey = rawKey.replace(/[^a-z0-9]/g, '');
+  if (compactKey && ARGOS_SHORT_PHRASE_LOOKUP_TH[compactKey]) {
+    return ARGOS_SHORT_PHRASE_LOOKUP_TH[compactKey];
+  }
+  if (compactKey && GENERAL_ENGLISH_DICTIONARY_TH[compactKey]) {
+    return GENERAL_ENGLISH_DICTIONARY_TH[compactKey];
   }
   // สำหรับ knight (เช่น kniiiiight)
   if (/^k[n]+[i]+[g]+[h]+[t]+$/i.test(key)) {
@@ -1044,7 +1199,7 @@ export const shouldSkipOverlayForUntranslatedCarryOver = (
   // ทำไม: manga dialogue fragments ที่รู้จักต้องไม่โดน skip ไม่ว่า Argos จะแปลได้หรือไม่
   // เพราะ glossary จะ override ผลการแปลที่ถูกต้องอยู่แล้ว
   const compactUpper = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const KNOWN_MANGA_PHRASES = /^(?:THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|C[O]+CKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH|BE|STOP|HOLE|LETHER|THEBABAR|THEBARBA|PUNCHINGMY|GETTING|ALSOSAYTHAT|BUTINANY|FIRST|AGAIN|ASS|ASSHOLE|ISDEAD|MYHEARTSBEINGTORNBYTHEIRCOCKS|BEINGSLASHEDBYC[O]+CKS|BYC[O]+CKS)$/i.test(compactUpper);
+  const KNOWN_MANGA_PHRASES = /^(?:THEPIGYOUARE|LIKETHEPIGYOUARE|PIGYOUARE|THEPIG|PIG|THENTRYANDHOLDBACKYOURORGASMYOUPIG|KILLME|WITHPROCREATION|NIPPLES|SUDDENLY|BUT|FORMAMEDICAL|WAYTOOGOOD|BEINGTOO|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|ILLNESSBE|WELLSINCE|RESTA|THESEX|BLOWJOB|NURSE|OFME|EROMANGA|OFMEEROMANGA|ITWITHOUT|HEADNURSE|HEADNURS\w+|DISEASE|FOUNDA|RESTRAINT|HERPUSSY|CUMMING|WAYTOO|NOTNECESSARY|ADYDO|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|C[O]+CKS|ONEONONE|CUMALOTJUSTLIKETHAT|GONNADIE|TOBEDEADNOW|ONEBATTLE|SOPLEASE|NONSTOP|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|WITHIT|FRONT|YOUFRONT|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|YOURE|USTHE|HES|GET|CUM|II|NIPPLES|LONGER|TODAYAGAIN|HERPOSI|HERPOSITION|SUITS|SO|NIPPLESAND|CERVIX|GENERAL|DIEALONG|ALSO|HERPLACE|MAKESURE|SADNESS|ALLARSTOCRATS|ALLARISTOCRATS|KINGAND|BUTINANYAGE|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|ANALLOUT|IFI|TOYEDWITH|ANDWASATA|EXPECT|ANDHER|YOUFRONTUSTHEGETTINGAWAYWITH|BE|STOP|HOLE|LETHER|THEBABAR|THEBARBA|PUNCHINGMY|GETTING|ALSOSAYTHAT|BUTINANY|FIRST|AGAIN|ASS|ASSHOLE|ISDEAD|MYHEARTSBEINGTORNBYTHEIRCOCKS|BEINGSLASHEDBYC[O]+CKS|BYC[O]+CKS)$/i.test(compactUpper);
   if (KNOWN_MANGA_PHRASES) return false;
 
   if (sourceKey === translatedKey) {
