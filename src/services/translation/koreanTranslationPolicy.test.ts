@@ -52,6 +52,19 @@ describe('koreanTranslationPolicy', () => {
       expect(applyKoreanConversationalFallback('쾌락에패배하고굴복해서', '')).toBe('พ่ายแพ้และยอมจำนนต่อความสุข');
       expect(applyKoreanConversationalFallback('가장무방비한자세로 보지대주고있는상황을', '')).toBe('สถานการณ์ที่เสนออวัยวะเพศหญิงของตนเองในตำแหน่งที่ไร้การป้องกันที่สุด');
       expect(applyKoreanConversationalFallback('하앙!?', '')).toBe('ฮ๊าง!?');
+      expect(applyKoreanConversationalFallback('이대로...', '')).toBe('แบบนี้...');
+      expect(applyKoreanConversationalFallback('아니...', '')).toBe('ไม่...');
+      expect(applyKoreanConversationalFallback('그럼...', '')).toBe('ถ้าอย่างนั้น...');
+      expect(applyKoreanConversationalFallback('살살 해줄게', '')).toBe('จะทำเบาๆ ให้');
+      expect(applyKoreanConversationalFallback('사랑해', '')).toBe('รักนะ');
+      expect(applyKoreanConversationalFallback('아니 뭐...', '')).toBe('เปล่าหรอก แค่...');
+      expect(applyKoreanConversationalFallback('말구.', '')).toBe('อย่า.');
+      expect(applyKoreanConversationalFallback('하아...', '')).toBe('เฮ้อ...');
+      expect(applyKoreanConversationalFallback('옛날의 우리로선', '')).toBe('สำหรับพวกเราในอดีต');
+      expect(applyKoreanConversationalFallback('하늘아!', '')).toBe('ฮานึล!');
+      expect(applyKoreanConversationalFallback('내 말이!', '')).toBe('นั่นน่ะสิ!');
+      expect(applyKoreanConversationalFallback('아무튼 그래서...', '')).toBe('อย่างที่บอกไปว่า...');
+      expect(applyKoreanConversationalFallback('계속 좋아해 준다는 그 약속만 잘 지켜준다면--', '')).toBe('ถ้าเธอยังคงรักษาสัญญาว่าจะชอบฉันตลอดไป--');
     });
 
     it('returns null when no pattern matches', () => {

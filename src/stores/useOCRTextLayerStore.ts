@@ -44,7 +44,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v53'; // v53: ASS-HOLE merge, SUCK/YOU KEEP split, 168 filter, COOOOOOCKS, spatial overlay dedup
+export const OCR_TRANSLATION_CACHE_VERSION = 'v54'; // v54: Fix offline all pages cache hit fallback for YOU, FRONT and missing short phrase translations
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')

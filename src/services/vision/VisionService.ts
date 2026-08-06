@@ -10,6 +10,7 @@
 
 import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
 import { filterKoreanJamoNoise, filterWeakIsolatedCjkLines } from './ocr-filtering';
+import { isKnownShortWordHelper, isLikelyEnglishDialogue } from '../ocr/ocrSafetyLineDedup';
 import { preprocessImage } from './ocr-preprocessing';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from './ocrVersion';
 import {
@@ -1928,8 +1929,9 @@ class VisionService {
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
 
       // ── Safety Gate: prevent filtering standard English dialogue lines ──
-      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME)\b/i.test(rawText);
-      if (hasKillOrOtherStandardWord) return true;
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME|BITCH|HEY|PIG|ALREADY|GETTING|AWAY|LIKE|COCK|CUM|ASS|ASSHOLE|SHUT|HER|OUT|BACK|MOVE|CHARGE|FRONT|YOUFRONT|THEPIGYOUARE|BITCHHEY|PIGYOUARE)\b/i.test(rawText);
+      const isStandardEnglishDialogue = !stylizedWideEffect && isLikelyEnglishDialogue(rawText) && alphaLength >= 2;
+      if (hasKillOrOtherStandardWord || isStandardEnglishDialogue) return true;
 
       // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")
       const looksLikeReadableEnglishWord = !stylizedWideEffect && ((alphaLength >= 3 && confidence >= 78) || (alphaLength >= 2 && confidence >= 85));

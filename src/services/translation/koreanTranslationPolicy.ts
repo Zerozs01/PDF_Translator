@@ -14,11 +14,12 @@ const KOREAN_COLLOQUIAL_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
   { pattern: /([\uAC00-\uD7AF]+?)을라고/g, replacement: '$1으려고' },
   { pattern: /([\uAC00-\uD7AF]+?)를라고/g, replacement: '$1려고' },
   { pattern: /하느데(?![\uAC00-\uD7AF])/g, replacement: '하는데' },
+  { pattern: /아뎨요(?![\uAC00-\uD7AF])/g, replacement: '아녜요' },
 ];
 
 const preserveSourceTrailingPunctuation = (sourceText: string, replacement: string): string => {
-  const punctuation = String(sourceText || '').trim().match(/([.!?…]+)$/)?.[1] || '';
-  const cleanReplacement = normalizeWhitespace(String(replacement || '')).replace(/[.!?…]+$/g, '').trim();
+  const punctuation = String(sourceText || '').trim().match(/([.!?…\u002D\u2010-\u2015\u2212\u00AD]+)$/)?.[1] || '';
+  const cleanReplacement = normalizeWhitespace(String(replacement || '')).replace(/[.!?…\u002D\u2010-\u2015\u2212\u00AD]+$/g, '').trim();
   return `${cleanReplacement}${punctuation}`.trim();
 };
 
@@ -231,6 +232,52 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^나왔어$/, replacement: 'ออกมาแล้ว' },
   { pattern: /^들어가$/, replacement: 'เข้าไปเลย' },
   { pattern: /^나가$/, replacement: 'ออกไปเลย' },
+
+  // Systemic Korean conversational stems & dialogue connectors
+  { pattern: /^이대로$/, replacement: 'แบบนี้' },
+  { pattern: /^이대로는$/, replacement: 'ถ้าเป็นแบบนี้ต่อไป' },
+  { pattern: /^이대로가$/, replacement: 'ถ้าเป็นแบบนี้' },
+  { pattern: /^네마음대로해$/, replacement: 'ทำตามใจเธอเลย' },
+  { pattern: /^네마음대로$/, replacement: 'ตามใจเธอ' },
+  { pattern: /^지금의나는$/, replacement: 'ตัวฉันในตอนนี้' },
+  { pattern: /^나도앞으로도$/, replacement: 'ฉันเอง ต่อจากนี้ก็ด้วย' },
+  { pattern: /^그렇지$/, replacement: 'ใช่ไหมล่ะ' },
+  { pattern: /^하더라고$/, replacement: 'เขาว่างั้นนะ' },
+  { pattern: /^아녜요$/, replacement: 'เปล่าหรอก' },
+  { pattern: /^아뎨요$/, replacement: 'เปล่าหรอก' },
+  { pattern: /^재밌는데$/, replacement: 'น่าสนุกดีนี่' },
+  { pattern: /^으응$/, replacement: 'อืม?' },
+  { pattern: /^계속좋아해준다는그약속만잘지켜준다면$/, replacement: 'ถ้าเธอยังคงรักษาสัญญาว่าจะชอบฉันตลอดไป...' },
+  { pattern: /^계속좋아해준다는$/, replacement: 'ว่าจะชอบฉันตลอดไป' },
+  { pattern: /^그약속만잘지켜준다면$/, replacement: 'ถ้าเธอยังคงรักษาสัญญานั้นไว้' },
+  { pattern: /^사랑해$/, replacement: 'รักนะ' },
+  { pattern: /^아니뭐$/, replacement: 'เปล่าหรอก แค่...' },
+  { pattern: /^하아$/, replacement: 'เฮ้อ...' },
+  { pattern: /^옛날의우리로선$/, replacement: 'สำหรับพวกเราในอดีต' },
+  { pattern: /^하늘아$/, replacement: 'ฮานึล!' },
+  { pattern: /^내말이$/, replacement: 'นั่นน่ะสิ!' },
+  { pattern: /^말구$/, replacement: 'อย่า...' },
+  { pattern: /^너무기대하진말구$/, replacement: 'อย่าคาดหวังเกินไปนะ' },
+  { pattern: /^너무기대하진$/, replacement: 'อย่าคาดหวังเกินไป' },
+  { pattern: /^지수가그럼자기랑도오래알았으니까깍지껴보자고그랬거든$/, replacement: 'จีซูบอกว่าไหนๆ ก็รู้จักกันมานานแล้ว เลยลองมากุมมือกันน่ะ' },
+  { pattern: /^아무튼그래서$/, replacement: 'อย่างที่บอกไปว่า' },
+  { pattern: /^아무튼$/, replacement: 'อย่างน้อยก็' },
+  { pattern: /^그래서$/, replacement: 'เพราะฉะนั้น' },
+  { pattern: /^그럼$/, replacement: 'ถ้าอย่างนั้น' },
+  { pattern: /^그럼특별히$/, replacement: 'ถ้าอย่างนั้นเป็นพิเศษ' },
+  { pattern: /^특별히$/, replacement: 'เป็นพิเศษ' },
+  { pattern: /^살살해줄게$/, replacement: 'จะทำเบาๆ ให้' },
+  { pattern: /^살살해줘$/, replacement: 'ทำเบาๆ หน่อยนะ' },
+  { pattern: /^아니야$/, replacement: 'ไม่ใช่หรอก' },
+  { pattern: /^아니에요$/, replacement: 'ไม่ใช่ครับ' },
+  { pattern: /^어쩌지$/, replacement: 'ทำไงดี' },
+  { pattern: /^어쩌면$/, replacement: 'บางที' },
+  { pattern: /^그래$/, replacement: 'นั่นสิ' },
+  { pattern: /^하지만$/, replacement: 'แต่ว่า' },
+  { pattern: /^글쎄$/, replacement: 'นั่นสิอืม' },
+  { pattern: /^벌써$/, replacement: 'เรียบร้อยแล้ว' },
+  { pattern: /^그렇게$/, replacement: 'แบบนั้น' },
+  { pattern: /^이렇게$/, replacement: 'แบบนี้' },
 ];
 
 export const normalizeKoreanColloquialOcrText = (text: string): string => {
@@ -265,7 +312,14 @@ export const isBoilerplateHallucination = (sourceText: string, translatedText: s
     'ข้อตกลงในการให้บริการ',
     'ผมตกลงในเงื่อนไข',
     'ฉันตกลงในเงื่อนไข',
-    'ข้อมูลส่วนบุคคล'
+    'ข้อมูลส่วนบุคคล',
+    'ถ้าคุณมีคำถาม',
+    'โปรดติดต่อเรา',
+    'โปรดติดต่อ',
+    'ติดต่อเรา',
+    'คำถามที่พบบ่อย',
+    'ศูนย์ช่วยเหลือ',
+    'ข้อกำหนดและเงื่อนไข',
   ];
 
   // If the source doesn't actually mean "about us" or "terms of service", but translation contains it
@@ -285,7 +339,7 @@ export const applyKoreanConversationalFallback = (
   const source = normalizeWhitespace(sourceText);
   if (!source || !KOREAN_HANGUL_REGEX.test(source)) return null;
 
-  const compactSource = source.replace(/[\s.!?~,]/g, '');
+  const compactSource = source.replace(/[\s.!?~,\u002D\u2010-\u2015\u2212\u00AD]/g, '');
   const matched = KOREAN_CONVERSATIONAL_FALLBACKS.find((entry) => entry.pattern.test(compactSource));
   if (!matched) return null;
 

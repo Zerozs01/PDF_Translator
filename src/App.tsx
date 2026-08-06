@@ -3919,6 +3919,7 @@ export default function App() {
           // ใช้ข้อมูลที่ processor มีอยู่แล้ว โดยไม่ต้องพึ่ง store ซึ่งอาจ sync ไม่ทัน
           const result = await runCurrentPageTranslationRef.current(engine, pageNum, { 
             suppressStatus: true,
+            bypassPageCache: false, // ใช้ SQLite DB cache เพื่อไม่ต้องแปลซ้ำเมื่อกด pause แล้ว resume
             ocrLanguage: options?.ocrLanguage,
             sourceLanguage: options?.sourceLanguage,
             targetLanguage: options?.targetLanguage,
@@ -5658,9 +5659,24 @@ export default function App() {
           });
 
           if (matchedCache && !options?.bypassPageCache) {
-            console.log(`[Translation] Cache hit for page ${pageNum} via database! Skipping translation coordinator.`);
-            
-            let safeMatchedCache = matchedCache;
+            const isCacheIncomplete = Array.isArray(matchedCache.translatedByIndex) && pageOCR.lines.some((line) => {
+              const text = String(line.text || '').trim();
+              if (!text) return false;
+              const ascii = text.replace(/[^A-Za-z0-9]/g, '');
+              if (!isKnownShortWordHelper(ascii) && !isLikelyEnglishDialogue(text)) return false;
+              const item = (matchedCache.translatedByIndex as any[]).find((c: any) => {
+                const itemSrc = String(c.sourceText || c.rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                return itemSrc === text.toLowerCase();
+              });
+              return !item || !item.text || item.text === text || !/[\u0E00-\u0E7F]/.test(String(item.text));
+            });
+
+            if (isCacheIncomplete) {
+              console.log(`[Translation] DB cache for page ${pageNum} is incomplete (missing translation for dialogue lines). Re-translating...`);
+            } else {
+              console.log(`[Translation] Cache hit for page ${pageNum} via database! Skipping translation coordinator.`);
+              
+              let safeMatchedCache = matchedCache;
             if (normalizedTargetLanguage === 'th' && matchedCache && Array.isArray(matchedCache.translatedByIndex)) {
               safeMatchedCache = {
                 ...matchedCache,
@@ -5722,13 +5738,21 @@ export default function App() {
 
               if (pageLayers.length > 0) {
                 const updatedPageLayers = pageLayers.map(layer => {
-                  const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, safeMatchedCache.translatedByIndex);
-                  if (!matchedItem) return layer;
                   if (layer.userEdited) return layer;
+                  const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, safeMatchedCache.translatedByIndex);
+                  let finalText = matchedItem?.text;
+                  const sourceClean = String(layer.sourceText || '').trim();
+                  if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
+                    const glossaryMatch = lookupShortPhraseTh(sourceClean);
+                    if (glossaryMatch) {
+                      finalText = glossaryMatch;
+                    }
+                  }
+                  if (!finalText) return layer;
                   return {
                     ...layer,
-                    translatedText: matchedItem.text,
-                    text: matchedItem.text,
+                    translatedText: finalText,
+                    text: finalText,
                     translationEngineUsed: engine,
                   };
                 });
@@ -5743,8 +5767,16 @@ export default function App() {
                 if (Array.isArray(pageOCR?.lines)) {
                   pageOCR.lines.forEach((line, idx) => {
                     const matchedItem = findBestCacheMatch(line.text, idx, safeMatchedCache.translatedByIndex);
-                    if (matchedItem) {
-                      translatedMap.set(idx, matchedItem.text);
+                    let finalText = matchedItem?.text;
+                    const sourceClean = String(line.text || '').trim();
+                    if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
+                      const glossaryMatch = lookupShortPhraseTh(sourceClean);
+                      if (glossaryMatch) {
+                        finalText = glossaryMatch;
+                      }
+                    }
+                    if (finalText) {
+                      translatedMap.set(idx, finalText);
                     }
                   });
                 }
@@ -5762,6 +5794,7 @@ export default function App() {
               });
             }
             return true;
+            }
           }
         }
       } catch (err) {

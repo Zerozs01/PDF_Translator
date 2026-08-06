@@ -15,6 +15,7 @@ import { isKnownShortWordHelper, isLikelyEnglishDialogue } from '../ocr/ocrSafet
 
 import {
   hasKoreanTranslationCarryover,
+  applyKoreanConversationalFallback,
 } from './koreanTranslationPolicy';
 
 import {
@@ -806,6 +807,11 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   }
   if (/^c[o]+cks$/i.test(key)) {
     return 'ควยยยยยยพวกนี้';
+  }
+
+  if (/[\uAC00-\uD7AF]/.test(text)) {
+    const koreanMatch = applyKoreanConversationalFallback(text, text);
+    if (koreanMatch) return koreanMatch;
   }
 
   return GENERAL_ENGLISH_DICTIONARY_TH[key] || null;

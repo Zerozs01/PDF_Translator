@@ -501,14 +501,7 @@ class BackgroundQueueProcessor {
               .filter(Boolean)
               .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
-            const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
-            const resolvedQualityProfile = activeEngine === 'paddleocr'
-              ? (shouldPreferFastPaddleProfile
-                ? 'fast'
-                : (ocrQualityMode === 'fast'
-                  ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
-                  : (isSensitiveFastLanguage ? 'balanced' : 'best')))
-              : 'best';
+            const resolvedQualityProfile = options.ocrQualityProfile || 'best';
 
             const pageSegModeVal = job.ocrPageSegMode !== undefined
               ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)

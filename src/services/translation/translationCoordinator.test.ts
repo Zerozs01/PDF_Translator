@@ -270,8 +270,7 @@ describe('TranslationCoordinator & Engines', () => {
   describe('GeminiTranslationEngine', () => {
     it('translates balloon/narration layers using XML tags and local dict first for SFX', async () => {
       const mockTranslateBatchGemini = vi.fn().mockResolvedValue([
-        '<balloon id="1">สวัสดี</balloon>',
-        '<sfx id="2">เฟี้ยว!</sfx>', // mock for custom sfx not in local dictionary
+        '<page_dialogue>\n<balloon id="1">สวัสดี</balloon>\n<sfx id="2">เฟี้ยว!</sfx>\n</page_dialogue>',
       ]);
 
       const items: TranslatableItem[] = [
@@ -288,11 +287,11 @@ describe('TranslationCoordinator & Engines', () => {
         translateBatchGemini: mockTranslateBatchGemini,
       });
 
-      // translateBatchGemini should only receive 'Hello' (as <balloon>) and 'ZOOM' (as <sfx>)
+      // translateBatchGemini should receive single bundled XML payload containing 'Hello' (as <balloon>) and 'ZOOM' (as <sfx>)
       // 'BOOM' should be resolved locally
       expect(mockTranslateBatchGemini).toHaveBeenCalledWith(
-        ['<balloon id="1">Hello</balloon>', '<sfx id="2">ZOOM</sfx>'],
-        'text',
+        ['<page_dialogue>\n<balloon id="1">Hello</balloon>\n<sfx id="2">ZOOM</sfx>\n</page_dialogue>'],
+        'batch-markdown',
         'official',
         'en',
         'th'

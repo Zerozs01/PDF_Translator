@@ -337,11 +337,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const fileKey = get().filePath || resolvedPath || file.name;
     let savedOcrLang = 'eng';
     let savedOcrEngine = 'paddleocr';
-    let savedOcrQualityProfile = 'fast';
+    let savedOcrQualityProfile = 'best';
     try {
       savedOcrLang = localStorage.getItem(`pdf_translator.ocr_lang.${fileKey}`) || 'eng';
       savedOcrEngine = localStorage.getItem(`pdf_translator.ocr_engine.${fileKey}`) || 'paddleocr';
-      savedOcrQualityProfile = localStorage.getItem(`pdf_translator.ocr_quality_profile.${fileKey}`) || 'fast';
+      savedOcrQualityProfile = localStorage.getItem(`pdf_translator.ocr_quality_profile.${fileKey}`) || 'best';
     } catch (e) {
       console.warn('[Storage] Failed to read OCR options:', e);
     }

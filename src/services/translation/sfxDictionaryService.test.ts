@@ -79,6 +79,7 @@ describe('sfxDictionaryService', () => {
         en: [{ source: 'ZAP', target: 'เปรี้ยง!', notes: 'สายฟ้าฟาด' }],
         jp: [],
         ko: [],
+        es: [],
       };
 
       saveUserDictionary(userDict);
@@ -90,6 +91,7 @@ describe('sfxDictionaryService', () => {
         en: [{ source: 'ZAP', target: 'เปรี้ยง!', notes: 'สายฟ้าฟาด' }],
         jp: [],
         ko: [],
+        es: [],
       };
 
       saveUserDictionary(userDict);

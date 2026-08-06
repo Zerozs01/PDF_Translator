@@ -1,8 +1,9 @@
 import { TranslatableItem, TranslationResult, TranslationEngine } from '../../types/translation';
 import { translateSFX, SFXLanguage } from './sfxDictionaryService';
 import { dbService } from '../dbService';
-import { hasKoreanTranslationCarryover } from './koreanTranslationPolicy';
+import { hasKoreanTranslationCarryover, applyKoreanConversationalFallback } from './koreanTranslationPolicy';
 import { lookupShortPhraseTh } from './offlineTranslationService';
+import { normalizeTranslationLanguage } from '../ocr/ocrTextNormalizer';
 
 /**
  * Argos Offline Engine Implementation
@@ -92,11 +93,16 @@ export class ArgosTranslationEngine implements TranslationEngine {
       batchItems.forEach((item, index) => {
         let translatedText = translatedTexts[index] || item.text;
         
-        // Safety Fallback: ถ้าเป็นภาษาไทย แต่ Argos คืนผลลัพธ์ภาษาอังกฤษกลับมา ให้ลองค้นหา short phrase dict อีกครั้ง
-        if (options.targetLanguage === 'th' && !/[\u0E00-\u0E7F]/.test(translatedText)) {
-          const dictFallback = lookupShortPhraseTh(item.text);
-          if (dictFallback) {
-            translatedText = dictFallback;
+        // Safety Fallback: ถ้าเป็นภาษาไทย แต่ Argos คืนผลลัพธ์ภาษาเกาหลี/ภาษาอังกฤษกลับมา ให้ลองระบบ Fallback ภาษาเกาหลี
+        if (options.targetLanguage === 'th' && (!/[\u0E00-\u0E7F]/.test(translatedText) || /[\uAC00-\uD7AF]/.test(translatedText))) {
+          const koreanFallback = applyKoreanConversationalFallback(item.text, translatedText);
+          if (koreanFallback) {
+            translatedText = koreanFallback;
+          } else {
+            const dictFallback = lookupShortPhraseTh(item.text);
+            if (dictFallback) {
+              translatedText = dictFallback;
+            }
           }
         }
 
@@ -282,7 +288,7 @@ export class GeminiTranslationEngine implements TranslationEngine {
       // ในที่นี้ เพื่อความสเถียรและประยุกต์ใช้กับฟังก์ชัน translateBatchGemini ที่ส่ง Array
       // เราสามารถห่อหุ้ม XML แยก หรือแปลแบบส่ง Batch ไปโดยตรง
       
-      const inputs = llmTargetItems.map((item) => {
+      const xmlTags = llmTargetItems.map((item) => {
         if (item.groupType === 'sfx') {
           return `<sfx id="${item.id}">${item.text}</sfx>`;
         } else if (item.groupType === 'narration') {
@@ -292,23 +298,52 @@ export class GeminiTranslationEngine implements TranslationEngine {
         }
       });
 
+      // Bundle all dialogue elements on the page into a single XML document payload to preserve context
+      const singleXmlPayload = `<page_dialogue>\n${xmlTags.join('\n')}\n</page_dialogue>`;
+
       const translatedOutputs = await options.translateBatchGemini(
-        inputs,
-        'text',
+        [singleXmlPayload],
+        'batch-markdown',
         options.translationMode,
         options.sourceLanguage,
         options.targetLanguage
       );
 
-      llmTargetItems.forEach((item, index) => {
-        const rawOutput = translatedOutputs[index] || item.text;
-        const cleanedText = rawOutput
-          .replace(/<balloon[^>]*>([\s\S]*?)<\/balloon>/gi, '$1')
-          .replace(/<sfx[^>]*>([\s\S]*?)<\/sfx>/gi, '$1')
-          .replace(/<narration[^>]*>([\s\S]*?)<\/narration>/gi, '$1')
-          .trim();
+      const combinedResponse = translatedOutputs[0] || '';
 
-        const sanitizedText = sanitizeTranslationResult(cleanedText);
+      llmTargetItems.forEach((item, index) => {
+        // Extract tag by ID using Regex
+        const tagRegex = new RegExp(`<(?:balloon|sfx|narration)\\s+id=["']?${item.id}["']?[^>]*>([\\s\\S]*?)</(?:balloon|sfx|narration)>`, 'i');
+        const match = combinedResponse.match(tagRegex);
+        
+        let cleanedText = '';
+        if (match && match[1] !== undefined) {
+          cleanedText = match[1].trim();
+        } else {
+          // Fallback: If single batch response didn't contain the specific tag, check array output
+          const rawOutput = translatedOutputs[index] || item.text;
+          cleanedText = rawOutput
+            .replace(/<balloon[^>]*>([\s\S]*?)<\/balloon>/gi, '$1')
+            .replace(/<sfx[^>]*>([\s\S]*?)<\/sfx>/gi, '$1')
+            .replace(/<narration[^>]*>([\s\S]*?)<\/narration>/gi, '$1')
+            .replace(/<\/?page_dialogue>/gi, '')
+            .trim();
+        }
+
+        let sanitizedText = sanitizeTranslationResult(cleanedText);
+
+        // Fallback for Korean conversational phrases when Gemini fails to translate or leaves untranslated
+        if (options.targetLanguage === 'th' && (!sanitizedText || !/[\u0E00-\u0E7F]/.test(sanitizedText) || /[\uAC00-\uD7AF]/.test(sanitizedText))) {
+          const koreanFallback = applyKoreanConversationalFallback(item.text, sanitizedText);
+          if (koreanFallback) {
+            sanitizedText = koreanFallback;
+          } else {
+            const dictFallback = lookupShortPhraseTh(item.text);
+            if (dictFallback) {
+              sanitizedText = dictFallback;
+            }
+          }
+        }
 
         results.push({
           id: item.id,
@@ -471,7 +506,7 @@ export class TranslationCoordinator {
 
       if (hasLatinLetters && !hasThaiChars) return true;
 
-      const normSource = String(sourceLang || '').toLowerCase();
+      const normSource = normalizeTranslationLanguage(sourceLang, '').toLowerCase();
       if ((normSource === 'es' || normSource === 'spa') && hasLatinLetters && !hasThaiChars) {
         const lenDelta = Math.abs(trimmed.length - sourceText.length) / Math.max(1, sourceText.length);
         if (lenDelta < 0.20 && trimmed.toLowerCase() === sourceText.toLowerCase().trim()) {

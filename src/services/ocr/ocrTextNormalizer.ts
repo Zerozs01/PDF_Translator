@@ -580,7 +580,12 @@ export const cleanJapaneseOcrSpacing = (text: string): string => {
 
 export const cleanKoreanOcrSpacing = (text: string): string => {
   if (!text) return '';
-  const words = text.split(/(\s+)/);
+  // Collapse spaces between isolated single Korean syllables (e.g. "안 녕 하 세 요" -> "안녕하세요")
+  // while preserving spaces around multi-syllable words (e.g. "네 마음대로 해" -> "네 마음대로 해")
+  let cleaned = text.replace(/([\uac00-\ud7af])\s+(?=[\uac00-\ud7af]\s+[\uac00-\ud7af])/g, '$1');
+  cleaned = cleaned.replace(/([\uac00-\ud7af])\s+(?=[\uac00-\ud7af]$)/g, '$1');
+
+  const words = cleaned.split(/(\s+)/);
   const result: string[] = [];
   
   for (let i = 0; i < words.length; i++) {
@@ -597,10 +602,7 @@ export const cleanKoreanOcrSpacing = (text: string): string => {
     const nextKoMatches = nextWord.match(/[\uac00-\ud7af]/g);
     
     if (prevKoMatches && nextKoMatches) {
-      const prevKoLen = prevKoMatches.length;
-      const nextKoLen = nextKoMatches.length;
-      
-      if (prevKoLen === 1 || nextKoLen === 1) {
+      if (prevKoMatches.length === 1 && nextKoMatches.length === 1) {
         result[result.length - 1] = prevWord + nextWord;
         i++;
         continue;

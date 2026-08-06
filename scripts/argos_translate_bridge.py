@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 import argparse
+import gc
 import json
 import os
 import sys
