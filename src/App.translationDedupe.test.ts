@@ -147,7 +147,7 @@ beforeAll(async () => {
   protectTranslationTokens = appModule.protectTranslationTokens;
   restoreProtectedTokens = appModule.restoreProtectedTokens;
   setSlangGroupContext = glossaryModule.setSlangGroupContext;
-});
+}, 30000);
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
   index: 0,

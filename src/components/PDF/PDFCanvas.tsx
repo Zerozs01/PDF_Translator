@@ -367,6 +367,19 @@ const PDFPageOverlay: React.FC<{
     lastBuiltTranslationMapRef.current = new Map();
   }
 
+  const [liveUpdateTick, setLiveUpdateTick] = useState(0);
+
+  useEffect(() => {
+    const handleLiveUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ pageNum: number }>;
+      if (customEvent.detail?.pageNum === pageNum) {
+        setLiveUpdateTick((t) => t + 1);
+      }
+    };
+    window.addEventListener('page-translation-updated', handleLiveUpdate);
+    return () => window.removeEventListener('page-translation-updated', handleLiveUpdate);
+  }, [pageNum]);
+
   useEffect(() => {
     if (!currentPageOCRResolved || !currentPageOCRResolved.lines || currentPageOCRResolved.lines.length === 0) return;
 
@@ -439,7 +452,7 @@ const PDFPageOverlay: React.FC<{
       lastBuiltTranslationMapRef.current = new Map(currentTranslationMap);
       hasBuiltLayersForCurrentPageRef.current = true;
     }
-  }, [currentPageOCRResolved, pageNum, hasLayers, translationOverlayContext.translatedByIndex, translationPreviewMode]);
+  }, [currentPageOCRResolved, pageNum, hasLayers, translationOverlayContext.translatedByIndex, translationPreviewMode, liveUpdateTick]);
 
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
     preset: overlayFontPreset,
@@ -1254,7 +1267,7 @@ const PDFPageContainer: React.FC<{
         });
       },
       {
-        rootMargin: '600px 0px 600px 0px',
+        rootMargin: '1400px 0px 1400px 0px',
       }
     );
 
@@ -1388,17 +1401,10 @@ const PDFPageContainer: React.FC<{
       }
     };
 
-    // Wait for scroll/pan to settle down before loading database cache (Lazy Cache Load)
-    // Delay increased to 350ms to completely bypass loading pages that are fast-scrolled past.
+    // Fast cache loader: Load database cache quickly (40ms debounce) without 1000ms idle callback blocker
     const timer = setTimeout(() => {
-      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-        window.requestIdleCallback(() => {
-          if (!canceled) void loadCache();
-        }, { timeout: 1000 });
-      } else {
-        void loadCache();
-      }
-    }, 350);
+      if (!canceled) void loadCache();
+    }, 40);
 
     return () => {
       canceled = true;

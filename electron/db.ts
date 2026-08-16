@@ -1023,9 +1023,16 @@ export const TranslationCacheDAO = {
       created_at: number;
     }>;
 
-    const CURRENT_CACHE_VERSION_TAG = 'ver:v59';
+    const hasValidTranslationVersion = (key: string): boolean => {
+      const strKey = String(key || '');
+      const match = strKey.match(/ver:v(\d+)/);
+      if (!match) return false;
+      const versionNum = parseInt(match[1], 10);
+      return versionNum >= 40;
+    };
+
     return rows
-      .filter((row) => String(row.cache_key || '').includes(CURRENT_CACHE_VERSION_TAG))
+      .filter((row) => hasValidTranslationVersion(row.cache_key))
       .map((row) => {
       let translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: any }> = [];
       try {

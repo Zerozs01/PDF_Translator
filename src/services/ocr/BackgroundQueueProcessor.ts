@@ -327,8 +327,23 @@ class BackgroundQueueProcessor {
     const endPage = isSinglePage ? (job.targetPage as number) : totalPages;
     const pagesCount = endPage - startPage + 1;
     const pageNumbers: number[] = [];
-    for (let pageNum = startPage; pageNum <= endPage; pageNum++) {
-      pageNumbers.push(pageNum);
+    if (isSinglePage) {
+      pageNumbers.push(job.targetPage as number);
+    } else {
+      const activeDocId = useProjectStore.getState().documentId;
+      const activeCurrentPage = useProjectStore.getState().currentPage;
+      if (activeDocId === job.documentId && activeCurrentPage >= 1 && activeCurrentPage <= totalPages) {
+        for (let p = activeCurrentPage; p <= totalPages; p++) {
+          pageNumbers.push(p);
+        }
+        for (let p = 1; p < activeCurrentPage; p++) {
+          pageNumbers.push(p);
+        }
+      } else {
+        for (let p = 1; p <= totalPages; p++) {
+          pageNumbers.push(p);
+        }
+      }
     }
 
     const CHUNK_SIZE = 3;
@@ -410,6 +425,11 @@ class BackgroundQueueProcessor {
                 const activeFile = useProjectStore.getState().file;
                 if (activeFile && useProjectStore.getState().documentId === job.documentId) {
                   useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+                  const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
+                    || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
+                  if (storeResult) {
+                    ocrResult = storeResult;
+                  }
                 }
               }
             }
@@ -546,25 +566,40 @@ class BackgroundQueueProcessor {
             const activeFile = useProjectStore.getState().file;
             if (activeFile && useProjectStore.getState().documentId === job.documentId) {
               useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+              const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
+                || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
+              if (storeResult) {
+                ocrResult = storeResult;
+              }
             }
           }
 
           if (ocrResult) {
             try {
-              const layerStore = useLayerStore.getState();
-              const existingLayers = layerStore.getPageLayers(pageNum);
-              const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
-              const existingGroups = layerStore.getPageGroups(pageNum);
-              const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
-                || existingGroups.some(g => g.userCreated);
+              const activeDocId = useProjectStore.getState().documentId;
+              const isActiveDoc = activeDocId === null || activeDocId === job.documentId;
 
-              if (existingLayers.length === 0 || !hasUserModifications) {
-                layerStore.setPageLayers(pageNum, initialLayerResult);
-                console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
+              if (!isActiveDoc) {
+                console.log(
+                  `[QueueProcessor] Skipping layerStore.setPageLayers for page ${pageNum}: ` +
+                  `active doc (${activeDocId}) ≠ job doc (${job.documentId}). Layers will be built on open.`
+                );
               } else {
-                const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
-                layerStore.setPageLayers(pageNum, mergedResult);
-                console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
+                const layerStore = useLayerStore.getState();
+                const existingLayers = layerStore.getPageLayers(pageNum);
+                const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
+                const existingGroups = layerStore.getPageGroups(pageNum);
+                const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+                  || existingGroups.some(g => g.userCreated);
+
+                if (existingLayers.length === 0 || !hasUserModifications) {
+                  layerStore.setPageLayers(pageNum, initialLayerResult);
+                  console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
+                } else {
+                  const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
+                  layerStore.setPageLayers(pageNum, mergedResult);
+                  console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
+                }
               }
             } catch (err) {
               console.warn(`[QueueProcessor] Failed to initialize layers from OCR for page ${pageNum}:`, err);
@@ -608,6 +643,25 @@ class BackgroundQueueProcessor {
 
           processedCount++;
           successPagesCount++;
+
+          const finishedProgress = Math.round((processedCount / pagesCount) * 100);
+          useBackgroundQueueStore.getState().updateJobProgress(
+            job.id,
+            finishedProgress,
+            pageNum,
+            isSinglePage
+              ? `แปลหน้าที่ ${pageNum} เรียบร้อยแล้ว!`
+              : `แปลหน้าที่ ${pageNum} สำเร็จ (${processedCount}/${pagesCount}) • กำลังประมวลผลต่อ...`
+          );
+
+          if (typeof window !== 'undefined') {
+            const activePage = useProjectStore.getState().currentPage;
+            const activeDoc = useProjectStore.getState().documentId;
+            if (activeDoc === job.documentId && activePage === pageNum) {
+              window.dispatchEvent(new CustomEvent('page-translation-updated', { detail: { pageNum } }));
+            }
+          }
+
           throwIfAborted();
         }
       } catch (err: any) {

@@ -205,6 +205,22 @@ def translate_texts(
             continue
 
         translated = str(translation.translate(normalized_text) or "")
+
+        # OpenNMT SentencePiece Casing Fallback:
+        # ALL-CAPS text (e.g. "SUPPOSED", "STUDENTS", "APOLOGIES") confuses OpenNMT subword tokenizers.
+        # If translation produced no target script (e.g. Thai), retry with Title-case ("Supposed") or Lower-case ("supposed").
+        if target_language == "th" and (not translated or translated == normalized_text or not any('\u0e00' <= c <= '\u0e7f' for c in translated)):
+            if normalized_text.isupper() and len(normalized_text) > 1:
+                title_cased = normalized_text.title()
+                alt_translated = str(translation.translate(title_cased) or "")
+                if alt_translated and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated):
+                    translated = alt_translated
+                else:
+                    lower_cased = normalized_text.lower()
+                    alt_translated2 = str(translation.translate(lower_cased) or "")
+                    if alt_translated2 and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated2):
+                        translated = alt_translated2
+
         remember_text_translation(cache_key, translated)
         translations.append(translated)
     return translations

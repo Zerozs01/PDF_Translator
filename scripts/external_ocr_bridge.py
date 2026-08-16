@@ -622,16 +622,17 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 )
                 is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
         else:
-            # Tightened: prevent vertically stacked short words (EH/ME) from merging
+            # Tightened: prevent merging text across different speech bubbles / columns
             same_band = (
-                center_delta <= min_height * 0.24
-                or (overlap_y >= 0.82 and center_delta <= min_height * 0.38)
+                center_delta <= min_height * 0.22
+                or (overlap_y >= 0.82 and center_delta <= min_height * 0.34)
             )
             close_enough = (
-                (gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34)
-                and overlap_x <= 0.88  # block near-full vertical stacking
+                gap_x <= max(24.0, min_height * 1.3)
+                and gap_x >= -max(10.0, min_height * 0.65)
+                and overlap_x <= 0.28
             )
-            is_very_close = gap_x <= max(36.0, min_height * 1.6)
+            is_very_close = gap_x <= max(20.0, min_height * 1.0) and gap_x >= -max(6.0, min_height * 0.4)
 
         should_merge = fragment_like or is_very_close
 

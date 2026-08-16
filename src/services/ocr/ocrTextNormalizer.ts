@@ -580,17 +580,17 @@ export const cleanJapaneseOcrSpacing = (text: string): string => {
 
 export const cleanKoreanOcrSpacing = (text: string): string => {
   if (!text) return '';
-  // Collapse spaces between isolated single Korean syllables (e.g. "안 녕 하 세 요" -> "안녕하세요")
-  // while preserving spaces around multi-syllable words (e.g. "네 마음대로 해" -> "네 마음대로 해")
-  let cleaned = text.replace(/([\uac00-\ud7af])\s+(?=[\uac00-\ud7af]\s+[\uac00-\ud7af])/g, '$1');
-  cleaned = cleaned.replace(/([\uac00-\ud7af])\s+(?=[\uac00-\ud7af]$)/g, '$1');
+  // Collapse single spaces between isolated single Korean syllables (e.g. "안 녕 하 세 요" -> "안녕하세요")
+  // while preserving double spaces between words (e.g. "설 정 을  다 시" -> "설정을  다시")
+  let cleaned = text.replace(/([\uac00-\ud7af]) (?=[\uac00-\ud7af] [\uac00-\ud7af])/g, '$1');
+  cleaned = cleaned.replace(/([\uac00-\ud7af]) (?=[\uac00-\ud7af](?:[^\uac00-\ud7afA-Za-z0-9]|\s|$))/g, '$1');
 
   const words = cleaned.split(/(\s+)/);
   const result: string[] = [];
   
   for (let i = 0; i < words.length; i++) {
     const item = words[i];
-    if (!/^[ ]$/.test(item)) {
+    if (item !== ' ') {
       result.push(item);
       continue;
     }
@@ -604,7 +604,6 @@ export const cleanKoreanOcrSpacing = (text: string): string => {
     if (prevKoMatches && nextKoMatches) {
       if (prevKoMatches.length === 1 && nextKoMatches.length === 1) {
         result[result.length - 1] = prevWord + nextWord;
-        i++;
         continue;
       }
     }
@@ -677,7 +676,6 @@ export const normalizeSourceForTranslation = (text: string, sourceLanguage = '')
 
   let normalized = normalizeTechnicalArtifactsForTranslation(raw);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);
-  normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
 
   const normLang = normalizeTranslationLanguage(sourceLanguage, '');
   if (normLang === 'es') {
@@ -688,6 +686,8 @@ export const normalizeSourceForTranslation = (text: string, sourceLanguage = '')
   } else if (normLang === 'ko') {
     normalized = cleanKoreanOcrSpacing(normalized);
     normalized = normalizeKoreanOcrNoiseForTranslation(normalized);
+  } else {
+    normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
   }
 
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
