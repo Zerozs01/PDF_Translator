@@ -759,6 +759,55 @@ const applyThaiConversationalGlossaryInternal = (
     return preserveSourceTrailingPunctuation(source, 'มากเกินไป');
   }
 
+  if (compactSourceAlnumUpper.includes('WHATTHEHELLKINDOF') && (compactSourceAlnumUpper.includes('EROMANGA') || compactSourceAlnumUpper.includes('CONVENIENT') || compactSourceAlnumUpper.includes('CONYENIENT') || compactSourceAlnumUpper.includes('DISEASE'))) {
+    return preserveSourceTrailingPunctuation(source, 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?');
+  }
+  if (compactSourceAlnumUpper.includes('SEXUALINTERCOURSEDEFICIENCY') || (compactSourceAlnumUpper.includes('GENITALS') && compactSourceAlnumUpper.includes('DISEASE'))) {
+    return preserveSourceTrailingPunctuation(source, 'โรคความบกพร่องทางเพศของอวัยวะเพศ');
+  }
+  if (compactSourceAlnumUpper.includes('RELEASEALOTOFSPERM') || (compactSourceAlnumUpper.includes('SPERM') && compactSourceAlnumUpper.includes('FATAL'))) {
+    return preserveSourceTrailingPunctuation(source, 'นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้');
+  }
+  if (compactSourceAlnumUpper.includes('MOREEFFICIENT') && compactSourceAlnumUpper.includes('SPERM')) {
+    return preserveSourceTrailingPunctuation(source, 'วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง');
+  }
+  if (compactSourceAlnumUpper.includes('BYHAVINGSEXWITHAWOMAN') || compactSourceAlnumUpper.includes('HAVINGSEXWITHAWOMAN')) {
+    return preserveSourceTrailingPunctuation(source, 'โดยการมีเพศสัมพันธ์กับผู้หญิง');
+  }
+  if (compactSourceAlnumUpper.includes('IMADEAFEWMODIFICATIONS') || compactSourceAlnumUpper.includes('MODIFICATIONSTOTHEROOM')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันได้ทำการปรับเปลี่ยนห้องเล็กน้อย');
+  }
+  if (compactSourceAlnumUpper.includes('CONTINUETHETREATMENT') || compactSourceAlnumUpper.includes('CONTINUETHETHREATMENT')) {
+    return preserveSourceTrailingPunctuation(source, 'ดำเนินการรักษาต่อไป');
+  }
+  if (compactSourceAlnumUpper === 'TREATMENT' || compactSourceAlnumUpper === 'THETREATMENT') {
+    return preserveSourceTrailingPunctuation(source, 'การรักษา');
+  }
+  if (compactSourceAlnumUpper === 'SUCKING' || compactSourceAlnumUpper === 'SUCK') {
+    return preserveSourceTrailingPunctuation(source, 'ดูด');
+  }
+  if (compactSourceAlnumUpper === 'DISCOURSE' || compactSourceAlnumUpper === 'DISCOUR') {
+    return preserveSourceTrailingPunctuation(source, 'การสนทนา');
+  }
+  if (compactSourceAlnumUpper === 'METHERE' || compactSourceAlnumUpper === 'ME,THERE') {
+    return preserveSourceTrailingPunctuation(source, 'ฉัน, ตรงนั้น');
+  }
+  if (compactSourceAlnumUpper === 'THENWESHOULD' || compactSourceAlnumUpper === 'THENWE') {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าอย่างนั้นเราควรจะ');
+  }
+  if (compactSourceAlnumUpper === 'AALRIGHT' || compactSourceAlnumUpper === 'AALRIGHT' || compactSourceAlnumUpper === 'AALRIGHT!') {
+    return preserveSourceTrailingPunctuation(source, 'ช-ชะ ใช่แล้ว!');
+  }
+  if (compactSourceAlnumUpper === 'THENWHY') {
+    return preserveSourceTrailingPunctuation(source, 'แล้วทำไม');
+  }
+  if (compactSourceAlnumUpper === 'ITFELT') {
+    return preserveSourceTrailingPunctuation(source, 'มันรู้สึก');
+  }
+  if (compactSourceAlnumUpper === 'MOVING') {
+    return preserveSourceTrailingPunctuation(source, 'ขยับเขยื้อน!');
+  }
+
   // H-Manga Slang Conversational Override Group
   if (compactSourceAlnumUpper.includes('SHUPUPWE') && compactSourceAlnumUpper.includes('FUCK') && (compactSourceAlnumUpper.includes('PRINCESS') || compactSourceAlnumUpper.includes('PRIN') || compactSourceAlnumUpper.includes('CESS'))) {
     return preserveSourceTrailingPunctuation(source, 'หุบปากซะ! ฉันอยากจะเย็ดเธอให้เละเทะมาตลอดเลยนะ อีเจ้าหญิงโง่!!');

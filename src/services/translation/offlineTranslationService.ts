@@ -892,9 +892,47 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'around tokyo,': 'รอบๆ โตเกียว,', 'around tokyo': 'รอบๆ โตเกียว',
   'vand my': 'และ...ของฉัน', 'and my': 'และ...ของฉัน',
   '\\foolishness': 'ความโง่เขลา', 'foolishness': 'ความโง่เขลา',
-  'will be laid': 'จะถูกวาง',
-  'bare for all': 'เปลือยเปล่าสำหรับทุกคน',
   'mioro': 'กล็อบ', 'glorb': 'กล็อบ',
+  '(aged, it\'s)': 'อายุมากแล้ว มัน...', '(aged, its)': 'อายุมากแล้ว มัน...', 'aged, it\'s': 'อายุมากแล้ว มัน...', 'aged, its': 'อายุมากแล้ว มัน...',
+  'a-al- right!': 'ช-ชะ ใช่แล้ว!', 'a-al- right': 'ช-ชะ ใช่แล้ว', 'a-all right!': 'ช-ชะ ใช่แล้ว!', 'a-all right': 'ช-ชะ ใช่แล้ว',
+  'gh...!': 'อึ่ก!...', 'gh...': 'อึ่ก...', 'gh!': 'อึ่ก!',
+  'then why': 'แล้วทำไม', 'then why?': 'แล้วทำไมล่ะ?', 'then why!?': 'แล้วทำไมล่ะ!?',
+  'sexual intercourse deficiency of the genitals disease': 'โรคความบกพร่องทางเพศของอวัยวะเพศ',
+  'it\'s a disease in which you have to release a lot of sperm or it could be fatal': 'นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้',
+  'its a disease in which you have to release a lot of sperm or it could be fatal': 'นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้',
+  'it\'s more efficient and produces high quality sperm.': 'วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง',
+  'it\'s more efficient and produces high quality sperm': 'วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง',
+  'its more efficient and produces high quality sperm.': 'วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง',
+  'its more efficient and produces high quality sperm': 'วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง',
+  'by having sex with a woman,': 'โดยการมีเพศสัมพันธ์กับผู้หญิง,',
+  'by having sex with a woman': 'โดยการมีเพศสัมพันธ์กับผู้หญิง',
+  'what the hell kind of convenient straight out of an ero-manga disease is that ..!?': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+  'what the hell kind of convenient straight out of an ero-manga disease is that...!?': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+  'what the hell kind of convenient straight out of an ero-manga disease is that': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+  'what the hell kind of conyenient straight out of an ero-manga disease is that ..!?': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+  'what the hell kind of conyenient straight out of an ero-manga disease is that...!?': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+  'what the hell kind of conyenient straight out of an ero-manga disease is that': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+  'ero-manga': 'มังงะอีโรติก', 'ero manga': 'มังงะอีโรติก', 'an ero-manga': 'มังงะอีโรติก', 'an ero manga': 'มังงะอีโรติก',
+  'moving!!': 'ขยับเขยื้อน!', 'moving!': 'ขยับเขยื้อน!', 'moving': 'ขยับเขยื้อน',
+  'came...': 'เสร็จแล้ว...', 'came!': 'แตกแล้ว!', 'came': 'แตกแล้ว',
+  'it felt': 'มันรู้สึก',
+  'the treat- ment': 'การรักษา', 'the treat-ment': 'การรักษา', 'the treatment': 'การรักษา',
+  'treatment': 'การรักษา', 'treatment...': 'การรักษา...', 'treatment.': 'การรักษา.',
+  'continue the threat-ment': 'ดำเนินการรักษาต่อไป', 'continue the treatment': 'ดำเนินการรักษาต่อไป',
+  'continue': 'ดำเนินการต่อไป',
+  'to day\'s': 'ของวันนี้', 'today\'s': 'ของวันนี้',
+  'i made a few modifi-cations to the room': 'ฉันได้ทำการปรับเปลี่ยนห้องเล็กน้อย',
+  'i made a few modifications to the room': 'ฉันได้ทำการปรับเปลี่ยนห้องเล็กน้อย',
+  'on to day...': 'ในวันนี้...', 'on today...': 'ในวันนี้...', 'on to day': 'ในวันนี้', 'on today': 'ในวันนี้',
+  'we rest': 'พวกเราพักผ่อน', 'werest': 'พวกเราพักผ่อน',
+  'cum at': 'หลั่งใส่', 'cumat': 'หลั่งใส่',
+  'time as i': 'เวลาที่ฉัน', 'time asi': 'เวลาที่ฉัน',
+  'so good': 'รู้สึกดีมาก', 'so good...': 'รู้สึกดีมาก...', 'so good!': 'รู้สึกดีมาก!', '50good': 'รู้สึกดีมาก',
+  'sucking': 'ดูด', 'sucking...': 'ดูด...', 'sucking!': 'ดูด!',
+  'discourse': 'การสนทนา', 'discour-': 'การสนทนา', 'discour': 'การสนทนา',
+  'me, there': 'ฉัน, ตรงนั้น', '(me, there)': '(ฉัน, ตรงนั้น)', '(me,there)': '(ฉัน, ตรงนั้น)', 'me,there': 'ฉัน, ตรงนั้น',
+  'then, we should': 'ถ้าอย่างนั้นเราควรจะ', 'then we should': 'ถ้าอย่างนั้นเราควรจะ', 'then. we should': 'ถ้าอย่างนั้นเราควรจะ', 'then.we should': 'ถ้าอย่างนั้นเราควรจะ',
+  'then, we': 'ถ้าอย่างนั้นเรา', 'then we': 'ถ้าอย่างนั้นเรา',
 };
 
 
@@ -938,8 +976,10 @@ export const GENERAL_ENGLISH_DICTIONARY_TH: Record<string, string> = {
 };
 
 export const lookupShortPhraseTh = (text: string): string | null => {
-  // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
+  if (!text) return null;
   const trimmed = text.trim();
+
+  // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
   const tempAlertMatch = trimmed.match(/^temp:\s*(\d+)\s*c\s*\[alert\]$/i);
   if (tempAlertMatch) {
     return `อุณหภูมิ: ${tempAlertMatch[1]}°C [แจ้งเตือน]`;
@@ -965,6 +1005,14 @@ export const lookupShortPhraseTh = (text: string): string | null => {
       return match + trailingPunct[1];
     }
     return match;
+  }
+
+  // 0.2 ลองค้นหาหลังจากซ่อมแซมเสียงรบกวน OCR (เช่น Suvvenlya -> Suddenly, Bvt -> But, (ME,THERE) -> (ME, THERE))
+  const ocrNormalized = normalizeEnglishOcrNoiseForTranslation(trimmed);
+  if (ocrNormalized && ocrNormalized.toLowerCase() !== rawKey) {
+    const ocrKey = ocrNormalized.toLowerCase();
+    const ocrMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrKey] || GENERAL_ENGLISH_DICTIONARY_TH[ocrKey];
+    if (ocrMatch) return ocrMatch;
   }
 
   const key = rawKey

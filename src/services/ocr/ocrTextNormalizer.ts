@@ -615,6 +615,34 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/\\foolishness\b/gi, 'foolishness');
   normalized = normalized.replace(/\bMioro\b/gi, 'Glorb');
   normalized = normalized.replace(/inside\s+my\s+\+body/gi, 'inside my body');
+  normalized = normalized.replace(/\bconyenient\b/gi, 'convenient');
+  normalized = normalized.replace(/\bA-Al-\s*RIGHT!?/gi, 'A-All RIGHT!');
+  normalized = normalized.replace(/\bHoLP\b/gi, 'Hold');
+  normalized = normalized.replace(/\bMope_\b/gi, 'More...');
+  normalized = normalized.replace(/\bMope\b/gi, 'More');
+  normalized = normalized.replace(/\bNhl\b/g, 'Nh!');
+  normalized = normalized.replace(/\bROUGH40\b/gi, 'ROUGH');
+  normalized = normalized.replace(/\bRE4t\s+A\b/gi, 'Rest a');
+  normalized = normalized.replace(/\bTHE\s+TREAT-\s*\+?MENT\b/gi, 'THE TREATMENT');
+  normalized = normalized.replace(/\bCONTINUE\s+THE\s+THREAT-?\s*MENT\b/gi, 'CONTINUE THE TREATMENT');
+  normalized = normalized.replace(/\bTOVAY['’]?S\b/gi, "TODAY'S");
+  normalized = normalized.replace(/\bON\s+TOVAY(\.{2,}|…)?/gi, 'ON TODAY$1');
+  normalized = normalized.replace(/\bWEREST\b/gi, 'WE REST');
+  normalized = normalized.replace(/\bCUMAT\b/gi, 'CUM AT');
+  normalized = normalized.replace(/\bTIME\s+ASI\b/gi, 'TIME AS I');
+  normalized = normalized.replace(/\b50GOOD\b/gi, 'SO GOOD');
+  normalized = normalized.replace(/\bMODIFI-CATIONS\b/gi, 'MODIFICATIONS');
+  normalized = normalized.replace(/\bSuvvenlya\b/gi, 'Suddenly');
+  normalized = normalized.replace(/\bSuvvenly\b/gi, 'Suddenly');
+  normalized = normalized.replace(/\bSuvdenly\b/gi, 'Suddenly');
+  normalized = normalized.replace(/\bBvt\b/g, 'But');
+  normalized = normalized.replace(/\bBVT\b/g, 'BUT');
+  normalized = normalized.replace(/\(ME,\s*THERE\)/gi, '(ME, THERE)');
+  normalized = normalized.replace(/\bME,\s*THERE\b/gi, 'ME, THERE');
+  normalized = normalized.replace(/\bME,THERE\b/gi, 'ME, THERE');
+  normalized = normalized.replace(/\bDISCOUR-\b/gi, 'DISCOURSE');
+  normalized = normalized.replace(/\bTHEN\.\s*WE\s+SHOULD\b/gi, 'THEN, WE SHOULD');
+  normalized = normalized.replace(/\bTHEN\.\s*WE\b/gi, 'THEN, WE');
 
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,

@@ -6430,6 +6430,71 @@ export default function App() {
           });
           groupLineOverrides.set(groupIndex, overrideLines);
         }
+
+        // 5. BY HAVING SEX WITH A WOMAN -> โดยการ / มีเพศสัมพันธ์กับ / ผู้หญิง
+        else if (compactCombined.includes('BYHAVINGSEXWITHAWOMAN') || compactCombined.includes('HAVINGSEXWITHAWOMAN')) {
+          const overrideLines: string[] = [];
+          if (group.lines.length === 3) {
+            overrideLines.push('โดยการ', 'มีเพศสัมพันธ์กับ', 'ผู้หญิง');
+          } else {
+            group.lines.forEach((line, lineOffset) => {
+              if (lineOffset === 0) overrideLines.push('โดยการมีเพศสัมพันธ์กับผู้หญิง');
+              else overrideLines.push('');
+            });
+          }
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 6. IT'S MORE EFFICIENT AND PRODUCES HIGH QUALITY SPERM -> วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง
+        else if (compactCombined.includes('MOREEFFICIENT') && compactCombined.includes('SPERM')) {
+          const overrideLines: string[] = [];
+          if (group.lines.length === 6) {
+            overrideLines.push('วิธีนี้มี', 'ประสิทธิภาพ', 'มากกว่าและ', 'ได้', 'อสุจิคุณภาพสูง', '');
+          } else {
+            group.lines.forEach((line, lineOffset) => {
+              if (lineOffset === 0) overrideLines.push('วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง');
+              else overrideLines.push('');
+            });
+          }
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 7. What the hell kind of convenient straight out of an ero-manga disease is that...!?
+        else if (compactCombined.includes('WHATTHEHELL') && (compactCombined.includes('EROMANGA') || compactCombined.includes('CONVENIENT') || compactCombined.includes('CONYENIENT') || compactCombined.includes('DISEASE'))) {
+          const overrideLines: string[] = [];
+          if (group.lines.length >= 5) {
+            overrideLines.push('โรคอะไรวะเนี่ย', 'โรคที่สะดวกสบาย', 'เหมือนหลุดออกมาจาก', 'มังงะอีโรติก', 'เลย...!?');
+            for (let i = 5; i < group.lines.length; i++) {
+              overrideLines.push('');
+            }
+          } else {
+            group.lines.forEach((line, lineOffset) => {
+              if (lineOffset === 0) overrideLines.push('โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?');
+              else overrideLines.push('');
+            });
+          }
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 8. IT'S A DISEASE IN WHICH YOU HAVE TO RELEASE A LOT OF SPERM OR IT COULD BE FATAL
+        else if (compactCombined.includes('RELEASEALOTOFSPERM') || (compactCombined.includes('SPERM') && compactCombined.includes('FATAL'))) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line, lineOffset) => {
+            if (lineOffset === 0) overrideLines.push('นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้');
+            else overrideLines.push('');
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 9. SEXUAL INTERCOURSE DEFICIENCY OF THE GENITALS DISEASE
+        else if (compactCombined.includes('SEXUALINTERCOURSEDEFICIENCY') || (compactCombined.includes('GENITALS') && compactCombined.includes('DISEASE'))) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line, lineOffset) => {
+            if (lineOffset === 0) overrideLines.push('โรคความบกพร่องทางเพศของอวัยวะเพศ');
+            else overrideLines.push('');
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
       }
 
       const directLineOverride = groupLineOverrides.get(groupIndex);

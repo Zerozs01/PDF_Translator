@@ -395,6 +395,67 @@ describe('TranslationCoordinator & Engines', () => {
         expect(item?.success).toBe(true);
       });
     });
+
+    it('successfully translates newly requested medical/erotic manga phrases and SFX', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'm1', text: 'GH...!', groupType: 'sfx' },
+        { id: 'm2', text: 'MOVING!!', groupType: 'sfx' },
+        { id: 'm3', text: 'CAME...', groupType: 'sfx' },
+        { id: 'm4', text: 'THEN WHY', groupType: 'balloon' },
+        { id: 'm5', text: 'SEXUAL INTERCOURSE DEFICIENCY OF THE GENITALS DISEASE', groupType: 'balloon' },
+        { id: 'm6', text: "IT'S A DISEASE IN WHICH YOU HAVE TO RELEASE A LOT OF SPERM OR IT COULD BE FATAL", groupType: 'balloon' },
+        { id: 'm7', text: "it's more efficient and produces high quality sperm.", groupType: 'balloon' },
+        { id: 'm8', text: 'BY HAVING SEX WITH A WOMAN,', groupType: 'balloon' },
+        { id: 'm9', text: 'What the hell kind of convenient straight out of an ero-manga disease is that ..!?', groupType: 'balloon' },
+        { id: 'm10', text: 'CONTINUE THE TREATMENT', groupType: 'balloon' },
+        { id: 'm11', text: 'I MADE A FEW MODIFICATIONS TO THE ROOM', groupType: 'balloon' },
+        { id: 'm12', text: 'A-All RIGHT!', groupType: 'balloon' },
+        { id: 'm13', text: 'so good', groupType: 'balloon' },
+        { id: 'm14', text: 'TREATMENT', groupType: 'balloon' },
+        { id: 'm15', text: 'SUCKING', groupType: 'balloon' },
+        { id: 'm16', text: 'DISCOUR-', groupType: 'balloon' },
+        { id: 'm17', text: '(ME,THERE)', groupType: 'balloon' },
+        { id: 'm18', text: 'THEN.WE SHOULD', groupType: 'balloon' },
+        { id: 'm19', text: 'Suvvenlya', groupType: 'balloon' },
+        { id: 'm20', text: 'Bvt', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official',
+        translateBatchOffline: vi.fn(),
+      });
+
+      const expected: Record<string, string> = {
+        'm1': 'อึ่ก!...',
+        'm2': 'ขยับเขยื้อน!',
+        'm3': 'เสร็จแล้ว...',
+        'm4': 'แล้วทำไม',
+        'm5': 'โรคความบกพร่องทางเพศของอวัยวะเพศ',
+        'm6': 'นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้',
+        'm7': 'วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง',
+        'm8': 'โดยการมีเพศสัมพันธ์กับผู้หญิง,',
+        'm9': 'โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?',
+        'm10': 'ดำเนินการรักษาต่อไป',
+        'm11': 'ฉันได้ทำการปรับเปลี่ยนห้องเล็กน้อย',
+        'm12': 'ช-ชะ ใช่แล้ว!',
+        'm13': 'รู้สึกดีมาก',
+        'm14': 'การรักษา',
+        'm15': 'ดูด',
+        'm16': 'การสนทนา',
+        'm17': '(ฉัน, ตรงนั้น)',
+        'm18': 'ถ้าอย่างนั้นเราควรจะ',
+        'm19': 'ทันใดนั้น',
+        'm20': 'แต่',
+      };
+
+      Object.entries(expected).forEach(([id, val]) => {
+        const item = results.find(r => r.id === id);
+        expect(item?.translatedText).toBe(val);
+        expect(item?.success).toBe(true);
+      });
+    });
   });
 
   describe('GeminiTranslationEngine', () => {

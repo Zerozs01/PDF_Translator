@@ -307,10 +307,18 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
       { source: 'Squeeezee...', target: 'บีบแน่น', notes: 'อาการบีบแน่น' },
       { source: 'Apeooh...', target: 'ฮ๊าา-อู้วว!', notes: 'เสียงคราง' },
       { source: 'Yeah!', target: 'ใช่!', notes: 'คำอุทาน' },
-      { source: 'buuuut', target: 'แต่ว่าาาา', notes: 'คำอุทานลากเสียง' },
-      { source: 'Gathes', target: 'รวมตัว', notes: 'อาการรวมตัว' },
-      { source: 'Eeh...', target: 'อ...เอ๋...', notes: 'เสียงอุทานสงสัย' },
-      { source: 'Glorb', target: 'กล็อบ', notes: 'เสียงของเหลว' }
+      { source: 'Glorb', target: 'กล็อบ', notes: 'เสียงของเหลว' },
+      { source: 'GH...!', target: 'อึ่ก!...', notes: 'เสียงร้องอึ่กจุก' },
+      { source: 'GH...', target: 'อึ่ก...', notes: 'เสียงร้องอึ่ก' },
+      { source: 'GH!', target: 'อึ่ก!', notes: 'เสียงร้องอึ่ก' },
+      { source: 'MOVING!!', target: 'ขยับเขยื้อน!', notes: 'อาการขยับเขยื้อน' },
+      { source: 'MOVING!', target: 'ขยับเขยื้อน!', notes: 'อาการขยับเขยื้อน' },
+      { source: 'MOVING', target: 'ขยับเขยื้อน', notes: 'อาการขยับเขยื้อน' },
+      { source: 'CAME...', target: 'เสร็จแล้ว...', notes: 'กริยาหลั่งน้ำกาม' },
+      { source: 'CAME!', target: 'แตกแล้ว!', notes: 'กริยาหลั่งน้ำกาม' },
+      { source: 'CAME', target: 'แตกแล้ว', notes: 'กริยาหลั่งน้ำกาม' },
+      { source: 'Nhl', target: 'นืห์!', notes: 'เสียงคราง Nh! OCR variant' },
+      { source: 'Nh!', target: 'นืห์!', notes: 'เสียงคราง' }
     ],
     ko: [
       { source: '쿵', target: 'ตึง!', notes: 'เสียงของหนักกระแทกพื้น' },

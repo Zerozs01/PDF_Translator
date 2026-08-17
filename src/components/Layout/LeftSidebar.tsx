@@ -188,12 +188,64 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
 
   const docKey = fileUrl ?? 'pdf-thumbs';
 
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('pdf_translator.left_sidebar_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (parsed >= 160 && parsed <= 500) return parsed;
+      }
+    } catch {}
+    return 240;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.min(Math.max(e.clientX, 160), 500);
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        localStorage.setItem('pdf_translator.left_sidebar_width', String(sidebarWidth));
+      } catch {}
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, sidebarWidth]);
+
   return (
     <aside 
-      className={`bg-slate-950/60 border-r border-white/10 backdrop-blur-xl flex flex-col transition-all duration-300 ease-in-out relative shrink-0 overflow-visible z-20 ${
-        isOpen ? (sidebarView === 'pages' ? 'w-56' : 'w-80') : 'w-0'
-      }`}
+      style={{
+        width: isOpen ? `${sidebarWidth}px` : '0px',
+        transition: isResizing ? 'none' : 'width 0.2s ease-in-out'
+      }}
+      className="bg-slate-950/60 border-r border-white/10 backdrop-blur-xl flex flex-col relative shrink-0 overflow-visible z-20"
     >
+      {/* Draggable Resize Handle */}
+      {isOpen && (
+        <div
+          onMouseDown={startResizing}
+          className="absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize hover:bg-sky-500/50 active:bg-sky-500/80 transition-colors z-30 group"
+          title="Drag to resize sidebar"
+        >
+          <div className="w-[1px] h-full mx-auto bg-transparent group-hover:bg-sky-400 group-active:bg-sky-400" />
+        </div>
+      )}
       <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
         {/* Header - Combined Controls */}
         <div className="p-2 border-b border-white/10 bg-slate-950/35">

@@ -91,7 +91,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
 
       // 5. Post-processing: คืนค่าไปตามลำดับ ID ตามลำดับของ items
       batchItems.forEach((item, index) => {
-        let translatedText = translatedTexts[index] || item.text;
+        let translatedText = (translatedTexts && translatedTexts[index]) || item.text;
         
         // Safety Fallback: ถ้าเป็นภาษาไทย แต่ Argos คืนผลลัพธ์ภาษาเกาหลี/ภาษาอังกฤษกลับมา ให้ลองระบบ Fallback ภาษาเกาหลี
         if (options.targetLanguage === 'th' && (!/[\u0E00-\u0E7F]/.test(translatedText) || /[\uAC00-\uD7AF]/.test(translatedText))) {
