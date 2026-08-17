@@ -327,6 +327,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         const ensuredId = await get().ensureDocumentId();
         if (ensuredId) {
           await touchProjectDocumentActivity(dbService, ensuredId);
+          const existingDoc = await dbService.getDocument(resolvedPath);
+          if (existingDoc && typeof existingDoc.last_page === 'number' && existingDoc.last_page > 1) {
+            set({ currentPage: existingDoc.last_page });
+          }
         }
       } catch (error) {
         console.error('[DB] Failed to ensure documentId:', error);

@@ -1828,8 +1828,8 @@ export const UploadScreen: React.FC = () => {
     };
     
     try {
-      if (window.electronAPI?.db?.getDocument) {
-        const realDoc = await window.electronAPI.db.getDocument(job.documentId);
+      if (window.electronAPI?.db?.getDocument && job.filepath) {
+        const realDoc = await window.electronAPI.db.getDocument(job.filepath);
         if (realDoc) {
           docToOpen = realDoc;
         }

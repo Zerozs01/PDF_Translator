@@ -1518,18 +1518,19 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     }
   }, [zoom, pan, isDragging]);
 
-  const prevPageRef = useRef(currentPage);
+  const prevPageRef = useRef<number | null>(null);
   const prevViewModeRef = useRef(viewMode);
 
-  // Track programmatic scrolling to lock active page updates during animations
-  const isProgrammaticScrollRef = useRef(false);
+  // Track programmatic scrolling to lock active page updates during animations & initial mount
+  const isProgrammaticScrollRef = useRef(currentPage > 1);
 
-  // Sync scroll position when switching to continuous viewMode or clicking LeftSidebar thumbnails
+  // Sync scroll position when switching to continuous viewMode or clicking LeftSidebar thumbnails or on initial load
   useEffect(() => {
-    const pageChanged = currentPage !== prevPageRef.current;
+    const pageChanged = prevPageRef.current !== null && currentPage !== prevPageRef.current;
     const viewModeChanged = viewMode !== prevViewModeRef.current;
+    const isInitialMount = prevPageRef.current === null;
 
-    if (viewMode === 'continuous' && (pageChanged || viewModeChanged)) {
+    if (viewMode === 'continuous' && (pageChanged || viewModeChanged || (isInitialMount && currentPage > 1))) {
       if (isUserInteracting) {
         prevPageRef.current = currentPage;
         prevViewModeRef.current = viewMode;
@@ -1553,9 +1554,8 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
           const currentPanY = stateRef.current.pan.y;
           const diff = Math.abs(currentPanY - targetY);
 
-          // Only snap if the offset diff is substantial (e.g. LeftSidebar click or viewMode toggle)
-          // to avoid fighting manual user scrolls.
-          if (diff > 150 || viewModeChanged) {
+          // Snap if the offset diff is substantial or if on initial load / mode switch
+          if (diff > 50 || viewModeChanged || isInitialMount) {
             const { clientWidth } = containerRef.current;
             const pageWidth = pageElement.clientWidth || 800;
             const scaledWidth = pageWidth * zoom;
@@ -1568,9 +1568,9 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
         // Release the programmatic scroll lock after the transition animation (0.1s transform duration + buffer)
         setTimeout(() => {
           isProgrammaticScrollRef.current = false;
-        }, 150);
+        }, 200);
 
-      }, 100);
+      }, isInitialMount ? 150 : 80);
 
       prevPageRef.current = currentPage;
       prevViewModeRef.current = viewMode;
@@ -1607,8 +1607,26 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       if (useProjectStore.getState().viewMode === 'single') {
         setPan(x, 20);
       } else {
-        // Keep the current vertical pan in continuous mode to prevent resetting to page 1
-        setPan(x, stateRef.current.pan.y);
+        const targetPage = useProjectStore.getState().currentPage;
+        if (targetPage > 1) {
+          isProgrammaticScrollRef.current = true;
+          const pageElement = document.querySelector(
+            `.pdf-canvas-document [data-page-container="${targetPage}"]`
+          ) as HTMLElement | null;
+          if (pageElement) {
+            const offsetTop = pageElement.offsetTop;
+            const targetY = -(offsetTop * fitScale) + 20;
+            setPan(x, targetY);
+          } else {
+            setPan(x, stateRef.current.pan.y);
+          }
+          setTimeout(() => {
+            isProgrammaticScrollRef.current = false;
+          }, 300);
+        } else {
+          // Keep current vertical pan or default to top
+          setPan(x, stateRef.current.pan.y !== 0 ? stateRef.current.pan.y : 20);
+        }
       }
     }
   }, [setZoom, setPan]);

@@ -18,6 +18,14 @@
   - ย้ายการตรวจจับภาษาอังกฤษล้วน `if (hasLatinLetters && thaiChars === 0) return true;` ขึ้นมาบรรทัดแรกสุด เพื่อซ่อนกล่องภาษาอังกฤษล้มเหลวโดยอัตโนมัติ
   - ปรับปรุง `splitTranslatedTextBySourceWeights` ใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) ให้ใช้ `Intl.Segmenter` เกลี่ยคำแปลภาษาไทยกระจายลงสล็อตบอลลูนทุกบรรทัด ไม่ปล่อยให้บรรทัดกลางเป็นค่าว่างแล้วถอยกลับไปใช้ภาษาอังกฤษดั้งเดิม
 
+### 🐞 1.3 Cross-Document Store Isolation (คำแปลของไฟล์ที่ 2 เขียนทับไฟล์ที่ 1)
+- **สาเหตุ:** `runCurrentPageTranslation` ใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) อัปเดต `useOCRTextLayerStore` และ `useLayerStore` โดยไม่ได้เช็คว่าตรงกับเอกสารที่เปิดอยู่หรือไม่ ส่งผลให้งานพื้นหลังของไฟล์ที่ 2 ไปเขียนทับ in-memory state ของไฟล์ที่ 1
+- **การแก้ไข:** เพิ่มเงื่อนไข `isActiveDoc` ครอบการอัปเดต in-memory store ทั้งหมด ให้เฉพาะงานของ active document เท่านั้นที่แตะต้อง UI state ส่วนงานพื้นหลังบันทึกลงเฉพาะ SQLite DB
+
+### 🐞 1.4 Last Page Memory & IntersectionObserver Conflict (ไม่จำหน้าที่เคยเปิด)
+- **สาเหตุ:** เมื่อเปิดไฟล์เดิม `IntersectionObserver` ของ Page 1 ตรวจพบว่าหน้า 1 อยู่ใน Viewport ระหว่างโหลด และสั่ง `setPage(1)` ทับค่าหน้าเดิมในฐานข้อมูลทันที
+- **การแก้ไข:** เพิ่ม `isProgrammaticScrollRef` ล็อค Observer ขณะโหลดไฟล์ที่ `currentPage > 1` และสั่ง scroll ไปยังหน้าเดิมทันทีก่อนปลดล็อค พร้อมทั้งเพิ่มการกู้คืน `last_page` ใน `loadProject` ([useProjectStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useProjectStore.ts))
+
 ---
 
 ## 🚀 2. Modular Architecture & Optimization Progress
@@ -39,6 +47,6 @@
 
 ## 🧪 3. Verification & Compliance Standard
 
-- **Vitest Unit Test Suite:** **Passed 100% (34 Test Files / 323 Tests Passed)**
+- **Vitest Unit Test Suite:** **Passed 100% (34 Test Files / 324 Tests Passed)**
 - **TypeScript Compiler (`tsc --noEmit`):** **0 Error (ผ่านสมบูรณ์)**
 - **Core Rules Compliance:** คงความแม่นยำของ Bounding Box / Border Detect ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts), [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) และ [ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) ไว้อย่างเสถียร 100%

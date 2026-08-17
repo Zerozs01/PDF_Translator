@@ -5594,28 +5594,6 @@ export default function App() {
       return false;
     }
 
-    // Ensure store layers are in sync with pageOCR before we collect translatable lines or resolve grouping.
-    try {
-      const layerStore = useLayerStore.getState();
-      const existingLayers = layerStore.getPageLayers(pageNum);
-      const existingGroups = layerStore.getPageGroups(pageNum);
-      const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
-        || existingGroups.some(g => g.userCreated);
-      
-      const isStoreStale = existingLayers.length === 0 || 
-        existingLayers.length !== pageOCR.lines.length ||
-        existingLayers.some(l => l.lineIndex >= pageOCR.lines.length) ||
-        (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
-
-      if ((isStoreStale || !hasUserModifications) && !hasUserModifications) {
-        const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
-        layerStore.setPageLayers(pageNum, initialLayerResult);
-        console.log(`[TranslationSync] Synchronously initialized/rebuilt store layers for page ${pageNum} before translation.`);
-      }
-    } catch (err) {
-      console.warn('[TranslationSync] Failed to verify/rebuild stale store layers:', err);
-    }
-
     const pageEngine = (pageOCR.ocrEngine || selectedEngine) as OCREngine;
     const ocrEngine = pageEngine;
     const ocrLanguageKey = options?.ocrLanguage || pageOCR.language || ocrOptions.language || sourceLanguage || 'eng';
@@ -5625,8 +5603,33 @@ export default function App() {
     const effectiveSourceLanguage = resolvedSourceFromOCR;
     const effectiveTranslationMode = options?.translationMode || translationMode;
 
-    // ตรวจสอบ cache ก่อนเริ่มกระบวนการแปล เพื่อหลีกเลี่ยงการแปลซ้ำและทำให้คำแปลเปลี่ยนไป
+    const activeDocId = useProjectStore.getState().documentId;
     const matchedDocId = options?.documentIdOverride ?? (await ensureDocumentId().catch(() => null));
+    const isActiveDoc = matchedDocId !== null && activeDocId !== null && activeDocId === matchedDocId;
+
+    // Ensure store layers are in sync with pageOCR before we collect translatable lines or resolve grouping (only if this document is actively open in viewport).
+    if (isActiveDoc) {
+      try {
+        const layerStore = useLayerStore.getState();
+        const existingLayers = layerStore.getPageLayers(pageNum);
+        const existingGroups = layerStore.getPageGroups(pageNum);
+        const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+          || existingGroups.some(g => g.userCreated);
+        
+        const isStoreStale = existingLayers.length === 0 || 
+          existingLayers.length !== pageOCR.lines.length ||
+          existingLayers.some(l => l.lineIndex >= pageOCR.lines.length) ||
+          (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
+
+        if ((isStoreStale || !hasUserModifications) && !hasUserModifications) {
+          const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
+          layerStore.setPageLayers(pageNum, initialLayerResult);
+          console.log(`[TranslationSync] Synchronously initialized/rebuilt store layers for page ${pageNum} before translation.`);
+        }
+      } catch (err) {
+        console.warn('[TranslationSync] Failed to verify/rebuild stale store layers:', err);
+      }
+    }
     if (matchedDocId) {
       try {
         const transCache = await dbService.getTranslationCachePage(matchedDocId, pageNum);
@@ -5708,95 +5711,97 @@ export default function App() {
               };
             }
 
-            // อัปเดตข้อมูลเข้า Store สำหรับหน้าจอ UI
-            ocrState.setTranslationCacheEntry(pageNum, safeMatchedCache.key, safeMatchedCache);
-            ocrState.setActiveTranslationCacheKey(pageNum, safeMatchedCache.key);
-            ocrState.setTranslationPreviewMode('translated');
+            // อัปเดตข้อมูลเข้า Store สำหรับหน้าจอ UI เฉพาะเมื่อเอกสารนี้กำลังเปิดอยู่บนหน้าจอ
+            if (isActiveDoc) {
+              ocrState.setTranslationCacheEntry(pageNum, safeMatchedCache.key, safeMatchedCache);
+              ocrState.setActiveTranslationCacheKey(pageNum, safeMatchedCache.key);
+              ocrState.setTranslationPreviewMode('translated');
 
-            // ซิงค์ผลการแปลกลับเข้าสู่ Layer Store ด้วย
-            try {
-              const layerStore = useLayerStore.getState();
-              const pageLayers = layerStore.getPageLayers(pageNum);
+              // ซิงค์ผลการแปลกลับเข้าสู่ Layer Store ด้วย
+              try {
+                const layerStore = useLayerStore.getState();
+                const pageLayers = layerStore.getPageLayers(pageNum);
 
-              // Helper ในการจับคู่แคชคำแปลอย่างปลอดภัยโดยเช็คจากข้อความดิบ
-              const findBestCacheMatch = (sourceText: string, lineIndex: number, cacheItems: any[]) => {
-                if (!Array.isArray(cacheItems)) return undefined;
-                const cleanSource = String(sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                if (!cleanSource) return undefined;
-                
-                // 1. Exact match (case-insensitive)
-                const exact = cacheItems.find(item => {
-                  const itemSource = String(item.sourceText !== undefined ? item.sourceText : (item.rawText || '')).replace(/\s+/g, ' ').trim().toLowerCase();
-                  return itemSource === cleanSource;
-                });
-                if (exact) return exact;
-                
-                // 2. Substring match
-                const partial = cacheItems.find(item => {
-                  const itemSource = String(item.sourceText !== undefined ? item.sourceText : (item.rawText || '')).replace(/\s+/g, ' ').trim().toLowerCase();
-                  return itemSource.includes(cleanSource) || cleanSource.includes(itemSource);
-                });
-                if (partial) return partial;
-                
-                // 3. Fallback to Index match
-                return cacheItems.find(item => {
-                  const idxVal = item.index !== undefined ? item.index : item.lineIndex;
-                  return idxVal === lineIndex;
-                });
-              };
+                // Helper ในการจับคู่แคชคำแปลอย่างปลอดภัยโดยเช็คจากข้อความดิบ
+                const findBestCacheMatch = (sourceText: string, lineIndex: number, cacheItems: any[]) => {
+                  if (!Array.isArray(cacheItems)) return undefined;
+                  const cleanSource = String(sourceText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                  if (!cleanSource) return undefined;
+                  
+                  // 1. Exact match (case-insensitive)
+                  const exact = cacheItems.find(item => {
+                    const itemSource = String(item.sourceText !== undefined ? item.sourceText : (item.rawText || '')).replace(/\s+/g, ' ').trim().toLowerCase();
+                    return itemSource === cleanSource;
+                  });
+                  if (exact) return exact;
+                  
+                  // 2. Substring match
+                  const partial = cacheItems.find(item => {
+                    const itemSource = String(item.sourceText !== undefined ? item.sourceText : (item.rawText || '')).replace(/\s+/g, ' ').trim().toLowerCase();
+                    return itemSource.includes(cleanSource) || cleanSource.includes(itemSource);
+                  });
+                  if (partial) return partial;
+                  
+                  // 3. Fallback to Index match
+                  return cacheItems.find(item => {
+                    const idxVal = item.index !== undefined ? item.index : item.lineIndex;
+                    return idxVal === lineIndex;
+                  });
+                };
 
-              if (pageLayers.length > 0) {
-                const updatedPageLayers = pageLayers.map(layer => {
-                  if (layer.userEdited) return layer;
-                  const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, safeMatchedCache.translatedByIndex);
-                  let finalText = matchedItem?.text;
-                  const sourceClean = String(layer.sourceText || '').trim();
-                  if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
-                    const glossaryMatch = lookupShortPhraseTh(sourceClean);
-                    if (glossaryMatch) {
-                      finalText = glossaryMatch;
-                    }
-                  }
-                  if (!finalText) return layer;
-                  return {
-                    ...layer,
-                    translatedText: finalText,
-                    text: finalText,
-                    translationEngineUsed: engine,
-                  };
-                });
-                layerStore.setPageLayers(pageNum, {
-                  layers: updatedPageLayers,
-                  groups: layerStore.getPageGroups(pageNum),
-                });
-              } else {
-                // หากยังไม่มีเลเยอร์ถูกสร้างขึ้นในหน้านี้ (เช่น แปลข้ามหน้า หรือแคชเก็บไว้)
-                // ให้สร้างเลเยอร์ขึ้นมาใหม่จาก OCR + แคชคำแปลทันที
-                const translatedMap = new Map<number, string>();
-                if (Array.isArray(pageOCR?.lines)) {
-                  pageOCR.lines.forEach((line, idx) => {
-                    const matchedItem = findBestCacheMatch(line.text, idx, safeMatchedCache.translatedByIndex);
+                if (pageLayers.length > 0) {
+                  const updatedPageLayers = pageLayers.map(layer => {
+                    if (layer.userEdited) return layer;
+                    const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, safeMatchedCache.translatedByIndex);
                     let finalText = matchedItem?.text;
-                    const sourceClean = String(line.text || '').trim();
+                    const sourceClean = String(layer.sourceText || '').trim();
                     if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
                       const glossaryMatch = lookupShortPhraseTh(sourceClean);
                       if (glossaryMatch) {
                         finalText = glossaryMatch;
                       }
                     }
-                    if (finalText) {
-                      translatedMap.set(idx, finalText);
-                    }
+                    if (!finalText) return layer;
+                    return {
+                      ...layer,
+                      translatedText: finalText,
+                      text: finalText,
+                      translationEngineUsed: engine,
+                    };
                   });
+                  layerStore.setPageLayers(pageNum, {
+                    layers: updatedPageLayers,
+                    groups: layerStore.getPageGroups(pageNum),
+                  });
+                } else {
+                  // หากยังไม่มีเลเยอร์ถูกสร้างขึ้นในหน้านี้ (เช่น แปลข้ามหน้า หรือแคชเก็บไว้)
+                  // ให้สร้างเลเยอร์ขึ้นมาใหม่จาก OCR + แคชคำแปลทันที
+                  const translatedMap = new Map<number, string>();
+                  if (Array.isArray(pageOCR?.lines)) {
+                    pageOCR.lines.forEach((line, idx) => {
+                      const matchedItem = findBestCacheMatch(line.text, idx, safeMatchedCache.translatedByIndex);
+                      let finalText = matchedItem?.text;
+                      const sourceClean = String(line.text || '').trim();
+                      if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
+                        const glossaryMatch = lookupShortPhraseTh(sourceClean);
+                        if (glossaryMatch) {
+                          finalText = glossaryMatch;
+                        }
+                      }
+                      if (finalText) {
+                        translatedMap.set(idx, finalText);
+                      }
+                    });
+                  }
+                  const result = buildLayerGroupsFromOCR(pageOCR, translatedMap);
+                  layerStore.setPageLayers(pageNum, result);
                 }
-                const result = buildLayerGroupsFromOCR(pageOCR, translatedMap);
-                layerStore.setPageLayers(pageNum, result);
+              } catch (err) {
+                console.warn('[TranslationSync] Failed to sync cache to Layer Store:', err);
               }
-            } catch (err) {
-              console.warn('[TranslationSync] Failed to sync cache to Layer Store:', err);
             }
 
-            if (!options?.suppressStatus) {
+            if (!options?.suppressStatus && isActiveDoc) {
               setTranslationStatus({
                 kind: 'success',
                 message: `${engine} | Cache Hit for Page ${pageNum} | Loaded from persistent translation cache.`,
@@ -6670,25 +6675,27 @@ export default function App() {
       normalizedTargetLanguage
     );
     if (translationHealth.shouldSkip) {
-      const ocrStore = useOCRTextLayerStore.getState();
-      const existingEntries = ocrStore.getTranslationCacheEntries(pageNum);
-      const preserved = existingEntries.find((entry) => (
-        entry.ocrEngine === ocrEngine
-        && normalizeTranslationLanguage(entry.targetLanguage || '', 'th') === normalizedTargetLanguage
-        && entry.translatedByIndex.some((item) => THAI_REGEX.test(String(item.text || '')))
-      ));
-      if (preserved) {
-        ocrStore.setActiveTranslationCacheKey(pageNum, preserved.key);
-        ocrStore.setTranslationPreviewMode('translated');
-      }
-      if (!options?.suppressStatus) {
-        const retryPct = Math.round(translationHealth.retryRatio * 100);
-        const thaiPct = Math.round(translationHealth.thaiRatio * 100);
-        const engineLabel = effectiveEngine === 'offline' ? 'Offline' : 'AI';
-        setTranslationStatus({
-          kind: 'error',
-          message: `${engineLabel} translation returned mostly source text (retry ${retryPct}%, Thai ${thaiPct}%). Cache preserved.`,
-        });
+      if (isActiveDoc) {
+        const ocrStore = useOCRTextLayerStore.getState();
+        const existingEntries = ocrStore.getTranslationCacheEntries(pageNum);
+        const preserved = existingEntries.find((entry) => (
+          entry.ocrEngine === ocrEngine
+          && normalizeTranslationLanguage(entry.targetLanguage || '', 'th') === normalizedTargetLanguage
+          && entry.translatedByIndex.some((item) => THAI_REGEX.test(String(item.text || '')))
+        ));
+        if (preserved) {
+          ocrStore.setActiveTranslationCacheKey(pageNum, preserved.key);
+          ocrStore.setTranslationPreviewMode('translated');
+        }
+        if (!options?.suppressStatus) {
+          const retryPct = Math.round(translationHealth.retryRatio * 100);
+          const thaiPct = Math.round(translationHealth.thaiRatio * 100);
+          const engineLabel = effectiveEngine === 'offline' ? 'Offline' : 'AI';
+          setTranslationStatus({
+            kind: 'error',
+            message: `${engineLabel} translation returned mostly source text (retry ${retryPct}%, Thai ${thaiPct}%). Cache preserved.`,
+          });
+        }
       }
     }
 
@@ -6779,46 +6786,48 @@ export default function App() {
       height: pageOCR.height,
     };
 
-    setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
-    console.log(`[Translation] cache set page=${pageNum} engine=${ocrEngine} key=${cacheKey}`);
+    if (isActiveDoc) {
+      setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
+      console.log(`[Translation] cache set page=${pageNum} engine=${ocrEngine} key=${cacheKey}`);
 
-    // Synchronize translated texts back to persistent Layer Store (useLayerStore)
-    try {
-      const layerStore = useLayerStore.getState();
-      const pageLayers = layerStore.getPageLayers(pageNum);
-      if (pageLayers.length > 0) {
-        const updatedPageLayers = pageLayers.map(layer => {
-          const translatedText = translatedByIndex.get(layer.lineIndex);
-          if (translatedText === undefined) return layer;
+      // Synchronize translated texts back to persistent Layer Store (useLayerStore)
+      try {
+        const layerStore = useLayerStore.getState();
+        const pageLayers = layerStore.getPageLayers(pageNum);
+        if (pageLayers.length > 0) {
+          const updatedPageLayers = pageLayers.map(layer => {
+            const translatedText = translatedByIndex.get(layer.lineIndex);
+            if (translatedText === undefined) return layer;
 
-          // RULE 1: หากผู้ใช้เคยแก้ไขเลเยอร์นี้เองแล้ว ให้ข้ามการแปลทับ! (Manual Edit Protection)
-          if (layer.userEdited) {
-            return layer;
-          }
+            // RULE 1: หากผู้ใช้เคยแก้ไขเลเยอร์นี้เองแล้ว ให้ข้ามการแปลทับ! (Manual Edit Protection)
+            if (layer.userEdited) {
+              return layer;
+            }
 
-          // RULE 2: อัปเดตข้อมูลคำแปลลงในแคช และเอาไปใช้เป็นค่าข้อความแสดงผลหลัก
-          return {
-            ...layer,
-            translatedText: translatedText,
-            text: translatedText,
-            translationEngineUsed: effectiveEngine, // 'offline' หรือ 'ai'
-          };
-        });
-        layerStore.setPageLayers(pageNum, {
-          layers: updatedPageLayers,
-          groups: layerStore.getPageGroups(pageNum),
-        });
-      } else {
-        // *** KEY FIX: Background Queue — หน้านี้ยังไม่เคยถูกเปิดใน UI
-        // ดังนั้น layer store ว่างอยู่ ต้องสร้าง layer groups ใหม่ทันที
-        // เพื่อให้ผู้ใช้ใช้ select tool และแก้ไข textbox ได้เมื่อเปิดหน้านั้นภายหลัง
-        // (เหมือน cache-hit path ที่เรียก buildLayerGroupsFromOCR ด้วย)
-        const result = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
-        layerStore.setPageLayers(pageNum, result);
-        console.log(`[TranslationSync] Built ${result.layers.length} layer(s) in ${result.groups.length} group(s) for page ${pageNum} (background queue new-translation path).`);
+            // RULE 2: อัปเดตข้อมูลคำแปลลงในแคช และเอาไปใช้เป็นค่าข้อความแสดงผลหลัก
+            return {
+              ...layer,
+              translatedText: translatedText,
+              text: translatedText,
+              translationEngineUsed: effectiveEngine, // 'offline' หรือ 'ai'
+            };
+          });
+          layerStore.setPageLayers(pageNum, {
+            layers: updatedPageLayers,
+            groups: layerStore.getPageGroups(pageNum),
+          });
+        } else {
+          // *** KEY FIX: Background Queue — หน้านี้ยังไม่เคยถูกเปิดใน UI
+          // ดังนั้น layer store ว่างอยู่ ต้องสร้าง layer groups ใหม่ทันที
+          // เพื่อให้ผู้ใช้ใช้ select tool และแก้ไข textbox ได้เมื่อเปิดหน้านั้นภายหลัง
+          // (เหมือน cache-hit path ที่เรียก buildLayerGroupsFromOCR ด้วย)
+          const result = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
+          layerStore.setPageLayers(pageNum, result);
+          console.log(`[TranslationSync] Built ${result.layers.length} layer(s) in ${result.groups.length} group(s) for page ${pageNum} (background queue new-translation path).`);
+        }
+      } catch (err) {
+        console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
       }
-    } catch (err) {
-      console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
     }
 
     const cacheDocId = options?.documentIdOverride ?? (await ensureDocumentId().catch(() => null));

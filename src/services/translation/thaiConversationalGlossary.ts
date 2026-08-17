@@ -642,6 +642,63 @@ const applyThaiConversationalGlossaryInternal = (
   if (compactSourceAlnumUpper === 'AIGHT') {
     return preserveSourceTrailingPunctuation(source, 'โอเค๊');
   }
+  if (compactSourceAlnumUpper === 'AMAZING' || compactSourceAlnumUpper === 'AMAZINGR') {
+    return preserveSourceTrailingPunctuation(source, 'ยอดเยี่ยม');
+  }
+  if (compactSourceAlnumUpper === 'PISTONPOUNDED') {
+    return preserveSourceTrailingPunctuation(source, 'ลูกสูบกระแทก!');
+  }
+  if (compactSourceAlnumUpper === 'NOWWELL') {
+    return preserveSourceTrailingPunctuation(source, 'ต่อไปนี้ เราจะ');
+  }
+  if (compactSourceAlnumUpper === 'SOSTRANGE') {
+    return preserveSourceTrailingPunctuation(source, 'แปลกจัง');
+  }
+  if (compactSourceAlnumUpper === 'NOMATTER') {
+    return preserveSourceTrailingPunctuation(source, 'ไม่ว่าอย่างไรก็ตาม');
+  }
+  if (compactSourceAlnumUpper === 'HOWSZATHAVING') {
+    return preserveSourceTrailingPunctuation(source, 'เป็นไงบ้าง');
+  }
+  if (compactSourceAlnumUpper === 'GOODGRIEF') {
+    return preserveSourceTrailingPunctuation(source, 'โอ้ พระเจ้า...');
+  }
+  if (compactSourceAlnumUpper === 'INSIDEMYBODY') {
+    return preserveSourceTrailingPunctuation(source, 'ไว้ในร่างกายของฉัน');
+  }
+  if (compactSourceAlnumUpper === 'MISSMAKIMASWOMB') {
+    return preserveSourceTrailingPunctuation(source, 'มดลูกของคุณมากิมา');
+  }
+  if (compactSourceAlnumUpper === 'MOREHONESTWITHME') {
+    return preserveSourceTrailingPunctuation(source, 'ซื่อสัตย์กับฉันมากกว่านี้หน่อย~!');
+  }
+  if (compactSourceAlnumUpper === 'JUSTFROMLICKINGHERNIPS') {
+    return preserveSourceTrailingPunctuation(source, 'แค่เพียงเลียหัวนมของเธอเท่านั้น');
+  }
+  if (compactSourceAlnumUpper.includes('SHEDARESTOALSOSQUEEZEUPTHATPUSSY')) {
+    return preserveSourceTrailingPunctuation(source, 'เธอกล้าที่จะบีบช่องคลอดของเธอให้แน่นขนาดนั้นเลยเหรอ!');
+  }
+  if (compactSourceAlnumUpper.includes('WEREMAKINGACOVERFORTHISBLACKMARKETAV')) {
+    return preserveSourceTrailingPunctuation(source, 'เรากำลังทำปกAVให้กับตลาดมืดนี้');
+  }
+  if (compactSourceAlnumUpper === 'THISADULTVIDEO' || compactSourceAlnumUpper === 'THISADULTVIDEOS') {
+    return preserveSourceTrailingPunctuation(source, 'วิดีโอสำหรับผู้ใหญ่นี้');
+  }
+  if (compactSourceAlnumUpper === 'CIRCULATEDALL') {
+    return preserveSourceTrailingPunctuation(source, 'เผยแพร่ทั้งหมด');
+  }
+  if (compactSourceAlnumUpper === 'AROUNDTOKYO') {
+    return preserveSourceTrailingPunctuation(source, 'รอบๆ โตเกียว');
+  }
+  if (compactSourceAlnumUpper === 'BAREFORALL') {
+    return preserveSourceTrailingPunctuation(source, 'เปลือยเปล่าสำหรับทุกคน');
+  }
+  if (compactSourceAlnumUpper === 'WILLBELAID') {
+    return preserveSourceTrailingPunctuation(source, 'จะถูกวาง');
+  }
+  if (compactSourceAlnumUpper === 'FOOLISHNESS') {
+    return preserveSourceTrailingPunctuation(source, 'ความโง่เขลา');
+  }
 
   // ─── Missing manga dialogue fragment translations ────────────────────────────
   // ทำไม: คำเหล่านี้อยู่ใน whitelist (ไม่โดน skip) แต่ไม่มี glossary rule แปลเป็นไทย

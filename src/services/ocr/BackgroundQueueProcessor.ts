@@ -566,7 +566,7 @@ class BackgroundQueueProcessor {
           if (ocrResult) {
             try {
               const activeDocId = useProjectStore.getState().documentId;
-              const isActiveDoc = activeDocId === null || activeDocId === job.documentId;
+              const isActiveDoc = activeDocId !== null && activeDocId === job.documentId;
 
               if (!isActiveDoc) {
                 console.log(
