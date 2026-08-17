@@ -330,19 +330,8 @@ class BackgroundQueueProcessor {
     if (isSinglePage) {
       pageNumbers.push(job.targetPage as number);
     } else {
-      const activeDocId = useProjectStore.getState().documentId;
-      const activeCurrentPage = useProjectStore.getState().currentPage;
-      if (activeDocId === job.documentId && activeCurrentPage >= 1 && activeCurrentPage <= totalPages) {
-        for (let p = activeCurrentPage; p <= totalPages; p++) {
-          pageNumbers.push(p);
-        }
-        for (let p = 1; p < activeCurrentPage; p++) {
-          pageNumbers.push(p);
-        }
-      } else {
-        for (let p = 1; p <= totalPages; p++) {
-          pageNumbers.push(p);
-        }
+      for (let p = 1; p <= totalPages; p++) {
+        pageNumbers.push(p);
       }
     }
 

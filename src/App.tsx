@@ -3811,6 +3811,15 @@ export default function App() {
         useLayerStore.getState().clearLayers();
         useOCRTextLayerStore.getState().clearAllOCR();
         useOCRTextLayerStore.getState().setCurrentPageOCR(null);
+        useProjectStore.getState().setCurrentPage(1);
+
+        // ยกเลิกคิวงานที่ค้างอยู่ของเอกสารนี้
+        const existingJobs = useBackgroundQueueStore.getState().jobs;
+        existingJobs.forEach((j) => {
+          if (j.documentId === documentId && ['pending', 'queued', 'paused', 'processing'].includes(j.status)) {
+            useBackgroundQueueStore.getState().cancelJob(j.id);
+          }
+        });
         
         // แจ้งเตือนความสำเร็จ
         setTranslationStatus({

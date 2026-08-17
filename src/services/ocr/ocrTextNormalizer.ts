@@ -480,6 +480,70 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/(?<=\d)[oO]+(?=\D|$|%)/g, '0');
   normalized = normalized.replace(/(?<=\d)[oO]+(?=\d)/g, '0');
 
+  normalized = normalized.replace(/\bI\s+MPREGN\s*A\s*TATED\b/gi, 'IMPREGNATED');
+  normalized = normalized.replace(/\bI\s+MPREGNATED\b/gi, 'IMPREGNATED');
+  normalized = normalized.replace(/\bI\s+Dan['’]?T\b/gi, "I DON'T");
+  normalized = normalized.replace(/\bCack(?=\.{2,}|\s*[!?,]|$)/gi, 'COCK');
+  normalized = normalized.replace(/\bGANNA\b/gi, 'GONNA');
+  normalized = normalized.replace(/\bDIFEEE\b/gi, 'DIEEEE');
+  normalized = normalized.replace(/\bBURSTiNG\b/gi, 'BURSTING');
+  normalized = normalized.replace(/\bSORRY{2,}\b/gi, 'SORRY');
+  normalized = normalized.replace(/\bNO{3,}\b/gi, 'NOOO');
+  normalized = normalized.replace(/\bYOUVE\b/gi, "YOU'VE");
+  normalized = normalized.replace(/\bMSMAK\s+IM\s*A\b/gi, 'Ms. Makima');
+  normalized = normalized.replace(/\bMSMAK\s+IMA\b/gi, 'Ms. Makima');
+  normalized = normalized.replace(/\bPLARU\b/gi, 'PLAP');
+  normalized = normalized.replace(/\bQoiver\b/gi, 'Quiver');
+  normalized = normalized.replace(/\bS-sory\b/gi, 'S-sorry');
+  normalized = normalized.replace(/\bAnn!\b/g, 'Ahh!');
+  normalized = normalized.replace(/\bGrinc\b/gi, 'Grind');
+  normalized = normalized.replace(/\bTwire\b/gi, 'Twitch');
+  normalized = normalized.replace(/\bSeoeeze\b/gi, 'Squeeze');
+  normalized = normalized.replace(/\bSaeeze\b/gi, 'Squeeze');
+  normalized = normalized.replace(/\bSHNER\b/gi, 'SHIVER');
+  normalized = normalized.replace(/\bShvero\b/gi, 'Shivers');
+  normalized = normalized.replace(/\brHuff\b/gi, 'Huff');
+  normalized = normalized.replace(/\bHofflv\b/gi, 'Huff');
+  normalized = normalized.replace(/\bSochacan\b/gi, 'So he can');
+  normalized = normalized.replace(/\bGuuuun\b/gi, 'Gyuuuh');
+  normalized = normalized.replace(/\bPlurp\b/gi, 'Blorp');
+  normalized = normalized.replace(/\bCummngi\b/gi, 'Cumming');
+  normalized = normalized.replace(/\bchistic\s+ehP\b/gi, 'chistic eh?');
+  normalized = normalized.replace(/\barushwomb!?uck\b/gi, 'crush womb lick');
+  normalized = normalized.replace(/\bFucki\b/gi, 'Fuck');
+  normalized = normalized.replace(/\bBREE\s+DING\s+SACK\b/gi, 'BREEDING SACK');
+  normalized = normalized.replace(/\bPSV\b/g, 'PSH');
+  normalized = normalized.replace(/\bSplurty\b/gi, 'Splort');
+  normalized = normalized.replace(/\bSplorgey\b/gi, 'Splorge');
+  normalized = normalized.replace(/\bSplooge['’]v\b/gi, 'Splooge');
+  normalized = normalized.replace(/\bThmi\b/gi, 'Thmp');
+  normalized = normalized.replace(/\bathle\b/gi, 'Rattle');
+  normalized = normalized.replace(/\bseueeze\b/gi, 'Squeeze');
+  normalized = normalized.replace(/\bqweleh\b/gi, 'Squelch');
+  normalized = normalized.replace(/\btBlorp\b/gi, 'Blorp');
+  normalized = normalized.replace(/\bCiCK\b/g, 'Lick');
+  normalized = normalized.replace(/\bhTwiteh\+?\b/gi, 'Twitch');
+  normalized = normalized.replace(/\bsuchthick\b/gi, 'such thick');
+  normalized = normalized.replace(/(?<=^|\s)-Gargle\b/gi, 'Gargle');
+  normalized = normalized.replace(/\bquish\b/gi, 'Squish');
+  normalized = normalized.replace(/\bWaiggle\b/gi, 'Wriggle');
+  normalized = normalized.replace(/\bSha!\b/g, 'Shake!');
+  normalized = normalized.replace(/\bJolk\b/gi, 'Jolt');
+  normalized = normalized.replace(/\bJoly\b/gi, 'Jolt');
+  normalized = normalized.replace(/\bNchuhig\b/gi, 'Nchuh');
+  normalized = normalized.replace(/\bJOcK\b/g, 'Lock');
+  normalized = normalized.replace(/\bShirch\b/gi, 'Shlrch');
+  normalized = normalized.replace(/\btobe\b/gi, 'to be');
+  normalized = normalized.replace(/\bOohgl\b/gi, 'Oohg');
+  normalized = normalized.replace(/\bnstrict(\.{2,}|…)/gi, 'Constrict$1');
+  normalized = normalized.replace(/\bDoh!\b/g, 'Ooh!');
+  normalized = normalized.replace(/\bSprch\b/gi, 'Splrch');
+  normalized = normalized.replace(/\byguhh\b/gi, 'uguhh');
+  normalized = normalized.replace(/\buurRh\b/gi, 'uurkh');
+  normalized = normalized.replace(/\bSrp\b/g, 'Grip');
+  normalized = normalized.replace(/['’]aight\.D\b/gi, 'aight');
+  normalized = normalized.replace(/\(?vGlob\b/gi, 'Glob');
+
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,
     "BACK THEN HIS WHOLE BODY WAS BURNING UP LIKE A FURNACE, BUT NOW HE'S COLD AS ICE"
@@ -729,6 +793,8 @@ export const normalizeThaiTranslationText = (text: string): string => {
   normalized = normalized
     .replace(/([\(\[\{])\s+/g, '$1')
     .replace(/\s+([\)\]\}])/g, '$1');
+  normalized = normalized.replace(/ๆ{3,}/g, 'ๆๆ');
+  normalized = normalized.replace(/^\s*ๆ+\s*$/g, '');
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   return normalizeWhitespace(normalized);
 };

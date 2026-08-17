@@ -549,6 +549,100 @@ const applyThaiConversationalGlossaryInternal = (
     return preserveSourceTrailingPunctuation(source, 'หีของเธอ');
   }
 
+  if (compactSourceAlnumUpper === 'TATED' || compactSourceAlnumUpper === 'IMPREGNATED' || compactSourceAlnumUpper === 'IMPREGNATE') {
+    return preserveSourceTrailingPunctuation(source, 'ท้องแล้ว!');
+  }
+  if (compactSourceAlnumUpper === 'IMPREGNATEDPIG' || compactSourceAlnumUpper === 'IMPREGNATEDPIGS') {
+    return preserveSourceTrailingPunctuation(source, 'หมูแม่พันธุ์ที่กำลังตั้งท้อง');
+  }
+  if (compactSourceAlnumUpper === 'WEIGHT') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำหนัก');
+  }
+  if (compactSourceAlnumUpper === 'BURSTING' || compactSourceAlnumUpper === 'BURST') {
+    return preserveSourceTrailingPunctuation(source, 'จะระเบิดแล้ว');
+  }
+  if (/^SORRY+$/.test(compactSourceAlnumUpper)) {
+    return preserveSourceTrailingPunctuation(source, 'ขอโทษษษ');
+  }
+  if (/^NO{3,}$/.test(compactSourceAlnumUpper)) {
+    return preserveSourceTrailingPunctuation(source, 'ไม่นะะะะ');
+  }
+  if (compactSourceAlnumUpper === 'YOUVEGOTA' || compactSourceAlnumUpper === 'YOUVEGOT') {
+    return preserveSourceTrailingPunctuation(source, 'เธอมี...');
+  }
+  if (compactSourceAlnumUpper === 'OHHHOH' || compactSourceAlnumUpper === 'OHOH' || compactSourceAlnumUpper === 'OHHHN' || compactSourceAlnumUpper === 'OHHH') {
+    return preserveSourceTrailingPunctuation(source, 'โอ้! โอ้!');
+  }
+  if (compactSourceAlnumUpper === 'FIELD' || compactSourceAlnumUpper === 'FIELDS') {
+    return preserveSourceTrailingPunctuation(source, 'สนาม');
+  }
+  if (compactSourceAlnumUpper === 'CACKQH' || compactSourceAlnumUpper === 'CACK') {
+    return preserveSourceTrailingPunctuation(source, 'ควย... โอ้!');
+  }
+  if (compactSourceAlnumUpper === 'IDANT' || compactSourceAlnumUpper === 'IDONTWANNA') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่อยาก');
+  }
+  if (compactSourceAlnumUpper === 'GANNA') {
+    return preserveSourceTrailingPunctuation(source, 'กำลังจะ');
+  }
+  if (compactSourceAlnumUpper === 'DIFEEE' || compactSourceAlnumUpper === 'DIEEE') {
+    return preserveSourceTrailingPunctuation(source, 'ตายยยย!');
+  }
+  if (/^H{2,}$/.test(compactSourceAlnumUpper)) {
+    return preserveSourceTrailingPunctuation(source, 'ฮึก...');
+  }
+  if (/^OH+$/.test(compactSourceAlnumUpper)) {
+    return preserveSourceTrailingPunctuation(source, 'โอ้!');
+  }
+  if (compactSourceAlnumUpper === 'MSMAKIMA' || compactSourceAlnumUpper === 'MSMAKIMA' || compactSourceAlnumUpper === 'MSMAKIMA') {
+    return preserveSourceTrailingPunctuation(source, 'คุณมากิมะ');
+  }
+  if (compactSourceAlnumUpper === 'FLOWING') {
+    return preserveSourceTrailingPunctuation(source, 'ไหลริน...');
+  }
+  if (compactSourceAlnumUpper === 'SWELL') {
+    return preserveSourceTrailingPunctuation(source, 'บวมเป่ง');
+  }
+  if (compactSourceAlnumUpper === 'THINGTHE' || compactSourceAlnumUpper === 'THING') {
+    return preserveSourceTrailingPunctuation(source, 'สิ่งนั้น');
+  }
+  if (compactSourceAlnumUpper === 'SEMEN') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำอสุจิ...');
+  }
+  if (compactSourceAlnumUpper === 'BREEDINGSACK' || compactSourceAlnumUpper === 'BREEDINGSACK') {
+    return preserveSourceTrailingPunctuation(source, 'กระสอบแม่พันธุ์');
+  }
+  if (compactSourceAlnumUpper === 'THISBLACKMARKETAV') {
+    return preserveSourceTrailingPunctuation(source, 'หนังโป๊ตลาดมืดเรื่องนี้');
+  }
+  if (compactSourceAlnumUpper === 'CRUSHWOMBLICK') {
+    return preserveSourceTrailingPunctuation(source, 'กระแทกมดลูกแล้วเลีย');
+  }
+  if (compactSourceAlnumUpper === 'CUMMNGI' || compactSourceAlnumUpper === 'CUMMING') {
+    return preserveSourceTrailingPunctuation(source, 'จะแตกแล้ว!');
+  }
+  if (compactSourceAlnumUpper === 'SOHECAN' || compactSourceAlnumUpper === 'SOCHACAN') {
+    return preserveSourceTrailingPunctuation(source, 'เพื่อให้เขาสามารถ');
+  }
+  if (compactSourceAlnumUpper === 'MYCERVIX') {
+    return preserveSourceTrailingPunctuation(source, 'มดลูกของฉัน');
+  }
+  if (compactSourceAlnumUpper === 'SLUTTIEST') {
+    return preserveSourceTrailingPunctuation(source, 'อีตัวที่สุด');
+  }
+  if (compactSourceAlnumUpper === 'SUCHTHICK') {
+    return preserveSourceTrailingPunctuation(source, 'ข้นขนาดนี้');
+  }
+  if (compactSourceAlnumUpper === 'CONSTRICT' || compactSourceAlnumUpper === 'NSTRICT') {
+    return preserveSourceTrailingPunctuation(source, 'บีบรัด...');
+  }
+  if (compactSourceAlnumUpper === 'LMAO') {
+    return preserveSourceTrailingPunctuation(source, 'ก๊ากๆ');
+  }
+  if (compactSourceAlnumUpper === 'AIGHT') {
+    return preserveSourceTrailingPunctuation(source, 'โอเค๊');
+  }
+
   // ─── Missing manga dialogue fragment translations ────────────────────────────
   // ทำไม: คำเหล่านี้อยู่ใน whitelist (ไม่โดน skip) แต่ไม่มี glossary rule แปลเป็นไทย
   // Argos มักจะ carry-over กลับมาเป็น English ทำให้ดูเหมือนไม่ได้แปล

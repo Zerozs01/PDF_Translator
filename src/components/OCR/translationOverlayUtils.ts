@@ -3636,6 +3636,11 @@ const suppressOverlappingOverlayBorders = (
       return iou >= 0.58;
     }
 
+    // บรรทัดที่อยู่ห่างกันในแนวดิ่ง (เช่น บทสนทนาที่พูดซ้ำลงมาเรื่อยๆ เช่น I'M DYING!) ไม่ใช่ OCR duplicate ห้ามลบ!
+    if (centerDeltaY > Math.max(14, minHeight * 0.8) && iou < 0.35) {
+      return false;
+    }
+
     // มีคำแปลเหมือนกันเป๊ะ -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง (เช่น โดน OCR อ่านเบิ้ล)
     if (existing.textKey === candidate.textKey) {
       return iou >= 0.15 || (overlapX >= 0.4 && overlapY >= 0.4);
@@ -3789,6 +3794,13 @@ export const computeOverlayLayoutMap = (
     const shouldNormalize = effectiveDocumentProfile
       ? (allDocumentBody && group.length >= 2 && (maxFontSize - minFontSize) >= 0.18)
       : (group.length >= 2 && (isCenteredBlock || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind === 'comic-box') || (maxFontSize - minFontSize) >= 0.35));
+    const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
+    const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
+    const allowSectionMerge = (effectiveProfile === 'manga' || effectiveProfile === 'manhwa')
+      && !group.some((item) => item.hints?.groupType === 'sfx');
+    const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
+      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      : undefined;
     const alignment: 'left' | 'center' = ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind !== 'comic-box')
       ? 'center'
       : (isCenteredBlock ? 'center' : 'left');
@@ -3797,13 +3809,6 @@ export const computeOverlayLayoutMap = (
       : undefined;
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
-      : undefined;
-    const allowSectionMerge = (effectiveProfile === 'manga' || effectiveProfile === 'manhwa')
-      && !group.some((item) => item.hints?.groupType === 'sfx');
-    const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
-    const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
-    const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -3893,7 +3898,9 @@ export const computeOverlayLayoutMap = (
     );
 
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && (hasBalloonMember || (hasStrongColumnContinuity && !overlyWideSectionSpan));
+      && group.length <= 3
+      && hasStrongColumnContinuity
+      && !overlyWideSectionSpan;
 
     if (canMergeSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
