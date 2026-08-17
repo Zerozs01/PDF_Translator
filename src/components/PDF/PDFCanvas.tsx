@@ -1277,6 +1277,7 @@ const PDFPageContainer: React.FC<{
           if (
             entry.isIntersecting &&
             !isProgrammaticScrollRef?.current &&
+            previewModeOverride !== 'translated' &&
             useProjectStore.getState().currentPage !== pageNum
           ) {
             const now = performance.now();
@@ -1542,8 +1543,12 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       isProgrammaticScrollRef.current = true;
 
       const timer = setTimeout(() => {
-        const pageElement = document.querySelector(
-          `.pdf-canvas-document [data-page-container="${currentPage}"]`
+        const pageElement = (
+          containerRef.current?.querySelector(
+            `.pdf-canvas-document [data-page-container="${currentPage}"]`
+          ) || document.querySelector(
+            `.pdf-canvas-document [data-page-container="${currentPage}"]`
+          )
         ) as HTMLElement | null;
 
         if (pageElement && containerRef.current) {
@@ -1589,6 +1594,11 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   }, [setTotalPages]);
 
   const onPageLoadSuccess = React.useCallback(async (page: any) => {
+    if (previewModeOverride === 'translated') {
+      // Secondary split-view canvas should not reset or recalculate global zoom/pan
+      return;
+    }
+
     if (containerRef.current) {
       const { clientWidth, clientHeight } = containerRef.current;
       const { width, height } = page.originalWidth ? { width: page.originalWidth, height: page.originalHeight } : page;
@@ -1610,8 +1620,12 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
         const targetPage = useProjectStore.getState().currentPage;
         if (targetPage > 1) {
           isProgrammaticScrollRef.current = true;
-          const pageElement = document.querySelector(
-            `.pdf-canvas-document [data-page-container="${targetPage}"]`
+          const pageElement = (
+            containerRef.current?.querySelector(
+              `.pdf-canvas-document [data-page-container="${targetPage}"]`
+            ) || document.querySelector(
+              `.pdf-canvas-document [data-page-container="${targetPage}"]`
+            )
           ) as HTMLElement | null;
           if (pageElement) {
             const offsetTop = pageElement.offsetTop;
@@ -1629,7 +1643,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
         }
       }
     }
-  }, [setZoom, setPan]);
+  }, [setZoom, setPan, previewModeOverride]);
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;

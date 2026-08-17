@@ -63,6 +63,7 @@ interface LayerStoreState {
   synchronizeGroupBBox: (pageNum: number, groupId: string) => void;
   deleteLayer: (pageNum: number, layerId: string) => void;
   deleteGroup: (pageNum: number, groupId: string) => void;
+  deleteSelectedLayers: () => void;
   addManualLayer: (pageNum: number, bbox: BBox, text: string, lineIndex: number, options?: { backgroundColor?: string; textColor?: string }) => void;
   moveLayerToGroup: (pageNum: number, layerId: string, targetGroupId: string, targetIndex?: number) => void;
   reorderGroups: (pageNum: number, dragIndex: number, hoverIndex: number) => void;
@@ -449,6 +450,36 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
       deletedLineIndexesByPage: nextDeletedLineIndexes,
     };
   }),
+
+  deleteSelectedLayers: () => {
+    const { selectedLayerIds, layersByPage, editingLayerId } = get();
+    if (editingLayerId || selectedLayerIds.size === 0) return;
+
+    // หาว่า selected layers อยู่ในหน้าไหนบ้าง
+    const layersByTargetPage = new Map<number, string[]>();
+    for (const [page, pageLayers] of layersByPage.entries()) {
+      for (const layer of pageLayers) {
+        if (selectedLayerIds.has(layer.id)) {
+          const list = layersByTargetPage.get(page) || [];
+          list.push(layer.id);
+          layersByTargetPage.set(page, list);
+        }
+      }
+    }
+
+    if (layersByTargetPage.size === 0) {
+      get().clearSelection();
+      return;
+    }
+
+    for (const [page, layerIds] of layersByTargetPage.entries()) {
+      get().pushUndoSnapshot(page);
+      for (const id of layerIds) {
+        get().deleteLayer(page, id);
+      }
+    }
+    get().clearSelection();
+  },
 
   addManualLayer: (pageNum, bbox, text, lineIndex, options) => set((state) => {
     const layers = [...(state.layersByPage.get(pageNum) || [])];

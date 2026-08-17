@@ -525,6 +525,27 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     });
   }, [selectedLayerIds, groups, pageNum, expandGroup]);
 
+  // Handle Delete/Backspace keyboard shortcut to remove selected layers
+  const deleteSelectedLayers = useLayerStore((state) => state.deleteSelectedLayers);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerIds.size > 0) {
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable
+        );
+        if (isTyping) return;
+
+        e.preventDefault();
+        deleteSelectedLayers();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLayerIds, deleteSelectedLayers]);
+
   // Build layers when OCR data changes
   const handleBuildLayers = useCallback((forceRebuild = false) => {
     if (!currentPageOCR || !currentPageOCR.lines || currentPageOCR.lines.length === 0) return;

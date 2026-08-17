@@ -1013,7 +1013,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   } | null>(null);
 
   // ── Keyboard: Ctrl+Z Undo & Delete ──────────────────────────────
-  const { undoLastAction } = useLayerStore();
+  const { undoLastAction, deleteSelectedLayers } = useLayerStore();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !editingLayerId) {
@@ -1034,17 +1034,12 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         if (isTyping) return;
 
         e.preventDefault();
-        // ลบ snapshot ก่อนลบจริงเพื่อให้ undo ทำงานได้ถูกต้อง
-        pushUndoSnapshot(pageNum);
-        selectedLayerIds.forEach((id) => {
-          deleteLayer(pageNum, id);
-        });
-        clearSelection();
+        deleteSelectedLayers();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pageNum, editingLayerId, selectedLayerIds, undoLastAction, clearSelection, deleteLayer, pushUndoSnapshot]);
+  }, [pageNum, editingLayerId, selectedLayerIds, undoLastAction, clearSelection, deleteSelectedLayers]);
 
   // ── Manual Region Creation Handler ──────────────────────────────────
   const handleCreateManualRegion = useCallback((pdfBBox: BBox, bgColor: string) => {

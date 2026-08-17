@@ -645,8 +645,32 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/\bTHEN\.\s*WE\b/gi, 'THEN, WE');
   normalized = normalized.replace(/\bTO\s+ME\s+tOVAy\.?/gi, 'TO ME TODAY.');
   normalized = normalized.replace(/\bAIr\s+bath\.?/gi, 'Air bath.');
-  normalized = normalized.replace(/\bICHAN,\s*I['’]?LL\b/gi, "CHAN, I'LL");
   normalized = normalized.replace(/\bSOME-THING\s+I\s+SAID-?\b/gi, 'SOME-THING I SAID-');
+  normalized = normalized.replace(/\bShudder\.s\b/gi, 'Shudder');
+  normalized = normalized.replace(/\bTwitcht\b/gi, 'Twitch');
+  normalized = normalized.replace(/\bHISSEMEN\b/gi, 'HIS SEMEN');
+  normalized = normalized.replace(/\bISSTILLEAKING\b/gi, 'IS STILL LEAKING');
+  normalized = normalized.replace(/\bOUTOPME(\.{2,}|…)?/gi, 'OUT OF ME$1');
+  normalized = normalized.replace(/\bOUTOPME\b/gi, 'OUT OF ME');
+  normalized = normalized.replace(/\bSmacky\b/gi, 'Smack');
+  normalized = normalized.replace(/\bSlapy\b/gi, 'Slap');
+  normalized = normalized.replace(/\bRubr\b/gi, 'Rub');
+  normalized = normalized.replace(/\bCoughe\b/gi, 'Cough');
+  normalized = normalized.replace(/\bPate\b/gi, 'Pat');
+  normalized = normalized.replace(/\bMVF[iI]utter\b/gi, 'Flutter');
+  normalized = normalized.replace(/\bMVFlutter\b/gi, 'Flutter');
+  normalized = normalized.replace(/\bIBET\s+IVE\b/gi, "I BET I'VE");
+  normalized = normalized.replace(/\bIBETIVE\b/gi, "I BET I'VE");
+  normalized = normalized.replace(/\bTHE\s+SENSAT\s*(\.{2,}|…)/gi, 'THE SENSATION$1');
+  normalized = normalized.replace(/\bTHE\s+SENSAT\b/gi, 'THE SENSATION');
+  normalized = normalized.replace(/\bOWON['’]?TSAYNAUGHTY\b/gi, "I WON'T SAY NAUGHTY");
+  normalized = normalized.replace(/\bOWONTSAYNAUGHTY\b/gi, "I WON'T SAY NAUGHTY");
+  normalized = normalized.replace(/\byyt\b/g, 'Ahh');
+  normalized = normalized.replace(/\bQLIET!?\b/gi, 'QUIET!');
+  normalized = normalized.replace(/\bQLIET\b/gi, 'QUIET');
+  normalized = normalized.replace(/\bACOWARD\b/gi, 'A COWARD');
+  normalized = normalized.replace(/\bHER\s+POSIT\s*I\s*ON\b/gi, 'HER POSITION');
+  normalized = normalized.replace(/\bHER\s+POSITI\s*ON\b/gi, 'HER POSITION');
 
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,
