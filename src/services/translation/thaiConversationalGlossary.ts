@@ -798,6 +798,57 @@ const applyThaiConversationalGlossaryInternal = (
   if (compactSourceAlnumUpper === 'AALRIGHT' || compactSourceAlnumUpper === 'AALRIGHT' || compactSourceAlnumUpper === 'AALRIGHT!') {
     return preserveSourceTrailingPunctuation(source, 'ช-ชะ ใช่แล้ว!');
   }
+  if (compactSourceAlnumUpper === 'BOYFRIEND') {
+    return preserveSourceTrailingPunctuation(source, 'แฟนหนุ่ม');
+  }
+  if (compactSourceAlnumUpper === 'BIG') {
+    return preserveSourceTrailingPunctuation(source, 'ใหญ่มาก');
+  }
+  if (compactSourceAlnumUpper === 'INTERESTING') {
+    return preserveSourceTrailingPunctuation(source, 'น่าสนใจ');
+  }
+  if (compactSourceAlnumUpper === 'SATISFY') {
+    return preserveSourceTrailingPunctuation(source, 'ทำให้พึงพอใจ');
+  }
+  if (compactSourceAlnumUpper.includes('MIKIYUKA28') || compactSourceAlnumUpper.includes('MIKIYUKA')) {
+    return preserveSourceTrailingPunctuation(source, 'มิกิ ยูกะ (28)');
+  }
+  if (compactSourceAlnumUpper === 'LETITOUT') {
+    return preserveSourceTrailingPunctuation(source, 'ปล่อยมันออกมา');
+  }
+  if (compactSourceAlnumUpper === 'LOOSE') {
+    return preserveSourceTrailingPunctuation(source, 'โหลยโท่ย');
+  }
+  if (compactSourceAlnumUpper === 'AIRBATH') {
+    return preserveSourceTrailingPunctuation(source, 'อ่างตากอากาศ');
+  }
+  if (compactSourceAlnumUpper.includes('YUKACHAN') && compactSourceAlnumUpper.includes('ILL')) {
+    return preserveSourceTrailingPunctuation(source, 'ยูกะ-จัง ฉันจะ');
+  }
+  if (compactSourceAlnumUpper.includes('CHANILL')) {
+    return preserveSourceTrailingPunctuation(source, 'จัง ฉันจะ');
+  }
+  if (compactSourceAlnumUpper === 'LIMIT') {
+    return preserveSourceTrailingPunctuation(source, 'ขีดจำกัด');
+  }
+  if (compactSourceAlnumUpper === 'LOLSOLEWD') {
+    return preserveSourceTrailingPunctuation(source, 'ฮ่าๆๆ ลามกจังเลย');
+  }
+  if (/^W+H+A+T+$/i.test(compactSourceAlnumUpper) || compactSourceAlnumUpper === 'WHAAAT') {
+    return preserveSourceTrailingPunctuation(source, 'อ..อะไรยยย');
+  }
+  if (compactSourceAlnumUpper === 'YYES') {
+    return preserveSourceTrailingPunctuation(source, 'ช-ใช่');
+  }
+  if (compactSourceAlnumUpper === 'PAINFUL') {
+    return preserveSourceTrailingPunctuation(source, 'เจ็บปวด');
+  }
+  if (compactSourceAlnumUpper === 'THICK') {
+    return preserveSourceTrailingPunctuation(source, 'หนา');
+  }
+  if (compactSourceAlnumUpper.includes('SOMETHINGISAID')) {
+    return preserveSourceTrailingPunctuation(source, 'บางสิ่ง ที่ฉัน พูด-');
+  }
   if (compactSourceAlnumUpper === 'THENWHY') {
     return preserveSourceTrailingPunctuation(source, 'แล้วทำไม');
   }

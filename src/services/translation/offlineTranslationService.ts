@@ -933,6 +933,25 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'me, there': 'ฉัน, ตรงนั้น', '(me, there)': '(ฉัน, ตรงนั้น)', '(me,there)': '(ฉัน, ตรงนั้น)', 'me,there': 'ฉัน, ตรงนั้น',
   'then, we should': 'ถ้าอย่างนั้นเราควรจะ', 'then we should': 'ถ้าอย่างนั้นเราควรจะ', 'then. we should': 'ถ้าอย่างนั้นเราควรจะ', 'then.we should': 'ถ้าอย่างนั้นเราควรจะ',
   'then, we': 'ถ้าอย่างนั้นเรา', 'then we': 'ถ้าอย่างนั้นเรา',
+  'boyfriend': 'แฟน', 'boyfriend!': 'แฟนหนุ่ม!', 'boyfriend...': 'แฟนหนุ่ม...',
+  'big': 'ใหญ่', 'big!': 'ใหญ่มาก!', 'big...': 'ใหญ่มาก...',
+  'interesting': 'น่าสนใจ', 'interesting!': 'น่าสนใจ!', 'interesting...': 'น่าสนใจ...',
+  'to me today.': 'ให้ฉันในวันนี้.', 'to me today': 'ให้ฉันในวันนี้', 'to me tovay.': 'ให้ฉันในวันนี้.', 'to me tovay': 'ให้ฉันในวันนี้',
+  'satisfy': 'ทำให้พึงพอใจ', 'satisfy!': 'ทำให้พึงพอใจ!', 'satisfy...': 'ทำให้พึงพอใจ...',
+  'miki yuka (28).': 'มิกิ ยูกะ (28)', 'miki yuka (28)': 'มิกิ ยูกะ (28)',
+  'let it out': 'ปล่อยมันออกมา', 'let it out!': 'ปล่อยมันออกมา!', 'let it out...': 'ปล่อยมันออกมา...',
+  'loose': 'โหลยโท่ย', 'loose!': 'โหลยโท่ย!', 'loose...': 'โหลยโท่ย...',
+  'air bath.': 'อ่างตากอากาศ', 'air bath': 'อ่างตากอากาศ', 'airbath.': 'อ่างตากอากาศ', 'airbath': 'อ่างตากอากาศ',
+  'yuka-chan, i\'ll': 'ยูกะ-จัง ฉันจะ', 'yuka-chan, i\'ll...': 'ยูกะ-จัง ฉันจะ...', 'yuka-chan i\'ll': 'ยูกะ-จัง ฉันจะ',
+  'chan, i\'ll': 'จัง ฉันจะ', 'chan, i\'ll...': 'จัง ฉันจะ...', 'chan i\'ll': 'จัง ฉันจะ',
+  'chan': 'จัง', '-chan': '-จัง',
+  'limit': 'ขีดจำกัด', 'limit!': 'ขีดจำกัด!', 'limit...': 'ขีดจำกัด...',
+  'lol so lewd': 'ฮ่าๆๆ ลามกจังเลย', 'lol so lewd!': 'ฮ่าๆๆ ลามกจังเลย!', 'lol so lewd...': 'ฮ่าๆๆ ลามกจังเลย...',
+  'whaaat': 'อ..อะไร', 'whaaat!': 'อ..อะไร!', 'whaaat,': 'อ..อะไร,', 'whaaat...': 'อ..อะไร...',
+  'y-yes': 'ช-ใช่', 'y-yes!': 'ช-ใช่!', 'y-yes...': 'ช-ใช่...',
+  'painful': 'เจ็บปวด', 'painful!': 'เจ็บปวด!', 'painful...': 'เจ็บปวด...',
+  'thick': 'หนา', 'thick!': 'หนา!', 'thick...': 'หนา...',
+  'some-thing i said-': 'บางสิ่ง ที่ฉัน พูด-', 'some-thing i said': 'บางสิ่ง ที่ฉัน พูด', 'something i said': 'บางสิ่ง ที่ฉัน พูด',
 };
 
 
@@ -975,16 +994,31 @@ export const GENERAL_ENGLISH_DICTIONARY_TH: Record<string, string> = {
   'inside': 'ข้างใน', 'outside': 'ข้างนอก', 'defeat': 'เอาชนะ', 'fight': 'ต่อสู้',
 };
 
+// ── Pre-compiled Module-Level Regular Expressions ───────────────────
+const TEMP_ALERT_REGEX = /^temp:\s*(\d+)\s*c\s*\[alert\]$/i;
+const TEMP_NORMAL_REGEX = /^temp:\s*(\d+)\s*c$/i;
+const LEADING_PUNCT_REGEX = /^[¡¿\s]+/;
+const LEADING_II_REGEX = /^ii(?=[a-z])/i;
+const STRIP_DOTS_START_REGEX = /^[\.\,\-\s]+/;
+const STRIP_DOTS_END_REGEX = /[\.\,\-\s]+$/;
+const TRAILING_PUNCT_REGEX = /([\!\?\.…]+)$/;
+const HAS_TRAILING_PUNCT_REGEX = /[\!\?\.…]$/;
+const UNDERLINE_REGEX = /[_]+/g;
+const PUNCT_SPACE_REGEX = /[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g;
+const NON_LETTER_NUM_REGEX = /[^\p{L}\p{N}\s]/gu;
+const MULTI_SPACE_REGEX = /\s+/g;
+const DIACRITICS_REGEX = /[\u0300-\u036f]/g;
+
 export const lookupShortPhraseTh = (text: string): string | null => {
   if (!text) return null;
   const trimmed = text.trim();
 
   // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
-  const tempAlertMatch = trimmed.match(/^temp:\s*(\d+)\s*c\s*\[alert\]$/i);
+  const tempAlertMatch = trimmed.match(TEMP_ALERT_REGEX);
   if (tempAlertMatch) {
     return `อุณหภูมิ: ${tempAlertMatch[1]}°C [แจ้งเตือน]`;
   }
-  const tempNormalMatch = trimmed.match(/^temp:\s*(\d+)\s*c$/i);
+  const tempNormalMatch = trimmed.match(TEMP_NORMAL_REGEX);
   if (tempNormalMatch) {
     return `อุณหภูมิ: ${tempNormalMatch[1]}°C`;
   }
@@ -993,15 +1027,15 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey] || GENERAL_ENGLISH_DICTIONARY_TH[rawKey];
   if (directRawMatch) return directRawMatch;
 
-  const cleanedRawKey = rawKey.replace(/^[¡¿\s]+/, '').replace(/^ii(?=[a-z])/i, '');
+  const cleanedRawKey = rawKey.replace(LEADING_PUNCT_REGEX, '').replace(LEADING_II_REGEX, '');
   const directCleanedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[cleanedRawKey] || GENERAL_ENGLISH_DICTIONARY_TH[cleanedRawKey];
   if (directCleanedMatch) return directCleanedMatch;
 
-  const strippedDotsKey = cleanedRawKey.replace(/^[\.\,\-\s]+/, '').replace(/[\.\,\-\s]+$/, '').trim();
+  const strippedDotsKey = cleanedRawKey.replace(STRIP_DOTS_START_REGEX, '').replace(STRIP_DOTS_END_REGEX, '').trim();
   if (strippedDotsKey && (ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey])) {
     const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey];
-    const trailingPunct = text.match(/([\!\?\.…]+)$/);
-    if (trailingPunct && !/[\!\?\.…]$/.test(match)) {
+    const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
+    if (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(match)) {
       return match + trailingPunct[1];
     }
     return match;
@@ -1016,10 +1050,10 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   }
 
   const key = rawKey
-    .replace(/[_]+/g, ' ')
-    .replace(/[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g, ' ')
-    .replace(/[^\p{L}\p{N}\s]/gu, '')
-    .replace(/\s+/g, ' ')
+    .replace(UNDERLINE_REGEX, ' ')
+    .replace(PUNCT_SPACE_REGEX, ' ')
+    .replace(NON_LETTER_NUM_REGEX, '')
+    .replace(MULTI_SPACE_REGEX, ' ')
     .trim();
   
   // 1. ลองค้นหาแบบตรงตัวใน dictionary ก่อน
@@ -1027,13 +1061,13 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   
   // Try Spanish diacritic stripping fallback (e.g. bañas -> banas, montón -> monton)
   if (!directMatch) {
-    const strippedKey = key.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ñ/g, 'n');
+    const strippedKey = key.normalize('NFD').replace(DIACRITICS_REGEX, '').replace(/ñ/g, 'n');
     directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedKey];
   }
 
   if (directMatch) {
-    const trailingPunct = text.match(/([\!\?\.…]+)$/);
-    if (trailingPunct && !/[\!\?\.…]$/.test(directMatch)) {
+    const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
+    if (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(directMatch)) {
       return directMatch + trailingPunct[1];
     }
     return directMatch;
@@ -1237,9 +1271,46 @@ export async function translateBatchOffline(
       .replace(/\s{2,}/g, ' ')
       .trim();
 
-  // Run Direct translation and Pivot English translation in parallel to minimize IPC latency
+  // Run Direct translation or 2-step Pivot English translation based on route
   const runPivotEnglish = engine === 'm2m100' ? false : shouldUseOfflinePivotRoute(normalizedSource, normalizedTarget);
-  const directPromise = offlineBatchBridge(preparedTexts, {
+
+  if (runPivotEnglish) {
+    try {
+      // Step 1: source -> English
+      const pivotEnglishResults = await offlineBatchBridge(preparedTexts, {
+        mode,
+        sourceType: type,
+        sourceLanguage: normalizedSource,
+        targetLanguage: 'en',
+        engine: engine || 'argos',
+      });
+
+      // Step 2: English -> Thai
+      const pivotEnglishPrepared = pivotEnglishResults.map((line, i) => {
+        const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
+        if (normalizedPivot) return normalizedPivot;
+        const originalIndex = indicesToTranslate[i];
+        return normalizeOfflineSourceText(String(texts[originalIndex] || ''));
+      });
+
+      const pivotThaiResults = await offlineBatchBridge(pivotEnglishPrepared, {
+        mode,
+        sourceType: type,
+        sourceLanguage: 'en',
+        targetLanguage: normalizedTarget,
+      });
+
+      indicesToTranslate.forEach((originalIndex, i) => {
+        finalDirectTranslations[originalIndex] = pivotThaiResults[i] || '';
+      });
+
+      return finalDirectTranslations;
+    } catch (pivotErr) {
+      console.warn(`[translateBatchOffline] Pivot route ${normalizedSource}->en->${normalizedTarget} failed, falling back to direct translation:`, pivotErr);
+    }
+  }
+
+  const directResults = await offlineBatchBridge(preparedTexts, {
     mode,
     sourceType: type,
     sourceLanguage: normalizedSource,
@@ -1249,24 +1320,6 @@ export async function translateBatchOffline(
     console.error(`[translateBatchOffline] Direct translation call failed for ${normalizedSource}->${normalizedTarget}:`, err);
     return new Array<string>(preparedTexts.length).fill('');
   });
-
-  const pivotEnglishPromise = runPivotEnglish
-    ? offlineBatchBridge(preparedTexts, {
-        mode,
-        sourceType: type,
-        sourceLanguage: normalizedSource,
-        targetLanguage: 'en',
-        engine: engine || 'argos',
-      }).catch((err) => {
-        console.error(`[translateBatchOffline] Pivot English translation call failed for ${normalizedSource}->en:`, err);
-        return new Array<string>(preparedTexts.length).fill('');
-      })
-    : Promise.resolve<string[]>([]);
-
-  const [directResults, pivotEnglishResults] = await Promise.all([
-    directPromise,
-    pivotEnglishPromise,
-  ]);
 
   // Merge batch direct translations back
   indicesToTranslate.forEach((originalIndex, batchIndex) => {
@@ -1280,24 +1333,20 @@ export async function translateBatchOffline(
     const originalIndex = indicesToTranslate[i];
     const text = directResults[i] || '';
     const untranslated = isArgosUntranslated(text, normalizedTarget, normalizedSource);
-    console.log(`[HybridRetry] i=${originalIndex} src="${preparedTexts[i]}" argosOut="${text}" untranslated=${untranslated}`);
     if (!untranslated) continue;
 
     const originalText = texts[originalIndex] ?? preparedTexts[i] ?? '';
 
     const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
     if (lookupResult) {
-      console.log(`[HybridRetry] LOOKUP HIT: "${originalText}" → "${lookupResult}"`);
       finalDirectTranslations[originalIndex] = lookupResult;
       continue;
     }
 
     const cleaned = cleanForRetry(preparedTexts[i]);
-    console.log(`[HybridRetry] cleaned="${cleaned}" sameAsPrepared=${cleaned === preparedTexts[i].trim()}`);
     if (cleaned && cleaned !== preparedTexts[i].trim()) {
       const cleanedLookup = normalizedTarget === 'th' ? lookupShortPhraseTh(cleaned) : null;
       if (cleanedLookup) {
-        console.log(`[HybridRetry] CLEANED LOOKUP HIT: "${cleaned}" → "${cleanedLookup}"`);
         finalDirectTranslations[originalIndex] = cleanedLookup;
         continue;
       }
@@ -1305,10 +1354,7 @@ export async function translateBatchOffline(
     } else {
       const fallback = systemicWordFallbackTranslate(originalText);
       if (fallback) {
-        console.log(`[SystemicFallback] DIRECT WORD FALLBACK: "${originalText}" → "${fallback}"`);
         finalDirectTranslations[originalIndex] = fallback;
-      } else {
-        console.log(`[HybridRetry] GAVE UP (no clean retry target): "${originalText}" → returning original Argos output`);
       }
     }
   }
@@ -1326,17 +1372,13 @@ export async function translateBatchOffline(
       retriesPending.forEach((retry, batchIdx) => {
         const retryResult = retryResults[batchIdx] ?? '';
         const stillUntranslated = isArgosUntranslated(retryResult, normalizedTarget, normalizedSource);
-        console.log(`[HybridRetry] BATCHED ARGOS RETRY: index=${retry.index} cleaned="${retry.cleaned}" → "${retryResult}" stillUntranslated=${stillUntranslated}`);
         if (!stillUntranslated) {
           finalDirectTranslations[retry.index] = retryResult;
         } else {
           const origText = texts[retry.index] || retry.cleaned;
           const fallback = systemicWordFallbackTranslate(origText);
           if (fallback) {
-            console.log(`[SystemicFallback] RESOLVED UNTRANSLATED WORD: "${origText}" → "${fallback}"`);
             finalDirectTranslations[retry.index] = fallback;
-          } else {
-            console.log(`[HybridRetry] GAVE UP (still untranslated after retry): index=${retry.index} → returning original Argos output`);
           }
         }
       });
@@ -1345,42 +1387,7 @@ export async function translateBatchOffline(
     }
   }
 
-  if (!runPivotEnglish) {
-    return finalDirectTranslations;
-  }
-
-  try {
-    const pivotEnglishPrepared = pivotEnglishResults.map((line, i) => {
-      const normalizedPivot = normalizeSourceForTranslation(String(line || ''), 'en');
-      if (normalizedPivot) return normalizedPivot;
-      const originalIndex = indicesToTranslate[i];
-      return normalizeOfflineSourceText(String(texts[originalIndex] || ''));
-    });
-    const pivotThaiResults = await offlineBatchBridge(pivotEnglishPrepared, {
-      mode,
-      sourceType: type,
-      sourceLanguage: 'en',
-      targetLanguage: normalizedTarget,
-    });
-
-    indicesToTranslate.forEach((originalIndex, i) => {
-      const sourceText = texts[originalIndex] || '';
-      const directCandidate = finalDirectTranslations[originalIndex];
-      const pivotCandidate = pivotThaiResults[i] || '';
-      finalDirectTranslations[originalIndex] = selectOfflinePivotCandidate(
-        sourceText,
-        normalizedSource,
-        normalizedTarget,
-        directCandidate,
-        pivotCandidate
-      );
-    });
-
-    return finalDirectTranslations;
-  } catch (error) {
-    console.error(`[OfflineTranslation] Pivot fallback ${normalizedSource}->en->${normalizedTarget} failed:`, error);
-    return finalDirectTranslations;
-  }
+  return finalDirectTranslations;
 }
 
 // -------------------------------------------------------------

@@ -356,22 +356,38 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
 const USER_DICT_STORAGE_KEY = 'pdf_translator_user_sfx_dict';
 
 // ── Helper Algorithms ──────────────────────────────────────────────
-/** คำนวณ Levenshtein Distance เพื่อหาจำนวนครั้งในการแก้ไขตัวหนังสือ */
+/** คำนวณ Levenshtein Distance เพื่อหาจำนวนครั้งในการแก้ไขตัวหนังสือ (ใช้ 1D TypedArray เพื่อประสิทธิภาพสูงสุด) */
 export function getLevenshteinDistance(a: string, b: string): number {
-  const tmp: number[][] = [];
-  for (let i = 0; i <= a.length; i++) tmp[i] = [i];
-  for (let j = 0; j <= b.length; j++) tmp[0][j] = j;
+  if (a === b) return 0;
+  const aLen = a.length;
+  const bLen = b.length;
+  if (aLen === 0) return bLen;
+  if (bLen === 0) return aLen;
 
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      tmp[i][j] = Math.min(
-        tmp[i - 1][j] + 1,
-        tmp[i][j - 1] + 1,
-        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+  let prevRow = new Int32Array(bLen + 1);
+  let currRow = new Int32Array(bLen + 1);
+
+  for (let j = 0; j <= bLen; j++) {
+    prevRow[j] = j;
+  }
+
+  for (let i = 1; i <= aLen; i++) {
+    currRow[0] = i;
+    const charA = a.charCodeAt(i - 1);
+    for (let j = 1; j <= bLen; j++) {
+      const cost = charA === b.charCodeAt(j - 1) ? 0 : 1;
+      currRow[j] = Math.min(
+        prevRow[j] + 1,       // deletion
+        currRow[j - 1] + 1,   // insertion
+        prevRow[j - 1] + cost // substitution
       );
     }
+    const temp = prevRow;
+    prevRow = currRow;
+    currRow = temp;
   }
-  return tmp[a.length][b.length];
+
+  return prevRow[bLen];
 }
 
 /** คำนวณหาความคล้ายคลึงกัน (Similarity score: 0.0 - 1.0) */
@@ -385,6 +401,19 @@ export function getStringSimilarity(a: string, b: string): number {
   
   const distance = getLevenshteinDistance(normA, normB);
   return (maxLen - distance) / maxLen;
+}
+
+// ── In-Memory Memoization & Fast O(1) Lookup Maps ──────────────────
+let cachedMergedDict: SFXDictionary | null = null;
+let cachedExactMap: Record<SFXLanguage, Map<string, string>> | null = null;
+let lastUserDictRaw: string | null = null;
+let lastGlossaryEntriesRef: any = null;
+
+export function invalidateSFXCache(): void {
+  cachedMergedDict = null;
+  cachedExactMap = null;
+  lastUserDictRaw = null;
+  lastGlossaryEntriesRef = null;
 }
 
 // ── Dictionary Actions ─────────────────────────────────────────────
@@ -405,28 +434,50 @@ export function getUserDictionary(): Record<SFXLanguage, SFXDictionaryEntry[]> {
 export function saveUserDictionary(userDict: Record<SFXLanguage, SFXDictionaryEntry[]>): void {
   try {
     localStorage.setItem(USER_DICT_STORAGE_KEY, JSON.stringify(userDict));
+    invalidateSFXCache();
   } catch (e) {
     console.error('Failed to save User SFX Dictionary to localStorage', e);
   }
 }
 
-/** ผสานคลังคำเริ่มต้นร่วมกับคลังคำของผู้ใช้ */
+/** ผสานคลังคำเริ่มต้นร่วมกับคลังคำของผู้ใช้ (พร้อมระบบแคช In-Memory) */
 export function getMergedDictionary(): SFXDictionary {
+  let currentUserDictRaw: string | null = null;
+  try {
+    currentUserDictRaw = localStorage.getItem(USER_DICT_STORAGE_KEY);
+  } catch {
+    currentUserDictRaw = null;
+  }
+
+  let currentGlossaryEntries: any = null;
+  try {
+    currentGlossaryEntries = useGlossaryStore.getState().entries;
+  } catch {
+    currentGlossaryEntries = null;
+  }
+
+  // Fast cache hit check
+  if (
+    cachedMergedDict &&
+    cachedExactMap &&
+    currentUserDictRaw === lastUserDictRaw &&
+    currentGlossaryEntries === lastGlossaryEntriesRef
+  ) {
+    return cachedMergedDict;
+  }
+
   const userDict = getUserDictionary();
   
   // Fetch custom SFX entries from useGlossaryStore
   let customSfxEntries: SFXDictionaryEntry[] = [];
-  try {
-    const storeEntries = useGlossaryStore.getState().entries;
-    customSfxEntries = storeEntries
-      .filter((e) => e.isActive && e.type === 'SFX' && e.sourceText.trim())
-      .map((e) => ({
+  if (Array.isArray(currentGlossaryEntries)) {
+    customSfxEntries = currentGlossaryEntries
+      .filter((e: any) => e.isActive && e.type === 'SFX' && e.sourceText.trim())
+      .map((e: any) => ({
         source: e.sourceText.trim(),
         target: e.targetText.trim(),
         notes: 'คำแปลจากพจนานุกรมส่วนตัว (Custom Glossary)',
       }));
-  } catch (err) {
-    console.error('[sfxDictionaryService] Failed to load custom SFX from useGlossaryStore:', err);
   }
   
   const merged: SFXDictionary = {
@@ -455,12 +506,40 @@ export function getMergedDictionary(): SFXDictionary {
   merged.data.ko = deduplicate(merged.data.ko);
   merged.data.es = deduplicate(merged.data.es);
 
+  // สร้าง O(1) Exact Map Cache สำหรับทุกลำดับภาษา
+  const exactMap: Record<SFXLanguage, Map<string, string>> = {
+    en: new Map(),
+    jp: new Map(),
+    ko: new Map(),
+    es: new Map(),
+  };
+
+  const populateMap = (lang: SFXLanguage) => {
+    const list = merged.data[lang] || [];
+    for (const item of list) {
+      const key = item.source.trim().toLowerCase();
+      if (key && !exactMap[lang].has(key)) {
+        exactMap[lang].set(key, item.target);
+      }
+    }
+  };
+
+  populateMap('en');
+  populateMap('jp');
+  populateMap('ko');
+  populateMap('es');
+
+  cachedMergedDict = merged;
+  cachedExactMap = exactMap;
+  lastUserDictRaw = currentUserDictRaw;
+  lastGlossaryEntriesRef = currentGlossaryEntries;
+
   return merged;
 }
 
 /**
  * แปลเสียงเอฟเฟกต์ (SFX) จากพจนานุกรม
- * ค้นหาแบบ Exact match ก่อน หากไม่พบจะค้นหาแบบ Fuzzy match ภายใต้เกณฑ์ที่กำหนด
+ * ค้นหาแบบ Exact match ก่อน (O(1)) หากไม่พบจะค้นหาแบบ Fuzzy match ภายใต้เกณฑ์ที่กำหนด
  */
 export function translateSFX(
   text: string,
@@ -468,15 +547,18 @@ export function translateSFX(
   fuzzyThreshold = 0.75,
   _isEnFallback = false
 ): string | null {
-  const dict = getMergedDictionary();
-  const entries = dict.data[lang] || [];
   const normalizedInput = text.trim().toLowerCase();
-
   if (!normalizedInput) return null;
 
-  // 1st Phase: Exact match
-  const exact = entries.find(e => e.source.toLowerCase() === normalizedInput);
-  if (exact) return exact.target;
+  const dict = getMergedDictionary();
+  const exactMap = cachedExactMap?.[lang];
+
+  // 1st Phase: Exact match (O(1) Map Lookup)
+  if (exactMap && exactMap.has(normalizedInput)) {
+    return exactMap.get(normalizedInput)!;
+  }
+
+  const entries = dict.data[lang] || [];
 
   // 2nd Phase: Fuzzy match
   let bestMatch: SFXDictionaryEntry | null = null;
@@ -487,8 +569,22 @@ export function translateSFX(
     ? Math.max(fuzzyThreshold, 0.85)
     : fuzzyThreshold;
 
+  const inputLen = normalizedInput.length;
+
   for (const entry of entries) {
-    const score = getStringSimilarity(entry.source, normalizedInput);
+    const entrySourceNorm = entry.source.trim().toLowerCase();
+    const entryLen = entrySourceNorm.length;
+    const maxLen = Math.max(entryLen, inputLen);
+    if (maxLen === 0) continue;
+
+    // Pruning: ถ้าความยาวต่างกันมากเกินไปจนเป็นไปไม่ได้ที่จะได้ score >= effectiveThreshold ให้ข้ามทันที
+    const minPossibleScore = (maxLen - Math.abs(entryLen - inputLen)) / maxLen;
+    if (minPossibleScore < effectiveThreshold || minPossibleScore <= highestScore) {
+      continue;
+    }
+
+    const distance = getLevenshteinDistance(entrySourceNorm, normalizedInput);
+    const score = (maxLen - distance) / maxLen;
     if (score > highestScore && score >= effectiveThreshold) {
       highestScore = score;
       bestMatch = entry;

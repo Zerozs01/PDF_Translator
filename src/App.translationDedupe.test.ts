@@ -2005,7 +2005,7 @@ describe('shouldPreserveSourceLineForTranslation', () => {
 describe('Sentence-level Translation Caching & Deduplication', () => {
   test('retrieves translation from sentence cache and bypasses offline/online engine', async () => {
     const getSpy = vi.spyOn(dbService, 'getSentenceTranslationBatch');
-    const saveSpy = vi.spyOn(dbService, 'saveSentenceTranslation');
+    const saveBatchSpy = vi.spyOn(dbService, 'saveSentenceTranslationBatch').mockResolvedValue(true);
 
     getSpy.mockImplementation(async (texts, src, tgt, engine, mode) => {
       const results: Record<string, string> = {};
@@ -2014,8 +2014,6 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
       }
       return results;
     });
-
-    saveSpy.mockResolvedValue(true);
 
     const mockTranslateBatchOffline = vi.fn().mockResolvedValue(['ยินดีต้อนรับ']);
 
@@ -2050,17 +2048,19 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
       'th'
     );
 
-    expect(saveSpy).toHaveBeenCalledWith(
-      'Welcome',
-      'en',
-      'th',
-      'argos',
-      'official',
-      'ยินดีต้อนรับ'
-    );
+    expect(saveBatchSpy).toHaveBeenCalledWith([
+      {
+        sourceText: 'Welcome',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translatorEngine: 'argos',
+        translationMode: 'official',
+        translatedText: 'ยินดีต้อนรับ',
+      }
+    ]);
 
     getSpy.mockRestore();
-    saveSpy.mockRestore();
+    saveBatchSpy.mockRestore();
   });
 
   describe('Custom Glossary & Location Proper Noun Protection', () => {

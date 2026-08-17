@@ -766,6 +766,18 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:save-sentence-translation-batch', async (_, { items }) => {
+    if (!Array.isArray(items)) {
+      throw new Error('Invalid input: items must be an array');
+    }
+    try {
+      return SentenceTranslationDAO.saveBatch(items);
+    } catch (error) {
+      console.error('db:save-sentence-translation-batch error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:get-sentence-translation', async (_, { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }) => {
     if (!isValidString(sourceText) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode)) {
       throw new Error('Invalid input: all arguments must be non-empty strings');

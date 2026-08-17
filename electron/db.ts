@@ -1134,6 +1134,56 @@ export const SentenceTranslationDAO = {
     }
   },
 
+  saveBatch: (
+    items: Array<{
+      sourceText: string;
+      sourceLanguage: string;
+      targetLanguage: string;
+      translatorEngine: string;
+      translationMode: string;
+      translatedText: string;
+    }>
+  ): boolean => {
+    if (!db) throw new Error('DB not initialized');
+    if (!Array.isArray(items) || items.length === 0) return true;
+    const now = Date.now();
+    try {
+      const stmt = getStmt(`
+        INSERT INTO sentence_translation_cache (
+          source_text,
+          source_language,
+          target_language,
+          translator_engine,
+          translation_mode,
+          translated_text,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_text, source_language, target_language, translator_engine, translation_mode) DO UPDATE SET
+          translated_text = excluded.translated_text,
+          created_at = excluded.created_at
+      `);
+      const insertMany = db.transaction((entries: typeof items) => {
+        for (const entry of entries) {
+          stmt.run(
+            entry.sourceText,
+            entry.sourceLanguage.toLowerCase(),
+            entry.targetLanguage.toLowerCase(),
+            entry.translatorEngine.toLowerCase(),
+            entry.translationMode.toLowerCase(),
+            entry.translatedText,
+            now
+          );
+        }
+      });
+      insertMany(items);
+      return true;
+    } catch (error) {
+      console.error('[DB] Failed to save sentence translations batch:', error);
+      return false;
+    }
+  },
+
   get: (
     sourceText: string,
     sourceLanguage: string,

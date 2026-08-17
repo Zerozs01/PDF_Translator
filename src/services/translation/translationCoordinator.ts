@@ -563,7 +563,16 @@ export class TranslationCoordinator {
     if (uncachedItems.length > 0) {
       engineResults = await engine.translate(uncachedItems, options);
 
-      const savePromises = engineResults.map(async (res) => {
+      const itemsToSave: Array<{
+        sourceText: string;
+        sourceLanguage: string;
+        targetLanguage: string;
+        translatorEngine: string;
+        translationMode: string;
+        translatedText: string;
+      }> = [];
+
+      for (const res of engineResults) {
         if (res.success && res.translatedText) {
           const matchedItem = uncachedItems.find((ui) => ui.id === res.id);
           if (matchedItem) {
@@ -575,35 +584,41 @@ export class TranslationCoordinator {
             );
             if (wouldBeUntranslated) {
               console.warn('[TranslationCoordinator] Skipping cache save for low-quality translation:', matchedItem.text, '→', res.translatedText);
-              return;
+              continue;
             }
-            try {
-              await dbService.saveSentenceTranslation(
-                matchedItem.text,
-                options.sourceLanguage,
-                options.targetLanguage,
-                engineId,
-                options.translationMode,
-                res.translatedText
-              );
 
-              const cacheKey = `${options.sourceLanguage}:${options.targetLanguage}:${engineId}:${options.translationMode}:${matchedItem.text}`;
-              this.memoryCache.delete(cacheKey);
-              this.memoryCache.set(cacheKey, res.translatedText);
-              
-              while (this.memoryCache.size > this.maxCacheSize) {
-                const firstKey = this.memoryCache.keys().next().value;
-                if (firstKey !== undefined) {
-                  this.memoryCache.delete(firstKey);
-                }
-              }
-            } catch (saveError) {
-              console.warn('[TranslationCoordinator] Failed to save sentence to cache:', matchedItem.text, saveError);
-            }
+            itemsToSave.push({
+              sourceText: matchedItem.text,
+              sourceLanguage: options.sourceLanguage,
+              targetLanguage: options.targetLanguage,
+              translatorEngine: engineId,
+              translationMode: options.translationMode,
+              translatedText: res.translatedText,
+            });
+
+            const cacheKey = `${options.sourceLanguage}:${options.targetLanguage}:${engineId}:${options.translationMode}:${matchedItem.text}`;
+            this.memoryCache.delete(cacheKey);
+            this.memoryCache.set(cacheKey, res.translatedText);
           }
         }
-      });
-      await Promise.all(savePromises);
+      }
+
+      while (this.memoryCache.size > this.maxCacheSize) {
+        const firstKey = this.memoryCache.keys().next().value;
+        if (firstKey !== undefined) {
+          this.memoryCache.delete(firstKey);
+        } else {
+          break;
+        }
+      }
+
+      if (itemsToSave.length > 0) {
+        try {
+          await dbService.saveSentenceTranslationBatch(itemsToSave);
+        } catch (saveError) {
+          console.warn('[TranslationCoordinator] Failed to save batch sentences to cache:', saveError);
+        }
+      }
     }
 
     const cachedResults: TranslationResult[] = cachedItems.map((c) => ({

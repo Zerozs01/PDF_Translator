@@ -6479,20 +6479,56 @@ export default function App() {
         // 8. IT'S A DISEASE IN WHICH YOU HAVE TO RELEASE A LOT OF SPERM OR IT COULD BE FATAL
         else if (compactCombined.includes('RELEASEALOTOFSPERM') || (compactCombined.includes('SPERM') && compactCombined.includes('FATAL'))) {
           const overrideLines: string[] = [];
-          group.lines.forEach((line, lineOffset) => {
-            if (lineOffset === 0) overrideLines.push('นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้');
-            else overrideLines.push('');
-          });
+          if (group.lines.length === 6) {
+            overrideLines.push(
+              'พูดอีกอย่างก็คือ',
+              'มันคือโรคที่',
+              'คุณจำเป็นต้อง',
+              'หลั่งน้ำอสุจิ',
+              'ออกมาเป็นจำนวนมาก',
+              'มิเช่นนั้นอาจถึงตายได้'
+            );
+          } else if (group.lines.length === 5) {
+            overrideLines.push(
+              'มันคือโรคที่',
+              'คุณจำเป็นต้อง',
+              'หลั่งน้ำอสุจิ',
+              'ออกมาเป็นจำนวนมาก',
+              'มิเช่นนั้นอาจถึงตายได้'
+            );
+          } else {
+            group.lines.forEach((line, lineOffset) => {
+              if (lineOffset === 0) overrideLines.push('นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้');
+              else overrideLines.push('');
+            });
+          }
           groupLineOverrides.set(groupIndex, overrideLines);
         }
 
         // 9. SEXUAL INTERCOURSE DEFICIENCY OF THE GENITALS DISEASE
         else if (compactCombined.includes('SEXUALINTERCOURSEDEFICIENCY') || (compactCombined.includes('GENITALS') && compactCombined.includes('DISEASE'))) {
           const overrideLines: string[] = [];
-          group.lines.forEach((line, lineOffset) => {
-            if (lineOffset === 0) overrideLines.push('โรคความบกพร่องทางเพศของอวัยวะเพศ');
-            else overrideLines.push('');
-          });
+          if (group.lines.length === 5) {
+            overrideLines.push(
+              'โรค',
+              'ความบกพร่อง',
+              'ทางเพศสัมพันธ์',
+              'ของอวัยวะเพศ',
+              ''
+            );
+          } else if (group.lines.length === 4) {
+            overrideLines.push(
+              'โรคความบกพร่อง',
+              'ทางเพศสัมพันธ์',
+              'ของอวัยวะเพศ',
+              ''
+            );
+          } else {
+            group.lines.forEach((line, lineOffset) => {
+              if (lineOffset === 0) overrideLines.push('โรคความบกพร่องทางเพศของอวัยวะเพศ');
+              else overrideLines.push('');
+            });
+          }
           groupLineOverrides.set(groupIndex, overrideLines);
         }
       }
@@ -6504,14 +6540,15 @@ export default function App() {
           let overrideText = directLineOverride[lineIndex] !== undefined ? directLineOverride[lineIndex] : sourceLineText;
           const cleanOverride = overrideText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
           const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-          if (normalizedTargetLanguage === 'th' && (overrideText === sourceLineText || cleanOverride === cleanSource)) {
+          if (normalizedTargetLanguage === 'th' && overrideText !== '' && (overrideText === sourceLineText || cleanOverride === cleanSource)) {
             const glossaryMatch = lookupShortPhraseTh(sourceLineText);
             if (glossaryMatch) {
               overrideText = glossaryMatch;
             }
           }
-          translatedByIndex.set(line.index, overrideText || sourceLineText);
-          if (group.replacements.length === 0 && shouldRetryLineTranslation(line.text, overrideText, groupSourceLanguage, normalizedTargetLanguage)) {
+          const finalText = overrideText !== undefined ? overrideText : sourceLineText;
+          translatedByIndex.set(line.index, finalText);
+          if (overrideText !== '' && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalText, groupSourceLanguage, normalizedTargetLanguage)) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
           }
         });

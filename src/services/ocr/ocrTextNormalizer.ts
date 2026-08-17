@@ -643,6 +643,10 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/\bDISCOUR-\b/gi, 'DISCOURSE');
   normalized = normalized.replace(/\bTHEN\.\s*WE\s+SHOULD\b/gi, 'THEN, WE SHOULD');
   normalized = normalized.replace(/\bTHEN\.\s*WE\b/gi, 'THEN, WE');
+  normalized = normalized.replace(/\bTO\s+ME\s+tOVAy\.?/gi, 'TO ME TODAY.');
+  normalized = normalized.replace(/\bAIr\s+bath\.?/gi, 'Air bath.');
+  normalized = normalized.replace(/\bICHAN,\s*I['’]?LL\b/gi, "CHAN, I'LL");
+  normalized = normalized.replace(/\bSOME-THING\s+I\s+SAID-?\b/gi, 'SOME-THING I SAID-');
 
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,

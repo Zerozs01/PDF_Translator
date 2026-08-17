@@ -391,6 +391,27 @@ export const dbService = {
     }
   },
 
+  async saveSentenceTranslationBatch(
+    items: Array<{
+      sourceText: string;
+      sourceLanguage: string;
+      targetLanguage: string;
+      translatorEngine: string;
+      translationMode: string;
+      translatedText: string;
+    }>
+  ): Promise<boolean> {
+    try {
+      if (!isDbAvailable() || !Array.isArray(items) || items.length === 0) {
+        return false;
+      }
+      return await window.electronAPI.db.saveSentenceTranslationBatch?.(items) ?? false;
+    } catch (error) {
+      console.error('Failed to save sentence translations batch:', error);
+      return false;
+    }
+  },
+
   async getSentenceTranslation(
     sourceText: string,
     sourceLanguage: string,

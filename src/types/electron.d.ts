@@ -199,6 +199,16 @@ export interface ElectronAPI {
       translationMode: string,
       translatedText: string
     ) => Promise<boolean>;
+    saveSentenceTranslationBatch?: (
+      items: Array<{
+        sourceText: string;
+        sourceLanguage: string;
+        targetLanguage: string;
+        translatorEngine: string;
+        translationMode: string;
+        translatedText: string;
+      }>
+    ) => Promise<boolean>;
     getSentenceTranslation?: (
       sourceText: string,
       sourceLanguage: string,
