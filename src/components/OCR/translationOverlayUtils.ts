@@ -2,6 +2,7 @@ import { BBox, OCRLine, OCREngine, OCRPageResult } from '../../types';
 import { hasCurrentOCRTranslationCacheVersion, OCRPreviewMode, OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
 
 const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
@@ -416,6 +417,11 @@ export const resolveMissingOverlayLineFallbackText = (
   if (!source) return '';
   const normalizedTarget = normalizeTranslationLanguageKey(targetLanguage || '', 'th');
   if (normalizedTarget !== 'th') return source;
+
+  const dictMatch = lookupShortPhraseTh(source);
+  if (dictMatch) {
+    return preserveOverlaySourceTrailingPunctuation(source, dictMatch);
+  }
 
   if (/^AH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'อ๊ะ ฉัน');
   if (/^EH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เอ๋ ฉัน');
@@ -926,6 +932,11 @@ export const resolveTranslationOverlayContext = ({
             const oldTranslation = rawMap.get(bestOldIdx);
             if (oldTranslation) {
               translatedByIndexRaw.set(currentIdx, oldTranslation);
+            }
+          } else {
+            const dictMatch = lookupShortPhraseTh(currentText) || lookupShortPhraseTh(currentText.replace(/[^A-Za-z0-9]/g, ''));
+            if (dictMatch) {
+              translatedByIndexRaw.set(currentIdx, dictMatch);
             }
           }
         });

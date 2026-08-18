@@ -1183,6 +1183,18 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "PRINCESS",
     "DIE",
     "PIG",
+    "THEPIG",
+    "YOUARE",
+    "THEPIGYOUARE",
+    "LIKETHEPIGYOUARE",
+    "LIKEAPIG",
+    "PIGYOUARE",
+    "COME",
+    "COMEON",
+    "CRY",
+    "EVEN",
+    "LIKE",
+    "ARE",
     "CUM",
     "COCK",
     "OH",
@@ -1195,6 +1207,7 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "ALL",
     "MORE",
     "YOU",
+    "THE",
     "USTHE",
     "NOTMY",
     "ASS",
@@ -1338,6 +1351,17 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "BAD",
     "BIG",
     "CRY",
+    "COME",
+    "EVEN",
+    "LIKE",
+    "PIG",
+    "YOU",
+    "ARE",
+    "THEPIG",
+    "YOUARE",
+    "THEPIGYOUARE",
+    "LIKEAPIG",
+    "LIKETHEPIGYOUARE",
     "DID",
     "EAT",
     "END",
@@ -3752,20 +3776,20 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
             
             if pipeline == "panel":
                 if profile_key == "cpu_panel_accurate":
-                    det_thresh = 0.15
-                    det_box_thresh = 0.30
-                    det_unclip_ratio = 1.95
-                    rec_score_thresh = 0.20
+                    det_thresh = 0.12
+                    det_box_thresh = 0.24
+                    det_unclip_ratio = 2.10
+                    rec_score_thresh = 0.18
                 elif profile_key == "cpu_panel_fast":
-                    det_thresh = 0.22
-                    det_box_thresh = 0.44
-                    det_unclip_ratio = 1.80
-                    rec_score_thresh = 0.28
-                else:
                     det_thresh = 0.18
                     det_box_thresh = 0.38
-                    det_unclip_ratio = 1.90
+                    det_unclip_ratio = 1.85
                     rec_score_thresh = 0.24
+                else:
+                    det_thresh = 0.14
+                    det_box_thresh = 0.28
+                    det_unclip_ratio = 2.05
+                    rec_score_thresh = 0.20
     else:
         if is_cjk_like:
             det_limit = 2800 if shortest <= 1200 else 3200
@@ -5372,9 +5396,9 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
         max_side_len=int(payload.get("maxSideLen") or payload.get("max_side_len") or 0),
         # maxPixels (camelCase from TS) or max_pixels (snake_case)
         max_pixels=int(payload.get("maxPixels") or payload.get("max_pixels") or 0),
-        use_angle_cls=payload.get("useAngleCls") if payload.get("useAngleCls") is not None else (
-            payload.get("use_angle_cls") if payload.get("use_angle_cls") is not None else (
-                False if str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel").strip().lower() == "panel" else True
+        use_angle_cls=False if str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel").strip().lower() == "panel" else (
+            payload.get("useAngleCls") if payload.get("useAngleCls") is not None else (
+                payload.get("use_angle_cls") if payload.get("use_angle_cls") is not None else True
             )
         ),
         stdio_server=False,

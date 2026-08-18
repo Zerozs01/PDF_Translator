@@ -2629,6 +2629,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     ocrResult.pipelineProfile = activePipelineProfile;
     ocrResult.ocrEngine = activeEngine;
     ocrResult.ocrQualityProfile = resolvedQualityProfile;
+    ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+    ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+    if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+    ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
     setEngineWarmState(activeEngine, {
       phase: 'ready',
       progress: 100,

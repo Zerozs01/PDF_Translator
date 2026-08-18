@@ -44,7 +44,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v54'; // v54: Fix offline all pages cache hit fallback for YOU, FRONT and missing short phrase translations
+export const OCR_TRANSLATION_CACHE_VERSION = 'v61'; // v61: Force angle classification disabled for panel manga and full 154-word balloon recall
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
@@ -564,7 +564,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       // Guard 3: Spanish / Latin short phrase dictionary fallback (e.g. "MENTE CALIENTES Y" -> "รู้สึกอุ่นและ...")
       const isLatinCarryover = !translatedHasThai && /[a-zA-Z]/.test(item.text);
       if ((isLatinCarryover || !item.text) && sourceText) {
-        const dictHit = lookupShortPhraseTh(sourceText);
+        const dictHit = lookupShortPhraseTh(sourceText) || lookupShortPhraseTh(sourceText.replace(/[^A-Za-z0-9]/g, ''));
         if (dictHit && /[\u0E00-\u0E7F]/.test(dictHit) && dictHit !== item.text) {
           hasChanges = true;
           console.log(`[setTranslationCacheEntry] Short phrase dictionary upgrade on page ${pageNum} index ${item.index}: "${item.text}" → "${dictHit}" (source: "${sourceText}")`);

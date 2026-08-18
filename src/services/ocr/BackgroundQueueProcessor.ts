@@ -371,7 +371,7 @@ class BackgroundQueueProcessor {
           try {
             const cached = await dbService.getOCR(job.documentId, pageNum, job.engine);
             if (cached && cached.lines && cached.lines.length > 0) {
-              const cachedRawVersion = cached.ocrRawVersion ?? 0;
+              const cachedRawVersion = cached.ocrRawVersion ?? 1;
               const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
               const languageMismatch = normalizeLanguage(cached.language || '') !== normalizeLanguage(targetOcrLanguage);
               
@@ -468,7 +468,6 @@ class BackgroundQueueProcessor {
                 canvasContext: ctx,
                 viewport,
                 intent: 'display',
-                background: 'rgba(255,255,255,1)',
                 canvas
               } as any).promise;
 
@@ -516,6 +515,8 @@ class BackgroundQueueProcessor {
               ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
               : (options.pageSegMode === null ? undefined : options.pageSegMode);
 
+            const resolvedUseAngleCls = false;
+
             const ocrPromise = visionService.ocrForTextLayer(
               imageBlob,
               canvas.width,
@@ -530,7 +531,7 @@ class BackgroundQueueProcessor {
               job.engine,
               canvas.width * canvas.height,
               {
-                useAngleCls: job.useAngleCls !== undefined ? job.useAngleCls : options.useAngleCls
+                useAngleCls: resolvedUseAngleCls
               }
             );
 
@@ -540,9 +541,15 @@ class BackgroundQueueProcessor {
             ocrResult.language = normalizeLanguage(ocrLanguage);
             ocrResult.pipelineProfile = 'panel';
             ocrResult.ocrQualityProfile = resolvedQualityProfile;
+            ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+            ocrResult.ocrRawVersion = OCR_RAW_VERSION;
 
             ocrResult = applyPanelLanguageScriptGate(ocrResult, ocrLanguage);
             ocrResult = applyPanelSafetyLineDedup(ocrResult);
+            ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+            ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+            if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+            ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
 
             throwIfAborted();
 

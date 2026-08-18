@@ -8,6 +8,7 @@
 import type { BBox, OCRLine, OCRPageResult } from '../../types';
 import type { TextLayer, TextLayerGroup, LayerGroupType, LayerGroupingResult } from '../../types/layers';
 import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../translation/offlineTranslationService';
 
 // Group color palette (Canva-style)
 const GROUP_COLORS = [
@@ -591,9 +592,15 @@ export const buildLayerGroupsFromOCR = (
       layerIds.push(layerId);
 
       const targetIdx = typeof line.originalIndex === 'number' ? line.originalIndex : lineIdx;
-      const translatedText = translatedByIndex?.get(targetIdx) ?? translatedByIndex?.get(lineIdx);
-      const displayText = translatedText || normalizeInlineText(line.text);
+      let translatedText = translatedByIndex?.get(targetIdx) ?? translatedByIndex?.get(lineIdx);
       const sourceText = normalizeInlineText(line.text);
+      if (!translatedText || (/[a-zA-Z]/.test(translatedText) && !/[\u0E00-\u0E7F]/.test(translatedText))) {
+        const dictMatch = lookupShortPhraseTh(sourceText);
+        if (dictMatch) {
+          translatedText = dictMatch;
+        }
+      }
+      const displayText = translatedText || sourceText;
       const h = bboxHeight(line.bbox);
 
       allLayers.push({

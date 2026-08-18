@@ -33,6 +33,7 @@ import {
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
+import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
 import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
@@ -272,7 +273,9 @@ const PDFPageOverlay: React.FC<{
       if (!layer) return false;
       if (layer.userEdited) return true;
 
-      const text = String(layer.sourceText || layer.text || '').trim();
+      const sourceText = String(layer.sourceText || '').trim();
+      const currentText = String(layer.text || '').trim();
+      const text = sourceText || currentText;
       if (!text) return false;
 
       const compact = text.replace(/\s+/g, '');
@@ -299,7 +302,8 @@ const PDFPageOverlay: React.FC<{
       }
 
       const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
-      const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
+      const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(sourceText)
+        || /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(currentText);
 
       const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
       if (isPureSymbolNoise) return false;
@@ -307,7 +311,7 @@ const PDFPageOverlay: React.FC<{
       const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
       if (isVerticalLineJunk) return false;
 
-      const isSingleCharJunk = !hasCjkOrThai && asciiCompact.length === 1 && !/^[IAO]$/i.test(asciiCompact);
+      const isSingleCharJunk = !hasCjkOrThai && asciiCompact.length === 1 && !/^[IAO]$/i.test(asciiCompact) && !/^[0-9]$/.test(asciiCompact);
       if (isSingleCharJunk) return false;
 
       const bbox = layer.bbox;
@@ -316,7 +320,10 @@ const PDFPageOverlay: React.FC<{
         const height = Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
         const area = width * height;
 
-        const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
+        const isKnownShortWord = isKnownShortWordHelper(asciiCompact)
+          || Boolean(lookupShortPhraseTh(sourceText))
+          || Boolean(lookupShortPhraseTh(currentText))
+          || Boolean(lookupShortPhraseTh(asciiCompact));
         const isTinyJunkBox = !hasCjkOrThai && asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
 
         if (isTinyJunkBox) return false;
@@ -507,17 +514,23 @@ const PDFPageOverlay: React.FC<{
   }, [showDebugOverlay, debugPageOCR]);
 
   const overlayLayoutByIndex = useMemo(() => {
-    if (!translationOverlayContext.shouldRender || !currentPageOCRResolved) {
+    if (!currentPageOCRResolved) {
       return new Map<number, OverlayLayout>();
     }
 
     return computeOverlayLayoutMap(
       currentPageOCRResolved.lines.flatMap((line, index) => {
-        const translatedText = translationOverlayContext.translatedByIndex.get(index);
+        const lineLayer = currentPageLayers.find(l => l.lineIndex === index);
+        const fallbackText = lineLayer?.translatedText
+          || lineLayer?.text
+          || lookupShortPhraseTh(line.text)
+          || lookupShortPhraseTh(String(line.text || '').replace(/[^A-Za-z0-9]/g, ''))
+          || line.text;
+        const translatedText = translationOverlayContext.translatedByIndex.get(index) || fallbackText;
         if (!translatedText) return [];
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return [];
 
-        const layer = currentPageLayers.find(l => l.lineIndex === index);
+        const layer = lineLayer;
         const balloonId = layer?.groupId;
 
         const sourceBbox = resolveOverlaySourceBBox(line);
@@ -1377,7 +1390,28 @@ const PDFPageContainer: React.FC<{
               ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
               translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
               translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
-              translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
+              translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex.map((item: any) => {
+                if (item) {
+                  const source = String(item.sourceText || '').trim();
+                  const translated = String(item.text || '').trim();
+                  const cleanSource = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  const cleanTrans = translated.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  if (!translated || cleanSource === cleanTrans || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
+                    const glossaryMatch = lookupShortPhraseTh(source) || lookupShortPhraseTh(cleanSource);
+                    if (glossaryMatch) {
+                      return { ...item, text: glossaryMatch };
+                    }
+                    const words = source.trim().split(/\s+/);
+                    if (words.length > 1) {
+                      const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
+                      if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+                        return { ...item, text: translatedWords.join(' ') };
+                      }
+                    }
+                  }
+                }
+                return item;
+              }) : [],
             };
             ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
 

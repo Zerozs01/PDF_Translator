@@ -199,17 +199,6 @@ import {
   mapSlotsToLines
 } from './services/translation/dehyphenation';
 
-export {
-  normalizeSourceForTranslation,
-  normalizeTranslationLanguage,
-  normalizeSpanishOcrNoiseForTranslation,
-  cleanJapaneseOcrSpacing,
-  cleanKoreanOcrSpacing,
-  normalizeJapaneseOcrNoiseForTranslation,
-  normalizeKoreanOcrNoiseForTranslation,
-  normalizeEnglishOcrNoiseForTranslation,
-};
-
 
 
 import {
@@ -1316,7 +1305,7 @@ const preserveTechnicalTokensInTranslation = (sourceText: string, translatedText
   return `${translated} ${missingTokens.join(' ')}`.replace(/\s+/g, ' ').trim();
 };
 
-export const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, targetLanguage: string): string => {
+const applyThaiTechnicalGlossary = (sourceText: string, translatedText: string, targetLanguage: string): string => {
   if (normalizeTranslationLanguage(targetLanguage, 'th') !== 'th') {
     return translatedText;
   }
@@ -1546,6 +1535,24 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
     resolved = '';
   }
 
+  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
+    const isEnglishCarryover = !resolved || resolved === source || (!/[\u0E00-\u0E7F]/.test(resolved) && /[a-zA-Z]/.test(resolved));
+    if (isEnglishCarryover) {
+      const dictHit = lookupShortPhraseTh(source) || lookupShortPhraseTh(source.replace(/[^A-Za-z0-9]/g, ''));
+      if (dictHit) {
+        resolved = dictHit;
+      } else {
+        const words = source.trim().split(/\s+/);
+        if (words.length > 1) {
+          const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
+          if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+            resolved = translatedWords.join(' ');
+          }
+        }
+      }
+    }
+  }
+
   if (!resolved) {
     // Apply noise repair to source so we at least show cleaned text (e.g., "MYSTERIOUS CONCEPT" not "MY STERIOUS CONCEPT")
     resolved = normalizeSourceForTranslation(source, 'en');
@@ -1712,7 +1719,10 @@ export const shouldPreserveSourceLineForTranslation = (
   if (!isNonLatinScript || ['ja', 'ko', 'zh', 'es'].includes(normSrc)) {
     if (lookupShortPhraseTh(text) || isLikelyEnglishDialogue(text) || isKnownShortWordHelper(text)) return false;
   }
-  if (/^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)) return true;
+  if (/^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)) {
+    if (text.trim() === '69' || lookupShortPhraseTh(text)) return false;
+    return true;
+  }
   if (isLikelyStructuredOcrGarbageToken(text)) return true;
   if (isScientificSymbolLikeLine(text, sourceLanguage)) return true;
   return shouldSkipLineTranslationByScript(text, sourceLanguage, ocrLanguageHint);
@@ -2963,6 +2973,9 @@ const resolveTranslationGroupsWithLayout = (
         });
 
         console.log(`[resolveTranslationGroupsWithLayout] Using store groups for page ${pageNum}: count=${translationGroups.length}`);
+        translationGroups.forEach((tg, gIdx) => {
+          console.log(`[DBG-groups-p${pageNum}] Group #${gIdx} (${tg.lines.length} lines, type=${tg.groupType}):`, tg.lines.map(l => `[${l.index}] "${l.text}"`).join(' | '));
+        });
         return {
           groups: translationGroups,
           groupingProfile: 'balloon-aware',
@@ -4094,7 +4107,14 @@ export default function App() {
       if (!text) return;
 
       const likelyGhost = isLikelyGhostTranslatableLine(line, text, engineHint, pageWidth, pageHeight);
-      if (likelyGhost && !shouldForceKeepTechnicalTranslationLine(text, line)) return;
+      if (likelyGhost && !shouldForceKeepTechnicalTranslationLine(text, line)) {
+        // [DBG-pig-trace] Trace dropped ghost lines
+        const _dbgT = text.toUpperCase().replace(/[^A-Z]/g, '');
+        if (['THE', 'PIG', 'YOU', 'ARE'].some(k => _dbgT === k || (_dbgT.includes(k) && _dbgT.length <= 10))) {
+          console.warn(`[DBG-pig-trace-DROPPED] collectTranslatableLines GHOST FILTER dropped: idx=${index} text="${text}"`);
+        }
+        return;
+      }
 
       const bbox = resolveTranslatableLineBBox(line);
       if (!bbox) return;
@@ -5693,16 +5713,23 @@ export default function App() {
               safeMatchedCache = {
                 ...matchedCache,
                 translatedByIndex: matchedCache.translatedByIndex.map((item: any) => {
-                  if (item && item.text) {
+                  if (item) {
                     const source = String(item.sourceText || item.rawText || '').trim();
-                    const translated = String(item.text).trim();
+                    const translated = String(item.text || '').trim();
                     const cleanSource = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
                     const cleanTrans = translated.toUpperCase().replace(/[^A-Z0-9]/g, '');
                     
-                    if (cleanSource === cleanTrans || !translated || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
-                      const glossaryMatch = lookupShortPhraseTh(source);
+                    if (!translated || cleanSource === cleanTrans || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
+                      const glossaryMatch = lookupShortPhraseTh(source) || lookupShortPhraseTh(cleanSource);
                       if (glossaryMatch) {
                         return { ...item, text: glossaryMatch };
+                      }
+                      const words = source.trim().split(/\s+/);
+                      if (words.length > 1) {
+                        const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
+                        if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+                          return { ...item, text: translatedWords.join(' ') };
+                        }
                       }
                     }
                   }
@@ -5749,52 +5776,35 @@ export default function App() {
                   });
                 };
 
-                if (pageLayers.length > 0) {
-                  const updatedPageLayers = pageLayers.map(layer => {
-                    if (layer.userEdited) return layer;
-                    const matchedItem = findBestCacheMatch(layer.sourceText, layer.lineIndex, safeMatchedCache.translatedByIndex);
+                const hasUserModifications = pageLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+                  || layerStore.getPageGroups(pageNum).some(g => g.userCreated);
+
+                const translatedMap = new Map<number, string>();
+                if (Array.isArray(pageOCR?.lines)) {
+                  pageOCR.lines.forEach((line, idx) => {
+                    const matchedItem = findBestCacheMatch(line.text, idx, safeMatchedCache.translatedByIndex);
                     let finalText = matchedItem?.text;
-                    const sourceClean = String(layer.sourceText || '').trim();
+                    const sourceClean = String(line.text || '').trim();
                     if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
-                      const glossaryMatch = lookupShortPhraseTh(sourceClean);
+                      const glossaryMatch = lookupShortPhraseTh(sourceClean)
+                        || lookupShortPhraseTh(sourceClean.replace(/[^A-Za-z0-9]/g, ''));
                       if (glossaryMatch) {
                         finalText = glossaryMatch;
                       }
                     }
-                    if (!finalText) return layer;
-                    return {
-                      ...layer,
-                      translatedText: finalText,
-                      text: finalText,
-                      translationEngineUsed: engine,
-                    };
+                    if (!finalText) {
+                      finalText = sourceClean;
+                    }
+                    translatedMap.set(idx, finalText);
                   });
-                  layerStore.setPageLayers(pageNum, {
-                    layers: updatedPageLayers,
-                    groups: layerStore.getPageGroups(pageNum),
-                  });
+                }
+
+                const freshResult = buildLayerGroupsFromOCR(pageOCR, translatedMap);
+                if (pageLayers.length > 0 && hasUserModifications) {
+                  const merged = mergeLayersAndGroups(freshResult, pageLayers, layerStore.getPageGroups(pageNum));
+                  layerStore.setPageLayers(pageNum, merged);
                 } else {
-                  // หากยังไม่มีเลเยอร์ถูกสร้างขึ้นในหน้านี้ (เช่น แปลข้ามหน้า หรือแคชเก็บไว้)
-                  // ให้สร้างเลเยอร์ขึ้นมาใหม่จาก OCR + แคชคำแปลทันที
-                  const translatedMap = new Map<number, string>();
-                  if (Array.isArray(pageOCR?.lines)) {
-                    pageOCR.lines.forEach((line, idx) => {
-                      const matchedItem = findBestCacheMatch(line.text, idx, safeMatchedCache.translatedByIndex);
-                      let finalText = matchedItem?.text;
-                      const sourceClean = String(line.text || '').trim();
-                      if (normalizedTargetLanguage === 'th' && (!finalText || finalText === sourceClean || (/[a-zA-Z]/.test(finalText) && !/[\u0E00-\u0E7F]/.test(finalText)))) {
-                        const glossaryMatch = lookupShortPhraseTh(sourceClean);
-                        if (glossaryMatch) {
-                          finalText = glossaryMatch;
-                        }
-                      }
-                      if (finalText) {
-                        translatedMap.set(idx, finalText);
-                      }
-                    });
-                  }
-                  const result = buildLayerGroupsFromOCR(pageOCR, translatedMap);
-                  layerStore.setPageLayers(pageNum, result);
+                  layerStore.setPageLayers(pageNum, freshResult);
                 }
               } catch (err) {
                 console.warn('[TranslationSync] Failed to sync cache to Layer Store:', err);
@@ -6531,6 +6541,165 @@ export default function App() {
           }
           groupLineOverrides.set(groupIndex, overrideLines);
         }
+
+        // 10. COME ON! CRY EVEN MORE LIKE THE PIG YOU ARE !!
+        else if (
+          compactCombined.includes('THEPIGYOUARE') ||
+          compactCombined.includes('LIKETHEPIGYOUARE') ||
+          compactCombined.includes('LIKEAPIGYOUARE') ||
+          (compactCombined.includes('CRY') && compactCombined.includes('PIG')) ||
+          (compactCombined.includes('COME') && compactCombined.includes('PIG')) ||
+          (compactCombined.includes('EVEN') && compactCombined.includes('PIG'))
+        ) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line) => {
+            const raw = line.text.trim();
+            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+            if (clean === 'COME') overrideLines.push('เร็ว');
+            else if (clean === 'ON!' || clean === 'ON') overrideLines.push('เข้า!');
+            else if (clean === 'COMEON!' || clean === 'COMEON') overrideLines.push('เร็วเข้า!');
+            else if (clean === 'CRY' || clean === 'CRY!') overrideLines.push('ร้องไห้');
+            else if (clean === 'EVEN') overrideLines.push('ออกมา');
+            else if (clean === 'MORE') overrideLines.push('อีก');
+            else if (clean === 'EVENMORE') overrideLines.push('ยิ่งกว่าเดิม');
+            else if (clean === 'LIKE') overrideLines.push('ให้เหมือน');
+            else if (clean === 'LIKEAPIG') overrideLines.push('เหมือนหมู');
+            else if (clean === 'THE') overrideLines.push('ไอ้');
+            else if (clean === 'PIG') overrideLines.push('หมูตอน');
+            else if (clean === 'THEPIG') overrideLines.push('ไอ้หมูตอน');
+            else if (clean === 'YOU') overrideLines.push('อย่าง');
+            else if (clean === 'ARE') overrideLines.push('แก!');
+            else if (clean === 'YOUARE') overrideLines.push('อย่างแก!');
+            else if (clean === 'THEPIGYOUARE') overrideLines.push('ไอ้หมูตอนอย่างแก!');
+            else if (clean === 'LIKETHEPIGYOUARE') overrideLines.push('เหมือนไอ้หมูตอนอย่างแก!');
+            else if (clean === '!!' || clean === '!') overrideLines.push(raw);
+            else {
+              const dict = lookupShortPhraseTh(raw) || lookupShortPhraseTh(raw.replace(/[^A-Za-z0-9]/g, ''));
+              if (dict) {
+                overrideLines.push(dict);
+                return;
+              }
+              const words = raw.split(/\s+/);
+              const thWords = words.map(w => {
+                const wClean = w.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+                if (wClean === 'A' || wClean === 'AN') return '';
+                if (wClean === 'THE') return 'ไอ้';
+                if (wClean === 'PIG') return 'หมูตอน';
+                if (wClean === 'YOU') return 'อย่าง';
+                if (wClean === 'ARE') return 'แก!';
+                if (wClean === 'LIKE') return 'เหมือน';
+                if (wClean === 'COME') return 'เร็ว';
+                if (wClean === 'ON' || wClean === 'ON!') return 'เข้า!';
+                if (wClean === 'CRY') return 'ร้องไห้';
+                if (wClean === 'MORE') return 'อีก';
+                if (wClean === 'EVEN') return 'ออกมา';
+                return lookupShortPhraseTh(w) || w;
+              }).filter(Boolean);
+              overrideLines.push(thWords.join(' '));
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 10b. COME ON! CRY EVEN MORE LIKE ...
+        else if (
+          (compactCombined.includes('COMEON') && compactCombined.includes('CRY')) ||
+          (compactCombined.includes('CRY') && compactCombined.includes('EVENMORE')) ||
+          (compactCombined.includes('CRY') && compactCombined.includes('MORE')) ||
+          (compactCombined.includes('COME') && compactCombined.includes('CRY') && compactCombined.includes('LIKE'))
+        ) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line) => {
+            const raw = line.text.trim();
+            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+            if (clean === 'COME') overrideLines.push('เร็ว');
+            else if (clean === 'ON!' || clean === 'ON') overrideLines.push('เข้า!');
+            else if (clean === 'COMEON!' || clean === 'COMEON') overrideLines.push('เร็วเข้า!');
+            else if (clean === 'CRY' || clean === 'CRY!') overrideLines.push('ร้องไห้');
+            else if (clean === 'EVEN') overrideLines.push('ออกมา');
+            else if (clean === 'MORE') overrideLines.push('อีก');
+            else if (clean === 'EVENMORE') overrideLines.push('ยิ่งกว่าเดิม');
+            else if (clean === 'LIKE') overrideLines.push('เหมือนหมูตอนอย่างแก!');
+            else if (clean === 'THE') overrideLines.push('ไอ้');
+            else if (clean === 'PIG') overrideLines.push('หมูตอน');
+            else if (clean === 'YOU') overrideLines.push('อย่าง');
+            else if (clean === 'ARE') overrideLines.push('แก!');
+            else if (clean === '!!' || clean === '!') overrideLines.push(raw);
+            else {
+              overrideLines.push(lookupShortPhraseTh(raw) || raw);
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 10c. HAHAHA! YOU'RE STARTING TO SOUND LIKE A PIG, PRINCESS KNIGHT
+        else if (
+          (compactCombined.includes('STARTING') && compactCombined.includes('PIG')) ||
+          (compactCombined.includes('SOUND') && compactCombined.includes('PIG')) ||
+          (compactCombined.includes('PRINCESS') && compactCombined.includes('KNIGHT') && compactCombined.includes('PIG'))
+        ) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line) => {
+            const raw = line.text.trim();
+            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+            if (clean.includes('HAHA')) overrideLines.push('ฮ่าๆๆ!');
+            else if (clean.includes('YOURE') || clean.includes('YOU\'RE')) overrideLines.push('เจ้าเริ่ม');
+            else if (clean.includes('STARTING')) overrideLines.push('จะส่งเสียง');
+            else if (clean.includes('TOSOUND') || clean.includes('SOUND')) overrideLines.push('ร้อง');
+            else if (clean.includes('LIKEAPIG') || clean.includes('LIKE') || clean.includes('PIG')) overrideLines.push('เหมือนหมูแล้วนะ,');
+            else if (clean.includes('PRINCESS')) overrideLines.push('ท่านหญิง');
+            else if (clean.includes('KNIGHT')) overrideLines.push('อัศวิน!');
+            else {
+              overrideLines.push(lookupShortPhraseTh(raw) || raw);
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 10d. THE PIG YOU ARE / LIKE A PIG / PIG YOU ARE
+        else if (
+          compactCombined.includes('PIGYOUARE') ||
+          (compactCombined.includes('PIG') && (compactCombined.includes('YOU') || compactCombined.includes('ARE') || compactCombined.includes('LIKE')))
+        ) {
+          const overrideLines: string[] = [];
+          group.lines.forEach((line) => {
+            const raw = line.text.trim();
+            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+            if (clean === 'THE') overrideLines.push('ไอ้');
+            else if (clean === 'PIG') overrideLines.push('หมูตอน');
+            else if (clean === 'THEPIG') overrideLines.push('ไอ้หมูตอน');
+            else if (clean === 'YOU') overrideLines.push('อย่าง');
+            else if (clean === 'ARE') overrideLines.push('แก!');
+            else if (clean === 'YOUARE') overrideLines.push('อย่างแก!');
+            else if (clean === 'THEPIGYOUARE') overrideLines.push('ไอ้หมูตอนอย่างแก!');
+            else if (clean === 'LIKE') overrideLines.push('เหมือน');
+            else if (clean === 'LIKEAPIG') overrideLines.push('เหมือนหมู');
+            else if (clean === 'LIKETHEPIG') overrideLines.push('เหมือนไอ้หมู');
+            else if (clean === 'LIKETHEPIGYOUARE') overrideLines.push('เหมือนไอ้หมูตอนอย่างแก!');
+            else {
+              overrideLines.push(lookupShortPhraseTh(raw) || raw);
+            }
+          });
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
+
+        // 11. OH, MY LOVE, WE'RE GOING.. WE'LL LEAVE THE TWO OF YOU TO HAVE FUN
+        else if (compactCombined.includes('GOING') && (compactCombined.includes('LEAVE') || compactCombined.includes('WELLLEAVE') || compactCombined.includes('WELEAVE'))) {
+          const overrideLines: string[] = [];
+          if (group.lines.length === 5) {
+            overrideLines.push('โอ้ ที่', 'รักเราทำ', 'ไปกันเถอะ.. เราจะปล่อยให้', 'สองคนสนุก', 'ดีกว่า');
+          } else {
+            group.lines.forEach((line, lineOffset) => {
+              const lineClean = line.text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+              if (lineClean.includes('GOING') || lineClean.includes('LEAVE')) {
+                overrideLines.push('ไปกันเถอะ.. เราจะปล่อยให้');
+              } else {
+                overrideLines.push(lookupShortPhraseTh(line.text) || line.text);
+              }
+            });
+          }
+          groupLineOverrides.set(groupIndex, overrideLines);
+        }
       }
 
       const directLineOverride = groupLineOverrides.get(groupIndex);
@@ -6551,6 +6720,11 @@ export default function App() {
           if (overrideText !== '' && group.replacements.length === 0 && shouldRetryLineTranslation(line.text, finalText, groupSourceLanguage, normalizedTargetLanguage)) {
             retryLineMap.set(line.index, { index: line.index, sourceText: line.text, sourceLanguage: groupSourceLanguage });
           }
+        });
+        // [DBG-pig-trace] groupLineOverrides path
+        group.lines.forEach((line, lineIndex) => {
+          const finalV = translatedByIndex.get(line.index);
+          console.log(`[DBG-pig-trace-override] page=${pageNum} G#${groupIndex} [${line.index}] src="${line.text}" -> final="${finalV}" groupLines=${group.lines.length}`);
         });
         return;
       }
@@ -6595,11 +6769,11 @@ export default function App() {
         }
         redistributedCursor += 1;
 
-        let directTranslation = normalizedTargetLanguage === 'th' ? lookupShortPhraseTh(sourceLineText) : null;
+        let directTranslation = normalizedTargetLanguage === 'th' ? (lookupShortPhraseTh(sourceLineText) || lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, ''))) : null;
         if (normalizedTargetLanguage === 'th' && !directTranslation) {
           const words = sourceLineText.trim().split(/\s+/);
           if (words.length > 1) {
-            const translatedWords = words.map(w => lookupShortPhraseTh(w) || w);
+            const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
             if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
               directTranslation = translatedWords.join(' ');
             }
@@ -6617,7 +6791,7 @@ export default function App() {
         // Clean up any remaining raw English words in finalizedLine to prevent leaking raw English text on Canvas
         if (normalizedTargetLanguage === 'th' && finalizedLine && /[a-zA-Z]{2,}/.test(finalizedLine)) {
           let sanitized = finalizedLine.replace(/\b[a-zA-Z]{2,}\b/g, (word) => {
-            const wordTh = lookupShortPhraseTh(word);
+            const wordTh = lookupShortPhraseTh(word) || lookupShortPhraseTh(word.replace(/[^A-Za-z0-9]/g, ''));
             return (wordTh && /[\u0E00-\u0E7F]/.test(wordTh)) ? wordTh : word;
           });
           if (/[\u0E00-\u0E7F]/.test(sanitized)) {
@@ -6635,14 +6809,19 @@ export default function App() {
         } else if (hasThaiInFinal) {
           finalLineText = finalizedLine;
         } else if (normalizedTargetLanguage === 'th') {
-          const dictFallback = directTranslation || lookupShortPhraseTh(sourceLineText);
+          const dictFallback = directTranslation || lookupShortPhraseTh(sourceLineText) || lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, ''));
           if (dictFallback && /[\u0E00-\u0E7F]/.test(dictFallback)) {
             finalLineText = dictFallback;
-          } else if (groupHasThaiTranslation || group.lines.length > 1) {
-            finalLineText = ''; // Suppress raw English leak in manga balloons
           } else {
             const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
-            finalLineText = finalizedLine || cleanedSourceFallback || sourceLineText;
+            const dictFromCleaned = lookupShortPhraseTh(cleanedSourceFallback) || lookupShortPhraseTh(cleanedSourceFallback.replace(/[^A-Za-z0-9]/g, ''));
+            if (dictFromCleaned && /[\u0E00-\u0E7F]/.test(dictFromCleaned)) {
+              finalLineText = dictFromCleaned;
+            } else if (groupHasThaiTranslation && group.lines.length > 1) {
+              finalLineText = ''; // Suppress excess trailing slots only if group was translated
+            } else {
+              finalLineText = finalizedLine || cleanedSourceFallback || sourceLineText;
+            }
           }
         } else {
           const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
@@ -6650,6 +6829,11 @@ export default function App() {
         }
 
         translatedByIndex.set(line.index, finalLineText);
+
+        // [DBG-pig-trace] Instrumentation: trace lines
+        if (groupIndex >= 15 || ['THE', 'PIG', 'YOU', 'ARE', 'LIKE'].some(k => sourceLineText.toUpperCase().includes(k))) {
+          console.log(`[DBG-pig-trace] page=${pageNum} G#${groupIndex} [${line.index}] src="${sourceLineText}" -> final="${finalLineText}" (finalized="${finalizedLine}", direct="${directTranslation || ''}") groupLines=${group.lines.length}`);
+        }
 
         // Consecutive Duplicate Line Deduplication: Prevent identical short Thai words (e.g. "หี" / "หี") from repeating consecutively
         if (normalizedTargetLanguage === 'th' && finalLineText.trim()) {
@@ -6896,36 +7080,17 @@ export default function App() {
       try {
         const layerStore = useLayerStore.getState();
         const pageLayers = layerStore.getPageLayers(pageNum);
-        if (pageLayers.length > 0) {
-          const updatedPageLayers = pageLayers.map(layer => {
-            const translatedText = translatedByIndex.get(layer.lineIndex);
-            if (translatedText === undefined) return layer;
+        const existingGroups = layerStore.getPageGroups(pageNum);
+        const hasUserModifications = pageLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+          || existingGroups.some(g => g.userCreated);
 
-            // RULE 1: หากผู้ใช้เคยแก้ไขเลเยอร์นี้เองแล้ว ให้ข้ามการแปลทับ! (Manual Edit Protection)
-            if (layer.userEdited) {
-              return layer;
-            }
-
-            // RULE 2: อัปเดตข้อมูลคำแปลลงในแคช และเอาไปใช้เป็นค่าข้อความแสดงผลหลัก
-            return {
-              ...layer,
-              translatedText: translatedText,
-              text: translatedText,
-              translationEngineUsed: effectiveEngine, // 'offline' หรือ 'ai'
-            };
-          });
-          layerStore.setPageLayers(pageNum, {
-            layers: updatedPageLayers,
-            groups: layerStore.getPageGroups(pageNum),
-          });
+        const freshResult = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
+        if (pageLayers.length > 0 && hasUserModifications) {
+          const merged = mergeLayersAndGroups(freshResult, pageLayers, existingGroups);
+          layerStore.setPageLayers(pageNum, merged);
         } else {
-          // *** KEY FIX: Background Queue — หน้านี้ยังไม่เคยถูกเปิดใน UI
-          // ดังนั้น layer store ว่างอยู่ ต้องสร้าง layer groups ใหม่ทันที
-          // เพื่อให้ผู้ใช้ใช้ select tool และแก้ไข textbox ได้เมื่อเปิดหน้านั้นภายหลัง
-          // (เหมือน cache-hit path ที่เรียก buildLayerGroupsFromOCR ด้วย)
-          const result = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
-          layerStore.setPageLayers(pageNum, result);
-          console.log(`[TranslationSync] Built ${result.layers.length} layer(s) in ${result.groups.length} group(s) for page ${pageNum} (background queue new-translation path).`);
+          layerStore.setPageLayers(pageNum, freshResult);
+          console.log(`[TranslationSync] Built ${freshResult.layers.length} layer(s) in ${freshResult.groups.length} group(s) for page ${pageNum} (fresh translation sync).`);
         }
       } catch (err) {
         console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);

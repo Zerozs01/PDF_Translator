@@ -545,6 +545,18 @@ describe('TranslationCoordinator & Engines', () => {
         { id: 'u46', text: 'QLIET!', groupType: 'balloon' },
         { id: 'u47', text: 'ACOWARD', groupType: 'balloon' },
         { id: 'u48', text: 'HER POSIT I ON', groupType: 'balloon' },
+        { id: 'u49', text: 'SO.. BASICALLY...', groupType: 'balloon' },
+        { id: 'u50', text: "GOING.. WE'LL LEAVE", groupType: 'balloon' },
+        { id: 'u51', text: "(GOING.. WE'LL LEAVE)", groupType: 'balloon' },
+        { id: 'u52', text: "SHIT.. THIS'", groupType: 'balloon' },
+        { id: 'u53', text: 'PLEASURABLE… TO TAKE', groupType: 'balloon' },
+        { id: 'u54', text: 'Sourge', groupType: 'sfx' },
+        { id: 'u55', text: 'tAhn', groupType: 'sfx' },
+        { id: 'u56', text: 'WHAT IS IT~~', groupType: 'balloon' },
+        { id: 'u57', text: '..REALLY WANNA', groupType: 'balloon' },
+        { id: 'u58', text: 'POSSESS, SEEMS', groupType: 'balloon' },
+        { id: 'u59', text: '69', groupType: 'balloon' },
+        { id: 'u60', text: "(YUUTO'S MOM)", groupType: 'balloon' },
       ];
 
       const results = await translationCoordinator.runTranslation('argos', items, {
@@ -603,6 +615,18 @@ describe('TranslationCoordinator & Engines', () => {
         'u46': 'เงียบ!',
         'u47': 'คนขี้ขลาด',
         'u48': 'ตำแหน่งของเธอ',
+        'u49': 'สรุปก็คือ...',
+        'u50': 'ไปกันเถอะ.. เราจะปล่อยให้',
+        'u51': '(ไปกันเถอะ.. เราจะปล่อยให้)',
+        'u52': 'เชี่ยเอ๊ย.. นี่มัน',
+        'u53': 'สุขสมเหลือเกิน...ที่จะได้รับ',
+        'u54': 'พรวดดด',
+        'u55': 'อ๊าา',
+        'u56': 'อะไรเหรอ~~',
+        'u57': 'อยากจริงๆ',
+        'u58': 'ดูเหมือนจะครอบงำ',
+        'u59': '69',
+        'u60': '(แม่ของยูโตะ)',
       };
 
       Object.entries(expected).forEach(([id, val]) => {

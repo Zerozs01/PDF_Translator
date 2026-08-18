@@ -22,9 +22,14 @@
 - **สาเหตุ:** `runCurrentPageTranslation` ใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) อัปเดต `useOCRTextLayerStore` และ `useLayerStore` โดยไม่ได้เช็คว่าตรงกับเอกสารที่เปิดอยู่หรือไม่ ส่งผลให้งานพื้นหลังของไฟล์ที่ 2 ไปเขียนทับ in-memory state ของไฟล์ที่ 1
 - **การแก้ไข:** เพิ่มเงื่อนไข `isActiveDoc` ครอบการอัปเดต in-memory store ทั้งหมด ให้เฉพาะงานของ active document เท่านั้นที่แตะต้อง UI state ส่วนงานพื้นหลังบันทึกลงเฉพาะ SQLite DB
 
-### 🐞 1.4 Last Page Memory & IntersectionObserver Conflict (ไม่จำหน้าที่เคยเปิด)
-- **สาเหตุ:** เมื่อเปิดไฟล์เดิม `IntersectionObserver` ของ Page 1 ตรวจพบว่าหน้า 1 อยู่ใน Viewport ระหว่างโหลด และสั่ง `setPage(1)` ทับค่าหน้าเดิมในฐานข้อมูลทันที
-- **การแก้ไข:** เพิ่ม `isProgrammaticScrollRef` ล็อค Observer ขณะโหลดไฟล์ที่ `currentPage > 1` และสั่ง scroll ไปยังหน้าเดิมทันทีก่อนปลดล็อค พร้อมทั้งเพิ่มการกู้คืน `last_page` ใน `loadProject` ([useProjectStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useProjectStore.ts))
+### 🐞 1.5 Dialogue Keep & Fragmentation (THE PIG YOU ARE / LIKE A PIG Dialogue Preservation)
+- **สาเหตุ:** 
+  - คำศัพท์สั้นในบอลลูนคำพูดแนวตั้ง (`THE`, `PIG`, `YOU`, `ARE`, `COME`, `CRY`, `LIKE`, `MORE`) ไม่มีอยู่ใน `PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS` และ `KNOWN_SHORT_WORDS` ของ Python Bridge ส่งผลให้บางกรณีโดน Single-character/noise prune
+  - ใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) กฎ Rule 10b เมื่อจับกลุ่มได้ 6 บรรทัด (`COME`, `ON!`, `CRY`, `EVEN`, `MORE`, `LIKE`) ดันแปลท่อนท้ายว่า `"สิ"` โดยตัดความหมายของ `"ให้เหมือนกับหมูอย่างแก"` ออกไปทั้งหมด
+- **การแก้ไข:**
+  - เพิ่มคีย์บทสนทนา `THE`, `PIG`, `YOU`, `ARE`, `COME`, `LIKE`, `THEPIGYOUARE` ลงใน `PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS`, `LATIN_SHORT_KEEP_TOKENS` และ `KNOWN_SHORT_WORDS` ฝั่ง Python Bridge และ JS Safety Dedup
+  - อัปเดตกฎ Rule 10, 10b, 10d ใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) ให้แปลความหมายประโยคเต็ม `"เร็วเข้า! ร้องไห้ออกมาอีก ให้เหมือนหมูตอนอย่างแก!"` ครบถ้วน ไม่ว่าจะจับได้แบบ 6 บรรทัดหรือ 10 บรรทัด
+  - บั๊มพ์แคชเป็น `v59` ใน [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts)
 
 ---
 

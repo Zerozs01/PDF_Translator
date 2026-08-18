@@ -145,6 +145,8 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
       { source: 'Blurge', target: 'บลั๊กก', notes: 'เสียงของเหลวพุ่ง' },
       { source: 'Pwah', target: 'พวาห์', notes: 'เสียงพ่นลมหายใจ/ของเหลว' },
       { source: 'Splurge', target: 'พรวดดด', notes: 'เสียงทะลัก พรวดดด' },
+      { source: 'Sourge', target: 'พรวดดด', notes: 'Splurge OCR noise variant' },
+      { source: 'tAhn', target: 'อ๊าา', notes: 'เสียงคราง Ahh OCR noise variant' },
       { source: 'Twitch', target: 'กระตุก', notes: 'เสียงหรืออาการกระตุก' },
       { source: 'Twitcht', target: 'กระตุก', notes: 'เสียงหรืออาการกระตุก (OCR variant)' },
       { source: 'Slap', target: 'แป๊ะ', notes: 'เสียงตบ แป๊ะ' },

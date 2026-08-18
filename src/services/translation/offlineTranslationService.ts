@@ -100,8 +100,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'would': 'คงจะ', 'would...': 'คงจะ...', 'would!': 'คงจะ!',
   'woman would': 'ผู้หญิงจะ', 'woman would be': 'ผู้หญิงจะ...', 'a normal woman would': 'ผู้หญิงธรรมดาจะ',
   'would be dead': 'คงตายไปแล้ว', 'would be dead by now': 'ป่านนี้คงตายไปแล้ว', 'would be dead by now!': 'ป่านนี้คงตายไปแล้ว!',
-  'the pig you are': 'ไอ้หมูตอนอย่างแก', 'the pig you are!': 'ไอ้หมูตอนอย่างแก!', 'the pig you are!!': 'ไอ้หมูตอนอย่างแก!!', 'the pig that you are': 'ไอ้หมูตอนอย่างแก',
-  'like the pig you are': 'เหมือนเจ้าหมูอย่างคุณ', 'like the pig you are!': 'เหมือนเจ้าหมูอย่างคุณ!', 'like the pig you are!!': 'เหมือนเจ้าหมูอย่างคุณ!!',
+  'the pig that you are': 'ไอ้หมูตอนอย่างแก',
   'pig you are': 'ไอ้หมูโสโครก', 'pig you are!': 'ไอ้หมูโสโครก!', 'pig you are!!': 'ไอ้หมูโสโครก!!',
   'a pig like you': 'หมูอย่างแก', 'a pig like you!': 'หมูอย่างแก!',
   'serve as': 'ทำหน้าที่เป็น', 'to serve as': 'เพื่อทำหน้าที่เป็น', 'must be': 'ต้องเป็น', 'must be...': 'ต้องเป็น...', 'must be!': 'ต้องเป็น!',
@@ -469,12 +468,40 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'we deal!': 'พวกเราจะจัดการเอง!',
   'away with': 'ไปให้พ้นกับ', 'away with!': 'ไปให้พ้นกับ!',
   'away... with': 'ไปให้พ้นกับ', 'away... with!': 'ไปให้พ้นกับ!',
-  // THE PiG YOU ARE,GETTING,AWAY...WiTH variants — comma-separated form from OCR
+  // THE PiG YOU ARE, LIKE A PiG, GETTING, AWAY...WiTH variants
   'getting away with us the pig you are': 'รอดตัวไปได้หรอกับหมูอย่างแก',
   'getting away with us the pig you are!': 'รอดตัวไปได้หรอกับหมูอย่างแก!',
   'us the pig you are': 'ด้วยหมูอย่างแก',
   'even getting away with': 'แม้แต่จะรอดตัวไปได้กับ',
   'even getting away with!': 'แม้แต่จะรอดตัวไปได้กับ!',
+  'the pig you are': 'ไอ้หมูตอนอย่างแก',
+  'the pig you are!': 'ไอ้หมูตอนอย่างแก!',
+  'the pig you are!!': 'ไอ้หมูตอนอย่างแก!!',
+  'the pig you are,': 'ไอ้หมูตอนอย่างแก,',
+  'the pig you are...': 'ไอ้หมูตอนอย่างแก...',
+  'like the pig you are': 'เหมือนไอ้หมูตอนอย่างแก',
+  'like the pig you are!': 'เหมือนไอ้หมูตอนอย่างแก!',
+  'like the pig you are!!': 'เหมือนไอ้หมูตอนอย่างแก!!',
+  'like the pig you are,': 'เหมือนไอ้หมูตอนอย่างแก,',
+  'like a pig you are': 'เหมือนไอ้หมูตอนอย่างแก',
+  'like a pig you are!': 'เหมือนไอ้หมูตอนอย่างแก!',
+  'like a pig you are!!': 'เหมือนไอ้หมูตอนอย่างแก!!',
+  'like a pig you are,': 'เหมือนไอ้หมูตอนอย่างแก,',
+  'like a pig': 'เหมือนหมู',
+  'like a pig,': 'เหมือนหมู,',
+  'like a pig!': 'เหมือนหมู!',
+  'like a pig!!': 'เหมือนหมู!!',
+  'like a pig...': 'เหมือนหมู...',
+  'a pig': 'หมู',
+  'a pig,': 'หมู,',
+  'a pig!': 'หมู!',
+  'a pig!!': 'หมู!!',
+  'a pig...': 'หมู...',
+  'come on! cry even more': 'เร็วเข้า! ร้องไห้ออกมาอีก',
+  'come on! cry even more like': 'เร็วเข้า! ร้องไห้ออกมาอีกเหมือน',
+  'come on cry even more like': 'เร็วเข้า! ร้องไห้ออกมาอีกเหมือน',
+  'cry even more like': 'ร้องไห้ออกมาอีกเหมือน',
+  'cry even more': 'ร้องไห้ออกมาอีก',
   'than any': 'ยิ่งกว่าใคร',
   'than any-': 'ยิ่งกว่าใคร',
   'feelings': 'ความรู้สึก',
@@ -974,17 +1001,24 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'out of me..': 'ออกมาจากฉัน..', 'out of me': 'ออกมาจากฉัน', 'out of me...': 'ออกมาจากฉัน...', 'outopme..': 'ออกมาจากฉัน..', 'outopme': 'ออกมาจากฉัน',
   'his semen is still leaking out of me': 'น้ำอสุจิของเขายังคงไหลออกมาจากตัวฉัน',
   'his semen is still leaking out of me=': 'น้ำอสุจิของเขายังคงไหลออกมาจากตัวฉัน',
-  'really wanna': 'อยากจริงๆ', 'really wanna...': 'อยากจริงๆ...',
+  'really wanna': 'อยากจริงๆ', 'really wanna...': 'อยากจริงๆ...', '..really wanna': 'อยากจริงๆ', '...really wanna': 'อยากจริงๆ', 'really wanna!': 'อยากจริงๆ!',
   "(out, yuuto! don't)": '(ออกไป ยูโตะ! อย่า)', "out, yuuto! don't": 'ออกไป ยูโตะ! อย่า',
-  '(so, basically...)': '(สรุปก็คือ...)', 'so, basically...': 'สรุปก็คือ...', 'so basically...': 'สรุปก็คือ...', 'so, basically': 'สรุปก็คือ',
+  '(so, basically...)': '(สรุปก็คือ...)', 'so, basically...': 'สรุปก็คือ...', 'so basically...': 'สรุปก็คือ...', 'so, basically': 'สรุปก็คือ', 'so basically': 'สรุปก็คือ', 'so.. basically...': 'สรุปก็คือ...', 'so.. basically': 'สรุปก็คือ', '(so.. basically...)': '(สรุปก็คือ...)',
   'this..could be...': 'นี่มัน..อาจจะเป็น...', 'this..could be': 'นี่มัน..อาจจะเป็น', 'this could be...': 'นี่อาจจะเป็น...',
   "yuuto i'm sure": 'ยูโตะ ฉันแน่ใจว่า', "yuuto, i'm sure": 'ยูโตะ ฉันแน่ใจว่า',
   'product of lust': 'ผลผลิตแห่งราคะ',
-  "yuuto's mom": 'แม่ของยูโตะ', 'yuutos mom': 'แม่ของยูโตะ',
-  '(possess, seems)': '(ดูเหมือนจะครอบงำ)', 'possess, seems': 'ดูเหมือนจะครอบงำ',
-  'ahh..holy': 'อ๊า..พระเจ้า', 'ahh..holy!': 'อ๊า..พระเจ้า!',
+  "yuuto's mom": 'แม่ของยูโตะ', 'yuutos mom': 'แม่ของยูโตะ', 'yuuto s mom': 'แม่ของยูโตะ', "(yuuto's mom)": '(แม่ของยูโตะ)', '(yuutos mom)': '(แม่ของยูโตะ)',
+  '(possess, seems)': '(ดูเหมือนจะครอบงำ)', 'possess, seems': 'ดูเหมือนจะครอบงำ', 'possess seems': 'ดูเหมือนจะครอบงำ', '(possess seems)': '(ดูเหมือนจะครอบงำ)', 'possess, seems...': 'ดูเหมือนจะครอบงำ...',
+  'ahh..holy': 'อ๊า..พระเจ้า', 'ahh..holy!': 'อ๊า..พระเจ้า!', 'ahh...holy': 'อ๊า..พระเจ้า', 'ahh holy': 'อ๊า..พระเจ้า', 'ahh.. holy': 'อ๊า..พระเจ้า',
   '(yo, yuuto~)': '(โย่ ยูโตะ~)', 'yo, yuuto~': 'โย่ ยูโตะ~', 'yo yuuto~': 'โย่ ยูโตะ~',
   'ah.. this': 'อ๊ะ.. นี่มัน', 'ah.. this...': 'อ๊ะ.. นี่มัน...', 'ah this': 'อ๊ะ นี่มัน',
+  'shit.. this': 'เชี่ยเอ๊ย.. นี่มัน', 'shit... this': 'เชี่ยเอ๊ย.. นี่มัน', 'shit this': 'เชี่ยเอ๊ย นี่มัน', "shit.. this'": 'เชี่ยเอ๊ย.. นี่มัน', "shit.. this'!": 'เชี่ยเอ๊ย.. นี่มัน!', "shit this'": 'เชี่ยเอ๊ย นี่มัน', 'shit.. this...': 'เชี่ยเอ๊ย.. นี่มัน...',
+  'pleasurable… to take': 'สุขสมเหลือเกิน...ที่จะได้รับ', 'pleasurable... to take': 'สุขสมเหลือเกิน...ที่จะได้รับ', 'pleasurable to take': 'สุขสมเหลือเกินที่จะได้รับ', 'pleasurable...to take': 'สุขสมเหลือเกิน...ที่จะได้รับ', 'pleasurable to take...': 'สุขสมเหลือเกิน...ที่จะได้รับ',
+  "going.. we'll leave": 'ไปกันเถอะ.. เราจะปล่อยให้', "going... we'll leave": 'ไปกันเถอะ.. เราจะปล่อยให้', "going we'll leave": 'ไปกันเถอะ เราจะปล่อยให้', 'going.. well leave': 'ไปกันเถอะ.. เราจะปล่อยให้', 'going well leave': 'ไปกันเถอะ เราจะปล่อยให้',
+  "(going.. we'll leave)": '(ไปกันเถอะ.. เราจะปล่อยให้)', "(going... we'll leave)": '(ไปกันเถอะ.. เราจะปล่อยให้)',
+  'sourge': 'พรวดดด', 'sourge!': 'พรวดดด!', 'sourge...': 'พรวดดด...',
+  'tahn': 'อ๊าา', 'tahn!': 'อ๊าา!', 'tahn~': 'อ๊าา~', 'tahn~~': 'อ๊าา~~', 'tahn...': 'อ๊าา...',
+  'what is it~~': 'อะไรเหรอ~~', 'what is it~': 'อะไรเหรอ~', 'what is it': 'อะไรเหรอ', 'what is it?': 'อะไรเหรอ?', 'what is it...': 'อะไรเหรอ...',
   'smack': 'เพียะ', 'smacky': 'เพียะ',
   'slap': 'แป๊ะ', 'slapy': 'แป๊ะ',
   'rub': 'ถู', 'rubr': 'ถู',
@@ -996,6 +1030,8 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'yyt': 'อ๊าา',
   'quiet!': 'เงียบ!', 'quiet': 'เงียบ', 'qliet!': 'เงียบ!', 'qliet': 'เงียบ',
   'a coward': 'คนขี้ขลาด', 'acoward': 'คนขี้ขลาด',
+  '69': '69',
+  'the': 'เดอะ', 'are': 'เป็น',
 };
 
 
@@ -1036,6 +1072,7 @@ export const GENERAL_ENGLISH_DICTIONARY_TH: Record<string, string> = {
   'enemies': 'ศัตรู', 'enemy': 'ศัตรู', 'moving': 'เคลื่อนไหว', 'move': 'เคลื่อนไหว',
   'front': 'ข้างหน้า', 'back': 'ข้างหลัง', 'side': 'ด้าน', 'top': 'ด้านบน', 'bottom': 'ด้านล่าง',
   'inside': 'ข้างใน', 'outside': 'ข้างนอก', 'defeat': 'เอาชนะ', 'fight': 'ต่อสู้',
+  'pig': 'หมู', 'you': 'คุณ', 'come': 'เร็ว', 'cry': 'ร้องไห้', 'more': 'อีก', 'even': 'เหมือน',
 };
 
 // ── Pre-compiled Module-Level Regular Expressions ───────────────────
@@ -1052,6 +1089,26 @@ const PUNCT_SPACE_REGEX = /[\-\/\.\,\!\?\:\;\'\’\”\“\"]+/g;
 const NON_LETTER_NUM_REGEX = /[^\p{L}\p{N}\s]/gu;
 const MULTI_SPACE_REGEX = /\s+/g;
 const DIACRITICS_REGEX = /[\u0300-\u036f]/g;
+
+let _compactPhraseMap: Map<string, string> | null = null;
+function getCompactPhraseMap(): Map<string, string> {
+  if (!_compactPhraseMap) {
+    _compactPhraseMap = new Map<string, string>();
+    for (const [k, v] of Object.entries(ARGOS_SHORT_PHRASE_LOOKUP_TH)) {
+      const compact = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (compact && !_compactPhraseMap.has(compact)) {
+        _compactPhraseMap.set(compact, v);
+      }
+    }
+    for (const [k, v] of Object.entries(GENERAL_ENGLISH_DICTIONARY_TH)) {
+      const compact = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (compact && !_compactPhraseMap.has(compact)) {
+        _compactPhraseMap.set(compact, v);
+      }
+    }
+  }
+  return _compactPhraseMap;
+}
 
 export const lookupShortPhraseTh = (text: string): string | null => {
   if (!text) return null;
@@ -1071,18 +1128,30 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey] || GENERAL_ENGLISH_DICTIONARY_TH[rawKey];
   if (directRawMatch) return directRawMatch;
 
-  const cleanedRawKey = rawKey.replace(LEADING_PUNCT_REGEX, '').replace(LEADING_II_REGEX, '');
+  const hasOuterParens = /^\s*[\(\[\{<].*[\)\]\}>]\s*$/.test(trimmed);
+  const unwrapped = trimmed.replace(/^\s*[\(\[\{<"']+|[\)\]\}>"'\s]+$/g, '').trim().toLowerCase();
+  if (unwrapped && unwrapped !== rawKey) {
+    const unwrappedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[unwrapped] || GENERAL_ENGLISH_DICTIONARY_TH[unwrapped];
+    if (unwrappedMatch) {
+      return hasOuterParens && !unwrappedMatch.startsWith('(') ? `(${unwrappedMatch})` : unwrappedMatch;
+    }
+  }
+
+  const cleanedRawKey = rawKey
+    .replace(/^[\(\[\{<"'\s¡¿]+/g, '')
+    .replace(/[\)\]\}>"'\s]+$/g, '')
+    .replace(LEADING_II_REGEX, '');
   const directCleanedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[cleanedRawKey] || GENERAL_ENGLISH_DICTIONARY_TH[cleanedRawKey];
-  if (directCleanedMatch) return directCleanedMatch;
+  if (directCleanedMatch) {
+    return hasOuterParens && !directCleanedMatch.startsWith('(') ? `(${directCleanedMatch})` : directCleanedMatch;
+  }
 
   const strippedDotsKey = cleanedRawKey.replace(STRIP_DOTS_START_REGEX, '').replace(STRIP_DOTS_END_REGEX, '').trim();
   if (strippedDotsKey && (ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey])) {
     const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey];
     const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
-    if (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(match)) {
-      return match + trailingPunct[1];
-    }
-    return match;
+    let result = (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(match)) ? match + trailingPunct[1] : match;
+    return hasOuterParens && !result.startsWith('(') ? `(${result})` : result;
   }
 
   // 0.2 ลองค้นหาหลังจากซ่อมแซมเสียงรบกวน OCR (เช่น Suvvenlya -> Suddenly, Bvt -> But, (ME,THERE) -> (ME, THERE))
@@ -1090,7 +1159,14 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   if (ocrNormalized && ocrNormalized.toLowerCase() !== rawKey) {
     const ocrKey = ocrNormalized.toLowerCase();
     const ocrMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrKey] || GENERAL_ENGLISH_DICTIONARY_TH[ocrKey];
-    if (ocrMatch) return ocrMatch;
+    if (ocrMatch) {
+      return hasOuterParens && !ocrMatch.startsWith('(') ? `(${ocrMatch})` : ocrMatch;
+    }
+    const ocrStripped = ocrKey.replace(STRIP_DOTS_START_REGEX, '').replace(STRIP_DOTS_END_REGEX, '').trim();
+    if (ocrStripped && (ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrStripped] || GENERAL_ENGLISH_DICTIONARY_TH[ocrStripped])) {
+      const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrStripped] || GENERAL_ENGLISH_DICTIONARY_TH[ocrStripped];
+      return hasOuterParens && !match.startsWith('(') ? `(${match})` : match;
+    }
   }
 
   const key = rawKey
@@ -1111,10 +1187,17 @@ export const lookupShortPhraseTh = (text: string): string | null => {
 
   if (directMatch) {
     const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
-    if (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(directMatch)) {
-      return directMatch + trailingPunct[1];
+    let result = (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(directMatch)) ? directMatch + trailingPunct[1] : directMatch;
+    return hasOuterParens && !result.startsWith('(') ? `(${result})` : result;
+  }
+
+  // 1.5 ลองค้นหาแบบ No-Apostrophe (เช่น yuuto's mom -> yuutos mom, we'll -> well)
+  const noAposKey = rawKey.replace(/['’]/g, '').replace(PUNCT_SPACE_REGEX, ' ').replace(MULTI_SPACE_REGEX, ' ').trim();
+  if (noAposKey && noAposKey !== key) {
+    const noAposMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[noAposKey] || GENERAL_ENGLISH_DICTIONARY_TH[noAposKey];
+    if (noAposMatch) {
+      return hasOuterParens && !noAposMatch.startsWith('(') ? `(${noAposMatch})` : noAposMatch;
     }
-    return directMatch;
   }
 
   // 2. ตรวจสอบความลากเสียงยาว (Elongation) สำหรับคำการ์ตูนยอดนิยม
@@ -1128,13 +1211,6 @@ export const lookupShortPhraseTh = (text: string): string | null => {
     return 'ออกไปปปป';
   }
 
-  const compactKey = rawKey.replace(/[^a-z0-9]/g, '');
-  if (compactKey && ARGOS_SHORT_PHRASE_LOOKUP_TH[compactKey]) {
-    return ARGOS_SHORT_PHRASE_LOOKUP_TH[compactKey];
-  }
-  if (compactKey && GENERAL_ENGLISH_DICTIONARY_TH[compactKey]) {
-    return GENERAL_ENGLISH_DICTIONARY_TH[compactKey];
-  }
   // สำหรับ knight (เช่น kniiiiight)
   if (/^k[n]+[i]+[g]+[h]+[t]+$/i.test(key)) {
     return 'อัศวิน';
@@ -1149,6 +1225,17 @@ export const lookupShortPhraseTh = (text: string): string | null => {
   }
   if (/^c[o]+cks$/i.test(key)) {
     return 'ควยยยยยยพวกนี้';
+  }
+
+  // 3. ลองค้นหาผ่าน Compact Alphanumeric Map (ทนทานต่อการตัดคำ/เครื่องหมายวรรคตอน/จุดไข่ปลาทุกประเภท)
+  const compactKey = rawKey.replace(/[^a-z0-9]/g, '');
+  if (compactKey && compactKey.length >= 2) {
+    const compactMatch = getCompactPhraseMap().get(compactKey);
+    if (compactMatch) {
+      const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
+      let result = (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(compactMatch)) ? compactMatch + trailingPunct[1] : compactMatch;
+      return hasOuterParens && !result.startsWith('(') ? `(${result})` : result;
+    }
   }
 
   if (/[\uAC00-\uD7AF]/.test(text)) {

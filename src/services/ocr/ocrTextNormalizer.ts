@@ -671,6 +671,21 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/\bACOWARD\b/gi, 'A COWARD');
   normalized = normalized.replace(/\bHER\s+POSIT\s*I\s*ON\b/gi, 'HER POSITION');
   normalized = normalized.replace(/\bHER\s+POSITI\s*ON\b/gi, 'HER POSITION');
+  normalized = normalized.replace(/\bSourge\b/gi, 'Splurge');
+  normalized = normalized.replace(/\btAhn\b/gi, 'Ahh');
+  normalized = normalized.replace(/\btahn\b/gi, 'Ahh');
+  normalized = normalized.replace(/\bSHIT\.\.\s*THIS['’]?\b/gi, 'SHIT.. THIS');
+  normalized = normalized.replace(/\bSHIT\.\.\.\s*THIS['’]?\b/gi, 'SHIT... THIS');
+  normalized = normalized.replace(/\bPLEASURABLE[…\.]+\s*TO\s+TAKE\b/gi, 'PLEASURABLE... TO TAKE');
+  normalized = normalized.replace(/\bGOING\.\.\s*WE['’]?LL\s+LEAVE\b/gi, "GOING.. WE'LL LEAVE");
+  normalized = normalized.replace(/\bGOING\.\.\.\s*WE['’]?LL\s+LEAVE\b/gi, "GOING... WE'LL LEAVE");
+  normalized = normalized.replace(/\(GOING\.\.\s*WE['’]?LL\s+LEAVE\)/gi, "(GOING.. WE'LL LEAVE)");
+  normalized = normalized.replace(/\(GOING\.\.\.\s*WE['’]?LL\s+LEAVE\)/gi, "(GOING... WE'LL LEAVE)");
+  normalized = normalized.replace(/\bWHAT\s+IS\s+IT~+\b/gi, 'WHAT IS IT~~');
+  normalized = normalized.replace(/\bPOSSESS,\s*SEEMS\b/gi, 'POSSESS, SEEMS');
+  normalized = normalized.replace(/\(POSSESS,\s*SEEMS\)/gi, '(POSSESS, SEEMS)');
+  normalized = normalized.replace(/\bAHH\.\.\s*HOLY\b/gi, 'AHH..HOLY');
+  normalized = normalized.replace(/\bAHH\.\.\.\s*HOLY\b/gi, 'AHH...HOLY');
 
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,

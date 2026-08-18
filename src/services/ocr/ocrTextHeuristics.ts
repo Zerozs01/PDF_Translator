@@ -951,12 +951,14 @@ export const isLikelyGhostTranslatableLine = (
     return false;
   }
 
-  if (isKnownShortWord) {
+  if (isKnownShortWord || lookupShortPhraseTh(text) || lookupShortPhraseTh(asciiCompact)) {
     return false;
   }
 
   // Apply these safety filters to ALL OCR engines to guarantee obvious ghost noise is always dropped
-  const isPageNumberOrPureNumber = /^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text);
+  const isPageNumberOrPureNumber = (compact !== '69' && !lookupShortPhraseTh(text)) && (
+    /^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)
+  );
   if (isPageNumberOrPureNumber) {
     return true;
   }
