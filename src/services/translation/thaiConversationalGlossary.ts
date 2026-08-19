@@ -14,6 +14,7 @@ import {
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { applyKoreanConversationalFallback } from './koreanTranslationPolicy';
+import { lookupShortPhraseTh } from './offlineTranslationService';
 
 const preserveSourceTrailingPunctuation = (sourceText: string, replacement: string): string => {
   const punctuation = String(sourceText || '').trim().match(/([.!?…]+)$/)?.[1] || '';
@@ -95,6 +96,11 @@ const applyThaiConversationalGlossaryInternal = (
     
     if (esResult !== translated) {
       return preserveSourceTrailingPunctuation(sourceOriginal, esResult);
+    }
+
+    const esShortPhrase = lookupShortPhraseTh(normalizedSpanishSource) || lookupShortPhraseTh(sourceOriginal);
+    if (esShortPhrase) {
+      return preserveSourceTrailingPunctuation(sourceOriginal, esShortPhrase);
     }
   }
 
@@ -835,7 +841,7 @@ const applyThaiConversationalGlossaryInternal = (
     return preserveSourceTrailingPunctuation(source, 'ฮ่าๆๆ ลามกจังเลย');
   }
   if (/^W+H+A+T+$/i.test(compactSourceAlnumUpper) || compactSourceAlnumUpper === 'WHAAAT') {
-    return preserveSourceTrailingPunctuation(source, 'อ..อะไรยยย');
+    return preserveSourceTrailingPunctuation(source, 'อ..อะไร');
   }
   if (compactSourceAlnumUpper === 'YYES') {
     return preserveSourceTrailingPunctuation(source, 'ช-ใช่');
@@ -857,6 +863,141 @@ const applyThaiConversationalGlossaryInternal = (
   }
   if (compactSourceAlnumUpper === 'MOVING') {
     return preserveSourceTrailingPunctuation(source, 'ขยับเขยื้อน!');
+  }
+  if (compactSourceAlnumUpper === 'CENTRED' || compactSourceAlnumUpper === 'CENTERED') {
+    return preserveSourceTrailingPunctuation(source, 'ตรงกลาง');
+  }
+  if (compactSourceAlnumUpper === 'THECASHIER' || compactSourceAlnumUpper === 'CASHIER') {
+    return preserveSourceTrailingPunctuation(source, 'พนักงานคิดเงิน');
+  }
+  if (compactSourceAlnumUpper === 'WORK') {
+    return preserveSourceTrailingPunctuation(source, 'ทำงาน');
+  }
+  if (compactSourceAlnumUpper === 'SUREIS') {
+    return preserveSourceTrailingPunctuation(source, 'ใช่จริงๆ ด้วย');
+  }
+  if (compactSourceAlnumUpper === 'THINK') {
+    return preserveSourceTrailingPunctuation(source, 'คิด');
+  }
+  if (compactSourceAlnumUpper === 'WONT') {
+    return preserveSourceTrailingPunctuation(source, 'จะไม่');
+  }
+  if (compactSourceAlnumUpper === 'ANTEIT' || compactSourceAlnumUpper === 'GUARANTEEIT') {
+    return preserveSourceTrailingPunctuation(source, 'รับรองได้เลย');
+  }
+  if (compactSourceAlnumUpper === 'LEAGUE') {
+    return preserveSourceTrailingPunctuation(source, 'ลีก');
+  }
+  if (compactSourceAlnumUpper === 'QUARTERS' || compactSourceAlnumUpper === 'QUARTER') {
+    return preserveSourceTrailingPunctuation(source, 'เหรียญ');
+  }
+  if (compactSourceAlnumUpper === 'SIDES' || compactSourceAlnumUpper === 'SIDE') {
+    return preserveSourceTrailingPunctuation(source, 'ด้านข้าง');
+  }
+  if (compactSourceAlnumUpper === 'MELEDFOR') {
+    return preserveSourceTrailingPunctuation(source, 'เรียกหา');
+  }
+  if (compactSourceAlnumUpper === 'MOTIVATED') {
+    return preserveSourceTrailingPunctuation(source, 'มีแรงฮึด');
+  }
+  if (compactSourceAlnumUpper === 'RELUCTANT') {
+    return preserveSourceTrailingPunctuation(source, 'ลังเล');
+  }
+  if (compactSourceAlnumUpper.startsWith('SANSNOT') || compactSourceAlnumUpper.startsWith('SANISNOT')) {
+    return preserveSourceTrailingPunctuation(source, 'ซังไม่อยู่');
+  }
+  if (compactSourceAlnumUpper === 'LIEVED' || compactSourceAlnumUpper === 'RELIEVED') {
+    return preserveSourceTrailingPunctuation(source, 'โล่งอกไปที!');
+  }
+  if (compactSourceAlnumUpper === 'PLACEAND') {
+    return preserveSourceTrailingPunctuation(source, '(สถานที่ และ...)');
+  }
+  if (compactSourceAlnumUpper === 'COLLAR') {
+    return preserveSourceTrailingPunctuation(source, 'ปลอกคอ');
+  }
+  if (compactSourceAlnumUpper === 'MAN') {
+    return preserveSourceTrailingPunctuation(source, 'ผู้ชาย');
+  }
+  if (/^S+A+N+$/i.test(compactSourceAlnumUpper) || /^S+A+A+N+$/i.test(compactSourceAlnumUpper)) {
+    return preserveSourceTrailingPunctuation(source, 'ซังงง.');
+  }
+  if (compactSourceAlnumUpper === 'ACHOKER' || compactSourceAlnumUpper === 'CHOKER') {
+    return preserveSourceTrailingPunctuation(source, 'สร้อยคอโชกเกอร์');
+  }
+  if (compactSourceAlnumUpper === 'TERRIFIC') {
+    return preserveSourceTrailingPunctuation(source, 'ยอดเยี่ยม~');
+  }
+  if (compactSourceAlnumUpper === 'REJECTED') {
+    return preserveSourceTrailingPunctuation(source, 'ถูกปฏิเสธ');
+  }
+  if (compactSourceAlnumUpper === 'SMIRK' || compactSourceAlnumUpper === 'SMINK') {
+    return preserveSourceTrailingPunctuation(source, 'แสยะยิ้ม');
+  }
+  if (compactSourceAlnumUpper === 'CAT') {
+    return preserveSourceTrailingPunctuation(source, 'แมว');
+  }
+  if (compactSourceAlnumUpper === 'CLOSED') {
+    return preserveSourceTrailingPunctuation(source, 'ปิดแล้ว');
+  }
+  if (compactSourceAlnumUpper === 'COUNT') {
+    return preserveSourceTrailingPunctuation(source, 'นับ');
+  }
+  if (compactSourceAlnumUpper === 'TRANCE') {
+    return preserveSourceTrailingPunctuation(source, 'ภวังค์');
+  }
+  if (compactSourceAlnumUpper === 'LEAGUES') {
+    return preserveSourceTrailingPunctuation(source, 'ลีก');
+  }
+  if (compactSourceAlnumUpper === 'DENCE') {
+    return preserveSourceTrailingPunctuation(source, 'ความมั่นใจ');
+  }
+  if (compactSourceAlnumUpper === 'DROPPER') {
+    return preserveSourceTrailingPunctuation(source, 'ที่หยด');
+  }
+  if (compactSourceAlnumUpper === 'HELLO' && (source.includes('...') || source.includes('~') || source.includes('..'))) {
+    return preserveSourceTrailingPunctuation(source, 'สวัสดี');
+  }
+  if (compactSourceAlnumUpper === 'WRACKING') {
+    return preserveSourceTrailingPunctuation(source, 'ปวดหัวแทบแตก');
+  }
+  if (compactSourceAlnumUpper === 'GOROUSAN' || compactSourceAlnumUpper === 'GOROLSAN') {
+    return preserveSourceTrailingPunctuation(source, 'คุณโกโร่');
+  }
+  if (compactSourceAlnumUpper === 'PERVSAKI') {
+    return preserveSourceTrailingPunctuation(source, 'ตาโรคจิตซากิ');
+  }
+  if (compactSourceAlnumUpper === 'BEYBLADE' || compactSourceAlnumUpper === 'MYBEYBLADE') {
+    return preserveSourceTrailingPunctuation(source, 'เบย์เบลด');
+  }
+  if (compactSourceAlnumUpper === 'IAM') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันเอง');
+  }
+  if (compactSourceAlnumUpper === 'HUH') {
+    return preserveSourceTrailingPunctuation(source, 'หะ');
+  }
+  if (compactSourceAlnumUpper === 'ILLLEAVE' || compactSourceAlnumUpper === 'ILEAVE') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันขอตัว');
+  }
+  if (compactSourceAlnumUpper === 'SCIOUSLY') {
+    return preserveSourceTrailingPunctuation(source, 'อย่างมีสติ');
+  }
+  if (compactSourceAlnumUpper === 'MINISCING') {
+    return preserveSourceTrailingPunctuation(source, 'รำลึกความหลัง');
+  }
+  if (compactSourceAlnumUpper === 'FWINE') {
+    return preserveSourceTrailingPunctuation(source, 'ส-สบายดี๊');
+  }
+  if (compactSourceAlnumUpper === 'BRINGHER') {
+    return preserveSourceTrailingPunctuation(source, 'พาเธอมา');
+  }
+  if (compactSourceAlnumUpper === 'DOESNTGET') {
+    return preserveSourceTrailingPunctuation(source, 'ไม่เข้าใจ');
+  }
+  if (compactSourceAlnumUpper === 'TTAYAMA') {
+    return preserveSourceTrailingPunctuation(source, 'ท-ทายามะ');
+  }
+  if (compactSourceAlnumUpper === 'AMAZING') {
+    return preserveSourceTrailingPunctuation(source, 'สุดยอดเลย');
   }
 
   // H-Manga Slang Conversational Override Group

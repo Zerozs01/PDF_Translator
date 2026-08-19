@@ -374,6 +374,8 @@ const PDFPageOverlay: React.FC<{
     lastBuiltTranslationMapRef.current = new Map();
   }
 
+  const samplingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const [liveUpdateTick, setLiveUpdateTick] = useState(0);
 
   useEffect(() => {
@@ -631,9 +633,15 @@ const PDFPageOverlay: React.FC<{
 
         const maxSampleSide = 2400;
         const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
-        const sampleCanvas = document.createElement('canvas');
-        sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
-        sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
+        const targetWidth = Math.max(1, Math.round(sourceWidth * sampleScale));
+        const targetHeight = Math.max(1, Math.round(sourceHeight * sampleScale));
+
+        if (!samplingCanvasRef.current) {
+          samplingCanvasRef.current = document.createElement('canvas');
+        }
+        const sampleCanvas = samplingCanvasRef.current;
+        if (sampleCanvas.width !== targetWidth) sampleCanvas.width = targetWidth;
+        if (sampleCanvas.height !== targetHeight) sampleCanvas.height = targetHeight;
 
         const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
         if (!context) {
@@ -657,11 +665,6 @@ const PDFPageOverlay: React.FC<{
           ));
         });
         setTranslatedLinePalette(next);
-
-        try {
-          sampleCanvas.width = 0;
-          sampleCanvas.height = 0;
-        } catch (e) { /* ignore */ }
       };
 
       if (typeof window.requestIdleCallback === 'function') {

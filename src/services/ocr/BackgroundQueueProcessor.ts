@@ -205,24 +205,24 @@ class BackgroundQueueProcessor {
             // ดึงสถานะปัจจุบันของ Job จาก Store
             const currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
 
+            const isSignalAborted = Boolean(this.currentAbortController?.signal?.aborted);
             const isAbortLike = error instanceof Error && (
               error.name === 'AbortError' ||
               error.message.includes('canceled') ||
               error.message.includes('aborted') ||
-              error.message.includes('aborted by signal') ||
-              error.message.includes('Worker was terminated') // PDF.js worker terminated เพราะ abort
+              error.message.includes('aborted by signal')
             );
 
             if (currentJob?.status === 'cancelled') {
               console.log(`[QueueProcessor] Job ${job.id} was cancelled.`);
             } else if (currentJob?.status === 'paused') {
               console.log(`[QueueProcessor] Job ${job.id} was paused.`);
-            } else if (currentJob?.status === 'queued' || currentJob?.status === 'pending') {
+            } else if (isSignalAborted && (currentJob?.status === 'queued' || currentJob?.status === 'pending')) {
               // งานถูก abort เพื่อหลีกทางให้งานอื่นที่มีลำดับสูงกว่า (Preemption) หรือ Foreground
               // สถานะ queued ถูกตั้งค่าไว้แล้วโดย Subscriber ก่อน abort ไม่ต้องทำอะไรเพิ่ม
               console.log(`[QueueProcessor] Job ${job.id} was preempted. Keeping queued status.`);
-            } else if (isAbortLike) {
-              // Abort/Worker terminated ที่ไม่ได้ตั้งใจ: ตรวจสอบสถานะล่าสุดอีกครั้ง
+            } else if (isSignalAborted || isAbortLike) {
+              // Abort via signal: ตรวจสอบสถานะล่าสุดอีกครั้ง
               const freshState = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
               if (freshState?.status === 'queued' || freshState?.status === 'pending') {
                 console.log(`[QueueProcessor] Job ${job.id} aborted for preemption, keeping queued status.`);
@@ -231,6 +231,7 @@ class BackgroundQueueProcessor {
                 useBackgroundQueueStore.getState().updateJobStatus(job.id, 'cancelled', 'ยกเลิกแล้ว');
               }
             } else {
+              // Unexpected failure / PDF.js Worker crash: แจ้งเตือนข้อผิดพลาดจริง
               console.error(`[QueueProcessor] Job ${job.id} failed with error:`, error);
               const errMsg = error instanceof Error ? error.message : 'Unknown processor error';
               useBackgroundQueueStore.getState().updateJobStatus(job.id, 'failed', `ล้มเหลว: ${errMsg}`);

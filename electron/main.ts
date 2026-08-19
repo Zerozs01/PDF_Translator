@@ -727,6 +727,28 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:save-ocr-batch', async (_, items) => {
+    if (!Array.isArray(items) || items.length === 0) return true;
+    try {
+      OCRCacheDAO.saveBatch(items);
+      return true;
+    } catch (error) {
+      console.error('db:save-ocr-batch error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:save-translation-cache-batch', async (_, items) => {
+    if (!Array.isArray(items) || items.length === 0) return true;
+    try {
+      TranslationCacheDAO.saveBatch(items);
+      return true;
+    } catch (error) {
+      console.error('db:save-translation-cache-batch error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:get-translation-cache-page', async (_, { docId, pageNum }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');

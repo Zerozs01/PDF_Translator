@@ -767,6 +767,33 @@ export const OCRCacheDAO = {
     });
   },
 
+  saveBatch: (
+    items: Array<{ documentId: number; pageNumber: number; data: any; engine?: string }>
+  ) => {
+    if (!db) throw new Error('DB not initialized');
+    if (!items || items.length === 0) return;
+    const now = Date.now();
+    const stmt = getStmt(`
+      INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
+      VALUES (@documentId, @pageNumber, @engine, @json, @now)
+      ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
+        ocr_data = @json,
+        updated_at = @now
+    `);
+    const insertMany = db.transaction((rows: typeof items) => {
+      for (const item of rows) {
+        stmt.run({
+          documentId: item.documentId,
+          pageNumber: item.pageNumber,
+          engine: String(item.engine || 'tesseract').toLowerCase(),
+          json: JSON.stringify(item.data),
+          now,
+        });
+      }
+    });
+    insertMany(items);
+  },
+
   get: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
@@ -985,6 +1012,90 @@ export const TranslationCacheDAO = {
     });
   },
 
+  saveBatch: (
+    items: Array<{ documentId: number; pageNumber: number; cacheKey: string; entry: TranslationCacheEntryRecord }>
+  ) => {
+    if (!db) throw new Error('DB not initialized');
+    if (!items || items.length === 0) return;
+    const now = Date.now();
+    const stmt = getStmt(`
+      INSERT INTO translation_cache (
+        document_id,
+        page_number,
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @documentId,
+        @pageNumber,
+        @cacheKey,
+        @ocrEngine,
+        @ocrLanguage,
+        @sourceLanguage,
+        @targetLanguage,
+        @translationMode,
+        @translatorEngine,
+        @sourceFingerprint,
+        @translatedByIndex,
+        @translatedText,
+        @lineCount,
+        @groupCount,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(document_id, page_number, cache_key) DO UPDATE SET
+        ocr_engine = @ocrEngine,
+        ocr_language = @ocrLanguage,
+        source_language = @sourceLanguage,
+        target_language = @targetLanguage,
+        translation_mode = @translationMode,
+        translator_engine = @translatorEngine,
+        source_fingerprint = @sourceFingerprint,
+        translated_by_index = @translatedByIndex,
+        translated_text = @translatedText,
+        line_count = @lineCount,
+        group_count = @groupCount,
+        created_at = @createdAt,
+        updated_at = @updatedAt
+    `);
+    const insertMany = db.transaction((rows: typeof items) => {
+      for (const item of rows) {
+        const entry = item.entry;
+        stmt.run({
+          documentId: item.documentId,
+          pageNumber: item.pageNumber,
+          cacheKey: item.cacheKey,
+          ocrEngine: String(entry.ocrEngine || 'tesseract').toLowerCase(),
+          ocrLanguage: String(entry.ocrLanguage || 'eng'),
+          sourceLanguage: String(entry.sourceLanguage || 'eng').toLowerCase(),
+          targetLanguage: String(entry.targetLanguage || 'th').toLowerCase(),
+          translationMode: String(entry.translationMode || 'manga').toLowerCase(),
+          translatorEngine: String(entry.translatorEngine || 'offline').toLowerCase(),
+          sourceFingerprint: String(entry.sourceFingerprint || ''),
+          translatedByIndex: JSON.stringify(Array.isArray(entry.translatedByIndex) ? entry.translatedByIndex : []),
+          translatedText: String(entry.translatedText || ''),
+          lineCount: Number(entry.lineCount || 0),
+          groupCount: Number(entry.groupCount || 0),
+          createdAt: Number(entry.createdAt || now),
+          updatedAt: now,
+        });
+      }
+    });
+    insertMany(items);
+  },
+
   getByPage: (documentId: number, pageNumber: number) => {
     if (!db) throw new Error('DB not initialized');
     // Cached statement: called on every page load for translation overlay
@@ -1077,17 +1188,24 @@ export const TranslationCacheDAO = {
   clearByEngine: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
-    const result = getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
-      .run(documentId, pageNumber, normalizedEngine);
-    
-    // Clear global sentence cache to force re-translating bad cached translations
-    try {
-      db.prepare('DELETE FROM sentence_translation_cache').run();
-    } catch (err) {
-      console.warn('[DB] Failed to clear sentence translation cache:', err);
-    }
-    
-    return result.changes > 0;
+    const activeDb = db;
+    let changes = 0;
+
+    const clearTx = activeDb.transaction(() => {
+      const result = getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+        .run(documentId, pageNumber, normalizedEngine);
+      changes = result.changes;
+      
+      // Clear global sentence cache to force re-translating bad cached translations
+      try {
+        activeDb.prepare('DELETE FROM sentence_translation_cache').run();
+      } catch (err) {
+        console.warn('[DB] Failed to clear sentence translation cache:', err);
+      }
+    });
+
+    clearTx();
+    return changes > 0;
   },
 };
 

@@ -278,6 +278,80 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^벌써$/, replacement: 'เรียบร้อยแล้ว' },
   { pattern: /^그렇게$/, replacement: 'แบบนั้น' },
   { pattern: /^이렇게$/, replacement: 'แบบนี้' },
+
+  // User requested Korean Manhwa dialogues and expressions
+  { pattern: /^아니잠깐$/, replacement: 'เดี๋ยวก่อนสิ' },
+  { pattern: /^그렇구나$/, replacement: 'อย่างนี้นี่เอง' },
+  { pattern: /^좋아해요$/, replacement: 'ชอบนะคะ' },
+  { pattern: /^어느새제가$/, replacement: 'ไม่ทันรู้ตัว ตัวฉันก็...' },
+  { pattern: /^그러세요$/, replacement: 'เชิญเลยค่ะ' },
+  { pattern: /^저를좋아하는지부터$/, replacement: 'เริ่มจากว่าชอบฉันหรือเปล่า' },
+  { pattern: /^그걸지금$/, replacement: 'เรื่องนั้น ตอนนี้น่ะ...' },
+  { pattern: /^말이라고하냐$/, replacement: 'พูดแบบนั้นออกมาได้ยังไง' },
+  { pattern: /^그런짓까지다허락해놓고$/, replacement: 'ทั้งที่ยอมให้ทำเรื่องแบบนั้นไปหมดแล้วแท้ๆ' },
+  { pattern: /^서도연하고나하고$/, replacement: 'ซอดอยอนกับฉัน' },
+  { pattern: /^울언으읍+$/, replacement: 'อื้ออื๊บ!!' },
+  { pattern: /^디진다진짜$/, replacement: 'เดี๋ยวตายจริงๆ แน่' },
+  { pattern: /^널심란하게$/, replacement: 'ทำให้เธอว้าวุ่นใจ' },
+  { pattern: /^안된다느니뭐니$/, replacement: 'บอกว่าไม่ได้บ้างล่ะ อะไรบ้างล่ะ' },
+  { pattern: /^이[땅딴다]걸물어보고$/, replacement: 'มาถามเรื่องพรรค์นี้' },
+  { pattern: /^하고싶은대로$/, replacement: 'ตามที่อยากทำ' },
+  { pattern: /^생각해보면너$/, replacement: 'พอลองคิดดูแล้ว เธอ...' },
+  { pattern: /^우리과에$/, replacement: 'ในสาขาของเรา' },
+  { pattern: /^우리과사람들$/, replacement: 'คนในสาขาของเรา' },
+  { pattern: /^예쁘고가슴큰년들은$/, replacement: 'พวกชะนีสวยๆ นมโตๆ' },
+  { pattern: /^[죄최]다긁어모아서$/, replacement: 'กวาดมารวมกันหมด' },
+  { pattern: /^연하늘은$/, replacement: 'ยอนฮานึลน่ะ' },
+  { pattern: /^[너떠]가더잘알거고$/, replacement: 'เธอคงจะรู้ดีกว่าใคร' },
+  { pattern: /^내내가바라는게$/, replacement: 'สิ่งที่ฉัน... ฉันต้องการ' },
+  { pattern: /^수치스럽게$/, replacement: 'อย่างน่าอับอาย' },
+  { pattern: /^웃기게들릴건$/, replacement: 'คงจะฟังดูตลกนะ' },
+  { pattern: /^육체적인관계로만$/, replacement: 'แค่ความสัมพันธ์ทางกายเท่านั้น' },
+  { pattern: /^자길좋아하냐고$/, replacement: 'ถามว่าชอบตัวเองหรือเปล่า' },
+  { pattern: /^아니그런거$/, replacement: 'เปล่า ไม่ใช่เรื่องแบบนั้น' },
+  { pattern: /^버린다든가$/, replacement: 'ทิ้งไป หรืออะไรแบบนั้น' },
+  { pattern: /^그런살벌한$/, replacement: 'เรื่องที่น่ากลัวแบบนั้น' },
+  { pattern: /^(기기적인해계지면프|기적적인|기적적인해결)$/, replacement: 'เรื่องมหัศจรรย์...' },
+  { pattern: /^그다지좋다고$/, replacement: 'ไม่ได้บอกว่าชอบขนาดนั้น' },
+  { pattern: /^그런유리선배를$/, replacement: 'รุ่นพี่ยูริแบบนั้น' },
+  { pattern: /^뒤집어버리려던게$/, replacement: 'ที่ตั้งใจจะพลิกกลับกลายมาเป็น' },
+  { pattern: /^진심으로$/, replacement: 'อย่างจริงใจ' },
+  { pattern: /^좋아하게됐다는걸$/, replacement: 'กลายเป็นชอบเข้าจริงๆ' },
+  { pattern: /^아시다시피저는$/, replacement: 'อย่างที่รู้กัน ตัวฉันน่ะ...' },
+  { pattern: /^복종심을이용해서$/, replacement: 'อาศัยความยอมจำนน' },
+  { pattern: /^좋아하라고강요하는듯$/, replacement: 'เหมือนบังคับให้ชอบ' },
+  { pattern: /^양심적이어서$/, replacement: 'รู้สึกผิดชอบชั่วดี' },
+  { pattern: /^연읍+$/, replacement: 'อื้ออื๊บ!!' },
+  { pattern: /^탓읍+$/, replacement: 'ทัต... อึ้บ!!' },
+  { pattern: /^참내$/, replacement: 'ให้ตายสิ' },
+  { pattern: /^꽤핫플레이스인데$/, replacement: 'เป็นสถานที่ยอดฮิตเลยนะ' },
+  { pattern: /^내가좋아하는사람이$/, replacement: 'คนที่ฉันชอบ' },
+  { pattern: /^흔한일은아니잖아요$/, replacement: 'มันไม่ใช่เรื่องธรรมดาๆ ทั่วไปนี่ครับ' },
+  { pattern: /^그런기적이왔는데도파민때문에놓치면$/, replacement: 'ปาฏิหาริย์แบบนั้นมาถึงแล้ว ถ้าต้องพลาดไปเพราะโดพามีนล่ะก็' },
+  { pattern: /^그런기적이왔는데$/, replacement: 'ปาฏิหาริย์แบบนั้นมาถึงแล้ว' },
+  { pattern: /^도파민때문에놓치면$/, replacement: 'ถ้าต้องพลาดไปเพราะโดพามีนล่ะก็' },
+  { pattern: /^서로좋아하는기회를놓칠까봐걱정을해$/, replacement: 'กังวลว่าจะพลาดโอกาสที่จะได้ชอบพอกันงั้นเหรอ?' },
+  { pattern: /^서로좋아하는기회를$/, replacement: 'โอกาสที่จะได้ชอบพอกัน' },
+  { pattern: /^놓칠까봐걱정을해$/, replacement: 'กังวลว่าจะพลาดไปงั้นเหรอ?' },
+  { pattern: /^이게$/, replacement: 'สิ่งนี้' },
+  { pattern: /^너도마음이있어서$/, replacement: 'เธอก็มีใจเหมือนกัน' },
+  { pattern: /^아니저는유리선배도$/, replacement: 'เปล่าครับ... สำหรับผม รุ่นพี่ยูริก็' },
+  { pattern: /^그런짓예시$/, replacement: 'ตัวอย่างเรื่องแบบนั้น' },
+  { pattern: /^조+조용히해요선배여기공원이에요$/, replacement: 'ชะ... เงียบๆ หน่อยครับรุ่นพี่! ที่นี่มันสวนสาธารณะนะ!' },
+  { pattern: /^조+조용히해요선배$/, replacement: 'ชะ... เงียบๆ หน่อยครับรุ่นพี่!' },
+  { pattern: /^여기공원이에요$/, replacement: 'ที่นี่มันสวนสาธารณะนะ!' },
+  { pattern: /^네뭐$/, replacement: 'คะ? อะไรนะ...' },
+  { pattern: /^하게해드려야지별수있나$/, replacement: 'ก็ต้องยอมให้ทำล่ะนะ จะมีทางเลือกอื่นได้ยังไง' },
+  { pattern: /^예뭐그건부부나연인들이야기아니에요$/, replacement: 'ใช่ เอ่อ... นั่นมันเรื่องของสามีภรรยาหรือคู่รักไม่ใช่เหรอครับ?' },
+  { pattern: /^에휴$/, replacement: 'เฮ้อ...' },
+  { pattern: /^그연인같은섹스를$/, replacement: 'เซ็กส์ที่เหมือนคู่รักแบบนั้น' },
+  { pattern: /^제이기심을받아들여줘서그연인같은섹스를$/, replacement: 'ที่ยอมรับความเห็นแก่ตัวของฉัน... เซ็กส์ที่เหมือนคู่รักแบบนั้น' },
+  { pattern: /^제이기심을받아들여줘서$/, replacement: 'ที่ยอมรับความเห็นแก่ตัวของฉัน' },
+  { pattern: /^나를좋아하는게$/, replacement: 'การที่ชอบฉัน' },
+  { pattern: /^나를좋아하는$/, replacement: 'ที่ชอบฉัน' },
+  { pattern: /^예\?*유리선배\?*$/, replacement: 'ใช่เหรอครับ? รุ่นพี่ยูริ?' },
+  { pattern: /^예유리선배$/, replacement: 'ใช่เหรอครับ? รุ่นพี่ยูริ?' },
+  { pattern: /^이건데$/, replacement: 'คืออันนี้เหรอ...?' },
 ];
 
 export const normalizeKoreanColloquialOcrText = (text: string): string => {
@@ -287,7 +361,8 @@ export const normalizeKoreanColloquialOcrText = (text: string): string => {
     .replace(/、/g, ', ')
     .replace(/！/g, '! ')
     .replace(/？/g, '? ')
-    .replace(/〜/g, '~');
+    .replace(/〜/g, '~')
+    .replace(/([.,!?…])(?=[\uAC00-\uD7AF])/g, '$1 ');
 
   KOREAN_COLLOQUIAL_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
@@ -339,7 +414,7 @@ export const applyKoreanConversationalFallback = (
   const source = normalizeWhitespace(sourceText);
   if (!source || !KOREAN_HANGUL_REGEX.test(source)) return null;
 
-  const compactSource = source.replace(/[\s.!?~,\u002D\u2010-\u2015\u2212\u00AD]/g, '');
+  const compactSource = source.replace(/[\s.!?~,\u002D\u2010-\u2015\u2212\u00AD\u2026…]+/g, '');
   const matched = KOREAN_CONVERSATIONAL_FALLBACKS.find((entry) => entry.pattern.test(compactSource));
   if (!matched) return null;
 

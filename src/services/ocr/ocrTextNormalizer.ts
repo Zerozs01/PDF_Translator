@@ -238,6 +238,7 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bs0\b/g, replacement: 'so' },
   { pattern: /BLOWTOB/gi, replacement: 'BLOWJOB' },
   { pattern: /\bnou\b/gi, replacement: 'you' },
+  { pattern: /\by0u\b/gi, replacement: 'you' },
   { pattern: /\bDIseASe\b/gi, replacement: 'DISEASE' },
   { pattern: /\bFOuND\s+A\b/gi, replacement: 'FOUND A' },
   { pattern: /\bS3HS\b/gi, replacement: "SHE'S" },
@@ -327,10 +328,50 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bTheysaysay\s+it\s+wood\b/gi, replacement: "They said it's" },
   { pattern: /\bALREADY\s+LISTEDAS\s+AN\b/gi, replacement: 'ALREADY LISTED AS AN' },
   { pattern: /\bLISTEDAS\s+AN\b/gi, replacement: 'LISTED AS AN' },
-  { pattern: /\bA\s+PPRAISER\s+FOR\s+THIS\b/gi, replacement: 'APPRAISER FOR THIS' },
-  { pattern: /\bAPPRAISER\s+FOR\s+THIS\b/gi, replacement: 'APPRAISER FOR THIS' },
   { pattern: /\bTHE\s+YSAID\s+ITS\b/gi, replacement: "THEY SAID IT'S" },
   { pattern: /\bTHEYSAID\s+ITS\b/gi, replacement: "THEY SAID IT'S" },
+  { pattern: /\bTHISTO\b/gi, replacement: 'THIS TO' },
+  { pattern: /\bYOUCAN\b/gi, replacement: 'YOU CAN' },
+  { pattern: /\bDOeSn't\b/gi, replacement: "DOESN'T" },
+  { pattern: /\bwhA-/gi, replacement: 'WHAT-' },
+  { pattern: /\bNeRVeS\b/gi, replacement: 'NERVES' },
+  { pattern: /\bAMUSInG\b/gi, replacement: 'AMUSING' },
+  { pattern: /\bDEALing\b/gi, replacement: 'DEALING' },
+  { pattern: /\bHonestLy\b/gi, replacement: 'HONESTLY' },
+  { pattern: /\bSAN'S\s+NOT\b/gi, replacement: "SAN'S NOT" },
+  { pattern: /\b1t['’]s\s+A\b/gi, replacement: "It's a" },
+  { pattern: /\b1t['’]s\b/gi, replacement: "It's" },
+  { pattern: /\bAntee\s+it\b/gi, replacement: 'guarantee it' },
+  { pattern: /\bMELED\s+FOR\b/gi, replacement: 'CALLED FOR' },
+  { pattern: /\bA\s+Blt\s+LIKE\b/gi, replacement: 'A BIT LIKE' },
+  { pattern: /\bTAYAM\s+AS\s+AN\b/gi, replacement: 'TAYAMA-SAN' },
+  { pattern: /\bIt['’]s\s+qulte\b/gi, replacement: "It's quite" },
+  { pattern: /\bA\s+cO[-–—\s]*Ar\b/gi, replacement: 'A COLLAR' },
+  { pattern: /\bAn\s+animar\b/gi, replacement: 'An animal' },
+  { pattern: /\banimar\b/gi, replacement: 'animal' },
+  { pattern: /\bA\s+himan\b/gi, replacement: 'A human' },
+  { pattern: /\bhiman\b/gi, replacement: 'human' },
+  { pattern: /\bSmink\b/gi, replacement: 'Smirk' },
+  { pattern: /\b1T\b/g, replacement: 'IT' },
+  { pattern: /[*•·]\s*collar\b/gi, replacement: 'collar' },
+  { pattern: /\bSASAK\s+IS\s+AN\b/gi, replacement: 'SASAKI-SAN' },
+  { pattern: /\bLIEVED!/gi, replacement: 'RELIEVED!' },
+  { pattern: /\bSAAAN\b/gi, replacement: 'SAN' },
+  { pattern: /\bRummnage\b/gi, replacement: 'Rummage' },
+  { pattern: /\bS0\s+y0u\b/gi, replacement: 'SO YOU' },
+  { pattern: /\bSAS4K1\.?\b/gi, replacement: 'SASAKI' },
+  { pattern: /\bPARVON\b/gi, replacement: 'PARDON' },
+  { pattern: /\bTICALLy\b/gi, replacement: 'TICALLY' },
+  { pattern: /\bhinkang\b/gi, replacement: 'thinking' },
+  { pattern: /\bHeve\b/gi, replacement: 'Here' },
+  { pattern: /\bPERY\b/gi, replacement: 'PERV' },
+  { pattern: /\bCLACKS\b/gi, replacement: 'CLACK' },
+  { pattern: /\bGOROL-SAN\b/gi, replacement: 'GOROU-SAN' },
+  { pattern: /\bMY\s+BEY-?\s*BLADE\b/gi, replacement: 'MY BEYBLADE' },
+  { pattern: /\bBRINGHER\b/gi, replacement: 'BRING HER' },
+  { pattern: /\bDOESn't\s+GEt\b/gi, replacement: "DOESN'T GET" },
+  { pattern: /\bSciously\b/gi, replacement: 'consciously' },
+  { pattern: /\bMINISCING\b/gi, replacement: 'REMINISCING' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -400,6 +441,35 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bGUENZA\b/gi, replacement: 'VERGÜENZA' },
   { pattern: /\bCIONANTE\b/gi, replacement: 'EMOCIONANTE' },
   { pattern: /\bMENTE\s+ODIOSO\b/gi, replacement: 'REALMENTE ODIOSO' },
+  { pattern: /\bCONESO\b/gi, replacement: 'CON ESO' },
+  { pattern: /\b[sS]0Y\s+[yY]0\b/g, replacement: 'SOY YO' },
+  { pattern: /\bFENDERSE\.?[sS]0Y\s+[yY]0\b/gi, replacement: 'DEFENDERSE. SOY YO' },
+  { pattern: /\bFENDERSE\b/gi, replacement: 'DEFENDERSE' },
+  { pattern: /\bTIR\s+AVERGONZADA\b/gi, replacement: 'SENTIR AVERGONZADA' },
+  { pattern: /\bBRE,\s*POR\s*FAVOR\b/gi, replacement: 'HOMBRE, POR FAVOR' },
+  { pattern: /\bPLIR\s+CON\s+LO\s+BA-?\b/gi, replacement: 'CUMPLIR CON LO BASICO' },
+  { pattern: /\bCIA\s+ATRAS\s+AS[iI]\s+CO-?\b/gi, replacement: 'HACIA ATRAS ASI COMO' },
+  { pattern: /\bTE\s+LAS\s+PIERNAS\b/gi, replacement: 'ENTRE LAS PIERNAS' },
+  { pattern: /\bGRAFIADO\s+JUNTO\s+A\s+ESO\s+Y\s+QUE\b/gi, replacement: 'FOTOGRAFIADO JUNTO A ESO Y QUE' },
+  { pattern: /\bMERA\s+VEZ\s+QUE\s+LE\b/gi, replacement: 'PRIMERA VEZ QUE LE' },
+  { pattern: /\bCucama\b/gi, replacement: 'cama' },
+  { pattern: /\bLLADO\s+POR\b/gi, replacement: 'HUMILLADO POR' },
+  { pattern: /\bHOOBAE\.LLADO\s+POR\b/gi, replacement: 'HOOBAE. HUMILLADO POR' },
+  { pattern: /\bDA\s+ESE\s+MOMENTO\b/gi, replacement: 'DESDE ESE MOMENTO' },
+  { pattern: /\bTABA\s+DE\s+FORMA\b/gi, replacement: 'ESTABA DE FORMA' },
+  { pattern: /\bGONZOSAS\.PLETA\s*DERROTA\b/gi, replacement: 'VERGONZOSAS. COMPLETA DERROTA' },
+  { pattern: /\bHECHO\.POR\b/gi, replacement: 'HECHO. POR' },
+  { pattern: /\bTRAS\s+LE\s+PELLIZCO\s+LOS\s+PEZONES\b/gi, replacement: 'MIENTRAS LE PELLIZCO LOS PEZONES' },
+  { pattern: /\bQUISTA\s+Y\s+ESTUPIDA\b/gi, replacement: 'CONQUISTA Y ESTUPIDA' },
+  { pattern: /\bQUISTA\s+Y\b/gi, replacement: 'CONQUISTA Y' },
+  { pattern: /\bCLUSIVA\b/gi, replacement: 'EXCLUSIVA' },
+  { pattern: /\bTA\s+DE\s+AHORA\s+EN\b/gi, replacement: 'TRATA DE AHORA EN' },
+  { pattern: /\bTA\s+DE\b/gi, replacement: 'TRATA DE' },
+  { pattern: /\bFELICESAAMBOS\b/gi, replacement: 'FELICES A AMBOS' },
+  { pattern: /\bESO\s+BASTA\.HACE\b/gi, replacement: 'CON ESO BASTA. HACE' },
+  { pattern: /\bCON\s+ESO\s+BASTA\.HACE\b/gi, replacement: 'CON ESO BASTA. HACE' },
+  { pattern: /\b(Pleaderrot|PLETADERROTA)\b/gi, replacement: 'COMPLETA DERROTA' },
+  { pattern: /\bUNIDOS\s+EN\s+LA\s+RELA-?/gi, replacement: 'UNIDOS EN LA RELACION' },
 ];
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;
@@ -408,13 +478,23 @@ export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(Q
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN_V2 = /\b(QUE|ME|TE|SE|LO|LA|LE|NOS|LOS|LAS|DE|UN|UNA|ES|NO|SI|MI|TU|SU)(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/g;
 
 // Split enclitics attached to verbs, e.g., dímelo, cuéntame
-// Whitelist common legitimately glued forms like dime, dame, cuéntame, dile, házmelo to avoid double splitting
 export const SPANISH_ENCLITIC_SPLIT_PATTERN = /\b([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,})(me|te|se|lo|la|nos)\b/gi;
+// Whitelist common legitimately glued forms like dime, dame, cuéntame, dile, házmelo to avoid double splitting
 export const SPANISH_LEGITIMATE_ENCLITICS = new Set([
   'dime', 'dame', 'cuéntame', 'dile', 'házmelo', 'hazmelo', 'cuentame', 'dimelo', 'dámelo', 'damelo',
   'regalo', 'solo', 'malo', 'pelo', 'abuelo', 'abuela', 'escuela', 'novela', 'hola', 'gente',
   'diente', 'puente', 'fuente', 'caliente', 'modelo', 'ejemplo', 'mente', 'presente', 'diferente',
-  'urgente', 'importante', 'paciente', 'cliente', 'corriente', 'brillante', 'excelente', 'pelicula', 'película'
+  'urgente', 'importante', 'paciente', 'cliente', 'corriente', 'brillante', 'excelente', 'pelicula', 'película',
+  'defenderse', 'defender', 'defenderte', 'defenderme', 'defendernos', 'defenderle', 'defenderles'
+]);
+
+export const SPANISH_COMPOUND_SPLIT_EXCLUSIONS = new Set([
+  'defenderse', 'defender', 'defenderte', 'defenderme', 'defendernos', 'defenderle', 'defenderles',
+  'depender', 'depende', 'entender', 'entiende', 'aprender', 'comprender', 'sorprender', 'encender',
+  'conseguir', 'conocer', 'consentir', 'presentar', 'presente', 'presencia',
+  'contenido', 'contento', 'contacto', 'contar', 'control', 'continuar',
+  'sentencia', 'sentimiento', 'entonces', 'encontrar', 'encuentro', 'entero',
+  'entregar', 'entrenar', 'entrada', 'entrar', 'entorno'
 ]);
 
 export const THAI_BOUNDARY_ATTACH_TOKENS = new Set([
@@ -721,7 +801,13 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
 export const splitSpanishUppercaseCompounds = (text: string): string => {
   let normalized = String(text || '');
   for (let i = 0; i < 2; i += 1) {
-    normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, '$1 $2 $3');
+    normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, (match, prefix, func, suffix) => {
+      const lowerMatch = match.toLowerCase();
+      if (SPANISH_COMPOUND_SPLIT_EXCLUSIONS.has(lowerMatch) || lowerMatch.endsWith('mente')) {
+        return match;
+      }
+      return `${prefix} ${func} ${suffix}`;
+    });
   }
   // Apply V2
   normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN_V2, '$1 ');
@@ -729,7 +815,7 @@ export const splitSpanishUppercaseCompounds = (text: string): string => {
   // Apply enclitic split with whitelist guard
   normalized = normalized.replace(SPANISH_ENCLITIC_SPLIT_PATTERN, (match, verb, pronoun) => {
     const lowerMatch = match.toLowerCase();
-    if (SPANISH_LEGITIMATE_ENCLITICS.has(lowerMatch) || lowerMatch.endsWith('mente')) {
+    if (SPANISH_LEGITIMATE_ENCLITICS.has(lowerMatch) || SPANISH_COMPOUND_SPLIT_EXCLUSIONS.has(lowerMatch) || lowerMatch.endsWith('mente')) {
       return match; // Keep as is
     }
     return `${verb} ${pronoun}`;
@@ -751,6 +837,7 @@ export const normalizeSpanishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/\bC+EH(?=[!?…])/gi, 'EH');
   normalized = normalized.replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2}),\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})\b/g, '$1$2');
   normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\s*,\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1, $2');
+  normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9])\.([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1. $2');
   return normalizeWhitespace(normalized);
 };
 
@@ -774,7 +861,7 @@ export const normalizePossessiveCompoundsForTranslation = (text: string): string
   let normalized = normalizeWhitespace(String(text || ''));
   normalized = normalized.replace(/\b([A-Za-z]{3,})['’]S([A-Za-z]{3,})\b/g, "$1'S $2");
   normalized = normalized.replace(/\[\s*([A-Za-z]{3,})['’]S([A-Za-z]{3,})\s*\]/g, "[$1'S $2]");
-  normalized = normalized.replace(/\b([A-Za-z]{3,})([\-_/])([A-Za-z]{3,})\b/g, '$1 $2 $3');
+  normalized = normalized.replace(/\b([A-Za-z]{3,})([\-_/])(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([A-Za-z]{3,})\b/gi, '$1 $2 $3');
   return normalizeWhitespace(normalized);
 };
 
@@ -877,9 +964,9 @@ export const normalizeSourceForTranslationWithThaiSubs = (normalized: string): s
 };
 
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
-  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely
+  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely (preserving Japanese honorifics)
   let raw = String(text || '').replace(/[\r\n]+/g, ' ');
-  raw = raw.replace(/([\p{L}])-\s*([\p{L}])/gu, '$1$2');
+  raw = raw.replace(/([\p{L}])-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([\p{L}])/gui, '$1$2');
 
   let normalized = normalizeTechnicalArtifactsForTranslation(raw);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);

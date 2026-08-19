@@ -701,4 +701,38 @@ describe('TranslationCoordinator & Engines', () => {
       expect(results[0]?.engineUsed).toBe('empty');
     });
   });
+
+  describe('Latest User-Requested Phrases & OCR Normalization', () => {
+    it('translates Sciously, MINISCING, FWINE!, BRINGHER, DOESnt GEt, T-TAYAMA, YA-MA-DA, SASAKI, AMAZING', async () => {
+      const items: TranslatableItem[] = [
+        { id: '1', text: 'Sciously', groupType: 'balloon' },
+        { id: '2', text: 'MINISCING', groupType: 'balloon' },
+        { id: '3', text: 'FWINE!', groupType: 'balloon' },
+        { id: '4', text: 'BRINGHER', groupType: 'balloon' },
+        { id: '5', text: "DOESn't GEt", groupType: 'balloon' },
+        { id: '6', text: 'T-TAYAMA-', groupType: 'balloon' },
+        { id: '7', text: '(YA-MA-DA)', groupType: 'balloon' },
+        { id: '8', text: 'SASAKI-', groupType: 'balloon' },
+        { id: '9', text: 'AMAZING~', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official',
+        translateBatchOffline: vi.fn(),
+      });
+
+      const resMap = new Map(results.map(r => [r.id, r.translatedText]));
+      expect(resMap.get('1')).toBe('อย่างมีสติ');
+      expect(resMap.get('2')).toBe('รำลึกความหลัง');
+      expect(resMap.get('3')).toBe('ส-สบายดี๊!');
+      expect(resMap.get('4')).toBe('พาเธอมา');
+      expect(resMap.get('5')).toBe('ไม่เข้าใจ');
+      expect(resMap.get('6')).toBe('ท-ทายามะ-');
+      expect(resMap.get('7')).toBe('(ยา-มา-ดะ)');
+      expect(resMap.get('8')).toBe('ซาซากิ-');
+      expect(resMap.get('9')).toBe('สุดยอดเลย~');
+    });
+  });
 });

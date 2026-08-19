@@ -101,7 +101,7 @@ import {
 import { getOverlayFontOption, getOverlayPrimaryFontName, resolveOverlayFontFamily } from './constants/overlayFonts';
 import { BBox, OCRLine, OCREngine, OCRPageResult, OCRQualityProfile } from './types';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from './services/vision/ocrVersion';
-import { buildLayerGroupsFromOCR } from './services/layers/LayerGroupingService';
+import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from './services/layers/LayerGroupingService';
 import {
   translateBatchOffline,
   shouldSkipOverlayForUntranslatedCarryOver,
@@ -120,6 +120,118 @@ import {
   lookupShortPhraseTh
 } from './services/translation/offlineTranslationService';
 import { isKnownShortWordHelper, isLikelyEnglishDialogue } from './services/ocr/ocrSafetyLineDedup';
+import { matchMangaGroupLineOverrides } from './services/translation/mangaGroupOverrides';
+import {
+  protectLocationPhrases,
+  protectTranslationTokens,
+  restoreProtectedTokens,
+  isScientificSymbolLikeLine,
+  shouldSkipLineTranslationByScript,
+  shouldPreserveSourceLineForTranslation,
+  shouldPreserveDistinctTechnicalLines,
+  TECHNICAL_LINE_HINT_REGEX,
+  UNKNOWNS_COUNT_REGEX,
+  AXIS_SYMBOL_REGEX,
+  EQUATION_LABEL_REGEX,
+  SCI_SYMBOL_ALLOWED_REGEX,
+  SCI_SYMBOL_SIGNAL_REGEX,
+  SCI_FORCE_COMPONENT_TOKEN_REGEX,
+  SCI_NOTATION_LINE_REGEX,
+  SCI_MATH_LINE_REGEX,
+  PROPER_NOUN_POOL,
+  PROPER_NOUN_THAI_MAP,
+  titleCaseWord,
+  getAvailableProperNoun,
+} from './services/translation/translationTokenProtection';
+import {
+  intervalOverlap,
+  overlapRatio,
+  shouldPruneContextualGhostTranslatableLine,
+  normalizeTranslatableDedupKey,
+  collectMeaningfulTranslatableLatinTokens,
+  countSharedTranslatableLatinTokens,
+  KNOWN_CONVERSATIONAL_DUPLICATE_KEYS,
+  translatableDedupSimilarity,
+  dedupeTranslatableLinesForTranslation,
+  computeAlignmentScore,
+  computeOverlapRatio,
+  shouldUseDenseDialogueGrouping,
+  isLikelyComicDialogueLayout,
+  shouldForceLineByLineForOfflinePanel,
+  shouldUseLineByLineGrouping,
+  shouldUseBalloonAwareGrouping,
+  shouldPreferEnglishSourceForMixedTechnicalPage,
+  resolveBalloonAwareReadingMode,
+  isHesitantSpeech,
+  shouldMergeLines,
+  orderLinesForGrouping,
+  computeLineHorizontalGap,
+  computeLineVerticalGap,
+  shouldConnectDenseDialogueLines,
+  buildDenseDialogueGroupsByConnectivity,
+  buildTranslationGroups,
+} from './services/layout/dialogueGroupingService';
+import {
+  findSplitIndexNear,
+  computeLineSplitWeight,
+  tokenizeRedistributedPart,
+  joinRedistributedTokens,
+  rebalanceRedistributedParts,
+  THAI_PARTICLES,
+  glueTrailingParticles,
+  isRedistributionPlausible,
+  splitTranslatedTextBySourceWeights,
+  resolveRedistributedLineFallback,
+  isSourceFallbackOverlayText,
+} from './services/translation/textRedistributionService';
+
+// Re-export services for backwards compatibility with tests and consumers
+export {
+  protectLocationPhrases,
+  protectTranslationTokens,
+  restoreProtectedTokens,
+  isScientificSymbolLikeLine,
+  shouldSkipLineTranslationByScript,
+  shouldPreserveSourceLineForTranslation,
+  shouldPreserveDistinctTechnicalLines,
+} from './services/translation/translationTokenProtection';
+
+export {
+  intervalOverlap,
+  overlapRatio,
+  shouldPruneContextualGhostTranslatableLine,
+  dedupeTranslatableLinesForTranslation,
+  computeAlignmentScore,
+  computeOverlapRatio,
+  shouldUseDenseDialogueGrouping,
+  isLikelyComicDialogueLayout,
+  shouldForceLineByLineForOfflinePanel,
+  shouldUseLineByLineGrouping,
+  shouldUseBalloonAwareGrouping,
+  shouldPreferEnglishSourceForMixedTechnicalPage,
+  resolveBalloonAwareReadingMode,
+  shouldMergeLines,
+  orderLinesForGrouping,
+  shouldConnectDenseDialogueLines,
+  buildDenseDialogueGroupsByConnectivity,
+  buildTranslationGroups,
+} from './services/layout/dialogueGroupingService';
+
+export {
+  findSplitIndexNear,
+  computeLineSplitWeight,
+  tokenizeRedistributedPart,
+  joinRedistributedTokens,
+  rebalanceRedistributedParts,
+  THAI_PARTICLES,
+  glueTrailingParticles,
+  isRedistributionPlausible,
+  splitTranslatedTextBySourceWeights,
+  resolveRedistributedLineFallback,
+  isSourceFallbackOverlayText,
+} from './services/translation/textRedistributionService';
+
+import { useExportOrchestration } from './hooks/useExportOrchestration';
 
 // Lazy Load Heavy Components
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
@@ -397,616 +509,7 @@ const buildGeminiBasePrompt = (
 
 
 
-const intervalOverlap = (a0: number, a1: number, b0: number, b1: number): number =>
-  Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
 
-const overlapRatio = (a0: number, a1: number, b0: number, b1: number): number => {
-  const overlap = intervalOverlap(a0, a1, b0, b1);
-  const base = Math.max(1, Math.min(Math.max(1, a1 - a0), Math.max(1, b1 - b0)));
-  return overlap / base;
-};
-
-export const shouldPruneContextualGhostTranslatableLine = (
-  candidate: TranslatableLine,
-  lines: TranslatableLine[],
-): boolean => {
-  const text = normalizeWhitespace(String(candidate.text || ''));
-  if (!text) return true;
-
-  if (shouldForceKeepComicTranslationLine(text, {
-    text,
-    confidence: candidate.confidence || 0,
-    bbox: {
-      x0: candidate.left,
-      y0: candidate.top,
-      x1: candidate.right,
-      y1: candidate.bottom,
-    },
-    words: [],
-  }, {
-    width: candidate.right - candidate.left,
-    height: candidate.bottom - candidate.top,
-    area: candidate.area,
-    wordCoverage: candidate.wordCoverage,
-  })) {
-    return false;
-  }
-
-  const width = Math.max(1, candidate.right - candidate.left);
-  const height = Math.max(1, candidate.bottom - candidate.top);
-  const area = Math.max(1, candidate.area || (width * height));
-  const centerX = (candidate.left + candidate.right) * 0.5;
-  const centerY = (candidate.top + candidate.bottom) * 0.5;
-  const tokenCount = text.split(/\s+/g).filter(Boolean).length;
-  const compact = text.replace(/\s+/g, '');
-  const readability = scoreSourceLineReadability(text);
-  const wordCoverage = Math.max(0, Number(candidate.wordCoverage || 0));
-  const wordBoxCount = Math.max(0, Number(candidate.wordBoxCount || 0));
-
-  const neighbors = lines
-    .filter((line) => line.index !== candidate.index)
-    .map((line) => {
-      const otherWidth = Math.max(1, line.right - line.left);
-      const otherHeight = Math.max(1, line.bottom - line.top);
-      const otherArea = Math.max(1, line.area || (otherWidth * otherHeight));
-      const otherCenterX = (line.left + line.right) * 0.5;
-      const otherCenterY = (line.top + line.bottom) * 0.5;
-      const overlapX = overlapRatio(candidate.left, candidate.right, line.left, line.right);
-      const overlapY = overlapRatio(candidate.top, candidate.bottom, line.top, line.bottom);
-      const centerDeltaX = Math.abs(centerX - otherCenterX);
-      const centerDeltaY = Math.abs(centerY - otherCenterY);
-      const otherCoverage = Math.max(0, Number(line.wordCoverage || 0));
-      const otherWordBoxCount = Math.max(0, Number(line.wordBoxCount || 0));
-      const otherReadability = scoreSourceLineReadability(line.text);
-      const strongSignal = (
-        otherWordBoxCount >= 2
-        || otherCoverage >= 0.28
-        || line.sourceLength >= Math.max(8, candidate.sourceLength * 0.9)
-        || otherReadability >= readability + 2.5
-      );
-      return {
-        line,
-        width: otherWidth,
-        height: otherHeight,
-        area: otherArea,
-        overlapX,
-        overlapY,
-        centerDeltaX,
-        centerDeltaY,
-        strongSignal,
-        centerX: otherCenterX,
-        centerY: otherCenterY,
-      };
-    });
-
-  const sameBandNeighbors = neighbors.filter((neighbor) => (
-    neighbor.overlapY >= 0.18
-    || neighbor.centerDeltaY <= Math.max(96, height * 0.95)
-  ));
-  const leftAnchors = sameBandNeighbors.filter((neighbor) => (
-    neighbor.strongSignal
-    && neighbor.width <= width * 0.44
-    && neighbor.line.right <= centerX - Math.max(88, width * 0.08)
-  ));
-  const rightAnchors = sameBandNeighbors.filter((neighbor) => (
-    neighbor.strongSignal
-    && neighbor.width <= width * 0.44
-    && neighbor.line.left >= centerX + Math.max(88, width * 0.08)
-  ));
-  const bridgeLine = (
-    tokenCount >= 4
-    && tokenCount <= 8
-    && wordBoxCount >= 3
-    && width >= 900
-    && leftAnchors.length > 0
-    && rightAnchors.length > 0
-    && leftAnchors.some((leftAnchor) => rightAnchors.some((rightAnchor) => (
-      Math.abs(leftAnchor.centerY - rightAnchor.centerY) <= Math.max(110, height * 0.9)
-      && (rightAnchor.line.left - leftAnchor.line.right) >= Math.max(260, width * 0.22)
-    )))
-  );
-  if (bridgeLine) {
-    return true;
-  }
-
-  const localStrongNeighbors = neighbors.filter((neighbor) => (
-    neighbor.strongSignal
-    && neighbor.centerDeltaY <= Math.max(240, height * 2.4)
-    && (
-      neighbor.overlapX >= 0.28
-      || neighbor.centerDeltaX <= Math.max(240, width * 1.4)
-    )
-  ));
-  const strongAbove = localStrongNeighbors.some((neighbor) => neighbor.centerY < centerY - Math.max(18, height * 0.18));
-  const strongBelow = localStrongNeighbors.some((neighbor) => neighbor.centerY > centerY + Math.max(18, height * 0.18));
-
-  const letters = text.replace(/[^A-Za-z]/g, '');
-  const trailingHyphenFragment = /-\s*$/.test(text)
-    && tokenCount <= 3
-    && (readability <= 12 || area >= 30000)
-    && (letters.length <= 1 || (wordCoverage <= 0.22 && area >= 20000));
-  const oversizedWeakSingleton = tokenCount <= 1
-    && compact.length <= 12
-    && wordBoxCount <= 1
-    && area >= 22000;
-
-  return (
-    (strongBelow && trailingHyphenFragment)
-    || (strongAbove && strongBelow && oversizedWeakSingleton)
-    || (strongAbove && strongBelow && wordBoxCount <= 1 && wordCoverage <= 0.22 && readability <= 4.2 && area >= 18000)
-  );
-};
-
-const normalizeTranslatableDedupKey = (text: string): string =>
-  normalizeWhitespace(String(text || ''))
-    .toUpperCase()
-    .replace(/[^A-Z0-9\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '')
-    .replace(/0/g, 'O')
-    .replace(/1/g, 'I')
-    .replace(/5/g, 'S');
-
-const collectMeaningfulTranslatableLatinTokens = (text: string): string[] => (
-  normalizeWhitespace(String(text || ''))
-    .toUpperCase()
-    .split(/\s+/g)
-    .map((token) => token.replace(/[^A-Z0-9]/g, '').replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S'))
-    .filter((token) => token.length >= 3)
-);
-
-const countSharedTranslatableLatinTokens = (left: string, right: string): number => {
-  const leftTokens = new Set(collectMeaningfulTranslatableLatinTokens(left));
-  const rightTokens = new Set(collectMeaningfulTranslatableLatinTokens(right));
-  let shared = 0;
-  leftTokens.forEach((token) => {
-    if (rightTokens.has(token)) shared += 1;
-  });
-  return shared;
-};
-
-const TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
-const UNKNOWNS_COUNT_REGEX = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+unknowns?\b/i;
-const AXIS_SYMBOL_REGEX = /\b(?:fx|fy|fz|mx|my|mz|rx|ry|rz)\b/gi;
-const EQUATION_LABEL_REGEX = /\([0-9]{1,3}\)/;
-
-const UNKNOWN_COUNT_WORD_TO_NUMBER: Record<string, string> = {
-  one: '1',
-  two: '2',
-  three: '3',
-  four: '4',
-  five: '5',
-  six: '6',
-  seven: '7',
-  eight: '8',
-  nine: '9',
-  ten: '10',
-};
-
-const normalizeUnknownCountToken = (value: string): string => {
-  const normalized = normalizeWhitespace(String(value || '')).toLowerCase();
-  if (!normalized) return '';
-  return UNKNOWN_COUNT_WORD_TO_NUMBER[normalized] || normalized;
-};
-
-const collectUniqueRegexMatches = (value: string, regex: RegExp): string[] => {
-  const normalized = normalizeWhitespace(String(value || '')).toLowerCase();
-  if (!normalized) return [];
-  const flags = regex.flags.includes('g') ? regex.flags : `${regex.flags}g`;
-  const matcher = new RegExp(regex.source, flags);
-  const matches = normalized.match(matcher) || [];
-  return Array.from(new Set(matches.map((item) => item.trim()).filter(Boolean)));
-};
-
-const shouldPreserveDistinctTechnicalLines = (a: string, b: string): boolean => {
-  const normalizedA = normalizeWhitespace(String(a || '')).toLowerCase();
-  const normalizedB = normalizeWhitespace(String(b || '')).toLowerCase();
-  if (!normalizedA || !normalizedB || normalizedA === normalizedB) return false;
-
-  const hasTechnicalA = (
-    TECHNICAL_LINE_HINT_REGEX.test(normalizedA)
-    || UNKNOWNS_COUNT_REGEX.test(normalizedA)
-    || EQUATION_LABEL_REGEX.test(normalizedA)
-  );
-  const hasTechnicalB = (
-    TECHNICAL_LINE_HINT_REGEX.test(normalizedB)
-    || UNKNOWNS_COUNT_REGEX.test(normalizedB)
-    || EQUATION_LABEL_REGEX.test(normalizedB)
-  );
-  if (!hasTechnicalA || !hasTechnicalB) return false;
-
-  const unknownCountA = normalizeUnknownCountToken(normalizedA.match(UNKNOWNS_COUNT_REGEX)?.[1] || '');
-  const unknownCountB = normalizeUnknownCountToken(normalizedB.match(UNKNOWNS_COUNT_REGEX)?.[1] || '');
-  if (unknownCountA && unknownCountB && unknownCountA !== unknownCountB) {
-    return true;
-  }
-
-  const axisTokensA = new Set(collectUniqueRegexMatches(normalizedA, AXIS_SYMBOL_REGEX));
-  const axisTokensB = new Set(collectUniqueRegexMatches(normalizedB, AXIS_SYMBOL_REGEX));
-  if (axisTokensA.size > 0 || axisTokensB.size > 0) {
-    let shared = 0;
-    for (const token of axisTokensA) {
-      if (axisTokensB.has(token)) shared += 1;
-    }
-    if (shared < Math.min(axisTokensA.size, axisTokensB.size)) {
-      return true;
-    }
-  }
-
-  const equationTagsA = new Set(collectUniqueRegexMatches(normalizedA, EQUATION_LABEL_REGEX));
-  const equationTagsB = new Set(collectUniqueRegexMatches(normalizedB, EQUATION_LABEL_REGEX));
-  if (equationTagsA.size > 0 && equationTagsB.size > 0) {
-    let shared = 0;
-    for (const token of equationTagsA) {
-      if (equationTagsB.has(token)) shared += 1;
-    }
-    if (shared === 0) {
-      return true;
-    }
-  }
-
-  return false;
-};
-
-const KNOWN_CONVERSATIONAL_DUPLICATE_KEYS = new Set([
-  'AAREYOU',
-  'AAREYO',
-  'AAREY',
-]);
-
-const translatableDedupSimilarity = (a: string, b: string): number => {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  const grams = (value: string): Set<string> => {
-    const set = new Set<string>();
-    if (value.length < 2) {
-      set.add(value);
-      return set;
-    }
-    for (let i = 0; i < value.length - 1; i += 1) {
-      set.add(value.slice(i, i + 2));
-    }
-    return set;
-  };
-  const aSet = grams(a);
-  const bSet = grams(b);
-  if (aSet.size === 0 || bSet.size === 0) return 0;
-  let overlap = 0;
-  for (const gram of aSet) {
-    if (bSet.has(gram)) overlap += 1;
-  }
-  return (2 * overlap) / (aSet.size + bSet.size);
-};
-
-export const dedupeTranslatableLinesForTranslation = (lines: TranslatableLine[]): TranslatableLine[] => {
-  if (lines.length <= 1) return lines;
-
-  const ordered = [...lines].sort((a, b) => {
-    if (a.top !== b.top) return a.top - b.top;
-    if (a.left !== b.left) return a.left - b.left;
-    return a.index - b.index;
-  });
-
-  const kept: TranslatableLine[] = [];
-  const keptKeys: string[] = [];
-  const mergeRicherDuplicateTextWithCleanerGeometry = (
-    existing: TranslatableLine,
-    existingKey: string,
-    candidate: TranslatableLine,
-    candidateKey: string
-  ): TranslatableLine | null => {
-    if (!existingKey || !candidateKey || existingKey === candidateKey) return null;
-    const minLength = Math.min(existingKey.length, candidateKey.length);
-    if (minLength < 5) return null;
-    const existingContainsCandidate = existingKey.includes(candidateKey);
-    const candidateContainsExisting = candidateKey.includes(existingKey);
-    if (!existingContainsCandidate && !candidateContainsExisting) return null;
-
-    const richer = existingKey.length > candidateKey.length ? existing : candidate;
-    const richerKey = existingKey.length > candidateKey.length ? existingKey : candidateKey;
-    const cleaner = richer === existing ? candidate : existing;
-    const cleanerKey = richer === existing ? candidateKey : existingKey;
-    const richerWordCount = normalizeWhitespace(String(richer.text || '')).split(/\s+/g).filter(Boolean).length;
-    const cleanerWordCount = normalizeWhitespace(String(cleaner.text || '')).split(/\s+/g).filter(Boolean).length;
-    if (richerWordCount > 4 || cleanerWordCount > 3) return null;
-    if (richerKey.length > 22 || cleanerKey.length > 16) return null;
-
-    const richerWidth = Math.max(1, richer.right - richer.left);
-    const richerHeight = Math.max(1, richer.bottom - richer.top);
-    const cleanerWidth = Math.max(1, cleaner.right - cleaner.left);
-    const cleanerHeight = Math.max(1, cleaner.bottom - cleaner.top);
-    const richerArea = Math.max(1, richerWidth * richerHeight);
-    const cleanerArea = Math.max(1, cleanerWidth * cleanerHeight);
-    const richerCoverage = Math.max(0, Number(richer.wordCoverage || 0));
-    const cleanerCoverage = Math.max(0, Number(cleaner.wordCoverage || 0));
-    const richerWordBoxes = Math.max(0, Number(richer.wordBoxCount || 0));
-    const cleanerWordBoxes = Math.max(0, Number(cleaner.wordBoxCount || 0));
-    const cleanerLooksLocalized = (
-      cleanerCoverage >= Math.max(0.36, richerCoverage + 0.14)
-      || (cleanerArea <= richerArea * 0.58 && cleanerCoverage >= Math.max(0.24, richerCoverage))
-      || (cleanerWordBoxes >= richerWordBoxes && cleanerArea <= richerArea * 0.72)
-    );
-    const richerLooksMislocalized = (
-      richerCoverage <= 0.36
-      || richerArea >= cleanerArea * 1.55
-      || richerHeight >= cleanerHeight * 1.7
-    );
-    const shortPhraseRepair = (
-      /^I\s*THINK[.!?…]*$/i.test(richer.text)
-      && /^THINK[.!?…]*$/i.test(cleaner.text)
-      && cleanerCoverage >= Math.max(0.22, richerCoverage)
-    );
-
-    if (!shortPhraseRepair && (!cleanerLooksLocalized || !richerLooksMislocalized)) {
-      return null;
-    }
-
-    const repairedText = /^I\s*THINK[.!?…]*$/i.test(richer.text)
-      ? String(richer.text || '').replace(/^I\s*THINK/i, 'I THINK')
-      : richer.text;
-
-    return {
-      ...cleaner,
-      text: repairedText,
-      sourceLength: Math.max(richer.sourceLength, countReadableLength(repairedText)),
-    };
-  };
-  const lineScore = (line: TranslatableLine): number => {
-    const width = Math.max(1, line.right - line.left);
-    const height = Math.max(1, line.bottom - line.top);
-    const readability = scoreSourceLineReadability(line.text);
-    const area = Math.max(1, width * height);
-    const density = line.sourceLength / Math.max(1, Math.sqrt(area));
-    const wordCoverage = Math.max(0, Math.min(1.5, Number(line.wordCoverage || 0)));
-    const wordBoxCount = Math.max(0, Number(line.wordBoxCount || 0));
-    const coverageBonus = Math.min(1, wordCoverage) * 15.2;
-    const wordBoxBonus = Math.min(4, wordBoxCount) * 1.25;
-    const noWordPenalty = wordBoxCount === 0 ? 4.8 : 0;
-    const oversizedSparsePenalty = (
-      wordCoverage <= 0.2
-      && wordBoxCount <= 1
-      && line.sourceLength <= 34
-      && area >= 14000
-    ) ? (Math.log10(area) * 3.35) : 0;
-
-    const confidence = typeof line.confidence === 'number' ? line.confidence : 85;
-    const confidenceBonus = confidence * 0.16;
-    const hasPunctuation = /[!.?…]/.test(line.text);
-    const punctuationBonus = hasPunctuation ? 3.8 : 0;
-    const endsWithOcrTypoNoise = /[A-Z]{3,}[Il1]$/.test(line.text);
-    const ocrTypoPenalty = endsWithOcrTypoNoise ? 8.5 : 0;
-
-    return (line.sourceLength * 1.82)
-      + (readability * 2.75)
-      + (density * 26)
-      + (height * 0.18)
-      + coverageBonus
-      + wordBoxBonus
-      + confidenceBonus
-      + punctuationBonus
-      - noWordPenalty
-      - oversizedSparsePenalty
-      - ocrTypoPenalty
-      - (Math.log10(area) * 1.45);
-  };
-
-  const processed = ordered.filter(line => {
-    const txt = String(line.text || '').replace(/\s+/g, ' ').trim().toUpperCase();
-    if (txt.includes('AN A PPKADEK') || txt.includes('ANA PPKADEK') || txt.includes('PPKADEK')) {
-      const hasAppraiser = ordered.some(other => {
-        const otherTxt = String(other.text || '').replace(/\s+/g, ' ').trim().toUpperCase();
-        if (otherTxt.includes('APPRAISER') || otherTxt.includes('APPRENTICE')) {
-          // If it overlaps vertically and horizontally to any degree (since they are basically the same text box)
-          const overlapW = Math.max(0, Math.min(other.right, line.right) - Math.max(other.left, line.left));
-          const overlapH = Math.max(0, Math.min(other.bottom, line.bottom) - Math.max(other.top, line.top));
-          const overlapArea = overlapW * overlapH;
-          if (overlapArea > 0) {
-            return true;
-          }
-        }
-        return false;
-      });
-      if (hasAppraiser) {
-        return false; // Skip/drop this line completely
-      }
-    }
-    return true;
-  });
-
-  for (const candidate of processed) {
-    const candidateKey = normalizeTranslatableDedupKey(candidate.text);
-    if (!candidateKey) {
-      kept.push(candidate);
-      keptKeys.push('');
-      continue;
-    }
-
-    let existingIndex = kept.findIndex((existing, index) => {
-      const existingKey = keptKeys[index];
-      if (!existingKey) return false;
-
-      const minLength = Math.min(existingKey.length, candidateKey.length);
-      const keySimilarity = translatableDedupSimilarity(existingKey, candidateKey);
-      const sameOrSubset = existingKey === candidateKey
-        || (minLength >= 5 && (existingKey.includes(candidateKey) || candidateKey.includes(existingKey)));
-      const similar = keySimilarity >= 0.9;
-      if (shouldPreserveDistinctTechnicalLines(existing.text, candidate.text)) return false;
-
-      const existingWidth = Math.max(1, existing.right - existing.left);
-      const candidateWidth = Math.max(1, candidate.right - candidate.left);
-      const existingHeight = Math.max(1, existing.bottom - existing.top);
-      const candidateHeight = Math.max(1, candidate.bottom - candidate.top);
-      const existingArea = existingWidth * existingHeight;
-      const candidateArea = candidateWidth * candidateHeight;
-
-      const overlapW = Math.max(0, Math.min(existing.right, candidate.right) - Math.max(existing.left, candidate.left));
-      const overlapH = Math.max(0, Math.min(existing.bottom, candidate.bottom) - Math.max(existing.top, candidate.top));
-      const overlapArea = overlapW * overlapH;
-
-      const isSpatialContained = (overlapArea / candidateArea) >= 0.85 || (overlapArea / existingArea) >= 0.85;
-      if (isSpatialContained) {
-        if (keySimilarity >= 0.15 || existingKey.includes(candidateKey) || candidateKey.includes(existingKey)) {
-          return true;
-        }
-      }
-      const minWidth = Math.max(24, Math.min(existingWidth, candidateWidth));
-      const minHeight = Math.max(8, Math.min(existingHeight, candidateHeight));
-      const existingCenterX = (existing.left + existing.right) * 0.5;
-      const candidateCenterX = (candidate.left + candidate.right) * 0.5;
-      const existingCenterY = (existing.top + existing.bottom) * 0.5;
-      const candidateCenterY = (candidate.top + candidate.bottom) * 0.5;
-      const centerDeltaX = Math.abs(existingCenterX - candidateCenterX);
-      const centerDeltaY = Math.abs(existingCenterY - candidateCenterY);
-      const overlapX = overlapRatio(existing.left, existing.right, candidate.left, candidate.right);
-      const overlapY = overlapRatio(existing.top, existing.bottom, candidate.top, candidate.bottom);
-
-      // เหตุผล: ป้องกันไม่ให้คำศัพท์ซ้ำกันที่อยู่คนละบรรทัดในบอลลูนเดียวกันถูกตัดสินว่าเป็นคำซ้ำแล้วลบทิ้ง (เช่น FOR YOU / FOR YOU, I CAME / I CAME)
-      // โดยการตรวจสอบสัดส่วนการทับซ้อนแนวตั้ง (vertical overlap) ที่ต้องน้อยกว่าครึ่งกล่อง
-      if (!isSpatialContained && overlapY <= 0.48) {
-        return false;
-      }
-
-      const existingReadability = scoreSourceLineReadability(existing.text);
-      const candidateReadability = scoreSourceLineReadability(candidate.text);
-      const readabilityGap = Math.abs(existingReadability - candidateReadability);
-      const longLinePair = Math.min(existing.sourceLength, candidate.sourceLength) >= 18;
-      const existingWordCount = normalizeWhitespace(String(existing.text || '')).split(/\s+/g).filter(Boolean).length;
-      const candidateWordCount = normalizeWhitespace(String(candidate.text || '')).split(/\s+/g).filter(Boolean).length;
-      const paragraphLikePair = existingWordCount >= 4 && candidateWordCount >= 4;
-      const veryStrongSpatialMatch = overlapY >= 0.82 && overlapX >= 0.64;
-      const compactSpatialMatch = (
-        overlapY >= 0.7
-        && overlapX >= 0.52
-        && centerDeltaY <= Math.max(20, minHeight * 0.92)
-        && centerDeltaX <= Math.max(58, minWidth * 1.3)
-      );
-      const strongSpatialForNoise = (
-        overlapY >= 0.72
-        && overlapX >= 0.5
-        && centerDeltaY <= Math.max(24, minHeight * 1.05)
-        && centerDeltaX <= Math.max(62, minWidth * 1.45)
-      );
-      const technicalLinePair = (
-        TECHNICAL_LINE_HINT_REGEX.test(existing.text)
-        || TECHNICAL_LINE_HINT_REGEX.test(candidate.text)
-        || UNKNOWNS_COUNT_REGEX.test(existing.text)
-        || UNKNOWNS_COUNT_REGEX.test(candidate.text)
-      );
-      const strictSubsetPair = sameOrSubset && Math.abs(existingKey.length - candidateKey.length) >= 8;
-      if (technicalLinePair && strictSubsetPair) {
-        const strictSpatialMatch = veryStrongSpatialMatch || compactSpatialMatch;
-        if (!strictSpatialMatch) return false;
-      }
-      const noisyNearDuplicate = !sameOrSubset
-        && keySimilarity >= 0.72
-        && readabilityGap >= 4.8
-        && (existingReadability <= 1.5 || candidateReadability <= 1.5)
-        && strongSpatialForNoise;
-      const sameBoxSharedPhraseDuplicate = !sameOrSubset
-        && !technicalLinePair
-        && Math.min(existingKey.length, candidateKey.length) >= 8
-        && countSharedTranslatableLatinTokens(existing.text, candidate.text) >= 2
-        && overlapY >= 0.78
-        && overlapX >= 0.56
-        && centerDeltaY <= Math.max(24, minHeight * 1.05)
-        && centerDeltaX <= Math.max(72, minWidth * 1.4);
-
-      if (!sameOrSubset && !similar && !noisyNearDuplicate && !sameBoxSharedPhraseDuplicate) return false;
-
-      const looseSpatialMatchForHighSimilarity = keySimilarity >= 0.85
-        && (
-          (overlapY >= 0.58 && overlapX >= 0.46)
-          || (
-            overlapY >= 0.44
-            && overlapX >= 0.38
-            && centerDeltaY <= Math.max(32, minHeight * 1.35)
-            && centerDeltaX <= Math.max(76, minWidth * 1.5)
-          )
-        );
-
-      if ((longLinePair || paragraphLikePair) && !veryStrongSpatialMatch && !compactSpatialMatch && !looseSpatialMatchForHighSimilarity) {
-        return false;
-      }
-
-      const nearByCenter = (
-        centerDeltaY <= Math.max(34, minHeight * 1.45)
-        && centerDeltaX <= Math.max(72, minWidth * 1.58)
-      );
-      const nearByOverlap = overlapY >= 0.64 && overlapX >= 0.54;
-      const nearBySharedColumn = (
-        centerDeltaY <= Math.max(42, minHeight * 1.72)
-        && centerDeltaX <= Math.max(62, minWidth * 1.32)
-        && overlapX >= 0.7
-      );
-
-      return nearByCenter || nearByOverlap || nearBySharedColumn;
-    });
-
-    if (existingIndex < 0 && KNOWN_CONVERSATIONAL_DUPLICATE_KEYS.has(candidateKey)) {
-      existingIndex = kept.findIndex((existing, index) => {
-        if (keptKeys[index] !== candidateKey) return false;
-
-        const centerXExisting = (existing.left + existing.right) * 0.5;
-        const centerXCandidate = (candidate.left + candidate.right) * 0.5;
-        const horizontalDistance = Math.abs(centerXCandidate - centerXExisting);
-        const verticalDistance = Math.abs(candidate.top - existing.top);
-
-        return verticalDistance <= 420 && horizontalDistance <= 460;
-      });
-    }
-
-    if (existingIndex < 0) {
-      kept.push(candidate);
-      keptKeys.push(candidateKey);
-      continue;
-    }
-
-    const existing = kept[existingIndex];
-    const existingKey = keptKeys[existingIndex];
-    const repairedDuplicate = mergeRicherDuplicateTextWithCleanerGeometry(existing, existingKey, candidate, candidateKey);
-    if (repairedDuplicate) {
-      kept[existingIndex] = repairedDuplicate;
-      keptKeys[existingIndex] = normalizeTranslatableDedupKey(repairedDuplicate.text);
-    } else if (lineScore(candidate) > lineScore(existing)) {
-      kept[existingIndex] = candidate;
-      keptKeys[existingIndex] = candidateKey;
-    }
-  }
-
-  return kept.sort((a, b) => {
-    if (a.top !== b.top) return a.top - b.top;
-    if (a.left !== b.left) return a.left - b.left;
-    return a.index - b.index;
-  });
-};
-
-const computeAlignmentScore = (base: BBox, candidate: BBox): number | null => {
-  const baseCenterX = (base.x0 + base.x1) / 2;
-  const baseCenterY = (base.y0 + base.y1) / 2;
-  const candidateCenterX = (candidate.x0 + candidate.x1) / 2;
-  const candidateCenterY = (candidate.y0 + candidate.y1) / 2;
-  const baseWidth = Math.max(1, base.x1 - base.x0);
-  const baseHeight = Math.max(1, base.y1 - base.y0);
-  const candidateWidth = Math.max(1, candidate.x1 - candidate.x0);
-  const candidateHeight = Math.max(1, candidate.y1 - candidate.y0);
-  const avgWidth = Math.max(1, (baseWidth + candidateWidth) / 2);
-  const avgHeight = Math.max(1, (baseHeight + candidateHeight) / 2);
-  const normalizedXGap = Math.abs(candidateCenterX - baseCenterX) / avgWidth;
-  const normalizedYGap = Math.abs(candidateCenterY - baseCenterY) / avgHeight;
-
-  const yOverlap = overlapRatio(base.y0, base.y1, candidate.y0, candidate.y1);
-  const xOverlap = overlapRatio(base.x0, base.x1, candidate.x0, candidate.x1);
-
-  const sameBand = yOverlap >= 0.14 || normalizedYGap <= 1.55;
-  const sameColumn = xOverlap >= 0.08 || normalizedXGap <= 1.35;
-  if (!sameBand || !sameColumn) return null;
-  if (normalizedXGap >= 1.8 && xOverlap < 0.18) return null;
-
-  let score = yOverlap * 6.4 + xOverlap * 2.6 - normalizedYGap * 1.5 - normalizedXGap * 1.35;
-  if (yOverlap >= 0.42) score += 1.8;
-  if (xOverlap >= 0.3) score += 0.9;
-  if (xOverlap >= 0.5) score += 1.1;
-  if (normalizedXGap <= 0.55) score += 1.0;
-  return score;
-};
 
 const chooseBestSourceTextForLine = (
   baseLine: TranslatableLine,
@@ -1536,9 +1039,18 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
   }
 
   if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
-    const isEnglishCarryover = !resolved || resolved === source || (!/[\u0E00-\u0E7F]/.test(resolved) && /[a-zA-Z]/.test(resolved));
-    if (isEnglishCarryover) {
-      const dictHit = lookupShortPhraseTh(source) || lookupShortPhraseTh(source.replace(/[^A-Za-z0-9]/g, ''));
+    // 1. Korean fallback check
+    if (/[\uAC00-\uD7AF]/.test(source) && (!resolved || !/[\u0E00-\u0E7F]/.test(resolved) || hasKoreanTranslationCarryover(resolved))) {
+      const koFallback = applyKoreanConversationalFallback(source, resolved);
+      if (koFallback) {
+        resolved = koFallback;
+      }
+    }
+
+    // 2. English/Latin/Spanish carryover check
+    const isCarryover = !resolved || resolved === source || (!/[\u0E00-\u0E7F]/.test(resolved) && /[a-zA-Z]/.test(resolved));
+    if (isCarryover) {
+      const dictHit = lookupShortPhraseTh(source) || lookupShortPhraseTh(source.replace(/[^A-Za-z0-9]/g, '')) || lookupShortPhraseTh(normalizeSpanishOcrNoiseForTranslation(source));
       if (dictHit) {
         resolved = dictHit;
       } else {
@@ -1554,7 +1066,6 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
   }
 
   if (!resolved) {
-    // Apply noise repair to source so we at least show cleaned text (e.g., "MYSTERIOUS CONCEPT" not "MY STERIOUS CONCEPT")
     resolved = normalizeSourceForTranslation(source, 'en');
     if (source && resolved === source) {
       console.warn(`[finalizeTranslatedLine] fallback to source for: "${source}"`);
@@ -1572,1063 +1083,6 @@ const finalizeTranslatedLine = (sourceText: string, translatedText: string, targ
     return normalizeThaiTranslationText(resolved);
   }
   return normalizeWhitespace(resolved);
-};
-
-const titleCaseWord = (value: string): string => {
-  const lower = String(value || '').toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-};
-
-const SCI_SYMBOL_ALLOWED_REGEX = /^[A-Za-z0-9()\[\]{}_,.%:+\-*/^=<>|~'"\s\u00B0\u0391-\u03C9\u2190-\u2193\u2212\u2032\u2033]+$/;
-const SCI_SYMBOL_SIGNAL_REGEX = /[0-9\u0391-\u03C9()_+\-*/^=<>%\u00B0\u2190-\u2193\u2212\u2032\u2033]/;
-const SCI_FORCE_COMPONENT_TOKEN_REGEX = /\b(?:F|M)(?:x|y|z|\d{1,2})\b/gi;
-const SCI_NOTATION_LINE_REGEX = /^(?:fig(?:ure)?\.?\s*\d+(?:[-–]\d+)?(?:\s*[a-z])?|table\s*\d+(?:[-–]\d+)?|chapter\s*\d+|[A-Za-z]?\d+(?:[-–]\d+)?|\(\s*[a-z0-9]{1,3}\s*\)|[A-Za-z]\.|[A-Za-z]{1,2}\d{1,2})$/i;
-const SCI_MATH_LINE_REGEX = /^[A-Za-z0-9\u0391-\u03C9()_+\-*/^=<>%\u00B0\u2190-\u2193\u2212\u2032\u2033\s]+$/;
-
-const isScientificSymbolLikeLine = (text: string, sourceLanguage?: string): boolean => {
-  const normalized = normalizeWhitespace(String(text || ''));
-  if (!normalized) return false;
-
-  // Remove trailing/leading underscores before checking exemption
-  const noUnderscore = normalized.replace(/^_+|_+$/g, '');
-  const noUnderscoreUpper = noUnderscore.toUpperCase();
-
-  // If it contains multiple English-like words, it's probably dialogue, not a symbol
-  const ocrWords = noUnderscore.split(/\s+/g).filter(Boolean);
-  const alphaWordCount = ocrWords.filter((w) => w.length >= 2 && /[A-Za-z]/.test(w)).length;
-  if (alphaWordCount >= 2 && !/[=<>+\-*/^]/.test(noUnderscore)) {
-    return false;
-  }
-
-  const asciiCompact = noUnderscoreUpper.replace(/[^A-Z0-9]/g, '');
-  const isKnownShort = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|CUMALOTJUSTLIKETHAT)$/i.test(asciiCompact);
-  if (isKnownShort) {
-    return false;
-  }
-
-  const normalizedSourceLanguage = normalizeTranslationLanguage(sourceLanguage || 'en', 'en');
-  if (normalizedSourceLanguage === 'es') {
-    if (/^(?:SI|NO|EL|LA|UN|YO|TU|SU|ES|EN|DE|AL|LO|TE|ME|SE)$/i.test(noUnderscore)) {
-      return false;
-    }
-  }
-  const forceComponentTokens = normalized.match(SCI_FORCE_COMPONENT_TOKEN_REGEX) || [];
-  if (forceComponentTokens.length > 0) {
-    if (normalized.length <= 48 && ocrWords.length <= 8 && !/[.!?]/.test(normalized)) {
-      return true;
-    }
-  }
-
-  const hasMathSignals = /[0-9=<>%^]/.test(normalized);
-  const naturalLanguageLike = alphaWordCount >= 3 && !hasMathSignals;
-  if (naturalLanguageLike) {
-    return false;
-  }
-
-  if (normalized.length > 28) return false;
-  if (!SCI_SYMBOL_ALLOWED_REGEX.test(normalized)) return false;
-
-  const tokens = ocrWords;
-  if (tokens.length > 5) return false;
-
-  const alnum = normalized.replace(/[^A-Za-z0-9\u0391-\u03C9]/g, '');
-  if (alnum.length > 16) return false;
-
-  const compact = normalized.replace(/\s+/g, ' ');
-  if (SCI_NOTATION_LINE_REGEX.test(compact)) {
-    return true;
-  }
-
-  const hasExplicitSciSignal = SCI_SYMBOL_SIGNAL_REGEX.test(normalized);
-  if (!hasExplicitSciSignal) {
-    return normalized === normalized.toUpperCase() && tokens.length <= 2 && alnum.length <= 2;
-  }
-
-  // Check for real English words BEFORE math-like detection to avoid
-  // false positives like "HMM_ GUESS" being treated as a formula
-  const alphaTokens = tokens
-    .map((token) => token.replace(/[^A-Za-z]/g, ''))
-    .filter(Boolean);
-  const longAlphaTokenCount = alphaTokens.filter((token) => token.length >= 4).length;
-  if (longAlphaTokenCount >= 1) {
-    return false;
-  }
-
-  const hasMathLikeContent = SCI_MATH_LINE_REGEX.test(normalized)
-    && /[\u0391-\u03C9_+\-*/^=<>\u00B0\u2190-\u2193\u2212\u2032\u2033]/.test(normalized);
-  if (hasMathLikeContent) {
-    return true;
-  }
-
-  return tokens.length <= 2 && alnum.length <= 6;
-};
-
-const shouldSkipLineTranslationByScript = (
-  text: string,
-  sourceLanguage: string,
-  ocrLanguageHint?: string
-): boolean => {
-  const normalized = normalizeWhitespace(String(text || ''));
-  if (!normalized) return true;
-
-  const resolvedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
-  const normalizedOcrLanguageHint = String(ocrLanguageHint || '')
-    .split('+')
-    .map((part) => normalizeTranslationLanguage(part, ''))
-    .filter(Boolean);
-  const hasOcrCjkHint = normalizedOcrLanguageHint.some((lang) =>
-    ['ko', 'ja', 'zh', 'th'].includes(lang)
-  );
-  if (resolvedSource === 'ko' || resolvedSource === 'ja' || resolvedSource === 'zh' || resolvedSource === 'th') {
-    return false;
-  }
-  if (hasOcrCjkHint) {
-    return false;
-  }
-
-  const hasLatin = /[A-Za-z]/.test(normalized);
-  const hasHangul = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(normalized);
-  const hasKana = /[\u3040-\u30FF]/.test(normalized);
-  const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(normalized);
-  const hasThai = /[\u0E00-\u0E7F]/.test(normalized);
-  const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
-  const compactLength = normalized.replace(/\s+/g, '').length;
-  const shortTokenLike = compactLength <= 10 || tokenCount <= 2;
-
-  const isCjkText = hasHangul || hasKana;
-  const skipCondition = isCjkText ? (compactLength <= 3) : shortTokenLike;
-  
-  if (!hasLatin && skipCondition && (hasHangul || hasKana || hasHan || hasThai)) {
-    return true;
-  }
-
-  return false;
-};
-
-export const shouldPreserveSourceLineForTranslation = (
-  text: string,
-  sourceLanguage: string,
-  ocrLanguageHint?: string
-): boolean => {
-  const normSrc = normalizeTranslationLanguage(sourceLanguage, 'en');
-  const isNonLatinScript = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/.test(text);
-  if (!isNonLatinScript && (normSrc === 'en' || normSrc === 'es')) {
-    return false; // Valid Latin dialogue lines on English/Spanish pages must NEVER be preserved/skipped!
-  }
-  if (!isNonLatinScript || ['ja', 'ko', 'zh', 'es'].includes(normSrc)) {
-    if (lookupShortPhraseTh(text) || isLikelyEnglishDialogue(text) || isKnownShortWordHelper(text)) return false;
-  }
-  if (/^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)) {
-    if (text.trim() === '69' || lookupShortPhraseTh(text)) return false;
-    return true;
-  }
-  if (isLikelyStructuredOcrGarbageToken(text)) return true;
-  if (isScientificSymbolLikeLine(text, sourceLanguage)) return true;
-  return shouldSkipLineTranslationByScript(text, sourceLanguage, ocrLanguageHint);
-};
-
-const PROPER_NOUN_POOL = [
-  'Zara', 'Kira', 'Nexo', 'Valo', 'Mira', 'Taro', 'Seno', 'Pika', 'Reno', 'Luma',
-  'Gale', 'Vira', 'Zolo', 'Miko', 'Piku', 'Rana', 'Bolo', 'Fina', 'Dina', 'Tina',
-  'Juno', 'Yuna', 'Milo', 'Kael', 'Zina', 'Veda', 'Koda', 'Zola', 'Bena', 'Tavi',
-  'Remi', 'Vito', 'Zori', 'Bria', 'Roko', 'Nura', 'Palo', 'Koba', 'Tova', 'Sola'
-];
-
-const PROPER_NOUN_THAI_MAP: Record<string, string[]> = {
-  zara: ['ซาร่า', 'ซารา'],
-  kira: ['คิรา', 'คีรา', 'กีร่า', 'กีรา'],
-  nexo: ['เน็กโซ', 'เนกโซ'],
-  valo: ['วาโล'],
-  mira: ['มิรา', 'มีรา', 'มิร่า', 'มีร่า'],
-  taro: ['ทาโร่', 'ทาโร'],
-  seno: ['เซโน'],
-  pika: ['ปิก้า', 'ปิกา', 'พีร่า'],
-  reno: ['เรโน'],
-  luma: ['ลูม่า', 'ลูมา'],
-  gale: ['เกล'],
-  vira: ['วิร่า', 'วิรา'],
-  zolo: ['โซโล'],
-  miko: ['มิโกะ', 'มิโก'],
-  piku: ['ปิกุ', 'ปิกุ๊'],
-  rana: ['ราน่า', 'รานา'],
-  web: ['เว็บ'],
-  bolo: ['โบโล'],
-  fina: ['ฟีน่า', 'ฟีนา'],
-  dina: ['ดีน่า', 'ดีนา'],
-  tina: ['ทีน่า', 'ทีนา'],
-  juno: ['จูโน่', 'จูโน'],
-  yuna: ['ยูน่า', 'ยูนา'],
-  milo: ['ไมโล'],
-  kael: ['คาเอล'],
-  zina: ['ซีนา', 'ซีน่า'],
-  veda: ['เวดา', 'วีดา'],
-  koda: ['โคดา', 'โคล่า'],
-  zola: ['โซล่า', 'โซลา'],
-  bena: ['เบน่า', 'เบนา'],
-  tavi: ['ทาวี่', 'ทาวิ'],
-  remi: ['เรมี่', 'เรมิ'],
-  vito: ['วิโต้', 'วิโต'],
-  zori: ['โซรี่', 'โซริ'],
-  bria: ['เบรีย'],
-  roko: ['โรโกะ', 'โรโก'],
-  nura: ['นูร่า', 'นูรา'],
-  palo: ['ปาโล'],
-  koba: ['โคบา'],
-  tova: ['โตวา', 'โทวา'],
-  sola: ['โซล่า', 'โซลา']
-};
-
-const getAvailableProperNoun = (text: string, usedTokens: Set<string>): string => {
-  const textLower = text.toLowerCase();
-  for (const noun of PROPER_NOUN_POOL) {
-    if (!usedTokens.has(noun) && !textLower.includes(noun.toLowerCase())) {
-      return noun;
-    }
-  }
-  let counter = 1;
-  while (true) {
-    const fallbackNoun = `Zara${counter}`;
-    if (!usedTokens.has(fallbackNoun) && !textLower.includes(fallbackNoun.toLowerCase())) {
-      return fallbackNoun;
-    }
-    counter++;
-  }
-};
-
-export const protectLocationPhrases = (
-  text: string,
-  targetLanguage: string,
-  tokenOffset = 0,
-  usedTokens = new Set<string>()
-): { protectedText: string; replacements: ProtectedTokenReplacement[] } => {
-  const replacements: ProtectedTokenReplacement[] = [];
-  let protectedText = text;
-  const locale = String(targetLanguage || '').toLowerCase();
-  const locationRe = /\b([A-Za-z][A-Za-z'\-]{1,}(?:\s+[A-Za-z][A-Za-z'\-]{1,}){0,2})\s+(Town|City|Village|District)\b/g;
-
-  protectedText = protectedText.replace(locationRe, (_match, rawName: string, rawType: string) => {
-    const name = rawName
-      .split(/\s+/g)
-      .map((word) => titleCaseWord(word))
-      .join(' ')
-      .trim();
-    const placeType = String(rawType || '').toLowerCase();
-
-    let replacement = `${name} ${rawType}`;
-    if (locale.startsWith('th')) {
-      if (placeType === 'town' || placeType === 'city') {
-        replacement = `เมือง ${name}`;
-      } else if (placeType === 'village') {
-        replacement = `หมู่บ้าน ${name}`;
-      } else if (placeType === 'district') {
-        replacement = `เขต ${name}`;
-      }
-    }
-
-    const token = getAvailableProperNoun(protectedText, usedTokens);
-    usedTokens.add(token);
-
-    replacements.push({ token, replacement });
-    return token;
-  });
-
-  return { protectedText, replacements };
-};
-
-export const protectTranslationTokens = (
-  text: string,
-  targetLanguage: string
-): { protectedText: string; replacements: ProtectedTokenReplacement[] } => {
-  const usedTokens = new Set<string>();
-  const locationResult = protectLocationPhrases(text, targetLanguage, 0, usedTokens);
-  // Normalize curly quotes/apostrophes in the input text to straight ones for uniform matching
-  let protectedText = locationResult.protectedText.replace(/[\u2018\u2019\u201B\u201C\u201D`‘’“”]/g, "'");
-  const replacements = [...locationResult.replacements];
-
-  try {
-    const defaultEntries = [
-      { sourceText: 'PDF Translator', targetText: 'PDF TRANSLATOR' },
-      { sourceText: 'OCR', targetText: 'OCR' }
-    ];
-    const entries = [
-      ...defaultEntries.map(e => ({ ...e, id: 'default-' + e.sourceText, isActive: true, type: 'TERM' as const })),
-      ...useGlossaryStore.getState().entries
-    ];
-    const activeEntries = entries
-      .filter((e) => e.isActive && e.sourceText.trim())
-      .sort((a, b) => b.sourceText.length - a.sourceText.length);
-
-    const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    activeEntries.forEach((entry) => {
-      const source = entry.sourceText.trim();
-      const target = entry.targetText.trim();
-      
-      // Normalize curly quotes/apostrophes in the glossary source text as well
-      const normalizedSource = source
-        .replace(/[\u2018\u2019\u201B\u201C\u201D`‘’“”]/g, "'")
-        .replace(/\s+/g, ' ');
-
-      if (!normalizedSource) return;
-
-      // Check boundary characters to only apply \b when starting/ending with a word character
-      // This avoids \b matching failures on entries starting or ending with punctuation (e.g. "SHUP UP!")
-      const hasWordStart = /^\w/.test(normalizedSource);
-      const hasWordEnd = /\w$/.test(normalizedSource);
-      
-      const patternStr = (hasWordStart ? '\\b' : '') + escapeRegExp(normalizedSource) + (hasWordEnd ? '\\b' : '');
-      const pattern = new RegExp(patternStr, 'gi');
-
-      const token = getAvailableProperNoun(protectedText, usedTokens);
-      const nextText = protectedText.replace(pattern, token);
-      if (nextText !== protectedText) {
-        usedTokens.add(token);
-        protectedText = nextText;
-        replacements.push({ token, replacement: target });
-      }
-    });
-  } catch (err) {
-    console.error('[App] Failed to apply Custom Glossary Token Protection:', err);
-  }
-
-  return { protectedText, replacements };
-};
-
-export const restoreProtectedTokens = (text: string, replacements: ProtectedTokenReplacement[]): string => {
-  let restored = text;
-  for (const item of replacements) {
-    const englishPattern = buildLooseTokenPattern(item.token);
-    let nextRestored = restored.replace(englishPattern, item.replacement);
-    
-    if (nextRestored === restored) {
-      const lowerToken = item.token.toLowerCase();
-      const thaiAliases = PROPER_NOUN_THAI_MAP[lowerToken] || [];
-      for (const alias of thaiAliases) {
-        const thaiPattern = new RegExp(escapeRegExp(alias), 'gi');
-        nextRestored = nextRestored.replace(thaiPattern, item.replacement);
-      }
-    }
-    restored = nextRestored;
-  }
-  return restored;
-};
-
-const computeOverlapRatio = (a: TranslatableLine, b: TranslatableLine): number => {
-  const overlap = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
-  const baseWidth = Math.max(1, Math.min(a.right - a.left, b.right - b.left));
-  return overlap / baseWidth;
-};
-
-const shouldUseDenseDialogueGrouping = (
-  lines: TranslatableLine[],
-  sourceLanguage: string,
-  targetLanguage: string,
-  mode: TranslationMode
-): boolean => {
-  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
-  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
-  if (normalizedTarget !== 'th') return false;
-  const avgLength = lines.reduce((sum, line) => sum + line.text.length, 0) / Math.max(1, lines.length);
-  const technicalHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
-  const longSentenceLines = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    return normalized.length >= 44 || normalized.split(/\s+/g).filter(Boolean).length >= 8;
-  }).length;
-  const looksDocumentLike = technicalHits >= 2 || longSentenceLines >= 3 || avgLength >= 24;
-
-  if (mode === 'adaptive' && looksDocumentLike) {
-    return false;
-  }
-
-  if (mode === 'manga') {
-    return ['en', 'ja', 'ko', 'zh', 'es'].includes(normalizedSource);
-  }
-
-  if (mode === 'manhwa') {
-    return normalizedSource === 'ko' || normalizedSource === 'en';
-  }
-
-  if (mode === 'adaptive') {
-    return ['en', 'ja', 'ko', 'zh', 'es'].includes(normalizedSource);
-  }
-
-  return normalizedSource === 'ko' || normalizedSource === 'es';
-};
-
-const isLikelyComicDialogueLayout = (lines: TranslatableLine[]): boolean => {
-  if (lines.length < 4) return false;
-
-  const widths = lines.map((line) => Math.max(1, line.right - line.left));
-  const heights = lines.map((line) => Math.max(1, line.height));
-  const medianWidth = computeMedian(widths);
-  const medianHeight = computeMedian(heights);
-  const shortLineCount = lines.filter((line) => normalizeWhitespace(String(line.text || '')).length <= 34).length;
-  const narrowOrBubbleLikeCount = lines.filter((line) => {
-    const width = Math.max(1, line.right - line.left);
-    const height = Math.max(1, line.height);
-    const aspect = width / Math.max(1, height);
-    return aspect <= 8.0 || width <= medianWidth * 0.95 || height >= medianHeight * 1.15;
-  }).length;
-  const longPunctuatedCount = lines.filter((line) => {
-    const text = normalizeWhitespace(String(line.text || ''));
-    return text.length >= 20 && /[.,;:]/.test(text);
-  }).length;
-
-  const result = (
-    shortLineCount >= Math.ceil(lines.length * 0.62)
-    && narrowOrBubbleLikeCount >= Math.ceil(lines.length * 0.58)
-    && longPunctuatedCount <= Math.max(1, Math.floor(lines.length * 0.24))
-  );
-  console.log(`[isLikelyComicDialogueLayout] lines=${lines.length} shortLineCount=${shortLineCount}/${Math.ceil(lines.length * 0.62)} narrowOrBubbleLikeCount=${narrowOrBubbleLikeCount}/${Math.ceil(lines.length * 0.58)} longPunctuatedCount=${longPunctuatedCount}/${Math.max(1, Math.floor(lines.length * 0.24))} result=${result}`);
-  return result;
-};
-
-const shouldForceLineByLineForOfflinePanel = (lines: TranslatableLine[]): boolean => {
-  if (lines.length < 3) return false;
-
-  const normalizedLines = lines.map((line) => normalizeWhitespace(String(line.text || ''))).filter(Boolean);
-  if (normalizedLines.length < 3) return false;
-
-  const avgLength = normalizedLines.reduce((sum, text) => sum + text.length, 0) / normalizedLines.length;
-  const technicalHits = normalizedLines.filter((text) => TECHNICAL_SOURCE_HINT_REGEX.test(text)).length;
-  if (technicalHits < 3) return false;
-  const shortLineCount = normalizedLines.filter((text) => text.length <= 34).length;
-  const uppercaseDominantCount = normalizedLines.filter((text) => {
-    const letters = text.replace(/[^A-Za-z]/g, '');
-    if (letters.length < 5) return false;
-    return letters === letters.toUpperCase();
-  }).length;
-  const hasBracketNarration = normalizedLines.some((text) => /\[[^\]]{4,}\]/.test(text));
-  const hasPossessiveCompound = normalizedLines.some((text) => /\b[A-Za-z]{3,}['’]S[A-Za-z]{3,}\b/.test(text));
-
-  const mostlyShort = shortLineCount >= Math.ceil(normalizedLines.length * 0.7);
-  const mostlyUppercase = uppercaseDominantCount >= Math.ceil(normalizedLines.length * 0.5);
-  if (normalizedLines.length >= 5 && mostlyShort && avgLength >= 18 && avgLength <= 38 && technicalHits >= 4) {
-    return true;
-  }
-
-  return mostlyShort && mostlyUppercase && (hasBracketNarration || hasPossessiveCompound);
-};
-
-const TECHNICAL_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|conditions?|equilibrium|rigid|body|reaction|moment|force|free[-\s]?body|unknowns?|support|collinear|diagram|objectives?)\b/i;
-const TECHNICAL_TABLE_ROW_HINT_REGEX = /\b(?:table|continued|types?\s+of\s+connection|number\s+of\s+unknowns|reactions?|unknowns?|components?|couple\s+moment|magnitude|direction|resultant|smooth\s+pin|hinge|fixed\s+support|collar|rod|member\s+fixed|bridge|building|beam|welded|column)\b|^\(?\d+\)?$|^(?:fx|fy|fyt|f|m|or)$/i;
-
-export const shouldUseLineByLineGrouping = (
-  lines: TranslatableLine[],
-  sourceLanguage: string,
-  targetLanguage: string,
-  engine: 'offline' | 'ai' | 'm2m100',
-  mode: TranslationMode
-): boolean => {
-  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
-  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
-  if (normalizedTarget !== 'th') return false;
-  if (lines.length <= 4) return false;
-
-  const markerHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
-  const tableRowSignalCount = lines.reduce((count, line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    return count + (TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalized) ? 1 : 0);
-  }, 0);
-  const latinHeavyLineCount = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
-    const nonSpaceChars = normalized.replace(/\s+/g, '').length;
-    const latinRatio = latinChars / Math.max(1, nonSpaceChars);
-    return latinChars >= 8 && latinRatio >= 0.45;
-  }).length;
-  const avgLength = lines.reduce((sum, line) => sum + line.text.length, 0) / Math.max(1, lines.length);
-  const longSentenceLines = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
-    return normalized.length >= 48
-      || (normalized.length >= 20 && /[.,;:]/.test(normalized))
-      || tokenCount >= 8;
-  }).length;
-  const shortLineCount = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    return normalized.length > 0 && normalized.length <= 36;
-  }).length;
-  const compactTechnicalRowCount = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
-    return tokenCount >= 2
-      && tokenCount <= 9
-      && (
-        TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalized)
-        || (
-          TECHNICAL_SOURCE_HINT_REGEX.test(normalized)
-          && normalized.length <= 56
-        )
-      );
-  }).length;
-  const noisyLines = lines.filter((line) => scoreSourceLineReadability(line.text) < 4).length;
-  const uppercaseHeadingLines = lines.filter((line) => {
-    const latin = line.text.replace(/[^A-Za-z]/g, '');
-    if (latin.length < 5) return false;
-    const upperRatio = latin.replace(/[^A-Z]/g, '').length / latin.length;
-    return upperRatio >= 0.72;
-  }).length;
-  const tableLikeTechnicalDocument = markerHits >= 3
-    && shortLineCount >= Math.ceil(lines.length * 0.45)
-    && tableRowSignalCount >= Math.max(4, Math.floor(lines.length * 0.28));
-  const mixedTechnicalEvidence = markerHits >= 2
-    && latinHeavyLineCount >= 3
-    && (longSentenceLines >= 1 || tableRowSignalCount >= 2);
-  const strongTechnicalDocument = markerHits >= 3
-    && longSentenceLines >= 3
-    && avgLength >= 21
-    && uppercaseHeadingLines >= 1;
-  const compactTechnicalRowPage = markerHits >= 1
-    && compactTechnicalRowCount >= Math.max(3, Math.floor(lines.length * 0.32))
-    && shortLineCount >= Math.ceil(lines.length * 0.4)
-    && latinHeavyLineCount >= Math.max(2, Math.floor(lines.length * 0.24));
-  const technicalEvidenceStrong = (
-    tableLikeTechnicalDocument
-    || strongTechnicalDocument
-    || mixedTechnicalEvidence
-    || compactTechnicalRowPage
-  );
-
-  if ((mode === 'manga' || mode === 'manhwa') && tableLikeTechnicalDocument) {
-    return true;
-  }
-
-  if (mode !== 'official' && mode !== 'adaptive') return false;
-
-  const comicDialogueLike = isLikelyComicDialogueLayout(lines);
-  if (mode === 'adaptive' && comicDialogueLike && !technicalEvidenceStrong) {
-    return false;
-  }
-
-  if (mode === 'adaptive') {
-    if (tableLikeTechnicalDocument) {
-      return true;
-    }
-    if (strongTechnicalDocument) {
-      return true;
-    }
-    if (compactTechnicalRowPage) {
-      return true;
-    }
-    return mixedTechnicalEvidence && (normalizedSource === 'en' || normalizedSource === 'th');
-  }
-
-  const officialDocumentSignals = (
-    (markerHits >= 2 && (longSentenceLines >= 2 || avgLength >= 20))
-    || (markerHits >= 1 && uppercaseHeadingLines >= 2 && lines.length >= 8)
-    || tableLikeTechnicalDocument
-    || compactTechnicalRowPage
-  );
-  if (officialDocumentSignals) {
-    return true;
-  }
-
-  if (engine === 'offline' && markerHits >= 2 && noisyLines >= 3 && longSentenceLines >= 2) {
-    return true;
-  }
-
-  if (engine === 'offline' && mixedTechnicalEvidence && normalizedSource !== 'en') {
-    return true;
-  }
-
-  return false;
-};
-
-const shouldUseBalloonAwareGrouping = (
-  lines: TranslatableLine[],
-  sourceLanguage: string,
-  targetLanguage: string,
-  mode: TranslationMode
-): boolean => {
-  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
-  if (normalizedTarget !== 'th') return false;
-  if (lines.length < 2) return false;
-  if (mode === 'official') return false;
-
-  const technicalHits = lines.reduce((count, line) => count + (TECHNICAL_SOURCE_HINT_REGEX.test(line.text) ? 1 : 0), 0);
-  const technicalRowHits = lines.reduce((count, line) => count + (TECHNICAL_TABLE_ROW_HINT_REGEX.test(normalizeWhitespace(line.text)) ? 1 : 0), 0);
-  if (technicalHits >= 3 || technicalRowHits >= Math.max(3, Math.floor(lines.length * 0.24))) {
-    return false;
-  }
-
-  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
-  const comicLike = isLikelyComicDialogueLayout(lines);
-  if (mode === 'manga' || mode === 'manhwa') {
-    return comicLike || ['en', 'es', 'ja', 'ko', 'zh'].includes(normalizedSource);
-  }
-
-  if (mode === 'adaptive') {
-    return comicLike;
-  }
-
-  return false;
-};
-
-const resolveBalloonAwareReadingMode = (
-  sourceLanguage: string,
-  mode: TranslationMode
-): LayoutReadingMode => {
-  const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
-  if (mode === 'manga' && normalizedSource === 'ja') {
-    return 'rtl';
-  }
-  if (mode === 'manhwa' || normalizedSource === 'ko' || normalizedSource === 'zh') {
-    return 'auto';
-  }
-  return 'ltr';
-};
-
-const shouldPreferEnglishSourceForMixedTechnicalPage = (
-  lines: TranslatableLine[],
-  inferredSourceLanguage: string,
-  targetLanguage: string,
-  mode: TranslationMode
-): boolean => {
-  const normalizedSource = normalizeTranslationLanguage(inferredSourceLanguage, 'en');
-  const normalizedTarget = normalizeTranslationLanguage(targetLanguage, 'th');
-  if (normalizedTarget !== 'th') return false;
-  if (mode !== 'official' && mode !== 'adaptive') return false;
-  if (normalizedSource === 'en') return false;
-
-  const latinHeavyLineCount = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
-    const nonSpaceChars = normalized.replace(/\s+/g, '').length;
-    const latinRatio = latinChars / Math.max(1, nonSpaceChars);
-    return latinChars >= 8 && latinRatio >= 0.5;
-  }).length;
-
-  if (latinHeavyLineCount < 3) return false;
-
-  const technicalHintCount = lines.reduce((count, line) => (
-    count + (TECHNICAL_SOURCE_HINT_REGEX.test(String(line.text || '')) ? 1 : 0)
-  ), 0);
-  const longLatinSentenceCount = lines.filter((line) => {
-    const normalized = normalizeWhitespace(String(line.text || ''));
-    const latinChars = (normalized.match(/[A-Za-z]/g) || []).length;
-    const tokenCount = normalized.split(/\s+/g).filter(Boolean).length;
-    return latinChars >= 12 && tokenCount >= 5 && /[.,;:]/.test(normalized);
-  }).length;
-
-  return technicalHintCount >= 2 || longLatinSentenceCount >= 2;
-};
-
-const isHesitantSpeech = (text: string): boolean => {
-  const normalized = (text || '').trim();
-  return /^[A-Za-z]\s*-\s*[A-Za-z][A-Za-z]{0,3}[!?….-]*$/i.test(normalized);
-};
-
-const shouldMergeLines = (
-  previous: TranslatableLine,
-  current: TranslatableLine,
-  medianHeight: number,
-  profile: TranslationGroupingProfile = 'default'
-): boolean => {
-  const baseHeight = Math.max(8, medianHeight || previous.height || current.height || 8);
-  const isDense = profile === 'dense-dialogue';
-  const verticalGap = current.top - previous.bottom;
-  const overlapRatio = computeOverlapRatio(previous, current);
-  const leftDelta = Math.abs(current.left - previous.left);
-  const previousCenter = (previous.left + previous.right) * 0.5;
-  const currentCenter = (current.left + current.right) * 0.5;
-  const centerDelta = Math.abs(currentCenter - previousCenter);
-
-  if (isHesitantSpeech(previous.text) || isHesitantSpeech(current.text)) {
-    const tightSameBubble = overlapRatio >= 0.75
-      && centerDelta <= baseHeight * 0.8
-      && Math.abs(verticalGap) <= baseHeight * 0.25;
-    if (!tightSameBubble) {
-      return false;
-    }
-  }
-  const centeredStack = isDense && centerDelta <= baseHeight * 1.7;
-  const aligned = overlapRatio >= (isDense ? 0.14 : 0.18)
-    || leftDelta <= baseHeight * (isDense ? 2.4 : 1.8)
-    || centeredStack;
-  const continuation = isLikelyContinuation(previous.text, current.text);
-  const sameRowSeparatedColumns = Math.abs(current.top - previous.top) <= baseHeight * 1.25
-    && overlapRatio <= 0.34
-    && centerDelta >= baseHeight * 2.8;
-  const sameRowFarSeparatedColumns = Math.abs(current.top - previous.top) <= baseHeight * 1.45
-    && overlapRatio <= 0.28
-    && centerDelta >= baseHeight * 4.2;
-
-  const previousInterjection = isLikelyStandaloneInterjectionLine(previous.text);
-  const currentInterjection = isLikelyStandaloneInterjectionLine(current.text);
-
-
-  if (previousInterjection || currentInterjection) {
-    const tightSameBubble = overlapRatio >= 0.56
-      && centerDelta <= baseHeight * 1.05
-      && Math.abs(verticalGap) <= baseHeight * 1.25;
-    if (!tightSameBubble) {
-      return false;
-    }
-  }
-
-  if (sameRowSeparatedColumns || sameRowFarSeparatedColumns) {
-    return false;
-  }
-
-  const previousEndsSentence = isStrongSentenceEnd(previous.text)
-    && !SOFT_CONTINUATION_END_REGEX.test(previous.text.trim());
-  if (previousEndsSentence && !continuation) {
-    const wideVerticalBreak = verticalGap >= baseHeight * 1.1;
-    if (wideVerticalBreak) {
-      return false;
-    }
-  }
-
-  const isLikelyStandaloneDialogueLine = (text: string): boolean => {
-    const normalized = normalizeWhitespace(String(text || ''));
-    if (!normalized) return false;
-    const tokens = normalized.split(/\s+/g).filter(Boolean);
-    if (tokens.length === 0 || tokens.length > 7) return false;
-    if (normalized.length > 42) return false;
-    if (SOFT_CONTINUATION_END_REGEX.test(normalized)) return false;
-    if (CONTINUATION_TRAILING_WORD_REGEX.test(normalized)) return false;
-
-    const latin = normalized.replace(/[^A-Za-z]/g, '');
-    const uppercaseRatio = latin.length > 0
-      ? latin.replace(/[^A-Z]/g, '').length / latin.length
-      : 0;
-    const bracketNarration = /^\[[^\]]+\]$/.test(normalized);
-
-    return bracketNarration
-      || (!isStrongSentenceEnd(normalized) && (uppercaseRatio >= 0.58 || tokens.length <= 3));
-  };
-
-  if (!continuation && verticalGap >= baseHeight * 0.45) {
-    const previousStandalone = isLikelyStandaloneDialogueLine(previous.text);
-    const currentStandalone = isLikelyStandaloneDialogueLine(current.text);
-    const weakColumnLink = overlapRatio < 0.38 && centerDelta >= baseHeight * 1.25;
-    if (previousStandalone && currentStandalone && weakColumnLink) {
-      return false;
-    }
-  }
-
-  // Overlapping boxes are treated as same paragraph if they still align.
-  if (verticalGap <= 0 && aligned) return true;
-
-  const normalGapLimit = baseHeight * (isDense ? 1.85 : 1.15);
-  const continuationGapLimit = baseHeight * (isDense ? 2.55 : 1.9);
-  const gapLimit = continuation ? continuationGapLimit : normalGapLimit;
-  if (verticalGap > gapLimit) return false;
-
-  if (aligned) return true;
-  return continuation && verticalGap <= continuationGapLimit;
-};
-
-type GroupingColumn = {
-  lines: TranslatableLine[];
-  left: number;
-  right: number;
-  centerX: number;
-  firstTop: number;
-  lastTop: number;
-  lastBottom: number;
-};
-
-const computeGroupingColumnAffinity = (
-  column: GroupingColumn,
-  line: TranslatableLine,
-  baseHeight: number
-): number | null => {
-  const columnWidth = Math.max(1, column.right - column.left);
-  const lineWidth = Math.max(1, line.right - line.left);
-  const overlap = overlapRatio(column.left, column.right, line.left, line.right);
-  const lineCenterX = (line.left + line.right) * 0.5;
-  const centerDelta = Math.abs(lineCenterX - column.centerX);
-  const rowDelta = Math.abs(line.top - column.lastTop);
-  const verticalGap = line.top - column.lastBottom;
-  const normalizedCenterDelta = centerDelta / Math.max(1, Math.max(columnWidth, lineWidth));
-  const sameRowButDifferentColumn = rowDelta <= baseHeight * 1.4
-    && overlap <= 0.24
-    && centerDelta >= baseHeight * 1.35;
-  if (sameRowButDifferentColumn) return null;
-
-  const centerAligned = centerDelta <= Math.max(34, Math.min(columnWidth, lineWidth) * 0.48, baseHeight * 1.55);
-  const leftAligned = Math.abs(line.left - column.left) <= Math.max(42, baseHeight * 2.2);
-  const canBridge = overlap >= 0.2 || (centerAligned && leftAligned && rowDelta <= baseHeight * 1.95);
-  if (!canBridge) return null;
-
-  const outsideVerticalBand = verticalGap > baseHeight * 3.3 || verticalGap < -baseHeight * 0.95;
-  if (outsideVerticalBand) return null;
-
-  const backwardsPenalty = line.top < column.lastTop - baseHeight * 0.8 ? 1.6 : 0;
-  const stretchedGapPenalty = verticalGap > baseHeight * 1.9
-    ? ((verticalGap - (baseHeight * 1.9)) / Math.max(1, baseHeight)) * 1.25
-    : 0;
-  return overlap * 5.8 - normalizedCenterDelta * 2.8 - backwardsPenalty - stretchedGapPenalty;
-};
-
-const orderLinesForGrouping = (lines: TranslatableLine[], medianHeight: number): TranslatableLine[] => {
-  if (lines.length <= 2) return [...lines];
-
-  const seeded = [...lines].sort((a, b) => {
-    if (a.top !== b.top) return a.top - b.top;
-    if (a.left !== b.left) return a.left - b.left;
-    return a.index - b.index;
-  });
-
-  const baseHeight = Math.max(8, medianHeight || computeMedian(seeded.map((line) => Math.max(1, line.height))));
-  const columns: GroupingColumn[] = [];
-
-  seeded.forEach((line) => {
-    let bestColumnIndex = -1;
-    let bestScore = Number.NEGATIVE_INFINITY;
-
-    for (let i = 0; i < columns.length; i += 1) {
-      const score = computeGroupingColumnAffinity(columns[i], line, baseHeight);
-      if (score === null) continue;
-      if (score > bestScore) {
-        bestScore = score;
-        bestColumnIndex = i;
-      }
-    }
-
-    if (bestColumnIndex < 0 || bestScore < -2.1) {
-      columns.push({
-        lines: [line],
-        left: line.left,
-        right: line.right,
-        centerX: (line.left + line.right) * 0.5,
-        firstTop: line.top,
-        lastTop: line.top,
-        lastBottom: line.bottom,
-      });
-      return;
-    }
-
-    const column = columns[bestColumnIndex];
-    column.lines.push(line);
-    column.left = Math.min(column.left, line.left);
-    column.right = Math.max(column.right, line.right);
-    column.centerX = (column.left + column.right) * 0.5;
-    column.lastTop = line.top;
-    column.lastBottom = Math.max(column.lastBottom, line.bottom);
-  });
-
-  const orderedColumns = columns
-    .map((column) => ({
-      ...column,
-      lines: [...column.lines].sort((a, b) => {
-        if (a.top !== b.top) return a.top - b.top;
-        if (a.left !== b.left) return a.left - b.left;
-        return a.index - b.index;
-      }),
-    }))
-    .sort((a, b) => {
-      const topDelta = a.firstTop - b.firstTop;
-      const verticalOverlap = intervalOverlap(a.firstTop, a.lastBottom, b.firstTop, b.lastBottom);
-      const minColumnSpan = Math.max(1, Math.min(
-        Math.max(1, a.lastBottom - a.firstTop),
-        Math.max(1, b.lastBottom - b.firstTop)
-      ));
-      const overlapRatio = verticalOverlap / minColumnSpan;
-      const sameReadingBand = overlapRatio >= 0.16 || Math.abs(topDelta) <= baseHeight * 1.35;
-      if (sameReadingBand) {
-        if (a.left !== b.left) return a.left - b.left;
-        if (a.centerX !== b.centerX) return a.centerX - b.centerX;
-      }
-      if (topDelta !== 0) return topDelta;
-      if (a.left !== b.left) return a.left - b.left;
-      return a.centerX - b.centerX;
-    });
-
-  return orderedColumns.flatMap((column) => column.lines);
-};
-
-const computeLineHorizontalGap = (a: TranslatableLine, b: TranslatableLine): number =>
-  Math.max(0, Math.max(a.left, b.left) - Math.min(a.right, b.right));
-
-const computeLineVerticalGap = (a: TranslatableLine, b: TranslatableLine): number =>
-  Math.max(0, Math.max(a.top, b.top) - Math.min(a.bottom, b.bottom));
-
-const shouldConnectDenseDialogueLines = (
-  a: TranslatableLine,
-  b: TranslatableLine,
-  baseHeight: number
-): boolean => {
-  const overlapX = overlapRatio(a.left, a.right, b.left, b.right);
-  const overlapY = overlapRatio(a.top, a.bottom, b.top, b.bottom);
-  const horizontalGap = computeLineHorizontalGap(a, b);
-  const verticalGap = computeLineVerticalGap(a, b);
-
-  const centerAx = (a.left + a.right) * 0.5;
-  const centerBx = (b.left + b.right) * 0.5;
-  const centerDeltaX = Math.abs(centerAx - centerBx);
-
-  const widthA = Math.max(1, a.right - a.left);
-  const widthB = Math.max(1, b.right - b.left);
-  const minWidth = Math.max(1, Math.min(widthA, widthB));
-
-
-
-  const hesitantA = isHesitantSpeech(a.text);
-  const hesitantB = isHesitantSpeech(b.text);
-  if (hesitantA || hesitantB) {
-    const tightSameBubble = overlapX >= 0.75
-      && centerDeltaX <= baseHeight * 0.8
-      && verticalGap <= baseHeight * 0.25;
-    if (!tightSameBubble) {
-      return false;
-    }
-  }
-
-  const interjectionA = isLikelyStandaloneInterjectionLine(a.text);
-  const interjectionB = isLikelyStandaloneInterjectionLine(b.text);
-  if (interjectionA || interjectionB) {
-    const tightSameBubble = overlapX >= 0.56
-      && centerDeltaX <= baseHeight * 1.05
-      && verticalGap <= baseHeight * 1.3;
-    if (!tightSameBubble) {
-      return false;
-    }
-  }
-
-  const sameRowSeparatedColumns = overlapY >= 0.24
-    && overlapX <= 0.18
-    && horizontalGap >= baseHeight * 0.9
-    && centerDeltaX >= baseHeight * 1.9;
-  if (sameRowSeparatedColumns) return false;
-
-  const verticallyStacked = overlapX >= 0.24
-    && verticalGap <= baseHeight * 1.95
-    && centerDeltaX <= Math.max(96, minWidth * 0.9);
-  const tightlyStacked = overlapX >= 0.16
-    && verticalGap <= baseHeight * 1.15
-    && centerDeltaX <= Math.max(72, minWidth * 0.66);
-  const nearDiagonalInBubble = overlapX >= 0.2
-    && verticalGap <= baseHeight * 1.4
-    && horizontalGap <= Math.max(42, baseHeight * 1.4)
-    && centerDeltaX <= Math.max(86, minWidth * 1.08);
-  const strongContainment = overlapX >= 0.55 && overlapY >= 0.35;
-
-  if (verticallyStacked || tightlyStacked || nearDiagonalInBubble || strongContainment) {
-    return true;
-  }
-
-  return false;
-};
-
-const buildDenseDialogueGroupsByConnectivity = (
-  orderedLines: TranslatableLine[],
-  medianHeight: number
-): TranslationGroup[] => {
-  if (orderedLines.length === 0) return [];
-  if (orderedLines.length === 1) return [{ lines: [orderedLines[0]] }];
-
-  const baseHeight = Math.max(8, medianHeight || computeMedian(orderedLines.map((line) => Math.max(1, line.height))));
-  const parent = orderedLines.map((_, index) => index);
-
-  const find = (index: number): number => {
-    let current = index;
-    while (parent[current] !== current) {
-      parent[current] = parent[parent[current]];
-      current = parent[current];
-    }
-    return current;
-  };
-
-  const unite = (aIndex: number, bIndex: number): void => {
-    const rootA = find(aIndex);
-    const rootB = find(bIndex);
-    if (rootA === rootB) return;
-    parent[rootB] = rootA;
-  };
-
-  for (let i = 0; i < orderedLines.length; i += 1) {
-    for (let j = i + 1; j < orderedLines.length; j += 1) {
-      if (shouldConnectDenseDialogueLines(orderedLines[i], orderedLines[j], baseHeight)) {
-        unite(i, j);
-      }
-    }
-  }
-
-  const grouped = new Map<number, TranslatableLine[]>();
-  orderedLines.forEach((line, index) => {
-    const root = find(index);
-    const bucket = grouped.get(root) || [];
-    bucket.push(line);
-    grouped.set(root, bucket);
-  });
-
-  return Array.from(grouped.values())
-    .map((bucket) => {
-      const lines = orderLinesForGrouping(bucket, baseHeight);
-
-      return {
-        lines,
-        bounds: {
-          top: Math.min(...lines.map((line) => line.top)),
-          bottom: Math.max(...lines.map((line) => line.bottom)),
-          left: Math.min(...lines.map((line) => line.left)),
-          right: Math.max(...lines.map((line) => line.right)),
-        },
-      };
-    })
-    .sort((a, b) => {
-      const topDelta = a.bounds.top - b.bounds.top;
-      const verticalOverlap = intervalOverlap(a.bounds.top, a.bounds.bottom, b.bounds.top, b.bounds.bottom);
-      const minGroupSpan = Math.max(1, Math.min(
-        Math.max(1, a.bounds.bottom - a.bounds.top),
-        Math.max(1, b.bounds.bottom - b.bounds.top)
-      ));
-      const overlapRatio = verticalOverlap / minGroupSpan;
-      const sameReadingBand = overlapRatio >= 0.16 || Math.abs(topDelta) <= baseHeight * 1.35;
-
-      if (sameReadingBand) {
-        if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
-      }
-
-      if (topDelta !== 0) return topDelta;
-      if (a.bounds.left !== b.bounds.left) return a.bounds.left - b.bounds.left;
-      return a.bounds.right - b.bounds.right;
-    })
-    .map((bucket) => ({ lines: bucket.lines }));
-};
-
-export const buildTranslationGroups = (
-  lines: TranslatableLine[],
-  profile: TranslationGroupingProfile = 'default'
-): TranslationGroup[] => {
-  if (lines.length === 0) return [];
-
-  const heights = lines.map((line) => Math.max(1, line.height));
-  const medianHeight = computeMedian(heights);
-  const orderedForGrouping = orderLinesForGrouping(lines, medianHeight);
-
-  if (profile === 'line-by-line') {
-    return orderedForGrouping.map((line) => ({ lines: [line] }));
-  }
-
-  if (profile === 'dense-dialogue' && orderedForGrouping.length >= 3) {
-    return buildDenseDialogueGroupsByConnectivity(orderedForGrouping, medianHeight);
-  }
-
-  const groups: TranslationGroup[] = [];
-  let currentGroup: TranslatableLine[] = [orderedForGrouping[0]];
-
-  for (let i = 1; i < orderedForGrouping.length; i += 1) {
-    const previous = currentGroup[currentGroup.length - 1];
-    const current = orderedForGrouping[i];
-    if (shouldMergeLines(previous, current, medianHeight, profile)) {
-      currentGroup.push(current);
-      continue;
-    }
-
-    groups.push({ lines: currentGroup });
-    currentGroup = [current];
-  }
-
-  if (currentGroup.length > 0) {
-    groups.push({ lines: currentGroup });
-  }
-
-  return groups;
 };
 
 const composeGroupSourceText = (
@@ -2727,10 +1181,38 @@ const composeGroupSourceText = (
       /[A-Za-z][\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/.test(currItem.text) &&
       /^[A-Za-z0-9]/.test(nextItem.text)
     ) {
+      // Check if nextItem starts with a Japanese honorific like SAN, CHAN, KUN, SAMA, SENSEI, SENPAI
+      const honorificMatch = nextItem.text.match(/^(SAN|CHAN|KUN|SAMA|SENSEI|SENPAI|DONO)(['’]S)?(\b.*)$/i);
+      if (honorificMatch) {
+        const cleanParentText = currItem.text.replace(/[\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/, '');
+        const honorific = honorificMatch[1];
+        const suffix = honorificMatch[2] || '';
+        const restOfNext = (honorificMatch[3] || '').trim();
+
+        if (!restOfNext) {
+          currItem.text = `${cleanParentText}-${honorific}${suffix}`;
+          nextItem.text = '';
+          joins.push({ parentIdx: currItem.originalIdx, childIdx: nextItem.originalIdx });
+        } else {
+          currItem.text = `${cleanParentText}-${honorific}${suffix}`;
+          nextItem.text = restOfNext;
+        }
+        continue;
+      }
+
       const cleanParentText = currItem.text.replace(/[\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/, '');
-      currItem.text = cleanParentText + nextItem.text;
-      nextItem.text = '';
-      joins.push({ parentIdx: currItem.originalIdx, childIdx: nextItem.originalIdx });
+      const nextTokens = nextItem.text.trim().split(/\s+/);
+      const firstToken = nextTokens[0] || '';
+      const restTokens = nextTokens.slice(1).join(' ');
+
+      if (!restTokens) {
+        currItem.text = cleanParentText + firstToken;
+        nextItem.text = '';
+        joins.push({ parentIdx: currItem.originalIdx, childIdx: nextItem.originalIdx });
+      } else {
+        currItem.text = cleanParentText + firstToken;
+        nextItem.text = restTokens;
+      }
     }
   }
 
@@ -3068,449 +1550,7 @@ const resolveTranslationGroupsWithLayout = (
   };
 };
 
-const findSplitIndexNear = (
-  text: string,
-  desired: number,
-  min: number,
-  max: number
-): number => {
-  const clampedDesired = Math.max(min, Math.min(max, desired));
-  const maxRadius = 18;
 
-  for (let radius = 0; radius <= maxRadius; radius += 1) {
-    const right = clampedDesired + radius;
-    if (right <= max) {
-      const c = text[right];
-      if (/[\s,.;:!?\u3001\u3002\uFF0C\uFF01\uFF1F]/.test(c || '')) {
-        return right;
-      }
-    }
-
-    const left = clampedDesired - radius;
-    if (left >= min) {
-      const c = text[left];
-      if (/[\s,.;:!?\u3001\u3002\uFF0C\uFF01\uFF1F]/.test(c || '')) {
-        return left;
-      }
-    }
-  }
-
-  return clampedDesired;
-};
-
-const computeLineSplitWeight = (line: TranslatableLine): number => {
-  const width = Math.max(1, line.right - line.left);
-  const height = Math.max(1, line.height);
-  const areaScore = Math.sqrt(width * height) * 0.12;
-  return Math.max(1, line.sourceLength * 0.82 + areaScore);
-};
-
-const tokenizeRedistributedPart = (value: string, targetLanguage: string): string[] => {
-  const normalized = normalizeWhitespace(String(value || ''));
-  if (!normalized) return [];
-
-  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
-    const intlWithSegmenter = Intl as unknown as {
-      Segmenter?: new (
-        locales?: string | string[],
-        options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
-      ) => {
-        segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }>;
-      };
-    };
-    if (intlWithSegmenter.Segmenter) {
-      const wordSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
-      return Array.from(wordSeg.segment(normalized))
-        .map((item) => item.segment)
-        .filter((segment) => segment.trim().length > 0);
-    }
-    return Array.from(normalized).filter((segment) => segment.trim().length > 0);
-  }
-
-  return normalized.split(/\s+/g).filter(Boolean);
-};
-
-const joinRedistributedTokens = (tokens: string[], targetLanguage: string): string => {
-  if (tokens.length === 0) return '';
-  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
-    return tokens.join('');
-  }
-  return tokens.join(' ');
-};
-
-const rebalanceRedistributedParts = (
-  parts: string[],
-  sourceLines: TranslatableLine[],
-  targetText: string,
-  targetLanguage: string
-): string[] => {
-  const normalizedTarget = normalizeWhitespace(String(targetText || ''));
-  const normalizedParts = sourceLines.map((_, index) => normalizeWhitespace(String(parts[index] || '')));
-
-  if (normalizedParts.every((part) => part.length > 0)) {
-    return normalizedParts;
-  }
-
-  for (let i = 0; i < normalizedParts.length; i += 1) {
-    if (normalizedParts[i]) continue;
-
-    let donorIndex = -1;
-    let donorScore = Number.NEGATIVE_INFINITY;
-
-    for (let j = 0; j < normalizedParts.length; j += 1) {
-      if (i === j) continue;
-      const tokens = tokenizeRedistributedPart(normalizedParts[j], targetLanguage);
-      if (tokens.length <= 1) continue;
-
-      const score = tokens.length * 10 - Math.abs(j - i);
-      if (score > donorScore) {
-        donorScore = score;
-        donorIndex = j;
-      }
-    }
-
-    if (donorIndex >= 0) {
-      const donorTokens = tokenizeRedistributedPart(normalizedParts[donorIndex], targetLanguage);
-      const takeTail = donorIndex < i;
-      const moved = takeTail ? donorTokens.pop() : donorTokens.shift();
-      if (moved) {
-        normalizedParts[i] = moved;
-        normalizedParts[donorIndex] = joinRedistributedTokens(donorTokens, targetLanguage);
-      }
-    }
-  }
-
-  if (normalizedParts.every((part) => part.length > 0) || !normalizedTarget) {
-    return normalizedParts;
-  }
-
-  if (normalizeTranslationLanguage(targetLanguage, 'th') === 'th') {
-    // For Thai, do not force-slice target text by character index to fill empty lines,
-    // as it chops Thai words into unreadable letters/diacritics. Keep them empty/clean.
-    return normalizedParts;
-  }
-
-  const partCount = Math.max(1, normalizedParts.length);
-  for (let i = 0; i < normalizedParts.length; i += 1) {
-    if (normalizedParts[i]) continue;
-
-    const start = Math.floor((i / partCount) * normalizedTarget.length);
-    const end = Math.ceil(((i + 1) / partCount) * normalizedTarget.length);
-    const chunk = normalizeWhitespace(normalizedTarget.slice(start, end));
-    if (chunk) {
-      normalizedParts[i] = chunk;
-    }
-  }
-
-  return normalizedParts;
-};
-
-const THAI_PARTICLES = /^(นะ|ครับ|ค่ะ|สิ|นา|ด้วย|เลย|หน่อย|ล่ะ|จ้า|จ๊ะ|นี่)$/;
-
-const glueTrailingParticles = (slots: string[]): string[] => {
-  const result = [...slots];
-  for (let i = 0; i < result.length - 1; i++) {
-    const nextSlot = result[i + 1].trim();
-    if (!nextSlot) continue;
-
-    const intlWithSegmenter = Intl as unknown as {
-      Segmenter?: new (
-        locales?: string | string[],
-        options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
-      ) => {
-        segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }>;
-      };
-    };
-
-    if (intlWithSegmenter.Segmenter) {
-      const segmenter = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
-      const segments = Array.from(segmenter.segment(nextSlot));
-      const firstWordSeg = segments.find((s) => s.segment.trim().length > 0);
-
-      if (firstWordSeg && THAI_PARTICLES.test(firstWordSeg.segment)) {
-        const particle = firstWordSeg.segment;
-        result[i] = result[i] + particle;
-        const particleIdx = result[i + 1].indexOf(particle);
-        if (particleIdx >= 0) {
-          result[i + 1] = (
-            result[i + 1].slice(0, particleIdx) +
-            result[i + 1].slice(particleIdx + particle.length)
-          ).trim();
-        }
-      }
-    }
-  }
-  return result;
-};
-
-const isRedistributionPlausible = (
-  sourceLinesCount: number,
-  redistributedSlots: string[]
-): boolean => {
-  if (sourceLinesCount <= 1) return true;
-  const emptySlots = redistributedSlots.filter((s) => !s.trim()).length;
-  const emptyRatio = emptySlots / sourceLinesCount;
-  return emptyRatio < 0.4;
-};
-
-const splitTranslatedTextBySourceWeights = (
-  translatedText: string,
-  sourceLines: TranslatableLine[],
-  targetLanguage: string
-): string[] => {
-  const target = normalizeWhitespace(translatedText);
-  if (sourceLines.length <= 1) return [target];
-  if (!target) return sourceLines.map(() => '');
-
-  const explicitLineBreaks = translatedText
-    .replace(/\\n/g, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .split(/\r?\n+/)
-    .map((part) => normalizeWhitespace(part))
-    .filter(Boolean);
-
-  if (explicitLineBreaks.length === sourceLines.length) {
-    return rebalanceRedistributedParts(explicitLineBreaks, sourceLines, target, targetLanguage);
-  }
-
-  if (explicitLineBreaks.length > 1) {
-    const result: string[] = [];
-    for (let i = 0; i < sourceLines.length; i++) {
-      if (i === sourceLines.length - 1 && explicitLineBreaks.length > sourceLines.length) {
-        result.push(explicitLineBreaks.slice(i).join(' '));
-      } else {
-        result.push(explicitLineBreaks[i] || '');
-      }
-    }
-    return result;
-  }
-
-  const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
-  if (isThaiTarget) {
-    const intlWithSegmenter = Intl as unknown as {
-      Segmenter?: new (
-        locales?: string | string[],
-        options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
-      ) => {
-        segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }>;
-      };
-    };
-
-    const buildSegments = (): string[] => {
-      if (intlWithSegmenter.Segmenter) {
-        const wordSeg = new intlWithSegmenter.Segmenter('th', { granularity: 'word' });
-        const wordSegments = Array.from(wordSeg.segment(target)).map((item) => item.segment);
-        if (wordSegments.length > 0) {
-          return wordSegments;
-        }
-      }
-      return Array.from(target);
-    };
-
-    const segments = buildSegments();
-    const totalSourceChars = sourceLines.reduce((sum, l) => sum + (l.text || '').length, 0) || 1;
-
-    // Calculate cumulative character weights of source lines
-    const cumulativeSourceWeights: number[] = [];
-    let currentSum = 0;
-    for (let i = 0; i < sourceLines.length; i++) {
-      currentSum += (sourceLines[i].text || '').length;
-      cumulativeSourceWeights.push(currentSum);
-    }
-
-    // Calculate cumulative char budgets in target string
-    const cumulativeTargetBudgets = cumulativeSourceWeights.map((w) =>
-      Math.round((w / totalSourceChars) * target.length)
-    );
-
-    // Compute segment lengths and cumulative lengths
-    const segmentLengths = segments.map((s) => s.length);
-    const cumulativeSegmentLengths: number[] = [];
-    let segSum = 0;
-    for (let i = 0; i < segments.length; i++) {
-      segSum += segmentLengths[i];
-      cumulativeSegmentLengths.push(segSum);
-    }
-
-    const thaiParts: string[] = [];
-    let currentSegStart = 0;
-
-    for (let slot = 0; slot < sourceLines.length; slot++) {
-      const isLast = slot === sourceLines.length - 1;
-      if (isLast) {
-        thaiParts.push(segments.slice(currentSegStart).join('').trim());
-        break;
-      }
-
-      const targetCumulativeEnd = cumulativeTargetBudgets[slot];
-
-      // Find the segment index that gets closest to targetCumulativeEnd
-      let bestSegEnd = currentSegStart;
-      let minDifference = Infinity;
-
-      for (let idx = currentSegStart; idx < segments.length; idx++) {
-        const cumLen = cumulativeSegmentLengths[idx];
-        const diff = Math.abs(cumLen - targetCumulativeEnd);
-
-        // Ensure we leave at least one segment per remaining slot
-        const remainingSlots = sourceLines.length - 1 - slot;
-        if (segments.length - 1 - idx < remainingSlots) {
-          break;
-        }
-
-        if (diff <= minDifference) {
-          minDifference = diff;
-          bestSegEnd = idx + 1;
-        } else {
-          // Since cumulativeSegmentLengths is monotonically increasing,
-          // once the difference starts growing, it will continue to grow.
-          break;
-        }
-      }
-
-      // Safe fallback: at least consume one segment if we haven't consumed any
-      if (bestSegEnd <= currentSegStart && currentSegStart < segments.length) {
-        bestSegEnd = currentSegStart + 1;
-      }
-
-      const part = segments.slice(currentSegStart, bestSegEnd).join('').trim();
-      thaiParts.push(part);
-      currentSegStart = bestSegEnd;
-    }
-
-    const finalParts = glueTrailingParticles(thaiParts);
-    if (!isRedistributionPlausible(sourceLines.length, finalParts)) {
-      console.warn(`[splitTranslatedTextBySourceWeights] Thai redistribution implausible. Rebalancing segments across all slots.`);
-      const intlWithSeg = Intl as unknown as { Segmenter?: new (locales?: string, options?: any) => any };
-      let allWords: string[] = [];
-      if (intlWithSeg.Segmenter) {
-        const seg = new intlWithSeg.Segmenter('th', { granularity: 'word' });
-        allWords = Array.from(seg.segment(target)).map((item: any) => item.segment);
-      } else {
-        allWords = Array.from(target);
-      }
-      
-      const count = sourceLines.length;
-      const rebalanced: string[] = [];
-      let wIdx = 0;
-      for (let s = 0; s < count; s++) {
-        const remainingSlots = count - s;
-        const targetWordsForSlot = Math.max(1, Math.ceil((allWords.length - wIdx) / remainingSlots));
-        const endWIdx = s === count - 1 ? allWords.length : Math.min(allWords.length, wIdx + targetWordsForSlot);
-        rebalanced.push(allWords.slice(wIdx, endWIdx).join('').trim());
-        wIdx = endWIdx;
-      }
-      return rebalanced;
-    }
-    return rebalanceRedistributedParts(finalParts, sourceLines, target, targetLanguage);
-  }
-
-  const totalSource = sourceLines
-    .map((line) => computeLineSplitWeight(line))
-    .reduce((acc, n) => acc + n, 0);
-
-  const parts: string[] = [];
-  let start = 0;
-
-  for (let i = 0; i < sourceLines.length; i += 1) {
-    if (i === sourceLines.length - 1) {
-      parts.push(target.slice(start).trim());
-      break;
-    }
-
-    const consumedSource = sourceLines
-      .slice(0, i + 1)
-      .map((line) => computeLineSplitWeight(line))
-      .reduce((acc, n) => acc + n, 0);
-    const desiredEnd = Math.round((consumedSource / totalSource) * target.length);
-    const min = start + 1;
-    const max = Math.max(min, target.length - (sourceLines.length - i - 1));
-    const end = findSplitIndexNear(target, desiredEnd, min, max);
-    parts.push(target.slice(start, end).trim());
-    start = end;
-  }
-
-  return rebalanceRedistributedParts(parts, sourceLines, target, targetLanguage);
-};
-
-export const resolveRedistributedLineFallback = (
-  sourceLineText: string,
-  groupText: string,
-  targetLanguage: string,
-  lineIndex: number = 0,
-  totalLines: number = 1
-): string => {
-  const source = normalizeWhitespace(String(sourceLineText || ''));
-  const normalizedGroup = normalizeWhitespace(String(groupText || ''));
-  const isThaiTarget = normalizeTranslationLanguage(targetLanguage, 'th') === 'th';
-
-  if (normalizedGroup) {
-    const clampedTotal = Math.max(1, totalLines);
-    const clampedIndex = Math.max(0, Math.min(clampedTotal - 1, lineIndex));
-
-    if (clampedTotal > 1) {
-      const sentenceChunks = normalizedGroup
-        .split(/(?<=[.!?…。！？])\s+/)
-        .map((chunk) => normalizeWhitespace(chunk))
-        .filter(Boolean);
-
-      if (sentenceChunks.length === clampedTotal) {
-        const sentenceChunk = sentenceChunks[clampedIndex];
-        if (sentenceChunk) return sentenceChunk;
-      }
-
-      if (normalizedGroup.length >= clampedTotal * 3) {
-        if (!isThaiTarget) {
-          const start = Math.floor((clampedIndex / clampedTotal) * normalizedGroup.length);
-          const end = Math.ceil(((clampedIndex + 1) / clampedTotal) * normalizedGroup.length);
-          const proportionalChunk = normalizeWhitespace(normalizedGroup.slice(start, end));
-          if (proportionalChunk) return proportionalChunk;
-        } else {
-          // For Thai, we do not want proportional slicing as it shreds words.
-          // Return empty string so it falls back to the original English line text naturally.
-          return '';
-        }
-      }
-
-      // Duplication Prevention: For multi-line groups, if we haven't found any valid split
-      // for subsequent lines (index > 0), return empty string to prevent duplicating the whole group.
-      if (clampedIndex > 0) {
-        return '';
-      }
-    }
-
-    if (isThaiTarget) {
-      const normalizedGroupThai = normalizeThaiTranslationText(normalizedGroup);
-      if (normalizedGroupThai) return normalizedGroupThai;
-    }
-
-    return normalizedGroup;
-  }
-
-  if (isThaiTarget) {
-    const normalizedSource = normalizeThaiTranslationText(source);
-    if (normalizedSource) return normalizedSource;
-  }
-
-  return source;
-};
-
-// --- Mock Regions for Prototype ---
-// Region interface moved to src/types/index.ts
-
-const isSourceFallbackOverlayText = (sourceText: string, translatedText: string): boolean => {
-  const source = normalizeOverlayInlineText(String(sourceText || ''));
-  const translated = normalizeOverlayInlineText(String(translatedText || ''));
-  if (Boolean(source && translated && source === translated)) return true;
-
-  const sourceKey = String(sourceText || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
-  const translatedKey = String(translatedText || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g, '');
-  return Boolean(sourceKey && translatedKey && sourceKey === translatedKey);
-};
 
 /** Floating Queue Status Badge แสดงสถานะ Background Queue ขณะอยู่ในหน้า File Preview */
 const BackgroundQueueBadge: React.FC = () => {
@@ -3796,6 +1836,20 @@ export default function App() {
     defaultEngine: (ocrOptions.engine || 'paddleocr') as OCREngine,
   });
 
+  const { handleHeaderDownload } = useExportOrchestration({
+    popupOcrQualityMode,
+    setTranslationStatus,
+    selectedExportEngine,
+    setIsDownloadingResult,
+    setIsDownloadMenuOpen,
+    setExportCacheHydrationTick,
+    hydrateExportCachesForDownload,
+    resolveModelScopedPagesForExport,
+    resolveTranslatedEntryForExport,
+    buildTranslatedPageOCRForExport,
+    resolveVisibleOverlayExportSize,
+  });
+
   // Sync global loading state in useUIStore reactively
   const ocrProgress = useOCRTextLayerStore((state) => state.progress);
 
@@ -3824,7 +1878,7 @@ export default function App() {
         useLayerStore.getState().clearLayers();
         useOCRTextLayerStore.getState().clearAllOCR();
         useOCRTextLayerStore.getState().setCurrentPageOCR(null);
-        useProjectStore.getState().setCurrentPage(1);
+        useProjectStore.getState().setPage(1);
 
         // ยกเลิกคิวงานที่ค้างอยู่ของเอกสารนี้
         const existingJobs = useBackgroundQueueStore.getState().jobs;
@@ -4364,829 +2418,6 @@ export default function App() {
 
 
 
-  /**
-   * Render แต่ละหน้า PDF เป็น canvas ขนาดเล็ก แล้ว sample สีพื้นหลัง/ข้อความของแต่ละ line
-   * เพื่อส่งเป็น paletteByPage ไปให้ export window ใช้แทน DEFAULT_OVERLAY_PALETTE (ขาวเสมอ)
-   * — ทำงานใน renderer หลักซึ่งมี access ไปยัง pdfjs และ canvas
-   */
-  const buildPaletteByPageForExport = async (
-    pageRange: number[],
-    localSourcePageMap: Map<number, OCRPageResult>,
-    localTranslatedEntryMap: Map<number, OCRTranslationCacheEntry>,
-  ): Promise<Map<number, import('./types/pdfExport').ExportOverlayPaletteEntry[]>> => {
-    const paletteByPage = new Map<number, import('./types/pdfExport').ExportOverlayPaletteEntry[]>();
-    if (!file) return paletteByPage;
-
-    const SAMPLE_MAX_SIDE = 1024; // ขนาด canvas สำหรับ sample — ไม่ต้องใหญ่มาก
-    let pdfDocForSample: import('pdfjs-dist').PDFDocumentProxy | null = null;
-
-    try {
-      if (fileType === 'pdf') {
-        const arrayBuffer = await file.arrayBuffer();
-        const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
-        pdfDocForSample = await (loadingTask as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
-      }
-
-      for (const pageNum of pageRange) {
-        const pageOCR = localSourcePageMap.get(pageNum);
-        const translatedEntry = localTranslatedEntryMap.get(pageNum);
-        if (!pageOCR || !translatedEntry) continue;
-
-        const translatedByIndex = new Map<number, string>(
-          translatedEntry.translatedByIndex
-            .filter((item) => Number.isFinite(item.index))
-            .map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
-        );
-        if (translatedByIndex.size === 0) continue;
-
-        const sampleCanvas = document.createElement('canvas');
-        const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
-        if (!sampleCtx) continue;
-
-        try {
-          if (fileType === 'pdf' && pdfDocForSample) {
-            const page = await pdfDocForSample.getPage(pageNum);
-            const baseViewport = page.getViewport({ scale: 1 });
-            const scale = Math.min(SAMPLE_MAX_SIDE / Math.max(1, baseViewport.width), SAMPLE_MAX_SIDE / Math.max(1, baseViewport.height));
-            const viewport = page.getViewport({ scale });
-            sampleCanvas.width = Math.max(1, Math.round(viewport.width));
-            sampleCanvas.height = Math.max(1, Math.round(viewport.height));
-            sampleCtx.fillStyle = '#ffffff';
-            sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
-            await page.render({ canvasContext: sampleCtx, viewport, canvas: sampleCanvas }).promise;
-          } else if (fileType !== 'pdf') {
-            const imageBlob = fileData
-              ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
-              : file;
-            const imageBitmap = await createImageBitmap(imageBlob);
-            const scale = Math.min(SAMPLE_MAX_SIDE / Math.max(1, imageBitmap.width), SAMPLE_MAX_SIDE / Math.max(1, imageBitmap.height));
-            sampleCanvas.width = Math.max(1, Math.round(imageBitmap.width * scale));
-            sampleCanvas.height = Math.max(1, Math.round(imageBitmap.height * scale));
-            sampleCtx.fillStyle = '#ffffff';
-            sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
-            sampleCtx.drawImage(imageBitmap, 0, 0, sampleCanvas.width, sampleCanvas.height);
-            imageBitmap.close?.();
-          } else {
-            continue;
-          }
-
-          const sourceWidth = Math.max(1, Number(pageOCR.width || sampleCanvas.width));
-          const sourceHeight = Math.max(1, Number(pageOCR.height || sampleCanvas.height));
-          const pageEntries: import('./types/pdfExport').ExportOverlayPaletteEntry[] = [];
-
-          pageOCR.lines.forEach((line, index) => {
-            if (!translatedByIndex.has(index)) return;
-            if (shouldSkipOverlayRenderForSuspiciousLine(line)) return;
-            const palette = sampleOverlayPaletteFromLine(
-              sampleCtx,
-              line,
-              sourceWidth,
-              sourceHeight,
-              sampleCanvas.width,
-              sampleCanvas.height,
-            );
-            pageEntries.push({
-              index,
-              backgroundColor: palette.backgroundColor,
-              textColor: palette.textColor,
-              textStrokeWidth: palette.textStrokeWidth,
-              textStrokeColor: palette.textStrokeColor,
-              textFillWeight: palette.textFillWeight,
-            });
-          });
-
-          if (pageEntries.length > 0) {
-            paletteByPage.set(pageNum, pageEntries);
-          }
-        } catch {
-          // ถ้า sample ไม่ได้ (เช่น CORS, render error) ก็ข้ามไป — จะใช้ DEFAULT_OVERLAY_PALETTE แทน
-        }
-      }
-    } finally {
-      await (pdfDocForSample as { destroy?: () => Promise<void> } | null)?.destroy?.();
-    }
-
-    return paletteByPage;
-  };
-
-  const exportTranslatedOverlayPngForSinglePage = async (
-    pageNum: number,
-    pageOCR: OCRPageResult,
-    translatedEntry: OCRTranslationCacheEntry
-  ): Promise<void> => {
-    if (!file) return;
-
-    const translatedByIndex = new Map<number, string>(
-      translatedEntry.translatedByIndex
-        .filter((item) => Number.isFinite(item.index))
-        .map((item) => [item.index, normalizeWhitespace(String(item.text || ''))])
-    );
-    if (translatedByIndex.size === 0) {
-      throw new Error('No translated lines found in cache for current page export.');
-    }
-
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) {
-      throw new Error('Failed to create export canvas context.');
-    }
-
-    const visibleExportSize = resolveVisibleOverlayExportSize(pageNum);
-
-    if (fileType === 'pdf') {
-      const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
-      const pdfDoc = await (loadingTask as { promise: Promise<import('pdfjs-dist').PDFDocumentProxy> }).promise;
-      const page = await pdfDoc.getPage(pageNum);
-      const baseViewport = page.getViewport({ scale: 1 });
-      const layoutWidth = Math.max(
-        1,
-        visibleExportSize?.width || pageOCR.width || Math.round(baseViewport.width)
-      );
-      const layoutHeight = Math.max(
-        1,
-        visibleExportSize?.height || Math.round(baseViewport.height * (layoutWidth / Math.max(1, baseViewport.width)))
-      );
-      const exportScale = resolveOverlayExportScale(
-        layoutWidth,
-        layoutHeight,
-        Math.round(baseViewport.width),
-        Math.round(baseViewport.height)
-      );
-      const targetWidth = Math.max(1, Math.round(layoutWidth * exportScale));
-      const scale = targetWidth / Math.max(1, baseViewport.width);
-      const viewport = page.getViewport({ scale });
-
-      canvas.width = Math.max(1, Math.round(viewport.width));
-      canvas.height = Math.max(1, Math.round(viewport.height));
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-
-      await (pdfDoc as { destroy?: () => Promise<void> }).destroy?.();
-      (loadingTask as { destroy?: () => void }).destroy?.();
-    } else {
-      const imageBlob = fileData
-        ? new Blob([fileData as unknown as BlobPart], { type: file.type || 'image/png' })
-        : file;
-      const imageBitmap = await createImageBitmap(imageBlob);
-      const layoutWidth = Math.max(1, visibleExportSize?.width || imageBitmap.width);
-      const layoutHeight = Math.max(1, visibleExportSize?.height || imageBitmap.height);
-      const exportScale = resolveOverlayExportScale(
-        layoutWidth,
-        layoutHeight,
-        imageBitmap.width,
-        imageBitmap.height
-      );
-      const targetWidth = Math.max(1, Math.round(layoutWidth * exportScale));
-      const targetHeight = Math.max(1, Math.round(layoutHeight * exportScale));
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
-      imageBitmap.close?.();
-    }
-
-    const fontReadyPromise = (typeof document !== 'undefined' && 'fonts' in document)
-      ? (document as Document & { fonts?: FontFaceSet }).fonts?.ready
-      : undefined;
-    if (fontReadyPromise) {
-      await fontReadyPromise.catch(() => undefined);
-    }
-
-    const sourceWidth = Math.max(1, Number(pageOCR.width || canvas.width));
-    const sourceHeight = Math.max(1, Number(pageOCR.height || canvas.height));
-    const scaleX = canvas.width / sourceWidth;
-    const scaleY = canvas.height / sourceHeight;
-
-    const overlayLayoutProfile: OverlayLayoutProfile = translationMode === 'official'
-      ? 'official'
-      : translationMode === 'adaptive'
-        ? 'adaptive'
-        : translationMode === 'manhwa'
-          ? 'manhwa'
-          : 'manga';
-    const preferredOverlayFontFamily = getOverlayFontOption(overlayFontPreset).fontFamily;
-    const overlayFontFamily = resolveOverlayFontFamily({
-      preset: overlayFontPreset,
-      enabled: overlayThaiFontEnabled,
-      targetLanguage,
-    }) || preferredOverlayFontFamily || "'Noto Sans Thai', 'Sarabun', 'Segoe UI', sans-serif";
-    const canvasOverlayFontFamily = await buildCanvasFontFamily(
-      overlayFontFamily,
-      `${JSON.stringify(getOverlayPrimaryFontName(overlayFontPreset))}, 'Sarabun', 'Noto Sans Thai', sans-serif`
-    );
-
-    const pageLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
-    // ดึง lineIndexes ที่ถูก user ลบ เพื่อไม่ render overlay ให้
-    const deletedLineIndexes = useLayerStore.getState().deletedLineIndexesByPage.get(pageNum) || new Set<number>();
-
-    const overlayLayoutByIndex = computeOverlayLayoutMap(
-      pageOCR.lines.flatMap((line, index) => {
-        const lineLayer = pageLayers.find(l => l.lineIndex === index && l.visible);
-        let translatedText = (() => {
-          if (lineLayer) {
-            const normalizedLayerText = normalizeWhitespace(String(lineLayer.text || ''));
-            const normalizedSourceText = normalizeWhitespace(String(lineLayer.sourceText || line.text || ''));
-            const hasTranslation = lineLayer.userEdited || (normalizedLayerText && normalizedLayerText !== normalizedSourceText);
-            const tText = translatedByIndex.get(index);
-            if (hasTranslation) {
-              return normalizedLayerText || tText;
-            }
-            return tText !== undefined ? tText : (normalizedLayerText || line.text);
-          }
-          const tText = translatedByIndex.get(index);
-          return tText !== undefined ? tText : line.text;
-        })();
-        if (translatedText === '') {
-          translatedText = ' ';
-        }
-        if (!translatedText) return [];
-        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-        if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return [];
-        if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return [];
-
-        const layer = pageLayers.find(l => l.lineIndex === index);
-        const balloonId = layer?.groupId;
-
-        const sourceBbox = resolveOverlaySourceBBox(line);
-        const maskBbox = resolveOverlayMaskBBox(line);
-        const sourceWidthRaw = Math.max(1, sourceBbox.x1 - sourceBbox.x0);
-        const sourceHeightRaw = Math.max(1, sourceBbox.y1 - sourceBbox.y0);
-        const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
-        const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
-        const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
-        const maskAreaRaw = maskWidthRaw * maskHeightRaw;
-        const widthCoverage = sourceWidthRaw / maskWidthRaw;
-        const areaCoverage = sourceAreaRaw / maskAreaRaw;
-        const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
-          && widthCoverage < 0.84
-          && areaCoverage < 0.86;
-        const effectiveSourceBbox = lowCoverageSource ? maskBbox : sourceBbox;
-        const baseWidth = Math.max(1, (effectiveSourceBbox.x1 - effectiveSourceBbox.x0) * scaleX);
-        const baseHeight = Math.max(1, (effectiveSourceBbox.y1 - effectiveSourceBbox.y0) * scaleY);
-        const expansion = resolveOverlayMaskExpansion(line);
-        const maskExpandX = Math.min(expansion.maxExpandX, Math.max(1, Math.round(baseHeight * expansion.expandXRatio)));
-        const maskExpandTop = Math.min(expansion.maxExpandTop, Math.max(1, Math.round(baseHeight * expansion.expandTopRatio)));
-        const maskExpandBottom = Math.min(expansion.maxExpandBottom, Math.max(1, Math.round(baseHeight * expansion.expandBottomRatio)));
-        const rawLeft = effectiveSourceBbox.x0 * scaleX - maskExpandX;
-        const rawTop = effectiveSourceBbox.y0 * scaleY - maskExpandTop;
-        const rawWidth = baseWidth + maskExpandX * 2;
-        const rawHeight = baseHeight + maskExpandTop + maskExpandBottom;
-        const rect = clampOverlayRect(rawLeft, rawTop, rawWidth, rawHeight, {
-          x0: 0,
-          y0: 0,
-          x1: canvas.width,
-          y1: canvas.height,
-        });
-        const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
-        const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
-
-        return [{
-          index,
-          text: translatedText,
-          width: typographyWidth,
-          height: typographyHeight,
-          bbox: overlayLayoutProfile === 'official' ? maskBbox : effectiveSourceBbox,
-          line,
-          balloonId,
-          hints: {
-            sourceText: line.text,
-            sourceBoxWidth: baseWidth,
-            sourceBoxHeight: baseHeight,
-            sourceLineCount: 1,
-            fontFamily: canvasOverlayFontFamily,
-            profile: overlayLayoutProfile,
-          },
-        }];
-      }),
-      { profile: overlayLayoutProfile }
-    );
-
-    const translatedLinePalette = new Map<number, OverlayPalette>();
-    const maxSampleSide = 2400;
-    const sampleScale = Math.min(1, maxSampleSide / Math.max(1, canvas.width, canvas.height));
-    const sampleCanvas = document.createElement('canvas');
-    sampleCanvas.width = Math.max(1, Math.round(canvas.width * sampleScale));
-    sampleCanvas.height = Math.max(1, Math.round(canvas.height * sampleScale));
-    const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
-    if (sampleContext) {
-      sampleContext.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
-      pageOCR.lines.forEach((line, index) => {
-        if (!translatedByIndex.has(index)) return;
-        const translatedText = translatedByIndex.get(index) || '';
-        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-        if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
-        translatedLinePalette.set(index, sampleOverlayPaletteFromLine(
-          sampleContext,
-          line,
-          sourceWidth,
-          sourceHeight,
-          sampleCanvas.width,
-          sampleCanvas.height
-        ));
-      });
-    }
-
-    pageOCR.lines.forEach((line, index) => {
-      // Skip lines ที่ถูก user ลบออก
-      if (deletedLineIndexes.has(index)) return;
-      const lineLayer = pageLayers.find(l => l.lineIndex === index && l.visible);
-      let translatedText = (() => {
-        if (lineLayer) {
-          const normalizedLayerText = normalizeWhitespace(String(lineLayer.text || ''));
-          const normalizedSourceText = normalizeWhitespace(String(lineLayer.sourceText || line.text || ''));
-          const hasTranslation = lineLayer.userEdited || (normalizedLayerText && normalizedLayerText !== normalizedSourceText);
-          const tText = translatedByIndex.get(index);
-          if (hasTranslation) {
-            return normalizedLayerText || tText;
-          }
-          return tText !== undefined ? tText : (normalizedLayerText || line.text);
-        }
-        const tText = translatedByIndex.get(index);
-        return tText !== undefined ? tText : line.text;
-      })();
-      if (translatedText === '') {
-        translatedText = ' ';
-      }
-      if (!translatedText) return;
-
-      // ต้อง resolve layout ก่อน guard อื่นๆ เพื่อให้ mask-only lines ที่มี preserveMaskWhenHidden=true
-      // (เช่น YOU, FRONT. ที่ถูก merge เข้าไปแปลรวมกัน) ยังคงผ่านมาวาด background mask ได้
-      // แม้ว่า translatedText จะยังเป็นตัวอักษรภาษาอังกฤษ (เพราะ translatedByIndex ไม่มี entry ให้)
-      const layout = overlayLayoutByIndex.get(index);
-      const isMaskOnlyLine = Boolean(layout?.hidden);
-      if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
-        return;
-      }
-      // Mask-only lines ที่ preserveMaskWhenHidden=true → ข้ามผ่าน guard ด้านล่างทั้งหมด
-      if (!isMaskOnlyLine) {
-        const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
-        if (!lineLayer && shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
-        if (!lineLayer && shouldSkipOverlayForUntranslatedCarryOver(line.text, translatedText, targetLanguage) && !sourceFallbackOverlay) return;
-
-        // Skip ถ้า layer นี้ userEdited → จะ render ด้วย user-layer pass แทน
-        const matchedUserLayer = pageLayers.find(l => l.lineIndex === index && l.visible && l.userEdited);
-        if (matchedUserLayer) return;
-      }
-
-      const renderText = layout?.renderText || translatedText;
-      const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
-      const styleKind = layout?.styleKind;
-      const isDocumentLikeOverlay = styleKind
-        ? styleKind === 'document-heading' || styleKind === 'document-body'
-        : effectiveProfile === 'official';
-      const isComicLikeOverlay = !isDocumentLikeOverlay;
-      const maskBbox = (!isMaskOnlyLine && layout?.mergedMaskBBox) || resolveOverlayMaskBBox(line);
-      const resolvedSourceBbox = resolveOverlaySourceBBox(line);
-      const sourceWidthRaw = Math.max(1, resolvedSourceBbox.x1 - resolvedSourceBbox.x0);
-      const sourceHeightRaw = Math.max(1, resolvedSourceBbox.y1 - resolvedSourceBbox.y0);
-      const sourceAreaRaw = sourceWidthRaw * sourceHeightRaw;
-      const maskWidthRaw = Math.max(1, maskBbox.x1 - maskBbox.x0);
-      const maskHeightRaw = Math.max(1, maskBbox.y1 - maskBbox.y0);
-      const maskAreaRaw = maskWidthRaw * maskHeightRaw;
-      const widthCoverage = sourceWidthRaw / maskWidthRaw;
-      const areaCoverage = sourceAreaRaw / maskAreaRaw;
-      const lowCoverageSource = shouldUseDocumentCoverageFallback(line.text)
-        && widthCoverage < 0.84
-        && areaCoverage < 0.86;
-      const sourceBbox = isMaskOnlyLine
-        ? resolvedSourceBbox
-        : (layout?.mergedBBox || (isDocumentLikeOverlay || lowCoverageSource ? maskBbox : resolvedSourceBbox));
-
-      const maskRenderSourceLeft = maskBbox.x0;
-      const renderSourceLeft = layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined
-        ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
-        : sourceBbox.x0;
-      const maskBaseWidth = Math.max(1, (maskBbox.x1 - maskRenderSourceLeft) * scaleX);
-      const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * scaleY);
-      const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * scaleX);
-      const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * scaleY);
-      const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
-      const expansion = resolveOverlayMaskExpansion(line);
-      const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
-      const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
-      const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
-      const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
-      const maskExpandX = Math.min(
-        expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
-        Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
-      );
-      const maskExpandLeft = Math.min(isComicLikeOverlay ? 4 : 1, maskExpandX);
-      const maskExpandRight = maskExpandX;
-      const maskExpandTop = Math.min(
-        expansion.maxExpandTop + mergedMaskBoost + comicMaskBoostTop,
-        Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
-      );
-      const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
-      const documentBottomBoost = isDocumentLikeOverlay
-        ? Math.min(8, Math.max(2, Math.round(maskBaseHeight * 0.16)))
-        : 0;
-      const maskExpandBottom = Math.min(
-        expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
-        Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
-      );
-      const rawMaskLeft = maskRenderSourceLeft * scaleX - maskExpandLeft;
-      const rawMaskTop = maskBbox.y0 * scaleY - maskExpandTop;
-      const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight;
-      const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom;
-      const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, {
-        x0: 0,
-        y0: 0,
-        x1: canvas.width,
-        y1: canvas.height,
-      });
-
-      const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && !isMaskOnlyLine && Boolean(layout?.mergedMaskBBox);
-      const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
-      const textSourceTop = sourceBbox.y0;
-      const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
-      const textBaseHeight = baseHeight;
-      const mergedComicTextTopLift = 0;
-      const mergedComicTextExtraHeight = 0;
-      const rawTextLeft = textSourceLeft * scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
-      const rawTextTop = textSourceTop * scaleY - maskExpandTop - mergedComicTextTopLift;
-      const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
-      const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
-      let textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, {
-        x0: 0,
-        y0: 0,
-        x1: canvas.width,
-        y1: canvas.height,
-      });
-      if (!isDocumentLikeOverlay) {
-        textRect = clampOverlayRect(textRect.left, textRect.top, textRect.width, textRect.height, {
-          x0: Math.max(0, maskRect.left - 1),
-          y0: Math.max(0, maskRect.top - 1),
-          x1: Math.min(canvas.width, maskRect.left + maskRect.width + 1),
-          y1: Math.min(canvas.height, maskRect.top + maskRect.height + 1),
-        });
-      }
-
-      const palette = translatedLinePalette.get(index) || DEFAULT_OVERLAY_PALETTE;
-      const maskBackgroundColor = palette.backgroundColor;
-      const thaiDocumentHeadroom = isDocumentLikeOverlay && hasThaiText
-        ? Math.max(4, Math.round(Math.max(baseHeight, maskBaseHeight) * 0.4))
-        : 0;
-      const documentTypographyWidth = lowCoverageSource
-        ? Math.max(baseWidth, maskBaseWidth)
-        : Math.max(baseWidth, textRect.width * 0.96);
-      const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
-      const typographyHeight = isDocumentLikeOverlay
-        ? Math.min(
-          textRect.height,
-          Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
-        )
-        : textRect.height;
-      const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
-        sourceText: line.text,
-        sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
-        sourceBoxHeight: isDocumentLikeOverlay
-          ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
-          : baseHeight,
-        sourceLineCount: 1,
-        fontFamily: canvasOverlayFontFamily,
-        profile: effectiveProfile,
-        styleKind,
-      });
-      const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
-      const extraTopPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.08)) : 0;
-      const extraBottomPad = hasThaiText ? Math.max(1, Math.round(typography.fontSize * 0.06)) : 0;
-      const textStartOffset = layout?.sharedTextStartX !== undefined
-        ? Math.max(0, (layout.sharedTextStartX - renderSourceLeft) * scaleX)
-        : 0;
-      const centerOffset = layout?.sharedCenterX !== undefined
-        ? ((layout.sharedCenterX - renderSourceLeft) * scaleX) - (textRect.width * 0.5)
-        : 0;
-      const innerLeft = layout?.alignment === 'center'
-        ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
-        : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
-      const innerWidth = layout?.alignment === 'center'
-        ? textRect.width
-        : Math.max(1, textRect.width - innerLeft);
-      const overlayText = typography.forceSingleLine
-        ? normalizeOverlayInlineText(renderText)
-        : renderText;
-      const rotationDeg = estimateLineRotationDeg(line);
-      const rotationRad = (rotationDeg * Math.PI) / 180;
-      const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
-      const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
-      const minFillRatio = typography.estimatedLines > 1
-        ? (thaiComicLine ? 0.82 : 0.74)
-        : (thaiComicLine ? 0.58 : 0.5);
-      const naturalPaintHeight = typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad;
-      const paintHeight = isComicCenter
-        ? Math.min(textRect.height * 1.8, naturalPaintHeight)
-        : Math.min(
-            textRect.height * 1.8,
-            Math.max(naturalPaintHeight, textRect.height * minFillRatio)
-          );
-      const thaiVisualShift = (isComicCenter && hasThaiText)
-        ? Math.round(maskRect.height * 0.035)
-        : 0;
-      const paintOffsetTop = isComicCenter
-        ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
-        : Math.max(
-            hasThaiText ? 1 : 0,
-            Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-          );
-
-      ctx.save();
-      if (rotationDeg !== 0) {
-        ctx.translate(maskRect.left, maskRect.top);
-        ctx.rotate(rotationRad);
-        ctx.fillStyle = maskBackgroundColor;
-        ctx.fillRect(0, 0, maskRect.width, maskRect.height);
-      } else {
-        ctx.fillStyle = maskBackgroundColor;
-        ctx.fillRect(maskRect.left, maskRect.top, maskRect.width, maskRect.height);
-      }
-      ctx.restore();
-
-      if (isMaskOnlyLine) {
-        return;
-      }
-
-      ctx.save();
-      if (rotationDeg !== 0) {
-        ctx.translate(textRect.left, textRect.top);
-        ctx.rotate(rotationRad);
-      }
-
-      const originLeft = rotationDeg !== 0 ? 0 : textRect.left;
-      const originTop = rotationDeg !== 0 ? 0 : textRect.top;
-      const paintLeft = originLeft + innerLeft;
-      const paintTop = originTop + paintOffsetTop;
-
-      const clipHeightBoost = hasThaiText ? Math.max(2, Math.round(typography.fontSize * 0.35)) : 0;
-      ctx.beginPath();
-      ctx.rect(originLeft - 180, originTop, textRect.width + 360, Math.max(textRect.height, paintHeight) + clipHeightBoost);
-      ctx.clip();
-
-      const textBoxLeft = paintLeft + typography.padX;
-      const textBoxTop = paintTop + typography.padY + extraTopPad;
-      const textBoxWidth = Math.max(1, Math.round((innerWidth - (typography.padX * 2)) * 1.15) + 12);
-      const textBoxHeight = Math.max(1, Math.max(paintHeight, typography.contentHeight) - ((typography.padY * 2) + extraTopPad + extraBottomPad));
-      const lineHeightPx = Math.max(1, typography.fontSize * typography.lineHeight);
-      const maxLines = Math.max(1, Math.max(
-        Math.ceil(textBoxHeight / lineHeightPx),
-        typography.estimatedLines
-      ));
-      const overlayTextWeight = Number(palette.textFillWeight || 400);
-      const resolvedTextWeight = Math.max(400, Math.min(700, Math.round(overlayTextWeight)));
-
-      ctx.font = `${resolvedTextWeight} ${typography.fontSize}px ${canvasOverlayFontFamily}`;
-      const lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
-      ctx.fillStyle = palette.textColor;
-      const strokeBaseWidth = Number(palette.textStrokeWidth || 0);
-      const resolvedStrokeWidth = strokeBaseWidth > 0
-        ? Math.max(0.55, Math.min(1.35, strokeBaseWidth * (typography.fontSize / 14)))
-        : 0;
-      ctx.textBaseline = 'top';
-      ctx.textAlign = layout?.alignment === 'center' ? 'center' : 'left';
-
-      lines.forEach((lineText, lineIndex) => {
-        const y = textBoxTop + (lineIndex * lineHeightPx);
-        if (lineIndex > 0 && y + lineHeightPx > textBoxTop + textBoxHeight + 0.5) return;
-        const x = ctx.textAlign === 'center'
-          ? textRect.left + innerLeft + (innerWidth / 2)
-          : textBoxLeft;
-        if (resolvedStrokeWidth > 0 && palette.textStrokeColor) {
-          ctx.save();
-          ctx.lineJoin = 'round';
-          ctx.miterLimit = 2;
-          ctx.lineWidth = resolvedStrokeWidth;
-          ctx.strokeStyle = palette.textStrokeColor;
-          ctx.strokeText(lineText, x, y, textBoxWidth);
-          ctx.restore();
-        }
-        ctx.fillText(lineText, x, y, textBoxWidth);
-      });
-
-      ctx.restore();
-    });
-
-    // ── User-Edited Layer Render Pass ──────────────────────────────────────
-    // วนซ้ำ pageLayers ที่ user แก้ไขแล้ว (userEdited = true) เพื่อ render
-    // ทับด้วย style ที่ user ตั้งจริง: bbox, backgroundColor, textColor, fontSize, bold
-    // layer ที่ไม่ได้ userEdited จะ render โดย auto-layout loop ด้านบนแล้ว
-    const visibleUserLayers = pageLayers.filter(l => l.visible && l.userEdited);
-    if (visibleUserLayers.length > 0) {
-      for (const layer of visibleUserLayers) {
-        // แปลง OCR-space bbox → canvas pixel
-        const lx = Math.round(layer.bbox.x0 * scaleX);
-        const ly = Math.round(layer.bbox.y0 * scaleY);
-        const lw = Math.max(1, Math.round((layer.bbox.x1 - layer.bbox.x0) * scaleX));
-        const lh = Math.max(1, Math.round((layer.bbox.y1 - layer.bbox.y0) * scaleY));
-
-        ctx.save();
-
-        // Rotation support (หมุนรอบศูนย์กลางกล่อง)
-        const layerRotation = layer.rotation || 0;
-        if (layerRotation !== 0) {
-          const cx = lx + lw / 2;
-          const cy = ly + lh / 2;
-          ctx.translate(cx, cy);
-          ctx.rotate((layerRotation * Math.PI) / 180);
-          ctx.translate(-cx, -cy);
-        }
-
-        // วาด background rect
-        const layerBg = layer.backgroundColor;
-        if (layerBg && layerBg !== 'transparent') {
-          ctx.fillStyle = layerBg;
-          ctx.fillRect(lx, ly, lw, lh);
-        } else {
-          // โปร่งใส: ลบ pixel เดิมออก (white erase) เพื่อ match กล่องขาว
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(lx, ly, lw, lh);
-        }
-
-        // คำนวณ fontSize ที่ scale ตาม canvas
-        const baseFontSize = layer.fontSize || 14;
-        // scaleX แปลง OCR px → canvas px; clamp ให้อ่านได้
-        const resolvedFontSize = Math.max(8, Math.round(baseFontSize * scaleX));
-        const fontWeight = layer.bold ? 'bold' : 'normal';
-        ctx.font = `${fontWeight} ${resolvedFontSize}px ${canvasOverlayFontFamily}`;
-        ctx.fillStyle = layer.textColor || '#000000';
-        ctx.textBaseline = 'top';
-        ctx.textAlign = 'left';
-
-        // clip ไม่ให้ text ล้นกล่อง
-        ctx.beginPath();
-        ctx.rect(lx, ly, lw, lh);
-        ctx.clip();
-
-        // wrap text + render
-        const displayText = layer.text || '';
-        const lineHeightPx = Math.max(1, resolvedFontSize * 1.35);
-        const maxLines = Math.max(1, Math.floor((lh - 6) / lineHeightPx));
-        const wrappedLines = wrapCanvasText(ctx, displayText, lw - 8, maxLines, false);
-        wrappedLines.forEach((lineText, li) => {
-          const ty = ly + 3 + li * lineHeightPx;
-          if (li > 0 && ty + lineHeightPx > ly + lh + 0.5) return;
-          ctx.fillText(lineText, lx + 4, ty, lw - 8);
-        });
-
-        ctx.restore();
-      }
-    }
-    // ──────────────────────────────────────────────────────────────────────
-
-    const pngBlob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error('Failed to create translated PNG export.'));
-      }, 'image/png');
-    });
-
-    const pngUrl = URL.createObjectURL(pngBlob);
-    const anchor = document.createElement('a');
-    anchor.href = pngUrl;
-    anchor.download = file.name.replace(/\.[^.]+$/u, `_page_${pageNum}_translated_overlay.png`);
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(pngUrl);
-  };
-
-  const handleHeaderDownload = async (scope: DownloadScope, mode: DownloadContentMode, engineOverride?: OCREngine) => {
-    if (!file) return;
-
-    applyPopupOcrQualityProfile();
-    const selectedEngine = engineOverride || selectedExportEngine || (ocrOptions.engine || 'paddleocr') as OCREngine;
-    await hydrateExportCachesForDownload(selectedEngine);
-    setExportCacheHydrationTick((tick) => tick + 1);
-
-    const scopedPages = resolveModelScopedPagesForExport(scope, selectedEngine);
-    if (scopedPages.length === 0) {
-      setTranslationStatus({ kind: 'error', message: 'No OCR cache available for download. Run OCR first.' });
-      return;
-    }
-
-    try {
-      setIsDownloadingResult(true);
-      if (mode === 'original') {
-        const pageMap = new Map<number, OCRPageResult>();
-        scopedPages.forEach(({ pageNum, ocr }) => {
-          pageMap.set(pageNum, ocr);
-        });
-
-        const pageRange = scope === 'current'
-          ? [currentPage]
-          : scopedPages.map((item) => item.pageNum);
-        const arrayBuffer = await file.arrayBuffer();
-        const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
-          arrayBuffer,
-          pageMap,
-          pageRange
-        );
-        const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        const suffix = scope === 'current' ? `_page_${currentPage}_searchable.pdf` : '_searchable.pdf';
-        anchor.download = file.name.replace('.pdf', suffix);
-        document.body.appendChild(anchor);
-        anchor.click();
-        document.body.removeChild(anchor);
-        URL.revokeObjectURL(url);
-      } else {
-        const translatedPageMap = new Map<number, OCRPageResult>();
-        const translatedEntryMap = new Map<number, OCRTranslationCacheEntry>();
-        const sourcePageMap = new Map<number, OCRPageResult>();
-        let missingPages = 0;
-
-        scopedPages.forEach(({ pageNum, ocr }) => {
-          sourcePageMap.set(pageNum, ocr);
-          const translatedEntry = resolveTranslatedEntryForExport(pageNum, ocr, selectedEngine);
-          if (!translatedEntry) {
-            missingPages += 1;
-            return;
-          }
-
-          translatedEntryMap.set(pageNum, translatedEntry);
-          translatedPageMap.set(pageNum, buildTranslatedPageOCRForExport(ocr, translatedEntry));
-        });
-
-        if (translatedPageMap.size === 0) {
-          setTranslationStatus({
-            kind: 'error',
-            message: 'No translated cache found for selected OCR model and target language. Run translation first.',
-          });
-          return;
-        }
-
-        if (scope === 'current') {
-          const currentSourcePage = sourcePageMap.get(currentPage);
-          const currentEntry = translatedEntryMap.get(currentPage);
-          if (currentSourcePage && currentEntry) {
-            await exportTranslatedOverlayPngForSinglePage(currentPage, currentSourcePage, currentEntry);
-          }
-        }
-
-        if (scope === 'all' && fileType === 'pdf') {
-          const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
-          // Sample สีพื้นหลัง/ข้อความจากรูปต้นฉบับแต่ละหน้า ก่อนส่งไป export window
-          const paletteByPage = await buildPaletteByPageForExport(pageRange, sourcePageMap, translatedEntryMap);
-          const resultBytes = await exportTranslatedPdfViaPrint({
-            fileType: 'pdf',
-            sourceBytes: filePath ? undefined : await file.arrayBuffer(),
-            sourceFilePath: filePath,
-            sourceMimeType: file.type || 'application/pdf',
-            pageRange,
-            sourcePageMap,
-            translatedEntryMap,
-            translationMode,
-            overlayFontPreset,
-            overlayThaiFontEnabled,
-            targetLanguage,
-            overlayFontSizeScale,
-            paletteByPage,
-          });
-
-          const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
-          const anchor = document.createElement('a');
-          anchor.href = url;
-          const suffix = '_translated_overlay.pdf';
-          anchor.download = file.name.replace(/\.[^.]+$/u, suffix);
-          document.body.appendChild(anchor);
-          anchor.click();
-          document.body.removeChild(anchor);
-          URL.revokeObjectURL(url);
-        }
-
-        if (missingPages > 0) {
-          setTranslationStatus({
-            kind: 'info',
-            message: `Exported translated overlay for ${translatedPageMap.size} pages; ${missingPages} pages had no matching translated cache.`,
-          });
-        } else if (scope === 'current') {
-          setTranslationStatus({
-            kind: 'success',
-            message: `Exported page ${currentPage} translated overlay PNG.`,
-          });
-        } else {
-          setTranslationStatus({
-            kind: 'success',
-            message: `Exported translated overlay PDF for ${translatedPageMap.size} pages.`,
-          });
-        }
-      }
-
-      setIsDownloadMenuOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown download error';
-      setTranslationStatus({ kind: 'error', message: `Download failed: ${message}` });
-    } finally {
-      setIsDownloadingResult(false);
-      useExportStore.getState().finishExport();
-    }
-  };
 
   function buildGeminiContextOverrides(
     mode: TranslationMode,
@@ -5691,17 +2922,45 @@ export default function App() {
           });
 
           if (matchedCache && !options?.bypassPageCache) {
-            const isCacheIncomplete = Array.isArray(matchedCache.translatedByIndex) && pageOCR.lines.some((line) => {
-              const text = String(line.text || '').trim();
-              if (!text) return false;
-              const ascii = text.replace(/[^A-Za-z0-9]/g, '');
-              if (!isKnownShortWordHelper(ascii) && !isLikelyEnglishDialogue(text)) return false;
-              const item = (matchedCache.translatedByIndex as any[]).find((c: any) => {
-                const itemSrc = String(c.sourceText || c.rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                return itemSrc === text.toLowerCase();
-              });
-              return !item || !item.text || item.text === text || !/[\u0E00-\u0E7F]/.test(String(item.text));
-            });
+            const isCacheIncomplete = Array.isArray(matchedCache.translatedByIndex) && (
+              // 1. Any translatable dialogue line (Korean, Japanese, Spanish, English) missing Thai translation
+              pageOCR.lines.some((line) => {
+                const text = String(line.text || '').trim();
+                if (!text) return false;
+                const hasTranslatableChars = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(text) || /[a-zA-Z]{2,}/.test(text) || isKnownShortWordHelper(text.replace(/[^A-Za-z0-9]/g, ''));
+                if (!hasTranslatableChars) return false;
+
+                const item = (matchedCache.translatedByIndex as any[]).find((c: any) => {
+                  const itemSrc = String(c.sourceText || c.rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                  return itemSrc === text.toLowerCase();
+                });
+                
+                if (!item || !item.text) return true;
+                
+                if (normalizedTargetLanguage === 'th') {
+                  const transText = String(item.text).trim();
+                  if (!/[\u0E00-\u0E7F]/.test(transText)) {
+                    const canResolve = lookupShortPhraseTh(text) || applyKoreanConversationalFallback(text, transText);
+                    if (!canResolve) return true;
+                  }
+                  if (hasKoreanTranslationCarryover(transText) || isBoilerplateHallucination(text, transText)) {
+                    return true;
+                  }
+                }
+                return false;
+              }) ||
+              // 2. Any Korean line with un-translated Hangul carryover or boilerplate hallucination in cache items
+              (normalizedTargetLanguage === 'th' && (matchedCache.translatedByIndex as any[]).some((item: any) => {
+                const src = String(item.sourceText || item.rawText || '').trim();
+                const trans = String(item.text || '').trim();
+                if (/[\uAC00-\uD7AF]/.test(src)) {
+                  if (hasKoreanTranslationCarryover(trans) || isBoilerplateHallucination(src, trans)) {
+                    return true;
+                  }
+                }
+                return false;
+              }))
+            );
 
             if (isCacheIncomplete) {
               console.log(`[Translation] DB cache for page ${pageNum} is incomplete (missing translation for dialogue lines). Re-translating...`);
@@ -5709,34 +2968,53 @@ export default function App() {
               console.log(`[Translation] Cache hit for page ${pageNum} via database! Skipping translation coordinator.`);
               
               let safeMatchedCache = matchedCache;
-            if (normalizedTargetLanguage === 'th' && matchedCache && Array.isArray(matchedCache.translatedByIndex)) {
-              safeMatchedCache = {
-                ...matchedCache,
-                translatedByIndex: matchedCache.translatedByIndex.map((item: any) => {
-                  if (item) {
-                    const source = String(item.sourceText || item.rawText || '').trim();
-                    const translated = String(item.text || '').trim();
-                    const cleanSource = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    const cleanTrans = translated.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    
-                    if (!translated || cleanSource === cleanTrans || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
-                      const glossaryMatch = lookupShortPhraseTh(source) || lookupShortPhraseTh(cleanSource);
-                      if (glossaryMatch) {
-                        return { ...item, text: glossaryMatch };
+              let cacheWasUpgraded = false;
+              if (normalizedTargetLanguage === 'th' && matchedCache && Array.isArray(matchedCache.translatedByIndex)) {
+                safeMatchedCache = {
+                  ...matchedCache,
+                  translatedByIndex: matchedCache.translatedByIndex.map((item: any) => {
+                    if (item) {
+                      const source = String(item.sourceText || item.rawText || '').trim();
+                      const translated = String(item.text || '').trim();
+                      const cleanSource = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                      const cleanTrans = translated.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                      
+                      // 1. Korean conversational fallback / boilerplate sanitization
+                      if (source && (/[\uAC00-\uD7AF]/.test(source) || hasKoreanTranslationCarryover(translated) || isBoilerplateHallucination(source, translated))) {
+                        const koFallback = applyKoreanConversationalFallback(source, translated);
+                        if (koFallback && koFallback !== translated) {
+                          cacheWasUpgraded = true;
+                          return { ...item, text: koFallback, sourceText: source };
+                        }
                       }
-                      const words = source.trim().split(/\s+/);
-                      if (words.length > 1) {
-                        const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
-                        if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
-                          return { ...item, text: translatedWords.join(' ') };
+
+                      // 2. Short phrase / glossary lookup
+                      if (!translated || cleanSource === cleanTrans || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
+                        const glossaryMatch = lookupShortPhraseTh(source) || lookupShortPhraseTh(cleanSource) || lookupShortPhraseTh(normalizeSpanishOcrNoiseForTranslation(source));
+                        if (glossaryMatch && glossaryMatch !== translated) {
+                          cacheWasUpgraded = true;
+                          return { ...item, text: glossaryMatch, sourceText: source };
+                        }
+                        const words = source.trim().split(/\s+/);
+                        if (words.length > 1) {
+                          const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
+                          if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+                            cacheWasUpgraded = true;
+                            return { ...item, text: translatedWords.join(' '), sourceText: source };
+                          }
                         }
                       }
                     }
-                  }
-                  return item;
-                })
-              };
-            }
+                    return item;
+                  })
+                };
+              }
+
+              if (cacheWasUpgraded && matchedDocId) {
+                dbService.saveTranslationCachePage(matchedDocId, pageNum, safeMatchedCache).catch((err) => {
+                  console.warn('[Translation] Failed to persist upgraded cache to DB:', err);
+                });
+              }
 
             // อัปเดตข้อมูลเข้า Store สำหรับหน้าจอ UI เฉพาะเมื่อเอกสารนี้กำลังเปิดอยู่บนหน้าจอ
             if (isActiveDoc) {
@@ -6358,347 +3636,9 @@ export default function App() {
       if (normalizeTranslationLanguage(normalizedTargetLanguage, 'th') === 'th') {
         const combinedRaw = group.lines.map(l => String(l.text || '').trim()).join(' ');
         const compactCombined = combinedRaw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-        // 1. CUM- MING -> ทะ- / ทะลักออกมาแล้ววว!
-        if (compactCombined.includes('CUMMING') && compactCombined.replace(/[^A-Z]/g, '').length <= 25) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line, lineOffset) => {
-            if (lineOffset === 0) {
-              overrideLines.push('ทะ-');
-            } else if (lineOffset === 1) {
-              overrideLines.push('ทะลักออกมาแล้ววว!');
-            } else {
-              overrideLines.push('');
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-        
-        // 2. IT FELT WAY TOO GOOD -> ดีเกินไป
-        else if (compactCombined.includes('ITFELTWAYTOOGOOD')) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line, lineOffset) => {
-            if (lineOffset === 0) {
-              overrideLines.push('ดีเกินไป');
-            } else {
-              overrideLines.push('');
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 3. NOT NEC- ESSARY -> ไม่สำคัญ
-        else if (compactCombined.includes('NOTNECESSARY')) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line, lineOffset) => {
-            if (lineOffset === 0) {
-              overrideLines.push('ไม่สำคัญ');
-            } else {
-              overrideLines.push('');
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 4. COO + OOO + OCKS / COO + OCKS / COOOOOOOCKS -> ควยย ยยย ยพวกนี้ / โดย ควยย ยยย ยเหล่านี้
-        else if (
-          (() => {
-            const normalizedCombined = compactCombined
-              .replace(/[07QDZ]/g, 'O')
-              .replace(/G/g, 'C')
-              .replace(/5/g, 'S');
-            return /CO+C?KS/i.test(normalizedCombined) || /C[O0]{2,}CKS/i.test(compactCombined);
-          })()
-        ) {
-          const overrideLines: string[] = [];
-          let foundMain = false;
-          group.lines.forEach((line, lineOffset) => {
-            const lineTextClean = line.text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-            const isCocksLinePart = (() => {
-              const clean = lineTextClean.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-              if (!clean) return false;
-              if (/^[O0QD7]{2,}$/.test(clean)) return true;
-              const normalized = clean
-                .replace(/[07QDZ]/g, 'O')
-                .replace(/G/g, 'C')
-                .replace(/5/g, 'S');
-              return /^[CO]*C?KS$/.test(normalized) || /^[CO]{2,}$/.test(normalized) || /^[CO]+C?K?S?$/.test(normalized);
-            })();
-
-            if (lineTextClean === 'BY') {
-              overrideLines.push('โดย');
-            } else if (isCocksLinePart) {
-              if (!foundMain) {
-                overrideLines.push('ควยย ยยย ยพวกนี้');
-                foundMain = true;
-              } else {
-                overrideLines.push('');
-              }
-            } else {
-              overrideLines.push(line.text);
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 5. BY HAVING SEX WITH A WOMAN -> โดยการ / มีเพศสัมพันธ์กับ / ผู้หญิง
-        else if (compactCombined.includes('BYHAVINGSEXWITHAWOMAN') || compactCombined.includes('HAVINGSEXWITHAWOMAN')) {
-          const overrideLines: string[] = [];
-          if (group.lines.length === 3) {
-            overrideLines.push('โดยการ', 'มีเพศสัมพันธ์กับ', 'ผู้หญิง');
-          } else {
-            group.lines.forEach((line, lineOffset) => {
-              if (lineOffset === 0) overrideLines.push('โดยการมีเพศสัมพันธ์กับผู้หญิง');
-              else overrideLines.push('');
-            });
-          }
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 6. IT'S MORE EFFICIENT AND PRODUCES HIGH QUALITY SPERM -> วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง
-        else if (compactCombined.includes('MOREEFFICIENT') && compactCombined.includes('SPERM')) {
-          const overrideLines: string[] = [];
-          if (group.lines.length === 6) {
-            overrideLines.push('วิธีนี้มี', 'ประสิทธิภาพ', 'มากกว่าและ', 'ได้', 'อสุจิคุณภาพสูง', '');
-          } else {
-            group.lines.forEach((line, lineOffset) => {
-              if (lineOffset === 0) overrideLines.push('วิธีนี้มีประสิทธิภาพมากกว่าและได้อสุจิคุณภาพสูง');
-              else overrideLines.push('');
-            });
-          }
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 7. What the hell kind of convenient straight out of an ero-manga disease is that...!?
-        else if (compactCombined.includes('WHATTHEHELL') && (compactCombined.includes('EROMANGA') || compactCombined.includes('CONVENIENT') || compactCombined.includes('CONYENIENT') || compactCombined.includes('DISEASE'))) {
-          const overrideLines: string[] = [];
-          if (group.lines.length >= 5) {
-            overrideLines.push('โรคอะไรวะเนี่ย', 'โรคที่สะดวกสบาย', 'เหมือนหลุดออกมาจาก', 'มังงะอีโรติก', 'เลย...!?');
-            for (let i = 5; i < group.lines.length; i++) {
-              overrideLines.push('');
-            }
-          } else {
-            group.lines.forEach((line, lineOffset) => {
-              if (lineOffset === 0) overrideLines.push('โรคอะไรวะเนี่ย โรคที่เหมือนหลุดออกมาจากมังงะอีโรติกเลย...!?');
-              else overrideLines.push('');
-            });
-          }
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 8. IT'S A DISEASE IN WHICH YOU HAVE TO RELEASE A LOT OF SPERM OR IT COULD BE FATAL
-        else if (compactCombined.includes('RELEASEALOTOFSPERM') || (compactCombined.includes('SPERM') && compactCombined.includes('FATAL'))) {
-          const overrideLines: string[] = [];
-          if (group.lines.length === 6) {
-            overrideLines.push(
-              'พูดอีกอย่างก็คือ',
-              'มันคือโรคที่',
-              'คุณจำเป็นต้อง',
-              'หลั่งน้ำอสุจิ',
-              'ออกมาเป็นจำนวนมาก',
-              'มิเช่นนั้นอาจถึงตายได้'
-            );
-          } else if (group.lines.length === 5) {
-            overrideLines.push(
-              'มันคือโรคที่',
-              'คุณจำเป็นต้อง',
-              'หลั่งน้ำอสุจิ',
-              'ออกมาเป็นจำนวนมาก',
-              'มิเช่นนั้นอาจถึงตายได้'
-            );
-          } else {
-            group.lines.forEach((line, lineOffset) => {
-              if (lineOffset === 0) overrideLines.push('นี่เป็นโรคที่คุณต้องหลั่งอสุจิออกมาเป็นจำนวนมาก มิเช่นนั้นอาจถึงแก่ชีวิตได้');
-              else overrideLines.push('');
-            });
-          }
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 9. SEXUAL INTERCOURSE DEFICIENCY OF THE GENITALS DISEASE
-        else if (compactCombined.includes('SEXUALINTERCOURSEDEFICIENCY') || (compactCombined.includes('GENITALS') && compactCombined.includes('DISEASE'))) {
-          const overrideLines: string[] = [];
-          if (group.lines.length === 5) {
-            overrideLines.push(
-              'โรค',
-              'ความบกพร่อง',
-              'ทางเพศสัมพันธ์',
-              'ของอวัยวะเพศ',
-              ''
-            );
-          } else if (group.lines.length === 4) {
-            overrideLines.push(
-              'โรคความบกพร่อง',
-              'ทางเพศสัมพันธ์',
-              'ของอวัยวะเพศ',
-              ''
-            );
-          } else {
-            group.lines.forEach((line, lineOffset) => {
-              if (lineOffset === 0) overrideLines.push('โรคความบกพร่องทางเพศของอวัยวะเพศ');
-              else overrideLines.push('');
-            });
-          }
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 10. COME ON! CRY EVEN MORE LIKE THE PIG YOU ARE !!
-        else if (
-          compactCombined.includes('THEPIGYOUARE') ||
-          compactCombined.includes('LIKETHEPIGYOUARE') ||
-          compactCombined.includes('LIKEAPIGYOUARE') ||
-          (compactCombined.includes('CRY') && compactCombined.includes('PIG')) ||
-          (compactCombined.includes('COME') && compactCombined.includes('PIG')) ||
-          (compactCombined.includes('EVEN') && compactCombined.includes('PIG'))
-        ) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line) => {
-            const raw = line.text.trim();
-            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
-            if (clean === 'COME') overrideLines.push('เร็ว');
-            else if (clean === 'ON!' || clean === 'ON') overrideLines.push('เข้า!');
-            else if (clean === 'COMEON!' || clean === 'COMEON') overrideLines.push('เร็วเข้า!');
-            else if (clean === 'CRY' || clean === 'CRY!') overrideLines.push('ร้องไห้');
-            else if (clean === 'EVEN') overrideLines.push('ออกมา');
-            else if (clean === 'MORE') overrideLines.push('อีก');
-            else if (clean === 'EVENMORE') overrideLines.push('ยิ่งกว่าเดิม');
-            else if (clean === 'LIKE') overrideLines.push('ให้เหมือน');
-            else if (clean === 'LIKEAPIG') overrideLines.push('เหมือนหมู');
-            else if (clean === 'THE') overrideLines.push('ไอ้');
-            else if (clean === 'PIG') overrideLines.push('หมูตอน');
-            else if (clean === 'THEPIG') overrideLines.push('ไอ้หมูตอน');
-            else if (clean === 'YOU') overrideLines.push('อย่าง');
-            else if (clean === 'ARE') overrideLines.push('แก!');
-            else if (clean === 'YOUARE') overrideLines.push('อย่างแก!');
-            else if (clean === 'THEPIGYOUARE') overrideLines.push('ไอ้หมูตอนอย่างแก!');
-            else if (clean === 'LIKETHEPIGYOUARE') overrideLines.push('เหมือนไอ้หมูตอนอย่างแก!');
-            else if (clean === '!!' || clean === '!') overrideLines.push(raw);
-            else {
-              const dict = lookupShortPhraseTh(raw) || lookupShortPhraseTh(raw.replace(/[^A-Za-z0-9]/g, ''));
-              if (dict) {
-                overrideLines.push(dict);
-                return;
-              }
-              const words = raw.split(/\s+/);
-              const thWords = words.map(w => {
-                const wClean = w.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
-                if (wClean === 'A' || wClean === 'AN') return '';
-                if (wClean === 'THE') return 'ไอ้';
-                if (wClean === 'PIG') return 'หมูตอน';
-                if (wClean === 'YOU') return 'อย่าง';
-                if (wClean === 'ARE') return 'แก!';
-                if (wClean === 'LIKE') return 'เหมือน';
-                if (wClean === 'COME') return 'เร็ว';
-                if (wClean === 'ON' || wClean === 'ON!') return 'เข้า!';
-                if (wClean === 'CRY') return 'ร้องไห้';
-                if (wClean === 'MORE') return 'อีก';
-                if (wClean === 'EVEN') return 'ออกมา';
-                return lookupShortPhraseTh(w) || w;
-              }).filter(Boolean);
-              overrideLines.push(thWords.join(' '));
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 10b. COME ON! CRY EVEN MORE LIKE ...
-        else if (
-          (compactCombined.includes('COMEON') && compactCombined.includes('CRY')) ||
-          (compactCombined.includes('CRY') && compactCombined.includes('EVENMORE')) ||
-          (compactCombined.includes('CRY') && compactCombined.includes('MORE')) ||
-          (compactCombined.includes('COME') && compactCombined.includes('CRY') && compactCombined.includes('LIKE'))
-        ) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line) => {
-            const raw = line.text.trim();
-            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
-            if (clean === 'COME') overrideLines.push('เร็ว');
-            else if (clean === 'ON!' || clean === 'ON') overrideLines.push('เข้า!');
-            else if (clean === 'COMEON!' || clean === 'COMEON') overrideLines.push('เร็วเข้า!');
-            else if (clean === 'CRY' || clean === 'CRY!') overrideLines.push('ร้องไห้');
-            else if (clean === 'EVEN') overrideLines.push('ออกมา');
-            else if (clean === 'MORE') overrideLines.push('อีก');
-            else if (clean === 'EVENMORE') overrideLines.push('ยิ่งกว่าเดิม');
-            else if (clean === 'LIKE') overrideLines.push('เหมือนหมูตอนอย่างแก!');
-            else if (clean === 'THE') overrideLines.push('ไอ้');
-            else if (clean === 'PIG') overrideLines.push('หมูตอน');
-            else if (clean === 'YOU') overrideLines.push('อย่าง');
-            else if (clean === 'ARE') overrideLines.push('แก!');
-            else if (clean === '!!' || clean === '!') overrideLines.push(raw);
-            else {
-              overrideLines.push(lookupShortPhraseTh(raw) || raw);
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 10c. HAHAHA! YOU'RE STARTING TO SOUND LIKE A PIG, PRINCESS KNIGHT
-        else if (
-          (compactCombined.includes('STARTING') && compactCombined.includes('PIG')) ||
-          (compactCombined.includes('SOUND') && compactCombined.includes('PIG')) ||
-          (compactCombined.includes('PRINCESS') && compactCombined.includes('KNIGHT') && compactCombined.includes('PIG'))
-        ) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line) => {
-            const raw = line.text.trim();
-            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
-            if (clean.includes('HAHA')) overrideLines.push('ฮ่าๆๆ!');
-            else if (clean.includes('YOURE') || clean.includes('YOU\'RE')) overrideLines.push('เจ้าเริ่ม');
-            else if (clean.includes('STARTING')) overrideLines.push('จะส่งเสียง');
-            else if (clean.includes('TOSOUND') || clean.includes('SOUND')) overrideLines.push('ร้อง');
-            else if (clean.includes('LIKEAPIG') || clean.includes('LIKE') || clean.includes('PIG')) overrideLines.push('เหมือนหมูแล้วนะ,');
-            else if (clean.includes('PRINCESS')) overrideLines.push('ท่านหญิง');
-            else if (clean.includes('KNIGHT')) overrideLines.push('อัศวิน!');
-            else {
-              overrideLines.push(lookupShortPhraseTh(raw) || raw);
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 10d. THE PIG YOU ARE / LIKE A PIG / PIG YOU ARE
-        else if (
-          compactCombined.includes('PIGYOUARE') ||
-          (compactCombined.includes('PIG') && (compactCombined.includes('YOU') || compactCombined.includes('ARE') || compactCombined.includes('LIKE')))
-        ) {
-          const overrideLines: string[] = [];
-          group.lines.forEach((line) => {
-            const raw = line.text.trim();
-            const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
-            if (clean === 'THE') overrideLines.push('ไอ้');
-            else if (clean === 'PIG') overrideLines.push('หมูตอน');
-            else if (clean === 'THEPIG') overrideLines.push('ไอ้หมูตอน');
-            else if (clean === 'YOU') overrideLines.push('อย่าง');
-            else if (clean === 'ARE') overrideLines.push('แก!');
-            else if (clean === 'YOUARE') overrideLines.push('อย่างแก!');
-            else if (clean === 'THEPIGYOUARE') overrideLines.push('ไอ้หมูตอนอย่างแก!');
-            else if (clean === 'LIKE') overrideLines.push('เหมือน');
-            else if (clean === 'LIKEAPIG') overrideLines.push('เหมือนหมู');
-            else if (clean === 'LIKETHEPIG') overrideLines.push('เหมือนไอ้หมู');
-            else if (clean === 'LIKETHEPIGYOUARE') overrideLines.push('เหมือนไอ้หมูตอนอย่างแก!');
-            else {
-              overrideLines.push(lookupShortPhraseTh(raw) || raw);
-            }
-          });
-          groupLineOverrides.set(groupIndex, overrideLines);
-        }
-
-        // 11. OH, MY LOVE, WE'RE GOING.. WE'LL LEAVE THE TWO OF YOU TO HAVE FUN
-        else if (compactCombined.includes('GOING') && (compactCombined.includes('LEAVE') || compactCombined.includes('WELLLEAVE') || compactCombined.includes('WELEAVE'))) {
-          const overrideLines: string[] = [];
-          if (group.lines.length === 5) {
-            overrideLines.push('โอ้ ที่', 'รักเราทำ', 'ไปกันเถอะ.. เราจะปล่อยให้', 'สองคนสนุก', 'ดีกว่า');
-          } else {
-            group.lines.forEach((line, lineOffset) => {
-              const lineClean = line.text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-              if (lineClean.includes('GOING') || lineClean.includes('LEAVE')) {
-                overrideLines.push('ไปกันเถอะ.. เราจะปล่อยให้');
-              } else {
-                overrideLines.push(lookupShortPhraseTh(line.text) || line.text);
-              }
-            });
-          }
-          groupLineOverrides.set(groupIndex, overrideLines);
+        const matchedOverride = matchMangaGroupLineOverrides(compactCombined, group.lines);
+        if (matchedOverride && matchedOverride.length > 0) {
+          groupLineOverrides.set(groupIndex, matchedOverride);
         }
       }
 
@@ -6769,7 +3709,14 @@ export default function App() {
         }
         redistributedCursor += 1;
 
-        let directTranslation = normalizedTargetLanguage === 'th' ? (lookupShortPhraseTh(sourceLineText) || lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, ''))) : null;
+        let directTranslation = normalizedTargetLanguage === 'th' ? (
+          lookupShortPhraseTh(sourceLineText) ||
+          lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, '')) ||
+          lookupShortPhraseTh(normalizeSpanishOcrNoiseForTranslation(sourceLineText))
+        ) : null;
+        if (normalizedTargetLanguage === 'th' && !directTranslation && /[\uAC00-\uD7AF]/.test(sourceLineText)) {
+          directTranslation = applyKoreanConversationalFallback(sourceLineText, finalizedLine);
+        }
         if (normalizedTargetLanguage === 'th' && !directTranslation) {
           const words = sourceLineText.trim().split(/\s+/);
           if (words.length > 1) {
@@ -6783,7 +3730,7 @@ export default function App() {
         if (normalizedTargetLanguage === 'th' && directTranslation && /[\u0E00-\u0E7F]/.test(directTranslation)) {
           const cleanFinal = finalizedLine.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
           const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-          if (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource || !/[\u0E00-\u0E7F]/.test(finalizedLine)) {
+          if (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource || !/[\u0E00-\u0E7F]/.test(finalizedLine) || hasKoreanTranslationCarryover(finalizedLine) || isBoilerplateHallucination(sourceLineText, finalizedLine)) {
             finalizedLine = directTranslation;
           }
         }

@@ -9,12 +9,14 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:get-document',
   'db:find-documents-by-filename',
   'db:save-ocr',
+  'db:save-ocr-batch',
   'db:get-ocr',
   'db:clear-ocr',
   'db:clear-document-cache',
   'db:get-latest-ocr',
   'db:get-ocr-cache-stats-for-document-ids',
   'db:save-translation-cache',
+  'db:save-translation-cache-batch',
   'db:get-translation-cache-page',
   'db:clear-translation-cache-by-engine',
   'db:save-sentence-translation',
@@ -151,6 +153,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:find-documents-by-filename', filename),
     saveOCR: (docId: number, pageNum: number, data: unknown, engine?: string) =>
       safeInvoke('db:save-ocr', { docId, pageNum, data, engine }),
+    saveOCRBatch: (items: Array<{ docId: number; pageNum: number; data: unknown; engine?: string }>) =>
+      safeInvoke('db:save-ocr-batch', items.map((i) => ({ documentId: i.docId, pageNumber: i.pageNum, data: i.data, engine: i.engine }))),
     getOCR: (docId: number, pageNum: number, engine?: string) =>
       safeInvoke('db:get-ocr', { docId, pageNum, engine }),
     clearOCR: (docId: number, pageNum: number, engine?: string) =>
@@ -163,6 +167,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
     saveTranslationCache: (docId: number, pageNum: number, cacheKey: string, entry: unknown) =>
       safeInvoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
+    saveTranslationCacheBatch: (items: Array<{ docId: number; pageNum: number; cacheKey: string; entry: unknown }>) =>
+      safeInvoke('db:save-translation-cache-batch', items.map((i) => ({ documentId: i.docId, pageNumber: i.pageNum, cacheKey: i.cacheKey, entry: i.entry }))),
     getTranslationCachePage: (docId: number, pageNum: number) =>
       safeInvoke('db:get-translation-cache-page', { docId, pageNum }),
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: string) =>

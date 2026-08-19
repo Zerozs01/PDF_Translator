@@ -1,7 +1,7 @@
 # PDF Translator - Project Context & Architecture Reference
 
 > **อัปเดตล่าสุด:** สิงหาคม 2026  
-> **สถานะการทดสอบ:** Vitest 34/34 Test Files ผ่านทั้งหมด (324/324 Tests Passed ✅)
+> **สถานะการทดสอบ:** Vitest 34/34 Test Files ผ่านทั้งหมด (326/326 Tests Passed ✅)
 
 ---
 
@@ -101,6 +101,13 @@ flowchart TD
 ### 4. การขยายพจนานุกรมมังงะและเสียงเอฟเฟกต์ (SFX & 20+ Manga Dictionary)
 - เพิ่มคำศัพท์, เสียงคราง, SFX และ Regex ซ่อมคำผิดกว่า 150+ รายการใน [`ocrTextNormalizer.ts`](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrTextNormalizer.ts), [`sfxDictionaryService.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/sfxDictionaryService.ts), และ [`offlineTranslationService.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts)
 
+### 5. การแก้ปัญหาภาษาเกาหลี/สเปนตกค้าง และการอัปเกรดแคช Offline All Pages (Carryover & Cache Upgrade Fix)
+- **ปัญหา:** ประโยคเกาหลีแบบติดกัน/สแลง/ไม่มีเว้นวรรค และคำสเปนขาดครึ่ง/จุดติดคำ/คำทับศัพท์ (`SUNBAE`, `HOOBAE`) แปลไม่ออกหรือโดนเมิน และเมื่อกด Offline All Pages ระบบดึงแคชเดิมที่ยังไม่ได้แปลมาแสดงผลซ้ำ
+- **การแก้ปัญหา:**
+  - เพิ่ม Fallback Patterns ใน [`koreanTranslationPolicy.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/koreanTranslationPolicy.ts) และ Short Phrase Lookups ใน [`offlineTranslationService.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts)
+  - ปรับปรุง `isCacheIncomplete` ใน [`src/App.tsx`](file:///c:/App/Electron/PDF_Translator/src/App.tsx) ให้ตรวจสอบ Hangul/Latin Carryover เพื่อสั่ง Re-translate ทันทีที่พบข้อความตกค้าง
+  - เพิ่มการอัปเกรดคำแปลอัตโนมัติ (`applyKoreanConversationalFallback`, `lookupShortPhraseTh`) ใน `safeMatchedCache` เมื่อโหลดข้อมูลจาก SQLite DB
+
 ---
 
 ## 🧪 5. การตรวจสอบและทดสอบ (Testing & Standards)
@@ -113,4 +120,4 @@ flowchart TD
   ```powershell
   pnpm vitest run src/services/translation/ src/App.translationDedupe.test.ts
   ```
-- **ผลลัพธ์ปัจจุบัน:** ผ่านสมบูรณ์ **34/34 Test Files (324/324 Tests Passed)**
+- **ผลลัพธ์ปัจจุบัน:** ผ่านสมบูรณ์ **34/34 Test Files (326/326 Tests Passed)**
