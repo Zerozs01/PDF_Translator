@@ -721,10 +721,10 @@ export const sanitizeTranslationResult = (text: string): string => {
   cleaned = cleaned.replace(/^(\*+|_|#+)(.*?)\1$/, '$2').trim();
   
   // ล้างเครื่องหมายอัญประกาศครอบหัวท้ายที่โมเดลชอบเติมมา
-  cleaned = cleaned.replace(/^["'“‘](.*?)["'”’]$/, '$2').trim();
+  cleaned = cleaned.replace(/^["'“‘](.*?)["'”’]$/, '$1').trim();
   
-  // ล้างเครื่องหมายแฮชที่อาจหลงเหลือเดี่ยว ๆ ที่จุดเริ่มต้นหรือจุดสิ้นสุด
-  cleaned = cleaned.replace(/^#+(.*?)$/, '$1').replace(/^(.*?)#+$/, '$1').trim();
+  // ล้างเครื่องหมายแฮชที่อาจหลงเหลือจากการแทนที่ Token เช่น # คำแปล # หรือ #...# ใดๆ
+  cleaned = cleaned.replace(/#\s*(.*?)\s*#/g, '$1').replace(/#/g, '').trim();
   
   return cleaned;
 };

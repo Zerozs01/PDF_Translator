@@ -516,7 +516,9 @@ class BackgroundQueueProcessor {
               ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
               : (options.pageSegMode === null ? undefined : options.pageSegMode);
 
-            const resolvedUseAngleCls = false;
+            const resolvedUseAngleCls = job.useAngleCls !== undefined
+              ? Boolean(job.useAngleCls)
+              : Boolean(options.useAngleCls);
 
             const ocrPromise = visionService.ocrForTextLayer(
               imageBlob,

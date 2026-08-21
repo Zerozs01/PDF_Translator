@@ -3538,6 +3538,13 @@ const suppressOverlappingOverlayBorders = (
     const baselineOverlapCollision = shouldSuppressOverlappingOverlayBorder(existing.bbox, candidate.bbox);
     if (!baselineOverlapCollision && !displacedCoverageEcho && !stackedSourceEcho) return false;
 
+    // RULE: บรรทัดที่อยู่แยกกันในแนวดิ่ง (เช่น "OF" บรรทัดบน กับ "OF" บรรทัดล่าง ใน "OF ALL OF US!")
+    // ต้องไม่ถูกยุบหรือซ่อนทิ้งเป็น duplicate echo เด็ดขาด
+    const isVerticallySeparated = overlapY <= 0.20 && (verticalGap > 0 || iou < 0.1) && centerDeltaY > Math.max(14, minHeight * 0.8);
+    if (isVerticallySeparated && !documentLikePair) {
+      return false;
+    }
+
     if (iou >= 0.82) return true;
 
     if (displacedCoverageEcho) {

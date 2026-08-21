@@ -1370,7 +1370,7 @@ const pushLayoutGroupingDebugPayload = (
   console.debug('[LayoutGrouping]', payload);
 };
 
-const resolveTranslationGroupsWithLayout = (
+export const resolveTranslationGroupsWithLayout = (
   pageNum: number,
   pageOCR: OCRPageResult,
   lines: TranslatableLine[],
@@ -1397,14 +1397,28 @@ const resolveTranslationGroupsWithLayout = (
   try {
     const storeGroups = useLayerStore.getState().getPageGroups(pageNum);
     const storeLayers = useLayerStore.getState().getPageLayers(pageNum);
-    if (storeGroups && storeGroups.length > 0) {
+    
+    // If store is empty (e.g. in Background Queue or fresh document load),
+    // compute fresh canonical 2D spatial layer groups directly via buildLayerGroupsFromOCR(pageOCR)
+    let effectiveStoreGroups = storeGroups;
+    let effectiveStoreLayers = storeLayers;
+
+    if (!effectiveStoreGroups || effectiveStoreGroups.length === 0 || !effectiveStoreLayers || effectiveStoreLayers.length === 0) {
+      if (pageOCR && Array.isArray(pageOCR.lines) && pageOCR.lines.length > 0) {
+        const generated = buildLayerGroupsFromOCR(pageOCR);
+        effectiveStoreGroups = generated.groups;
+        effectiveStoreLayers = generated.layers;
+      }
+    }
+
+    if (effectiveStoreGroups && effectiveStoreGroups.length > 0 && effectiveStoreLayers && effectiveStoreLayers.length > 0) {
       const lineMap = new Map<number, TranslatableLine>(lines.map((line) => [line.index, line]));
-      const layerMap = new Map<string, TextLayer>(storeLayers.map((l) => [l.id, l]));
+      const layerMap = new Map<string, TextLayer>(effectiveStoreLayers.map((l) => [l.id, l]));
       
       let matchedLayerCount = 0;
       let totalStoreLayers = 0;
       const translationGroups: TranslationGroup[] = [];
-      storeGroups.forEach((sg) => {
+      effectiveStoreGroups.forEach((sg) => {
         totalStoreLayers += sg.layerIds.length;
         const groupLines = sg.layerIds
           .map((id) => layerMap.get(id))
@@ -1431,7 +1445,7 @@ const resolveTranslationGroupsWithLayout = (
             lines: groupLines,
             groupType,
             derivedGroupId: sg.id,
-            confidence: sg.confidence,
+            confidence: sg.confidence ?? 0.95,
           });
         }
       });
@@ -1454,7 +1468,7 @@ const resolveTranslationGroupsWithLayout = (
           }
         });
 
-        console.log(`[resolveTranslationGroupsWithLayout] Using store groups for page ${pageNum}: count=${translationGroups.length}`);
+        console.log(`[resolveTranslationGroupsWithLayout] Using canonical 2D spatial groups for page ${pageNum}: count=${translationGroups.length} (fromStore=${Boolean(storeGroups && storeGroups.length > 0)})`);
         translationGroups.forEach((tg, gIdx) => {
           console.log(`[DBG-groups-p${pageNum}] Group #${gIdx} (${tg.lines.length} lines, type=${tg.groupType}):`, tg.lines.map(l => `[${l.index}] "${l.text}"`).join(' | '));
         });
@@ -1464,13 +1478,13 @@ const resolveTranslationGroupsWithLayout = (
           groupingDecision: {
             appliedProfile: 'balloon-aware',
             confidence: 1.0,
-            fallbackReason: 'use_store_groups',
+            fallbackReason: storeGroups && storeGroups.length > 0 ? 'use_store_groups' : 'use_canonical_ocr_groups',
           },
         };
       }
     }
   } catch (err) {
-    console.warn('[resolveTranslationGroupsWithLayout] Failed to resolve groups from store:', err);
+    console.warn('[resolveTranslationGroupsWithLayout] Failed to resolve groups from store/canonical:', err);
   }
 
   const flagEnabled = isBalloonAwareGroupingEnabled();
@@ -3709,29 +3723,37 @@ export default function App() {
         }
         redistributedCursor += 1;
 
-        let directTranslation = normalizedTargetLanguage === 'th' ? (
-          lookupShortPhraseTh(sourceLineText) ||
-          lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, '')) ||
-          lookupShortPhraseTh(normalizeSpanishOcrNoiseForTranslation(sourceLineText))
-        ) : null;
-        if (normalizedTargetLanguage === 'th' && !directTranslation && /[\uAC00-\uD7AF]/.test(sourceLineText)) {
-          directTranslation = applyKoreanConversationalFallback(sourceLineText, finalizedLine);
-        }
-        if (normalizedTargetLanguage === 'th' && !directTranslation) {
-          const words = sourceLineText.trim().split(/\s+/);
-          if (words.length > 1) {
-            const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
-            if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
-              directTranslation = translatedWords.join(' ');
+        // Prevent raw English text from leaking into multi-line balloons or single lines when target is Thai
+        const groupHasThaiTranslation = normalizedTargetLanguage === 'th' && /[\u0E00-\u0E7F]/.test(translatedGroup);
+        const hasThaiInFinal = /[\u0E00-\u0E7F]/.test(finalizedLine);
+
+        let directTranslation: string | null = null;
+        // Group-First Policy: Only calculate per-line dictionary fallback if the group as a whole
+        // failed translation or if this is a single-line group.
+        if (normalizedTargetLanguage === 'th' && (!groupHasThaiTranslation || group.lines.length <= 1)) {
+          directTranslation = lookupShortPhraseTh(sourceLineText) ||
+            lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, '')) ||
+            lookupShortPhraseTh(normalizeSpanishOcrNoiseForTranslation(sourceLineText)) || null;
+
+          if (!directTranslation && /[\uAC00-\uD7AF]/.test(sourceLineText)) {
+            directTranslation = applyKoreanConversationalFallback(sourceLineText, finalizedLine);
+          }
+          if (!directTranslation) {
+            const words = sourceLineText.trim().split(/\s+/);
+            if (words.length > 1) {
+              const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
+              if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+                directTranslation = translatedWords.join(' ');
+              }
             }
           }
-        }
 
-        if (normalizedTargetLanguage === 'th' && directTranslation && /[\u0E00-\u0E7F]/.test(directTranslation)) {
-          const cleanFinal = finalizedLine.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-          const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-          if (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource || !/[\u0E00-\u0E7F]/.test(finalizedLine) || hasKoreanTranslationCarryover(finalizedLine) || isBoilerplateHallucination(sourceLineText, finalizedLine)) {
-            finalizedLine = directTranslation;
+          if (directTranslation && /[\u0E00-\u0E7F]/.test(directTranslation)) {
+            const cleanFinal = finalizedLine.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const cleanSource = sourceLineText.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (!finalizedLine || finalizedLine === sourceLineText || cleanFinal === cleanSource || !/[\u0E00-\u0E7F]/.test(finalizedLine) || hasKoreanTranslationCarryover(finalizedLine) || isBoilerplateHallucination(sourceLineText, finalizedLine)) {
+              finalizedLine = directTranslation;
+            }
           }
         }
 
@@ -3745,10 +3767,6 @@ export default function App() {
             finalizedLine = sanitized.replace(/\b[a-zA-Z]{2,}\b/g, '').replace(/\s+/g, ' ').trim();
           }
         }
-
-        // Prevent raw English text from leaking into multi-line balloons or single lines when target is Thai
-        const groupHasThaiTranslation = normalizedTargetLanguage === 'th' && /[\u0E00-\u0E7F]/.test(translatedGroup);
-        const hasThaiInFinal = /[\u0E00-\u0E7F]/.test(finalizedLine);
         
         let finalLineText = '';
         if (childSet.has(lineOffset)) {
@@ -3756,18 +3774,22 @@ export default function App() {
         } else if (hasThaiInFinal) {
           finalLineText = finalizedLine;
         } else if (normalizedTargetLanguage === 'th') {
-          const dictFallback = directTranslation || lookupShortPhraseTh(sourceLineText) || lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, ''));
-          if (dictFallback && /[\u0E00-\u0E7F]/.test(dictFallback)) {
-            finalLineText = dictFallback;
+          if (groupHasThaiTranslation && group.lines.length > 1) {
+            // Group-First Policy: The balloon was already translated into Thai as a whole sentence.
+            // Trailing slots that have no Thai text are intentionally empty to prevent duplicate/fragmented words.
+            finalLineText = '';
           } else {
-            const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
-            const dictFromCleaned = lookupShortPhraseTh(cleanedSourceFallback) || lookupShortPhraseTh(cleanedSourceFallback.replace(/[^A-Za-z0-9]/g, ''));
-            if (dictFromCleaned && /[\u0E00-\u0E7F]/.test(dictFromCleaned)) {
-              finalLineText = dictFromCleaned;
-            } else if (groupHasThaiTranslation && group.lines.length > 1) {
-              finalLineText = ''; // Suppress excess trailing slots only if group was translated
+            const dictFallback = directTranslation || lookupShortPhraseTh(sourceLineText) || lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, ''));
+            if (dictFallback && /[\u0E00-\u0E7F]/.test(dictFallback)) {
+              finalLineText = dictFallback;
             } else {
-              finalLineText = finalizedLine || cleanedSourceFallback || sourceLineText;
+              const cleanedSourceFallback = normalizeSourceForTranslation(sourceLineText, groupSourceLanguage);
+              const dictFromCleaned = lookupShortPhraseTh(cleanedSourceFallback) || lookupShortPhraseTh(cleanedSourceFallback.replace(/[^A-Za-z0-9]/g, ''));
+              if (dictFromCleaned && /[\u0E00-\u0E7F]/.test(dictFromCleaned)) {
+                finalLineText = dictFromCleaned;
+              } else {
+                finalLineText = finalizedLine || cleanedSourceFallback || sourceLineText;
+              }
             }
           }
         } else {

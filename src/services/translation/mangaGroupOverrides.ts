@@ -369,5 +369,53 @@ export function matchMangaGroupLineOverrides(
     return overrideLines;
   }
 
+  // 12. HAHAHA! YOU'VE GOT A NICELY PLOWED WET PUSSY, DON'T YOU? HOW MUCH DID YOU DO IT WITH THE BARBARIANS
+  if (
+    compactCombined.includes('BARBARIANS') &&
+    (compactCombined.includes('PLOWED') || compactCombined.includes('WETPUSSY') || compactCombined.includes('HAHAHA'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+      if (clean === 'HAHAHA!' || clean === 'HAHAHA') overrideLines.push('ฮ่าฮ่าฮ่า!');
+      else if (clean === "YOU'VEGOTA" || clean === "YOUVEGOTA" || clean === "YOUVEGOT" || clean === "YOU'VE") overrideLines.push('เธอมี');
+      else if (clean === 'NICELYPLOWED' || clean === 'NICELY' || clean === 'PLOWED') overrideLines.push('ที่ถูกไถอย่างดีแล้ว');
+      else if (clean === 'WETPUSSY,' || clean === 'WETPUSSY' || clean === 'PUSSY') overrideLines.push('ช่องคลอดเปียกๆ');
+      else if (clean === "DON'TYOU?" || clean === "DONTYOU?" || clean === "DONTYOU" || clean === "DON'TYOU") overrideLines.push('ใช่ไหม?');
+      else if (clean === 'HOWMUCH' || clean === 'HOW' || clean === 'MUCH') overrideLines.push('เธอทำไปเท่าไหร่');
+      else if (clean === 'DIDYOUDO' || clean === 'DIDYOU' || clean === 'YOUDO') overrideLines.push('กับพวก');
+      else if (clean === 'ITWITHTHE' || clean === 'WITHTHE' || clean === 'WITH') overrideLines.push('กับพวก');
+      else if (clean === 'BARBARIANS' || clean === 'BARBARIAN') overrideLines.push('คนป่าเถื่อน');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
+  // 13. AAAH, FUCK! YOUR BITCH MOANS ARE FORCING THE NEXT LOAD OUT!
+  if (
+    (compactCombined.includes('LOADOUT') || compactCombined.includes('THENEXT') || compactCombined.includes('FORCING')) &&
+    (compactCombined.includes('BITCH') || compactCombined.includes('MOANS') || compactCombined.includes('AAAH') || compactCombined.includes('FUCK'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+      if (clean.startsWith('AAAH') || clean === 'AAAH,' || clean === 'AAAH!') overrideLines.push('อ๊าก!');
+      else if (clean === 'FUCK!' || clean === 'FUCK') overrideLines.push('เหี้ย!');
+      else if (clean.includes('YOURBITCH') || clean === 'YOURBITCH' || clean === 'BITCH') overrideLines.push('เสียงครางร่านๆของเธอ');
+      else if (clean.includes('MOANS') || clean === 'MOANSARE' || clean === 'MOANS') overrideLines.push('กำลังบังคับ');
+      else if (clean.includes('FORCING') || clean === 'FORCING') overrideLines.push('ให้');
+      else if (clean.includes('THENEXT') || clean === 'NEXT' || clean === 'THE') overrideLines.push('เตรียมก๊อก');
+      else if (clean.includes('LOADOUT') || clean === 'LOAD' || clean === 'OUT') overrideLines.push('ถัดไป!');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
   return null;
 }

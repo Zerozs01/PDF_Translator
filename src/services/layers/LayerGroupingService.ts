@@ -215,6 +215,17 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines (หรือ 3.2x สำหรับภาษาอังกฤษแนวตั้งที่จัดระนาบเดียวกัน)
   const isBothEnglish = isLikelyEnglishDialogue(a.text) && isLikelyEnglishDialogue(b.text);
   const maxVertGap = isBothEnglish && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
+
+  // ปรับปรุง: สำหรับบทสนทนาภาษาอังกฤษในบอลลูนแนวตั้งที่มีการจัดกึ่งกลาง (Centered-aligned speech balloon)
+  // หากเป็นบรรทัดที่เรียงซ้อนกันในแนวดิ่ง (isStacked) และระยะห่างแนวดิ่งชิดกัน (vertGap <= 1.8 * avgHeight) ให้ผ่อนปรน horizOverlap ลงมาเป็น 0.20
+  // เพื่อป้องกันไม่ให้คำสั้นสลับคำยาว (เช่น "NOISY" กับ "BITCH... HEY!" หรือ "LIKE" กับ "THE PIG YOU ARE") ถูกตัดขาดออกจากกัน
+  const isStacked = (bottomLine.bbox.y0 >= topLine.bbox.y0 + avgHeight * 0.4);
+  const centerDeltaX = Math.abs((a.bbox.x0 + a.bbox.x1) * 0.5 - (b.bbox.x0 + b.bbox.x1) * 0.5);
+  const maxAllowedCenterDeltaX = Math.max(bboxWidth(a.bbox), bboxWidth(b.bbox)) * 0.6;
+  if (isBothEnglish && isStacked && vertGap <= 1.8 * avgHeight && horizOverlap >= 0.20 && centerDeltaX <= maxAllowedCenterDeltaX) {
+    return true;
+  }
+
   return horizOverlap >= 0.48 && vertGap <= maxVertGap;
 };
 

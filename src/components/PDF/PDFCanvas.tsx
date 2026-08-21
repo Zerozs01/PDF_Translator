@@ -1293,6 +1293,7 @@ const PDFPageContainer: React.FC<{
           if (
             entry.isIntersecting &&
             !isProgrammaticScrollRef?.current &&
+            isUserInteracting &&
             previewModeOverride !== 'translated' &&
             useProjectStore.getState().currentPage !== pageNum
           ) {
@@ -1307,10 +1308,11 @@ const PDFPageContainer: React.FC<{
             activePageChangeTimeout = setTimeout(() => {
               React.startTransition(() => {
                 if (capturedTime < lastPageUpdateTime) return;
+                if (isProgrammaticScrollRef?.current || !isUserInteracting) return;
                 setPage(pendingPage);
               });
               activePageChangeTimeout = null;
-            }, 200);
+            }, 150);
           }
         });
       },
@@ -1578,6 +1580,10 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
       // from firing setPage and overriding the target page before the scroll snap finishes.
       isProgrammaticScrollRef.current = true;
+      if (activePageChangeTimeout) {
+        clearTimeout(activePageChangeTimeout);
+        activePageChangeTimeout = null;
+      }
 
       const timer = setTimeout(() => {
         const pageElement = (
@@ -1588,8 +1594,9 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
           )
         ) as HTMLElement | null;
 
-        if (pageElement && containerRef.current) {
-          const offsetTop = pageElement.offsetTop;
+        if (containerRef.current) {
+          const estimatedOffsetTop = (currentPage - 1) * 1146;
+          const offsetTop = pageElement && pageElement.offsetTop > 0 ? pageElement.offsetTop : estimatedOffsetTop;
           const targetY = -(offsetTop * zoom) + 20;
 
           // Read the latest pan.y from the stateRef to check if the change was substantial
@@ -1597,9 +1604,9 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
           const diff = Math.abs(currentPanY - targetY);
 
           // Snap if the offset diff is substantial or if on initial load / mode switch
-          if (diff > 50 || viewModeChanged || isInitialMount) {
+          if (diff > 20 || viewModeChanged || isInitialMount) {
             const { clientWidth } = containerRef.current;
-            const pageWidth = pageElement.clientWidth || 800;
+            const pageWidth = pageElement?.clientWidth || 800;
             const scaledWidth = pageWidth * zoom;
             const targetX = (clientWidth - scaledWidth) / 2;
 
@@ -1610,7 +1617,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
         // Release the programmatic scroll lock after the transition animation (0.1s transform duration + buffer)
         setTimeout(() => {
           isProgrammaticScrollRef.current = false;
-        }, 200);
+        }, 500);
 
       }, isInitialMount ? 150 : 80);
 
@@ -1657,6 +1664,10 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
         const targetPage = useProjectStore.getState().currentPage;
         if (targetPage > 1) {
           isProgrammaticScrollRef.current = true;
+          if (activePageChangeTimeout) {
+            clearTimeout(activePageChangeTimeout);
+            activePageChangeTimeout = null;
+          }
           const pageElement = (
             containerRef.current?.querySelector(
               `.pdf-canvas-document [data-page-container="${targetPage}"]`
@@ -1664,16 +1675,13 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
               `.pdf-canvas-document [data-page-container="${targetPage}"]`
             )
           ) as HTMLElement | null;
-          if (pageElement) {
-            const offsetTop = pageElement.offsetTop;
-            const targetY = -(offsetTop * fitScale) + 20;
-            setPan(x, targetY);
-          } else {
-            setPan(x, stateRef.current.pan.y);
-          }
+          const estimatedOffsetTop = (targetPage - 1) * 1146;
+          const offsetTop = pageElement && pageElement.offsetTop > 0 ? pageElement.offsetTop : estimatedOffsetTop;
+          const targetY = -(offsetTop * fitScale) + 20;
+          setPan(x, targetY);
           setTimeout(() => {
             isProgrammaticScrollRef.current = false;
-          }, 300);
+          }, 500);
         } else {
           // Keep current vertical pan or default to top
           setPan(x, stateRef.current.pan.y !== 0 ? stateRef.current.pan.y : 20);

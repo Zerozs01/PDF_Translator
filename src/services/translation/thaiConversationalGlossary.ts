@@ -312,6 +312,78 @@ const applyThaiConversationalGlossaryInternal = (
     }
   }
 
+  // ─── UGH, HAA! HER PUSSY'S SO STiNKY ───
+  if (compactPageTextsUpper.includes('HERPUSSY') && (compactPageTextsUpper.includes('STINKY') || compactPageTextsUpper.includes('STiNKY') || compactPageTextsUpper.includes('UGH'))) {
+    if (compactSourceAlnumUpper === 'UGH' || compactSourceAlnumUpper === 'UGH,') {
+      return preserveSourceTrailingPunctuation(source, 'อึก..');
+    }
+    if (compactSourceAlnumUpper === 'HAA' || compactSourceAlnumUpper === 'HAA!') {
+      return preserveSourceTrailingPunctuation(source, 'ฮาห์!');
+    }
+    if (compactSourceAlnumUpper === 'HER') {
+      return preserveSourceTrailingPunctuation(source, 'ของเธอ');
+    }
+    if (compactSourceAlnumUpper === 'PUSSY' || compactSourceAlnumUpper === 'PUSSY\'S' || compactSourceAlnumUpper === 'PUSSYS') {
+      return preserveSourceTrailingPunctuation(source, 'หี');
+    }
+    if (compactSourceAlnumUpper === 'SO' || compactSourceAlnumUpper === '6O' || compactSourceAlnumUpper === '60' || compactSourceAlnumUpper === 'S0') {
+      return preserveSourceTrailingPunctuation(source, 'มัน');
+    }
+    if (compactSourceAlnumUpper === 'STINKY' || compactSourceAlnumUpper === 'STiNKY') {
+      return preserveSourceTrailingPunctuation(source, 'ตุๆ');
+    }
+  }
+
+  // ─── HEHEHE! YOUR PUSSY'S REAL TIGHT BECAUSE OF YOUR TRAINING! ───
+  if ((compactPageTextsUpper.includes('YOURPUSSY') || compactPageTextsUpper.includes('REALTIGHT')) && compactPageTextsUpper.includes('TRAINING')) {
+    if (compactSourceAlnumUpper === 'HEHEHE' || compactSourceAlnumUpper === 'HEHEHE!') {
+      return preserveSourceTrailingPunctuation(source, 'ฮิ ฮิ ฮิ!');
+    }
+    if (compactSourceAlnumUpper === 'YOURPUSSY' || compactSourceAlnumUpper === 'YOURPUSSY\'S' || compactSourceAlnumUpper === 'YOURPUSSYS') {
+      return preserveSourceTrailingPunctuation(source, 'หีของเธอ');
+    }
+    if (compactSourceAlnumUpper === 'REALTIGHT') {
+      return preserveSourceTrailingPunctuation(source, 'แน่นจริงๆ');
+    }
+    if (compactSourceAlnumUpper === 'BECAUSEOF' || compactSourceAlnumUpper === 'BECAUSE') {
+      return preserveSourceTrailingPunctuation(source, 'เพราะ');
+    }
+    if (compactSourceAlnumUpper === 'OF') {
+      return preserveSourceTrailingPunctuation(source, 'ของ');
+    }
+    if (compactSourceAlnumUpper === 'YOURTRAINING' || compactSourceAlnumUpper === 'TRAINING') {
+      return preserveSourceTrailingPunctuation(source, 'การฝึกของเธอ!');
+    }
+    if (compactSourceAlnumUpper === 'ITSTHEFIRST' || compactSourceAlnumUpper === 'ITSTHE' || compactSourceAlnumUpper === 'FIRST') {
+      return preserveSourceTrailingPunctuation(source, 'นี่เป็นครั้งแรก');
+    }
+    if (compactSourceAlnumUpper === 'HIGHQUALITY') {
+      return preserveSourceTrailingPunctuation(source, 'คุณภาพยอดเยี่ยม');
+    }
+    if (compactSourceAlnumUpper === 'PUSSYWEVE' || compactSourceAlnumUpper === 'WEVE') {
+      return preserveSourceTrailingPunctuation(source, 'หีที่เรามี');
+    }
+    if (compactSourceAlnumUpper === 'HADINA' || compactSourceAlnumUpper === 'HADIN') {
+      return preserveSourceTrailingPunctuation(source, 'ในรอบ');
+    }
+    if (compactSourceAlnumUpper === 'WHILE' || compactSourceAlnumUpper === 'WHILE!') {
+      return preserveSourceTrailingPunctuation(source, 'หลายวัน!');
+    }
+  }
+
+  // ─── OF ALL OF US! ───
+  if (compactPageTextsUpper.includes('OFALLOFUS') || (compactPageTextsUpper.includes('ALLOFUS') && compactPageTextsUpper.includes('OF'))) {
+    if (compactSourceAlnumUpper === 'OF') {
+      return preserveSourceTrailingPunctuation(source, 'ของ');
+    }
+    if (compactSourceAlnumUpper === 'ALL') {
+      return preserveSourceTrailingPunctuation(source, 'ทุกคน');
+    }
+    if (compactSourceAlnumUpper === 'US' || compactSourceAlnumUpper === 'US!') {
+      return preserveSourceTrailingPunctuation(source, 'พวกเรา!');
+    }
+  }
+
   // ─── Page-context word-order fix: YOU FOUND A DISEASE? ─────────────────────
   // When each line of the balloon is translated separately, we need context to
   // reassemble the correct Thai sentence order.
@@ -352,9 +424,43 @@ const applyThaiConversationalGlossaryInternal = (
     }
   }
 
+  // ─── HAHAHA! YOU'VE GOT A NICELY PLOWED WET PUSSY, DON'T YOU? HOW MUCH DID YOU DO IT WITH THE BARBARIANS ───
+  if (compactPageTextsUpper.includes('BARBARIANS') || (compactPageTextsUpper.includes('PLOWED') && compactPageTextsUpper.includes('WETPUSSY'))) {
+    if (compactSourceAlnumUpper === 'HAHAHA' || compactSourceAlnumUpper === 'HAHAHA!') {
+      return preserveSourceTrailingPunctuation(source, 'ฮ่าฮ่าฮ่า!');
+    }
+    if (compactSourceAlnumUpper === 'YOUVEGOTA' || compactSourceAlnumUpper === 'YOUVEGOT' || compactSourceAlnumUpper === 'YOUVE') {
+      return preserveSourceTrailingPunctuation(source, 'เธอมี');
+    }
+    if (compactSourceAlnumUpper === 'NICELYPLOWED' || compactSourceAlnumUpper === 'NICELY' || compactSourceAlnumUpper === 'PLOWED') {
+      return preserveSourceTrailingPunctuation(source, 'ที่ถูกไถอย่างดีแล้ว');
+    }
+    if (compactSourceAlnumUpper === 'WETPUSSY' || compactSourceAlnumUpper === 'WET' || compactSourceAlnumUpper === 'PUSSY') {
+      return preserveSourceTrailingPunctuation(source, 'ช่องคลอดเปียกๆ');
+    }
+    if (compactSourceAlnumUpper === 'DONTYOU' || compactSourceAlnumUpper === 'DONTYOU?') {
+      return preserveSourceTrailingPunctuation(source, 'ใช่ไหม?');
+    }
+    if (compactSourceAlnumUpper === 'HOWMUCH' || compactSourceAlnumUpper === 'HOW' || compactSourceAlnumUpper === 'MUCH') {
+      return preserveSourceTrailingPunctuation(source, 'เธอทำไปเท่าไหร่');
+    }
+    if (compactSourceAlnumUpper === 'DIDYOUDO' || compactSourceAlnumUpper === 'DIDYOU' || compactSourceAlnumUpper === 'YOUDO') {
+      return preserveSourceTrailingPunctuation(source, 'กับพวก');
+    }
+    if (compactSourceAlnumUpper === 'ITWITHTHE' || compactSourceAlnumUpper === 'WITHTHE' || compactSourceAlnumUpper === 'WITH') {
+      return preserveSourceTrailingPunctuation(source, 'กับพวก');
+    }
+    if (compactSourceAlnumUpper === 'BARBARIANS' || compactSourceAlnumUpper === 'BARBARIANS?' || compactSourceAlnumUpper === 'BARBARIAN') {
+      return preserveSourceTrailingPunctuation(source, 'คนป่าเถื่อน');
+    }
+  }
+
   // Sex/Conversational slang & H-manga adjustments (exact / short matches)
 
   const cleanDialogueText = source.trim().toLowerCase();
+  if (compactSource === 'strumpet' || compactSourceAlnumUpper === 'STRUMPET') {
+    return preserveSourceTrailingPunctuation(source, 'อีกระหรี่');
+  }
   if (compactSource === 'cock' || compactSource === 'cocks') {
     return preserveSourceTrailingPunctuation(source, 'ควย');
   }
@@ -365,7 +471,7 @@ const applyThaiConversationalGlossaryInternal = (
     return preserveSourceTrailingPunctuation(source, 'น้ำแตก');
   }
   if (compactSource === 'cumming') {
-    return preserveSourceTrailingPunctuation(source, 'น้ำแตกแล้ว');
+    return preserveSourceTrailingPunctuation(source, 'ต-แตกแล้ว');
   }
   if (compactSource === 'wanna') {
     return preserveSourceTrailingPunctuation(source, 'อยาก');
@@ -377,6 +483,15 @@ const applyThaiConversationalGlossaryInternal = (
       return preserveSourceTrailingPunctuation(source, `ฉั${totalNs}`);
     } else {
       return preserveSourceTrailingPunctuation(source, 'ฉัน');
+    }
+  }
+  if (/^me+a+n+$/i.test(compactSource)) {
+    const eCount = (compactSource.match(/e/gi) || []).length;
+    if (eCount > 1) {
+      const totalMs = 'ม'.repeat(Math.max(1, eCount - 1));
+      return preserveSourceTrailingPunctuation(source, `เลวทรา${totalMs}`);
+    } else {
+      return preserveSourceTrailingPunctuation(source, 'ใจร้าย');
     }
   }
   // Specific short word mappings
@@ -391,6 +506,79 @@ const applyThaiConversationalGlossaryInternal = (
   }
   if (cleanDialogueText === 'he' || compactSourceAlnumUpper === 'HE') {
     return preserveSourceTrailingPunctuation(source, 'เขา');
+  }
+  if (compactSourceAlnumUpper === 'ALLRIGHT') {
+    return preserveSourceTrailingPunctuation(source, '(เอา ล่ะ)');
+  }
+  if (compactSourceAlnumUpper === 'STOMACHS' || compactSourceAlnumUpper === 'STOMACH') {
+    return preserveSourceTrailingPunctuation(source, 'กระเพาะอาหาร');
+  }
+  if (compactSourceAlnumUpper === 'CAMEAGAIN') {
+    return preserveSourceTrailingPunctuation(source, 'แตกอีกแล้ว!');
+  }
+  if (compactSourceAlnumUpper === 'SEMEN') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำกาม');
+  }
+  if (compactSourceAlnumUpper === 'SPURT' || compactSourceAlnumUpper === 'SPUT') {
+    return preserveSourceTrailingPunctuation(source, 'ปรื๊ดด');
+  }
+  if (compactSourceAlnumUpper === 'SPURTING' || compactSourceAlnumUpper === 'PURTING') {
+    return preserveSourceTrailingPunctuation(source, 'ปรื๊ดดด!');
+  }
+  if (compactSourceAlnumUpper === 'HIGHSCHOOLER' || compactSourceAlnumUpper === 'HIGHSCHOOLERS') {
+    return preserveSourceTrailingPunctuation(source, 'นักเรียนมัธยมปลาย');
+  }
+  if (compactSourceAlnumUpper.includes('ARRESTFORSERIAL') || compactSourceAlnumUpper.includes('ARRESTEDFORSERIAL')) {
+    return preserveSourceTrailingPunctuation(source, 'จับกุมผู้ต้องหาคดีต่อเนื่อง');
+  }
+  if (compactSourceAlnumUpper === 'INSEMINATION') {
+    return preserveSourceTrailingPunctuation(source, 'การหว่านเชื้อ');
+  }
+  if (compactSourceAlnumUpper === 'DISTRIBUTION') {
+    return preserveSourceTrailingPunctuation(source, 'การกระจาย');
+  }
+  if (compactSourceAlnumUpper === 'APHRODISIAC' || compactSourceAlnumUpper === 'APHRODISIACS') {
+    return preserveSourceTrailingPunctuation(source, 'ยาปลุกเซ็กซ์');
+  }
+  if (compactSourceAlnumUpper === 'PREGNAN' || compactSourceAlnumUpper === 'PREGNANT') {
+    return preserveSourceTrailingPunctuation(source, 'ตั้งครรภ์');
+  }
+  if (compactSourceAlnumUpper === 'STUTTER' || compactSourceAlnumUpper === 'STUTTER-') {
+    return preserveSourceTrailingPunctuation(source, 'พูดติดอ่าง');
+  }
+  if (compactSourceAlnumUpper.includes('SHOVEITINSIDE')) {
+    return preserveSourceTrailingPunctuation(source, 'ยัดเข้าไปข้างใน');
+  }
+  if (compactSourceAlnumUpper.includes('JJUSHTCAAME') || compactSourceAlnumUpper.includes('JJUSTCAME')) {
+    return preserveSourceTrailingPunctuation(source, 'ต-แตก ออกมาแล้วว!');
+  }
+  if (compactSourceAlnumUpper === 'MASOCHIST' || compactSourceAlnumUpper === 'MASOCHISTS') {
+    return preserveSourceTrailingPunctuation(source, 'มาโซคิสต์');
+  }
+  if (compactSourceAlnumUpper === 'BITCHPUSSY') {
+    return preserveSourceTrailingPunctuation(source, 'หีร่านๆ');
+  }
+  if (compactSourceAlnumUpper === 'CUMAGAIN' || compactSourceAlnumUpper === 'CUMAGAIN!') {
+    return preserveSourceTrailingPunctuation(source, 'แตก อีกแล้วว!!');
+  }
+  if (compactSourceAlnumUpper === 'THESEMENS' || compactSourceAlnumUpper === 'THESEMEN') {
+    return preserveSourceTrailingPunctuation(source, 'น้ำกามมัน');
+  }
+  if (compactSourceAlnumUpper === 'FLAVORED' || compactSourceAlnumUpper === 'FLAVOURED') {
+    return preserveSourceTrailingPunctuation(source, 'ปรุงแต่งรสชาติ');
+  }
+  if (/^cha+n+$/i.test(compactSource)) {
+    const aCount = (compactSource.match(/a/gi) || []).length;
+    const ngCount = Math.max(1, aCount);
+    return preserveSourceTrailingPunctuation(source, `จัง${'ง'.repeat(ngCount)}ห์!`);
+  }
+  if (/^sque+ze$/i.test(compactSource)) {
+    const eCount = (compactSource.match(/e/gi) || []).length;
+    if (eCount >= 3) {
+      const extraNs = 'น'.repeat(Math.max(1, eCount - 2));
+      return preserveSourceTrailingPunctuation(source, `บีบแน่น${extraNs}`);
+    }
+    return preserveSourceTrailingPunctuation(source, 'บีบเค้น');
   }
   if (compactSourceAlnumUpper === 'RRR') {
     return preserveSourceTrailingPunctuation(source, 'RRR');
@@ -2065,7 +2253,7 @@ const applyThaiConversationalGlossaryInternal = (
       .replace(/หลั่งน้ำ/g, 'น้ำแตก').replace(/หลั่งกระฉูด/g, 'น้ำแตก').replace(/กระฉูด/g, 'น้ำแตก')
       .replace(/มาถึง/g, 'น้ำแตก').replace(/เสร็จสม/g, 'น้ำแตก')
       .replace(/กำลังมาถึง/g, 'น้ำแตก').replace(/กำลังมา/g, 'น้ำแตก')
-      .replace(/เร่ง!*/g, 'น้ำแตกแล้ว!').replace(/เร่ง/g, 'น้ำแตกแล้ว')
+      .replace(/เร่ง!*/g, 'ต-แตกแล้ว!').replace(/เร่ง/g, 'ต-แตกแล้ว')
       .replace(/คิวอึม/g, 'แตกกกกก').replace(/คิวมู/g, 'แตกกกกก')
       .replace(/ว่าว/g, 'น้ำแตก');
   }
