@@ -999,6 +999,141 @@ const applyThaiConversationalGlossaryInternal = (
   if (compactSourceAlnumUpper === 'AMAZING') {
     return preserveSourceTrailingPunctuation(source, 'สุดยอดเลย');
   }
+  if (compactSourceAlnumUpper === 'FORTUNATEHEAR') {
+    return preserveSourceTrailingPunctuation(source, 'โชคดีที่ได้ยิน');
+  }
+  if (compactSourceAlnumUpper === 'OLDSENPAI') {
+    return preserveSourceTrailingPunctuation(source, 'รุ่นพี่ที่เคยรู้จัก');
+  }
+  if (compactSourceAlnumUpper === 'NONEXISTENTWELL') {
+    return preserveSourceTrailingPunctuation(source, 'ไม่มีอยู่จริง...');
+  }
+  if (compactSourceAlnumUpper === 'NOWAMARRIED') {
+    return preserveSourceTrailingPunctuation(source, 'ตอนนี้แต่งงานแล้ว');
+  }
+  if (compactSourceAlnumUpper === 'ISSUCHANICE') {
+    return preserveSourceTrailingPunctuation(source, 'ช่างเป็นคนที่แสนดี');
+  }
+  if (compactSourceAlnumUpper === 'GOODMOOD') {
+    return preserveSourceTrailingPunctuation(source, 'อารมณ์ดี');
+  }
+  if (compactSourceAlnumUpper === 'THANKSFOR') {
+    return preserveSourceTrailingPunctuation(source, 'ขอบคุณสำหรับ');
+  }
+  if (compactSourceAlnumUpper === 'ONEESAN') {
+    return preserveSourceTrailingPunctuation(source, 'พี่สาว');
+  }
+  if (compactSourceAlnumUpper === 'WELLGO') {
+    return preserveSourceTrailingPunctuation(source, 'พวกเราจะไป');
+  }
+  if (compactSourceAlnumUpper === 'SENPAI') {
+    return preserveSourceTrailingPunctuation(source, 'รุ่นพี่');
+  }
+  if (compactSourceAlnumUpper === 'GRATITUDEI') {
+    return preserveSourceTrailingPunctuation(source, 'ความขอบคุณ ฉัน');
+  }
+  if (compactSourceAlnumUpper === 'ALLTHETIME') {
+    return preserveSourceTrailingPunctuation(source, 'ตลอดเวลา');
+  }
+  if (compactSourceAlnumUpper === 'BADUM') {
+    return preserveSourceTrailingPunctuation(source, 'ตึก-ตัก');
+  }
+  if (compactSourceAlnumUpper === 'YOUPRETTY') {
+    return preserveSourceTrailingPunctuation(source, 'คุณสวย');
+  }
+  if (compactSourceAlnumUpper === 'MARRIED') {
+    return preserveSourceTrailingPunctuation(source, 'แต่งงาน');
+  }
+  if (compactSourceAlnumUpper === 'EVENTHOUGH') {
+    return preserveSourceTrailingPunctuation(source, 'ถึงแม้ว่า');
+  }
+  if (compactSourceAlnumUpper === 'IDIDNT') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่ได้ทำ');
+  }
+  if (compactSourceAlnumUpper === 'IWASIN') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันอยู่ใน');
+  }
+  if (compactSourceAlnumUpper === 'RUMBLE' || compactSourceAlnumUpper === 'RUMEL' || compactSourceAlnumUpper === 'GUMBC') {
+    return preserveSourceTrailingPunctuation(source, 'ครืน');
+  }
+  if (compactSourceAlnumUpper === 'TAYAMA') {
+    return preserveSourceTrailingPunctuation(source, 'ทายามะ');
+  }
+  if (compactSourceAlnumUpper === 'SENPAL') {
+    return preserveSourceTrailingPunctuation(source, 'รุ่นพี่');
+  }
+  if (compactSourceAlnumUpper === 'BLOCKHEAD') {
+    return preserveSourceTrailingPunctuation(source, 'คนทึ่ม');
+  }
+  if (compactSourceAlnumUpper === 'GOODYOU') {
+    return preserveSourceTrailingPunctuation(source, '(ดี, คุณ)');
+  }
+  if (compactSourceAlnumUpper === 'ALSOTHE') {
+    return preserveSourceTrailingPunctuation(source, '(ด้วยเหมือนกัน, สิ่งนั้น)');
+  }
+  if (compactSourceAlnumUpper === 'TOBUYSTUFF') {
+    return preserveSourceTrailingPunctuation(source, 'เพื่อซื้อของ');
+  }
+  if (compactSourceAlnumUpper === 'DECORATIONS') {
+    return preserveSourceTrailingPunctuation(source, 'ของตกแต่ง');
+  }
+  if (compactSourceAlnumUpper === 'GRATEFUL' || compactSourceAlnumUpper === 'GRATEFLL') {
+    return preserveSourceTrailingPunctuation(source, 'รู้สึกขอบคุณ');
+  }
+  if (compactSourceAlnumUpper === 'DOINGP') {
+    return preserveSourceTrailingPunctuation(source, 'กำลังทำอะไรอยู่?');
+  }
+  if (compactSourceAlnumUpper === 'SASAKISAN' || compactSourceAlnumUpper === 'SASAKISANP') {
+    return preserveSourceTrailingPunctuation(source, 'ซาซากิซัง');
+  }
+  if (compactSourceAlnumUpper === 'RESOLUTE') {
+    return preserveSourceTrailingPunctuation(source, 'เด็ดเดี่ยว');
+  }
+  if (compactSourceAlnumUpper === 'FILRTING') {
+    return preserveSourceTrailingPunctuation(source, 'กำลังจีบ');
+  }
+  if (compactSourceAlnumUpper === 'TOMUSIC') {
+    return preserveSourceTrailingPunctuation(source, 'กับเสียงเพลง');
+  }
+  if (compactSourceAlnumUpper === 'TOSONGS') {
+    return preserveSourceTrailingPunctuation(source, 'กับบทเพลง');
+  }
+  if (compactSourceAlnumUpper === 'WAYWHY') {
+    return preserveSourceTrailingPunctuation(source, '(ทาง, ทำไม)');
+  }
+  if (compactSourceAlnumUpper === 'SHOULDI') {
+    return preserveSourceTrailingPunctuation(source, 'ฉันควรจะ');
+  }
+  if (compactSourceAlnumUpper === 'CORDIS') {
+    return preserveSourceTrailingPunctuation(source, 'สายคือ');
+  }
+  if (compactSourceAlnumUpper === 'MYSELFTHEN') {
+    return preserveSourceTrailingPunctuation(source, 'ตัวเอง" จากนั้น');
+  }
+  if (compactSourceAlnumUpper === 'ANDSTARTED') {
+    return preserveSourceTrailingPunctuation(source, 'และเริ่ม');
+  }
+  if (compactSourceAlnumUpper === 'TOCOMPLETE') {
+    return preserveSourceTrailingPunctuation(source, 'เพื่อให้เสร็จสิ้น');
+  }
+  if (compactSourceAlnumUpper === 'NEXTMONTHS') {
+    return preserveSourceTrailingPunctuation(source, 'ของเดือนหน้า');
+  }
+  if (compactSourceAlnumUpper === 'HASMADE') {
+    return preserveSourceTrailingPunctuation(source, 'ได้ทำ');
+  }
+  if (compactSourceAlnumUpper === 'EARTHIS') {
+    return preserveSourceTrailingPunctuation(source, 'โลกคือ');
+  }
+  if (compactSourceAlnumUpper === 'ROOMWAS') {
+    return preserveSourceTrailingPunctuation(source, '(ห้อง, เคยเป็น)');
+  }
+  if (compactSourceAlnumUpper === 'TERESTING') {
+    return preserveSourceTrailingPunctuation(source, 'น่าสนใจ');
+  }
+  if (compactSourceAlnumUpper === 'ITSFASTER') {
+    return preserveSourceTrailingPunctuation(source, '"มันเร็วกว่า');
+  }
 
   // H-Manga Slang Conversational Override Group
   if (compactSourceAlnumUpper.includes('SHUPUPWE') && compactSourceAlnumUpper.includes('FUCK') && (compactSourceAlnumUpper.includes('PRINCESS') || compactSourceAlnumUpper.includes('PRIN') || compactSourceAlnumUpper.includes('CESS'))) {

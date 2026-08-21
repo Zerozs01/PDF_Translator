@@ -372,6 +372,63 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bDOESn't\s+GEt\b/gi, replacement: "DOESN'T GET" },
   { pattern: /\bSciously\b/gi, replacement: 'consciously' },
   { pattern: /\bMINISCING\b/gi, replacement: 'REMINISCING' },
+  { pattern: /\bSAn\b/g, replacement: 'San' },
+  { pattern: /\bis'such\b/gi, replacement: 'is such' },
+  { pattern: /\bAGREAT\b/gi, replacement: 'A GREAT' },
+  { pattern: /\bDISGUSTEDBY\b/gi, replacement: 'DISGUSTED BY' },
+  { pattern: /\bATFORSO\b/gi, replacement: 'AT SO FOR' },
+  { pattern: /\bSHOULDIGET\b/gi, replacement: 'SHOULD I GET' },
+  { pattern: /\bFAULTFOR\b/gi, replacement: 'FAULT FOR' },
+  { pattern: /\bYOUQUIT\b/gi, replacement: 'YOU QUIT' },
+  { pattern: /\bYousoMuCh\b/gi, replacement: 'You so much' },
+  { pattern: /\bt-thAt\b/gi, replacement: 'T-that' },
+  { pattern: /\btoge\+her\b/gi, replacement: 'together' },
+  { pattern: /\bISSUCHANICE\b/gi, replacement: 'IS SUCH A NICE' },
+  { pattern: /\bCoURSe\b/gi, replacement: 'course' },
+  { pattern: /\bCAre\b/gi, replacement: 'Care' },
+  { pattern: /\bGOODMOOD\b/gi, replacement: 'GOOD MOOD' },
+  { pattern: /\bTHANKSFOR\b/gi, replacement: 'THANKS FOR' },
+  { pattern: /\bWE'LLGO\b/gi, replacement: "WE'LL GO" },
+  { pattern: /\bWELLGO\b/gi, replacement: "WE'LL GO" },
+  { pattern: /\bYOUPRETTY\b/gi, replacement: 'YOU PRETTY' },
+  { pattern: /\bFORTUNATE\.HEAR\b/gi, replacement: 'FORTUNATE. HEAR' },
+  { pattern: /\bGRATITUDE\.I\b/gi, replacement: 'GRATITUDE. I' },
+  { pattern: /\bNON-?EXISTENT\s*WELL\b/gi, replacement: 'NON-EXISTENT WELL' },
+  { pattern: /\bNONEXISTENTWELL\b/gi, replacement: 'NON-EXISTENT WELL' },
+  { pattern: /\bnow\.a\s+Married\b/gi, replacement: 'Now, a married' },
+  { pattern: /\bdisoBeying\b/gi, replacement: 'disobeying' },
+  { pattern: /\bWAiTing\b/gi, replacement: 'Waiting' },
+  { pattern: /\bMar-ried\b/gi, replacement: 'Married' },
+  { pattern: /\bSANI\?/gi, replacement: 'SAN?' },
+  { pattern: /\bIWASIN\b/gi, replacement: 'I WAS IN' },
+  { pattern: /\bRumeL\b/gi, replacement: 'Rumble' },
+  { pattern: /\bGUMBC\b/gi, replacement: 'Rumble' },
+  { pattern: /@umblc/gi, replacement: 'Rumble' },
+  { pattern: /\bSENPAL\b/gi, replacement: 'SENPAI' },
+  { pattern: /\bCuTe\b/g, replacement: 'Cute' },
+  { pattern: /\bMAtCH\b/g, replacement: 'Match' },
+  { pattern: /\bwantto\b/gi, replacement: 'want to' },
+  { pattern: /\bTOBUYSTUFF\b/gi, replacement: 'TO BUY STUFF' },
+  { pattern: /\bGRATEFLL\b/gi, replacement: 'GRATEFUL' },
+  { pattern: /\bDOINGP\b/gi, replacement: 'DOING?' },
+  { pattern: /\b(?:SAsaki-?sanP|Sasakisanp)\b/gi, replacement: 'Sasaki-san?' },
+  { pattern: /\b([A-Za-z]+)-?sanP\b/gi, replacement: '$1-san?' },
+  { pattern: /\bLightLy\b/g, replacement: 'Lightly' },
+  { pattern: /\bUM-BRELLA/gi, replacement: 'UMBRELLA' },
+  { pattern: /\bFILRTING\b/gi, replacement: 'FLIRTING' },
+  { pattern: /\bTOMUSIC\b/gi, replacement: 'TO MUSIC' },
+  { pattern: /\bTOSONGS\b/gi, replacement: 'TO SONGS' },
+  { pattern: /\bSHOULDI\b/gi, replacement: 'SHOULD I' },
+  { pattern: /\bCORDIS\b/gi, replacement: 'CORD IS' },
+  { pattern: /\bMYSELF"THEN\b/gi, replacement: 'MYSELF" THEN' },
+  { pattern: /\bANDSTARTED\b/gi, replacement: 'AND STARTED' },
+  { pattern: /\bTOCOMPLETE\b/gi, replacement: 'TO COMPLETE' },
+  { pattern: /\bNEXTMONTH'S\b/gi, replacement: "NEXT MONTH'S" },
+  { pattern: /\bHASMADE\b/gi, replacement: 'HAS MADE' },
+  { pattern: /\bEARTHIS\b/gi, replacement: 'EARTH IS' },
+  { pattern: /\bFINIShED\b/gi, replacement: 'FINISHED' },
+  { pattern: /\bteresting\b/gi, replacement: 'interesting' },
+  { pattern: /"IT'SFASTER\b/gi, replacement: '"IT\'S FASTER' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -964,9 +1021,9 @@ export const normalizeSourceForTranslationWithThaiSubs = (normalized: string): s
 };
 
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
-  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely (preserving Japanese honorifics)
+  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely (preserving Japanese honorifics and single-letter stutters)
   let raw = String(text || '').replace(/[\r\n]+/g, ' ');
-  raw = raw.replace(/([\p{L}])-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([\p{L}])/gui, '$1$2');
+  raw = raw.replace(/\b([\p{L}]{2,})-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([\p{L}])/gui, '$1$2');
 
   let normalized = normalizeTechnicalArtifactsForTranslation(raw);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);

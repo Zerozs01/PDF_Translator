@@ -714,6 +714,61 @@ describe('TranslationCoordinator & Engines', () => {
         { id: '7', text: '(YA-MA-DA)', groupType: 'balloon' },
         { id: '8', text: 'SASAKI-', groupType: 'balloon' },
         { id: '9', text: 'AMAZING~', groupType: 'balloon' },
+        { id: '10', text: 'FORTUNATE.HEAR.', groupType: 'balloon' },
+        { id: '11', text: 'APOLOGIZE', groupType: 'balloon' },
+        { id: '12', text: 'REGARDING', groupType: 'balloon' },
+        { id: '13', text: 'ASSURED.', groupType: 'balloon' },
+        { id: '14', text: 'OLD SENPAI', groupType: 'balloon' },
+        { id: '15', text: 'CONFUSING', groupType: 'balloon' },
+        { id: '16', text: 'NON-EXISTENTWELL...', groupType: 'balloon' },
+        { id: '17', text: 'PRECIOUS', groupType: 'balloon' },
+        { id: '18', text: 'now.a Married', groupType: 'balloon' },
+        { id: '19', text: 'GOODMOOD', groupType: 'balloon' },
+        { id: '20', text: 'THANKSFOR', groupType: 'balloon' },
+        { id: '21', text: 'ONEE-SAN!', groupType: 'balloon' },
+        { id: '22', text: 'SENPAI', groupType: 'balloon' },
+        { id: '23', text: 'ALL THE Time...', groupType: 'balloon' },
+        { id: '24', text: 'Ba-dum', groupType: 'sfx' },
+        { id: '25', text: 'Mar-ried', groupType: 'balloon' },
+        { id: '26', text: 'SORRY', groupType: 'balloon' },
+        { id: '27', text: 'EVEN THOUGH', groupType: 'balloon' },
+        { id: '28', text: "I DIDN'T", groupType: 'balloon' },
+        { id: '29', text: 'IWASIN', groupType: 'balloon' },
+        { id: '30', text: 'RumeL', groupType: 'sfx' },
+        { id: '31', text: 'TAYAMA-', groupType: 'balloon' },
+        { id: '32', text: 'SENPAL', groupType: 'balloon' },
+        { id: '33', text: 'BLOCKHEAD', groupType: 'balloon' },
+        { id: '34', text: '(GOOD,YOU)', groupType: 'balloon' },
+        { id: '35', text: 'TOBUYSTUFF', groupType: 'balloon' },
+        { id: '36', text: 'GRATEFLL', groupType: 'balloon' },
+        { id: '37', text: 'DOINGP', groupType: 'balloon' },
+        { id: '38', text: 'SAsaki-sanP', groupType: 'balloon' },
+        { id: '39', text: 'RESOLUTE', groupType: 'balloon' },
+        { id: '40', text: 'WELL', groupType: 'balloon' },
+        { id: '41', text: 'HOW ABOUT', groupType: 'balloon' },
+        { id: '42', text: 'HUH?', groupType: 'balloon' },
+        { id: '43', text: 'AH~', groupType: 'balloon' },
+        { id: '44', text: 'HMMM?', groupType: 'balloon' },
+        { id: '45', text: 'LightLy', groupType: 'balloon' },
+        { id: '46', text: "UM-BRELLA'S", groupType: 'balloon' },
+        { id: '47', text: 'FILRTING', groupType: 'balloon' },
+        { id: '48', text: 'TOMUSIC', groupType: 'balloon' },
+        { id: '49', text: 'TOSONGS', groupType: 'balloon' },
+        { id: '50', text: '(WAY,WHY)', groupType: 'balloon' },
+        { id: '51', text: 'SHOULDI', groupType: 'balloon' },
+        { id: '52', text: 'CORDIS', groupType: 'balloon' },
+        { id: '53', text: 'Flick', groupType: 'sfx' },
+        { id: '54', text: 'MYSELF"THEN', groupType: 'balloon' },
+        { id: '55', text: 'ANDSTARTED', groupType: 'balloon' },
+        { id: '56', text: 'MANAGER', groupType: 'balloon' },
+        { id: '57', text: 'TOCOMPLETE', groupType: 'balloon' },
+        { id: '58', text: "NEXTMONTH'S", groupType: 'balloon' },
+        { id: '59', text: 'HASMADE', groupType: 'balloon' },
+        { id: '60', text: 'EARTHIS', groupType: 'balloon' },
+        { id: '61', text: 'FINIShED', groupType: 'balloon' },
+        { id: '62', text: '(ROOM,WAS)', groupType: 'balloon' },
+        { id: '63', text: 'teresting', groupType: 'balloon' },
+        { id: '64', text: '"IT\'SFASTER', groupType: 'balloon' },
       ];
 
       const results = await translationCoordinator.runTranslation('argos', items, {
@@ -733,6 +788,61 @@ describe('TranslationCoordinator & Engines', () => {
       expect(resMap.get('7')).toBe('(ยา-มา-ดะ)');
       expect(resMap.get('8')).toBe('ซาซากิ-');
       expect(resMap.get('9')).toBe('สุดยอดเลย~');
+      expect(resMap.get('10')).toBe('โชคดีที่ได้ยิน');
+      expect(resMap.get('11')).toBe('ขอโทษ');
+      expect(resMap.get('12')).toBe('เกี่ยวกับ');
+      expect(resMap.get('13')).toBe('วางใจได้.');
+      expect(resMap.get('14')).toBe('รุ่นพี่ที่เคยรู้จัก');
+      expect(resMap.get('15')).toBe('สับสน');
+      expect(resMap.get('16')).toBe('ไม่มีอยู่จริง...');
+      expect(resMap.get('17')).toBe('ล้ำค่า');
+      expect(resMap.get('18')).toBe('ตอนนี้แต่งงานแล้ว');
+      expect(resMap.get('19')).toBe('อารมณ์ดี');
+      expect(resMap.get('20')).toBe('ขอบคุณสำหรับ');
+      expect(resMap.get('21')).toBe('พี่สาว!');
+      expect(resMap.get('22')).toBe('รุ่นพี่');
+      expect(resMap.get('23')).toBe('ตลอดเวลา...');
+      expect(resMap.get('24')).toBe('ตึก-ตัก');
+      expect(resMap.get('25')).toBe('แต่ง-งาน');
+      expect(resMap.get('26')).toBe('ขอโทษ');
+      expect(resMap.get('27')).toBe('ถึงแม้ว่า');
+      expect(resMap.get('28')).toBe('ฉันไม่ได้ทำ');
+      expect(resMap.get('29')).toBe('ฉันอยู่ใน');
+      expect(resMap.get('30')).toBe('ครืน');
+      expect(resMap.get('31')).toBe('ทายามะ-');
+      expect(resMap.get('32')).toBe('รุ่นพี่');
+      expect(resMap.get('33')).toBe('คนทึ่ม');
+      expect(resMap.get('34')).toBe('(ดี, คุณ)');
+      expect(resMap.get('35')).toBe('เพื่อซื้อของ');
+      expect(resMap.get('36')).toBe('รู้สึกขอบคุณ');
+      expect(resMap.get('37')).toBe('กำลังทำอะไรอยู่?');
+      expect(resMap.get('38')).toBe('ซาซากิซัง?');
+      expect(resMap.get('39')).toBe('เด็ดเดี่ยว');
+      expect(resMap.get('40')).toBe('เอาล่ะ');
+      expect(resMap.get('41')).toBe('แล้ว...ล่ะ');
+      expect(resMap.get('42')).toBe('หา?');
+      expect(resMap.get('43')).toBe('อ๊ะ~');
+      expect(resMap.get('44')).toBe('หืมมม?');
+      expect(resMap.get('45')).toBe('เบาๆ');
+      expect(resMap.get('46')).toBe('ของร่ม');
+      expect(resMap.get('47')).toBe('กำลังจีบ');
+      expect(resMap.get('48')).toBe('กับเสียงเพลง');
+      expect(resMap.get('49')).toBe('กับบทเพลง');
+      expect(resMap.get('50')).toBe('(ทาง, ทำไม)');
+      expect(resMap.get('51')).toBe('ฉันควรจะ');
+      expect(resMap.get('52')).toBe('สายคือ');
+      expect(resMap.get('53')).toBe('สะบัด');
+      expect(resMap.get('54')).toBe('ตัวเอง" จากนั้น');
+      expect(resMap.get('55')).toBe('และเริ่ม');
+      expect(resMap.get('56')).toBe('ผู้จัดการ');
+      expect(resMap.get('57')).toBe('เพื่อให้เสร็จสิ้น');
+      expect(resMap.get('58')).toBe('ของเดือนหน้า');
+      expect(resMap.get('59')).toBe('ได้ทำ');
+      expect(resMap.get('60')).toBe('โลกคือ');
+      expect(resMap.get('61')).toBe('เสร็จสิ้นแล้ว');
+      expect(resMap.get('62')).toBe('(ห้อง, เคยเป็น)');
+      expect(resMap.get('63')).toBe('น่าสนใจ');
+      expect(resMap.get('64')).toBe('"มันเร็วกว่า');
     });
   });
 });

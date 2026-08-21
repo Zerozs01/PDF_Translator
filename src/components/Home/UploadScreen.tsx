@@ -270,7 +270,7 @@ const DocumentContextMenu: React.FC<{
 
   useEffect(() => {
     let active = true;
-    if (window.electronAPI.db.getDocumentCacheSize) {
+    if (window.electronAPI?.db?.getDocumentCacheSize) {
       window.electronAPI.db.getDocumentCacheSize(doc.id)
         .then((size) => {
           if (active) setCacheSize(size);
@@ -295,21 +295,33 @@ const DocumentContextMenu: React.FC<{
       <div className="border-b border-white/10 px-2 pb-2.5 flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-semibold text-slate-100" title={doc.filename}>{doc.filename}</div>
-          <div className="mt-1 flex items-center gap-1.5">
-            <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Rating:</span>
-            <div className="flex items-center">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  onClick={() => onUpdateRating((doc.rating || 0) === star ? 0 : star)}
-                  className="p-0.5 text-slate-500 hover:text-amber-400 transition-colors"
-                >
-                  <Star
-                    size={13}
-                    className={star <= (doc.rating || 0) ? 'text-amber-400 fill-amber-400' : 'text-slate-600'}
-                  />
-                </button>
-              ))}
+          <div className="mt-1 flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Rating:</span>
+              <div className="flex items-center">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => onUpdateRating((doc.rating || 0) === star ? 0 : star)}
+                    className="p-0.5 text-slate-500 hover:text-amber-400 transition-colors"
+                  >
+                    <Star
+                      size={13}
+                      className={star <= (doc.rating || 0) ? 'text-amber-400 fill-amber-400' : 'text-slate-600'}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div 
+              className="flex items-center gap-1 text-[10px] shrink-0 bg-slate-900/80 border border-white/10 px-1.5 py-0.5 rounded-md"
+              title="ขนาดข้อมูลแคช OCR และการแปลของเอกสารนี้"
+            >
+              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Cache:</span>
+              <span className={cacheSize && cacheSize > 0 ? "text-amber-400 font-semibold" : "text-slate-500"}>
+                {cacheSize !== null ? formatFileSize(cacheSize) : '...'}
+              </span>
             </div>
           </div>
         </div>

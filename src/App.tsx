@@ -2940,8 +2940,8 @@ export default function App() {
                 if (normalizedTargetLanguage === 'th') {
                   const transText = String(item.text).trim();
                   if (!/[\u0E00-\u0E7F]/.test(transText)) {
-                    const canResolve = lookupShortPhraseTh(text) || applyKoreanConversationalFallback(text, transText);
-                    if (!canResolve) return true;
+                    // Cached item has no Thai text for a translatable dialogue line - consider cache incomplete and re-translate fresh
+                    return true;
                   }
                   if (hasKoreanTranslationCarryover(transText) || isBoilerplateHallucination(text, transText)) {
                     return true;
