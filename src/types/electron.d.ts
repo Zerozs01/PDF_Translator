@@ -17,6 +17,9 @@ export interface DBDocument {
   is_favorite: boolean;
   rating?: number;
   last_page: number;
+  tag_ids?: string | null;
+  tag_names?: string | null;
+  tag_colors?: string | null;
   created_at: string;
   last_accessed: string;
 }
@@ -81,6 +84,11 @@ export interface DocumentUpdate {
   is_favorite?: boolean;
   total_pages?: number;
   rating?: number;
+}
+
+export interface TagUpdate {
+  name?: string;
+  color?: string;
 }
 
 export interface ProjectCreate {
@@ -254,6 +262,7 @@ export interface ElectronAPI {
   tags: {
     getAll: () => Promise<DBTag[]>;
     create: (name: string, color?: string) => Promise<DBTag | null>;
+    update: (id: number, updates: TagUpdate) => Promise<boolean>;
     delete: (id: number) => Promise<boolean>;
   };
   

@@ -6,6 +6,7 @@ import type {
   ElectronAPI,
   ProjectCreate,
   ProjectUpdate,
+  TagUpdate,
 } from '../types/electron.d';
 
 export type LibrarySortBy = 'name' | 'date' | 'size' | 'type' | 'rating';
@@ -304,6 +305,15 @@ export const createLibraryTag = async (
   client?: LibraryTagsClient | null
 ): Promise<DBTag | null> =>
   withTagsClient(client, 'createTag', null, async ({ tags }) => tags.create(name, color));
+
+export const updateLibraryTag = async (
+  tagId: number,
+  updates: TagUpdate,
+  client?: LibraryTagsClient | null
+): Promise<boolean> =>
+  withTagsClient(client, 'updateTag', false, async ({ tags }) =>
+    tags.update ? tags.update(tagId, updates) : false
+  );
 
 export const deleteLibraryTag = async (
   tagId: number,

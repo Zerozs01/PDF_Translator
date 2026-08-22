@@ -4556,7 +4556,7 @@ export default function App() {
       </div>
       
       {/* HEADER TOOLBAR - Google Docs Style */}
-      <header className="relative z-50 h-12 bg-[#171b23]/78 border-b border-white/10 backdrop-blur-xl flex items-center px-2 gap-1 shrink-0">
+      <header className="relative z-50 h-12 bg-[#171b23]/78 border-b border-white/10 backdrop-blur-xl flex items-center px-2 pr-36 gap-1 shrink-0 titlebar-drag">
         {/* Home Button */}
         <button 
           onClick={handleBackToHome}

@@ -105,6 +105,13 @@ function createWindow() {
     height: 960,
     minWidth: 480,
     minHeight: 600,
+    backgroundColor: '#17181b',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#0e0f11',
+      symbolColor: '#cbd5e1',
+      height: 32,
+    },
     autoHideMenuBar: true, // Hide menu bar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1540,6 +1547,18 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('db:create-tag error:', error);
       return null;
+    }
+  });
+
+  ipcMain.handle('db:update-tag', async (_, { id, updates }) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return TagDAO.update(id, updates);
+    } catch (error) {
+      console.error('db:update-tag error:', error);
+      return false;
     }
   });
 

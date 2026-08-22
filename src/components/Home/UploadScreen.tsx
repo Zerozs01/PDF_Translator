@@ -152,6 +152,29 @@ const getFileIcon = (fileType: string) => {
 const fallbackFolderColors = ['#7C5CFF', '#4387FF', '#59C8F6', '#F59A3A', '#F1C85B'];
 const THEMED_LIBRARY_ACCENTS = ['#7C5CFF', '#4387FF', '#59C8F6', '#F59A3A', '#F1C85B'];
 
+export const FOLDER_PALETTE_COLORS = [
+  '#38BDF8', // Sky
+  '#0EA5E9', // Ocean Blue
+  '#2563EB', // Royal Blue
+  '#6366F1', // Indigo
+  '#7C5CFF', // Violet
+  '#8B5CF6', // Purple
+  '#A855F7', // Magenta
+  '#D946EF', // Fuchsia
+  '#EC4899', // Pink
+  '#F43F5E', // Rose
+  '#EF4444', // Red
+  '#F97316', // Orange
+  '#F59E0B', // Amber
+  '#EAB308', // Gold/Yellow
+  '#84CC16', // Lime
+  '#10B981', // Emerald
+  '#14B8A6', // Teal
+  '#06B6D4', // Cyan
+  '#64748B', // Slate
+  '#94A3B8', // Silver
+];
+
 const resolveThemedAccent = (index: number): string =>
   THEMED_LIBRARY_ACCENTS[Math.abs(index) % THEMED_LIBRARY_ACCENTS.length];
 
@@ -184,6 +207,7 @@ type MenuActionDialogState = {
   name: string;
   documentId: number | null;
   parentId?: number | null;
+  color?: string;
 };
 
 type MenuPosition = {
@@ -492,47 +516,6 @@ const DocumentContextMenu: React.FC<{
   );
 };
 
-const TagContextMenu: React.FC<{
-  tag: DBTag;
-  position: MenuPosition;
-  onClose: () => void;
-  onDelete: () => void;
-}> = ({ tag, position, onClose, onDelete }) => {
-  const accent = resolveStableAccent(tag.id);
-  return createPortal(
-  <div
-    data-library-floating-menu="true"
-    className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
-    style={{ left: position.x, top: position.y }}
-    onClick={(e) => e.stopPropagation()}
-    onContextMenu={(e) => e.preventDefault()}
-  >
-    <div className="border-b border-white/10 px-2 pb-2">
-      <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
-        <span
-          className="h-2.5 w-2.5 rounded-full"
-          style={{ backgroundColor: accent }}
-        />
-        {tag.name}
-      </div>
-      <div className="mt-1 text-[10px] text-slate-400">Deleting a tag only removes the label, not OCR data.</div>
-    </div>
-    <div className="pt-2">
-      <button
-        onClick={() => {
-          onDelete();
-          onClose();
-        }}
-        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
-      >
-        <Trash2 size={12} />
-        Delete Tag
-      </button>
-    </div>
-  </div>,
-  document.body
-);
-};
 
 const ProjectContextMenu: React.FC<{
   project: DBProject;
@@ -560,27 +543,7 @@ const ProjectContextMenu: React.FC<{
       <div className="mt-1 text-[10px] text-slate-400">Deleting a folder does not delete the documents inside it.</div>
     </div>
     <div className="pt-2 space-y-0.5">
-      <button
-        onClick={() => {
-          onShowInfo();
-          onClose();
-        }}
-        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-sky-300 transition-colors hover:bg-sky-500/10 font-medium"
-      >
-        <Info size={13} className="text-sky-400" />
-        Folder Info & Cache Stats
-      </button>
-      <button
-        onClick={() => {
-          onCreateSubfolder();
-          onClose();
-        }}
-        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10"
-      >
-        <FolderPlus size={12} className="text-slate-400" />
-        Create Subfolder
-      </button>
-      <button
+       <button
         onClick={() => {
           onEdit();
           onClose();
@@ -590,6 +553,28 @@ const ProjectContextMenu: React.FC<{
         <Edit3 size={12} className="text-slate-400" />
         Edit Folder
       </button>
+       <button
+        onClick={() => {
+          onCreateSubfolder();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10"
+      >
+        <FolderPlus size={12} className="text-slate-400" />
+        Create Sub Folder
+      </button>
+      <button
+        onClick={() => {
+          onShowInfo();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-sky-300 transition-colors hover:bg-sky-500/10 font-medium"
+      >
+        <Info size={13} className="text-sky-400" />
+        Folder Info
+      </button>
+     
+     
       <button
         onClick={() => {
           onDelete();
@@ -603,6 +588,233 @@ const ProjectContextMenu: React.FC<{
     </div>
   </div>,
   document.body
+  );
+};
+
+const TagContextMenu: React.FC<{
+  tag: DBTag;
+  position: MenuPosition;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}> = ({ tag, position, onClose, onEdit, onDelete }) => {
+  return createPortal(
+    <div
+      data-library-floating-menu="true"
+      className="fixed z-[160] w-52 rounded-2xl border border-white/12 bg-slate-950/95 p-1 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl flex flex-col gap-0.5 animate-fade-in"
+      style={{ left: position.x, top: position.y }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-white/5 mb-0.5">
+        <span 
+          className="h-2 w-2 rounded-full shrink-0 shadow-[0_0_8px_rgba(255,255,255,0.2)]" 
+          style={{ backgroundColor: tag.color || '#8B5CF6' }} 
+        />
+        <span className="text-xs font-semibold text-slate-200 truncate">{tag.name}</span>
+      </div>
+
+      <button
+        onClick={() => {
+          onClose();
+          onEdit();
+        }}
+        className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+      >
+        <Edit3 size={13} className="text-sky-400" />
+        Edit Tag
+      </button>
+
+      <button
+        onClick={() => {
+          onClose();
+          onDelete();
+        }}
+        className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/20 hover:text-red-200"
+      >
+        <Trash2 size={13} />
+        ลบแท็ก (Delete Tag)
+      </button>
+    </div>,
+    document.body
+  );
+};
+
+export const TAG_COLOR_PALETTES = [
+  {
+    name: 'Crimson & Ember',
+    icon: '🔥',
+    colors: [
+      '#EF4444', '#F87171', '#DC2626', '#E11D48',
+      '#F97316', '#FB923C', '#EA580C', '#F59E0B',
+      '#FBBF24', '#D97706', '#FB7185', '#F43F5E'
+    ]
+  },
+  {
+    name: 'Abyssal & Astral',
+    icon: '🔮',
+    colors: [
+      '#6366F1', '#818CF8', '#4F46E5', '#8B5CF6',
+      '#A78BFA', '#7C3AED', '#A855F7', '#C084FC',
+      '#9333EA', '#3B82F6', '#60A5FA', '#2563EB'
+    ]
+  },
+  {
+    name: 'Biosphere & Nature',
+    icon: '🌿',
+    colors: [
+      '#10B981', '#34D399', '#059669', '#14B8A6',
+      '#2DD4BF', '#0D9488', '#22C55E', '#4ADE80',
+      '#16A34A', '#84CC16', '#A3E635', '#65A30D'
+    ]
+  },
+  {
+    name: 'Atmosphere & Sky',
+    icon: '☁️',
+    colors: [
+      '#0EA5E9', '#38BDF8', '#0284C7', '#06B6D4',
+      '#22D3EE', '#0891B2', '#64748B', '#94A3B8',
+      '#CBD5E1', '#A5B4FC', '#C7D2FE', '#7DD3FC'
+    ]
+  },
+  {
+    name: 'Flesh & Blossom',
+    icon: '🌸',
+    colors: [
+      '#EC4899', '#F472B6', '#DB2777', '#F43F5E',
+      '#FDA4AF', '#FDBA74', '#FED7AA', '#FDE047',
+      '#FEF08A', '#FACC15', '#F87171', '#C084FC'
+    ]
+  }
+];
+
+const EditTagModal: React.FC<{
+  isOpen: boolean;
+  tag: DBTag | null;
+  name: string;
+  color: string;
+  onChangeName: (name: string) => void;
+  onChangeColor: (color: string) => void;
+  onSave: () => void;
+  onClose: () => void;
+}> = ({ isOpen, tag, name, color, onChangeName, onChangeColor, onSave, onClose }) => {
+  if (!isOpen || !tag) return null;
+
+  return createPortal(
+    <div 
+      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/65 backdrop-blur-md p-4 animate-fade-in"
+      onClick={onClose}
+    >
+      <div 
+        className="w-full max-w-lg rounded-3xl border border-white/12 bg-[#0e1116]/98 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-4 max-h-[90vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div 
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+              style={{ backgroundColor: hexToRgba(color || '#8B5CF6', 0.2) }}
+            >
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color || '#8B5CF6' }} />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-100">แก้ไขแท็ก (Edit Tag)</h3>
+              <p className="text-xs text-slate-400">เปลี่ยนชื่อและชุดสีแท็กสำหรับแยกหมวดหมู่</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Tag Name Input */}
+        <div>
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+            ชื่อแท็ก (Tag Name)
+          </label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => onChangeName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSave();
+            }}
+            placeholder="Tag name"
+            className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+          />
+        </div>
+
+        {/* Live Preview Pill */}
+        <div className="flex items-center gap-3 p-3 rounded-2xl bg-white/[0.02] border border-white/5">
+          <span className="text-xs text-slate-400 select-none">ตัวอย่างแท็ก (Preview):</span>
+          <span 
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-white/10 bg-[#131519]/88 text-slate-200 shadow-sm"
+            style={{ boxShadow: `0 0 0 1px ${hexToRgba(color || '#8B5CF6', 0.28)}` }}
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color || '#8B5CF6' }} />
+            {name || 'Tag Name'}
+          </span>
+        </div>
+
+        {/* Categorized Color Palettes */}
+        <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 custom-scrollbar max-h-64">
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block sticky top-0 bg-[#0e1116] py-1 z-10">
+            เลือกโทนสี (Select Color Palette)
+          </label>
+          {TAG_COLOR_PALETTES.map((group) => (
+            <div key={group.name} className="space-y-1.5">
+              <div className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
+                <span>{group.icon}</span>
+                <span>{group.name}</span>
+              </div>
+              <div className="grid grid-cols-6 gap-2">
+                {group.colors.map((c) => {
+                  const isSelected = (color || '').toUpperCase() === c.toUpperCase();
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => onChangeColor(c)}
+                      className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                      style={{ 
+                        backgroundColor: c,
+                        boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                      }}
+                      title={c}
+                    >
+                      {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer Actions */}
+        <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSave}
+            disabled={!name.trim()}
+            className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Save (บันทึก)
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 };
 
@@ -799,6 +1011,9 @@ const SortContextMenu: React.FC<{
   ratingFilterOnly: number | null;
   ratingFilterMin: number | null;
   ratingFilterMax: number | null;
+  activeFilterTag: number | 'no_folder' | null;
+  tags: DBTag[];
+  onSelectFilterTag: (filter: number | 'no_folder' | null) => void;
   onUpdateFilters: (updates: {
     mode?: 'only' | 'range';
     only?: number | null;
@@ -815,6 +1030,9 @@ const SortContextMenu: React.FC<{
   ratingFilterOnly,
   ratingFilterMin,
   ratingFilterMax,
+  activeFilterTag,
+  tags,
+  onSelectFilterTag,
   onUpdateFilters,
   onSelect,
   onClose
@@ -1006,6 +1224,88 @@ const SortContextMenu: React.FC<{
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Filter by Tag Section */}
+      <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-t border-b border-white/5 my-1 mt-2 flex items-center justify-between">
+        <span>Filter by Tag</span>
+        {activeFilterTag !== null && (
+          <button
+            onClick={() => onSelectFilterTag(null)}
+            className="text-[9px] text-[#5CC6F2] hover:underline cursor-pointer"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 p-2 bg-white/[0.02] rounded-xl border border-white/5 my-1 mx-0.5 max-h-44 overflow-y-auto custom-scrollbar">
+        {/* No tags (Untagged files) button */}
+        <button
+          onClick={() => {
+            if (activeFilterTag === 0) {
+              onSelectFilterTag(null);
+            } else {
+              onSelectFilterTag(0);
+            }
+          }}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+            activeFilterTag === 0
+              ? 'border-sky-400 bg-sky-500/20 text-sky-200 shadow-[0_0_12px_rgba(56,189,248,0.25)]'
+              : 'border-white/10 bg-[#131519]/88 text-slate-400 hover:border-white/20 hover:text-slate-200'
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${activeFilterTag === 0 ? 'bg-sky-400' : 'bg-slate-500'}`} />
+          No tags
+        </button>
+
+        {/* No folder (Root / Uncategorized files) button */}
+        <button
+          onClick={() => {
+            if (activeFilterTag === 'no_folder') {
+              onSelectFilterTag(null);
+            } else {
+              onSelectFilterTag('no_folder');
+            }
+          }}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+            activeFilterTag === 'no_folder'
+              ? 'border-amber-400 bg-amber-500/20 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.25)]'
+              : 'border-white/10 bg-[#131519]/88 text-slate-400 hover:border-white/20 hover:text-slate-200'
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${activeFilterTag === 'no_folder' ? 'bg-amber-400' : 'bg-slate-500'}`} />
+          No folder
+        </button>
+
+        {tags.map((tag) => {
+          const isSelected = activeFilterTag === tag.id;
+          const tagColor = tag.color || '#8B5CF6';
+          return (
+            <button
+              key={tag.id}
+              onClick={() => {
+                if (isSelected) {
+                  onSelectFilterTag(null);
+                } else {
+                  onSelectFilterTag(tag.id);
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+                isSelected
+                  ? 'border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                  : 'border-white/10 bg-[#131519]/88 text-slate-400 hover:border-white/20 hover:text-slate-200'
+              }`}
+              style={isSelected ? { boxShadow: `0 0 0 1px ${hexToRgba(tagColor, 0.35)}` } : undefined}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: tagColor }}
+              />
+              {tag.name}
+            </button>
+          );
+        })}
       </div>
     </div>,
     document.body
@@ -1433,30 +1733,33 @@ const ProjectItem = React.memo<{
   );
 });
 
-// Tag Pill Component
 const TagPill = React.memo<{
   tag: DBTag;
   isSelected: boolean;
   onClick: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLButtonElement>) => void;
   displayColor?: string;
-}>(({ tag, isSelected, onClick, onContextMenu, displayColor }) => (
-  <button
-    onClick={onClick}
-    onContextMenu={onContextMenu}
-    className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-      isSelected 
-        ? 'border-white/12 bg-[#23262b] text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
-        : 'border-white/10 bg-[#131519]/88 text-slate-300 hover:border-white/14 hover:bg-[#1a1d22]'
-    }`}
-    style={isSelected ? { boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px ${hexToRgba(displayColor || tag.color || '#8B5CF6', 0.18)}` } : undefined}
-  >
-    <span className={`h-1.5 w-1.5 rounded-full transition-colors ${
-      isSelected ? '' : 'bg-slate-500 group-hover:bg-slate-300'
-    }`} style={isSelected ? { backgroundColor: displayColor || tag.color || '#8B5CF6' } : undefined} />
-    {tag.name}
-  </button>
-));
+}>(({ tag, isSelected, onClick, onContextMenu, displayColor }) => {
+  const accent = tag.color || displayColor || '#8B5CF6';
+  return (
+    <button
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+        isSelected 
+          ? 'border-white/12 bg-[#23262b] text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
+          : 'border-white/10 bg-[#131519]/88 text-slate-300 hover:border-white/14 hover:bg-[#1a1d22]'
+      }`}
+      style={isSelected ? { boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px ${hexToRgba(accent, 0.28)}` } : undefined}
+    >
+      <span 
+        className="h-1.5 w-1.5 rounded-full transition-colors" 
+        style={{ backgroundColor: accent }} 
+      />
+      {tag.name}
+    </button>
+  );
+});
 
 export const UploadScreen: React.FC = () => {
   const {
@@ -1504,7 +1807,7 @@ export const UploadScreen: React.FC = () => {
           searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
-    createTag, createProject, deleteTag, deleteProject, updateProject, loadDocumentTags, persistDocumentPatch,
+    createTag, createProject, deleteTag, deleteProject, updateProject, updateTag, loadDocumentTags, persistDocumentPatch,
     selectedDocumentIds, selectDocument, selectRangeDocuments, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
@@ -1623,6 +1926,12 @@ export const UploadScreen: React.FC = () => {
   const [activeDocumentMenuId, setActiveDocumentMenuId] = useState<number | null>(null);
   const [activeDocumentMenuPosition, setActiveDocumentMenuPosition] = useState<MenuPosition | null>(null);
   const [activeTagMenu, setActiveTagMenu] = useState<{ tag: DBTag; position: MenuPosition } | null>(null);
+  const [editTagDialog, setEditTagDialog] = useState<{
+    isOpen: boolean;
+    tag: DBTag | null;
+    name: string;
+    color: string;
+  }>({ isOpen: false, tag: null, name: '', color: '' });
   const [documentTagsById, setDocumentTagsById] = useState<Record<number, DBTag[]>>({});
   const [projectDialog, setProjectDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [tagDialog, setTagDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
@@ -1643,6 +1952,7 @@ export const UploadScreen: React.FC = () => {
   const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortMenuPosition, setSortMenuPosition] = useState<MenuPosition | null>(null);
+  const [activeFilterTag, setActiveFilterTag] = useState<number | 'no_folder' | null>(null);
   const [ratingFilterMode, setRatingFilterMode] = useState<'only' | 'range'>('only');
   const [ratingFilterOnly, setRatingFilterOnly] = useState<number | null>(null);
   const [ratingFilterMin, setRatingFilterMin] = useState<number | null>(null);
@@ -1866,7 +2176,10 @@ export const UploadScreen: React.FC = () => {
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('[data-library-floating-menu="true"]')) return;
+      if (
+        target?.closest('[data-library-floating-menu="true"]') ||
+        target?.closest('[data-sort-menu-trigger="true"]')
+      ) return;
       setActiveDocumentMenuId(null);
       setActiveDocumentMenuPosition(null);
       setActiveTagMenu(null);
@@ -2214,17 +2527,38 @@ export const UploadScreen: React.FC = () => {
   const rawSortedDocuments = getSortedDocuments();
   const sortedDocuments = useMemo(() => {
     return rawSortedDocuments.filter(doc => {
+      // 1. Rating Filter
       const rating = doc.rating || 0;
       if (ratingFilterMode === 'only') {
-        if (ratingFilterOnly === null) return true;
-        return rating === ratingFilterOnly;
+        if (ratingFilterOnly !== null && rating !== ratingFilterOnly) return false;
       } else {
         if (ratingFilterMin !== null && rating < ratingFilterMin) return false;
         if (ratingFilterMax !== null && rating > ratingFilterMax) return false;
-        return true;
       }
+
+      // 2. Scope-aware Local Filter (Tag or No Folder within current view)
+      if (activeFilterTag !== null) {
+        if (activeFilterTag === 0) {
+          // No tags (untagged files)
+          const hasTags = (doc.tag_names && doc.tag_names.trim().length > 0) ||
+                          (doc.tag_ids && doc.tag_ids.trim().length > 0);
+          if (hasTags) return false;
+        } else if (activeFilterTag === 'no_folder') {
+          // No folder (files not in any folder)
+          if (doc.project_id !== null && doc.project_id !== undefined) return false;
+        } else {
+          // Filter by specific tag ID
+          const tagIdStr = String(activeFilterTag);
+          const targetTag = tags.find(t => t.id === activeFilterTag);
+          const hasTagId = doc.tag_ids ? doc.tag_ids.split(',').map(s => s.trim()).includes(tagIdStr) : false;
+          const hasTagName = targetTag && doc.tag_names ? doc.tag_names.split(',').map(s => s.trim()).includes(targetTag.name) : false;
+          if (!hasTagId && !hasTagName) return false;
+        }
+      }
+
+      return true;
     });
-  }, [rawSortedDocuments, ratingFilterMode, ratingFilterOnly, ratingFilterMin, ratingFilterMax]);
+  }, [rawSortedDocuments, ratingFilterMode, ratingFilterOnly, ratingFilterMin, ratingFilterMax, activeFilterTag, tags]);
 
   const currentSubprojects = useMemo(() => {
     if (filterType === 'favorites' || filterType === 'tag') {
@@ -2235,6 +2569,89 @@ export const UploadScreen: React.FC = () => {
     }
     return projects.filter(p => p.parent_id === null);
   }, [projects, selectedProjectId, filterType]);
+
+  const breadcrumbItems = useMemo(() => {
+    let homeLabel = 'Home';
+    let isTagView = false;
+    let activeTagObj: DBTag | undefined = undefined;
+
+    if (filterType === 'tag' && selectedTagId !== null) {
+      isTagView = true;
+      if (selectedTagId === 0) {
+        homeLabel = 'No tags';
+      } else {
+        activeTagObj = tags.find(t => t.id === selectedTagId);
+        homeLabel = activeTagObj ? `#${activeTagObj.name}` : 'Tag';
+      }
+    } else if (filterType === 'favorites') {
+      homeLabel = 'Favorites';
+    }
+
+    const items: Array<{
+      id: number | null;
+      name: string;
+      color?: string;
+      isHome?: boolean;
+      isTag?: boolean;
+      isFavorites?: boolean;
+      tagColor?: string;
+    }> = [
+      {
+        id: null,
+        name: homeLabel,
+        isHome: !isTagView && filterType !== 'favorites',
+        isTag: isTagView,
+        isFavorites: filterType === 'favorites',
+        tagColor: activeTagObj?.color,
+      }
+    ];
+
+    if (selectedProjectId !== null) {
+      const chain: DBProject[] = [];
+      let currentId: number | null = selectedProjectId;
+      const visited = new Set<number>();
+      while (currentId !== null && !visited.has(currentId)) {
+        visited.add(currentId);
+        const p = projects.find(item => item.id === currentId);
+        if (p) {
+          chain.unshift(p);
+          currentId = p.parent_id;
+        } else {
+          break;
+        }
+      }
+
+      for (const p of chain) {
+        items.push({
+          id: p.id,
+          name: p.name,
+          color: p.color || resolveStableAccent(p.id),
+        });
+      }
+    }
+
+    return items;
+  }, [filterType, selectedTagId, tags, selectedProjectId, projects]);
+
+  const handleBreadcrumbClick = useCallback((item: { id: number | null }, index: number) => {
+    if (index === breadcrumbItems.length - 1) {
+      return;
+    }
+
+    if (item.id === null) {
+      setSelectedProjectId(null);
+      if (selectedTagId !== null) {
+        void loadDocumentsByTag(selectedTagId);
+      } else if (filterType === 'favorites') {
+        void loadFavoriteDocuments();
+      } else {
+        void loadRecentDocuments();
+      }
+      return;
+    }
+
+    void loadDocumentsByProject(item.id);
+  }, [breadcrumbItems.length, filterType, loadDocumentsByProject, loadDocumentsByTag, loadFavoriteDocuments, loadRecentDocuments, selectedTagId, setSelectedProjectId]);
 
   const openDocumentMenu = useCallback(async (docId: number, position: MenuPosition) => {
     setActiveTagMenu(null);
@@ -2278,7 +2695,7 @@ export const UploadScreen: React.FC = () => {
     });
   }, []);
 
-  const openSortMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleToggleSortMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
     setActiveDocumentMenuId(null);
@@ -2286,13 +2703,20 @@ export const UploadScreen: React.FC = () => {
     setLibraryMenuPosition(null);
     setActiveTagMenu(null);
     setActiveProjectMenu(null);
+
+    if (isSortMenuOpen) {
+      setIsSortMenuOpen(false);
+      setSortMenuPosition(null);
+      return;
+    }
+
     const rect = event.currentTarget.getBoundingClientRect();
     setSortMenuPosition({
-      x: rect.right - 192, // 192px is w-48
+      x: Math.max(16, rect.right - 270),
       y: rect.bottom + 8
     });
     setIsSortMenuOpen(true);
-  }, []);
+  }, [isSortMenuOpen]);
 
   const handleToggleDocumentTag = useCallback(async (doc: DBDocument, tag: DBTag) => {
     const isMulti = selectedDocumentIds.has(doc.id);
@@ -2345,7 +2769,8 @@ export const UploadScreen: React.FC = () => {
     if (isMulti) {
       clearSelection();
     }
-  }, [moveToProject, selectedDocumentIds, clearSelection]);
+    await refreshLibraryView();
+  }, [moveToProject, selectedDocumentIds, clearSelection, refreshLibraryView]);
 
   const handleCardClick = useCallback((doc: DBDocument, index: number, e: React.MouseEvent) => {
     const isCtrl = e.ctrlKey || e.metaKey;
@@ -2397,13 +2822,16 @@ export const UploadScreen: React.FC = () => {
     lastClickedDocIdRef.current = doc.id;
   }, [toggleDocumentSelection]);
 
+
   const openProjectDialog = useCallback((documentId: number | null = null, parentId: number | null = null) => {
     setActiveDocumentMenuId(null);
     setActiveDocumentMenuPosition(null);
     setActiveTagMenu(null);
+    setActiveProjectMenu(null);
     setLibraryMenuPosition(null);
-    setProjectDialog({ isOpen: true, name: '', documentId, parentId });
-  }, []);
+    const initialColor = FOLDER_PALETTE_COLORS[projects.length % FOLDER_PALETTE_COLORS.length];
+    setProjectDialog({ isOpen: true, name: '', documentId, parentId, color: initialColor });
+  }, [projects.length]);
 
   const openTagDialog = useCallback((documentId: number | null = null) => {
     setActiveDocumentMenuId(null);
@@ -2417,7 +2845,7 @@ export const UploadScreen: React.FC = () => {
     const name = projectDialog.name.trim();
     if (!name) return;
 
-    const color = fallbackFolderColors[projects.length % fallbackFolderColors.length];
+    const color = projectDialog.color || FOLDER_PALETTE_COLORS[projects.length % FOLDER_PALETTE_COLORS.length];
     const parentId = (projectDialog.parentId !== undefined && projectDialog.parentId !== null) ? projectDialog.parentId : (selectedProjectId ?? null);
     const project = await createProject(name, parentId, color);
     if (!project) return;
@@ -2426,8 +2854,8 @@ export const UploadScreen: React.FC = () => {
       await moveToProject(projectDialog.documentId, project.id);
     }
 
-    setProjectDialog({ isOpen: false, name: '', documentId: null, parentId: null });
-  }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projectDialog.parentId, projects.length, selectedProjectId]);
+    setProjectDialog({ isOpen: false, name: '', documentId: null, parentId: null, color: '' });
+  }, [createProject, moveToProject, projectDialog.color, projectDialog.documentId, projectDialog.name, projectDialog.parentId, projects.length, selectedProjectId]);
 
   const handleEditProject = useCallback(async () => {
     const { project, name, color } = editProjectDialog;
@@ -2440,6 +2868,24 @@ export const UploadScreen: React.FC = () => {
       setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' });
     }
   }, [editProjectDialog, updateProject]);
+
+  const handleEditTag = useCallback(async () => {
+    const { tag, name, color } = editTagDialog;
+    if (!tag) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    const success = await updateTag(tag.id, { name: trimmedName, color });
+    if (success) {
+      setEditTagDialog({ isOpen: false, tag: null, name: '', color: '' });
+      await loadTags();
+      if (selectedTagId === tag.id) {
+        void loadDocumentsByTag(tag.id);
+      } else {
+        void loadRecentDocuments();
+      }
+    }
+  }, [editTagDialog, updateTag, loadTags, selectedTagId, loadDocumentsByTag, loadRecentDocuments]);
 
   const handleCreateTag = useCallback(async () => {
     const name = tagDialog.name.trim();
@@ -2544,13 +2990,9 @@ export const UploadScreen: React.FC = () => {
     setDraggedDocumentIds([]);
     setProjectDropTargetId(null);
 
-    // Refresh view
-    if (selectedProjectId !== null) {
-      void loadDocumentsByProject(selectedProjectId);
-    } else {
-      void loadRecentDocuments();
-    }
-  }, [draggedDocumentIds, draggedDocumentId, selectedDocumentIds, moveToProject, clearSelection, selectedProjectId, loadDocumentsByProject, loadRecentDocuments]);
+    // Refresh view staying on current active page/tag/folder
+    await refreshLibraryView();
+  }, [draggedDocumentIds, draggedDocumentId, selectedDocumentIds, moveToProject, clearSelection, refreshLibraryView]);
 
   const handleDropOnProject = useCallback(async (targetProjectId: number | null, event?: React.DragEvent) => {
     if (event) {
@@ -2613,11 +3055,7 @@ export const UploadScreen: React.FC = () => {
           setExpandedProjectIds(prev => new Set(prev).add(targetProjectId));
         }
         await loadProjects();
-        if (selectedProjectId !== null) {
-          void loadDocumentsByProject(selectedProjectId);
-        } else {
-          void loadRecentDocuments();
-        }
+        await refreshLibraryView();
       }
       draggedProjectIdRef.current = null;
       setDraggedProjectId(null);
@@ -2627,7 +3065,7 @@ export const UploadScreen: React.FC = () => {
 
     // 2. Otherwise handle dropped documents
     await handleProjectDrop(targetProjectId, event);
-  }, [draggedProjectId, projects, updateProject, loadProjects, selectedProjectId, loadDocumentsByProject, loadRecentDocuments, handleProjectDrop]);
+  }, [draggedProjectId, projects, updateProject, loadProjects, refreshLibraryView, handleProjectDrop]);
 
   useEffect(() => {
     const pendingDocs = sortedDocuments
@@ -2736,7 +3174,11 @@ export const UploadScreen: React.FC = () => {
             onSelect={() => {
               if (selectedProjectId === project.id) {
                 setSelectedProjectId(null);
-                loadRecentDocuments();
+                if (selectedTagId !== null) {
+                  loadDocumentsByTag(selectedTagId);
+                } else {
+                  loadRecentDocuments();
+                }
               } else {
                 loadDocumentsByProject(project.id);
               }
@@ -2747,7 +3189,7 @@ export const UploadScreen: React.FC = () => {
         </React.Fragment>
       );
     });
-  }, [projects, selectedProjectId, projectDropTargetId, expandedProjectIds, toggleProjectExpanded, handleDropOnProject, loadRecentDocuments, loadDocumentsByProject, openProjectMenu]);
+  }, [projects, selectedProjectId, selectedTagId, projectDropTargetId, expandedProjectIds, toggleProjectExpanded, handleDropOnProject, loadRecentDocuments, loadDocumentsByTag, loadDocumentsByProject, openProjectMenu]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
@@ -2759,7 +3201,7 @@ export const UploadScreen: React.FC = () => {
 
       <div className="relative z-10 flex h-full w-full">
         {/* Left Navigation Sidebar */}
-        <div className="w-16 bg-[#0e0f11]/86 border-r border-white/6 backdrop-blur-xl flex flex-col items-center py-4">
+        <div className="w-16 bg-[#0e0f11]/86 border-r border-white/6 backdrop-blur-xl flex flex-col items-center py-4 titlebar-drag">
           <button
             onClick={() => { setActivePage('home'); loadRecentDocuments(); }}
             className={`p-3 rounded-xl mb-2 transition-all ${
@@ -2799,16 +3241,19 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Secondary Sidebar */}
-        <div className={`transition-all duration-300 ease-in-out border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl flex flex-col overflow-hidden shrink-0 ${
+        <div className={`transition-all duration-300 ease-in-out border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl flex flex-col overflow-hidden shrink-0 titlebar-drag ${
           isSidebarOpen ? 'w-56 p-4 opacity-100' : 'w-0 p-0 border-r-0 opacity-0 pointer-events-none'
         }`}>
         {activePage === 'home' ? (
           <>
             {/* Quick Filters */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5">Library</h2>
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5 select-none titlebar-drag">Library</h2>
             <div className="space-y-1 mb-3">
               <button
-                onClick={() => loadRecentDocuments()}
+                onClick={() => {
+                  setSelectedTagId(null);
+                  loadRecentDocuments();
+                }}
                 className={`w-full py-1.5 px-2.5 rounded-lg text-left text-xs flex items-center gap-2.5 border transition-all ${
                   filterType === 'recent'
                     ? 'border-white/12 bg-[#25282d] text-slate-100'
@@ -2818,7 +3263,10 @@ export const UploadScreen: React.FC = () => {
                 <Clock size={14} /> Recent
               </button>
               <button
-                onClick={() => loadFavoriteDocuments()}
+                onClick={() => {
+                  setSelectedTagId(null);
+                  loadFavoriteDocuments();
+                }}
                 className={`w-full py-1.5 px-2.5 rounded-lg text-left text-xs flex items-center gap-2.5 border transition-all ${
                   filterType === 'favorites'
                     ? 'border-white/12 bg-[#25282d] text-slate-100'
@@ -2853,7 +3301,11 @@ export const UploadScreen: React.FC = () => {
                   setActiveTagMenu(null);
                   if (selectedTagId === 0) {
                     setSelectedTagId(null);
-                    loadRecentDocuments();
+                    if (selectedProjectId !== null) {
+                      loadDocumentsByProject(selectedProjectId);
+                    } else {
+                      loadRecentDocuments();
+                    }
                   } else {
                     loadDocumentsByTag(0);
                   }
@@ -2863,14 +3315,18 @@ export const UploadScreen: React.FC = () => {
                 <TagPill 
                   key={tag.id} 
                   tag={tag} 
-                  displayColor={resolveThemedAccent(index)}
+                  displayColor={tag.color || resolveThemedAccent(index)}
                   isSelected={selectedTagId === tag.id}
                   onContextMenu={(event) => openTagMenu(tag, event)}
                   onClick={() => {
                     setActiveTagMenu(null);
                     if (selectedTagId === tag.id) {
                       setSelectedTagId(null);
-                      loadRecentDocuments();
+                      if (selectedProjectId !== null) {
+                        loadDocumentsByProject(selectedProjectId);
+                      } else {
+                        loadRecentDocuments();
+                      }
                     } else {
                       loadDocumentsByTag(tag.id);
                     }
@@ -2939,7 +3395,7 @@ export const UploadScreen: React.FC = () => {
         ) : activePage === 'projects' ? (
           <>
             {/* Projects Page Sidebar */}
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-bold mb-4 flex items-center gap-2 titlebar-drag select-none">
               <FolderOpen className="text-slate-300" size={20} /> Projects
             </h2>
             <button
@@ -2955,7 +3411,7 @@ export const UploadScreen: React.FC = () => {
         ) : (
           <>
             {/* Settings Page Sidebar */}
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-bold mb-4 flex items-center gap-2 titlebar-drag select-none">
               <Settings2 className="text-slate-300" size={20} /> Settings
             </h2>
 
@@ -3211,7 +3667,7 @@ export const UploadScreen: React.FC = () => {
         {/* Main Content Area */}
         <div className="relative flex-1 flex flex-col overflow-hidden bg-[#25272b]">
           {/* Toolbar */}
-          <div className="relative overflow-hidden border-b border-white/6 px-4 pt-4 pb-5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+          <div className="relative overflow-hidden border-b border-white/6 px-4 pt-4 pb-5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] titlebar-drag">
             <div className="absolute inset-0 bg-[linear-gradient(98deg,rgba(60,134,223,0.9)_0%,rgba(58,152,224,0.86)_34%,rgba(74,120,213,0.88)_66%,rgba(112,84,194,0.88)_100%)]" />
             <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.14)_0%,rgba(0,0,0,0.05)_18%,rgba(0,0,0,0.04)_82%,rgba(0,0,0,0.12)_100%)]" />
             <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.03)_0%,rgba(0,0,0,0.05)_48%,rgba(0,0,0,0.09)_100%)]" />
@@ -3270,11 +3726,14 @@ export const UploadScreen: React.FC = () => {
               {/* Sort / Filter Button */}
               <div className="relative">
                 <button
-                  onClick={openSortMenu}
-                  className={`p-2 rounded-lg bg-[#202329]/90 border border-white/8 text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0 ${
-                    isSortMenuOpen ? 'text-[#5CC6F2] border-[#5CC6F2]/30' : ''
+                  data-sort-menu-trigger="true"
+                  onClick={handleToggleSortMenu}
+                  className={`p-2 rounded-lg bg-[#202329]/90 border text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0 cursor-pointer ${
+                    isSortMenuOpen || activeFilterTag !== null || ratingFilterOnly !== null || ratingFilterMin !== null || ratingFilterMax !== null
+                      ? 'text-[#5CC6F2] border-[#5CC6F2]/40 bg-[#5CC6F2]/10 shadow-[0_0_12px_rgba(92,198,242,0.2)]'
+                      : 'border-white/8'
                   }`}
-                  title="Sort options"
+                  title="Sort and filter options"
                 >
                   <Filter size={16} />
                 </button>
@@ -3354,6 +3813,72 @@ export const UploadScreen: React.FC = () => {
             </div>
           )}
 
+          {/* Breadcrumb Path Navigation Bar */}
+          <div className="px-4 pt-2.5 pb-1 flex items-center justify-between gap-2 select-none border-b border-white/[0.04]">
+            <nav className="flex items-center gap-1.5 flex-wrap min-w-0" aria-label="Breadcrumb">
+              {breadcrumbItems.map((item, idx) => {
+                const isLast = idx === breadcrumbItems.length - 1;
+                return (
+                  <React.Fragment key={item.id ?? `root-${idx}`}>
+                    {idx > 0 && (
+                      <ChevronRight size={12} className="text-slate-600 shrink-0" />
+                    )}
+                    {isLast ? (
+                      <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold ${
+                        item.id !== null
+                          ? 'bg-white/[0.08] text-white border border-white/10 shadow-sm'
+                          : 'text-slate-200'
+                      }`}>
+                        {item.isHome && <HomeIcon size={13} className="text-sky-400" />}
+                        {item.isFavorites && <Star size={13} className="text-amber-400 fill-amber-400" />}
+                        {item.isTag && (
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ backgroundColor: item.tagColor || '#8B5CF6' }}
+                          />
+                        )}
+                        {item.id !== null && (
+                          <Folder size={13} style={{ color: item.color || '#38BDF8' }} />
+                        )}
+                        <span className="truncate max-w-[220px]">{item.name}</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleBreadcrumbClick(item, idx)}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all cursor-pointer group"
+                      >
+                        {item.isHome && <HomeIcon size={13} className="text-slate-400 group-hover:text-sky-400 transition-colors" />}
+                        {item.isFavorites && <Star size={13} className="text-slate-400 group-hover:text-amber-400 transition-colors" />}
+                        {item.isTag && (
+                          <span
+                            className="inline-block h-2 w-2 rounded-full opacity-70 group-hover:opacity-100"
+                            style={{ backgroundColor: item.tagColor || '#8B5CF6' }}
+                          />
+                        )}
+                        {item.id !== null && (
+                          <Folder size={13} style={{ color: item.color || '#38BDF8' }} className="opacity-75 group-hover:opacity-100" />
+                        )}
+                        <span className="truncate max-w-[160px]">{item.name}</span>
+                      </button>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </nav>
+
+            {/* Quick Action Button in Breadcrumb Bar */}
+            {selectedProjectId !== null && (
+              <button
+                onClick={() => openProjectDialog(null, selectedProjectId)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 hover:border-white/15 text-slate-300 hover:text-white text-xs font-medium transition-all shrink-0 cursor-pointer shadow-sm"
+                title="สร้างโฟลเดอร์ย่อยในโฟลเดอร์นี้"
+              >
+                <FolderPlus size={13} className="text-sky-400" />
+                <span>+ Subfolder</span>
+              </button>
+            )}
+          </div>
+
           {/* Documents Grid/List */}
           <div
             className="flex-1 overflow-y-auto p-4 custom-scrollbar"
@@ -3375,10 +3900,12 @@ export const UploadScreen: React.FC = () => {
                 {/* 📂 Render Folder Grid/List first */}
                 {viewMode === 'grid' ? (
                   currentSubprojects.length > 0 && (
-                    <div className="mb-6">
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 px-1">Folders ({currentSubprojects.length})</h3>
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
+                        <span>Folders ({currentSubprojects.length})</span>
+                      </h3>
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
-                        {currentSubprojects.map((subproj, index) => {
+                        {currentSubprojects.map((subproj) => {
                           const accent = subproj.color || resolveStableAccent(subproj.id);
                           const isDropTarget = projectDropTargetId === subproj.id;
                           return (
@@ -3397,12 +3924,12 @@ export const UploadScreen: React.FC = () => {
                                 dragGhost.style.position = 'absolute';
                                 dragGhost.style.top = '-9999px';
                                 dragGhost.style.left = '-9999px';
-                                dragGhost.style.padding = '4px 10px';
-                                dragGhost.style.background = '#4f46e5';
+                                dragGhost.style.padding = '6px 12px';
+                                dragGhost.style.background = '#0284c7';
                                 dragGhost.style.color = '#ffffff';
                                 dragGhost.style.fontSize = '12px';
                                 dragGhost.style.fontWeight = 'bold';
-                                dragGhost.style.borderRadius = '8px';
+                                dragGhost.style.borderRadius = '10px';
                                 dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
                                 dragGhost.innerText = `📁 ${subproj.name}`;
                                 document.body.appendChild(dragGhost);
@@ -3443,20 +3970,27 @@ export const UploadScreen: React.FC = () => {
                                 event.stopPropagation();
                                 void handleDropOnProject(subproj.id, event);
                               }}
-                              className={`group py-2 px-3 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
+                              className={`group relative px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none overflow-hidden ${
                                 isDropTarget
-                                  ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
-                                  : 'border-white/5 hover:border-white/12 bg-[#16181c]/70 hover:bg-[#1b1e23]'
+                                  ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.4)] scale-[1.01]'
+                                  : 'border-white/8 hover:border-white/18 bg-[#16181c]/80 hover:bg-[#1c1f26] shadow-sm hover:shadow-md'
                               }`}
                             >
                               <div 
-                                className="p-1 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-110"
-                                style={{ backgroundColor: hexToRgba(accent, 0.14) }}
+                                className="h-7 w-7 rounded-lg flex items-center justify-center shrink-0 border border-white/10 transition-transform duration-200 group-hover:scale-105 shadow-inner"
+                                style={{ 
+                                  backgroundColor: hexToRgba(accent, 0.16),
+                                  boxShadow: `0 1px 4px ${hexToRgba(accent, 0.2)}`
+                                }}
                               >
                                 <Folder size={14} style={{ color: accent }} />
                               </div>
-                              <span className="flex-1 truncate text-xs font-medium text-slate-200 group-hover:text-white">{subproj.name}</span>
-                              <ChevronRight size={11} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
+
+                              <span className="flex-1 truncate text-xs font-semibold text-slate-100 group-hover:text-white transition-colors" title={subproj.name}>
+                                {subproj.name}
+                              </span>
+
+                              <ChevronRight size={12} className="text-slate-500 group-hover:text-slate-300 group-hover:translate-x-0.5 transition-all shrink-0" />
                             </div>
                           );
                         })}
@@ -3465,99 +3999,106 @@ export const UploadScreen: React.FC = () => {
                   )
                 ) : (
                   currentSubprojects.length > 0 && (
-                    <div className="mb-4 space-y-1">
+                    <div>
                       <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">Folders ({currentSubprojects.length})</h3>
-                      {currentSubprojects.map((subproj, index) => {
-                        const accent = subproj.color || resolveStableAccent(subproj.id);
-                        const isDropTarget = projectDropTargetId === subproj.id;
-                        return (
-                          <div
-                            key={subproj.id}
-                            draggable={true}
-                            onDragStart={(event) => {
-                              event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
-                              event.dataTransfer.setData('application/x-project-id', String(subproj.id));
-                              event.dataTransfer.effectAllowed = 'move';
-                              draggedProjectIdRef.current = subproj.id;
-                              setDraggedProjectId(subproj.id);
-                              setActiveProjectMenu(null);
+                      <div className="space-y-1">
+                        {currentSubprojects.map((subproj) => {
+                          const accent = subproj.color || resolveStableAccent(subproj.id);
+                          const isDropTarget = projectDropTargetId === subproj.id;
+                          return (
+                            <div
+                              key={subproj.id}
+                              draggable={true}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                                event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                                event.dataTransfer.effectAllowed = 'move';
+                                draggedProjectIdRef.current = subproj.id;
+                                setDraggedProjectId(subproj.id);
+                                setActiveProjectMenu(null);
 
-                              const dragGhost = document.createElement('div');
-                              dragGhost.style.position = 'absolute';
-                              dragGhost.style.top = '-9999px';
-                              dragGhost.style.left = '-9999px';
-                              dragGhost.style.padding = '4px 10px';
-                              dragGhost.style.background = '#4f46e5';
-                              dragGhost.style.color = '#ffffff';
-                              dragGhost.style.fontSize = '12px';
-                              dragGhost.style.fontWeight = 'bold';
-                              dragGhost.style.borderRadius = '8px';
-                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
-                              dragGhost.innerText = `📁 ${subproj.name}`;
-                              document.body.appendChild(dragGhost);
-                              event.dataTransfer.setDragImage(dragGhost, 10, 10);
-                              setTimeout(() => {
-                                if (document.body.contains(dragGhost)) {
-                                  document.body.removeChild(dragGhost);
-                                }
-                              }, 0);
-                            }}
-                            onDragEnd={() => {
-                              draggedProjectIdRef.current = null;
-                              setDraggedProjectId(null);
-                              setProjectDropTargetId(null);
-                            }}
-                            onClick={() => {
-                              loadDocumentsByProject(subproj.id);
-                            }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              openProjectMenu(subproj, e);
-                            }}
-                            onDragOver={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              event.dataTransfer.dropEffect = 'move';
-                              setProjectDropTargetId(subproj.id);
-                            }}
-                            onDragLeave={(event) => {
-                              event.stopPropagation();
-                              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-                              if (projectDropTargetId === subproj.id) {
+                                const dragGhost = document.createElement('div');
+                                dragGhost.style.position = 'absolute';
+                                dragGhost.style.top = '-9999px';
+                                dragGhost.style.left = '-9999px';
+                                dragGhost.style.padding = '6px 12px';
+                                dragGhost.style.background = '#0284c7';
+                                dragGhost.style.color = '#ffffff';
+                                dragGhost.style.fontSize = '12px';
+                                dragGhost.style.fontWeight = 'bold';
+                                dragGhost.style.borderRadius = '10px';
+                                dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                                dragGhost.innerText = `📁 ${subproj.name}`;
+                                document.body.appendChild(dragGhost);
+                                event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                                setTimeout(() => {
+                                  if (document.body.contains(dragGhost)) {
+                                    document.body.removeChild(dragGhost);
+                                  }
+                                }, 0);
+                              }}
+                              onDragEnd={() => {
+                                draggedProjectIdRef.current = null;
+                                setDraggedProjectId(null);
                                 setProjectDropTargetId(null);
-                              }
-                            }}
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void handleDropOnProject(subproj.id, event);
-                            }}
-                            className={`group px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
-                              isDropTarget
-                                ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
-                                : 'border-white/5 hover:border-white/12 bg-[#16181c]/50 hover:bg-[#1b1e23]'
-                            }`}
-                          >
-                            <div 
-                              className="p-1 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-110"
-                              style={{ backgroundColor: hexToRgba(accent, 0.14) }}
+                              }}
+                              onClick={() => {
+                                loadDocumentsByProject(subproj.id);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                openProjectMenu(subproj, e);
+                              }}
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                event.dataTransfer.dropEffect = 'move';
+                                setProjectDropTargetId(subproj.id);
+                              }}
+                              onDragLeave={(event) => {
+                                event.stopPropagation();
+                                if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                                if (projectDropTargetId === subproj.id) {
+                                  setProjectDropTargetId(null);
+                                }
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void handleDropOnProject(subproj.id, event);
+                              }}
+                              className={`group px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
+                                isDropTarget
+                                  ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
+                                  : 'border-white/6 hover:border-white/15 bg-[#16181c]/70 hover:bg-[#1b1e24]'
+                              }`}
                             >
-                              <Folder size={14} style={{ color: accent }} />
+                              <div 
+                                className="h-7 w-7 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-105 border border-white/5"
+                                style={{ backgroundColor: hexToRgba(accent, 0.16) }}
+                              >
+                                <Folder size={14} style={{ color: accent }} />
+                              </div>
+                              <span className="flex-1 truncate text-xs font-semibold text-slate-200 group-hover:text-white">{subproj.name}</span>
+                              <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-300 transition-colors shrink-0" />
                             </div>
-                            <span className="flex-1 truncate text-xs font-medium text-slate-200 group-hover:text-white">{subproj.name}</span>
-                            <ChevronRight size={11} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
                   )
+                )}
+
+                {/* Subtle section divider line between Folders and Files when both exist */}
+                {currentSubprojects.length > 0 && sortedDocuments.length > 0 && (
+                  <div className="h-px bg-white/6 my-3 w-full shrink-0" />
                 )}
 
                 {/* 📄 Render Documents Grid/List */}
                 {sortedDocuments.length > 0 ? (
                   <>
                     {currentSubprojects.length > 0 && (
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 mt-2 px-1">Files ({sortedDocuments.length})</h3>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5 px-1">Files ({sortedDocuments.length})</h3>
                     )}
                     <div className={viewMode === 'grid'
                       ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
@@ -3644,14 +4185,89 @@ export const UploadScreen: React.FC = () => {
                   </>
                 ) : (
                   currentSubprojects.length > 0 && (
-                    <div className="rounded-xl border border-white/5 bg-[#16181c]/30 p-8 text-center text-xs text-slate-500 mt-2 select-none">
-                      No documents in this folder level. Drag and drop files here to upload.
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleDrop}
+                      className="rounded-3xl border-2 border-dashed border-white/8 bg-[#16181c]/40 p-8 flex flex-col items-center justify-center text-center mt-3 backdrop-blur-xl select-none group hover:border-white/15 transition-all"
+                    >
+                      <div className="h-12 w-12 rounded-2xl bg-white/[0.04] border border-white/8 flex items-center justify-center text-slate-400 mb-3 group-hover:scale-105 transition-transform">
+                        <FolderPlus size={22} className="text-sky-400/80" />
+                      </div>
+                      <h4 className="text-sm font-semibold text-slate-200 mb-1">
+                        โฟลเดอร์นี้ยังไม่มีเอกสาร
+                      </h4>
+                      <p className="text-xs text-slate-400 max-w-sm mb-4">
+                        ลากไฟล์มาวางที่นี่เพื่อเพิ่มไฟล์เข้าโฟลเดอร์นี้ หรือเลือกนำเข้าไฟล์ใหม่
+                      </p>
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          onClick={handleBrowse}
+                          className="px-4 py-2 rounded-xl bg-[#23272e] hover:bg-[#2b3038] text-white border border-white/10 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        >
+                          <Upload size={13} />
+                          <span>Import Files</span>
+                        </button>
+                        <button
+                          onClick={() => openProjectDialog(null, selectedProjectId)}
+                          className="px-4 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/8 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                        >
+                          <FolderPlus size={13} className="text-sky-400" />
+                          <span>+ Subfolder</span>
+                        </button>
+                      </div>
                     </div>
                   )
                 )}
               </div>
+            ) : selectedProjectId !== null ? (
+              // Dedicated Empty State when inside a Folder with no subfolders and no documents
+              <div className="h-full flex items-center justify-center p-4">
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  className={`w-full max-w-lg rounded-3xl border-2 border-dashed flex flex-col items-center justify-center p-10 transition-all duration-300 backdrop-blur-xl text-center ${
+                    isDragging
+                      ? 'border-sky-400 bg-sky-500/10 scale-[1.015] shadow-[0_24px_60px_rgba(56,189,248,0.2)]'
+                      : 'border-white/10 bg-[#17191d]/75 hover:border-white/16'
+                  }`}
+                >
+                  <div 
+                    className="p-5 rounded-2xl border border-white/10 mb-4 shadow-xl"
+                    style={{ 
+                      backgroundColor: hexToRgba(projects.find(p => p.id === selectedProjectId)?.color || '#38BDF8', 0.14) 
+                    }}
+                  >
+                    <Folder size={40} style={{ color: projects.find(p => p.id === selectedProjectId)?.color || '#38BDF8' }} />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-100 mb-1.5">
+                    {projects.find(p => p.id === selectedProjectId)?.name || 'Folder'}
+                  </h3>
+                  <p className="text-slate-400 mb-6 text-xs max-w-xs">
+                    โฟลเดอร์นี้ว่างอยู่ ลากไฟล์ PDF หรือรูปภาพมาวางที่นี่ หรือสร้างโฟลเดอร์ย่อย
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleBrowse}
+                      className="px-5 py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-xl font-bold cursor-pointer transition-all text-xs shadow-lg flex items-center gap-2"
+                    >
+                      <Upload size={14} />
+                      Browse / Import
+                    </button>
+                    <button
+                      onClick={() => openProjectDialog(null, selectedProjectId)}
+                      className="px-4 py-2.5 bg-white/[0.06] hover:bg-white/[0.1] text-slate-200 hover:text-white rounded-xl font-semibold cursor-pointer transition-all border border-white/10 text-xs flex items-center gap-1.5"
+                    >
+                      <FolderPlus size={14} className="text-sky-400" />
+                      Create Subfolder
+                    </button>
+                  </div>
+                </div>
+              </div>
             ) : (
-              // Empty State / Upload Area with Recent Files
+              // Empty State / Upload Area with Recent Files for Root Library
               <div className="h-full flex flex-col">
                 {/* Recent Files Section */}
                 {documents.length > 0 && (
@@ -3664,10 +4280,13 @@ export const UploadScreen: React.FC = () => {
                       {documents.slice(0, 5).map(doc => {
                         const isHidden = hiddenThumbnails.has(doc.id);
                         return (
-                          <button
+                          <div
                             key={doc.id}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => handleOpenDocument(doc)}
-                            className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl relative"
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenDocument(doc); }}
+                            className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl relative cursor-pointer select-none"
                           >
                             <div className="h-14 w-10 overflow-hidden rounded-lg bg-[#111214]/90 border border-white/5 group-hover:border-white/10 flex items-center justify-center shrink-0 relative">
                               {isHidden ? (
@@ -3703,7 +4322,7 @@ export const UploadScreen: React.FC = () => {
                             >
                               {isHidden ? <EyeOff size={10} /> : <Eye size={10} />}
                             </button>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -3750,17 +4369,19 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Right: Project Settings */}
-        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl">
-         <h2 className="text-base font-bold mb-3 flex items-center gap-1">
-            Import
-          </h2>
+        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl titlebar-drag">
+          <div className="flex items-center justify-between mb-3 titlebar-drag select-none pr-36">
+            <h2 className="text-base font-bold flex items-center gap-1">
+              Import
+            </h2>
+          </div>
 
           {/* Quick Upload */}
           <div
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            className={`p-4 rounded-xl border-2 border-dashed mb-4 text-center transition-all ${
+            className={`p-4 rounded-xl border-2 border-dashed mb-4 text-center transition-all titlebar-no-drag ${
               isDragging ? 'border-white/18 bg-white/[0.04]' : 'border-white/10 hover:border-white/16 bg-[#13151a]/92'
             }`}
           >
@@ -4087,20 +4708,6 @@ export const UploadScreen: React.FC = () => {
           document.body
         )}
 
-        {activeTagMenu && (
-          <TagContextMenu
-            tag={activeTagMenu.tag}
-            position={activeTagMenu.position}
-            onClose={() => setActiveTagMenu(null)}
-            onDelete={() => {
-              setDeleteTagDialog({
-                isOpen: true,
-                tag: activeTagMenu.tag,
-                confirmation: ''
-              });
-            }}
-          />
-        )}
 
         {activeProjectMenu && (
           <ProjectContextMenu
@@ -4136,6 +4743,42 @@ export const UploadScreen: React.FC = () => {
           />
         )}
 
+        {activeTagMenu && (
+          <TagContextMenu
+            tag={activeTagMenu.tag}
+            position={activeTagMenu.position}
+            onClose={() => setActiveTagMenu(null)}
+            onEdit={() => {
+              setEditTagDialog({
+                isOpen: true,
+                tag: activeTagMenu.tag,
+                name: activeTagMenu.tag.name,
+                color: activeTagMenu.tag.color || '#8B5CF6'
+              });
+            }}
+            onDelete={() => {
+              setDeleteTagDialog({
+                isOpen: true,
+                tag: activeTagMenu.tag,
+                confirmation: ''
+              });
+            }}
+          />
+        )}
+
+        {editTagDialog.isOpen && editTagDialog.tag && (
+          <EditTagModal
+            isOpen={editTagDialog.isOpen}
+            tag={editTagDialog.tag}
+            name={editTagDialog.name}
+            color={editTagDialog.color}
+            onChangeName={(name) => setEditTagDialog((prev) => ({ ...prev, name }))}
+            onChangeColor={(color) => setEditTagDialog((prev) => ({ ...prev, color }))}
+            onSave={handleEditTag}
+            onClose={() => setEditTagDialog({ isOpen: false, tag: null, name: '', color: '' })}
+          />
+        )}
+
         {isSortMenuOpen && sortMenuPosition && (
           <SortContextMenu
             position={sortMenuPosition}
@@ -4145,6 +4788,9 @@ export const UploadScreen: React.FC = () => {
             ratingFilterOnly={ratingFilterOnly}
             ratingFilterMin={ratingFilterMin}
             ratingFilterMax={ratingFilterMax}
+            activeFilterTag={activeFilterTag}
+            tags={tags}
+            onSelectFilterTag={setActiveFilterTag}
             onUpdateFilters={(updates) => {
               if (updates.mode !== undefined) setRatingFilterMode(updates.mode);
               if (updates.only !== undefined) setRatingFilterOnly(updates.only);
@@ -4369,37 +5015,89 @@ export const UploadScreen: React.FC = () => {
         )}
 
         {projectDialog.isOpen && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
-              <h3 className="text-lg font-semibold text-slate-100">Create Folder</h3>
-              <p className="mt-1 text-sm text-slate-400">
-                Create a folder for organizing documents in the home library.
-              </p>
-              <input
-                autoFocus
-                type="text"
-                value={projectDialog.name}
-                onChange={(e) => setProjectDialog((current) => ({ ...current, name: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    void handleCreateProject();
-                  }
-                }}
-                placeholder="Folder name"
-                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60"
-              />
-              <div className="mt-5 flex items-center justify-end gap-3">
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div 
+                    className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+                    style={{ backgroundColor: hexToRgba(projectDialog.color || '#38BDF8', 0.2) }}
+                  >
+                    <Folder size={16} style={{ color: projectDialog.color || '#38BDF8' }} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-100">
+                      {projectDialog.parentId ? 'สร้างโฟลเดอร์ย่อย (Create Subfolder)' : 'สร้างโฟลเดอร์ใหม่ (Create Folder)'}
+                    </h3>
+                    <p className="text-xs text-slate-400">สำหรับจัดหมวดหมู่เอกสารในคลัง</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
+                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  ชื่อโฟลเดอร์ (Folder Name)
+                </label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={projectDialog.name}
+                  onChange={(e) => setProjectDialog((current) => ({ ...current, name: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void handleCreateProject();
+                    }
+                  }}
+                  placeholder="Folder name"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                  เลือกสีไอคอนโฟลเดอร์ (Folder Color)
+                </label>
+                <div className="grid grid-cols-6 gap-2">
+                  {FOLDER_PALETTE_COLORS.map((c) => {
+                    const isSelected = (projectDialog.color || '').toUpperCase() === c.toUpperCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setProjectDialog((current) => ({ ...current, color: c }))}
+                        className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                        style={{ 
+                          backgroundColor: c,
+                          boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                        }}
+                        title={c}
+                      >
+                        {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
                 <button
-                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null })}
+                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
                   className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => void handleCreateProject()}
-                  className="rounded-xl bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
+                  disabled={!projectDialog.name.trim()}
+                  className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Create
+                  Create (สร้าง)
                 </button>
               </div>
             </div>
@@ -4407,70 +5105,78 @@ export const UploadScreen: React.FC = () => {
         )}
 
         {editProjectDialog.isOpen && editProjectDialog.project && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left">
-              <h3 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
-                <Edit3 size={18} className="text-[#2B9BFF]" />
-                แก้ไขโฟลเดอร์ (Edit Folder)
-              </h3>
-              <p className="mt-1 text-sm text-slate-400">
-                เปลี่ยนชื่อหรือเลือกสีไอคอนสำหรับโฟลเดอร์นี้
-              </p>
-              
-              <div className="mt-5 space-y-4">
-                <div>
-                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">ชื่อโฟลเดอร์ (Folder Name)</label>
-                  <input
-                    autoFocus
-                    type="text"
-                    value={editProjectDialog.name}
-                    onChange={(e) => setEditProjectDialog((current) => ({ ...current, name: e.target.value }))}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        void handleEditProject();
-                      }
-                    }}
-                    placeholder="Folder name"
-                    className="mt-1.5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">สีไอคอนโฟลเดอร์ (Folder Icon Color)</label>
-                  <div className="grid grid-cols-5 gap-3">
-                    {[
-                      '#7C5CFF', // Indigo
-                      '#4387FF', // Blue
-                      '#59C8F6', // Sky
-                      '#10B981', // Emerald/Green
-                      '#06B6D4', // Cyan
-                      '#F59A3A', // Orange
-                      '#F1C85B', // Yellow
-                      '#EC4899', // Rose/Pink
-                      '#EF4444', // Red
-                      '#64748B'  // Slate
-                    ].map((color) => {
-                      const isSelected = editProjectDialog.color === color;
-                      return (
-                        <button
-                          key={color}
-                          onClick={() => setEditProjectDialog((current) => ({ ...current, color }))}
-                          className="h-9 w-9 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-105 active:scale-95"
-                          style={{ 
-                            backgroundColor: color,
-                            boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${color}` : 'none'
-                          }}
-                          title={color}
-                        >
-                          {isSelected && <Check size={14} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" />}
-                        </button>
-                      );
-                    })}
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div 
+                    className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+                    style={{ backgroundColor: hexToRgba(editProjectDialog.color || '#38BDF8', 0.2) }}
+                  >
+                    <Folder size={16} style={{ color: editProjectDialog.color || '#38BDF8' }} />
                   </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                      <Edit3 size={15} className="text-sky-400" />
+                      แก้ไขโฟลเดอร์ (Edit Folder)
+                    </h3>
+                    <p className="text-xs text-slate-400">เปลี่ยนชื่อหรือเลือกสีไอคอนสำหรับโฟลเดอร์นี้</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
+                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  ชื่อโฟลเดอร์ (Folder Name)
+                </label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={editProjectDialog.name}
+                  onChange={(e) => setEditProjectDialog((current) => ({ ...current, name: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void handleEditProject();
+                    }
+                  }}
+                  placeholder="Folder name"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                  เลือกสีไอคอนโฟลเดอร์ (Folder Color)
+                </label>
+                <div className="grid grid-cols-6 gap-2">
+                  {FOLDER_PALETTE_COLORS.map((c) => {
+                    const isSelected = (editProjectDialog.color || '').toUpperCase() === c.toUpperCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setEditProjectDialog((current) => ({ ...current, color: c }))}
+                        className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                        style={{ 
+                          backgroundColor: c,
+                          boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                        }}
+                        title={c}
+                      >
+                        {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="mt-6 flex items-center justify-end gap-3">
+              <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
                 <button
                   onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
                   className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
@@ -4479,9 +5185,10 @@ export const UploadScreen: React.FC = () => {
                 </button>
                 <button
                   onClick={() => void handleEditProject()}
-                  className="rounded-xl bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
+                  disabled={!editProjectDialog.name.trim()}
+                  className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Save
+                  Save (บันทึก)
                 </button>
               </div>
             </div>

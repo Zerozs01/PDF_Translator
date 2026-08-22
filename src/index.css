@@ -52,3 +52,23 @@
 .custom-scrollbar:hover::-webkit-scrollbar-thumb {
   background: rgb(71 85 105 / 0.5);
 }
+
+/* Electron Window Drag Regions */
+.titlebar-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.titlebar-no-drag,
+button,
+input,
+select,
+textarea,
+a,
+form,
+[role="button"],
+[draggable="true"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+

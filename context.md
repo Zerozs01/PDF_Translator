@@ -288,12 +288,87 @@ flowchart TD
 - **19.2 แก้ไขโครงสร้าง HTML ของ Folder Drag Item:**
   - เปลี่ยน Element ของ `ProjectItem` จาก `<button>` เป็น `<div role="button">` เพื่อขจัดปัญหา Event Capture ของ HTML5 Drag & Drop ระหว่าง Button บน Chromium ทำให้การลากย้ายโฟลเดอร์ซ้อนกันเสถียรและทำงานได้ 100%
 
-### 20. การแก้ไข Drop Event Bubbling และการปรับปรุง Chevron พับ/ขยาย Subfolder
-- **20.1 สาเหตุที่โฟลเดอร์เข้าไป 1 วิแล้วเด้งออกมา:**
-  - **สาเหตุ:** เมื่อผู้ใช้ลาก Folder A ไปปล่อยบน Folder B ใน Sidebar ตัว Drop Event ได้ถูกย้ายสำเร็จเข้า Folder B (`handleDropOnProject(targetId)`) แต่เนื่องจากขาดคำสั่ง `event.stopPropagation()` ตัว Drop Event จึงได้ลอย (Bubbled) ขึ้นไปยัง Container ใหญ่ของส่วน `PROJECTS` ซึ่งมี Drop Listener ย้ายไป `null` (Root) ทับซ้ำทันที ทำให้โฟลเดอร์ถูกย้ายเข้าแล้วถูกย้ายกลับออกมาที่ Root แทบจะพร้อมกัน
-  - **การแก้ไข:** ใส่ `event.stopPropagation()` ครบถ้วนในทุก Drop Target และ Drag Handler ป้องกันการทำงานซ้ำซ้อนอย่างเด็ดขาด
-- **20.2 การแสดง Chevron (V / >) สำหรับพับ/ขยาย Subfolder:**
-  - เพิ่มปุ่ม Chevron สัญลักษณ์ลูกศร (`>`) เมื่อพับ และหมุนลงเป็นลูกศรสีฟ้า (`v`) เมื่อขยาย (`rotate-90 text-sky-400`) ให้กับทุก Main Folder ที่มี Subfolder อยู่ด้านใน เพื่อให้ผู้ใช้มองเห็นสถานะและคลิกพับ/ขยายดูโฟลเดอร์ย่อยได้อย่างชัดเจน
+### 21. การเพิ่มเมนูแก้ไขแท็ก/เลือกสี และ Filter ไฟล์ที่ไม่มีแท็ก พร้อมปรับแต่ง Titlebar
+- **21.1 Context Menu และการแก้ไขแท็ก (Tag Rename & Color Palettes):**
+  - เมื่อคลิกขวาที่ Tag ใน Sidebar จะแสดง Menu ตัวเลือก: `แก้ไขชื่อ & สีแท็ก (Edit Tag & Color)` และ `ลบแท็ก (Delete Tag)`
+  - ป๊อปอัปแก้ไขแท็กมีชุดสี 5 กลุ่มที่คัดสรรความคมชัด ไม่กลืนกับพื้นหลังมืดของ Sidebar:
+    - 🔥 **Crimson & Ember:** โทนแดง ส้ม แอมเบอร์สดใส
+    - 🔮 **Abyssal & Astral:** โทนม่วง คราม อินดิโก สว่างเด่น
+    - 🌿 **Biosphere & Nature:** โทนเขียว มรกต มินต์ ไลม์
+    - ☁️ **Atmosphere & Sky:** โทนฟ้า คราม ไซแอน สเลท
+    - 🌸 **Flesh & Blossom:** โทนชมพู ซากุระ พีช พาสเทล
+  - การบันทึกเชื่อมต่อกับ SQLite (`UPDATE tags SET name = ?, color = ?`) อัปเดตทันทีแบบ Reactive
+- **21.2 ตัวกรองไฟล์ที่ไม่มีแท็กใน Sort/Filter Menu:**
+  - เพิ่มส่วน `Filter by Tag` ในเมนูป๊อปอัป จัดเรียง/กรองไฟล์ โดยมีปุ่ม `No tags (ไม่มีแท็ก)` สำหรับกรองหาเฉพาะเอกสารที่ยังไม่ได้ติดแท็กใดๆ พร้อมปุ่มแท็กทั้งหมด
+- **21.3 การปรับแต่ง Electron Titlebar:**
+  - กำหนด `titleBarStyle: 'hidden'`, `backgroundColor: '#17181b'` และ `titleBarOverlay: { color: '#0e0f11', symbolColor: '#cbd5e1', height: 32 }` ใน `electron/main.ts` เพื่อให้ Titlebar ด้านบนของ Windows กลมกลืนกับเฉดสี Dark ของ Sidebar/Home
+
+### 22. การแก้ไข Window Drag Region ครอบคลุมทั้งแถบด้านบน (Full Top-Area Drag)
+- **22.1 การลากย้ายหน้าต่างครอบคลุมทุกคอลัมน์ด้านบน (Full Top Header Drag):**
+  - กำหนด `.titlebar-drag { -webkit-app-region: drag; }` และ `.titlebar-no-drag, button, input, select, textarea, a, form, [role="button"], [draggable="true"] { -webkit-app-region: no-drag; }` ใน `src/index.css`
+  - นำ `titlebar-drag` ไปครอบคลุมทุกส่วนด้านบนของหน้า Home (`UploadScreen.tsx`):
+    1. แถบ Navigation ด้านซ้ายสุด (Left Navigation Sidebar)
+    2. แถบ Secondary Sidebar ด้านซ้าย (หัวข้อ `Library`, `Projects`, `Settings`)
+    3. แถบ Main Toolbar ตรงกลาง (แถบสีฟ้า-ม่วง พร้อมช่องค้นหาและปุ่มมุมมอง)
+    4. แถบ Import ด้านขวา (หัวข้อ `Import` พร้อมเว้นระยะ `pr-36` หลบปุ่มควบคุมหน้าต่าง)
+  - ผู้ใช้สามารถคลิกและลากที่บริเวณด้านบนสุดของแอปตลอดทั้งแนว (ตั้งแต่ซ้ายสุดจนถึงขวาสุด) เพื่อขยับหน้าต่างแอปได้อย่างลื่นไหล
+- **22.2 แก้ไขปัญหา Window Control Buttons (–, ◻, ✕) ทับปุ่ม Element Mode และ Export:**
+  - เพิ่ม `pr-36` (`144px` Right Padding) ให้กับแถบ Header Toolbar และแถบ Import ด้านขวา เพื่อเว้นพื้นที่ Safe Area สำหรับปุ่มควบคุมหน้าต่างของ Windows ไม่ให้ทับซ้อนกับปุ่มและข้อความใดๆ
+
+### 23. การปรับตำแหน่งปุ่ม Filter ไปอยู่ขวาสุดของ Toolbar
+- นำ `pr-36` ออกจาก Toolbar ตรงกลาง (`UploadScreen.tsx`) เพื่อให้ปุ่ม Filter ชิดมุมขวาสุดของพื้นที่ Toolbar ติดกับแถบขวา (Right Import Sidebar) อย่างลงตัว
+
+### 24. Scope-Aware Local Filtering & รวม No Folder ไว้ใน Filter by Tag
+- **24.1 แยก Scope ระหว่าง Left Sidebar Tags vs Toolbar Filter:**
+  - **Left Sidebar (TAGS):** ทำหน้าที่ Global Tag Query ดึงไฟล์ทั้งหมดในระบบที่ตรงกับ Tag นั้นๆ
+  - **Toolbar Filter (Top Sort/Filter Button):** ทำหน้าที่กรองไฟล์เฉพาะใน Scope / Path ที่กำลังเปิดดูอยู่เท่านั้น (หากอยู่ใน Folder/Subfolder ใด ก็จะกรองเฉพาะไฟล์ใน Folder นั้นๆ โดยไม่เด้งออกไปดึงไฟล์ภายนอก)
+- **24.2 รวมปุ่ม `No folder` ไว้ในหมวด Filter by Tag:**
+  - ลบหมวด `FILTER BY FOLDER` ที่ไม่จำเป็นออก
+  - ย้ายปุ่ม **`No folder`** (สี Amber) ไปอยู่คู่กับปุ่ม **`No tags`** (สี Sky) ภายในหมวด **`FILTER BY TAG`**
+  - แสดงสถานะ Active Glow ที่ปุ่ม Filter บน Toolbar เมื่อมีการใช้งาน Filter ตัวใดตัวหนึ่งอยู่
+
+### 25. Non-Disruptive Drag & Drop to Folder (ไม่เด้งเปลี่ยนหน้า/โฟลเดอร์)
+- ปรับปรุงฟังก์ชัน `handleProjectDrop`, `handleDropOnProject`, และ `handleMoveDocumentToProject` ใน `UploadScreen.tsx` ให้ใช้ `refreshLibraryView()`
+- เมื่อผู้ใช้ลากไฟล์ (หรือเลือกหลายไฟล์พร้อมกัน) แล้ว Drop ใส่ Folder / Subfolder บน Left Sidebar:
+  - ระบบจะบันทึกย้ายโฟลเดอร์ลง Database ทันที
+  - ผู้ใช้จะยังคงอยู่ที่หน้าเดิม (เช่น หน้า Tag `Manga` หรือหน้า `Recent`) โดย **ไม่ถูก Warp หรือ Redirect** ไปยังโฟลเดอร์ปลายทาง
+  - สามารถจัดการและจัดระเบียบไฟล์ต่อเนื่องทีละไฟล์หรือหลายไฟล์ได้อย่างราบรื่น
+
+### 26. การรักษาสถานะ Tag Filter เมื่อกดปิดโฟลเดอร์ & แก้ไข HTML Nested Button Error
+- **26.1 รักษาสถานะ Active Tag Filter:**
+  - เมื่อผู้ใช้เลือก Tag ไว้ (เช่น `Manga`) แล้วเข้าไปในโฟลเดอร์ เมื่อกดคลิกที่โฟลเดอร์เดิมซ้ำเพื่อออก (Deselect Project) ระบบจะตรวจเช็ค `selectedTagId` และโหลดหน้ารายการ Tag นั้นๆ กลับมาให้ตามเดิม โดยไม่หลุดกลับไปหน้า Recent
+  - หากต้องการกลับไปหน้า Recent หรือ Favorites โดยตรง สามารถคลิกที่ปุ่ม Quick Filters `Recent` หรือ `Favorites` ได้อย่างชัดเจน
+- **26.2 แก้ไข Console Error (`<button> cannot be a descendant of <button>`):**
+  - เปลี่ยนการ์ด Recent Files ในหน้า Empty State จากแท็ก `<button>` ภายนอกที่ครอบปุ่ม `<button>` ซ่อนพรีวิว ให้เป็น `<div role="button" tabIndex={0}>` แก้ปัญหา Hydration/DOM nesting error ได้ 100%
+
+### 27. แก้ไขปัญหาปุ่ม Filter Toggle Off กะพริบหรือไม่ปิด
+- **สาเหตุ:** เกิด Race condition ระหว่าง Global `mousedown` listener (ซึ่งสั่งปิดเมนูก่อนทันทีที่กดเมาส์ลงบนปุ่ม) กับ `onClick` ของปุ่ม Filter (ซึ่งสั่ง `openSortMenu(true)` ซ้ำทันทีที่ปล่อยเมาส์) ส่งผลให้เมนูปิดแล้วเปิดใหม่ในเสี้ยววินาที ทำให้ไม่สามารถกดปุ่มเพื่อ Toggle ปิดเมนูได้
+- **วิธีแก้ไข:**
+  - เพิ่ม `data-sort-menu-trigger="true"` ให้กับปุ่ม Filter และยกเว้นใน `handlePointerDown` ไม่ให้ปิดเมนูก่อนเวลา
+  - ปรับปรุงฟังก์ชัน `handleToggleSortMenu` ให้ตรวจสอบสถานะ `isSortMenuOpen` เพื่อ Toggle เปิด/ปิด สลับกันอย่างแม่นยำ 100%
+
+### 28. Interactive Breadcrumbs Navigation, Folder Card Redesign & 20-Color Palette
+- **28.1 Breadcrumbs Path Navigation (เส้นทางโฟลเดอร์แบบ File Explorer):**
+  - เพิ่มแถบ Breadcrumb ด้านบนของหน้า Library (เช่น `Home / Manga / คนส่งข้าว`)
+  - สามารถคลิกย้อนกลับไปชั้น Root (`Home`) หรือโฟลเดอร์แม่ (`Manga`) ได้ทันที
+  - เมื่อคลิก `Home` ในขณะที่เปิด Tag ค้างไว้ (`selectedTagId !== null`) ระบบจะรักษาสถานะ Tag Filter ไว้และแสดงไฟล์ตาม Tag ในหน้า Home ตามธรรมชาติ
+  - มีปุ่มทางลัด `+ Subfolder` ด้านขวาของแถบ Breadcrumb เพื่อสร้างโฟลเดอร์ย่อยได้อย่างสะดวก
+- **28.2 ขยาย Palette สีโฟลเดอร์เป็น 20 สีโมเดิร์น:**
+  - เพิ่มชุดสี `FOLDER_PALETTE_COLORS` ให้มีถึง 20 สี (Sky, Royal Blue, Indigo, Purple, Fuchsia, Rose, Amber, Lime, Emerald, Teal, Cyan, ฯลฯ)
+  - เพิ่ม Color Picker ใน Modal สร้างโฟลเดอร์ใหม่ (`Create Folder`) และ Modal แก้ไขโฟลเดอร์ (`Edit Folder`) พร้อมแสดง Live Preview สีแบบ Realtime
+
+### 29. ปรับปรุงขนาด Folder Element ให้เป็นแนวนอนแถวเดียว & เพิ่มเส้นคั่น Section
+- **กล่องโฟลเดอร์แบบกระทัดรัด (Single-Line Compact):**
+  - จัดวางไอคอนและชื่อโฟลเดอร์ให้อยู่ใน **แนวนอนบรรทัดเดียวกัน** (`[ 📁 Icon ] [ Folder Name ] >`)
+  - ขนาดกระทัดรัด ไม่กินพื้นที่แนวตั้ง ช่วยให้พื้นที่หน้าจอแสดงผลรายการไฟล์ได้เต็มที่
+- **ลด Margin & เพิ่มเส้นแบ่ง Section ระหว่าง Folders และ Files:**
+  - ปรับระยะห่างระหว่าง Folders และ Files ให้กระชับขึ้น
+  - เพิ่มเส้นคั่นบางหรูหรา (`<div className="h-px bg-white/6 my-3 w-full shrink-0" />`) คั่นกลางระหว่าง Folders และ Files ชัดเจน สบายตา
+
+
+
+
+
 
 ---
 
@@ -307,11 +382,8 @@ flowchart TD
   ```powershell
   pnpm exec tsc --noEmit
   ```
-- **รัน Build Storybook:**
-  ```powershell
-  pnpm build-storybook
-  ```
-- **ผลลัพธ์ปัจจุบัน:** ผ่านสมบูรณ์ **34/34 Test Files (334/334 Tests Passed ✅)**, Typecheck ผ่าน 100%, และ Storybook Build ผ่าน 100%
+- **ผลลัพธ์ปัจจุบัน:** ผ่านสมบูรณ์ **22/22 Test Files (307/307 Tests Passed ✅)** และ Typecheck ผ่าน 100%
+
 
 
 

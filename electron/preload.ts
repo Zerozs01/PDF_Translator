@@ -45,6 +45,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   // Tag management
   'db:get-all-tags',
   'db:create-tag',
+  'db:update-tag',
   'db:delete-tag',
   // Project management
   'db:get-all-projects',
@@ -232,6 +233,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAll: () => safeInvoke('db:get-all-tags'),
     create: (name: string, color?: string) =>
       safeInvoke('db:create-tag', { name, color }),
+    update: (id: number, updates: { name?: string; color?: string }) =>
+      safeInvoke('db:update-tag', { id, updates }),
     delete: (id: number) => safeInvoke('db:delete-tag', id),
   },
 

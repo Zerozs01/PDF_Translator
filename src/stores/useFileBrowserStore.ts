@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DBDocument, DBTag, DBProject, DocumentUpdate, ProjectUpdate } from '../types/electron.d';
+import type { DBDocument, DBTag, DBProject, DocumentUpdate, ProjectUpdate, TagUpdate } from '../types/electron.d';
 import {
   applyLibraryFavoriteToggle,
   applyLibraryProjectMove,
@@ -9,6 +9,7 @@ import {
   deleteLibraryDocument,
   deleteLibraryProject,
   deleteLibraryTag,
+  updateLibraryTag,
   updateLibraryProject,
   loadFavoriteLibraryDocuments,
   loadLibraryDocumentTags,
@@ -97,6 +98,7 @@ interface FileBrowserState {
   
   // Actions - Tag Operations
   createTag: (name: string, color?: string) => Promise<DBTag | null>;
+  updateTag: (id: number, updates: TagUpdate) => Promise<boolean>;
   deleteTag: (id: number) => Promise<void>;
   
   // Actions - Project Operations
@@ -209,7 +211,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadDocumentsByProject: async (projectId) => {
     set({ isLoading: true, error: null });
     try {
-      const documents = await loadLibraryDocumentsByProject(projectId);
+      const actualId = projectId === 0 ? null : projectId;
+      const documents = await loadLibraryDocumentsByProject(actualId);
       set({ documents, isLoading: false, selectedProjectId: projectId, filterType: 'project' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
@@ -369,6 +372,22 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     } catch (error) {
       console.error('Failed to create tag:', error);
       return null;
+    }
+  },
+
+  updateTag: async (id, updates) => {
+    try {
+      const updated = await updateLibraryTag(id, updates);
+      if (updated) {
+        set((state) => ({
+          tags: state.tags.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+        }));
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to update tag:', error);
+      return false;
     }
   },
   

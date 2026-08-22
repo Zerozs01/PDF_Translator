@@ -340,6 +340,18 @@ export const TagDAO = {
     return stmt.get(name, color);
   },
 
+  update: (id: number, data: { name?: string; color?: string }) => {
+    if (!db) throw new Error('DB not initialized');
+    const sets: string[] = [];
+    const values: any[] = [];
+    if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
+    if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
+    if (sets.length === 0) return true;
+    values.push(id);
+    db.prepare(`UPDATE tags SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return true;
+  },
+
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare('DELETE FROM tags WHERE id = ?').run(id);
@@ -604,7 +616,7 @@ export const DocumentDAO = {
   getRecent: (limit: number = 20) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
@@ -635,21 +647,22 @@ export const DocumentDAO = {
     }
 
     const docIds = recentDocs.map(d => d.id);
-    let tagMap: Map<number, { names: string[]; colors: string[] }> = new Map();
+    let tagMap: Map<number, { ids: number[]; names: string[]; colors: string[] }> = new Map();
     if (docIds.length > 0) {
       const placeholders = docIds.map(() => '?').join(', ');
       const tagRows = db.prepare(`
-        SELECT dt.document_id, t.name, t.color
+        SELECT dt.document_id, dt.tag_id, t.name, t.color
         FROM document_tags dt
         JOIN tags t ON t.id = dt.tag_id
         WHERE dt.document_id IN (${placeholders})
         ORDER BY t.name
-      `).all(...docIds) as Array<{ document_id: number; name: string; color: string }>;
+      `).all(...docIds) as Array<{ document_id: number; tag_id: number; name: string; color: string }>;
       for (const row of tagRows) {
         if (!tagMap.has(row.document_id)) {
-          tagMap.set(row.document_id, { names: [], colors: [] });
+          tagMap.set(row.document_id, { ids: [], names: [], colors: [] });
         }
         const entry = tagMap.get(row.document_id)!;
+        entry.ids.push(row.tag_id);
         entry.names.push(row.name);
         entry.colors.push(row.color);
       }
@@ -659,6 +672,7 @@ export const DocumentDAO = {
       const tags = tagMap.get(doc.id);
       return {
         ...doc,
+        tag_ids: tags ? tags.ids.join(',') : null,
         tag_names: tags ? tags.names.join(',') : null,
         tag_colors: tags ? tags.colors.join(',') : null,
       };
@@ -676,7 +690,7 @@ export const DocumentDAO = {
     if (!db) throw new Error('DB not initialized');
     if (projectId === null) {
       return db.prepare(`
-        SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+        SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
         FROM documents d
         LEFT JOIN document_tags dt ON d.id = dt.document_id
         LEFT JOIN tags t ON dt.tag_id = t.id
@@ -686,7 +700,7 @@ export const DocumentDAO = {
       `).all();
     }
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
@@ -699,7 +713,7 @@ export const DocumentDAO = {
   getFavorites: () => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
@@ -719,14 +733,14 @@ export const DocumentDAO = {
     const sanitized = trimmed.replace(/"/g, '""');
     
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       JOIN document_search ds ON d.id = ds.document_id
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
       WHERE ds.search_text MATCH '"' || ? || '"*'
       GROUP BY d.id
-      ORDER BY rank, d.last_accessed DESC
+      ORDER BY d.last_accessed DESC
     `).all(sanitized);
   },
 
