@@ -6,7 +6,7 @@ import {
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
   PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play, Filter, Edit3, Zap, Award,
-  ChevronUp, ChevronDown, ArrowRight
+  ChevronUp, ChevronDown, ArrowRight, Info, Database
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
@@ -541,12 +541,13 @@ const ProjectContextMenu: React.FC<{
   onDelete: () => void;
   onEdit: () => void;
   onCreateSubfolder: () => void;
-}> = ({ project, position, onClose, onDelete, onEdit, onCreateSubfolder }) => {
+  onShowInfo: () => void;
+}> = ({ project, position, onClose, onDelete, onEdit, onCreateSubfolder, onShowInfo }) => {
   const accent = project.color || resolveStableAccent(project.id);
   return createPortal(
   <div
     data-library-floating-menu="true"
-    className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+    className="fixed z-[160] w-60 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
     style={{ left: position.x, top: position.y }}
     onClick={(e) => e.stopPropagation()}
     onContextMenu={(e) => e.preventDefault()}
@@ -559,6 +560,16 @@ const ProjectContextMenu: React.FC<{
       <div className="mt-1 text-[10px] text-slate-400">Deleting a folder does not delete the documents inside it.</div>
     </div>
     <div className="pt-2 space-y-0.5">
+      <button
+        onClick={() => {
+          onShowInfo();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-sky-300 transition-colors hover:bg-sky-500/10 font-medium"
+      >
+        <Info size={13} className="text-sky-400" />
+        Folder Info & Cache Stats
+      </button>
       <button
         onClick={() => {
           onCreateSubfolder();
@@ -592,6 +603,191 @@ const ProjectContextMenu: React.FC<{
     </div>
   </div>,
   document.body
+  );
+};
+
+const FolderInfoModal: React.FC<{
+  project: DBProject;
+  onClose: () => void;
+}> = ({ project, onClose }) => {
+  const [stats, setStats] = useState<import('../../types/electron.d').ProjectStatsResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const accent = project.color || resolveStableAccent(project.id);
+
+  useEffect(() => {
+    let canceled = false;
+    async function load() {
+      try {
+        setLoading(true);
+        if (window.electronAPI?.projects?.getStats) {
+          const res = await window.electronAPI.projects.getStats(project.id);
+          if (!canceled && res) {
+            setStats(res);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load project stats:', err);
+      } finally {
+        if (!canceled) setLoading(false);
+      }
+    }
+    load();
+    return () => { canceled = true; };
+  }, [project.id]);
+
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  return createPortal(
+    <div 
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-fade-in"
+      onClick={onClose}
+    >
+      <div 
+        className="w-full max-w-xl rounded-3xl border border-white/12 bg-[#0e1116]/98 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-5 max-h-[85vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-white/10 pb-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <div 
+              className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shadow-inner border border-white/10"
+              style={{ backgroundColor: hexToRgba(accent, 0.18) }}
+            >
+              <Folder size={24} style={{ color: accent }} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                {project.name}
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                ข้อมูลสรุปและสถานะแคชในฐานข้อมูล SQLite
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400">
+            <div className="h-6 w-6 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
+            <span className="text-xs font-medium">กำลังคำนวณขนาดและสถานะแคช...</span>
+          </div>
+        ) : stats ? (
+          <div className="flex-1 overflow-y-auto space-y-4 custom-scrollbar pr-1">
+            {/* Quick Stat Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">ไฟล์ทั้งหมด</span>
+                <span className="text-lg font-extrabold text-slate-100 mt-1">{stats.totalDocuments}</span>
+                <span className="text-[10px] text-slate-500 mt-0.5">เอกสารในโฟลเดอร์</span>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">จำนวนหน้ารวม</span>
+                <span className="text-lg font-extrabold text-sky-400 mt-1">{stats.totalPages}</span>
+                <span className="text-[10px] text-slate-500 mt-0.5">หน้าทั้งหมด</span>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">OCR แล้ว</span>
+                <span className="text-lg font-extrabold text-emerald-400 mt-1">
+                  {stats.totalOcrPages}
+                  <span className="text-xs font-medium text-slate-400 ml-1">
+                    ({stats.totalPages > 0 ? Math.round((stats.totalOcrPages / stats.totalPages) * 100) : 0}%)
+                  </span>
+                </span>
+                <span className="text-[10px] text-slate-500 mt-0.5">หน้าที่มี OCR Cache</span>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">แปลแล้ว</span>
+                <span className="text-lg font-extrabold text-indigo-400 mt-1">
+                  {stats.totalTranslationPages}
+                  <span className="text-xs font-medium text-slate-400 ml-1">
+                    ({stats.totalPages > 0 ? Math.round((stats.totalTranslationPages / stats.totalPages) * 100) : 0}%)
+                  </span>
+                </span>
+                <span className="text-[10px] text-slate-500 mt-0.5">หน้าที่มีคำแปล</span>
+              </div>
+            </div>
+
+            {/* Cache Storage Footprint Banner */}
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3.5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
+                  <Database size={16} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-200">ขนาดแคชในฐานข้อมูล SQLite</div>
+                  <div className="text-[10px] text-slate-400">เก็บเฉพาะตัวอักษรและพิกัด ไม่โคลนไฟล์ PDF ต้นฉบับ</div>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-sm font-bold text-cyan-300 font-mono">{formatBytes(stats.totalCacheSizeBytes)}</span>
+              </div>
+            </div>
+
+            {/* Document List Breakdown */}
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>รายการไฟล์ในโฟลเดอร์ ({stats.documents.length})</span>
+              </div>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-1">
+                {stats.documents.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500 border border-white/5 rounded-2xl">
+                    ไม่มีไฟล์ในโฟลเดอร์นี้
+                  </div>
+                ) : (
+                  stats.documents.map((doc) => {
+                    const ocrPct = doc.totalPages > 0 ? Math.min(100, Math.round((doc.ocrPages / doc.totalPages) * 100)) : 0;
+                    const transPct = doc.totalPages > 0 ? Math.min(100, Math.round((doc.translationPages / doc.totalPages) * 100)) : 0;
+                    return (
+                      <div 
+                        key={doc.id}
+                        className="flex items-center justify-between p-2.5 rounded-xl border border-white/6 bg-slate-950/40 hover:bg-slate-900/50 transition-colors text-xs"
+                      >
+                        <div className="min-w-0 flex-1 pr-3">
+                          <div className="font-medium text-slate-200 truncate">{doc.filename}</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-2">
+                            <span>{doc.totalPages} หน้า</span>
+                            <span>•</span>
+                            <span className="text-emerald-400">OCR: {doc.ocrPages}/{doc.totalPages} ({ocrPct}%)</span>
+                            <span>•</span>
+                            <span className="text-indigo-400">แปล: {doc.translationPages}/{doc.totalPages} ({transPct}%)</span>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[11px] font-mono text-slate-400">{formatBytes(doc.cacheSizeBytes)}</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Footer */}
+        <div className="border-t border-white/10 pt-3 flex justify-end shrink-0">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold transition-colors"
+          >
+            ปิด
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 };
 
@@ -822,6 +1018,8 @@ const DocumentCard = React.memo<{
   isSelected: boolean;
   isMultiSelectActive?: boolean;
   onOpen: () => void;
+  onCardClick?: (e: React.MouseEvent) => void;
+  onCheckboxClick?: (e: React.MouseEvent) => void;
   onToggleSelect?: () => void;
   onToggleFavorite: () => void;
   onDelete: () => void;
@@ -847,6 +1045,8 @@ const DocumentCard = React.memo<{
   isSelected,
   isMultiSelectActive = false,
   onOpen,
+  onCardClick,
+  onCheckboxClick,
   onToggleSelect,
   onToggleFavorite,
   onDelete,
@@ -867,6 +1067,7 @@ const DocumentCard = React.memo<{
   onOCRAllPages,
   onUpdateRating
 }) => {
+  const isDraggingRef = useRef(false);
   const thumbnail = isThumbnailHidden ? (
     <div className="h-full w-full bg-[#f8fafc] border border-slate-200/80 shadow-inner flex flex-col items-center justify-center relative overflow-hidden group/paper">
       <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1.2px,transparent_1.2px)] [background-size:12px_12px] opacity-35" />
@@ -891,11 +1092,23 @@ const DocumentCard = React.memo<{
         }`}
         draggable
         onDragStart={(e) => {
+          isDraggingRef.current = true;
           onDragStart(e);
         }}
-        onDragEnd={onDragEnd}
+        onDragEnd={() => {
+          onDragEnd();
+          setTimeout(() => {
+            isDraggingRef.current = false;
+          }, 80);
+        }}
         onClick={(e) => {
-          if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
+          if (isDraggingRef.current) {
+            isDraggingRef.current = false;
+            return;
+          }
+          if (onCardClick) {
+            onCardClick(e);
+          } else if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
             e.preventDefault();
             e.stopPropagation();
             onToggleSelect?.();
@@ -912,7 +1125,18 @@ const DocumentCard = React.memo<{
         <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
           {thumbnail}
           {isSelected && (
-            <div className="absolute top-2 left-2 h-5 w-5 rounded-md bg-[#2B9BFF] text-white flex items-center justify-center shadow-md border border-white/20 z-20 animate-fade-in">
+            <div 
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onCheckboxClick) {
+                  onCheckboxClick(e);
+                } else {
+                  onToggleSelect?.();
+                }
+              }}
+              className="absolute top-2 left-2 h-5 w-5 rounded-md bg-[#2B9BFF] hover:bg-blue-600 text-white flex items-center justify-center shadow-md border border-white/20 z-20 animate-fade-in transition-colors cursor-pointer"
+              title="ยกเลิกการเลือก"
+            >
               <Check size={12} className="stroke-[3]" />
             </div>
           )}
@@ -985,11 +1209,23 @@ const DocumentCard = React.memo<{
       }`}
       draggable
       onDragStart={(e) => {
+        isDraggingRef.current = true;
         onDragStart(e);
       }}
-      onDragEnd={onDragEnd}
+      onDragEnd={() => {
+        onDragEnd();
+        setTimeout(() => {
+          isDraggingRef.current = false;
+        }, 80);
+      }}
       onClick={(e) => {
-        if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
+        if (isDraggingRef.current) {
+          isDraggingRef.current = false;
+          return;
+        }
+        if (onCardClick) {
+          onCardClick(e);
+        } else if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
           e.preventDefault();
           e.stopPropagation();
           onToggleSelect?.();
@@ -1004,7 +1240,18 @@ const DocumentCard = React.memo<{
       }}
     >
       {isSelected && (
-        <div className="h-4 w-4 rounded bg-[#2B9BFF] text-white flex items-center justify-center shrink-0 shadow-sm border border-white/10">
+        <div 
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onCheckboxClick) {
+              onCheckboxClick(e);
+            } else {
+              onToggleSelect?.();
+            }
+          }}
+          className="h-4 w-4 rounded bg-[#2B9BFF] hover:bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm border border-white/10 cursor-pointer transition-colors"
+          title="ยกเลิกการเลือก"
+        >
           <Check size={10} className="stroke-[3]" />
         </div>
       )}
@@ -1085,26 +1332,57 @@ const ProjectItem = React.memo<{
   onSelect: () => void;
   displayColor?: string;
   isDropTarget: boolean;
-  onDragOver: (event: React.DragEvent<HTMLButtonElement>) => void;
-  onDragLeave: () => void;
-  onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
-  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  draggable?: boolean;
+  onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDrop: (event: React.DragEvent<HTMLDivElement>) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
   level?: number;
   hasChildren?: boolean;
   isExpanded?: boolean;
   onToggleExpand?: () => void;
-}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop, onContextMenu, level = 0, hasChildren = false, isExpanded = false, onToggleExpand }) => {
+}>(({ project, isSelected, onSelect, displayColor, isDropTarget, draggable, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, onContextMenu, level = 0, hasChildren = false, isExpanded = false, onToggleExpand }) => {
   const accent = displayColor || resolveStableAccent(project.id);
+  const isDraggingRef = useRef(false);
+
   return (
-  <button 
-    onClick={onSelect}
+  <div 
+    role="button"
+    tabIndex={0}
+    draggable={draggable}
+    onDragStart={(e) => {
+      isDraggingRef.current = true;
+      onDragStart?.(e);
+    }}
+    onDragEnd={(e) => {
+      onDragEnd?.(e);
+      setTimeout(() => {
+        isDraggingRef.current = false;
+      }, 50);
+    }}
+    onClick={(e) => {
+      if (isDraggingRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      onSelect();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onSelect();
+      }
+    }}
     onContextMenu={onContextMenu}
     onDragOver={onDragOver}
     onDragLeave={onDragLeave}
     onDrop={onDrop}
-    className={`w-full p-3 rounded-xl text-left transition-all flex items-center border ${
+    className={`w-full py-2 px-2.5 rounded-xl text-left transition-all flex items-center border cursor-pointer select-none ${
       isDropTarget
-        ? 'border-white/16 bg-[#20242b] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+        ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_16px_rgba(56,189,248,0.3)] scale-[1.01]'
         : 
       isSelected 
         ? 'border-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
@@ -1116,19 +1394,19 @@ const ProjectItem = React.memo<{
     {level > 0 && (
       <div 
         className="flex items-center justify-end shrink-0 text-slate-600/60"
-        style={{ width: `${level * 16}px`, height: '24px' }}
+        style={{ width: `${level * 14}px`, height: '20px' }}
       >
-        <span className="w-2.5 h-4 border-l border-b border-white/20 rounded-bl mr-1.5 mt-[-8px]" />
+        <span className="w-2.5 h-3.5 border-l border-b border-white/20 rounded-bl mr-1.5 mt-[-6px]" />
       </div>
     )}
 
     <div 
-      className="p-2 rounded-lg border border-white/5 flex items-center justify-center shrink-0 mr-3"
+      className="p-1.5 rounded-lg border border-white/5 flex items-center justify-center shrink-0 mr-2.5 transition-transform group-hover:scale-105"
       style={{ backgroundColor: hexToRgba(accent, 0.14) }}
     >
-      <Folder size={16} style={{ color: accent }} />
+      <Folder size={14} style={{ color: accent }} />
     </div>
-    <span className="flex-1 truncate text-sm text-slate-200">{project.name}</span>
+    <span className="flex-1 truncate text-xs font-medium text-slate-200">{project.name}</span>
     {hasChildren ? (
       <div
         role="button"
@@ -1143,15 +1421,15 @@ const ProjectItem = React.memo<{
             onToggleExpand?.();
           }
         }}
-        className="p-1.5 rounded hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-all shrink-0 ml-1 cursor-pointer"
+        className="p-1 rounded-md hover:bg-white/10 text-slate-400 hover:text-sky-300 transition-all shrink-0 ml-1 cursor-pointer flex items-center justify-center"
         title={isExpanded ? 'Collapse subfolders' : 'Expand subfolders'}
       >
-        <ChevronRight size={14} className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
+        <ChevronRight size={13} className={`transition-transform duration-200 ${isExpanded ? 'rotate-90 text-sky-400' : 'text-slate-400'}`} />
       </div>
     ) : (
-      <div className="w-7 shrink-0" />
+      <div className="w-5 shrink-0" />
     )}
-  </button>
+  </div>
   );
 });
 
@@ -1227,9 +1505,11 @@ export const UploadScreen: React.FC = () => {
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
     createTag, createProject, deleteTag, deleteProject, updateProject, loadDocumentTags, persistDocumentPatch,
-    selectedDocumentIds, toggleDocumentSelection, clearSelection,
+    selectedDocumentIds, selectDocument, selectRangeDocuments, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
+
+  const lastClickedDocIdRef = useRef<number | null>(null);
 
   const [isDragging, setIsDragging] = useState(false);
   const [hiddenThumbnails, setHiddenThumbnails] = useState<Set<number>>(() => {
@@ -1357,6 +1637,9 @@ export const UploadScreen: React.FC = () => {
   }>({ isOpen: false, project: null, name: '', color: '' });
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
+  const [draggedDocumentIds, setDraggedDocumentIds] = useState<number[]>([]);
+  const [draggedProjectId, setDraggedProjectId] = useState<number | null>(null);
+  const draggedProjectIdRef = useRef<number | null>(null);
   const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [sortMenuPosition, setSortMenuPosition] = useState<MenuPosition | null>(null);
@@ -1480,6 +1763,7 @@ export const UploadScreen: React.FC = () => {
     setOcrBackgroundDialog(prev => ({ ...prev, isOpen: false, doc: null }));
   }, [ocrBackgroundDialog]);
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
+  const [folderInfoProject, setFolderInfoProject] = useState<DBProject | null>(null);
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
   const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
@@ -2063,6 +2347,56 @@ export const UploadScreen: React.FC = () => {
     }
   }, [moveToProject, selectedDocumentIds, clearSelection]);
 
+  const handleCardClick = useCallback((doc: DBDocument, index: number, e: React.MouseEvent) => {
+    const isCtrl = e.ctrlKey || e.metaKey;
+    const isShift = e.shiftKey;
+
+    if (isShift) {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const lastId = lastClickedDocIdRef.current;
+      let anchorIndex = lastId !== null ? sortedDocuments.findIndex(d => d.id === lastId) : -1;
+      if (anchorIndex === -1) {
+        anchorIndex = 0;
+      }
+      
+      const minIdx = Math.min(anchorIndex, index);
+      const maxIdx = Math.max(anchorIndex, index);
+      const rangeIds = sortedDocuments.slice(minIdx, maxIdx + 1).map(d => d.id);
+      
+      selectRangeDocuments(rangeIds, isCtrl);
+      return;
+    }
+
+    if (isCtrl) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleDocumentSelection(doc.id);
+      lastClickedDocIdRef.current = doc.id;
+      return;
+    }
+
+    // When multi-select mode is active, clicking any card toggles it without requiring Ctrl to be held!
+    if (selectedDocumentIds.size > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleDocumentSelection(doc.id);
+      lastClickedDocIdRef.current = doc.id;
+      return;
+    }
+
+    lastClickedDocIdRef.current = doc.id;
+    handleOpenDocument(doc);
+  }, [sortedDocuments, selectedDocumentIds.size, selectRangeDocuments, toggleDocumentSelection, handleOpenDocument]);
+
+  const handleCheckboxClick = useCallback((doc: DBDocument, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    toggleDocumentSelection(doc.id);
+    lastClickedDocIdRef.current = doc.id;
+  }, [toggleDocumentSelection]);
+
   const openProjectDialog = useCallback((documentId: number | null = null, parentId: number | null = null) => {
     setActiveDocumentMenuId(null);
     setActiveDocumentMenuPosition(null);
@@ -2175,35 +2509,125 @@ export const UploadScreen: React.FC = () => {
     let ids: number[] = [];
     if (event) {
       try {
-        const rawIds = event.dataTransfer.getData('application/x-document-ids');
+        const rawIds = event.dataTransfer.getData('application/x-document-ids') || event.dataTransfer.getData('text/plain');
         if (rawIds) {
-          ids = JSON.parse(rawIds);
+          const parsed = JSON.parse(rawIds);
+          if (Array.isArray(parsed)) {
+            ids = parsed.map(Number).filter(Number.isFinite);
+          }
         }
       } catch (e) {
         console.error('Failed to parse dragged document IDs:', e);
       }
     }
     
-    if (ids.length === 0 && draggedDocumentId) {
-      ids = [draggedDocumentId];
+    if (ids.length === 0) {
+      if (draggedDocumentIds.length > 0) {
+        ids = draggedDocumentIds;
+      } else if (draggedDocumentId) {
+        ids = selectedDocumentIds.has(draggedDocumentId)
+          ? Array.from(selectedDocumentIds)
+          : [draggedDocumentId];
+      }
     }
 
     if (ids.length === 0) return;
 
+    // Directly move all items in parallel without nested handleMoveDocumentToProject loops
     await Promise.all(
-      ids.map(async (docId) => {
-        const doc = sortedDocuments.find((d) => d.id === docId);
-        if (doc) {
-          await handleMoveDocumentToProject(doc, projectId);
-        }
-      })
+      ids.map((docId) => moveToProject(docId, projectId))
     );
 
-    // Clear selection after moving
+    // Clear selection and drag state after moving
     clearSelection();
     setDraggedDocumentId(null);
+    setDraggedDocumentIds([]);
     setProjectDropTargetId(null);
-  }, [draggedDocumentId, handleMoveDocumentToProject, sortedDocuments, clearSelection]);
+
+    // Refresh view
+    if (selectedProjectId !== null) {
+      void loadDocumentsByProject(selectedProjectId);
+    } else {
+      void loadRecentDocuments();
+    }
+  }, [draggedDocumentIds, draggedDocumentId, selectedDocumentIds, moveToProject, clearSelection, selectedProjectId, loadDocumentsByProject, loadRecentDocuments]);
+
+  const handleDropOnProject = useCallback(async (targetProjectId: number | null, event?: React.DragEvent) => {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    // 1. Check if dragging a folder
+    let sourceProjId: number | null = null;
+    if (event) {
+      const textPlain = event.dataTransfer.getData('text/plain') || '';
+      if (textPlain.startsWith('project:')) {
+        const parsed = Number(textPlain.replace('project:', ''));
+        if (Number.isFinite(parsed)) sourceProjId = parsed;
+      }
+      if (sourceProjId === null) {
+        const rawProjId = event.dataTransfer.getData('application/x-project-id');
+        if (rawProjId) {
+          const parsed = Number(rawProjId);
+          if (Number.isFinite(parsed)) sourceProjId = parsed;
+        }
+      }
+    }
+    if (sourceProjId === null && draggedProjectIdRef.current !== null) {
+      sourceProjId = draggedProjectIdRef.current;
+    }
+    if (sourceProjId === null && draggedProjectId !== null) {
+      sourceProjId = draggedProjectId;
+    }
+
+    if (sourceProjId !== null) {
+      // Prevent dropping a folder into itself
+      if (targetProjectId === sourceProjId) {
+        draggedProjectIdRef.current = null;
+        setDraggedProjectId(null);
+        setProjectDropTargetId(null);
+        return;
+      }
+      // Prevent cyclic dependency: dropping a parent folder into one of its children
+      if (targetProjectId !== null) {
+        let current = projects.find(p => p.id === targetProjectId);
+        let isDescendant = false;
+        while (current && current.parent_id !== null) {
+          if (current.parent_id === sourceProjId) {
+            isDescendant = true;
+            break;
+          }
+          current = projects.find(p => p.id === current?.parent_id);
+        }
+        if (isDescendant) {
+          draggedProjectIdRef.current = null;
+          setDraggedProjectId(null);
+          setProjectDropTargetId(null);
+          return;
+        }
+      }
+
+      const moved = await updateProject(sourceProjId, { parent_id: targetProjectId });
+      if (moved) {
+        if (targetProjectId !== null) {
+          setExpandedProjectIds(prev => new Set(prev).add(targetProjectId));
+        }
+        await loadProjects();
+        if (selectedProjectId !== null) {
+          void loadDocumentsByProject(selectedProjectId);
+        } else {
+          void loadRecentDocuments();
+        }
+      }
+      draggedProjectIdRef.current = null;
+      setDraggedProjectId(null);
+      setProjectDropTargetId(null);
+      return;
+    }
+
+    // 2. Otherwise handle dropped documents
+    await handleProjectDrop(targetProjectId, event);
+  }, [draggedProjectId, projects, updateProject, loadProjects, selectedProjectId, loadDocumentsByProject, loadRecentDocuments, handleProjectDrop]);
 
   useEffect(() => {
     const pendingDocs = sortedDocuments
@@ -2253,24 +2677,61 @@ export const UploadScreen: React.FC = () => {
             displayColor={displayColor}
             isSelected={selectedProjectId === project.id}
             isDropTarget={projectDropTargetId === project.id}
+            draggable={true}
+            onDragStart={(event) => {
+              event.dataTransfer.setData('text/plain', `project:${project.id}`);
+              event.dataTransfer.setData('application/x-project-id', String(project.id));
+              event.dataTransfer.effectAllowed = 'move';
+              draggedProjectIdRef.current = project.id;
+              setDraggedProjectId(project.id);
+              setActiveProjectMenu(null);
+
+              const dragGhost = document.createElement('div');
+              dragGhost.style.position = 'absolute';
+              dragGhost.style.top = '-9999px';
+              dragGhost.style.left = '-9999px';
+              dragGhost.style.padding = '4px 10px';
+              dragGhost.style.background = '#4f46e5';
+              dragGhost.style.color = '#ffffff';
+              dragGhost.style.fontSize = '12px';
+              dragGhost.style.fontWeight = 'bold';
+              dragGhost.style.borderRadius = '8px';
+              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+              dragGhost.innerText = `📁 ${project.name}`;
+              document.body.appendChild(dragGhost);
+              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+              setTimeout(() => {
+                if (document.body.contains(dragGhost)) {
+                  document.body.removeChild(dragGhost);
+                }
+              }, 0);
+            }}
+            onDragEnd={() => {
+              draggedProjectIdRef.current = null;
+              setDraggedProjectId(null);
+              setProjectDropTargetId(null);
+            }}
             level={level}
             hasChildren={hasChildren}
             isExpanded={isExpanded}
             onToggleExpand={() => toggleProjectExpanded(project.id)}
             onDragOver={(event) => {
-              if (!draggedDocumentId) return;
               event.preventDefault();
+              event.stopPropagation();
               event.dataTransfer.dropEffect = 'move';
               setProjectDropTargetId(project.id);
             }}
-            onDragLeave={() => {
+            onDragLeave={(event) => {
+              event.stopPropagation();
+              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
               if (projectDropTargetId === project.id) {
                 setProjectDropTargetId(null);
               }
             }}
             onDrop={(event) => {
               event.preventDefault();
-              void handleProjectDrop(project.id, event);
+              event.stopPropagation();
+              void handleDropOnProject(project.id, event);
             }}
             onSelect={() => {
               if (selectedProjectId === project.id) {
@@ -2286,7 +2747,7 @@ export const UploadScreen: React.FC = () => {
         </React.Fragment>
       );
     });
-  }, [projects, selectedProjectId, projectDropTargetId, draggedDocumentId, expandedProjectIds, toggleProjectExpanded, handleProjectDrop, loadRecentDocuments, loadDocumentsByProject, openProjectMenu]);
+  }, [projects, selectedProjectId, projectDropTargetId, expandedProjectIds, toggleProjectExpanded, handleDropOnProject, loadRecentDocuments, loadDocumentsByProject, openProjectMenu]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
@@ -2344,32 +2805,35 @@ export const UploadScreen: React.FC = () => {
         {activePage === 'home' ? (
           <>
             {/* Quick Filters */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3">Library</h2>
-            <div className="space-y-1 mb-6">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5">Library</h2>
+            <div className="space-y-1 mb-3">
               <button
                 onClick={() => loadRecentDocuments()}
-                className={`w-full p-2.5 rounded-lg text-left text-sm flex items-center gap-3 border transition-all ${
+                className={`w-full py-1.5 px-2.5 rounded-lg text-left text-xs flex items-center gap-2.5 border transition-all ${
                   filterType === 'recent'
                     ? 'border-white/12 bg-[#25282d] text-slate-100'
                     : 'border-transparent hover:border-white/8 hover:bg-white/[0.04] text-slate-300'
                 }`}
               >
-                <Clock size={16} /> Recent
+                <Clock size={14} /> Recent
               </button>
               <button
                 onClick={() => loadFavoriteDocuments()}
-                className={`w-full p-2.5 rounded-lg text-left text-sm flex items-center gap-3 border transition-all ${
+                className={`w-full py-1.5 px-2.5 rounded-lg text-left text-xs flex items-center gap-2.5 border transition-all ${
                   filterType === 'favorites'
                     ? 'border-white/12 bg-[#25282d] text-slate-100'
                     : 'border-transparent hover:border-white/8 hover:bg-white/[0.04] text-slate-300'
                 }`}
               >
-                <Star size={16} /> Favorites
+                <Star size={14} /> Favorites
               </button>
             </div>
 
+            {/* Subtle Divider Line */}
+            <div className="h-px bg-white/6 my-3 w-full shrink-0" />
+
             {/* Tags */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5 flex items-center justify-between">
               Tags
               <button
                 onClick={() => openTagDialog()}
@@ -2379,7 +2843,7 @@ export const UploadScreen: React.FC = () => {
                 <Plus size={12} />
               </button>
             </h2>
-            <div className="flex flex-wrap gap-2 mb-6">
+            <div className="flex flex-wrap gap-1.5 mb-3">
               <TagPill
                 tag={{ id: 0, name: 'No tags', color: '#64748b', created_at: '' }}
                 displayColor="#64748b"
@@ -2415,8 +2879,11 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
 
+            {/* Subtle Divider Line */}
+            <div className="h-px bg-white/6 my-3 w-full shrink-0" />
+
             {/* Projects */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5 flex items-center justify-between">
               Projects
               <button
                 onClick={() => openProjectDialog()}
@@ -2426,7 +2893,21 @@ export const UploadScreen: React.FC = () => {
                 <Plus size={12} />
               </button>
             </h2>
-            <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
+            <div 
+              onDragOver={(event) => {
+                if (draggedProjectIdRef.current !== null || draggedProjectId !== null) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }
+              }}
+              onDrop={(event) => {
+                if (draggedProjectIdRef.current !== null || draggedProjectId !== null) {
+                  event.preventDefault();
+                  void handleDropOnProject(null, event);
+                }
+              }}
+              className="flex-1 overflow-y-auto space-y-1 custom-scrollbar min-h-[120px] rounded-xl"
+            >
               {renderProjectTree(null)}
             </div>
 
@@ -2896,12 +3377,47 @@ export const UploadScreen: React.FC = () => {
                   currentSubprojects.length > 0 && (
                     <div className="mb-6">
                       <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 px-1">Folders ({currentSubprojects.length})</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
                         {currentSubprojects.map((subproj, index) => {
                           const accent = subproj.color || resolveStableAccent(subproj.id);
+                          const isDropTarget = projectDropTargetId === subproj.id;
                           return (
                             <div
                               key={subproj.id}
+                              draggable={true}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                                event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                                event.dataTransfer.effectAllowed = 'move';
+                                draggedProjectIdRef.current = subproj.id;
+                                setDraggedProjectId(subproj.id);
+                                setActiveProjectMenu(null);
+
+                                const dragGhost = document.createElement('div');
+                                dragGhost.style.position = 'absolute';
+                                dragGhost.style.top = '-9999px';
+                                dragGhost.style.left = '-9999px';
+                                dragGhost.style.padding = '4px 10px';
+                                dragGhost.style.background = '#4f46e5';
+                                dragGhost.style.color = '#ffffff';
+                                dragGhost.style.fontSize = '12px';
+                                dragGhost.style.fontWeight = 'bold';
+                                dragGhost.style.borderRadius = '8px';
+                                dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                                dragGhost.innerText = `📁 ${subproj.name}`;
+                                document.body.appendChild(dragGhost);
+                                event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                                setTimeout(() => {
+                                  if (document.body.contains(dragGhost)) {
+                                    document.body.removeChild(dragGhost);
+                                  }
+                                }, 0);
+                              }}
+                              onDragEnd={() => {
+                                draggedProjectIdRef.current = null;
+                                setDraggedProjectId(null);
+                                setProjectDropTargetId(null);
+                              }}
                               onClick={() => {
                                 loadDocumentsByProject(subproj.id);
                               }}
@@ -2909,16 +3425,38 @@ export const UploadScreen: React.FC = () => {
                                 e.preventDefault();
                                 openProjectMenu(subproj, e);
                               }}
-                              className="group p-3 rounded-xl border border-white/5 hover:border-white/12 bg-[#16181c]/70 hover:bg-[#1b1e23] transition-all flex items-center gap-3 cursor-pointer select-none"
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                event.dataTransfer.dropEffect = 'move';
+                                setProjectDropTargetId(subproj.id);
+                              }}
+                              onDragLeave={(event) => {
+                                event.stopPropagation();
+                                if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                                if (projectDropTargetId === subproj.id) {
+                                  setProjectDropTargetId(null);
+                                }
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void handleDropOnProject(subproj.id, event);
+                              }}
+                              className={`group py-2 px-3 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
+                                isDropTarget
+                                  ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
+                                  : 'border-white/5 hover:border-white/12 bg-[#16181c]/70 hover:bg-[#1b1e23]'
+                              }`}
                             >
                               <div 
-                                className="p-1.5 rounded-lg shrink-0 flex items-center justify-center"
+                                className="p-1 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-110"
                                 style={{ backgroundColor: hexToRgba(accent, 0.14) }}
                               >
-                                <Folder size={16} style={{ color: accent }} />
+                                <Folder size={14} style={{ color: accent }} />
                               </div>
                               <span className="flex-1 truncate text-xs font-medium text-slate-200 group-hover:text-white">{subproj.name}</span>
-                              <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
+                              <ChevronRight size={11} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
                             </div>
                           );
                         })}
@@ -2931,9 +3469,44 @@ export const UploadScreen: React.FC = () => {
                       <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">Folders ({currentSubprojects.length})</h3>
                       {currentSubprojects.map((subproj, index) => {
                         const accent = subproj.color || resolveStableAccent(subproj.id);
+                        const isDropTarget = projectDropTargetId === subproj.id;
                         return (
                           <div
                             key={subproj.id}
+                            draggable={true}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                              event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                              event.dataTransfer.effectAllowed = 'move';
+                              draggedProjectIdRef.current = subproj.id;
+                              setDraggedProjectId(subproj.id);
+                              setActiveProjectMenu(null);
+
+                              const dragGhost = document.createElement('div');
+                              dragGhost.style.position = 'absolute';
+                              dragGhost.style.top = '-9999px';
+                              dragGhost.style.left = '-9999px';
+                              dragGhost.style.padding = '4px 10px';
+                              dragGhost.style.background = '#4f46e5';
+                              dragGhost.style.color = '#ffffff';
+                              dragGhost.style.fontSize = '12px';
+                              dragGhost.style.fontWeight = 'bold';
+                              dragGhost.style.borderRadius = '8px';
+                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                              dragGhost.innerText = `📁 ${subproj.name}`;
+                              document.body.appendChild(dragGhost);
+                              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                              setTimeout(() => {
+                                if (document.body.contains(dragGhost)) {
+                                  document.body.removeChild(dragGhost);
+                                }
+                              }, 0);
+                            }}
+                            onDragEnd={() => {
+                              draggedProjectIdRef.current = null;
+                              setDraggedProjectId(null);
+                              setProjectDropTargetId(null);
+                            }}
                             onClick={() => {
                               loadDocumentsByProject(subproj.id);
                             }}
@@ -2941,16 +3514,38 @@ export const UploadScreen: React.FC = () => {
                               e.preventDefault();
                               openProjectMenu(subproj, e);
                             }}
-                            className="group px-4 py-2.5 rounded-xl border border-white/5 hover:border-white/12 bg-[#16181c]/50 hover:bg-[#1b1e23] transition-all flex items-center gap-3 cursor-pointer select-none"
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              event.dataTransfer.dropEffect = 'move';
+                              setProjectDropTargetId(subproj.id);
+                            }}
+                            onDragLeave={(event) => {
+                              event.stopPropagation();
+                              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                              if (projectDropTargetId === subproj.id) {
+                                setProjectDropTargetId(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDropOnProject(subproj.id, event);
+                            }}
+                            className={`group px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
+                              isDropTarget
+                                ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
+                                : 'border-white/5 hover:border-white/12 bg-[#16181c]/50 hover:bg-[#1b1e23]'
+                            }`}
                           >
                             <div 
-                              className="p-1.5 rounded-lg shrink-0 flex items-center justify-center"
+                              className="p-1 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-110"
                               style={{ backgroundColor: hexToRgba(accent, 0.14) }}
                             >
                               <Folder size={14} style={{ color: accent }} />
                             </div>
                             <span className="flex-1 truncate text-xs font-medium text-slate-200 group-hover:text-white">{subproj.name}</span>
-                            <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
+                            <ChevronRight size={11} className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
                           </div>
                         );
                       })}
@@ -2968,7 +3563,7 @@ export const UploadScreen: React.FC = () => {
                       ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
                       : 'space-y-2'
                     }>
-                      {sortedDocuments.map(doc => (
+                      {sortedDocuments.map((doc, index) => (
                         <DocumentCard
                           key={doc.id}
                           doc={doc}
@@ -2976,6 +3571,8 @@ export const UploadScreen: React.FC = () => {
                           isSelected={selectedDocumentIds.has(doc.id)}
                           isMultiSelectActive={selectedDocumentIds.size > 0}
                           onOpen={() => handleOpenDocument(doc)}
+                          onCardClick={(e) => handleCardClick(doc, index, e)}
+                          onCheckboxClick={(e) => handleCheckboxClick(doc, e)}
                           onToggleFavorite={() => void handleToggleFavorite(doc.id)}
                           onDelete={() => void handleDeleteDocument(doc.id)}
                           isMenuOpen={activeDocumentMenuId === doc.id}
@@ -2993,18 +3590,48 @@ export const UploadScreen: React.FC = () => {
                           onToggleSelect={() => toggleDocumentSelection(doc.id)}
                           onCreateTag={() => openTagDialog(doc.id)}
                           onDragStart={(e) => {
-                            const ids = selectedDocumentIds.has(doc.id)
+                            const isTargetSelected = selectedDocumentIds.has(doc.id);
+                            const ids = isTargetSelected && selectedDocumentIds.size > 0
                               ? Array.from(selectedDocumentIds)
                               : [doc.id];
-                            e.dataTransfer.setData('application/x-document-ids', JSON.stringify(ids));
+                            const payload = JSON.stringify(ids);
+                            e.dataTransfer.setData('application/x-document-ids', payload);
+                            e.dataTransfer.setData('text/plain', payload);
                             e.dataTransfer.effectAllowed = 'move';
+                            
+                            // Multi-item drag ghost badge
+                            if (ids.length > 1) {
+                              const dragGhost = document.createElement('div');
+                              dragGhost.style.position = 'absolute';
+                              dragGhost.style.top = '-9999px';
+                              dragGhost.style.left = '-9999px';
+                              dragGhost.style.padding = '6px 12px';
+                              dragGhost.style.background = '#0284c7';
+                              dragGhost.style.color = '#ffffff';
+                              dragGhost.style.fontSize = '12px';
+                              dragGhost.style.fontWeight = 'bold';
+                              dragGhost.style.borderRadius = '12px';
+                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                              dragGhost.style.zIndex = '99999';
+                              dragGhost.innerText = `📄 ย้าย ${ids.length} รายการ`;
+                              document.body.appendChild(dragGhost);
+                              e.dataTransfer.setDragImage(dragGhost, 15, 15);
+                              setTimeout(() => {
+                                if (document.body.contains(dragGhost)) {
+                                  document.body.removeChild(dragGhost);
+                                }
+                              }, 0);
+                            }
+
                             setDraggedDocumentId(doc.id);
+                            setDraggedDocumentIds(ids);
                             setActiveDocumentMenuId(null);
                             setActiveDocumentMenuPosition(null);
                             setLibraryMenuPosition(null);
                           }}
                           onDragEnd={() => {
                             setDraggedDocumentId(null);
+                            setDraggedDocumentIds([]);
                             setProjectDropTargetId(null);
                           }}
                           isThumbnailHidden={hiddenThumbnails.has(doc.id)}
@@ -3480,6 +4107,7 @@ export const UploadScreen: React.FC = () => {
             project={activeProjectMenu.project}
             position={activeProjectMenu.position}
             onClose={() => setActiveProjectMenu(null)}
+            onShowInfo={() => setFolderInfoProject(activeProjectMenu.project)}
             onDelete={() => {
               setDeleteProjectDialog({
                 isOpen: true,
@@ -3498,6 +4126,13 @@ export const UploadScreen: React.FC = () => {
             onCreateSubfolder={() => {
               openProjectDialog(null, activeProjectMenu.project.id);
             }}
+          />
+        )}
+
+        {folderInfoProject && (
+          <FolderInfoModal
+            project={folderInfoProject}
+            onClose={() => setFolderInfoProject(null)}
           />
         )}
 

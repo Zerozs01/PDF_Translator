@@ -1479,15 +1479,28 @@ const PDFPageContainer: React.FC<{
       style={{ minHeight: pageRenderTick > 0 ? undefined : 1130 }}
       className="relative mb-4 group pdf-page-container"
     >
-      <Page 
-        pageNumber={pageNum} 
-        renderTextLayer={false} 
-        renderAnnotationLayer={false}
-        className="border border-slate-700 bg-white"
-        width={800}
-        onLoadSuccess={onPageLoadSuccess}
-        onRenderSuccess={onPageRenderSuccess}
-      />
+      {hasBeenVisible ? (
+        <Page 
+          pageNumber={pageNum} 
+          renderTextLayer={false} 
+          renderAnnotationLayer={false}
+          className="border border-slate-700 bg-white"
+          width={800}
+          onLoadSuccess={onPageLoadSuccess}
+          onRenderSuccess={onPageRenderSuccess}
+          onRenderError={(err) => {
+            console.warn(`[PDFCanvas] Page ${pageNum} render suppressed:`, err);
+          }}
+        />
+      ) : (
+        <div 
+          className="border border-slate-700/60 bg-[#0d1117] flex flex-col items-center justify-center text-slate-500 select-none"
+          style={{ width: 800, height: 1130 }}
+        >
+          <div className="h-8 w-8 rounded-full border-2 border-slate-700 border-t-sky-400 animate-spin mb-2 opacity-50" />
+          <span className="text-xs font-mono opacity-60">Page {pageNum}</span>
+        </div>
+      )}
       {isCacheLoading && (
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 text-xs text-slate-200 shadow-lg animate-pulse pointer-events-none select-none">
           <svg className="animate-spin h-3.5 w-3.5 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">

@@ -18,8 +18,8 @@ const KOREAN_COLLOQUIAL_REPAIRS: Array<{ pattern: RegExp; replacement: string }>
 ];
 
 const preserveSourceTrailingPunctuation = (sourceText: string, replacement: string): string => {
-  const punctuation = String(sourceText || '').trim().match(/([.!?…\u002D\u2010-\u2015\u2212\u00AD]+)$/)?.[1] || '';
-  const cleanReplacement = normalizeWhitespace(String(replacement || '')).replace(/[.!?…\u002D\u2010-\u2015\u2212\u00AD]+$/g, '').trim();
+  const punctuation = String(sourceText || '').trim().match(/([.!?…\u002D\u2010-\u2015\u2212\u00AD~♡♥]+)$/)?.[1] || '';
+  const cleanReplacement = normalizeWhitespace(String(replacement || '')).replace(/[.!?…\u002D\u2010-\u2015\u2212\u00AD~♡♥]+$/g, '').trim();
   return `${cleanReplacement}${punctuation}`.trim();
 };
 
@@ -132,6 +132,10 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
 
   // Common negative/question phrases
   { pattern: /^안갔지$/, replacement: 'ไม่ได้ไปหรอก' },
+  { pattern: /^잘생겼다$/, replacement: 'หล่อจัง' },
+  { pattern: /^살생겼의$/, replacement: 'หล่อจัง' },
+  { pattern: /^잘생겼의$/, replacement: 'หล่อจัง' },
+  { pattern: /^살생겼다$/, replacement: 'หล่อจัง' },
   { pattern: /^안갔어$/, replacement: 'ไม่ได้ไปนะ' },
   { pattern: /^가야해서$/, replacement: 'เพราะต้องไปแล้ว' },
   { pattern: /^가야해$/, replacement: 'ต้องไปแล้ว' },
@@ -220,6 +224,65 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^멋있다$/, replacement: 'เท่จัง' },
   { pattern: /^멋있어$/, replacement: 'เท่มาก' },
   { pattern: /^잘생겼다$/, replacement: 'หล่อจัง' },
+  { pattern: /^살생겼의$/, replacement: 'หล่อจัง' },
+  { pattern: /^잘생겼의$/, replacement: 'หล่อจัง' },
+  { pattern: /^살생겼다$/, replacement: 'หล่อจัง' },
+  { pattern: /^엄마\s*사촌$/, replacement: 'ลูกพี่ลูกน้องของแม่' },
+  { pattern: /^마리코\s*아들$/, replacement: 'ลูกชายของมาริโกะ' },
+  { pattern: /^마리코아들$/, replacement: 'ลูกชายของมาริโกะ' },
+  { pattern: /^렌이야!?$/, replacement: 'เรนไงล่ะ!' },
+  { pattern: /^렌이야$/, replacement: 'เรนไงล่ะ' },
+  { pattern: /^당연히안되지$/, replacement: 'แน่นอนว่าไม่ได้หรอก' },
+  { pattern: /^당연히$/, replacement: 'แน่นอนอยู่แล้ว' },
+  { pattern: /^안되지$/, replacement: 'ไม่ได้หรอก' },
+  { pattern: /^꼬맹이네$/, replacement: 'เด็กคนนั้น' },
+  { pattern: /^뭐$/, replacement: 'อะไรนะ' },
+  { pattern: /^부모님도$/, replacement: 'พ่อแม่ก็ด้วย' },
+  { pattern: /^떨굴거야$/, replacement: 'จะทำให้ตก' },
+  { pattern: /^그래그래$/, replacement: 'ใช่แล้ว ใช่แล้ว' },
+  { pattern: /^렌\?*껴안지않아도너한$/, replacement: 'เรน? ไม่ต้องกอดก็ได้ ให้เธอ' },
+  { pattern: /^렌\?*껴안지않아도$/, replacement: 'เรน? ไม่ต้องกอดก็ได้' },
+  { pattern: /^껴안지않아도$/, replacement: 'ไม่ต้องกอดก็ได้' },
+  { pattern: /^너한$/, replacement: 'กับเธอ' },
+  { pattern: /^너한테$/, replacement: 'กับเธอ' },
+  { pattern: /^꼬맹이$/, replacement: 'เจ้าหนู' },
+  { pattern: /^주제에뭐냐고이녀석$/, replacement: 'เป็นแค่... แต่ทำเป็นเก่งนะไอ้หมอนี่' },
+  { pattern: /^주제에$/, replacement: 'เป็นแค่...แท้ๆ' },
+  { pattern: /^뭐냐고이녀석$/, replacement: 'คิดว่าเป็นใครกันไอ้หมอนี่' },
+  { pattern: /^개허접걸레년주제에나대지[마มา].*$/, replacement: 'อีผู้หญิงสำส่อนไม่ได้เรื่องเอ๊ย อย่ามาสะเออะ!' },
+  { pattern: /^개허접걸레년$/, replacement: 'อีผู้หญิงสำส่อนไม่ได้เรื่อง' },
+  { pattern: /^주제에나대지[마มา].*$/, replacement: 'อย่ามาสะเออะ!' },
+  { pattern: /^이[압얍]이이[압얍]이$/, replacement: 'ยึบ ยึบ' },
+  { pattern: /^이[압얍]이$/, replacement: 'ยึบ' },
+  { pattern: /^거+거긴만지면$/, replacement: 'ตร-ตรงนั้นถ้าไปจับโดนเข้าล่ะก็' },
+  { pattern: /^거긴만지면$/, replacement: 'ตรงนั้นถ้าไปจับโดนเข้าล่ะก็' },
+  { pattern: /^만지면$/, replacement: 'ถ้าไปจับโดน...' },
+  { pattern: /^같았는데$/, replacement: 'เหมือนว่า...แท้ๆ' },
+  { pattern: /^꼬맹이라고거유녀랑재우니까불끈거린다고$/, replacement: 'หาว่าเป็นเด็ก แต่พอให้นอนกับสาวนมโตแล้วมันคึกจนแข็งเป๊กเลยนี่หว่า' },
+  { pattern: /^꼬맹이라고$/, replacement: 'หาว่าเป็นเด็ก' },
+  { pattern: /^거유녀랑$/, replacement: 'กับสาวนมโต' },
+  { pattern: /^재우니까$/, replacement: 'พอให้นอนด้วย' },
+  { pattern: /^불끈거린다고$/, replacement: 'มันคึกจนแข็งเป๊กเลยนี่หว่า' },
+  { pattern: /^알면서$/, replacement: 'ทั้งที่รู้อยู่แท้ๆ' },
+  { pattern: /^그걸로뭐하려고$/, replacement: 'จะเอาอันนั้นไปทำอะไรน่ะ' },
+  { pattern: /^아무리그래도그건.*$/, replacement: 'ถึงอย่างนั้นก็เถอะ แบบนั้นมัน--!' },
+  { pattern: /^그럴리가$/, replacement: 'ไม่มีทางหรอก' },
+  { pattern: /^네엄마쉬워보이던[데เด].*$/, replacement: 'แม่ของเธอแลดูง่ายดีนี่นา เดี๋ยวจะสร้างน้องข้างๆ สามีให้ดูนะ' },
+  { pattern: /^네엄마$/, replacement: 'แม่ของเธอ' },
+  { pattern: /^쉬워보이던[데เด]$/, replacement: 'แลดูง่ายดีนี่นา' },
+  { pattern: /^남편옆에서$/, replacement: 'ข้างๆ สามี' },
+  { pattern: /^동생만들어줄게.*$/, replacement: 'เดี๋ยวจะสร้างน้องให้ดูนะ' },
+  { pattern: /^갑자기어리광부리지말라고$/, replacement: 'จู่ๆ อย่ามาทำเป็นออดอ้อนนะ' },
+  { pattern: /^갑자기$/, replacement: 'จู่ๆ' },
+  { pattern: /^어리광$/, replacement: 'ออดอ้อน' },
+  { pattern: /^부리지말라고$/, replacement: 'อย่ามาทำเป็น...นะ' },
+  { pattern: /^마리코가$/, replacement: 'มาริโกะ' },
+  { pattern: /^남편이랑$/, replacement: 'กับสามี' },
+  { pattern: /^일주일\s*여행$/, replacement: 'เที่ยวหนึ่งสัปดาห์' },
+  { pattern: /^일주일여행$/, replacement: 'เที่ยวหนึ่งสัปดาห์' },
+  { pattern: /^가는\s*동안$/, replacement: 'ระหว่างที่ไป' },
+  { pattern: /^가는동안$/, replacement: 'ระหว่างที่ไป' },
+  { pattern: /^맡아달래서$/, replacement: 'วานให้ช่วยดูแล' },
   { pattern: /^예쁘다$/, replacement: 'สวยจัง' },
   { pattern: /^예뻐$/, replacement: 'สวย' },
   { pattern: /^그만해$/, replacement: 'หยุดนะ' },
@@ -228,7 +291,6 @@ const KOREAN_CONVERSATIONAL_FALLBACKS: Array<{ pattern: RegExp; replacement: str
   { pattern: /^기다려$/, replacement: 'รอก่อน' },
   { pattern: /^천천히$/, replacement: 'ช้าๆ หน่อย' },
   { pattern: /^조금만$/, replacement: 'นิดนึงก็ยังดี' },
-  { pattern: /^다왔어$/, replacement: 'ถึงแล้ว' },
   { pattern: /^나왔어$/, replacement: 'ออกมาแล้ว' },
   { pattern: /^들어가$/, replacement: 'เข้าไปเลย' },
   { pattern: /^나가$/, replacement: 'ออกไปเลย' },
@@ -414,7 +476,7 @@ export const applyKoreanConversationalFallback = (
   const source = normalizeWhitespace(sourceText);
   if (!source || !KOREAN_HANGUL_REGEX.test(source)) return null;
 
-  const compactSource = source.replace(/[\s.!?~,\u002D\u2010-\u2015\u2212\u00AD\u2026…]+/g, '');
+  const compactSource = source.replace(/[\s.!?~,\u002D\u2010-\u2015\u2212\u00AD\u2026…♡♥]+/g, '');
   const matched = KOREAN_CONVERSATIONAL_FALLBACKS.find((entry) => entry.pattern.test(compactSource));
   if (!matched) return null;
 

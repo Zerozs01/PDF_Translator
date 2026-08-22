@@ -363,6 +363,13 @@ describe('TranslationCoordinator & Engines', () => {
         { id: 'es12', text: 'MENTE CALIENTES Y', groupType: 'balloon' },
         { id: 'es13', text: 'TELO', groupType: 'balloon' },
         { id: 'es14', text: 'ZARME', groupType: 'balloon' },
+        { id: 'es15', text: 'TEANDOLE?', groupType: 'balloon' },
+        { id: 'es16', text: 'TENTARLO?', groupType: 'balloon' },
+        { id: 'es17', text: 'BROS...', groupType: 'balloon' },
+        { id: 'es18', text: 'TREVISTARON', groupType: 'balloon' },
+        { id: 'es19', text: 'SOLACION...', groupType: 'balloon' },
+        { id: 'es20', text: 'CREIBLE.SiUNNIESE', groupType: 'balloon' },
+        { id: 'es21', text: 'CANSANDO...', groupType: 'balloon' },
       ];
 
       const results = await translationCoordinator.runTranslation('argos', items, {
@@ -387,6 +394,13 @@ describe('TranslationCoordinator & Engines', () => {
         'es12': 'รู้สึกอุ่นและ...',
         'es13': 'บอกคุณ',
         'es14': 'กอดฉัน',
+        'es15': 'เย้ายวนเขาเหรอ?',
+        'es16': 'ลองดูไหม?',
+        'es17': 'พวกพ้อง...',
+        'es18': 'สัมภาษณ์แล้ว',
+        'es19': 'ความสิ้นหวัง...',
+        'es20': 'น่าเชื่อถือ ถ้าหากรวมตัวกัน',
+        'es21': 'เหนื่อยล้า...',
       };
 
       Object.entries(expected).forEach(([id, val]) => {

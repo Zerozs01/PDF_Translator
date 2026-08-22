@@ -3025,7 +3025,7 @@ export default function App() {
               }
 
               if (cacheWasUpgraded && matchedDocId) {
-                dbService.saveTranslationCachePage(matchedDocId, pageNum, safeMatchedCache).catch((err) => {
+                dbService.saveTranslationCache(matchedDocId, pageNum, safeMatchedCache.key, safeMatchedCache).catch((err: unknown) => {
                   console.warn('[Translation] Failed to persist upgraded cache to DB:', err);
                 });
               }
@@ -3728,9 +3728,8 @@ export default function App() {
         const hasThaiInFinal = /[\u0E00-\u0E7F]/.test(finalizedLine);
 
         let directTranslation: string | null = null;
-        // Group-First Policy: Only calculate per-line dictionary fallback if the group as a whole
-        // failed translation or if this is a single-line group.
-        if (normalizedTargetLanguage === 'th' && (!groupHasThaiTranslation || group.lines.length <= 1)) {
+        const lineNeedsFallback = (!groupHasThaiTranslation || group.lines.length <= 1) || (!hasThaiInFinal || hasKoreanTranslationCarryover(finalizedLine) || finalizedLine === sourceLineText || /[\uAC00-\uD7AF]/.test(finalizedLine));
+        if (normalizedTargetLanguage === 'th' && lineNeedsFallback) {
           directTranslation = lookupShortPhraseTh(sourceLineText) ||
             lookupShortPhraseTh(sourceLineText.replace(/[^A-Za-z0-9]/g, '')) ||
             lookupShortPhraseTh(normalizeSpanishOcrNoiseForTranslation(sourceLineText)) || null;

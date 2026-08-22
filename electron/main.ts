@@ -122,10 +122,15 @@ function createWindow() {
     win?.show();
   });
 
-  // Enable DevTools shortcut (Ctrl+Shift+I or F12) and page refresh (Ctrl+R / F5) in dev mode
+  // Enable DevTools shortcut (Ctrl+Shift+I or F12), page refresh (Ctrl+R / F5), and Fullscreen toggle (F11)
   win.webContents.on('before-input-event', (event, input) => {
     if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
       win?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+    if (input.key === 'F11' && input.type === 'keyDown') {
+      const isFullScreen = win?.isFullScreen() ?? false;
+      win?.setFullScreen(!isFullScreen);
       event.preventDefault();
     }
     if (VITE_DEV_SERVER_URL && ((input.control && input.key.toLowerCase() === 'r') || input.key === 'F5')) {
@@ -1272,8 +1277,23 @@ app.whenReady().then(() => {
     try {
       return await prewarmExternalOcrEngine(payload.engine, isValidString(payload.language) ? payload.language : 'eng');
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/canceled|stopped unexpectedly|daemon process died/i.test(message)) {
+        console.warn(`ocr:prewarm-engine safely canceled for ${payload.engine}: ${message}`);
+        return {
+          ok: false,
+          engine: payload.engine,
+          runtime: 'none',
+          description: `Prewarm canceled (${message})`,
+        };
+      }
       console.error('ocr:prewarm-engine error:', error);
-      throw error;
+      return {
+        ok: false,
+        engine: payload.engine,
+        runtime: 'none',
+        description: message,
+      };
     }
   });
 
@@ -1590,6 +1610,36 @@ app.whenReady().then(() => {
       console.error('db:delete-project error:', error);
       return false;
     }
+  });
+
+  ipcMain.handle('db:get-project-stats', async (_, projectId: number) => {
+    if (!isValidNumber(projectId)) {
+      throw new Error('Invalid input: projectId must be a positive number');
+    }
+    try {
+      return ProjectDAO.getProjectStats(projectId);
+    } catch (error) {
+      console.error('db:get-project-stats error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('window:toggle-fullscreen', async () => {
+    try {
+      if (win) {
+        const next = !win.isFullScreen();
+        win.setFullScreen(next);
+        return next;
+      }
+      return false;
+    } catch (error) {
+      console.error('window:toggle-fullscreen error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('window:is-fullscreen', async () => {
+    return win?.isFullScreen() ?? false;
   });
 
   // ============================================

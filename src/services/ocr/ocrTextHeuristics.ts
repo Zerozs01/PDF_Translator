@@ -299,7 +299,7 @@ export const inferSourceLanguageFromTextHints = (
   if (thaiCount >= Math.max(4, latinCount * 0.2)) {
     return 'th';
   }
-  if (hangulCount >= Math.max(3, latinCount * 0.12)) {
+  if (hangulCount >= Math.max(1, Math.min(2, Math.floor(latinCount * 0.1)))) {
     return 'ko';
   }
   if (kanaCount >= 2) {

@@ -52,6 +52,10 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:create-project',
   'db:update-project',
   'db:delete-project',
+  'db:get-project-stats',
+  // Window management
+  'window:toggle-fullscreen',
+  'window:is-fullscreen',
   // File system
   'fs:read-file',
   'fs:open-file',
@@ -241,6 +245,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (id: number, updates: ProjectUpdate) =>
       safeInvoke('db:update-project', { id, updates }),
     delete: (id: number) => safeInvoke('db:delete-project', id),
+    getStats: (projectId: number) => safeInvoke('db:get-project-stats', projectId),
   },
 
   // Gemini translation (SECURE: API key stays in main process)
@@ -407,6 +412,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   power: {
     preventSleep: () => safeInvoke<number>('power:prevent-sleep'),
     allowSleep: () => safeInvoke<boolean>('power:allow-sleep'),
+  },
+
+  window: {
+    toggleFullScreen: () => safeInvoke<boolean>('window:toggle-fullscreen'),
+    isFullScreen: () => safeInvoke<boolean>('window:is-fullscreen'),
   },
 
   // Message handling (restricted to allowed channels)

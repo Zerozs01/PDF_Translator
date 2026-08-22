@@ -12,7 +12,7 @@
  * กด Layer icon จะ flip sidebar เป็น Layer management panel
  */
 
-import React, { useMemo, useState, lazy, Suspense, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -52,12 +52,35 @@ const ThumbnailItem: React.FC<ThumbnailItemProps> = React.memo(({
   isSelected,
   setPage,
 }) => {
+  const [hasBeenVisible, setHasBeenVisible] = useState(isSelected || pageNum <= 4);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (hasBeenVisible) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setHasBeenVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '400px 0px 400px 0px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasBeenVisible]);
+
   const handleClick = useCallback(() => {
     setPage(pageNum);
   }, [pageNum, setPage]);
 
   return (
     <div 
+      ref={containerRef}
       onClick={handleClick}
       className={`cursor-pointer group relative rounded-lg overflow-hidden border-2 transition-all ${
         isSelected 
@@ -65,14 +88,21 @@ const ThumbnailItem: React.FC<ThumbnailItemProps> = React.memo(({
           : 'border-white/10 hover:border-white/25'
       }`}
     >
-      <div className="relative bg-white flex justify-center items-center overflow-hidden w-full">
-        <Page 
-          pageNumber={pageNum} 
-          width={190} 
-          renderTextLayer={false}
-          renderAnnotationLayer={false}
-          className="opacity-90 group-hover:opacity-100 transition-opacity"
-        />
+      <div className="relative bg-[#0d1117] flex justify-center items-center overflow-hidden w-full min-h-[140px] aspect-[1/1.414]">
+        {hasBeenVisible ? (
+          <Page 
+            pageNumber={pageNum} 
+            width={190} 
+            renderTextLayer={false}
+            renderAnnotationLayer={false}
+            className="opacity-90 group-hover:opacity-100 transition-opacity bg-white"
+            onRenderError={(err) => console.warn(`[LeftSidebar] Page ${pageNum} thumbnail error:`, err)}
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center text-slate-500 text-xs">
+            <span className="font-mono opacity-50">Page {pageNum}</span>
+          </div>
+        )}
         {/* Page Number Badge */}
         <div className="absolute bottom-1 right-1 bg-slate-900/80 text-white text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-sm">
           {pageNum}

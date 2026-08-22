@@ -72,6 +72,7 @@ interface FileBrowserState {
   selectDocument: (id: number) => void;
   deselectDocument: (id: number) => void;
   toggleDocumentSelection: (id: number) => void;
+  selectRangeDocuments: (ids: number[], additive?: boolean) => void;
   selectAllDocuments: () => void;
   clearSelection: () => void;
   
@@ -164,6 +165,11 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   selectAllDocuments: () => set((state) => ({
     selectedDocumentIds: new Set(state.documents.map(d => d.id))
   })),
+  selectRangeDocuments: (ids, additive = false) => set((state) => {
+    const newSet = additive ? new Set(state.selectedDocumentIds) : new Set<number>();
+    ids.forEach(id => newSet.add(id));
+    return { selectedDocumentIds: newSet };
+  }),
   clearSelection: () => set({ selectedDocumentIds: new Set() }),
   
     // 🚀 Batch startup load: all 3 in 1 IPC round-trip

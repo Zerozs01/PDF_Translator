@@ -141,7 +141,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'pervsaki': 'ตาโรคจิตซากิ', 'pervsaki.': 'ตาโรคจิตซากิ.',
   'beyblade': 'เบย์เบลด', 'beyblade!': 'เบย์เบลด!', 'bey-blade': 'เบย์เบลด', 'bey-blade!': 'เบย์เบลด!', 'my beyblade': 'เบย์เบลดของฉัน', 'my beyblade!': 'เบย์เบลดของฉัน!',
   'i am': 'ฉันเอง', 'i am.': 'ฉันเอง.', 'i am!': 'ฉันเอง!',
-  'huh?!': 'หะ?!', 'huh?': 'หะ?', 'huh!': 'หะ!',
+  'huh?!': 'หา?!', 'huh?': 'หา?', 'huh!': 'หา!',
   'what?!': 'อะไรนะ?!', 'what?': 'อะไรนะ?', 'what!': 'อะไรนะ!',
   'i\'ll leave': 'ฉันขอตัว', 'i\'ll leave.': 'ฉันขอตัว.', 'i\'ll leave!': 'ฉันจะไปแล้ว!', 'ill leave': 'ฉันขอตัว',
   'sciously': 'อย่างมีสติ', 'sciously.': 'อย่างมีสติ.', 'sciously...': 'อย่างมีสติ...',
@@ -255,7 +255,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'sasaki-san?': 'ซาซากิซัง?', 'sasaki-sanp': 'ซาซากิซัง?',
   'well': 'เอาล่ะ', 'well...': 'เอาล่ะ...', 'well,': 'เอาล่ะ,', 'well!': 'เอาล่ะ!',
   'how about': 'แล้ว...ล่ะ', 'how about...': 'แล้ว...ล่ะ...', 'how about?': 'แล้ว...ล่ะ?',
-  'huh?': 'หา?', 'huh': 'หา', 'huh!': 'หา!',
+  'huh': 'หา',
   'ah~': 'อ๊ะ~', 'ah': 'อ๊ะ',
   'hmmm?': 'หืมมม?', 'hmmm': 'หืมมม', 'hmmm...': 'หืมมม...',
   'lightly': 'เบาๆ', 'lightly.': 'เบาๆ.', 'lightly...': 'เบาๆ...',
@@ -374,8 +374,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'but...': 'แต่...', 'but': 'แต่',
   'form a medical': 'การตรวจทางการแพทย์', 'form a medical...': 'การตรวจทางการแพทย์...',
   'blowjob': 'อมควย', 'blowjob...': 'อมควย...', 'blowjob!': 'อมควย!',
-  'barbarians!!': 'ไอ่พวกบา-บาเรียน!!', 'barbarians': 'ไอ่พวกบา-บาเรียน',
-  'pregnant': 'ตั้งท้อง', 'pregnant...': 'ตั้งท้อง...', 'pregnant!': 'ตั้งท้อง!',
+  'barbarians!!': 'ไอ่พวกบา-บาเรียน!!',
   's-sto ooo op...': 'ห-หยุด ดดด ดดด...', 's-stooooop...': 'ห-หยุด ดดด ดดด...',
   'frfo': '', 'frfo...': '',
   'stinky': 'เหม็นตุๆ', 'stinky!': 'เหม็นตุๆ!', 'stinky...': 'เหม็นตุๆ...',
@@ -387,7 +386,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'then try and hold back your orgasm you pig!!': 'ถ้าอย่างนั้นก็พยายามกลั้นจุดสุดยอดของแกไว้ซะสิ ไอ้หมูโสโครก!!',
   'i': 'ฉัน', 'you': 'คุณ', 'you!': 'คุณ!', 'you!!': 'คุณ!!', 'he': 'เขา', 'she': 'เธอ',
   'we': 'เรา', 'they': 'พวกเขา', 'it': 'มัน', 'me': 'ฉัน',
-  'him': 'เขา', 'her': 'เธอ', 'us': 'พวกเรา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
+  'him': 'เขา', 'them': 'พวกเขา', 'us the': 'พวกเรา',
   'so...': 'ช่าง...', 'so!': 'ช่าง!',
   'hole': 'รู', 'hole!': 'รู!', 'asshole': 'รูตูด', 'asshole!': 'รูตูด!', 'asshole!!': 'รูตูด!!', 'ass-hole': 'รูตูด', 'ass-hole!': 'รูตูด!', 'ass-hole!!': 'รูตูด!!', 'ass': 'ตูด', '4ss': 'ตูด', '4ss!': 'ตูด!',
   'getting': 'กำลัง', 'getting...': 'กำลัง...', 'getting!': 'กำลัง!',
@@ -433,7 +432,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'suck': 'ดูด', 'suck!': 'ดูด!', 'suck on': 'ดูด',
   'suck on mine': 'ดูดของฉัน', 'suck on mine too': 'ดูดของฉันด้วย',
   'you keep': 'คุณยังคง', 'if you keep': 'ถ้าคุณยังคง',
-  'gonna': 'จะ', 'gonna...': 'จะ...', 'gonna!': 'จะ!',
   'away': 'หนีไป', 'away...': 'หนีไป...', 'away!': 'หนีไป!',
   'ahh': 'อา', 'ahh...': 'อา...', 'ahh!': 'อา!',
   'majesty': 'ฝ่าบาท', 'majesty...': 'ฝ่าบาท...', 'majesty?': 'ฝ่าบาท?', 'majesty...?': 'ฝ่าบาท...?',
@@ -442,7 +440,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'cen todosson': 'เซน โทดอสสัน',
   'there was a long war': 'มันเป็นสงครามที่ยาวนาน',
   'there was a long war.': 'มันเป็นสงครามที่ยาวนาน.',
-  'hateria': 'ฮาเทเรีย',
   'kingdom of hateria': 'อาณาจักรฮาเทเรีย',
   'virgin holes': 'รูเวอร์จิ้น', 'virgin hole': 'รูเวอร์จิ้น',
   'come help': 'มาช่วยฉันด้วย!', 'come help me': 'มาช่วยฉันด้วย!', 'come help me!': 'มาช่วยฉันด้วย!',
@@ -452,8 +449,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   "i can't": 'ฉันทำไม่ได้', "i cant": 'ฉันทำไม่ได้', "i can't!": 'ฉันทำไม่ได้!', "i cant!": 'ฉันทำไม่ได้!',
   'defeat': 'ความพ่ายแพ้', 'defeat!': 'ความพ่ายแพ้!',
   'on the': 'บน', 'you\'re supposed': 'เธอควรจะ', 'youre supposed': 'เธอควรจะ',
-  'tight': 'แน่น', 'tight!': 'แน่น!', 'your training': 'การฝึกของคุณ',
-  'bitch... hey!': 'ยัยเวร... เฮ้ย!', 'bitch hey!': 'ยัยเวร... เฮ้ย!', 'bitch... hey': 'ยัยเวร... เฮ้ย!', 'bitch hey': 'ยัยเวร... เฮ้ย!',
   's-stop!': 'ห-หยุดนะ!', 's-stop': 'ห-หยุดนะ!', 's stop!': 'ห-หยุดนะ!', 's stop': 'ห-หยุดนะ!',
   'a dirty': 'ที่โสโครก', 'her posi-': 'ท่าของเธอ', 'her posi': 'ท่าของเธอ',
   'i\'ll have a': 'ฉันจะมี', 'ill have a': 'ฉันจะมี',
@@ -597,13 +592,11 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'what': 'อะไร', 'why': 'ทำไม', 'how': 'อย่างไร', 'when': 'เมื่อไหร่',
   'go': 'ไป', 'run': 'วิ่ง', 'help': 'ช่วยด้วย', 'look': 'ดูสิ',
   'now': 'ตอนนี้', 'here': 'ที่นี่', 'there': 'ที่นั่น', 'come': 'มา',
-  'hey': 'เฮ้ย', 'huh': 'หยิ', 'hm': 'อืม', 'hmm': 'อืม',
-  'ah': 'อา', 'oh': 'โอ้', 'uh': 'เอ่อ', 'ugh': 'โอ๊ย',
-  'ugh!': 'โอ๊ย!', 'ugh!!': 'โอ๊ย!!', 'ugh,': 'โอ๊ย!',
+  'hey': 'เฮ้ย', 'hm': 'อืม', 'hmm': 'อืม',
+  'oh': 'โอ้', 'uh': 'เอ่อ',
   'wow': 'ว้าว', 'whoa': 'โว้ว', 'ha': 'ฮ่า',
-  'haa': 'ฮ่าฮ่า', 'haa!': 'ฮ่าฮ่า!', 'haa!!': 'ฮ่าฮ่า!!', 'haa...': 'ฮ่าฮ่า...',
   'even': 'แม้แต่', 'even!': 'แม้แต่!',
-  'thanks': 'ขอบคุณ', 'sorry': 'ขอโทษ', 'please': 'ได้โปรด', 'please!': 'ได้โปรด!', 'please...': 'ได้โปรด...',
+  'thanks': 'ขอบคุณ',
   'right': 'ใช่แล้ว', 'wrong': 'ผิดแล้ว', 'really': 'จริงเหรอ',
   'seriously': 'จริงจังเหรอ', 'impossible': 'เป็นไปไม่ได้',
   'unbelievable': 'เชื่อไม่ได้', 'of course': 'แน่นอน',
@@ -626,7 +619,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   // Common manga/technical short terms
   'unit': 'หน่วย', 'units': 'หน่วย', 'all units': 'ทุกหน่วย',
   'charge': 'บุกเลย!', 'charge!': 'บุกเลย!',
-  'princess': 'เจ้าหญิง', 'of all of us': 'ของพวกเราทุกคน',
   // Action words that Argos translates wrong
   'much': 'มาก', 'much...': 'มาก...', 'so much': 'มากนัก',
   'fool': 'คนโง่', 'fool...': 'คนโง่...', 'you fool': 'แกโง่ชัด',
@@ -638,12 +630,11 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'oh!': 'โอ้!', 'ohhh': 'โอ้หน่อ', 'ohh': 'โอ้โห',
   'of': 'ของ', 'all': 'ทั้งหมด', 'all!': 'ทุกคน!',
   'gonna die': 'จะตาย', 'gonna die!': 'จะตายแล้ว!',
-  'so please': 'ดังนั้นได้โปรด', 'so please!': 'ดังนั้นได้โปรด!', 'soplease': 'ดังนั้นได้โปรด', 'soplease!': 'ดังนั้นได้โปรด!',
   'why!?': 'ทำไม!?', 'why?': 'ทำไม?',
   'ass-': 'ก้น',
   'ass- hole': 'รูตูด',
   'ha!': 'ฮ่า!', 'ha ha': 'ฮ่าฮ่า', 'ha ha ha': 'ฮ่าฮ่าฮ่า',
-  'hehe': 'เฮ้เฮ้', 'hehe!': 'เฮ้เฮ้!', 'hehehe': 'เฮ้เฮ้เฮ้', 'hehehe!': 'เฮ้เฮ้เฮ้!',
+  'hehe': 'เฮ้เฮ้', 'hehe!': 'เฮ้เฮ้!',
   'i cant believe it': 'ไมยากเชื่อเลย...', 'i cannot believe it': 'ไม่อยากเชื่อเลย...',
   'cant believe it': 'เชื่อไม่ได้เลย...', 'cannot believe it': 'เชื่อไม่ได้เลย...',
   'i cant believe it...': 'ไม่อยากเชื่อเลย...', 'i cant believe this': 'ไม่อยากเชื่อเลย',
@@ -687,6 +678,13 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'simplemente odioso...': 'น่าเกลียดจริงๆ...', 'mente odioso...': 'น่าเกลียดจริงๆ...', 'mente odioso..': 'น่าเกลียดจริงๆ..', 'odioso...': 'น่าเกลียด...', 'mente odioso': 'น่าเกลียดจริงๆ',
   'qué vergüenza, no': 'น่าอับอาย ไม่นะ', 'vergüenza, no': 'น่าอับอาย ไม่นะ', 'verguenza, no': 'น่าอับอาย ไม่นะ', 'guenza, no': 'น่าอับอาย ไม่นะ', 'guenza, no!': 'น่าอับอาย ไม่นะ!', 'guenza': 'น่าอับอาย',
   'fuerzas...': 'เข้มแข็งไว้...', 'zas...': 'ฉับ!...', 'zas..': 'ฉับ!..', 'zas': 'ฉับ!', 'mente calientes y': 'รู้สึกอุ่นและ...', 'mente calientes y...': 'รู้สึกอุ่นและ...', 'mente calientes y..': 'รู้สึกอุ่นและ..', 'calientes y': 'รู้สึกอุ่นและ...', 'calientes y...': 'รู้สึกอุ่นและ...',
+  'teandole?': 'เย้ายวนเขาเหรอ?', 'teandole': 'เย้ายวนเขา', 'tentandole?': 'เย้ายวนเขาเหรอ?', 'tentandole': 'เย้ายวนเขา', 'tentándole?': 'เย้ายวนเขาเหรอ?', 'tentándole': 'เย้ายวนเขา',
+  'tentarlo?': 'ลองดูไหม?', 'tentarlo': 'ลองดู', 'tentarlo...': 'ลองดู...',
+  'bros...': 'พวกพ้อง...', 'bros': 'พวกพ้อง', 'bros!': 'พวกพ้อง!', 'bro...': 'พวกพ้อง...', 'bro': 'พวกพ้อง',
+  'trevistaron': 'สัมภาษณ์แล้ว', 'entrevistaron': 'สัมภาษณ์แล้ว',
+  'solacion...': 'ความสิ้นหวัง...', 'solacion': 'ความสิ้นหวัง', 'desolacion...': 'ความสิ้นหวัง...', 'desolacion': 'ความสิ้นหวัง', 'desolación...': 'ความสิ้นหวัง...', 'desolación': 'ความสิ้นหวัง',
+  'creible.siunniese': 'น่าเชื่อถือ ถ้าหากรวมตัวกัน', 'creible. si uniese': 'น่าเชื่อถือ ถ้าหากรวมตัวกัน', 'creible si uniese': 'น่าเชื่อถือ ถ้าหากรวมตัวกัน', 'creíble. si uniese': 'น่าเชื่อถือ ถ้าหากรวมตัวกัน',
+  'cansando...': 'เหนื่อยล้า...', 'cansando': 'เหนื่อยล้า', 'cansado': 'เหนื่อย', 'cansada': 'เหนื่อย',
   'you\'re too far out in front, princess roseria! please move back!': 'คุณอยู่ข้างหน้าไกลเกินไปแล้ว องค์หญิงโรเซเรีย! ได้โปรดถอยกลับมาด้วย!',
   'youre too far out in front, princess roseria! please move back!': 'คุณอยู่ข้างหน้าไกลเกินไปแล้ว องค์หญิงโรเซเรีย! ได้โปรดถอยกลับมาด้วย!',
   'you stubborn bitch... you\'re always making us charge!': 'ยัยคนดื้อดึง... เธอเอาแต่สั่งให้พวกเราบุกตลอดเลย!',
@@ -780,7 +778,6 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'her up': 'หุบปากเธอซะ',
   'what a': 'ช่าง...',
   'noisy': 'เสียงดัง',
-  'bitch': 'ยัยตัวแสบ',
   'shove one': 'ยัดมันเข้าไป',
   'in her other': 'เข้าไปในอีกรูของเธอ',
   'hole too': 'ด้วยเหมือนกัน',
@@ -1070,16 +1067,16 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'ann!': 'อ๊าห์!', 'ann': 'อ๊าห์',
   'bzz': 'หึ่งง', 'squish': 'ยวบบ', 'stood': 'ยืนอยู่', 'stood!': 'ยืนอยู่!', 'jiggle': 'ดึ๋งๆ',
   'grind': 'บดด', 'grinc': 'บดด', 'twire': 'กระตุก',
-  'squeeze': 'บีบเค้น', 'squeeze!': 'บีบเค้น!', 'seoeeze': 'บีบเค้น', 'saeeze': 'บีบเค้น',
+  'seoeeze': 'บีบเค้น', 'saeeze': 'บีบเค้น',
   'shiver': 'สั่นสะท้าน', 'shner': 'สั่นสะท้าน', 'flinch': 'สะดุ้ง', 'cling': 'เกาะแน่น',
   'shives': 'สั่นสะท้าน', 'shvero': 'สั่นสะท้าน', 'stroke': 'ลูบไล้', 'grope': 'ขยำา',
   'charten': 'สั่นระรัว', 'shlp': 'จ๊วบบ',
   'huff': 'แฮ่กก', 'rhuff': 'แฮ่กก', 'hofflv': 'แฮ่กก', 'julp': 'อึกก',
   'so he can': 'เพื่อให้เขาสามารถ', 'sochacan': 'เพื่อให้เขาสามารถ',
-  'semen...': 'น้ำกาม...', 'semen': 'น้ำกาม', 'semen!': 'น้ำกาม!',
+  'semen...': 'น้ำกาม...',
   'glepgh': 'แหวะะ', 'blubub': 'บุ๋งๆ',
   'yammer': 'บ่นพร่ำ', 'yammer:': 'บ่นพร่ำ:', 'chatter': 'พูดพร่ำ', 'speeed': 'เร็วขึ้นน',
-  'fondle': 'เคล้นคลึง', 'flick': 'ดีดด', 'nunu': 'งึมงำ...',
+  'fondle': 'เคล้นคลึง', 'nunu': 'งึมงำ...',
   'gyuuuh': 'กิ๊ววว', 'guuuun': 'กิ๊ววว', 'apeooh': 'อาเปะโอ้...', 'apeooh...': 'อาเปะโอ้...',
   'uuggun': 'อึ่กกก', 'uuuhnn': 'อู้วววน์', 'throb': 'เต้นตุบๆ',
   'blorp': 'ผล็อยย', 'plurp': 'ผล็อยย', 'clatter': 'กริ๊กกร๊าก',
@@ -1098,7 +1095,7 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'thmi': 'ตึ่บบ',
   'athle': 'กึกกัก',
   'seueeze': 'บีบเค้น',
-  'flicks': 'สะบัด', 'flick!': 'ดีดด!',
+  'flicks': 'สะบัด',
   'squelch': 'ปรื๊ด', 'qweleh': 'ปรื๊ด',
   'porplo': 'ปุ๋งๆ',
   'tblorp': 'ผล็อยย',
@@ -1593,7 +1590,7 @@ export const systemicWordFallbackTranslate = (text: string): string | null => {
   return null;
 };
 
-const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko', 'ja']);
+const OFFLINE_PIVOT_SOURCE_LANGUAGES = new Set(['es', 'ko', 'ja', 'zh', 'chi', 'zho']);
 
 export const shouldUseOfflinePivotRoute = (sourceLanguage: string, targetLanguage: string): boolean => {
   const normalizedSource = normalizeTranslationLanguage(sourceLanguage, 'en');
@@ -1752,7 +1749,13 @@ export async function translateBatchOffline(
       });
 
       indicesToTranslate.forEach((originalIndex, i) => {
-        finalDirectTranslations[originalIndex] = pivotThaiResults[i] || '';
+        const engText = pivotEnglishPrepared[i] || pivotEnglishResults[i] || '';
+        const dictLookup = lookupShortPhraseTh(engText);
+        if (dictLookup) {
+          finalDirectTranslations[originalIndex] = dictLookup;
+        } else {
+          finalDirectTranslations[originalIndex] = pivotThaiResults[i] || '';
+        }
       });
 
       return finalDirectTranslations;

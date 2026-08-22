@@ -163,6 +163,138 @@ flowchart TD
     - `CHAAAN!` $\rightarrow$ `จังงงงห์!` (Dynamic A's)
   - **สาเหตุของ `# xx #`:** โมเดลแปลภาษา (เช่น Argos / MarianMT) หรือระบบ Protect Placeholder ในโมเดลบางตัวใช้ Delimiter สัญลักษณ์ `#` ครอบ Token ที่ต้องการปกป้อง หรือเกิดจาก Markdown header leaking (`# Heading #`) ได้ทำการเพิ่ม `sanitizeTranslationResult` ในจุดส่งกลับของ `translateBatchOffline` และ `translationCoordinator.ts` เพื่อตัดเครื่องหมาย `#` และ markdown delimiters ออกอย่างหมดจด 100%
 
+### 11. การรองรับคำศัพท์สเปน/หลายภาษา (Multilingual Fallback Architecture & Spanish OCR Repairs)
+- **สมมุติฐาน & สถาปัตยกรรม:**
+  - ข้อความหรือสแลงมังงะที่ไม่พบในโมเดล Argos (ไม่ว่าจะเป็น EN, ES, KO, JA, ZH) ได้รับการออกแบบให้รองรับผ่านสถาปัตยกรรมหลายชั้นโดยไม่เพิ่มภาระหน่วยความจำให้ตัวแอป:
+    1. **Pivot Pipeline (JA/KO/ZH -> EN -> TH):** สำหรับภาษาเอเชีย ระบบจะแปลผ่าน Pivot เป็นภาษาอังกฤษก่อน ดังนั้นคลังคำแปลสแลงและบริบทเฉพาะทางทั้งหมดในฝั่ง EN จะถ่ายทอดสู่ผลลัพธ์ภาษาไทยของ JA/KO/ZH โดยอัตโนมัติ 100%
+    2. **Direct Fallback (ES & Raw Loanwords):** คำศัพท์ภาษาสเปนหรือสแลงสากลที่ OCR เพี้ยน ถูกแปลงผ่าน `SPANISH_OCR_NOISE_REPAIRS` และดักจับด้วย `SHORT_PHRASE_DICTIONARY_TH` + `thaiConversationalGlossary.ts` ในระดับ $O(1)$ Hash Lookup
+- **สิ่งที่ดำเนินการเพิ่มเติม:**
+  - ใน [`ocrTextNormalizer.ts`](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrTextNormalizer.ts) เพิ่มตัวแปลงคำเพี้ยนภาษาสเปน:
+    - `TEANDOLE` $\rightarrow$ `TENTANDOLE`
+    - `TREVISTARON` $\rightarrow$ `ENTREVISTARON`
+    - `SOLACION` $\rightarrow$ `DESOLACION`
+    - `CREIBLE.SiUNNIESE` / `SiUNNIESE` $\rightarrow$ `CREIBLE. SI UNIESE`
+  - ใน [`offlineTranslationService.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) และ [`thaiConversationalGlossary.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/thaiConversationalGlossary.ts) เพิ่มคลังคำแปล:
+    - `TEANDOLE?` / `TENTANDOLE?` $\rightarrow$ `เย้ายวนเขาเหรอ?`
+    - `TENTARLO?` $\rightarrow$ `ลองดูไหม?`
+    - `BROS...` $\rightarrow$ `พวกพ้อง...`
+    - `TREVISTARON` $\rightarrow$ `สัมภาษณ์แล้ว`
+    - `SOLACION...` / `DESOLACION...` $\rightarrow$ `ความสิ้นหวัง...`
+    - `CREIBLE.SiUNNIESE` $\rightarrow$ `น่าเชื่อถือ ถ้าหากรวมตัวกัน`
+    - `CANSANDO...` $\rightarrow$ `เหนื่อยล้า...`
+
+### 12. การแก้ไขบัคแปลภาษาเกาหลีและ OCR หลุด (Korean All-Page Missing/Incomplete Translation & Typo Fix)
+- **ต้นตอของปัญหา (Root Causes):**
+  1. **หน้าตาดีจัง♡ (`살생겼의` vs `잘생겼다♡`):** ฟอนต์เกาหลีแบบมีหัวใจ `♡` หรือฟอนต์ลายมือทำให้ตัวอักษร `ㅈ` ถูก OCR มองเป็น `ㅅ` และ `다♡` มองเป็น `의` จนได้ข้อความว่า `살생겼의` ซึ่งไม่มีในพจนานุกรมและโมเดลแปลไม่รู้จัก จึงค้างเป็นภาษาเกาหลี
+  2. **All Page เมินประโยคเกาหลี:** หน้ามังงะมีโลโก้ภาษาอังกฤษ เช่น `DANYU`, `7DAYS`, `SALON` ฟังก์ชัน `inferSourceLanguageFromTextHints` มีเงื่อนไขเข้มงวดเกินไป (`hangulCount >= 3`) ทำให้ตีความหน้านั้นเป็นภาษาอังกฤษ (`en`) ส่งผลให้ `shouldSkipLineTranslationByScript` กรองข้อความเกาหลีทิ้งเป็น CJK ขยะบนหน้าภาษาอังกฤษ
+  3. **บอลลูนรวมแปลไทยไม่ครบ (มีเกาหลีปน `마리 코아들 렌아 야!`):** เมื่อรวมกลุ่ม 3 บรรทัด (`엄마 사촌`, `마리코 아들`, `렌이야!`) โมเดลแปลได้เฉพาะบรรทัดแรก (`ลูกพี่ลูกน้องของแม่`) ทำให้บรรทัดที่ 2 และ 3 ว่างเปล่าและ Fallback กลับไปเป็นข้อความเกาหลีเดิม โดยที่ `lineNeedsFallback` ไม่ยอมให้รัน per-line fallback เพราะเห็นว่ากลุ่มมีภาษาไทยแล้ว
+- **สิ่งที่ดำเนินการแก้ไข:**
+  - ปรับปรุง `koreanTranslationPolicy.ts` ให้ครอบคลุม `살생겼의`, `살생겼다`, `잘생겼다♡`, `엄마 사촌`, `마리코 아들`, `렌이야`, `마리코가`, `남편이랑`, `일주일 여행`, `가는 동안`, `맡า달래서`
+  - รองรับสัญลักษณ์ `♡`, `♥`, `~` ใน `preserveSourceTrailingPunctuation` และ `compactSource`
+  - ปรับปรุง `ocrTextHeuristics.ts` ให้ตรวจจับภาษาเกาหลีได้อย่างแม่นยำแม้มีข้อความ Hangul เพียง 1 ประโยค
+  - ปรับปรุง `src/App.tsx` ให้ `lineNeedsFallback` ทำงานทันทีหากบรรทัดใดยังมีข้อความเกาหลีหลงเหลือ (`/[\uAC00-\uD7AF]/`) หรือไม่มีภาษาไทย
+
+### 13. การเพิ่มคลังคำแปลภาษาเกาหลีชุดใหม่ & วิเคราะห์ Layer Control Balloon
+- **คลังคำแปลภาษาเกาหลีที่เพิ่มใหม่:**
+  - `당연히 안되지` $\rightarrow$ `แน่นอนว่าไม่ได้หรอก`
+  - `꼬맹이เน` $\rightarrow$ `เด็กคนนั้น`
+  - `뭐` $\rightarrow$ `อะไรนะ`
+  - `부모님도` $\rightarrow$ `พ่อแม่ก็ด้วย`
+  - `떨굴거야` $\rightarrow$ `จะทำให้ตก`
+  - `그래그래` $\rightarrow$ `ใช่แล้ว ใช่แล้ว`
+  - `렌? 껴안지 않아도, 너한` $\rightarrow$ `เรน? ไม่ต้องกอดก็ได้ ให้เธอ`
+  - `주제에 뭐냐고 이녀석` $\rightarrow$ `เป็นแค่... แต่ทำเป็นเก่งนะไอ้หมอนี่`
+  - `개허접 걸레년 주제에 나대지마!` $\rightarrow$ `อีผู้หญิงสำส่อนไม่ได้เรื่องเอ๊ย อย่ามาสะเออะ!`
+  - `이압이 이압이` $\rightarrow$ `ยึบ ยึบ`
+  - `거거긴 만지면` $\rightarrow$ `ตร-ตรงนั้นถ้าไปจับโดนเข้าล่ะก็`
+  - `같았는데` $\rightarrow$ `เหมือนว่า...แท้ๆ`
+  - `꼬맹이라고 거유녀랑 재우니까 불끈거린다고` $\rightarrow$ `หาว่าเป็นเด็ก แต่พอให้นอนกับสาวนมโตแล้วมันคึกจนแข็งเป๊กเลยนี่หว่า` (พร้อม sub-lines)
+  - `알면서` $\rightarrow$ `ทั้งที่รู้อยู่แท้ๆ`
+  - `그걸로 뭐하려고` $\rightarrow$ `จะเอาอันนั้นไปทำอะไรน่ะ`
+  - `아무리 그래도 그건--!` $\rightarrow$ `ถึงอย่างนั้นก็เถอะ แบบนั้นมัน--!`
+  - `그럴리가` $\rightarrow$ `ไม่มีทางหรอก`
+  - `네엄마 쉬워보이던데 남편옆에서 동생만들어줄게` $\rightarrow$ `แม่ของเธอแลดูง่ายดีนี่นา เดี๋ยวจะสร้างน้องข้างๆ สามีให้ดูนะ` (พร้อม sub-lines)
+  - `갑자기 어리광 부리지 말라고` $\rightarrow$ `จู่ๆ อย่ามาทำเป็นออดอ้อนนะ`
+- **วิเคราะห์กลไก Layer Control & Balloon ของภาษาเกาหลี:**
+  - ในภาษาอังกฤษ ความยาวของแต่ละบรรทัดมักเป็นแนวนอนยาว ทำให้ตัวตรวจจับ (DBNet ใน PaddleOCR) แยกแต่ละบรรทัดเป็นกล่องสี่เหลี่ยมแนวนอนอิสระได้อย่างชัดเจน
+  - ในภาษาเกาหลี/ญี่ปุ่น ตัวอักษรเรียงตัวเป็นแนวตั้งหรือกล่องสี่เหลี่ยมจัตุรัสที่มีระยะห่างบรรทัดแคบมาก (Vertical line gap แคบ) ทำให้ DBNet ของ PaddleOCR:
+    1. **กรณีรวมกล่องทั้งบอลลูน (ภาพ 1 & 2):** PaddleOCR ตรวจจับทั้งบอลลูนเป็น 1 Text region ใหญ่ (`Balloon (1)`) ซึ่งครอบคลุมทั้ง 4 บรรทัด
+    2. **กรณีรวมบางบรรทัด (ภาพ 3):** สองบรรทัดบนมีช่องว่างแยกชัดเจน จึงได้ 2 บรรทัด (`갑자기`, `어리광`) ส่วนสองบรรทัดล่าง (`부리지`, `말라고`) ตัวอักษรชิดกันมาก DBNet จึงรวมเป็นกล่องเดียว `부리지 말라고` (`Balloon (3)`)
+  - **การทำงานของระบบแปล:** แม้ OCR จะตรวจจับมาเป็น 1 กล่องรวม หรือแยกย่อยหลายบรรทัด ระบบ `koreanTranslationPolicy.ts` และ `splitTranslatedTextBySourceWeights` ได้ถูกตั้งค่าให้รองรับทั้งแบบเต็มประโยค (Full block) และแบบแบ่งทีละบรรทัด (Line-by-line) ทำให้ข้อความแปลไทยกระจายตัวลงบนภาพได้อย่างสมบูรณ์
+
+### 15. การรองรับปุ่ม F11 Fullscreen, ปรับปรุง Drag-and-Drop ซับโฟลเดอร์, เพิ่ม Folder Info & Cache Stats, และ Virtualization ไฟล์ 500+ หน้า
+- **15.1 รองรับปุ่ม F11 Fullscreen:**
+  - เพิ่ม Keyboard Event Listener ดักจับปุ่ม `F11` ใน Electron Main (`win.webContents.on('before-input-event')`) เพื่อสลับ `win.setFullScreen(!win.isFullScreen())`
+  - เพิ่ม IPC Channel `window:toggle-fullscreen` และ `window:is-fullscreen` ใน `preload.ts` และ `src/types/electron.d.ts`
+- **15.2 แก้ไขปัญหา Drag-and-Drop ไฟล์เข้า Subfolder ในหน้าหลัก:**
+  - **สาเหตุ:** การ์ดโฟลเดอร์ในส่วน `Folders (X)` ของหน้า Home (`UploadScreen.tsx`) ขาด HTML5 drop event listeners (`onDragOver`, `onDragLeave`, `onDrop`)
+  - **การแก้ไข:** เชื่อมต่อ `handleProjectDrop(subproj.id, event)` พร้อมทั้งรองรับการลากไฟล์แบบ Multi-selected (เลือกหลายไฟล์แล้วลากลงโฟลเดอร์พร้อมกัน) และใส่ Visual Drop Highlight (`border-sky-400 bg-sky-500/20`)
+- **15.3 เพิ่มเมนูคลิกขวา "Folder Info & Cache Stats" บนโฟลเดอร์:**
+  - เพิ่มตัวเลือก `Folder Info & Cache Stats` ใน `ProjectContextMenu`
+  - เพิ่ม `ProjectDAO.getProjectStats(projectId)` ใน `electron/db.ts` ใช้ Recursive CTE เพื่อคำนวณสถิติของโฟลเดอร์และซับโฟลเดอร์ย่อย
+  - สร้าง `FolderInfoModal` ใน `UploadScreen.tsx` สำหรับแสดงผลสถิติอย่างละเอียด
+- **15.4 แก้ไขปัญหา `pdf.worker.min.mjs: Worker was terminated` และ OCR Daemon Teardown บนไฟล์ 500+ หน้า:**
+  - **สาเหตุ:** ทุกหน้าของไฟล์ PDF (500 หน้า) จะเรนเดอร์ Canvas `<Page>` พร้อมกัน ทำให้คิวของ PDF.js Worker ถูกส่งคำสั่งเรนเดอร์พร้อมกันนับพันหน้า จนเกิด Memory Exhaustion และเมื่อปิดโปรแกรม Daemon Process จะถูกส่ง SIGTERM ในขณะที่ Prewarm ค้างอยู่
+  - **การแก้ไข:** เรนเดอร์ `<Page>` เฉพาะเมื่อเข้าใกล้หน้าจอในระยะ 1400px ใน `PDFCanvas.tsx` และใช้ `IntersectionObserver` ใน `LeftSidebar.tsx` พร้อมจัดการ Graceful Cancellation ใน Electron Main
+- **15.5 สถาปัตยกรรมการจัดการแคชและความเสถียรของ SQLite:**
+  - โหลดเฉพาะ Metadata 50 ไฟล์แรกแบบ Lazy Loading (~2-5ms) ไม่แตะ OCR blob
+  - Zero File Cloning อ้างอิงพาธเดิม ไม่กินเนื้อที่ Harddisk ซ้ำซ้อน
+  - SQLite WAL mode + Memory-Mapped I/O มอบความเสถียรและเร็วเทียบเท่า File Explorer
+- **15.6 อัปเดต Storybook 10.4 Suite:**
+  - เพิ่ม Stories สำหรับ `SmartCanvas`, `Toolbar (SplitViewToggle)`, `CompactTopToolbar`, และ `LoginScreen`
+
+### 16. การปรับปรุง Multi-Select Drag & Drop และการนำ Default Mockup Tags ออกจากระบบ
+- **16.1 แก้ไขปัญหาการลากไฟล์หลายรายการ (Ctrl+Click) เข้าสู่ Subfolder:**
+  - **สาเหตุที่เกิดปัญหา:**
+    1. ใน `DocumentCard`: เมื่อลากไฟล์เสร็จสิ้น (`dragend` / `drop`) Event `click` ของเบราว์เซอร์จะทำงานต่อทันที ทำให้ฟังก์ชัน `onClick` ไปสั่งสลับสถานะ (`onToggleSelect`) ปลดการเลือกไฟล์ที่ถูกลากออก
+    2. ใน `UploadScreen.tsx`: การ์ดโฟลเดอร์มี `if (!draggedDocumentId) return;` ใน `onDragOver` และ `onDragLeave` ขาดการตรวจสอบ `event.currentTarget.contains(event.relatedTarget)` ทำให้เมื่อเมาส์เลื่อนผ่านไอคอนย่อยในโฟลเดอร์ เกิด Event Bubbling ส่งผลให้ยกเลิกสถานะ Drop Target กลางคัน
+    3. ใน `handleProjectDrop`: มีการเรียก `handleMoveDocumentToProject` ซ้อนใน `Promise.all` ซึ่งทำให้เกิด Race Condition ในการเคลียร์ Selection ซ้ำซ้อน
+  - **การแก้ไข:**
+    - เพิ่ม `isDraggingRef` ใน `DocumentCard` เพื่อป้องกันไม่ให้ Event `click` ไปสลับการเลือกการ์ดหลังจากการลากเสร็จสิ้น
+    - เพิ่ม `draggedDocumentIds` Array State และเพิ่มตัวสร้าง Ghost Drag Badge (`📄 ย้าย N รายการ`) ขณะลากไฟล์หลายรายการพร้อมกัน
+    - ปรับ `handleProjectDrop` ให้ย้ายเอกสารทั้งหมดผ่าน `moveToProject(docId, projectId)` แบบ Direct Parallel
+    - เพิ่มการตรวจสอบ `event.currentTarget.contains(event.relatedTarget)` ใน `onDragLeave` เพื่อป้องกันอาการกะพริบ (Flickering) เมื่อลากผ่านไอคอนหรือตัวหนังสือในโฟลเดอร์
+- **16.2 การนำ Default Tag Mockups ออกจากระบบ:**
+  - **สาเหตุที่ Tag Mockup ฟื้นกลับมาหลังลบ:** ใน `electron/db.ts` มีคำสั่ง `if (tagCount === 0)` ซึ่งจะยิง `INSERT INTO tags ('Manga', 'Document', ...)` ทุกครั้งที่ตาราง `tags` ว่างเปล่า ทำให้เมื่อผู้ใช้ลบ Tag จนหมด แล้วเปิดแอปใหม่หรือติดตั้ง `.exe` ใหม่ ตัวแอปจะแทรก Tag เดิมกลับมาเสมอ
+  - **การแก้ไข & คำแนะนำ:** นำคำสั่ง Hardcoded Seeding ออก 100% ทำให้ฐานข้อมูล Tag เป็นระบบ Clean-State ที่ผู้ใช้เป็นผู้สร้างและจัดการเองอย่างแท้จริง Tag ที่ถูกลบไปแล้วจะไม่ฟื้นกลับมาอีก
+
+### 17. การแก้ไข Grid Folder Drop Target และระบบ Shift+Click Range Multi-Select (File Explorer Parity)
+- **17.1 แก้ไขปัญหาการลากไฟล์ลง Subfolder ไม่เข้าใน Grid Mode:**
+  - **สาเหตุ:** ในหน้า Home (`UploadScreen.tsx`) การ์ดโฟลเดอร์ในส่วน `viewMode === 'grid'` ขาด Event Handlers สำหรับ Drag & Drop (`onDragOver`, `onDragLeave`, `onDrop`) ซึ่งเดิมมีเฉพาะในโหมด `list` ทำให้เมื่อผู้ใช้ลากไฟล์ทั้ง 8 ไฟล์ไปวางบนโฟลเดอร์ "คนส่งข้าว" ในโหมด Grid ตัวเบราว์เซอร์จะไม่ยอมรับ Drop Event และไม่มีไฟล์ใดถูกย้าย
+  - **การแก้ไข:** เพิ่ม `onDragOver`, `onDragLeave`, `onDrop` พร้อมทั้งไฮไลท์กรอบสีฟ้าเรืองแสง (`isDropTarget`) ลงในการ์ดโฟลเดอร์ของโหมด Grid ทำให้ลากไฟล์ลงโฟลเดอร์สำเร็จทั้งแบบ Grid และ List
+- **17.2 เพิ่มระบบเลือกไฟล์แบบช่วงด้วย Shift + Click (Windows File Explorer Logic):**
+  - **การทำงาน:**
+    1. **คลิกธรรมดา:** เลือกเฉพาะไฟล์นั้น หรือเปิดไฟล์หากไม่ได้อยู่ในโหมดเลือก
+    2. **Ctrl + Click:** สลับเลือก/ไม่เลือก (Toggle) ทีละไฟล์ และตั้งไฟล์นั้นเป็นจุดอ้างอิง (Anchor)
+    3. **Shift + Click:** เลือกคลุมช่วงตั้งแต่ไฟล์ Anchor ตัวล่าสุด ไปจนถึงไฟล์ที่คลิก (`slice(min, max)`)
+    4. **Ctrl + Shift + Click:** ขยายการเลือกช่วงใหม่รวมเข้ากับไฟล์เดิมที่เลือกค้างไว้อยู่แล้ว (Additive Range Selection)
+    5. **Checkbox Click:** คลิกที่เครื่องหมายถูกสีฟ้าเพื่อปลดหรือสลับการเลือกเฉพาะไฟล์นั้นได้อย่างอิสระ
+  - **สโตร์:** เพิ่มฟังก์ชัน `selectRangeDocuments(ids, additive)` ใน `useFileBrowserStore.ts` เพื่อรองรับการเซ็ต Selection แบบช่วงอย่างมีประสิทธิภาพ
+
+### 18. การรองรับ Drag-and-Drop ย้ายโฟลเดอร์ใน Sidebar, เส้นคั่นหมวดหมู่, และ Compact Layout
+- **18.1 ระบบ Drag-and-Drop จัดโครงสร้างโฟลเดอร์ (Folder Hierarchy Reorganization):**
+  - **การย้ายเป็น Subfolder:** สามารถลากโฟลเดอร์ใดๆ ไปวางทับอีกโฟลเดอร์หนึ่ง (เช่น ลาก "สิงห์อมควัน" ไปใส่ใน "Manga") เพื่อตั้งค่า `parent_id = targetFolder.id` กลายเป็นโฟลเดอร์ย่อยได้ทันที
+  - **การย้ายกลับมาเป็น Main Folder (Root):** สามารถลาก Subfolder มาปล่อยที่พื้นที่ว่างของกล่อง `PROJECTS` ใน Left Sidebar เพื่อปลด `parent_id = null` ให้กลับมาเป็นโฟลเดอร์หลัก
+  - **ระบบป้องกัน Circular Reference:** ตรวจสอบโครงสร้างโฟลเดอร์ ไม่ให้สามารถลากโฟลเดอร์หลักไปใส่ใน Subfolder ลูกของตัวเอง หรือลากใส่ตัวเองได้
+  - **SQLite Database Support:** อัปเดต `ProjectDAO.update` ใน `electron/db.ts` ให้รองรับการอัปเดตฟิลด์ `parent_id`
+- **18.2 การปรับปรุง UI Sidebar & ความสูงโฟลเดอร์ (Visual Polish & Compact Spacing):**
+  - **เส้นคั่นหมวดหมู่:** เพิ่มเส้นคั่นบางๆ (`border-white/6`) คั่นระหว่างหมวดหมู่ `LIBRARY`, `TAGS`, และ `PROJECTS` ใน Sidebar ซ้าย
+  - **ลดขนาดความสูงกล่องโฟลเดอร์:** ปรับ Padding ของ `ProjectItem` และการ์ดโฟลเดอร์ให้กะทัดรัด (Compact) สวยงาม ประหยัดพื้นที่ในแนวตั้ง
+
+### 19. การปรับปรุง Multi-select Toggle Logic และแก้ไข Folder Drag Item Structure
+- **19.1 ปรับปรุง Selection Mode Toggle:**
+  - **พฤติกรรมเดิม:** เมื่อกด Ctrl+Click เลือกไฟล์แรกเพื่อเข้าโหมด Multi-select หากคลิกไฟล์ถัดไปโดยไม่ได้กด Ctrl ค้าง ระบบจะล้าง Selection เดิมทิ้ง
+  - **พฤติกรรมใหม่:** เมื่อระบบอยู่ในโหมด Multi-select (`selectedDocumentIds.size > 0`) การคลิกไฟล์ใดๆ จะเป็นการ Toggle (เพิ่ม/ลด) ไฟล์นั้นเข้าใน Selection ทันที โดยไม่ต้องกดปุ่ม Ctrl ค้างไว้ตลอด และยังคงใช้งาน `Shift + Click` เพื่อเลือกคลุมช่วงได้ตามปกติ
+- **19.2 แก้ไขโครงสร้าง HTML ของ Folder Drag Item:**
+  - เปลี่ยน Element ของ `ProjectItem` จาก `<button>` เป็น `<div role="button">` เพื่อขจัดปัญหา Event Capture ของ HTML5 Drag & Drop ระหว่าง Button บน Chromium ทำให้การลากย้ายโฟลเดอร์ซ้อนกันเสถียรและทำงานได้ 100%
+
+### 20. การแก้ไข Drop Event Bubbling และการปรับปรุง Chevron พับ/ขยาย Subfolder
+- **20.1 สาเหตุที่โฟลเดอร์เข้าไป 1 วิแล้วเด้งออกมา:**
+  - **สาเหตุ:** เมื่อผู้ใช้ลาก Folder A ไปปล่อยบน Folder B ใน Sidebar ตัว Drop Event ได้ถูกย้ายสำเร็จเข้า Folder B (`handleDropOnProject(targetId)`) แต่เนื่องจากขาดคำสั่ง `event.stopPropagation()` ตัว Drop Event จึงได้ลอย (Bubbled) ขึ้นไปยัง Container ใหญ่ของส่วน `PROJECTS` ซึ่งมี Drop Listener ย้ายไป `null` (Root) ทับซ้ำทันที ทำให้โฟลเดอร์ถูกย้ายเข้าแล้วถูกย้ายกลับออกมาที่ Root แทบจะพร้อมกัน
+  - **การแก้ไข:** ใส่ `event.stopPropagation()` ครบถ้วนในทุก Drop Target และ Drag Handler ป้องกันการทำงานซ้ำซ้อนอย่างเด็ดขาด
+- **20.2 การแสดง Chevron (V / >) สำหรับพับ/ขยาย Subfolder:**
+  - เพิ่มปุ่ม Chevron สัญลักษณ์ลูกศร (`>`) เมื่อพับ และหมุนลงเป็นลูกศรสีฟ้า (`v`) เมื่อขยาย (`rotate-90 text-sky-400`) ให้กับทุก Main Folder ที่มี Subfolder อยู่ด้านใน เพื่อให้ผู้ใช้มองเห็นสถานะและคลิกพับ/ขยายดูโฟลเดอร์ย่อยได้อย่างชัดเจน
+
 ---
 
 ## 🧪 5. การตรวจสอบและทดสอบ (Testing & Standards)
@@ -171,8 +303,18 @@ flowchart TD
   ```powershell
   pnpm vitest run
   ```
-- **รันเฉพาะส่วน Translation & Grouping:**
+- **รันตรวจสอบ Type:**
   ```powershell
-  pnpm vitest run src/services/translation/ src/App.translationDedupe.test.ts
+  pnpm exec tsc --noEmit
   ```
-- **ผลลัพธ์ปัจจุบัน:** ผ่านสมบูรณ์ **34/34 Test Files (334/334 Tests Passed ✅)**
+- **รัน Build Storybook:**
+  ```powershell
+  pnpm build-storybook
+  ```
+- **ผลลัพธ์ปัจจุบัน:** ผ่านสมบูรณ์ **34/34 Test Files (334/334 Tests Passed ✅)**, Typecheck ผ่าน 100%, และ Storybook Build ผ่าน 100%
+
+
+
+
+
+

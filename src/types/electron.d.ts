@@ -263,6 +263,7 @@ export interface ElectronAPI {
     create: (project: ProjectCreate) => Promise<DBProject | null>;
     update: (id: number, updates: ProjectUpdate) => Promise<boolean>;
     delete: (id: number) => Promise<boolean>;
+    getStats: (projectId: number) => Promise<ProjectStatsResult | null>;
   };
   
   gemini: {
@@ -361,8 +362,32 @@ export interface ElectronAPI {
     preventSleep: () => Promise<number>;
     allowSleep: () => Promise<boolean>;
   };
+
+  window?: {
+    toggleFullScreen: () => Promise<boolean>;
+    isFullScreen: () => Promise<boolean>;
+  };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+}
+
+export interface ProjectStatsResult {
+  projectId: number;
+  projectName: string;
+  totalDocuments: number;
+  totalPages: number;
+  totalOcrPages: number;
+  totalTranslationPages: number;
+  totalCacheSizeBytes: number;
+  documents: Array<{
+    id: number;
+    filename: string;
+    totalPages: number;
+    ocrPages: number;
+    translationPages: number;
+    cacheSizeBytes: number;
+    lastAccessed: number | null;
+  }>;
 }
 
 // Extend Window interface
@@ -373,3 +398,4 @@ declare global {
 }
 
 export {};
+

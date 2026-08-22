@@ -273,21 +273,6 @@ console.log('[DB] BenchmarkDAO ready');
       // Columns probably already exist
     }
 
-    // Seed default tags only if the tags table is completely empty
-    const tagCount = (db.prepare('SELECT COUNT(*) as count FROM tags').get() as { count: number }).count;
-    if (tagCount === 0) {
-      db.prepare(`
-        INSERT INTO tags (name, color) VALUES 
-          ('Manga', '#ef4444'),
-          ('Document', '#3b82f6'),
-          ('Novel', '#8b5cf6'),
-          ('Textbook', '#10b981'),
-          ('Work', '#f59e0b'),
-          ('Personal', '#ec4899')
-      `).run();
-      console.log('[SQLite] Seeded default tags into empty tags table');
-    }
-
     console.log('[SQLite] Database initialized successfully with WAL, FTS5 & MMap');
     
     return db;
@@ -395,13 +380,14 @@ export const ProjectDAO = {
     );
   },
 
-  update: (id: number, data: { name?: string; description?: string; icon?: string; color?: string }) => {
+  update: (id: number, data: { name?: string; description?: string; parent_id?: number | null; icon?: string; color?: string }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
     
     if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
     if (data.description !== undefined) { sets.push('description = ?'); values.push(data.description); }
+    if (data.parent_id !== undefined) { sets.push('parent_id = ?'); values.push(data.parent_id); }
     if (data.icon !== undefined) { sets.push('icon = ?'); values.push(data.icon); }
     if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
     
@@ -416,8 +402,109 @@ export const ProjectDAO = {
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  },
+
+  getProjectStats: (projectId: number): ProjectStatsResult => {
+    if (!db) throw new Error('DB not initialized');
+    
+    const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId) as { id: number; name: string } | undefined;
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    const docRows = db.prepare(`
+      WITH RECURSIVE project_tree AS (
+        SELECT id FROM projects WHERE id = ?
+        UNION ALL
+        SELECT p.id FROM projects p JOIN project_tree pt ON p.parent_id = pt.id
+      ),
+      project_docs AS (
+        SELECT d.id, d.filename, d.total_pages, d.last_accessed
+        FROM documents d
+        WHERE d.project_id IN (SELECT id FROM project_tree)
+      )
+      SELECT 
+        d.id,
+        d.filename,
+        d.total_pages,
+        d.last_accessed,
+        (SELECT COUNT(DISTINCT page_number) FROM ocr_cache_engine WHERE document_id = d.id) as ocr_pages,
+        (SELECT COUNT(DISTINCT page_number) FROM translation_cache WHERE document_id = d.id) as translation_pages,
+        (
+          (SELECT COALESCE(SUM(LENGTH(ocr_data)), 0) FROM ocr_cache_engine WHERE document_id = d.id) +
+          (SELECT COALESCE(SUM(LENGTH(translated_by_index) + LENGTH(translated_text)), 0) FROM translation_cache WHERE document_id = d.id)
+        ) as cache_size_bytes
+      FROM project_docs d
+      ORDER BY d.filename;
+    `).all(projectId) as Array<{
+      id: number;
+      filename: string;
+      total_pages: number;
+      last_accessed: number | null;
+      ocr_pages: number;
+      translation_pages: number;
+      cache_size_bytes: number;
+    }>;
+
+    let totalPages = 0;
+    let totalOcrPages = 0;
+    let totalTranslationPages = 0;
+    let totalCacheSizeBytes = 0;
+
+    const documents = docRows.map((r) => {
+      const docTotalPages = Number(r.total_pages || 0);
+      const ocrPages = Number(r.ocr_pages || 0);
+      const transPages = Number(r.translation_pages || 0);
+      const cacheBytes = Number(r.cache_size_bytes || 0);
+
+      totalPages += docTotalPages;
+      totalOcrPages += ocrPages;
+      totalTranslationPages += transPages;
+      totalCacheSizeBytes += cacheBytes;
+
+      return {
+        id: r.id,
+        filename: r.filename,
+        totalPages: docTotalPages,
+        ocrPages,
+        translationPages: transPages,
+        cacheSizeBytes: cacheBytes,
+        lastAccessed: r.last_accessed,
+      };
+    });
+
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      totalDocuments: documents.length,
+      totalPages,
+      totalOcrPages,
+      totalTranslationPages,
+      totalCacheSizeBytes,
+      documents,
+    };
   }
 };
+
+export interface ProjectStatsResult {
+  projectId: number;
+  projectName: string;
+  totalDocuments: number;
+  totalPages: number;
+  totalOcrPages: number;
+  totalTranslationPages: number;
+  totalCacheSizeBytes: number;
+  documents: Array<{
+    id: number;
+    filename: string;
+    totalPages: number;
+    ocrPages: number;
+    translationPages: number;
+    cacheSizeBytes: number;
+    lastAccessed: number | null;
+  }>;
+}
+
 
 // ===== Document DAO =====
 export const DocumentDAO = {

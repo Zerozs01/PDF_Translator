@@ -564,6 +564,11 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bCON\s+ESO\s+BASTA\.HACE\b/gi, replacement: 'CON ESO BASTA. HACE' },
   { pattern: /\b(Pleaderrot|PLETADERROTA)\b/gi, replacement: 'COMPLETA DERROTA' },
   { pattern: /\bUNIDOS\s+EN\s+LA\s+RELA-?/gi, replacement: 'UNIDOS EN LA RELACION' },
+  { pattern: /\bTEANDOLE\b/gi, replacement: 'TENTANDOLE' },
+  { pattern: /\bTREVISTARON\b/gi, replacement: 'ENTREVISTARON' },
+  { pattern: /\bSOLACION\b/gi, replacement: 'DESOLACION' },
+  { pattern: /\bCREIBLE\.?\s*S[iI]\s*UNN?IESE\b/gi, replacement: 'CREIBLE. SI UNIESE' },
+  { pattern: /\bS[iI]UNN?IESE\b/gi, replacement: 'SI UNIESE' },
 ];
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;

@@ -580,6 +580,27 @@ const applyThaiConversationalGlossaryInternal = (
     }
     return preserveSourceTrailingPunctuation(source, 'บีบเค้น');
   }
+  if (compactSourceAlnumUpper.includes('TEANDOLE') || compactSourceAlnumUpper.includes('TENTANDOLE')) {
+    return preserveSourceTrailingPunctuation(source, 'เย้ายวนเขาเหรอ?');
+  }
+  if (compactSourceAlnumUpper.includes('TENTARLO')) {
+    return preserveSourceTrailingPunctuation(source, 'ลองดูไหม?');
+  }
+  if (compactSourceAlnumUpper === 'BROS' || compactSourceAlnumUpper === 'BRO') {
+    return preserveSourceTrailingPunctuation(source, 'พวกพ้อง');
+  }
+  if (compactSourceAlnumUpper.includes('TREVISTARON') || compactSourceAlnumUpper.includes('ENTREVISTARON')) {
+    return preserveSourceTrailingPunctuation(source, 'สัมภาษณ์แล้ว');
+  }
+  if (compactSourceAlnumUpper.includes('SOLACION') || compactSourceAlnumUpper.includes('DESOLACION')) {
+    return preserveSourceTrailingPunctuation(source, 'ความสิ้นหวัง');
+  }
+  if (compactSourceAlnumUpper.includes('CREIBLESIUNIESE') || compactSourceAlnumUpper.includes('CREIBLESIUNNIESE')) {
+    return preserveSourceTrailingPunctuation(source, 'น่าเชื่อถือ ถ้าหากรวมตัวกัน');
+  }
+  if (compactSourceAlnumUpper.includes('CANSANDO')) {
+    return preserveSourceTrailingPunctuation(source, 'เหนื่อยล้า');
+  }
   if (compactSourceAlnumUpper === 'RRR') {
     return preserveSourceTrailingPunctuation(source, 'RRR');
   }
