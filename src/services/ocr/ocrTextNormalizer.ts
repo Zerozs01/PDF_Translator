@@ -37,6 +37,89 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 ];
 
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\b\(?GTiNKY\)?\b/gi, replacement: 'STINKY' },
+  { pattern: /\b\(?GTINKY\)?\b/gi, replacement: 'STINKY' },
+  { pattern: /\b6[oO]\b/gi, replacement: 'SO' },
+  { pattern: /\bIi['’]?m\b/gi, replacement: "I-I'm" },
+  { pattern: /\bII['’]?m\b/gi, replacement: "I-I'm" },
+  { pattern: /\bii([a-zA-Z]{3,})\b/gi, replacement: "$1" },
+  { pattern: /\b5[oO]\b/gi, replacement: 'SO' },
+  { pattern: /\bS0\b/gi, replacement: 'SO' },
+  { pattern: /\b60\b/gi, replacement: 'SO' },
+  { pattern: /\bNat\s+My\b/gi, replacement: 'NOT MY' },
+  { pattern: /^\s*168\s*$/gi, replacement: '' },
+  { pattern: /\b4SS-?\s*HOLE\b/gi, replacement: 'ASSHOLE' },
+  { pattern: /\b4SS\b/gi, replacement: 'ASS' },
+  { pattern: /\b455-?\s*HOLE\b/gi, replacement: 'ASSHOLE' },
+  { pattern: /\b455\b/gi, replacement: 'ASS' },
+  { pattern: /\bA55-?\s*HOLE\b/gi, replacement: 'ASSHOLE' },
+  { pattern: /\bA55\b/gi, replacement: 'ASS' },
+  { pattern: /\bGETT[iI]NG\b/gi, replacement: 'GETTING' },
+  { pattern: /\bF[iI]RST\b/gi, replacement: 'FIRST' },
+  { pattern: /\bAGAA\b/gi, replacement: 'AGAIN' },
+  { pattern: /\bME+F+E+!?\b/gi, replacement: 'MEEEEEEE!' },
+  { pattern: /\bfAWAY\b/g, replacement: 'AWAY' },
+  { pattern: /\bWiTH\b/g, replacement: 'WITH' },
+  { pattern: /\bYOU'?\s*(FUR|FOR|RE|R)?\s*(KRASH|CRUSH|CRUNCH|KRACH)[A-Z]*\s+MY\s+BAE?BY\b/gi, replacement: "YOU'RE CRUSHING MY BABY" },
+  { pattern: /\bKRASH[A-Z]*\b/gi, replacement: 'CRUSHING' },
+  { pattern: /\bC[oO]{2,}\s*[-+]*[0OoO]{2,}\s*[-+]*[7tTfF0]?[oO]?[cC]?[kK][sS]\b/gi, replacement: 'COOOOOOOCKS' },
+  { pattern: /\bBAE?BY\b/gi, replacement: 'BABY' },
+  { pattern: /\bStOa?go?p!?\b/gi, replacement: 'Stoooop!' },
+  { pattern: /\bStOaaop!?\b/gi, replacement: 'Stoooop!' },
+  { pattern: /\bs-sto\s+ooo\s+op\b/gi, replacement: 'Stoooop!' },
+  { pattern: /\bI\s*M\s*P\s*R\s*E\s*S\s*S\s*I\s*O\s*N\b/gi, replacement: 'IMPRESSION' },
+  { pattern: /\bE\s*X\s*P\s*R\s*E\s*S\s*S\s*I\s*O\s*N\b/gi, replacement: 'EXPRESSION' },
+  { pattern: /\bTHATCANTBE\s+IT\b/gi, replacement: "THAT CAN'T BE IT" },
+  { pattern: /\bTHATCANTBE\b/gi, replacement: "THAT CAN'T" },
+  { pattern: /\ball\s+arstocrats\b/gi, replacement: 'all aristocrats' },
+  { pattern: /\bTODAY\s+AGAiN\b/gi, replacement: 'TODAY AGAIN' },
+  { pattern: /\bHER\s+POSi-\b/gi, replacement: 'HER POSITION' },
+  { pattern: /\bNiPPLES\b/gi, replacement: 'NIPPLES' },
+  { pattern: /\bSUiTS\b/gi, replacement: 'SUITS' },
+  { pattern: /\bDiE\b/gi, replacement: 'DIE' },
+  { pattern: /\bFEEE5\b/gi, replacement: 'FEELS' },
+  { pattern: /\brecapturina\b/gi, replacement: 'recapturing' },
+  { pattern: /\bkina\b/gi, replacement: 'king' },
+  { pattern: /,?KN[iI]+GHT\b/gi, replacement: 'KNIGHT' },
+  { pattern: /\bKN[iI]+GH\b/gi, replacement: 'KNIGHT' },
+  { pattern: /\bI\s*KEER\b/gi, replacement: 'I KEEP' },
+  { pattern: /\bIKEER\b/gi, replacement: 'I KEEP' },
+  { pattern: /\bGONNA\s+LSE\b/gi, replacement: 'GONNA USE' },
+  { pattern: /\bP[iI]G\s*-\s*KN[iI]+GHT\b/gi, replacement: 'PIG KNIGHT' },
+  { pattern: /\bPR[iI]NCESS\s*-\s*KN[iI]+GHT\b/gi, replacement: 'PRINCESS KNIGHT' },
+  { pattern: /\bPR[iI]NCEGS\b/gi, replacement: 'PRINCESS' },
+  { pattern: /\bL[iI]lKE\s+A\b/gi, replacement: 'LIKE A' },
+  { pattern: /\bL[iI]lKE\b/gi, replacement: 'LIKE' },
+  { pattern: /\bYOUR\s*PUSSY'?S\b/gi, replacement: "YOUR PUSSY'S" },
+  { pattern: /\bYOURPUSSY'?S\b/gi, replacement: "YOUR PUSSY'S" },
+  { pattern: /\bWH[iI]TEP[iI]G\b/gi, replacement: 'WHITE PIG' },
+  { pattern: /\bI\s+pan['’]?t\b/gi, replacement: "I can't" },
+  { pattern: /\bYQU['’]?RE\b/gi, replacement: "YOU'RE" },
+  { pattern: /\bTHEN\.\.\.I\b/gi, replacement: 'THEN...!' },
+  { pattern: /\bNICELYPLOWED\b/gi, replacement: 'NICELY PLOWED' },
+  { pattern: /\bDiD\s*YOUDO\b/gi, replacement: 'DID YOU DO' },
+  { pattern: /\bYOUDO\b/gi, replacement: 'YOU DO' },
+  { pattern: /\bEXECUT\s*I\s*ON\b/gi, replacement: 'EXECUTION' },
+  { pattern: /\bof\s+ROSER\s*I\s*AS\b/gi, replacement: "OF ROSERIA'S" },
+  { pattern: /\bROSER\s*I\s*AS\b/gi, replacement: "ROSERIA'S" },
+  { pattern: /\bROSER\s*I\s*A['’]?S\b/gi, replacement: "ROSERIA'S" },
+  { pattern: /\bROSERIAS\b/gi, replacement: "ROSERIA'S" },
+  { pattern: /\bSput\b/g, replacement: 'Spurt' },
+  { pattern: /\bsput\b/g, replacement: 'spurt' },
+  { pattern: /\bpurting\b/gi, replacement: 'Spurting' },
+  { pattern: /\bL?INSEM\s*IN\s*AT\s*I\s*ON\b/gi, replacement: 'INSEMINATION' },
+  { pattern: /\bDISST?R\s*I\s*BUT\s*I\s*ON\b/gi, replacement: 'DISTRIBUTION' },
+  { pattern: /\bPOSIT\s*I\s*ON\b/gi, replacement: 'POSITION' },
+  { pattern: /\bIT\s+I\s+NSIDE\b/gi, replacement: 'IT INSIDE' },
+  { pattern: /\bIT\s*I\s*NSIDE\b/gi, replacement: 'IT INSIDE' },
+  { pattern: /\bJ-JUSHT\s+CA+ME\b/gi, replacement: 'J-JUST CAME' },
+  { pattern: /\bJ-JUSHT\b/gi, replacement: 'J-JUST' },
+  { pattern: /\bCAAME\b/gi, replacement: 'CAME' },
+  { pattern: /\bPREGNAN\b/gi, replacement: 'PREGNANT' },
+  { pattern: /\bHERVES\b/gi, replacement: 'HEROES' },
+  { pattern: /\bherves\b/gi, replacement: 'heroes' },
+  { pattern: /HCTAKCEP/gi, replacement: '' },
+  { pattern: /\bHES\b/gi, replacement: "HE'S" },
   { pattern: /\bFLICK\b/gi, replacement: 'FUCK' },
   { pattern: /\bA-\s*Areyou\b/gi, replacement: 'A-Are you' },
   { pattern: /\bA-\s*Are\s*y\b/gi, replacement: 'A-Are you' },
@@ -95,6 +178,44 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bKNIMIGHT\b/gi, replacement: 'KNIGHT' },
   { pattern: /\bBARBAR\s+[Il1|]\s+AN\b/gi, replacement: 'BARBARIAN' },
   { pattern: /BARBAR\s+[Il1|]\s+AN/gi, replacement: 'BARBARIAN' },
+  // OCR lowercase 'i' confused for 'I' in ALL-CAPS manga text
+  { pattern: /\bYQU'?RE\b/gi, replacement: "YOU'RE" },
+  { pattern: /\bYQU\b/gi, replacement: 'YOU' },
+  { pattern: /\bWiDLY\b/g, replacement: 'WILDLY' },
+  { pattern: /\bSQIiRT\b/gi, replacement: 'SQUIRT' },
+  { pattern: /\bSQ[Ii]RT\s*-\s*iNG\b/gi, replacement: 'SQUIRTING' },
+  { pattern: /\bSQ[Ii]RT\s*-\s*\*?\+?\s*iNG\b/gi, replacement: 'SQUIRTING' },
+  { pattern: /\bSQIiRTiNG\b/gi, replacement: 'SQUIRTING' },
+  { pattern: /\bNiPPLES\b/gi, replacement: 'NIPPLES' },
+  { pattern: /\bCLiT\b/gi, replacement: 'CLIT' },
+  { pattern: /\bI\s+MOHSSO\s+IN\b/gi, replacement: 'SiDESHOW' },
+  { pattern: /\bIMOHSSOIN\b/gi, replacement: 'SiDESHOW' },
+  { pattern: /\bI\s+MOHSSOIN\b/gi, replacement: 'SiDESHOW' },
+  { pattern: /\bCHME\b/gi, replacement: 'CAME' },
+  { pattern: /\bCUM\s*-\s*\*?\+?\s*(?=[A-Za-z+]*([A-Za-z])\1)M+I+N+G+[\s+]*[G+]*\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
+  { pattern: /\bCUM\s*-\s*\*?\+?\s*M+I+N+\s+N+G+\s+G+\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
+  { pattern: /\bCUM\s*-\s*\*?\+?\s*M+I+N+\+\s*N+G+\+\s*G+\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
+  { pattern: /\bCUM-?\s*\*?\+?\s*M+I+N+N+G+G+\b/gi, replacement: 'CUM- MIIINN NNGG GGG' },
+  { pattern: /\bC[O0]{2,}\s*[+\s0]*[0-9]*\s*7?F?CKS\b/gi, replacement: 'COOOOOOOCKS' },
+  { pattern: /\bWiTH\b/g, replacement: 'WITH' },
+  { pattern: /\biT\b/g, replacement: 'IT' },
+  { pattern: /\bSiDE\b/g, replacement: 'SIDE' },
+  { pattern: /\bTHiNG\b/g, replacement: 'THING' },
+  { pattern: /\bSiDe\b/g, replacement: 'SIDE' },
+  { pattern: /\bMiND\b/g, replacement: 'MIND' },
+  { pattern: /\bLiFE\b/g, replacement: 'LIFE' },
+  { pattern: /\bFiGHT\b/g, replacement: 'FIGHT' },
+  { pattern: /\bNiGHT\b/g, replacement: 'NIGHT' },
+  { pattern: /\bLiKE\b/g, replacement: 'LIKE' },
+  { pattern: /\bTiME\b/g, replacement: 'TIME' },
+  { pattern: /\bKiLL\b/g, replacement: 'KILL' },
+  { pattern: /\bRiGHT\b/g, replacement: 'RIGHT' },
+  { pattern: /\bDiE\b/g, replacement: 'DIE' },
+  { pattern: /\bDiED\b/g, replacement: 'DIED' },
+  { pattern: /\bDYiNG\b/g, replacement: 'DYING' },
+  // SOW in military/attack context is likely SHOW or a command; handle cautiously via lookup
+  // WiTH iT: fix together
+  { pattern: /\bWiTH\s+iT\b/g, replacement: 'WITH IT' },
   { pattern: /\bWITHAN\b/gi, replacement: 'WITH AN' },
   { pattern: /\bI'VELOST\b/gi, replacement: "I'VE LOST" },
   { pattern: /\bMYVIRGINITY\b/gi, replacement: 'MY VIRGINITY' },
@@ -147,8 +268,204 @@ export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bLOCAT\s+I\s+ON\b/gi, replacement: 'LOCATION' },
   { pattern: /\bCHME\b/gi, replacement: 'CAME' },
   { pattern: /\b4HH\b/gi, replacement: 'AHH' },
-  { pattern: /\b6o\b/g, replacement: 'So' },
-  { pattern: /\b6O\b/g, replacement: 'SO' },
+  // 6O เป็น OCR noise ที่ไม่มีความหมาย ตัดทิ้งเลย
+  { pattern: /\b6[oO]\b/g, replacement: '' },
+  // S0 (เลขศูนย์) → SO (ตัวอักษร O)
+  { pattern: /\bS0\b/g, replacement: 'SO' },
+  { pattern: /\bs0\b/g, replacement: 'so' },
+  { pattern: /BLOWTOB/gi, replacement: 'BLOWJOB' },
+  { pattern: /\bnou\b/gi, replacement: 'you' },
+  { pattern: /\by0u\b/gi, replacement: 'you' },
+  { pattern: /\bDIseASe\b/gi, replacement: 'DISEASE' },
+  { pattern: /\bFOuND\s+A\b/gi, replacement: 'FOUND A' },
+  { pattern: /\bS3HS\b/gi, replacement: "SHE'S" },
+  { pattern: /\bINSIDEI\b/gi, replacement: 'INSIDE!' },
+  { pattern: /\bINSIDEI\?(?!\?)/gi, replacement: 'INSIDE!?' },
+  { pattern: /\bWHTTT\s+TT\b/gi, replacement: 'IT WITHOUT' },
+  { pattern: /\bRESTRAINT\s*[…\.]+/gi, replacement: 'RESTRAINT.' },
+  { pattern: /\bGOO\s*[…\.]+/gi, replacement: 'GOOD...' },
+  { pattern: /\biHnH\b/gi, replacement: 'HUH?' },
+  { pattern: /\biSIhs\b/gi, replacement: 'THIS?' },
+  { pattern: /\b2iHg\b/gi, replacement: 'EH!?' },
+  { pattern: /\bEiH3\b/gi, replacement: 'EH!?' },
+  { pattern: /\bIimom\b/gi, replacement: 'WOW!' },
+  { pattern: /\bOd\s+11\.1\b/gi, replacement: "I'LL DO" },
+  { pattern: /\bVAYS\b/gi, replacement: 'DAYS' },
+  { pattern: /\bILL\b/g, replacement: "I'LL" },
+  { pattern: /\bBEEELEE\b/gi, replacement: 'BELIEVE' },
+  { pattern: /\bWNTTTT\b/gi, replacement: 'WITHOUT' },
+  { pattern: /\bHERPUSSY\b/gi, replacement: 'HER PUSSY' },
+  { pattern: /\bii333s\b/gi, replacement: 'SEEE!!' },
+  { pattern: /\bHEAD\s+NUR-?\s*SEEE!!/gi, replacement: 'HEAD NUR-SEEE!!' },
+  { pattern: /\bHEAD\s+NUR-?\s*ii333s/gi, replacement: 'HEAD NUR-SEEE!!' },
+  { pattern: /\bAny\s*-?\s*MORE\b/gi, replacement: 'Anymore' },
+  { pattern: /\bCUM\s*-?\s*MING\b/gi, replacement: 'CUMMING' },
+  { pattern: /\bNOT\s+NEC\s*-?\s*ESSARY\b/gi, replacement: 'NOT NECESSARY' },
+  { pattern: /\bNEC\s*-?\s*ESSARY\b/gi, replacement: 'NECESSARY' },
+  // --- Manga specific repairs for Syunichi Kansuu Dojin ---
+  { pattern: /\bSHUS[S\s]+ST\b/gi, replacement: 'SHE JUST' },
+  { pattern: /\bBL[NW]TOO[R8]\b/gi, replacement: 'BLOWJOB' },
+  { pattern: /\bBUE\s+ER\b/gi, replacement: 'BUT HER' },
+  { pattern: /\bBUE\s+ER/gi, replacement: 'BUT HER' },
+  { pattern: /\biSih1\b/gi, replacement: 'THIS' },
+  { pattern: /\bWAY\s+TOO\+GOOD\b/gi, replacement: 'WAY TOO GOOD' },
+  { pattern: /\bWAY\s+TOO\s*\+\s*GOOD\b/gi, replacement: 'WAY TOO GOOD' },
+  { pattern: /\bABOUT\s+\+?\s*THE\s+FORE\+?\s*PLAY\b/gi, replacement: 'ABOUT THE FOREPLAY' },
+  { pattern: /\bNOT\s+NEC-ESSARY\b/gi, replacement: 'NOT NECESSARY' },
+  { pattern: /\bNOT\s+NEC\+NOT\s+NEC\b/gi, replacement: 'NOT NECESSARY' },
+  { pattern: /\bALTHE\b/gi, replacement: 'ALL THE' },
+  { pattern: /\bHheelel\b/gi, replacement: 'HEHEHE!' },
+  { pattern: /\bBARBA-\s*RIANS\b/gi, replacement: 'BARBARIANS' },
+  { pattern: /\bBARBA-RIANS\b/gi, replacement: 'BARBARIANS' },
+  { pattern: /\bPREG-\s*NANAT\b/gi, replacement: 'PREGNANT' },
+  { pattern: /\bPREG-NANAT\b/gi, replacement: 'PREGNANT' },
+  { pattern: /\bFRFO\b/gi, replacement: '' },
+  { pattern: /\bS-STO\+000\+0P\b/gi, replacement: 'S-STO OOO OP' },
+  { pattern: /\bS-STO\+OOO\+OP\b/gi, replacement: 'S-STO OOO OP' },
+  { pattern: /\b\(?GT[iI]NKY\)?\b/gi, replacement: 'STINKY' },
+  { pattern: /\bWITHPRO\+CREAT\s*I\s*ON\b/gi, replacement: 'WITH PROCREATION' },
+  { pattern: /\bWITHPRO\+CREAT\s*ION\b/gi, replacement: 'WITH PROCREATION' },
+  { pattern: /\bj9H9H\b/gi, replacement: '' },
+  { pattern: /<W\s+SDN/gi, replacement: '' },
+  { pattern: /<WSDN/gi, replacement: '' },
+  { pattern: /\bATOH\s+ONO\b/gi, replacement: 'AND HOLD' },
+  { pattern: /\bATOHONO\b/gi, replacement: 'AND HOLD' },
+  { pattern: /\bRe4t\s+A\b/g, replacement: 'Rest A' },
+  { pattern: /\bRe4t\s+a\b/g, replacement: 'Rest a' },
+  { pattern: /\bLN4I4\s+I\b/gi, replacement: "I DIDN'T" },
+  { pattern: /\bCAME\.\.\.\b/gi, replacement: 'CAME' },
+  { pattern: /\bdnd\b/gi, replacement: 'and' },
+  { pattern: /\bhem\b/gi, replacement: 'hero' },
+  { pattern: /~History/g, replacement: 'History' },
+  { pattern: /\bFOR\s+MULAS\b/gi, replacement: 'FORMULAS' },
+  { pattern: /\bOR\s*GANIZ\s*AT\s*I\s*ON\b/gi, replacement: 'ORGANIZATION' },
+  { pattern: /\bGO\s*IN\s*GTOARREST\b/gi, replacement: 'GOING TO ARREST' },
+  { pattern: /\bTHOSETHUGS\b/gi, replacement: 'THOSE THUGS' },
+  { pattern: /\bAS\s+IS\s+A\s+I\s+DBEFORE\b/gi, replacement: 'AS I SAID BEFORE' },
+  { pattern: /\bAND\s+ITS\s+DISTR\s*I\s*BUT\s*I\s*ON\s+IS\b/gi, replacement: 'AND ITS DISTRIBUTION IS' },
+  { pattern: /\bIDO\b/g, replacement: 'I DO' },
+  { pattern: /\bA\s+RELIEF\/HAVE\b/gi, replacement: 'A RELIEF I HAVE' },
+  { pattern: /\bNAKCHALTEMPLE\b/gi, replacement: 'NAKCHAL TEMPLE' },
+  { pattern: /\bNAKCHAL\s*TEMPLE\b/gi, replacement: 'NAKCHAL TEMPLE' },
+  { pattern: /\bTHE\s+NAKCHAL\s*TEMPLE\b/gi, replacement: 'THE NAKCHAL TEMPLE' },
+  { pattern: /\bPEOPLE\s+IS\s+I\s+LLEGAL\b/gi, replacement: 'PEOPLE IS ILLEGAL' },
+  { pattern: /\bPEOPLE\s+IS\s+ILLEGAL\b/gi, replacement: 'PEOPLE IS ILLEGAL' },
+  { pattern: /\bI\s+LLEGAL\b/gi, replacement: 'ILLEGAL' },
+  { pattern: /\bSUPERV\s+IS\s+OR\s+INSTEAD\b/gi, replacement: 'SUPERVISOR INSTEAD' },
+  { pattern: /\bSUPERV\s+IS\s+OR\b/gi, replacement: 'SUPERVISOR' },
+  { pattern: /\bSUPERV\s*IS\s*OR\b/gi, replacement: 'SUPERVISOR' },
+  { pattern: /\bSTILL\s+BE\s+IN\s+GDISTR\s*I\s*BUTED\b/gi, replacement: 'STILL BEING DISTRIBUTED' },
+  { pattern: /\bSTILL\s+BEING\s+DISTR\s*I\s*BUTED\b/gi, replacement: 'STILL BEING DISTRIBUTED' },
+  { pattern: /\bSTILL\s+BE\s+IN\s+G\s*DISTRIBUTED\b/gi, replacement: 'STILL BEING DISTRIBUTED' },
+  { pattern: /\bIFIWERE\s+THEM\b/gi, replacement: 'IF I WERE THEM' },
+  { pattern: /\bIFIWERETHEM\b/gi, replacement: 'IF I WERE THEM' },
+  { pattern: /\bIM\s+CURIO\s+US\s+TO\b/gi, replacement: "I'M CURIOUS TO" },
+  { pattern: /\bIM\s+CURIOUS\s+TO\b/gi, replacement: "I'M CURIOUS TO" },
+  { pattern: /\bThe\s+ysaysay\s+it\s+wood\b/gi, replacement: "They said it's" },
+  { pattern: /\bTheysaysay\s+it\s+wood\b/gi, replacement: "They said it's" },
+  { pattern: /\bALREADY\s+LISTEDAS\s+AN\b/gi, replacement: 'ALREADY LISTED AS AN' },
+  { pattern: /\bLISTEDAS\s+AN\b/gi, replacement: 'LISTED AS AN' },
+  { pattern: /\bTHE\s+YSAID\s+ITS\b/gi, replacement: "THEY SAID IT'S" },
+  { pattern: /\bTHEYSAID\s+ITS\b/gi, replacement: "THEY SAID IT'S" },
+  { pattern: /\bTHISTO\b/gi, replacement: 'THIS TO' },
+  { pattern: /\bYOUCAN\b/gi, replacement: 'YOU CAN' },
+  { pattern: /\bDOeSn't\b/gi, replacement: "DOESN'T" },
+  { pattern: /\bwhA-/gi, replacement: 'WHAT-' },
+  { pattern: /\bNeRVeS\b/gi, replacement: 'NERVES' },
+  { pattern: /\bAMUSInG\b/gi, replacement: 'AMUSING' },
+  { pattern: /\bDEALing\b/gi, replacement: 'DEALING' },
+  { pattern: /\bHonestLy\b/gi, replacement: 'HONESTLY' },
+  { pattern: /\bSAN'S\s+NOT\b/gi, replacement: "SAN'S NOT" },
+  { pattern: /\b1t['’]s\s+A\b/gi, replacement: "It's a" },
+  { pattern: /\b1t['’]s\b/gi, replacement: "It's" },
+  { pattern: /\bAntee\s+it\b/gi, replacement: 'guarantee it' },
+  { pattern: /\bMELED\s+FOR\b/gi, replacement: 'CALLED FOR' },
+  { pattern: /\bA\s+Blt\s+LIKE\b/gi, replacement: 'A BIT LIKE' },
+  { pattern: /\bTAYAM\s+AS\s+AN\b/gi, replacement: 'TAYAMA-SAN' },
+  { pattern: /\bIt['’]s\s+qulte\b/gi, replacement: "It's quite" },
+  { pattern: /\bA\s+cO[-–—\s]*Ar\b/gi, replacement: 'A COLLAR' },
+  { pattern: /\bAn\s+animar\b/gi, replacement: 'An animal' },
+  { pattern: /\banimar\b/gi, replacement: 'animal' },
+  { pattern: /\bA\s+himan\b/gi, replacement: 'A human' },
+  { pattern: /\bhiman\b/gi, replacement: 'human' },
+  { pattern: /\bSmink\b/gi, replacement: 'Smirk' },
+  { pattern: /\b1T\b/g, replacement: 'IT' },
+  { pattern: /[*•·]\s*collar\b/gi, replacement: 'collar' },
+  { pattern: /\bSASAK\s+IS\s+AN\b/gi, replacement: 'SASAKI-SAN' },
+  { pattern: /\bLIEVED!/gi, replacement: 'RELIEVED!' },
+  { pattern: /\bSAAAN\b/gi, replacement: 'SAN' },
+  { pattern: /\bRummnage\b/gi, replacement: 'Rummage' },
+  { pattern: /\bS0\s+y0u\b/gi, replacement: 'SO YOU' },
+  { pattern: /\bSAS4K1\.?\b/gi, replacement: 'SASAKI' },
+  { pattern: /\bPARVON\b/gi, replacement: 'PARDON' },
+  { pattern: /\bTICALLy\b/gi, replacement: 'TICALLY' },
+  { pattern: /\bhinkang\b/gi, replacement: 'thinking' },
+  { pattern: /\bHeve\b/gi, replacement: 'Here' },
+  { pattern: /\bPERY\b/gi, replacement: 'PERV' },
+  { pattern: /\bCLACKS\b/gi, replacement: 'CLACK' },
+  { pattern: /\bGOROL-SAN\b/gi, replacement: 'GOROU-SAN' },
+  { pattern: /\bMY\s+BEY-?\s*BLADE\b/gi, replacement: 'MY BEYBLADE' },
+  { pattern: /\bBRINGHER\b/gi, replacement: 'BRING HER' },
+  { pattern: /\bDOESn't\s+GEt\b/gi, replacement: "DOESN'T GET" },
+  { pattern: /\bSciously\b/gi, replacement: 'consciously' },
+  { pattern: /\bMINISCING\b/gi, replacement: 'REMINISCING' },
+  { pattern: /\bSAn\b/g, replacement: 'San' },
+  { pattern: /\bis'such\b/gi, replacement: 'is such' },
+  { pattern: /\bAGREAT\b/gi, replacement: 'A GREAT' },
+  { pattern: /\bDISGUSTEDBY\b/gi, replacement: 'DISGUSTED BY' },
+  { pattern: /\bATFORSO\b/gi, replacement: 'AT SO FOR' },
+  { pattern: /\bSHOULDIGET\b/gi, replacement: 'SHOULD I GET' },
+  { pattern: /\bFAULTFOR\b/gi, replacement: 'FAULT FOR' },
+  { pattern: /\bYOUQUIT\b/gi, replacement: 'YOU QUIT' },
+  { pattern: /\bYousoMuCh\b/gi, replacement: 'You so much' },
+  { pattern: /\bt-thAt\b/gi, replacement: 'T-that' },
+  { pattern: /\btoge\+her\b/gi, replacement: 'together' },
+  { pattern: /\bISSUCHANICE\b/gi, replacement: 'IS SUCH A NICE' },
+  { pattern: /\bCoURSe\b/gi, replacement: 'course' },
+  { pattern: /\bCAre\b/gi, replacement: 'Care' },
+  { pattern: /\bGOODMOOD\b/gi, replacement: 'GOOD MOOD' },
+  { pattern: /\bTHANKSFOR\b/gi, replacement: 'THANKS FOR' },
+  { pattern: /\bWE'LLGO\b/gi, replacement: "WE'LL GO" },
+  { pattern: /\bWELLGO\b/gi, replacement: "WE'LL GO" },
+  { pattern: /\bYOUPRETTY\b/gi, replacement: 'YOU PRETTY' },
+  { pattern: /\bFORTUNATE\.HEAR\b/gi, replacement: 'FORTUNATE. HEAR' },
+  { pattern: /\bGRATITUDE\.I\b/gi, replacement: 'GRATITUDE. I' },
+  { pattern: /\bNON-?EXISTENT\s*WELL\b/gi, replacement: 'NON-EXISTENT WELL' },
+  { pattern: /\bNONEXISTENTWELL\b/gi, replacement: 'NON-EXISTENT WELL' },
+  { pattern: /\bnow\.a\s+Married\b/gi, replacement: 'Now, a married' },
+  { pattern: /\bdisoBeying\b/gi, replacement: 'disobeying' },
+  { pattern: /\bWAiTing\b/gi, replacement: 'Waiting' },
+  { pattern: /\bMar-ried\b/gi, replacement: 'Married' },
+  { pattern: /\bSANI\?/gi, replacement: 'SAN?' },
+  { pattern: /\bIWASIN\b/gi, replacement: 'I WAS IN' },
+  { pattern: /\bRumeL\b/gi, replacement: 'Rumble' },
+  { pattern: /\bGUMBC\b/gi, replacement: 'Rumble' },
+  { pattern: /@umblc/gi, replacement: 'Rumble' },
+  { pattern: /\bSENPAL\b/gi, replacement: 'SENPAI' },
+  { pattern: /\bCuTe\b/g, replacement: 'Cute' },
+  { pattern: /\bMAtCH\b/g, replacement: 'Match' },
+  { pattern: /\bwantto\b/gi, replacement: 'want to' },
+  { pattern: /\bTOBUYSTUFF\b/gi, replacement: 'TO BUY STUFF' },
+  { pattern: /\bGRATEFLL\b/gi, replacement: 'GRATEFUL' },
+  { pattern: /\bDOINGP\b/gi, replacement: 'DOING?' },
+  { pattern: /\b(?:SAsaki-?sanP|Sasakisanp)\b/gi, replacement: 'Sasaki-san?' },
+  { pattern: /\b([A-Za-z]+)-?sanP\b/gi, replacement: '$1-san?' },
+  { pattern: /\bLightLy\b/g, replacement: 'Lightly' },
+  { pattern: /\bUM-BRELLA/gi, replacement: 'UMBRELLA' },
+  { pattern: /\bFILRTING\b/gi, replacement: 'FLIRTING' },
+  { pattern: /\bTOMUSIC\b/gi, replacement: 'TO MUSIC' },
+  { pattern: /\bTOSONGS\b/gi, replacement: 'TO SONGS' },
+  { pattern: /\bSHOULDI\b/gi, replacement: 'SHOULD I' },
+  { pattern: /\bCORDIS\b/gi, replacement: 'CORD IS' },
+  { pattern: /\bMYSELF"THEN\b/gi, replacement: 'MYSELF" THEN' },
+  { pattern: /\bANDSTARTED\b/gi, replacement: 'AND STARTED' },
+  { pattern: /\bTOCOMPLETE\b/gi, replacement: 'TO COMPLETE' },
+  { pattern: /\bNEXTMONTH'S\b/gi, replacement: "NEXT MONTH'S" },
+  { pattern: /\bHASMADE\b/gi, replacement: 'HAS MADE' },
+  { pattern: /\bEARTHIS\b/gi, replacement: 'EARTH IS' },
+  { pattern: /\bFINIShED\b/gi, replacement: 'FINISHED' },
+  { pattern: /\bteresting\b/gi, replacement: 'interesting' },
+  { pattern: /"IT'SFASTER\b/gi, replacement: '"IT\'S FASTER' },
 ];
 
 export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -187,9 +504,97 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bENESPECI(?:FICO|ICO)\b/gi, replacement: 'EN ESPECIFICO' },
   { pattern: /\bESPEI?CICO\b/gi, replacement: 'ESPECIFICO' },
   { pattern: /\bALGE\s+ASI\b/gi, replacement: 'ALGO ASI' },
+  { pattern: /\bmente\s+un\s+regalo\b/gi, replacement: 'un regalo para la mente' },
+  { pattern: /\bdo\s+de\s+estudiar\b/gi, replacement: 'donde estudiar' },
+  { pattern: /\brio\s+muy\b/gi, replacement: 'río muy' },
+  { pattern: /\bgo\s+que\s+tendre\s+que\b/gi, replacement: 'tengo que ir' },
+  { pattern: /\bversacion\b/gi, replacement: 'versión' },
+  { pattern: /\bi(?=una\s+senal)/gi, replacement: '¡' },
+  { pattern: /\bsenal\b/gi, replacement: 'señal' },
+  { pattern: /\bromantica\b/gi, replacement: 'romántica' },
+  { pattern: /\bC+pelicula\b/gi, replacement: 'película' },
+  { pattern: /\btamento\b/gi, replacement: 'departamento' },
+  { pattern: /\bingles\b/gi, replacement: 'inglés' },
+  { pattern: /\bcen,todosson\b/gi, replacement: 'Cen Todosson' },
+  { pattern: /\bque\?(?=\s|$)/gi, replacement: '¿qué?' },
+  { pattern: /\bbirme\s+a\b/gi, replacement: 'suscribirme a' },
+  { pattern: /\btido\s+prestado\b/gi, replacement: 'tiempo prestado' },
+  { pattern: /\bprar\b/gi, replacement: 'comprar' },
+  { pattern: /\bron\s+una\s+fiesta\b/gi, replacement: 'organizaron una fiesta' },
+  { pattern: /\bbien\s+te\s+gustan\b/gi, replacement: 'también te gustan' },
+  { pattern: /\bsecunda\s+ria\b/gi, replacement: 'secundaria' },
+  { pattern: /\bfraz\s+para\b/gi, replacement: 'disfraz para' },
+  { pattern: /\btonces\b/gi, replacement: 'entonces' },
+  { pattern: /\bratura\s+delaire\b/gi, replacement: 'temperatura del aire' },
+  { pattern: /\bratura\s+del\s+aire\b/gi, replacement: 'temperatura del aire' },
+  { pattern: /\bguida\b/gi, replacement: 'seguida' },
+  { pattern: /\bactualdad\b/gi, replacement: 'actualidad' },
+  { pattern: /\bE\s*-\s*ES\s+QUE\b/gi, replacement: 'E-ES QUE' },
+  { pattern: /\bTE\s*-\s*LO\b/gi, replacement: 'TE LO' },
+  { pattern: /\bMON\s*-\s*TON\b/gi, replacement: 'MONTÓN' },
+  { pattern: /\bGUENZA\b/gi, replacement: 'VERGÜENZA' },
+  { pattern: /\bCIONANTE\b/gi, replacement: 'EMOCIONANTE' },
+  { pattern: /\bMENTE\s+ODIOSO\b/gi, replacement: 'REALMENTE ODIOSO' },
+  { pattern: /\bCONESO\b/gi, replacement: 'CON ESO' },
+  { pattern: /\b[sS]0Y\s+[yY]0\b/g, replacement: 'SOY YO' },
+  { pattern: /\bFENDERSE\.?[sS]0Y\s+[yY]0\b/gi, replacement: 'DEFENDERSE. SOY YO' },
+  { pattern: /\bFENDERSE\b/gi, replacement: 'DEFENDERSE' },
+  { pattern: /\bTIR\s+AVERGONZADA\b/gi, replacement: 'SENTIR AVERGONZADA' },
+  { pattern: /\bBRE,\s*POR\s*FAVOR\b/gi, replacement: 'HOMBRE, POR FAVOR' },
+  { pattern: /\bPLIR\s+CON\s+LO\s+BA-?\b/gi, replacement: 'CUMPLIR CON LO BASICO' },
+  { pattern: /\bCIA\s+ATRAS\s+AS[iI]\s+CO-?\b/gi, replacement: 'HACIA ATRAS ASI COMO' },
+  { pattern: /\bTE\s+LAS\s+PIERNAS\b/gi, replacement: 'ENTRE LAS PIERNAS' },
+  { pattern: /\bGRAFIADO\s+JUNTO\s+A\s+ESO\s+Y\s+QUE\b/gi, replacement: 'FOTOGRAFIADO JUNTO A ESO Y QUE' },
+  { pattern: /\bMERA\s+VEZ\s+QUE\s+LE\b/gi, replacement: 'PRIMERA VEZ QUE LE' },
+  { pattern: /\bCucama\b/gi, replacement: 'cama' },
+  { pattern: /\bLLADO\s+POR\b/gi, replacement: 'HUMILLADO POR' },
+  { pattern: /\bHOOBAE\.LLADO\s+POR\b/gi, replacement: 'HOOBAE. HUMILLADO POR' },
+  { pattern: /\bDA\s+ESE\s+MOMENTO\b/gi, replacement: 'DESDE ESE MOMENTO' },
+  { pattern: /\bTABA\s+DE\s+FORMA\b/gi, replacement: 'ESTABA DE FORMA' },
+  { pattern: /\bGONZOSAS\.PLETA\s*DERROTA\b/gi, replacement: 'VERGONZOSAS. COMPLETA DERROTA' },
+  { pattern: /\bHECHO\.POR\b/gi, replacement: 'HECHO. POR' },
+  { pattern: /\bTRAS\s+LE\s+PELLIZCO\s+LOS\s+PEZONES\b/gi, replacement: 'MIENTRAS LE PELLIZCO LOS PEZONES' },
+  { pattern: /\bQUISTA\s+Y\s+ESTUPIDA\b/gi, replacement: 'CONQUISTA Y ESTUPIDA' },
+  { pattern: /\bQUISTA\s+Y\b/gi, replacement: 'CONQUISTA Y' },
+  { pattern: /\bCLUSIVA\b/gi, replacement: 'EXCLUSIVA' },
+  { pattern: /\bTA\s+DE\s+AHORA\s+EN\b/gi, replacement: 'TRATA DE AHORA EN' },
+  { pattern: /\bTA\s+DE\b/gi, replacement: 'TRATA DE' },
+  { pattern: /\bFELICESAAMBOS\b/gi, replacement: 'FELICES A AMBOS' },
+  { pattern: /\bESO\s+BASTA\.HACE\b/gi, replacement: 'CON ESO BASTA. HACE' },
+  { pattern: /\bCON\s+ESO\s+BASTA\.HACE\b/gi, replacement: 'CON ESO BASTA. HACE' },
+  { pattern: /\b(Pleaderrot|PLETADERROTA)\b/gi, replacement: 'COMPLETA DERROTA' },
+  { pattern: /\bUNIDOS\s+EN\s+LA\s+RELA-?/gi, replacement: 'UNIDOS EN LA RELACION' },
+  { pattern: /\bTEANDOLE\b/gi, replacement: 'TENTANDOLE' },
+  { pattern: /\bTREVISTARON\b/gi, replacement: 'ENTREVISTARON' },
+  { pattern: /\bSOLACION\b/gi, replacement: 'DESOLACION' },
+  { pattern: /\bCREIBLE\.?\s*S[iI]\s*UNN?IESE\b/gi, replacement: 'CREIBLE. SI UNIESE' },
+  { pattern: /\bS[iI]UNN?IESE\b/gi, replacement: 'SI UNIESE' },
 ];
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;
+
+// V2: Insert space when an uppercase function word is followed by a new Title-Case or uppercase word
+export const SPANISH_FUNCTION_WORD_GLUE_PATTERN_V2 = /\b(QUE|ME|TE|SE|LO|LA|LE|NOS|LOS|LAS|DE|UN|UNA|ES|NO|SI|MI|TU|SU)(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/g;
+
+// Split enclitics attached to verbs, e.g., dímelo, cuéntame
+export const SPANISH_ENCLITIC_SPLIT_PATTERN = /\b([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,})(me|te|se|lo|la|nos)\b/gi;
+// Whitelist common legitimately glued forms like dime, dame, cuéntame, dile, házmelo to avoid double splitting
+export const SPANISH_LEGITIMATE_ENCLITICS = new Set([
+  'dime', 'dame', 'cuéntame', 'dile', 'házmelo', 'hazmelo', 'cuentame', 'dimelo', 'dámelo', 'damelo',
+  'regalo', 'solo', 'malo', 'pelo', 'abuelo', 'abuela', 'escuela', 'novela', 'hola', 'gente',
+  'diente', 'puente', 'fuente', 'caliente', 'modelo', 'ejemplo', 'mente', 'presente', 'diferente',
+  'urgente', 'importante', 'paciente', 'cliente', 'corriente', 'brillante', 'excelente', 'pelicula', 'película',
+  'defenderse', 'defender', 'defenderte', 'defenderme', 'defendernos', 'defenderle', 'defenderles'
+]);
+
+export const SPANISH_COMPOUND_SPLIT_EXCLUSIONS = new Set([
+  'defenderse', 'defender', 'defenderte', 'defenderme', 'defendernos', 'defenderle', 'defenderles',
+  'depender', 'depende', 'entender', 'entiende', 'aprender', 'comprender', 'sorprender', 'encender',
+  'conseguir', 'conocer', 'consentir', 'presentar', 'presente', 'presencia',
+  'contenido', 'contento', 'contacto', 'contar', 'control', 'continuar',
+  'sentencia', 'sentimiento', 'entonces', 'encontrar', 'encuentro', 'entero',
+  'entregar', 'entrenar', 'entrada', 'entrar', 'entorno'
+]);
 
 export const THAI_BOUNDARY_ATTACH_TOKENS = new Set([
   'ไป',
@@ -223,7 +628,17 @@ export const THAI_BOUNDARY_NO_SPLIT_PAIRS = new Set([
   'ปิ|ด',
 ]);
 
-export const normalizeWhitespace = (text: string): string => text.replace(/\s+/g, ' ').trim();
+export const safeStr = (val: unknown): string => {
+  if (val == null) return '';
+  const s = String(val).trim();
+  if (s.toLowerCase() === 'null' || s.toLowerCase() === 'undefined') return '';
+  return s;
+};
+
+export const normalizeWhitespace = (text: unknown): string => {
+  return safeStr(text).replace(/\s+/g, ' ');
+};
+
 
 export const normalizeTranslationLanguage = (value: string, fallback: string): string => {
   const raw = String(value || '').trim().toLowerCase();
@@ -243,6 +658,213 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
   // Repair OCR digit-to-letter confusion (e.g., '4O%' -> '40%', '1O0' -> '100')
   normalized = normalized.replace(/(?<=\d)[oO]+(?=\D|$|%)/g, '0');
   normalized = normalized.replace(/(?<=\d)[oO]+(?=\d)/g, '0');
+
+  normalized = normalized.replace(/\bI\s+MPREGN\s*A\s*TATED\b/gi, 'IMPREGNATED');
+  normalized = normalized.replace(/\bI\s+MPREGNATED\b/gi, 'IMPREGNATED');
+  normalized = normalized.replace(/\bI\s+Dan['’]?T\b/gi, "I DON'T");
+  normalized = normalized.replace(/\bCack(?=\.{2,}|\s*[!?,]|$)/gi, 'COCK');
+  normalized = normalized.replace(/\bGANNA\b/gi, 'GONNA');
+  normalized = normalized.replace(/\bDIFEEE\b/gi, 'DIEEEE');
+  normalized = normalized.replace(/\bBURSTiNG\b/gi, 'BURSTING');
+  normalized = normalized.replace(/\bSORRY{2,}\b/gi, 'SORRY');
+  normalized = normalized.replace(/\bNO{3,}\b/gi, 'NOOO');
+  normalized = normalized.replace(/\bYOUVE\b/gi, "YOU'VE");
+  normalized = normalized.replace(/\bMSMAK\s+IM\s*A\b/gi, 'Ms. Makima');
+  normalized = normalized.replace(/\bMSMAK\s+IMA\b/gi, 'Ms. Makima');
+  normalized = normalized.replace(/\bPLARU\b/gi, 'PLAP');
+  normalized = normalized.replace(/\bQoiver\b/gi, 'Quiver');
+  normalized = normalized.replace(/\bS-sory\b/gi, 'S-sorry');
+  normalized = normalized.replace(/\bAnn!\b/g, 'Ahh!');
+  normalized = normalized.replace(/\bGrinc\b/gi, 'Grind');
+  normalized = normalized.replace(/\bTwire\b/gi, 'Twitch');
+  normalized = normalized.replace(/\bSeoeeze\b/gi, 'Squeeze');
+  normalized = normalized.replace(/\bSaeeze\b/gi, 'Squeeze');
+  normalized = normalized.replace(/\bSHNER\b/gi, 'SHIVER');
+  normalized = normalized.replace(/\bShvero\b/gi, 'Shivers');
+  normalized = normalized.replace(/\brHuff\b/gi, 'Huff');
+  normalized = normalized.replace(/\bHofflv\b/gi, 'Huff');
+  normalized = normalized.replace(/\bSochacan\b/gi, 'So he can');
+  normalized = normalized.replace(/\bGuuuun\b/gi, 'Gyuuuh');
+  normalized = normalized.replace(/\bPlurp\b/gi, 'Blorp');
+  normalized = normalized.replace(/\bCummngi\b/gi, 'Cumming');
+  normalized = normalized.replace(/\bchistic\s+ehP\b/gi, 'chistic eh?');
+  normalized = normalized.replace(/\barushwomb!?uck\b/gi, 'crush womb lick');
+  normalized = normalized.replace(/\bFucki\b/gi, 'Fuck');
+  normalized = normalized.replace(/\bBREE\s+DING\s+SACK\b/gi, 'BREEDING SACK');
+  normalized = normalized.replace(/\bPSV\b/g, 'PSH');
+  normalized = normalized.replace(/\bSplurty\b/gi, 'Splort');
+  normalized = normalized.replace(/\bSplorgey\b/gi, 'Splorge');
+  normalized = normalized.replace(/\bSplooge['’]v\b/gi, 'Splooge');
+  normalized = normalized.replace(/\bThmi\b/gi, 'Thmp');
+  normalized = normalized.replace(/\bathle\b/gi, 'Rattle');
+  normalized = normalized.replace(/\bseueeze\b/gi, 'Squeeze');
+  normalized = normalized.replace(/\bqweleh\b/gi, 'Squelch');
+  normalized = normalized.replace(/\btBlorp\b/gi, 'Blorp');
+  normalized = normalized.replace(/\bCiCK\b/g, 'Lick');
+  normalized = normalized.replace(/\bhTwiteh\+?\b/gi, 'Twitch');
+  normalized = normalized.replace(/\bsuchthick\b/gi, 'such thick');
+  normalized = normalized.replace(/(?<=^|\s)-Gargle\b/gi, 'Gargle');
+  normalized = normalized.replace(/\bquish\b/gi, 'Squish');
+  normalized = normalized.replace(/\bWaiggle\b/gi, 'Wriggle');
+  normalized = normalized.replace(/\bSha!\b/g, 'Shake!');
+  normalized = normalized.replace(/\bJolk\b/gi, 'Jolt');
+  normalized = normalized.replace(/\bJoly\b/gi, 'Jolt');
+  normalized = normalized.replace(/\bNchuhig\b/gi, 'Nchuh');
+  normalized = normalized.replace(/\bJOcK\b/g, 'Lock');
+  normalized = normalized.replace(/\bShirch\b/gi, 'Shlrch');
+  normalized = normalized.replace(/\btobe\b/gi, 'to be');
+  normalized = normalized.replace(/\bOohgl\b/gi, 'Oohg');
+  normalized = normalized.replace(/\bnstrict(\.{2,}|…)/gi, 'Constrict$1');
+  normalized = normalized.replace(/\bDoh!\b/g, 'Ooh!');
+  normalized = normalized.replace(/\bSprch\b/gi, 'Splrch');
+  normalized = normalized.replace(/\byguhh\b/gi, 'uguhh');
+  normalized = normalized.replace(/\buurRh\b/gi, 'uurkh');
+  normalized = normalized.replace(/\bSrp\b/g, 'Grip');
+  normalized = normalized.replace(/['’]aight\.D\b/gi, 'aight');
+  normalized = normalized.replace(/\(?vGlob\b/gi, 'Glob');
+  normalized = normalized.replace(/\bSNA\b/g, 'SNAP');
+  normalized = normalized.replace(/\bIburrpe\b/gi, 'Blurrpp');
+  normalized = normalized.replace(/\bLuuuh\b/gi, 'uuuh');
+  normalized = normalized.replace(/\bThw\b/g, 'Thud');
+  normalized = normalized.replace(/\bsplt\b/gi, 'splat');
+  normalized = normalized.replace(/\bChw\b/g, 'Chulp');
+  normalized = normalized.replace(/\blurpv\b/gi, 'lurp');
+  normalized = normalized.replace(/\bypurp\b/gi, 'purp');
+  normalized = normalized.replace(/\bpipun\b/gi, 'pupuh');
+  normalized = normalized.replace(/\bblupu\b/gi, 'plupuh');
+  normalized = normalized.replace(/\bHoffl\b/gi, 'Hoff');
+  normalized = normalized.replace(/\bwiteh\b/gi, 'twitch');
+  normalized = normalized.replace(/\bIwiteh\b/gi, 'Twitch');
+  normalized = normalized.replace(/\blerq\b/gi, 'Blergh');
+  normalized = normalized.replace(/\bOurgh!\b/g, 'Eurgh!');
+  normalized = normalized.replace(/\bMhmP\b/g, 'Mhm?');
+  normalized = normalized.replace(/\bChatten!?\.?\b/gi, 'Chatter');
+  normalized = normalized.replace(/\bAM\s+A\s+ZINGR\b/gi, 'Amazing');
+  normalized = normalized.replace(/\bnow\s+rightP\b/gi, 'now right?');
+  normalized = normalized.replace(/\brightP\b/g, 'right?');
+  normalized = normalized.replace(/\bSNAR!\b/g, 'SNAP!');
+  normalized = normalized.replace(/\bApeooho\.?\b/gi, 'Apeooh');
+  normalized = normalized.replace(/\bwonbooo\b/gi, 'womb...');
+  normalized = normalized.replace(/\bCatter(\.{2,}|…)/gi, 'Clatter$1');
+  normalized = normalized.replace(/\bPLAR\b/g, 'PLAP');
+  normalized = normalized.replace(/\bsostrange\b/gi, 'so strange');
+  normalized = normalized.replace(/\bnomatter\b/gi, 'no matter');
+  normalized = normalized.replace(/\bthinkabout\b/gi, 'think about');
+  normalized = normalized.replace(/\buuqun\b/gi, 'uuguh');
+  normalized = normalized.replace(/\bKunk\b/gi, 'Kuhk');
+  normalized = normalized.replace(/\bLneo\b/gi, 'Knead');
+  normalized = normalized.replace(/\bgluby\b/gi, 'glub');
+  normalized = normalized.replace(/\bHolam\b/gi, 'Hold');
+  normalized = normalized.replace(/\bRawle\b/gi, 'Rattle');
+  normalized = normalized.replace(/\bcrittch\b/gi, 'scritch');
+  normalized = normalized.replace(/\btretch\b/gi, 'stretch');
+  normalized = normalized.replace(/\b8plly\b/gi, 'Splly');
+  normalized = normalized.replace(/\bwor\b/gi, 'work');
+  normalized = normalized.replace(/\bgood\+grief\b/gi, 'good grief');
+  normalized = normalized.replace(/\bSrind\b/gi, 'Grind');
+  normalized = normalized.replace(/\bShivero\b/gi, 'Shiver');
+  normalized = normalized.replace(/\bSplurcct\b/gi, 'Splurrrt');
+  normalized = normalized.replace(/\bSuky\b/gi, 'Schlrp');
+  normalized = normalized.replace(/\(?good,\s*nop\)?/gi, '(good, no?)');
+  normalized = normalized.replace(/\bSqueleh\b/gi, 'Squelch');
+  normalized = normalized.replace(/\bmy\.throat\./gi, 'my throat');
+  normalized = normalized.replace(/\bsemerboo\b/gi, 'semen');
+  normalized = normalized.replace(/\bhumph!J\b/gi, 'Humph!');
+  normalized = normalized.replace(/\bPART\s+I\s+CULARLY\b/gi, 'PARTICULARLY');
+  normalized = normalized.replace(/\bqoeeezeee(\.{2,}|…)?/gi, 'Squeeezee$1');
+  normalized = normalized.replace(/\bwomb\.for\b/gi, 'womb for');
+  normalized = normalized.replace(/\bthihnk\b/gi, 'think');
+  normalized = normalized.replace(/\bWhat\.\b/g, 'What');
+  normalized = normalized.replace(/\bApeooho\.{2,}/gi, 'Apeooh...');
+  normalized = normalized.replace(/\bsoItake\b/gi, 'so I take');
+  normalized = normalized.replace(/\byour\.womb\b/gi, 'your womb');
+  normalized = normalized.replace(/more\s+honest\+with\s+me/gi, 'more honest with me');
+  normalized = normalized.replace(/\bmuuh"?\b/gi, 'uuuh');
+  normalized = normalized.replace(/\bEhr\b/g, 'Eh');
+  normalized = normalized.replace(/\bJOL7\b/g, 'JOLT');
+  normalized = normalized.replace(/\bNumber4\./gi, 'Number 4');
+  normalized = normalized.replace(/\bPatheri\b/gi, 'Gathes');
+  normalized = normalized.replace(/\bhowmany\b/gi, 'how many');
+  normalized = normalized.replace(/\bPsh0\b/gi, 'Pshh');
+  normalized = normalized.replace(/\bAVP\b/g, 'AV');
+  normalized = normalized.replace(/\bWhat\s+r\b/gi, 'What');
+  normalized = normalized.replace(/\bTHIS\s+A\s+DULT\s*VIDEO\b/gi, 'THIS ADULT VIDEO');
+  normalized = normalized.replace(/\bwill\s+alsobe\b/gi, 'will also be');
+  normalized = normalized.replace(/\bVand\s+my\b/gi, 'and my');
+  normalized = normalized.replace(/\\foolishness\b/gi, 'foolishness');
+  normalized = normalized.replace(/\bMioro\b/gi, 'Glorb');
+  normalized = normalized.replace(/inside\s+my\s+\+body/gi, 'inside my body');
+  normalized = normalized.replace(/\bconyenient\b/gi, 'convenient');
+  normalized = normalized.replace(/\bA-Al-\s*RIGHT!?/gi, 'A-All RIGHT!');
+  normalized = normalized.replace(/\bHoLP\b/gi, 'Hold');
+  normalized = normalized.replace(/\bMope_\b/gi, 'More...');
+  normalized = normalized.replace(/\bMope\b/gi, 'More');
+  normalized = normalized.replace(/\bNhl\b/g, 'Nh!');
+  normalized = normalized.replace(/\bROUGH40\b/gi, 'ROUGH');
+  normalized = normalized.replace(/\bRE4t\s+A\b/gi, 'Rest a');
+  normalized = normalized.replace(/\bTHE\s+TREAT-\s*\+?MENT\b/gi, 'THE TREATMENT');
+  normalized = normalized.replace(/\bCONTINUE\s+THE\s+THREAT-?\s*MENT\b/gi, 'CONTINUE THE TREATMENT');
+  normalized = normalized.replace(/\bTOVAY['’]?S\b/gi, "TODAY'S");
+  normalized = normalized.replace(/\bON\s+TOVAY(\.{2,}|…)?/gi, 'ON TODAY$1');
+  normalized = normalized.replace(/\bWEREST\b/gi, 'WE REST');
+  normalized = normalized.replace(/\bCUMAT\b/gi, 'CUM AT');
+  normalized = normalized.replace(/\bTIME\s+ASI\b/gi, 'TIME AS I');
+  normalized = normalized.replace(/\b50GOOD\b/gi, 'SO GOOD');
+  normalized = normalized.replace(/\bMODIFI-CATIONS\b/gi, 'MODIFICATIONS');
+  normalized = normalized.replace(/\bSuvvenlya\b/gi, 'Suddenly');
+  normalized = normalized.replace(/\bSuvvenly\b/gi, 'Suddenly');
+  normalized = normalized.replace(/\bSuvdenly\b/gi, 'Suddenly');
+  normalized = normalized.replace(/\bBvt\b/g, 'But');
+  normalized = normalized.replace(/\bBVT\b/g, 'BUT');
+  normalized = normalized.replace(/\(ME,\s*THERE\)/gi, '(ME, THERE)');
+  normalized = normalized.replace(/\bME,\s*THERE\b/gi, 'ME, THERE');
+  normalized = normalized.replace(/\bME,THERE\b/gi, 'ME, THERE');
+  normalized = normalized.replace(/\bDISCOUR-\b/gi, 'DISCOURSE');
+  normalized = normalized.replace(/\bTHEN\.\s*WE\s+SHOULD\b/gi, 'THEN, WE SHOULD');
+  normalized = normalized.replace(/\bTHEN\.\s*WE\b/gi, 'THEN, WE');
+  normalized = normalized.replace(/\bTO\s+ME\s+tOVAy\.?/gi, 'TO ME TODAY.');
+  normalized = normalized.replace(/\bAIr\s+bath\.?/gi, 'Air bath.');
+  normalized = normalized.replace(/\bSOME-THING\s+I\s+SAID-?\b/gi, 'SOME-THING I SAID-');
+  normalized = normalized.replace(/\bShudder\.s\b/gi, 'Shudder');
+  normalized = normalized.replace(/\bTwitcht\b/gi, 'Twitch');
+  normalized = normalized.replace(/\bHISSEMEN\b/gi, 'HIS SEMEN');
+  normalized = normalized.replace(/\bISSTILLEAKING\b/gi, 'IS STILL LEAKING');
+  normalized = normalized.replace(/\bOUTOPME(\.{2,}|…)?/gi, 'OUT OF ME$1');
+  normalized = normalized.replace(/\bOUTOPME\b/gi, 'OUT OF ME');
+  normalized = normalized.replace(/\bSmacky\b/gi, 'Smack');
+  normalized = normalized.replace(/\bSlapy\b/gi, 'Slap');
+  normalized = normalized.replace(/\bRubr\b/gi, 'Rub');
+  normalized = normalized.replace(/\bCoughe\b/gi, 'Cough');
+  normalized = normalized.replace(/\bPate\b/gi, 'Pat');
+  normalized = normalized.replace(/\bMVF[iI]utter\b/gi, 'Flutter');
+  normalized = normalized.replace(/\bMVFlutter\b/gi, 'Flutter');
+  normalized = normalized.replace(/\bIBET\s+IVE\b/gi, "I BET I'VE");
+  normalized = normalized.replace(/\bIBETIVE\b/gi, "I BET I'VE");
+  normalized = normalized.replace(/\bTHE\s+SENSAT\s*(\.{2,}|…)/gi, 'THE SENSATION$1');
+  normalized = normalized.replace(/\bTHE\s+SENSAT\b/gi, 'THE SENSATION');
+  normalized = normalized.replace(/\bOWON['’]?TSAYNAUGHTY\b/gi, "I WON'T SAY NAUGHTY");
+  normalized = normalized.replace(/\bOWONTSAYNAUGHTY\b/gi, "I WON'T SAY NAUGHTY");
+  normalized = normalized.replace(/\byyt\b/g, 'Ahh');
+  normalized = normalized.replace(/\bQLIET!?\b/gi, 'QUIET!');
+  normalized = normalized.replace(/\bQLIET\b/gi, 'QUIET');
+  normalized = normalized.replace(/\bACOWARD\b/gi, 'A COWARD');
+  normalized = normalized.replace(/\bHER\s+POSIT\s*I\s*ON\b/gi, 'HER POSITION');
+  normalized = normalized.replace(/\bHER\s+POSITI\s*ON\b/gi, 'HER POSITION');
+  normalized = normalized.replace(/\bSourge\b/gi, 'Splurge');
+  normalized = normalized.replace(/\btAhn\b/gi, 'Ahh');
+  normalized = normalized.replace(/\btahn\b/gi, 'Ahh');
+  normalized = normalized.replace(/\bSHIT\.\.\s*THIS['’]?\b/gi, 'SHIT.. THIS');
+  normalized = normalized.replace(/\bSHIT\.\.\.\s*THIS['’]?\b/gi, 'SHIT... THIS');
+  normalized = normalized.replace(/\bPLEASURABLE[…\.]+\s*TO\s+TAKE\b/gi, 'PLEASURABLE... TO TAKE');
+  normalized = normalized.replace(/\bGOING\.\.\s*WE['’]?LL\s+LEAVE\b/gi, "GOING.. WE'LL LEAVE");
+  normalized = normalized.replace(/\bGOING\.\.\.\s*WE['’]?LL\s+LEAVE\b/gi, "GOING... WE'LL LEAVE");
+  normalized = normalized.replace(/\(GOING\.\.\s*WE['’]?LL\s+LEAVE\)/gi, "(GOING.. WE'LL LEAVE)");
+  normalized = normalized.replace(/\(GOING\.\.\.\s*WE['’]?LL\s+LEAVE\)/gi, "(GOING... WE'LL LEAVE)");
+  normalized = normalized.replace(/\bWHAT\s+IS\s+IT~+\b/gi, 'WHAT IS IT~~');
+  normalized = normalized.replace(/\bPOSSESS,\s*SEEMS\b/gi, 'POSSESS, SEEMS');
+  normalized = normalized.replace(/\(POSSESS,\s*SEEMS\)/gi, '(POSSESS, SEEMS)');
+  normalized = normalized.replace(/\bAHH\.\.\s*HOLY\b/gi, 'AHH..HOLY');
+  normalized = normalized.replace(/\bAHH\.\.\.\s*HOLY\b/gi, 'AHH...HOLY');
 
   normalized = normalized.replace(
     /\bBACK\s+THEN\s+HIS\s+WHOLE\s+BODY\s+WAS\s+BURNING\s+UP\s+LIKE\s+A\s+FURNACE\s+BUT\s+NOW\s+HE'?S?\s+COLD\s+AS\s+ICE\b/gi,
@@ -278,8 +900,26 @@ export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => 
 export const splitSpanishUppercaseCompounds = (text: string): string => {
   let normalized = String(text || '');
   for (let i = 0; i < 2; i += 1) {
-    normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, '$1 $2 $3');
+    normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN, (match, prefix, func, suffix) => {
+      const lowerMatch = match.toLowerCase();
+      if (SPANISH_COMPOUND_SPLIT_EXCLUSIONS.has(lowerMatch) || lowerMatch.endsWith('mente')) {
+        return match;
+      }
+      return `${prefix} ${func} ${suffix}`;
+    });
   }
+  // Apply V2
+  normalized = normalized.replace(SPANISH_FUNCTION_WORD_GLUE_PATTERN_V2, '$1 ');
+  
+  // Apply enclitic split with whitelist guard
+  normalized = normalized.replace(SPANISH_ENCLITIC_SPLIT_PATTERN, (match, verb, pronoun) => {
+    const lowerMatch = match.toLowerCase();
+    if (SPANISH_LEGITIMATE_ENCLITICS.has(lowerMatch) || SPANISH_COMPOUND_SPLIT_EXCLUSIONS.has(lowerMatch) || lowerMatch.endsWith('mente')) {
+      return match; // Keep as is
+    }
+    return `${verb} ${pronoun}`;
+  });
+  
   return normalized;
 };
 
@@ -296,6 +936,7 @@ export const normalizeSpanishOcrNoiseForTranslation = (text: string): string => 
   normalized = normalized.replace(/\bC+EH(?=[!?…])/gi, 'EH');
   normalized = normalized.replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2}),\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})\b/g, '$1$2');
   normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\s*,\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1, $2');
+  normalized = normalized.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9])\.([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g, '$1. $2');
   return normalizeWhitespace(normalized);
 };
 
@@ -319,7 +960,7 @@ export const normalizePossessiveCompoundsForTranslation = (text: string): string
   let normalized = normalizeWhitespace(String(text || ''));
   normalized = normalized.replace(/\b([A-Za-z]{3,})['’]S([A-Za-z]{3,})\b/g, "$1'S $2");
   normalized = normalized.replace(/\[\s*([A-Za-z]{3,})['’]S([A-Za-z]{3,})\s*\]/g, "[$1'S $2]");
-  normalized = normalized.replace(/\b([A-Za-z]{3,})([\-_/])([A-Za-z]{3,})\b/g, '$1 $2 $3');
+  normalized = normalized.replace(/\b([A-Za-z]{3,})([\-_/])(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([A-Za-z]{3,})\b/gi, '$1 $2 $3');
   return normalizeWhitespace(normalized);
 };
 
@@ -331,11 +972,58 @@ export const cleanJapaneseOcrSpacing = (text: string): string => {
 };
 
 export const cleanKoreanOcrSpacing = (text: string): string => {
-  return text.replace(/([\uac00-\ud7af])\s(?=[\uac00-\ud7af])/g, '$1');
+  if (!text) return '';
+  // Collapse single spaces between isolated single Korean syllables (e.g. "안 녕 하 세 요" -> "안녕하세요")
+  // while preserving double spaces between words (e.g. "설 정 을  다 시" -> "설정을  다시")
+  let cleaned = text.replace(/([\uac00-\ud7af]) (?=[\uac00-\ud7af] [\uac00-\ud7af])/g, '$1');
+  cleaned = cleaned.replace(/([\uac00-\ud7af]) (?=[\uac00-\ud7af](?:[^\uac00-\ud7afA-Za-z0-9]|\s|$))/g, '$1');
+
+  const words = cleaned.split(/(\s+)/);
+  const result: string[] = [];
+  
+  for (let i = 0; i < words.length; i++) {
+    const item = words[i];
+    if (item !== ' ') {
+      result.push(item);
+      continue;
+    }
+    
+    const prevWord = result[result.length - 1] || '';
+    const nextWord = words[i + 1] || '';
+    
+    const prevKoMatches = prevWord.match(/[\uac00-\ud7af]/g);
+    const nextKoMatches = nextWord.match(/[\uac00-\ud7af]/g);
+    
+    if (prevKoMatches && nextKoMatches) {
+      if (prevKoMatches.length === 1 && nextKoMatches.length === 1) {
+        result[result.length - 1] = prevWord + nextWord;
+        continue;
+      }
+    }
+    result.push(item);
+  }
+  
+  return result.join('');
+};
+
+export const JA_PARTICLE_BOUNDARY_PATTERN = /([。、！？])(?=[^\s])/g;
+export const JA_REPEATED_SOKUON_COLLAPSE = /ッ{2,}/g;
+export const JA_ELONGATION_NORMALIZE = /ー{2,}/g;
+
+export const cleanJapaneseOcrNoise = (text: string): string => {
+  let normalized = String(text || '');
+  normalized = normalized.replace(JA_PARTICLE_BOUNDARY_PATTERN, '$1 ');
+  normalized = normalized.replace(JA_REPEATED_SOKUON_COLLAPSE, 'ッ');
+  normalized = normalized.replace(JA_ELONGATION_NORMALIZE, 'ー');
+  
+  // Remove stray middle dots ・ from broken glyphs if isolated
+  normalized = normalized.replace(/(?<=^|\s)・(?=\s|$)/g, ' ');
+  return normalized;
 };
 
 export const normalizeJapaneseOcrNoiseForTranslation = (text: string): string => {
   let normalized = String(text || '');
+  normalized = cleanJapaneseOcrNoise(normalized);
   normalized = normalized
     .replace(/。/g, '. ')
     .replace(/、/g, ', ')
@@ -375,13 +1063,12 @@ export const normalizeSourceForTranslationWithThaiSubs = (normalized: string): s
 };
 
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
-  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely
+  // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely (preserving Japanese honorifics and single-letter stutters)
   let raw = String(text || '').replace(/[\r\n]+/g, ' ');
-  raw = raw.replace(/([A-Za-z])-\s+([A-Za-z])/g, '$1$2');
+  raw = raw.replace(/\b([\p{L}]{2,})-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([\p{L}])/gui, '$1$2');
 
   let normalized = normalizeTechnicalArtifactsForTranslation(raw);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);
-  normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
 
   const normLang = normalizeTranslationLanguage(sourceLanguage, '');
   if (normLang === 'es') {
@@ -392,6 +1079,8 @@ export const normalizeSourceForTranslation = (text: string, sourceLanguage = '')
   } else if (normLang === 'ko') {
     normalized = cleanKoreanOcrSpacing(normalized);
     normalized = normalizeKoreanOcrNoiseForTranslation(normalized);
+  } else {
+    normalized = normalizeEnglishOcrNoiseForTranslation(normalized);
   }
 
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
@@ -433,6 +1122,8 @@ export const normalizeThaiTranslationText = (text: string): string => {
   normalized = normalized
     .replace(/([\(\[\{])\s+/g, '$1')
     .replace(/\s+([\)\]\}])/g, '$1');
+  normalized = normalized.replace(/ๆ{3,}/g, 'ๆๆ');
+  normalized = normalized.replace(/^\s*ๆ+\s*$/g, '');
   normalized = normalized.replace(/\s+([,.;:!?])/g, '$1');
   return normalizeWhitespace(normalized);
 };

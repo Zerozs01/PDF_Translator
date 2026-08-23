@@ -92,8 +92,8 @@ async function renderPdfFixturePageToDataUrl(
   try {
     const baseScale = Math.max(0.5, (dpi || 300) / 72);
     const baseViewport = page.getViewport({ scale: baseScale });
-    const maxSide = 3600;
-    const maxPixels = 13_000_000;
+    const maxSide = 20000;
+    const maxPixels = 36_000_000;
     let scaleAdjust = 1;
 
     if (Math.max(baseViewport.width, baseViewport.height) > maxSide) {

@@ -68,7 +68,11 @@
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "icon": "build/icon.icns"
     }
   },
   "devDependencies": {
@@ -103,6 +107,7 @@
     "better-sqlite3-multiple-ciphers": "^12.10.0",
     "lucide-react": "^0.562.0",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.4.296",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-pdf": "^10.2.0",

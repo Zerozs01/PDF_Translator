@@ -16,6 +16,7 @@ type ProgressCallback = (done: number, total: number) => void;
 
 const EXPORT_PAGE_TIMEOUT_MS = 60_000;
 const activeJobs = new Map<string, PdfExportSession>();
+let sharedExportWindow: BrowserWindow | null = null;
 
 class PdfExportSession {
   private win: BrowserWindow | null = null;
@@ -27,22 +28,36 @@ class PdfExportSession {
   ) {}
 
   async run(pages: PdfPrintExportPageConfig[], onProgress: ProgressCallback): Promise<Buffer> {
-    this.win = new BrowserWindow({
-      show: false,
-      width: 1400,
-      height: 1800,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webSecurity: true,
-      },
-    });
+    const maxPageWidthPt = Math.max(595, ...pages.map((p) => p.pageWidthPt ?? p.sourceOCR?.width ?? 0));
+    const maxPageHeightPt = Math.max(842, ...pages.map((p) => p.pageHeightPt ?? p.sourceOCR?.height ?? 0));
+    const windowWidth = Math.max(1600, Math.round(maxPageWidthPt * 1.5));
+    const windowHeight = Math.max(2000, Math.round(maxPageHeightPt * 1.5));
 
+    let shellLoaded = false;
+    if (sharedExportWindow && !sharedExportWindow.isDestroyed()) {
+      sharedExportWindow.setSize(windowWidth, windowHeight);
+      shellLoaded = true;
+    } else {
+      sharedExportWindow = new BrowserWindow({
+        show: false,
+        width: windowWidth,
+        height: windowHeight,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          webSecurity: true,
+        },
+      });
+    }
+
+    this.win = sharedExportWindow;
     const overlayResults: OverlayPageResult[] = [];
 
     try {
-      await this.loadExportShell();
+      if (!shellLoaded) {
+        await this.loadExportShell();
+      }
 
       for (let index = 0; index < pages.length; index += 1) {
         this.throwIfAborted();
@@ -61,36 +76,37 @@ class PdfExportSession {
 
       return overlayResults[0]?.overlayBuffer ?? Buffer.alloc(0);
     } finally {
-      this.destroyWindow();
+      this.win = null;
+      if (sharedExportWindow && !sharedExportWindow.isDestroyed()) {
+        try {
+          // Clear DOM container to free memory on the renderer side
+          sharedExportWindow.webContents.executeJavaScript(`
+            document.getElementById('export-root')?.replaceChildren();
+            document.head.querySelector('style[data-export-page-size]')?.remove();
+          `, true).catch(() => {});
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 
   cancel(): void {
     this.aborted = true;
-    this.destroyWindow();
+    this.win = null;
+    if (sharedExportWindow && !sharedExportWindow.isDestroyed()) {
+      try {
+        sharedExportWindow.destroy();
+      } catch {
+        // ignore
+      }
+      sharedExportWindow = null;
+    }
   }
 
   private throwIfAborted(): void {
     if (this.aborted) {
       throw new Error('Export canceled');
-    }
-  }
-
-  private destroyWindow(): void {
-    const current = this.win;
-    this.win = null;
-    if (!current || current.isDestroyed()) return;
-
-    try {
-      current.webContents.stop();
-    } catch {
-      // ignore stop errors during teardown
-    }
-
-    try {
-      current.destroy();
-    } catch {
-      // ignore destroy errors during teardown
     }
   }
 

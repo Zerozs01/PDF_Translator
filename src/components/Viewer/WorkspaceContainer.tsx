@@ -30,7 +30,8 @@ const DocumentRenderer: React.FC<DocumentRendererProps> = ({ dataSource, renderM
 };
 
 export const WorkspaceContainer = () => {
-  const { viewMode, pageMode } = useUIStore(); // pageMode: 'single' | 'scroll'
+  const viewMode = useUIStore((s) => s.viewMode);
+  const pageMode = useUIStore((s) => s.pageMode); // pageMode: 'single' | 'scroll'
   const { leftRef, rightRef } = useSyncScroll();
 
   return (

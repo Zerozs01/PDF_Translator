@@ -23,8 +23,8 @@ interface LayerStoreState {
   editingLayerId: string | null;
   activeDragItem: { type: 'layer' | 'group'; id: string; index: number } | null;
 
-  // Undo stack — เก็บ snapshot ของ layers ก่อนแต่ละ commit
-  undoStackByPage: Map<number, TextLayer[][]>;
+  // Undo stack — เก็บ snapshot ของ layers + groups + deletedLineIndexes ก่อนแต่ละ commit
+  undoStackByPage: Map<number, Array<{ layers: TextLayer[]; groups: TextLayerGroup[]; deletedLineIndexes: Set<number> }>>;
 
   // Actions: Read
   getPageLayers: (pageNum: number) => TextLayer[];
@@ -53,6 +53,7 @@ interface LayerStoreState {
   // Phase 3 Actions: Interactive Manipulation
   updateLayerBBox: (pageNum: number, layerId: string, newBBox: BBox) => void;
   updateLayerText: (pageNum: number, layerId: string, newText: string, isSource?: boolean) => void;
+  batchUpdateLayerTexts: (pageNum: number, updates: Array<{ id: string; text: string }>, isAutoTranslation?: boolean) => void;
   updateLayerRotation: (pageNum: number, layerId: string, degrees: number) => void;
   updateLayerFontSize: (pageNum: number, layerId: string, size: number) => void;
   updateLayerBackgroundColor: (pageNum: number, layerId: string, color: string) => void;
@@ -62,6 +63,7 @@ interface LayerStoreState {
   synchronizeGroupBBox: (pageNum: number, groupId: string) => void;
   deleteLayer: (pageNum: number, layerId: string) => void;
   deleteGroup: (pageNum: number, groupId: string) => void;
+  deleteSelectedLayers: () => void;
   addManualLayer: (pageNum: number, bbox: BBox, text: string, lineIndex: number, options?: { backgroundColor?: string; textColor?: string }) => void;
   moveLayerToGroup: (pageNum: number, layerId: string, targetGroupId: string, targetIndex?: number) => void;
   reorderGroups: (pageNum: number, dragIndex: number, hoverIndex: number) => void;
@@ -229,6 +231,24 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
           userEdited: true, // Mark as user edited to protect from being auto-translated over!
         };
       }
+    });
+    const next = new Map(state.layersByPage);
+    next.set(pageNum, updated);
+    return { layersByPage: next };
+  }),
+
+  batchUpdateLayerTexts: (pageNum, updates, isAutoTranslation = false) => set((state) => {
+    const layers = state.layersByPage.get(pageNum);
+    if (!layers || updates.length === 0) return {};
+    const updateMap = new Map(updates.map(u => [u.id, u.text]));
+    const updated = layers.map(l => {
+      if (!updateMap.has(l.id)) return l;
+      const newText = updateMap.get(l.id)!;
+      return {
+        ...l,
+        text: newText,
+        userEdited: isAutoTranslation ? l.userEdited : true,
+      };
     });
     const next = new Map(state.layersByPage);
     next.set(pageNum, updated);
@@ -431,6 +451,36 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     };
   }),
 
+  deleteSelectedLayers: () => {
+    const { selectedLayerIds, layersByPage, editingLayerId } = get();
+    if (editingLayerId || selectedLayerIds.size === 0) return;
+
+    // หาว่า selected layers อยู่ในหน้าไหนบ้าง
+    const layersByTargetPage = new Map<number, string[]>();
+    for (const [page, pageLayers] of layersByPage.entries()) {
+      for (const layer of pageLayers) {
+        if (selectedLayerIds.has(layer.id)) {
+          const list = layersByTargetPage.get(page) || [];
+          list.push(layer.id);
+          layersByTargetPage.set(page, list);
+        }
+      }
+    }
+
+    if (layersByTargetPage.size === 0) {
+      get().clearSelection();
+      return;
+    }
+
+    for (const [page, layerIds] of layersByTargetPage.entries()) {
+      get().pushUndoSnapshot(page);
+      for (const id of layerIds) {
+        get().deleteLayer(page, id);
+      }
+    }
+    get().clearSelection();
+  },
+
   addManualLayer: (pageNum, bbox, text, lineIndex, options) => set((state) => {
     const layers = [...(state.layersByPage.get(pageNum) || [])];
     const groups = [...(state.groupsByPage.get(pageNum) || [])];
@@ -587,10 +637,16 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
   pushUndoSnapshot: (pageNum) => set((state) => {
     const currentLayers = state.layersByPage.get(pageNum);
     if (!currentLayers) return {};
+    const currentGroups = state.groupsByPage.get(pageNum) || [];
+    const currentDeletedIndexes = state.deletedLineIndexesByPage.get(pageNum) || new Set<number>();
     const undoStack = new Map(state.undoStackByPage);
     const stack = [...(undoStack.get(pageNum) || [])];
-    // Deep clone snapshot
-    stack.push(currentLayers.map(l => ({ ...l })));
+    // Deep clone snapshot — เก็บทั้ง layers, groups, และ deletedLineIndexes
+    stack.push({
+      layers: currentLayers.map(l => ({ ...l })),
+      groups: currentGroups.map(g => ({ ...g, layerIds: [...g.layerIds] })),
+      deletedLineIndexes: new Set(currentDeletedIndexes),
+    });
     if (stack.length > MAX_UNDO_DEPTH) stack.shift();
     undoStack.set(pageNum, stack);
     return { undoStackByPage: undoStack };
@@ -600,11 +656,20 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
     const undoStack = new Map(state.undoStackByPage);
     const stack = [...(undoStack.get(pageNum) || [])];
     if (stack.length === 0) return {};
-    const previousLayers = stack.pop()!;
+    const snapshot = stack.pop()!;
     undoStack.set(pageNum, stack);
     const nextLayers = new Map(state.layersByPage);
-    nextLayers.set(pageNum, previousLayers);
-    return { undoStackByPage: undoStack, layersByPage: nextLayers };
+    nextLayers.set(pageNum, snapshot.layers);
+    const nextGroups = new Map(state.groupsByPage);
+    nextGroups.set(pageNum, snapshot.groups);
+    const nextDeletedIndexes = new Map(state.deletedLineIndexesByPage);
+    nextDeletedIndexes.set(pageNum, snapshot.deletedLineIndexes);
+    return {
+      undoStackByPage: undoStack,
+      layersByPage: nextLayers,
+      groupsByPage: nextGroups,
+      deletedLineIndexesByPage: nextDeletedIndexes,
+    };
   }),
 
   // ── Reset ─────────────────────────────────────────────────────

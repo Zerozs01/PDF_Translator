@@ -1,9 +1,8 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, protocol, net, powerSaveBlocker } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
-import { createHash, randomUUID } from 'crypto'
-import { spawn } from 'child_process'
+import { createHash } from 'crypto'
 import { pathToFileURL } from 'url'
 import https from 'https'
 import zlib from 'zlib'
@@ -64,7 +63,8 @@ protocol.registerSchemesAsPrivileged([
 import { initDB, closeDB, checkpointDB, DocumentDAO, OCRCacheDAO, ProjectDAO, TagDAO, TranslationCacheDAO, BenchmarkDAO, SentenceTranslationDAO } from './db'
 import * as authService from './authService'
 import { getRequestedDocumentPath, inspectExistingDocumentFile, isPathWithinDirectory, resolveImportedDocumentName, tryResolveRealDocumentPath } from './documentFileAccess'
-import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw } from './ocrBridge'
+import { cancelExternalOcr, deleteOcrTempImage, disposeExternalOcrDaemons, getExternalOcrEngineStatuses, prewarmExternalOcrEngine, runExternalOcr, writeOcrTempImage, runExternalOcrRaw, clearExternalOcrCudaCache } from './ocrBridge'
+import { disposeArgosTranslateRuntime, LANGUAGE_DISPLAY_NAMES, normalizeArgosLanguage, runArgosTranslateBatch, type TranslationContext } from './argosBridge'
 import { clearStoredGeminiApiKey, getGeminiApiKeyStatus, resolveGeminiApiKey, setStoredGeminiApiKey } from './secureSettings'
 import { cancelPdfPrintExport, startPdfPrintExport } from './pdfExportService'
 import {
@@ -90,7 +90,7 @@ process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public')
 
 let win: BrowserWindow | null
-let disposeArgosTranslateRuntime: (() => void) | null = null
+let powerSaveBlockerId: number | null = null
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
@@ -99,12 +99,19 @@ function createWindow() {
   Menu.setApplicationMenu(null)
   
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
+    icon: path.join(process.env.VITE_PUBLIC || '', 'image/Pdf_Translator.png'),
     show: false,
     width: 1440,
     height: 960,
-    minWidth: 1200,
-    minHeight: 780,
+    minWidth: 480,
+    minHeight: 600,
+    backgroundColor: '#17181b',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#0e0f11',
+      symbolColor: '#cbd5e1',
+      height: 32,
+    },
     autoHideMenuBar: true, // Hide menu bar
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -113,6 +120,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: false, // Prevent Chromium from throttling timers when backgrounded
     },
   })
 
@@ -121,10 +129,15 @@ function createWindow() {
     win?.show();
   });
 
-  // Enable DevTools shortcut (Ctrl+Shift+I or F12) and page refresh (Ctrl+R / F5) in dev mode
+  // Enable DevTools shortcut (Ctrl+Shift+I or F12), page refresh (Ctrl+R / F5), and Fullscreen toggle (F11)
   win.webContents.on('before-input-event', (event, input) => {
     if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
       win?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+    if (input.key === 'F11' && input.type === 'keyDown') {
+      const isFullScreen = win?.isFullScreen() ?? false;
+      win?.setFullScreen(!isFullScreen);
       event.preventDefault();
     }
     if (VITE_DEV_SERVER_URL && ((input.control && input.key.toLowerCase() === 'r') || input.key === 'F5')) {
@@ -163,6 +176,10 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
+  if (powerSaveBlockerId !== null) {
+    powerSaveBlocker.stop(powerSaveBlockerId)
+    powerSaveBlockerId = null
+  }
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
   void disposeAllStagedPdfExportJobs()
@@ -173,6 +190,11 @@ app.on('before-quit', () => {
 // Last-resort cleanup: ensure all child processes are killed even if
 // 'before-quit' or 'window-all-closed' fail to run (e.g. Vite HMR restart).
 process.on('exit', () => {
+  if (powerSaveBlockerId !== null) {
+    try {
+      powerSaveBlocker.stop(powerSaveBlockerId)
+    } catch (e) {}
+  }
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
 })
@@ -183,6 +205,9 @@ process.on('exit', () => {
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 // Suppress AMD DirectComposition VideoProcessorGetOutputExtension error spam
 app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
+// Disable renderer backgrounding and background timer throttling to keep background queue tasks running when window is backgrounded or system is locked
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -277,6 +302,24 @@ app.whenReady().then(() => {
       console.error('[PDF Export Protocol] Error:', error);
       return new Response('Internal Server Error', { status: 500 });
     }
+  });
+
+  // Power management IPC handlers
+  ipcMain.handle('power:prevent-sleep', () => {
+    if (powerSaveBlockerId === null) {
+      powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+      console.log(`[Main] Started powerSaveBlocker (ID: ${powerSaveBlockerId}) to prevent app suspension.`);
+    }
+    return powerSaveBlockerId;
+  });
+
+  ipcMain.handle('power:allow-sleep', () => {
+    if (powerSaveBlockerId !== null) {
+      powerSaveBlocker.stop(powerSaveBlockerId);
+      console.log(`[Main] Stopped powerSaveBlocker (ID: ${powerSaveBlockerId}).`);
+      powerSaveBlockerId = null;
+    }
+    return true;
   });
 
   // 🔒 Advanced Security Phase 7: Auth IPC Handlers
@@ -395,24 +438,6 @@ app.whenReady().then(() => {
     
     const lang = language.trim().toLowerCase();
     
-    if (engine === 'tesseract') {
-      const fileName = `${lang}.traineddata`;
-      
-      // Check in userData/tessdata
-      const userPath = path.join(app.getPath('userData'), 'tessdata', fileName);
-      if (fs.existsSync(userPath)) return { installed: true };
-      
-      // Check in dist/tessdata
-      const appPath = path.join(process.env.DIST || '', 'tessdata', fileName);
-      if (fs.existsSync(appPath)) return { installed: true };
-      
-      // Check in public/tessdata (dev mode)
-      const devPath = path.join(process.cwd(), 'public', 'tessdata', fileName);
-      if (fs.existsSync(devPath)) return { installed: true };
-      
-      return { installed: false };
-    }
-    
     if (engine === 'paddleocr') {
       try {
         const statuses = await getExternalOcrEngineStatuses();
@@ -437,60 +462,6 @@ app.whenReady().then(() => {
     
     const lang = language.trim().toLowerCase();
     
-    if (engine === 'tesseract') {
-      const url = `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${lang}/4.0.0_best_int/${lang}.traineddata.gz`;
-      const destDir = path.join(app.getPath('userData'), 'tessdata');
-      await fs.promises.mkdir(destDir, { recursive: true });
-      const gzPath = path.join(destDir, `${lang}.traineddata.gz`);
-      const finalPath = path.join(destDir, `${lang}.traineddata`);
-      
-      return new Promise<boolean>((resolve, reject) => {
-        https.get(url, (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error(`Tesseract CDN returned HTTP ${res.statusCode}`));
-            return;
-          }
-          const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
-          let downloadedBytes = 0;
-          const file = fs.createWriteStream(gzPath);
-          
-          res.on('data', (chunk) => {
-            downloadedBytes += chunk.length;
-            if (totalBytes > 0) {
-              const progress = Math.round((downloadedBytes / totalBytes) * 100);
-              event.sender.send('main-process-message', {
-                type: 'model-download-progress',
-                engine: 'tesseract',
-                language: lang,
-                progress,
-              });
-            }
-          });
-
-          res.pipe(file);
-          file.on('finish', () => {
-            file.close(async () => {
-              try {
-                const gzBytes = await fs.promises.readFile(gzPath);
-                const rawBytes = zlib.gunzipSync(gzBytes);
-                await fs.promises.writeFile(finalPath, rawBytes);
-                // Also keep gz final path
-                const gzFinalPath = path.join(destDir, `${lang}.traineddata.gz`);
-                await fs.promises.rename(gzPath, gzFinalPath);
-                resolve(true);
-              } catch (err) {
-                reject(err);
-              }
-            });
-          });
-
-          file.on('error', (err) => {
-            reject(err);
-          });
-        }).on('error', reject);
-      });
-    }
-
     if (engine === 'paddleocr') {
       try {
         await prewarmExternalOcrEngine('paddleocr', lang);
@@ -514,7 +485,7 @@ app.whenReady().then(() => {
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
   const isValidEngine = (value: unknown): value is string =>
-    typeof value === 'string' && ['tesseract', 'paddleocr', 'easyocr'].includes(value);
+    typeof value === 'string' && ['paddleocr', 'easyocr'].includes(value);
 
   const getImportsDirectory = (): string => path.join(app.getPath('userData'), 'imports')
 
@@ -534,449 +505,6 @@ app.whenReady().then(() => {
 
     throw new Error('File access denied')
   }
-
-  type TranslationContext = {
-    mode?: string;
-    sourceType?: string;
-    sourceLanguage?: string;
-    targetLanguage?: string;
-    timeoutMs?: number;
-  };
-
-  const ARGOS_LANG_ALIASES: Record<string, string> = {
-    en: 'en',
-    eng: 'en',
-    english: 'en',
-    th: 'th',
-    tha: 'th',
-    thai: 'th',
-    ja: 'ja',
-    jpn: 'ja',
-    ko: 'ko',
-    kor: 'ko',
-    zh: 'zh',
-    chi: 'zh',
-    chi_sim: 'zh',
-    chi_tra: 'zh',
-    vi: 'vi',
-    vie: 'vi',
-    de: 'de',
-    deu: 'de',
-    fr: 'fr',
-    fra: 'fr',
-    ru: 'ru',
-    rus: 'ru',
-    es: 'es',
-    spa: 'es',
-  };
-
-  const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
-    en: 'English',
-    th: 'Thai',
-    ja: 'Japanese',
-    ko: 'Korean',
-    zh: 'Chinese',
-    vi: 'Vietnamese',
-    de: 'German',
-    fr: 'French',
-    ru: 'Russian',
-    es: 'Spanish',
-  };
-
-  const normalizeArgosLanguage = (value: unknown, fallback: string): string => {
-    const raw = String(value || '').trim().toLowerCase();
-    if (!raw) return fallback;
-    return ARGOS_LANG_ALIASES[raw] || raw.split('-')[0] || fallback;
-  };
-
-  const normalizePythonOverride = (value: string | undefined): string | null => {
-    const trimmed = String(value || '').trim();
-    if (!trimmed) return null;
-    if (/[\\/]/.test(trimmed) || path.isAbsolute(trimmed)) {
-      const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed);
-      return fs.existsSync(resolved) ? resolved : null;
-    }
-    return trimmed;
-  };
-
-  const findLocalPythonExecutable = (
-    roots: Array<string | null | undefined>,
-    venvDirs: string[] = ['.venv-ocr', '.venv']
-  ): string | null => {
-    const pythonRelativePath = process.platform === 'win32'
-      ? ['Scripts', 'python.exe']
-      : ['bin', 'python'];
-    const seen = new Set<string>();
-
-    const searchRoots = [...roots];
-    if (typeof __DEV_PROJECT_ROOT__ !== 'undefined' && __DEV_PROJECT_ROOT__) {
-      searchRoots.push(__DEV_PROJECT_ROOT__);
-    }
-
-    for (const root of searchRoots) {
-      if (!root) continue;
-      const resolvedRoot = path.resolve(root);
-      if (seen.has(resolvedRoot)) continue;
-      seen.add(resolvedRoot);
-
-      for (const venvDir of venvDirs) {
-        const candidate = path.join(resolvedRoot, venvDir, ...pythonRelativePath);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-
-    return null;
-  };
-
-  const resolvePythonExecutable = (): string => {
-    const argosOverride = normalizePythonOverride(process.env.ARGOS_PYTHON_PATH);
-    if (argosOverride) return argosOverride;
-
-    const appOverride = normalizePythonOverride(process.env.PDF_TRANSLATOR_PYTHON);
-    if (appOverride) return appOverride;
-
-    const localVenvPython = findLocalPythonExecutable([
-      process.cwd(),
-      app.getAppPath(),
-      path.resolve(app.getAppPath(), '..'),
-      path.resolve(__dirname, '..'),
-      path.dirname(process.execPath),
-      path.resolve(path.dirname(process.execPath), '..'),
-      path.resolve(path.dirname(process.execPath), '../..'),
-      process.resourcesPath,
-      process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
-      process.env.PORTABLE_EXECUTABLE_DIR,
-    ], ['.venv-ocr', '.venv-easy-yolo', '.venv', '.venv-argos']);
-    if (localVenvPython) return localVenvPython;
-
-    const virtualEnv = process.env.VIRTUAL_ENV;
-    if (virtualEnv) {
-      const windowsPython = path.join(virtualEnv, 'Scripts', 'python.exe');
-      if (fs.existsSync(windowsPython)) return windowsPython;
-      const posixPython = path.join(virtualEnv, 'bin', 'python');
-      if (fs.existsSync(posixPython)) return posixPython;
-    }
-    return process.platform === 'win32' ? 'python' : 'python3';
-  };
-
-  const resolveArgosBridgePath = (): string => {
-    const candidates = [
-      path.join(process.cwd(), 'scripts', 'argos_translate_bridge.py'),
-      path.join(__dirname, '../scripts/argos_translate_bridge.py'),
-      path.join(process.resourcesPath, 'ocr-bridge', 'argos_translate_bridge.py'),
-    ];
-    const found = candidates.find((candidate) => fs.existsSync(candidate));
-    if (!found) {
-      throw new Error('Argos bridge script not found. Expected scripts/argos_translate_bridge.py');
-    }
-    return found;
-  };
-
-  const resolveArgosBridgeEnv = (): NodeJS.ProcessEnv => {
-    const userDataRoot = path.join(app.getPath('userData'), 'argos-runtime');
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(userDataRoot, 'config');
-    const cacheHome = process.env.XDG_CACHE_HOME || path.join(userDataRoot, 'cache');
-    fs.mkdirSync(configHome, { recursive: true });
-    fs.mkdirSync(cacheHome, { recursive: true });
-
-    const packageDirCandidates = [
-      process.env.ARGOS_PACKAGES_DIR,
-      process.env.ARGOS_TRANSLATE_PACKAGE_DIR,
-      path.join(app.getPath('home'), '.local', 'share', 'argos-translate', 'packages'),
-      path.join(userDataRoot, 'packages'),
-    ].filter((candidate): candidate is string => Boolean(candidate));
-
-    const packageDir = packageDirCandidates.find((candidate) => {
-      try {
-        return fs.existsSync(candidate);
-      } catch {
-        return false;
-      }
-    });
-
-    return {
-      ...process.env,
-      PYTHONUTF8: '1',
-      XDG_CONFIG_HOME: configHome,
-      XDG_CACHE_HOME: cacheHome,
-      ...(packageDir ? {
-        ARGOS_PACKAGES_DIR: packageDir,
-        ARGOS_TRANSLATE_PACKAGE_DIR: packageDir,
-      } : {}),
-    };
-  };
-
-  interface ArgosBridgeResponse {
-    ok?: boolean;
-    id?: string;
-    translations?: unknown;
-    reason?: string;
-    warning?: string;
-    fallbackReason?: string;
-  }
-
-  interface ArgosPendingRequest {
-    resolve: (response: ArgosBridgeResponse) => void;
-    reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }
-
-  interface ArgosBridgeDaemon {
-    child: ReturnType<typeof spawn>;
-    stdoutBuffer: string;
-    stderrBuffer: string;
-    pending: Map<string, ArgosPendingRequest>;
-    pythonExecutable: string;
-    bridgePath: string;
-    bridgeSignature: string;
-  }
-
-  const argosBridgeScriptSignature = (bridgePath: string): string => {
-    try {
-      const stat = fs.statSync(bridgePath);
-      return `${bridgePath}:${Math.floor(stat.mtimeMs)}`;
-    } catch {
-      return `${bridgePath}:unknown`;
-    }
-  };
-
-  let argosBridgeDaemon: ArgosBridgeDaemon | null = null;
-
-  const teardownArgosDaemon = (reason?: Error, targetDaemon?: ArgosBridgeDaemon | null): void => {
-    const daemon = targetDaemon || argosBridgeDaemon;
-    if (!daemon) return;
-
-    if (daemon === argosBridgeDaemon) {
-      argosBridgeDaemon = null;
-    }
-
-    for (const [, pending] of daemon.pending) {
-      clearTimeout(pending.timeout);
-      pending.reject(reason ?? new Error('Argos translation daemon stopped unexpectedly'));
-    }
-    daemon.pending.clear();
-    if (!daemon.child.killed) {
-      daemon.child.kill();
-    }
-  };
-
-  disposeArgosTranslateRuntime = () => {
-    teardownArgosDaemon(new Error('Argos translation runtime disposed'));
-  };
-
-  const handleArgosDaemonStdout = (chunk: Buffer, targetDaemon?: ArgosBridgeDaemon | null): void => {
-    const daemon = targetDaemon || argosBridgeDaemon;
-    if (!daemon) return;
-
-    daemon.stdoutBuffer += chunk.toString();
-    const lines = daemon.stdoutBuffer.split(/\r?\n/);
-    daemon.stdoutBuffer = lines.pop() ?? '';
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line) continue;
-
-      let payload: ArgosBridgeResponse;
-      try {
-        payload = JSON.parse(line) as ArgosBridgeResponse;
-      } catch {
-        console.warn(`[argosBridge] Ignoring non-JSON stdout: ${line}`);
-        continue;
-      }
-
-      if (!payload.id) {
-        console.warn('[argosBridge] Ignoring daemon response without request id');
-        continue;
-      }
-
-      const pending = daemon.pending.get(payload.id);
-      if (!pending) {
-        console.warn(`[argosBridge] Received orphaned daemon response ${payload.id}`);
-        continue;
-      }
-
-      daemon.pending.delete(payload.id);
-      clearTimeout(pending.timeout);
-      if (payload.ok === false) {
-        pending.reject(new Error(payload.reason || 'Argos translation bridge failed'));
-        continue;
-      }
-      pending.resolve(payload);
-    }
-  };
-
-  const ensureArgosDaemon = (): ArgosBridgeDaemon => {
-      const pythonExecutable = resolvePythonExecutable();
-      const bridgePath = resolveArgosBridgePath();
-      const bridgeSignature = argosBridgeScriptSignature(bridgePath);
-      const env = {
-        ...resolveArgosBridgeEnv(),
-        // Keep offline translation deterministic and avoid runtime Stanza resource fetches.
-        ARGOS_CHUNK_TYPE: process.env.ARGOS_CHUNK_TYPE || 'MINISBD',
-      };
-
-      // Reuse existing daemon if: not killed, path/executable/signature unchanged, and process still alive
-      if (
-        argosBridgeDaemon
-        && !argosBridgeDaemon.child.killed
-        && argosBridgeDaemon.pythonExecutable === pythonExecutable
-        && argosBridgeDaemon.bridgePath === bridgePath
-        && argosBridgeDaemon.bridgeSignature === bridgeSignature
-      ) {
-        // Double-check: is the child process actually alive? (handles orphaned state)
-        try {
-          process.kill(argosBridgeDaemon.child.pid!, 0); // Signal 0 = check-only, doesn't kill
-          return argosBridgeDaemon; // Process is alive, reuse it
-        } catch {
-          // Process is dead (pid doesn't exist or already exited), continue to spawn new
-        }
-      }
-
-      if (argosBridgeDaemon) {
-        teardownArgosDaemon(new Error('Argos bridge runtime changed or process died; restarting daemon'));
-      }
-
-      const child = spawn(pythonExecutable, [bridgePath, '--stdio-server'], {
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env,
-      });
-
-      const daemon: ArgosBridgeDaemon = {
-        child,
-        stdoutBuffer: '',
-        stderrBuffer: '',
-        pending: new Map(),
-        pythonExecutable,
-        bridgePath,
-        bridgeSignature,
-      };
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        handleArgosDaemonStdout(chunk, daemon);
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        daemon.stderrBuffer += chunk.toString();
-        const message = chunk.toString().trim();
-        if (argosBridgeDaemon && argosBridgeDaemon.child === child && message) {
-          console.warn(`[argosBridge] ${message}`);
-        }
-      });
-      child.on('error', (error) => {
-        teardownArgosDaemon(error, daemon);
-      });
-      child.on('close', (code, signal) => {
-        const stderr = daemon.stderrBuffer.trim();
-        const exitMessage = `Argos bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
-        teardownArgosDaemon(
-          new Error(stderr ? `${exitMessage}: ${stderr}` : exitMessage),
-          daemon
-        );
-      });
-
-      argosBridgeDaemon = daemon;
-      return daemon;
-    };
-
-  const requestArgosDaemon = async (
-    payload: Record<string, unknown>,
-    requestTimeoutMs: number
-  ): Promise<ArgosBridgeResponse> => {
-    const daemon = ensureArgosDaemon();
-    const id = randomUUID();
-
-    return await new Promise<ArgosBridgeResponse>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        daemon.pending.delete(id);
-        teardownArgosDaemon(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
-        reject(new Error(`Argos translation timed out after ${requestTimeoutMs}ms`));
-      }, requestTimeoutMs);
-
-      daemon.pending.set(id, { resolve, reject, timeout });
-
-      try {
-        const stdin = daemon.child.stdin;
-        if (!stdin) {
-          throw new Error('Argos daemon stdin is unavailable');
-        }
-        stdin.write(`${JSON.stringify({ id, ...payload })}\n`);
-      } catch (error) {
-        daemon.pending.delete(id);
-        clearTimeout(timeout);
-        reject(error instanceof Error ? error : new Error(String(error)));
-        teardownArgosDaemon(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  };
-
-  const runArgosTranslateBatch = async (
-    texts: string[],
-    context?: TranslationContext
-  ): Promise<string[]> => {
-    if (!Array.isArray(texts)) {
-      throw new Error('Invalid input: texts must be an array');
-    }
-    if (texts.length === 0) return [];
-
-    const timeoutMs = Math.max(3000, Math.min(120000, Number(context?.timeoutMs || 45000)));
-    const sourceLanguage = normalizeArgosLanguage(context?.sourceLanguage, 'en');
-    const targetLanguage = normalizeArgosLanguage(context?.targetLanguage, 'th');
-    if (sourceLanguage === targetLanguage) {
-      return texts.map((text) => String(text || ''));
-    }
-
-    const payload = {
-      texts: texts.map((text) => String(text || '')),
-      sourceLanguage,
-      targetLanguage,
-      mode: String(context?.mode || 'manga'),
-      sourceType: String(context?.sourceType || 'text'),
-    };
-
-    const dedupedTexts: string[] = [];
-    const dedupeIndexByText = new Map<string, number>();
-    const textOrder: number[] = [];
-    for (const text of payload.texts) {
-      const key = String(text);
-      const existing = dedupeIndexByText.get(key);
-      if (existing !== undefined) {
-        textOrder.push(existing);
-        continue;
-      }
-      const nextIndex = dedupedTexts.length;
-      dedupeIndexByText.set(key, nextIndex);
-      dedupedTexts.push(key);
-      textOrder.push(nextIndex);
-    }
-
-    const dedupedPayload = {
-      ...payload,
-      texts: dedupedTexts,
-    };
-
-    let response: ArgosBridgeResponse;
-    try {
-      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
-    } catch (error) {
-      teardownArgosDaemon(
-        error instanceof Error ? error : new Error(String(error))
-      );
-      response = await requestArgosDaemon(dedupedPayload, timeoutMs);
-    }
-
-    if (!Array.isArray(response.translations)) {
-      throw new Error('Argos translation bridge returned invalid payload');
-    }
-
-    const dedupedTranslations = response.translations.map((item) => String(item ?? ''));
-    if (dedupedTranslations.length !== dedupedTexts.length) {
-      throw new Error(`Argos translation count mismatch: expected ${dedupedTexts.length}, got ${dedupedTranslations.length}`);
-    }
-
-    return textOrder.map((index) => dedupedTranslations[index] ?? '');
-  };
 
   // ============================================
   // Database IPC Handlers (with validation)
@@ -1056,7 +584,9 @@ app.whenReady().then(() => {
 
     try {
       const selectedEngine = isValidEngine(engine) ? engine : 'tesseract';
-      return OCRCacheDAO.get(docId, pageNum, selectedEngine);
+      const result = OCRCacheDAO.get(docId, pageNum, selectedEngine);
+
+      return result;
     } catch (error) {
       console.error('db:get-ocr error:', error);
       return null;
@@ -1209,6 +739,28 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:save-ocr-batch', async (_, items) => {
+    if (!Array.isArray(items) || items.length === 0) return true;
+    try {
+      OCRCacheDAO.saveBatch(items);
+      return true;
+    } catch (error) {
+      console.error('db:save-ocr-batch error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('db:save-translation-cache-batch', async (_, items) => {
+    if (!Array.isArray(items) || items.length === 0) return true;
+    try {
+      TranslationCacheDAO.saveBatch(items);
+      return true;
+    } catch (error) {
+      console.error('db:save-translation-cache-batch error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:get-translation-cache-page', async (_, { docId, pageNum }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid input: docId and pageNum must be positive numbers');
@@ -1248,6 +800,18 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:save-sentence-translation-batch', async (_, { items }) => {
+    if (!Array.isArray(items)) {
+      throw new Error('Invalid input: items must be an array');
+    }
+    try {
+      return SentenceTranslationDAO.saveBatch(items);
+    } catch (error) {
+      console.error('db:save-sentence-translation-batch error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:get-sentence-translation', async (_, { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }) => {
     if (!isValidString(sourceText) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode)) {
       throw new Error('Invalid input: all arguments must be non-empty strings');
@@ -1260,6 +824,18 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:get-sentence-translation-batch', async (_, { sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode }) => {
+    if (!Array.isArray(sourceTexts) || !isValidString(sourceLanguage) || !isValidString(targetLanguage) || !isValidString(translatorEngine) || !isValidString(translationMode)) {
+      throw new Error('Invalid input: sourceTexts must be an array, other arguments must be non-empty strings');
+    }
+    try {
+      return SentenceTranslationDAO.getBatch(sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode);
+    } catch (error) {
+      console.error('db:get-sentence-translation-batch error:', error);
+      return {};
+    }
+  });
+
   // ============================================
     // Document Management IPC Handlers
     // ============================================
@@ -1267,68 +843,7 @@ app.whenReady().then(() => {
     // 🚀 Startup optimization: batch load all needed data in 1 round-trip
       ipcMain.handle('db:startup-load', async () => {
         try {
-          const db = initDB();
-          // Run all queries in parallel — SQLite with WAL handles concurrency well
-          const [recentDocs, allTags, allProjects, latestOcr] = await Promise.all([
-            Promise.resolve().then(() => {
-              // Fast path: get recent docs WITHOUT tags join (hydrate in JS instead)
-              if (!db) throw new Error('DB not initialized');
-              return db.prepare(`
-                SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
-                       d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
-                FROM documents d
-                ORDER BY d.last_accessed DESC
-                LIMIT 50
-              `).all();
-            }),
-            Promise.resolve().then(() => TagDAO.getAll()),
-            Promise.resolve().then(() => ProjectDAO.getAll()),
-            Promise.resolve().then(() => {
-              if (!db) return null;
-              const latestDoc = db.prepare(`
-                SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
-              `).get() as { id: number } | undefined;
-              return latestDoc ? OCRCacheDAO.getLatestForDocument(latestDoc.id) : null;
-            }),
-          ]);
-
-          // Hydrate tag_names/tag_colors from document_tags in JS (faster than SQL JOIN per row)
-          const docIds = (recentDocs as Array<{ id: number }>).map(d => d.id);
-          let tagMap: Map<number, { names: string[]; colors: string[] }> = new Map();
-          if (docIds.length > 0 && db) {
-            const placeholders = docIds.map(() => '?').join(', ');
-            const tagRows = db.prepare(`
-              SELECT dt.document_id, t.name, t.color
-              FROM document_tags dt
-              JOIN tags t ON t.id = dt.tag_id
-              WHERE dt.document_id IN (${placeholders})
-              ORDER BY t.name
-            `).all(...docIds) as Array<{ document_id: number; name: string; color: string }>;
-            for (const row of tagRows) {
-              if (!tagMap.has(row.document_id)) {
-                tagMap.set(row.document_id, { names: [], colors: [] });
-              }
-              const entry = tagMap.get(row.document_id)!;
-              entry.names.push(row.name);
-              entry.colors.push(row.color);
-            }
-          }
-
-          const hydratedDocs = (recentDocs as Array<{ id: number }>).map(doc => {
-            const tags = tagMap.get(doc.id);
-            return {
-              ...doc,
-              tag_names: tags ? tags.names.join(',') : null,
-              tag_colors: tags ? tags.colors.join(',') : null,
-            };
-          });
-
-          return {
-            recentDocuments: hydratedDocs,
-            allTags,
-            allProjects,
-            latestOcrDocId: (recentDocs as Array<{ id: number }>)?.[0]?.id ?? null,
-          };
+          return DocumentDAO.getStartupBatch();
         } catch (error) {
           console.error('db:startup-load error:', error);
           return { recentDocuments: [], allTags: [], allProjects: [], latestOcrDocId: null };
@@ -1428,7 +943,7 @@ app.whenReady().then(() => {
   ipcMain.handle('fs:open-file', async () => {
     try {
       const result = await dialog.showOpenDialog({
-        properties: ['openFile'],
+        properties: ['openFile', 'multiSelections'],
         filters: [
           { name: 'Documents', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff'] },
           { name: 'All Files', extensions: ['*'] },
@@ -1439,17 +954,21 @@ app.whenReady().then(() => {
         return null;
       }
 
-      const filepath = result.filePaths[0];
-      const documentFile = await inspectExistingDocumentFile(filepath)
-      const buffer = await fs.promises.readFile(documentFile.canonicalPath)
+      const files = await Promise.all(
+        result.filePaths.map(async (filepath) => {
+          const documentFile = await inspectExistingDocumentFile(filepath);
+          const buffer = await fs.promises.readFile(documentFile.canonicalPath);
+          return {
+            filepath: documentFile.canonicalPath,
+            data: buffer,
+            mimeType: documentFile.mimeType,
+            size: documentFile.size,
+            name: documentFile.name,
+          };
+        })
+      );
 
-      return {
-        filepath: documentFile.canonicalPath,
-        data: buffer,
-        mimeType: documentFile.mimeType,
-        size: documentFile.size,
-        name: documentFile.name,
-      };
+      return files;
     } catch (error) {
       console.error('fs:open-file error:', error);
       throw error;
@@ -1587,6 +1106,172 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('ocr:get-gpu-info', async () => {
+    try {
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+
+      let gpuNames: string[] = [];
+      if (process.platform === 'win32') {
+        try {
+          const { stdout } = await execAsync('powershell -Command "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"', { windowsHide: true });
+          gpuNames = stdout.split('\n').map((x: string) => x.trim()).filter(Boolean);
+          if (gpuNames.length === 0) {
+            const { stdout: wmiStdout } = await execAsync('powershell -Command "Get-WmiObject Win32_VideoController | Select-Object -ExpandProperty Name"', { windowsHide: true });
+            gpuNames = wmiStdout.split('\n').map((x: string) => x.trim()).filter(Boolean);
+          }
+        } catch (err) {
+          console.warn('[Main] Failed to query GPU names via PowerShell:', err);
+        }
+      }
+
+      if (gpuNames.length === 0) {
+        try {
+          const gpuInfo: any = await app.getGPUInfo('basic');
+          if (gpuInfo?.gpuDevice) {
+            gpuNames = gpuInfo.gpuDevice.map((device: any) => device.deviceString || device.vendorString || 'Unknown GPU');
+          }
+        } catch (err) {
+          console.warn('[Main] Failed to query GPU info via Electron getGPUInfo:', err);
+        }
+      }
+
+      // Filter out duplicate or empty values
+      gpuNames = Array.from(new Set(gpuNames.map(g => g.trim()))).filter(Boolean);
+
+      const hasNvidia = gpuNames.some(g => g.toLowerCase().includes('nvidia'));
+      const hasIntel = gpuNames.some(g => g.toLowerCase().includes('intel'));
+      const hasAmd = gpuNames.some(g => {
+        const lower = g.toLowerCase();
+        return lower.includes('amd') || lower.includes('radeon');
+      });
+
+      // Determine primary GPU vendor (priority: nvidia > amd > intel)
+      let gpuVendor: 'nvidia' | 'amd' | 'intel' | 'unknown' = 'unknown';
+      if (hasNvidia) {
+        gpuVendor = 'nvidia';
+      } else if (hasAmd) {
+        gpuVendor = 'amd';
+      } else if (hasIntel) {
+        gpuVendor = 'intel';
+      }
+
+      // Find local virtualenv path to check if DirectML / CUDA is installed
+      let hasDirectML = false;
+      let hasCuda = false;
+
+      const seen = new Set<string>();
+      const searchRoots = [
+        process.cwd(),
+        app.getAppPath(),
+        path.resolve(app.getAppPath(), '..'),
+        path.resolve(__dirname, '..'),
+        path.dirname(process.execPath),
+        path.resolve(path.dirname(process.execPath), '..'),
+        path.resolve(path.dirname(process.execPath), '../..'),
+        process.resourcesPath,
+        process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
+        process.env.PORTABLE_EXECUTABLE_DIR,
+      ];
+      if (typeof (global as any).__DEV_PROJECT_ROOT__ !== 'undefined' && (global as any).__DEV_PROJECT_ROOT__) {
+        searchRoots.push((global as any).__DEV_PROJECT_ROOT__);
+      }
+
+      // Add roots from environment variables if present (especially for packaged environments inheriting variables)
+      const envPythonPaths = [
+        process.env.OCR_PYTHON_PATH,
+        process.env.PADDLE_OCR_PYTHON_PATH,
+        process.env.EASY_YOLO_OCR_PYTHON_PATH,
+      ];
+      for (const envPath of envPythonPaths) {
+        if (envPath) {
+          const resolvedEnv = path.resolve(envPath);
+          if (resolvedEnv.toLowerCase().endsWith('python.exe') || resolvedEnv.toLowerCase().endsWith('python')) {
+            const venvRoot = path.resolve(path.dirname(resolvedEnv), '..');
+            searchRoots.push(venvRoot);
+            searchRoots.push(path.resolve(venvRoot, '..'));
+          } else {
+            searchRoots.push(resolvedEnv);
+          }
+        }
+      }
+
+      for (const root of searchRoots) {
+        if (!root) continue;
+        const resolvedRoot = path.resolve(root);
+        if (seen.has(resolvedRoot)) continue;
+        seen.add(resolvedRoot);
+
+        // Check if the resolvedRoot is directly a virtual environment itself (e.g. env overrides)
+        const directSitePackages = path.join(resolvedRoot, 'Lib', 'site-packages');
+        if (fs.existsSync(directSitePackages)) {
+          const hasTorchDml = fs.existsSync(path.join(directSitePackages, 'torch_directml'));
+          const hasOnnxDml1 = fs.existsSync(path.join(directSitePackages, 'onnxruntime_directml'));
+          const hasOnnxDml2 = fs.existsSync(path.join(directSitePackages, 'onnxruntime-directml'));
+          if (hasTorchDml || hasOnnxDml1 || hasOnnxDml2) {
+            hasDirectML = true;
+          }
+          if (fs.existsSync(path.join(directSitePackages, 'torch', 'cuda'))) {
+            hasCuda = true;
+          }
+        }
+
+        for (const venvDir of ['.venv-ocr', '.venv']) {
+          const venvPath = path.join(resolvedRoot, venvDir);
+          if (fs.existsSync(venvPath)) {
+            const sitePackagesPath = path.join(venvPath, 'Lib', 'site-packages');
+            if (fs.existsSync(sitePackagesPath)) {
+              const hasTorchDml = fs.existsSync(path.join(sitePackagesPath, 'torch_directml'));
+              const hasOnnxDml1 = fs.existsSync(path.join(sitePackagesPath, 'onnxruntime_directml'));
+              const hasOnnxDml2 = fs.existsSync(path.join(sitePackagesPath, 'onnxruntime-directml'));
+              if (hasTorchDml || hasOnnxDml1 || hasOnnxDml2) {
+                hasDirectML = true;
+              }
+              if (fs.existsSync(path.join(sitePackagesPath, 'torch', 'cuda'))) {
+                hasCuda = true;
+              }
+            }
+          }
+        }
+      }
+
+      // Check environment override
+      if (process.env.OCR_USE_DIRECTML === '1') {
+        hasDirectML = true;
+      }
+      if (process.env.OCR_USE_GPU === '1') {
+        hasCuda = true;
+      }
+
+      let mode: 'CUDA' | 'DirectML' | 'CPU' = 'CPU';
+      if (hasCuda && hasNvidia) {
+        mode = 'CUDA';
+      } else if (hasDirectML) {
+        mode = 'DirectML';
+      }
+
+      console.log(`[ocr:get-gpu-info] Mode resolved: ${mode} (gpus: ${gpuNames.join(', ') || 'none'})`);
+
+      return {
+        gpus: gpuNames.length > 0 ? gpuNames : ['CPU Display Adapter'],
+        hasDirectML,
+        hasCuda: hasCuda && hasNvidia, // Only report CUDA as active/available if Nvidia GPU is present
+        mode,
+        gpuVendor,  // 'intel' | 'amd' | 'nvidia' | 'unknown' — used by UI to show "Intel DirectML" etc.
+      };
+    } catch (error) {
+      console.error('ocr:get-gpu-info error:', error);
+      return {
+        gpus: ['Unknown GPU'],
+        hasDirectML: false,
+        hasCuda: false,
+        mode: 'CPU' as const,
+        gpuVendor: 'unknown' as const,
+      };
+    }
+  });
+
   ipcMain.handle('ocr:prewarm-engine', async (_, payload: { engine: string; language?: string }) => {
     if (!payload || typeof payload !== 'object' || !isValidString(payload.engine)) {
       throw new Error('Invalid OCR prewarm payload');
@@ -1599,8 +1284,23 @@ app.whenReady().then(() => {
     try {
       return await prewarmExternalOcrEngine(payload.engine, isValidString(payload.language) ? payload.language : 'eng');
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/canceled|stopped unexpectedly|daemon process died/i.test(message)) {
+        console.warn(`ocr:prewarm-engine safely canceled for ${payload.engine}: ${message}`);
+        return {
+          ok: false,
+          engine: payload.engine,
+          runtime: 'none',
+          description: `Prewarm canceled (${message})`,
+        };
+      }
       console.error('ocr:prewarm-engine error:', error);
-      throw error;
+      return {
+        ok: false,
+        engine: payload.engine,
+        runtime: 'none',
+        description: message,
+      };
     }
   });
 
@@ -1739,6 +1439,20 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('ocr:clear-cuda-cache', async (_, payload: { engine: string }) => {
+    try {
+      const engine = payload?.engine;
+      if (engine !== 'paddleocr' && engine !== 'easyocr') {
+        throw new Error(`Unsupported OCR engine for CUDA clear: ${engine}`);
+      }
+      await clearExternalOcrCudaCache(engine);
+      return true;
+    } catch (error) {
+      console.error('ocr:clear-cuda-cache error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:get-documents-by-tag', async (_, tagId) => {
     if (!isValidNumber(tagId)) {
       throw new Error('Invalid input: tagId must be a positive number');
@@ -1836,6 +1550,18 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('db:update-tag', async (_, { id, updates }) => {
+    if (!isValidNumber(id)) {
+      throw new Error('Invalid input: id must be a positive number');
+    }
+    try {
+      return TagDAO.update(id, updates);
+    } catch (error) {
+      console.error('db:update-tag error:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db:delete-tag', async (_, id) => {
     if (!isValidNumber(id)) {
       throw new Error('Invalid input: id must be a positive number');
@@ -1903,6 +1629,36 @@ app.whenReady().then(() => {
       console.error('db:delete-project error:', error);
       return false;
     }
+  });
+
+  ipcMain.handle('db:get-project-stats', async (_, projectId: number) => {
+    if (!isValidNumber(projectId)) {
+      throw new Error('Invalid input: projectId must be a positive number');
+    }
+    try {
+      return ProjectDAO.getProjectStats(projectId);
+    } catch (error) {
+      console.error('db:get-project-stats error:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('window:toggle-fullscreen', async () => {
+    try {
+      if (win) {
+        const next = !win.isFullScreen();
+        win.setFullScreen(next);
+        return next;
+      }
+      return false;
+    } catch (error) {
+      console.error('window:toggle-fullscreen error:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('window:is-fullscreen', async () => {
+    return win?.isFullScreen() ?? false;
   });
 
   // ============================================
@@ -2013,7 +1769,29 @@ app.whenReady().then(() => {
 
     const payload = {
       contents: [{ parts: [{ text: promptText }] }],
-      systemInstruction: { parts: [{ text: systemPrompt }] }
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_HATE_SPEECH',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_NONE'
+        },
+        {
+          category: 'HARM_CATEGORY_CIVIC_INTEGRITY',
+          threshold: 'BLOCK_NONE'
+        }
+      ]
     };
 
     // Exponential backoff retry

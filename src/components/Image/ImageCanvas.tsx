@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore, OCRTranslationCacheEntry, hasCurrentOCRTranslationCacheVersion } from '../../stores/useOCRTextLayerStore';
+import { dbService } from '../../services/dbService';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
+import type { OCREngine } from '../../types';
 import { useLayerStore } from '../../stores/useLayerStore';
+import { InteractiveLayerOverlay } from '../Layers/InteractiveLayerOverlay';
 import {
   clampOverlayRect,
   computeOverlayTypography,
@@ -148,6 +152,7 @@ interface ImageCanvasProps {
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewModeOverride }) => {
   const {
+    documentId,
     fileUrl,
     currentPage,
     sourceLanguage,
@@ -157,7 +162,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     overlayFontPreset,
     overlayFontSizeScale,
   } = useProjectStore();
-  const { zoom, pan, setZoom, setPan, setView, activeTool } = useUIStore();
+  const zoom = useUIStore((s) => s.zoom);
+  const pan = useUIStore((s) => s.pan);
+  const setZoom = useUIStore((s) => s.setZoom);
+  const setPan = useUIStore((s) => s.setPan);
+  const setView = useUIStore((s) => s.setView);
+  const activeTool = useUIStore((s) => s.activeTool);
   const {
     allPagesOCR,
     ocrByPageEngine,
@@ -171,8 +181,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
   const translationPreviewMode = previewModeOverride || storePreviewMode;
   
+  const [isCacheLoading, setIsCacheLoading] = useState(false);
   const layersByPage = useLayerStore((state) => state.layersByPage);
   const currentPageLayers = useMemo(() => layersByPage.get(currentPage) || layersByPage.get(1) || [], [layersByPage, currentPage]);
+  const groupsByPage = useLayerStore((state) => state.groupsByPage);
+  const currentPageGroups = useMemo(() => groupsByPage.get(currentPage) || groupsByPage.get(1) || [], [groupsByPage, currentPage]);
   const selectedEngine = (options.engine || 'paddleocr');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
@@ -183,6 +196,95 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     const fallbackEngine = (fallback.ocrEngine || selectedEngine);
     return fallbackEngine === selectedEngine ? fallback : undefined;
   };
+
+  // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
+  useEffect(() => {
+    if (!documentId) return;
+    let canceled = false;
+    const pageNum = currentPage || 1;
+    const activeEngine = (options.engine || 'paddleocr') as OCREngine;
+    const ocrState = useOCRTextLayerStore.getState();
+
+    const loadCache = async () => {
+      // 1. Load OCR cache if not in memory
+      const hasOcr = ocrState.ocrByPageEngine.get(pageNum)?.has(activeEngine);
+      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
+
+      let startedLoading = false;
+      if (!hasOcr || !hasTranslation) {
+        setIsCacheLoading(true);
+        startedLoading = true;
+      }
+
+      try {
+        const ocrPromise = !hasOcr
+          ? dbService.getOCR(documentId, pageNum, activeEngine).catch((err) => {
+              console.warn(`[ImageCanvas] Failed to load OCR cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const transPromise = !hasTranslation
+          ? dbService.getTranslationCachePage(documentId, pageNum).catch((err) => {
+              console.warn(`[ImageCanvas] Failed to load translation cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const [cached, rows] = await Promise.all([ocrPromise, transPromise]);
+
+        if (cached && !canceled) {
+          if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+            cached.pageNumber = pageNum;
+            ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+            console.log(`[ImageCanvas] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+          } else {
+            console.log(`[ImageCanvas] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
+          }
+        }
+
+        if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+          console.log(`[ImageCanvas] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+          let preferredKey: string | null = null;
+          const sortedRows = [...rows].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+          for (const row of sortedRows) {
+            if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+              continue;
+            }
+            const normalizedEntry: OCRTranslationCacheEntry = {
+              ...row,
+              pageNum,
+              ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+            };
+            ocrState.setTranslationCacheEntry(pageNum, row.key, normalizedEntry);
+
+            if (!preferredKey && row.key && row.key.includes(activeEngine)) {
+              preferredKey = row.key;
+            }
+          }
+
+          if (!preferredKey && sortedRows.length > 0 && sortedRows[0].key) {
+            preferredKey = sortedRows[0].key;
+          }
+
+          if (preferredKey) {
+            ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
+            ocrState.setTranslationPreviewMode('translated');
+          }
+        }
+      } finally {
+        if (startedLoading && !canceled) {
+          setIsCacheLoading(false);
+        }
+      }
+    };
+
+    loadCache();
+    return () => {
+      canceled = true;
+    };
+  }, [documentId, currentPage, options.engine]);
 
   const currentPageOCR = resolveEngineScopedPageOCR(currentPage)
     || resolveEngineScopedPageOCR(1);
@@ -300,6 +402,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
         if (!canceled) {
           setTranslatedLinePalette(next);
         }
+
+        // Optimize Memory: Explicitly release memory by resizing to 0x0
+        try {
+          sampleCanvas.width = 0;
+          sampleCanvas.height = 0;
+        } catch (e) { /* ignore */ }
       };
 
       if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
@@ -575,6 +683,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
         const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
         const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
 
+        const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+        const groupType = group?.groupType;
+
         return [{
           index,
           text: translatedText,
@@ -590,6 +701,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
             sourceLineCount: 1,
             fontFamily: overlayFontFamily,
             profile: overlayLayoutProfile,
+            groupType,
           },
         }];
       }),
@@ -638,6 +750,15 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
               draggable={false}
               className="max-w-none border border-slate-700 bg-white shadow-2xl select-none block"
             />
+            {isCacheLoading && (
+              <div className="absolute top-4 right-4 z-50 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 text-xs text-slate-200 shadow-lg animate-pulse pointer-events-none select-none">
+                <svg className="animate-spin h-3.5 w-3.5 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span className="font-medium tracking-wide">กำลังโหลดแคช...</span>
+              </div>
+            )}
             {translationOverlayContext.shouldRender && currentPageOCR && imageDisplaySize.width > 0 && imageDisplaySize.height > 0 && (
               <div 
                 style={{
@@ -647,19 +768,24 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                 className="absolute inset-0 pointer-events-none"
               >
                 {currentPageOCR.lines.map((line, idx) => {
+                  const layout = overlayLayoutByIndex.get(idx);
+                  const isMaskOnlyLine = Boolean(layout?.hidden);
+                  
                   const translatedText = translationOverlayContext.translatedByIndex.get(idx);
-                  if (!translatedText) return null;
-                  if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
+                  if (!translatedText && !(isMaskOnlyLine && layout?.preserveMaskWhenHidden)) {
+                    return null;
+                  }
+                  if (translatedText && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
                     return null;
                   }
 
-                  const layout = overlayLayoutByIndex.get(idx);
                   const layer = currentPageLayers.find(l => l.lineIndex === idx);
-                  const isMaskOnlyLine = Boolean(layout?.hidden);
+                  const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+                  const isSfxGroup = group?.groupType === 'sfx';
                   if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
                     return null;
                   }
-                  const renderText = layout?.renderText || translatedText;
+                  const renderText = layout?.renderText || translatedText || '';
                   const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
                   const styleKind = layout?.styleKind;
                   const isDocumentLikeOverlay = styleKind
@@ -730,8 +856,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                   const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
                   const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
                   const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
-                  const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-                  const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+                  const mergedComicTextTopLift = 0;
+                  const mergedComicTextExtraHeight = 0;
                   const rawTextLeft = textSourceLeft * ocrScaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
                   const rawTextTop = textSourceTop * ocrScaleY - maskExpandTop - mergedComicTextTopLift;
                   const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
@@ -762,18 +888,20 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                     ? Math.max(baseWidth, maskBaseWidth)
                     : Math.max(baseWidth, textRect.width * 0.96);
                   const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
+                  const mergedBalloonHeight = useMergedComicTextRect ? maskBaseHeight : 0;
                   const typographyHeight = isDocumentLikeOverlay
                     ? Math.min(
                       textRect.height,
                       Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
                     )
-                    : textRect.height;
+                    : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : textRect.height);
+                  const sourceBoxHeightForTypography = isDocumentLikeOverlay
+                    ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+                    : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : baseHeight);
                   const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
                     sourceText: line.text,
                     sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
-                    sourceBoxHeight: isDocumentLikeOverlay
-                      ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
-                      : baseHeight,
+                    sourceBoxHeight: sourceBoxHeightForTypography,
                     sourceLineCount: 1,
                     fontFamily: overlayFontFamily,
                     profile: effectiveProfile,
@@ -792,7 +920,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                     ? ((layout.sharedCenterX - renderSourceLeft) * ocrScaleX) - (textRect.width * 0.5)
                     : 0;
                   const innerLeft = layout?.alignment === 'center'
-                    ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+                    ? (effectiveProfile === 'manga' || effectiveProfile === 'manhwa'
+                      ? centerOffset
+                      : Math.max(0, Math.min(textRect.width * 0.12, centerOffset)))
                     : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
                   const innerWidth = layout?.alignment === 'center'
                     ? textRect.width
@@ -823,20 +953,26 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                   const rotationDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
                   const rotationOrigin = layer ? 'center center' : 'left top';
                   const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+                  const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
                   const minFillRatio = typography.estimatedLines > 1
                     ? (thaiComicLine ? 0.82 : 0.74)
                     : (thaiComicLine ? 0.58 : 0.5);
-                  const paintHeight = Math.min(
-                    textRect.height,
-                    Math.max(
-                      typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
-                      textRect.height * minFillRatio
-                    )
-                  );
-                  const paintOffsetTop = Math.max(
-                    hasThaiText ? 1 : 0,
-                    Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-                  );
+                  const naturalPaintHeight = typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad;
+                  const paintHeight = isComicCenter
+                    ? Math.min(textRect.height, naturalPaintHeight)
+                    : Math.min(
+                        textRect.height,
+                        Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+                      );
+                  const thaiVisualShift = (isComicCenter && hasThaiText)
+                    ? Math.round(maskRect.height * 0.035)
+                    : 0;
+                  const paintOffsetTop = isComicCenter
+                    ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+                    : Math.max(
+                        hasThaiText ? 1 : 0,
+                        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+                      );
 
                   const widthRatio = textRect.width / Math.max(1, baseWidth);
                   const heightRatio = paintHeight / Math.max(1, baseHeight);
@@ -872,7 +1008,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                             height: textRect.height,
                             maxHeight: textRect.height,
                             minHeight: textRect.height,
-                            overflow: 'hidden',
+                            overflow: 'visible',
                             zIndex: 1000 + Math.max(1, Math.round(textRect.top)),
                             transform: rotationDeg !== 0 ? `rotate(${rotationDeg.toFixed(2)}deg)` : undefined,
                             transformOrigin: rotationDeg !== 0 ? rotationOrigin : undefined,
@@ -893,14 +1029,15 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                               padding: `${typography.padY + extraTopPad}px ${typography.padX}px ${typography.padY + extraBottomPad}px ${typography.padX}px`,
                               boxSizing: 'border-box',
                               display: 'flex',
-                              alignItems: 'flex-start',
+                              alignItems: isComicCenter ? 'center' : 'flex-start',
+                              justifyContent: ((layout?.effectiveProfile || overlayLayoutProfile) === 'manga' || (layout?.effectiveProfile || overlayLayoutProfile) === 'manhwa') && layout?.alignment === 'center' ? 'center' : 'flex-start',
                               color: layerTextColor,
                               fontSize: typography.fontSize,
                               lineHeight: typography.lineHeight,
                               fontFamily: overlayFontFamily,
                               fontWeight: layer?.bold ? 'bold' : overlayTextWeight,
                               textAlign: layout?.alignment === 'center' ? 'center' : 'left',
-                              whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                              whiteSpace: typography.forceSingleLine ? 'nowrap' : 'pre-wrap',
                               wordBreak: 'normal',
                               lineBreak: hasThaiText ? 'auto' : 'normal',
                               WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,
@@ -1001,6 +1138,19 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
                 ))}
               </div>
             )}
+            <InteractiveLayerOverlay
+              pageNum={currentPage || 1}
+              layers={currentPageLayers}
+              groups={currentPageGroups}
+              ocrTransform={{
+                scaleX: ocrScaleX,
+                scaleY: ocrScaleY,
+                offsetX: 0,
+                offsetY: 0
+              }}
+              isActive={activeTool === 'select' || activeTool === 'region'}
+              layouts={overlayLayoutByIndex}
+            />
           </div>
         ) : (
           <div className="text-slate-500 p-6">Loading image...</div>

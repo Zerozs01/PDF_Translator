@@ -6,7 +6,7 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore, OCRTranslationCacheEntry, hasCurrentOCRTranslationCacheVersion } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../../services/dbService';
-import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
 import { OCREngine } from '../../types';
 import { useLayerStore } from '../../stores/useLayerStore';
 import type { TextLayer, TextLayerGroup } from '../../types/layers';
@@ -33,6 +33,8 @@ import {
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
+import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
+import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
 const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
@@ -263,19 +265,45 @@ const PDFPageOverlay: React.FC<{
 
   // Real-Time Layer Ghost Noise Filter: surgical cleanup of spiky balloon border layers in frontend view
   const currentPageLayers = useMemo(() => {
+    const thaiLayers = rawCurrentPageLayers.filter(l => 
+      l && l.visible && /[\u0E00-\u0E7F]/.test(String(l.text || ''))
+    );
+
     return rawCurrentPageLayers.filter((layer) => {
       if (!layer) return false;
       if (layer.userEdited) return true;
 
-      const text = String(layer.sourceText || layer.text || '').trim();
+      const sourceText = String(layer.sourceText || '').trim();
+      const currentText = String(layer.text || '').trim();
+      const text = sourceText || currentText;
       if (!text) return false;
 
       const compact = text.replace(/\s+/g, '');
       const compactUpper = compact.toUpperCase();
       if (compactUpper === 'AAAANLWAL') return false; // Garbage filter
 
+      if (compactUpper === 'BELIEVE') {
+        const hasOverlapWithThai = thaiLayers.some(thaiLayer => {
+          if (!layer.bbox || !thaiLayer.bbox) return false;
+          const areaA = (layer.bbox.x1 - layer.bbox.x0) * (layer.bbox.y1 - layer.bbox.y0);
+          if (areaA <= 0) return false;
+          
+          const interX0 = Math.max(layer.bbox.x0, thaiLayer.bbox.x0);
+          const interY0 = Math.max(layer.bbox.y0, thaiLayer.bbox.y0);
+          const interX1 = Math.min(layer.bbox.x1, thaiLayer.bbox.x1);
+          const interY1 = Math.min(layer.bbox.y1, thaiLayer.bbox.y1);
+          
+          const interArea = Math.max(0, interX1 - interX0) * Math.max(0, interY1 - interY0);
+          return (interArea / areaA) >= 0.7;
+        });
+        if (hasOverlapWithThai) {
+          return false;
+        }
+      }
+
       const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
-      const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
+      const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(sourceText)
+        || /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(currentText);
 
       const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
       if (isPureSymbolNoise) return false;
@@ -283,7 +311,7 @@ const PDFPageOverlay: React.FC<{
       const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
       if (isVerticalLineJunk) return false;
 
-      const isSingleCharJunk = !hasCjkOrThai && asciiCompact.length === 1 && !/^[IAO]$/i.test(asciiCompact);
+      const isSingleCharJunk = !hasCjkOrThai && asciiCompact.length === 1 && !/^[IAO]$/i.test(asciiCompact) && !/^[0-9]$/.test(asciiCompact);
       if (isSingleCharJunk) return false;
 
       const bbox = layer.bbox;
@@ -292,8 +320,10 @@ const PDFPageOverlay: React.FC<{
         const height = Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
         const area = width * height;
 
-        const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+        const isKnownShortWord = isKnownShortWordHelper(asciiCompact)
+          || Boolean(lookupShortPhraseTh(sourceText))
+          || Boolean(lookupShortPhraseTh(currentText))
+          || Boolean(lookupShortPhraseTh(asciiCompact));
         const isTinyJunkBox = !hasCjkOrThai && asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
 
         if (isTinyJunkBox) return false;
@@ -344,6 +374,21 @@ const PDFPageOverlay: React.FC<{
     lastBuiltTranslationMapRef.current = new Map();
   }
 
+  const samplingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const [liveUpdateTick, setLiveUpdateTick] = useState(0);
+
+  useEffect(() => {
+    const handleLiveUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ pageNum: number }>;
+      if (customEvent.detail?.pageNum === pageNum) {
+        setLiveUpdateTick((t) => t + 1);
+      }
+    };
+    window.addEventListener('page-translation-updated', handleLiveUpdate);
+    return () => window.removeEventListener('page-translation-updated', handleLiveUpdate);
+  }, [pageNum]);
+
   useEffect(() => {
     if (!currentPageOCRResolved || !currentPageOCRResolved.lines || currentPageOCRResolved.lines.length === 0) return;
 
@@ -374,16 +419,26 @@ const PDFPageOverlay: React.FC<{
 
     // Trigger rebuild only if:
     // 1. We have never built layers for this page view yet (layers.length === 0 and hasBuiltLayersForCurrentPageRef is false)
-    // 2. OR one of the essential input state changed (engine, OCR source object, preview mode, or translated texts content)
     const isFirstBuild = layers.length === 0 && !hasBuiltLayersForCurrentPageRef.current;
+    const storeLayers = useLayerStore.getState().getPageLayers(pageNum);
+    const existingGroups = useLayerStore.getState().getPageGroups(pageNum);
+    const hasUserModifications = storeLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+      || existingGroups.some(g => g.userCreated);
+    const isStoreStale = storeLayers.length === 0 ||
+      storeLayers.length !== currentPageOCRResolved.lines.length ||
+      storeLayers.some((l, idx) => {
+        const ocrLine = currentPageOCRResolved.lines[l.lineIndex] || currentPageOCRResolved.lines[idx];
+        if (!ocrLine) return true;
+        return String(l.sourceText || '').replace(/\s+/g, ' ').trim() !== String(ocrLine.text || '').replace(/\s+/g, ' ').trim();
+      });
 
-    if (isFirstBuild || engineChanged || ocrDataChanged || previewModeChanged || translationChanged) {
+    if (isFirstBuild || engineChanged || ocrDataChanged || previewModeChanged || translationChanged || (isStoreStale && !hasUserModifications)) {
       const result = buildLayerGroupsFromOCR(
         currentPageOCRResolved,
         translationPreviewMode === 'translated' ? currentTranslationMap : undefined
       );
 
-      if (isFirstBuild || !lastEngine) {
+      if (isFirstBuild || !lastEngine || (isStoreStale && !hasUserModifications)) {
         useLayerStore.getState().setPageLayers(pageNum, result);
       } else {
         const existingLayers = useLayerStore.getState().layersByPage.get(pageNum) || [];
@@ -406,7 +461,7 @@ const PDFPageOverlay: React.FC<{
       lastBuiltTranslationMapRef.current = new Map(currentTranslationMap);
       hasBuiltLayersForCurrentPageRef.current = true;
     }
-  }, [currentPageOCRResolved, pageNum, hasLayers, translationOverlayContext.translatedByIndex, translationPreviewMode]);
+  }, [currentPageOCRResolved, pageNum, hasLayers, translationOverlayContext.translatedByIndex, translationPreviewMode, liveUpdateTick]);
 
   const overlayFontFamily = useMemo(() => resolveOverlayFontFamily({
     preset: overlayFontPreset,
@@ -461,17 +516,23 @@ const PDFPageOverlay: React.FC<{
   }, [showDebugOverlay, debugPageOCR]);
 
   const overlayLayoutByIndex = useMemo(() => {
-    if (!translationOverlayContext.shouldRender || !currentPageOCRResolved) {
+    if (!currentPageOCRResolved) {
       return new Map<number, OverlayLayout>();
     }
 
     return computeOverlayLayoutMap(
       currentPageOCRResolved.lines.flatMap((line, index) => {
-        const translatedText = translationOverlayContext.translatedByIndex.get(index);
+        const lineLayer = currentPageLayers.find(l => l.lineIndex === index);
+        const fallbackText = lineLayer?.translatedText
+          || lineLayer?.text
+          || lookupShortPhraseTh(line.text)
+          || lookupShortPhraseTh(String(line.text || '').replace(/[^A-Za-z0-9]/g, ''))
+          || line.text;
+        const translatedText = translationOverlayContext.translatedByIndex.get(index) || fallbackText;
         if (!translatedText) return [];
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return [];
 
-        const layer = currentPageLayers.find(l => l.lineIndex === index);
+        const layer = lineLayer;
         const balloonId = layer?.groupId;
 
         const sourceBbox = resolveOverlaySourceBBox(line);
@@ -507,6 +568,9 @@ const PDFPageOverlay: React.FC<{
         const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
         const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
 
+        const group = layer ? rawCurrentPageGroups.find(g => g.id === layer.groupId) : undefined;
+        const groupType = group?.groupType;
+
         return [{
           index,
           text: translatedText,
@@ -522,6 +586,7 @@ const PDFPageOverlay: React.FC<{
             sourceLineCount: 1,
             fontFamily: overlayFontFamily,
             profile: overlayLayoutProfile,
+            groupType,
           },
         }];
       }),
@@ -568,9 +633,15 @@ const PDFPageOverlay: React.FC<{
 
         const maxSampleSide = 2400;
         const sampleScale = Math.min(1, maxSampleSide / Math.max(sourceWidth, sourceHeight));
-        const sampleCanvas = document.createElement('canvas');
-        sampleCanvas.width = Math.max(1, Math.round(sourceWidth * sampleScale));
-        sampleCanvas.height = Math.max(1, Math.round(sourceHeight * sampleScale));
+        const targetWidth = Math.max(1, Math.round(sourceWidth * sampleScale));
+        const targetHeight = Math.max(1, Math.round(sourceHeight * sampleScale));
+
+        if (!samplingCanvasRef.current) {
+          samplingCanvasRef.current = document.createElement('canvas');
+        }
+        const sampleCanvas = samplingCanvasRef.current;
+        if (sampleCanvas.width !== targetWidth) sampleCanvas.width = targetWidth;
+        if (sampleCanvas.height !== targetHeight) sampleCanvas.height = targetHeight;
 
         const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
         if (!context) {
@@ -594,11 +665,6 @@ const PDFPageOverlay: React.FC<{
           ));
         });
         setTranslatedLinePalette(next);
-
-        try {
-          sampleCanvas.width = 0;
-          sampleCanvas.height = 0;
-        } catch (e) { /* ignore */ }
       };
 
       if (typeof window.requestIdleCallback === 'function') {
@@ -708,11 +774,18 @@ const PDFPageOverlay: React.FC<{
           }}
           className="absolute inset-0 pointer-events-none"
         >
-          {currentPageOCRResolved.lines.map((line, idx) => {
+          {(() => {
+            const renderedOverlayTracker: Array<{ centerX: number; centerY: number; width: number; height: number; text: string }> = [];
+            return currentPageOCRResolved.lines.map((line, idx) => {
             if (hiddenLineIndexes.has(idx)) {
               return null;
             }
+            const layout = overlayLayoutByIndex.get(idx);
+            const isMaskOnlyLine = Boolean(layout?.hidden);
+
             const layer = currentPageLayers.find(l => l.lineIndex === idx);
+            const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+            const isSfxGroup = group?.groupType === 'sfx';
             const translatedText = (() => {
               if (!layer) {
                 return translationOverlayContext.translatedByIndex.get(idx);
@@ -722,21 +795,49 @@ const PDFPageOverlay: React.FC<{
               }
               const hasTranslation = layer.userEdited || layer.text !== layer.sourceText;
               if (hasTranslation) return layer.text;
-              return translationOverlayContext.translatedByIndex.get(idx) || layer.text;
+              const cachedText = translationOverlayContext.translatedByIndex.get(idx);
+              return cachedText !== undefined ? cachedText : layer.text;
             })();
-            if (!translatedText) return null;
-            if (!layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
+
+            if (!translatedText && !(isMaskOnlyLine && layout?.preserveMaskWhenHidden)) {
+              return null;
+            }
+            if (translatedText && !layer && shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) {
               return null;
             }
 
-            const layout = overlayLayoutByIndex.get(idx);
-            const isMaskOnlyLine = (layer && layer.userEdited) ? false : Boolean(layout?.hidden);
             if (isMaskOnlyLine && !layout?.preserveMaskWhenHidden) {
               return null;
             }
-            const renderText = (layer && layer.userEdited)
-              ? (translationPreviewMode === 'original' ? (layer.sourceText || layer.text) : layer.text)
-              : (layout?.renderText !== undefined ? layout.renderText : translatedText);
+            const isTextEdited = layer && layer.userEdited && layer.text !== layer.sourceText && layer.text !== translationOverlayContext.translatedByIndex.get(idx);
+            const renderText = (() => {
+              if (isTextEdited) {
+                return translationPreviewMode === 'original' ? (layer!.sourceText || layer!.text) : layer!.text;
+              }
+              if (translationPreviewMode === 'original') {
+                return layer?.sourceText || line.text;
+              }
+              // 1. ถ้า layout.renderText มีข้อมูลและเป็นภาษาไทย (รวมถึงกรณี Manga Bubble Merge ที่รวมข้อความทุกบรรทัดในบอลลูนเข้าด้วยกัน) ให้ใช้ layout.renderText
+              if (layout?.renderText !== undefined && layout.renderText.trim()) {
+                if (/[\u0E00-\u0E7F]/.test(layout.renderText)) {
+                  return layout.renderText;
+                }
+                // ถ้า layout.renderText เป็นภาษาต่างประเทศ และมีคำแปลภาษาไทย ให้ใช้คำแปลภาษาไทยแทน
+                if (translatedText && /[\u0E00-\u0E7F]/.test(translatedText)) {
+                  return translatedText;
+                }
+                return layout.renderText;
+              }
+              // 2. Fallback เป็น translatedText
+              return translatedText || '';
+            })();
+
+            if (!renderText.trim() && !isMaskOnlyLine) {
+              return null;
+            }
+
+            const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
+
             const effectiveProfile = layout?.effectiveProfile || overlayLayoutProfile;
             const styleKind = layout?.styleKind;
             const isDocumentLikeOverlay = styleKind
@@ -774,7 +875,6 @@ const PDFPageOverlay: React.FC<{
             const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * ocrOverlayTransform.scaleY);
             const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * ocrOverlayTransform.scaleX);
             const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * ocrOverlayTransform.scaleY);
-            const hasThaiText = /[\u0E00-\u0E7F]/.test(renderText);
             const expansion = resolveOverlayMaskExpansion(line);
             const mergedMaskBoost = 0;
             const comicMaskBoostX = 0;
@@ -814,8 +914,8 @@ const PDFPageOverlay: React.FC<{
             const textSourceTop = useMergedComicTextRect ? maskBbox.y0 : sourceBbox.y0;
             const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
             const textBaseHeight = useMergedComicTextRect ? Math.max(baseHeight, maskBaseHeight) : baseHeight;
-            const mergedComicTextTopLift = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.08 : 0.05))) : 0;
-            const mergedComicTextExtraHeight = useMergedComicTextRect ? Math.max(0, Math.round(maskBaseHeight * (styleKind === 'comic-bubble' ? 0.34 : 0.18))) : 0;
+            const mergedComicTextTopLift = 0;
+            const mergedComicTextExtraHeight = 0;
             const rawTextLeft = ocrOverlayTransform.offsetX + textSourceLeft * ocrOverlayTransform.scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
             const rawTextTop = ocrOverlayTransform.offsetY + textSourceTop * ocrOverlayTransform.scaleY - maskExpandTop - mergedComicTextTopLift;
             const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
@@ -846,23 +946,27 @@ const PDFPageOverlay: React.FC<{
               ? Math.max(baseWidth, maskBaseWidth)
               : Math.max(baseWidth, textRect.width * 0.96);
             const typographyWidth = isDocumentLikeOverlay ? documentTypographyWidth : textRect.width;
+            // Manga bubble merge: use the full balloon height for font sizing, not just the first line height
+            const mergedBalloonHeight = useMergedComicTextRect ? maskBaseHeight : 0;
             const typographyHeight = isDocumentLikeOverlay
               ? Math.min(
                 textRect.height,
                 Math.max(baseHeight + thaiDocumentHeadroom, (lowCoverageSource ? maskBaseHeight : baseHeight) + thaiDocumentHeadroom)
               )
-              : textRect.height;
+              : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : textRect.height);
+            const sourceBoxHeightForTypography = isDocumentLikeOverlay
+              ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
+              : (mergedBalloonHeight > baseHeight ? mergedBalloonHeight : baseHeight);
             const baseTypography = layout?.typography || computeOverlayTypography(renderText, typographyWidth, typographyHeight, {
               sourceText: line.text,
               sourceBoxWidth: isDocumentLikeOverlay && lowCoverageSource ? Math.max(baseWidth, maskBaseWidth) : baseWidth,
-              sourceBoxHeight: isDocumentLikeOverlay
-                ? (lowCoverageSource ? Math.max(baseHeight, maskBaseHeight) : baseHeight) + thaiDocumentHeadroom
-                : baseHeight,
+              sourceBoxHeight: sourceBoxHeightForTypography,
               sourceLineCount: 1,
               fontFamily: overlayFontFamily,
               profile: effectiveProfile,
               styleKind,
             });
+
             const typography = scaleOverlayTypography(baseTypography, overlayFontSizeScale);
             if (layer && layer.userEdited) {
               typography.fontSize = (layer.fontSize || 14) * ocrOverlayTransform.scaleX;
@@ -876,7 +980,9 @@ const PDFPageOverlay: React.FC<{
               ? ((layout.sharedCenterX - renderSourceLeft) * ocrOverlayTransform.scaleX) - (textRect.width * 0.5)
               : 0;
             const innerLeft = layout?.alignment === 'center'
-              ? Math.max(0, Math.min(textRect.width * 0.12, centerOffset))
+              ? (effectiveProfile === 'manga' || effectiveProfile === 'manhwa'
+                ? centerOffset
+                : Math.max(0, Math.min(textRect.width * 0.12, centerOffset)))
               : Math.max(0, Math.min(textRect.width - 1, maskExpandLeft + textStartOffset));
             const innerWidth = layout?.alignment === 'center'
               ? textRect.width
@@ -907,20 +1013,44 @@ const PDFPageOverlay: React.FC<{
             const rotationDeg = layer ? (layer.rotation || 0) : estimateLineRotationDeg(line);
             const rotationOrigin = layer ? 'center center' : 'left top';
             const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+            const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
             const minFillRatio = typography.estimatedLines > 1
               ? (thaiComicLine ? 0.82 : 0.74)
               : (thaiComicLine ? 0.58 : 0.5);
-            const paintHeight = Math.min(
-              textRect.height * 1.25,
-              Math.max(
-                typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad,
-                textRect.height * minFillRatio
-              )
-            );
-            const paintOffsetTop = Math.max(
-              hasThaiText ? 1 : 0,
-              Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
-            );
+            const naturalPaintHeight = typography.contentHeight + typography.padY * 2 + extraTopPad + extraBottomPad;
+            const paintHeight = isComicCenter
+              ? Math.min(textRect.height * 1.25, naturalPaintHeight)
+              : Math.min(
+                  textRect.height * 1.25,
+                  Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+                );
+            const thaiVisualShift = (isComicCenter && hasThaiText)
+              ? Math.round(maskRect.height * 0.035)
+              : 0;
+            const paintOffsetTop = isComicCenter
+              ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+              : Math.max(
+                  hasThaiText ? 1 : 0,
+                  Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+                );
+
+            const centerX = textRect.left + textRect.width * 0.5;
+            const centerY = textRect.top + textRect.height * 0.5;
+            const normalizedText = renderText.trim().replace(/\s+/g, ' ');
+            if (normalizedText) {
+              const isDuplicateOverlay = renderedOverlayTracker.some((prev) => {
+                const dx = Math.abs(prev.centerX - centerX);
+                const dy = Math.abs(prev.centerY - centerY);
+                const dw = Math.abs(prev.width - textRect.width);
+                const dh = Math.abs(prev.height - textRect.height);
+                const isExactColocation = dx < 4 && dy < 4 && dw < 8 && dh < 8;
+                return isExactColocation && (prev.text === normalizedText || prev.text.includes(normalizedText) || normalizedText.includes(prev.text));
+              });
+              if (isDuplicateOverlay) {
+                return null;
+              }
+              renderedOverlayTracker.push({ centerX, centerY, width: textRect.width, height: textRect.height, text: normalizedText });
+            }
 
             return (
               <React.Fragment key={`ocr-translation-line-${idx}`}>
@@ -981,17 +1111,16 @@ const PDFPageOverlay: React.FC<{
                         fontWeight: layer?.bold ? 'bold' : overlayTextWeight,
                         boxSizing: 'border-box',
                         display: 'flex',
-                        alignItems: 'flex-start',
+                        alignItems: isComicCenter ? 'center' : 'flex-start',
+                        justifyContent: layout?.alignment === 'center' ? 'center' : 'flex-start',
                         textAlign: layout?.alignment === 'center' ? 'center' : 'left',
-                        whiteSpace: typography.forceSingleLine ? 'nowrap' : 'normal',
+                        whiteSpace: typography.forceSingleLine ? 'nowrap' : 'pre-wrap',
                         wordBreak: 'normal',
                         lineBreak: hasThaiText ? 'auto' : 'normal',
                         WebkitTextStrokeWidth: overlayStrokeWidth > 0 ? `${overlayStrokeWidth.toFixed(2)}px` : undefined,
                         WebkitTextStrokeColor: overlayStrokeWidth > 0 ? palette.textStrokeColor : undefined,
                         textShadow: palette.textShadow,
-                        overflowWrap: typography.forceSingleLine
-                          ? 'normal'
-                          : (hasThaiText ? 'normal' : 'break-word'),
+                        overflowWrap: 'break-word',
                         overflow: 'visible',
                       }}
                     >
@@ -1001,7 +1130,8 @@ const PDFPageOverlay: React.FC<{
                 )}
               </React.Fragment>
             );
-          })}
+          });
+          })()}
         </div>
       )}
       {translationPreviewMode === 'original' && currentPageOCRResolved && originalOCRMatchedLineIndexes.length > 0 && (
@@ -1129,6 +1259,7 @@ const PDFPageContainer: React.FC<{
   const options = useOCRTextLayerStore((s) => s.options);
 
   const [pageRenderTick, setPageRenderTick] = useState(0);
+  const [isCacheLoading, setIsCacheLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(viewMode === 'single');
   const [hasBeenVisible, setHasBeenVisible] = useState(viewMode === 'single');
   const pageRef = useRef<HTMLDivElement>(null);
@@ -1152,7 +1283,7 @@ const PDFPageContainer: React.FC<{
         });
       },
       {
-        rootMargin: '600px 0px 600px 0px',
+        rootMargin: '1400px 0px 1400px 0px',
       }
     );
 
@@ -1162,6 +1293,8 @@ const PDFPageContainer: React.FC<{
           if (
             entry.isIntersecting &&
             !isProgrammaticScrollRef?.current &&
+            isUserInteracting &&
+            previewModeOverride !== 'translated' &&
             useProjectStore.getState().currentPage !== pageNum
           ) {
             const now = performance.now();
@@ -1175,10 +1308,11 @@ const PDFPageContainer: React.FC<{
             activePageChangeTimeout = setTimeout(() => {
               React.startTransition(() => {
                 if (capturedTime < lastPageUpdateTime) return;
+                if (isProgrammaticScrollRef?.current || !isUserInteracting) return;
                 setPage(pendingPage);
               });
               activePageChangeTimeout = null;
-            }, 200);
+            }, 150);
           }
         });
       },
@@ -1202,6 +1336,7 @@ const PDFPageContainer: React.FC<{
   // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
   useEffect(() => {
     if (!documentId) return;
+    if (!isVisible) return; // Only load cache if page is visible or preloading
     let canceled = false;
     const activeEngine = (options.engine || 'paddleocr') as OCREngine;
     const ocrState = useOCRTextLayerStore.getState();
@@ -1209,68 +1344,113 @@ const PDFPageContainer: React.FC<{
     const loadCache = async () => {
       // 1. Load OCR cache if not in memory
       const hasOcr = ocrState.ocrByPageEngine.get(pageNum)?.has(activeEngine);
-      if (!hasOcr) {
-        try {
-          const cached = await dbService.getOCR(documentId, pageNum, activeEngine);
-          if (cached && !canceled) {
-            if (cached.algorithmVersion === OCR_ALGORITHM_VERSION) {
-              cached.pageNumber = pageNum;
-              ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
-              console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
-            } else {
-              console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected ${OCR_ALGORITHM_VERSION}, got ${cached.algorithmVersion}`);
-            }
-          }
-        } catch (err) {
-          console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);
-        }
+      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
+
+      let startedLoading = false;
+      if (!hasOcr || !hasTranslation) {
+        setIsCacheLoading(true);
+        startedLoading = true;
       }
 
-      // 2. Load Translation cache if not in memory
-      const hasTranslation = ocrState.translationCacheByPage.has(pageNum);
-      if (!hasTranslation) {
-        try {
-          const rows = await dbService.getTranslationCachePage(documentId, pageNum);
-          if (Array.isArray(rows) && rows.length > 0 && !canceled) {
-            console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
-            for (const row of rows) {
-              if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
-                continue;
-              }
-              const normalizedEntry: OCRTranslationCacheEntry = {
-                ...row,
-                pageNum,
-                ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
-                translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
-                translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
-                translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex : [],
-              };
-              ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
+      try {
+        const ocrPromise = !hasOcr
+          ? dbService.getOCR(documentId, pageNum, activeEngine).catch((err) => {
+              console.warn(`[PDFPageContainer] Failed to load OCR cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const transPromise = !hasTranslation
+          ? dbService.getTranslationCachePage(documentId, pageNum).catch((err) => {
+              console.warn(`[PDFPageContainer] Failed to load translation cache for page ${pageNum}:`, err);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const [cached, rows] = await Promise.all([ocrPromise, transPromise]);
+
+        if (cached && !canceled) {
+          if (cached.algorithmVersion === OCR_ALGORITHM_VERSION && (cached.ocrRawVersion ?? 0) >= OCR_RAW_VERSION) {
+            cached.pageNumber = pageNum;
+            ocrState.setPageOCRForEngine(pageNum, activeEngine, cached);
+            console.log(`[PDFPageContainer] Background loaded OCR cache for page ${pageNum} engine=${activeEngine}`);
+          } else {
+            console.log(`[PDFPageContainer] Background OCR cache version mismatch for page ${pageNum}: expected algorithm v${OCR_ALGORITHM_VERSION} & raw v${OCR_RAW_VERSION}, got algorithm v${cached.algorithmVersion} & raw v${cached.ocrRawVersion ?? 0}`);
+          }
+        }
+
+        // 2. Load Translation cache if not in memory
+        if (Array.isArray(rows) && rows.length > 0 && !canceled) {
+          console.log(`[PDFPageContainer] Background loaded translation cache for page ${pageNum} rows=${rows.length}`);
+          let preferredKey: string | null = null;
+          const sortedRows = [...rows].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+          for (const row of sortedRows) {
+            if (row.key && !hasCurrentOCRTranslationCacheVersion(row.key)) {
+              continue;
+            }
+            const normalizedEntry: OCRTranslationCacheEntry = {
+              ...row,
+              pageNum,
+              ocrEngine: (row.ocrEngine || 'paddleocr') as OCREngine,
+              translationMode: row.translationMode === 'official' ? 'official' : row.translationMode === 'adaptive' ? 'adaptive' : row.translationMode === 'manhwa' ? 'manhwa' : 'manga',
+              translatorEngine: row.translatorEngine === 'ai' ? 'ai' : 'offline',
+              translatedByIndex: Array.isArray(row.translatedByIndex) ? row.translatedByIndex.map((item: any) => {
+                if (item) {
+                  const source = String(item.sourceText || '').trim();
+                  const translated = String(item.text || '').trim();
+                  const cleanSource = source.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  const cleanTrans = translated.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  if (!translated || cleanSource === cleanTrans || (/[a-zA-Z]/.test(translated) && !/[\u0E00-\u0E7F]/.test(translated))) {
+                    const glossaryMatch = lookupShortPhraseTh(source) || lookupShortPhraseTh(cleanSource);
+                    if (glossaryMatch) {
+                      return { ...item, text: glossaryMatch };
+                    }
+                    const words = source.trim().split(/\s+/);
+                    if (words.length > 1) {
+                      const translatedWords = words.map(w => lookupShortPhraseTh(w) || lookupShortPhraseTh(w.replace(/[^A-Za-z0-9]/g, '')) || w);
+                      if (translatedWords.some(tw => /[\u0E00-\u0E7F]/.test(tw))) {
+                        return { ...item, text: translatedWords.join(' ') };
+                      }
+                    }
+                  }
+                }
+                return item;
+              }) : [],
+            };
+            ocrState.setTranslationCacheEntry(pageNum, normalizedEntry.key, normalizedEntry);
+
+            if (!preferredKey && row.key && row.key.includes(activeEngine)) {
+              preferredKey = row.key;
             }
           }
-        } catch (err) {
-          console.warn(`[PDFPageContainer] Failed to load translation cache for page ${pageNum}:`, err);
+
+          if (!preferredKey && sortedRows.length > 0 && sortedRows[0].key) {
+            preferredKey = sortedRows[0].key;
+          }
+
+          if (preferredKey) {
+            ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
+            ocrState.setTranslationPreviewMode('translated');
+          }
+        }
+      } finally {
+        if (startedLoading && !canceled) {
+          setIsCacheLoading(false);
         }
       }
     };
 
-    // Wait for scroll/pan to settle down before loading database cache (Lazy Cache Load)
-    // Delay increased to 350ms to completely bypass loading pages that are fast-scrolled past.
+    // Fast cache loader: Load database cache quickly (40ms debounce) without 1000ms idle callback blocker
     const timer = setTimeout(() => {
-      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-        window.requestIdleCallback(() => {
-          if (!canceled) void loadCache();
-        }, { timeout: 1000 });
-      } else {
-        void loadCache();
-      }
-    }, 350);
+      if (!canceled) void loadCache();
+    }, 40);
 
     return () => {
       canceled = true;
       clearTimeout(timer);
     };
-  }, [pageNum, documentId, options.engine, fileUrl]);
+  }, [pageNum, documentId, options.engine, fileUrl, isVisible]);
 
   const handlePageClick = useCallback(() => {
     if (useProjectStore.getState().currentPage !== pageNum) {
@@ -1299,15 +1479,37 @@ const PDFPageContainer: React.FC<{
       style={{ minHeight: pageRenderTick > 0 ? undefined : 1130 }}
       className="relative mb-4 group pdf-page-container"
     >
-      <Page 
-        pageNumber={pageNum} 
-        renderTextLayer={false} 
-        renderAnnotationLayer={false}
-        className="border border-slate-700 bg-white"
-        width={800}
-        onLoadSuccess={onPageLoadSuccess}
-        onRenderSuccess={onPageRenderSuccess}
-      />
+      {hasBeenVisible ? (
+        <Page 
+          pageNumber={pageNum} 
+          renderTextLayer={false} 
+          renderAnnotationLayer={false}
+          className="border border-slate-700 bg-white"
+          width={800}
+          onLoadSuccess={onPageLoadSuccess}
+          onRenderSuccess={onPageRenderSuccess}
+          onRenderError={(err) => {
+            console.warn(`[PDFCanvas] Page ${pageNum} render suppressed:`, err);
+          }}
+        />
+      ) : (
+        <div 
+          className="border border-slate-700/60 bg-[#0d1117] flex flex-col items-center justify-center text-slate-500 select-none"
+          style={{ width: 800, height: 1130 }}
+        >
+          <div className="h-8 w-8 rounded-full border-2 border-slate-700 border-t-sky-400 animate-spin mb-2 opacity-50" />
+          <span className="text-xs font-mono opacity-60">Page {pageNum}</span>
+        </div>
+      )}
+      {isCacheLoading && (
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 text-xs text-slate-200 shadow-lg animate-pulse pointer-events-none select-none">
+          <svg className="animate-spin h-3.5 w-3.5 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="font-medium tracking-wide">กำลังโหลดแคช...</span>
+        </div>
+      )}
       {hasBeenVisible && (
         <div
           className="absolute inset-0 pointer-events-none"
@@ -1340,7 +1542,12 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     viewMode,
   } = useProjectStore();
 
-  const { zoom, pan, setZoom, setPan, setView, activeTool } = useUIStore();
+  const zoom = useUIStore((s) => s.zoom);
+  const pan = useUIStore((s) => s.pan);
+  const setZoom = useUIStore((s) => s.setZoom);
+  const setPan = useUIStore((s) => s.setPan);
+  const setView = useUIStore((s) => s.setView);
+  const activeTool = useUIStore((s) => s.activeTool);
   const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
 
@@ -1364,18 +1571,19 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     }
   }, [zoom, pan, isDragging]);
 
-  const prevPageRef = useRef(currentPage);
+  const prevPageRef = useRef<number | null>(null);
   const prevViewModeRef = useRef(viewMode);
 
-  // Track programmatic scrolling to lock active page updates during animations
-  const isProgrammaticScrollRef = useRef(false);
+  // Track programmatic scrolling to lock active page updates during animations & initial mount
+  const isProgrammaticScrollRef = useRef(currentPage > 1);
 
-  // Sync scroll position when switching to continuous viewMode or clicking LeftSidebar thumbnails
+  // Sync scroll position when switching to continuous viewMode or clicking LeftSidebar thumbnails or on initial load
   useEffect(() => {
-    const pageChanged = currentPage !== prevPageRef.current;
+    const pageChanged = prevPageRef.current !== null && currentPage !== prevPageRef.current;
     const viewModeChanged = viewMode !== prevViewModeRef.current;
+    const isInitialMount = prevPageRef.current === null;
 
-    if (viewMode === 'continuous' && (pageChanged || viewModeChanged)) {
+    if (viewMode === 'continuous' && (pageChanged || viewModeChanged || (isInitialMount && currentPage > 1))) {
       if (isUserInteracting) {
         prevPageRef.current = currentPage;
         prevViewModeRef.current = viewMode;
@@ -1385,25 +1593,33 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
       // from firing setPage and overriding the target page before the scroll snap finishes.
       isProgrammaticScrollRef.current = true;
+      if (activePageChangeTimeout) {
+        clearTimeout(activePageChangeTimeout);
+        activePageChangeTimeout = null;
+      }
 
       const timer = setTimeout(() => {
-        const pageElement = document.querySelector(
-          `.pdf-canvas-document [data-page-container="${currentPage}"]`
+        const pageElement = (
+          containerRef.current?.querySelector(
+            `.pdf-canvas-document [data-page-container="${currentPage}"]`
+          ) || document.querySelector(
+            `.pdf-canvas-document [data-page-container="${currentPage}"]`
+          )
         ) as HTMLElement | null;
 
-        if (pageElement && containerRef.current) {
-          const offsetTop = pageElement.offsetTop;
+        if (containerRef.current) {
+          const estimatedOffsetTop = (currentPage - 1) * 1146;
+          const offsetTop = pageElement && pageElement.offsetTop > 0 ? pageElement.offsetTop : estimatedOffsetTop;
           const targetY = -(offsetTop * zoom) + 20;
 
           // Read the latest pan.y from the stateRef to check if the change was substantial
           const currentPanY = stateRef.current.pan.y;
           const diff = Math.abs(currentPanY - targetY);
 
-          // Only snap if the offset diff is substantial (e.g. LeftSidebar click or viewMode toggle)
-          // to avoid fighting manual user scrolls.
-          if (diff > 150 || viewModeChanged) {
+          // Snap if the offset diff is substantial or if on initial load / mode switch
+          if (diff > 20 || viewModeChanged || isInitialMount) {
             const { clientWidth } = containerRef.current;
-            const pageWidth = pageElement.clientWidth || 800;
+            const pageWidth = pageElement?.clientWidth || 800;
             const scaledWidth = pageWidth * zoom;
             const targetX = (clientWidth - scaledWidth) / 2;
 
@@ -1414,9 +1630,9 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
         // Release the programmatic scroll lock after the transition animation (0.1s transform duration + buffer)
         setTimeout(() => {
           isProgrammaticScrollRef.current = false;
-        }, 150);
+        }, 500);
 
-      }, 100);
+      }, isInitialMount ? 150 : 80);
 
       prevPageRef.current = currentPage;
       prevViewModeRef.current = viewMode;
@@ -1435,6 +1651,11 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   }, [setTotalPages]);
 
   const onPageLoadSuccess = React.useCallback(async (page: any) => {
+    if (previewModeOverride === 'translated') {
+      // Secondary split-view canvas should not reset or recalculate global zoom/pan
+      return;
+    }
+
     if (containerRef.current) {
       const { clientWidth, clientHeight } = containerRef.current;
       const { width, height } = page.originalWidth ? { width: page.originalWidth, height: page.originalHeight } : page;
@@ -1453,11 +1674,34 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       if (useProjectStore.getState().viewMode === 'single') {
         setPan(x, 20);
       } else {
-        // Keep the current vertical pan in continuous mode to prevent resetting to page 1
-        setPan(x, stateRef.current.pan.y);
+        const targetPage = useProjectStore.getState().currentPage;
+        if (targetPage > 1) {
+          isProgrammaticScrollRef.current = true;
+          if (activePageChangeTimeout) {
+            clearTimeout(activePageChangeTimeout);
+            activePageChangeTimeout = null;
+          }
+          const pageElement = (
+            containerRef.current?.querySelector(
+              `.pdf-canvas-document [data-page-container="${targetPage}"]`
+            ) || document.querySelector(
+              `.pdf-canvas-document [data-page-container="${targetPage}"]`
+            )
+          ) as HTMLElement | null;
+          const estimatedOffsetTop = (targetPage - 1) * 1146;
+          const offsetTop = pageElement && pageElement.offsetTop > 0 ? pageElement.offsetTop : estimatedOffsetTop;
+          const targetY = -(offsetTop * fitScale) + 20;
+          setPan(x, targetY);
+          setTimeout(() => {
+            isProgrammaticScrollRef.current = false;
+          }, 500);
+        } else {
+          // Keep current vertical pan or default to top
+          setPan(x, stateRef.current.pan.y !== 0 ? stateRef.current.pan.y : 20);
+        }
       }
     }
-  }, [setZoom, setPan]);
+  }, [setZoom, setPan, previewModeOverride]);
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;

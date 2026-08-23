@@ -1,6 +1,8 @@
 import { BBox, OCRLine, OCREngine, OCRPageResult } from '../../types';
 import { hasCurrentOCRTranslationCacheVersion, OCRPreviewMode, OCRTranslationCacheEntry } from '../../stores/useOCRTextLayerStore';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
+import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
 
 const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
@@ -415,6 +417,11 @@ export const resolveMissingOverlayLineFallbackText = (
   if (!source) return '';
   const normalizedTarget = normalizeTranslationLanguageKey(targetLanguage || '', 'th');
   if (normalizedTarget !== 'th') return source;
+
+  const dictMatch = lookupShortPhraseTh(source);
+  if (dictMatch) {
+    return preserveOverlaySourceTrailingPunctuation(source, dictMatch);
+  }
 
   if (/^AH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'อ๊ะ ฉัน');
   if (/^EH\s+ME[.!?…]*$/i.test(source)) return preserveOverlaySourceTrailingPunctuation(source, 'เอ๋ ฉัน');
@@ -926,6 +933,11 @@ export const resolveTranslationOverlayContext = ({
             if (oldTranslation) {
               translatedByIndexRaw.set(currentIdx, oldTranslation);
             }
+          } else {
+            const dictMatch = lookupShortPhraseTh(currentText) || lookupShortPhraseTh(currentText.replace(/[^A-Za-z0-9]/g, ''));
+            if (dictMatch) {
+              translatedByIndexRaw.set(currentIdx, dictMatch);
+            }
           }
         });
       } else {
@@ -1036,6 +1048,7 @@ export type OverlayTypographyHints = {
   fontFamily?: string;
   profile?: OverlayLayoutProfile;
   styleKind?: OverlayStyleKind;
+  groupType?: string;
 };
 
 export type OverlayTypographyInput = {
@@ -1393,8 +1406,7 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
   const tText = normalizeOverlayInlineText(String(line.text || ''));
   const tCompact = tText.replace(/\s+/g, '');
   const asciiCompact = tCompact.replace(/[^A-Za-z0-9]/g, '');
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+  const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
   if (isKnownShortWord) {
     return false;
   }
@@ -1452,6 +1464,12 @@ export const shouldSkipOverlayRenderForSuspiciousLine = (line: OCRLine): boolean
   // 4. Extremely thin horizontal noise lines (panel dividers, scratches)
   const isThinHorizontalNoise = maskHeight < 10 && maskWidth > 50 && (maskWidth / maskHeight) > 6.0 && meaningfulChars.length <= 4;
   if (isThinHorizontalNoise && !hasTerminalPunctuation && !sentenceLikeSignal) {
+    return true;
+  }
+
+  // 5. Sparse noisy letter fragments (like "-X F" or "X F" from background speedlines/screentone)
+  const isNoisyLetterFragment = /^-?\s*[A-Z]\s+[A-Z]\s*$/i.test(normalizedText) && lowConfidence;
+  if (isNoisyLetterFragment) {
     return true;
   }
 
@@ -2741,10 +2759,10 @@ export const computeOverlayTypography = (
     ? (documentBodyLike ? (containsThai ? 1.72 : 1.18) : (containsThai ? 1.58 : 1.12))
     : 1;
   const comicProfileScale = isComicBubble
-    ? (profile === 'manga' ? 1.12 : profile === 'manhwa' ? 1.08 : 1.04)
+    ? (profile === 'manga' ? 1.01 : profile === 'manhwa' ? 1.04 : 1.02)
     : isComicBox
-      ? (profile === 'manga' ? 1.06 : profile === 'manhwa' ? 1.04 : 1)
-      : (profile === 'manga' ? 1 : profile === 'manhwa' ? 0.98 : 0.95);
+      ? (profile === 'manga' ? 1.01 : profile === 'manhwa' ? 1.02 : 1)
+      : (profile === 'manga' ? 0.98 : profile === 'manhwa' ? 0.98 : 0.95);
   const riskyNarrowBox = safeWidth <= 28 || (safeWidth <= 36 && safeWidth < safeHeight * 0.92);
   const severeWrapRisk = riskyNarrowBox && targetLength >= 4;
   const sourceSingleLineHint = !useDocumentTypographyProfile
@@ -3147,34 +3165,34 @@ const shouldHarmonizeOverlayBlock = (
   if (!effectiveDocumentProfile) {
     const isComicProfile = profile === 'manga' || profile === 'manhwa' || profile === 'adaptive';
     const generousComicStack = isComicProfile
-      && (overlapRatio >= 0.02 || centerDelta <= Math.max(36, avgHeight * 1.8) || leftDelta <= Math.max(36, avgHeight * 1.8))
-      && verticalGap >= -avgHeight * 0.4
-      && verticalGap <= Math.max(36, avgHeight * 1.85)
-      && heightRatio <= 3.2;
+      && (overlapRatio >= 0.45 || (centerDelta <= Math.max(18, avgHeight * 0.5) && overlapRatio >= 0.18))
+      && verticalGap >= -avgHeight * 0.3
+      && verticalGap <= Math.max(28, avgHeight * 1.15)
+      && heightRatio <= 2.8;
     if (generousComicStack) {
       return true;
     }
     if (boxedFragmentContinuity) {
       return true;
     }
-    const centeredStack = centerDelta <= Math.max(18, avgHeight * (profile === 'manga' ? 1.55 : profile === 'adaptive' ? 1.42 : 1.4));
+    const centeredStack = centerDelta <= Math.max(18, avgHeight * (profile === 'manga' ? 1.25 : profile === 'adaptive' ? 1.25 : 1.15));
     const centeredFragmentContinuity = shortComicFragmentPair
-      && centerDelta <= Math.max(24, avgHeight * 1.9);
+      && centerDelta <= Math.max(24, avgHeight * 1.35);
     const centeredFragmentMerge = centeredFragmentContinuity
       && centeredStack
-      && heightRatio <= 3.2
-      && verticalGap >= -avgHeight * 0.38
-      && verticalGap <= Math.max(36, avgHeight * 1.85);
+      && heightRatio <= 2.8
+      && verticalGap >= -avgHeight * 0.3
+      && verticalGap <= Math.max(28, avgHeight * 1.25);
     if (centeredFragmentMerge) {
       return true;
     }
     if (
       centeredStackContinuity
-      && overlapRatio >= 0.04
+      && overlapRatio >= 0.08
       && centeredStack
-      && heightRatio <= 2.8
-      && verticalGap >= -avgHeight * 0.32
-      && verticalGap <= Math.max(36, avgHeight * (profile === 'manga' ? 1.85 : profile === 'adaptive' ? 1.75 : 1.25))
+      && heightRatio <= 2.5
+      && verticalGap >= -avgHeight * 0.28
+      && verticalGap <= Math.max(28, avgHeight * (profile === 'manga' ? 1.25 : profile === 'adaptive' ? 1.25 : 1.15))
     ) {
       return true;
     }
@@ -3520,6 +3538,13 @@ const suppressOverlappingOverlayBorders = (
     const baselineOverlapCollision = shouldSuppressOverlappingOverlayBorder(existing.bbox, candidate.bbox);
     if (!baselineOverlapCollision && !displacedCoverageEcho && !stackedSourceEcho) return false;
 
+    // RULE: บรรทัดที่อยู่แยกกันในแนวดิ่ง (เช่น "OF" บรรทัดบน กับ "OF" บรรทัดล่าง ใน "OF ALL OF US!")
+    // ต้องไม่ถูกยุบหรือซ่อนทิ้งเป็น duplicate echo เด็ดขาด
+    const isVerticallySeparated = overlapY <= 0.20 && (verticalGap > 0 || iou < 0.1) && centerDeltaY > Math.max(14, minHeight * 0.8);
+    if (isVerticallySeparated && !documentLikePair) {
+      return false;
+    }
+
     if (iou >= 0.82) return true;
 
     if (displacedCoverageEcho) {
@@ -3627,6 +3652,11 @@ const suppressOverlappingOverlayBorders = (
 
     if (!existing.textKey || !candidate.textKey) {
       return iou >= 0.58;
+    }
+
+    // บรรทัดที่อยู่ห่างกันในแนวดิ่ง (เช่น บทสนทนาที่พูดซ้ำลงมาเรื่อยๆ เช่น I'M DYING!) ไม่ใช่ OCR duplicate ห้ามลบ!
+    if (centerDeltaY > Math.max(14, minHeight * 0.8) && iou < 0.35) {
+      return false;
     }
 
     // มีคำแปลเหมือนกันเป๊ะ -> ยุบรวมเฉพาะเมื่อทับซ้อนกันจริง (เช่น โดน OCR อ่านเบิ้ล)
@@ -3782,19 +3812,21 @@ export const computeOverlayLayoutMap = (
     const shouldNormalize = effectiveDocumentProfile
       ? (allDocumentBody && group.length >= 2 && (maxFontSize - minFontSize) >= 0.18)
       : (group.length >= 2 && (isCenteredBlock || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind === 'comic-box') || (maxFontSize - minFontSize) >= 0.35));
-    const alignment: 'left' | 'center' = isCenteredBlock ? 'center' : 'left';
+    const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
+    const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
+    const allowSectionMerge = (effectiveProfile === 'manga' || effectiveProfile === 'manhwa')
+      && !group.some((item) => item.hints?.groupType === 'sfx');
+    const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
+      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
+      : undefined;
+    const alignment: 'left' | 'center' = ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind !== 'comic-box')
+      ? 'center'
+      : (isCenteredBlock ? 'center' : 'left');
     const sharedTextStartX = group.length >= 2
       ? (alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles ? minStartX : (effectiveDocumentProfile ? resolveMedian(startXs) : undefined))
       : undefined;
     const sharedBoxLeftX = group.length >= 2 && alignment === 'left' && effectiveDocumentProfile && !mixedDocumentStyles
       ? minStartX
-      : undefined;
-    const allowSectionMerge = effectiveProfile === 'manga'
-      || effectiveProfile === 'manhwa';
-    const hasBalloonMember = group.some((item) => item.balloonId !== undefined);
-    const isMangaOrManhwa = effectiveProfile === 'manga' || effectiveProfile === 'manhwa';
-    const mergedStyleKind: OverlayStyleKind | undefined = !effectiveDocumentProfile
-      ? (isCenteredBlock || hasBalloonMember || isMangaOrManhwa ? 'comic-bubble' : (defaultStyleKind === 'comic-box' ? 'comic-box' : undefined))
       : undefined;
     const mergedText = joinOverlayGroupText(group);
     const groupGeometry = computeOverlayGroupGeometry(group);
@@ -3865,10 +3897,10 @@ export const computeOverlayLayoutMap = (
       && !shouldBlockSectionMergeForTechnicalRows
       && !shouldPreservePerLineNarrative
       && group.length >= 2
-      && mergedStyleKind === 'comic-bubble'
+      && (mergedStyleKind === 'comic-bubble' || mergedStyleKind === 'comic-box' || mergedStyleKind === 'comic-line')
       && (
         hasBalloonMember || (
-          compactTextLength(mergedText) >= Math.max(8, Math.round(group.length * 3.4))
+          compactTextLength(mergedText) >= (isMangaOrManhwa ? 3 : Math.max(8, Math.round(group.length * 3.4)))
           && groupGeometry.maxGap <= mergeGapLimit
           && groupGeometry.compactness <= mergeCompactnessLimit
         )
@@ -3884,7 +3916,9 @@ export const computeOverlayLayoutMap = (
     );
 
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && (hasBalloonMember || (hasStrongColumnContinuity && !overlyWideSectionSpan));
+      && group.length <= 3
+      && hasStrongColumnContinuity
+      && !overlyWideSectionSpan;
 
     if (canMergeSectionBlock && mergedStyleKind) {
       const mergedSourceText = group
@@ -3918,13 +3952,16 @@ export const computeOverlayLayoutMap = (
       const mergedLineHeightMedian = resolveMedian(
         group.map((item) => Math.max(1, item.hints?.sourceBoxHeight ?? (item.bbox.y1 - item.bbox.y0)))
       ) ?? mergedHeight;
-      const mergedHeightBudget = Math.max(
-        mergedHeight,
-        mergedHeight + Math.max(
-          mergedLineHeightMedian * (mergedStyleKind === 'comic-bubble'
-            ? Math.min(1.2, Math.max(0.45, group.length * 0.22))
-            : Math.min(0.85, Math.max(0.3, group.length * 0.16))),
-          mergedHeight * (mergedStyleKind === 'comic-bubble' ? 0.1 : 0.06)
+      const mergedHeightBudget = Math.min(
+        mergedHeight * 1.04,
+        Math.max(
+          mergedHeight,
+          mergedHeight + Math.max(
+            mergedLineHeightMedian * (mergedStyleKind === 'comic-bubble'
+              ? Math.min(0.35, Math.max(0.15, group.length * 0.08))
+              : Math.min(0.25, Math.max(0.1, group.length * 0.05))),
+            mergedHeight * 0.03
+          )
         )
       );
       const mergedTypography = computeOverlayTypography(
@@ -4073,7 +4110,7 @@ export const computeOverlayLayoutMap = (
         && compactTextLength(item.text) <= 36
         && ((item.bbox.x1 - item.bbox.x0) / Math.max(1, item.bbox.y1 - item.bbox.y0)) >= 1.35;
       const itemAlignment: 'left' | 'center' = singleLineCenterCandidate ? 'center' : alignment;
-      const itemSharedCenterX = singleLineCenterCandidate
+      const itemSharedCenterX = (singleLineCenterCandidate || ((effectiveProfile === 'manga' || effectiveProfile === 'manhwa') && defaultStyleKind !== 'comic-box' && group.length === 1))
         ? (item.bbox.x0 + item.bbox.x1) * 0.5
         : sharedCenterX;
       const itemSharedTextStartX = itemAlignment === 'left' ? sharedTextStartX : undefined;

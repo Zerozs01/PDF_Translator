@@ -26,6 +26,7 @@ import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
 import { resolveTranslationOverlayContext } from '../OCR/translationOverlayUtils';
+import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 import type { TextLayer, TextLayerGroup, LayerGroupType } from '../../types/layers';
 
 const GROUP_TYPE_ICONS: Record<LayerGroupType, React.ReactNode> = {
@@ -462,8 +463,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
         const height = Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
         const area = width * height;
 
-        const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-          /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+        const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
         const isTinyJunkBox = !hasCjkOrThai
           && asciiCompact.length <= 3
           && area <= 8000
@@ -524,6 +524,27 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
       }
     });
   }, [selectedLayerIds, groups, pageNum, expandGroup]);
+
+  // Handle Delete/Backspace keyboard shortcut to remove selected layers
+  const deleteSelectedLayers = useLayerStore((state) => state.deleteSelectedLayers);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerIds.size > 0) {
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable
+        );
+        if (isTyping) return;
+
+        e.preventDefault();
+        deleteSelectedLayers();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLayerIds, deleteSelectedLayers]);
 
   // Build layers when OCR data changes
   const handleBuildLayers = useCallback((forceRebuild = false) => {
@@ -605,7 +626,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
           </span>
         </div>
         <button
-          onClick={() => handleBuildLayers()}
+          onClick={() => handleBuildLayers(true)}
           className="p-1 rounded text-slate-600 hover:text-white transition-colors"
           title="Rebuild layers from OCR"
         >

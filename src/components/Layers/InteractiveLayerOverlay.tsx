@@ -13,6 +13,7 @@ import React, { useState, useEffect, useRef, useCallback, type CSSProperties } f
 import type { BBox } from '../../types';
 import type { TextLayer, TextLayerGroup } from '../../types/layers';
 import type { OverlayLayout } from '../OCR/translationOverlayUtils';
+import { resolveOverlayMaskExpansion, clampOverlayRect } from '../OCR/translationOverlayUtils';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useUIStore } from '../../stores/useUIStore';
@@ -125,11 +126,138 @@ const BG_COLORS = [
 
 const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onCommit, defaultValue, pageNum, layout }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const effectiveBBox = (layout && !layer.userEdited)
-    ? (layout.mergedBBox || layer.bbox)
-    : layer.bbox;
-  const { left, top, width } = toScreen(effectiveBBox, ocrTransform);
   const trimmedValue = defaultValue ? defaultValue.trim() : '';
+
+  const scaleX = ocrTransform.scaleX;
+  const scaleY = ocrTransform.scaleY;
+  const offsetX = ocrTransform.offsetX;
+  const offsetY = ocrTransform.offsetY;
+
+  const maskBbox = (layout && !layer.userEdited) ? (layout.mergedMaskBBox || layer.bbox) : layer.bbox;
+  const sourceBbox = (layout && !layer.userEdited) ? (layout.mergedBBox || layer.bbox) : layer.bbox;
+
+  const maskRenderSourceLeft = maskBbox.x0;
+  const renderSourceLeft = (!layer.userEdited && layout?.alignment === 'left' && layout.sharedBoxLeftX !== undefined)
+    ? Math.min(sourceBbox.x0, layout.sharedBoxLeftX)
+    : sourceBbox.x0;
+
+  const maskBaseWidth = Math.max(1, (maskBbox.x1 - maskRenderSourceLeft) * scaleX);
+  const maskBaseHeight = Math.max(1, (maskBbox.y1 - maskBbox.y0) * scaleY);
+  const baseWidth = Math.max(1, (sourceBbox.x1 - renderSourceLeft) * scaleX);
+  const baseHeight = Math.max(1, (sourceBbox.y1 - sourceBbox.y0) * scaleY);
+
+  const styleKind = layout?.styleKind || 'comic-bubble';
+  const hasThaiText = /[\u0E00-\u0E7F]/.test(defaultValue || '');
+
+  const expansion = resolveOverlayMaskExpansion({ text: layer.sourceText || layer.text } as any);
+  const isComicLikeOverlay = styleKind === 'comic-bubble' || styleKind === 'comic-box' || styleKind === 'comic-line';
+  const isDocumentLikeOverlay = styleKind === 'document-heading' || styleKind === 'document-body';
+
+  const mergedMaskBoost = isComicLikeOverlay && layout?.mergedBBox ? 4 : 0;
+  const comicMaskBoostX = isComicLikeOverlay ? 3 : 0;
+  const comicMaskBoostTop = isComicLikeOverlay ? 3 : 0;
+  const comicMaskBoostBottom = isComicLikeOverlay ? 2 : 0;
+
+  const maskExpandX = Math.min(
+    expansion.maxExpandX + mergedMaskBoost + comicMaskBoostX,
+    Math.max(1, Math.round(maskBaseHeight * expansion.expandXRatio)) + mergedMaskBoost + comicMaskBoostX
+  );
+  const maskExpandLeft = Math.min(isComicLikeOverlay ? 4 : 1, maskExpandX);
+  const maskExpandRight = maskExpandX;
+  const maskExpandTop = Math.min(
+    expansion.maxExpandTop + mergedMaskBoost + comicMaskBoostTop,
+    Math.max(1, Math.round(maskBaseHeight * expansion.expandTopRatio)) + mergedMaskBoost + comicMaskBoostTop
+  );
+  const thaiBottomBoost = hasThaiText ? Math.min(3, Math.max(1, Math.round(maskBaseHeight * 0.08))) : 0;
+  const documentBottomBoost = isDocumentLikeOverlay
+    ? Math.min(8, Math.max(2, Math.round(maskBaseHeight * 0.16)))
+    : 0;
+  const maskExpandBottom = Math.min(
+    expansion.maxExpandBottom + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom,
+    Math.max(1, Math.round(maskBaseHeight * expansion.expandBottomRatio)) + thaiBottomBoost + documentBottomBoost + mergedMaskBoost + comicMaskBoostBottom
+  );
+
+  const maskBleed = (styleKind === 'comic-bubble' || styleKind === 'comic-box') ? 2.5 : 0;
+  const bounds = { x0: 0, y0: 0, x1: 99999, y1: 99999 };
+
+  const rawMaskLeft = maskRenderSourceLeft * scaleX - maskExpandLeft - maskBleed;
+  const rawMaskTop = maskBbox.y0 * scaleY - maskExpandTop - maskBleed;
+  const rawMaskWidth = maskBaseWidth + maskExpandLeft + maskExpandRight + (maskBleed * 2);
+  const rawMaskHeight = maskBaseHeight + maskExpandTop + maskExpandBottom + (maskBleed * 2);
+  const maskRect = clampOverlayRect(rawMaskLeft, rawMaskTop, rawMaskWidth, rawMaskHeight, bounds);
+
+  const useMergedComicTextRect = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && Boolean(layout?.mergedMaskBBox);
+  const textSourceLeft = useMergedComicTextRect ? maskRenderSourceLeft : renderSourceLeft;
+  const textSourceTop = sourceBbox.y0;
+  const textBaseWidth = useMergedComicTextRect ? Math.max(baseWidth, maskBaseWidth) : baseWidth;
+  const textBaseHeight = baseHeight;
+  const mergedComicTextTopLift = 0;
+  const mergedComicTextExtraHeight = 0;
+
+  const rawTextLeft = textSourceLeft * scaleX - (layout?.alignment === 'center' ? 0 : maskExpandLeft);
+  const rawTextTop = textSourceTop * scaleY - maskExpandTop - mergedComicTextTopLift;
+  const rawTextWidth = textBaseWidth + (layout?.alignment === 'center' ? 0 : maskExpandLeft + maskExpandRight);
+  const rawTextHeight = textBaseHeight + maskExpandTop + maskExpandBottom + mergedComicTextTopLift + mergedComicTextExtraHeight;
+
+  let textRect = clampOverlayRect(rawTextLeft, rawTextTop, rawTextWidth, rawTextHeight, bounds);
+  if (!isDocumentLikeOverlay) {
+    textRect = clampOverlayRect(textRect.left, textRect.top, textRect.width, textRect.height, {
+      x0: Math.max(0, maskRect.left - 1),
+      y0: Math.max(0, maskRect.top - 1),
+      x1: maskRect.left + maskRect.width + 1,
+      y1: maskRect.top + maskRect.height + 1,
+    });
+  }
+
+  const typography = layout?.typography || {
+    fontSize: 14 * scaleX,
+    lineHeight: 1.12,
+    padX: 3,
+    padY: 2,
+    forceSingleLine: false,
+    estimatedLines: 1,
+    contentHeight: baseHeight,
+  };
+
+  let fontSize = typography.fontSize;
+  if (layer && layer.userEdited) {
+    fontSize = (layer.fontSize || 14) * scaleX;
+  }
+  const padX = typography.padX ?? 3;
+  const padY = typography.padY ?? 2;
+
+  const extraTopPad = hasThaiText ? Math.max(1, Math.round(fontSize * 0.08)) : 0;
+  const extraBottomPad = hasThaiText ? Math.max(1, Math.round(fontSize * 0.06)) : 0;
+
+  const thaiComicLine = hasThaiText && (styleKind === 'comic-bubble' || styleKind === 'comic-box');
+  const isComicCenter = (styleKind === 'comic-bubble' || styleKind === 'comic-box') && layout?.alignment === 'center';
+  const minFillRatio = typography.estimatedLines > 1
+    ? (thaiComicLine ? 0.82 : 0.74)
+    : (thaiComicLine ? 0.58 : 0.5);
+  const naturalPaintHeight = typography.contentHeight + padY * 2 + extraTopPad + extraBottomPad;
+
+  const paintHeightMultiplier = 1.0;
+  const paintHeight = isComicCenter
+    ? Math.min(textRect.height * paintHeightMultiplier, naturalPaintHeight)
+    : Math.min(
+        textRect.height * paintHeightMultiplier,
+        Math.max(naturalPaintHeight, textRect.height * minFillRatio)
+      );
+
+  const thaiVisualShift = (isComicCenter && hasThaiText)
+    ? Math.round(maskRect.height * 0.035)
+    : 0;
+
+  const paintOffsetTop = isComicCenter
+    ? Math.max(0, Math.min(textRect.height - paintHeight, Math.round((maskRect.top - textRect.top) + (maskRect.height - paintHeight) * 0.5 - thaiVisualShift)))
+    : Math.max(
+        hasThaiText ? 1 : 0,
+        Math.min(textRect.height - paintHeight, Math.round(textRect.height * (thaiComicLine ? 0.04 : 0.08)))
+      );
+
+  const inlineLeft = offsetX + textRect.left;
+  const inlineTop = offsetY + textRect.top + paintOffsetTop;
+  const inlineWidth = textRect.width;
 
   const { updateLayerBold, updateLayerBackgroundColor, updateLayerTextColor } = useLayerStore();
   const [showTextColorPicker, setShowTextColorPicker] = useState(false);
@@ -149,7 +277,6 @@ const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onComm
   }, []);
 
   useEffect(() => {
-    // Auto-focus + cursor at end + auto-resize height
     const el = textareaRef.current;
     if (el) {
       el.focus();
@@ -167,9 +294,9 @@ const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onComm
     <div
       style={{
         position: 'absolute',
-        left,
-        top,
-        width: Math.max(width, 140),
+        left: inlineLeft,
+        top: inlineTop,
+        width: Math.max(inlineWidth, 140),
         zIndex: 10000,
         display: 'flex',
         flexDirection: 'column',
@@ -432,6 +559,7 @@ const InlineEditor: React.FC<InlineEditorProps> = ({ layer, ocrTransform, onComm
           boxSizing: 'border-box',
           lineHeight: 1.4,
           overflowY: 'hidden',
+          textAlign: layout?.alignment === 'center' ? 'center' : 'left',
         }}
       />
     </div>
@@ -459,6 +587,79 @@ interface SelectionBoxProps {
   isLayoutHidden?: boolean;
 }
 
+const areEqualSelectionBox = (prev: SelectionBoxProps, next: SelectionBoxProps) => {
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.isEditing !== next.isEditing) return false;
+  if (prev.isMultiSelected !== next.isMultiSelected) return false;
+  if (prev.activeResizeDir !== next.activeResizeDir) return false;
+  if (prev.isRotating !== next.isRotating) return false;
+  if (prev.startRotation !== next.startRotation) return false;
+  if (prev.activeTool !== next.activeTool) return false;
+  if (prev.isLayoutHidden !== next.isLayoutHidden) return false;
+
+  // ocrTransform check (deep fields check)
+  if (
+    prev.ocrTransform.scaleX !== next.ocrTransform.scaleX ||
+    prev.ocrTransform.scaleY !== next.ocrTransform.scaleY ||
+    prev.ocrTransform.offsetX !== next.ocrTransform.offsetX ||
+    prev.ocrTransform.offsetY !== next.ocrTransform.offsetY
+  ) {
+    return false;
+  }
+
+  // layer check (deep fields check)
+  const pl = prev.layer;
+  const nl = next.layer;
+  if (
+    pl.id !== nl.id ||
+    pl.rotation !== nl.rotation ||
+    pl.locked !== nl.locked ||
+    pl.visible !== nl.visible ||
+    pl.userEdited !== nl.userEdited ||
+    pl.text !== nl.text ||
+    pl.sourceText !== nl.sourceText
+  ) {
+    return false;
+  }
+
+  // BBox check
+  if (
+    pl.bbox.x0 !== nl.bbox.x0 ||
+    pl.bbox.y0 !== nl.bbox.y0 ||
+    pl.bbox.x1 !== nl.bbox.x1 ||
+    pl.bbox.y1 !== nl.bbox.y1
+  ) {
+    return false;
+  }
+
+  // layout check
+  if (prev.layout !== next.layout) {
+    const playout = prev.layout;
+    const nlayout = next.layout;
+    if (!playout || !nlayout) return false;
+    if (
+      playout.hidden !== nlayout.hidden ||
+      playout.renderText !== nlayout.renderText ||
+      playout.alignment !== nlayout.alignment ||
+      playout.styleKind !== nlayout.styleKind
+    ) {
+      return false;
+    }
+    
+    // mergedBBox check
+    const pm = playout.mergedBBox;
+    const nm = nlayout.mergedBBox;
+    if (Boolean(pm) !== Boolean(nm)) return false;
+    if (pm && nm) {
+      if (pm.x0 !== nm.x0 || pm.y0 !== nm.y0 || pm.x1 !== nm.x1 || pm.y1 !== nm.y1) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+};
+
 const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
@@ -466,9 +667,21 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   onDoubleClick, onHover, layout, isLayoutHidden,
 }) => {
   const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
-  const effectiveBBox = (layout && !layer.userEdited)
-    ? (layout.mergedBBox || layer.bbox)
-    : layer.bbox;
+  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const viewMode = useUIStore((state) => state.viewMode);
+  
+  // ป้ายนี้ถือว่าเป็นฝั่งขวาในโหมดเปรียบเทียบ (split view) ก็ต่อเมื่อ viewMode === 'split' และมีข้อความแปลแล้ว/ภาษาไทย
+  const currentRenderText = (layout && typeof layout.renderText === 'string') ? layout.renderText : layer.text;
+  const hasThaiText = /[\u0E00-\u0E7F]/.test(currentRenderText);
+  const isSplitView = viewMode === 'split';
+  const isTranslatedAreaInSplitView = isSplitView && (translationPreviewMode === 'translated' || hasThaiText || (layer.text !== layer.sourceText));
+
+  // ซ่อน child line ที่ถูก dehyphenate รวมกับบรรทัดหลักไปแล้ว (renderText === '')
+  if (layout && layout.renderText === '' && !layer.userEdited && !isSelected && !isMultiSelected) {
+    return null;
+  }
+
+  const effectiveBBox = layer.bbox || layout?.mergedBBox || { x0: 0, y0: 0, x1: 0, y1: 0 };
   const { left, top, width, height } = toScreen(effectiveBBox, ocrTransform);
   const isHighlighted = isSelected || isMultiSelected;
   const rotation = layer.rotation || 0;
@@ -516,30 +729,34 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
         border: isRotating
           ? '2px solid #8B5CF6' // กำลังหมุน -> เส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
-            ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.55)' : '#3B82F6'}` // ได้รับการเลือก (suppress = สีม่วง, ปกติ = น้ำเงิน)
+            ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.85)' : (isTranslatedAreaInSplitView ? '#00D2FF' : '#3B82F6')}` // กดเลือก Layer -> เส้นประ dashed ชัดเจน!
             : isBoxHovered
-              ? `1.5px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.4)' : '#F97316'}` // hover (suppress = ม่วงจาง, ปกติ = ส้ม)
+              ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.9)' : (isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316')}` // hover -> สีเข้มสว่าง + เส้นประ dashed ชัดเจน!
               : isLayoutHidden
-                ? '0.5px dashed rgba(99,102,241,0.18)' // suppress โดย overlay dedup → เส้นประม่วงจางมาก บอกว่า "มีอยู่แต่ถูกซ่อน"
-                : showDebugOverlay
-                  ? '0.65px dashed rgba(249, 115, 22, 0.25)' // ปกติ (ยังไม่เลือก) -> เส้นประสีส้มจางบางเบา สบายตา ไม่แย่งซีน
+                ? '0.75px solid rgba(99,102,241,0.25)' // suppress โดย overlay dedup
+                : (showDebugOverlay || isTranslatedAreaInSplitView)
+                  ? `1.5px solid ${isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316'}` // ปกติ -> เส้นทึบ solid (ฝั่งขวาSplit = สีฟ้าสด #00D2FF, โหมดปกติ/ฝั่งซ้าย = สีส้มสด #F97316)
                   : 'none',
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
         boxSizing: 'border-box',
         background: isRotating 
-          ? 'rgba(139, 92, 246, 0.05)' // ไฮไลท์สีม่วงจางๆ ตอนหมุน
+          ? 'rgba(139, 92, 246, 0.08)' // ไฮไลท์สีม่วงจางๆ ตอนหมุน
           : isHighlighted 
-            ? 'rgba(59,130,246,0.06)' 
-            : 'transparent',
+            ? 'rgba(59,130,246,0.10)' 
+            : isBoxHovered
+              ? (isTranslatedAreaInSplitView ? 'rgba(0, 210, 255, 0.16)' : 'rgba(249, 115, 22, 0.16)') // hover -> สีเข้มชัดเจน!
+              : 'transparent',
         transition: 'border-color 0.12s, background 0.12s, box-shadow 0.12s',
-        // Glow Effect ตอนหมุนเพื่อความเด่นบนมังงะขาวดำ
+        // Glow Effect ตอนหมุนหรือ hover เพื่อความเด่นบนมังงะขาวดำ
         boxShadow: isRotating
           ? '0 0 12px rgba(139, 92, 246, 0.35)' 
-          : isMultiSelected && !isSelected
-            ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
-            : undefined,
+          : isBoxHovered
+            ? `0 0 8px ${isTranslatedAreaInSplitView ? 'rgba(0, 210, 255, 0.35)' : 'rgba(249, 115, 22, 0.35)'}`
+            : isMultiSelected && !isSelected
+              ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
+              : undefined,
       }}
       onMouseEnter={() => {
         setIsBoxHovered(true);
@@ -684,7 +901,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
       )}
     </div>
   );
-});
+}, areEqualSelectionBox);
 
 // ─── Main Component: InteractiveLayerOverlay ──────────────────────
 export const InteractiveLayerOverlay: React.FC<Props> = ({
@@ -731,23 +948,42 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       setViewport({ x0, y0, x1, y1 });
     };
 
-    // Initial update
+    // Initial update is synchronous to prevent layout flicker
     handleUpdate();
 
+    // Throttled update helper (minimum 100ms between calls during continuous scrolling/resize)
+    let lastRun = 0;
+    let throttleTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const handleUpdateThrottled = () => {
+      const now = Date.now();
+      if (now - lastRun >= 100) {
+        handleUpdate();
+        lastRun = now;
+      } else {
+        if (throttleTimeout) clearTimeout(throttleTimeout);
+        throttleTimeout = setTimeout(() => {
+          handleUpdate();
+          lastRun = Date.now();
+        }, 100 - (now - lastRun));
+      }
+    };
+
     // Listen to scroll/resize events
-    parent.addEventListener('scroll', handleUpdate, { passive: true });
-    window.addEventListener('resize', handleUpdate, { passive: true });
+    parent.addEventListener('scroll', handleUpdateThrottled, { passive: true });
+    window.addEventListener('resize', handleUpdateThrottled, { passive: true });
 
     // Use ResizeObserver to detect layout changes on zoom or pan
     const resizeObserver = new ResizeObserver(() => {
-      handleUpdate();
+      handleUpdateThrottled();
     });
     resizeObserver.observe(el);
     resizeObserver.observe(parent);
 
     return () => {
-      parent.removeEventListener('scroll', handleUpdate);
-      window.removeEventListener('resize', handleUpdate);
+      parent.removeEventListener('scroll', handleUpdateThrottled);
+      window.removeEventListener('resize', handleUpdateThrottled);
+      if (throttleTimeout) clearTimeout(throttleTimeout);
       resizeObserver.disconnect();
     };
   }, [ocrTransform, isActive, zoom]);
@@ -777,7 +1013,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   } | null>(null);
 
   // ── Keyboard: Ctrl+Z Undo & Delete ──────────────────────────────
-  const { undoLastAction } = useLayerStore();
+  const { undoLastAction, deleteSelectedLayers } = useLayerStore();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !editingLayerId) {
@@ -789,20 +1025,21 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         setEditingLayerId(null);
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !editingLayerId && selectedLayerIds.size > 0) {
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable
+        );
+        if (isTyping) return;
+
         e.preventDefault();
-        if (confirm(`คุณต้องการลบ ${selectedLayerIds.size} ข้อความที่เลือกใช่หรือไม่?`)) {
-          // ลบ snapshot ก่อนลบจริงเพื่อให้ undo ทำงานได้ถูกต้อง
-          pushUndoSnapshot(pageNum);
-          selectedLayerIds.forEach((id) => {
-            deleteLayer(pageNum, id);
-          });
-          clearSelection();
-        }
+        deleteSelectedLayers();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pageNum, editingLayerId, selectedLayerIds, undoLastAction, clearSelection, deleteLayer, pushUndoSnapshot]);
+  }, [pageNum, editingLayerId, selectedLayerIds, undoLastAction, clearSelection, deleteSelectedLayers]);
 
   // ── Manual Region Creation Handler ──────────────────────────────────
   const handleCreateManualRegion = useCallback((pdfBBox: BBox, bgColor: string) => {
@@ -958,23 +1195,30 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
           }
         });
 
-        // Save position updates
-        if (idsToMove.length > 1) {
-          updateMultiLayerBBoxDelta(pageNum, new Set(idsToMove), { dx, dy });
-        } else {
-          const start = ds.startBBox!;
-          const newBBox: BBox = {
-            x0: start.x0 + dx,
-            y0: start.y0 + dy,
-            x1: start.x1 + dx,
-            y1: start.y1 + dy,
-          };
-          updateLayerBBox(pageNum, ds.layerId, newBBox);
-        }
+        // Save position updates only if actual screen movement exceeded 3 pixels to prevent accidental "userEdited" flags
+        const screenMovement = Math.sqrt(
+          Math.pow(e.clientX - ds.startMouseX, 2) + 
+          Math.pow(e.clientY - ds.startMouseY, 2)
+        );
+        const hasMoved = screenMovement >= 3;
+        if (hasMoved) {
+          if (idsToMove.length > 1) {
+            updateMultiLayerBBoxDelta(pageNum, new Set(idsToMove), { dx, dy });
+          } else {
+            const start = ds.startBBox!;
+            const newBBox: BBox = {
+              x0: start.x0 + dx,
+              y0: start.y0 + dy,
+              x1: start.x1 + dx,
+              y1: start.y1 + dy,
+            };
+            updateLayerBBox(pageNum, ds.layerId, newBBox);
+          }
 
-        // Sync group BBox
-        const layer = layers.find(l => l.id === ds.layerId);
-        if (layer?.groupId) synchronizeGroupBBox(pageNum, layer.groupId);
+          // Sync group BBox
+          const layer = layers.find(l => l.id === ds.layerId);
+          if (layer?.groupId) synchronizeGroupBBox(pageNum, layer.groupId);
+        }
       } else if (ds.layerId) {
         // Sync group BBox หลัง resize หรือ rotate เสร็จ
         const layer = layers.find(l => l.id === ds.layerId);
@@ -991,12 +1235,13 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [
-    pageNum, layers, selectedLayerIds, ocrTransform, drawStartPos, drawCurrentPos,
+    pageNum, layers, groups, selectedLayerIds, ocrTransform, drawStartPos, drawCurrentPos,
     updateLayerBBox, updateLayerRotation, updateMultiLayerBBoxDelta, synchronizeGroupBBox, handleCreateManualRegion, activeTool
   ]);
 
   // ── Handlers ─────────────────────────────────────────────────
   const handleMouseDownBody = useCallback((e: React.MouseEvent, layerId: string) => {
+    if (e.button !== 0) return; // Only trigger for left-click to allow middle-click panning
     e.stopPropagation();
     if (activeTool === 'region' || activeTool === 'text') return;
 
@@ -1027,6 +1272,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   }, [editingLayerId, layers, pageNum, pushUndoSnapshot, selectLayer, activeTool, setEditingLayerId]);
 
   const handleMouseDownHandle = useCallback((e: React.MouseEvent, layerId: string, dir: ResizeDirection) => {
+    if (e.button !== 0) return; // Only trigger for left-click
     e.stopPropagation();
     const layer = layers.find(l => l.id === layerId);
     if (!layer || layer.locked || activeTool === 'region' || activeTool === 'text') return;
@@ -1044,6 +1290,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   }, [layers, pageNum, pushUndoSnapshot, activeTool]);
 
   const handleMouseDownRotate = useCallback((e: React.MouseEvent, layerId: string) => {
+    if (e.button !== 0) return; // Only trigger for left-click
     e.stopPropagation();
     const layer = layers.find(l => l.id === layerId);
     if (!layer || layer.locked || activeTool === 'region' || activeTool === 'text') return;
@@ -1096,6 +1343,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   }, [pageNum, layers, translationPreviewMode, pushUndoSnapshot, updateLayerText]);
 
   const handleOverlayMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Only trigger for left-click
     if (activeTool === 'region' || activeTool === 'text') {
       e.stopPropagation();
       e.preventDefault();
@@ -1154,14 +1402,14 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         // คัดกรองและซ่อนเลเยอร์ที่ถูกสั่ง hidden จาก layout map (เนื่องจากถูกผสานกลุ่ม)
         const layout = layouts?.get(layer.lineIndex);
         const isOcrLayer = layer.lineIndex >= 0 && !layer.id.startsWith('manual-');
-        // Layer ที่ไม่มีใน layout map และไม่ได้แก้ไขโดย user → ไม่ render (ยังไม่มีข้อมูลพอ) (เว้นแต่จะอยู่ในโหมด original OCR เพื่อให้ select/ขยับกล่องได้)
-        if (isOcrLayer && !layout && !layer.userEdited && translationPreviewMode !== 'original') {
-          return null;
-        }
+
         // layout.hidden = true → layer ถูก suppress โดย overlay dedup
         // ยังคง render SelectionBox เพื่อให้ user สามารถ select/interact ได้
         // แต่จะแสดง style จางลงเพื่อบ่งบอกสถานะ suppress
         const isLayoutHidden = layout?.hidden === true;
+        if (isLayoutHidden && !selectedLayerIds.has(layer.id)) {
+          return null;
+        }
 
         // Viewport Virtualization check (Math-based, zero DOM metrics API overhead)
         const effectiveBBox = (layout && !layer.userEdited)

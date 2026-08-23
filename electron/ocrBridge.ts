@@ -2,7 +2,7 @@ import { app, BrowserWindow } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
 import { randomUUID } from 'crypto';
 
 declare const __DEV_PROJECT_ROOT__: string | undefined;
@@ -87,6 +87,8 @@ export interface ExternalOcrRequestPayload {
    */
   maxSideLen?: number;
   maxPixels?: number;
+  useAngleCls?: boolean;
+  use_angle_cls?: boolean;
 }
 
 interface ExternalOcrBridgeResponse {
@@ -326,12 +328,10 @@ function resolveBridgeEnv(engine?: ExternalBridgeEngine): NodeJS.ProcessEnv {
 }
 
 function getExternalOcrTempRoot(): string {
-  if (externalOcrTempRoot) {
-    return externalOcrTempRoot;
+  const tempRoot = externalOcrTempRoot || path.join(os.tmpdir(), 'pdf-translator-ocr');
+  if (!fs.existsSync(tempRoot)) {
+    fs.mkdirSync(tempRoot, { recursive: true });
   }
-
-  const tempRoot = path.join(os.tmpdir(), 'pdf-translator-ocr');
-  fs.mkdirSync(tempRoot, { recursive: true });
   externalOcrTempRoot = tempRoot;
   return tempRoot;
 }
@@ -457,11 +457,156 @@ export function resetDaemonIdleTimer(engine: ExternalBridgeEngine): void {
   daemonIdleTimers.set(engine, timer);
 }
 
+const daemonWatchdogs = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
+
+function getProcessMemory(pid: number): Promise<number> {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      exec(`powershell -NoProfile -Command "Get-Process -Id ${pid} | Select-Object -ExpandProperty WorkingSet64"`, (err, stdout) => {
+        if (err) {
+          resolve(0);
+        } else {
+          const bytes = parseInt(stdout.trim(), 10);
+          resolve(isNaN(bytes) ? 0 : bytes);
+        }
+      });
+    } else {
+      exec(`ps -o rss= -p ${pid}`, (err, stdout) => {
+        if (err) {
+          resolve(0);
+        } else {
+          const kb = parseInt(stdout.trim(), 10);
+          resolve(isNaN(kb) ? 0 : kb * 1024);
+        }
+      });
+    }
+  });
+}
+
+function getDynamicMemoryLimitMB(engine: ExternalBridgeEngine): number {
+  const totalMemBytes = os.totalmem();
+  const totalMemGB = totalMemBytes / (1024 * 1024 * 1024);
+
+  if (engine === 'easyocr') {
+    if (totalMemGB >= 31) {
+      return 8000; // 8.0 GB for 32GB+ systems
+    }
+    if (totalMemGB >= 15) {
+      return 4500; // 4.5 GB for 16GB systems
+    }
+    return 2400; // 2.4 GB fallback for 8GB or less
+  } else {
+    // paddleocr
+    if (totalMemGB >= 31) {
+      return 4000; // 4.0 GB for 32GB+ systems
+    }
+    if (totalMemGB >= 15) {
+      return 2500; // 2.5 GB for 16GB systems
+    }
+    return 1200; // 1.2 GB fallback for 8GB or less
+  }
+}
+
+function startWatchdog(engine: ExternalBridgeEngine, daemon: BridgeDaemon) {
+  stopWatchdog(engine);
+  const timer = setInterval(async () => {
+    const pid = daemon.child.pid;
+    if (!pid || daemon.child.killed) {
+      stopWatchdog(engine);
+      return;
+    }
+
+    // 1. Check active state
+    let isAlive = false;
+    try {
+      process.kill(pid, 0);
+      isAlive = true;
+    } catch {
+      isAlive = false;
+    }
+
+    if (!isAlive) {
+      console.warn(`[ocrBridge] Watchdog detected that ${engine} process ${pid} is dead.`);
+      teardownDaemon(engine, new Error(`OCR daemon process died`));
+      stopWatchdog(engine);
+      return;
+    }
+
+    // 2. Check memory footprint
+    const memBytes = await getProcessMemory(pid);
+    if (memBytes > 0) {
+      const memMB = memBytes / (1024 * 1024);
+      console.log(`[ocrBridge] Watchdog: ${engine} process ${pid} memory usage: ${memMB.toFixed(2)} MB`);
+      const MEMORY_LIMIT_MB = getDynamicMemoryLimitMB(engine);
+      if (memMB > MEMORY_LIMIT_MB) {
+        console.warn(`[ocrBridge] Watchdog: ${engine} memory usage (${memMB.toFixed(2)} MB) exceeded limit (${MEMORY_LIMIT_MB} MB). Terminating daemon to prevent fragmentation.`);
+        teardownDaemon(engine, new Error(`OCR daemon memory limit exceeded`));
+        stopWatchdog(engine);
+      }
+    }
+  }, 15000); // Check every 15 seconds
+  daemonWatchdogs.set(engine, timer);
+}
+
+function stopWatchdog(engine: ExternalBridgeEngine) {
+  const timer = daemonWatchdogs.get(engine);
+  if (timer) {
+    clearInterval(timer);
+    daemonWatchdogs.delete(engine);
+  }
+}
+
+function killProcessPact(child: ReturnType<typeof spawn>, pid: number) {
+  console.log(`[ocrBridge] Initiating death pact for process ${pid} using SIGTERM`);
+  
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/T', '/PID', String(pid)], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      child.kill('SIGTERM');
+    }
+  } else {
+    child.kill('SIGTERM');
+  }
+
+  setTimeout(() => {
+    let isAlive = false;
+    try {
+      process.kill(pid, 0);
+      isAlive = true;
+    } catch {
+      isAlive = false;
+    }
+
+    if (isAlive) {
+      console.warn(`[ocrBridge] Heartbeat did not flatline for process ${pid} after 2000ms. Forcing SIGKILL.`);
+      if (process.platform === 'win32') {
+        try {
+          spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        } catch {
+          child.kill('SIGKILL');
+        }
+      } else {
+        child.kill('SIGKILL');
+      }
+    } else {
+      console.log(`[ocrBridge] Process ${pid} successfully terminated within 2000ms.`);
+    }
+  }, 2000);
+}
+
 function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
   const daemon = bridgeDaemons.get(engine);
   if (!daemon) return;
 
   bridgeDaemons.delete(engine);
+  stopWatchdog(engine);
 
   const existingTimer = daemonIdleTimers.get(engine);
   if (existingTimer) {
@@ -484,19 +629,8 @@ function teardownDaemon(engine: ExternalBridgeEngine, reason?: Error): void {
 
   if (!daemon.child.killed) {
     const pid = daemon.child.pid;
-    // On Windows, child.kill() only sends SIGTERM which Python may ignore.
-    // Use taskkill /F /T to forcefully terminate the entire process tree.
-    if (process.platform === 'win32' && pid) {
-      try {
-        spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-      } catch {
-        daemon.child.kill('SIGKILL');
-      }
-    } else {
-      daemon.child.kill('SIGKILL');
+    if (pid) {
+      killProcessPact(daemon.child, pid);
     }
   }
 }
@@ -634,6 +768,7 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
   });
 
   bridgeDaemons.set(engine, daemon);
+  startWatchdog(engine, daemon);
   return daemon;
 }
 
@@ -807,6 +942,7 @@ export async function writeOcrTempImage(
   mimeType: string
 ): Promise<string> {
   const tempRoot = getExternalOcrTempRoot();
+  await fs.promises.mkdir(tempRoot, { recursive: true });
   const ext = mimeTypeToExtension(mimeType);
   const imagePath = path.join(tempRoot, `ocr-tmp-${randomUUID()}${ext}`);
   await fs.promises.writeFile(imagePath, coerceImageBuffer(imageData));
@@ -878,6 +1014,8 @@ export async function runExternalOcr(payload: ExternalOcrRequestPayload): Promis
         ? { maxSideLen: Math.min(Math.max(1, payload.maxSideLen), 6000) }
         : {}),
       ...(typeof payload.maxPixels === 'number' ? { maxPixels: payload.maxPixels } : {}),
+      ...(typeof payload.useAngleCls === 'boolean' ? { useAngleCls: payload.useAngleCls } : {}),
+      ...(typeof payload.use_angle_cls === 'boolean' ? { use_angle_cls: payload.use_angle_cls } : {}),
     };
 
     let response: ExternalOcrBridgeResponse;
@@ -1057,6 +1195,13 @@ export function cancelExternalOcr(engine?: ExternalBridgeEngine): void {
     return;
   }
   disposeExternalOcrDaemons();
+}
+
+export async function clearExternalOcrCudaCache(engine: ExternalBridgeEngine): Promise<void> {
+  const response = await requestDaemon(engine, { action: 'cleanup', engine });
+  if (!response.ok) {
+    throw new Error(response.reason || `Failed to clear CUDA cache for engine "${engine}"`);
+  }
 }
 
 export function disposeExternalOcrDaemons(): void {

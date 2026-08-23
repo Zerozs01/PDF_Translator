@@ -206,6 +206,7 @@ export interface OCRPageResult {
   language: string;
   pageSegMode?: number;
   algorithmVersion: number;
+  ocrRawVersion?: number;
   pipelineProfile?: OCRPipelineProfile;
   ocrEngine?: OCREngine;
   ocrQualityProfile?: OCRQualityProfile;
@@ -214,6 +215,14 @@ export interface OCRPageResult {
   text: string;
   confidence: number;
   debug?: OCRDebugInfo;
+  /**
+   * ทำไมถึงเขียนแบบนี้: Flag นี้ใช้เป็น guard ป้องกัน splitAggressiveMergedLines ถูกเรียกซ้ำ
+   * เมื่อ OCR result ถูกโหลดจาก DB แล้วผ่าน setPageOCR ซึ่ง split อีกครั้ง (double-split bug)
+   * ระบบจะ set flag นี้เป็น true หลังจาก split แล้ว และ store จะตรวจสอบก่อน split ซ้ำ
+   */
+  _splitDone?: boolean;
+  _manhwaDone?: boolean;
+  _japaneseDone?: boolean;
 }
 
 /** OCR Processing Options */
@@ -226,6 +235,7 @@ export interface OCROptions {
   /** Per-page OCR timeout in seconds (0 = no timeout). Default: 120 */
   perPageTimeoutSec?: number;
   ocrQualityProfile?: OCRQualityProfile;
+  useAngleCls?: boolean;
 }
 
 /** Text Layer Generation Options */

@@ -38,14 +38,14 @@ This document describes the architecture as implemented in the current working t
   - language
   - dpi
   - pageSegMode
-  - algorithmVersion (`214`)
+  - algorithmVersion (`215`)
   - pipelineProfile
   - ocrEngine
   - ocrQualityProfile
 
 ### Translation Cache
 
-- Version: `v48`
+- Version: `v51`
 - Key dimensions include:
   - OCR engine + OCR language
   - source language + target language

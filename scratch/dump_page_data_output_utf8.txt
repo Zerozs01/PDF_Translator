@@ -1,0 +1,712 @@
+
+
+==================================================
+Dumping Doc 3 Page 3 details:
+==================================================
+
+OCR Lines:
+Line 0: "WHAT" (box: x0=2416.0, y0=380.0, x1=2582.0, y1=454.0)
+Line 1: "ARE YOU" (box: x0=2368.0, y0=459.0, x1=2630.0, y1=533.0)
+Line 2: "YOU'RE" (box: x0=4410.0, y0=491.0, x1=4710.0, y1=602.0)
+Line 3: "TALKING" (box: x0=2384.0, y0=539.0, x1=2614.0, y1=613.0)
+Line 4: "ABOUT," (box: x0=2388.0, y0=606.0, x1=2605.0, y1=699.0)
+Line 5: "TOO FAR" (box: x0=4373.0, y0=613.0, x1=4747.0, y1=708.0)
+Line 6: "GENERAL" (box: x0=2368.0, y0=697.0, x1=2625.0, y1=771.0)
+Line 7: "OuT iN" (box: x0=4416.0, y0=713.0, x1=4699.0, y1=824.0)
+Line 8: "GARCIA?" (box: x0=2367.0, y0=759.0, x1=2626.0, y1=851.0)
+Line 9: "I CAN'T" (box: x0=2379.0, y0=850.0, x1=2614.0, y1=930.0)
+Line 10: "PRiNCESS" (box: x0=4373.0, y0=930.0, x1=4747.0, y1=1025.0)
+Line 11: "DEFEAT" (box: x0=2379.0, y0=935.0, x1=2614.0, y1=1009.0)
+Line 12: "STUBBORN" (box: x0=1700.0, y0=956.0, x1=2026.0, y1=1051.0)
+Line 13: "ENEMIES" (box: x0=2374.0, y0=1014.0, x1=2625.0, y1=1088.0)
+Line 14: "ROSERIA!" (box: x0=4368.0, y0=1046.0, x1=4752.0, y1=1141.0)
+Line 15: "BITCH..." (box: x0=1725.0, y0=1049.0, x1=1991.0, y1=1180.0)
+Line 16: "WiTHOUT" (box: x0=2379.0, y0=1093.0, x1=2614.0, y1=1167.0)
+Line 17: "MOVING" (box: x0=2379.0, y0=1167.0, x1=2609.0, y1=1246.0)
+Line 18: "PLEASE" (box: x0=4400.0, y0=1151.0, x1=4720.0, y1=1246.0)
+Line 19: "YOU'RE" (box: x0=1748.0, y0=1178.0, x1=1978.0, y1=1273.0)
+Line 20: "OUT iN" (box: x0=2395.0, y0=1246.0, x1=2598.0, y1=1326.0)
+Line 21: "MOVE" (box: x0=4437.0, y0=1257.0, x1=4683.0, y1=1357.0)
+Line 22: "ALWAYS" (box: x0=1737.0, y0=1294.0, x1=1989.0, y1=1389.0)
+Line 23: "FRONT!" (box: x0=2390.0, y0=1326.0, x1=2603.0, y1=1400.0)
+Line 24: "BACK!" (box: x0=4425.0, y0=1356.0, x1=4685.0, y1=1470.0)
+Line 25: "MAKING US" (box: x0=1700.0, y0=1410.0, x1=2031.0, y1=1505.0)
+Line 26: "CHARGE!" (box: x0=1727.0, y0=1521.0, x1=1999.0, y1=1616.0)
+Line 27: "ALL UNITS," (box: x0=711.0, y0=1711.0, x1=1037.0, y1=1827.0)
+Line 28: "COME OUT FRONT!" (box: x0=583.0, y0=1843.0, x1=1181.0, y1=1949.0)
+Line 29: "FOLLOW HER" (box: x0=668.0, y0=1965.0, x1=1085.0, y1=2060.0)
+Line 30: "HIGHNESS AND" (box: x0=647.0, y0=2081.0, x1=1123.0, y1=2192.0)
+Line 31: "BREAK THROUGH" (box: x0=620.0, y0=2213.0, x1=1139.0, y1=2308.0)
+Line 32: "THE ENEMY" (box: x0=700.0, y0=2334.0, x1=1064.0, y1=2429.0)
+Line 33: "ENCAMPMENT!!" (box: x0=647.0, y0=2456.0, x1=1107.0, y1=2551.0)
+Line 34: "DONT" (box: x0=1200.0, y0=2765.0, x1=1435.0, y1=2875.0)
+Line 35: "BE STUPID," (box: x0=1131.0, y0=2855.0, x1=1521.0, y1=2976.0)
+Line 36: "YOU CAN'T" (box: x0=1146.0, y0=2944.0, x1=1521.0, y1=3071.0)
+Line 37: "EASILY BREAK" (box: x0=1093.0, y0=3034.0, x1=1596.0, y1=3171.0)
+Line 38: "THROUGH" (box: x0=1179.0, y0=3135.0, x1=1532.0, y1=3256.0)
+Line 39: "THAT TOUGH" (box: x0=1141.0, y0=3224.0, x1=1585.0, y1=3356.0)
+Line 40: "ENCAMPMENT" (box: x0=1131.0, y0=3325.0, x1=1612.0, y1=3451.0)
+Line 41: "BYCHARGING" (box: x0=1142.0, y0=3420.0, x1=1616.0, y1=3540.0)
+Line 42: "STRAIGHT" (box: x0=1216.0, y0=3517.0, x1=1558.0, y1=3638.0)
+Line 43: "AT IT!!" (box: x0=1270.0, y0=3612.0, x1=1521.0, y1=3727.0)
+Line 44: "AND SHE'S" (box: x0=4389.0, y0=4871.0, x1=4865.0, y1=4966.0)
+Line 45: "RUNNING" (box: x0=4394.0, y0=4987.0, x1=4843.0, y1=5082.0)
+Line 46: "AROUND" (box: x0=4421.0, y0=5103.0, x1=4827.0, y1=5193.0)
+Line 47: "LOOKING" (box: x0=4368.0, y0=5214.0, x1=4833.0, y1=5309.0)
+Line 48: "LIKE THAT" (box: x0=4361.0, y0=5309.0, x1=4850.0, y1=5432.0)
+Line 49: "BECAUSE SHE" (box: x0=2149.0, y0=6081.0, x1=2673.0, y1=6154.0)
+Line 50: "COMES OUT TOTHE" (box: x0=2021.0, y0=6176.0, x1=2796.0, y1=6250.0)
+Line 51: "FRONT RIDING A HORSE" (box: x0=1941.0, y0=6271.0, x1=2855.0, y1=6345.0)
+Line 52: "HER BIG SEXY ASSIS" (box: x0=1978.0, y0=6350.0, x1=2833.0, y1=6440.0)
+Line 53: "CLEARLYV IS I BLEDAMN" (box: x0=1919.0, y0=6445.0, x1=2871.0, y1=6535.0)
+Line 54: "I CAN'T CONCENTRATE" (box: x0=1957.0, y0=6545.0, x1=2849.0, y1=6619.0)
+Line 55: "ON THE BATTLE!!" (box: x0=2085.0, y0=6640.0, x1=2742.0, y1=6714.0)
+
+Dropped Words (Safety Dedup):
+
+================ Cache Key: ver:v49|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:adaptive|translator:offline ===============
+Raw translated_text: คุณ
+พูดเรื่อง
+เธอ
+อะไร
+นายพล
+ไกลเกิน
+การ์เซีย
+ไปใน
+ฉัน
+เอาชนะ
+เจ้าหญิง
+ศัตรู
+นังสารเลว
+ไม่ได้
+โรสเรีย
+... คุณ
+โดยไม่มี
+ได้ออก
+! กรุณา
+เธอ
+มาข้าง
+ถอย
+จะทําให้
+หน้า
+ไป!
+เราค่า
+ใช้จ่าย!
+ทุกหน่วย
+ออกมาข้าง
+หน้า!
+ตามพระนาง
+ไปและทํา
+ลายค่าย
+ศัตรู!
+อย่า
+โง่ไปหน่อยเลย
+นาย
+ไม่มีทางฝ่า
+ผ่าน
+ค่ายที่ลํา
+บากนั่นไป
+ได้ด้วย
+การพุ่ง
+เข้าใส่
+และเธอ
+ก็วิ่ง
+ไป
+ทั่ว
+แบบนั้น
+เพราะเธอออก
+มาที่ด้านหน้า
+ขี่ม้าก้นเซ็กซี่
+ของเธออย่างชัดเจน
+เป็นฉันเลือดออกฉัน
+ไม่สามารถมีสมาธิ
+ในการต่อสู้!
+translated_by_index raw value: [{"index":0,"text":"คุณ"},{"index":1,"text":"พูดเรื่อง"},{"index":3,"text":"อะไร"},{"index":4,"text":"นายพล"},{"index":6,"text":"การ์เซีย"},{"index":8,"text":"ฉัน"},{"index":9,"text":"เอาชนะ"},{"index":11,"text":"ศัตรู"},{"index":13,"text":"ไม่ได้"},{"index":16,"text":"โดยไม่มี"},{"index":17,"text":"ได้ออก"},{"index":20,"text":"มาข้าง"},{"index":23,"text":"หน้า"},{"index":2,"text":"เธอ"},{"index":5,"text":"ไกลเกิน"},{"index":7,"text":"ไปใน"},{"index":10,"text":"เจ้าหญิง"},{"index":14,"text":"โรสเรีย"},{"index":18,"text":"! กรุณา"},{"index":21,"text":"ถอย"},{"index":24,"text":"ไป!"},{"index":12,"text":"นังสารเลว"},{"index":15,"text":"... คุณ"},{"index":19,"text":"เธอ"},{"index":22,"text":"จะทําให้"},{"index":25,"text":"เราค่า"},{"index":26,"text":"ใช้จ่าย!"},{"index":27,"text":"ทุกหน่วย"},{"index":28,"text":"ออกมาข้าง"},{"index":29,"text":"หน้า!"},{"index":30,"text":"ตามพระนาง"},{"index":31,"text":"ไปและทํา"},{"index":32,"text":"ลายค่าย"},{"index":33,"text":"ศัตรู!"},{"index":34,"text":"อย่า"},{"index":35,"text":"โง่ไปหน่อยเลย"},{"index":36,"text":"นาย"},{"index":37,"text":"ไม่มีทางฝ่า"},{"index":38,"text":"ผ่าน"},{"index":39,"text":"ค่ายที่ลํา"},{"index":40,"text":"บากนั่นไป"},{"index":41,"text":"ได้ด้วย"},{"index":42,"text":"การพุ่ง"},{"index":43,"text":"เข้าใส่"},{"index":44,"text":"และเธอ"},{"index":45,"text":"ก็วิ่ง"},{"index":46,"text":"ไป"},{"index":47,"text":"ทั่ว"},{"index":48,"text":"แบบนั้น"},{"index":49,"text":"เพราะเธอออก"},{"index":50,"text":"มาที่ด้านหน้า"},{"index":51,"text":"ขี่ม้าก้นเซ็กซี่"},{"index":52,"text":"ของเธออย่างชัดเจน"},{"index":53,"text":"เป็นฉันเลือดออกฉัน"},{"index":54,"text":"ไม่สามารถมีสมาธิ"},{"index":55,"text":"ในการต่อสู้!"}]
+translated_by_index Parsed:
+[
+  { index: 0, text: 'คุณ' },
+  { index: 1, text: 'พูดเรื่อง' },
+  { index: 3, text: 'อะไร' },
+  { index: 4, text: 'นายพล' },
+  { index: 6, text: 'การ์เซีย' },
+  { index: 8, text: 'ฉัน' },
+  { index: 9, text: 'เอาชนะ' },
+  { index: 11, text: 'ศัตรู' },
+  { index: 13, text: 'ไม่ได้' },
+  { index: 16, text: 'โดยไม่มี' },
+  { index: 17, text: 'ได้ออก' },
+  { index: 20, text: 'มาข้าง' },
+  { index: 23, text: 'หน้า' },
+  { index: 2, text: 'เธอ' },
+  { index: 5, text: 'ไกลเกิน' },
+  { index: 7, text: 'ไปใน' },
+  { index: 10, text: 'เจ้าหญิง' },
+  { index: 14, text: 'โรสเรีย' },
+  { index: 18, text: '! กรุณา' },
+  { index: 21, text: 'ถอย' },
+  { index: 24, text: 'ไป!' },
+  { index: 12, text: 'นังสารเลว' },
+  { index: 15, text: '... คุณ' },
+  { index: 19, text: 'เธอ' },
+  { index: 22, text: 'จะทําให้' },
+  { index: 25, text: 'เราค่า' },
+  { index: 26, text: 'ใช้จ่าย!' },
+  { index: 27, text: 'ทุกหน่วย' },
+  { index: 28, text: 'ออกมาข้าง' },
+  { index: 29, text: 'หน้า!' },
+  { index: 30, text: 'ตามพระนาง' },
+  { index: 31, text: 'ไปและทํา' },
+  { index: 32, text: 'ลายค่าย' },
+  { index: 33, text: 'ศัตรู!' },
+  { index: 34, text: 'อย่า' },
+  { index: 35, text: 'โง่ไปหน่อยเลย' },
+  { index: 36, text: 'นาย' },
+  { index: 37, text: 'ไม่มีทางฝ่า' },
+  { index: 38, text: 'ผ่าน' },
+  { index: 39, text: 'ค่ายที่ลํา' },
+  { index: 40, text: 'บากนั่นไป' },
+  { index: 41, text: 'ได้ด้วย' },
+  { index: 42, text: 'การพุ่ง' },
+  { index: 43, text: 'เข้าใส่' },
+  { index: 44, text: 'และเธอ' },
+  { index: 45, text: 'ก็วิ่ง' },
+  { index: 46, text: 'ไป' },
+  { index: 47, text: 'ทั่ว' },
+  { index: 48, text: 'แบบนั้น' },
+  { index: 49, text: 'เพราะเธอออก' },
+  { index: 50, text: 'มาที่ด้านหน้า' },
+  { index: 51, text: 'ขี่ม้าก้นเซ็กซี่' },
+  { index: 52, text: 'ของเธออย่างชัดเจน' },
+  { index: 53, text: 'เป็นฉันเลือดออกฉัน' },
+  { index: 54, text: 'ไม่สามารถมีสมาธิ' },
+  { index: 55, text: 'ในการต่อสู้!' }
+]
+
+==================================================
+Dumping Doc 3 Page 11 details:
+==================================================
+
+OCR Lines:
+Line 0: "AHH! HER" (box: x0=1427.0, y0=69.0, x1=1689.0, y1=148.0)
+Line 1: "HEHE!" (box: x0=3461.0, y0=183.0, x1=3643.0, y1=298.0)
+Line 2: "OH...!" (box: x0=4047.0, y0=112.0, x1=4330.0, y1=300.0)
+Line 3: "SCREAMS" (box: x0=1411.0, y0=143.0, x1=1705.0, y1=232.0)
+Line 4: "ARE MAKiNG" (box: x0=1385.0, y0=232.0, x1=1727.0, y1=306.0)
+Line 5: "OHAHH" (box: x0=4039.0, y0=262.0, x1=4311.0, y1=436.0)
+Line 6: "HER" (box: x0=3491.0, y0=290.0, x1=3619.0, y1=375.0)
+Line 7: "MY COCK" (box: x0=1422.0, y0=312.0, x1=1689.0, y1=386.0)
+Line 8: "VIBRATE" (box: x0=1438.0, y0=401.0, x1=1673.0, y1=459.0)
+Line 9: "HOLE'S" (box: x0=3448.0, y0=380.0, x1=3662.0, y1=459.0)
+Line 10: "HHHH" (box: x0=4037.0, y0=405.0, x1=4272.0, y1=598.0)
+Line 11: "AND iT" (box: x0=1459.0, y0=470.0, x1=1657.0, y1=549.0)
+Line 12: "STiLL" (box: x0=3475.0, y0=470.0, x1=3630.0, y1=549.0)
+Line 13: "FEEE5" (box: x0=1459.0, y0=555.0, x1=1657.0, y1=634.0)
+Line 14: "TiGHT AND" (box: x0=3411.0, y0=560.0, x1=3694.0, y1=634.0)
+Line 15: "H!!" (box: x0=4050.0, y0=579.0, x1=4231.0, y1=757.0)
+Line 16: "GREAT!" (box: x0=1449.0, y0=639.0, x1=1668.0, y1=713.0)
+Line 17: "iT'S AWE" (box: x0=3421.0, y0=644.0, x1=3678.0, y1=718.0)
+Line 18: "AHH,IM" (box: x0=1438.0, y0=718.0, x1=1673.0, y1=792.0)
+Line 19: "SOME!" (box: x0=3452.0, y0=722.0, x1=3653.0, y1=820.0)
+Line 20: "CUMMING," (box: x0=1427.0, y0=797.0, x1=1679.0, y1=877.0)
+Line 21: "CUMMiNG!" (box: x0=1417.0, y0=877.0, x1=1684.0, y1=951.0)
+Line 22: "F" (box: x0=1941.0, y0=1125.0, x1=2133.0, y1=1336.0)
+Line 23: "OHHHHH!" (box: x0=4469.0, y0=1378.0, x1=4720.0, y1=1458.0)
+Line 24: "STOOOTH!" (box: x0=4421.0, y0=1463.0, x1=4763.0, y1=1553.0)
+Line 25: "I CAN'T" (box: x0=4464.0, y0=1553.0, x1=4726.0, y1=1648.0)
+Line 26: "IT SEEMS" (box: x0=1652.0, y0=1674.0, x1=1887.0, y1=1748.0)
+Line 27: "TAKE TWO" (box: x0=4432.0, y0=1648.0, x1=4758.0, y1=1738.0)
+Line 28: "AT THE" (box: x0=4474.0, y0=1738.0, x1=4715.0, y1=1833.0)
+Line 29: "LIKE A SHAME" (box: x0=1620.0, y0=1748.0, x1=1924.0, y1=1822.0)
+Line 30: "SAME" (box: x0=4488.0, y0=1820.0, x1=4701.0, y1=1935.0)
+Line 31: "TO KNOW" (box: x0=1663.0, y0=1827.0, x1=1882.0, y1=1901.0)
+Line 32: "THAT iT'S" (box: x0=1663.0, y0=1907.0, x1=1882.0, y1=1980.0)
+Line 33: "AGAIN!" (box: x0=4478.0, y0=1921.0, x1=4701.0, y1=2014.0)
+Line 34: "TURNING INTO" (box: x0=1625.0, y0=1986.0, x1=1919.0, y1=2060.0)
+Line 35: "A LOOSE" (box: x0=1657.0, y0=2060.0, x1=1887.0, y1=2134.0)
+Line 36: "PUSSY" (box: x0=1700.0, y0=2139.0, x1=1855.0, y1=2218.0)
+Line 37: "TODAY!" (box: x0=1689.0, y0=2218.0, x1=1855.0, y1=2292.0)
+Line 38: "OHHHHHHH..." (box: x0=1966.0, y0=2428.0, x1=2348.0, y1=2542.0)
+Line 39: "GEHHH!" (box: x0=2037.0, y0=2540.0, x1=2283.0, y1=2620.0)
+Line 40: "I CAN'T DO" (box: x0=1945.0, y0=2619.0, x1=2358.0, y1=2726.0)
+Line 41: "iT...GUHHH..." (box: x0=1950.0, y0=2708.0, x1=2353.0, y1=2816.0)
+Line 42: "iT'S GONNA" (box: x0=1957.0, y0=2820.0, x1=2352.0, y1=2894.0)
+Line 43: "C'MON!" (box: x0=3854.0, y0=2873.0, x1=4148.0, y1=2963.0)
+Line 44: "SHOOT OuT..." (box: x0=1923.0, y0=2893.0, x1=2382.0, y1=3006.0)
+Line 45: "BOHHH" (box: x0=4615.0, y0=2928.0, x1=4895.0, y1=3088.0)
+Line 46: "IF yOU" (box: x0=3844.0, y0=2968.0, x1=4154.0, y1=3063.0)
+Line 47: "AH.iT'S" (box: x0=2005.0, y0=3000.0, x1=2309.0, y1=3090.0)
+Line 48: "DON'T MAKE" (box: x0=3758.0, y0=3068.0, x1=4250.0, y1=3158.0)
+Line 49: "COMING" (box: x0=2015.0, y0=3095.0, x1=2299.0, y1=3190.0)
+Line 50: "BWOHH" (box: x0=4613.0, y0=3100.0, x1=4886.0, y1=3243.0)
+Line 51: "HEHH" (box: x0=1326.0, y0=3179.0, x1=1508.0, y1=3306.0)
+Line 52: "ME CUM" (box: x0=3838.0, y0=3163.0, x1=4159.0, y1=3253.0)
+Line 53: "HHHA" (box: x0=4611.0, y0=3214.0, x1=4852.0, y1=3413.0)
+Line 54: "SOON," (box: x0=3858.0, y0=3247.0, x1=4139.0, y1=3355.0)
+Line 55: "IT'S.." (box: x0=2053.0, y0=3285.0, x1=2240.0, y1=3364.0)
+Line 56: "HHH" (box: x0=1299.0, y0=3317.0, x1=1529.0, y1=3459.0)
+Line 57: "Ny" (box: x0=1017.0, y0=3329.0, x1=1175.0, y1=3434.0)
+Line 58: "SHiT AND" (box: x0=3817.0, y0=3350.0, x1=4191.0, y1=3445.0)
+Line 59: "HH" (box: x0=1299.0, y0=3461.0, x1=1529.0, y1=3604.0)
+Line 60: "CUM ARE" (box: x0=3822.0, y0=3450.0, x1=4180.0, y1=3540.0)
+Line 61: "UUUUU" (box: x0=1315.0, y0=3480.0, x1=1513.0, y1=3538.0)
+Line 62: "GONNA" (box: x0=3854.0, y0=3540.0, x1=4143.0, y1=3630.0)
+Line 63: "iHH" (box: x0=1320.0, y0=3614.0, x1=1513.0, y1=3746.0)
+Line 64: "SPRAY" (box: x0=3865.0, y0=3635.0, x1=4138.0, y1=3730.0)
+Line 65: "OUTTA" (box: x0=3870.0, y0=3736.0, x1=4132.0, y1=3815.0)
+Line 66: "DON'T" (box: x0=1286.0, y0=3744.0, x1=1542.0, y1=3902.0)
+Line 67: "YOUR" (box: x0=3874.0, y0=3808.0, x1=4123.0, y1=3922.0)
+Line 68: "LOO0" (box: x0=1283.0, y0=3899.0, x1=1550.0, y1=4042.0)
+Line 69: "ASS!!" (box: x0=3881.0, y0=3926.0, x1=4116.0, y1=4005.0)
+Line 70: "0000" (box: x0=1278.0, y0=4047.0, x1=1550.0, y1=4190.0)
+Line 71: "HAHA" (box: x0=933.0, y0=4172.0, x1=1114.0, y1=4271.0)
+Line 72: "000" (box: x0=1304.0, y0=4190.0, x1=1534.0, y1=4332.0)
+Line 73: "HAHAHA!!" (box: x0=881.0, y0=4263.0, x1=1167.0, y1=4355.0)
+Line 74: "OK!!" (box: x0=1320.0, y0=4343.0, x1=1513.0, y1=4475.0)
+Line 75: "SHE'S" (box: x0=930.0, y0=4354.0, x1=1128.0, y1=4433.0)
+Line 76: "SQUIRTING" (box: x0=866.0, y0=4438.0, x1=1197.0, y1=4512.0)
+Line 77: "SHITTING" (box: x0=882.0, y0=4512.0, x1=1171.0, y1=4602.0)
+Line 78: "HERSELF" (box: x0=893.0, y0=4602.0, x1=1171.0, y1=4676.0)
+Line 79: "A HHHHH IM" (box: x0=4104.0, y0=4816.0, x1=4712.0, y1=4968.0)
+Line 80: "COME" (box: x0=1069.0, y0=4924.0, x1=1304.0, y1=5003.0)
+Line 81: "HAHAHHL" (box: x0=1582.0, y0=4908.0, x1=1844.0, y1=5003.0)
+Line 82: "GONNA DIE!I'M" (box: x0=4051.0, y0=4949.0, x1=4738.0, y1=5100.0)
+Line 83: "ON!" (box: x0=1093.0, y0=4985.0, x1=1270.0, y1=5101.0)
+Line 84: "YOU'RE" (box: x0=1593.0, y0=5008.0, x1=1834.0, y1=5109.0)
+Line 85: "DYIIINNNGGGG!" (box: x0=4035.0, y0=5081.0, x1=4748.0, y1=5216.0)
+Line 86: "CRY" (box: x0=1101.0, y0=5093.0, x1=1262.0, y1=5177.0)
+Line 87: "STARTING" (box: x0=1561.0, y0=5114.0, x1=1871.0, y1=5225.0)
+Line 88: "EVEN" (box: x0=1080.0, y0=5177.0, x1=1288.0, y1=5273.0)
+Line 89: "NO MORE COCK!" (box: x0=4019.0, y0=5203.0, x1=4754.0, y1=5337.0)
+Line 90: "TO SOUND" (box: x0=1545.0, y0=5225.0, x1=1876.0, y1=5320.0)
+Line 91: "MORE" (box: x0=1069.0, y0=5273.0, x1=1299.0, y1=5352.0)
+Line 92: "NO MORE!OHH" (box: x0=4046.0, y0=5330.0, x1=4732.0, y1=5458.0)
+Line 93: "LiKE A PiG," (box: x0=1540.0, y0=5331.0, x1=1887.0, y1=5441.0)
+Line 94: "LIKE" (box: x0=1096.0, y0=5357.0, x1=1272.0, y1=5447.0)
+Line 95: "THE" (box: x0=1112.0, y0=5447.0, x1=1256.0, y1=5526.0)
+Line 96: "PRINCESS" (box: x0=1556.0, y0=5447.0, x1=1866.0, y1=5542.0)
+Line 97: "OHHHHHH" (box: x0=4175.0, y0=5457.0, x1=4608.0, y1=5568.0)
+Line 98: "PiG" (box: x0=1112.0, y0=5531.0, x1=1256.0, y1=5616.0)
+Line 99: "KNIGHT" (box: x0=1598.0, y0=5552.0, x1=1823.0, y1=5653.0)
+Line 100: "HHH" (box: x0=4258.0, y0=5566.0, x1=4477.0, y1=5697.0)
+Line 101: "YOU" (box: x0=1107.0, y0=5616.0, x1=1262.0, y1=5700.0)
+Line 102: "ARE" (box: x0=1101.0, y0=5706.0, x1=1267.0, y1=5790.0)
+Line 103: "I'M" (box: x0=1983.0, y0=5758.0, x1=2160.0, y1=5890.0)
+Line 104: "pYll" (box: x0=1983.0, y0=5896.0, x1=2192.0, y1=6044.0)
+Line 105: "OHHH" (box: x0=3753.0, y0=6017.0, x1=4009.0, y1=6096.0)
+Line 106: "GOHHH" (box: x0=612.0, y0=6052.0, x1=954.0, y1=6252.0)
+Line 107: "NNNN" (box: x0=1994.0, y0=6065.0, x1=2192.0, y1=6191.0)
+Line 108: "HHH" (box: x0=3772.0, y0=6089.0, x1=3985.0, y1=6199.0)
+Line 109: "HH!" (box: x0=3772.0, y0=6179.0, x1=3980.0, y1=6294.0)
+Line 110: "NGG" (box: x0=1986.0, y0=6189.0, x1=2215.0, y1=6331.0)
+Line 111: "GOH" (box: x0=3769.0, y0=6292.0, x1=3977.0, y1=6392.0)
+Line 112: "555" (box: x0=2002.0, y0=6332.0, x1=2226.0, y1=6468.0)
+Line 113: "HHHH" (box: x0=3745.0, y0=6363.0, x1=3980.0, y1=6479.0)
+Line 114: "GG" (box: x0=2047.0, y0=6482.0, x1=2208.0, y1=6614.0)
+Line 115: "HH!" (box: x0=3780.0, y0=6471.0, x1=3945.0, y1=6556.0)
+Line 116: "GOHH" (box: x0=3742.0, y0=6566.0, x1=3961.0, y1=6661.0)
+Line 117: "HHHT" (box: x0=3763.0, y0=6664.0, x1=3929.0, y1=6744.0)
+Line 118: "HHH" (box: x0=3763.0, y0=6741.0, x1=3924.0, y1=6841.0)
+
+Dropped Words (Safety Dedup):
+Dropped 0: "!P" (reason: ghostTinyArtifactLine, filter: panelSafetyDedup, confidence: 54.35343384742737)
+
+================ Cache Key: ver:v49|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:adaptive|translator:offline ===============
+Raw translated_text: ทะ-
+เฮ่!
+โอ้.
+ทะลักออกมาแล้ววว!
+กําลังทําให้
+..!
+โพรง
+ควยของฉัน My
+สัดส่วนภาพ
+ของเธอ
+HHHH
+และมัน
+ยังคง
+Fie5
+แน่นและมัน
+!
+เยี่ยม!
+น่าเกรงขาม
+อ่า...
+บาง!
+น้ำแตกแล้ว
+น้ำแตกแล้ว!
+F
+โอ้!
+! ฉันไม่
+สามารถ
+ดูน่า
+ใช้เวลาสอง
+ที่เดียวกัน
+เสียดายนะ
+อีก
+ที่ได้
+รู้ว่าวัน
+ครั้ง!
+นี้มัน
+เริ่มจะ
+หี
+แล้ว
+โอ้กี๊ห์
+!
+ฉันทําไม่
+ได้มันจะ
+ยิงออกไป
+เร็ว
+... อา
+โอ้
+เข้า!
+มันกํา
+ถ้าแกไม่ให้
+ลัง
+พระเจ้า
+อย่าโอเค!
+ฉัน
+ฮ่าฮ่า
+ใช้ปาก
+จะ...
+HHH
+ไน
+ว่าวเดี๋ยว
+HH
+ขี้
+อูวุว
+กับคาว
+Ihh
+จะ
+พ่นออก
+อย่า
+จาก
+LOO0
+ตูดแก
+0000
+ฮ่า
+000
+ฮ่าฮ่า
+โอเค
+เธอคือ
+! เธอ
+พ่นอึ
+ตัวเอง
+ฉันกําลัง
+เร็ว
+ฮาฮาห์ห์ห์
+จะตาย! ฉัน
+เข้า
+เธอ
+ตาาาายยยแล้วววว!
+!
+เริ่ม
+ถึง
+ไม่เอาควยแล้ว!
+พูด
+อีก
+ไม่เอาแล้วว!อ๊าาาห์
+เหมือนหมูเจ้า
+เหมือน
+หมู
+หญิง
+! โอ้
+หมู
+อัศวิน
+HHH
+คุณ
+เป็น
+ฉัน
+พ.ศ.
+โอ้! ไป!.
+โอ๊ย
+NNNN
+HHH
+HH!
+NGG
+โอ๊ย
+555
+HHHH
+GG
+HH!
+โอ๊ย
+hht
+HHH
+translated_by_index raw value: [{"index":0,"text":"ทะ-"},{"index":3,"text":"ทะลักออกมาแล้ววว!"},{"index":4,"text":"กําลังทําให้"},{"index":7,"text":"ควยของฉัน My"},{"index":8,"text":"สัดส่วนภาพ"},{"index":11,"text":"และมัน"},{"index":13,"text":"Fie5"},{"index":16,"text":"เยี่ยม!"},{"index":18,"text":"อ่า..."},{"index":20,"text":"น้ำแตกแล้ว"},{"index":21,"text":"น้ำแตกแล้ว!"},{"index":2,"text":"โอ้."},{"index":5,"text":"..!"},{"index":10,"text":"HHHH"},{"index":15,"text":"!"},{"index":1,"text":"เฮ่!"},{"index":6,"text":"โพรง"},{"index":9,"text":"ของเธอ"},{"index":12,"text":"ยังคง"},{"index":14,"text":"แน่นและมัน"},{"index":17,"text":"น่าเกรงขาม"},{"index":19,"text":"บาง!"},{"index":23,"text":"โอ้!"},{"index":24,"text":"! ฉันไม่"},{"index":25,"text":"สามารถ"},{"index":27,"text":"ใช้เวลาสอง"},{"index":28,"text":"ที่เดียวกัน"},{"index":30,"text":"อีก"},{"index":33,"text":"ครั้ง!"},{"index":26,"text":"ดูน่า"},{"index":29,"text":"เสียดายนะ"},{"index":31,"text":"ที่ได้"},{"index":32,"text":"รู้ว่าวัน"},{"index":34,"text":"นี้มัน"},{"index":35,"text":"เริ่มจะ"},{"index":36,"text":"หี"},{"index":37,"text":"แล้ว"},{"index":38,"text":"โอ้กี๊ห์"},{"index":39,"text":"!"},{"index":40,"text":"ฉันทําไม่"},{"index":41,"text":"ได้มันจะ"},{"index":42,"text":"ยิงออกไป"},{"index":44,"text":"... อา"},{"index":47,"text":"มันกํา"},{"index":49,"text":"ลัง"},{"index":55,"text":"จะ..."},{"index":43,"text":"เร็ว"},{"index":46,"text":"เข้า!"},{"index":48,"text":"ถ้าแกไม่ให้"},{"index":52,"text":"ฉัน"},{"index":54,"text":"ใช้ปาก"},{"index":58,"text":"ว่าวเดี๋ยว"},{"index":60,"text":"ขี้"},{"index":62,"text":"กับคาว"},{"index":64,"text":"จะ"},{"index":65,"text":"พ่นออก"},{"index":67,"text":"จาก"},{"index":69,"text":"ตูดแก"},{"index":45,"text":"โอ้"},{"index":50,"text":"พระเจ้า"},{"index":53,"text":"ฮ่าฮ่า"},{"index":51,"text":"อย่าโอเค!"},{"index":56,"text":"HHH"},{"index":61,"text":"อูวุว"},{"index":63,"text":"Ihh"},{"index":66,"text":"อย่า"},{"index":74,"text":"โอเค"},{"index":57,"text":"ไน"},{"index":71,"text":"ฮ่า"},{"index":73,"text":"ฮ่าฮ่า"},{"index":75,"text":"เธอคือ"},{"index":76,"text":"! เธอ"},{"index":77,"text":"พ่นอึ"},{"index":78,"text":"ตัวเอง"},{"index":79,"text":"ฉันกําลัง"},{"index":82,"text":"จะตาย! ฉัน"},{"index":85,"text":"ตาาาายยยแล้วววว!"},{"index":89,"text":"ไม่เอาควยแล้ว!"},{"index":92,"text":"ไม่เอาแล้วว!อ๊าาาห์"},{"index":97,"text":"! โอ้"},{"index":100,"text":"HHH"},{"index":80,"text":"เร็ว"},{"index":83,"text":"เข้า"},{"index":86,"text":"!"},{"index":88,"text":"ถึง"},{"index":91,"text":"อีก"},{"index":94,"text":"เหมือน"},{"index":95,"text":"หมู"},{"index":98,"text":"หมู"},{"index":101,"text":"คุณ"},{"index":102,"text":"เป็น"},{"index":81,"text":"ฮาฮาห์ห์ห์"},{"index":84,"text":"เธอ"},{"index":87,"text":"เริ่ม"},{"index":90,"text":"พูด"},{"index":93,"text":"เหมือนหมูเจ้า"},{"index":96,"text":"หญิง"},{"index":99,"text":"อัศวิน"},{"index":103,"text":"ฉัน"},{"index":104,"text":"พ.ศ."},{"index":107,"text":"NNNN"},{"index":110,"text":"NGG"},{"index":105,"text":"โอ้! ไป!."},{"index":108,"text":"HHH"},{"index":109,"text":"HH!"},{"index":111,"text":"โอ๊ย"},{"index":113,"text":"HHHH"},{"index":115,"text":"HH!"},{"index":116,"text":"โอ๊ย"},{"index":117,"text":"hht"},{"index":118,"text":"HHH"},{"index":106,"text":"โอ๊ย"}]
+translated_by_index Parsed:
+[
+  { index: 0, text: 'ทะ-' },
+  { index: 3, text: 'ทะลักออกมาแล้ววว!' },
+  { index: 4, text: 'กําลังทําให้' },
+  { index: 7, text: 'ควยของฉัน My' },
+  { index: 8, text: 'สัดส่วนภาพ' },
+  { index: 11, text: 'และมัน' },
+  { index: 13, text: 'Fie5' },
+  { index: 16, text: 'เยี่ยม!' },
+  { index: 18, text: 'อ่า...' },
+  { index: 20, text: 'น้ำแตกแล้ว' },
+  { index: 21, text: 'น้ำแตกแล้ว!' },
+  { index: 2, text: 'โอ้.' },
+  { index: 5, text: '..!' },
+  { index: 10, text: 'HHHH' },
+  { index: 15, text: '!' },
+  { index: 1, text: 'เฮ่!' },
+  { index: 6, text: 'โพรง' },
+  { index: 9, text: 'ของเธอ' },
+  { index: 12, text: 'ยังคง' },
+  { index: 14, text: 'แน่นและมัน' },
+  { index: 17, text: 'น่าเกรงขาม' },
+  { index: 19, text: 'บาง!' },
+  { index: 23, text: 'โอ้!' },
+  { index: 24, text: '! ฉันไม่' },
+  { index: 25, text: 'สามารถ' },
+  { index: 27, text: 'ใช้เวลาสอง' },
+  { index: 28, text: 'ที่เดียวกัน' },
+  { index: 30, text: 'อีก' },
+  { index: 33, text: 'ครั้ง!' },
+  { index: 26, text: 'ดูน่า' },
+  { index: 29, text: 'เสียดายนะ' },
+  { index: 31, text: 'ที่ได้' },
+  { index: 32, text: 'รู้ว่าวัน' },
+  { index: 34, text: 'นี้มัน' },
+  { index: 35, text: 'เริ่มจะ' },
+  { index: 36, text: 'หี' },
+  { index: 37, text: 'แล้ว' },
+  { index: 38, text: 'โอ้กี๊ห์' },
+  { index: 39, text: '!' },
+  { index: 40, text: 'ฉันทําไม่' },
+  { index: 41, text: 'ได้มันจะ' },
+  { index: 42, text: 'ยิงออกไป' },
+  { index: 44, text: '... อา' },
+  { index: 47, text: 'มันกํา' },
+  { index: 49, text: 'ลัง' },
+  { index: 55, text: 'จะ...' },
+  { index: 43, text: 'เร็ว' },
+  { index: 46, text: 'เข้า!' },
+  { index: 48, text: 'ถ้าแกไม่ให้' },
+  { index: 52, text: 'ฉัน' },
+  { index: 54, text: 'ใช้ปาก' },
+  { index: 58, text: 'ว่าวเดี๋ยว' },
+  { index: 60, text: 'ขี้' },
+  { index: 62, text: 'กับคาว' },
+  { index: 64, text: 'จะ' },
+  { index: 65, text: 'พ่นออก' },
+  { index: 67, text: 'จาก' },
+  { index: 69, text: 'ตูดแก' },
+  { index: 45, text: 'โอ้' },
+  { index: 50, text: 'พระเจ้า' },
+  { index: 53, text: 'ฮ่าฮ่า' },
+  { index: 51, text: 'อย่าโอเค!' },
+  { index: 56, text: 'HHH' },
+  { index: 61, text: 'อูวุว' },
+  { index: 63, text: 'Ihh' },
+  { index: 66, text: 'อย่า' },
+  { index: 74, text: 'โอเค' },
+  { index: 57, text: 'ไน' },
+  { index: 71, text: 'ฮ่า' },
+  { index: 73, text: 'ฮ่าฮ่า' },
+  { index: 75, text: 'เธอคือ' },
+  { index: 76, text: '! เธอ' },
+  { index: 77, text: 'พ่นอึ' },
+  { index: 78, text: 'ตัวเอง' },
+  { index: 79, text: 'ฉันกําลัง' },
+  { index: 82, text: 'จะตาย! ฉัน' },
+  { index: 85, text: 'ตาาาายยยแล้วววว!' },
+  { index: 89, text: 'ไม่เอาควยแล้ว!' },
+  { index: 92, text: 'ไม่เอาแล้วว!อ๊าาาห์' },
+  { index: 97, text: '! โอ้' },
+  { index: 100, text: 'HHH' },
+  { index: 80, text: 'เร็ว' },
+  { index: 83, text: 'เข้า' },
+  { index: 86, text: '!' },
+  { index: 88, text: 'ถึง' },
+  { index: 91, text: 'อีก' },
+  { index: 94, text: 'เหมือน' },
+  { index: 95, text: 'หมู' },
+  { index: 98, text: 'หมู' },
+  { index: 101, text: 'คุณ' },
+  { index: 102, text: 'เป็น' },
+  { index: 81, text: 'ฮาฮาห์ห์ห์' },
+  { index: 84, text: 'เธอ' },
+  { index: 87, text: 'เริ่ม' },
+  { index: 90, text: 'พูด' },
+  { index: 93, text: 'เหมือนหมูเจ้า' },
+  { index: 96, text: 'หญิง' },
+  { index: 99, text: 'อัศวิน' },
+  { index: 103, text: 'ฉัน' },
+  { index: 104, text: 'พ.ศ.' },
+  ... 12 more items
+]
+
+==================================================
+Dumping Doc 3 Page 25 details:
+==================================================
+
+OCR Lines:
+Line 0: "The news" (box: x0=4410.0, y0=690.0, x1=4703.0, y1=780.0)
+Line 1: "of ROSER I AS" (box: x0=4378.0, y0=780.0, x1=4729.0, y1=870.0)
+Line 2: "History" (box: x0=2118.0, y0=824.0, x1=2431.0, y1=996.0)
+Line 3: "EXECUT I ON" (box: x0=4410.0, y0=881.0, x1=4703.0, y1=971.0)
+Line 4: "caused the" (box: x0=4394.0, y0=976.0, x1=4719.0, y1=1067.0)
+Line 5: "would later" (box: x0=2073.0, y0=986.0, x1=2496.0, y1=1132.0)
+Line 6: "kingdom to" (box: x0=4382.0, y0=1065.0, x1=4720.0, y1=1174.0)
+Line 7: "praise" (box: x0=2163.0, y0=1139.0, x1=2417.0, y1=1275.0)
+Line 8: "Who gave" (box: x0=567.0, y0=1192.0, x1=976.0, y1=1344.0)
+Line 9: "be filled with" (box: x0=4362.0, y0=1167.0, x1=4745.0, y1=1258.0)
+Line 10: "sadness" (box: x0=4442.0, y0=1274.0, x1=4665.0, y1=1353.0)
+Line 11: "Roseria" (box: x0=2155.0, y0=1300.0, x1=2436.0, y1=1417.0)
+Line 12: "The war" (box: x0=3117.0, y0=1321.0, x1=3389.0, y1=1417.0)
+Line 13: "her life in" (box: x0=584.0, y0=1325.0, x1=964.0, y1=1471.0)
+Line 14: "and anger." (box: x0=4389.0, y0=1364.0, x1=4713.0, y1=1454.0)
+Line 15: "as a noble" (box: x0=2089.0, y0=1426.0, x1=2480.0, y1=1572.0)
+Line 16: "which had" (box: x0=3091.0, y0=1427.0, x1=3426.0, y1=1523.0)
+Line 17: "a fight" (box: x0=628.0, y0=1475.0, x1=915.0, y1=1613.0)
+Line 18: "Finally," (box: x0=4442.0, y0=1465.0, x1=4660.0, y1=1544.0)
+Line 19: "lasted ten years" (box: x0=3022.0, y0=1539.0, x1=3484.0, y1=1634.0)
+Line 20: "hero..." (box: x0=2170.0, y0=1592.0, x1=2405.0, y1=1714.0)
+Line 21: "against" (box: x0=620.0, y0=1610.0, x1=917.0, y1=1753.0)
+Line 22: "gathered" (box: x0=4413.0, y0=1633.0, x1=4694.0, y1=1753.0)
+Line 23: "stalemate ended" (box: x0=3027.0, y0=1756.0, x1=3490.0, y1=1852.0)
+Line 24: "under the" (box: x0=4405.0, y0=1741.0, x1=4708.0, y1=1831.0)
+Line 25: "evil and" (box: x0=610.0, y0=1750.0, x1=927.0, y1=1880.0)
+Line 26: "in just a year" (box: x0=3048.0, y0=1868.0, x1=3453.0, y1=1963.0)
+Line 27: "united the" (box: x0=585.0, y0=1894.0, x1=963.0, y1=2006.0)
+Line 28: "it became" (box: x0=4405.0, y0=1937.0, x1=4703.0, y1=2027.0)
+Line 29: "with them" (box: x0=3096.0, y0=1974.0, x1=3421.0, y1=2070.0)
+Line 30: "nation." (box: x0=622.0, y0=2038.0, x1=904.0, y1=2149.0)
+Line 31: "war." (box: x0=4479.0, y0=2139.0, x1=4623.0, y1=2218.0)
+Line 32: "the land from" (box: x0=3054.0, y0=2192.0, x1=3458.0, y1=2287.0)
+Line 33: "the Ludmer" (box: x0=3080.0, y0=2303.0, x1=3431.0, y1=2399.0)
+Line 34: "people." (box: x0=3131.0, y0=2396.0, x1=3364.0, y1=2528.0)
+Line 35: "1t fF" (box: x0=783.0, y0=2766.0, x1=1361.0, y1=3050.0)
+Line 36: "History" (box: x0=706.0, y0=3140.0, x1=1071.0, y1=3313.0)
+Line 37: "and" (box: x0=785.0, y0=3320.0, x1=1003.0, y1=3462.0)
+Line 38: "reality" (box: x0=734.0, y0=3489.0, x1=1037.0, y1=3633.0)
+Line 39: "are not" (box: x0=723.0, y0=3654.0, x1=1069.0, y1=3786.0)
+Line 40: "always" (box: x0=716.0, y0=3800.0, x1=1066.0, y1=3958.0)
+Line 41: "the" (box: x0=809.0, y0=3972.0, x1=984.0, y1=4105.0)
+Line 42: "same..." (box: x0=722.0, y0=4141.0, x1=1044.0, y1=4271.0)
+Line 43: "COCK!" (box: x0=830.0, y0=4454.0, x1=1292.0, y1=5215.0)
+Line 44: "COOOOCK!" (box: x0=3496.0, y0=4748.0, x1=4154.0, y1=5547.0)
+Line 45: "4H" (box: x0=3941.0, y0=4753.0, x1=4214.0, y1=5006.0)
+Line 46: "HHH!" (box: x0=3985.0, y0=4943.0, x1=4442.0, y1=5209.0)
+Line 47: "OOCK!" (box: x0=356.0, y0=5177.0, x1=942.0, y1=5527.0)
+Line 48: "DA" (box: x0=319.0, y0=6190.0, x1=590.0, y1=6265.0)
+Line 49: "20171231" (box: x0=378.0, y0=6487.0, x1=1096.0, y1=6562.0)
+Line 50: "FPICO" (box: x0=378.0, y0=6567.0, x1=798.0, y1=6636.0)
+Line 51: "18" (box: x0=372.0, y0=6684.0, x1=1974.0, y1=6758.0)
+Line 52: "Pixiv" (box: x0=372.0, y0=7026.0, x1=564.0, y1=7090.0)
+Line 53: "TWITTERNEROM A SHINOO I" (box: x0=372.0, y0=7090.0, x1=1048.0, y1=7165.0)
+
+Dropped Words (Safety Dedup):
+Dropped 0: "H!" (reason: ghostLowSignalLine, filter: panelSafetyDedup, confidence: 83.0859899520874)
+Dropped 1: "L" (reason: ghostLowSignalLine, filter: panelSafetyDedup, confidence: 51.31721496582031)
+Dropped 2: "-7-" (reason: ghostLowSignalLine, filter: panelSafetyDedup, confidence: 63.663965463638306)
+
+================ Cache Key: ver:v49|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:adaptive|translator:offline ===============
+Raw translated_text: ข่าวเรื่อง
+โรสเซอร์ที่
+ประวัติศาสตร์
+1 ขับไล่ข้า
+ทําให้อาณาจักร
+จะยก
+เต็มไปด้วย
+ย่อง
+ผู้ซึ่งมอบ
+ความเศร้าและ
+ความโกรธ
+โรสเรีย
+สงคราม
+ชีวิตเธอใน
+ในที่สุด
+ในฐานะ
+ที่
+การต่อสู้
+การรวมตัว
+ยืด
+วีรบุรุษ
+กับความ
+กันภายใต้
+เยื้อ
+สงครามก็
+ชั่วร้ายและ
+นาน
+รวมชาติเข้าด้วย
+กลายเป็นสงคราม
+สิบ
+กัน
+.
+ปี
+ตัวอ่อน
+ผู้คน
+1t off
+ประวัติศาสตร์
+และ
+ความ
+เป็นจริง
+ไม่ได้
+เสมอ
+เดิม...
+ควย!
+ต๊าย!
+4H
+HHH!
+โอค!
+DA
+20171231
+ฟรังโก
+18
+Pixiv
+ทวิตเตอร์
+translated_by_index raw value: [{"index":0,"text":"ข่าวเรื่อง"},{"index":1,"text":"โรสเซอร์ที่"},{"index":3,"text":"1 ขับไล่ข้า"},{"index":4,"text":"ทําให้อาณาจักร"},{"index":6,"text":"เต็มไปด้วย"},{"index":9,"text":"ความเศร้าและ"},{"index":10,"text":"ความโกรธ"},{"index":14,"text":"ในที่สุด"},{"index":18,"text":"การรวมตัว"},{"index":22,"text":"กันภายใต้"},{"index":24,"text":"สงครามก็"},{"index":28,"text":"กลายเป็นสงคราม"},{"index":31,"text":"."},{"index":2,"text":"ประวัติศาสตร์"},{"index":5,"text":"จะยก"},{"index":7,"text":"ย่อง"},{"index":11,"text":"โรสเรีย"},{"index":15,"text":"ในฐานะ"},{"index":20,"text":"วีรบุรุษ"},{"index":8,"text":"ผู้ซึ่งมอบ"},{"index":13,"text":"ชีวิตเธอใน"},{"index":17,"text":"การต่อสู้"},{"index":21,"text":"กับความ"},{"index":25,"text":"ชั่วร้ายและ"},{"index":27,"text":"รวมชาติเข้าด้วย"},{"index":30,"text":"กัน"},{"index":12,"text":"สงคราม"},{"index":16,"text":"ที่"},{"index":19,"text":"ยืด"},{"index":23,"text":"เยื้อ"},{"index":26,"text":"นาน"},{"index":29,"text":"สิบ"},{"index":32,"text":"ปี"},{"index":33,"text":"ตัวอ่อน"},{"index":34,"text":"ผู้คน"},{"index":35,"text":"1t off"},{"index":36,"text":"ประวัติศาสตร์"},{"index":37,"text":"และ"},{"index":38,"text":"ความ"},{"index":39,"text":"เป็นจริง"},{"index":40,"text":"ไม่ได้"},{"index":41,"text":"เสมอ"},{"index":42,"text":"เดิม..."},{"index":46,"text":"HHH!"},{"index":43,"text":"ควย!"},{"index":44,"text":"ต๊าย!"},{"index":47,"text":"โอค!"},{"index":50,"text":"ฟรังโก"},{"index":52,"text":"Pixiv"},{"index":53,"text":"ทวิตเตอร์"}]
+translated_by_index Parsed:
+[
+  { index: 0, text: 'ข่าวเรื่อง' },
+  { index: 1, text: 'โรสเซอร์ที่' },
+  { index: 3, text: '1 ขับไล่ข้า' },
+  { index: 4, text: 'ทําให้อาณาจักร' },
+  { index: 6, text: 'เต็มไปด้วย' },
+  { index: 9, text: 'ความเศร้าและ' },
+  { index: 10, text: 'ความโกรธ' },
+  { index: 14, text: 'ในที่สุด' },
+  { index: 18, text: 'การรวมตัว' },
+  { index: 22, text: 'กันภายใต้' },
+  { index: 24, text: 'สงครามก็' },
+  { index: 28, text: 'กลายเป็นสงคราม' },
+  { index: 31, text: '.' },
+  { index: 2, text: 'ประวัติศาสตร์' },
+  { index: 5, text: 'จะยก' },
+  { index: 7, text: 'ย่อง' },
+  { index: 11, text: 'โรสเรีย' },
+  { index: 15, text: 'ในฐานะ' },
+  { index: 20, text: 'วีรบุรุษ' },
+  { index: 8, text: 'ผู้ซึ่งมอบ' },
+  { index: 13, text: 'ชีวิตเธอใน' },
+  { index: 17, text: 'การต่อสู้' },
+  { index: 21, text: 'กับความ' },
+  { index: 25, text: 'ชั่วร้ายและ' },
+  { index: 27, text: 'รวมชาติเข้าด้วย' },
+  { index: 30, text: 'กัน' },
+  { index: 12, text: 'สงคราม' },
+  { index: 16, text: 'ที่' },
+  { index: 19, text: 'ยืด' },
+  { index: 23, text: 'เยื้อ' },
+  { index: 26, text: 'นาน' },
+  { index: 29, text: 'สิบ' },
+  { index: 32, text: 'ปี' },
+  { index: 33, text: 'ตัวอ่อน' },
+  { index: 34, text: 'ผู้คน' },
+  { index: 35, text: '1t off' },
+  { index: 36, text: 'ประวัติศาสตร์' },
+  { index: 37, text: 'และ' },
+  { index: 38, text: 'ความ' },
+  { index: 39, text: 'เป็นจริง' },
+  { index: 40, text: 'ไม่ได้' },
+  { index: 41, text: 'เสมอ' },
+  { index: 42, text: 'เดิม...' },
+  { index: 46, text: 'HHH!' },
+  { index: 43, text: 'ควย!' },
+  { index: 44, text: 'ต๊าย!' },
+  { index: 47, text: 'โอค!' },
+  { index: 50, text: 'ฟรังโก' },
+  { index: 52, text: 'Pixiv' },
+  { index: 53, text: 'ทวิตเตอร์' }
+]

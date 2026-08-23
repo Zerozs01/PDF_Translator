@@ -15,7 +15,11 @@ export interface DBDocument {
   thumbnail_path: string | null;
   project_id: number | null;
   is_favorite: boolean;
+  rating?: number;
   last_page: number;
+  tag_ids?: string | null;
+  tag_names?: string | null;
+  tag_colors?: string | null;
   created_at: string;
   last_accessed: string;
 }
@@ -63,9 +67,9 @@ export interface DBOCRTranslationCacheEntry {
   sourceLanguage: string;
   targetLanguage: string;
   translationMode: 'adaptive' | 'manga' | 'manhwa' | 'official';
-  translatorEngine: 'offline' | 'ai';
+  translatorEngine: 'offline' | 'ai' | 'm2m100';
   sourceFingerprint: string;
-  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: BBox }>;
   translatedText: string;
   lineCount: number;
   groupCount: number;
@@ -79,6 +83,12 @@ export interface DocumentUpdate {
   thumbnail_path?: string;
   is_favorite?: boolean;
   total_pages?: number;
+  rating?: number;
+}
+
+export interface TagUpdate {
+  name?: string;
+  color?: string;
 }
 
 export interface ProjectCreate {
@@ -127,6 +137,8 @@ export interface ExternalOCRRequest {
   maxPixels?: number;
   chunkIndex?: number;
   totalChunks?: number;
+  useAngleCls?: boolean;
+  use_angle_cls?: boolean;
 }
 
 export interface ExternalOCRResult {
@@ -167,9 +179,10 @@ export interface ElectronAPI {
   db: {
     // Basic operations
     saveDocument: (filepath: string, filename: string, totalPages: number) => Promise<number>;
-    getDocument: (filepath: string) => Promise<{ id: number; total_pages: number } | null>;
+    getDocument: (filepath: string) => Promise<{ id: number; total_pages: number; last_page?: number } | null>;
     findDocumentsByFilename: (filename: string) => Promise<DBDocumentCacheCandidate[]>;
     saveOCR: (docId: number, pageNum: number, data: OCRPageResult, engine?: OCREngine) => Promise<boolean>;
+    saveOCRBatch?: (items: Array<{ docId: number; pageNum: number; data: OCRPageResult; engine?: OCREngine }>) => Promise<boolean>;
     getOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<OCRPageResult | null>;
     clearOCR: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
     clearDocumentCache: (docId: number) => Promise<boolean>;
@@ -185,6 +198,9 @@ export interface ElectronAPI {
       cacheKey: string,
       entry: DBOCRTranslationCacheEntry
     ) => Promise<boolean>;
+    saveTranslationCacheBatch?: (
+      items: Array<{ docId: number; pageNum: number; cacheKey: string; entry: DBOCRTranslationCacheEntry }>
+    ) => Promise<boolean>;
     getTranslationCachePage: (docId: number, pageNum: number) => Promise<DBOCRTranslationCacheEntry[]>;
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: OCREngine) => Promise<boolean>;
     saveSentenceTranslation?: (
@@ -195,6 +211,16 @@ export interface ElectronAPI {
       translationMode: string,
       translatedText: string
     ) => Promise<boolean>;
+    saveSentenceTranslationBatch?: (
+      items: Array<{
+        sourceText: string;
+        sourceLanguage: string;
+        targetLanguage: string;
+        translatorEngine: string;
+        translationMode: string;
+        translatedText: string;
+      }>
+    ) => Promise<boolean>;
     getSentenceTranslation?: (
       sourceText: string,
       sourceLanguage: string,
@@ -202,6 +228,13 @@ export interface ElectronAPI {
       translatorEngine: string,
       translationMode: string
     ) => Promise<string | null>;
+    getSentenceTranslationBatch?: (
+      sourceTexts: string[],
+      sourceLanguage: string,
+      targetLanguage: string,
+      translatorEngine: string,
+      translationMode: string
+    ) => Promise<Record<string, string>>;
     
     // Benchmark CRUD
     saveBenchmark?: (params: { docId: number; pageNum: number; key: string; payload: string }) => Promise<boolean>;
@@ -229,6 +262,7 @@ export interface ElectronAPI {
   tags: {
     getAll: () => Promise<DBTag[]>;
     create: (name: string, color?: string) => Promise<DBTag | null>;
+    update: (id: number, updates: TagUpdate) => Promise<boolean>;
     delete: (id: number) => Promise<boolean>;
   };
   
@@ -238,6 +272,7 @@ export interface ElectronAPI {
     create: (project: ProjectCreate) => Promise<DBProject | null>;
     update: (id: number, updates: ProjectUpdate) => Promise<boolean>;
     delete: (id: number) => Promise<boolean>;
+    getStats: (projectId: number) => Promise<ProjectStatsResult | null>;
   };
   
   gemini: {
@@ -259,13 +294,13 @@ export interface ElectronAPI {
       size: number;
       name: string;
     }>;
-    openFile: () => Promise<{
+    openFile: () => Promise<Array<{
       filepath: string;
       data: Uint8Array | ArrayBuffer | string;
       mimeType: string;
       size: number;
       name: string;
-    } | null>;
+    }> | null>;
     importFile: (payload: {
       name: string;
       mimeType: string;
@@ -283,6 +318,7 @@ export interface ElectronAPI {
     getEngineStatus: () => Promise<ExternalOCREngineStatus[]>;
     prewarmEngine: (payload: { engine: OCREngine; language?: string }) => Promise<ExternalOCRWarmupStatus>;
     cancelExternal: (payload?: { engine?: OCREngine }) => Promise<boolean>;
+    clearCudaCache: (payload: { engine: OCREngine }) => Promise<boolean>;
     runExternal: (request: ExternalOCRRequest) => Promise<ExternalOCRResult>;
     runRawDirect?: (payload: {
       imagePath?: string;
@@ -295,6 +331,13 @@ export interface ElectronAPI {
     }) => Promise<any>;
     writeTempImage: (payload: { imageData: Uint8Array | ArrayBuffer; imageMimeType: string }) => Promise<{ imagePath: string }>;
     deleteTempImage: (payload: { imagePath: string }) => Promise<{ ok: boolean }>;
+    getGpuInfo: () => Promise<{
+      gpus: string[];
+      hasDirectML: boolean;
+      hasCuda: boolean;
+      mode: 'CUDA' | 'DirectML' | 'CPU';
+      gpuVendor: 'intel' | 'amd' | 'nvidia' | 'unknown';
+    }>;
   };
 
   models: {
@@ -323,8 +366,37 @@ export interface ElectronAPI {
     hardReset: (payload: { emergencyPin: string }) => Promise<{ success: boolean; error?: string }>;
     setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) => Promise<{ success: boolean; error?: string }>;
   };
+
+  power?: {
+    preventSleep: () => Promise<number>;
+    allowSleep: () => Promise<boolean>;
+  };
+
+  window?: {
+    toggleFullScreen: () => Promise<boolean>;
+    isFullScreen: () => Promise<boolean>;
+  };
   
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+}
+
+export interface ProjectStatsResult {
+  projectId: number;
+  projectName: string;
+  totalDocuments: number;
+  totalPages: number;
+  totalOcrPages: number;
+  totalTranslationPages: number;
+  totalCacheSizeBytes: number;
+  documents: Array<{
+    id: number;
+    filename: string;
+    totalPages: number;
+    ocrPages: number;
+    translationPages: number;
+    cacheSizeBytes: number;
+    lastAccessed: number | null;
+  }>;
 }
 
 // Extend Window interface
@@ -335,3 +407,4 @@ declare global {
 }
 
 export {};
+

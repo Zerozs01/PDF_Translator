@@ -9,12 +9,13 @@
 
 import { PDFDocument } from 'pdf-lib';
 import { visionService } from '../vision/VisionService';
-import { OCR_ALGORITHM_VERSION } from '../vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../vision/ocrVersion';
 import { resolvePerPageTimeoutSec, withPerPageOCRTimeout } from '../vision/ocr-timeout';
 import { TextLayerService } from './TextLayerService';
 import { OCRPageResult, OCROptions, OCRPipelineProfile, OCRQualityProfile } from '../../types';
 import { dbService } from '../dbService';
 import { pdfjs } from './pdfjsWorker';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 
 export interface ProcessingProgress {
   stage: 'init' | 'rendering' | 'ocr' | 'text-layer' | 'saving' | 'complete';
@@ -184,6 +185,7 @@ export class SearchablePDFService {
       const activeEngine = options.engine || 'paddleocr';
       
       if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return 'algorithmVersion mismatch';
+      if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return 'ocrRawVersion mismatch';
       if ((cached.pipelineProfile || 'panel') !== pipelineProfile) return 'pipelineProfile mismatch';
       if ((cached.ocrEngine || 'paddleocr') !== activeEngine) return 'ocrEngine mismatch';
       return null;
@@ -312,7 +314,7 @@ export class SearchablePDFService {
               const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
               const aspectRatio = longest / shortest;
               const pixelCount = imageWidth * imageHeight;
-              return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+              return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
             })();
 
             const isSensitiveFastLanguage = (options.language || 'eng')
@@ -324,9 +326,11 @@ export class SearchablePDFService {
             const ocrQualityMode = options.ocrQualityProfile === 'balanced' || options.ocrQualityProfile === 'best' ? 'high' : 'fast';
 
             const resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
-              ? (ocrQualityMode === 'fast'
-                ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
-                : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
+              ? (shouldPreferFastPaddleProfile
+                ? 'fast'
+                : (ocrQualityMode === 'fast'
+                  ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
+                  : (isSensitiveFastLanguage ? 'balanced' : 'best')))
               : 'best';
 
             const ocrPromise = visionService.ocrForTextLayer(
@@ -340,7 +344,11 @@ export class SearchablePDFService {
               debugCollectDrops,
               pipelineProfile,
               resolvedQualityProfile,
-              options.engine
+              options.engine,
+              undefined,
+              {
+                useAngleCls: options.useAngleCls
+              }
             );
 
             try {
@@ -520,6 +528,7 @@ export class SearchablePDFService {
     pageSegMode?: number,
     pipelineProfile: OCRPipelineProfile = 'panel'
   ): Promise<OCRPageResult> {
+    const options = useOCRTextLayerStore.getState().options;
     return visionService.ocrForTextLayer(
       imageDataUrl,
       imageWidth,
@@ -529,7 +538,13 @@ export class SearchablePDFService {
       pageSegMode,
       undefined,
       false,
-      pipelineProfile
+      pipelineProfile,
+      undefined,
+      undefined,
+      undefined,
+      {
+        useAngleCls: options.useAngleCls
+      }
     );
   }
 }

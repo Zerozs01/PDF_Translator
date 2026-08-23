@@ -145,7 +145,7 @@ const areSameScriptLines = (a: string, b: string): boolean => {
 
   const hasLatinA = /[A-Za-z]/.test(cleanA);
   const hasLatinB = /[A-Za-z]/.test(cleanB);
-  if (hasLatinA || hasLatinB) return false;
+  if (hasLatinA || hasLatinB) return hasLatinA && hasLatinB;
 
   return false;
 };
@@ -191,8 +191,8 @@ const splitMismergedGroup = (
 
   const subGroups: PreparedLine[][] = [[lines[0]]];
   const anomalyThreshold = pageMedianVerticalGap > 0
-    ? Math.min(baseHeight * 1.55, Math.max(baseHeight * 1.0, pageMedianVerticalGap * 1.6))
-    : baseHeight * 1.55;
+    ? Math.min(baseHeight * 2.2, Math.max(baseHeight * 1.0, pageMedianVerticalGap * 1.6))
+    : baseHeight * 2.2;
 
   for (let i = 1; i < lines.length; i++) {
     const prev = lines[i - 1];
@@ -202,9 +202,9 @@ const splitMismergedGroup = (
     
 
     const shouldSplit =
-      verticalGap > baseHeight * 1.55 ||
+      verticalGap > baseHeight * 2.2 ||
       // allow same-script fragments to bridge slightly larger gaps
-      (verticalGap > anomalyThreshold && !(areSameScriptLines(prev.text, curr.text) && verticalGap <= baseHeight * 1.55)) ||
+      (verticalGap > anomalyThreshold && !(areSameScriptLines(prev.text, curr.text) && verticalGap <= baseHeight * 2.2)) ||
       (startsNewBalloon(curr.text) && verticalGap > baseHeight * 0.8) ||
       (endsGroup(prev.text) && verticalGap > baseHeight * 0.85);
 
@@ -284,8 +284,8 @@ const shouldLinkGeometryLines = (
 
   // --- Guard 1: Page-level Gap Anomaly ---
   const anomalyThreshold = pageMedianVerticalGap > 0
-    ? Math.min(baseHeight * 1.55, Math.max(baseHeight * 1.0, pageMedianVerticalGap * 1.6))
-    : baseHeight * 1.55;
+    ? Math.min(baseHeight * 2.2, Math.max(baseHeight * 1.0, pageMedianVerticalGap * 1.6))
+    : baseHeight * 2.2;
 
   // --- Inflated Bbox Center Distance Guard ---
   const heightA = a.originalHeight ?? (a.bottom - a.top);
@@ -303,7 +303,7 @@ const shouldLinkGeometryLines = (
   // where fragmented vertical pieces should still be merged.
   if (verticalGap > anomalyThreshold) {
     // permit slightly larger gaps for same-script links (fragmented lines)
-    if (!(areSameScriptLines(a.text, b.text) && verticalGap <= baseHeight * 1.55)) {
+    if (!(areSameScriptLines(a.text, b.text) && verticalGap <= baseHeight * 2.2)) {
       return null;
     }
   }
@@ -330,7 +330,7 @@ const shouldLinkGeometryLines = (
   if (wideDistantColumns) return null;
 
   const verticallyStacked = overlapX >= 0.18
-    && verticalGap <= baseHeight * 1.55
+    && verticalGap <= baseHeight * 2.2
     && centerDeltaX <= Math.max(92, minWidth * 1.05);
   const tightlyStacked = overlapX >= 0.12
     && verticalGap <= baseHeight * 1.2
@@ -340,7 +340,7 @@ const shouldLinkGeometryLines = (
     && horizontalGap <= Math.max(64, baseHeight * 1.7)
     && centerDeltaX <= Math.max(96, minWidth * 1.35);
   const looseColumnStack = overlapY <= 0.38
-    && verticalGap <= baseHeight * 1.5
+    && verticalGap <= baseHeight * 2.2
     && centerDeltaX <= Math.max(128, maxWidth * 0.72, baseHeight * 3.4)
     && (overlapX >= 0.055 || horizontalGap <= Math.max(70, baseHeight * 2.6, minWidth * 0.55))
     && localAngleDelta <= 24;
@@ -349,7 +349,7 @@ const shouldLinkGeometryLines = (
     && Math.abs(Number(a.sortHintY) - Number(b.sortHintY)) <= Math.max(28, baseHeight * 1.2)
     && (!Number.isFinite(a.sortHintX) || !Number.isFinite(b.sortHintX) || Math.abs(Number(a.sortHintX) - Number(b.sortHintX)) <= Math.max(120, baseHeight * 1.5))
     && centerDeltaX <= Math.max(116, Math.max(a.width, b.width) * 1.45)
-    && verticalGap <= baseHeight * 1.5;
+    && verticalGap <= baseHeight * 2.2;
 
   if (!verticallyStacked && !tightlyStacked && !diagonalStack && !looseColumnStack && !contained && !hintedSequence) {
     return null;

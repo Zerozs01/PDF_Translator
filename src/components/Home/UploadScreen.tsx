@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { 
-  Upload, FileText, Clock, Star, FolderOpen, Settings2, 
+  Upload, Download, FileText, Clock, Star, FolderOpen, Settings2, 
   Sparkles, ScrollText, Shield, Grid3X3, List, Search, Plus, Flame, KeyRound, Eye, EyeOff,
   Home as HomeIcon, Folder, ChevronRight, MoreHorizontal, Trash2, Heart, Compass,
   AlertTriangle, RefreshCw, X, Check, Tag, FolderPlus,
-  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play
+  PanelLeftClose, PanelLeftOpen, Cpu, Pause, Play, Filter, Edit3, Zap, Award,
+  ChevronUp, ChevronDown, ArrowRight, Info, Database
 } from 'lucide-react';
 import { useProjectStore, SafetySettings, TranslationMode } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
@@ -14,12 +15,20 @@ import {
   OverlayFontPreset,
   getOverlayPrimaryFontName,
 } from '../../constants/overlayFonts';
-import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
-import { useFileBrowserStore, ViewMode as FileBrowserViewMode } from '../../stores/useFileBrowserStore';
+import { useOCRTextLayerStore, SUPPORTED_LANGUAGES } from '../../stores/useOCRTextLayerStore';
+import { useFileBrowserStore, ViewMode as FileBrowserViewMode, SortBy, SortOrder } from '../../stores/useFileBrowserStore';
+import { useLayerStore } from '../../stores/useLayerStore';
 import type { DBDocument, DBTag, DBProject } from '../../types/electron.d';
+import { OCREngine } from '../../types';
 import { generateDocumentThumbnail } from '../../services/libraryThumbnail';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../../services/vision/ocr-timeout';
 import { SecuritySettings } from '../Auth/SecuritySettings';
+import { dbService } from '../../services/dbService';
+import {
+  prepareProjectDocumentLoad,
+  ensureProjectDocumentRecord,
+  touchProjectDocumentActivity
+} from '../../services/projectDocumentService';
 
 type SidebarPage = 'home' | 'projects' | 'settings';
 
@@ -143,6 +152,29 @@ const getFileIcon = (fileType: string) => {
 const fallbackFolderColors = ['#7C5CFF', '#4387FF', '#59C8F6', '#F59A3A', '#F1C85B'];
 const THEMED_LIBRARY_ACCENTS = ['#7C5CFF', '#4387FF', '#59C8F6', '#F59A3A', '#F1C85B'];
 
+export const FOLDER_PALETTE_COLORS = [
+  '#38BDF8', // Sky
+  '#0EA5E9', // Ocean Blue
+  '#2563EB', // Royal Blue
+  '#6366F1', // Indigo
+  '#7C5CFF', // Violet
+  '#8B5CF6', // Purple
+  '#A855F7', // Magenta
+  '#D946EF', // Fuchsia
+  '#EC4899', // Pink
+  '#F43F5E', // Rose
+  '#EF4444', // Red
+  '#F97316', // Orange
+  '#F59E0B', // Amber
+  '#EAB308', // Gold/Yellow
+  '#84CC16', // Lime
+  '#10B981', // Emerald
+  '#14B8A6', // Teal
+  '#06B6D4', // Cyan
+  '#64748B', // Slate
+  '#94A3B8', // Silver
+];
+
 const resolveThemedAccent = (index: number): string =>
   THEMED_LIBRARY_ACCENTS[Math.abs(index) % THEMED_LIBRARY_ACCENTS.length];
 
@@ -174,6 +206,8 @@ type MenuActionDialogState = {
   isOpen: boolean;
   name: string;
   documentId: number | null;
+  parentId?: number | null;
+  color?: string;
 };
 
 type MenuPosition = {
@@ -186,6 +220,13 @@ type DeleteTagDialogState = {
   tag: DBTag | null;
   confirmation: string;
 };
+
+type DeleteProjectDialogState = {
+  isOpen: boolean;
+  project: DBProject | null;
+  confirmation: string;
+};
+
 
 const getFloatingMenuPosition = (
   x: number,
@@ -222,6 +263,8 @@ const DocumentContextMenu: React.FC<{
   onMoveToProject: (projectId: number | null) => void;
   onDelete: () => void;
   onCreateTag: () => void;
+  onOCRAllPages: () => void;
+  onUpdateRating: (rating: number) => void;
 }> = ({
   doc,
   position,
@@ -233,11 +276,13 @@ const DocumentContextMenu: React.FC<{
   onToggleTag,
   onMoveToProject,
   onDelete,
-  onCreateTag
+  onCreateTag,
+  onOCRAllPages,
+  onUpdateRating
 }) => {
   const assignedTagIds = useMemo(() => new Set(documentTags.map(tag => tag.id)), [documentTags]);
   const projectAccentById = useMemo(
-    () => new Map(projects.map((project, index) => [project.id, resolveThemedAccent(index)])),
+    () => new Map(projects.map((project, index) => [project.id, project.color || resolveThemedAccent(index)])),
     [projects]
   );
   const tagAccentById = useMemo(
@@ -249,7 +294,7 @@ const DocumentContextMenu: React.FC<{
 
   useEffect(() => {
     let active = true;
-    if (window.electronAPI.db.getDocumentCacheSize) {
+    if (window.electronAPI?.db?.getDocumentCacheSize) {
       window.electronAPI.db.getDocumentCacheSize(doc.id)
         .then((size) => {
           if (active) setCacheSize(size);
@@ -271,43 +316,67 @@ const DocumentContextMenu: React.FC<{
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="border-b border-white/10 px-2 pb-2">
-        <div className="truncate text-xs font-semibold text-slate-100">{doc.filename}</div>
-        <div className="mt-1 text-[10px] text-slate-400 flex items-center justify-between gap-2">
-          <span>{formatDate(doc.last_accessed)}</span>
-          <span className="text-[9px] text-[#2B9BFF] bg-[#2B9BFF]/10 px-1.5 py-0.5 rounded font-medium shrink-0">
-            แคช: {cacheSize !== null ? formatFileSize(cacheSize) : 'คำนวณ...'}
-          </span>
-        </div>
-      </div>
+      <div className="border-b border-white/10 px-2 pb-2.5 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-slate-100" title={doc.filename}>{doc.filename}</div>
+          <div className="mt-1 flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Rating:</span>
+              <div className="flex items-center">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => onUpdateRating((doc.rating || 0) === star ? 0 : star)}
+                    className="p-0.5 text-slate-500 hover:text-amber-400 transition-colors"
+                  >
+                    <Star
+                      size={13}
+                      className={star <= (doc.rating || 0) ? 'text-amber-400 fill-amber-400' : 'text-slate-600'}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
 
-      <div className="space-y-1 px-1 py-2">
+            <div 
+              className="flex items-center gap-1 text-[10px] shrink-0 bg-slate-900/80 border border-white/10 px-1.5 py-0.5 rounded-md"
+              title="ขนาดข้อมูลแคช OCR และการแปลของเอกสารนี้"
+            >
+              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Cache:</span>
+              <span className={cacheSize && cacheSize > 0 ? "text-amber-400 font-semibold" : "text-slate-500"}>
+                {cacheSize !== null ? formatFileSize(cacheSize) : '...'}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <button
           onClick={() => {
             onToggleFavorite();
             onClose();
           }}
-          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-200 transition-colors hover:bg-white/10"
+          className={`p-1.5 rounded-lg border transition-all shrink-0 ${
+            doc.is_favorite 
+              ? 'border-rose-500/25 bg-rose-500/10 text-rose-500' 
+              : 'border-white/10 bg-slate-900/30 text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title={doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
         >
-          <Heart size={12} fill={doc.is_favorite ? 'currentColor' : 'none'} />
-          {doc.is_favorite ? 'Remove Favorite' : 'Add Favorite'}
+          <Heart size={13} fill={doc.is_favorite ? 'currentColor' : 'none'} />
         </button>
+      </div>
 
-        {cacheSize !== null && cacheSize > 0 && (
-          <button
-            onClick={async () => {
-              const confirm = window.confirm(`ต้องการลบแคช (OCR + Overlay แปล) ของไฟล์นี้หรือไม่?\nขนาดแคช: ${formatFileSize(cacheSize)}`);
-              if (confirm) {
-                await window.electronAPI.db.clearDocumentCache(doc.id);
-                setCacheSize(0);
-              }
-            }}
-            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-amber-300 transition-colors hover:bg-amber-500/10"
-          >
-            <RefreshCw size={12} />
-            ล้างข้อมูลแคช (Clear Cache)
-          </button>
-        )}
+      <div className="space-y-1 px-1 py-2">
+        <button
+          onClick={() => {
+            onOCRAllPages();
+            onClose();
+          }}
+          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-[#2B9BFF] transition-colors hover:bg-[#2B9BFF]/10 font-medium"
+        >
+          <Cpu size={12} />
+          OCR Panel
+        </button>
       </div>
 
       <div className="border-t border-white/10 px-2 py-2">
@@ -403,15 +472,42 @@ const DocumentContextMenu: React.FC<{
         </div>
       </div>
 
-      <div className="border-t border-white/10 px-1 pt-2">
+      <div className="border-t border-white/10 px-1 pt-2 flex gap-1.5">
+        {cacheSize !== null && cacheSize > 0 ? (
+          <button
+            onClick={async () => {
+              const confirm = window.confirm(`ต้องการลบแคช (OCR + Overlay แปล) ของไฟล์นี้หรือไม่?\nขนาดแคช: ${formatFileSize(cacheSize)}`);
+              if (confirm) {
+                await window.electronAPI.db.clearDocumentCache(doc.id);
+                useLayerStore.getState().clearLayers();
+                useOCRTextLayerStore.getState().clearAllOCR();
+                useOCRTextLayerStore.getState().setCurrentPageOCR(null);
+                setCacheSize(0);
+              }
+            }}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#d97706]/10 border border-[#d97706]/20 py-2 text-[10px] font-semibold text-amber-500 hover:text-amber-400 transition-colors hover:bg-[#d97706]/20"
+          >
+            <RefreshCw size={11} />
+            Clear Cache
+          </button>
+        ) : (
+          <button
+            disabled
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-slate-900/40 border border-white/5 py-2 text-[10px] font-semibold text-slate-500 cursor-not-allowed"
+          >
+            <RefreshCw size={11} />
+            Clear Cache
+          </button>
+        )}
+
         <button
           onClick={() => {
             onDelete();
             onClose();
           }}
-          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-white text-[#EA580C] hover:bg-white/90 py-2 text-[10px] font-bold transition-all shadow-sm"
         >
-          <Trash2 size={12} />
+          <Trash2 size={11} className="text-[#EA580C]" />
           Delete
         </button>
       </div>
@@ -420,32 +516,65 @@ const DocumentContextMenu: React.FC<{
   );
 };
 
-const TagContextMenu: React.FC<{
-  tag: DBTag;
+
+const ProjectContextMenu: React.FC<{
+  project: DBProject;
   position: MenuPosition;
   onClose: () => void;
   onDelete: () => void;
-}> = ({ tag, position, onClose, onDelete }) => {
-  const accent = resolveStableAccent(tag.id);
+  onEdit: () => void;
+  onCreateSubfolder: () => void;
+  onShowInfo: () => void;
+}> = ({ project, position, onClose, onDelete, onEdit, onCreateSubfolder, onShowInfo }) => {
+  const accent = project.color || resolveStableAccent(project.id);
   return createPortal(
   <div
     data-library-floating-menu="true"
-    className="fixed z-[160] w-56 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+    className="fixed z-[160] w-60 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
     style={{ left: position.x, top: position.y }}
     onClick={(e) => e.stopPropagation()}
     onContextMenu={(e) => e.preventDefault()}
   >
     <div className="border-b border-white/10 px-2 pb-2">
       <div className="flex items-center gap-2 text-xs font-semibold text-slate-100">
-        <span
-          className="h-2.5 w-2.5 rounded-full"
-          style={{ backgroundColor: accent }}
-        />
-        {tag.name}
+        <Folder size={14} style={{ color: accent }} />
+        <span className="truncate">{project.name}</span>
       </div>
-      <div className="mt-1 text-[10px] text-slate-400">Deleting a tag only removes the label, not OCR data.</div>
+      <div className="mt-1 text-[10px] text-slate-400">Deleting a folder does not delete the documents inside it.</div>
     </div>
-    <div className="pt-2">
+    <div className="pt-2 space-y-0.5">
+       <button
+        onClick={() => {
+          onEdit();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10"
+      >
+        <Edit3 size={12} className="text-slate-400" />
+        Edit Folder
+      </button>
+       <button
+        onClick={() => {
+          onCreateSubfolder();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10"
+      >
+        <FolderPlus size={12} className="text-slate-400" />
+        Create Sub Folder
+      </button>
+      <button
+        onClick={() => {
+          onShowInfo();
+          onClose();
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-sky-300 transition-colors hover:bg-sky-500/10 font-medium"
+      >
+        <Info size={13} className="text-sky-400" />
+        Folder Info
+      </button>
+     
+     
       <button
         onClick={() => {
           onDelete();
@@ -454,19 +583,744 @@ const TagContextMenu: React.FC<{
         className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10"
       >
         <Trash2 size={12} />
-        Delete Tag
+        Delete Folder
       </button>
     </div>
   </div>,
   document.body
-);
+  );
+};
+
+const TagContextMenu: React.FC<{
+  tag: DBTag;
+  position: MenuPosition;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}> = ({ tag, position, onClose, onEdit, onDelete }) => {
+  return createPortal(
+    <div
+      data-library-floating-menu="true"
+      className="fixed z-[160] w-52 rounded-2xl border border-white/12 bg-slate-950/95 p-1 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl flex flex-col gap-0.5 animate-fade-in"
+      style={{ left: position.x, top: position.y }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-white/5 mb-0.5">
+        <span 
+          className="h-2 w-2 rounded-full shrink-0 shadow-[0_0_8px_rgba(255,255,255,0.2)]" 
+          style={{ backgroundColor: tag.color || '#8B5CF6' }} 
+        />
+        <span className="text-xs font-semibold text-slate-200 truncate">{tag.name}</span>
+      </div>
+
+      <button
+        onClick={() => {
+          onClose();
+          onEdit();
+        }}
+        className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+      >
+        <Edit3 size={13} className="text-sky-400" />
+        Edit Tag
+      </button>
+
+      <button
+        onClick={() => {
+          onClose();
+          onDelete();
+        }}
+        className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/20 hover:text-red-200"
+      >
+        <Trash2 size={13} />
+        ลบแท็ก (Delete Tag)
+      </button>
+    </div>,
+    document.body
+  );
+};
+
+export const TAG_COLOR_PALETTES = [
+  {
+    name: 'Crimson & Ember',
+    icon: '🔥',
+    colors: [
+      '#EF4444', '#F87171', '#DC2626', '#E11D48',
+      '#F97316', '#FB923C', '#EA580C', '#F59E0B',
+      '#FBBF24', '#D97706', '#FB7185', '#F43F5E'
+    ]
+  },
+  {
+    name: 'Abyssal & Astral',
+    icon: '🔮',
+    colors: [
+      '#6366F1', '#818CF8', '#4F46E5', '#8B5CF6',
+      '#A78BFA', '#7C3AED', '#A855F7', '#C084FC',
+      '#9333EA', '#3B82F6', '#60A5FA', '#2563EB'
+    ]
+  },
+  {
+    name: 'Biosphere & Nature',
+    icon: '🌿',
+    colors: [
+      '#10B981', '#34D399', '#059669', '#14B8A6',
+      '#2DD4BF', '#0D9488', '#22C55E', '#4ADE80',
+      '#16A34A', '#84CC16', '#A3E635', '#65A30D'
+    ]
+  },
+  {
+    name: 'Atmosphere & Sky',
+    icon: '☁️',
+    colors: [
+      '#0EA5E9', '#38BDF8', '#0284C7', '#06B6D4',
+      '#22D3EE', '#0891B2', '#64748B', '#94A3B8',
+      '#CBD5E1', '#A5B4FC', '#C7D2FE', '#7DD3FC'
+    ]
+  },
+  {
+    name: 'Flesh & Blossom',
+    icon: '🌸',
+    colors: [
+      '#EC4899', '#F472B6', '#DB2777', '#F43F5E',
+      '#FDA4AF', '#FDBA74', '#FED7AA', '#FDE047',
+      '#FEF08A', '#FACC15', '#F87171', '#C084FC'
+    ]
+  }
+];
+
+const EditTagModal: React.FC<{
+  isOpen: boolean;
+  tag: DBTag | null;
+  name: string;
+  color: string;
+  onChangeName: (name: string) => void;
+  onChangeColor: (color: string) => void;
+  onSave: () => void;
+  onClose: () => void;
+}> = ({ isOpen, tag, name, color, onChangeName, onChangeColor, onSave, onClose }) => {
+  if (!isOpen || !tag) return null;
+
+  return createPortal(
+    <div 
+      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/65 backdrop-blur-md p-4 animate-fade-in"
+      onClick={onClose}
+    >
+      <div 
+        className="w-full max-w-lg rounded-3xl border border-white/12 bg-[#0e1116]/98 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-4 max-h-[90vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div 
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+              style={{ backgroundColor: hexToRgba(color || '#8B5CF6', 0.2) }}
+            >
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color || '#8B5CF6' }} />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-100">แก้ไขแท็ก (Edit Tag)</h3>
+              <p className="text-xs text-slate-400">เปลี่ยนชื่อและชุดสีแท็กสำหรับแยกหมวดหมู่</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Tag Name Input */}
+        <div>
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+            ชื่อแท็ก (Tag Name)
+          </label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => onChangeName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSave();
+            }}
+            placeholder="Tag name"
+            className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+          />
+        </div>
+
+        {/* Live Preview Pill */}
+        <div className="flex items-center gap-3 p-3 rounded-2xl bg-white/[0.02] border border-white/5">
+          <span className="text-xs text-slate-400 select-none">ตัวอย่างแท็ก (Preview):</span>
+          <span 
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-white/10 bg-[#131519]/88 text-slate-200 shadow-sm"
+            style={{ boxShadow: `0 0 0 1px ${hexToRgba(color || '#8B5CF6', 0.28)}` }}
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color || '#8B5CF6' }} />
+            {name || 'Tag Name'}
+          </span>
+        </div>
+
+        {/* Categorized Color Palettes */}
+        <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 custom-scrollbar max-h-64">
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block sticky top-0 bg-[#0e1116] py-1 z-10">
+            เลือกโทนสี (Select Color Palette)
+          </label>
+          {TAG_COLOR_PALETTES.map((group) => (
+            <div key={group.name} className="space-y-1.5">
+              <div className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
+                <span>{group.icon}</span>
+                <span>{group.name}</span>
+              </div>
+              <div className="grid grid-cols-6 gap-2">
+                {group.colors.map((c) => {
+                  const isSelected = (color || '').toUpperCase() === c.toUpperCase();
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => onChangeColor(c)}
+                      className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                      style={{ 
+                        backgroundColor: c,
+                        boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                      }}
+                      title={c}
+                    >
+                      {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer Actions */}
+        <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSave}
+            disabled={!name.trim()}
+            className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Save (บันทึก)
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const FolderInfoModal: React.FC<{
+  project: DBProject;
+  onClose: () => void;
+}> = ({ project, onClose }) => {
+  const [stats, setStats] = useState<import('../../types/electron.d').ProjectStatsResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const accent = project.color || resolveStableAccent(project.id);
+
+  useEffect(() => {
+    let canceled = false;
+    async function load() {
+      try {
+        setLoading(true);
+        if (window.electronAPI?.projects?.getStats) {
+          const res = await window.electronAPI.projects.getStats(project.id);
+          if (!canceled && res) {
+            setStats(res);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load project stats:', err);
+      } finally {
+        if (!canceled) setLoading(false);
+      }
+    }
+    load();
+    return () => { canceled = true; };
+  }, [project.id]);
+
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  return createPortal(
+    <div 
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-fade-in"
+      onClick={onClose}
+    >
+      <div 
+        className="w-full max-w-xl rounded-3xl border border-white/12 bg-[#0e1116]/98 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-5 max-h-[85vh] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-white/10 pb-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <div 
+              className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shadow-inner border border-white/10"
+              style={{ backgroundColor: hexToRgba(accent, 0.18) }}
+            >
+              <Folder size={24} style={{ color: accent }} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                {project.name}
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                ข้อมูลสรุปและสถานะแคชในฐานข้อมูล SQLite
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400">
+            <div className="h-6 w-6 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
+            <span className="text-xs font-medium">กำลังคำนวณขนาดและสถานะแคช...</span>
+          </div>
+        ) : stats ? (
+          <div className="flex-1 overflow-y-auto space-y-4 custom-scrollbar pr-1">
+            {/* Quick Stat Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">ไฟล์ทั้งหมด</span>
+                <span className="text-lg font-extrabold text-slate-100 mt-1">{stats.totalDocuments}</span>
+                <span className="text-[10px] text-slate-500 mt-0.5">เอกสารในโฟลเดอร์</span>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">จำนวนหน้ารวม</span>
+                <span className="text-lg font-extrabold text-sky-400 mt-1">{stats.totalPages}</span>
+                <span className="text-[10px] text-slate-500 mt-0.5">หน้าทั้งหมด</span>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">OCR แล้ว</span>
+                <span className="text-lg font-extrabold text-emerald-400 mt-1">
+                  {stats.totalOcrPages}
+                  <span className="text-xs font-medium text-slate-400 ml-1">
+                    ({stats.totalPages > 0 ? Math.round((stats.totalOcrPages / stats.totalPages) * 100) : 0}%)
+                  </span>
+                </span>
+                <span className="text-[10px] text-slate-500 mt-0.5">หน้าที่มี OCR Cache</span>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-slate-900/60 p-3 flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400">แปลแล้ว</span>
+                <span className="text-lg font-extrabold text-indigo-400 mt-1">
+                  {stats.totalTranslationPages}
+                  <span className="text-xs font-medium text-slate-400 ml-1">
+                    ({stats.totalPages > 0 ? Math.round((stats.totalTranslationPages / stats.totalPages) * 100) : 0}%)
+                  </span>
+                </span>
+                <span className="text-[10px] text-slate-500 mt-0.5">หน้าที่มีคำแปล</span>
+              </div>
+            </div>
+
+            {/* Cache Storage Footprint Banner */}
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3.5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
+                  <Database size={16} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-200">ขนาดแคชในฐานข้อมูล SQLite</div>
+                  <div className="text-[10px] text-slate-400">เก็บเฉพาะตัวอักษรและพิกัด ไม่โคลนไฟล์ PDF ต้นฉบับ</div>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-sm font-bold text-cyan-300 font-mono">{formatBytes(stats.totalCacheSizeBytes)}</span>
+              </div>
+            </div>
+
+            {/* Document List Breakdown */}
+            <div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>รายการไฟล์ในโฟลเดอร์ ({stats.documents.length})</span>
+              </div>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-1">
+                {stats.documents.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500 border border-white/5 rounded-2xl">
+                    ไม่มีไฟล์ในโฟลเดอร์นี้
+                  </div>
+                ) : (
+                  stats.documents.map((doc) => {
+                    const ocrPct = doc.totalPages > 0 ? Math.min(100, Math.round((doc.ocrPages / doc.totalPages) * 100)) : 0;
+                    const transPct = doc.totalPages > 0 ? Math.min(100, Math.round((doc.translationPages / doc.totalPages) * 100)) : 0;
+                    return (
+                      <div 
+                        key={doc.id}
+                        className="flex items-center justify-between p-2.5 rounded-xl border border-white/6 bg-slate-950/40 hover:bg-slate-900/50 transition-colors text-xs"
+                      >
+                        <div className="min-w-0 flex-1 pr-3">
+                          <div className="font-medium text-slate-200 truncate">{doc.filename}</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-2">
+                            <span>{doc.totalPages} หน้า</span>
+                            <span>•</span>
+                            <span className="text-emerald-400">OCR: {doc.ocrPages}/{doc.totalPages} ({ocrPct}%)</span>
+                            <span>•</span>
+                            <span className="text-indigo-400">แปล: {doc.translationPages}/{doc.totalPages} ({transPct}%)</span>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[11px] font-mono text-slate-400">{formatBytes(doc.cacheSizeBytes)}</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Footer */}
+        <div className="border-t border-white/10 pt-3 flex justify-end shrink-0">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold transition-colors"
+          >
+            ปิด
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const SortContextMenu: React.FC<{
+  position: MenuPosition;
+  sortBy: SortBy;
+  sortOrder: SortOrder;
+  ratingFilterMode: 'only' | 'range';
+  ratingFilterOnly: number | null;
+  ratingFilterMin: number | null;
+  ratingFilterMax: number | null;
+  activeFilterTag: number | 'no_folder' | null;
+  tags: DBTag[];
+  onSelectFilterTag: (filter: number | 'no_folder' | null) => void;
+  onUpdateFilters: (updates: {
+    mode?: 'only' | 'range';
+    only?: number | null;
+    min?: number | null;
+    max?: number | null;
+  }) => void;
+  onSelect: (key: SortBy, order: SortOrder) => void;
+  onClose: () => void;
+}> = ({
+  position,
+  sortBy,
+  sortOrder,
+  ratingFilterMode,
+  ratingFilterOnly,
+  ratingFilterMin,
+  ratingFilterMax,
+  activeFilterTag,
+  tags,
+  onSelectFilterTag,
+  onUpdateFilters,
+  onSelect,
+  onClose
+}) => {
+  return createPortal(
+    <div
+      data-library-floating-menu="true"
+      className="fixed z-[160] w-[270px] rounded-2xl border border-white/15 bg-slate-950/95 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl flex flex-col gap-0.5"
+      style={{ left: position.x, top: position.y }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-white/5 mb-1">
+        Sort Documents
+      </div>
+      <div className="grid grid-cols-2 gap-1 p-1">
+        {[
+          { label: 'Newest', key: 'date', order: 'desc' as const, labelComponent: <span>Newest</span> },
+          { label: 'Oldest', key: 'date', order: 'asc' as const, labelComponent: <span>Oldest</span> },
+          { label: 'A-Z', key: 'name', order: 'asc' as const, labelComponent: <span>A-Z</span> },
+          { label: 'Z-A', key: 'name', order: 'desc' as const, labelComponent: <span>Z-A</span> },
+          { 
+            label: 'Rating: High to Low', 
+            key: 'rating', 
+            order: 'desc' as const, 
+            labelComponent: <span className="flex items-center gap-1"><Star size={11} className="fill-amber-400 text-amber-400 shrink-0" /> High ▲</span> 
+          },
+          { 
+            label: 'Rating: Low to High', 
+            key: 'rating', 
+            order: 'asc' as const, 
+            labelComponent: <span className="flex items-center gap-1"><Star size={11} className="fill-amber-400 text-amber-400 shrink-0" /> Low ▼</span> 
+          }
+        ].map((opt) => {
+          const isActive = sortBy === opt.key && sortOrder === opt.order;
+          return (
+            <button
+              key={`${opt.key}-${opt.order}`}
+              onClick={() => {
+                onSelect(opt.key as SortBy, opt.order);
+                onClose();
+              }}
+              className={`flex items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-xs transition-all border ${
+                isActive
+                  ? 'bg-white/10 text-white font-medium border-white/10'
+                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200 border-transparent'
+              }`}
+            >
+              {opt.labelComponent}
+              {isActive && <Check size={10} className="text-[#5CC6F2] shrink-0" />}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-t border-b border-white/5 my-1 mt-2">
+        Filter by Rating
+      </div>
+
+      <div className="flex flex-col gap-2 p-2 bg-white/[0.02] rounded-xl border border-white/5 my-1 mx-0.5">
+        {/* Only Rating Row */}
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="text-[11px] font-medium text-slate-400 select-none min-w-[32px]">Only:</span>
+          <div className="flex items-center gap-0.5">
+            {[1, 2, 3, 4, 5].map((stars) => {
+              const isSelected = ratingFilterMode === 'only' && ratingFilterOnly === stars;
+              return (
+                <button
+                  key={stars}
+                  onClick={() => {
+                    if (ratingFilterMode === 'only' && ratingFilterOnly === stars) {
+                      onUpdateFilters({ mode: 'only', only: null });
+                    } else {
+                      onUpdateFilters({ mode: 'only', only: stars });
+                    }
+                  }}
+                  className="p-0.5 hover:scale-110 active:scale-95 transition-all text-slate-600 hover:text-amber-400"
+                  title={`Only ${stars} stars`}
+                >
+                  <Star 
+                    size={12} 
+                    className={isSelected ? "fill-amber-400 text-amber-400" : "text-slate-600 hover:text-amber-400"} 
+                  />
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => {
+              if (ratingFilterMode === 'only' && ratingFilterOnly === 0) {
+                onUpdateFilters({ mode: 'only', only: null });
+              } else {
+                onUpdateFilters({ mode: 'only', only: 0 });
+              }
+            }}
+            className={`px-1.5 py-0.5 rounded text-[10px] transition-all border ${
+              ratingFilterMode === 'only' && ratingFilterOnly === 0
+                ? 'bg-[#5CC6F2]/10 text-[#5CC6F2] border-[#5CC6F2]/30 font-semibold animate-pulse'
+                : 'text-slate-500 hover:text-slate-300 border-transparent hover:border-white/5'
+            }`}
+          >
+            ☆ None
+          </button>
+        </div>
+
+        {/* Min/Max Rating Row */}
+        <div className="flex flex-col gap-1.5 pt-1.5 border-t border-white/5">
+          {/* Min row */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-slate-400 select-none min-w-[32px]">Min:</span>
+            <button
+              onClick={() => {
+                onUpdateFilters({ mode: 'range', min: null });
+              }}
+              className={`p-0.5 rounded hover:bg-white/5 text-slate-500 hover:text-slate-300 transition-colors ${
+                ratingFilterMode === 'range' && ratingFilterMin === null ? 'text-[#5CC6F2]' : ''
+              }`}
+              title="Reset Min"
+            >
+              <RefreshCw size={10} />
+            </button>
+            <div className="flex items-center gap-0.5">
+              {[1, 2, 3, 4, 5].map((stars) => {
+                const isSelected = ratingFilterMode === 'range' && ratingFilterMin !== null && ratingFilterMin === stars;
+                const isPassive = ratingFilterMode === 'range' && ratingFilterMin !== null && stars <= ratingFilterMin;
+                return (
+                  <button
+                    key={stars}
+                    onClick={() => {
+                      onUpdateFilters({ mode: 'range', min: stars });
+                    }}
+                    className="p-0.5 hover:scale-110 active:scale-95 transition-all"
+                  >
+                    <Star 
+                      size={11} 
+                      className={
+                        isSelected 
+                          ? "fill-blue-400 text-blue-400" 
+                          : isPassive 
+                            ? "fill-blue-400/40 text-blue-400/40" 
+                            : "text-slate-600 hover:text-blue-400"
+                      } 
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Max row */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-slate-400 select-none min-w-[32px]">Max:</span>
+            <button
+              onClick={() => {
+                onUpdateFilters({ mode: 'range', max: null });
+              }}
+              className={`p-0.5 rounded hover:bg-white/5 text-slate-500 hover:text-slate-300 transition-colors ${
+                ratingFilterMode === 'range' && ratingFilterMax === null ? 'text-[#5CC6F2]' : ''
+              }`}
+              title="Reset Max"
+            >
+              <RefreshCw size={10} />
+            </button>
+            <div className="flex items-center gap-0.5">
+              {[1, 2, 3, 4, 5].map((stars) => {
+                const isSelected = ratingFilterMode === 'range' && ratingFilterMax !== null && ratingFilterMax === stars;
+                const isPassive = ratingFilterMode === 'range' && ratingFilterMax !== null && stars <= ratingFilterMax;
+                return (
+                  <button
+                    key={stars}
+                    onClick={() => {
+                      onUpdateFilters({ mode: 'range', max: stars });
+                    }}
+                    className="p-0.5 hover:scale-110 active:scale-95 transition-all"
+                  >
+                    <Star 
+                      size={11} 
+                      className={
+                        isSelected 
+                          ? "fill-amber-400 text-amber-400" 
+                          : isPassive 
+                            ? "fill-amber-400/40 text-amber-400/40" 
+                            : "text-slate-600 hover:text-amber-400"
+                      } 
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter by Tag Section */}
+      <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-t border-b border-white/5 my-1 mt-2 flex items-center justify-between">
+        <span>Filter by Tag</span>
+        {activeFilterTag !== null && (
+          <button
+            onClick={() => onSelectFilterTag(null)}
+            className="text-[9px] text-[#5CC6F2] hover:underline cursor-pointer"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 p-2 bg-white/[0.02] rounded-xl border border-white/5 my-1 mx-0.5 max-h-44 overflow-y-auto custom-scrollbar">
+        {/* No tags (Untagged files) button */}
+        <button
+          onClick={() => {
+            if (activeFilterTag === 0) {
+              onSelectFilterTag(null);
+            } else {
+              onSelectFilterTag(0);
+            }
+          }}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+            activeFilterTag === 0
+              ? 'border-sky-400 bg-sky-500/20 text-sky-200 shadow-[0_0_12px_rgba(56,189,248,0.25)]'
+              : 'border-white/10 bg-[#131519]/88 text-slate-400 hover:border-white/20 hover:text-slate-200'
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${activeFilterTag === 0 ? 'bg-sky-400' : 'bg-slate-500'}`} />
+          No tags
+        </button>
+
+        {/* No folder (Root / Uncategorized files) button */}
+        <button
+          onClick={() => {
+            if (activeFilterTag === 'no_folder') {
+              onSelectFilterTag(null);
+            } else {
+              onSelectFilterTag('no_folder');
+            }
+          }}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+            activeFilterTag === 'no_folder'
+              ? 'border-amber-400 bg-amber-500/20 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.25)]'
+              : 'border-white/10 bg-[#131519]/88 text-slate-400 hover:border-white/20 hover:text-slate-200'
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${activeFilterTag === 'no_folder' ? 'bg-amber-400' : 'bg-slate-500'}`} />
+          No folder
+        </button>
+
+        {tags.map((tag) => {
+          const isSelected = activeFilterTag === tag.id;
+          const tagColor = tag.color || '#8B5CF6';
+          return (
+            <button
+              key={tag.id}
+              onClick={() => {
+                if (isSelected) {
+                  onSelectFilterTag(null);
+                } else {
+                  onSelectFilterTag(tag.id);
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+                isSelected
+                  ? 'border-white/20 bg-white/10 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+                  : 'border-white/10 bg-[#131519]/88 text-slate-400 hover:border-white/20 hover:text-slate-200'
+              }`}
+              style={isSelected ? { boxShadow: `0 0 0 1px ${hexToRgba(tagColor, 0.35)}` } : undefined}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: tagColor }}
+              />
+              {tag.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>,
+    document.body
+  );
 };
 
 const DocumentCard = React.memo<{
   doc: DBDocument;
   viewMode: FileBrowserViewMode;
   isSelected: boolean;
+  isMultiSelectActive?: boolean;
   onOpen: () => void;
+  onCardClick?: (e: React.MouseEvent) => void;
+  onCheckboxClick?: (e: React.MouseEvent) => void;
+  onToggleSelect?: () => void;
   onToggleFavorite: () => void;
   onDelete: () => void;
   isMenuOpen: boolean;
@@ -479,15 +1333,21 @@ const DocumentCard = React.memo<{
   onToggleTag: (tag: DBTag) => void;
   onMoveToProject: (projectId: number | null) => void;
   onCreateTag: () => void;
-  onDragStart: () => void;
+  onDragStart: (event: React.DragEvent) => void;
   onDragEnd: () => void;
   isThumbnailHidden?: boolean;
   onToggleHideThumbnail?: () => void;
+  onOCRAllPages: () => void;
+  onUpdateRating: (rating: number) => void;
 }>(({
   doc,
   viewMode,
   isSelected,
+  isMultiSelectActive = false,
   onOpen,
+  onCardClick,
+  onCheckboxClick,
+  onToggleSelect,
   onToggleFavorite,
   onDelete,
   isMenuOpen,
@@ -503,8 +1363,11 @@ const DocumentCard = React.memo<{
   onDragStart,
   onDragEnd,
   isThumbnailHidden = false,
-  onToggleHideThumbnail
+  onToggleHideThumbnail,
+  onOCRAllPages,
+  onUpdateRating
 }) => {
+  const isDraggingRef = useRef(false);
   const thumbnail = isThumbnailHidden ? (
     <div className="h-full w-full bg-[#f8fafc] border border-slate-200/80 shadow-inner flex flex-col items-center justify-center relative overflow-hidden group/paper">
       <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1.2px,transparent_1.2px)] [background-size:12px_12px] opacity-35" />
@@ -524,30 +1387,70 @@ const DocumentCard = React.memo<{
         data-document-card="true"
         className={`group relative p-4 rounded-2xl border transition-all cursor-pointer backdrop-blur-xl ${
           isSelected 
-            ? 'bg-[#090a0d] border-white/14 shadow-[0_14px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]' 
+            ? 'bg-[#090a0d] border-[#2B9BFF]/60 shadow-[0_14px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]' 
             : 'bg-[#08090c]/96 border-white/8 hover:border-white/12 hover:bg-[#101216]'
         }`}
         draggable
         onDragStart={(e) => {
-          e.dataTransfer.setData('application/x-document-id', String(doc.id));
-          e.dataTransfer.effectAllowed = 'move';
-          onDragStart();
+          isDraggingRef.current = true;
+          onDragStart(e);
         }}
-        onDragEnd={onDragEnd}
-        onClick={onOpen}
+        onDragEnd={() => {
+          onDragEnd();
+          setTimeout(() => {
+            isDraggingRef.current = false;
+          }, 80);
+        }}
+        onClick={(e) => {
+          if (isDraggingRef.current) {
+            isDraggingRef.current = false;
+            return;
+          }
+          if (onCardClick) {
+            onCardClick(e);
+          } else if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleSelect?.();
+          } else {
+            onOpen();
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
+          onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 560));
         }}
       >
         <div className="aspect-[3/4] rounded-xl bg-[#090a0c] mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
           {thumbnail}
+          {isSelected && (
+            <div 
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onCheckboxClick) {
+                  onCheckboxClick(e);
+                } else {
+                  onToggleSelect?.();
+                }
+              }}
+              className="absolute top-2 left-2 h-5 w-5 rounded-md bg-[#2B9BFF] hover:bg-blue-600 text-white flex items-center justify-center shadow-md border border-white/20 z-20 animate-fade-in transition-colors cursor-pointer"
+              title="ยกเลิกการเลือก"
+            >
+              <Check size={12} className="stroke-[3]" />
+            </div>
+          )}
         </div>
         
         <h3 className="font-medium text-sm text-slate-100 truncate mb-1">{doc.filename}</h3>
-        <p className="text-[10px] text-slate-400">
-          {formatDate(doc.last_accessed)} • {doc.total_pages} pages
+        <p className="text-[10px] text-slate-400 flex items-center justify-between gap-1">
+          <span>{formatDate(doc.last_accessed)} • {doc.total_pages} pages</span>
+          {(doc.rating || 0) > 0 && (
+            <span className="flex items-center text-amber-400 gap-0.5 shrink-0">
+              <Star size={10} className="fill-amber-400" />
+              <span className="text-[9px] font-bold">{doc.rating}</span>
+            </span>
+          )}
         </p>
         
         <button 
@@ -555,7 +1458,9 @@ const DocumentCard = React.memo<{
           className={`absolute top-2 left-2 p-1.5 rounded-lg transition-all z-10 ${
             isThumbnailHidden 
               ? 'bg-[#839958] text-white border border-[#839958] shadow-[0_0_8px_rgba(131,153,88,0.4)] opacity-100'
-              : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-slate-200'
+              : isSelected 
+                ? 'opacity-0 pointer-events-none'
+                : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-slate-200'
           }`}
           title={isThumbnailHidden ? 'แสดงรูปภาพตัวอย่าง' : 'ซ่อนรูปภาพตัวอย่าง'}
         >
@@ -566,9 +1471,10 @@ const DocumentCard = React.memo<{
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
           className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all z-10 ${
             doc.is_favorite 
-              ? 'bg-white/10 text-slate-100' 
-              : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100'
+              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30 shadow-[0_0_10px_rgba(244,63,94,0.35)] opacity-100 hover:bg-rose-500/30 hover:scale-110' 
+              : 'bg-[#111214]/90 text-slate-400 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-rose-400 hover:bg-[#1f2228] hover:border-rose-500/25 hover:scale-110 shadow-sm'
           }`}
+          title={doc.is_favorite ? 'นำออกจากรายการโปรด (Unfavorite)' : 'เพิ่มในรายการโปรด (Favorite)'}
         >
           <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
         </button>
@@ -576,7 +1482,7 @@ const DocumentCard = React.memo<{
         {isMenuOpen && (
           <DocumentContextMenu
             doc={doc}
-            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 430)}
+            position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 560)}
             documentTags={documentTags}
             tags={tags}
             projects={projects}
@@ -586,6 +1492,8 @@ const DocumentCard = React.memo<{
             onMoveToProject={onMoveToProject}
             onDelete={onDelete}
             onCreateTag={onCreateTag}
+            onOCRAllPages={onOCRAllPages}
+            onUpdateRating={onUpdateRating}
           />
         )}
       </div>
@@ -597,30 +1505,72 @@ const DocumentCard = React.memo<{
       data-document-card="true"
       className={`group relative flex items-center gap-4 p-3 rounded-xl border transition-all cursor-pointer backdrop-blur-xl ${
         isSelected 
-          ? 'bg-[#0a0b0e] border-white/14' 
+          ? 'bg-[#0a0b0e] border-[#2B9BFF]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]' 
           : 'bg-[#08090c]/94 border-white/8 hover:border-white/12 hover:bg-[#101216]'
       }`}
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData('application/x-document-id', String(doc.id));
-        e.dataTransfer.effectAllowed = 'move';
-        onDragStart();
+        isDraggingRef.current = true;
+        onDragStart(e);
       }}
-      onDragEnd={onDragEnd}
-      onClick={onOpen}
+      onDragEnd={() => {
+        onDragEnd();
+        setTimeout(() => {
+          isDraggingRef.current = false;
+        }, 80);
+      }}
+      onClick={(e) => {
+        if (isDraggingRef.current) {
+          isDraggingRef.current = false;
+          return;
+        }
+        if (onCardClick) {
+          onCardClick(e);
+        } else if (e.ctrlKey || e.metaKey || isMultiSelectActive) {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggleSelect?.();
+        } else {
+          onOpen();
+        }
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 430));
+        onRequestMenu(getFloatingMenuPosition(e.clientX, e.clientY, 288, 560));
       }}
     >
+      {isSelected && (
+        <div 
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onCheckboxClick) {
+              onCheckboxClick(e);
+            } else {
+              onToggleSelect?.();
+            }
+          }}
+          className="h-4 w-4 rounded bg-[#2B9BFF] hover:bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm border border-white/10 cursor-pointer transition-colors"
+          title="ยกเลิกการเลือก"
+        >
+          <Check size={10} className="stroke-[3]" />
+        </div>
+      )}
       <div className="relative h-16 w-12 overflow-hidden rounded-lg border border-white/5 bg-[#090a0c]">
         <div className="absolute inset-0 flex items-center justify-center">
           {thumbnail}
         </div>
       </div>
       <div className="flex-1 min-w-0">
-        <h3 className="font-medium text-sm text-slate-100 truncate">{doc.filename}</h3>
+        <h3 className="font-medium text-sm text-slate-100 truncate flex items-center gap-2">
+          <span>{doc.filename}</span>
+          {(doc.rating || 0) > 0 && (
+            <span className="inline-flex items-center text-amber-400 gap-0.5 shrink-0">
+              <Star size={10} className="fill-amber-400" />
+              <span className="text-[9px] font-bold">{doc.rating}</span>
+            </span>
+          )}
+        </h3>
         <p className="text-[10px] text-slate-400">
           {doc.total_pages} pages • {formatFileSize(doc.file_size)}
         </p>
@@ -639,9 +1589,12 @@ const DocumentCard = React.memo<{
       </button>
       <button 
         onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-        className={`p-1.5 rounded transition-all ${
-          doc.is_favorite ? 'text-slate-100' : 'text-slate-500 hover:text-slate-300'
+        className={`p-1.5 rounded-lg transition-all ${
+          doc.is_favorite 
+            ? 'text-rose-400 bg-rose-500/15 border border-rose-500/25 shadow-sm hover:scale-110' 
+            : 'text-slate-500 hover:text-rose-400 hover:bg-white/[0.06] hover:scale-110'
         }`}
+        title={doc.is_favorite ? 'นำออกจากรายการโปรด (Unfavorite)' : 'เพิ่มในรายการโปรด (Favorite)'}
       >
         <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
       </button>
@@ -649,7 +1602,7 @@ const DocumentCard = React.memo<{
         onClick={(e) => {
           e.stopPropagation();
           const rect = e.currentTarget.getBoundingClientRect();
-          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 430));
+          onRequestMenu(getFloatingMenuPosition(rect.right - 288, rect.bottom + 8, 288, 560));
         }}
         className="p-1.5 rounded text-slate-500 hover:text-slate-300"
       >
@@ -658,7 +1611,7 @@ const DocumentCard = React.memo<{
       {isMenuOpen && (
         <DocumentContextMenu
           doc={doc}
-          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 430)}
+          position={menuPosition ?? getFloatingMenuPosition(24, 24, 288, 560)}
           documentTags={documentTags}
           tags={tags}
           projects={projects}
@@ -668,6 +1621,8 @@ const DocumentCard = React.memo<{
           onMoveToProject={onMoveToProject}
           onDelete={onDelete}
           onCreateTag={onCreateTag}
+          onOCRAllPages={onOCRAllPages}
+          onUpdateRating={onUpdateRating}
         />
       )}
     </div>
@@ -681,20 +1636,57 @@ const ProjectItem = React.memo<{
   onSelect: () => void;
   displayColor?: string;
   isDropTarget: boolean;
-  onDragOver: (event: React.DragEvent<HTMLButtonElement>) => void;
-  onDragLeave: () => void;
-  onDrop: (event: React.DragEvent<HTMLButtonElement>) => void;
-}>(({ project, isSelected, onSelect, displayColor, isDropTarget, onDragOver, onDragLeave, onDrop }) => {
+  draggable?: boolean;
+  onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDrop: (event: React.DragEvent<HTMLDivElement>) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
+  level?: number;
+  hasChildren?: boolean;
+  isExpanded?: boolean;
+  onToggleExpand?: () => void;
+}>(({ project, isSelected, onSelect, displayColor, isDropTarget, draggable, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, onContextMenu, level = 0, hasChildren = false, isExpanded = false, onToggleExpand }) => {
   const accent = displayColor || resolveStableAccent(project.id);
+  const isDraggingRef = useRef(false);
+
   return (
-  <button 
-    onClick={onSelect}
+  <div 
+    role="button"
+    tabIndex={0}
+    draggable={draggable}
+    onDragStart={(e) => {
+      isDraggingRef.current = true;
+      onDragStart?.(e);
+    }}
+    onDragEnd={(e) => {
+      onDragEnd?.(e);
+      setTimeout(() => {
+        isDraggingRef.current = false;
+      }, 50);
+    }}
+    onClick={(e) => {
+      if (isDraggingRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      onSelect();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onSelect();
+      }
+    }}
+    onContextMenu={onContextMenu}
     onDragOver={onDragOver}
     onDragLeave={onDragLeave}
     onDrop={onDrop}
-    className={`w-full p-3 rounded-xl text-left transition-all flex items-center gap-3 border ${
+    className={`w-full py-2 px-2.5 rounded-xl text-left transition-all flex items-center border cursor-pointer select-none ${
       isDropTarget
-        ? 'border-white/16 bg-[#20242b] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+        ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_16px_rgba(56,189,248,0.3)] scale-[1.01]'
         : 
       isSelected 
         ? 'border-white/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
@@ -702,42 +1694,76 @@ const ProjectItem = React.memo<{
     }`}
     style={isSelected ? { backgroundColor: hexToRgba(accent, 0.14) } : undefined}
   >
+    {/* Tree line connector */}
+    {level > 0 && (
+      <div 
+        className="flex items-center justify-end shrink-0 text-slate-600/60"
+        style={{ width: `${level * 14}px`, height: '20px' }}
+      >
+        <span className="w-2.5 h-3.5 border-l border-b border-white/20 rounded-bl mr-1.5 mt-[-6px]" />
+      </div>
+    )}
+
     <div 
-      className="p-2 rounded-lg border border-white/5"
+      className="p-1.5 rounded-lg border border-white/5 flex items-center justify-center shrink-0 mr-2.5 transition-transform group-hover:scale-105"
       style={{ backgroundColor: hexToRgba(accent, 0.14) }}
     >
-      <Folder size={16} style={{ color: accent }} />
+      <Folder size={14} style={{ color: accent }} />
     </div>
-    <span className="flex-1 truncate text-sm text-slate-200">{project.name}</span>
-    <ChevronRight size={14} className="text-slate-500" />
-  </button>
+    <span className="flex-1 truncate text-xs font-medium text-slate-200">{project.name}</span>
+    {hasChildren ? (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleExpand?.();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.stopPropagation();
+            onToggleExpand?.();
+          }
+        }}
+        className="p-1 rounded-md hover:bg-white/10 text-slate-400 hover:text-sky-300 transition-all shrink-0 ml-1 cursor-pointer flex items-center justify-center"
+        title={isExpanded ? 'Collapse subfolders' : 'Expand subfolders'}
+      >
+        <ChevronRight size={13} className={`transition-transform duration-200 ${isExpanded ? 'rotate-90 text-sky-400' : 'text-slate-400'}`} />
+      </div>
+    ) : (
+      <div className="w-5 shrink-0" />
+    )}
+  </div>
   );
 });
 
-// Tag Pill Component
 const TagPill = React.memo<{
   tag: DBTag;
   isSelected: boolean;
   onClick: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLButtonElement>) => void;
   displayColor?: string;
-}>(({ tag, isSelected, onClick, onContextMenu, displayColor }) => (
-  <button
-    onClick={onClick}
-    onContextMenu={onContextMenu}
-    className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-      isSelected 
-        ? 'border-white/12 bg-[#23262b] text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
-        : 'border-white/10 bg-[#131519]/88 text-slate-300 hover:border-white/14 hover:bg-[#1a1d22]'
-    }`}
-    style={isSelected ? { boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px ${hexToRgba(displayColor || tag.color || '#8B5CF6', 0.18)}` } : undefined}
-  >
-    <span className={`h-1.5 w-1.5 rounded-full transition-colors ${
-      isSelected ? '' : 'bg-slate-500 group-hover:bg-slate-300'
-    }`} style={isSelected ? { backgroundColor: displayColor || tag.color || '#8B5CF6' } : undefined} />
-    {tag.name}
-  </button>
-));
+}>(({ tag, isSelected, onClick, onContextMenu, displayColor }) => {
+  const accent = tag.color || displayColor || '#8B5CF6';
+  return (
+    <button
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+        isSelected 
+          ? 'border-white/12 bg-[#23262b] text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' 
+          : 'border-white/10 bg-[#131519]/88 text-slate-300 hover:border-white/14 hover:bg-[#1a1d22]'
+      }`}
+      style={isSelected ? { boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px ${hexToRgba(accent, 0.28)}` } : undefined}
+    >
+      <span 
+        className="h-1.5 w-1.5 rounded-full transition-colors" 
+        style={{ backgroundColor: accent }} 
+      />
+      {tag.name}
+    </button>
+  );
+});
 
 export const UploadScreen: React.FC = () => {
   const {
@@ -768,9 +1794,13 @@ export const UploadScreen: React.FC = () => {
   const cancelJob = useBackgroundQueueStore((state) => state.cancelJob);
   const removeJob = useBackgroundQueueStore((state) => state.removeJob);
   const clearCompletedJobs = useBackgroundQueueStore((state) => state.clearCompletedJobs);
+  const moveJobUp = useBackgroundQueueStore((state) => state.moveJobUp);
+  const moveJobDown = useBackgroundQueueStore((state) => state.moveJobDown);
 
   const {
     viewMode, setViewMode,
+    sortBy, setSortBy,
+    sortOrder, setSortOrder,
     filterType,
     selectedTagId, setSelectedTagId,
     selectedProjectId, setSelectedProjectId,
@@ -781,10 +1811,12 @@ export const UploadScreen: React.FC = () => {
           searchDocuments, loadTags, loadProjects,
     toggleFavorite, deleteDocument, moveToProject,
     addTagToDocument, removeTagFromDocument,
-    createTag, createProject, deleteTag, loadDocumentTags, persistDocumentPatch,
-    selectedDocumentIds, toggleDocumentSelection, clearSelection,
+    createTag, createProject, deleteTag, deleteProject, updateProject, updateTag, loadDocumentTags, persistDocumentPatch,
+    selectedDocumentIds, selectDocument, selectRangeDocuments, toggleDocumentSelection, clearSelection,
     getSortedDocuments
   } = useFileBrowserStore();
+
+  const lastClickedDocIdRef = useRef<number | null>(null);
 
   const [isDragging, setIsDragging] = useState(false);
   const [hiddenThumbnails, setHiddenThumbnails] = useState<Set<number>>(() => {
@@ -810,18 +1842,242 @@ export const UploadScreen: React.FC = () => {
   }, []);
 
   const [activePage, setActivePage] = useState<SidebarPage>('home');
+  const [gpuInfo, setGpuInfo] = useState<{
+    gpus: string[];
+    hasDirectML: boolean;
+    hasCuda: boolean;
+    mode: 'CUDA' | 'DirectML' | 'CPU';
+    gpuVendor: 'intel' | 'amd' | 'nvidia' | 'unknown';
+  } | null>(null);
+
+  const [paddleThaiStatus, setPaddleThaiStatus] = useState<{ installed: boolean; checking: boolean; downloading: boolean }>({
+    installed: false,
+    checking: true,
+    downloading: false,
+  });
+  const [paddleEnglishStatus, setPaddleEnglishStatus] = useState<{ installed: boolean; checking: boolean; downloading: boolean }>({
+    installed: false,
+    checking: true,
+    downloading: false,
+  });
+
+  const checkModelStatus = useCallback(async () => {
+    if (!window.electronAPI?.models) return;
+    try {
+      const thaiRes = await window.electronAPI.models.getStatus({ engine: 'paddleocr', language: 'th' });
+      setPaddleThaiStatus(prev => ({ ...prev, installed: thaiRes.installed, checking: false }));
+    } catch (err) {
+      setPaddleThaiStatus(prev => ({ ...prev, checking: false }));
+    }
+    try {
+      const engRes = await window.electronAPI.models.getStatus({ engine: 'paddleocr', language: 'en' });
+      setPaddleEnglishStatus(prev => ({ ...prev, installed: engRes.installed, checking: false }));
+    } catch (err) {
+      setPaddleEnglishStatus(prev => ({ ...prev, checking: false }));
+    }
+  }, []);
+
+  const handleDownloadModel = useCallback(async (lang: 'th' | 'en') => {
+    if (!window.electronAPI?.models) return;
+    const setStatus = lang === 'th' ? setPaddleThaiStatus : setPaddleEnglishStatus;
+    setStatus(prev => ({ ...prev, downloading: true }));
+    try {
+      const success = await window.electronAPI.models.download({ engine: 'paddleocr', language: lang });
+      if (success) {
+        setStatus(prev => ({ ...prev, installed: true, downloading: false }));
+      } else {
+        setStatus(prev => ({ ...prev, downloading: false }));
+      }
+    } catch (err) {
+      console.error(`Failed to download ${lang} model:`, err);
+      setStatus(prev => ({ ...prev, downloading: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activePage === 'settings') {
+      void checkModelStatus();
+    }
+  }, [activePage, checkModelStatus]);
+
+  // Returns vendor-aware mode label: "Intel DirectML", "AMD DirectML", "CUDA", or "CPU"
+  const getGpuModeLabel = (info: typeof gpuInfo): string => {
+    if (!info) return 'CPU';
+    if (info.mode === 'DirectML') {
+      if (info.gpuVendor === 'intel') return 'Intel DirectML';
+      if (info.gpuVendor === 'amd') return 'AMD DirectML';
+      return 'DirectML';
+    }
+    return info.mode;
+  };
+
+  useEffect(() => {
+    let active = true;
+    if (window.electronAPI?.ocr?.getGpuInfo) {
+      window.electronAPI.ocr.getGpuInfo()
+        .then((info) => {
+          if (active) setGpuInfo(info);
+        })
+        .catch((err) => console.error('Failed to get GPU info:', err));
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileOpenError, setFileOpenError] = useState<FileOpenErrorEntry | null>(null);
   const [activeDocumentMenuId, setActiveDocumentMenuId] = useState<number | null>(null);
   const [activeDocumentMenuPosition, setActiveDocumentMenuPosition] = useState<MenuPosition | null>(null);
   const [activeTagMenu, setActiveTagMenu] = useState<{ tag: DBTag; position: MenuPosition } | null>(null);
+  const [editTagDialog, setEditTagDialog] = useState<{
+    isOpen: boolean;
+    tag: DBTag | null;
+    name: string;
+    color: string;
+  }>({ isOpen: false, tag: null, name: '', color: '' });
   const [documentTagsById, setDocumentTagsById] = useState<Record<number, DBTag[]>>({});
   const [projectDialog, setProjectDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [tagDialog, setTagDialog] = useState<MenuActionDialogState>({ isOpen: false, name: '', documentId: null });
   const [deleteTagDialog, setDeleteTagDialog] = useState<DeleteTagDialogState>({ isOpen: false, tag: null, confirmation: '' });
-  const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
+  const [activeProjectMenu, setActiveProjectMenu] = useState<{ project: DBProject; position: MenuPosition } | null>(null);
+  const [deleteProjectDialog, setDeleteProjectDialog] = useState<DeleteProjectDialogState>({ isOpen: false, project: null, confirmation: '' });
+  const [editProjectDialog, setEditProjectDialog] = useState<{
+    isOpen: boolean;
+    project: DBProject | null;
+    name: string;
+    color: string;
+  }>({ isOpen: false, project: null, name: '', color: '' });
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [draggedDocumentId, setDraggedDocumentId] = useState<number | null>(null);
+  const [draggedDocumentIds, setDraggedDocumentIds] = useState<number[]>([]);
+  const [draggedProjectId, setDraggedProjectId] = useState<number | null>(null);
+  const draggedProjectIdRef = useRef<number | null>(null);
+  const [libraryMenuPosition, setLibraryMenuPosition] = useState<MenuPosition | null>(null);
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [sortMenuPosition, setSortMenuPosition] = useState<MenuPosition | null>(null);
+  const [activeFilterTag, setActiveFilterTag] = useState<number | 'no_folder' | null>(null);
+  const [ratingFilterMode, setRatingFilterMode] = useState<'only' | 'range'>('only');
+  const [ratingFilterOnly, setRatingFilterOnly] = useState<number | null>(null);
+  const [ratingFilterMin, setRatingFilterMin] = useState<number | null>(null);
+  const [ratingFilterMax, setRatingFilterMax] = useState<number | null>(null);
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<number>>(new Set());
+  const [isProfileListOpen, setIsProfileListOpen] = useState(false);
+
+  const toggleProjectExpanded = useCallback((projectId: number) => {
+    setExpandedProjectIds(current => {
+      const newSet = new Set(current);
+      if (newSet.has(projectId)) {
+        newSet.delete(projectId);
+      } else {
+        newSet.add(projectId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const [ocrBackgroundDialog, setOcrBackgroundDialog] = useState<{
+    isOpen: boolean;
+    doc: DBDocument | null;
+    model: OCREngine;
+    profile: 'ocr_all' | 'offline_all';
+    ocrLanguage: string;
+    ocrQualityProfile: 'fast' | 'best';
+    targetLanguage: string;
+  }>({
+    isOpen: false,
+    doc: null,
+    model: 'paddleocr',
+    profile: 'offline_all',
+    ocrLanguage: 'eng',
+    ocrQualityProfile: 'best',
+    targetLanguage: 'th',
+  });
+
+  const [dialogCachePages, setDialogCachePages] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc) {
+      setDialogCachePages(null); // Reset
+      if (window.electronAPI?.db?.getOcrCacheStatsForDocumentIds) {
+        window.electronAPI.db.getOcrCacheStatsForDocumentIds([ocrBackgroundDialog.doc.id])
+          .then((rows) => {
+            if (rows && rows.length > 0) {
+              setDialogCachePages(rows[0].cache_pages);
+            } else {
+              setDialogCachePages(0);
+            }
+          })
+          .catch((err) => {
+            console.error('Failed to get cache pages stats for dialog:', err);
+            setDialogCachePages(0);
+          });
+      } else {
+        setDialogCachePages(0);
+      }
+    }
+  }, [ocrBackgroundDialog.isOpen, ocrBackgroundDialog.doc]);
+
+  const openOcrBackgroundDialog = useCallback((doc: DBDocument) => {
+    const currentOcrLanguage = useOCRTextLayerStore.getState().options.language || 'eng';
+    const currentOcrEngine = (useOCRTextLayerStore.getState().options.engine || 'paddleocr') as OCREngine;
+    const currentTargetLanguage = useProjectStore.getState().targetLanguage || 'th';
+    const currentOcrQuality = useOCRTextLayerStore.getState().options.ocrQualityProfile || 'best';
+    setOcrBackgroundDialog({
+      isOpen: true,
+      doc,
+      model: currentOcrEngine,
+      profile: 'offline_all',
+      ocrLanguage: currentOcrLanguage,
+      ocrQualityProfile: currentOcrQuality === 'fast' ? 'fast' : 'best',
+      targetLanguage: currentTargetLanguage,
+    });
+  }, []);
+
+  const handleStartOcrBackground = useCallback(() => {
+    const { doc, model, profile, ocrLanguage, ocrQualityProfile, targetLanguage } = ocrBackgroundDialog;
+    if (!doc) return;
+
+    const opt = useOCRTextLayerStore.getState().options;
+    const projectState = useProjectStore.getState();
+
+    if (profile === 'ocr_all') {
+      useBackgroundQueueStore.getState().addJob({
+        documentId: doc.id,
+        filename: doc.filename,
+        filepath: doc.filepath,
+        engine: model,
+        type: 'ocr_all',
+        totalPages: Math.max(1, doc.total_pages),
+        ocrLanguage: ocrLanguage,
+        ocrQualityProfile: ocrQualityProfile,
+        useAngleCls: opt.useAngleCls,
+      });
+    } else {
+      useBackgroundQueueStore.getState().addJob({
+        documentId: doc.id,
+        filename: doc.filename,
+        filepath: doc.filepath,
+        engine: model,
+        type: 'offline_all',
+        totalPages: Math.max(1, doc.total_pages),
+        ocrLanguage: ocrLanguage,
+        sourceLanguage: projectState.sourceLanguage || 'eng',
+        targetLanguage: targetLanguage,
+        translationMode: projectState.translationMode || 'adaptive',
+        ocrDpi: opt.dpi || 300,
+        ocrPageSegMode: opt.pageSegMode,
+        ocrQualityProfile: ocrQualityProfile,
+        useAngleCls: opt.useAngleCls,
+      });
+    }
+
+    // ไม่เรียก boostPriorityForDocument สำหรับคิวเบื้องหลัง (Case 1)
+    // งานที่เพิ่มจาก OCR Panel จะต่อท้ายคิวตาม FIFO โดยไม่แทรกคิวหรือยกเลิกงานที่กำลังรันอยู่
+    setOcrBackgroundDialog(prev => ({ ...prev, isOpen: false, doc: null }));
+  }, [ocrBackgroundDialog]);
   const [projectDropTargetId, setProjectDropTargetId] = useState<number | null>(null);
+  const [folderInfoProject, setFolderInfoProject] = useState<DBProject | null>(null);
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
   const [selectedFontAvailable, setSelectedFontAvailable] = useState<boolean | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
@@ -924,11 +2180,17 @@ export const UploadScreen: React.FC = () => {
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('[data-library-floating-menu="true"]')) return;
+      if (
+        target?.closest('[data-library-floating-menu="true"]') ||
+        target?.closest('[data-sort-menu-trigger="true"]')
+      ) return;
       setActiveDocumentMenuId(null);
       setActiveDocumentMenuPosition(null);
       setActiveTagMenu(null);
+      setActiveProjectMenu(null);
       setLibraryMenuPosition(null);
+      setIsSortMenuOpen(false);
+      setSortMenuPosition(null);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -936,10 +2198,16 @@ export const UploadScreen: React.FC = () => {
         setActiveDocumentMenuId(null);
         setActiveDocumentMenuPosition(null);
         setActiveTagMenu(null);
+        setActiveProjectMenu(null);
         setLibraryMenuPosition(null);
+        setIsSortMenuOpen(false);
+        setSortMenuPosition(null);
         setProjectDialog((current) => ({ ...current, isOpen: false }));
         setTagDialog((current) => ({ ...current, isOpen: false }));
         setDeleteTagDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
+        setDeleteProjectDialog((current) => ({ ...current, isOpen: false, confirmation: '' }));
+        setEditProjectDialog((current) => ({ ...current, isOpen: false }));
+        useFileBrowserStore.getState().clearSelection();
       }
     };
 
@@ -950,93 +2218,6 @@ export const UploadScreen: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      try {
-        await loadProject(droppedFile);
-        setFileOpenError(null);
-      } catch (error) {
-        reportFileOpenError('drag_drop', error, {
-          filename: droppedFile.name,
-          filepath: (droppedFile as unknown as { path?: string }).path
-        });
-      }
-    }
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      try {
-        await loadProject(selectedFile);
-        setFileOpenError(null);
-      } catch (error) {
-        reportFileOpenError('file_input', error, {
-          filename: selectedFile.name,
-          filepath: (selectedFile as unknown as { path?: string }).path
-        });
-      }
-    }
-  };
-
-  const handleBrowse = async () => {
-    if (window.electronAPI?.fs?.openFile) {
-      try {
-        const result = await window.electronAPI.fs.openFile();
-        if (!result) return;
-
-        const bytes = decodeFileData(result.data);
-
-        const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
-        const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
-        Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
-        await loadProject(file, bytes);
-        setFileOpenError(null);
-        return;
-      } catch (error) {
-        reportFileOpenError('browse', error);
-      }
-    }
-
-    fileInputRef.current?.click();
-  };
-
-  const handleOpenDocument = async (doc: DBDocument) => {
-    // Use Electron's fs API for fast file reading
-    try {
-      const result = await window.electronAPI.fs.readFile(doc.filepath);
-      const bytes = decodeFileData(result.data);
-      
-      // Create File object with path attached for database tracking
-      const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
-      const file = new File([blob], doc.filename || result.name, { type: result.mimeType }) as File & { path: string };
-      // Attach the filepath so loadProject can save to DB
-      Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
-      
-      await loadProject(file, bytes);
-      if (doc.last_page > 1) {
-        useProjectStore.getState().setPage(doc.last_page);
-      }
-      setFileOpenError(null);
-    } catch (error) {
-      reportFileOpenError('recent', error, {
-        filename: doc.filename,
-        filepath: doc.filepath,
-        docId: doc.id
-      });
-    }
-  };
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      searchDocuments(searchQuery);
-    }
-  };
 
   const refreshLibraryView = useCallback(async () => {
     const activeSearch = searchQuery.trim();
@@ -1073,6 +2254,214 @@ export const UploadScreen: React.FC = () => {
     selectedTagId,
   ]);
 
+  const handleImportFiles = useCallback(async (files: FileList | File[]) => {
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+
+    if (fileList.length === 1) {
+      const file = fileList[0];
+      try {
+        await loadProject(file);
+        setFileOpenError(null);
+        
+        // Auto assign to selectedProjectId if inside a folder
+        const documentId = useProjectStore.getState().documentId;
+        if (documentId && selectedProjectId) {
+          await moveToProject(documentId, selectedProjectId);
+        }
+      } catch (error) {
+        reportFileOpenError('file_input', error, {
+          filename: file.name,
+          filepath: (file as unknown as { path?: string }).path
+        });
+      }
+      return;
+    }
+
+    setImportProgress({ current: 0, total: fileList.length });
+    try {
+      for (let i = 0; i < fileList.length; i++) {
+        setImportProgress({ current: i + 1, total: fileList.length });
+        const file = fileList[i];
+        
+        const prepared = await prepareProjectDocumentLoad({
+          db: dbService,
+          file: file as File & { path?: string },
+          importFile: window.electronAPI?.fs?.importFile,
+        });
+        
+        const resolvedPath = prepared.resolvedPath;
+        if (resolvedPath && dbService.isAvailable()) {
+          const ensured = await ensureProjectDocumentRecord({
+            db: dbService,
+            documentId: null,
+            file: file as File & { path?: string },
+            filePath: resolvedPath,
+          });
+          
+          if (ensured.documentId) {
+            await touchProjectDocumentActivity(dbService, ensured.documentId);
+            
+            if (selectedProjectId) {
+              await moveToProject(ensured.documentId, selectedProjectId);
+            }
+          }
+        }
+      }
+      
+      await refreshLibraryView();
+    } catch (error) {
+      console.error('Failed to import multiple files:', error);
+    } finally {
+      setImportProgress(null);
+    }
+  }, [selectedProjectId, moveToProject, refreshLibraryView, loadProject]);
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const isFile = Array.from(e.dataTransfer.types).includes('Files');
+      if (isFile) {
+        void handleImportFiles(e.dataTransfer.files);
+      }
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      void handleImportFiles(e.target.files);
+    }
+  };
+
+  const handleBrowse = async () => {
+    if (window.electronAPI?.fs?.openFile) {
+      try {
+        const results = await window.electronAPI.fs.openFile();
+        if (!results || !Array.isArray(results) || results.length === 0) return;
+
+        if (results.length === 1) {
+          const result = results[0];
+          const bytes = decodeFileData(result.data);
+          const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
+          const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+          Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
+          await loadProject(file, bytes);
+          setFileOpenError(null);
+          
+          // Auto assign to selectedProjectId if inside a folder
+          const documentId = useProjectStore.getState().documentId;
+          if (documentId && selectedProjectId) {
+            await moveToProject(documentId, selectedProjectId);
+          }
+        } else {
+          setImportProgress({ current: 0, total: results.length });
+          try {
+            for (let i = 0; i < results.length; i++) {
+              setImportProgress({ current: i + 1, total: results.length });
+              const result = results[i];
+              const bytes = decodeFileData(result.data);
+              const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
+              const file = new File([blob], result.name, { type: result.mimeType }) as File & { path: string };
+              Object.defineProperty(file, 'path', { value: result.filepath, writable: false });
+
+              const prepared = await prepareProjectDocumentLoad({
+                db: dbService,
+                file: file as File & { path?: string },
+                fileData: bytes,
+                importFile: window.electronAPI?.fs?.importFile,
+              });
+              
+              const resolvedPath = prepared.resolvedPath;
+              if (resolvedPath && dbService.isAvailable()) {
+                const ensured = await ensureProjectDocumentRecord({
+                  db: dbService,
+                  documentId: null,
+                  file: file as File & { path?: string },
+                  filePath: resolvedPath,
+                });
+                
+                if (ensured.documentId) {
+                  await touchProjectDocumentActivity(dbService, ensured.documentId);
+                  
+                  if (selectedProjectId) {
+                    await moveToProject(ensured.documentId, selectedProjectId);
+                  }
+                }
+              }
+            }
+            await refreshLibraryView();
+          } catch (error) {
+            console.error('Failed to import multiple files via browse:', error);
+          } finally {
+            setImportProgress(null);
+          }
+        }
+        return;
+      } catch (error) {
+        reportFileOpenError('browse', error);
+      }
+    }
+
+    fileInputRef.current?.click();
+  };
+
+  const handleOpenDocument = async (doc: DBDocument) => {
+    // Use Electron's fs API for fast file reading
+    try {
+      const result = await window.electronAPI.fs.readFile(doc.filepath);
+      const bytes = decodeFileData(result.data);
+      
+      // Create File object with path attached for database tracking
+      const blob = new Blob([bytes as unknown as BlobPart], { type: result.mimeType });
+      const file = new File([blob], doc.filename || result.name, { type: result.mimeType }) as File & { path: string };
+      // Attach the filepath so loadProject can save to DB
+      Object.defineProperty(file, 'path', { value: doc.filepath, writable: false });
+      
+      await loadProject(file, bytes);
+      if (doc.last_page > 1) {
+        useProjectStore.getState().setPage(doc.last_page);
+      }
+      setFileOpenError(null);
+    } catch (error) {
+      reportFileOpenError('recent', error, {
+        filename: doc.filename,
+        filepath: doc.filepath,
+        docId: doc.id
+      });
+    }
+  };
+
+  const handleOpenJobFile = async (job: any) => {
+    let docToOpen: any = {
+      id: job.documentId,
+      filename: job.filename,
+      filepath: job.filepath,
+      last_page: 1
+    };
+    
+    try {
+      if (window.electronAPI?.db?.getDocument && job.filepath) {
+        const realDoc = await window.electronAPI.db.getDocument(job.filepath);
+        if (realDoc) {
+          docToOpen = realDoc;
+        }
+      }
+    } catch (err) {
+      console.warn('[UploadScreen] Failed to fetch real document from DB, falling back to job metadata:', err);
+    }
+
+    handleOpenDocument(docToOpen);
+  };
+
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (searchQuery.trim()) {
+      searchDocuments(searchQuery);
+    }
+  };
+
   useEffect(() => {
     const trimmed = searchQuery.trim();
     const timer = window.setTimeout(() => {
@@ -1087,17 +2476,186 @@ export const UploadScreen: React.FC = () => {
   }, [refreshLibraryView, searchDocuments, searchQuery]);
 
   const handleDeleteDocument = useCallback(async (documentId: number) => {
-    await deleteDocument(documentId);
-    setDocumentTagsById((current) => {
-      if (!(documentId in current)) return current;
-      const next = { ...current };
-      delete next[documentId];
-      return next;
-    });
+    if (selectedDocumentIds.has(documentId)) {
+      const confirm = window.confirm(`ต้องการลบไฟล์ที่เลือกทั้งหมด (${selectedDocumentIds.size} ไฟล์) หรือไม่?`);
+      if (!confirm) return;
+      await Promise.all(
+        Array.from(selectedDocumentIds).map(async (id) => {
+          await deleteDocument(id);
+          setDocumentTagsById((current) => {
+            if (!(id in current)) return current;
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+        })
+      );
+      clearSelection();
+    } else {
+      const confirm = window.confirm('ต้องการลบไฟล์นี้หรือไม่?');
+      if (!confirm) return;
+      await deleteDocument(documentId);
+      setDocumentTagsById((current) => {
+        if (!(documentId in current)) return current;
+        const next = { ...current };
+        delete next[documentId];
+        return next;
+      });
+    }
     await refreshLibraryView();
-  }, [deleteDocument, refreshLibraryView]);
+  }, [deleteDocument, refreshLibraryView, selectedDocumentIds, clearSelection]);
 
-  const sortedDocuments = getSortedDocuments();
+  const handleToggleFavorite = useCallback(async (docId: number) => {
+    if (selectedDocumentIds.has(docId)) {
+      await Promise.all(
+        Array.from(selectedDocumentIds).map((id) => toggleFavorite(id))
+      );
+    } else {
+      await toggleFavorite(docId);
+    }
+  }, [selectedDocumentIds, toggleFavorite]);
+
+  const handleUpdateRating = useCallback(async (doc: DBDocument, rating: number) => {
+    const isMulti = selectedDocumentIds.has(doc.id);
+    const targetDocIds = isMulti ? Array.from(selectedDocumentIds) : [doc.id];
+    
+    await Promise.all(
+      targetDocIds.map(async (docId) => {
+        await window.electronAPI.db.updateDocument(docId, { rating });
+      })
+    );
+    
+    await refreshLibraryView();
+  }, [selectedDocumentIds, refreshLibraryView]);
+
+  const rawSortedDocuments = getSortedDocuments();
+  const sortedDocuments = useMemo(() => {
+    return rawSortedDocuments.filter(doc => {
+      // 1. Rating Filter
+      const rating = doc.rating || 0;
+      if (ratingFilterMode === 'only') {
+        if (ratingFilterOnly !== null && rating !== ratingFilterOnly) return false;
+      } else {
+        if (ratingFilterMin !== null && rating < ratingFilterMin) return false;
+        if (ratingFilterMax !== null && rating > ratingFilterMax) return false;
+      }
+
+      // 2. Scope-aware Local Filter (Tag or No Folder within current view)
+      if (activeFilterTag !== null) {
+        if (activeFilterTag === 0) {
+          // No tags (untagged files)
+          const hasTags = (doc.tag_names && doc.tag_names.trim().length > 0) ||
+                          (doc.tag_ids && doc.tag_ids.trim().length > 0);
+          if (hasTags) return false;
+        } else if (activeFilterTag === 'no_folder') {
+          // No folder (files not in any folder)
+          if (doc.project_id !== null && doc.project_id !== undefined) return false;
+        } else {
+          // Filter by specific tag ID
+          const tagIdStr = String(activeFilterTag);
+          const targetTag = tags.find(t => t.id === activeFilterTag);
+          const hasTagId = doc.tag_ids ? doc.tag_ids.split(',').map(s => s.trim()).includes(tagIdStr) : false;
+          const hasTagName = targetTag && doc.tag_names ? doc.tag_names.split(',').map(s => s.trim()).includes(targetTag.name) : false;
+          if (!hasTagId && !hasTagName) return false;
+        }
+      }
+
+      return true;
+    });
+  }, [rawSortedDocuments, ratingFilterMode, ratingFilterOnly, ratingFilterMin, ratingFilterMax, activeFilterTag, tags]);
+
+  const currentSubprojects = useMemo(() => {
+    if (filterType === 'favorites' || filterType === 'tag') {
+      return [];
+    }
+    if (selectedProjectId !== null) {
+      return projects.filter(p => p.parent_id === selectedProjectId);
+    }
+    return projects.filter(p => p.parent_id === null);
+  }, [projects, selectedProjectId, filterType]);
+
+  const breadcrumbItems = useMemo(() => {
+    let homeLabel = 'Home';
+    let isTagView = false;
+    let activeTagObj: DBTag | undefined = undefined;
+
+    if (filterType === 'tag' && selectedTagId !== null) {
+      isTagView = true;
+      if (selectedTagId === 0) {
+        homeLabel = 'No tags';
+      } else {
+        activeTagObj = tags.find(t => t.id === selectedTagId);
+        homeLabel = activeTagObj ? `#${activeTagObj.name}` : 'Tag';
+      }
+    } else if (filterType === 'favorites') {
+      homeLabel = 'Favorites';
+    }
+
+    const items: Array<{
+      id: number | null;
+      name: string;
+      color?: string;
+      isHome?: boolean;
+      isTag?: boolean;
+      isFavorites?: boolean;
+      tagColor?: string;
+    }> = [
+      {
+        id: null,
+        name: homeLabel,
+        isHome: !isTagView && filterType !== 'favorites',
+        isTag: isTagView,
+        isFavorites: filterType === 'favorites',
+        tagColor: activeTagObj?.color,
+      }
+    ];
+
+    if (selectedProjectId !== null) {
+      const chain: DBProject[] = [];
+      let currentId: number | null = selectedProjectId;
+      const visited = new Set<number>();
+      while (currentId !== null && !visited.has(currentId)) {
+        visited.add(currentId);
+        const p = projects.find(item => item.id === currentId);
+        if (p) {
+          chain.unshift(p);
+          currentId = p.parent_id;
+        } else {
+          break;
+        }
+      }
+
+      for (const p of chain) {
+        items.push({
+          id: p.id,
+          name: p.name,
+          color: p.color || resolveStableAccent(p.id),
+        });
+      }
+    }
+
+    return items;
+  }, [filterType, selectedTagId, tags, selectedProjectId, projects]);
+
+  const handleBreadcrumbClick = useCallback((item: { id: number | null }, index: number) => {
+    if (index === breadcrumbItems.length - 1) {
+      return;
+    }
+
+    if (item.id === null) {
+      setSelectedProjectId(null);
+      if (selectedTagId !== null) {
+        void loadDocumentsByTag(selectedTagId);
+      } else if (filterType === 'favorites') {
+        void loadFavoriteDocuments();
+      } else {
+        void loadRecentDocuments();
+      }
+      return;
+    }
+
+    void loadDocumentsByProject(item.id);
+  }, [breadcrumbItems.length, filterType, loadDocumentsByProject, loadDocumentsByTag, loadFavoriteDocuments, loadRecentDocuments, selectedTagId, setSelectedProjectId]);
 
   const openDocumentMenu = useCallback(async (docId: number, position: MenuPosition) => {
     setActiveTagMenu(null);
@@ -1121,46 +2679,163 @@ export const UploadScreen: React.FC = () => {
     setActiveDocumentMenuId(null);
     setActiveDocumentMenuPosition(null);
     setLibraryMenuPosition(null);
+    setActiveProjectMenu(null);
     setActiveTagMenu({
       tag,
       position: getFloatingMenuPosition(event.clientX, event.clientY, 224, 120)
     });
   }, []);
 
+  const openProjectMenu = useCallback((project: DBProject, event: React.MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setLibraryMenuPosition(null);
+    setActiveTagMenu(null);
+    setActiveProjectMenu({
+      project,
+      position: getFloatingMenuPosition(event.clientX, event.clientY, 224, 120)
+    });
+  }, []);
+
+  const handleToggleSortMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDocumentMenuId(null);
+    setActiveDocumentMenuPosition(null);
+    setLibraryMenuPosition(null);
+    setActiveTagMenu(null);
+    setActiveProjectMenu(null);
+
+    if (isSortMenuOpen) {
+      setIsSortMenuOpen(false);
+      setSortMenuPosition(null);
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    setSortMenuPosition({
+      x: Math.max(16, rect.right - 270),
+      y: rect.bottom + 8
+    });
+    setIsSortMenuOpen(true);
+  }, [isSortMenuOpen]);
+
   const handleToggleDocumentTag = useCallback(async (doc: DBDocument, tag: DBTag) => {
+    const isMulti = selectedDocumentIds.has(doc.id);
+    const targetDocIds = isMulti ? Array.from(selectedDocumentIds) : [doc.id];
+    
     const currentTags = documentTagsById[doc.id] ?? [];
     const hasTag = currentTags.some(item => item.id === tag.id);
 
     try {
       if (hasTag) {
-        await removeTagFromDocument(doc.id, tag.id);
-        setDocumentTagsById((current) => ({
-          ...current,
-          [doc.id]: (current[doc.id] ?? []).filter(item => item.id !== tag.id)
-        }));
+        await Promise.all(
+          targetDocIds.map(async (docId) => {
+            const docTags = documentTagsById[docId] ?? [];
+            if (docTags.some(item => item.id === tag.id)) {
+              await removeTagFromDocument(docId, tag.id);
+              setDocumentTagsById((current) => ({
+                ...current,
+                [docId]: (current[docId] ?? []).filter(item => item.id !== tag.id)
+              }));
+            }
+          })
+        );
       } else {
-        await addTagToDocument(doc.id, tag.id);
-        setDocumentTagsById((current) => ({
-          ...current,
-          [doc.id]: [...(current[doc.id] ?? []), tag].sort((a, b) => a.name.localeCompare(b.name))
-        }));
+        await Promise.all(
+          targetDocIds.map(async (docId) => {
+            const docTags = documentTagsById[docId] ?? [];
+            if (!docTags.some(item => item.id === tag.id)) {
+              await addTagToDocument(docId, tag.id);
+              setDocumentTagsById((current) => ({
+                ...current,
+                [docId]: [...(current[docId] ?? []), tag].sort((a, b) => a.name.localeCompare(b.name))
+              }));
+            }
+          })
+        );
       }
     } catch (error) {
       console.error('Failed to update document tag:', error);
     }
-  }, [addTagToDocument, documentTagsById, removeTagFromDocument]);
+  }, [addTagToDocument, documentTagsById, removeTagFromDocument, selectedDocumentIds]);
 
   const handleMoveDocumentToProject = useCallback(async (doc: DBDocument, projectId: number | null) => {
-    await moveToProject(doc.id, projectId);
-  }, [moveToProject]);
+    const isMulti = selectedDocumentIds.has(doc.id);
+    const targetDocIds = isMulti ? Array.from(selectedDocumentIds) : [doc.id];
+    
+    await Promise.all(
+      targetDocIds.map((docId) => moveToProject(docId, projectId))
+    );
+    
+    if (isMulti) {
+      clearSelection();
+    }
+    await refreshLibraryView();
+  }, [moveToProject, selectedDocumentIds, clearSelection, refreshLibraryView]);
 
-  const openProjectDialog = useCallback((documentId: number | null = null) => {
+  const handleCardClick = useCallback((doc: DBDocument, index: number, e: React.MouseEvent) => {
+    const isCtrl = e.ctrlKey || e.metaKey;
+    const isShift = e.shiftKey;
+
+    if (isShift) {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const lastId = lastClickedDocIdRef.current;
+      let anchorIndex = lastId !== null ? sortedDocuments.findIndex(d => d.id === lastId) : -1;
+      if (anchorIndex === -1) {
+        anchorIndex = 0;
+      }
+      
+      const minIdx = Math.min(anchorIndex, index);
+      const maxIdx = Math.max(anchorIndex, index);
+      const rangeIds = sortedDocuments.slice(minIdx, maxIdx + 1).map(d => d.id);
+      
+      selectRangeDocuments(rangeIds, isCtrl);
+      return;
+    }
+
+    if (isCtrl) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleDocumentSelection(doc.id);
+      lastClickedDocIdRef.current = doc.id;
+      return;
+    }
+
+    // When multi-select mode is active, clicking any card toggles it without requiring Ctrl to be held!
+    if (selectedDocumentIds.size > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleDocumentSelection(doc.id);
+      lastClickedDocIdRef.current = doc.id;
+      return;
+    }
+
+    lastClickedDocIdRef.current = doc.id;
+    handleOpenDocument(doc);
+  }, [sortedDocuments, selectedDocumentIds.size, selectRangeDocuments, toggleDocumentSelection, handleOpenDocument]);
+
+  const handleCheckboxClick = useCallback((doc: DBDocument, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    toggleDocumentSelection(doc.id);
+    lastClickedDocIdRef.current = doc.id;
+  }, [toggleDocumentSelection]);
+
+
+  const openProjectDialog = useCallback((documentId: number | null = null, parentId: number | null = null) => {
     setActiveDocumentMenuId(null);
     setActiveDocumentMenuPosition(null);
     setActiveTagMenu(null);
+    setActiveProjectMenu(null);
     setLibraryMenuPosition(null);
-    setProjectDialog({ isOpen: true, name: '', documentId });
-  }, []);
+    const initialColor = FOLDER_PALETTE_COLORS[projects.length % FOLDER_PALETTE_COLORS.length];
+    setProjectDialog({ isOpen: true, name: '', documentId, parentId, color: initialColor });
+  }, [projects.length]);
 
   const openTagDialog = useCallback((documentId: number | null = null) => {
     setActiveDocumentMenuId(null);
@@ -1174,8 +2849,8 @@ export const UploadScreen: React.FC = () => {
     const name = projectDialog.name.trim();
     if (!name) return;
 
-    const color = fallbackFolderColors[projects.length % fallbackFolderColors.length];
-    const parentId = selectedProjectId ?? null;
+    const color = projectDialog.color || FOLDER_PALETTE_COLORS[projects.length % FOLDER_PALETTE_COLORS.length];
+    const parentId = (projectDialog.parentId !== undefined && projectDialog.parentId !== null) ? projectDialog.parentId : (selectedProjectId ?? null);
     const project = await createProject(name, parentId, color);
     if (!project) return;
 
@@ -1183,8 +2858,38 @@ export const UploadScreen: React.FC = () => {
       await moveToProject(projectDialog.documentId, project.id);
     }
 
-    setProjectDialog({ isOpen: false, name: '', documentId: null });
-  }, [createProject, moveToProject, projectDialog.documentId, projectDialog.name, projects.length, selectedProjectId]);
+    setProjectDialog({ isOpen: false, name: '', documentId: null, parentId: null, color: '' });
+  }, [createProject, moveToProject, projectDialog.color, projectDialog.documentId, projectDialog.name, projectDialog.parentId, projects.length, selectedProjectId]);
+
+  const handleEditProject = useCallback(async () => {
+    const { project, name, color } = editProjectDialog;
+    if (!project) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    const success = await updateProject(project.id, { name: trimmedName, color });
+    if (success) {
+      setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' });
+    }
+  }, [editProjectDialog, updateProject]);
+
+  const handleEditTag = useCallback(async () => {
+    const { tag, name, color } = editTagDialog;
+    if (!tag) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    const success = await updateTag(tag.id, { name: trimmedName, color });
+    if (success) {
+      setEditTagDialog({ isOpen: false, tag: null, name: '', color: '' });
+      await loadTags();
+      if (selectedTagId === tag.id) {
+        void loadDocumentsByTag(tag.id);
+      } else {
+        void loadRecentDocuments();
+      }
+    }
+  }, [editTagDialog, updateTag, loadTags, selectedTagId, loadDocumentsByTag, loadRecentDocuments]);
 
   const handleCreateTag = useCallback(async () => {
     const name = tagDialog.name.trim();
@@ -1232,14 +2937,139 @@ export const UploadScreen: React.FC = () => {
     setDeleteTagDialog({ isOpen: false, tag: null, confirmation: '' });
   }, [deleteTag, deleteTagDialog.confirmation, deleteTagDialog.tag, loadRecentDocuments, loadTags, selectedTagId, setSelectedTagId]);
 
-  const handleProjectDrop = useCallback(async (projectId: number | null) => {
-    if (!draggedDocumentId) return;
-    const draggedDocument = sortedDocuments.find((doc) => doc.id === draggedDocumentId);
-    if (!draggedDocument) return;
-    await handleMoveDocumentToProject(draggedDocument, projectId);
+  const handleDeleteProject = useCallback(async () => {
+    const targetProject = deleteProjectDialog.project;
+    if (!targetProject) return;
+    if (deleteProjectDialog.confirmation.trim() !== targetProject.name) return;
+
+    await deleteProject(targetProject.id);
+
+    if (selectedProjectId === targetProject.id) {
+      setSelectedProjectId(null);
+      void loadRecentDocuments();
+    } else {
+      void loadProjects();
+    }
+
+    setActiveProjectMenu(null);
+    setDeleteProjectDialog({ isOpen: false, project: null, confirmation: '' });
+  }, [deleteProject, deleteProjectDialog.confirmation, deleteProjectDialog.project, loadRecentDocuments, loadProjects, selectedProjectId, setSelectedProjectId]);
+
+  const handleProjectDrop = useCallback(async (projectId: number | null, event?: React.DragEvent) => {
+    let ids: number[] = [];
+    if (event) {
+      try {
+        const rawIds = event.dataTransfer.getData('application/x-document-ids') || event.dataTransfer.getData('text/plain');
+        if (rawIds) {
+          const parsed = JSON.parse(rawIds);
+          if (Array.isArray(parsed)) {
+            ids = parsed.map(Number).filter(Number.isFinite);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to parse dragged document IDs:', e);
+      }
+    }
+    
+    if (ids.length === 0) {
+      if (draggedDocumentIds.length > 0) {
+        ids = draggedDocumentIds;
+      } else if (draggedDocumentId) {
+        ids = selectedDocumentIds.has(draggedDocumentId)
+          ? Array.from(selectedDocumentIds)
+          : [draggedDocumentId];
+      }
+    }
+
+    if (ids.length === 0) return;
+
+    // Directly move all items in parallel without nested handleMoveDocumentToProject loops
+    await Promise.all(
+      ids.map((docId) => moveToProject(docId, projectId))
+    );
+
+    // Clear selection and drag state after moving
+    clearSelection();
     setDraggedDocumentId(null);
+    setDraggedDocumentIds([]);
     setProjectDropTargetId(null);
-  }, [draggedDocumentId, handleMoveDocumentToProject, sortedDocuments]);
+
+    // Refresh view staying on current active page/tag/folder
+    await refreshLibraryView();
+  }, [draggedDocumentIds, draggedDocumentId, selectedDocumentIds, moveToProject, clearSelection, refreshLibraryView]);
+
+  const handleDropOnProject = useCallback(async (targetProjectId: number | null, event?: React.DragEvent) => {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    // 1. Check if dragging a folder
+    let sourceProjId: number | null = null;
+    if (event) {
+      const textPlain = event.dataTransfer.getData('text/plain') || '';
+      if (textPlain.startsWith('project:')) {
+        const parsed = Number(textPlain.replace('project:', ''));
+        if (Number.isFinite(parsed)) sourceProjId = parsed;
+      }
+      if (sourceProjId === null) {
+        const rawProjId = event.dataTransfer.getData('application/x-project-id');
+        if (rawProjId) {
+          const parsed = Number(rawProjId);
+          if (Number.isFinite(parsed)) sourceProjId = parsed;
+        }
+      }
+    }
+    if (sourceProjId === null && draggedProjectIdRef.current !== null) {
+      sourceProjId = draggedProjectIdRef.current;
+    }
+    if (sourceProjId === null && draggedProjectId !== null) {
+      sourceProjId = draggedProjectId;
+    }
+
+    if (sourceProjId !== null) {
+      // Prevent dropping a folder into itself
+      if (targetProjectId === sourceProjId) {
+        draggedProjectIdRef.current = null;
+        setDraggedProjectId(null);
+        setProjectDropTargetId(null);
+        return;
+      }
+      // Prevent cyclic dependency: dropping a parent folder into one of its children
+      if (targetProjectId !== null) {
+        let current = projects.find(p => p.id === targetProjectId);
+        let isDescendant = false;
+        while (current && current.parent_id !== null) {
+          if (current.parent_id === sourceProjId) {
+            isDescendant = true;
+            break;
+          }
+          current = projects.find(p => p.id === current?.parent_id);
+        }
+        if (isDescendant) {
+          draggedProjectIdRef.current = null;
+          setDraggedProjectId(null);
+          setProjectDropTargetId(null);
+          return;
+        }
+      }
+
+      const moved = await updateProject(sourceProjId, { parent_id: targetProjectId });
+      if (moved) {
+        if (targetProjectId !== null) {
+          setExpandedProjectIds(prev => new Set(prev).add(targetProjectId));
+        }
+        await loadProjects();
+        await refreshLibraryView();
+      }
+      draggedProjectIdRef.current = null;
+      setDraggedProjectId(null);
+      setProjectDropTargetId(null);
+      return;
+    }
+
+    // 2. Otherwise handle dropped documents
+    await handleProjectDrop(targetProjectId, event);
+  }, [draggedProjectId, projects, updateProject, loadProjects, refreshLibraryView, handleProjectDrop]);
 
   useEffect(() => {
     const pendingDocs = sortedDocuments
@@ -1275,6 +3105,96 @@ export const UploadScreen: React.FC = () => {
     });
   }, [persistDocumentPatch, sortedDocuments, viewMode]);
 
+  const renderProjectTree = useCallback((parentId: number | null, level: number = 0) => {
+    const levelProjects = projects.filter(p => p.parent_id === parentId);
+    return levelProjects.map((project, index) => {
+      const displayColor = project.color || resolveThemedAccent(index);
+      const hasChildren = projects.some(p => p.parent_id === project.id);
+      const isExpanded = expandedProjectIds.has(project.id);
+
+      return (
+        <React.Fragment key={project.id}>
+          <ProjectItem
+            project={project}
+            displayColor={displayColor}
+            isSelected={selectedProjectId === project.id}
+            isDropTarget={projectDropTargetId === project.id}
+            draggable={true}
+            onDragStart={(event) => {
+              event.dataTransfer.setData('text/plain', `project:${project.id}`);
+              event.dataTransfer.setData('application/x-project-id', String(project.id));
+              event.dataTransfer.effectAllowed = 'move';
+              draggedProjectIdRef.current = project.id;
+              setDraggedProjectId(project.id);
+              setActiveProjectMenu(null);
+
+              const dragGhost = document.createElement('div');
+              dragGhost.style.position = 'absolute';
+              dragGhost.style.top = '-9999px';
+              dragGhost.style.left = '-9999px';
+              dragGhost.style.padding = '4px 10px';
+              dragGhost.style.background = '#4f46e5';
+              dragGhost.style.color = '#ffffff';
+              dragGhost.style.fontSize = '12px';
+              dragGhost.style.fontWeight = 'bold';
+              dragGhost.style.borderRadius = '8px';
+              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+              dragGhost.innerText = `📁 ${project.name}`;
+              document.body.appendChild(dragGhost);
+              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+              setTimeout(() => {
+                if (document.body.contains(dragGhost)) {
+                  document.body.removeChild(dragGhost);
+                }
+              }, 0);
+            }}
+            onDragEnd={() => {
+              draggedProjectIdRef.current = null;
+              setDraggedProjectId(null);
+              setProjectDropTargetId(null);
+            }}
+            level={level}
+            hasChildren={hasChildren}
+            isExpanded={isExpanded}
+            onToggleExpand={() => toggleProjectExpanded(project.id)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.dataTransfer.dropEffect = 'move';
+              setProjectDropTargetId(project.id);
+            }}
+            onDragLeave={(event) => {
+              event.stopPropagation();
+              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+              if (projectDropTargetId === project.id) {
+                setProjectDropTargetId(null);
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void handleDropOnProject(project.id, event);
+            }}
+            onSelect={() => {
+              if (selectedProjectId === project.id) {
+                setSelectedProjectId(null);
+                if (selectedTagId !== null) {
+                  loadDocumentsByTag(selectedTagId);
+                } else {
+                  loadRecentDocuments();
+                }
+              } else {
+                loadDocumentsByProject(project.id);
+              }
+            }}
+            onContextMenu={(event) => openProjectMenu(project, event)}
+          />
+          {isExpanded && renderProjectTree(project.id, level + 1)}
+        </React.Fragment>
+      );
+    });
+  }, [projects, selectedProjectId, selectedTagId, projectDropTargetId, expandedProjectIds, toggleProjectExpanded, handleDropOnProject, loadRecentDocuments, loadDocumentsByTag, loadDocumentsByProject, openProjectMenu]);
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#17181b] text-slate-100">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -1285,7 +3205,7 @@ export const UploadScreen: React.FC = () => {
 
       <div className="relative z-10 flex h-full w-full">
         {/* Left Navigation Sidebar */}
-        <div className="w-16 bg-[#0e0f11]/86 border-r border-white/6 backdrop-blur-xl flex flex-col items-center py-4">
+        <div className="w-16 bg-[#0e0f11]/86 border-r border-white/6 backdrop-blur-xl flex flex-col items-center py-4 titlebar-drag">
           <button
             onClick={() => { setActivePage('home'); loadRecentDocuments(); }}
             className={`p-3 rounded-xl mb-2 transition-all ${
@@ -1325,38 +3245,47 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Secondary Sidebar */}
-        <div className={`transition-all duration-300 ease-in-out border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl flex flex-col overflow-hidden shrink-0 ${
+        <div className={`transition-all duration-300 ease-in-out border-r border-white/6 bg-[#111214]/74 backdrop-blur-xl flex flex-col overflow-hidden shrink-0 titlebar-drag ${
           isSidebarOpen ? 'w-56 p-4 opacity-100' : 'w-0 p-0 border-r-0 opacity-0 pointer-events-none'
         }`}>
         {activePage === 'home' ? (
           <>
             {/* Quick Filters */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3">Library</h2>
-            <div className="space-y-1 mb-6">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5 select-none titlebar-drag">Library</h2>
+            <div className="space-y-1 mb-3">
               <button
-                onClick={() => loadRecentDocuments()}
-                className={`w-full p-2.5 rounded-lg text-left text-sm flex items-center gap-3 border transition-all ${
+                onClick={() => {
+                  setSelectedTagId(null);
+                  loadRecentDocuments();
+                }}
+                className={`w-full py-1.5 px-2.5 rounded-lg text-left text-xs flex items-center gap-2.5 border transition-all ${
                   filterType === 'recent'
                     ? 'border-white/12 bg-[#25282d] text-slate-100'
                     : 'border-transparent hover:border-white/8 hover:bg-white/[0.04] text-slate-300'
                 }`}
               >
-                <Clock size={16} /> Recent
+                <Clock size={14} /> Recent
               </button>
               <button
-                onClick={() => loadFavoriteDocuments()}
-                className={`w-full p-2.5 rounded-lg text-left text-sm flex items-center gap-3 border transition-all ${
+                onClick={() => {
+                  setSelectedTagId(null);
+                  loadFavoriteDocuments();
+                }}
+                className={`w-full py-1.5 px-2.5 rounded-lg text-left text-xs flex items-center gap-2.5 border transition-all ${
                   filterType === 'favorites'
                     ? 'border-white/12 bg-[#25282d] text-slate-100'
                     : 'border-transparent hover:border-white/8 hover:bg-white/[0.04] text-slate-300'
                 }`}
               >
-                <Star size={16} /> Favorites
+                <Star size={14} /> Favorites
               </button>
             </div>
 
+            {/* Subtle Divider Line */}
+            <div className="h-px bg-white/6 my-3 w-full shrink-0" />
+
             {/* Tags */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5 flex items-center justify-between">
               Tags
               <button
                 onClick={() => openTagDialog()}
@@ -1366,19 +3295,42 @@ export const UploadScreen: React.FC = () => {
                 <Plus size={12} />
               </button>
             </h2>
-            <div className="flex flex-wrap gap-2 mb-6">
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              <TagPill
+                tag={{ id: 0, name: 'No tags', color: '#64748b', created_at: '' }}
+                displayColor="#64748b"
+                isSelected={selectedTagId === 0}
+                onContextMenu={(event) => event.preventDefault()}
+                onClick={() => {
+                  setActiveTagMenu(null);
+                  if (selectedTagId === 0) {
+                    setSelectedTagId(null);
+                    if (selectedProjectId !== null) {
+                      loadDocumentsByProject(selectedProjectId);
+                    } else {
+                      loadRecentDocuments();
+                    }
+                  } else {
+                    loadDocumentsByTag(0);
+                  }
+                }}
+              />
               {tags.map((tag, index) => (
                 <TagPill 
                   key={tag.id} 
                   tag={tag} 
-                  displayColor={resolveThemedAccent(index)}
+                  displayColor={tag.color || resolveThemedAccent(index)}
                   isSelected={selectedTagId === tag.id}
                   onContextMenu={(event) => openTagMenu(tag, event)}
                   onClick={() => {
                     setActiveTagMenu(null);
                     if (selectedTagId === tag.id) {
                       setSelectedTagId(null);
-                      loadRecentDocuments();
+                      if (selectedProjectId !== null) {
+                        loadDocumentsByProject(selectedProjectId);
+                      } else {
+                        loadRecentDocuments();
+                      }
                     } else {
                       loadDocumentsByTag(tag.id);
                     }
@@ -1387,8 +3339,11 @@ export const UploadScreen: React.FC = () => {
               ))}
             </div>
 
+            {/* Subtle Divider Line */}
+            <div className="h-px bg-white/6 my-3 w-full shrink-0" />
+
             {/* Projects */}
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 px-0.5 flex items-center justify-between">
               Projects
               <button
                 onClick={() => openProjectDialog()}
@@ -1398,45 +3353,53 @@ export const UploadScreen: React.FC = () => {
                 <Plus size={12} />
               </button>
             </h2>
-            <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
-              {projects.map((project, index) => (
-                <ProjectItem
-                  key={project.id}
-                  project={project}
-                  displayColor={resolveThemedAccent(index)}
-                  isSelected={selectedProjectId === project.id}
-                  isDropTarget={projectDropTargetId === project.id}
-                  onDragOver={(event) => {
-                    if (!draggedDocumentId) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                    setProjectDropTargetId(project.id);
-                  }}
-                  onDragLeave={() => {
-                    if (projectDropTargetId === project.id) {
-                      setProjectDropTargetId(null);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    void handleProjectDrop(project.id);
-                  }}
-                  onSelect={() => {
-                    if (selectedProjectId === project.id) {
-                      setSelectedProjectId(null);
-                      loadRecentDocuments();
-                    } else {
-                      loadDocumentsByProject(project.id);
-                    }
-                  }}
-                />
-              ))}
+            <div 
+              onDragOver={(event) => {
+                if (draggedProjectIdRef.current !== null || draggedProjectId !== null) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }
+              }}
+              onDrop={(event) => {
+                if (draggedProjectIdRef.current !== null || draggedProjectId !== null) {
+                  event.preventDefault();
+                  void handleDropOnProject(null, event);
+                }
+              }}
+              className="flex-1 overflow-y-auto space-y-1 custom-scrollbar min-h-[120px] rounded-xl"
+            >
+              {renderProjectTree(null)}
+            </div>
+
+            {/* Hardware Acceleration GPU Status */}
+            <div className="mt-4 border-t border-white/6 pt-4 shrink-0">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.22em] mb-2 block">
+                Hardware Acceleration
+              </label>
+              <div className="rounded-xl border border-white/8 bg-slate-950/40 p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-slate-400">GPU Acceleration</span>
+                  <span className={`inline-flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                    gpuInfo && gpuInfo.mode !== 'CPU'
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  }`}>
+                    <span className={`h-1 w-1 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                    {getGpuModeLabel(gpuInfo)}
+                  </span>
+                </div>
+                <div className="text-[9px] text-slate-500 leading-normal">
+                  <div className="font-semibold text-slate-300 truncate" title={gpuInfo?.gpus.join(', ')}>
+                    Device: {gpuInfo?.gpus[0] || 'Loading...'}
+                  </div>
+                </div>
+              </div>
             </div>
           </>
         ) : activePage === 'projects' ? (
           <>
             {/* Projects Page Sidebar */}
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-bold mb-4 flex items-center gap-2 titlebar-drag select-none">
               <FolderOpen className="text-slate-300" size={20} /> Projects
             </h2>
             <button
@@ -1446,37 +3409,13 @@ export const UploadScreen: React.FC = () => {
               <Plus size={16} /> New Project
             </button>
             <div className="flex-1 overflow-y-auto space-y-1 custom-scrollbar">
-              {projects.map((project, index) => (
-                <ProjectItem
-                  key={project.id}
-                  project={project}
-                  displayColor={resolveThemedAccent(index)}
-                  isSelected={selectedProjectId === project.id}
-                  isDropTarget={projectDropTargetId === project.id}
-                  onDragOver={(event) => {
-                    if (!draggedDocumentId) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                    setProjectDropTargetId(project.id);
-                  }}
-                  onDragLeave={() => {
-                    if (projectDropTargetId === project.id) {
-                      setProjectDropTargetId(null);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    void handleProjectDrop(project.id);
-                  }}
-                  onSelect={() => loadDocumentsByProject(project.id)}
-                />
-              ))}
+              {renderProjectTree(null)}
             </div>
           </>
         ) : (
           <>
             {/* Settings Page Sidebar */}
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-bold mb-4 flex items-center gap-2 titlebar-drag select-none">
               <Settings2 className="text-slate-300" size={20} /> Settings
             </h2>
 
@@ -1538,8 +3477,126 @@ export const UploadScreen: React.FC = () => {
                 )}
               </div>
 
+              {/* Model Downloader / Management */}
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
+                <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                  <Download size={12} className="text-slate-400" />
+                  การจัดการโมเดล OCR (Model Management)
+                </label>
+                
+                <div className="space-y-3 text-xs">
+                  {/* Thai OCR Model */}
+                  <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-200">โมเดลภาษาไทย (Thai Model)</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                        paddleThaiStatus.downloading
+                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                          : paddleThaiStatus.installed
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-500/10 text-slate-400 border border-white/10'
+                      }`}>
+                        {paddleThaiStatus.downloading ? 'กำลังดาวน์โหลด...' : paddleThaiStatus.installed ? 'ติดตั้งแล้ว' : 'ไม่ได้ติดตั้ง'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-slate-400">PaddleOCR PP-OCRv5 Thai Model (~15MB)</span>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadModel('th')}
+                        disabled={paddleThaiStatus.checking || paddleThaiStatus.downloading || paddleThaiStatus.installed}
+                        className="rounded bg-[#2B9BFF] hover:bg-[#1a85e8] disabled:bg-slate-800 disabled:text-slate-500 px-2 py-1 text-[10px] font-semibold text-white transition-colors"
+                      >
+                        {paddleThaiStatus.downloading ? 'Downloading...' : paddleThaiStatus.installed ? 'Installed' : 'Download'}
+                      </button>
+                    </div>
+                    {paddleThaiStatus.downloading && (
+                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
+                        <div className="bg-[#2B9BFF] h-1 rounded-full animate-pulse" style={{ width: '65%' }}></div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* English OCR Model */}
+                  <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-200">โมเดลภาษาอังกฤษ (English Model)</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                        paddleEnglishStatus.downloading
+                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                          : paddleEnglishStatus.installed
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-500/10 text-slate-400 border border-white/10'
+                      }`}>
+                        {paddleEnglishStatus.downloading ? 'กำลังดาวน์โหลด...' : paddleEnglishStatus.installed ? 'ติดตั้งแล้ว' : 'ไม่ได้ติดตั้ง'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-slate-400">PaddleOCR English Model (~10MB)</span>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadModel('en')}
+                        disabled={paddleEnglishStatus.checking || paddleEnglishStatus.downloading || paddleEnglishStatus.installed}
+                        className="rounded bg-[#2B9BFF] hover:bg-[#1a85e8] disabled:bg-slate-800 disabled:text-slate-500 px-2 py-1 text-[10px] font-semibold text-white transition-colors"
+                      >
+                        {paddleEnglishStatus.downloading ? 'Downloading...' : paddleEnglishStatus.installed ? 'Installed' : 'Download'}
+                      </button>
+                    </div>
+                    {paddleEnglishStatus.downloading && (
+                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
+                        <div className="bg-[#2B9BFF] h-1 rounded-full animate-pulse" style={{ width: '65%' }}></div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* Security Settings */}
               <SecuritySettings />
+
+              {/* Hardware Acceleration GPU Status */}
+              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
+                <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                  <Cpu size={12} className="text-slate-400" />
+                  Hardware Acceleration / GPU Status
+                </label>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Acceleration Mode</span>
+                    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                      gpuInfo && gpuInfo.mode !== 'CPU'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    }`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                      {getGpuModeLabel(gpuInfo)}
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-slate-400 shrink-0">Detected GPUs</span>
+                    <div className="text-slate-200 text-right truncate font-mono text-[10px]" title={gpuInfo?.gpus.join(', ')}>
+                      {gpuInfo?.gpus.join(', ') || 'None'}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">DirectML Support</span>
+                    <span className={`text-[10px] font-semibold ${gpuInfo?.hasDirectML ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {gpuInfo?.hasDirectML ? 'Available' : 'Unavailable'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">CUDA Support</span>
+                    <span className={`text-[10px] font-semibold ${gpuInfo?.hasCuda ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {gpuInfo?.hasCuda ? 'Available' : 'Unavailable'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 leading-normal border-t border-white/5 pt-2">
+                    {gpuInfo && gpuInfo.mode !== 'CPU'
+                      ? 'GPU Acceleration is active. The system will leverage DirectML/CUDA for OCR processing.'
+                      : 'Running on CPU. If you have an AMD/Intel/NVIDIA GPU, make sure you ran setup correctly to enable hardware acceleration.'}
+                  </p>
+                </div>
+              </div>
 
               {isThaiTargetLanguage && (
                 <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
@@ -1614,7 +3671,7 @@ export const UploadScreen: React.FC = () => {
         {/* Main Content Area */}
         <div className="relative flex-1 flex flex-col overflow-hidden bg-[#25272b]">
           {/* Toolbar */}
-          <div className="relative overflow-hidden border-b border-white/6 px-4 pt-4 pb-5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+          <div className="relative overflow-hidden border-b border-white/6 px-4 pt-4 pb-5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] titlebar-drag">
             <div className="absolute inset-0 bg-[linear-gradient(98deg,rgba(60,134,223,0.9)_0%,rgba(58,152,224,0.86)_34%,rgba(74,120,213,0.88)_66%,rgba(112,84,194,0.88)_100%)]" />
             <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.14)_0%,rgba(0,0,0,0.05)_18%,rgba(0,0,0,0.04)_82%,rgba(0,0,0,0.12)_100%)]" />
             <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.03)_0%,rgba(0,0,0,0.05)_48%,rgba(0,0,0,0.09)_100%)]" />
@@ -1664,6 +3721,25 @@ export const UploadScreen: React.FC = () => {
                   }`}
                 >
                   <List size={16} />
+                </button>
+              </div>
+
+              {/* Spacer to push filter button to the right corner */}
+              <div className="flex-1" />
+
+              {/* Sort / Filter Button */}
+              <div className="relative">
+                <button
+                  data-sort-menu-trigger="true"
+                  onClick={handleToggleSortMenu}
+                  className={`p-2 rounded-lg bg-[#202329]/90 border text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0 cursor-pointer ${
+                    isSortMenuOpen || activeFilterTag !== null || ratingFilterOnly !== null || ratingFilterMin !== null || ratingFilterMax !== null
+                      ? 'text-[#5CC6F2] border-[#5CC6F2]/40 bg-[#5CC6F2]/10 shadow-[0_0_12px_rgba(92,198,242,0.2)]'
+                      : 'border-white/8'
+                  }`}
+                  title="Sort and filter options"
+                >
+                  <Filter size={16} />
                 </button>
               </div>
             </div>
@@ -1741,6 +3817,89 @@ export const UploadScreen: React.FC = () => {
             </div>
           )}
 
+          {/* Breadcrumb Path Navigation Bar */}
+          <div className="px-4 pt-2.5 pb-1 flex items-center justify-between gap-2 select-none border-b border-white/[0.04]">
+            <nav className="flex items-center gap-1.5 flex-wrap min-w-0" aria-label="Breadcrumb">
+              {breadcrumbItems.map((item, idx) => {
+                const isLast = idx === breadcrumbItems.length - 1;
+                return (
+                  <React.Fragment key={item.id ?? `root-${idx}`}>
+                    {idx > 0 && (
+                      <ChevronRight size={12} className="text-slate-600 shrink-0" />
+                    )}
+                    {isLast ? (
+                      <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold ${
+                        item.id !== null
+                          ? 'bg-white/[0.08] text-white border border-white/10 shadow-sm'
+                          : 'text-slate-200'
+                      }`}>
+                        {item.isHome && <HomeIcon size={13} className="text-sky-400" />}
+                        {item.isFavorites && <Star size={13} className="text-amber-400 fill-amber-400" />}
+                        {item.isTag && (
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ backgroundColor: item.tagColor || '#8B5CF6' }}
+                          />
+                        )}
+                        {item.id !== null && (
+                          <Folder size={13} style={{ color: item.color || '#38BDF8' }} />
+                        )}
+                        <span className="truncate max-w-[220px]">{item.name}</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleBreadcrumbClick(item, idx)}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all cursor-pointer group"
+                      >
+                        {item.isHome && <HomeIcon size={13} className="text-slate-400 group-hover:text-sky-400 transition-colors" />}
+                        {item.isFavorites && <Star size={13} className="text-slate-400 group-hover:text-amber-400 transition-colors" />}
+                        {item.isTag && (
+                          <span
+                            className="inline-block h-2 w-2 rounded-full opacity-70 group-hover:opacity-100"
+                            style={{ backgroundColor: item.tagColor || '#8B5CF6' }}
+                          />
+                        )}
+                        {item.id !== null && (
+                          <Folder size={13} style={{ color: item.color || '#38BDF8' }} className="opacity-75 group-hover:opacity-100" />
+                        )}
+                        <span className="truncate max-w-[160px]">{item.name}</span>
+                      </button>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </nav>
+
+            {/* Right-aligned Stats & Action Button in Breadcrumb Bar */}
+            <div className="flex items-center gap-3 shrink-0">
+              {/* Item Counters */}
+              <div className="flex items-center gap-2.5 text-xs select-none">
+                {currentSubprojects.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="font-bold text-sky-400">{currentSubprojects.length}</span>
+                    <span className="text-white font-medium">{currentSubprojects.length === 1 ? 'Folder' : 'Folders'}</span>
+                  </span>
+                )}
+                {sortedDocuments.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="font-bold text-sky-400">{sortedDocuments.length}</span>
+                    <span className="text-white font-medium">{sortedDocuments.length === 1 ? 'File' : 'Files'}</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Quick Action Button (+ Folder) */}
+              <button
+                onClick={() => openProjectDialog(null, selectedProjectId)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 hover:border-white/15 text-slate-300 hover:text-white text-xs font-medium transition-all shrink-0 cursor-pointer shadow-sm"
+                title={selectedProjectId !== null ? "สร้างโฟลเดอร์ย่อยในโฟลเดอร์นี้" : "สร้างโฟลเดอร์ใหม่"}
+              >
+                <FolderPlus size={13} className="text-sky-400" />
+                <span>+ Folder</span>
+              </button>
+            </div>
+          </div>
+
           {/* Documents Grid/List */}
           <div
             className="flex-1 overflow-y-auto p-4 custom-scrollbar"
@@ -1757,50 +3916,365 @@ export const UploadScreen: React.FC = () => {
               <div className="flex items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-slate-300/80"></div>
               </div>
-            ) : sortedDocuments.length > 0 ? (
-              <div className={viewMode === 'grid'
-                ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
-                : 'space-y-2'
-              }>
-                {sortedDocuments.map(doc => (
-                  <DocumentCard
-                    key={doc.id}
-                    doc={doc}
-                    viewMode={viewMode}
-                    isSelected={selectedDocumentIds.has(doc.id)}
-                    onOpen={() => handleOpenDocument(doc)}
-                    onToggleFavorite={() => toggleFavorite(doc.id)}
-                    onDelete={() => void handleDeleteDocument(doc.id)}
-                    isMenuOpen={activeDocumentMenuId === doc.id}
-                    menuPosition={activeDocumentMenuPosition}
-                    documentTags={documentTagsById[doc.id] ?? []}
-                    tags={tags}
-                    projects={projects}
-                    onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
-                    onCloseMenu={() => {
-                      setActiveDocumentMenuId(null);
-                      setActiveDocumentMenuPosition(null);
+            ) : (sortedDocuments.length > 0 || currentSubprojects.length > 0) ? (
+              <div className="h-full overflow-y-auto pr-1 custom-scrollbar pb-20">
+                {/* 📂 Render Folder Grid/List first */}
+                {viewMode === 'grid' ? (
+                  currentSubprojects.length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
+                      {currentSubprojects.map((subproj) => {
+                        const accent = subproj.color || resolveStableAccent(subproj.id);
+                        const isDropTarget = projectDropTargetId === subproj.id;
+                        return (
+                          <div
+                            key={subproj.id}
+                            draggable={true}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                              event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                              event.dataTransfer.effectAllowed = 'move';
+                              draggedProjectIdRef.current = subproj.id;
+                              setDraggedProjectId(subproj.id);
+                              setActiveProjectMenu(null);
+
+                              const dragGhost = document.createElement('div');
+                              dragGhost.style.position = 'absolute';
+                              dragGhost.style.top = '-9999px';
+                              dragGhost.style.left = '-9999px';
+                              dragGhost.style.padding = '6px 12px';
+                              dragGhost.style.background = '#0284c7';
+                              dragGhost.style.color = '#ffffff';
+                              dragGhost.style.fontSize = '12px';
+                              dragGhost.style.fontWeight = 'bold';
+                              dragGhost.style.borderRadius = '10px';
+                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                              dragGhost.innerText = `📁 ${subproj.name}`;
+                              document.body.appendChild(dragGhost);
+                              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                              setTimeout(() => {
+                                if (document.body.contains(dragGhost)) {
+                                  document.body.removeChild(dragGhost);
+                                }
+                              }, 0);
+                            }}
+                            onDragEnd={() => {
+                              draggedProjectIdRef.current = null;
+                              setDraggedProjectId(null);
+                              setProjectDropTargetId(null);
+                            }}
+                            onClick={() => {
+                              loadDocumentsByProject(subproj.id);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              openProjectMenu(subproj, e);
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              event.dataTransfer.dropEffect = 'move';
+                              setProjectDropTargetId(subproj.id);
+                            }}
+                            onDragLeave={(event) => {
+                              event.stopPropagation();
+                              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                              if (projectDropTargetId === subproj.id) {
+                                setProjectDropTargetId(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDropOnProject(subproj.id, event);
+                            }}
+                            className={`group relative px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none overflow-hidden ${
+                              isDropTarget
+                                ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.4)] scale-[1.01]'
+                                : 'border-white/8 hover:border-white/18 bg-[#16181c]/80 hover:bg-[#1c1f26] shadow-sm hover:shadow-md'
+                            }`}
+                          >
+                            <div 
+                              className="h-7 w-7 rounded-lg flex items-center justify-center shrink-0 border border-white/10 transition-transform duration-200 group-hover:scale-105 shadow-inner"
+                              style={{ 
+                                backgroundColor: hexToRgba(accent, 0.16),
+                                boxShadow: `0 1px 4px ${hexToRgba(accent, 0.2)}`
+                              }}
+                            >
+                              <Folder size={14} style={{ color: accent }} />
+                            </div>
+
+                            <span className="flex-1 truncate text-xs font-semibold text-slate-100 group-hover:text-white transition-colors" title={subproj.name}>
+                              {subproj.name}
+                            </span>
+
+                            <ChevronRight size={12} className="text-slate-500 group-hover:text-slate-300 group-hover:translate-x-0.5 transition-all shrink-0" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                ) : (
+                  currentSubprojects.length > 0 && (
+                    <div className="space-y-1">
+                      {currentSubprojects.map((subproj) => {
+                        const accent = subproj.color || resolveStableAccent(subproj.id);
+                        const isDropTarget = projectDropTargetId === subproj.id;
+                        return (
+                          <div
+                            key={subproj.id}
+                            draggable={true}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                              event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                              event.dataTransfer.effectAllowed = 'move';
+                              draggedProjectIdRef.current = subproj.id;
+                              setDraggedProjectId(subproj.id);
+                              setActiveProjectMenu(null);
+
+                              const dragGhost = document.createElement('div');
+                              dragGhost.style.position = 'absolute';
+                              dragGhost.style.top = '-9999px';
+                              dragGhost.style.left = '-9999px';
+                              dragGhost.style.padding = '6px 12px';
+                              dragGhost.style.background = '#0284c7';
+                              dragGhost.style.color = '#ffffff';
+                              dragGhost.style.fontSize = '12px';
+                              dragGhost.style.fontWeight = 'bold';
+                              dragGhost.style.borderRadius = '10px';
+                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                              dragGhost.innerText = `📁 ${subproj.name}`;
+                              document.body.appendChild(dragGhost);
+                              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                              setTimeout(() => {
+                                if (document.body.contains(dragGhost)) {
+                                  document.body.removeChild(dragGhost);
+                                }
+                              }, 0);
+                            }}
+                            onDragEnd={() => {
+                              draggedProjectIdRef.current = null;
+                              setDraggedProjectId(null);
+                              setProjectDropTargetId(null);
+                            }}
+                            onClick={() => {
+                              loadDocumentsByProject(subproj.id);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              openProjectMenu(subproj, e);
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              event.dataTransfer.dropEffect = 'move';
+                              setProjectDropTargetId(subproj.id);
+                            }}
+                            onDragLeave={(event) => {
+                              event.stopPropagation();
+                              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                              if (projectDropTargetId === subproj.id) {
+                                setProjectDropTargetId(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDropOnProject(subproj.id, event);
+                            }}
+                            className={`group px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
+                              isDropTarget
+                                ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
+                                : 'border-white/6 hover:border-white/15 bg-[#16181c]/70 hover:bg-[#1b1e24]'
+                            }`}
+                          >
+                            <div 
+                              className="h-7 w-7 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-105 border border-white/5"
+                              style={{ backgroundColor: hexToRgba(accent, 0.16) }}
+                            >
+                              <Folder size={14} style={{ color: accent }} />
+                            </div>
+                            <span className="flex-1 truncate text-xs font-semibold text-slate-200 group-hover:text-white">{subproj.name}</span>
+                            <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-300 transition-colors shrink-0" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
+
+                {/* Subtle section divider line between Folders and Files when both exist */}
+                {currentSubprojects.length > 0 && sortedDocuments.length > 0 && (
+                  <div className="h-px bg-white/6 my-3 w-full shrink-0" />
+                )}
+
+                {/* 📄 Render Documents Grid/List */}
+                {sortedDocuments.length > 0 ? (
+                  <div className={viewMode === 'grid'
+                    ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
+                    : 'space-y-2'
+                  }>
+                    {sortedDocuments.map((doc, index) => (
+                      <DocumentCard
+                        key={doc.id}
+                        doc={doc}
+                        viewMode={viewMode}
+                        isSelected={selectedDocumentIds.has(doc.id)}
+                        isMultiSelectActive={selectedDocumentIds.size > 0}
+                        onOpen={() => handleOpenDocument(doc)}
+                        onCardClick={(e) => handleCardClick(doc, index, e)}
+                        onCheckboxClick={(e) => handleCheckboxClick(doc, e)}
+                        onToggleFavorite={() => void handleToggleFavorite(doc.id)}
+                        onDelete={() => void handleDeleteDocument(doc.id)}
+                        isMenuOpen={activeDocumentMenuId === doc.id}
+                        menuPosition={activeDocumentMenuPosition}
+                        documentTags={documentTagsById[doc.id] ?? []}
+                        tags={tags}
+                        projects={projects}
+                        onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
+                        onCloseMenu={() => {
+                          setActiveDocumentMenuId(null);
+                          setActiveDocumentMenuPosition(null);
+                        }}
+                        onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
+                        onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
+                        onToggleSelect={() => toggleDocumentSelection(doc.id)}
+                        onCreateTag={() => openTagDialog(doc.id)}
+                        onDragStart={(e) => {
+                          const isTargetSelected = selectedDocumentIds.has(doc.id);
+                          const ids = isTargetSelected && selectedDocumentIds.size > 0
+                            ? Array.from(selectedDocumentIds)
+                            : [doc.id];
+                          const payload = JSON.stringify(ids);
+                          e.dataTransfer.setData('application/x-document-ids', payload);
+                          e.dataTransfer.setData('text/plain', payload);
+                          e.dataTransfer.effectAllowed = 'move';
+                          
+                          if (ids.length > 1) {
+                            const dragGhost = document.createElement('div');
+                            dragGhost.style.position = 'absolute';
+                            dragGhost.style.top = '-9999px';
+                            dragGhost.style.left = '-9999px';
+                            dragGhost.style.padding = '6px 12px';
+                            dragGhost.style.background = '#0284c7';
+                            dragGhost.style.color = '#ffffff';
+                            dragGhost.style.fontSize = '12px';
+                            dragGhost.style.fontWeight = 'bold';
+                            dragGhost.style.borderRadius = '12px';
+                            dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                            dragGhost.style.zIndex = '99999';
+                            dragGhost.innerText = `📄 ย้าย ${ids.length} รายการ`;
+                            document.body.appendChild(dragGhost);
+                            e.dataTransfer.setDragImage(dragGhost, 15, 15);
+                            setTimeout(() => {
+                              if (document.body.contains(dragGhost)) {
+                                document.body.removeChild(dragGhost);
+                              }
+                            }, 0);
+                          }
+
+                          setDraggedDocumentId(doc.id);
+                          setDraggedDocumentIds(ids);
+                          setActiveDocumentMenuId(null);
+                          setActiveDocumentMenuPosition(null);
+                          setLibraryMenuPosition(null);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedDocumentId(null);
+                          setDraggedDocumentIds([]);
+                          setProjectDropTargetId(null);
+                        }}
+                        isThumbnailHidden={hiddenThumbnails.has(doc.id)}
+                        onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
+                        onOCRAllPages={() => openOcrBackgroundDialog(doc)}
+                        onUpdateRating={(rating) => void handleUpdateRating(doc, rating)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  currentSubprojects.length > 0 && (
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleDrop}
+                      className="rounded-3xl border-2 border-dashed border-white/8 bg-[#16181c]/40 p-8 flex flex-col items-center justify-center text-center mt-3 backdrop-blur-xl select-none group hover:border-white/15 transition-all"
+                    >
+                      <div className="h-12 w-12 rounded-2xl bg-white/[0.04] border border-white/8 flex items-center justify-center text-slate-400 mb-3 group-hover:scale-105 transition-transform">
+                        <FolderPlus size={22} className="text-sky-400/80" />
+                      </div>
+                      <h4 className="text-sm font-semibold text-slate-200 mb-1">
+                        โฟลเดอร์นี้ยังไม่มีเอกสาร
+                      </h4>
+                      <p className="text-xs text-slate-400 max-w-sm mb-4">
+                        ลากไฟล์มาวางที่นี่เพื่อเพิ่มไฟล์เข้าโฟลเดอร์นี้ หรือเลือกนำเข้าไฟล์ใหม่
+                      </p>
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          onClick={handleBrowse}
+                          className="px-4 py-2 rounded-xl bg-[#23272e] hover:bg-[#2b3038] text-white border border-white/10 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                        >
+                          <Upload size={13} />
+                          <span>Import Files</span>
+                        </button>
+                        <button
+                          onClick={() => openProjectDialog(null, selectedProjectId)}
+                          className="px-4 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/8 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                        >
+                          <FolderPlus size={13} className="text-sky-400" />
+                          <span>+ Subfolder</span>
+                        </button>
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            ) : selectedProjectId !== null ? (
+              // Dedicated Empty State when inside a Folder with no subfolders and no documents
+              <div className="h-full flex items-center justify-center p-4">
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  className={`w-full max-w-lg rounded-3xl border-2 border-dashed flex flex-col items-center justify-center p-10 transition-all duration-300 backdrop-blur-xl text-center ${
+                    isDragging
+                      ? 'border-sky-400 bg-sky-500/10 scale-[1.015] shadow-[0_24px_60px_rgba(56,189,248,0.2)]'
+                      : 'border-white/10 bg-[#17191d]/75 hover:border-white/16'
+                  }`}
+                >
+                  <div 
+                    className="p-5 rounded-2xl border border-white/10 mb-4 shadow-xl"
+                    style={{ 
+                      backgroundColor: hexToRgba(projects.find(p => p.id === selectedProjectId)?.color || '#38BDF8', 0.14) 
                     }}
-                    onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
-                    onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
-                    onCreateTag={() => openTagDialog(doc.id)}
-                    onDragStart={() => {
-                      setDraggedDocumentId(doc.id);
-                      setActiveDocumentMenuId(null);
-                      setActiveDocumentMenuPosition(null);
-                      setLibraryMenuPosition(null);
-                    }}
-                    onDragEnd={() => {
-                      setDraggedDocumentId(null);
-                      setProjectDropTargetId(null);
-                    }}
-                    isThumbnailHidden={hiddenThumbnails.has(doc.id)}
-                    onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
-                  />
-                ))}
+                  >
+                    <Folder size={40} style={{ color: projects.find(p => p.id === selectedProjectId)?.color || '#38BDF8' }} />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-100 mb-1.5">
+                    {projects.find(p => p.id === selectedProjectId)?.name || 'Folder'}
+                  </h3>
+                  <p className="text-slate-400 mb-6 text-xs max-w-xs">
+                    โฟลเดอร์นี้ว่างอยู่ ลากไฟล์ PDF หรือรูปภาพมาวางที่นี่ หรือสร้างโฟลเดอร์ย่อย
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleBrowse}
+                      className="px-5 py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-xl font-bold cursor-pointer transition-all text-xs shadow-lg flex items-center gap-2"
+                    >
+                      <Upload size={14} />
+                      Browse / Import
+                    </button>
+                    <button
+                      onClick={() => openProjectDialog(null, selectedProjectId)}
+                      className="px-4 py-2.5 bg-white/[0.06] hover:bg-white/[0.1] text-slate-200 hover:text-white rounded-xl font-semibold cursor-pointer transition-all border border-white/10 text-xs flex items-center gap-1.5"
+                    >
+                      <FolderPlus size={14} className="text-sky-400" />
+                      Create Subfolder
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
-              // Empty State / Upload Area with Recent Files
+              // Empty State / Upload Area with Recent Files for Root Library
               <div className="h-full flex flex-col">
                 {/* Recent Files Section */}
                 {documents.length > 0 && (
@@ -1813,10 +4287,13 @@ export const UploadScreen: React.FC = () => {
                       {documents.slice(0, 5).map(doc => {
                         const isHidden = hiddenThumbnails.has(doc.id);
                         return (
-                          <button
+                          <div
                             key={doc.id}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => handleOpenDocument(doc)}
-                            className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl relative"
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenDocument(doc); }}
+                            className="flex items-center gap-3 p-3 rounded-xl bg-[#17191d]/78 border border-white/8 hover:border-white/12 hover:bg-[#1d2025] transition-all text-left group backdrop-blur-xl relative cursor-pointer select-none"
                           >
                             <div className="h-14 w-10 overflow-hidden rounded-lg bg-[#111214]/90 border border-white/5 group-hover:border-white/10 flex items-center justify-center shrink-0 relative">
                               {isHidden ? (
@@ -1852,7 +4329,7 @@ export const UploadScreen: React.FC = () => {
                             >
                               {isHidden ? <EyeOff size={10} /> : <Eye size={10} />}
                             </button>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -1899,17 +4376,19 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Right: Project Settings */}
-        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl">
-          <h2 className="text-base font-bold mb-5 flex items-center gap-2">
-            <Settings2 className="text-slate-300" size={18} /> Quick Start
-          </h2>
+        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl custom-scrollbar titlebar-no-drag">
+          <div className="flex items-center justify-between mb-3 titlebar-drag select-none pr-36">
+            <h2 className="text-base font-bold flex items-center gap-1">
+              Import
+            </h2>
+          </div>
 
           {/* Quick Upload */}
           <div
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            className={`p-4 rounded-xl border-2 border-dashed mb-6 text-center transition-all ${
+            className={`p-4 rounded-xl border-2 border-dashed mb-4 text-center transition-all titlebar-no-drag ${
               isDragging ? 'border-white/18 bg-white/[0.04]' : 'border-white/10 hover:border-white/16 bg-[#13151a]/92'
             }`}
           >
@@ -1926,72 +4405,80 @@ export const UploadScreen: React.FC = () => {
           {/* Profile Selection */}
           <div className="mb-6">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 block">Profile</label>
-            <div className="space-y-2">
-              <button
-                onClick={() => setTranslationMode('adaptive')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'adaptive'
-                    ? 'border-[#14B8A6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'adaptive' ? { background: 'linear-gradient(180deg, rgba(20,184,166,0.22) 0%, rgba(19,48,58,0.92) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <Compass size={14} className={translationMode === 'adaptive' ? 'text-[#99F6E4]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'adaptive' ? 'text-[#E6FFF9]' : 'text-slate-300'}`}>Flexibility</span>
-                </div>
-              </button>
+            <div className="relative">
+              {(() => {
+                const profiles = [
+                  { id: 'adaptive', name: 'Flexibility', icon: Compass, activeBg: 'linear-gradient(180deg, rgba(20,184,166,0.22) 0%, rgba(19,48,58,0.92) 100%)', textTheme: 'text-[#E6FFF9]', iconTheme: 'text-[#99F6E4]' },
+                  { id: 'manga', name: 'Manga Style', icon: Sparkles, activeBg: 'linear-gradient(180deg, rgba(139,92,246,0.28) 0%, rgba(46,28,82,0.92) 100%)', textTheme: 'text-[#F4E8FF]', iconTheme: 'text-[#D8B4FE]' },
+                  { id: 'manhwa', name: 'Manhwa Style', icon: Flame, activeBg: 'linear-gradient(180deg, rgba(236,72,153,0.24) 0%, rgba(66,24,44,0.92) 100%)', textTheme: 'text-[#FFE7F3]', iconTheme: 'text-[#F9A8D4]' },
+                  { id: 'official', name: 'Official Doc', icon: ScrollText, activeBg: 'linear-gradient(180deg, rgba(67,135,255,0.2) 0%, rgba(17,28,48,0.9) 100%)', textTheme: 'text-[#EDF4FF]', iconTheme: 'text-[#A8CFFF]' }
+                ];
+                const activeProfile = profiles.find(p => p.id === translationMode) || profiles[0];
+                const ActiveIcon = activeProfile.icon;
 
-              <button
-                onClick={() => setTranslationMode('manga')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'manga'
-                    ? 'border-[#8B5CF6]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'manga' ? { background: 'linear-gradient(180deg, rgba(139,92,246,0.28) 0%, rgba(46,28,82,0.92) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <Sparkles size={14} className={translationMode === 'manga' ? 'text-[#D8B4FE]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'manga' ? 'text-[#F4E8FF]' : 'text-slate-300'}`}>Manga Style</span>
-                </div>
-              </button>
+                return (
+                  <div className="relative space-y-1">
+                    {/* Main Active Button */}
+                    <button
+                      onClick={() => setIsProfileListOpen(!isProfileListOpen)}
+                      className={`w-full p-3 rounded-xl border text-left transition-all flex items-center justify-between ${
+                        isProfileListOpen 
+                          ? 'border-[#2B9BFF]/60 bg-slate-900/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]' 
+                          : activeProfile.id === 'adaptive' ? 'border-[#14B8A6]/45' 
+                          : activeProfile.id === 'manga' ? 'border-[#8B5CF6]/45'
+                          : activeProfile.id === 'manhwa' ? 'border-[#EC4899]/45'
+                          : 'border-[#4387FF]/42'
+                      }`}
+                      style={!isProfileListOpen ? { background: activeProfile.activeBg } : undefined}
+                    >
+                      <div className="flex items-center gap-2">
+                        <ActiveIcon size={14} className={activeProfile.iconTheme} />
+                        <span className={`font-semibold text-sm ${activeProfile.textTheme}`}>{activeProfile.name}</span>
+                      </div>
+                      <ChevronRight 
+                        size={14} 
+                        className={`text-slate-400 transition-transform duration-200 ${isProfileListOpen ? 'rotate-90 text-white' : ''}`} 
+                      />
+                    </button>
 
-              <button
-                onClick={() => setTranslationMode('manhwa')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'manhwa'
-                    ? 'border-[#EC4899]/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'manhwa' ? { background: 'linear-gradient(180deg, rgba(236,72,153,0.24) 0%, rgba(66,24,44,0.92) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <Flame size={14} className={translationMode === 'manhwa' ? 'text-[#F9A8D4]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'manhwa' ? 'text-[#FFE7F3]' : 'text-slate-300'}`}>Manhwa Style</span>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setTranslationMode('official')}
-                className={`w-full p-3 rounded-xl border text-left transition-all ${
-                  translationMode === 'official'
-                    ? 'border-[#4387FF]/42 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-                    : 'bg-[#17191d]/74 border-white/10 hover:border-white/16'
-                }`}
-                style={translationMode === 'official' ? { background: 'linear-gradient(180deg, rgba(67,135,255,0.2) 0%, rgba(17,28,48,0.9) 100%)' } : undefined}
-              >
-                <div className="flex items-center gap-2">
-                  <ScrollText size={14} className={translationMode === 'official' ? 'text-[#A8CFFF]' : 'text-slate-400'} />
-                  <span className={`font-medium text-sm ${translationMode === 'official' ? 'text-[#EDF4FF]' : 'text-slate-300'}`}>Official Doc</span>
-                </div>
-              </button>
+                    {/* Expanded Dropdown List */}
+                    {isProfileListOpen && (
+                      <div className="absolute left-0 right-0 mt-1 z-[160] rounded-xl border border-white/10 bg-slate-950/98 p-1 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl flex flex-col gap-0.5 max-h-56 overflow-y-auto">
+                        {profiles.map((prof) => {
+                          const isSelected = prof.id === translationMode;
+                          const Icon = prof.icon;
+                          return (
+                            <button
+                              key={prof.id}
+                              onClick={() => {
+                                setTranslationMode(prof.id as any);
+                                setIsProfileListOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-xs transition-all ${
+                                isSelected
+                                  ? 'bg-white/10 text-white font-medium'
+                                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <Icon size={13} className={isSelected ? prof.iconTheme : 'text-slate-500'} />
+                                <span className={isSelected ? 'font-semibold' : ''}>{prof.name}</span>
+                              </div>
+                              {isSelected && <Check size={12} className="text-[#5CC6F2]" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
           {/* Safety Settings (Collapsed by default) */}
-          <details className="mb-6">
-            <summary className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-3 cursor-pointer flex items-center gap-2">
+          <details className="mb-1">
+            <summary className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] mb-0 cursor-pointer flex items-center gap-2">
               <Shield size={12} /> Safety Filters
             </summary>
             <div className="space-y-4 mt-3">
@@ -2068,6 +4555,28 @@ export const UploadScreen: React.FC = () => {
                           </p>
                         </div>
                         
+                        {/* Queue reorder buttons: ^ and v */}
+                        {!isFinished && (
+                          <div className="flex flex-col items-center gap-0.5 shrink-0 mr-0.5">
+                            <button
+                              onClick={() => moveJobUp(job.id)}
+                              disabled={jobs.indexOf(job) === 0}
+                              className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
+                              title="เลื่อนขึ้นในคิว"
+                            >
+                              <ChevronUp size={10} />
+                            </button>
+                            <button
+                              onClick={() => moveJobDown(job.id)}
+                              disabled={jobs.indexOf(job) === jobs.length - 1}
+                              className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
+                              title="เลื่อนลงในคิว"
+                            >
+                              <ChevronDown size={10} />
+                            </button>
+                          </div>
+                        )}
+
                         <div className="flex items-center gap-1 shrink-0">
                           {isActive && (
                             <button
@@ -2097,13 +4606,24 @@ export const UploadScreen: React.FC = () => {
                             </button>
                           )}
                           {isFinished && (
-                            <button
-                              onClick={() => removeJob(job.id)}
-                              className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
-                              title="Remove"
-                            >
-                              <Trash2 size={10} />
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {job.status === 'completed' && (
+                                <button
+                                  onClick={() => handleOpenJobFile(job)}
+                                  className="p-1 rounded bg-[#EAB308]/15 hover:bg-[#EAB308]/25 text-[#EAB308] hover:text-yellow-400 transition-all flex items-center justify-center"
+                                  title="เปิดไฟล์นี้"
+                                >
+                                  <ArrowRight size={10} className="animate-pulse" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => removeJob(job.id)}
+                                className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
+                                title="Remove"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2195,11 +4715,54 @@ export const UploadScreen: React.FC = () => {
           document.body
         )}
 
+
+        {activeProjectMenu && (
+          <ProjectContextMenu
+            project={activeProjectMenu.project}
+            position={activeProjectMenu.position}
+            onClose={() => setActiveProjectMenu(null)}
+            onShowInfo={() => setFolderInfoProject(activeProjectMenu.project)}
+            onDelete={() => {
+              setDeleteProjectDialog({
+                isOpen: true,
+                project: activeProjectMenu.project,
+                confirmation: ''
+              });
+            }}
+            onEdit={() => {
+              setEditProjectDialog({
+                isOpen: true,
+                project: activeProjectMenu.project,
+                name: activeProjectMenu.project.name,
+                color: activeProjectMenu.project.color || resolveStableAccent(activeProjectMenu.project.id)
+              });
+            }}
+            onCreateSubfolder={() => {
+              openProjectDialog(null, activeProjectMenu.project.id);
+            }}
+          />
+        )}
+
+        {folderInfoProject && (
+          <FolderInfoModal
+            project={folderInfoProject}
+            onClose={() => setFolderInfoProject(null)}
+          />
+        )}
+
         {activeTagMenu && (
           <TagContextMenu
             tag={activeTagMenu.tag}
             position={activeTagMenu.position}
             onClose={() => setActiveTagMenu(null)}
+            onEdit={() => {
+              setEditTagDialog({
+                isOpen: true,
+                tag: activeTagMenu.tag,
+                name: activeTagMenu.tag.name,
+                color: activeTagMenu.tag.color || '#8B5CF6'
+              });
+            }}
             onDelete={() => {
               setDeleteTagDialog({
                 isOpen: true,
@@ -2210,38 +4773,429 @@ export const UploadScreen: React.FC = () => {
           />
         )}
 
-        {projectDialog.isOpen && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
-              <h3 className="text-lg font-semibold text-slate-100">Create Folder</h3>
-              <p className="mt-1 text-sm text-slate-400">
-                Create a folder for organizing documents in the home library.
-              </p>
-              <input
-                autoFocus
-                type="text"
-                value={projectDialog.name}
-                onChange={(e) => setProjectDialog((current) => ({ ...current, name: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    void handleCreateProject();
-                  }
-                }}
-                placeholder="Folder name"
-                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-[#2B9BFF]/60"
-              />
-              <div className="mt-5 flex items-center justify-end gap-3">
+        {editTagDialog.isOpen && editTagDialog.tag && (
+          <EditTagModal
+            isOpen={editTagDialog.isOpen}
+            tag={editTagDialog.tag}
+            name={editTagDialog.name}
+            color={editTagDialog.color}
+            onChangeName={(name) => setEditTagDialog((prev) => ({ ...prev, name }))}
+            onChangeColor={(color) => setEditTagDialog((prev) => ({ ...prev, color }))}
+            onSave={handleEditTag}
+            onClose={() => setEditTagDialog({ isOpen: false, tag: null, name: '', color: '' })}
+          />
+        )}
+
+        {isSortMenuOpen && sortMenuPosition && (
+          <SortContextMenu
+            position={sortMenuPosition}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            ratingFilterMode={ratingFilterMode}
+            ratingFilterOnly={ratingFilterOnly}
+            ratingFilterMin={ratingFilterMin}
+            ratingFilterMax={ratingFilterMax}
+            activeFilterTag={activeFilterTag}
+            tags={tags}
+            onSelectFilterTag={setActiveFilterTag}
+            onUpdateFilters={(updates) => {
+              if (updates.mode !== undefined) setRatingFilterMode(updates.mode);
+              if (updates.only !== undefined) setRatingFilterOnly(updates.only);
+              if (updates.min !== undefined) setRatingFilterMin(updates.min);
+              if (updates.max !== undefined) setRatingFilterMax(updates.max);
+            }}
+            onSelect={(key, order) => {
+              setSortBy(key);
+              setSortOrder(order);
+            }}
+            onClose={() => {
+              setIsSortMenuOpen(false);
+              setSortMenuPosition(null);
+            }}
+          />
+        )}
+
+        {ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/65 backdrop-blur-md">
+            <div className="w-full max-w-md rounded-3xl border border-white/12 bg-[#0e1116]/96 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                  <Cpu className="text-cyan-400" size={18} />
+                  ประมวลผลทุกหน้าเบื้องหลัง
+                </h3>
+                <div className="mt-2 flex flex-col gap-1 bg-white/[0.03] border border-white/5 p-2.5 rounded-2xl">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ชื่อไฟล์:</span>
+                  <span className="text-xs font-semibold text-slate-300 truncate font-mono">{ocrBackgroundDialog.doc.filename}</span>
+                  {dialogCachePages !== null && (
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-[10px] font-semibold text-emerald-400">
+                        แปล/ทำ OCR ไปแล้ว {dialogCachePages} จาก {ocrBackgroundDialog.doc.total_pages} หน้า ({Math.round((dialogCachePages / ocrBackgroundDialog.doc.total_pages) * 100)}%)
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* OCR Engine selection */}
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Model Engine</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'paddleocr' }))}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs ${
+                      ocrBackgroundDialog.model === 'paddleocr'
+                        ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span className="font-semibold">PaddleOCR</span>
+                    <span className="text-[8px] opacity-75 mt-0.5">แนะนำสำหรับมังงะ/รูปภาพ</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'easyocr' }))}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs ${
+                      ocrBackgroundDialog.model === 'easyocr'
+                        ? 'border-violet-500/50 bg-violet-500/10 text-violet-200 shadow-[0_0_15px_rgba(139,92,246,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span className="font-semibold">EasyOCR</span>
+                    <span className="text-[8px] opacity-75 mt-0.5">ทางเลือก (เอกสารทั่วไป)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Profile Selection */}
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">รูปแบบการทำงาน</label>
+                <div className="space-y-2">
+                  <label className={`flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-all ${
+                    ocrBackgroundDialog.profile === 'offline_all'
+                      ? 'border-sky-500/50 bg-sky-500/10 text-slate-100 shadow-[0_0_15px_rgba(14,165,233,0.12)]'
+                      : 'border-white/5 bg-slate-900/30 text-slate-500 hover:border-white/10 hover:bg-slate-900/50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="background_ocr_profile"
+                      checked={ocrBackgroundDialog.profile === 'offline_all'}
+                      onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'offline_all' }))}
+                      className="mt-0.5 accent-sky-400"
+                    />
+                    <div className="text-xs flex-1">
+                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'offline_all' ? 'text-sky-300' : 'text-slate-300'}`}>Offline Translate All</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR พร้อมแปลเนื้อหาเป้าหมายลงฐานข้อมูล</div>
+                    </div>
+                  </label>
+
+                  <label className={`flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-all ${
+                    ocrBackgroundDialog.profile === 'ocr_all'
+                      ? 'border-indigo-500/50 bg-indigo-500/10 text-slate-100 shadow-[0_0_15px_rgba(99,102,241,0.12)]'
+                      : 'border-white/5 bg-slate-900/30 text-slate-500 hover:border-white/10 hover:bg-slate-900/50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="background_ocr_profile"
+                      checked={ocrBackgroundDialog.profile === 'ocr_all'}
+                      onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'ocr_all' }))}
+                      className="mt-0.5 accent-indigo-400"
+                    />
+                    <div className="text-xs">
+                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'ocr_all' ? 'text-indigo-300' : 'text-slate-300'}`}>OCR All Pages Only</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">ค้นหาพิกัดและแกะข้อความเก็บไว้โดยยังไม่แปลภาษา</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Processing Quality (Fast vs High) */}
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Processing Quality</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile: 'fast' }))}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs gap-1.5 ${
+                      ocrBackgroundDialog.ocrQualityProfile === 'fast'
+                        ? 'border-amber-500/50 bg-amber-500/10 text-amber-200 shadow-[0_0_15px_rgba(245,158,11,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Zap size={13} className={ocrBackgroundDialog.ocrQualityProfile === 'fast' ? 'text-amber-400 animate-pulse' : 'text-slate-400'} />
+                      Fast (เน้นความเร็ว)
+                    </span>
+                   
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile: 'best' }))}
+                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs gap-1.5 ${
+                      ocrBackgroundDialog.ocrQualityProfile === 'best'
+                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.15)] font-semibold'
+                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Award size={13} className={ocrBackgroundDialog.ocrQualityProfile === 'best' ? 'text-emerald-400 animate-pulse' : 'text-slate-400'} />
+                      High (ความแม่นยำสูง)
+                    </span>
+                   
+                  </button>
+                </div>
+              </div>
+
+              {/* Languages Row */}
+              <div className="grid grid-cols-2 gap-3">
+                {/* Source Language */}
+                <div>
+                  <label htmlFor="ocr-bg-lang-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-cyan-400" />
+                    ภาษาต้นทาง 
+                  </label>
+                  <select
+                    id="ocr-bg-lang-select"
+                    value={ocrBackgroundDialog.ocrLanguage}
+                    onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, ocrLanguage: e.target.value }))}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-100 outline-none transition-colors focus:border-cyan-400/50 cursor-pointer"
+                  >
+                    <option value="eng">🇬🇧 EN (English)</option>
+                    <option value="tha">🇹🇭 TH (Thai)</option>
+                    <option value="jpn">🇯🇵 JA (Japanese)</option>
+                    <option value="jpn_vert">🇯🇵 JA-V (Japanese Vert)</option>
+                    <option value="kor">🇰🇷 KO (Korean)</option>
+                    <option value="chi_sim">🇨🇳 ZH-S (Chinese Simp)</option>
+                    <option value="chi_tra">🇨🇳 ZH-T (Chinese Trad)</option>
+                    <option value="vie">🇻🇳 VI (Vietnamese)</option>
+                    <option value="deu">🇩🇪 DE (German)</option>
+                    <option value="fra">🇫🇷 FR (French)</option>
+                    <option value="spa">🇪🇸 ES (Spanish)</option>
+                    <option value="rus">🇷🇺 RU (Russian)</option>
+                  </select>
+                </div>
+
+                {/* Target Language */}
+                <div>
+                  <label htmlFor="ocr-bg-target-lang-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
+                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    ภาษาปลายทาง
+                  </label>
+                  <select
+                    id="ocr-bg-target-lang-select"
+                    value={ocrBackgroundDialog.targetLanguage}
+                    disabled={ocrBackgroundDialog.profile !== 'offline_all'}
+                    onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, targetLanguage: e.target.value }))}
+                    className={`w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-100 outline-none transition-colors focus:border-emerald-500/50 cursor-pointer ${
+                      ocrBackgroundDialog.profile !== 'offline_all' ? 'opacity-40 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <option value="th">🇹🇭 TH (Thai)</option>
+                    <option value="en">🇬🇧 EN (English)</option>
+                    <option value="ja">🇯🇵 JA (Japanese)</option>
+                    <option value="ko">🇰🇷 KO (Korean)</option>
+                    <option value="zh">🇨🇳 ZH (Chinese)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-3 border-t border-white/5 pt-4">
                 <button
-                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null })}
+                  type="button"
+                  onClick={() => setOcrBackgroundDialog({ isOpen: false, doc: null, model: 'paddleocr', profile: 'offline_all', ocrLanguage: 'eng', ocrQualityProfile: 'best', targetLanguage: 'th' })}
+                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  ยกเลิก (Cancel)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartOcrBackground}
+                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98]"
+                >
+                  เริ่มประมวลผล (Start)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {projectDialog.isOpen && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div 
+                    className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+                    style={{ backgroundColor: hexToRgba(projectDialog.color || '#38BDF8', 0.2) }}
+                  >
+                    <Folder size={16} style={{ color: projectDialog.color || '#38BDF8' }} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-100">
+                      {projectDialog.parentId ? 'สร้างโฟลเดอร์ย่อย (Create Subfolder)' : 'สร้างโฟลเดอร์ใหม่ (Create Folder)'}
+                    </h3>
+                    <p className="text-xs text-slate-400">สำหรับจัดหมวดหมู่เอกสารในคลัง</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
+                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  ชื่อโฟลเดอร์ (Folder Name)
+                </label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={projectDialog.name}
+                  onChange={(e) => setProjectDialog((current) => ({ ...current, name: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void handleCreateProject();
+                    }
+                  }}
+                  placeholder="Folder name"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                  เลือกสีไอคอนโฟลเดอร์ (Folder Color)
+                </label>
+                <div className="grid grid-cols-6 gap-2">
+                  {FOLDER_PALETTE_COLORS.map((c) => {
+                    const isSelected = (projectDialog.color || '').toUpperCase() === c.toUpperCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setProjectDialog((current) => ({ ...current, color: c }))}
+                        className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                        style={{ 
+                          backgroundColor: c,
+                          boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                        }}
+                        title={c}
+                      >
+                        {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
+                <button
+                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
                   className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => void handleCreateProject()}
-                  className="rounded-xl bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(43,155,255,0.35)]"
+                  disabled={!projectDialog.name.trim()}
+                  className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Create
+                  Create (สร้าง)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editProjectDialog.isOpen && editProjectDialog.project && (
+          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div 
+                    className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+                    style={{ backgroundColor: hexToRgba(editProjectDialog.color || '#38BDF8', 0.2) }}
+                  >
+                    <Folder size={16} style={{ color: editProjectDialog.color || '#38BDF8' }} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                      <Edit3 size={15} className="text-sky-400" />
+                      แก้ไขโฟลเดอร์ (Edit Folder)
+                    </h3>
+                    <p className="text-xs text-slate-400">เปลี่ยนชื่อหรือเลือกสีไอคอนสำหรับโฟลเดอร์นี้</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
+                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                  ชื่อโฟลเดอร์ (Folder Name)
+                </label>
+                <input
+                  autoFocus
+                  type="text"
+                  value={editProjectDialog.name}
+                  onChange={(e) => setEditProjectDialog((current) => ({ ...current, name: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void handleEditProject();
+                    }
+                  }}
+                  placeholder="Folder name"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                  เลือกสีไอคอนโฟลเดอร์ (Folder Color)
+                </label>
+                <div className="grid grid-cols-6 gap-2">
+                  {FOLDER_PALETTE_COLORS.map((c) => {
+                    const isSelected = (editProjectDialog.color || '').toUpperCase() === c.toUpperCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setEditProjectDialog((current) => ({ ...current, color: c }))}
+                        className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                        style={{ 
+                          backgroundColor: c,
+                          boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                        }}
+                        title={c}
+                      >
+                        {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
+                <button
+                  onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleEditProject()}
+                  disabled={!editProjectDialog.name.trim()}
+                  className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Save (บันทึก)
                 </button>
               </div>
             </div>
@@ -2347,9 +5301,95 @@ export const UploadScreen: React.FC = () => {
           </div>
         )}
 
+        {deleteProjectDialog.isOpen && deleteProjectDialog.project && (
+          <div className="absolute inset-0 z-[175] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-red-400/25 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-2xl bg-red-500/12 p-2 text-red-300">
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-100">Delete Project Folder</h3>
+                  <p className="mt-1 text-sm text-slate-400">
+                    This removes the project folder. Documents in this project will not be deleted, but will be moved out of the project folder.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-white/10 bg-slate-900/55 p-4">
+                <div className="flex items-center gap-2 text-sm text-slate-200">
+                  <Folder
+                    size={16}
+                    style={{ color: resolveStableAccent(deleteProjectDialog.project.id) }}
+                  />
+                  <span className="font-medium">{deleteProjectDialog.project.name}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  Type <span className="font-semibold text-slate-200">{deleteProjectDialog.project.name}</span> to confirm deletion.
+                </p>
+              </div>
+
+              <input
+                autoFocus
+                type="text"
+                value={deleteProjectDialog.confirmation}
+                onChange={(e) => setDeleteProjectDialog((current) => ({ ...current, confirmation: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleDeleteProject();
+                  }
+                }}
+                placeholder={deleteProjectDialog.project.name}
+                className="mt-5 w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-100 outline-none transition-colors focus:border-red-400/60"
+              />
+
+              <div className="mt-5 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setDeleteProjectDialog({ isOpen: false, project: null, confirmation: '' })}
+                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleDeleteProject()}
+                  disabled={deleteProjectDialog.confirmation.trim() !== deleteProjectDialog.project.name}
+                  className="rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(239,68,68,0.28)] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Delete Folder
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Import Progress Dialog */}
+        {importProgress !== null && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md">
+            <div className="w-96 rounded-3xl border border-white/10 bg-slate-900/90 p-6 shadow-[0_30px_70px_rgba(0,0,0,0.6)] backdrop-blur-2xl flex flex-col items-center text-center gap-4">
+              <div className="relative flex items-center justify-center">
+                <div className="h-12 w-12 rounded-full border-2 border-white/5 border-t-[#2B9BFF] animate-spin"></div>
+                <div className="absolute h-8 w-8 rounded-full border-2 border-white/5 border-b-[#839958] animate-spin [animation-direction:reverse]"></div>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100 mb-1">กำลังนำเข้าไฟล์...</h3>
+                <p className="text-xs text-slate-400">
+                  กำลังประมวลผลไฟล์ที่ {importProgress.current} จาก {importProgress.total} ไฟล์
+                </p>
+              </div>
+              <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-gradient-to-r from-[#2B9BFF] to-[#839958] h-full transition-all duration-300"
+                  style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="hidden"
           accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
           onChange={handleFileSelect}

@@ -145,7 +145,7 @@ export const dbService = {
     }
   },
 
-  async getDocument(filepath: string): Promise<{ id: number; total_pages: number } | null> {
+  async getDocument(filepath: string): Promise<{ id: number; total_pages: number; last_page?: number } | null> {
     try {
       if (!isDbAvailable()) {
         console.warn('[DB] getDocument skipped: DB not available');
@@ -283,6 +283,21 @@ export const dbService = {
     }
   },
 
+  async saveOCRBatch(
+    items: Array<{ docId: number; pageNum: number; data: OCRPageResult; engine?: OCREngine }>
+  ): Promise<boolean> {
+    try {
+      if (!isDbAvailable() || !window.electronAPI.db.saveOCRBatch) {
+        console.warn('[DB] saveOCRBatch skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.saveOCRBatch(items);
+    } catch (error) {
+      console.error('Failed to save OCR batch:', error);
+      return false;
+    }
+  },
+
   async getOCR(docId: number, pageNum: number, engine: OCREngine = 'paddleocr'): Promise<OCRPageResult | null> {
     try {
       if (!isDbAvailable()) {
@@ -333,6 +348,21 @@ export const dbService = {
       return await window.electronAPI.db.saveTranslationCache(docId, pageNum, cacheKey, entry);
     } catch (error) {
       console.error('Failed to save translation cache:', error);
+      return false;
+    }
+  },
+
+  async saveTranslationCacheBatch(
+    items: Array<{ docId: number; pageNum: number; cacheKey: string; entry: DBOCRTranslationCacheEntry }>
+  ): Promise<boolean> {
+    try {
+      if (!isDbAvailable() || !window.electronAPI.db.saveTranslationCacheBatch) {
+        console.warn('[DB] saveTranslationCacheBatch skipped: DB not available');
+        return false;
+      }
+      return await window.electronAPI.db.saveTranslationCacheBatch(items);
+    } catch (error) {
+      console.error('Failed to save translation cache batch:', error);
       return false;
     }
   },
@@ -391,6 +421,27 @@ export const dbService = {
     }
   },
 
+  async saveSentenceTranslationBatch(
+    items: Array<{
+      sourceText: string;
+      sourceLanguage: string;
+      targetLanguage: string;
+      translatorEngine: string;
+      translationMode: string;
+      translatedText: string;
+    }>
+  ): Promise<boolean> {
+    try {
+      if (!isDbAvailable() || !Array.isArray(items) || items.length === 0) {
+        return false;
+      }
+      return await window.electronAPI.db.saveSentenceTranslationBatch?.(items) ?? false;
+    } catch (error) {
+      console.error('Failed to save sentence translations batch:', error);
+      return false;
+    }
+  },
+
   async getSentenceTranslation(
     sourceText: string,
     sourceLanguage: string,
@@ -412,6 +463,30 @@ export const dbService = {
     } catch (error) {
       console.error('Failed to get sentence translation:', error);
       return null;
+    }
+  },
+
+  async getSentenceTranslationBatch(
+    sourceTexts: string[],
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string
+  ): Promise<Record<string, string>> {
+    try {
+      if (!isDbAvailable() || sourceTexts.length === 0) {
+        return {};
+      }
+      return await window.electronAPI.db.getSentenceTranslationBatch?.(
+        sourceTexts,
+        sourceLanguage,
+        targetLanguage,
+        translatorEngine,
+        translationMode
+      ) ?? {};
+    } catch (error) {
+      console.error('Failed to get sentence translation batch:', error);
+      return {};
     }
   },
 

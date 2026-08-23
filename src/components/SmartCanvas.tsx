@@ -10,7 +10,11 @@ interface SmartCanvasProps {
 
 export const SmartCanvas: React.FC<SmartCanvasProps> = ({ regions }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { zoom, pan, setZoom, setPan, activeTool } = useUIStore();
+  const zoom = useUIStore((s) => s.zoom);
+  const pan = useUIStore((s) => s.pan);
+  const setZoom = useUIStore((s) => s.setZoom);
+  const setPan = useUIStore((s) => s.setPan);
+  const activeTool = useUIStore((s) => s.activeTool);
   const [isDragging, setIsDragging] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
 

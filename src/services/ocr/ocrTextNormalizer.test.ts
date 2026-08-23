@@ -74,6 +74,22 @@ describe('normalizeSpanishOcrNoiseForTranslation', () => {
     expect(normalizeSpanishOcrNoiseForTranslation('iC-COMO')).toBe('¿COMO');
     expect(normalizeSpanishOcrNoiseForTranslation('LISTOCON')).toBe('LISTO CON');
     expect(normalizeSpanishOcrNoiseForTranslation('TODOLOQUE')).toBe('TODO LO QUE');
+    expect(normalizeSpanishOcrNoiseForTranslation('CONESO BASTA.')).toBe('CON ESO BASTA.');
+    expect(normalizeSpanishOcrNoiseForTranslation('FENDERSE.s0Y Y0')).toBe('DEFENDERSE. SOY YO');
+    expect(normalizeSpanishOcrNoiseForTranslation('TIR AVERGONZADA')).toBe('SENTIR AVERGONZADA');
+    expect(normalizeSpanishOcrNoiseForTranslation('BRE, POR FAVOR...')).toBe('HOMBRE, POR FAVOR...');
+    expect(normalizeSpanishOcrNoiseForTranslation('GONZOSAS.PLETADERROTA')).toBe('VERGONZOSAS. COMPLETA DERROTA');
+    expect(normalizeSpanishOcrNoiseForTranslation('HECHO.POR')).toBe('HECHO. POR');
+    expect(normalizeSpanishOcrNoiseForTranslation('TRAS LE PELLIZCO LOS PEZONES')).toBe('MIENTRAS LE PELLIZCO LOS PEZONES');
+    expect(normalizeSpanishOcrNoiseForTranslation('ESO BASTA.HACE')).toBe('CON ESO BASTA. HACE');
+    expect(normalizeSpanishOcrNoiseForTranslation('Pleaderrot')).toBe('COMPLETA DERROTA');
+    expect(normalizeSpanishOcrNoiseForTranslation('UNIDOS EN LA RELA-')).toBe('UNIDOS EN LA RELACION');
+    expect(normalizeSpanishOcrNoiseForTranslation('Cucama')).toBe('cama');
+    expect(normalizeSpanishOcrNoiseForTranslation('LLADO POR')).toBe('HUMILLADO POR');
+    expect(normalizeSpanishOcrNoiseForTranslation('GONZOSAS.PLETA DERROTA')).toBe('VERGONZOSAS. COMPLETA DERROTA');
+    expect(normalizeSpanishOcrNoiseForTranslation('QUISTA Y ESTUPIDA.')).toBe('CONQUISTA Y ESTUPIDA.');
+    expect(normalizeSpanishOcrNoiseForTranslation('TA DE AHORA EN')).toBe('TRATA DE AHORA EN');
+    expect(normalizeSpanishOcrNoiseForTranslation('FELICESAAMBOS')).toBe('FELICES A AMBOS');
   });
 });
 
@@ -98,6 +114,151 @@ describe('normalizeSourceForTranslation', () => {
 
   test('should repair dums to dumb', () => {
     expect(normalizeSourceForTranslation('DUMS PRINCESS!!', 'en')).toBe('Dumb princess!!');
+  });
+
+  test('should repair newly added english ocr noise lines correctly', () => {
+    // 1. Any-MORE -> Anymore
+    expect(normalizeSourceForTranslation('IT ANY- MORE...', 'en')).toBe('It anymore...');
+    expect(normalizeSourceForTranslation('IT ANY-MORE...', 'en')).toBe('It anymore...');
+
+    // 2. CUM-MING -> CUMMING
+    expect(normalizeSourceForTranslation('CUM- MING', 'en')).toBe('Cumming');
+    expect(normalizeSourceForTranslation('CUM-MING', 'en')).toBe('Cumming');
+
+    // 3. NOT NEC-ESSARY -> NOT NECESSARY
+    expect(normalizeSourceForTranslation('NOT NEC- ESSARY', 'en')).toBe('Not necessary');
+    expect(normalizeSourceForTranslation('NOT NEC-ESSARY', 'en')).toBe('Not necessary');
+
+    // 4. IMPRESSION, EXPRESSION, THATCANTBE IT
+    expect(normalizeSourceForTranslation('A BAD I MPRESS I ON', 'en')).toBe('A bad impression');
+    expect(normalizeSourceForTranslation('THATCANTBE IT', 'en')).toBe("That can't be it");
+    expect(normalizeSourceForTranslation('EXPRESS I ON', 'en')).toBe('Expression');
+
+    // 5. GETTiNG, FiRST, 455, A55, YOU FUR KRASHING MY BAEBY
+    expect(normalizeSourceForTranslation('GETTiNG', 'en')).toBe('Getting');
+    expect(normalizeSourceForTranslation('FiRST', 'en')).toBe('First');
+    expect(normalizeSourceForTranslation('AGAA', 'en')).toBe('Again');
+    expect(normalizeSourceForTranslation('455', 'en')).toBe('Ass');
+    expect(normalizeSourceForTranslation('A55', 'en')).toBe('Ass');
+    expect(normalizeSourceForTranslation('YOU FUR KRASHING MY BAEBY', 'en')).toBe("You're crushing my baby");
+    expect(normalizeSourceForTranslation('COO+000+7OCKS', 'en')).toBe('Cooooooocks');
+    expect(normalizeSourceForTranslation('168', 'en')).toBe('');
+    expect(normalizeSourceForTranslation('THISTO', 'en')).toBe('This to');
+    expect(normalizeSourceForTranslation('YOUCAN', 'en')).toBe('You can');
+    expect(normalizeSourceForTranslation("DOeSn't", 'en')).toBe("Doesn't");
+    expect(normalizeSourceForTranslation('whA-', 'en')).toBe('What-');
+    expect(normalizeSourceForTranslation('NeRVeS', 'en')).toBe('Nerves');
+    expect(normalizeSourceForTranslation('AMUSInG', 'en')).toBe('Amusing');
+    expect(normalizeSourceForTranslation('DEALing', 'en')).toBe('Dealing');
+    expect(normalizeSourceForTranslation("SAN'S NOT", 'en')).toBe("San's not");
+    expect(normalizeSourceForTranslation('A Blt LIKE', 'en')).toBe('A bit like');
+    expect(normalizeSourceForTranslation('TAYAM AS AN', 'en')).toBe('Tayama-san');
+    expect(normalizeSourceForTranslation("It's qulte", 'en')).toBe("It's quite");
+    expect(normalizeSourceForTranslation('A cO--Ar', 'en')).toBe('A collar');
+    expect(normalizeSourceForTranslation('An animar.', 'en')).toBe('An animal.');
+    expect(normalizeSourceForTranslation('A himan.', 'en')).toBe('A human.');
+    expect(normalizeSourceForTranslation('Smink', 'en')).toBe('Smirk');
+    expect(normalizeSourceForTranslation('1T', 'en')).toBe('It');
+    expect(normalizeSourceForTranslation('*collar', 'en')).toBe('collar');
+    expect(normalizeSourceForTranslation('SASAK IS AN', 'en')).toBe('Sasaki-san');
+    expect(normalizeSourceForTranslation('LIEVED!', 'en')).toBe('Relieved!');
+    expect(normalizeSourceForTranslation('SAAAN.', 'en')).toBe('San.');
+    expect(normalizeSourceForTranslation('Rummnage', 'en')).toBe('Rummage');
+    expect(normalizeSourceForTranslation('S0 y0u', 'en')).toBe('So you');
+    expect(normalizeSourceForTranslation('SAS4K1.', 'en')).toBe('Sasaki.');
+    expect(normalizeSourceForTranslation('PARVON', 'en')).toBe('Pardon');
+    expect(normalizeSourceForTranslation('TICALLy', 'en')).toBe('Tically');
+    expect(normalizeSourceForTranslation('hinkang', 'en')).toBe('thinking');
+    expect(normalizeSourceForTranslation('Heve.', 'en')).toBe('Here.');
+    expect(normalizeSourceForTranslation('PERY', 'en')).toBe('Perv');
+    expect(normalizeSourceForTranslation('CLACKS', 'en')).toBe('Clack');
+    expect(normalizeSourceForTranslation('GOROL-SAN.', 'en')).toBe('Gorou-san.');
+    expect(normalizeSourceForTranslation('MY BEY-BLADE!', 'en')).toBe('My beyblade!');
+    expect(normalizeSourceForTranslation('BRINGHER', 'en')).toBe('Bring her');
+    expect(normalizeSourceForTranslation("DOESn't GEt", 'en')).toBe("Doesn't get");
+    expect(normalizeSourceForTranslation('Sciously', 'en')).toBe('consciously');
+    expect(normalizeSourceForTranslation('MINISCING', 'en')).toBe('Reminiscing');
+    expect(normalizeSourceForTranslation('AGREAT', 'en')).toBe('A great');
+    expect(normalizeSourceForTranslation('DISGUSTEDBY', 'en')).toBe('Disgusted by');
+    expect(normalizeSourceForTranslation('ATFORSO', 'en')).toBe('At so for');
+    expect(normalizeSourceForTranslation('SHOULDIGET', 'en')).toBe('Should i get');
+    expect(normalizeSourceForTranslation('FAULTFOR', 'en')).toBe('Fault for');
+    expect(normalizeSourceForTranslation('YOUQUIT', 'en')).toBe('You quit');
+    expect(normalizeSourceForTranslation('YousoMuCh.', 'en')).toBe('You so much.');
+    expect(normalizeSourceForTranslation('t-thAt', 'en')).toBe('T-that');
+    expect(normalizeSourceForTranslation('toge+her,', 'en')).toBe('together,');
+    expect(normalizeSourceForTranslation('ISSUCHANICE', 'en')).toBe('Is such a nice');
+    expect(normalizeSourceForTranslation('CoURSe', 'en')).toBe('course');
+    expect(normalizeSourceForTranslation('CAre', 'en')).toBe('Care');
+    expect(normalizeSourceForTranslation('GOODMOOD', 'en')).toBe('Good mood');
+    expect(normalizeSourceForTranslation('THANKSFOR', 'en')).toBe('Thanks for');
+    expect(normalizeSourceForTranslation("WE'LLGO", 'en')).toBe("We'll go");
+    expect(normalizeSourceForTranslation('YOUPRETTY', 'en')).toBe('You pretty');
+    expect(normalizeSourceForTranslation('FORTUNATE.HEAR.', 'en')).toBe('Fortunate. Hear.');
+    expect(normalizeSourceForTranslation('GRATITUDE.I', 'en')).toBe('Gratitude. I');
+    expect(normalizeSourceForTranslation('NON-EXISTENTWELL...', 'en')).toBe('Non-existent well...');
+    expect(normalizeSourceForTranslation('now.a Married', 'en')).toBe('Now, a married');
+    expect(normalizeSourceForTranslation('disoBeying', 'en')).toBe('disobeying');
+    expect(normalizeSourceForTranslation('WAiTing', 'en')).toBe('Waiting');
+    expect(normalizeSourceForTranslation('Mar-ried', 'en')).toBe('Married');
+    expect(normalizeSourceForTranslation('SANI?', 'en')).toBe('San?');
+    expect(normalizeSourceForTranslation('IWASIN', 'en')).toBe('I was in');
+    expect(normalizeSourceForTranslation('RumeL', 'en')).toBe('Rumble');
+    expect(normalizeSourceForTranslation('GUMBC', 'en')).toBe('Rumble');
+    expect(normalizeSourceForTranslation('@umblc', 'en')).toBe('Rumble');
+    expect(normalizeSourceForTranslation('SENPAL', 'en')).toBe('Senpai');
+    expect(normalizeSourceForTranslation('CuTe', 'en')).toBe('Cute');
+    expect(normalizeSourceForTranslation('MAtCH', 'en')).toBe('Match');
+    expect(normalizeSourceForTranslation('wantto', 'en')).toBe('want to');
+    expect(normalizeSourceForTranslation('TOBUYSTUFF', 'en')).toBe('To buy stuff');
+    expect(normalizeSourceForTranslation('GRATEFLL', 'en')).toBe('Grateful');
+    expect(normalizeSourceForTranslation('DOINGP', 'en')).toBe('Doing?');
+    expect(normalizeSourceForTranslation('LightLy', 'en')).toBe('Lightly');
+    expect(normalizeSourceForTranslation("UM-BRELLA'S", 'en')).toBe("Umbrella's");
+    expect(normalizeSourceForTranslation('FILRTING', 'en')).toBe('Flirting');
+    expect(normalizeSourceForTranslation('TOMUSIC', 'en')).toBe('To music');
+    expect(normalizeSourceForTranslation('TOSONGS', 'en')).toBe('To songs');
+    expect(normalizeSourceForTranslation('SHOULDI', 'en')).toBe('Should i');
+    expect(normalizeSourceForTranslation('CORDIS', 'en')).toBe('Cord is');
+    expect(normalizeSourceForTranslation('MYSELF"THEN', 'en')).toBe('Myself" then');
+    expect(normalizeSourceForTranslation('ANDSTARTED', 'en')).toBe('And started');
+    expect(normalizeSourceForTranslation('TOCOMPLETE', 'en')).toBe('To complete');
+    expect(normalizeSourceForTranslation("NEXTMONTH'S", 'en')).toBe("Next month's");
+    expect(normalizeSourceForTranslation('HASMADE', 'en')).toBe('Has made');
+    expect(normalizeSourceForTranslation('EARTHIS', 'en')).toBe('Earth is');
+    expect(normalizeSourceForTranslation('FINIShED', 'en')).toBe('Finished');
+    expect(normalizeSourceForTranslation('teresting', 'en')).toBe('interesting');
+    expect(normalizeSourceForTranslation('"IT\'SFASTER', 'en')).toBe('"it\'s faster');
+  });
+
+  test('should restore hyphenated words with Unicode characters and no spaces', () => {
+    expect(normalizeSourceForTranslation('AC-TUALDAD', 'es')).toBe('actualidad');
+    expect(normalizeSourceForTranslation('servi-cio', 'es')).toBe('servicio');
+    expect(normalizeSourceForTranslation('strea-ming', 'es')).toBe('streaming');
+    expect(normalizeSourceForTranslation('PRO-FESORA', 'es')).toBe('Profesora');
+  });
+
+  test('should repair Spanish OCR noises', () => {
+    expect(normalizeSourceForTranslation('MENTE UN REGALO.', 'es')).toBe('un regalo para la mente.');
+    expect(normalizeSourceForTranslation('DO DE ESTUDIAR', 'es')).toBe('donde estudiar');
+    expect(normalizeSourceForTranslation('RIO MUY', 'es')).toBe('río muy');
+    expect(normalizeSourceForTranslation('GO QUE TENDRE QUE', 'es')).toBe('tengo que ir');
+    expect(normalizeSourceForTranslation('VERSACION', 'es')).toBe('versión');
+    expect(normalizeSourceForTranslation('iUNA SENAL', 'es')).toBe('¡una señal');
+    expect(normalizeSourceForTranslation('CCPELICULA', 'es')).toBe('película');
+    expect(normalizeSourceForTranslation('TAMENTO DE INGLES', 'es')).toBe('Departamento de inglés');
+    expect(normalizeSourceForTranslation('CEN,TODOSSON', 'es')).toBe('Cen todosson');
+    expect(normalizeSourceForTranslation('que?', 'es')).toBe('¿qué?');
+    expect(normalizeSourceForTranslation('BIRME A', 'es')).toBe('suscribir me a');
+    expect(normalizeSourceForTranslation('TIDO PRESTADO', 'es')).toBe('tiempo prestado');
+    expect(normalizeSourceForTranslation('PRAR', 'es')).toBe('comprar');
+    expect(normalizeSourceForTranslation('RON UNA FIESTA', 'es')).toBe('organizaron una fiesta');
+    expect(normalizeSourceForTranslation('BIEN TE GUSTAN', 'es')).toBe('también te gustan');
+    expect(normalizeSourceForTranslation('SECUNDA RIA', 'es')).toBe('secundaria');
+    expect(normalizeSourceForTranslation('FRAZ PARA', 'es')).toBe('disfraz para');
+    expect(normalizeSourceForTranslation('TONCES', 'es')).toBe('entonces');
+    expect(normalizeSourceForTranslation('RATURA DELAIRE', 'es')).toBe('temperatura del aire');
+    expect(normalizeSourceForTranslation('GUIDA.', 'es')).toBe('seguida.');
   });
 });
 

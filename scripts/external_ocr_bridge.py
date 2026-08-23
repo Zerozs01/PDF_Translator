@@ -622,16 +622,17 @@ def merge_same_band_fragments(lines: List[Dict[str, Any]]) -> List[Dict[str, Any
                 )
                 is_very_close = gap_x <= max(24.0, min_height * 1.25) and gap_x >= -max(8.0, min_height * 0.5)
         else:
-            # Tightened: prevent vertically stacked short words (EH/ME) from merging
+            # Tightened: prevent merging text across different speech bubbles / columns
             same_band = (
-                center_delta <= min_height * 0.24
-                or (overlap_y >= 0.82 and center_delta <= min_height * 0.38)
+                center_delta <= min_height * 0.22
+                or (overlap_y >= 0.82 and center_delta <= min_height * 0.34)
             )
             close_enough = (
-                (gap_x <= max(42.0, min_height * 2.4) or overlap_x >= 0.34)
-                and overlap_x <= 0.88  # block near-full vertical stacking
+                gap_x <= max(24.0, min_height * 1.3)
+                and gap_x >= -max(10.0, min_height * 0.65)
+                and overlap_x <= 0.28
             )
-            is_very_close = gap_x <= max(36.0, min_height * 1.6)
+            is_very_close = gap_x <= max(20.0, min_height * 1.0) and gap_x >= -max(6.0, min_height * 0.4)
 
         should_merge = fragment_like or is_very_close
 
@@ -1182,6 +1183,18 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "PRINCESS",
     "DIE",
     "PIG",
+    "THEPIG",
+    "YOUARE",
+    "THEPIGYOUARE",
+    "LIKETHEPIGYOUARE",
+    "LIKEAPIG",
+    "PIGYOUARE",
+    "COME",
+    "COMEON",
+    "CRY",
+    "EVEN",
+    "LIKE",
+    "ARE",
     "CUM",
     "COCK",
     "OH",
@@ -1194,6 +1207,7 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "ALL",
     "MORE",
     "YOU",
+    "THE",
     "USTHE",
     "NOTMY",
     "ASS",
@@ -1223,6 +1237,190 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "HEIRRR",
     "RRR",
     "IIM",
+    "OFME",
+    "EROMANGA",
+    "OFMEEROMANGA",
+    "BLOWJOB",
+    "IM",
+    "NURSE",
+    "BEINGTOO",
+    "SUDDENLY",
+    "ILL",
+    "RESTA",
+    "THESEX",
+    "WELLSINCE",
+    "JUST",
+    "ILLNESSBE",
+    "METHOD",
+    "FROMTHE",
+    "ITFEELS",
+    "OUTINSIDE",
+    "STILLFULL",
+    "BLOWTOB",
+    "NOU",
+    "DISEASE",
+    "FOUNDA",
+    "II333S",
+    "S3HS",
+    "INSIDEI",
+    "INSIDE",
+    "WHTTTTT",
+    "RESTRAINT",
+    "GOO",
+    "IHNH",
+    "ISIHS",
+    "2IHG",
+    "EIH3",
+    "IIMOM",
+    "OD111",
+    "VAYS",
+    "BEEELEE",
+    "WNTTTT",
+    "HERPUSSY",
+    "WOMB",
+    "MING",
+    "WAYTOO",
+    "GOOD",
+    "TOMAKETHREADS",
+    "MYCUM",
+    "THATS",
+    "NOTNECESSARY",
+    "ADYDO",
+    "UMEAN",
+    "WERE",
+    "PLEASE",
+    "CUMALOTJUSTLIKETHAT",
+    "OK",
+    "NO",
+    "HI",
+    "AM",
+    "AN",
+    "AS",
+    "AT",
+    "BY",
+    "DO",
+    "GO",
+    "HE",
+    "IF",
+    "IN",
+    "IS",
+    "IT",
+    "ME",
+    "MY",
+    "ON",
+    "OR",
+    "TO",
+    "UP",
+    "US",
+    "WE",
+    "YE",
+    "AH",
+    "HA",
+    "EH",
+    "UH",
+    "LO",
+    "YA",
+    "UM",
+    "YES",
+    "FOR",
+    "AND",
+    "BUT",
+    "THE",
+    "NOT",
+    "HER",
+    "HIS",
+    "HIM",
+    "SHE",
+    "CAN",
+    "OUT",
+    "GET",
+    "HOW",
+    "WHO",
+    "WHY",
+    "HEY",
+    "BOY",
+    "RUN",
+    "SAY",
+    "SEE",
+    "MAN",
+    "OUR",
+    "DAY",
+    "NEW",
+    "TOO",
+    "ANY",
+    "BAD",
+    "BIG",
+    "CRY",
+    "COME",
+    "EVEN",
+    "LIKE",
+    "PIG",
+    "YOU",
+    "ARE",
+    "THEPIG",
+    "YOUARE",
+    "THEPIGYOUARE",
+    "LIKEAPIG",
+    "LIKETHEPIGYOUARE",
+    "DID",
+    "EAT",
+    "END",
+    "FAR",
+    "FIT",
+    "FLY",
+    "FUN",
+    "GUY",
+    "HOT",
+    "ITS",
+    "JOB",
+    "KEY",
+    "LET",
+    "LIE",
+    "LOT",
+    "MAD",
+    "MAY",
+    "MOM",
+    "DAD",
+    "OLD",
+    "ONE",
+    "TWO",
+    "OWN",
+    "PAY",
+    "SAD",
+    "SON",
+    "TRY",
+    "WIN",
+    "YET",
+    "WOW",
+    "YAY",
+    "YEP",
+    "NAH",
+    "NOP",
+    "SIR",
+    "YESSIR",
+    "QUCK",
+    "QUICK",
+    "NOWI",
+    "II",
+    "ONA",
+    "YYOU",
+    "IIS",
+    "IIT",
+    "IIN",
+    "SSHE",
+    "HHE",
+    "TTHEY",
+    "WWE",
+    "TTHIS",
+    "TTHAT",
+    "NNO",
+    "MME",
+    "III",
+    "MEEE",
+    "MEEEE",
+    "5O",
+    "S0",
+    "6O"
 }
 
 
@@ -3358,7 +3556,7 @@ def resolve_local_model_dir(model_subdir: str) -> str | None:
     return None
 
 
-def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, Any]:
+def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: bool = True) -> Dict[str, Any]:
     # Dynamic hardware acceleration detection
     # NOTE: When running under ZLUDA (AMD GPU via CUDA emulation), PaddlePaddle-GPU
     # requires cublasLt64_11.dll which ZLUDA does NOT implement (it only stubs cuBLAS,
@@ -3412,6 +3610,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
             "use_doc_unwarping": False,
             "use_textline_orientation": True,
             "show_log": False,
+            "use_angle_cls": use_angle_cls,
         }
 
     enable_textline_orientation = (
@@ -3437,6 +3636,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str) -> Dict[str, An
         "use_doc_unwarping": False,
         "use_textline_orientation": enable_textline_orientation,
         "show_log": False,
+        "use_angle_cls": use_angle_cls,
     }
 
     if text_detection_model_name:
@@ -3492,26 +3692,26 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 if shortest <= 420:
                     det_limit = 2000
                 elif shortest <= 720:
-                    det_limit = 2200
-                else:
                     det_limit = 2400
+                else:
+                    det_limit = 3200
                 rec_batch = 10
-                det_thresh = 0.18 if is_cjk_like else 0.20
-                det_box_thresh = 0.44 if is_cjk_like else 0.46
-                det_unclip_ratio = 1.60 if is_cjk_like else 1.75
+                det_thresh = 0.15
+                det_box_thresh = 0.40
+                det_unclip_ratio = 1.80
                 rec_score_thresh = 0.22 if is_cjk_like else 0.24
             else:  # "best"
                 if shortest <= 420:
-                    det_limit = 2400
+                    det_limit = 3000
                 elif shortest <= 720:
-                    det_limit = 2600
+                    det_limit = 3100
                 else:
-                    det_limit = 2800
+                    det_limit = 3600
                 rec_batch = 8
-                det_thresh = 0.12
-                det_box_thresh = 0.38 if is_cjk_like else 0.40
-                det_unclip_ratio =  1.90
-                rec_score_thresh = 0.3
+                det_thresh = 0.1
+                det_box_thresh = 0.3
+                det_unclip_ratio = 1.96
+                rec_score_thresh = 0.225
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
                 det_limit = 1536 if quality_profile == "fast" else 2000 if quality_profile == "balanced" else 2300
@@ -3564,27 +3764,39 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     rec_score_thresh = 0.28
         else:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
-                if shortest <= 420:
-                    det_limit = 2300
-                elif shortest <= 720:
-                    det_limit = 1900
-                else:
-                    det_limit = 1536
+                det_limit = 2560 if shortest <= 900 else 2800
                 if quality_profile == "fast":
-                    det_limit = max(1280, int(det_limit * 0.85))
+                    det_limit = max(1800, int(det_limit * 0.88))
                     rec_batch = 12
                 elif quality_profile == "balanced":
                     rec_batch = 10
                 else:
-                    det_limit = min(2300, int(det_limit * 1.08))
+                    det_limit = min(3200, int(det_limit * 1.08))
                     rec_batch = 8
+            
+            if pipeline == "panel":
+                if profile_key == "cpu_panel_accurate":
+                    det_thresh = 0.12
+                    det_box_thresh = 0.24
+                    det_unclip_ratio = 2.10
+                    rec_score_thresh = 0.18
+                elif profile_key == "cpu_panel_fast":
+                    det_thresh = 0.18
+                    det_box_thresh = 0.38
+                    det_unclip_ratio = 1.85
+                    rec_score_thresh = 0.24
+                else:
+                    det_thresh = 0.14
+                    det_box_thresh = 0.28
+                    det_unclip_ratio = 2.05
+                    rec_score_thresh = 0.20
     else:
         if is_cjk_like:
             det_limit = 2800 if shortest <= 1200 else 3200
         else:
-            det_limit = 2200 if shortest <= 900 else 1800
+            det_limit = 2560 if shortest <= 900 else 2800
         if quality_profile == "fast":
-            det_limit = max(1280, int(det_limit * 0.85))
+            det_limit = max(1800, int(det_limit * 0.88))
             rec_batch = 12
         elif quality_profile == "balanced":
             rec_batch = 10
@@ -3592,10 +3804,14 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
             det_limit = min(3600, int(det_limit * 1.08))
             rec_batch = 8
 
+    if lang == "korean":
+        det_unclip_ratio = 1.2
+
     predict_kwargs: Dict[str, Any] = {
         "text_det_limit_type": "max",
         "text_det_limit_side_len": det_limit,
         "text_recognition_batch_size": rec_batch,
+        "use_angle_cls": getattr(args, "use_angle_cls", True),
     }
     if det_thresh is not None:
         predict_kwargs["text_det_thresh"] = det_thresh
@@ -3715,6 +3931,10 @@ def normalize_paddle_v2_output(raw_result: Any) -> Dict[str, Any]:
         if not text:
             continue
         bbox = bbox_from_points(points)
+        w = max(0.0, bbox["x1"] - bbox["x0"])
+        h = max(0.0, bbox["y1"] - bbox["y0"])
+        if confidence < 0.5 and w < 10.0 and h < 10.0:
+            continue
         quad = normalize_quad_points(points)
         angle_deg = angle_deg_from_points(points)
         sort_y, sort_x = sort_hint_from_points(points)
@@ -3778,6 +3998,10 @@ def normalize_paddle_v3_output(raw_result: Any) -> Dict[str, Any]:
             if hasattr(raw_score, "item"):
                 raw_score = raw_score.item()
             confidence = float(raw_score or 0.0)
+            w = max(0.0, bbox["x1"] - bbox["x0"])
+            h = max(0.0, bbox["y1"] - bbox["y0"])
+            if confidence < 0.5 and w < 10.0 and h < 10.0:
+                continue
             line_words = explode_line_to_words(text_value, confidence, bbox)
             lines.append(make_line(text_value, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "paddleocr"))
             words.extend(line_words)
@@ -3826,7 +4050,10 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
 
     from paddleocr import PaddleOCR  # type: ignore
 
-    constructor_kwargs = build_paddle_constructor_kwargs(lang, profile_key)
+    use_angle_cls = True
+    if predict_kwargs and "use_angle_cls" in predict_kwargs:
+        use_angle_cls = bool(predict_kwargs["use_angle_cls"])
+    constructor_kwargs = build_paddle_constructor_kwargs(lang, profile_key, use_angle_cls)
 
     # Automatically download models if specified directories don't exist
     det_dir = constructor_kwargs.get("det_model_dir")
@@ -4284,8 +4511,11 @@ def run_paddleocr_pass(
         return cleaned
 
     if hasattr(ocr, "ocr"):
+        use_cls = getattr(ocr, "use_angle_cls", False)
+        if predict_kwargs and "use_angle_cls" in predict_kwargs:
+            use_cls = bool(predict_kwargs["use_angle_cls"])
         try:
-            raw = ocr.ocr(image_path, cls=False)
+            raw = ocr.ocr(image_path, cls=use_cls)
         except TypeError:
             raw = ocr.ocr(image_path)
 
@@ -4722,6 +4952,10 @@ def normalize_easyocr_output(raw_result: Any) -> Dict[str, Any]:
         confidence = float(item[2] or 0.0)
         if not text:
             continue
+        w = max(0.0, bbox["x1"] - bbox["x0"])
+        h = max(0.0, bbox["y1"] - bbox["y0"])
+        if confidence < 0.5 and w < 10.0 and h < 10.0:
+            continue
         line_words = explode_line_to_words(text, confidence, bbox)
         lines.append(make_line(text, confidence, bbox, line_words, sort_y, sort_x, quad, angle_deg, "easyocr"))
         words.extend(line_words)
@@ -4976,7 +5210,13 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
         if hasattr(ocr, "predict"):
             raw = ocr.predict(str(img_path))
         else:
-            raw = ocr.ocr(str(img_path))
+            use_cls = getattr(ocr, "use_angle_cls", False)
+            if hasattr(args, "use_angle_cls") and args.use_angle_cls is not None:
+                use_cls = bool(args.use_angle_cls)
+            try:
+                raw = ocr.ocr(str(img_path), cls=use_cls)
+            except TypeError:
+                raw = ocr.ocr(str(img_path))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         words = []
@@ -4998,6 +5238,10 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
                     if not text_value:
                         continue
                     bbox = bbox_from_points_raw(points)
+                    w = max(0.0, bbox["x1"] - bbox["x0"])
+                    h = max(0.0, bbox["y1"] - bbox["y0"])
+                    if score < 0.5 and w < 10.0 and h < 10.0:
+                        continue
                     words.append(text_value)
                     lines.append({
                         "text": text_value,
@@ -5044,6 +5288,10 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
                     elif index < len(rec_polys):
                         points = rec_polys[index]
                     bbox = bbox_from_points_raw(points)
+                    w = max(0.0, bbox["x1"] - bbox["x0"])
+                    h = max(0.0, bbox["y1"] - bbox["y0"])
+                    if score < 0.5 and w < 10.0 and h < 10.0:
+                        continue
                     words.append(text_value)
                     lines.append({
                         "text": text_value,
@@ -5101,6 +5349,10 @@ def run_easyocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
             except Exception:
                 bbox = {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}
 
+            w = max(0.0, bbox["x1"] - bbox["x0"])
+            h = max(0.0, bbox["y1"] - bbox["y0"])
+            if float(confidence) < 0.5 and w < 10.0 and h < 10.0:
+                continue
             words.append(text_value)
             lines.append({
                 "text": text_value,
@@ -5144,6 +5396,11 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
         max_side_len=int(payload.get("maxSideLen") or payload.get("max_side_len") or 0),
         # maxPixels (camelCase from TS) or max_pixels (snake_case)
         max_pixels=int(payload.get("maxPixels") or payload.get("max_pixels") or 0),
+        use_angle_cls=False if str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel").strip().lower() == "panel" else (
+            payload.get("useAngleCls") if payload.get("useAngleCls") is not None else (
+                payload.get("use_angle_cls") if payload.get("use_angle_cls") is not None else True
+            )
+        ),
         stdio_server=False,
     )
 
@@ -5192,6 +5449,9 @@ def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
         return status_easy_yolo()
     if args.action == "prewarm":
         return prewarm_engine(args)
+    if args.action == "cleanup":
+        cleanup_memory()
+        return {"ok": True, "message": "CUDA cache and system memory cleared successfully"}
     if args.action == "raw_ocr":
         if args.engine == "paddleocr":
             return run_paddleocr_raw(args)
@@ -5256,7 +5516,7 @@ def serve_stdio(default_engine: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr"])
+    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup"])
     parser.add_argument("--engine", required=True, choices=["paddleocr", "easyocr"])
     parser.add_argument("--image")
     parser.add_argument("--language", default="eng")

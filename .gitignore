@@ -44,3 +44,11 @@ temp_*
 
 *storybook.log
 storybook-static
+
+# Temporary scratch files and test scripts
+scratch/
+
+# Benchmark and testing results
+benchmark-results.json
+benchmark-results.md
+bridge_response.json

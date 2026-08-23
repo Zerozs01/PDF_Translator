@@ -51,7 +51,7 @@ import {
   resolvePerPageTimeoutSec,
   withPerPageOCRTimeout,
 } from '../../services/vision/ocr-timeout';
-import { OCR_ALGORITHM_VERSION } from '../../services/vision/ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
 import { pdfjs } from '../../services/pdf/pdfjsWorker';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 import { resolveMissingOverlayLineFallbackText } from './translationOverlayUtils';
@@ -1028,6 +1028,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     const activeEngine = options.engine || 'paddleocr';
     
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== activeEngine) return false;
     return true;
   }, [options, normalizeLanguage]);
@@ -1037,6 +1038,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.dpi !== options.dpi) return false;
     
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== engine) return false;
     return true;
   }, [normalizeLanguage, options.dpi, options.language, options.pageSegMode]);
@@ -1046,6 +1048,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== (options.engine || 'paddleocr')) return false;
     return true;
   }, [normalizeLanguage, options.engine, options.language]);
@@ -1055,6 +1058,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (cached.words.length === 0 && cached.lines.length === 0 && !(cached.text || '').trim()) return false;
     if (normalizeLanguage(cached.language) !== normalizeLanguage(options.language)) return false;
     if (cached.algorithmVersion !== OCR_ALGORITHM_VERSION) return false;
+    if ((cached.ocrRawVersion ?? 0) < OCR_RAW_VERSION) return false;
     if ((cached.ocrEngine || 'paddleocr') !== eng) return false;
     return true;
   }, [normalizeLanguage, options.language]);
@@ -1843,7 +1847,9 @@ export const OCRTextLayerPanel: React.FC = () => {
       return;
     }
 
-    setTranslationPreviewMode('original');
+    if (contextChanged) {
+      setTranslationPreviewMode('original');
+    }
   }, [
     currentPage,
     normalizedContextOCRLanguage,
@@ -1995,27 +2001,27 @@ export const OCRTextLayerPanel: React.FC = () => {
     if (engine === 'paddleocr') {
       if (koreanPaddlePanel) {
         return {
-          maxSide: 20000,
-          maxPixels: 23_500_000,
+          maxSide: 21500,
+          maxPixels: 37_650_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
-            boostedMaxSide: 20000,
-            boostedMaxPixels: 34_000_000,
+            boostedMaxSide: 21500,
+            boostedMaxPixels: 37_950_000,
           },
         };
       }
       if (cjkPanelExternal) {
         return {
-          maxSide: 19000,
-          maxPixels: 28_800_000,
+          maxSide:  21500,
+          maxPixels:37_950_000,
           minWidth: null,
           tallPageBoost: {
             minAspectRatio: 2.35,
             minLongSide: 9000,
-            boostedMaxSide: 20000,
-            boostedMaxPixels: 28_000_000,
+            boostedMaxSide:  21500,
+            boostedMaxPixels: 37_950_000,
           },
         };
       }
@@ -2075,6 +2081,7 @@ export const OCRTextLayerPanel: React.FC = () => {
     const maxSide = constraints?.maxSide ?? null;
     const maxPixels = constraints?.maxPixels ?? null;
     const minWidth = constraints?.minWidth ?? null;
+    const tallPageBoost = constraints?.tallPageBoost ?? null;
     
     let effectiveMaxSide = maxSide;
     let effectiveMaxPixels = maxPixels;
@@ -2084,29 +2091,45 @@ export const OCRTextLayerPanel: React.FC = () => {
     const shortSide = Math.max(1, Math.min(width, height));
     const aspectRatio = longSide / shortSide;
 
-    // Use a sub-linear dynamic scaling multiplier instead of a hardcoded threshold
-    if (effectiveMaxPixels && effectiveMaxPixels > 0) {
-      const baseMaxPixels = effectiveMaxPixels;
-      // Scale dynamically using the square root of the aspect ratio
-      const subLinearMultiplier = Math.sqrt(aspectRatio);
-      let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
-
-      // Hard ceiling of 20M pixels to prevent memory exhaustion and "donut effect"
-      const MAX_PIXELS_CEILING = 37_950_000;
-      if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
-        dynamicMaxPixels = MAX_PIXELS_CEILING;
+    if (tallPageBoost) {
+      const qualifiesTallPage = longSide >= Math.max(1, tallPageBoost.minLongSide)
+        && aspectRatio >= Math.max(1, tallPageBoost.minAspectRatio);
+      if (qualifiesTallPage) {
+        appliedTallPageBoost = true;
+        if (tallPageBoost.boostedMaxSide > 0) {
+          effectiveMaxSide = tallPageBoost.boostedMaxSide;
+        }
+        if (tallPageBoost.boostedMaxPixels > 0) {
+          effectiveMaxPixels = tallPageBoost.boostedMaxPixels;
+        }
       }
-
-      effectiveMaxPixels = dynamicMaxPixels;
-      // Mark as boosted if aspect ratio is noticeably non-square (e.g. > 1.5)
-      appliedTallPageBoost = aspectRatio > 1.5;
     }
 
-    // Adjust effectiveMaxSide sub-linearly to prevent the width from being crushed
-    // on images with extreme aspect ratios
-    if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
-      const baseMaxSide = effectiveMaxSide;
-      effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+    if (!appliedTallPageBoost) {
+      // Use a sub-linear dynamic scaling multiplier instead of a hardcoded threshold
+      if (effectiveMaxPixels && effectiveMaxPixels > 0) {
+        const baseMaxPixels = effectiveMaxPixels;
+        // Scale dynamically using the square root of the aspect ratio
+        const subLinearMultiplier = Math.sqrt(aspectRatio);
+        let dynamicMaxPixels = baseMaxPixels * subLinearMultiplier;
+
+        // Hard ceiling of 20M pixels to prevent memory exhaustion and "donut effect"
+        const MAX_PIXELS_CEILING = 37_950_000;
+        if (dynamicMaxPixels > MAX_PIXELS_CEILING) {
+          dynamicMaxPixels = MAX_PIXELS_CEILING;
+        }
+
+        effectiveMaxPixels = dynamicMaxPixels;
+        // Mark as boosted if aspect ratio is noticeably non-square (e.g. > 1.5)
+        appliedTallPageBoost = aspectRatio > 1.5;
+      }
+
+      // Adjust effectiveMaxSide sub-linearly to prevent the width from being crushed
+      // on images with extreme aspect ratios
+      if (effectiveMaxSide && effectiveMaxSide > 0 && aspectRatio > 1.5) {
+        const baseMaxSide = effectiveMaxSide;
+        effectiveMaxSide = Math.min(30000, Math.max(baseMaxSide, Math.round(baseMaxSide * Math.sqrt(aspectRatio))));
+      }
     }
 
     let scaleFactor = 1;
@@ -2359,20 +2382,29 @@ export const OCRTextLayerPanel: React.FC = () => {
       const outputCanvas = document.createElement('canvas');
       outputCanvas.width = Math.floor(viewport.width);
       outputCanvas.height = Math.floor(viewport.height);
+      outputCanvas.style.position = 'absolute';
+      outputCanvas.style.left = '-99999px';
+      outputCanvas.style.top = '-99999px';
+      outputCanvas.style.visibility = 'hidden';
+      document.body.appendChild(outputCanvas);
 
-      const ctx = outputCanvas.getContext('2d', { alpha: false });
-      if (!ctx) throw new Error('Cannot get canvas context');
+      try {
+        const ctx = outputCanvas.getContext('2d', { alpha: false });
+        if (!ctx) throw new Error('Cannot get canvas context');
 
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
 
-      const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'print', canvas: outputCanvas });
-      await Promise.race([
-        renderTask.promise,
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error(`Direct pdf.js render timeout after ${DIRECT_RENDER_TIMEOUT_MS}ms for page ${pageNum}`)), DIRECT_RENDER_TIMEOUT_MS);
-        })
-      ]);
+        const renderTask = page.render({ canvasContext: ctx, viewport, intent: 'display', canvas: outputCanvas });
+        await Promise.race([
+          renderTask.promise,
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error(`Direct pdf.js render timeout after ${DIRECT_RENDER_TIMEOUT_MS}ms for page ${pageNum}`)), DIRECT_RENDER_TIMEOUT_MS);
+          })
+        ]);
+      } finally {
+        outputCanvas.remove();
+      }
 
       console.log(`[OCRPanel] Direct pdf.js render complete for page ${pageNum}: ${outputCanvas.width}x${outputCanvas.height}`);
 
@@ -2525,7 +2557,7 @@ export const OCRTextLayerPanel: React.FC = () => {
       const shortest = Math.max(1, Math.min(imageWidth, imageHeight));
       const aspectRatio = longest / shortest;
       const pixelCount = imageWidth * imageHeight;
-      return pixelCount >= 3_600_000 || longest >= 5200 || aspectRatio <= 2.4;
+      return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
     })();
 
     const isSensitiveFastLanguage = options.language
@@ -2535,9 +2567,11 @@ export const OCRTextLayerPanel: React.FC = () => {
       .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
     let resolvedQualityProfile: OCRQualityProfile = activeEngine === 'paddleocr'
-      ? (ocrQualityMode === 'fast'
-        ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
-        : (shouldPreferFastPaddleProfile ? 'fast' : 'balanced'))
+      ? (shouldPreferFastPaddleProfile
+        ? 'fast'
+        : (ocrQualityMode === 'fast'
+          ? (isSensitiveFastLanguage ? 'balanced' : 'fast')
+          : (isSensitiveFastLanguage ? 'balanced' : 'best')))
       : 'best';
     let ocrResult: import('../../types').OCRPageResult;
     try {
@@ -2595,6 +2629,10 @@ export const OCRTextLayerPanel: React.FC = () => {
     ocrResult.pipelineProfile = activePipelineProfile;
     ocrResult.ocrEngine = activeEngine;
     ocrResult.ocrQualityProfile = resolvedQualityProfile;
+    ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+    ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+    if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+    ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
     setEngineWarmState(activeEngine, {
       phase: 'ready',
       progress: 100,

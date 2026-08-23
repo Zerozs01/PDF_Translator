@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 import argparse
+import gc
 import json
 import os
 import sys
@@ -204,6 +205,22 @@ def translate_texts(
             continue
 
         translated = str(translation.translate(normalized_text) or "")
+
+        # OpenNMT SentencePiece Casing Fallback:
+        # ALL-CAPS text (e.g. "SUPPOSED", "STUDENTS", "APOLOGIES") confuses OpenNMT subword tokenizers.
+        # If translation produced no target script (e.g. Thai), retry with Title-case ("Supposed") or Lower-case ("supposed").
+        if target_language == "th" and (not translated or translated == normalized_text or not any('\u0e00' <= c <= '\u0e7f' for c in translated)):
+            if normalized_text.isupper() and len(normalized_text) > 1:
+                title_cased = normalized_text.title()
+                alt_translated = str(translation.translate(title_cased) or "")
+                if alt_translated and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated):
+                    translated = alt_translated
+                else:
+                    lower_cased = normalized_text.lower()
+                    alt_translated2 = str(translation.translate(lower_cased) or "")
+                    if alt_translated2 and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated2):
+                        translated = alt_translated2
+
         remember_text_translation(cache_key, translated)
         translations.append(translated)
     return translations
@@ -236,7 +253,63 @@ def validate_languages(argos_translate_module: Any, source_language: str, target
     return installed_codes
 
 
-def process_payload(argos_translate_module: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+_kiwi_instance = None
+
+
+def get_kiwi_instance() -> Any:
+    global _kiwi_instance
+    if _kiwi_instance is None:
+        try:
+            from kiwipiepy import Kiwi
+            _kiwi_instance = Kiwi()
+        except ImportError:
+            _kiwi_instance = False
+    return _kiwi_instance
+
+
+_argos_translate_module = None
+
+
+def get_argos_translate_module() -> Any:
+    global _argos_translate_module
+    if _argos_translate_module is None:
+        _argos_translate_module = init_argos_module()
+    return _argos_translate_module
+
+
+_m2m_translator = None
+_m2m_tokenizer = None
+
+
+def get_m2m_components() -> Tuple[Any, Any]:
+    global _m2m_translator, _m2m_tokenizer
+    if _m2m_translator is None or _m2m_tokenizer is None:
+        try:
+            import ctranslate2
+            import transformers
+
+            model_path = Path(__file__).parent.parent / "models" / "m2m100_ct2"
+            if not model_path.exists():
+                raise RuntimeError(f"M2M100 model directory does not exist: {model_path}")
+
+            device = "cpu"
+            compute_type = "int8"
+            try:
+                if ctranslate2.get_cuda_device_count() > 0:
+                    device = "cuda"
+                    compute_type = "int8_float16"
+            except Exception:
+                pass
+
+            _m2m_translator = ctranslate2.Translator(str(model_path), device=device, compute_type=compute_type)
+            _m2m_tokenizer = transformers.AutoTokenizer.from_pretrained(str(model_path))
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize M2M100 translator: {e}")
+
+    return _m2m_translator, _m2m_tokenizer
+
+
+def process_m2m_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw_texts = payload.get("texts", [])
     if not isinstance(raw_texts, list):
         raise ValueError("Field 'texts' must be an array")
@@ -245,7 +318,86 @@ def process_payload(argos_translate_module: Any, payload: Dict[str, Any]) -> Dic
     source_language = normalize_language(payload.get("sourceLanguage"), "en")
     target_language = normalize_language(payload.get("targetLanguage"), "th")
 
+    if source_language == "ko":
+        kiwi = get_kiwi_instance()
+        if kiwi:
+            texts = [kiwi.space(t, reset_whitespace=False) for t in texts]
+
+    if source_language == target_language:
+        return {
+            "ok": True,
+            "engine": "m2m100",
+            "sourceLanguage": source_language,
+            "targetLanguage": target_language,
+            "translations": texts,
+        }
+
+    translator, tokenizer = get_m2m_components()
+    tokenizer.src_lang = source_language
+
+    source_tokens = []
+    for t in texts:
+        if not t.strip():
+            source_tokens.append([])
+            continue
+        ids = tokenizer.encode(t)
+        tokens = tokenizer.convert_ids_to_tokens(ids)
+        source_tokens.append(tokens)
+
+    active_indices = [i for i, tokens in enumerate(source_tokens) if tokens]
+    if not active_indices:
+        return {
+            "ok": True,
+            "engine": "m2m100",
+            "sourceLanguage": source_language,
+            "targetLanguage": target_language,
+            "translations": [""] * len(texts),
+        }
+
+    active_tokens = [source_tokens[i] for i in active_indices]
+    target_prefix_token = tokenizer.lang_code_to_token[target_language]
+    target_prefixes = [[target_prefix_token] for _ in range(len(active_tokens))]
+
+    results = translator.translate_batch(
+        active_tokens,
+        target_prefix=target_prefixes
+    )
+
+    translations = [""] * len(texts)
+    for idx, res in zip(active_indices, results):
+        translated_tokens = res.hypotheses[0]
+        translated_text = tokenizer.decode(tokenizer.convert_tokens_to_ids(translated_tokens), skip_special_tokens=True)
+        translations[idx] = translated_text
+
+    return {
+        "ok": True,
+        "engine": "m2m100",
+        "sourceLanguage": source_language,
+        "targetLanguage": target_language,
+        "translations": translations,
+    }
+
+
+def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    engine = payload.get("engine", "argos")
+    if engine == "m2m100":
+        return process_m2m_payload(payload)
+
+    raw_texts = payload.get("texts", [])
+    if not isinstance(raw_texts, list):
+        raise ValueError("Field 'texts' must be an array")
+
+    texts: List[str] = [str(item or "") for item in raw_texts]
+    source_language = normalize_language(payload.get("sourceLanguage"), "en")
+    target_language = normalize_language(payload.get("targetLanguage"), "th")
+
+    argos_translate_module = get_argos_translate_module()
     validate_languages(argos_translate_module, source_language, target_language)
+
+    if source_language == "ko":
+        kiwi = get_kiwi_instance()
+        if kiwi:
+            texts = [kiwi.space(t, reset_whitespace=False) for t in texts]
 
     if source_language == target_language:
         return {
@@ -257,19 +409,14 @@ def process_payload(argos_translate_module: Any, payload: Dict[str, Any]) -> Dic
         }
 
     fallback_reason: str | None = None
-    try:
-        translations = translate_texts(
-            argos_translate_module,
-            texts,
-            source_language,
-            target_language,
-            force_noop_sentencizer=False,
-        )
-    except Exception as primary_error:
-        if not is_sentence_split_network_error(primary_error):
-            raise
+    force_noop = (
+        os.getenv("ARGOS_FORCE_NOOP_SENTENCIZER", "1") == "1"
+        or bool(payload.get("forceNoOpSentencizer"))
+        or payload.get("sourceType") in ("ocr_lines", "text")
+        or payload.get("mode") in ("manga", "panel")
+    )
 
-        fallback_reason = str(primary_error)
+    if force_noop:
         translations = translate_texts(
             argos_translate_module,
             texts,
@@ -277,6 +424,27 @@ def process_payload(argos_translate_module: Any, payload: Dict[str, Any]) -> Dic
             target_language,
             force_noop_sentencizer=True,
         )
+    else:
+        try:
+            translations = translate_texts(
+                argos_translate_module,
+                texts,
+                source_language,
+                target_language,
+                force_noop_sentencizer=False,
+            )
+        except Exception as primary_error:
+            if not is_sentence_split_network_error(primary_error):
+                raise
+
+            fallback_reason = str(primary_error)
+            translations = translate_texts(
+                argos_translate_module,
+                texts,
+                source_language,
+                target_language,
+                force_noop_sentencizer=True,
+            )
 
     output: Dict[str, Any] = {
         "ok": True,
@@ -291,7 +459,8 @@ def process_payload(argos_translate_module: Any, payload: Dict[str, Any]) -> Dic
     return output
 
 
-def serve_stdio(argos_translate_module: Any) -> None:
+def serve_stdio() -> None:
+    request_count = 0
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
@@ -303,7 +472,7 @@ def serve_stdio(argos_translate_module: Any) -> None:
             if not isinstance(payload, dict):
                 raise ValueError("Payload must be a JSON object")
             request_id = str(payload.get("id")) if payload.get("id") is not None else None
-            response = process_payload(argos_translate_module, payload)
+            response = process_payload(payload)
         except Exception as exc:
             response = {"ok": False, "reason": str(exc)}
 
@@ -312,6 +481,10 @@ def serve_stdio(argos_translate_module: Any) -> None:
 
         sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         sys.stdout.flush()
+
+        request_count += 1
+        if request_count % 10 == 0:
+            gc.collect()
 
 
 def init_argos_module() -> Any:
@@ -340,15 +513,14 @@ def main() -> None:
     parser.add_argument("--stdio-server", action="store_true")
     args = parser.parse_args()
 
-    argos_translate = init_argos_module()
-
     if args.stdio_server:
-        serve_stdio(argos_translate)
+        serve_stdio()
         return
 
     payload = load_payload()
-    response = process_payload(argos_translate, payload)
+    response = process_payload(payload)
     print(json.dumps(response, ensure_ascii=False))
+
 
 
 if __name__ == "__main__":

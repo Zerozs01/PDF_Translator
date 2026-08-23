@@ -1,0 +1,567 @@
+{
+  "pageNumber": 2,
+  "width": 4233,
+  "height": 6250,
+  "dpi": 300,
+  "language": "kor",
+  "algorithmVersion": 214,
+  "pipelineProfile": "panel",
+  "ocrEngine": "paddleocr",
+  "ocrQualityProfile": "balanced",
+  "lines": [
+    {
+      "text": "뭐야",
+      "confidence": 99.97700452804565,
+      "bbox": {
+        "x0": 3565,
+        "y0": 1308,
+        "x1": 3805,
+        "y1": 1417
+      },
+      "words": [
+        {
+          "text": "뭐야",
+          "confidence": 99.97700452804565,
+          "bbox": {
+            "x0": 3565,
+            "y0": 1308,
+            "x1": 3805,
+            "y1": 1417
+          }
+        }
+      ],
+      "_sortY": 1232.7910072087925,
+      "sortHintY": 1232.7910072087925,
+      "_sortX": 3593.686037002277,
+      "sortHintX": 3593.686037002277,
+      "_sourceIndex": 1
+    },
+    {
+      "text": "얘는?",
+      "confidence": 99.99586939811707,
+      "bbox": {
+        "x0": 3581,
+        "y0": 1432,
+        "x1": 3785,
+        "y1": 1544
+      },
+      "words": [
+        {
+          "text": "얘는?",
+          "confidence": 99.99586939811707,
+          "bbox": {
+            "x0": 3581,
+            "y0": 1432,
+            "x1": 3785,
+            "y1": 1544
+          }
+        }
+      ],
+      "_sortY": 1174.0542551459907,
+      "sortHintY": 1174.0542551459907,
+      "_sortX": 3680.484289597443,
+      "sortHintX": 3680.484289597443,
+      "_sourceIndex": 2
+    },
+    {
+      "text": "마리고가",
+      "confidence": 92.424076795578,
+      "bbox": {
+        "x0": 678,
+        "y0": 1532,
+        "x1": 984,
+        "y1": 1607
+      },
+      "words": [
+        {
+          "text": "마리고가",
+          "confidence": 92.424076795578,
+          "bbox": {
+            "x0": 678,
+            "y0": 1532,
+            "x1": 984,
+            "y1": 1607
+          }
+        }
+      ],
+      "_sortY": 1532,
+      "sortHintY": 1532,
+      "_sortX": 678,
+      "sortHintX": 678,
+      "_sourceIndex": 3
+    },
+    {
+      "text": "공0울극1니",
+      "confidence": 68.41136813163757,
+      "bbox": {
+        "x0": 646,
+        "y0": 1892,
+        "x1": 988,
+        "y1": 1991
+      },
+      "words": [
+        {
+          "text": "공0울극1니",
+          "confidence": 68.41136813163757,
+          "bbox": {
+            "x0": 646,
+            "y0": 1892,
+            "x1": 988,
+            "y1": 1991
+          }
+        }
+      ],
+      "_sortY": 1875.233917109762,
+      "sortHintY": 1875.233917109762,
+      "_sortX": 692.3260262341649,
+      "sortHintX": 692.3260262341649,
+      "_sourceIndex": 6
+    },
+    {
+      "text": "엄마사촌",
+      "confidence": 99.72148537635803,
+      "bbox": {
+        "x0": 1351,
+        "y0": 2322,
+        "x1": 1686,
+        "y1": 2425
+      },
+      "words": [
+        {
+          "text": "엄마사촌",
+          "confidence": 99.72148537635803,
+          "bbox": {
+            "x0": 1351,
+            "y0": 2322,
+            "x1": 1686,
+            "y1": 2425
+          }
+        }
+      ],
+      "_sortY": 2322,
+      "sortHintY": 2322,
+      "_sortX": 1351,
+      "sortHintX": 1351,
+      "_sourceIndex": 8
+    },
+    {
+      "text": "왜같이",
+      "confidence": 99.99520182609558,
+      "bbox": {
+        "x0": 2810,
+        "y0": 4476,
+        "x1": 3096,
+        "y1": 4589
+      },
+      "words": [
+        {
+          "text": "왜같이",
+          "confidence": 99.99520182609558,
+          "bbox": {
+            "x0": 2810,
+            "y0": 4476,
+            "x1": 3096,
+            "y1": 4589
+          }
+        }
+      ],
+      "_sortY": 4476,
+      "sortHintY": 4476,
+      "_sortX": 2810,
+      "sortHintX": 2810,
+      "_sourceIndex": 1
+    },
+    {
+      "text": "안갔지",
+      "confidence": 99.98946189880371,
+      "bbox": {
+        "x0": 2806,
+        "y0": 4626,
+        "x1": 3242,
+        "y1": 4752
+      },
+      "words": [
+        {
+          "text": "안갔지",
+          "confidence": 99.98946189880371,
+          "bbox": {
+            "x0": 2806,
+            "y0": 4626,
+            "x1": 3242,
+            "y1": 4752
+          }
+        }
+      ],
+      "_sortY": 4500.704619281625,
+      "sortHintY": 4500.704619281625,
+      "_sortX": 2889.3965828841974,
+      "sortHintX": 2889.3965828841974,
+      "_sourceIndex": 2
+    },
+    {
+      "text": "잘부탁해",
+      "confidence": 99.98977780342102,
+      "bbox": {
+        "x0": 971,
+        "y0": 4678,
+        "x1": 1342,
+        "y1": 4768
+      },
+      "words": [
+        {
+          "text": "잘부탁해",
+          "confidence": 99.98977780342102,
+          "bbox": {
+            "x0": 971,
+            "y0": 4678,
+            "x1": 1342,
+            "y1": 4768
+          }
+        }
+      ],
+      "_sortY": 4678,
+      "sortHintY": 4678,
+      "_sortX": 971,
+      "sortHintX": 971,
+      "_sourceIndex": 4
+    },
+    {
+      "text": "가야해서",
+      "confidence": 99.97105598449707,
+      "bbox": {
+        "x0": 2287,
+        "y0": 4798,
+        "x1": 2618,
+        "y1": 4883
+      },
+      "words": [
+        {
+          "text": "가야해서",
+          "confidence": 99.97105598449707,
+          "bbox": {
+            "x0": 2287,
+            "y0": 4798,
+            "x1": 2618,
+            "y1": 4883
+          }
+        }
+      ],
+      "_sortY": 4798,
+      "sortHintY": 4798,
+      "_sortX": 2287,
+      "sortHintX": 2287,
+      "_sourceIndex": 7
+    },
+    {
+      "text": "코토미",
+      "confidence": 99.98413920402527,
+      "bbox": {
+        "x0": 1098,
+        "y0": 4806,
+        "x1": 1353,
+        "y1": 4896
+      },
+      "words": [
+        {
+          "text": "코토미",
+          "confidence": 99.98413920402527,
+          "bbox": {
+            "x0": 1098,
+            "y0": 4806,
+            "x1": 1353,
+            "y1": 4896
+          }
+        }
+      ],
+      "_sortY": 4783.869582020234,
+      "sortHintY": 4783.869582020234,
+      "_sortX": 1139.8169582235794,
+      "sortHintX": 1139.8169582235794,
+      "_sourceIndex": 6
+    },
+    {
+      "text": "속마음",
+      "confidence": 99.96361136436462,
+      "bbox": {
+        "x0": 1474,
+        "y0": 5463,
+        "x1": 1758,
+        "y1": 5605
+      },
+      "words": [
+        {
+          "text": "속마음",
+          "confidence": 99.96361136436462,
+          "bbox": {
+            "x0": 1474,
+            "y0": 5463,
+            "x1": 1758,
+            "y1": 5605
+          }
+        }
+      ],
+      "_sortY": 5463,
+      "sortHintY": 5463,
+      "_sortX": 1474,
+      "sortHintX": 1474,
+      "_sourceIndex": 8
+    },
+    {
+      "text": "읽지만",
+      "confidence": 99.95421767234802,
+      "bbox": {
+        "x0": 1483,
+        "y0": 5627,
+        "x1": 1792,
+        "y1": 5750
+      },
+      "words": [
+        {
+          "text": "읽지만",
+          "confidence": 99.95421767234802,
+          "bbox": {
+            "x0": 1483,
+            "y0": 5627,
+            "x1": 1792,
+            "y1": 5750
+          }
+        }
+      ],
+      "_sortY": 5627,
+      "sortHintY": 5627,
+      "_sortX": 1483,
+      "sortHintX": 1483,
+      "_sourceIndex": 9
+    }
+  ],
+  "words": [
+    {
+      "text": "뭐야",
+      "confidence": 99.97700452804565,
+      "bbox": {
+        "x0": 3565,
+        "y0": 1308,
+        "x1": 3805,
+        "y1": 1417
+      }
+    },
+    {
+      "text": "얘는?",
+      "confidence": 99.99586939811707,
+      "bbox": {
+        "x0": 3581,
+        "y0": 1432,
+        "x1": 3785,
+        "y1": 1544
+      }
+    },
+    {
+      "text": "마리고가",
+      "confidence": 92.424076795578,
+      "bbox": {
+        "x0": 678,
+        "y0": 1532,
+        "x1": 984,
+        "y1": 1607
+      }
+    },
+    {
+      "text": "공0울극1니",
+      "confidence": 68.41136813163757,
+      "bbox": {
+        "x0": 646,
+        "y0": 1892,
+        "x1": 988,
+        "y1": 1991
+      }
+    },
+    {
+      "text": "엄마사촌",
+      "confidence": 99.72148537635803,
+      "bbox": {
+        "x0": 1351,
+        "y0": 2322,
+        "x1": 1686,
+        "y1": 2425
+      }
+    },
+    {
+      "text": "왜같이",
+      "confidence": 99.99520182609558,
+      "bbox": {
+        "x0": 2810,
+        "y0": 4476,
+        "x1": 3096,
+        "y1": 4589
+      }
+    },
+    {
+      "text": "안갔지",
+      "confidence": 99.98946189880371,
+      "bbox": {
+        "x0": 2806,
+        "y0": 4626,
+        "x1": 3242,
+        "y1": 4752
+      }
+    },
+    {
+      "text": "잘부탁해",
+      "confidence": 99.98977780342102,
+      "bbox": {
+        "x0": 971,
+        "y0": 4678,
+        "x1": 1342,
+        "y1": 4768
+      }
+    },
+    {
+      "text": "가야해서",
+      "confidence": 99.97105598449707,
+      "bbox": {
+        "x0": 2287,
+        "y0": 4798,
+        "x1": 2618,
+        "y1": 4883
+      }
+    },
+    {
+      "text": "코토미",
+      "confidence": 99.98413920402527,
+      "bbox": {
+        "x0": 1098,
+        "y0": 4806,
+        "x1": 1353,
+        "y1": 4896
+      }
+    },
+    {
+      "text": "속마음",
+      "confidence": 99.96361136436462,
+      "bbox": {
+        "x0": 1474,
+        "y0": 5463,
+        "x1": 1758,
+        "y1": 5605
+      }
+    },
+    {
+      "text": "읽지만",
+      "confidence": 99.95421767234802,
+      "bbox": {
+        "x0": 1483,
+        "y0": 5627,
+        "x1": 1792,
+        "y1": 5750
+      }
+    }
+  ],
+  "text": "뭐야\n얘는?\n마리고가\n공0울극1니\n엄마사촌\n왜같이\n안갔지\n잘부탁해\n가야해서\n코토미\n속마음\n읽지만",
+  "confidence": 87.09701832972075,
+  "debug": {
+    "droppedWords": [
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "wordScriptMismatch",
+        "text": "우IOH",
+        "confidence": 66.73213243484497,
+        "bbox": {
+          "x0": 678,
+          "y0": 1651,
+          "x1": 986,
+          "y1": 1737
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "lineScriptMismatch",
+        "text": "우IOH",
+        "confidence": 66.73213243484497,
+        "bbox": {
+          "x0": 678,
+          "y0": 1651,
+          "x1": 986,
+          "y1": 1737
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "wordScriptMismatch",
+        "text": "HH룸",
+        "confidence": 67.43316650390625,
+        "bbox": {
+          "x0": 582,
+          "y0": 2024,
+          "x1": 984,
+          "y1": 2099
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "lineScriptMismatch",
+        "text": "HH룸",
+        "confidence": 67.43316650390625,
+        "bbox": {
+          "x0": 582,
+          "y0": 2024,
+          "x1": 984,
+          "y1": 2099
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "wordScriptMismatch",
+        "text": "를lo",
+        "confidence": 93.15055012702942,
+        "bbox": {
+          "x0": 1310,
+          "y0": 2467,
+          "x1": 1515,
+          "y1": 2567
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "lineScriptMismatch",
+        "text": "를lo",
+        "confidence": 93.15055012702942,
+        "bbox": {
+          "x0": 1310,
+          "y0": 2467,
+          "x1": 1720,
+          "y1": 2567
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "wordScriptMismatch",
+        "text": "iol이고",
+        "confidence": 63.75511884689331,
+        "bbox": {
+          "x0": 1387,
+          "y0": 2606,
+          "x1": 1643,
+          "y1": 2710
+        }
+      },
+      {
+        "filter": "panelLanguageScriptGate",
+        "reason": "lineScriptMismatch",
+        "text": "iol이고",
+        "confidence": 63.75511884689331,
+        "bbox": {
+          "x0": 1387,
+          "y0": 2606,
+          "x1": 1643,
+          "y1": 2710
+        }
+      }
+    ],
+    "dropCounts": {
+      "panelLanguageScriptGate": 8
+    },
+    "runtimeMs": 5706.399999999441,
+    "preprocessing_latency_ms": 0,
+    "panelSafetyNormalizedVersion": 214
+  }
+}

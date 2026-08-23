@@ -8,8 +8,12 @@ import { ProcessingProgress } from '../services/pdf';
 import { OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT } from '../services/vision/ocr-timeout';
 import { splitAggressiveMergedLines } from '../services/layers/LayerGroupingService';
 import { isBoilerplateHallucination, applyKoreanConversationalFallback } from '../services/translation/koreanTranslationPolicy';
+import { processKoreanManhwaPipeline } from '../services/ocr/ocrManhwaHeuristics';
+import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from '../services/ocr/ocrJapaneseVerticalHeuristics';
+import { isKnownShortWordHelper, applyPanelSafetyLineDedup } from '../services/ocr/ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../services/translation/offlineTranslationService';
 
-export type TranslatorEngine = 'offline' | 'ai';
+export type TranslatorEngine = 'offline' | 'ai' | 'm2m100';
 export type OCRPreviewMode = 'translated' | 'original';
 
 export type OCRTranslationCacheKeyParts = {
@@ -40,7 +44,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v48';
+export const OCR_TRANSLATION_CACHE_VERSION = 'v61'; // v61: Force angle classification disabled for panel manga and full 154-word balloon recall
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')
@@ -75,10 +79,12 @@ export const hasCurrentOCRTranslationCacheVersion = (key: string): boolean =>
 export const filterGhostOcrData = (
   lines: OCRLine[],
   words: any[],
-  engine: OCREngine
+  engine: OCREngine,
+  dpi: number = 300
 ): { lines: OCRLine[]; words: any[] } => {
   const ocrEngine = String(engine || '').toLowerCase();
   const isExternal = ocrEngine === 'paddleocr' || ocrEngine === 'easyocr';
+  const dpiScale = Math.max(0.2, dpi / 300);
 
   // 1. Clean and filter ghost noise lines
   const filteredLines = (lines || []).filter((line) => {
@@ -135,12 +141,11 @@ export const filterGhostOcrData = (
         : [Number(line.confidence || 0)];
       const avgConfidence = confidenceSamples.reduce((sum, v) => sum + v, 0) / Math.max(1, confidenceSamples.length);
 
-      const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-        /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+      const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
       const containsAlphanumeric = /[a-zA-Z0-9]/.test(asciiCompact);
       const isTinyJunkBox = !hasCjkOrThai
         && asciiCompact.length <= 3
-        && area <= 8000
+        && area <= 8000 * dpiScale * dpiScale
         && (containsAlphanumeric
           ? (isExternal ? avgConfidence <= 85 : avgConfidence <= 75)
           : (isExternal ? avgConfidence <= 98 : avgConfidence <= 85)
@@ -150,6 +155,11 @@ export const filterGhostOcrData = (
       if (isTinyJunkBox) {
         return false;
       }
+    }
+
+    // E. Watermark/bracket junk (e.g. "? [({2help)")
+    if (/[\?\[\(\{\}\)\]]{2,}/.test(compact) && /help/i.test(compact)) {
+      return false;
     }
 
     return true;
@@ -289,7 +299,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     engine: 'paddleocr',
     skipIfTextExists: true,
     perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
-    ocrQualityProfile: 'fast',
+    ocrQualityProfile: 'best',
   },
   
   setOptions: (newOptions) => set((state) => ({
@@ -306,17 +316,60 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   allPagesOCR: new Map(),
   ocrByPageEngine: new Map(),
   setPageOCR: (pageNum, result) => set((state) => {
-    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
     const engine = (result.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
+    // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag ก่อน split เพื่อป้องกัน double-split bug
+    // เมื่อโหลด OCR จาก DB (ซึ่งผ่าน split มาแล้วจาก BackgroundQueueProcessor)
+    // แล้วมาเรียก setPageOCR ซึ่งจะ split ซ้ำ ทำให้ lines array มีขนาดใหญ่ขึ้นและ index drift
+    const processedLines = result._splitDone
+      ? result.lines
+      : splitAggressiveMergedLines(result.lines || [], 2.2);
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
       processedLines,
       result.words || [],
-      engine
+      engine,
+      result.dpi || state.options.dpi || 300
     );
 
-    const processedResult = { ...result, lines: cleanLines, words: cleanWords };
+    let processedResult: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+
+    // Apply Korean Manhwa Pipeline if it's Korean
+    const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
+    if (isKorean) {
+      const koreanResult = processKoreanManhwaPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 35,
+          minColumnOverlapRatio: 0.3,
+          maxGroupHeightRatio: 0.3,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
+      processedResult = { ...koreanResult, _splitDone: true };
+    }
+
+    const isJapanese = String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja';
+    if (isJapanese && isVerticalJapaneseLayout(processedResult.lines)) {
+      const japaneseResult = processJapaneseVerticalPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 18,
+          minColumnOverlapRatio: 0.35,
+          maxGroupHeightRatio: 0.45,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      processedResult = { ...japaneseResult, _splitDone: true };
+    }
+
+    processedResult = { ...applyPanelSafetyLineDedup(processedResult), _splitDone: true };
+
     const newMap = new Map(state.allPagesOCR);
     newMap.set(pageNum, processedResult);
     const byPageEngine = new Map(state.ocrByPageEngine);
@@ -329,16 +382,59 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     };
   }),
   setPageOCRForEngine: (pageNum, engine, result) => set((state) => {
-    const processedLines = splitAggressiveMergedLines(result.lines || [], 2.2);
+    // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag ก่อน split เพื่อป้องกัน double-split bug
+    // เมื่อโหลด OCR จาก DB (ซึ่งผ่าน split มาแล้วจาก BackgroundQueueProcessor)
+    // แล้วมาเรียก setPageOCRForEngine ซึ่งจะ split ซ้ำ ทำให้ lines array มีขนาดใหญ่ขึ้นและ index drift
+    const processedLines = result._splitDone
+      ? result.lines
+      : splitAggressiveMergedLines(result.lines || [], 2.2);
     
     // Apply targeted spiky speech balloon filter to clean ghost noise boxes in real-time
     const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
       processedLines,
       result.words || [],
-      engine
+      engine,
+      result.dpi || state.options.dpi || 300
     );
 
-    const processedResult = { ...result, lines: cleanLines, words: cleanWords };
+    let processedResult: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+
+    // Apply Korean Manhwa Pipeline if it's Korean
+    const isKorean = String(processedResult.language || '').toLowerCase() === 'kor' || String(state.options.language || '').toLowerCase() === 'kor';
+    if (isKorean) {
+      const koreanResult = processKoreanManhwaPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 35,
+          minColumnOverlapRatio: 0.3,
+          maxGroupHeightRatio: 0.3,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      // preserve _splitDone flag after Korean pipeline (pipeline doesn't know about this flag)
+      processedResult = { ...koreanResult, _splitDone: true };
+    }
+
+    const isJapanese = String(processedResult.language || '').toLowerCase() === 'jpn' || String(state.options.language || '').toLowerCase() === 'ja';
+    if (isJapanese && isVerticalJapaneseLayout(processedResult.lines)) {
+      const japaneseResult = processJapaneseVerticalPipeline(processedResult, {
+        merge: {
+          maxVerticalGap: 25,
+          maxHorizontalGap: 18,
+          minColumnOverlapRatio: 0.35,
+          maxGroupHeightRatio: 0.45,
+          pageHeight: processedResult.height || 1200,
+          readingDirection: "rtl-ttb",
+        },
+        debug: false
+      });
+      processedResult = { ...japaneseResult, _splitDone: true };
+    }
+
+    processedResult = { ...applyPanelSafetyLineDedup(processedResult), _splitDone: true };
+
     const byPageEngine = new Map(state.ocrByPageEngine);
     const perPage = new Map(byPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
     perPage.set(engine, processedResult);
@@ -422,9 +518,16 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     // Find OCR result to get the original source text if not present in items
     const ocr = state.ocrByPageEngine.get(pageNum)?.get(entry.ocrEngine) || state.allPagesOCR.get(pageNum);
 
+    // Regex helpers for CJK carryover detection
+    const HANGUL_REGEX = /[\uAC00-\uD7AF]/;
+    const KANA_REGEX = /[\u3040-\u30FF]/;
+    const THAI_REGEX = /[\u0E00-\u0E7F]/;
+
     sanitizedEntry.translatedByIndex = entry.translatedByIndex.map((item) => {
       const ocrLine = ocr?.lines[item.index];
       const sourceText = item.sourceText || ocrLine?.text || '';
+
+      // Guard 1: Boilerplate hallucination (existing check)
       if (sourceText && isBoilerplateHallucination(sourceText, item.text)) {
         const fallback = applyKoreanConversationalFallback(sourceText, item.text);
         const nextText = fallback !== null ? fallback : sourceText;
@@ -433,6 +536,42 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
           return { ...item, text: nextText, sourceText };
         }
       }
+
+      // Guard 2: CJK/Hangul carryover — translation result still contains the source script
+      // This catches cases where Argos failed and returned the original Korean/Japanese text
+      // without translating it (e.g. "안갔지" → "안갔지", "코토미" → "코토미")
+      const translatedHasHangul = HANGUL_REGEX.test(item.text);
+      const translatedHasKana = KANA_REGEX.test(item.text);
+      const translatedHasThai = THAI_REGEX.test(item.text);
+      const sourceHasHangul = HANGUL_REGEX.test(sourceText);
+      const sourceHasKana = KANA_REGEX.test(sourceText);
+
+      // If translation contains CJK script from source but no Thai → untranslated carryover
+      const isHangulCarryover = translatedHasHangul && !translatedHasThai && sourceHasHangul;
+      const isKanaCarryover = translatedHasKana && !translatedHasThai && sourceHasKana;
+
+      if (isHangulCarryover || isKanaCarryover) {
+        // Try conversational fallback dict first
+        const fallback = sourceText ? applyKoreanConversationalFallback(sourceText, item.text) : null;
+        const nextText = fallback !== null ? fallback : (sourceText || item.text);
+        if (nextText !== item.text) {
+          hasChanges = true;
+          console.warn(`[setTranslationCacheEntry] CJK carryover detected on page ${pageNum} index ${item.index}: "${item.text}" → "${nextText}" (source: "${sourceText}")`);
+          return { ...item, text: nextText, sourceText };
+        }
+      }
+
+      // Guard 3: Spanish / Latin short phrase dictionary fallback (e.g. "MENTE CALIENTES Y" -> "รู้สึกอุ่นและ...")
+      const isLatinCarryover = !translatedHasThai && /[a-zA-Z]/.test(item.text);
+      if ((isLatinCarryover || !item.text) && sourceText) {
+        const dictHit = lookupShortPhraseTh(sourceText) || lookupShortPhraseTh(sourceText.replace(/[^A-Za-z0-9]/g, ''));
+        if (dictHit && /[\u0E00-\u0E7F]/.test(dictHit) && dictHit !== item.text) {
+          hasChanges = true;
+          console.log(`[setTranslationCacheEntry] Short phrase dictionary upgrade on page ${pageNum} index ${item.index}: "${item.text}" → "${dictHit}" (source: "${sourceText}")`);
+          return { ...item, text: dictHit, sourceText };
+        }
+      }
+
       return item;
     });
 

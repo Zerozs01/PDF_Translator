@@ -7,6 +7,8 @@
 
 import type { BBox, OCRLine, OCRPageResult } from '../../types';
 import type { TextLayer, TextLayerGroup, LayerGroupType, LayerGroupingResult } from '../../types/layers';
+import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../translation/offlineTranslationService';
 
 // Group color palette (Canva-style)
 const GROUP_COLORS = [
@@ -81,25 +83,49 @@ const endsGroup = (text: string): boolean => {
   return END_BALLOON_PATTERNS.some((p) => p.test(text));
 };
 
+const isLikelyEnglishDialogue = (text: string): boolean => {
+  const cleaned = String(text || '').trim();
+  if (!cleaned) return false;
+  const ascii = cleaned.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (ascii && isKnownShortWordHelper(ascii)) return true;
+  return /[a-z]/i.test(cleaned) && cleaned.length >= 2;
+};
+
 /**
  * ตรวจสอบความเชื่อมโยงเชิงพื้นที่ (Proximity & Overlap Alignment) ระหว่าง 2 Lines
  */
+const isHesitantSpeech = (text: string): boolean => {
+  const normalized = (text || '').trim();
+  return /^[A-Za-z]\s*-\s*[A-Za-z][A-Za-z]{0,3}$/i.test(normalized);
+};
+
 const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean => {
+  if (isHesitantSpeech(a.text) || isHesitantSpeech(b.text)) {
+    const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
+    const vertGap = getVerticalGap(a.bbox, b.bbox);
+    const minH = Math.min(bboxHeight(a.bbox), bboxHeight(b.bbox));
+    if (horizOverlap < 0.75 || vertGap > minH * 0.25) {
+      return false;
+    }
+  }
+
   const hA = bboxHeight(a.bbox);
   const hB = bboxHeight(b.bbox);
   const minHeight = Math.min(hA, hB);
   const avgHeight = (hA + hB) * 0.5;
 
+  const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
+
   // 0. Side-by-side guard: หากกล่องสองกล่องมีการทับซ้อนแนวตั้ง (Vertical Overlap) มากเกินไป 
   // แสดงว่าเป็นข้อความที่อยู่แถวเดียวกันหรือข้างกัน (side-by-side) ไม่ใช่การต่อบรรทัดแนวตั้ง (vertical stack)
   // ให้ปฏิเสธการจัดกลุ่มทันที เพื่อไม่ให้ข้ามคอลัมน์หรือพาเนล
+  // ยกเว้นในกรณีที่มีการทับซ้อนแนวนอน (horizOverlap >= 0.50) ซึ่งบ่งชี้ว่าอยู่ในคอลัมน์เดียวกัน/กล่องข้อความแนวตั้งเดียวกัน
   const overlapHeight = Math.max(0, Math.min(a.bbox.y1, b.bbox.y1) - Math.max(a.bbox.y0, b.bbox.y0));
   const vertOverlapRatio = overlapHeight / Math.max(1, minHeight);
-  if (vertOverlapRatio > 0.25) {
+  if (vertOverlapRatio > 0.25 && horizOverlap < 0.50) {
     return false;
   }
 
-  const horizOverlap = getHorizontalOverlapRatio(a.bbox, b.bbox);
   const vertGap = getVerticalGap(a.bbox, b.bbox);
 
   const topLine = a.bbox.y0 <= b.bbox.y0 ? a : b;
@@ -169,9 +195,38 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
     }
   }
 
+  // (e) Hyphen continuation override (e.g., "ASS-" on top line, "HOLE" on bottom line)
+  const isHyphenContinuation = /[A-Za-z][\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u00AD]$/.test(topText)
+    && /^[A-Za-z]/.test(bottomLine.text.trim());
+  if (isHyphenContinuation && horizOverlap >= 0.25 && vertGap <= 3.0 * avgHeight) {
+    return true;
+  }
+
+  // (f) Standalone imperative/exclamation clause guard (e.g., "SUCK" top line vs "YOU KEEP" bottom line)
+  const SINGLE_IMPERATIVE_OR_EXCLAMATION_RE = /^(?:SUCK|STOP|S-STOP|LOOK|WAIT|HELP|NO|YES|CUM|FU*CK|SHIT|DAMN|HEY|AH|OH|WOW|PLEASE)[!.,?…]*$/i;
+  const NEW_CLAUSE_START_RE = /^(?:YOU|I|HE|SHE|WE|THEY|IT|IF|BUT|DON['’]?T|CAN['’]?T|WONT|THAT['’]?S|THIS|THERE)[!.,?\s]/i;
+  if (SINGLE_IMPERATIVE_OR_EXCLAMATION_RE.test(topText) && NEW_CLAUSE_START_RE.test(bottomLine.text.trim())) {
+    if (vertGap > minHeight * 0.2) {
+      return false;
+    }
+  }
+
   // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
-  // 4. Vertical gap <= 1.5x ความสูงเฉลี่ยของสอง lines
-  return horizOverlap >= 0.30 && vertGap <= 1.5 * avgHeight;
+  // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines (หรือ 3.2x สำหรับภาษาอังกฤษแนวตั้งที่จัดระนาบเดียวกัน)
+  const isBothEnglish = isLikelyEnglishDialogue(a.text) && isLikelyEnglishDialogue(b.text);
+  const maxVertGap = isBothEnglish && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
+
+  // ปรับปรุง: สำหรับบทสนทนาภาษาอังกฤษในบอลลูนแนวตั้งที่มีการจัดกึ่งกลาง (Centered-aligned speech balloon)
+  // หากเป็นบรรทัดที่เรียงซ้อนกันในแนวดิ่ง (isStacked) และระยะห่างแนวดิ่งชิดกัน (vertGap <= 1.8 * avgHeight) ให้ผ่อนปรน horizOverlap ลงมาเป็น 0.20
+  // เพื่อป้องกันไม่ให้คำสั้นสลับคำยาว (เช่น "NOISY" กับ "BITCH... HEY!" หรือ "LIKE" กับ "THE PIG YOU ARE") ถูกตัดขาดออกจากกัน
+  const isStacked = (bottomLine.bbox.y0 >= topLine.bbox.y0 + avgHeight * 0.4);
+  const centerDeltaX = Math.abs((a.bbox.x0 + a.bbox.x1) * 0.5 - (b.bbox.x0 + b.bbox.x1) * 0.5);
+  const maxAllowedCenterDeltaX = Math.max(bboxWidth(a.bbox), bboxWidth(b.bbox)) * 0.6;
+  if (isBothEnglish && isStacked && vertGap <= 1.8 * avgHeight && horizOverlap >= 0.20 && centerDeltaX <= maxAllowedCenterDeltaX) {
+    return true;
+  }
+
+  return horizOverlap >= 0.48 && vertGap <= maxVertGap;
 };
 
 /**
@@ -184,13 +239,26 @@ const classifyGroup = (lines: OCRLine[], pageWidth: number, pageHeight: number):
   const groupWidth = bboxWidth(mergedBBox);
   const groupHeight = bboxHeight(mergedBBox);
   const totalText = lines.map(l => normalizeInlineText(l.text)).join(' ');
+  
+  const hasCjk = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(totalText);
   const wordCount = totalText.split(/\s+/).filter(Boolean).length;
 
-  // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยว)
-  if (lines.length <= 2 && wordCount <= 3) {
-    const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
-    const isShortWord = totalText.length <= 6;
-    if (isTall || isShortWord) return 'sfx';
+  if (hasCjk) {
+    // สำหรับภาษาเกาหลี/ญี่ปุ่น (CJK): SFX ต้องเป็นคำสั้นสากลจริงๆ (ความยาว <= 3 อักขระ) และไม่มีเครื่องหมายคำถาม
+    if (lines.length <= 2 && totalText.length <= 3 && !totalText.includes('?')) {
+      const isTall = groupHeight / Math.max(1, groupWidth) > 1.2;
+      const isShortWord = totalText.length <= 2;
+      if (isTall || isShortWord) return 'sfx';
+    }
+  } else {
+    // SFX: คำสั้น, จำนวน lines น้อย, กล่องแนวตั้งสูงชะลูดเมื่อเทียบกับความกว้าง (หรือคำสั้นโดดเดี่ยวที่ไม่ใช่คำพูดทั่วไป)
+    const asciiCompact = totalText.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const isCommonDialogueWord = /^(YOU|FRONT|YOUFRONT|ME|HE|SHE|WE|US|THEY|HER|HIM|IT|IN|ON|AT|TO|OF|IS|ARE|WAS|WERE|DO|DID|GO|BE|MY|BY|SO|NO|YES|HI|OH|AH|OK|IF|OR|AM|AN|AS)$/i.test(asciiCompact);
+    if (lines.length <= 2 && wordCount <= 3) {
+      const isTall = groupHeight / Math.max(1, groupWidth) > 1.25;
+      const isShortWord = totalText.length <= 6 && !isCommonDialogueWord;
+      if (isTall || isShortWord) return 'sfx';
+    }
   }
 
   // Narration: กว้างมากครอบคลุมเกือบครึ่งหน้า หรือขอบซ้ายขวาเหยียดกว้างแบบจดหมาย
@@ -258,10 +326,31 @@ export const splitAggressiveMergedLines = (
 ): OCRLine[] => {
   const result: OCRLine[] = [];
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    let line = lines[lineIndex];
     if (!line.words || line.words.length <= 1) {
-      result.push(line);
-      continue;
+      const textWords = (line.text || '').trim().split(/\s+/).filter(Boolean);
+      if (textWords.length > 1 && line.bbox && (line.bbox.x1 - line.bbox.x0) > 0) {
+        const totalChars = Math.max(1, (line.text || '').length);
+        const width = line.bbox.x1 - line.bbox.x0;
+        let charCursor = 0;
+        const synthWords = textWords.map((word) => {
+          const wStartChar = (line.text || '').indexOf(word, charCursor);
+          const startIdx = wStartChar >= 0 ? wStartChar : charCursor;
+          charCursor = startIdx + word.length;
+          const x0 = line.bbox.x0 + startIdx * (width / totalChars);
+          const x1 = line.bbox.x0 + charCursor * (width / totalChars);
+          return {
+            text: word,
+            confidence: line.confidence || 90,
+            bbox: { x0, y0: line.bbox.y0, x1, y1: line.bbox.y1 },
+          };
+        });
+        line = { ...line, words: synthWords };
+      } else {
+        result.push(line);
+        continue;
+      }
     }
 
     const { words } = line;
@@ -274,27 +363,35 @@ export const splitAggressiveMergedLines = (
       const prevHeight = bboxHeight(prev.bbox);
       const currHeight = bboxHeight(curr.bbox);
       const avgHeight = (prevHeight + currHeight) * 0.5;
+      const minHeight = Math.min(prevHeight, currHeight);
+      const effectiveHeight = Math.min(avgHeight, minHeight * 1.4);
 
       const gap = curr.bbox.x0 - prev.bbox.x1;
 
-      // ทำไมถึงเขียนแบบนี้: เนื่องจากในการ์ตูน OCR มักจะรวมประโยคจากคนละบอลลูนหรือต่างคอลัมน์กันในแนวนอน
-      // การใช้ตัวคูณช่องว่างคงที่ (เช่น 2.2 หรือ 2.8) อาจไม่เพียงพอในการแยกข้อความที่อยู่ต่างกล่องคำพูด
-      // เราจึงลดเกณฑ์ตัวคูณช่องว่าง (effectiveGapMultiplier) ลงเมื่อพบเบาะแสคำจบประโยคด้วยเครื่องหมายวรรคตอน (เหลือ 0.85)
-      // หรือเมื่อคำถัดไปขึ้นต้นด้วยอักษรตัวใหญ่ (เช่น BEING, YOu!, SLASHED) ซึ่งเป็นสัญญาณของการเริ่มคำพูด/ประโยคใหม่ (เหลือ 1.35)
-      // เพื่อให้สามารถหั่นแบ่งบรรทัดออกจากกันได้อย่างแม่นยำขึ้นโดยไม่ไปรบกวนช่องว่างคำตามปกติในประโยคเดียวกัน
       let effectiveGapMultiplier = gapMultiplier;
       const prevText = prev.text.trim();
       const currText = curr.text.trim();
 
       if (/[!?.,;]$/.test(prevText)) {
         effectiveGapMultiplier = 0.85;
+      } else if (/-$/.test(prevText)) {
+        effectiveGapMultiplier = 3.5;
       } else if (/^[A-Z]/.test(currText)) {
-        effectiveGapMultiplier = 0.9;
+        effectiveGapMultiplier = 0.75;
       }
 
-      if (gap > effectiveGapMultiplier * avgHeight) {
+      const isHyphenated = /-$/.test(prevText) && gap < avgHeight * 0.75;
+      const isHeightMismatch = prevHeight > currHeight * 2.2 || currHeight > prevHeight * 2.2;
+      // cross-balloon gap: ปรับความละเอียดลดขีดจำกัดล่างลงเพื่อป้องกันเคสคำพิมพ์ใหญ่โดนรวม (เช่น FiTTiNG FOR BEING)
+      const isCapitalizedWordBoundary = /^[A-Z]/.test(currText) && gap >= Math.max(14, minHeight * 0.75);
+      const isCrossBalloonCandidate = !isHyphenated && (
+        isHeightMismatch || isCapitalizedWordBoundary || gap > 0.9 * minHeight
+      );
+
+      const absoluteSplitThreshold = 0.9;
+      if (!isHyphenated && (isCrossBalloonCandidate || gap > effectiveGapMultiplier * avgHeight || gap > absoluteSplitThreshold * minHeight)) {
         result.push({
-          ...line, // preserve original confidence, engine hints, etc.
+          ...line,
           text: currentGroup.map(w => w.text).join(' '),
           bbox: mergeBBoxes(currentGroup.map(w => w.bbox)),
           words: currentGroup,
@@ -390,11 +487,17 @@ export const buildLayerGroupsFromOCR = (
   // Attach original index before splitting
   const linesWithIndex = sanitizedRawLines.map((line, idx) => ({
     ...line,
+    text: line.text,
     originalIndex: idx
   }));
 
   // Pre-process: หั่นบรรทัดที่โดน EasyOCR/PaddleOCR มัดรวมข้าม panel ออกจากกัน
-  const rawSplitLines = splitAggressiveMergedLines(linesWithIndex, 2.2) as Array<OCRLine & { originalIndex?: number }>;
+  // ทำไมถึงเขียนแบบนี้: ตรวจสอบ _splitDone flag เพื่อป้องกัน triple-split bug
+  // เมื่อ ocrResult.lines ผ่าน splitAggressiveMergedLines มาจาก store แล้ว (ใน setPageOCR/setPageOCRForEngine)
+  // การ split ซ้ำจะทำให้ lineIndex ที่ถูก assign ให้ layer ไม่ตรงกับ index ใน source lines array ที่ใช้ใน export
+  const rawSplitLines = (ocrResult as any)._splitDone
+    ? (linesWithIndex as Array<OCRLine & { originalIndex?: number }>)
+    : (splitAggressiveMergedLines(linesWithIndex, 2.2) as Array<OCRLine & { originalIndex?: number }>);
 
   // Re-sanitize to ensure reconstructed word bboxes from splitAggressiveMergedLines don't bypass clamping
   const lines = rawSplitLines.map(line => {
@@ -458,8 +561,16 @@ export const buildLayerGroupsFromOCR = (
     component.sort((a, b) => {
       const lineA = lines[a];
       const lineB = lines[b];
-      if (lineA.bbox.y0 !== lineB.bbox.y0) return lineA.bbox.y0 - lineB.bbox.y0;
-      return lineA.bbox.x0 - lineB.bbox.x0;
+      const hA = lineA.bbox.y1 - lineA.bbox.y0;
+      const hB = lineB.bbox.y1 - lineB.bbox.y0;
+      const avgH = (hA + hB) * 0.5;
+
+      const yDiff = Math.abs(lineA.bbox.y0 - lineB.bbox.y0);
+      // หากอยู่ในแนวบรรทัดเดียวกัน (ต่างกันไม่เกิน 50% ของความสูงเฉลี่ย) ให้เรียงจากซ้ายไปขวา
+      if (yDiff < avgH * 0.5) {
+        return lineA.bbox.x0 - lineB.bbox.x0;
+      }
+      return lineA.bbox.y0 - lineB.bbox.y0;
     });
 
     components.push(component);
@@ -491,14 +602,21 @@ export const buildLayerGroupsFromOCR = (
       const layerId = generateLayerId();
       layerIds.push(layerId);
 
-      const translatedText = translatedByIndex?.get(lineIdx);
-      const displayText = translatedText || normalizeInlineText(line.text);
+      const targetIdx = typeof line.originalIndex === 'number' ? line.originalIndex : lineIdx;
+      let translatedText = translatedByIndex?.get(targetIdx) ?? translatedByIndex?.get(lineIdx);
       const sourceText = normalizeInlineText(line.text);
+      if (!translatedText || (/[a-zA-Z]/.test(translatedText) && !/[\u0E00-\u0E7F]/.test(translatedText))) {
+        const dictMatch = lookupShortPhraseTh(sourceText);
+        if (dictMatch) {
+          translatedText = dictMatch;
+        }
+      }
+      const displayText = translatedText || sourceText;
       const h = bboxHeight(line.bbox);
 
       allLayers.push({
         id: layerId,
-        lineIndex: lineIdx,
+        lineIndex: targetIdx,
         groupId,
         text: displayText,
         sourceText,

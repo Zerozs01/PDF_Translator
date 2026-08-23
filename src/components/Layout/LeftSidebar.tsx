@@ -12,7 +12,7 @@
  * กด Layer icon จะ flip sidebar เป็น Layer management panel
  */
 
-import React, { useMemo, useState, lazy, Suspense, useCallback } from 'react';
+import React, { useMemo, useState, lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
@@ -52,12 +52,35 @@ const ThumbnailItem: React.FC<ThumbnailItemProps> = React.memo(({
   isSelected,
   setPage,
 }) => {
+  const [hasBeenVisible, setHasBeenVisible] = useState(isSelected || pageNum <= 4);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (hasBeenVisible) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setHasBeenVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '400px 0px 400px 0px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasBeenVisible]);
+
   const handleClick = useCallback(() => {
     setPage(pageNum);
   }, [pageNum, setPage]);
 
   return (
     <div 
+      ref={containerRef}
       onClick={handleClick}
       className={`cursor-pointer group relative rounded-lg overflow-hidden border-2 transition-all ${
         isSelected 
@@ -65,14 +88,21 @@ const ThumbnailItem: React.FC<ThumbnailItemProps> = React.memo(({
           : 'border-white/10 hover:border-white/25'
       }`}
     >
-      <div className="relative bg-white flex justify-center items-center overflow-hidden w-full">
-        <Page 
-          pageNumber={pageNum} 
-          width={190} 
-          renderTextLayer={false}
-          renderAnnotationLayer={false}
-          className="opacity-90 group-hover:opacity-100 transition-opacity"
-        />
+      <div className="relative bg-[#0d1117] flex justify-center items-center overflow-hidden w-full min-h-[140px] aspect-[1/1.414]">
+        {hasBeenVisible ? (
+          <Page 
+            pageNumber={pageNum} 
+            width={190} 
+            renderTextLayer={false}
+            renderAnnotationLayer={false}
+            className="opacity-90 group-hover:opacity-100 transition-opacity bg-white"
+            onRenderError={(err) => console.warn(`[LeftSidebar] Page ${pageNum} thumbnail error:`, err)}
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center text-slate-500 text-xs">
+            <span className="font-mono opacity-50">Page {pageNum}</span>
+          </div>
+        )}
         {/* Page Number Badge */}
         <div className="absolute bottom-1 right-1 bg-slate-900/80 text-white text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur-sm">
           {pageNum}
@@ -164,7 +194,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
   const viewMode = useProjectStore((state) => state.viewMode);
   const setViewMode = useProjectStore((state) => state.setViewMode);
   const [displayMode, setDisplayMode] = useState<'gallery' | 'list'>('gallery');
-  const [sidebarView, setSidebarView] = useState<SidebarView>('pages');
+  const fileType = useProjectStore((state) => state.fileType);
+  const [sidebarView, setSidebarView] = useState<SidebarView>(fileType === 'pdf' ? 'pages' : 'layers');
+
+  useEffect(() => {
+    if (fileType !== 'pdf') {
+      setSidebarView('layers');
+    } else {
+      setSidebarView('pages');
+    }
+  }, [fileType]);
+
 
 
 
@@ -178,12 +218,64 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
 
   const docKey = fileUrl ?? 'pdf-thumbs';
 
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('pdf_translator.left_sidebar_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (parsed >= 160 && parsed <= 500) return parsed;
+      }
+    } catch {}
+    return 240;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.min(Math.max(e.clientX, 160), 500);
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        localStorage.setItem('pdf_translator.left_sidebar_width', String(sidebarWidth));
+      } catch {}
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, sidebarWidth]);
+
   return (
     <aside 
-      className={`bg-slate-950/60 border-r border-white/10 backdrop-blur-xl flex flex-col transition-all duration-300 ease-in-out relative shrink-0 overflow-visible z-20 ${
-        isOpen ? (sidebarView === 'pages' ? 'w-56' : 'w-80') : 'w-0'
-      }`}
+      style={{
+        width: isOpen ? `${sidebarWidth}px` : '0px',
+        transition: isResizing ? 'none' : 'width 0.2s ease-in-out'
+      }}
+      className="bg-slate-950/60 border-r border-white/10 backdrop-blur-xl flex flex-col relative shrink-0 overflow-visible z-20"
     >
+      {/* Draggable Resize Handle */}
+      {isOpen && (
+        <div
+          onMouseDown={startResizing}
+          className="absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize hover:bg-sky-500/50 active:bg-sky-500/80 transition-colors z-30 group"
+          title="Drag to resize sidebar"
+        >
+          <div className="w-[1px] h-full mx-auto bg-transparent group-hover:bg-sky-400 group-active:bg-sky-400" />
+        </div>
+      )}
       <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0'}`}>
         {/* Header - Combined Controls */}
         <div className="p-2 border-b border-white/10 bg-slate-950/35">
@@ -191,106 +283,112 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({ isOpen, onT
             {/* Left section: Display Mode Toggle + Layer Toggle */}
             <div className="flex items-center gap-1">
               {/* Display Mode Toggle (Gallery/List) - visible only in pages view */}
-              <div className={`flex bg-slate-900/70 border border-white/10 rounded p-0.5 transition-opacity ${
-                sidebarView === 'pages' ? 'opacity-100' : 'opacity-30 pointer-events-none'
-              }`}>
-                <button 
-                  onClick={() => setDisplayMode('gallery')}
-                  className={`p-1 rounded transition-colors ${
-                    displayMode === 'gallery' 
-                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title="Gallery View"
-                >
-                  <Grid3X3 size={12} />
-                </button>
-                <button 
-                  onClick={() => setDisplayMode('list')}
-                  className={`p-1 rounded transition-colors ${
-                    displayMode === 'list' 
-                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title="List View"
-                >
-                  <List size={12} />
-                </button>
-              </div>
+              {fileType === 'pdf' && (
+                <div className={`flex bg-slate-900/70 border border-white/10 rounded p-0.5 transition-opacity ${
+                  sidebarView === 'pages' ? 'opacity-100' : 'opacity-30 pointer-events-none'
+                }`}>
+                  <button 
+                    onClick={() => setDisplayMode('gallery')}
+                    className={`p-1 rounded transition-colors ${
+                      displayMode === 'gallery' 
+                        ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="Gallery View"
+                  >
+                    <Grid3X3 size={12} />
+                  </button>
+                  <button 
+                    onClick={() => setDisplayMode('list')}
+                    className={`p-1 rounded transition-colors ${
+                      displayMode === 'list' 
+                        ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="List View"
+                  >
+                    <List size={12} />
+                  </button>
+                </div>
+              )}
 
               {/* Layer Toggle Button */}
               <button
-                onClick={() => setSidebarView(sidebarView === 'layers' ? 'pages' : 'layers')}
+                onClick={() => setSidebarView(fileType === 'pdf' ? (sidebarView === 'layers' ? 'pages' : 'layers') : 'layers')}
                 className={`p-1 rounded transition-all duration-200 border ${
                   sidebarView === 'layers'
                     ? 'bg-gradient-to-r from-[#8B5CF6]/90 to-[#6366F1]/90 text-white border-[#8B5CF6]/50 shadow-[0_0_8px_rgba(139,92,246,0.35)]'
                     : 'bg-slate-900/70 border-white/10 text-slate-400 hover:text-[#8B5CF6] hover:border-[#8B5CF6]/30'
                 }`}
-                title={sidebarView === 'layers' ? 'Back to Pages' : 'Open Layer Panel'}
+                title={sidebarView === 'layers' ? (fileType === 'pdf' ? 'Back to Pages' : 'Layer Panel') : 'Open Layer Panel'}
               >
                 <Layers size={12} />
               </button>
 
               {/* Glossary Toggle Button */}
               <button
-                onClick={() => setSidebarView(sidebarView === 'glossary' ? 'pages' : 'glossary')}
+                onClick={() => setSidebarView(fileType === 'pdf' ? (sidebarView === 'glossary' ? 'pages' : 'glossary') : 'glossary')}
                 className={`p-1 rounded transition-all duration-200 border ${
                   sidebarView === 'glossary'
                     ? 'bg-gradient-to-r from-pink-500/90 to-rose-500/90 text-white border-pink-500/50 shadow-[0_0_8px_rgba(236,72,153,0.35)]'
                     : 'bg-slate-900/70 border-white/10 text-slate-400 hover:text-pink-400 hover:border-pink-500/30'
                 }`}
-                title={sidebarView === 'glossary' ? 'Back to Pages' : 'Open Glossary Panel'}
+                title={sidebarView === 'glossary' ? (fileType === 'pdf' ? 'Back to Pages' : 'Glossary Panel') : 'Open Glossary Panel'}
               >
                 <BookOpen size={12} />
               </button>
             </div>
 
             {/* Right section: View Mode Toggle (Single/Scroll) */}
-            <div className="flex bg-slate-900/70 border border-white/10 rounded p-0.5">
-              <button 
-                onClick={() => setViewMode('single')}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                  viewMode === 'single' 
-                    ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Single Page"
-              >
-                Single
-              </button>
-              <button 
-                onClick={() => setViewMode('continuous')}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                  viewMode === 'continuous' 
-                    ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Continuous Scroll"
-              >
-                Scroll
-              </button>
-            </div>
+            {fileType === 'pdf' && (
+              <div className="flex bg-slate-900/70 border border-white/10 rounded p-0.5">
+                <button 
+                  onClick={() => setViewMode('single')}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                    viewMode === 'single' 
+                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Single Page"
+                >
+                  Single
+                </button>
+                <button 
+                  onClick={() => setViewMode('continuous')}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                    viewMode === 'continuous' 
+                      ? 'bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] text-white' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Continuous Scroll"
+                >
+                  Scroll
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Page Navigation Input — visible in both views */}
-        <div className="p-2 border-b border-white/10 bg-slate-950/25">
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] text-slate-500">Go to:</span>
-            <input 
-              type="number" 
-              value={currentPage}
-              onChange={(e) => {
-                const page = parseInt(e.target.value);
-                if (page >= 1 && page <= totalPages) setPage(page);
-              }}
-              className="flex-1 w-full bg-slate-900/70 border border-white/15 rounded px-2 py-1 text-xs text-center text-white focus:outline-none focus:border-[#2B9BFF]/65"
-              min={1}
-              max={totalPages}
-            />
-            <span className="text-[10px] text-slate-500">/ {totalPages}</span>
+        {fileType === 'pdf' && (
+          <div className="p-2 border-b border-white/10 bg-slate-950/25">
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-slate-500">Go to:</span>
+              <input 
+                type="number" 
+                value={currentPage}
+                onChange={(e) => {
+                  const page = parseInt(e.target.value);
+                  if (page >= 1 && page <= totalPages) setPage(page);
+                }}
+                className="flex-1 w-full bg-slate-900/70 border border-white/15 rounded px-2 py-1 text-xs text-center text-white focus:outline-none focus:border-[#2B9BFF]/65"
+                min={1}
+                max={totalPages}
+              />
+              <span className="text-[10px] text-slate-500">/ {totalPages}</span>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Main Content Area — flips between pages and layers */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">

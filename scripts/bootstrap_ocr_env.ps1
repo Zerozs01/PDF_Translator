@@ -9,6 +9,9 @@ if ($env:OCR_USE_GPU -eq '1' -or $env:OCR_USE_ZLUDA -eq '1' -or $env:USE_ZLUDA -
   $UseGPU = $true
 }
 
+# Track GPU vendor for Python bridge optimization (intel/amd/nvidia/unknown)
+$DetectedGpuVendor = if ($env:OCR_GPU_VENDOR) { $env:OCR_GPU_VENDOR } else { 'unknown' }
+
 if (-not $UseGPU) {
   # Auto-detect GPU for Windows platform to maximize AMD/Intel/NVIDIA utilization out-of-the-box
   try {
@@ -19,10 +22,23 @@ if (-not $UseGPU) {
     if ($gpus) {
       foreach ($gpu in $gpus) {
         $gpuName = "$($gpu.Name) $($gpu.Caption)".ToLower()
-        if ($gpuName -like "*nvidia*" -or $gpuName -like "*amd*" -or $gpuName -like "*radeon*" -or $gpuName -like "*intel(r) iris*" -or $gpuName -like "*intel(r) arc*") {
-          Write-Host "[ocr:bootstrap] Auto-detected GPU capable hardware: $($gpu.Name)"
-          Write-Host '[ocr:bootstrap] Enabling GPU mode automatically to accelerate OCR performance.'
+        if ($gpuName -like "*nvidia*") {
+          Write-Host "[ocr:bootstrap] Auto-detected NVIDIA GPU: $($gpu.Name)"
+          Write-Host '[ocr:bootstrap] Enabling GPU mode (CUDA/DirectML) to accelerate OCR performance.'
           $UseGPU = $true
+          $DetectedGpuVendor = 'nvidia'
+          break
+        } elseif ($gpuName -like "*amd*" -or $gpuName -like "*radeon*") {
+          Write-Host "[ocr:bootstrap] Auto-detected AMD GPU: $($gpu.Name)"
+          Write-Host '[ocr:bootstrap] Enabling GPU mode (DirectML) to accelerate OCR performance.'
+          $UseGPU = $true
+          $DetectedGpuVendor = 'amd'
+          break
+        } elseif ($gpuName -like "*intel*") {
+          Write-Host "[ocr:bootstrap] Auto-detected Intel GPU: $($gpu.Name)"
+          Write-Host '[ocr:bootstrap] Enabling GPU mode (DirectML) to accelerate OCR performance.'
+          $UseGPU = $true
+          $DetectedGpuVendor = 'intel'
           break
         }
       }
@@ -30,6 +46,12 @@ if (-not $UseGPU) {
   } catch {
     # Fail silently
   }
+}
+
+# Persist vendor info to environment so Python bridge can optimize DirectML device selection
+if ($DetectedGpuVendor -ne 'unknown') {
+  $env:OCR_GPU_VENDOR = $DetectedGpuVendor
+  Write-Host "[ocr:bootstrap] GPU vendor detected: $DetectedGpuVendor (OCR_GPU_VENDOR=$DetectedGpuVendor)"
 }
 
 $ErrorActionPreference = 'Stop'
@@ -195,8 +217,10 @@ function Install-PaddleStack {
       if ($LASTEXITCODE -ne 0) {
         throw '[ocr:bootstrap] Failed to install paddlepaddle CPU base.'
       }
-      Write-Host '[ocr:bootstrap] Uninstalling conflicting standard onnxruntime if present'
-      & $PythonPath -m pip uninstall -y onnxruntime 2>&1 | Out-Null
+      $oldPreference = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      & $PythonPath -m pip uninstall -y onnxruntime --quiet
+      $ErrorActionPreference = $oldPreference
       Write-Host '[ocr:bootstrap] Installing paddle2onnx and onnxruntime-directml'
       & $PythonPath -m pip install paddle2onnx==1.3.1 onnxruntime-directml
       if ($LASTEXITCODE -ne 0) {
@@ -220,6 +244,18 @@ function Install-PaddleStack {
   }
 
   Invoke-CheckedExternal -Executable $PythonPath -Arguments @('-m', 'pip', 'install', 'paddleocr<=2.8.1') -Step 'Installing paddleocr'
+
+  # DirectML fix: paddleocr depends on 'onnxruntime' (CPU) which overrides 'onnxruntime-directml'.
+  # We must uninstall the standard CPU onnxruntime package and force-reinstall onnxruntime-directml.
+  if ($UseGPU -and -not $isNvidia) {
+    Write-Host '[ocr:bootstrap] Resolving DirectML conflict: Re-enforcing onnxruntime-directml over CPU build'
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $PythonPath -m pip uninstall -y onnxruntime --quiet
+    $ErrorActionPreference = $oldPreference
+    & $PythonPath -m pip install --force-reinstall paddle2onnx==1.3.1 onnxruntime-directml
+  }
+
   # Re-pin numpy<2 after dependency installs
   & $PythonPath -m pip install 'numpy<2' | Out-Null
 }
@@ -328,10 +364,62 @@ if ($Engines -contains 'easyocr') {
   Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'easyocr') -Step 'Installing easyocr'
 }
 
-Write-Host '[ocr:bootstrap] Enforcing final numpy<2 downgrade for PaddleOCR/EasyOCR compatibility'
+Write-Host '[ocr:bootstrap] Ensuring argostranslate is installed for offline translation'
+Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'argostranslate') -Step 'Installing argostranslate'
+
+Write-Host '[ocr:bootstrap] Ensuring kiwipiepy is installed for Korean spacing correction'
+Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'kiwipiepy') -Step 'Installing kiwipiepy'
+
+Write-Host '[ocr:bootstrap] Ensuring ctranslate2, transformers, sentencepiece, and huggingface_hub are installed for M2M100 translation'
+Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'ctranslate2', 'transformers', 'sentencepiece', 'huggingface_hub') -Step 'Installing CTranslate2 and HuggingFace dependencies'
+
+
+Write-Host '[ocr:bootstrap] Enforcing final numpy<2, opencv<4.10, and DirectML overrides for compatibility'
 Get-Process | Where-Object { $_.Path -like "*$venvPath*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
-Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'numpy<2') -Step 'Enforcing final numpy<2'
+
+# DirectML fix: argostranslate or other packages might have pulled in CPU onnxruntime, overriding onnxruntime-directml.
+# Re-enforce onnxruntime-directml over CPU build for non-NVIDIA GPUs.
+if ($UseGPU -and $DetectedGpuVendor -ne 'nvidia') {
+  Write-Host '[ocr:bootstrap] Final DirectML check: Re-enforcing onnxruntime-directml over CPU build'
+  $oldPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & $pythonExe -m pip uninstall -y onnxruntime --quiet
+  $ErrorActionPreference = $oldPreference
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', '--force-reinstall', 'paddle2onnx==1.3.1', 'onnxruntime-directml') -Step 'Re-enforcing onnxruntime-directml'
+}
+
+Invoke-CheckedExternal -Executable $pythonExe -Arguments @('-m', 'pip', 'install', 'numpy<2', 'opencv-python-headless<4.10', 'opencv-python<4.10') -Step 'Enforcing final numpy<2'
+
+$argosInstallScript = Join-Path $PSScriptRoot 'argos_install_pair.py'
+try {
+  Write-Host '[ocr:bootstrap] Installing Argos Translate English to Thai model pair'
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @($argosInstallScript, '--from', 'en', '--to', 'th') -Step 'Installing Argos en-th translation model'
+} catch {
+  Write-Warning "[ocr:bootstrap] Failed to install Argos en-th model: $_"
+}
+
+try {
+  Write-Host '[ocr:bootstrap] Installing Argos Translate Korean to English model pair'
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @($argosInstallScript, '--from', 'ko', '--to', 'en') -Step 'Installing Argos ko-en translation model'
+} catch {
+  Write-Warning "[ocr:bootstrap] Failed to install Argos ko-en model: $_"
+}
+
+try {
+  Write-Host '[ocr:bootstrap] Installing Argos Translate Spanish to English model pair'
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @($argosInstallScript, '--from', 'es', '--to', 'en') -Step 'Installing Argos es-en translation model'
+} catch {
+  Write-Warning "[ocr:bootstrap] Failed to install Argos es-en model: $_"
+}
+$m2mDownloadScript = Join-Path $PSScriptRoot 'download_m2m100.py'
+try {
+  Write-Host '[ocr:bootstrap] Downloading M2M100 CTranslate2 quantized model...'
+  Invoke-CheckedExternal -Executable $pythonExe -Arguments @($m2mDownloadScript) -Step 'Downloading M2M100 model'
+} catch {
+  Write-Warning "[ocr:bootstrap] Failed to download M2M100 model: $_"
+}
+
 
 if (-not $SkipPrewarm) {
   if (-not (Test-Path $bridgePath)) {
@@ -347,13 +435,18 @@ if (-not $SkipPrewarm) {
     Write-Host "[ocr:bootstrap] Running prewarm under ZLUDA ($zludaPath)"
   }
 
+  # Ensure GPU vendor is forwarded to the prewarm Python process
+  if ($env:OCR_GPU_VENDOR) {
+    Write-Host "[ocr:bootstrap] Forwarding OCR_GPU_VENDOR=$($env:OCR_GPU_VENDOR) to prewarm process"
+  }
+
   if ($Engines -contains 'paddleocr') {
-    Write-Host "[ocr:bootstrap] Prewarming PaddleOCR model(s) (language=$PrewarmLanguage)"
+    Write-Host "[ocr:bootstrap] Prewarming PaddleOCR model(s) (language=$PrewarmLanguage, vendor=$($env:OCR_GPU_VENDOR))"
     Invoke-CheckedExternal -Executable $execCmd -Arguments ($execArgs + @($bridgePath, '--action', 'prewarm', '--engine', 'paddleocr', '--language', $PrewarmLanguage, '--pipeline-profile', 'panel')) -Step 'Prewarming PaddleOCR'
   }
 
   if ($Engines -contains 'easyocr') {
-    Write-Host "[ocr:bootstrap] Prewarming EasyOCR model(s) (language=$PrewarmLanguage)"
+    Write-Host "[ocr:bootstrap] Prewarming EasyOCR model(s) (language=$PrewarmLanguage, vendor=$($env:OCR_GPU_VENDOR))"
     Invoke-CheckedExternal -Executable $execCmd -Arguments ($execArgs + @($bridgePath, '--action', 'prewarm', '--engine', 'easyocr', '--language', $PrewarmLanguage, '--pipeline-profile', 'panel')) -Step 'Prewarming EasyOCR'
   }
 }

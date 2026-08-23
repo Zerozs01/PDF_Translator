@@ -263,5 +263,35 @@ describe('deriveBalloonAwareLayoutGrouping', () => {
     expect(groupWithBeing).toBeDefined();
     expect(groupWithFitting!.id).not.toEqual(groupWithBeing!.id);
   });
+
+  test('pussy balloon grouping debug test', () => {
+    const input: LayoutGroupingInput = {
+      pageNumber: 7,
+      imageWidth: 5000,
+      imageHeight: 8000,
+      mode: 'balloon-aware',
+      readingMode: 'ltr',
+      lines: [
+        // Dummy lines to stabilize baseHeight (median height) around 80px
+        line(90, 'DUMMY 1', 10, 10, 50, 90),
+        line(91, 'DUMMY 2', 10, 120, 50, 200),
+        line(92, 'DUMMY 3', 10, 230, 50, 310),
+        line(93, 'DUMMY 4', 10, 340, 50, 420),
+        line(94, 'DUMMY 5', 10, 450, 50, 530),
+
+        // Target balloon
+        line(45, 'UGH,', 4374, 3448, 4563, 3586, { sortHintX: 4374, sortHintY: 3448 }),
+        line(48, 'HAA!', 4366, 3590, 4579, 3729, { sortHintX: 4366, sortHintY: 3590 }),
+        line(51, 'HER', 4382, 3745, 4567, 3868, { sortHintX: 4382, sortHintY: 3745 }),
+        line(52, "PuSSy's", 4273, 3887, 4664, 4023, { sortHintX: 4273, sortHintY: 3887 }),
+        line(53, '6o', 4386, 4042, 4563, 4169, { sortHintX: 4386, sortHintY: 4042 }),
+        line(54, 'STiNKY', 4322, 4192, 4623, 4319, { sortHintX: 4322, sortHintY: 4192 }),
+      ],
+    };
+
+    const result = deriveBalloonAwareLayoutGrouping(input);
+    console.log('DEBUG GROUPS:', result.groups.map(g => g.orderedLineIndexes));
+    console.log('DEBUG UNGROUPED:', result.ungroupedLineIndexes);
+  });
 });
 

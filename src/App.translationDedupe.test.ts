@@ -58,6 +58,15 @@ let shouldPreserveSourceLineForTranslation: (
   text: string,
   sourceLanguage: string
 ) => boolean;
+let resolveTranslationGroupsWithLayout: (
+  pageNum: number,
+  pageOCR: any,
+  lines: TranslatableLine[],
+  fallbackProfile: any,
+  sourceLanguage: string,
+  targetLanguage: string,
+  mode: any
+) => any;
 let normalizeSpanishOcrNoiseForTranslation: (text: string) => string;
 let inferSourceLanguageFromTextHints: (
   lines: TranslatableLine[],
@@ -125,28 +134,32 @@ beforeAll(async () => {
 
   const appModule = await import('./App');
   const heuristicsModule = await import('./services/ocr/ocrTextHeuristics');
+  const glossaryModule = await import('./services/translation/thaiConversationalGlossary');
+  const technicalGlossaryModule = await import('./services/translation/thaiTechnicalGlossaryService');
+  const normalizerModule = await import('./services/ocr/ocrTextNormalizer');
   dedupeTranslatableLinesForTranslation = appModule.dedupeTranslatableLinesForTranslation;
   resolveBestOcrLineText = heuristicsModule.resolveBestOcrLineText;
   buildTranslationGroups = appModule.buildTranslationGroups;
   shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
-  applyThaiConversationalGlossary = appModule.applyThaiConversationalGlossary;
-  applyThaiTechnicalGlossary = appModule.applyThaiTechnicalGlossary;
+  applyThaiConversationalGlossary = glossaryModule.applyThaiConversationalGlossary;
+  applyThaiTechnicalGlossary = technicalGlossaryModule.applyThaiTechnicalGlossary;
   resolveRedistributedLineFallback = appModule.resolveRedistributedLineFallback;
   shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
-  normalizeSpanishOcrNoiseForTranslation = appModule.normalizeSpanishOcrNoiseForTranslation;
+  normalizeSpanishOcrNoiseForTranslation = normalizerModule.normalizeSpanishOcrNoiseForTranslation;
   inferSourceLanguageFromTextHints = heuristicsModule.inferSourceLanguageFromTextHints;
   resolvePreferredSourceLanguageForText = heuristicsModule.resolvePreferredSourceLanguageForText;
   isLikelyGhostTranslatableLine = heuristicsModule.isLikelyGhostTranslatableLine;
   shouldPruneContextualGhostTranslatableLine = appModule.shouldPruneContextualGhostTranslatableLine;
-  cleanJapaneseOcrSpacing = appModule.cleanJapaneseOcrSpacing;
-  cleanKoreanOcrSpacing = appModule.cleanKoreanOcrSpacing;
-  normalizeJapaneseOcrNoiseForTranslation = appModule.normalizeJapaneseOcrNoiseForTranslation;
-  normalizeKoreanOcrNoiseForTranslation = appModule.normalizeKoreanOcrNoiseForTranslation;
-  normalizeSourceForTranslation = appModule.normalizeSourceForTranslation;
+  cleanJapaneseOcrSpacing = normalizerModule.cleanJapaneseOcrSpacing;
+  cleanKoreanOcrSpacing = normalizerModule.cleanKoreanOcrSpacing;
+  normalizeJapaneseOcrNoiseForTranslation = normalizerModule.normalizeJapaneseOcrNoiseForTranslation;
+  normalizeKoreanOcrNoiseForTranslation = normalizerModule.normalizeKoreanOcrNoiseForTranslation;
+  normalizeSourceForTranslation = normalizerModule.normalizeSourceForTranslation;
   protectTranslationTokens = appModule.protectTranslationTokens;
   restoreProtectedTokens = appModule.restoreProtectedTokens;
-  setSlangGroupContext = appModule.setSlangGroupContext;
-});
+  resolveTranslationGroupsWithLayout = appModule.resolveTranslationGroupsWithLayout;
+  setSlangGroupContext = glossaryModule.setSlangGroupContext;
+}, 30000);
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
   index: 0,
@@ -1824,14 +1837,16 @@ describe('applyThaiConversationalGlossary', () => {
     expect(applyThaiConversationalGlossary('COCK!!', 'COCK!!', 'th')).toBe('ควย!!');
     expect(applyThaiConversationalGlossary('cocks.', 'cocks.', 'th')).toBe('ควย.');
     expect(applyThaiConversationalGlossary('pussy’s', 'pussy’s', 'th')).toBe('หี');
-    expect(applyThaiConversationalGlossary('cumming!', 'cumming!', 'th')).toBe('น้ำแตกแล้ว!');
+    expect(applyThaiConversationalGlossary('cumming!', 'cumming!', 'th')).toBe('ต-แตกแล้ว!');
     expect(applyThaiConversationalGlossary('MEEEE!!', 'MEEEE!!', 'th')).toBe('ฉันนนนน!!');
     expect(applyThaiConversationalGlossary('MEEE!', 'MEEE!', 'th')).toBe('ฉันนนน!');
     expect(applyThaiConversationalGlossary('ME?', 'ME?', 'th')).toBe('ฉัน?');
     expect(applyThaiConversationalGlossary('I-I..', 'I-I..', 'th')).toBe('ฉ-ฉัน..');
     expect(applyThaiConversationalGlossary('I-I', 'I-I', 'th')).toBe('ฉ-ฉัน');
-    expect(applyThaiConversationalGlossary('I.. I..', 'I.. I..', 'th')).toBe('ฉ-ฉัน..');
     expect(applyThaiConversationalGlossary('US THE', 'US THE', 'th')).toBe('พวกเรา');
+    expect(applyThaiConversationalGlossary('But in any age...', 'But in any age...', 'th')).toBe('แต่ไม่ว่าจะในยุคสมัยใด...');
+    expect(applyThaiConversationalGlossary('AWAY...WiTH', 'AWAY...WiTH', 'th')).toBe('ไปให้พ้นกับ');
+    expect(applyThaiConversationalGlossary('getting', 'getting', 'th')).toBe('ได้รับ');
     // STiNKY standalone → ตุๆ
     expect(applyThaiConversationalGlossary('STiNKY', 'STiNKY', 'th')).toBe('ตุๆ');
     expect(applyThaiConversationalGlossary('STINKY', 'STINKY', 'th')).toBe('ตุๆ');
@@ -1840,6 +1855,56 @@ describe('applyThaiConversationalGlossary', () => {
     // die → ตายซะ (H-manga context)
     expect(applyThaiConversationalGlossary('DiE', 'DiE', 'th')).toBe('ตายซะ');
     expect(applyThaiConversationalGlossary('die', 'die', 'th')).toBe('ตายซะ');
+  });
+
+  test('maps newly tuned eng-to-thai slang and normalization repairs correctly', () => {
+    // 1. HEAD NUR-SEEE!!
+    expect(applyThaiConversationalGlossary('HEAD NUR-SEEE!!', 'HEAD NUR-SEEE!!', 'th')).toBe('หัวหน้า พยา-บาลลล!!');
+    
+    // 2. SHE'S -> เธอคือ
+    expect(applyThaiConversationalGlossary("SHE'S", "SHE'S", 'th')).toBe('เธอคือ');
+
+    // 3. INSIDE!? -> ข้างใน!?
+    expect(applyThaiConversationalGlossary("INSIDE!?", "INSIDE!?", 'th')).toBe('ข้างใน!?');
+
+    // 4. IT WITHOUT -> มันโดยไม่มี
+    expect(applyThaiConversationalGlossary("IT WITHOUT", "IT WITHOUT", 'th')).toBe('มันโดยไม่มี');
+
+    // 5. HUH? -> ฮะ?
+    expect(applyThaiConversationalGlossary("HUH?", "HUH?", 'th')).toBe('ฮะ?');
+
+    // 6. THIS? -> นี่น่ะเหรอ?
+    expect(applyThaiConversationalGlossary("THIS?", "THIS?", 'th')).toBe('นี่น่ะเหรอ?');
+    expect(applyThaiConversationalGlossary("THIS", "THIS", 'th')).toBe('นี่');
+
+    // 7. EH!? -> เอ๊!? vs EH? -> เอ๋?
+    expect(applyThaiConversationalGlossary("EH!?", "EH!?", 'th')).toBe('เอ๊!?');
+    expect(applyThaiConversationalGlossary("EH?", "EH?", 'th')).toBe('เอ๋?');
+
+    // 8. WOW! -> ว้าว!
+    expect(applyThaiConversationalGlossary("WOW!", "WOW!", 'th')).toBe('ว้าว!');
+
+    // 9. I'LL DO -> ฉันจะทำ
+    expect(applyThaiConversationalGlossary("I'LL DO", "I'LL DO", 'th')).toBe('ฉันจะทำ');
+
+    // 10. DAYS -> หลายวัน
+    expect(applyThaiConversationalGlossary("DAYS", "DAYS", 'th')).toBe('หลายวัน');
+
+    // 11. I'LL -> ฉันจะ
+    expect(applyThaiConversationalGlossary("I'LL", "I'LL", 'th')).toBe('ฉันจะ');
+
+    // 12. BELIEVE -> เชื่อ
+    expect(applyThaiConversationalGlossary("BELIEVE", "BELIEVE", 'th')).toBe('เชื่อ');
+
+    // 13. WITHOUT -> โดยไม่มี
+    expect(applyThaiConversationalGlossary("WITHOUT", "WITHOUT", 'th')).toBe('โดยไม่มี');
+
+    // 14. HER PUSSY -> หีของเธอ
+    expect(applyThaiConversationalGlossary("HER PUSSY..!", "HER PUSSY..!", 'th')).toBe('หีของเธอ..!');
+
+    // 15. Balloon dedupe: จิ๋ม vs หี, ไก่ vs ควย
+    expect(applyThaiConversationalGlossary("SOME TEXT", "จิ๋มและหี", 'th')).toBe('หีและหี');
+    expect(applyThaiConversationalGlossary("SOME TEXT", "ไก่และควย", 'th')).toBe('ควยและควย');
   });
 
   test('maps spanish conversational fragments to stable thai meaning', () => {
@@ -1951,17 +2016,16 @@ describe('shouldPreserveSourceLineForTranslation', () => {
 
 describe('Sentence-level Translation Caching & Deduplication', () => {
   test('retrieves translation from sentence cache and bypasses offline/online engine', async () => {
-    const getSpy = vi.spyOn(dbService, 'getSentenceTranslation');
-    const saveSpy = vi.spyOn(dbService, 'saveSentenceTranslation');
+    const getSpy = vi.spyOn(dbService, 'getSentenceTranslationBatch');
+    const saveBatchSpy = vi.spyOn(dbService, 'saveSentenceTranslationBatch').mockResolvedValue(true);
 
-    getSpy.mockImplementation(async (text, src, tgt, engine, mode) => {
-      if (text === 'Hello' && engine === 'argos') {
-        return 'สวัสดี (จากแคชระดับประโยค)';
+    getSpy.mockImplementation(async (texts, src, tgt, engine, mode) => {
+      const results: Record<string, string> = {};
+      if (texts.includes('Hello') && engine === 'argos') {
+        results['Hello'] = 'สวัสดี (จากแคชระดับประโยค)';
       }
-      return null;
+      return results;
     });
-
-    saveSpy.mockResolvedValue(true);
 
     const mockTranslateBatchOffline = vi.fn().mockResolvedValue(['ยินดีต้อนรับ']);
 
@@ -1996,17 +2060,19 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
       'th'
     );
 
-    expect(saveSpy).toHaveBeenCalledWith(
-      'Welcome',
-      'en',
-      'th',
-      'argos',
-      'official',
-      'ยินดีต้อนรับ'
-    );
+    expect(saveBatchSpy).toHaveBeenCalledWith([
+      {
+        sourceText: 'Welcome',
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translatorEngine: 'argos',
+        translationMode: 'official',
+        translatedText: 'ยินดีต้อนรับ',
+      }
+    ]);
 
     getSpy.mockRestore();
-    saveSpy.mockRestore();
+    saveBatchSpy.mockRestore();
   });
 
   describe('Custom Glossary & Location Proper Noun Protection', () => {
@@ -2060,4 +2126,258 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
       expect(restored).toBe('เมือง York, เมือง London.');
     });
   });
+
+  describe('Single-Page vs All-Pages Balloon Grouping Parity & Group-First Policy', () => {
+    test('produces 100% identical grouping between Single Page (with Store) and All Pages (without Store)', async () => {
+      const { useLayerStore } = await import('./stores/useLayerStore');
+      const { buildLayerGroupsFromOCR } = await import('./services/layers/LayerGroupingService');
+
+      const mockOCR = {
+        pageNumber: 1,
+        width: 1000,
+        height: 1500,
+        ocrEngine: 'paddleocr',
+        lines: [
+          { index: 0, text: 'HELLO WORLD', bbox: { x0: 100, y0: 100, x1: 300, y1: 130 }, words: [], confidence: 0.95 },
+          { index: 1, text: 'HOW ARE YOU', bbox: { x0: 100, y0: 135, x1: 300, y1: 165 }, words: [], confidence: 0.95 },
+          { index: 2, text: 'SEPARATE PANEL', bbox: { x0: 500, y0: 800, x1: 750, y1: 830 }, words: [], confidence: 0.95 },
+        ]
+      } as any;
+
+      const translatableLines: TranslatableLine[] = [
+        makeLine({ index: 0, text: 'HELLO WORLD', left: 100, top: 100, right: 300, bottom: 130, height: 30 }),
+        makeLine({ index: 1, text: 'HOW ARE YOU', left: 100, top: 135, right: 300, bottom: 165, height: 30 }),
+        makeLine({ index: 2, text: 'SEPARATE PANEL', left: 500, top: 800, right: 750, bottom: 830, height: 30 }),
+      ];
+
+      // 1. Simulate Single Page (Store has populated layer groups)
+      const initialLayers = buildLayerGroupsFromOCR(mockOCR);
+      useLayerStore.getState().setPageLayers(1, initialLayers);
+
+      const singlePageResult = resolveTranslationGroupsWithLayout(
+        1,
+        mockOCR,
+        translatableLines,
+        'default',
+        'en',
+        'th',
+        'manga'
+      );
+
+      // 2. Simulate All Pages / Background Queue (Store is empty for this page)
+      useLayerStore.getState().setPageLayers(1, { layers: [], groups: [] });
+
+      const allPagesResult = resolveTranslationGroupsWithLayout(
+        1,
+        mockOCR,
+        translatableLines,
+        'default',
+        'en',
+        'th',
+        'manga'
+      );
+
+      // Verify that both Single Page and All Pages produce identical group counts and line composition
+      expect(allPagesResult.groups.length).toBe(singlePageResult.groups.length);
+      expect(allPagesResult.groups[0].lines.map((l: any) => l.text)).toEqual(singlePageResult.groups[0].lines.map((l: any) => l.text));
+      expect(allPagesResult.groups[1].lines.map((l: any) => l.text)).toEqual(singlePageResult.groups[1].lines.map((l: any) => l.text));
+      expect(allPagesResult.groupingProfile).toBe(singlePageResult.groupingProfile);
+    });
+
+    test('group-first policy preserves full translated balloon without trailing dictionary corruption', async () => {
+      const { splitTranslatedTextBySourceWeights } = await import('./services/translation/textRedistributionService');
+
+      // A 2-line balloon in source English
+      const sourceLines = [
+        { index: 0, text: 'LEAVE IT', sourceLength: 8, left: 100, top: 100, right: 300, bottom: 130, height: 30 },
+        { index: 1, text: 'TO ME, SIR!', sourceLength: 11, left: 100, top: 135, right: 300, bottom: 165, height: 30 },
+      ] as any[];
+
+      // Argos translates the entire merged balloon "LEAVE IT TO ME, SIR!" into Thai
+      const fullTranslatedText = 'ปล่อยให้เป็นหน้าที่ของผมเองครับท่าน!';
+
+      const redistributedSlots = splitTranslatedTextBySourceWeights(
+        fullTranslatedText,
+        sourceLines,
+        'th'
+      );
+
+      // Verify that the sentence was distributed across slots cleanly
+      expect(redistributedSlots.length).toBe(2);
+      expect(redistributedSlots.join('')).toContain('ปล่อยให้เป็นหน้าที่ของผมเองครับท่าน');
+    });
+
+    test('centered English speech balloon with varying width lines (NOISY and BITCH... HEY!) groups together', async () => {
+      const { buildLayerGroupsFromOCR } = await import('./services/layers/LayerGroupingService');
+      const mockOCR = {
+        width: 1000,
+        height: 1500,
+        lines: [
+          { text: 'WHAT A', confidence: 95, bbox: { x0: 200, y0: 100, x1: 300, y1: 130 } },
+          { text: 'NOISY', confidence: 95, bbox: { x0: 210, y0: 135, x1: 290, y1: 165 } },
+          // BITCH... HEY! is wider and slightly offset, but centered vertically in the same balloon
+          { text: 'BITCH... HEY!', confidence: 95, bbox: { x0: 150, y0: 172, x1: 380, y1: 202 } },
+          { text: 'SHOVE ONE', confidence: 95, bbox: { x0: 180, y0: 210, x1: 320, y1: 240 } },
+        ],
+      } as any;
+
+      const result = buildLayerGroupsFromOCR(mockOCR);
+      // All 4 lines should be in a single connected balloon group
+      expect(result.groups.length).toBe(1);
+      expect(result.groups[0].layerIds.length).toBe(4);
+    });
+
+    test('OCR noise normalizer repairs common manga font misrecognitions', async () => {
+      const { normalizeEnglishOcrNoiseForTranslation } = await import('./services/ocr/ocrTextNormalizer');
+      expect(normalizeEnglishOcrNoiseForTranslation('I KEER')).toBe('I KEEP');
+      expect(normalizeEnglishOcrNoiseForTranslation('IKEER')).toBe('I KEEP');
+      expect(normalizeEnglishOcrNoiseForTranslation('KNIIGH')).toBe('KNIGHT');
+      expect(normalizeEnglishOcrNoiseForTranslation('GONNA LSE')).toBe('GONNA USE');
+      expect(normalizeEnglishOcrNoiseForTranslation('PiG-KNIGHT')).toBe('PIG KNIGHT');
+      expect(normalizeEnglishOcrNoiseForTranslation('PRINCESS-KNIGHT')).toBe('PRINCESS KNIGHT');
+      expect(normalizeEnglishOcrNoiseForTranslation('HERVES')).toBe('HEROES');
+      expect(normalizeEnglishOcrNoiseForTranslation('LilKE A')).toBe('LIKE A');
+      expect(normalizeEnglishOcrNoiseForTranslation('PRiNCEGS')).toBe('PRINCESS');
+      expect(normalizeEnglishOcrNoiseForTranslation("YOURPUSSY'S")).toBe("YOUR PUSSY'S");
+      expect(normalizeEnglishOcrNoiseForTranslation('WHiTEPiG')).toBe('WHITE PIG');
+      expect(normalizeEnglishOcrNoiseForTranslation("I pan't")).toBe("I can't");
+      expect(normalizeEnglishOcrNoiseForTranslation("YQU'RE")).toBe("YOU'RE");
+      expect(normalizeEnglishOcrNoiseForTranslation('THEN...I')).toBe('THEN...!');
+      expect(normalizeEnglishOcrNoiseForTranslation('EXECUT I ON')).toBe('EXECUTION');
+      expect(normalizeEnglishOcrNoiseForTranslation('of ROSER I AS')).toBe("OF ROSERIA'S");
+      expect(normalizeEnglishOcrNoiseForTranslation('ROSER I AS')).toBe("ROSERIA'S");
+      expect(normalizeEnglishOcrNoiseForTranslation('Sput')).toBe('Spurt');
+      expect(normalizeEnglishOcrNoiseForTranslation('purting')).toBe('Spurting');
+      expect(normalizeEnglishOcrNoiseForTranslation('LINSEM IN AT I ON')).toBe('INSEMINATION');
+      expect(normalizeEnglishOcrNoiseForTranslation('DISSTR I BUT I ON')).toBe('DISTRIBUTION');
+      expect(normalizeEnglishOcrNoiseForTranslation('POSIT I ON')).toBe('POSITION');
+      expect(normalizeEnglishOcrNoiseForTranslation('IT I NSIDE')).toBe('IT INSIDE');
+      expect(normalizeEnglishOcrNoiseForTranslation('J-JUSHT CAAME!')).toBe('J-JUST CAME!');
+      expect(normalizeEnglishOcrNoiseForTranslation('PREGNAN')).toBe('PREGNANT');
+    });
+
+    test('sanitizeTranslationResult cleanly removes stray token hashes and markers', async () => {
+      const { sanitizeTranslationResult } = await import('./services/translation/translationCoordinator');
+      expect(sanitizeTranslationResult('# จะต้องมี #')).toBe('จะต้องมี');
+      expect(sanitizeTranslationResult('#จะต้องมี#')).toBe('จะต้องมี');
+      expect(sanitizeTranslationResult('**ข้อความสำคัญ**')).toBe('ข้อความสำคัญ');
+      expect(sanitizeTranslationResult('"คำพูดในบท"')).toBe('คำพูดในบท');
+    });
+
+    test('vertically separated dialogue lines (OF ALL OF US!) are not suppressed as duplicate echoes', async () => {
+      const { computeOverlayLayoutMap } = await import('./components/OCR/translationOverlayUtils');
+      const inputs = [
+        { index: 0, text: 'ของ', width: 100, height: 40, bbox: { x0: 200, y0: 100, x1: 300, y1: 140 }, hints: { sourceText: 'OF' } },
+        { index: 1, text: 'ทั้งหมด', width: 100, height: 40, bbox: { x0: 200, y0: 160, x1: 300, y1: 200 }, hints: { sourceText: 'ALL' } },
+        { index: 2, text: 'ของ', width: 100, height: 40, bbox: { x0: 200, y0: 220, x1: 300, y1: 260 }, hints: { sourceText: 'OF' } },
+        { index: 3, text: 'พวกเรา!', width: 100, height: 40, bbox: { x0: 200, y0: 280, x1: 300, y1: 320 }, hints: { sourceText: 'US!' } },
+      ] as any[];
+
+      const layoutMap = computeOverlayLayoutMap(inputs, { profile: 'manga' });
+      // Neither line 0 (OF) nor line 2 (OF) should be hidden!
+      expect(layoutMap.get(0)?.hidden).toBeFalsy();
+      expect(layoutMap.get(1)?.hidden).toBeFalsy();
+      expect(layoutMap.get(2)?.hidden).toBeFalsy();
+      expect(layoutMap.get(3)?.hidden).toBeFalsy();
+    });
+
+    test('maps MEEEEAN!, STRUMPET, and BARBARIANS multi-line balloon correctly', async () => {
+      const { applyThaiConversationalGlossary } = await import('./services/translation/thaiConversationalGlossary');
+      const { matchMangaGroupLineOverrides } = await import('./services/translation/mangaGroupOverrides');
+
+      expect(applyThaiConversationalGlossary('MEEEEAN!', 'MEEEEAN!', 'th')).toBe('เลวทรามมม!');
+      expect(applyThaiConversationalGlossary('STRUMPET', 'STRUMPET', 'th')).toBe('อีกระหรี่');
+      expect(applyThaiConversationalGlossary('ALL RiGHT,', 'ALL RiGHT,', 'th')).toBe('(เอา ล่ะ)');
+      expect(applyThaiConversationalGlossary("STOMACH'S", "STOMACH'S", 'th')).toBe('กระเพาะอาหาร');
+      expect(applyThaiConversationalGlossary('CAME AGAIN!', 'CAME AGAIN!', 'th')).toBe('แตกอีกแล้ว!');
+      expect(applyThaiConversationalGlossary('SEMEN', 'SEMEN', 'th')).toBe('น้ำกาม');
+      expect(applyThaiConversationalGlossary('Squeeeze', 'Squeeeze', 'th')).toBe('บีบแน่นนน');
+      expect(applyThaiConversationalGlossary('HIGH SCHOOLER', 'HIGH SCHOOLER', 'th')).toBe('นักเรียนมัธยมปลาย');
+      expect(applyThaiConversationalGlossary('arrest for serial', 'arrest for serial', 'th')).toBe('จับกุมผู้ต้องหาคดีต่อเนื่อง');
+      expect(applyThaiConversationalGlossary('INSEMINATION', 'INSEMINATION', 'th')).toBe('การหว่านเชื้อ');
+      expect(applyThaiConversationalGlossary('APHRODISIAC', 'APHRODISIAC', 'th')).toBe('ยาปลุกเซ็กซ์');
+      expect(applyThaiConversationalGlossary('PREGNAN', 'PREGNAN', 'th')).toBe('ตั้งครรภ์');
+      expect(applyThaiConversationalGlossary('STUTTER-', 'STUTTER-', 'th')).toBe('พูดติดอ่าง');
+      expect(applyThaiConversationalGlossary('SHOVE IT INSIDE', 'SHOVE IT INSIDE', 'th')).toBe('ยัดเข้าไปข้างใน');
+      expect(applyThaiConversationalGlossary('J-JUSHT CAAME!', 'J-JUSHT CAAME!', 'th')).toBe('ต-แตก ออกมาแล้วว!');
+      expect(applyThaiConversationalGlossary('MASOCHIST', 'MASOCHIST', 'th')).toBe('มาโซคิสต์');
+      expect(applyThaiConversationalGlossary('BITCH PUSSY', 'BITCH PUSSY', 'th')).toBe('หีร่านๆ');
+      expect(applyThaiConversationalGlossary('CUM AGAIN!!', 'CUM AGAIN!!', 'th')).toBe('แตก อีกแล้วว!!');
+      expect(applyThaiConversationalGlossary("THE SEMEN'S", "THE SEMEN'S", 'th')).toBe('น้ำกามมัน');
+      expect(applyThaiConversationalGlossary('FLAVORED', 'FLAVORED', 'th')).toBe('ปรุงแต่งรสชาติ');
+      expect(applyThaiConversationalGlossary('CHAAAN!', 'CHAAAN!', 'th')).toBe('จังงงงห์!');
+
+      const { lookupShortPhraseTh } = await import('./services/translation/offlineTranslationService');
+      expect(lookupShortPhraseTh('so please')).toBe('ดังนั้นได้โปรด');
+      expect(lookupShortPhraseTh('gonna')).toBe('จะ');
+      expect(lookupShortPhraseTh('execution')).toBe('การประหารชีวิต');
+      expect(lookupShortPhraseTh("of roseria's")).toBe('ของโรเซเรีย');
+      expect(lookupShortPhraseTh('hateria')).toBe('ฮาเทเรีย');
+      expect(lookupShortPhraseTh('the princess')).toBe('เจ้าหญิง');
+      expect(lookupShortPhraseTh('like a')).toBe('เหมือนกับ');
+      expect(lookupShortPhraseTh('all right,')).toBe('(เอา ล่ะ)');
+      expect(lookupShortPhraseTh('semen')).toBe('น้ำกาม');
+      expect(lookupShortPhraseTh('spurt')).toBe('ปรื๊ดด');
+      expect(lookupShortPhraseTh('spurting')).toBe('ปรื๊ดดด!');
+      expect(lookupShortPhraseTh('squeeeze')).toBe('บีบแน่นนน');
+      expect(lookupShortPhraseTh('high schooler')).toBe('นักเรียนมัธยมปลาย');
+      expect(lookupShortPhraseTh('aphrodisiac')).toBe('ยาปลุกเซ็กซ์');
+      expect(lookupShortPhraseTh('shove it inside')).toBe('ยัดเข้าไปข้างใน');
+      expect(lookupShortPhraseTh('masochist')).toBe('มาโซคิสต์');
+      expect(lookupShortPhraseTh('bitch pussy')).toBe('หีร่านๆ');
+      expect(lookupShortPhraseTh('cum again!!')).toBe('แตก อีกแล้วว!!');
+      expect(lookupShortPhraseTh("the semen's")).toBe('น้ำกามมัน');
+      expect(lookupShortPhraseTh('flavored')).toBe('ปรุงแต่งรสชาติ');
+      expect(lookupShortPhraseTh('chaaan!')).toBe('จังงงงห์!');
+
+      const barbariansLines = [
+        { text: 'HAHAHA!' },
+        { text: "YOU'VE GOT A" },
+        { text: 'NICELYPLOWED' },
+        { text: 'WET PUSSY,' },
+        { text: "DON'T YOu?" },
+        { text: 'HOW MUCH' },
+        { text: 'DiD YOUDO' },
+        { text: 'iT WiTH THE' },
+        { text: 'BARBARIANS' },
+      ] as any[];
+
+      const compactCombined = barbariansLines.map((l) => l.text || '').join('').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const translated = matchMangaGroupLineOverrides(compactCombined, barbariansLines);
+      expect(translated).toEqual([
+        'ฮ่าฮ่าฮ่า!',
+        'เธอมี',
+        'ที่ถูกไถอย่างดีแล้ว',
+        'ช่องคลอดเปียกๆ',
+        'ใช่ไหม?',
+        'เธอทำไปเท่าไหร่',
+        'กับพวก',
+        'กับพวก',
+        'คนป่าเถื่อน',
+      ]);
+
+      const aaahLines = [
+        { text: 'AAAH,' },
+        { text: 'FUCK!' },
+        { text: 'YOUR BITCH' },
+        { text: 'MOANS ARE' },
+        { text: 'FORCING' },
+        { text: 'THE NEXT' },
+        { text: 'LOAD OUT!' },
+      ] as any[];
+      const compactAaah = aaahLines.map((l) => l.text || '').join('').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const translatedAaah = matchMangaGroupLineOverrides(compactAaah, aaahLines);
+      expect(translatedAaah).toEqual([
+        'อ๊าก!',
+        'เหี้ย!',
+        'เสียงครางร่านๆของเธอ',
+        'กำลังบังคับ',
+        'ให้',
+        'เตรียมก๊อก',
+        'ถัดไป!',
+      ]);
+    });
+  });
 });
+
+

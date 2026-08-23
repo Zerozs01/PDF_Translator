@@ -69,3 +69,9 @@ Rule 1 in `App.tsx` (~line 7720): `if (layer.userEdited) return layer;` — skip
 After deleting a layer, track its `lineIndex` in `deletedLineIndexesByPage` to prevent
 PDFCanvas from rendering stale overlay text for that line. This prevents ghost text
 appearing after manual layer deletion.
+
+## 11. Translation Carry-over & Short Phrase Bypass
+
+For offline translation, carry-over text (100% untranslated English results) will be hidden by `shouldSkipOverlayForUntranslatedCarryOver` to avoid drawing English on top of English. To bypass this and force-render short dialogue phrases:
+- Map direct Thai translations in `ARGOS_SHORT_PHRASE_LOOKUP_TH` (within `offlineTranslationService.ts`).
+- Add phrases to `KNOWN_MANGA_PHRASES` or register them via `isKnownShortWordHelper` to prevent them from being hidden in the UI.

@@ -9,6 +9,7 @@ export interface TranslatableItem {
   text: string; // ข้อความเดิมที่ต้องการแปล
   groupType: LayerGroupType; // ประเภทกลุ่มเลเยอร์ เช่น balloon, sfx, narration
   lineIndex?: number;
+  sourceLanguage?: string; // ภาษาต้นทางของกล่องข้อความย่อยนี้
 }
 
 export interface TranslationResult {

@@ -10,78 +10,37 @@
 
 import { Region, OCREngine, OCRDroppedWord, OCRLine, OCRPageResult, OCRPipelineProfile, OCRQualityProfile, OCRWord } from '../../types';
 import { filterKoreanJamoNoise, filterWeakIsolatedCjkLines } from './ocr-filtering';
+import { isKnownShortWordHelper, isLikelyEnglishDialogue } from '../ocr/ocrSafetyLineDedup';
 import { preprocessImage } from './ocr-preprocessing';
-import { OCR_ALGORITHM_VERSION } from './ocrVersion';
+import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from './ocrVersion';
 import {
-  OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
-  OCR_WORKER_RETRY_ATTEMPTS_DEFAULT,
-  OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
-} from './ocr-timeout';
+  type WorkerMessage,
+  type PendingRequest,
+  type QueuedRequest,
+  type WorkerMode,
+  type WorkerSlot,
+  type OCRProgressCallback,
+  createAbortError,
+  WORKER_POOL_CONFIG as CONFIG,
+} from './ocrWorkerPool';
+export type { OCRProgressCallback };
 
-
+import {
+  bboxCenterX,
+  bboxCenterY,
+  bboxWidth,
+  bboxHeight,
+  bboxArea,
+  verticalOverlapRatio,
+  horizontalOverlapRatio,
+  horizontalContainmentRatio,
+  expandContextualPhraseBBox,
+  bboxIoURatio,
+  medianNumber,
+} from './visionGeometry';
 
 const EXTERNAL_TECHNICAL_LINE_HINT_REGEX = /\b(unknowns?|reactions?|equilibrium|resultant|component|components|direction|force|moment|column|columns|connections?|support|rigid|body|beam|beams|pin|hinge|utility|building|bridge|girder|floor|member|concrete|weld(?:ed|ing)?|fx|fy|fz|mx|my|mz|rx|ry|rz)\b/i;
 const EXTERNAL_TECHNICAL_TABLE_ROW_HINT_REGEX = /\b(?:table|continued|types?\s+of\s+connection|number\s+of\s+unknowns|reactions?|unknowns?|components?|couple\s+moment|magnitude|direction|resultant|smooth\s+pin|hinge|fixed\s+support|collar|rod|member\s+fixed|bridge|building|beam|welded|column)\b|^\(?\d+\)?$|^(?:fx|fy|fyt|f|m|or)$/i;
-
-type WorkerMessage = {
-  type: string;
-  payload?: unknown;
-  id: string;
-};
-
-type PendingRequest = {
-  resolve: (data: unknown) => void;
-  reject: (error: Error) => void;
-  timestamp: number;
-  workerIndex: number;
-  timeoutId: ReturnType<typeof setTimeout>;
-  request: QueuedRequest;
-};
-
-type QueuedRequest = {
-  type: string;
-  payload?: unknown;
-  resolve: (data: unknown) => void;
-  reject: (error: Error) => void;
-  retryCount: number;
-  signal?: AbortSignal;
-  abortHandler?: () => void;
-};
-
-type WorkerMode = 'primary' | 'stable';
-
-type WorkerSlot = {
-  worker: Worker;
-  busy: boolean;
-  booted: boolean;
-  mode: WorkerMode;
-};
-
-export type OCRProgressCallback = (progress: {
-  status: string;
-  progress: number;
-  workerId?: string;
-}) => void;
-
-// Configuration
-const getDefaultWorkerCount = (): number => {
-  return 1;
-};
-
-const CONFIG = {
-  REQUEST_TIMEOUT_MS: OCR_WORKER_REQUEST_TIMEOUT_MS_DEFAULT,
-  RETRY_ATTEMPTS: OCR_WORKER_RETRY_ATTEMPTS_DEFAULT,
-  RETRY_DELAY_MS: OCR_WORKER_RETRY_DELAY_MS_DEFAULT,
-  HEALTH_CHECK_INTERVAL_MS: 30000,
-  MAX_WORKERS: getDefaultWorkerCount(),
-  DEBUG_LOG_MISSING_LINES: false,
-};
-
-const createAbortError = (reason: string = 'OCR job canceled'): Error => {
-  const error = new Error(reason);
-  (error as Error & { name?: string }).name = 'AbortError';
-  return error;
-};
 
 const EXTERNAL_PADDLE_CHUNK_MIN_HEIGHT = 5200;
 const EXTERNAL_PADDLE_CHUNK_TARGET_HEIGHT = 2200;
@@ -94,69 +53,6 @@ const normalizeExternalDedupText = (text: string): string =>
     .replace(/[.,!?;:'"`~^_+]+/g, '')
     .replace(/[|¦│┃￨︱︲]+/g, '')
     .toUpperCase();
-
-const bboxCenterX = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => (bbox.x0 + bbox.x1) / 2;
-const bboxCenterY = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => (bbox.y0 + bbox.y1) / 2;
-const bboxWidth = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => Math.max(0, bbox.x1 - bbox.x0);
-const bboxHeight = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number => Math.max(0, bbox.y1 - bbox.y0);
-const verticalOverlapRatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
-  const overlap = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
-  const minHeight = Math.max(1, Math.min(bboxHeight(a), bboxHeight(b)));
-  return Math.max(0, overlap) / minHeight;
-};
-
-const horizontalOverlapRatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
-  const overlap = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
-  const minWidth = Math.max(1, Math.min(bboxWidth(a), bboxWidth(b)));
-  return Math.max(0, overlap) / minWidth;
-};
-
-const horizontalContainmentRatio = (inner: OCRWord['bbox'] | OCRLine['bbox'], outer: OCRWord['bbox'] | OCRLine['bbox']): number => {
-  const innerWidth = Math.max(1, bboxWidth(inner));
-  const overlap = Math.min(inner.x1, outer.x1) - Math.max(inner.x0, outer.x0);
-  return Math.max(0, overlap) / innerWidth;
-};
-
-const bboxArea = (bbox: OCRWord['bbox'] | OCRLine['bbox']): number =>
-  Math.max(1, bboxWidth(bbox) * bboxHeight(bbox));
-
-const expandContextualPhraseBBox = (
-  bbox: OCRLine['bbox'],
-  pageWidth: number,
-  pageHeight: number,
-  leftRatio: number,
-  rightRatio: number,
-  verticalRatio: number = 0.08
-): OCRLine['bbox'] => {
-  const width = Math.max(1, bboxWidth(bbox));
-  const height = Math.max(1, bboxHeight(bbox));
-  return {
-    x0: Math.max(0, bbox.x0 - width * leftRatio),
-    y0: Math.max(0, bbox.y0 - height * verticalRatio),
-    x1: Math.min(Math.max(1, pageWidth), bbox.x1 + width * rightRatio),
-    y1: Math.min(Math.max(1, pageHeight), bbox.y1 + height * verticalRatio),
-  };
-};
-
-const bboxIoURatio = (a: OCRWord['bbox'] | OCRLine['bbox'], b: OCRWord['bbox'] | OCRLine['bbox']): number => {
-  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
-  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
-  const intersection = overlapWidth * overlapHeight;
-  if (intersection <= 0) return 0;
-
-  const union = bboxArea(a) + bboxArea(b) - intersection;
-  return union > 0 ? (intersection / union) : 0;
-};
-
-const medianNumber = (values: number[]): number => {
-  if (values.length === 0) return 0;
-  const ordered = values.slice().sort((a, b) => a - b);
-  const middle = Math.floor(ordered.length / 2);
-  if (ordered.length % 2 === 0) {
-    return (ordered[middle - 1] + ordered[middle]) / 2;
-  }
-  return ordered[middle];
-};
 
 const computeLineWordUnionCoverage = (line: OCRLine): number => {
   const validWords = (Array.isArray(line.words) ? line.words : [])
@@ -1928,8 +1824,9 @@ class VisionService {
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
 
       // ── Safety Gate: prevent filtering standard English dialogue lines ──
-      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME)\b/i.test(rawText);
-      if (hasKillOrOtherStandardWord) return true;
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME|BITCH|HEY|PIG|ALREADY|GETTING|AWAY|LIKE|COCK|CUM|ASS|ASSHOLE|SHUT|HER|OUT|BACK|MOVE|CHARGE|FRONT|YOUFRONT|THEPIGYOUARE|BITCHHEY|PIGYOUARE)\b/i.test(rawText);
+      const isStandardEnglishDialogue = !stylizedWideEffect && isLikelyEnglishDialogue(rawText) && alphaLength >= 2;
+      if (hasKillOrOtherStandardWord || isStandardEnglishDialogue) return true;
 
       // If it contains at least 3 letters of printable Latin and confidence is relatively high, or at least 2 letters with high confidence (e.g. "I-I", "WAIT!", "STOP!!")
       const looksLikeReadableEnglishWord = !stylizedWideEffect && ((alphaLength >= 3 && confidence >= 78) || (alphaLength >= 2 && confidence >= 85));
@@ -2194,6 +2091,10 @@ class VisionService {
     if (alphaLength < 6) return false;
     if (tokenCount < 1 || tokenCount > 8) return false;
 
+    // หากคำมีความมั่นใจสูง (>= 99%) ให้ถือว่าเป็นคำมังงะจริง ไม่ใช่ geometry artifact
+    // เช่น STINKY (99.7%), BELIEVE (99.2%) ที่ถูกมองผิดว่าเป็น compressedTiny
+    if (Number(line.confidence || 0) >= 99) return false;
+
     const compressedTiny = tokenCount <= 6
       && pxPerChar < 5.8
       && width <= Math.max(96, pageWidth * 0.045)
@@ -2214,6 +2115,10 @@ class VisionService {
     const { alphaLength, tokenCount, width, height, pxPerChar, areaPerChar } = metrics;
     if (alphaLength < 6) return false;
     if (tokenCount < 1 || tokenCount > 8) return false;
+
+    // คำที่มีความมั่นใจสูง (>= 99%) ไม่ควรถูกมองว่าเป็น severe malformed line
+    // การ fallback ไป EasyOCR จะทำให้คุณภาพแย่ลงสำหรับคำพวกนี้
+    if (Number(line.confidence || 0) >= 99) return false;
 
     const compressedTiny = tokenCount <= 6
       && width <= Math.max(52, pageWidth * 0.028)
@@ -2752,6 +2657,7 @@ class VisionService {
       language,
       pageSegMode,
       algorithmVersion: OCR_ALGORITHM_VERSION,
+      ocrRawVersion: OCR_RAW_VERSION,
       pipelineProfile,
       ocrEngine,
       ocrQualityProfile,
@@ -2778,7 +2684,8 @@ class VisionService {
     pipelineProfile: OCRPipelineProfile,
     ocrQualityProfile: OCRQualityProfile,
     ocrEngine: OCREngine,
-    maxPixels?: number
+    maxPixels?: number,
+    useAngleCls?: boolean
   ): Promise<OCRPageResult> {
     const bridge = window.electronAPI?.ocr;
     if (!bridge?.runExternal) {
@@ -2898,6 +2805,7 @@ class VisionService {
                   totalChunks,
                   ...(maxSideLen !== undefined ? { maxSideLen } : {}),
                   ...(maxPixels !== undefined ? { maxPixels } : {}),
+                  ...(useAngleCls !== undefined ? { useAngleCls } : {}),
                 });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -2916,6 +2824,7 @@ class VisionService {
                 language,
                 pageSegMode: result.pageSegMode ?? pageSegMode,
                 algorithmVersion: OCR_ALGORITHM_VERSION,
+                ocrRawVersion: OCR_RAW_VERSION,
                 pipelineProfile,
                 ocrEngine,
                 ocrQualityProfile,
@@ -2968,6 +2877,7 @@ class VisionService {
           ocrQualityProfile,
           ...(maxSideLen !== undefined ? { maxSideLen } : {}),
           ...(maxPixels !== undefined ? { maxPixels } : {}),
+          ...(useAngleCls !== undefined ? { useAngleCls } : {}),
         });
 
         const isPaddlePanelPath = ocrEngine === 'paddleocr' && pipelineProfile === 'panel';
@@ -3080,6 +2990,7 @@ class VisionService {
           language,
           pageSegMode: result.pageSegMode ?? pageSegMode,
           algorithmVersion: OCR_ALGORITHM_VERSION,
+          ocrRawVersion: OCR_RAW_VERSION,
           pipelineProfile,
           ocrEngine,
           ocrQualityProfile,
@@ -3175,6 +3086,7 @@ class VisionService {
           language,
           pageSegMode: resultRaw.pageSegMode ?? pageSegMode,
           algorithmVersion: OCR_ALGORITHM_VERSION,
+          ocrRawVersion: OCR_RAW_VERSION,
           pipelineProfile: 'raw',
           ocrEngine,
           ocrQualityProfile,
@@ -3273,6 +3185,7 @@ class VisionService {
         language,
         pageSegMode: undefined,
         algorithmVersion: OCR_ALGORITHM_VERSION,
+        ocrRawVersion: OCR_RAW_VERSION,
         pipelineProfile: 'raw',
         ocrEngine,
         ocrQualityProfile: 'best',
@@ -3311,6 +3224,7 @@ class VisionService {
     maxPixels?: number,
     config?: {
       engine?: string;
+      useAngleCls?: boolean;
       preprocessing?: {
         enabled?: boolean;
         binarization?: boolean;
@@ -3384,7 +3298,8 @@ class VisionService {
         pipelineProfile,
         ocrQualityProfile,
         ocrEngine,
-        maxPixels
+        maxPixels,
+        config?.useAngleCls
       );
 
       const canApplyPaddleLatinGeometryGuard = ocrEngine === 'paddleocr'
@@ -3437,7 +3352,8 @@ class VisionService {
           pipelineProfile,
           fallbackQualityProfile,
           fallbackEngine,
-          maxPixels
+          maxPixels,
+          config?.useAngleCls
         );
 
         const mergedFallbackResult = this.mergePaddleGeometryFallbackResult(
@@ -3524,7 +3440,8 @@ class VisionService {
             pipelineProfile,
             ocrQualityProfile,
             'easyocr',
-            maxPixels
+            maxPixels,
+            config?.useAngleCls
           );
 
           if (easyResult.debug) {

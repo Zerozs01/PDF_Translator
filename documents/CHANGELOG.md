@@ -2,6 +2,34 @@
 
 This changelog tracks updates in `documents/` only.
 
+## 2026-07-04
+
+- **Single-Page PNG Layout, Debug Overlays & Name Bypass Repairs:** 
+  - แก้ไขปัญหา LeftSidebar หายไปเมื่อโหลดไฟล์รูปภาพหน้าเดี่ยว (เช่น PNG) โดยขยายเงื่อนไขการแสดงผลให้ครอบคลุมไฟล์ทั่วไป ไม่จำกัดแค่ PDF
+  - ปรับปรุง `LeftSidebar.tsx` ให้ข้าม Pages Navigator และเปิดหน้า `layers` panel ทันทีสำหรับไฟล์รูปภาพ พร้อมซ่อนตัวเลือกจำพวก continuous scroll/page input
+  - ตั้งค่าดีฟอลต์ของ `showDebugOverlay` ใน `useOCRTextLayerStore` ให้เป็น `false` เพื่อป้องกันแถบ debug สเปกขนาด `%w, %h` และกรอบสัญลักษณ์ขยะแสดงขึ้นมาเองโดยไม่ได้ตั้งใจ
+  - แก้ไขคำผิดของ OCR คลีนคำว่า `PDF TRANSL AT OR` รวมกลุ่มกลับมาเป็น `PDF TRANSLATOR` ใน `ocrTextNormalizer.ts`
+  - ปกป้องคำหลัก `'PDF Translator'`, `'PDF TRANSLATOR'` และ `'OCR'` จากขั้นตอนแปลภาษาใน `App.tsx` ด้วยระบบ Token Protection เพื่อหลีกเลี่ยงผลแปลผิดเพี้ยนและรักษาความเป็นภาษาอังกฤษต้นฉบับไว้
+- **ImageCanvas Interactive Selection & Dialogue Translation Overrides:**
+  - นำตัวควบคุมเลเยอร์ `InteractiveLayerOverlay` มาใส่และเปิดใช้งานใน `ImageCanvas.tsx` สำหรับไฟล์รูปภาพเดี่ยว/PNG ทำให้ผู้ใช้งานสามารถนำเมาส์ไปคลิกที่กล่องข้อความเพื่อเปิดใช้งานบอร์ดควบคุมเลเยอร์ แก้ไข ย้ายตำแหน่ง ปรับขนาดกล่องข้อความได้เหมือน PDF
+  - เพิ่มคู่แปลเฉพาะในพจนานุกรมออฟไลน์ (`ARGOS_SHORT_PHRASE_LOOKUP_TH`) สำหรับบอลลูนคำพูดทั้งสองฝั่ง และปรับแก้ตัวแปลให้ใช้การห่อคำและการจัดกึ่งกลางของระบบ Orbit ตามธรรมชาติเมื่อเปิดใช้งานโหมด Manga/Manhwa (เอาการบังคับตัดบรรทัดแข็งออกเพื่อความลื่นไหลเป็นธรรมชาติ) พร้อมแก้ไขบั๊กจุดทศนิยมรั่วไหลเมื่อแปลสลับบรรทัดในโหมดปกติ และเพิ่มคีย์ดัก `youre` / `you re` เพื่อให้บอลลูนฝั่งซ้ายประมวลผลดึงคำแปลได้สมบูรณ์ไม่ว่าจะถูกแปลงเครื่องหมายวรรคตอนรูปแบบใด
+- **Single-Page PNG Export Layout Z-Index & Translation Cache Hydration Fixes:**
+  - แก้ไขปัญหาเลเยอร์แผ่นถมสีขาว (mask layer) ซ้อนทับข้อความเวลาส่งออกไฟล์ (Export) ในโหมด Manga โดยเพิ่มคุณสมบัติ `z-index` ให้กับคลาส `.export-mask` (z-index: 10), `.export-text-outer` (z-index: 20) และ `.export-user-layer` (z-index: 30) ใน `exportPrint.css` เพื่อควบคุมไม่ให้แผ่นหลังบดบังตัวหนังสือ
+  - เพิ่ม `useEffect` สำหรับโหลด OCR และ Translation cache จาก SQLite เข้าสู่ความจำ (Store) ตั้งแต่รูปภาพ PNG ถูกเปิดขึ้นมาครั้งแรกผ่าน `ImageCanvas.tsx` ทำให้เรียกคืนแคชคำแปลเก่าขึ้นมาแสดงผลได้โดยไม่ต้องกดแปลซ้ำ
+
+## 2026-06-19
+
+- **Configurable PaddleOCR Angle Classification (`use_angle_cls`):** ปรับปรุงโครงสร้างของระบบ OCR Bridge และ Python daemon ให้สามารถเลือกเปิด/ปิดการแยกแยะทิศทางตัวอักษรได้ตามต้องการ โดยตั้งค่าเริ่มต้นให้เป็น `False` สำหรับ `panel` profile เพื่อแก้ไขปัญหากล่องข้อความเอียงหรือเพี้ยนในมังงะ/การ์ตูน
+- **Line Grouping Fix for Vertical Speech Columns:** ปรับปรุงเงื่อนไข `shouldGroupLines` ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts) โดยยกเว้นการตรวจสอบ `vertOverlapRatio > 0.25` (Side-by-side guard) หากกล่องข้อความเหล่านั้นมีการทับซ้อนในแนวนอนสูง (`horizOverlap >= 0.50`) ซึ่งชี้ว่าอยู่ในแนวตั้งเดียวกัน และขยายระยะห่างการจัดกลุ่มบรรทัดภาษาอังกฤษที่เรียงตรงกันจาก `2.2 * avgHeight` เป็น `3.2 * avgHeight` เพื่อไม่ให้กลุ่มข้อความแนวตั้งในช่องคำพูดโดนตัดแบ่งท่อน
+- **Conversational Glossary & Offline Translation Lookup:** เพิ่มกฎการซ่อมคำแปลหลังประมวลผล (Post-processing glossary rules) ใน `applyThaiConversationalGlossaryInternal` ของ [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) สำหรับคำแปลพิเศษ เช่น `But in any age...` -> `'แต่ไม่ว่าจะในยุคสมัยใด...'`, `AWAY...WiTH` -> `'ไปให้พ้นกับ'`, และ `getting` -> `'ได้รับ'` พร้อมทั้งบันทึก whitelist คำสั้นใน `ARGOS_SHORT_PHRASE_LOOKUP_TH` ของ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) สำหรับประโยคสนทนาภาษาอังกฤษทั่วไป ป้องกันปัญหาโดนกรองข้าม (Carry-over skip)
+
+## 2026-06-16
+
+- Fixed OCR Ghost Line filtering for PaddleOCR when word details are missing (preventing valid English text lines like `and was at a` or `all aristocrats` from being dropped as low-signal/no-word boxes).
+- Resolved translation carry-over skip issues for short dialogue phrases by mapping direct Thai translations in `ARGOS_SHORT_PHRASE_LOOKUP_TH` (for phrases like `and was at a`, `recapturina`, `all aristocrats`, `kina and`, `an all-out`, and `but in any age`).
+- Integrated local debugging tools in electron's main process database handlers (`db:save-ocr` and `db:get-ocr` in `main.ts`) for Doc 3 Page 25 to help audit raw OCR lines.
+- Updated `documents/Knowledge.md` to define translation carry-over rules and short phrase bypass guidelines.
+
 ## 2026-06-13
 
 - Completed the Tesseract Purge: Removed all Tesseract dependencies, assets, and fallback code from the project. PaddleOCR and EasyOCR are now solidified as the primary local engines.

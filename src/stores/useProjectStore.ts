@@ -327,6 +327,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         const ensuredId = await get().ensureDocumentId();
         if (ensuredId) {
           await touchProjectDocumentActivity(dbService, ensuredId);
+          const existingDoc = await dbService.getDocument(resolvedPath);
+          if (existingDoc && typeof existingDoc.last_page === 'number' && existingDoc.last_page > 1) {
+            set({ currentPage: existingDoc.last_page });
+          }
         }
       } catch (error) {
         console.error('[DB] Failed to ensure documentId:', error);
@@ -337,11 +341,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const fileKey = get().filePath || resolvedPath || file.name;
     let savedOcrLang = 'eng';
     let savedOcrEngine = 'paddleocr';
-    let savedOcrQualityProfile = 'fast';
+    let savedOcrQualityProfile = 'best';
     try {
       savedOcrLang = localStorage.getItem(`pdf_translator.ocr_lang.${fileKey}`) || 'eng';
       savedOcrEngine = localStorage.getItem(`pdf_translator.ocr_engine.${fileKey}`) || 'paddleocr';
-      savedOcrQualityProfile = localStorage.getItem(`pdf_translator.ocr_quality_profile.${fileKey}`) || 'fast';
+      savedOcrQualityProfile = localStorage.getItem(`pdf_translator.ocr_quality_profile.${fileKey}`) || 'best';
     } catch (e) {
       console.warn('[Storage] Failed to read OCR options:', e);
     }
@@ -355,6 +359,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   ensureDocumentId: async () => {
     if (!dbService.isAvailable()) return null;
     const { documentId, file, filePath } = get();
+    if (documentId) {
+      return documentId;
+    }
     const hadDocumentId = Boolean(documentId);
 
     const ensured = await ensureProjectDocumentRecord({

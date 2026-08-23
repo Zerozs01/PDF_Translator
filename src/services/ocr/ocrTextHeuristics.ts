@@ -6,6 +6,8 @@ import {
   normalizeSourceForTranslation,
   normalizeTranslationLanguage,
 } from './ocrTextNormalizer';
+import { isKnownShortWordHelper, isLikelyEnglishDialogue } from './ocrSafetyLineDedup';
+import { lookupShortPhraseTh } from '../translation/offlineTranslationService';
 
 export const HANGUL_REGEX = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/;
 export const THAI_REGEX = /[\u0E00-\u0E7F]/;
@@ -297,7 +299,7 @@ export const inferSourceLanguageFromTextHints = (
   if (thaiCount >= Math.max(4, latinCount * 0.2)) {
     return 'th';
   }
-  if (hangulCount >= Math.max(3, latinCount * 0.12)) {
+  if (hangulCount >= Math.max(1, Math.min(2, Math.floor(latinCount * 0.1)))) {
     return 'ko';
   }
   if (kanaCount >= 2) {
@@ -570,7 +572,9 @@ export const scoreSourceLineReadability = (text: string): number => {
 
   const hasLatin = /[A-Za-z]/.test(normalized);
   if (!hasLatin) {
-    return normalized.length * 0.22;
+    // CJK/Thai text: use a higher multiplier so short-but-valid Korean phrases
+    // score safely above the 1.5 ghost-filter threshold (was 0.22, too conservative)
+    return normalized.length * 0.55;
   }
 
   const tokens = normalized.split(/\s+/g).filter(Boolean);
@@ -830,6 +834,29 @@ const FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES = [
   /^SMACK[VE]?([.!?…\s]*)$/i,
   /^SO\s*TIGHT[.!?…]*$/i,
   /^PHEW[.!?…]*$/i,
+  /^FRONT[.!?…]*$/i,
+  /^YOU,?\s*FRONT[.!?…]*$/i,
+  /^YOU\s+FRONT[.!?…]*$/i,
+  /^YOU\s+FRONT\s+US\s+THE\s+GETTING\s+AWAY\s+WITH[.!?…]*$/i,
+  /^GETT[Ii1]NG(?:\s+WiTH|\s+WITH|\s+YOUR)?[.!?…]*$/i,
+  /^KNII*GHT[.!?…]*$/i,
+  /^SUCK[.!?…]*$/i,
+  /^C[O0]{2,}[O0]*F?CKS[.!?…]*$/i,
+  /^COCKS?[.!?…]*$/i,
+  /^COO[.!?…]*$/i,
+  /^OOO[.!?…]*$/i,
+  /^CKS[.!?…]*$/i,
+  /^WOULD[.!?…]*$/i,
+  /^HE['’]?S[.!?…]*$/i,
+  /^YOU['’]?RE[.!?…]*$/i,
+  /^YOU[.!?…]*$/i,
+  /^(?:THE\s+)?PIG(?:\s+YOU\s+ARE|\s+LiKE\s+YOU|\s+LIKE\s+YOU)?[.!?…]*$/i,
+  /^THiS\s+MY[.!?…]*$/i,
+  /^HEHEHE[!.,?…]*$/i,
+  /^HOLE[.!?…]*$/i,
+  /^US\s+THE[.!?…]*$/i,
+  /^BUT\s+IN\s+ANY\s+AGE[.!?…]*$/i,
+  /^BUT\s+IN\s+ANY[.!?…]*$/i,
 ];
 
 export const shouldForceKeepComicTranslationLine = (
@@ -839,6 +866,7 @@ export const shouldForceKeepComicTranslationLine = (
 ): boolean => {
   const normalized = normalizeWhitespace(String(resolvedText || ''));
   if (!normalized) return false;
+  if (lookupShortPhraseTh(normalized)) return true;
   if (!FORCE_KEEP_COMIC_TRANSLATION_LINE_REGEXES.some((regex) => regex.test(normalized))) return false;
 
   if (!line?.bbox) return true;
@@ -897,8 +925,7 @@ export const isLikelyGhostTranslatableLine = (
   const cjkCompact = compact.replace(/[^\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownChars = compact.replace(/[A-Za-z0-9\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g, '');
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
-  const isKnownShortWord = /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+  const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
 
   const validWords = (Array.isArray(scaledLine.words) ? scaledLine.words : []).filter((word) => {
     const wordText = normalizeWhitespace(String(word?.text || ''));
@@ -915,11 +942,27 @@ export const isLikelyGhostTranslatableLine = (
   const readability = scoreSourceLineReadability(text);
   const wordCoverage = computeLineWordUnionCoverage(scaledLine);
 
+  const isEnglishDialogue = isLikelyEnglishDialogue(text);
+  const wordCountRatio = validWords.length / Math.max(1, sourceTokenCount);
+  const hasCompleteWordCoverage = wordCountRatio >= 0.75 || validWords.length >= sourceTokenCount - 1;
+  const isLikelyLegitimateDialogue = isEnglishDialogue && hasCompleteWordCoverage;
+
   if (shouldForceKeepComicTranslationLine(text, scaledLine)) {
     return false;
   }
 
+  if (isKnownShortWord || lookupShortPhraseTh(text) || lookupShortPhraseTh(asciiCompact)) {
+    return false;
+  }
+
   // Apply these safety filters to ALL OCR engines to guarantee obvious ghost noise is always dropped
+  const isPageNumberOrPureNumber = (compact !== '69' && !lookupShortPhraseTh(text)) && (
+    /^\s*#?\s*(?:P\.?\s*)?\d{1,4}\.?\s*$/i.test(text) || /^\s*[-–—]\s*\d{1,4}\s*[-–—]\s*$/i.test(text)
+  );
+  if (isPageNumberOrPureNumber) {
+    return true;
+  }
+
   // 1. Pure non-alphanumeric symbol noise (e.g., "|||", "///", "\\", "---")
   const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
   if (isPureSymbolNoise) {
@@ -945,7 +988,7 @@ export const isLikelyGhostTranslatableLine = (
   const isTinyJunkBox = !hasCjkOrThai
     && asciiCompact.length <= 3
     && area <= 8000
-    && (isExternalEngine ? avgConfidence <= 98 : avgConfidence <= 85)
+    && (isExternalEngine ? avgConfidence <= 88 : avgConfidence <= 80)
     && !isKnownShortWord;
   if (isTinyJunkBox) {
     return true;
@@ -953,10 +996,10 @@ export const isLikelyGhostTranslatableLine = (
 
   const giantLineBox = (
     (width >= 180 && height >= 110 && area >= 18000)
-    || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2)
+    || (width >= 132 && height >= 88 && area >= 12000 && wordCoverage <= 0.2 && validWords.length > 0)
     || (width >= 320 && height >= 98 && area >= 32000)
   );
-  const noWordOversizedShortPhrase = validWords.length === 0
+  const noWordOversizedShortPhrase = !hasCjkOrThai && validWords.length === 0
     && wordCount >= 2
     && wordCount <= 6
     && compact.length <= 30
@@ -969,28 +1012,41 @@ export const isLikelyGhostTranslatableLine = (
   }
 
   const sparseLargePhrase = wordCount <= 4 && compact.length <= 24;
-  const lowCoverageLargeBox = wordCoverage <= 0.26;
-  const lowSignalLargeBox = avgConfidence <= 93 || unknownCharRatio >= 0.24 || readability <= 8.8;
-  if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox) {
+  const lowCoverageLargeBox = wordCoverage <= 0.26 && validWords.length > 0;
+  const lowSignalLargeBox = avgConfidence <= 93 
+    || unknownCharRatio >= 0.24 
+    || (hasCjkOrThai ? readability <= 1.5 : readability <= 8.8);
+  // For Korean (Hangul) / Japanese (Kana) text with >= 2 script chars, skip this compound
+  // check and defer to the dedicated CJK-specific sub-filters below. Thai text is intentionally
+  // excluded — Thai OCR artifacts can also appear in large sparse border captures and should
+  // continue to be filtered. Without this bypass, valid Korean speech-bubble phrases were ghosted
+  // before the isCommonKoreanWord allowlist had a chance to protect them.
+  const hangulOrKanaInCompact = (compact.match(/[\uAC00-\uD7AF\u3040-\u30FF]/g) || []).length;
+  if (giantLineBox && sparseLargePhrase && lowCoverageLargeBox && lowSignalLargeBox
+      && !(hangulOrKanaInCompact >= 2)) {
     return true;
   }
 
   // New aggressive sparse SFX filter: large area but very few characters
   // Removed wordCoverage check because OCR sometimes creates word bboxes as large as the line bbox
-  const isSparseSfxBox = (area >= 12000 && compact.length <= 14 && (area / Math.max(1, compact.length)) >= 1200)
-    || (area >= 24000 && compact.length <= 22 && (area / Math.max(1, compact.length)) >= 1000);
+  const isSparseSfxBox = !hasCjkOrThai && (
+    (area >= 12000 && compact.length <= 14 && (area / Math.max(1, compact.length)) >= 1200)
+    || (area >= 24000 && compact.length <= 22 && (area / Math.max(1, compact.length)) >= 1000)
+  );
   const englishTokens = text.split(/\s+/g).map(t => t.replace(/[^A-Za-z\u00C0-\u024F]/g, '')).filter(t => t.length >= 2 && /[aeiouy\u00C0-\u024F]/i.test(t));
   const isNaturalDialogue = englishTokens.length >= 2
     || (englishTokens.length === 1 && englishTokens[0].length >= 3 && readability >= 1.0)
     || isKnownShortWord
+    || isEnglishDialogue
     || /^(?:PRINCESS|PRiNCESS|DIE|PIG|CUM|COCK|OH|OHHH|OHHHH|OHHHHH|AGAA|SO|OF|ALL|MORE|YOU|US|THE|THIS|MY|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|USTHESOOFALL|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU)$/i.test(asciiCompact);
-  if (isSparseSfxBox && !isNaturalDialogue && !shouldForceKeepComicTranslationLine(text, scaledLine)) {
+  const isHighConfidenceText = avgConfidence >= 90 && asciiCompact.length > 0 && !isPureSymbolNoise && !isVerticalLineJunk;
+  if (isSparseSfxBox && !isNaturalDialogue && !isHighConfidenceText && !shouldForceKeepComicTranslationLine(text, scaledLine)) {
     return true;
   }
 
   if (hasCjkOrThai) {
     // Prevent dropping common Korean conversational words or SFX (e.g. "이런", "자", "녀석들", "쿠기사키", "제대로", etc.)
-    const isCommonKoreanWord = /^(?:이런|자|그|이|저|나|너|네|예|응|뭐|왜|안|못|잘|더|다|또|꾹|슥|헉|하|앗|어|오|엇|녀석|녀석들|쿠기사키|제대로|쪼여|쪼여라|크|윽|흐|음|읏|큭|읍|하앗|흐윽|후|휴|하아|하아아|으|으윽)$/.test(cjkCompact);
+    const isCommonKoreanWord = /^(?:이런|자|그|이|저|나|너|네|예|응|뭐|왜|안|못|잘|더|다|또|꾹|슥|헉|하|앗|어|오|엇|녀석|녀석들|쿠기사키|제대로|쪼여|쪼여라|크|윽|흐|음|읏|큭|읍|하앗|흐윽|후|휴|하아|하아아|으|으윽|진짜)$/.test(cjkCompact);
     if (isCommonKoreanWord) {
       return false;
     }
@@ -1081,6 +1137,7 @@ export const isLikelyGhostTranslatableLine = (
   }
 
   const compressedSparseShortPhrase = !hasCjkOrThai
+    && !isLikelyLegitimateDialogue
     && sourceTokenCount >= 2
     && sourceTokenCount <= 4
     && latinCompact.length >= 8
@@ -1089,6 +1146,7 @@ export const isLikelyGhostTranslatableLine = (
     && area <= Math.max(5200, latinCompact.length * 520)
     && (area / Math.max(1, latinCompact.length)) <= 430
     && wordCoverage <= 0.24
+    && validWords.length > 0
     && avgConfidence <= 94
     && !/[.!?…]\s*$/.test(text);
   if (compressedSparseShortPhrase) {

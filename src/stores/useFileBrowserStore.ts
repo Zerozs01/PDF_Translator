@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DBDocument, DBTag, DBProject, DocumentUpdate } from '../types/electron.d';
+import type { DBDocument, DBTag, DBProject, DocumentUpdate, ProjectUpdate, TagUpdate } from '../types/electron.d';
 import {
   applyLibraryFavoriteToggle,
   applyLibraryProjectMove,
@@ -9,6 +9,8 @@ import {
   deleteLibraryDocument,
   deleteLibraryProject,
   deleteLibraryTag,
+  updateLibraryTag,
+  updateLibraryProject,
   loadFavoriteLibraryDocuments,
   loadLibraryDocumentTags,
   loadLibraryDocumentsByProject,
@@ -27,7 +29,7 @@ import {
 } from '../services/libraryService';
 
 export type ViewMode = 'grid' | 'detail';
-export type SortBy = 'name' | 'date' | 'size' | 'type';
+export type SortBy = 'name' | 'date' | 'size' | 'type' | 'rating';
 export type SortOrder = 'asc' | 'desc';
 export type FilterType = 'all' | 'favorites' | 'recent' | 'tag' | 'project';
 
@@ -71,6 +73,7 @@ interface FileBrowserState {
   selectDocument: (id: number) => void;
   deselectDocument: (id: number) => void;
   toggleDocumentSelection: (id: number) => void;
+  selectRangeDocuments: (ids: number[], additive?: boolean) => void;
   selectAllDocuments: () => void;
   clearSelection: () => void;
   
@@ -95,11 +98,13 @@ interface FileBrowserState {
   
   // Actions - Tag Operations
   createTag: (name: string, color?: string) => Promise<DBTag | null>;
+  updateTag: (id: number, updates: TagUpdate) => Promise<boolean>;
   deleteTag: (id: number) => Promise<void>;
   
   // Actions - Project Operations
   createProject: (name: string, parentId?: number | null, color?: string) => Promise<DBProject | null>;
   deleteProject: (id: number) => Promise<void>;
+  updateProject: (id: number, updates: ProjectUpdate) => Promise<boolean>;
   
   // Computed/Helpers
   getSortedDocuments: () => DBDocument[];
@@ -162,6 +167,11 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   selectAllDocuments: () => set((state) => ({
     selectedDocumentIds: new Set(state.documents.map(d => d.id))
   })),
+  selectRangeDocuments: (ids, additive = false) => set((state) => {
+    const newSet = additive ? new Set(state.selectedDocumentIds) : new Set<number>();
+    ids.forEach(id => newSet.add(id));
+    return { selectedDocumentIds: newSet };
+  }),
   clearSelection: () => set({ selectedDocumentIds: new Set() }),
   
     // 🚀 Batch startup load: all 3 in 1 IPC round-trip
@@ -201,7 +211,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   loadDocumentsByProject: async (projectId) => {
     set({ isLoading: true, error: null });
     try {
-      const documents = await loadLibraryDocumentsByProject(projectId);
+      const actualId = projectId === 0 ? null : projectId;
+      const documents = await loadLibraryDocumentsByProject(actualId);
       set({ documents, isLoading: false, selectedProjectId: projectId, filterType: 'project' });
     } catch (error) {
       set({ error: (error as Error).message, isLoading: false });
@@ -363,6 +374,22 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       return null;
     }
   },
+
+  updateTag: async (id, updates) => {
+    try {
+      const updated = await updateLibraryTag(id, updates);
+      if (updated) {
+        set((state) => ({
+          tags: state.tags.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+        }));
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to update tag:', error);
+      return false;
+    }
+  },
   
   deleteTag: async (id) => {
     try {
@@ -399,6 +426,22 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       set((state) => ({ projects: state.projects.filter(p => p.id !== id) }));
     } catch (error) {
       console.error('Failed to delete project:', error);
+    }
+  },
+
+  updateProject: async (id, updates) => {
+    try {
+      const updated = await updateLibraryProject(id, updates);
+      if (updated) {
+        set((state) => ({
+          projects: state.projects.map((p) => (p.id === id ? { ...p, ...updates } : p)),
+        }));
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to update project:', error);
+      return false;
     }
   },
   

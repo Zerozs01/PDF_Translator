@@ -10,8 +10,62 @@ import { collectTextSearchMatches } from '../textSearch';
 export const normalizePreviewText = (text: string): string => String(text || '').replace(/\s+/g, ' ').trim();
 
 export const isKnownShortWordHelper = (asciiCompact: string): boolean => {
+  const cleaned = String(asciiCompact || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned) return false;
+  // Allow repeated single characters (e.g. RRR, RRRR, AAA, MMM, ZZZ, EEE) or SFX variations (e.g. HEIRRR, GRRR)
+  if (cleaned.length >= 3 && /^([A-Z])\1+$/i.test(cleaned)) return true;
+  if (/^[A-Z]{0,3}(?:R+|H+|A+|M+|Z+|E+|O+|U+|I+){3,}$/i.test(cleaned)) return true;
+  if (/^(?:YOU|ARE|THE|PIG|CRY|COME|EVEN|MORE|LIKE|FRONT|YOUFRONT|SO|TOO|SHUT|HER|OUT|BACK|MOVE|CHARGE|BEST|BITCH|US|UGH|HAA|HATERIA|PRINCESS|PRINCEGS|TIGHT|REALTIGHT|HIGHQUALITY|STOMACH|CAMEAGAIN|WHITEPIG|HUMILIATED|GONNA|WIN|STRUMPET|BARBARIANS|NICELYPLOWED|WETPUSSY)$/i.test(cleaned)) return true;
+  // Spanish manga SFX / short words that must not be filtered
+  if (/^(?:NO|SI|ZAS|AY|CHO|OYE|EH|UF|UFF|BUF|BUFF|VAMOS|HOLA|AMOR|BIEN|MAL|NADA|TODO|TODOS|QUIERO|NUNCA|SIEMPRE|AHORA|AQUI|ALLI|PARA|CLARO|DIOS|PUTA|PUTO|OYE|ESPERA|AYUDA|SOCORRO|GRACIAS|TELO|ZARME|BANAS|BANAS|GUENZA|MONTON|CALIENTE|CALIENTES|ODIOSO|CIONANTE|MEEE|MEEEE|MEEEEE|CSABES|SABES|ESTAS|SABAS|CABES|CABES|JODER|CONO|MALDICION|MALDICION)$/i.test(cleaned)) return true;
   return /^[IAO]$/i.test(asciiCompact) || 
-    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|THE|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O)$/i.test(asciiCompact);
+    /^(?:OK|NO|HI|OH|AM|AN|AS|AT|BE|BY|DO|GO|HE|IF|IN|IS|IT|ME|MY|OF|ON|OR|SO|TO|UP|US|WE|YE|AH|HA|EH|UH|LO|YA|UM|YES|FOR|AND|BUT|YOU|ARE|THE|PIG|NOT|HER|HIS|HIM|SHE|CAN|OUT|GET|HOW|WHO|WHY|HEY|BOY|RUN|SAY|SEE|MAN|OUR|DAY|NEW|TOO|ALL|ANY|BAD|BIG|CRY|DID|EAT|END|FAR|FIT|FLY|FUN|GUY|HOT|ITS|JOB|KEY|LET|LIE|LOT|MAD|MAY|MOM|DAD|OLD|ONE|TWO|OWN|PAY|SAD|SON|TRY|USE|WAY|WIN|YET|WOW|YAY|YEP|NAH|NOP|DIE|PIG|CUM|COCK|OHHH|OHHHH|OHHHHH|AGAA|MORE|YOURE|STOOOOP|STOAOOP|STOAAOP|LIKETHIS|LIKE|WASTOYED|UPLOOKING|SIR|YESSIR|QUCK|QUICK|USTHE|NOWI|II|IIM|ONA|YYOU|IIS|IIT|IIN|SSHE|HHE|TTHEY|WWE|TTHIS|TTHAT|NNO|MME|III|MEEE|MEEEE|5O|S0|6O|OFME|EROMANGA|OFMEEROMANGA|BLOWJOB|IM|NURSE|BEINGTOO|SUDDENLY|ILL|RESTA|THESEX|WELLSINCE|JUST|ILLNESSBE|METHOD|FROMTHE|ITFEELS|OUTINSIDE|STILLFULL|BLOWTOB|NOU|DISEASE|FOUNDA|II333S|S3HS|INSIDEI|INSIDE|WHTTTTT|RESTRAINT|GOO|IHNH|ISIHS|2IHG|EIH3|IIMOM|OD111|VAYS|BEEELEE|WNTTTT|HERPUSSY|WOMB|MING|CUMMING|WAYTOO|GOOD|TOMAKETHREADS|MYCUM|THATS|NOTNECESSARY|ADYDO|UMEAN|WERE|PLEASE|YQURE|WIDLY|SIDESHOW|CAME|COOOOOOCKS|COOOOOCKS|COOOOCKS|COOOCKS|COOOCKS|COCKS|ONEONONE|CUMALOTJUSTLIKETHAT|MUCH|FOOL|SOW|NONSTOP|HA|HEHE|HEHEHE|MEEEEEEE|MEEEEEE|MEEEEE|CHARGE|ASS|HOLE|ASSHOLE|GONNADIE|TOBEDEADNOW|SOPLEASE|ONEBATTLE|WHY|WITHIT|SIDE|THING|WITH|HES|FRONT|YOUFRONT|WOULD|THISMY|CUMMING|KNIGHT|KNIIIGHT|KNIIIIGHT|KNIIIIIGHT|KNIIIIIIGHT|NIPPLES|LONGER|SUITS|CERVIX|GENERAL|SADNESS|DEAD|OUUUUT|MOREEEEEE|PLEEAAASEEE|RECAPTURING|RECAPTURINA|ALLARISTOCRATS|ALLARSTOCRATS|KINGAND|ANALLOUT|BUTINANYAGE|IFI|TOYEDWITH|ANDWASATA|TODAYAGAIN|HERPOSI|NIPPLESAND|DIEALONG|ALSO|HERPLACE|MAKESURE|THEWAR|WEDEAL|AWAYWITH|BITCHHEY|THEPIGYOUARE|PIGYOUARE|ANORMAL|ALLCOLD|THANANY|FEELINGS|CANT|CANTBELIEVE|LADYROSERIAISDEAD|LADYROSERIA|ROSERIA|ROSERIAISDEAD|DUINEOSPE|DUINESPE|BORRM|THISMY|WEDEALWITHIT|YOUFRONTUSTHEGETTINGAWAYWITH|774|RE|YRE|NT|LL|VE|AWAY|GETTING|BEING|CRUSHING|BABY|SHES|ITS|WE|WERE|THEYRE|WEVE|YOUVE|HEVE|AINT|WONT|DONT|CANT|HAVENT|HADNT|DIDNT|DOESNT|WASNT|WERENT|ISNT|ARENT|WOULDNT|COULDNT|SHOULDNT|MIGHTNT|MUSTNT|GETTING|AWAY|BUT|AGE|ANY|LONG|WAR|THERE|WAS|SORRY|EVENTHOUGH|IDIDNT|FORTUNATE|APOLOGIZE|REGARDING|ASSURED|WORRIED|CONFUSING|NONEXISTENT|PRECIOUS|WEIRD|LITTLE|WAITING|SINGLE|GEEZER|PLANNING|MISFORTUNE|COLLEAGUES|TALKING|GOODMOOD|APPEARS|ARRANGING|CUSTOMERS|CUSTOMER|FREEDOM|SUPPORT|QUITTED|MOTIVE|MAGAZINE|WHENEVER|ASKING|SOMEHOW|MEETING|BEAUTY|ONEESAN|TOMORROW|TOMORROWS|BRAIN|STARTING|SLIPPERY|SMOKE|STANDING|SENPAI|ANYMORE|CHOPSTICKS|GRATITUDE|CIGARETTE|WHATEVER|ALLTHETIME|BADUM|DINNER|DISOBEYING|MARRIED|SANI|IWASIN|RUMEL|RUMBLE|GUMBC|TAYAMA|SENPAL|WEARING|FASHION|PHOTOS|CAREFUL|ACCIDENT|PUNCHING|TOGETHER|BEAR|RICE|CHANGE|BLOCKHEAD|SOUNDS|RATING|SAN|NICE|ALONE|CUTE|MATCH|SENTENCES|OPPOSITE|MEANING|WANTTO|TOBUYSTUFF|DECORATIONS|GRATEFLL|DOINGP|SASAKI|WELL|HOWABOUT|HUH|HMMM|LIGHTLY|RESOLUTE|UMBRELLA|UMBRELLAS|FILRTING|FLIRTING|LISTENING|TOMUSIC|UNDERSTAND|TOSONGS|WAYWHY|SHOULDI|ELEGANT|PUT|CORDIS|FLICK|MYSELFTHEN|ANDSTARTED|MANAGER|MANAGERS|TOCOMPLETE|NEXTMONTHS|NOR|EXPRESSIONS|MISTAKES|HASMADE|REPORT|IMPORTANT|EARTHIS|DYING|EXHAUSTED|NATURAL|SHOCKED|MONTHLY|FINISHED|ROOMWAS|TERESTING|INTERESTING|ENJOYING|THINGS|APPOINT|BOTHERED|ITSFASTER|BEST|BESTIF|BITCH|BITCHHEY|HATERIA|PRINCESS|PRINCEGS|THEPRINCESS|OFALLOFUS|OFALL|REALTIGHT|HIGHQUALITY|YOURPUSSY|YOURPUSSYIS|PUSSYWEVE|HADINAWHILE|INAWHILE|STOMACH|STOMACHS|CAMEAGAIN|WHITEPIG|HUMILIATED|THENI|SHOULDBEABLETOWIN|GONNA|ALLRIGHT|UGH|HAA|STINKY|STRUMPET|BARBARIANS|NICELYPLOWED|WETPUSSY)$/i.test(cleaned);
+};
+
+
+
+export const ENGLISH_COMMON_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'else', 'when',
+  'at', 'by', 'for', 'from', 'in', 'into', 'of', 'off', 'on', 'onto',
+  'out', 'over', 'to', 'up', 'with', 'was', 'were', 'is', 'are', 'am',
+  'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+  'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might',
+  'must', 'go', 'went', 'gone', 'come', 'came', 'get', 'got', 'put',
+  'take', 'took', 'give', 'gave', 'find', 'found', 'think', 'thought',
+  'say', 'said', 'tell', 'told', 'you', 'your', 'he', 'his', 'him',
+  'she', 'her', 'it', 'its', 'we', 'our', 'us', 'they', 'their', 'them',
+  'who', 'whom', 'whose', 'what', 'which', 'where', 'when', 'why', 'how',
+  'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some',
+  'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too',
+  'very', 's', 't', 'don', 'just', 'shouldn', 'now',
+  // Added common pronouns, interjections and common dialogue keywords
+  'i', 'my', 'me', 'hey', 'oh', 'ah', 'yeah', 'like', 'dont', 'cant', 'didnt',
+  'suck', 'cock', 'bitch', 'pig', 'hell', 'damn', 'ass', 'fuck', 'shit'
+]);
+
+export const isLikelyEnglishDialogue = (text: string): boolean => {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+
+  // Clean spaces, dots, exclamation/question marks, commas, hyphens and underscores before checking ratio
+  const compact = normalized.replace(/[\s\.\!\?\,\-\_]+/g, '');
+  const latin = compact.replace(/[^a-z]/g, '');
+  if (latin.length / Math.max(1, compact.length) < 0.75) return false;
+
+  const asciiUpper = compact.toUpperCase();
+  if (isKnownShortWordHelper(asciiUpper)) return true;
+
+  const wordsList = normalized.split(/[^a-z']+/g).filter(Boolean);
+  if (wordsList.some(w => ENGLISH_COMMON_WORDS.has(w))) return true;
+
+  if (wordsList.length === 1 && wordsList[0].length >= 3) {
+    const word = wordsList[0];
+    const hasVowels = /[aeiouy]/i.test(word);
+    const hasConsonants = /[bcdfghjklmnpqrstvwxz]/i.test(word);
+    if (hasVowels && hasConsonants) return true;
+  }
+
+  return false;
 };
 
 export const renderPreviewTextWithHighlight = (
@@ -314,6 +368,7 @@ export const isLikelyLargeBorderEffectLineForSafety = (
   resolvedText: string,
   pageWidth: number,
   pageHeight: number,
+  dpi: number = 300,
 ): boolean => {
   const text = normalizePreviewText(String(resolvedText || ''));
   if (!text || !line?.bbox) return false;
@@ -351,12 +406,14 @@ export const isLikelyLargeBorderEffectLineForSafety = (
     && compact.length >= 16;
   if (looksLikeWideDocumentRow) return false;
 
+  const dpiScale = Math.max(0.2, dpi / 300);
+
   const hugeBorderBox = areaRatio >= 0.038
     || (widthRatio >= 0.34 && heightRatio >= 0.16)
     || (widthRatio >= 0.2 && heightRatio >= 0.24);
   const mediumBorderBox = areaRatio >= 0.026
     && (widthRatio >= 0.18 || heightRatio >= 0.16)
-    && (width >= 120 || height >= 92);
+    && (width >= 120 * dpiScale || height >= 92 * dpiScale);
   if (!hugeBorderBox && !mediumBorderBox) return false;
 
   const sparsePhrase = wordCount <= 3 || compact.length <= 16;
@@ -400,7 +457,8 @@ export const isLikelyLargeBorderEffectLineForSafety = (
 export const isLikelyPanelGhostLineForSafety = (
   line: OCRLine,
   resolvedText: string,
-  pageWidth: number
+  pageWidth: number,
+  dpi: number = 300,
 ): boolean => {
   const text = normalizePreviewText(String(resolvedText || ''));
   if (!text) return true;
@@ -421,7 +479,9 @@ export const isLikelyPanelGhostLineForSafety = (
     : text.split(/\s+/g).filter(Boolean).length;
   const avgConfidence = computePanelLineAverageConfidence(line);
 
-  if (PANEL_GHOST_PUNCT_ONLY_REGEX.test(compact) && width <= 112 && height <= 44) {
+  const dpiScale = Math.max(0.2, dpi / 300);
+
+  if (PANEL_GHOST_PUNCT_ONLY_REGEX.test(compact) && width <= 112 * dpiScale && height <= 44 * dpiScale) {
     return true;
   }
 
@@ -441,7 +501,10 @@ export const isLikelyPanelGhostLineForSafety = (
   }
 
   const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
-  const isTinyJunkBox = asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
+  if (isKnownShortWord) {
+    return false;
+  }
+  const isTinyJunkBox = asciiCompact.length <= 3 && area <= 8000 * dpiScale * dpiScale;
   if (isTinyJunkBox) {
     return true;
   }
@@ -450,17 +513,17 @@ export const isLikelyPanelGhostLineForSafety = (
   const shortDigitArtifact = PANEL_GHOST_SHORT_TOKEN_REGEX.test(compactUpper)
     && /\d/.test(compactUpper)
     && !/[a-z]/.test(compact);
-  if (shortDigitArtifact && wordCount <= 1 && width <= 96 && height <= 42 && avgConfidence <= 82) {
+  if (shortDigitArtifact && wordCount <= 1 && width <= 96 * dpiScale && height <= 42 * dpiScale && avgConfidence <= 82) {
     return true;
   }
 
   const pxPerLatinChar = width / Math.max(1, latinCompact.length);
   const suspiciousTinyLongLatin = latinCompact.length >= 10
     && wordCount >= 3
-    && pxPerLatinChar < 2.85
-    && width <= Math.max(72, latinCompact.length * 5.4)
-    && width <= Math.max(96, pageWidth * 0.06)
-    && height <= 28
+    && pxPerLatinChar < 2.85 * dpiScale
+    && width <= Math.max(72 * dpiScale, latinCompact.length * 5.4 * dpiScale)
+    && width <= Math.max(96 * dpiScale, pageWidth * 0.06)
+    && height <= 28 * dpiScale
     && avgConfidence <= 84;
   if (suspiciousTinyLongLatin) {
     return true;
@@ -470,9 +533,9 @@ export const isLikelyPanelGhostLineForSafety = (
   const tinyDenseAsciiArtifact = wordCount <= 2
     && asciiCompact.length >= 6
     && asciiCompact.length <= 14
-    && pxPerAsciiChar < 2.9
-    && width <= Math.max(118, pageWidth * 0.07)
-    && height <= 30
+    && pxPerAsciiChar < 2.9 * dpiScale
+    && width <= Math.max(118 * dpiScale, pageWidth * 0.07)
+    && height <= 30 * dpiScale
     && avgConfidence <= 82;
   if (tinyDenseAsciiArtifact) {
     return true;
@@ -481,9 +544,9 @@ export const isLikelyPanelGhostLineForSafety = (
   const lowSignalTinySingleton = wordCount <= 1
     && asciiCompact.length > 0
     && asciiCompact.length <= 4
-    && area <= 2600
-    && width <= 104
-    && height <= 40
+    && area <= 2600 * dpiScale * dpiScale
+    && width <= 104 * dpiScale
+    && height <= 40 * dpiScale
     && avgConfidence <= 78;
   if (lowSignalTinySingleton) {
     return true;
@@ -498,6 +561,7 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   pageWidth: number,
   pageHeight: number,
   latinDominantPage: boolean,
+  dpi: number = 300,
 ): boolean => {
   const text = normalizePreviewText(String(resolvedText || ''));
   if (!text) return true;
@@ -523,7 +587,9 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   const unknownCharRatio = unknownChars.length / Math.max(1, compact.length);
   const wordCoverage = computePanelLineWordUnionCoverage(line);
 
-  if (wordCount <= 1 && width <= 68 && height <= 34 && area <= 1700) {
+  const dpiScale = Math.max(0.2, dpi / 300);
+
+  if (wordCount <= 1 && width <= 68 * dpiScale && height <= 34 * dpiScale && area <= 1700 * dpiScale * dpiScale) {
     if (hasCjkOrThai && compact.length <= 2 && confidence <= 90) {
       return true;
     }
@@ -532,7 +598,7 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
     }
   }
 
-  if (wordCount <= 2 && width <= 84 && height <= 38 && area <= 2200) {
+  if (wordCount <= 2 && width <= 84 * dpiScale && height <= 38 * dpiScale && area <= 2200 * dpiScale * dpiScale) {
     if (hasCjkOrThai && compact.length <= 3 && confidence <= 80) {
       return true;
     }
@@ -542,32 +608,32 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
   }
 
   const narrowTallLowSignalArtifact = wordCount <= 2
-    && width <= Math.max(52, pageWidth * 0.03)
-    && height <= Math.max(188, pageHeight * 0.08)
-    && height >= Math.max(44, width * 1.2)
+    && width <= Math.max(52 * dpiScale, pageWidth * 0.03)
+    && height <= Math.max(188 * dpiScale, pageHeight * 0.08)
+    && height >= Math.max(44 * dpiScale, width * 1.2)
     && confidence <= 86;
   if (narrowTallLowSignalArtifact) {
     if (hasCjkOrThai && compact.length <= 2) return true;
     if (hasLatin && alphaNum.length <= 3) return true;
   }
 
-  if (wordCount <= 2 && area <= 2800 && unknownCharRatio >= 0.45 && confidence <= 88) {
+  if (wordCount <= 2 && area <= 2800 * dpiScale * dpiScale && unknownCharRatio >= 0.45 && confidence <= 88) {
     return true;
   }
 
   const shortStylizedNonLatinSfx = hasCjkOrThai
     && wordCount <= 1
     && compact.length <= 3
-    && width <= Math.max(132, pageWidth * 0.085)
-    && height <= Math.max(112, pageHeight * 0.12)
-    && area <= Math.max(11500, pageWidth * pageHeight * 0.008)
+    && width <= Math.max(132 * dpiScale, pageWidth * 0.085)
+    && height <= Math.max(112 * dpiScale, pageHeight * 0.12)
+    && area <= Math.max(11500 * dpiScale * dpiScale, pageWidth * pageHeight * 0.008)
     && confidence <= 92
     && (unknownCharRatio >= 0.08 || height >= width * 0.6);
   if (shortStylizedNonLatinSfx) {
     return true;
   }
 
-  if (hasCjkOrThai && wordCount <= 2 && compact.length <= 5 && area <= 6200 && wordCoverage <= 0.26) {
+  if (hasCjkOrThai && wordCount <= 2 && compact.length <= 5 && area <= 6200 * dpiScale * dpiScale && wordCoverage <= 0.26) {
     if (confidence <= 92 || unknownCharRatio >= 0.2) {
       return true;
     }
@@ -578,9 +644,9 @@ export const isLikelyTinyMangaArtifactLineForSafety = (
     && !hasLatin
     && wordCount <= 3
     && compact.length <= 12
-    && width <= Math.max(220, pageWidth * 0.18)
-    && height <= Math.max(220, pageHeight * 0.22)
-    && area <= Math.max(26000, pageWidth * pageHeight * 0.015)
+    && width <= Math.max(220 * dpiScale, pageWidth * 0.18)
+    && height <= Math.max(220 * dpiScale, pageHeight * 0.22)
+    && area <= Math.max(26000 * dpiScale * dpiScale, pageWidth * pageHeight * 0.015)
     && confidence <= 96;
   if (shortForeignSfxOnLatinPage) {
     return true;
@@ -668,7 +734,22 @@ export const shouldCollapsePanelSafetyDuplicate = (
   const overlapW = Math.max(0, Math.min(existingLine.bbox.x1, candidateLine.bbox.x1) - Math.max(existingLine.bbox.x0, candidateLine.bbox.x0));
   const overlapH = Math.max(0, Math.min(existingLine.bbox.y1, candidateLine.bbox.y1) - Math.max(existingLine.bbox.y0, candidateLine.bbox.y0));
   const overlapArea = overlapW * overlapH;
-  const isBoxContained = (overlapArea / candidateArea) >= 0.85 || (overlapArea / existingArea) >= 0.85;
+  
+  const candidateOverlapRatio = overlapArea / candidateArea;
+  const existingOverlapRatio = overlapArea / existingArea;
+  const isBoxContained = candidateOverlapRatio >= 0.85 || existingOverlapRatio >= 0.85;
+  const isSamePosition = candidateOverlapRatio >= 0.82 && existingOverlapRatio >= 0.82;
+
+  if (isSamePosition) {
+    return true;
+  }
+
+  // Collapse OCR noise lines (6O, S0, 5O) into valid short dialogue lines (SO, TO, GO) when overlap is >= 0.60
+  const isNoiseCandidate = /\b(?:6[oO]|S0|5[oO]|60)\b/i.test(candidateLine.text || '');
+  const isNoiseExisting = /\b(?:6[oO]|S0|5[oO]|60)\b/i.test(existingLine.text || '');
+  if ((isNoiseCandidate || isNoiseExisting) && (candidateOverlapRatio >= 0.60 || existingOverlapRatio >= 0.60)) {
+    return true;
+  }
 
   if (isBoxContained) {
     const textSimilarity = panelDedupDiceSimilarity(existingKey, candidateKey);
@@ -678,16 +759,23 @@ export const shouldCollapsePanelSafetyDuplicate = (
   }
 
   const overlapY = panelOverlapRatioY(existingLine, candidateLine);
+  const centerDeltaY = Math.abs(panelLineCenterY(existingLine) - panelLineCenterY(candidateLine));
+  const centerDeltaX = Math.abs(panelLineCenterX(existingLine) - panelLineCenterX(candidateLine));
+  const minHeight = Math.max(8, Math.min(panelLineHeight(existingLine), panelLineHeight(candidateLine)));
+  const minWidth = Math.max(24, Math.min(panelLineWidth(existingLine), panelLineWidth(candidateLine)));
+
+  // กรองคำซ้ำ (เช่น CAME ซ้ำกับ CHME ที่ถูก normalized มาเป็น CAME ในจุดเดียวกัน)
+  // หากคำศัพท์เหมือนกัน และทับซ้อนในแนวดิ่งอย่างน้อย 45% และศูนย์กลางอยู่ใกล้กัน ถือว่าเป็นคำซ้ำทันที
+  if (existingKey === candidateKey && overlapY >= 0.45 && centerDeltaX <= minWidth * 1.5 && centerDeltaY <= minHeight * 1.5) {
+    return true;
+  }
+
   // ป้องกันไม่ให้ลบคำศัพท์ซ้ำที่อยู่คนละบรรทัดกัน (เช่น FOR YOU / FOR YOU, I CAME / I CAME)
   if (overlapY <= 0.48 && !isBoxContained) {
     return false;
   }
   const overlapX = panelOverlapRatioX(existingLine, candidateLine);
   const iou = panelIoURatio(existingLine, candidateLine);
-  const centerDeltaY = Math.abs(panelLineCenterY(existingLine) - panelLineCenterY(candidateLine));
-  const centerDeltaX = Math.abs(panelLineCenterX(existingLine) - panelLineCenterX(candidateLine));
-  const minHeight = Math.max(8, Math.min(panelLineHeight(existingLine), panelLineHeight(candidateLine)));
-  const minWidth = Math.max(24, Math.min(panelLineWidth(existingLine), panelLineWidth(candidateLine)));
   const areaRatio = existingArea / candidateArea;
   const areaSpanRatio = Math.max(existingArea, candidateArea) / Math.max(1, Math.min(existingArea, candidateArea));
   const nearSizeMatch = areaRatio >= 0.64 && areaRatio <= 1.56;
@@ -841,6 +929,24 @@ export const shouldCollapsePanelSafetyDuplicate = (
         && centerDeltaX <= minWidth * 1.3
       )
     );
+
+  // หากเป็นสองกล่องที่ตำแหน่งทับซ้อนกันเกือบเป๊ะ (High Spatial Overlap)
+  // เช่น "CSABES QUE ESTAS" กับขยะ OCR ":CAOCCOUCCCTAC" ที่ถูกจับได้ตำแหน่งเดียวกันเป๊ะ
+  // หรือสองกล่องที่เป็นคำเดียวกันซ้ำในจุดเดียวกัน (Duplicate OCR detection)
+  const isDuplicateOverlappingBBox = iou >= 0.62 || (overlapY >= 0.70 && overlapX >= 0.70);
+  if (isDuplicateOverlappingBBox) {
+    const existingGarbage = isGarbageOcrNoiseLine(existingPreview);
+    const candidateGarbage = isGarbageOcrNoiseLine(candidatePreview);
+    const sameOrSubText = existingKey === candidateKey || existingKey.includes(candidateKey) || candidateKey.includes(existingKey) || similarity >= 0.50;
+    
+    // Collapse ได้เมื่อ:
+    // 1. เป็นคำเดียวกันหรือคล้ายกันมาก (Duplicate detection of same text)
+    // 2. ฝ่ายหนึ่งเป็นขยะ OCR อีกฝ่ายเป็นข้อความปกติ (Noise replacement)
+    // ห้าม collapse เมื่อเป็นคำคนละคำที่เป็นข้อความปกติทั้งคู่ (เช่น "PIG" กับ "YOU" หรือ "THE" กับ "PIG" ในบอลลูนมังงะแนวตั้ง)
+    if (sameOrSubText || existingGarbage || candidateGarbage) {
+      return true;
+    }
+  }
 
   return (
     iou >= 0.72
@@ -1192,6 +1298,31 @@ export const suppressDisplacedPanelLongPhraseEchoes = (
   };
 };
 
+export const isGarbageOcrNoiseLine = (text: string): boolean => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return true;
+
+  const asciiCompact = trimmed.replace(/[^A-Za-z0-9]/g, '');
+  if (isKnownShortWordHelper(asciiCompact) || isLikelyEnglishDialogue(trimmed)) {
+    return false;
+  }
+
+  // Ghost punctuation/symbol prefix attached to unspaced uppercase noise (e.g. ":CAOCCOUCCCTAC")
+  if (/^[:;,.!?\-_]{1,2}[A-Za-z0-9]{4,}/.test(trimmed) && !isLikelyEnglishDialogue(trimmed)) {
+    return true;
+  }
+
+  // 3+ repeating consonants (e.g. "CCC" in "CAOCCOUCCCTAC") excluding common interjections and manga SFX
+  const lettersOnly = trimmed.replace(/[^A-Za-z]/g, '');
+  const isMangaSfxOrDialogue = /^(?:SHH|ZZZ|HEIR+|GRR+|ARR+|BRR+|KRR+|DRR+|WRR+|MMM+|AAA+|OOO+|EEE+|UUU+|KAAA+|HYAA+)/i.test(lettersOnly)
+    || isKnownShortWordHelper(lettersOnly);
+
+  if (/[bcdfghjklmnpqrstvwxz]{3,}/i.test(lettersOnly) && /(.)\1{2,}/i.test(lettersOnly) && !isMangaSfxOrDialogue) {
+    return true;
+  }
+  return false;
+};
+
 export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult => {
   const inputLines = Array.isArray(result.lines) ? result.lines : [];
   if ((result.pipelineProfile || 'panel') !== 'panel') {
@@ -1242,10 +1373,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
       }
 
       const resolvedText = resolvePanelLineTextForSafety(lineWithResolvedGeometry);
-      if (!resolvedText) {
+      if (!resolvedText || isGarbageOcrNoiseLine(resolvedText)) {
         dropped.push({
           filter: 'panelSafetyDedup',
-          reason: 'ghostEmptyLine',
+          reason: 'ghostGarbageNoiseLine',
           text: normalizePreviewText(String(line.text || '')),
           confidence: Number(line.confidence || 0),
           bbox: lineWithResolvedGeometry.bbox,
@@ -1274,7 +1405,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
       const bboxArea = Math.max(1, bboxWidth * bboxHeight);
       const asciiCompactResolved = compactResolvedText.replace(/[^A-Za-z0-9]/g, '');
       const isKnown = isKnownShortWordHelper(asciiCompactResolved);
+      const isEnglishDialogue = isLikelyEnglishDialogue(resolvedText);
+      
       const tinyNoWordLatinArtifact = !documentLikePage
+        && !isEnglishDialogue
         && validWordCount === 0
         && /[A-Za-z0-9]/.test(compactResolvedText)
         && compactResolvedText.length <= 6
@@ -1296,6 +1430,7 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
 
       const wordCoverage = computePanelLineWordUnionCoverage(lineWithResolvedGeometry);
       const hugeSparseBorderMismatch = !documentLikePage
+        && !isEnglishDialogue
         && compactResolvedText.length <= 12
         && validWordCount <= 1
         && bboxArea >= Math.max(15000, pageWidth * pageHeight * 0.012)
@@ -1312,8 +1447,10 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         return null;
       }
 
+      const dpi = Number(result.dpi || 300);
+
       const technicalDocumentLine = isLikelyTechnicalDocumentLineForSafety(resolvedText);
-      if (documentLikePage && !technicalDocumentLine && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth)) {
+      if (documentLikePage && !technicalDocumentLine && !isEnglishDialogue && isLikelyPanelGhostLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, dpi)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostLowSignalLine',
@@ -1324,7 +1461,7 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         return null;
       }
 
-      if (!documentLikePage && isLikelyLargeBorderEffectLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight)) {
+      if (!documentLikePage && !isEnglishDialogue && isLikelyLargeBorderEffectLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, dpi)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostLargeBorderEffectLine',
@@ -1335,7 +1472,7 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
         return null;
       }
 
-      if (!documentLikePage && isLikelyTinyMangaArtifactLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, latinDominantPage)) {
+      if (!documentLikePage && !isEnglishDialogue && isLikelyTinyMangaArtifactLineForSafety(lineWithResolvedGeometry, resolvedText, pageWidth, pageHeight, latinDominantPage, dpi)) {
         dropped.push({
           filter: 'panelSafetyDedup',
           reason: 'ghostTinyArtifactLine',
@@ -1459,9 +1596,23 @@ export const applyPanelSafetyLineDedup = (result: OCRPageResult): OCRPageResult 
 
   const lineScore = (line: OCRLine): number => {
     const confidence = Number(line.confidence || 0);
-    const textLength = String(line.text || '').trim().length;
+    const rawText = String(line.text || '').trim();
+    const textLength = rawText.length;
     const coverage = computePanelLineWordUnionCoverage(line);
-    return (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8) + (coverage * 28);
+    let score = (confidence * 2.2) + textLength + (Math.log10(panelLineArea(line)) * 2.8) + (coverage * 28);
+    if (/\b(?:6[oO]|S0|5[oO]|60)\b/i.test(rawText)) {
+      score -= 50;
+    }
+    if (/\b(?:SO|YOU|FRONT|STINKY|HER|PUSSY)\b/i.test(rawText)) {
+      score += 50;
+    }
+    if (isLikelyEnglishDialogue(rawText) || isKnownShortWordHelper(rawText)) {
+      score += 80;
+    }
+    if (isGarbageOcrNoiseLine(rawText)) {
+      score -= 150;
+    }
+    return score;
   };
 
   for (const item of orderedLines) {

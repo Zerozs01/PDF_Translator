@@ -9,16 +9,20 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:get-document',
   'db:find-documents-by-filename',
   'db:save-ocr',
+  'db:save-ocr-batch',
   'db:get-ocr',
   'db:clear-ocr',
   'db:clear-document-cache',
   'db:get-latest-ocr',
   'db:get-ocr-cache-stats-for-document-ids',
   'db:save-translation-cache',
+  'db:save-translation-cache-batch',
   'db:get-translation-cache-page',
   'db:clear-translation-cache-by-engine',
   'db:save-sentence-translation',
+  'db:save-sentence-translation-batch',
   'db:get-sentence-translation',
+  'db:get-sentence-translation-batch',
   'db:save-benchmark',
   'db:get-benchmark',
   'db:clear-benchmark',
@@ -41,6 +45,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   // Tag management
   'db:get-all-tags',
   'db:create-tag',
+  'db:update-tag',
   'db:delete-tag',
   // Project management
   'db:get-all-projects',
@@ -48,18 +53,24 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:create-project',
   'db:update-project',
   'db:delete-project',
+  'db:get-project-stats',
+  // Window management
+  'window:toggle-fullscreen',
+  'window:is-fullscreen',
   // File system
   'fs:read-file',
   'fs:open-file',
   'fs:import-file',
   // OCR
   'ocr:get-engine-status',
+  'ocr:get-gpu-info',
   'ocr:prewarm-engine',
   'ocr:write-temp-image',
   'ocr:delete-temp-image',
   'ocr:run-raw-direct',
   'ocr:run-external',
   'ocr:cancel-external',
+  'ocr:clear-cuda-cache',
   // Gemini
   'gemini:get-api-key-status',
   'gemini:set-api-key',
@@ -83,6 +94,9 @@ const ALLOWED_INVOKE_CHANNELS = [
   'auth:auto-login',
   'auth:hard-reset',
   'auth:set-mode',
+  // Power sleep prevention
+  'power:prevent-sleep',
+  'power:allow-sleep',
 ] as const;
 
 const ALLOWED_SEND_CHANNELS = [
@@ -144,6 +158,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:find-documents-by-filename', filename),
     saveOCR: (docId: number, pageNum: number, data: unknown, engine?: string) =>
       safeInvoke('db:save-ocr', { docId, pageNum, data, engine }),
+    saveOCRBatch: (items: Array<{ docId: number; pageNum: number; data: unknown; engine?: string }>) =>
+      safeInvoke('db:save-ocr-batch', items.map((i) => ({ documentId: i.docId, pageNumber: i.pageNum, data: i.data, engine: i.engine }))),
     getOCR: (docId: number, pageNum: number, engine?: string) =>
       safeInvoke('db:get-ocr', { docId, pageNum, engine }),
     clearOCR: (docId: number, pageNum: number, engine?: string) =>
@@ -156,14 +172,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:get-ocr-cache-stats-for-document-ids', { documentIds }),
     saveTranslationCache: (docId: number, pageNum: number, cacheKey: string, entry: unknown) =>
       safeInvoke('db:save-translation-cache', { docId, pageNum, cacheKey, entry }),
+    saveTranslationCacheBatch: (items: Array<{ docId: number; pageNum: number; cacheKey: string; entry: unknown }>) =>
+      safeInvoke('db:save-translation-cache-batch', items.map((i) => ({ documentId: i.docId, pageNumber: i.pageNum, cacheKey: i.cacheKey, entry: i.entry }))),
     getTranslationCachePage: (docId: number, pageNum: number) =>
       safeInvoke('db:get-translation-cache-page', { docId, pageNum }),
     clearTranslationCacheByEngine: (docId: number, pageNum: number, engine?: string) =>
       safeInvoke('db:clear-translation-cache-by-engine', { docId, pageNum, engine }),
     saveSentenceTranslation: (sourceText: string, sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string, translatedText: string) =>
       safeInvoke('db:save-sentence-translation', { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode, translatedText }),
+    saveSentenceTranslationBatch: (items: Array<{ sourceText: string; sourceLanguage: string; targetLanguage: string; translatorEngine: string; translationMode: string; translatedText: string }>) =>
+      safeInvoke('db:save-sentence-translation-batch', { items }),
     getSentenceTranslation: (sourceText: string, sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string) =>
       safeInvoke('db:get-sentence-translation', { sourceText, sourceLanguage, targetLanguage, translatorEngine, translationMode }),
+    getSentenceTranslationBatch: (sourceTexts: string[], sourceLanguage: string, targetLanguage: string, translatorEngine: string, translationMode: string) =>
+      safeInvoke('db:get-sentence-translation-batch', { sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode }),
 
     // Benchmark CRUD (Phase 1.3)
     saveBenchmark: (params: { docId: number; pageNum: number; key: string; payload: string }) =>
@@ -211,6 +233,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAll: () => safeInvoke('db:get-all-tags'),
     create: (name: string, color?: string) =>
       safeInvoke('db:create-tag', { name, color }),
+    update: (id: number, updates: { name?: string; color?: string }) =>
+      safeInvoke('db:update-tag', { id, updates }),
     delete: (id: number) => safeInvoke('db:delete-tag', id),
   },
 
@@ -224,6 +248,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (id: number, updates: ProjectUpdate) =>
       safeInvoke('db:update-project', { id, updates }),
     delete: (id: number) => safeInvoke('db:delete-project', id),
+    getStats: (projectId: number) => safeInvoke('db:get-project-stats', projectId),
   },
 
   // Gemini translation (SECURE: API key stays in main process)
@@ -276,10 +301,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   ocr: {
     getEngineStatus: () => safeInvoke('ocr:get-engine-status'),
+    getGpuInfo: () => safeInvoke('ocr:get-gpu-info'),
     prewarmEngine: (payload: { engine: string; language?: string }) =>
       safeInvoke('ocr:prewarm-engine', payload),
     cancelExternal: (payload?: { engine?: string }) =>
       safeInvoke('ocr:cancel-external', payload),
+    clearCudaCache: (payload: { engine: string }) =>
+      safeInvoke('ocr:clear-cuda-cache', payload),
     /**
      * Write image bytes to a temp file on disk.
      * Returns { imagePath } — a string path to pass to runExternal.
@@ -382,6 +410,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke<{ success: boolean; error?: string }>('auth:hard-reset', payload),
     setMode: (payload: { mode: 'RELAX' | 'SECURITY'; password?: string }) =>
       safeInvoke<{ success: boolean; error?: string }>('auth:set-mode', payload),
+  },
+
+  power: {
+    preventSleep: () => safeInvoke<number>('power:prevent-sleep'),
+    allowSleep: () => safeInvoke<boolean>('power:allow-sleep'),
+  },
+
+  window: {
+    toggleFullScreen: () => safeInvoke<boolean>('window:toggle-fullscreen'),
+    isFullScreen: () => safeInvoke<boolean>('window:is-fullscreen'),
   },
 
   // Message handling (restricted to allowed channels)

@@ -142,6 +142,7 @@ console.log('[DB] BenchmarkDAO ready');
         thumbnail_path TEXT,
         project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
         is_favorite INTEGER DEFAULT 0,
+        rating INTEGER DEFAULT 0,
         last_page INTEGER DEFAULT 1,
         last_accessed INTEGER,
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
@@ -253,18 +254,25 @@ console.log('[DB] BenchmarkDAO ready');
       INSERT INTO document_search(document_id, search_text)
       SELECT id, filename FROM documents 
       WHERE id NOT IN (SELECT document_id FROM document_search);
-
-      -- Insert default tags if not exists
-      INSERT OR IGNORE INTO tags (name, color) VALUES 
-        ('Manga', '#ef4444'),
-        ('Document', '#3b82f6'),
-        ('Novel', '#8b5cf6'),
-        ('Textbook', '#10b981'),
-        ('Work', '#f59e0b'),
-        ('Personal', '#ec4899');
     `;
 
     db.exec(schema);
+
+    // Migration: Add rating column to documents table if it doesn't exist
+    try {
+      db.exec('ALTER TABLE documents ADD COLUMN rating INTEGER DEFAULT 0');
+      console.log('[DB] Added column "rating" to documents table');
+    } catch (e) {
+      // Column probably already exists, which is expected
+    }
+
+    try {
+      db.exec('ALTER TABLE translation_cache ADD COLUMN width INTEGER DEFAULT 0');
+      db.exec('ALTER TABLE translation_cache ADD COLUMN height INTEGER DEFAULT 0');
+    } catch (e) {
+      // Columns probably already exist
+    }
+
     console.log('[SQLite] Database initialized successfully with WAL, FTS5 & MMap');
     
     return db;
@@ -275,6 +283,49 @@ console.log('[DB] BenchmarkDAO ready');
 }
 
 // --- Data Access Objects (DAO) ---
+
+type StartupDocumentRow = {
+  id: number;
+  filepath: string;
+  filename: string;
+  total_pages: number;
+  last_accessed: number | null;
+  is_favorite: number;
+  project_id: number | null;
+  last_page: number;
+  file_type: string;
+  file_size: number;
+};
+
+type StartupDocument = StartupDocumentRow & {
+  tag_names: string | null;
+  tag_colors: string | null;
+};
+
+type StartupTag = {
+  id: number;
+  name: string;
+  color: string;
+  created_at: number | null;
+};
+
+type StartupProject = {
+  id: number;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  color: string;
+  parent_id: number | null;
+  created_at: number | null;
+  updated_at: number | null;
+};
+
+export type DocumentStartupBatch = {
+  recentDocuments: StartupDocument[];
+  allTags: StartupTag[];
+  allProjects: StartupProject[];
+  latestOcrDocId: number | null;
+};
 
 // ===== Tag DAO =====
 export const TagDAO = {
@@ -287,6 +338,18 @@ export const TagDAO = {
     if (!db) throw new Error('DB not initialized');
     const stmt = db.prepare('INSERT INTO tags (name, color) VALUES (?, ?) RETURNING *');
     return stmt.get(name, color);
+  },
+
+  update: (id: number, data: { name?: string; color?: string }) => {
+    if (!db) throw new Error('DB not initialized');
+    const sets: string[] = [];
+    const values: any[] = [];
+    if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
+    if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
+    if (sets.length === 0) return true;
+    values.push(id);
+    db.prepare(`UPDATE tags SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return true;
   },
 
   delete: (id: number) => {
@@ -329,13 +392,14 @@ export const ProjectDAO = {
     );
   },
 
-  update: (id: number, data: { name?: string; description?: string; icon?: string; color?: string }) => {
+  update: (id: number, data: { name?: string; description?: string; parent_id?: number | null; icon?: string; color?: string }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
     
     if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
     if (data.description !== undefined) { sets.push('description = ?'); values.push(data.description); }
+    if (data.parent_id !== undefined) { sets.push('parent_id = ?'); values.push(data.parent_id); }
     if (data.icon !== undefined) { sets.push('icon = ?'); values.push(data.icon); }
     if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
     
@@ -350,8 +414,109 @@ export const ProjectDAO = {
   delete: (id: number) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  },
+
+  getProjectStats: (projectId: number): ProjectStatsResult => {
+    if (!db) throw new Error('DB not initialized');
+    
+    const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId) as { id: number; name: string } | undefined;
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    const docRows = db.prepare(`
+      WITH RECURSIVE project_tree AS (
+        SELECT id FROM projects WHERE id = ?
+        UNION ALL
+        SELECT p.id FROM projects p JOIN project_tree pt ON p.parent_id = pt.id
+      ),
+      project_docs AS (
+        SELECT d.id, d.filename, d.total_pages, d.last_accessed
+        FROM documents d
+        WHERE d.project_id IN (SELECT id FROM project_tree)
+      )
+      SELECT 
+        d.id,
+        d.filename,
+        d.total_pages,
+        d.last_accessed,
+        (SELECT COUNT(DISTINCT page_number) FROM ocr_cache_engine WHERE document_id = d.id) as ocr_pages,
+        (SELECT COUNT(DISTINCT page_number) FROM translation_cache WHERE document_id = d.id) as translation_pages,
+        (
+          (SELECT COALESCE(SUM(LENGTH(ocr_data)), 0) FROM ocr_cache_engine WHERE document_id = d.id) +
+          (SELECT COALESCE(SUM(LENGTH(translated_by_index) + LENGTH(translated_text)), 0) FROM translation_cache WHERE document_id = d.id)
+        ) as cache_size_bytes
+      FROM project_docs d
+      ORDER BY d.filename;
+    `).all(projectId) as Array<{
+      id: number;
+      filename: string;
+      total_pages: number;
+      last_accessed: number | null;
+      ocr_pages: number;
+      translation_pages: number;
+      cache_size_bytes: number;
+    }>;
+
+    let totalPages = 0;
+    let totalOcrPages = 0;
+    let totalTranslationPages = 0;
+    let totalCacheSizeBytes = 0;
+
+    const documents = docRows.map((r) => {
+      const docTotalPages = Number(r.total_pages || 0);
+      const ocrPages = Number(r.ocr_pages || 0);
+      const transPages = Number(r.translation_pages || 0);
+      const cacheBytes = Number(r.cache_size_bytes || 0);
+
+      totalPages += docTotalPages;
+      totalOcrPages += ocrPages;
+      totalTranslationPages += transPages;
+      totalCacheSizeBytes += cacheBytes;
+
+      return {
+        id: r.id,
+        filename: r.filename,
+        totalPages: docTotalPages,
+        ocrPages,
+        translationPages: transPages,
+        cacheSizeBytes: cacheBytes,
+        lastAccessed: r.last_accessed,
+      };
+    });
+
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      totalDocuments: documents.length,
+      totalPages,
+      totalOcrPages,
+      totalTranslationPages,
+      totalCacheSizeBytes,
+      documents,
+    };
   }
 };
+
+export interface ProjectStatsResult {
+  projectId: number;
+  projectName: string;
+  totalDocuments: number;
+  totalPages: number;
+  totalOcrPages: number;
+  totalTranslationPages: number;
+  totalCacheSizeBytes: number;
+  documents: Array<{
+    id: number;
+    filename: string;
+    totalPages: number;
+    ocrPages: number;
+    translationPages: number;
+    cacheSizeBytes: number;
+    lastAccessed: number | null;
+  }>;
+}
+
 
 // ===== Document DAO =====
 export const DocumentDAO = {
@@ -451,7 +616,7 @@ export const DocumentDAO = {
   getRecent: (limit: number = 20) => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
@@ -461,11 +626,71 @@ export const DocumentDAO = {
     `).all(limit);
   },
 
+  getStartupBatch: (): DocumentStartupBatch => {
+    if (!db) throw new Error('DB not initialized');
+
+    const recentDocs = db.prepare(`
+      SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
+             d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
+      FROM documents d
+      ORDER BY d.last_accessed DESC
+      LIMIT 50
+    `).all() as StartupDocumentRow[];
+
+    const allTags = TagDAO.getAll() as StartupTag[];
+    const allProjects = ProjectDAO.getAll() as StartupProject[];
+    const latestDoc = db.prepare(`
+      SELECT id FROM documents ORDER BY last_accessed DESC LIMIT 1
+    `).get() as { id: number } | undefined;
+    if (latestDoc) {
+      OCRCacheDAO.getLatestForDocument(latestDoc.id);
+    }
+
+    const docIds = recentDocs.map(d => d.id);
+    let tagMap: Map<number, { ids: number[]; names: string[]; colors: string[] }> = new Map();
+    if (docIds.length > 0) {
+      const placeholders = docIds.map(() => '?').join(', ');
+      const tagRows = db.prepare(`
+        SELECT dt.document_id, dt.tag_id, t.name, t.color
+        FROM document_tags dt
+        JOIN tags t ON t.id = dt.tag_id
+        WHERE dt.document_id IN (${placeholders})
+        ORDER BY t.name
+      `).all(...docIds) as Array<{ document_id: number; tag_id: number; name: string; color: string }>;
+      for (const row of tagRows) {
+        if (!tagMap.has(row.document_id)) {
+          tagMap.set(row.document_id, { ids: [], names: [], colors: [] });
+        }
+        const entry = tagMap.get(row.document_id)!;
+        entry.ids.push(row.tag_id);
+        entry.names.push(row.name);
+        entry.colors.push(row.color);
+      }
+    }
+
+    const hydratedDocs: StartupDocument[] = recentDocs.map(doc => {
+      const tags = tagMap.get(doc.id);
+      return {
+        ...doc,
+        tag_ids: tags ? tags.ids.join(',') : null,
+        tag_names: tags ? tags.names.join(',') : null,
+        tag_colors: tags ? tags.colors.join(',') : null,
+      };
+    });
+
+    return {
+      recentDocuments: hydratedDocs,
+      allTags,
+      allProjects,
+      latestOcrDocId: recentDocs?.[0]?.id ?? null,
+    };
+  },
+
   getByProject: (projectId: number | null) => {
     if (!db) throw new Error('DB not initialized');
     if (projectId === null) {
       return db.prepare(`
-        SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+        SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
         FROM documents d
         LEFT JOIN document_tags dt ON d.id = dt.document_id
         LEFT JOIN tags t ON dt.tag_id = t.id
@@ -475,7 +700,7 @@ export const DocumentDAO = {
       `).all();
     }
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
@@ -488,7 +713,7 @@ export const DocumentDAO = {
   getFavorites: () => {
     if (!db) throw new Error('DB not initialized');
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
@@ -508,14 +733,14 @@ export const DocumentDAO = {
     const sanitized = trimmed.replace(/"/g, '""');
     
     return db.prepare(`
-      SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
+      SELECT d.*, GROUP_CONCAT(t.id, ',') as tag_ids, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
       JOIN document_search ds ON d.id = ds.document_id
       LEFT JOIN document_tags dt ON d.id = dt.document_id
       LEFT JOIN tags t ON dt.tag_id = t.id
       WHERE ds.search_text MATCH '"' || ? || '"*'
       GROUP BY d.id
-      ORDER BY rank, d.last_accessed DESC
+      ORDER BY d.last_accessed DESC
     `).all(sanitized);
   },
 
@@ -546,6 +771,15 @@ export const DocumentDAO = {
 
   getByTag: (tagId: number) => {
     if (!db) throw new Error('DB not initialized');
+    if (tagId === 0) {
+      return db.prepare(`
+        SELECT d.*, NULL as tag_names, NULL as tag_colors
+        FROM documents d
+        LEFT JOIN document_tags dt ON d.id = dt.document_id
+        WHERE dt.document_id IS NULL
+        ORDER BY d.last_accessed DESC
+      `).all();
+    }
     return db.prepare(`
       SELECT d.*, GROUP_CONCAT(t.name, ',') as tag_names, GROUP_CONCAT(t.color, ',') as tag_colors
       FROM documents d
@@ -557,7 +791,7 @@ export const DocumentDAO = {
     `).all(tagId);
   },
 
-  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number }) => {
+  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number; rating?: number }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
@@ -567,6 +801,7 @@ export const DocumentDAO = {
     if (data.thumbnail_path !== undefined) { sets.push('thumbnail_path = ?'); values.push(data.thumbnail_path); }
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
     if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
+    if (data.rating !== undefined) { sets.push('rating = ?'); values.push(data.rating); }
     
     if (sets.length === 0) return true;
     values.push(id);
@@ -631,6 +866,33 @@ export const OCRCacheDAO = {
       json: JSON.stringify(data),
       now: Date.now()
     });
+  },
+
+  saveBatch: (
+    items: Array<{ documentId: number; pageNumber: number; data: any; engine?: string }>
+  ) => {
+    if (!db) throw new Error('DB not initialized');
+    if (!items || items.length === 0) return;
+    const now = Date.now();
+    const stmt = getStmt(`
+      INSERT INTO ocr_cache_engine (document_id, page_number, ocr_engine, ocr_data, updated_at)
+      VALUES (@documentId, @pageNumber, @engine, @json, @now)
+      ON CONFLICT(document_id, page_number, ocr_engine) DO UPDATE SET
+        ocr_data = @json,
+        updated_at = @now
+    `);
+    const insertMany = db.transaction((rows: typeof items) => {
+      for (const item of rows) {
+        stmt.run({
+          documentId: item.documentId,
+          pageNumber: item.pageNumber,
+          engine: String(item.engine || 'tesseract').toLowerCase(),
+          json: JSON.stringify(item.data),
+          now,
+        });
+      }
+    });
+    insertMany(items);
   },
 
   get: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
@@ -760,7 +1022,7 @@ type TranslationCacheEntryRecord = {
   translationMode: string;
   translatorEngine: string;
   sourceFingerprint: string;
-  translatedByIndex: Array<{ index: number; text: string }>;
+  translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: any }>;
   translatedText: string;
   lineCount: number;
   groupCount: number;
@@ -851,6 +1113,90 @@ export const TranslationCacheDAO = {
     });
   },
 
+  saveBatch: (
+    items: Array<{ documentId: number; pageNumber: number; cacheKey: string; entry: TranslationCacheEntryRecord }>
+  ) => {
+    if (!db) throw new Error('DB not initialized');
+    if (!items || items.length === 0) return;
+    const now = Date.now();
+    const stmt = getStmt(`
+      INSERT INTO translation_cache (
+        document_id,
+        page_number,
+        cache_key,
+        ocr_engine,
+        ocr_language,
+        source_language,
+        target_language,
+        translation_mode,
+        translator_engine,
+        source_fingerprint,
+        translated_by_index,
+        translated_text,
+        line_count,
+        group_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @documentId,
+        @pageNumber,
+        @cacheKey,
+        @ocrEngine,
+        @ocrLanguage,
+        @sourceLanguage,
+        @targetLanguage,
+        @translationMode,
+        @translatorEngine,
+        @sourceFingerprint,
+        @translatedByIndex,
+        @translatedText,
+        @lineCount,
+        @groupCount,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(document_id, page_number, cache_key) DO UPDATE SET
+        ocr_engine = @ocrEngine,
+        ocr_language = @ocrLanguage,
+        source_language = @sourceLanguage,
+        target_language = @targetLanguage,
+        translation_mode = @translationMode,
+        translator_engine = @translatorEngine,
+        source_fingerprint = @sourceFingerprint,
+        translated_by_index = @translatedByIndex,
+        translated_text = @translatedText,
+        line_count = @lineCount,
+        group_count = @groupCount,
+        created_at = @createdAt,
+        updated_at = @updatedAt
+    `);
+    const insertMany = db.transaction((rows: typeof items) => {
+      for (const item of rows) {
+        const entry = item.entry;
+        stmt.run({
+          documentId: item.documentId,
+          pageNumber: item.pageNumber,
+          cacheKey: item.cacheKey,
+          ocrEngine: String(entry.ocrEngine || 'tesseract').toLowerCase(),
+          ocrLanguage: String(entry.ocrLanguage || 'eng'),
+          sourceLanguage: String(entry.sourceLanguage || 'eng').toLowerCase(),
+          targetLanguage: String(entry.targetLanguage || 'th').toLowerCase(),
+          translationMode: String(entry.translationMode || 'manga').toLowerCase(),
+          translatorEngine: String(entry.translatorEngine || 'offline').toLowerCase(),
+          sourceFingerprint: String(entry.sourceFingerprint || ''),
+          translatedByIndex: JSON.stringify(Array.isArray(entry.translatedByIndex) ? entry.translatedByIndex : []),
+          translatedText: String(entry.translatedText || ''),
+          lineCount: Number(entry.lineCount || 0),
+          groupCount: Number(entry.groupCount || 0),
+          createdAt: Number(entry.createdAt || now),
+          updatedAt: now,
+        });
+      }
+    });
+    insertMany(items);
+  },
+
   getByPage: (documentId: number, pageNumber: number) => {
     if (!db) throw new Error('DB not initialized');
     // Cached statement: called on every page load for translation overlay
@@ -889,16 +1235,32 @@ export const TranslationCacheDAO = {
       created_at: number;
     }>;
 
-    return rows.map((row) => {
-      let translatedByIndex: Array<{ index: number; text: string }> = [];
+    const hasValidTranslationVersion = (key: string): boolean => {
+      const strKey = String(key || '');
+      const match = strKey.match(/ver:v(\d+)/);
+      if (!match) return false;
+      const versionNum = parseInt(match[1], 10);
+      return versionNum >= 40;
+    };
+
+    return rows
+      .filter((row) => hasValidTranslationVersion(row.cache_key))
+      .map((row) => {
+      let translatedByIndex: Array<{ index: number; text: string; sourceText?: string; bbox?: any }> = [];
       try {
         const parsed = JSON.parse(row.translated_by_index);
         if (Array.isArray(parsed)) {
           translatedByIndex = parsed
-            .map((item) => ({
-              index: Number((item as { index?: unknown }).index || 0),
-              text: String((item as { text?: unknown }).text || ''),
-            }))
+            .map((item: any) => {
+              const indexVal = item.index !== undefined ? item.index : item.lineIndex;
+              const sourceTextVal = item.sourceText !== undefined ? item.sourceText : item.rawText;
+              return {
+                index: Number(indexVal !== undefined ? indexVal : 0),
+                text: String(item.text || ''),
+                sourceText: sourceTextVal !== undefined ? String(sourceTextVal) : undefined,
+                bbox: item.bbox,
+              };
+            })
             .filter((item) => Number.isFinite(item.index));
         }
       } catch {
@@ -927,9 +1289,24 @@ export const TranslationCacheDAO = {
   clearByEngine: (documentId: number, pageNumber: number, engine: string = 'tesseract') => {
     if (!db) throw new Error('DB not initialized');
     const normalizedEngine = String(engine || 'tesseract').toLowerCase();
-    const result = getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
-      .run(documentId, pageNumber, normalizedEngine);
-    return result.changes > 0;
+    const activeDb = db;
+    let changes = 0;
+
+    const clearTx = activeDb.transaction(() => {
+      const result = getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+        .run(documentId, pageNumber, normalizedEngine);
+      changes = result.changes;
+      
+      // Clear global sentence cache to force re-translating bad cached translations
+      try {
+        activeDb.prepare('DELETE FROM sentence_translation_cache').run();
+      } catch (err) {
+        console.warn('[DB] Failed to clear sentence translation cache:', err);
+      }
+    });
+
+    clearTx();
+    return changes > 0;
   },
 };
 
@@ -976,6 +1353,56 @@ export const SentenceTranslationDAO = {
     }
   },
 
+  saveBatch: (
+    items: Array<{
+      sourceText: string;
+      sourceLanguage: string;
+      targetLanguage: string;
+      translatorEngine: string;
+      translationMode: string;
+      translatedText: string;
+    }>
+  ): boolean => {
+    if (!db) throw new Error('DB not initialized');
+    if (!Array.isArray(items) || items.length === 0) return true;
+    const now = Date.now();
+    try {
+      const stmt = getStmt(`
+        INSERT INTO sentence_translation_cache (
+          source_text,
+          source_language,
+          target_language,
+          translator_engine,
+          translation_mode,
+          translated_text,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_text, source_language, target_language, translator_engine, translation_mode) DO UPDATE SET
+          translated_text = excluded.translated_text,
+          created_at = excluded.created_at
+      `);
+      const insertMany = db.transaction((entries: typeof items) => {
+        for (const entry of entries) {
+          stmt.run(
+            entry.sourceText,
+            entry.sourceLanguage.toLowerCase(),
+            entry.targetLanguage.toLowerCase(),
+            entry.translatorEngine.toLowerCase(),
+            entry.translationMode.toLowerCase(),
+            entry.translatedText,
+            now
+          );
+        }
+      });
+      insertMany(items);
+      return true;
+    } catch (error) {
+      console.error('[DB] Failed to save sentence translations batch:', error);
+      return false;
+    }
+  },
+
   get: (
     sourceText: string,
     sourceLanguage: string,
@@ -1005,6 +1432,44 @@ export const SentenceTranslationDAO = {
     } catch (error) {
       console.error('[DB] Failed to get sentence translation:', error);
       return null;
+    }
+  },
+
+  getBatch: (
+    sourceTexts: string[],
+    sourceLanguage: string,
+    targetLanguage: string,
+    translatorEngine: string,
+    translationMode: string
+  ): Record<string, string> => {
+    if (!db) throw new Error('DB not initialized');
+    const results: Record<string, string> = {};
+    if (sourceTexts.length === 0) return results;
+    try {
+      const stmt = getStmt(`
+        SELECT translated_text 
+        FROM sentence_translation_cache 
+        WHERE source_text = ? 
+          AND source_language = ? 
+          AND target_language = ? 
+          AND translator_engine = ? 
+          AND translation_mode = ?
+      `);
+      const srcLang = sourceLanguage.toLowerCase();
+      const tgtLang = targetLanguage.toLowerCase();
+      const engine = translatorEngine.toLowerCase();
+      const mode = translationMode.toLowerCase();
+      
+      for (const text of sourceTexts) {
+        const row = stmt.get(text, srcLang, tgtLang, engine, mode) as { translated_text: string } | undefined;
+        if (row) {
+          results[text] = row.translated_text;
+        }
+      }
+      return results;
+    } catch (error) {
+      console.error('[DB] Failed to get sentence translations batch:', error);
+      return results;
     }
   }
 };
