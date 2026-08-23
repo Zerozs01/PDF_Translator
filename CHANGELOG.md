@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Home Library Navigation, Folders & File Management
+
+- **Interactive Breadcrumb Navigation:** Added a file-explorer-style breadcrumbs bar (`Home / Folder / Subfolder`) allowing 1-click ancestor navigation while preserving active Tag filters when navigating back to Home.
+- **Top-Right Item Counters:** Moved `Folders (x)` and `Files (x)` counters to the top-right breadcrumb bar with vibrant sky blue count numbers and clean white text labels.
+- **Global `+ Folder` Button:** Made the `+ Folder` action button accessible across all library views (root Home creates top-level folders, subfolders create nested projects).
+- **Expanded 20-Color Folder Palette:** Introduced `FOLDER_PALETTE_COLORS` (20 curated modern tones) with visual color picker grids and live icon previews in both Create and Edit folder dialogs.
+- **Single-Line Compact Folder Cards:** Designed sleek single-line folder elements with inline icons and ambient color glows, maximizing vertical document view real estate.
+- **Document Card Favorite Hover Effects:** Added glassmorphism badge backgrounds, rose glow outlines, and scale animations on Favorite heart buttons matching the thumbnail visibility toggle design.
+
+### Fixed — UI & Interaction Stability
+
+- **Right Sidebar Smooth Scrolling:** Removed `-webkit-app-region: drag` (`titlebar-drag`) from the scrollable settings container so mouse wheel and drag scrolling in the settings panel work with zero latency.
+- **Filter Dropdown Race Condition:** Resolved mousedown/click race condition on the filter button using `data-sort-menu-trigger` attribute.
+- **DOM Nesting Hydration Error:** Fixed `<button>` inside `<button>` nesting in empty state cards by transitioning container to accessible `<div role="button">`.
+
 ### Added — Generic Intel GPU Support & Automated Offline Translation Setup
 
 - **Generic Intel GPU Auto-detection**: Enhanced `bootstrap_ocr_env.ps1` to detect generic Intel GPUs (e.g. `Intel(R) Graphics` on Mini PCs) and automatically set up DirectML GPU acceleration via ONNX Runtime & PyTorch-DirectML.

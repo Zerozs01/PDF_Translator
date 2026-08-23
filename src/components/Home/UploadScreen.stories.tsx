@@ -18,6 +18,7 @@ const mockDocuments: DBDocument[] = [
     thumbnail_path: '/fixtures/ocr/dummy.png',
     project_id: 1,
     is_favorite: true,
+    rating: 5,
     last_page: 6,
     created_at: nowIso,
     last_accessed: nowIso,
@@ -32,6 +33,22 @@ const mockDocuments: DBDocument[] = [
     thumbnail_path: '/fixtures/ocr/baseline/test1.png',
     project_id: null,
     is_favorite: false,
+    rating: 0,
+    last_page: 1,
+    created_at: nowIso,
+    last_accessed: nowIso,
+  },
+  {
+    id: 3,
+    filepath: 'C:/Docs/chapter-02.pdf',
+    filename: 'Chapter 2.pdf',
+    file_type: 'pdf',
+    file_size: 4096000,
+    total_pages: 28,
+    thumbnail_path: '/fixtures/ocr/dummy.png',
+    project_id: 1,
+    is_favorite: true,
+    rating: 4,
     last_page: 1,
     created_at: nowIso,
     last_accessed: nowIso,
@@ -39,17 +56,18 @@ const mockDocuments: DBDocument[] = [
 ];
 
 const mockTags: DBTag[] = [
-  { id: 1, name: 'manga', color: '#8B5CF6', created_at: nowIso },
-  { id: 2, name: 'work', color: '#38BDF8', created_at: nowIso },
+  { id: 1, name: 'Manga', color: '#8B5CF6', created_at: nowIso },
+  { id: 2, name: 'Work', color: '#38BDF8', created_at: nowIso },
+  { id: 3, name: 'Important', color: '#F43F5E', created_at: nowIso },
 ];
 
 const mockProjects: DBProject[] = [
   {
     id: 1,
-    name: 'Reading List',
+    name: 'Manga Series',
     description: null,
     icon: null,
-    color: '#6366F1',
+    color: '#8B5CF6',
     parent_id: null,
     created_at: nowIso,
   },
@@ -62,9 +80,23 @@ const mockProjects: DBProject[] = [
     parent_id: null,
     created_at: nowIso,
   },
+  {
+    id: 3,
+    name: 'Season 1',
+    description: null,
+    icon: null,
+    color: '#38BDF8',
+    parent_id: 1,
+    created_at: nowIso,
+  },
 ];
 
-const UploadScreenStoryFrame: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+interface StoryFrameProps {
+  children: React.ReactNode;
+  initialState?: Partial<ReturnType<typeof useFileBrowserStore.getState>>;
+}
+
+const UploadScreenStoryFrame: React.FC<StoryFrameProps> = ({ children, initialState }) => {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -79,8 +111,9 @@ const UploadScreenStoryFrame: React.FC<{ children: React.ReactNode }> = ({ child
       selectedTagId: null,
       selectedProjectId: null,
       searchQuery: '',
-      selectedDocumentIds: new Set([1]),
+      selectedDocumentIds: new Set<number>(),
       loadStartupData: async () => {},
+      ...initialState,
     });
 
     useProjectStore.setState({
@@ -94,7 +127,7 @@ const UploadScreenStoryFrame: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     setReady(true);
-  }, []);
+  }, [initialState]);
 
   return (
     <div className="h-screen w-screen">
@@ -113,6 +146,12 @@ const meta = {
   parameters: {
     layout: 'fullscreen',
   },
+} satisfies Meta<typeof UploadScreen>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+export const Default: Story = {
   decorators: [
     (Story) => (
       <UploadScreenStoryFrame>
@@ -120,9 +159,65 @@ const meta = {
       </UploadScreenStoryFrame>
     ),
   ],
-} satisfies Meta<typeof UploadScreen>;
+};
 
-export default meta;
-type Story = StoryObj<typeof meta>;
+export const InsideFolderWithBreadcrumbs: Story = {
+  decorators: [
+    (Story) => (
+      <UploadScreenStoryFrame
+        initialState={{
+          selectedProjectId: 1,
+          filterType: 'project',
+        }}
+      >
+        <Story />
+      </UploadScreenStoryFrame>
+    ),
+  ],
+};
 
-export const Default: Story = {};
+export const EmptyFolderView: Story = {
+  decorators: [
+    (Story) => (
+      <UploadScreenStoryFrame
+        initialState={{
+          selectedProjectId: 2,
+          filterType: 'project',
+          documents: [],
+        }}
+      >
+        <Story />
+      </UploadScreenStoryFrame>
+    ),
+  ],
+};
+
+export const TagFilterActive: Story = {
+  decorators: [
+    (Story) => (
+      <UploadScreenStoryFrame
+        initialState={{
+          selectedTagId: 1,
+          filterType: 'tag',
+        }}
+      >
+        <Story />
+      </UploadScreenStoryFrame>
+    ),
+  ],
+};
+
+export const FavoritesView: Story = {
+  decorators: [
+    (Story) => (
+      <UploadScreenStoryFrame
+        initialState={{
+          filterType: 'favorites',
+          documents: mockDocuments.filter((d) => d.is_favorite),
+        }}
+      >
+        <Story />
+      </UploadScreenStoryFrame>
+    ),
+  ],
+};

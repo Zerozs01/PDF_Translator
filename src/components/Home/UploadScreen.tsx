@@ -1471,9 +1471,10 @@ const DocumentCard = React.memo<{
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
           className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all z-10 ${
             doc.is_favorite 
-              ? 'bg-white/10 text-slate-100' 
-              : 'bg-[#111214]/90 text-slate-500 border border-white/5 opacity-0 group-hover:opacity-100'
+              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30 shadow-[0_0_10px_rgba(244,63,94,0.35)] opacity-100 hover:bg-rose-500/30 hover:scale-110' 
+              : 'bg-[#111214]/90 text-slate-400 border border-white/5 opacity-0 group-hover:opacity-100 hover:text-rose-400 hover:bg-[#1f2228] hover:border-rose-500/25 hover:scale-110 shadow-sm'
           }`}
+          title={doc.is_favorite ? 'นำออกจากรายการโปรด (Unfavorite)' : 'เพิ่มในรายการโปรด (Favorite)'}
         >
           <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
         </button>
@@ -1588,9 +1589,12 @@ const DocumentCard = React.memo<{
       </button>
       <button 
         onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-        className={`p-1.5 rounded transition-all ${
-          doc.is_favorite ? 'text-slate-100' : 'text-slate-500 hover:text-slate-300'
+        className={`p-1.5 rounded-lg transition-all ${
+          doc.is_favorite 
+            ? 'text-rose-400 bg-rose-500/15 border border-rose-500/25 shadow-sm hover:scale-110' 
+            : 'text-slate-500 hover:text-rose-400 hover:bg-white/[0.06] hover:scale-110'
         }`}
+        title={doc.is_favorite ? 'นำออกจากรายการโปรด (Unfavorite)' : 'เพิ่มในรายการโปรด (Favorite)'}
       >
         <Heart size={14} fill={doc.is_favorite ? 'currentColor' : 'none'} />
       </button>
@@ -3866,17 +3870,34 @@ export const UploadScreen: React.FC = () => {
               })}
             </nav>
 
-            {/* Quick Action Button in Breadcrumb Bar */}
-            {selectedProjectId !== null && (
+            {/* Right-aligned Stats & Action Button in Breadcrumb Bar */}
+            <div className="flex items-center gap-3 shrink-0">
+              {/* Item Counters */}
+              <div className="flex items-center gap-2.5 text-xs select-none">
+                {currentSubprojects.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="font-bold text-sky-400">{currentSubprojects.length}</span>
+                    <span className="text-white font-medium">{currentSubprojects.length === 1 ? 'Folder' : 'Folders'}</span>
+                  </span>
+                )}
+                {sortedDocuments.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <span className="font-bold text-sky-400">{sortedDocuments.length}</span>
+                    <span className="text-white font-medium">{sortedDocuments.length === 1 ? 'File' : 'Files'}</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Quick Action Button (+ Folder) */}
               <button
                 onClick={() => openProjectDialog(null, selectedProjectId)}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 hover:border-white/15 text-slate-300 hover:text-white text-xs font-medium transition-all shrink-0 cursor-pointer shadow-sm"
-                title="สร้างโฟลเดอร์ย่อยในโฟลเดอร์นี้"
+                title={selectedProjectId !== null ? "สร้างโฟลเดอร์ย่อยในโฟลเดอร์นี้" : "สร้างโฟลเดอร์ใหม่"}
               >
                 <FolderPlus size={13} className="text-sky-400" />
-                <span>+ Subfolder</span>
+                <span>+ Folder</span>
               </button>
-            )}
+            </div>
           </div>
 
           {/* Documents Grid/List */}
@@ -3900,191 +3921,183 @@ export const UploadScreen: React.FC = () => {
                 {/* 📂 Render Folder Grid/List first */}
                 {viewMode === 'grid' ? (
                   currentSubprojects.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
-                        <span>Folders ({currentSubprojects.length})</span>
-                      </h3>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
-                        {currentSubprojects.map((subproj) => {
-                          const accent = subproj.color || resolveStableAccent(subproj.id);
-                          const isDropTarget = projectDropTargetId === subproj.id;
-                          return (
-                            <div
-                              key={subproj.id}
-                              draggable={true}
-                              onDragStart={(event) => {
-                                event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
-                                event.dataTransfer.setData('application/x-project-id', String(subproj.id));
-                                event.dataTransfer.effectAllowed = 'move';
-                                draggedProjectIdRef.current = subproj.id;
-                                setDraggedProjectId(subproj.id);
-                                setActiveProjectMenu(null);
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
+                      {currentSubprojects.map((subproj) => {
+                        const accent = subproj.color || resolveStableAccent(subproj.id);
+                        const isDropTarget = projectDropTargetId === subproj.id;
+                        return (
+                          <div
+                            key={subproj.id}
+                            draggable={true}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                              event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                              event.dataTransfer.effectAllowed = 'move';
+                              draggedProjectIdRef.current = subproj.id;
+                              setDraggedProjectId(subproj.id);
+                              setActiveProjectMenu(null);
 
-                                const dragGhost = document.createElement('div');
-                                dragGhost.style.position = 'absolute';
-                                dragGhost.style.top = '-9999px';
-                                dragGhost.style.left = '-9999px';
-                                dragGhost.style.padding = '6px 12px';
-                                dragGhost.style.background = '#0284c7';
-                                dragGhost.style.color = '#ffffff';
-                                dragGhost.style.fontSize = '12px';
-                                dragGhost.style.fontWeight = 'bold';
-                                dragGhost.style.borderRadius = '10px';
-                                dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
-                                dragGhost.innerText = `📁 ${subproj.name}`;
-                                document.body.appendChild(dragGhost);
-                                event.dataTransfer.setDragImage(dragGhost, 10, 10);
-                                setTimeout(() => {
-                                  if (document.body.contains(dragGhost)) {
-                                    document.body.removeChild(dragGhost);
-                                  }
-                                }, 0);
-                              }}
-                              onDragEnd={() => {
-                                draggedProjectIdRef.current = null;
-                                setDraggedProjectId(null);
-                                setProjectDropTargetId(null);
-                              }}
-                              onClick={() => {
-                                loadDocumentsByProject(subproj.id);
-                              }}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                openProjectMenu(subproj, e);
-                              }}
-                              onDragOver={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                event.dataTransfer.dropEffect = 'move';
-                                setProjectDropTargetId(subproj.id);
-                              }}
-                              onDragLeave={(event) => {
-                                event.stopPropagation();
-                                if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-                                if (projectDropTargetId === subproj.id) {
-                                  setProjectDropTargetId(null);
+                              const dragGhost = document.createElement('div');
+                              dragGhost.style.position = 'absolute';
+                              dragGhost.style.top = '-9999px';
+                              dragGhost.style.left = '-9999px';
+                              dragGhost.style.padding = '6px 12px';
+                              dragGhost.style.background = '#0284c7';
+                              dragGhost.style.color = '#ffffff';
+                              dragGhost.style.fontSize = '12px';
+                              dragGhost.style.fontWeight = 'bold';
+                              dragGhost.style.borderRadius = '10px';
+                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                              dragGhost.innerText = `📁 ${subproj.name}`;
+                              document.body.appendChild(dragGhost);
+                              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                              setTimeout(() => {
+                                if (document.body.contains(dragGhost)) {
+                                  document.body.removeChild(dragGhost);
                                 }
+                              }, 0);
+                            }}
+                            onDragEnd={() => {
+                              draggedProjectIdRef.current = null;
+                              setDraggedProjectId(null);
+                              setProjectDropTargetId(null);
+                            }}
+                            onClick={() => {
+                              loadDocumentsByProject(subproj.id);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              openProjectMenu(subproj, e);
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              event.dataTransfer.dropEffect = 'move';
+                              setProjectDropTargetId(subproj.id);
+                            }}
+                            onDragLeave={(event) => {
+                              event.stopPropagation();
+                              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                              if (projectDropTargetId === subproj.id) {
+                                setProjectDropTargetId(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDropOnProject(subproj.id, event);
+                            }}
+                            className={`group relative px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none overflow-hidden ${
+                              isDropTarget
+                                ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.4)] scale-[1.01]'
+                                : 'border-white/8 hover:border-white/18 bg-[#16181c]/80 hover:bg-[#1c1f26] shadow-sm hover:shadow-md'
+                            }`}
+                          >
+                            <div 
+                              className="h-7 w-7 rounded-lg flex items-center justify-center shrink-0 border border-white/10 transition-transform duration-200 group-hover:scale-105 shadow-inner"
+                              style={{ 
+                                backgroundColor: hexToRgba(accent, 0.16),
+                                boxShadow: `0 1px 4px ${hexToRgba(accent, 0.2)}`
                               }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                void handleDropOnProject(subproj.id, event);
-                              }}
-                              className={`group relative px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none overflow-hidden ${
-                                isDropTarget
-                                  ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.4)] scale-[1.01]'
-                                  : 'border-white/8 hover:border-white/18 bg-[#16181c]/80 hover:bg-[#1c1f26] shadow-sm hover:shadow-md'
-                              }`}
                             >
-                              <div 
-                                className="h-7 w-7 rounded-lg flex items-center justify-center shrink-0 border border-white/10 transition-transform duration-200 group-hover:scale-105 shadow-inner"
-                                style={{ 
-                                  backgroundColor: hexToRgba(accent, 0.16),
-                                  boxShadow: `0 1px 4px ${hexToRgba(accent, 0.2)}`
-                                }}
-                              >
-                                <Folder size={14} style={{ color: accent }} />
-                              </div>
-
-                              <span className="flex-1 truncate text-xs font-semibold text-slate-100 group-hover:text-white transition-colors" title={subproj.name}>
-                                {subproj.name}
-                              </span>
-
-                              <ChevronRight size={12} className="text-slate-500 group-hover:text-slate-300 group-hover:translate-x-0.5 transition-all shrink-0" />
+                              <Folder size={14} style={{ color: accent }} />
                             </div>
-                          );
-                        })}
-                      </div>
+
+                            <span className="flex-1 truncate text-xs font-semibold text-slate-100 group-hover:text-white transition-colors" title={subproj.name}>
+                              {subproj.name}
+                            </span>
+
+                            <ChevronRight size={12} className="text-slate-500 group-hover:text-slate-300 group-hover:translate-x-0.5 transition-all shrink-0" />
+                          </div>
+                        );
+                      })}
                     </div>
                   )
                 ) : (
                   currentSubprojects.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">Folders ({currentSubprojects.length})</h3>
-                      <div className="space-y-1">
-                        {currentSubprojects.map((subproj) => {
-                          const accent = subproj.color || resolveStableAccent(subproj.id);
-                          const isDropTarget = projectDropTargetId === subproj.id;
-                          return (
-                            <div
-                              key={subproj.id}
-                              draggable={true}
-                              onDragStart={(event) => {
-                                event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
-                                event.dataTransfer.setData('application/x-project-id', String(subproj.id));
-                                event.dataTransfer.effectAllowed = 'move';
-                                draggedProjectIdRef.current = subproj.id;
-                                setDraggedProjectId(subproj.id);
-                                setActiveProjectMenu(null);
+                    <div className="space-y-1">
+                      {currentSubprojects.map((subproj) => {
+                        const accent = subproj.color || resolveStableAccent(subproj.id);
+                        const isDropTarget = projectDropTargetId === subproj.id;
+                        return (
+                          <div
+                            key={subproj.id}
+                            draggable={true}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('text/plain', `project:${subproj.id}`);
+                              event.dataTransfer.setData('application/x-project-id', String(subproj.id));
+                              event.dataTransfer.effectAllowed = 'move';
+                              draggedProjectIdRef.current = subproj.id;
+                              setDraggedProjectId(subproj.id);
+                              setActiveProjectMenu(null);
 
-                                const dragGhost = document.createElement('div');
-                                dragGhost.style.position = 'absolute';
-                                dragGhost.style.top = '-9999px';
-                                dragGhost.style.left = '-9999px';
-                                dragGhost.style.padding = '6px 12px';
-                                dragGhost.style.background = '#0284c7';
-                                dragGhost.style.color = '#ffffff';
-                                dragGhost.style.fontSize = '12px';
-                                dragGhost.style.fontWeight = 'bold';
-                                dragGhost.style.borderRadius = '10px';
-                                dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
-                                dragGhost.innerText = `📁 ${subproj.name}`;
-                                document.body.appendChild(dragGhost);
-                                event.dataTransfer.setDragImage(dragGhost, 10, 10);
-                                setTimeout(() => {
-                                  if (document.body.contains(dragGhost)) {
-                                    document.body.removeChild(dragGhost);
-                                  }
-                                }, 0);
-                              }}
-                              onDragEnd={() => {
-                                draggedProjectIdRef.current = null;
-                                setDraggedProjectId(null);
-                                setProjectDropTargetId(null);
-                              }}
-                              onClick={() => {
-                                loadDocumentsByProject(subproj.id);
-                              }}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                openProjectMenu(subproj, e);
-                              }}
-                              onDragOver={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                event.dataTransfer.dropEffect = 'move';
-                                setProjectDropTargetId(subproj.id);
-                              }}
-                              onDragLeave={(event) => {
-                                event.stopPropagation();
-                                if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-                                if (projectDropTargetId === subproj.id) {
-                                  setProjectDropTargetId(null);
+                              const dragGhost = document.createElement('div');
+                              dragGhost.style.position = 'absolute';
+                              dragGhost.style.top = '-9999px';
+                              dragGhost.style.left = '-9999px';
+                              dragGhost.style.padding = '6px 12px';
+                              dragGhost.style.background = '#0284c7';
+                              dragGhost.style.color = '#ffffff';
+                              dragGhost.style.fontSize = '12px';
+                              dragGhost.style.fontWeight = 'bold';
+                              dragGhost.style.borderRadius = '10px';
+                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                              dragGhost.innerText = `📁 ${subproj.name}`;
+                              document.body.appendChild(dragGhost);
+                              event.dataTransfer.setDragImage(dragGhost, 10, 10);
+                              setTimeout(() => {
+                                if (document.body.contains(dragGhost)) {
+                                  document.body.removeChild(dragGhost);
                                 }
-                              }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                void handleDropOnProject(subproj.id, event);
-                              }}
-                              className={`group px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
-                                isDropTarget
-                                  ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
-                                  : 'border-white/6 hover:border-white/15 bg-[#16181c]/70 hover:bg-[#1b1e24]'
-                              }`}
+                              }, 0);
+                            }}
+                            onDragEnd={() => {
+                              draggedProjectIdRef.current = null;
+                              setDraggedProjectId(null);
+                              setProjectDropTargetId(null);
+                            }}
+                            onClick={() => {
+                              loadDocumentsByProject(subproj.id);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              openProjectMenu(subproj, e);
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              event.dataTransfer.dropEffect = 'move';
+                              setProjectDropTargetId(subproj.id);
+                            }}
+                            onDragLeave={(event) => {
+                              event.stopPropagation();
+                              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                              if (projectDropTargetId === subproj.id) {
+                                setProjectDropTargetId(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDropOnProject(subproj.id, event);
+                            }}
+                            className={`group px-3 py-2 rounded-xl border transition-all flex items-center gap-2.5 cursor-pointer select-none ${
+                              isDropTarget
+                                ? 'border-sky-400 bg-sky-500/20 shadow-[0_0_20px_rgba(56,189,248,0.35)] scale-[1.01]'
+                                : 'border-white/6 hover:border-white/15 bg-[#16181c]/70 hover:bg-[#1b1e24]'
+                            }`}
+                          >
+                            <div 
+                              className="h-7 w-7 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-105 border border-white/5"
+                              style={{ backgroundColor: hexToRgba(accent, 0.16) }}
                             >
-                              <div 
-                                className="h-7 w-7 rounded-lg shrink-0 flex items-center justify-center transition-transform group-hover:scale-105 border border-white/5"
-                                style={{ backgroundColor: hexToRgba(accent, 0.16) }}
-                              >
-                                <Folder size={14} style={{ color: accent }} />
-                              </div>
-                              <span className="flex-1 truncate text-xs font-semibold text-slate-200 group-hover:text-white">{subproj.name}</span>
-                              <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-300 transition-colors shrink-0" />
+                              <Folder size={14} style={{ color: accent }} />
                             </div>
-                          );
-                        })}
-                      </div>
+                            <span className="flex-1 truncate text-xs font-semibold text-slate-200 group-hover:text-white">{subproj.name}</span>
+                            <ChevronRight size={12} className="text-slate-600 group-hover:text-slate-300 transition-colors shrink-0" />
+                          </div>
+                        );
+                      })}
                     </div>
                   )
                 )}
@@ -4096,93 +4109,87 @@ export const UploadScreen: React.FC = () => {
 
                 {/* 📄 Render Documents Grid/List */}
                 {sortedDocuments.length > 0 ? (
-                  <>
-                    {currentSubprojects.length > 0 && (
-                      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5 px-1">Files ({sortedDocuments.length})</h3>
-                    )}
-                    <div className={viewMode === 'grid'
-                      ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
-                      : 'space-y-2'
-                    }>
-                      {sortedDocuments.map((doc, index) => (
-                        <DocumentCard
-                          key={doc.id}
-                          doc={doc}
-                          viewMode={viewMode}
-                          isSelected={selectedDocumentIds.has(doc.id)}
-                          isMultiSelectActive={selectedDocumentIds.size > 0}
-                          onOpen={() => handleOpenDocument(doc)}
-                          onCardClick={(e) => handleCardClick(doc, index, e)}
-                          onCheckboxClick={(e) => handleCheckboxClick(doc, e)}
-                          onToggleFavorite={() => void handleToggleFavorite(doc.id)}
-                          onDelete={() => void handleDeleteDocument(doc.id)}
-                          isMenuOpen={activeDocumentMenuId === doc.id}
-                          menuPosition={activeDocumentMenuPosition}
-                          documentTags={documentTagsById[doc.id] ?? []}
-                          tags={tags}
-                          projects={projects}
-                          onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
-                          onCloseMenu={() => {
-                            setActiveDocumentMenuId(null);
-                            setActiveDocumentMenuPosition(null);
-                          }}
-                          onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
-                          onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
-                          onToggleSelect={() => toggleDocumentSelection(doc.id)}
-                          onCreateTag={() => openTagDialog(doc.id)}
-                          onDragStart={(e) => {
-                            const isTargetSelected = selectedDocumentIds.has(doc.id);
-                            const ids = isTargetSelected && selectedDocumentIds.size > 0
-                              ? Array.from(selectedDocumentIds)
-                              : [doc.id];
-                            const payload = JSON.stringify(ids);
-                            e.dataTransfer.setData('application/x-document-ids', payload);
-                            e.dataTransfer.setData('text/plain', payload);
-                            e.dataTransfer.effectAllowed = 'move';
-                            
-                            // Multi-item drag ghost badge
-                            if (ids.length > 1) {
-                              const dragGhost = document.createElement('div');
-                              dragGhost.style.position = 'absolute';
-                              dragGhost.style.top = '-9999px';
-                              dragGhost.style.left = '-9999px';
-                              dragGhost.style.padding = '6px 12px';
-                              dragGhost.style.background = '#0284c7';
-                              dragGhost.style.color = '#ffffff';
-                              dragGhost.style.fontSize = '12px';
-                              dragGhost.style.fontWeight = 'bold';
-                              dragGhost.style.borderRadius = '12px';
-                              dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
-                              dragGhost.style.zIndex = '99999';
-                              dragGhost.innerText = `📄 ย้าย ${ids.length} รายการ`;
-                              document.body.appendChild(dragGhost);
-                              e.dataTransfer.setDragImage(dragGhost, 15, 15);
-                              setTimeout(() => {
-                                if (document.body.contains(dragGhost)) {
-                                  document.body.removeChild(dragGhost);
-                                }
-                              }, 0);
-                            }
+                  <div className={viewMode === 'grid'
+                    ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
+                    : 'space-y-2'
+                  }>
+                    {sortedDocuments.map((doc, index) => (
+                      <DocumentCard
+                        key={doc.id}
+                        doc={doc}
+                        viewMode={viewMode}
+                        isSelected={selectedDocumentIds.has(doc.id)}
+                        isMultiSelectActive={selectedDocumentIds.size > 0}
+                        onOpen={() => handleOpenDocument(doc)}
+                        onCardClick={(e) => handleCardClick(doc, index, e)}
+                        onCheckboxClick={(e) => handleCheckboxClick(doc, e)}
+                        onToggleFavorite={() => void handleToggleFavorite(doc.id)}
+                        onDelete={() => void handleDeleteDocument(doc.id)}
+                        isMenuOpen={activeDocumentMenuId === doc.id}
+                        menuPosition={activeDocumentMenuPosition}
+                        documentTags={documentTagsById[doc.id] ?? []}
+                        tags={tags}
+                        projects={projects}
+                        onRequestMenu={(position) => void openDocumentMenu(doc.id, position)}
+                        onCloseMenu={() => {
+                          setActiveDocumentMenuId(null);
+                          setActiveDocumentMenuPosition(null);
+                        }}
+                        onToggleTag={(tag) => void handleToggleDocumentTag(doc, tag)}
+                        onMoveToProject={(projectId) => void handleMoveDocumentToProject(doc, projectId)}
+                        onToggleSelect={() => toggleDocumentSelection(doc.id)}
+                        onCreateTag={() => openTagDialog(doc.id)}
+                        onDragStart={(e) => {
+                          const isTargetSelected = selectedDocumentIds.has(doc.id);
+                          const ids = isTargetSelected && selectedDocumentIds.size > 0
+                            ? Array.from(selectedDocumentIds)
+                            : [doc.id];
+                          const payload = JSON.stringify(ids);
+                          e.dataTransfer.setData('application/x-document-ids', payload);
+                          e.dataTransfer.setData('text/plain', payload);
+                          e.dataTransfer.effectAllowed = 'move';
+                          
+                          if (ids.length > 1) {
+                            const dragGhost = document.createElement('div');
+                            dragGhost.style.position = 'absolute';
+                            dragGhost.style.top = '-9999px';
+                            dragGhost.style.left = '-9999px';
+                            dragGhost.style.padding = '6px 12px';
+                            dragGhost.style.background = '#0284c7';
+                            dragGhost.style.color = '#ffffff';
+                            dragGhost.style.fontSize = '12px';
+                            dragGhost.style.fontWeight = 'bold';
+                            dragGhost.style.borderRadius = '12px';
+                            dragGhost.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
+                            dragGhost.style.zIndex = '99999';
+                            dragGhost.innerText = `📄 ย้าย ${ids.length} รายการ`;
+                            document.body.appendChild(dragGhost);
+                            e.dataTransfer.setDragImage(dragGhost, 15, 15);
+                            setTimeout(() => {
+                              if (document.body.contains(dragGhost)) {
+                                document.body.removeChild(dragGhost);
+                              }
+                            }, 0);
+                          }
 
-                            setDraggedDocumentId(doc.id);
-                            setDraggedDocumentIds(ids);
-                            setActiveDocumentMenuId(null);
-                            setActiveDocumentMenuPosition(null);
-                            setLibraryMenuPosition(null);
-                          }}
-                          onDragEnd={() => {
-                            setDraggedDocumentId(null);
-                            setDraggedDocumentIds([]);
-                            setProjectDropTargetId(null);
-                          }}
-                          isThumbnailHidden={hiddenThumbnails.has(doc.id)}
-                          onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
-                          onOCRAllPages={() => openOcrBackgroundDialog(doc)}
-                          onUpdateRating={(rating) => void handleUpdateRating(doc, rating)}
-                        />
-                      ))}
-                    </div>
-                  </>
+                          setDraggedDocumentId(doc.id);
+                          setDraggedDocumentIds(ids);
+                          setActiveDocumentMenuId(null);
+                          setActiveDocumentMenuPosition(null);
+                          setLibraryMenuPosition(null);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedDocumentId(null);
+                          setDraggedDocumentIds([]);
+                          setProjectDropTargetId(null);
+                        }}
+                        isThumbnailHidden={hiddenThumbnails.has(doc.id)}
+                        onToggleHideThumbnail={() => toggleHideThumbnail(doc.id)}
+                        onOCRAllPages={() => openOcrBackgroundDialog(doc)}
+                        onUpdateRating={(rating) => void handleUpdateRating(doc, rating)}
+                      />
+                    ))}
+                  </div>
                 ) : (
                   currentSubprojects.length > 0 && (
                     <div
@@ -4369,7 +4376,7 @@ export const UploadScreen: React.FC = () => {
         </div>
 
         {/* Right: Project Settings */}
-        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl titlebar-drag">
+        <div className="w-72 bg-[#1b1d22]/96 border-l border-white/6 p-5 flex flex-col overflow-y-auto backdrop-blur-xl custom-scrollbar titlebar-no-drag">
           <div className="flex items-center justify-between mb-3 titlebar-drag select-none pr-36">
             <h2 className="text-base font-bold flex items-center gap-1">
               Import

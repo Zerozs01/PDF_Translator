@@ -365,6 +365,25 @@ flowchart TD
   - ปรับระยะห่างระหว่าง Folders และ Files ให้กระชับขึ้น
   - เพิ่มเส้นคั่นบางหรูหรา (`<div className="h-px bg-white/6 my-3 w-full shrink-0" />`) คั่นกลางระหว่าง Folders และ Files ชัดเจน สบายตา
 
+### 30. ย้ายตัวนับจำนวน (Item Counters) ไปไว้แถบ Breadcrumbs ด้านขวา & ปุ่ม `+ Folder` ให้มีทุกหน้า
+- **ย้ายตัวนับ FOLDERS(x) และ FILES(x) ไปไว้แถบ Breadcrumbs ด้านขวา:**
+  - นำตัวนับจำนวนย้ายไปวางในแถบ Breadcrumbs ด้านบนขวามือ ก่อนถึงปุ่ม `+ Folder`
+  - ตัวเลขแสดงด้วย **สีฟ้า (`text-sky-400 font-bold`)** ส่วนคำว่า `Folder/Folders` และ `File/Files` เป็น **สีขาว (`text-white font-medium`)** ตามที่ผู้ใช้กำหนด
+  - นำข้อความหัวข้อ `FOLDERS (x)` และ `FILES (x)` ขนาดใหญ่ออก เพื่อให้พื้นที่แสดงผลไฟล์และโฟลเดอร์คลีน สวยงาม สะอาดตา
+- **เปลี่ยนปุ่ม `+ Subfolder` เป็น `+ Folder` และเปิดใช้งานทุกหน้า:**
+  - เปลี่ยนชื่อปุ่มเป็น `+ Folder`
+  - เปิดใช้งานทุกหน้า (รวมถึงหน้า Home/Recent) โดยหากอยู่ที่หน้า Home จะสร้าง Top-level Folder และหากอยู่ในโฟลเดอร์ใดๆ จะสร้าง Subfolder ในโฟลเดอร์นั้นทันที
+
+### 31. ปรับปรุง Hover Effect ของ Favorite Icon และแก้ไขปัญหา Scroll ใน Setting/Right Sidebar
+- **Favorite Icon Hover Effect & Glow Badge:**
+  - เพิ่มพื้นหลังแก้ว (Glassmorphism Pill Badge) และเงาเรืองแสงสี Rose Glow ให้กับปุ่ม Favorite (`Heart`) ทั้งใน Grid View และ List View
+  - เมื่อนำเมาส์ไปชี้จะแสดงเอฟเฟกต์ `hover:scale-110 hover:bg-[#1f2228] hover:text-rose-400` เหมือนกับปุ่มซ่อน/แสดงภาพตัวอย่าง (Eye Icon) อย่างสวยงามสอดคล้องกัน
+- **แก้ไขบัค Scroll ในพาเนล Setting/Import (Right Sidebar):**
+  - **สาเหตุ:** คลาส `-webkit-app-region: drag` (`titlebar-drag`) ถูกใส่ไว้บนคอนเทนเนอร์หลักที่เปิด `overflow-y-auto` ทำให้ Electron ดักจับการ Scroll / Drag / Wheel ของเมาส์ไปเป็นการลากย้ายหน้าต่างโปรแกรม ส่งผลให้ Scroll ติดขัดหรือหน่วง
+  - **วิธีแก้ไข:** เอา `titlebar-drag` ออกจากคอนเทนเนอร์ที่ Scroll และใส่ `titlebar-no-drag` พร้อมคง `titlebar-drag` ไว้เฉพาะส่วน Header Bar ด้านบนเท่านั้น ทำให้ Scroll ทำงานได้อย่างลื่นไหล 100%
+
+
+
 
 
 
