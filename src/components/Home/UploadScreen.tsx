@@ -68,6 +68,8 @@ import {
 import {
   EditTagModal,
   FolderInfoModal,
+  CreateProjectModal,
+  EditProjectModal,
 } from './Modals';
 
 import {
@@ -88,6 +90,8 @@ import {
 
 import { LibraryTopBar } from './Bars/LibraryTopBar';
 import { BackgroundQueueMonitor } from './Panels/BackgroundQueueMonitor';
+import { LibrarySettingsPanel } from './Panels/LibrarySettingsPanel';
+import { BatchOCRBackgroundDialog } from './Panels/BatchOCRBackgroundDialog';
 
 export { FOLDER_PALETTE_COLORS, TAG_COLOR_PALETTES };
 
@@ -1765,258 +1769,33 @@ export const UploadScreen: React.FC = () => {
             </div>
           </>
         ) : (
-          <>
-            {/* Settings Page Sidebar */}
-            <h2 className="text-lg font-bold mb-4 flex items-center gap-2 titlebar-drag select-none">
-              <Settings2 className="text-slate-300" size={20} /> Settings
-            </h2>
-
-            <div className="flex-1 overflow-y-auto space-y-5 custom-scrollbar pr-1">
-              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2">
-                <label className="text-[11px] font-semibold text-slate-300">Gemini API Key</label>
-                <div className="relative">
-                  <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type={showGeminiApiKey ? 'text' : 'password'}
-                    value={geminiApiKeyDraft}
-                    onChange={(e) => setGeminiApiKeyDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        void saveGeminiApiKey();
-                      }
-                    }}
-                    placeholder={geminiInputPlaceholder}
-                    className="w-full rounded-lg border border-white/12 bg-slate-900/85 pl-7 pr-8 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
-                    disabled={!isGeminiApiKeyLoaded || isGeminiApiKeySaving}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowGeminiApiKey((prev) => !prev)}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-white/10"
-                    title={showGeminiApiKey ? 'Hide API key' : 'Show API key'}
-                  >
-                    {showGeminiApiKey ? <EyeOff size={12} /> : <Eye size={12} />}
-                  </button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void saveGeminiApiKey()}
-                    disabled={!geminiApiKeyDraft.trim() || isGeminiApiKeySaving || !isGeminiApiKeyLoaded}
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Check size={12} />
-                    Save Securely
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void clearGeminiApiKey()}
-                    disabled={(!hasGeminiApiKey && geminiApiKeySource !== 'environment') || isGeminiApiKeySaving || !isGeminiApiKeyLoaded}
-                    className="inline-flex items-center gap-1 rounded-lg border border-white/12 bg-slate-900/70 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:border-white/20 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <X size={12} />
-                    Clear Saved Key
-                  </button>
-                </div>
-                <p className={`text-[10px] leading-relaxed ${geminiStatusClass}`}>
-                  {geminiStatusLabel}
-                </p>
-                {geminiApiKeyError && (
-                  <p className="text-[10px] leading-relaxed text-rose-300/90">
-                    {geminiApiKeyError}
-                  </p>
-                )}
-              </div>
-
-              {/* Model Downloader / Management */}
-              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
-                <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
-                  <Download size={12} className="text-slate-400" />
-                  การจัดการโมเดล OCR (Model Management)
-                </label>
-                
-                <div className="space-y-3 text-xs">
-                  {/* Thai OCR Model */}
-                  <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-200">โมเดลภาษาไทย (Thai Model)</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
-                        paddleThaiStatus.downloading
-                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-                          : paddleThaiStatus.installed
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : 'bg-slate-500/10 text-slate-400 border border-white/10'
-                      }`}>
-                        {paddleThaiStatus.downloading ? 'กำลังดาวน์โหลด...' : paddleThaiStatus.installed ? 'ติดตั้งแล้ว' : 'ไม่ได้ติดตั้ง'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] text-slate-400">PaddleOCR PP-OCRv5 Thai Model (~15MB)</span>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadModel('th')}
-                        disabled={paddleThaiStatus.checking || paddleThaiStatus.downloading || paddleThaiStatus.installed}
-                        className="rounded bg-[#2B9BFF] hover:bg-[#1a85e8] disabled:bg-slate-800 disabled:text-slate-500 px-2 py-1 text-[10px] font-semibold text-white transition-colors"
-                      >
-                        {paddleThaiStatus.downloading ? 'Downloading...' : paddleThaiStatus.installed ? 'Installed' : 'Download'}
-                      </button>
-                    </div>
-                    {paddleThaiStatus.downloading && (
-                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
-                        <div className="bg-[#2B9BFF] h-1 rounded-full animate-pulse" style={{ width: '65%' }}></div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* English OCR Model */}
-                  <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-200">โมเดลภาษาอังกฤษ (English Model)</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
-                        paddleEnglishStatus.downloading
-                          ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-                          : paddleEnglishStatus.installed
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : 'bg-slate-500/10 text-slate-400 border border-white/10'
-                      }`}>
-                        {paddleEnglishStatus.downloading ? 'กำลังดาวน์โหลด...' : paddleEnglishStatus.installed ? 'ติดตั้งแล้ว' : 'ไม่ได้ติดตั้ง'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] text-slate-400">PaddleOCR English Model (~10MB)</span>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadModel('en')}
-                        disabled={paddleEnglishStatus.checking || paddleEnglishStatus.downloading || paddleEnglishStatus.installed}
-                        className="rounded bg-[#2B9BFF] hover:bg-[#1a85e8] disabled:bg-slate-800 disabled:text-slate-500 px-2 py-1 text-[10px] font-semibold text-white transition-colors"
-                      >
-                        {paddleEnglishStatus.downloading ? 'Downloading...' : paddleEnglishStatus.installed ? 'Installed' : 'Download'}
-                      </button>
-                    </div>
-                    {paddleEnglishStatus.downloading && (
-                      <div className="w-full bg-slate-800 rounded-full h-1 overflow-hidden">
-                        <div className="bg-[#2B9BFF] h-1 rounded-full animate-pulse" style={{ width: '65%' }}></div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Security Settings */}
-              <SecuritySettings />
-
-              {/* Hardware Acceleration GPU Status */}
-              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
-                <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
-                  <Cpu size={12} className="text-slate-400" />
-                  Hardware Acceleration / GPU Status
-                </label>
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Acceleration Mode</span>
-                    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
-                      gpuInfo && gpuInfo.mode !== 'CPU'
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                    }`}>
-                      <span className={`h-1.5 w-1.5 rounded-full ${gpuInfo && gpuInfo.mode !== 'CPU' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                      {getGpuModeLabel(gpuInfo)}
-                    </span>
-                  </div>
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-slate-400 shrink-0">Detected GPUs</span>
-                    <div className="text-slate-200 text-right truncate font-mono text-[10px]" title={gpuInfo?.gpus.join(', ')}>
-                      {gpuInfo?.gpus.join(', ') || 'None'}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">DirectML Support</span>
-                    <span className={`text-[10px] font-semibold ${gpuInfo?.hasDirectML ? 'text-emerald-400' : 'text-slate-500'}`}>
-                      {gpuInfo?.hasDirectML ? 'Available' : 'Unavailable'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">CUDA Support</span>
-                    <span className={`text-[10px] font-semibold ${gpuInfo?.hasCuda ? 'text-emerald-400' : 'text-slate-500'}`}>
-                      {gpuInfo?.hasCuda ? 'Available' : 'Unavailable'}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-slate-500 leading-normal border-t border-white/5 pt-2">
-                    {gpuInfo && gpuInfo.mode !== 'CPU'
-                      ? 'GPU Acceleration is active. The system will leverage DirectML/CUDA for OCR processing.'
-                      : 'Running on CPU. If you have an AMD/Intel/NVIDIA GPU, make sure you ran setup correctly to enable hardware acceleration.'}
-                  </p>
-                </div>
-              </div>
-
-              {isThaiTargetLanguage && (
-                <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-2.5">
-                  <label className="text-[11px] font-semibold text-slate-300">Overlay Font</label>
-
-                  <select
-                    value={overlayFontPreset}
-                    onChange={(e) => setOverlayFontPreset(e.target.value as OverlayFontPreset)}
-                    className="w-full rounded-lg border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
-                    aria-label="Overlay font preset"
-                    title="Overlay font preset"
-                  >
-                    {OVERLAY_FONT_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-
-                  <p className={`text-[10px] leading-relaxed ${
-                    selectedFontAvailable === false
-                      ? 'text-amber-300/90'
-                      : selectedFontAvailable === true
-                        ? 'text-emerald-300/85'
-                        : 'text-slate-500'
-                  }`}>
-                    Font status: {
-                      selectedFontAvailable === false
-                        ? 'fallback in use (font not detected)'
-                        : selectedFontAvailable === true
-                          ? 'detected and ready'
-                          : 'unknown'
-                    }
-                  </p>
-                </div>
-              )}
-
-              <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
-                <label className="text-[11px] font-semibold text-slate-300">OCR Runtime</label>
-                <div className="grid grid-cols-12 items-center gap-2">
-                  <label className="col-span-5 text-[11px] font-semibold text-slate-300">Timeout</label>
-                  <select
-                    value={ocrOptions.perPageTimeoutSec ?? OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT}
-                    onChange={(e) => setOCROptions({ perPageTimeoutSec: Number(e.target.value) })}
-                    aria-label="OCR timeout seconds per page"
-                    title="OCR timeout seconds per page"
-                    className="col-span-7 rounded-lg border border-white/12 bg-slate-900/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-[#2B9BFF]/55"
-                  >
-                    <option value={0}>No Limit</option>
-                    <option value={30}>30s</option>
-                    <option value={60}>60s</option>
-                    <option value={120}>120s</option>
-                    <option value={180}>180s</option>
-                    <option value={300}>300s</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/55 px-2.5 py-2">
-                  <span className="text-[11px] font-semibold text-slate-300">Skip if text exists</span>
-                  <input
-                    type="checkbox"
-                    checked={ocrOptions.skipIfTextExists !== false}
-                    onChange={(e) => setOCROptions({ skipIfTextExists: e.target.checked })}
-                    className="accent-[#2B9BFF]"
-                    aria-label="Skip OCR if Text Exists"
-                  />
-                </div>
-              </div>
-            </div>
-          </>
+          <LibrarySettingsPanel
+            geminiApiKeyDraft={geminiApiKeyDraft}
+            setGeminiApiKeyDraft={setGeminiApiKeyDraft}
+            showGeminiApiKey={showGeminiApiKey}
+            setShowGeminiApiKey={setShowGeminiApiKey}
+            saveGeminiApiKey={saveGeminiApiKey}
+            clearGeminiApiKey={clearGeminiApiKey}
+            isGeminiApiKeyLoaded={isGeminiApiKeyLoaded}
+            isGeminiApiKeySaving={isGeminiApiKeySaving}
+            hasGeminiApiKey={hasGeminiApiKey}
+            geminiApiKeySource={geminiApiKeySource}
+            geminiInputPlaceholder={geminiInputPlaceholder}
+            geminiStatusClass={geminiStatusClass}
+            geminiStatusLabel={geminiStatusLabel}
+            geminiApiKeyError={geminiApiKeyError}
+            paddleThaiStatus={paddleThaiStatus}
+            paddleEnglishStatus={paddleEnglishStatus}
+            handleDownloadModel={handleDownloadModel}
+            gpuInfo={gpuInfo}
+            getGpuModeLabel={getGpuModeLabel}
+            isThaiTargetLanguage={isThaiTargetLanguage}
+            overlayFontPreset={overlayFontPreset}
+            setOverlayFontPreset={setOverlayFontPreset}
+            selectedFontAvailable={selectedFontAvailable}
+            ocrOptions={ocrOptions}
+            setOCROptions={setOCROptions}
+          />
         )}
       </div>
 
@@ -2955,391 +2734,45 @@ export const UploadScreen: React.FC = () => {
         )}
 
         {ocrBackgroundDialog.isOpen && ocrBackgroundDialog.doc && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/65 backdrop-blur-md">
-            <div className="w-full max-w-md rounded-3xl border border-white/12 bg-[#0e1116]/96 p-6 shadow-[0_32px_96px_rgba(0,0,0,0.6)] text-left flex flex-col gap-4">
-              <div>
-                <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                  <Cpu className="text-cyan-400" size={18} />
-                  ประมวลผลทุกหน้าเบื้องหลัง
-                </h3>
-                <div className="mt-2 flex flex-col gap-1 bg-white/[0.03] border border-white/5 p-2.5 rounded-2xl">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ชื่อไฟล์:</span>
-                  <span className="text-xs font-semibold text-slate-300 truncate font-mono">{ocrBackgroundDialog.doc.filename}</span>
-                  {dialogCachePages !== null && (
-                    <div className="mt-2 flex items-center gap-1.5">
-                      <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[10px] font-semibold text-emerald-400">
-                        แปล/ทำ OCR ไปแล้ว {dialogCachePages} จาก {ocrBackgroundDialog.doc.total_pages} หน้า ({Math.round((dialogCachePages / ocrBackgroundDialog.doc.total_pages) * 100)}%)
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* OCR Engine selection */}
-              <div>
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Model Engine</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'paddleocr' }))}
-                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs ${
-                      ocrBackgroundDialog.model === 'paddleocr'
-                        ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.15)] font-semibold'
-                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
-                    }`}
-                  >
-                    <span className="font-semibold">PaddleOCR</span>
-                    <span className="text-[8px] opacity-75 mt-0.5">แนะนำสำหรับมังงะ/รูปภาพ</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, model: 'easyocr' }))}
-                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs ${
-                      ocrBackgroundDialog.model === 'easyocr'
-                        ? 'border-violet-500/50 bg-violet-500/10 text-violet-200 shadow-[0_0_15px_rgba(139,92,246,0.15)] font-semibold'
-                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
-                    }`}
-                  >
-                    <span className="font-semibold">EasyOCR</span>
-                    <span className="text-[8px] opacity-75 mt-0.5">ทางเลือก (เอกสารทั่วไป)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Profile Selection */}
-              <div>
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">รูปแบบการทำงาน</label>
-                <div className="space-y-2">
-                  <label className={`flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-all ${
-                    ocrBackgroundDialog.profile === 'offline_all'
-                      ? 'border-sky-500/50 bg-sky-500/10 text-slate-100 shadow-[0_0_15px_rgba(14,165,233,0.12)]'
-                      : 'border-white/5 bg-slate-900/30 text-slate-500 hover:border-white/10 hover:bg-slate-900/50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="background_ocr_profile"
-                      checked={ocrBackgroundDialog.profile === 'offline_all'}
-                      onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'offline_all' }))}
-                      className="mt-0.5 accent-sky-400"
-                    />
-                    <div className="text-xs flex-1">
-                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'offline_all' ? 'text-sky-300' : 'text-slate-300'}`}>Offline Translate All</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">รัน OCR พร้อมแปลเนื้อหาเป้าหมายลงฐานข้อมูล</div>
-                    </div>
-                  </label>
-
-                  <label className={`flex items-start gap-3 rounded-2xl border p-3 cursor-pointer transition-all ${
-                    ocrBackgroundDialog.profile === 'ocr_all'
-                      ? 'border-indigo-500/50 bg-indigo-500/10 text-slate-100 shadow-[0_0_15px_rgba(99,102,241,0.12)]'
-                      : 'border-white/5 bg-slate-900/30 text-slate-500 hover:border-white/10 hover:bg-slate-900/50'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="background_ocr_profile"
-                      checked={ocrBackgroundDialog.profile === 'ocr_all'}
-                      onChange={() => setOcrBackgroundDialog(prev => ({ ...prev, profile: 'ocr_all' }))}
-                      className="mt-0.5 accent-indigo-400"
-                    />
-                    <div className="text-xs">
-                      <div className={`font-semibold ${ocrBackgroundDialog.profile === 'ocr_all' ? 'text-indigo-300' : 'text-slate-300'}`}>OCR All Pages Only</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">ค้นหาพิกัดและแกะข้อความเก็บไว้โดยยังไม่แปลภาษา</div>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              {/* Processing Quality (Fast vs High) */}
-              <div>
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Processing Quality</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile: 'fast' }))}
-                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs gap-1.5 ${
-                      ocrBackgroundDialog.ocrQualityProfile === 'fast'
-                        ? 'border-amber-500/50 bg-amber-500/10 text-amber-200 shadow-[0_0_15px_rgba(245,158,11,0.15)] font-semibold'
-                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <Zap size={13} className={ocrBackgroundDialog.ocrQualityProfile === 'fast' ? 'text-amber-400 animate-pulse' : 'text-slate-400'} />
-                      Fast (เน้นความเร็ว)
-                    </span>
-                   
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile: 'best' }))}
-                    className={`flex flex-col items-center justify-center rounded-2xl border p-3 transition-all text-xs gap-1.5 ${
-                      ocrBackgroundDialog.ocrQualityProfile === 'best'
-                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.15)] font-semibold'
-                        : 'border-white/5 bg-slate-900/40 text-slate-500 hover:border-white/10 hover:text-slate-300'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <Award size={13} className={ocrBackgroundDialog.ocrQualityProfile === 'best' ? 'text-emerald-400 animate-pulse' : 'text-slate-400'} />
-                      High (ความแม่นยำสูง)
-                    </span>
-                   
-                  </button>
-                </div>
-              </div>
-
-              {/* Languages Row */}
-              <div className="grid grid-cols-2 gap-3">
-                {/* Source Language */}
-                <div>
-                  <label htmlFor="ocr-bg-lang-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
-                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-cyan-400" />
-                    ภาษาต้นทาง 
-                  </label>
-                  <select
-                    id="ocr-bg-lang-select"
-                    value={ocrBackgroundDialog.ocrLanguage}
-                    onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, ocrLanguage: e.target.value }))}
-                    className="w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-100 outline-none transition-colors focus:border-cyan-400/50 cursor-pointer"
-                  >
-                    <option value="eng">🇬🇧 EN (English)</option>
-                    <option value="tha">🇹🇭 TH (Thai)</option>
-                    <option value="jpn">🇯🇵 JA (Japanese)</option>
-                    <option value="jpn_vert">🇯🇵 JA-V (Japanese Vert)</option>
-                    <option value="kor">🇰🇷 KO (Korean)</option>
-                    <option value="chi_sim">🇨🇳 ZH-S (Chinese Simp)</option>
-                    <option value="chi_tra">🇨🇳 ZH-T (Chinese Trad)</option>
-                    <option value="vie">🇻🇳 VI (Vietnamese)</option>
-                    <option value="deu">🇩🇪 DE (German)</option>
-                    <option value="fra">🇫🇷 FR (French)</option>
-                    <option value="spa">🇪🇸 ES (Spanish)</option>
-                    <option value="rus">🇷🇺 RU (Russian)</option>
-                  </select>
-                </div>
-
-                {/* Target Language */}
-                <div>
-                  <label htmlFor="ocr-bg-target-lang-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
-                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    ภาษาปลายทาง
-                  </label>
-                  <select
-                    id="ocr-bg-target-lang-select"
-                    value={ocrBackgroundDialog.targetLanguage}
-                    disabled={ocrBackgroundDialog.profile !== 'offline_all'}
-                    onChange={(e) => setOcrBackgroundDialog(prev => ({ ...prev, targetLanguage: e.target.value }))}
-                    className={`w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-100 outline-none transition-colors focus:border-emerald-500/50 cursor-pointer ${
-                      ocrBackgroundDialog.profile !== 'offline_all' ? 'opacity-40 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    <option value="th">🇹🇭 TH (Thai)</option>
-                    <option value="en">🇬🇧 EN (English)</option>
-                    <option value="ja">🇯🇵 JA (Japanese)</option>
-                    <option value="ko">🇰🇷 KO (Korean)</option>
-                    <option value="zh">🇨🇳 ZH (Chinese)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 border-t border-white/5 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setOcrBackgroundDialog({ isOpen: false, doc: null, model: 'paddleocr', profile: 'offline_all', ocrLanguage: 'eng', ocrQualityProfile: 'best', targetLanguage: 'th' })}
-                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs text-slate-300 transition-colors hover:bg-white/10"
-                >
-                  ยกเลิก (Cancel)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleStartOcrBackground}
-                  className="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 text-xs font-semibold text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98]"
-                >
-                  เริ่มประมวลผล (Start)
-                </button>
-              </div>
-            </div>
-          </div>
+          <BatchOCRBackgroundDialog
+            isOpen={ocrBackgroundDialog.isOpen}
+            doc={ocrBackgroundDialog.doc}
+            model={ocrBackgroundDialog.model}
+            profile={ocrBackgroundDialog.profile}
+            ocrLanguage={ocrBackgroundDialog.ocrLanguage}
+            ocrQualityProfile={ocrBackgroundDialog.ocrQualityProfile}
+            targetLanguage={ocrBackgroundDialog.targetLanguage}
+            dialogCachePages={dialogCachePages}
+            onChangeModel={(model) => setOcrBackgroundDialog(prev => ({ ...prev, model }))}
+            onChangeProfile={(profile) => setOcrBackgroundDialog(prev => ({ ...prev, profile }))}
+            onChangeOcrLanguage={(ocrLanguage) => setOcrBackgroundDialog(prev => ({ ...prev, ocrLanguage }))}
+            onChangeOcrQualityProfile={(ocrQualityProfile) => setOcrBackgroundDialog(prev => ({ ...prev, ocrQualityProfile }))}
+            onChangeTargetLanguage={(targetLanguage) => setOcrBackgroundDialog(prev => ({ ...prev, targetLanguage }))}
+            onStart={handleStartOcrBackground}
+            onClose={() => setOcrBackgroundDialog({ isOpen: false, doc: null, model: 'paddleocr', profile: 'offline_all', ocrLanguage: 'eng', ocrQualityProfile: 'best', targetLanguage: 'th' })}
+          />
         )}
 
-        {projectDialog.isOpen && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div 
-                    className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
-                    style={{ backgroundColor: hexToRgba(projectDialog.color || '#38BDF8', 0.2) }}
-                  >
-                    <Folder size={16} style={{ color: projectDialog.color || '#38BDF8' }} />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-100">
-                      {projectDialog.parentId ? 'สร้างโฟลเดอร์ย่อย (Create Subfolder)' : 'สร้างโฟลเดอร์ใหม่ (Create Folder)'}
-                    </h3>
-                    <p className="text-xs text-slate-400">สำหรับจัดหมวดหมู่เอกสารในคลัง</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
-                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
-                >
-                  <X size={18} />
-                </button>
-              </div>
+        <CreateProjectModal
+          isOpen={projectDialog.isOpen}
+          name={projectDialog.name}
+          color={projectDialog.color || '#38BDF8'}
+          parentId={projectDialog.parentId}
+          onChangeName={(name) => setProjectDialog(current => ({ ...current, name }))}
+          onChangeColor={(color) => setProjectDialog(current => ({ ...current, color }))}
+          onCreate={() => void handleCreateProject()}
+          onClose={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
+        />
 
-              <div>
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                  ชื่อโฟลเดอร์ (Folder Name)
-                </label>
-                <input
-                  autoFocus
-                  type="text"
-                  value={projectDialog.name}
-                  onChange={(e) => setProjectDialog((current) => ({ ...current, name: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      void handleCreateProject();
-                    }
-                  }}
-                  placeholder="Folder name"
-                  className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
-                  เลือกสีไอคอนโฟลเดอร์ (Folder Color)
-                </label>
-                <div className="grid grid-cols-6 gap-2">
-                  {FOLDER_PALETTE_COLORS.map((c) => {
-                    const isSelected = (projectDialog.color || '').toUpperCase() === c.toUpperCase();
-                    return (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => setProjectDialog((current) => ({ ...current, color: c }))}
-                        className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
-                        style={{ 
-                          backgroundColor: c,
-                          boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
-                        }}
-                        title={c}
-                      >
-                        {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
-                <button
-                  onClick={() => setProjectDialog({ isOpen: false, name: '', documentId: null, color: '' })}
-                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => void handleCreateProject()}
-                  disabled={!projectDialog.name.trim()}
-                  className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Create (สร้าง)
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {editProjectDialog.isOpen && editProjectDialog.project && (
-          <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div 
-                    className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
-                    style={{ backgroundColor: hexToRgba(editProjectDialog.color || '#38BDF8', 0.2) }}
-                  >
-                    <Folder size={16} style={{ color: editProjectDialog.color || '#38BDF8' }} />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                      <Edit3 size={15} className="text-sky-400" />
-                      แก้ไขโฟลเดอร์ (Edit Folder)
-                    </h3>
-                    <p className="text-xs text-slate-400">เปลี่ยนชื่อหรือเลือกสีไอคอนสำหรับโฟลเดอร์นี้</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
-                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                  ชื่อโฟลเดอร์ (Folder Name)
-                </label>
-                <input
-                  autoFocus
-                  type="text"
-                  value={editProjectDialog.name}
-                  onChange={(e) => setEditProjectDialog((current) => ({ ...current, name: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      void handleEditProject();
-                    }
-                  }}
-                  placeholder="Folder name"
-                  className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
-                  เลือกสีไอคอนโฟลเดอร์ (Folder Color)
-                </label>
-                <div className="grid grid-cols-6 gap-2">
-                  {FOLDER_PALETTE_COLORS.map((c) => {
-                    const isSelected = (editProjectDialog.color || '').toUpperCase() === c.toUpperCase();
-                    return (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => setEditProjectDialog((current) => ({ ...current, color: c }))}
-                        className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
-                        style={{ 
-                          backgroundColor: c,
-                          boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
-                        }}
-                        title={c}
-                      >
-                        {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
-                <button
-                  onClick={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
-                  className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => void handleEditProject()}
-                  disabled={!editProjectDialog.name.trim()}
-                  className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Save (บันทึก)
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <EditProjectModal
+          isOpen={editProjectDialog.isOpen && !!editProjectDialog.project}
+          name={editProjectDialog.name}
+          color={editProjectDialog.color || '#38BDF8'}
+          onChangeName={(name) => setEditProjectDialog(current => ({ ...current, name }))}
+          onChangeColor={(color) => setEditProjectDialog(current => ({ ...current, color }))}
+          onSave={() => void handleEditProject()}
+          onClose={() => setEditProjectDialog({ isOpen: false, project: null, name: '', color: '' })}
+        />
 
         {tagDialog.isOpen && (
           <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm">

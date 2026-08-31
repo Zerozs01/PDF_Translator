@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, ChevronDown, Sparkles, Gauge } from 'lucide-react';
+import { Cpu, ChevronDown, Sparkles, Gauge, Zap } from 'lucide-react';
 import type { OCREngine, OCROptions } from '../../../types';
 import { OCR_ENGINES } from '../../../stores/useOCRTextLayerStore';
 import type { EngineWarmState } from '../hooks/useEnginePrewarm';
@@ -51,31 +51,38 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
               onClick={() => setOcrQualityMode('fast')}
               className={`flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-semibold border transition-all ${
                 ocrQualityMode === 'fast'
-                  ? 'border-cyan-500/50 bg-slate-950/80 text-cyan-300 shadow-sm'
+                  ? 'border-cyan-500/50 bg-cyan-950/70 text-cyan-300 shadow-sm'
                   : 'border-white/10 bg-black/40 text-slate-400 hover:text-white'
               }`}
-              title="Fast Mode"
+              title="Fast Mode - เน้นความเร็วในการประมวลผล OCR"
             >
-              <Gauge size={11} className="text-cyan-400" />
+              <Gauge size={11} className={ocrQualityMode === 'fast' ? "text-cyan-400" : "text-slate-400"} />
               <span>Fast</span>
             </button>
 
-            {/* Improve Pill Button */}
+            {/* Best Pill Button */}
             <button
               type="button"
-              onClick={() => {
-                setOcrQualityMode('high');
-                onOpenBenchmark();
-              }}
+              onClick={() => setOcrQualityMode('high')}
               className={`flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[10px] font-semibold border transition-all ${
                 ocrQualityMode === 'high'
-                  ? 'border-white/25 bg-black text-white shadow-sm'
+                  ? 'border-amber-400/50 bg-amber-950/70 text-amber-300 shadow-sm'
                   : 'border-white/10 bg-black/40 text-slate-400 hover:text-white'
               }`}
+              title="Best Mode - ความแม่นยำและคุณภาพสูงสุด"
+            >
+              <Zap size={11} className={ocrQualityMode === 'high' ? "text-amber-400" : "text-slate-400"} />
+              <span>Best</span>
+            </button>
+
+            {/* Benchmark Button */}
+            <button
+              type="button"
+              onClick={onOpenBenchmark}
+              className="flex items-center justify-center p-1 rounded-lg border border-white/10 bg-black/40 text-slate-400 hover:text-amber-300 hover:border-amber-400/30 transition-all"
               title="Benchmark & Quality Improvement"
             >
-              <Sparkles size={11} className="text-white" />
-              <span>Improve</span>
+              <Sparkles size={11} />
             </button>
 
             {/* Chevron Toggle Button */}

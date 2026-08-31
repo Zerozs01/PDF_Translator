@@ -197,9 +197,25 @@ process.on('exit', () => {
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 // Suppress AMD DirectComposition VideoProcessorGetOutputExtension error spam
 app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
-// Disable renderer backgrounding and background timer throttling to keep background queue tasks running when window is backgrounded or system is locked
+// Disable renderer backgrounding and background timer throttling to keep
+// background queue tasks running when window is backgrounded or system is locked
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
+
+// ─── GPU Rasterization & Zero-Copy (Rust/Tauri equivalent) ──────────────────
+// Enable GPU-backed tile rasterization — offloads raster work from CPU to GPU
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+// Skip compositor buffer copies — renders directly to display framebuffer
+app.commandLine.appendSwitch('enable-zero-copy');
+// Force 2D canvas operations through GPU — accelerates PDF overlay rendering
+app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
+// Use OS-level vsync instead of software vsync for smoother canvas animations
+app.commandLine.appendSwitch('disable-frame-rate-limit');
+
+// ─── V8 Memory Tuning ──────────────────────────────────────────────────────────
+// Cap V8 old-generation heap to 1 GB — forces more aggressive GC reclamation
+// and prevents runaway heap growth during heavy multi-page OCR processing
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=1024');
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {

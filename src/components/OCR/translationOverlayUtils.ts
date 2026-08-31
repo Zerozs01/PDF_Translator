@@ -3,6 +3,8 @@ import { hasCurrentOCRTranslationCacheVersion, OCRPreviewMode, OCRTranslationCac
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
+import { fastIoU } from '../../services/native/fastSpatialCluster';
+import { fastDiceSimilarity } from '../../services/native/fastDiceSimilarity';
 
 const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
@@ -119,21 +121,8 @@ const buildOverlayKeyBigrams = (value: string): Set<string> => {
   return grams;
 };
 
-const overlayKeyDiceSimilarity = (a: string, b: string): number => {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-
-  const aBigrams = buildOverlayKeyBigrams(a);
-  const bBigrams = buildOverlayKeyBigrams(b);
-  if (aBigrams.size === 0 || bBigrams.size === 0) return 0;
-
-  let overlap = 0;
-  for (const gram of aBigrams) {
-    if (bBigrams.has(gram)) overlap += 1;
-  }
-
-  return (2 * overlap) / (aBigrams.size + bBigrams.size);
-};
+const overlayKeyDiceSimilarity = (a: string, b: string): number =>
+  fastDiceSimilarity(a, b);
 
 const buildOverlayWordSet = (value: string): Set<string> => {
   const normalized = normalizeOverlayInlineText(String(value || ''))
@@ -176,15 +165,8 @@ const overlayDedupOverlapRatioY = (a: BBox, b: BBox): number => {
   return overlap / minHeight;
 };
 
-const overlayDedupIou = (a: BBox, b: BBox): number => {
-  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
-  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
-  const intersection = overlapWidth * overlapHeight;
-  if (intersection <= 0) return 0;
-
-  const union = overlayDedupBoxArea(a) + overlayDedupBoxArea(b) - intersection;
-  return union > 0 ? intersection / union : 0;
-};
+const overlayDedupIou = (a: BBox, b: BBox): number =>
+  fastIoU(a, b);
 
 const shouldCollapseTranslatedOverlayDuplicate = (
   existing: TranslatedOverlayCandidate,

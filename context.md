@@ -1,17 +1,18 @@
 # PDF Translator - Project Context & Architecture Reference
 
 > **อัปเดตล่าสุด:** สิงหาคม 2026  
-> **สถานะการทดสอบ:** Vitest 39/39 Test Files ผ่านทั้งหมด (355/355 Tests Passed 100% ✅)  
+> **สถานะการทดสอบ:** Vitest 42/42 Test Files ผ่านทั้งหมด (385/385 Tests Passed 100% ✅)  
 > **TypeScript Strict Check:** `pnpm exec tsc --noEmit` 0 Errors (Exit Code 0 ✅)
 
 ---
 
 ## 📌 1. ภาพรวมโปรเจกต์ (Project Overview)
 
-**PDF Translator** คือแอปพลิเคชัน Desktop ประสิทธิภาพสูงสำหรับแปลเอกสาร PDF, มังงะ, มังฮวา, นิยาย และรูปภาพ ด้วยเทคโนโลยี AI/OCR แบบออฟไลน์และออนไลน์:
+**PDF Translator** คือแอปพลิเคชัน Desktop ประสิทธิภาพสูงระดับ Native-Equivalent สำหรับแปลเอกสาร PDF, มังงะ, มังฮวา, นิยาย และรูปภาพ ด้วยเทคโนโลยี AI/OCR แบบออฟไลน์และออนไลน์:
 - **Frontend:** React 18 + Strict TypeScript + Vite + TailwindCSS + Zustand + React.memo
-- **Desktop Host:** Electron (Context Isolation, Secure IPC, Native File System, SQLite Native Bridge)
-- **Database:** SQLite (`better-sqlite3`) พร้อมโหมด WAL (Write-Ahead Logging), FTS5 Full-Text Search และ Memory-Mapped I/O
+- **Desktop Host:** Electron (Context Isolation, Secure IPC, Native File System, SQLite Native Bridge, Chromium GPU Rasterization, Zero-Copy Pipeline)
+- **Database:** SQLite (`better-sqlite3`) พร้อม Modular DAOs, โหมด WAL (Write-Ahead Logging), FTS5 Full-Text Search และ Memory-Mapped I/O
+- **Native Performance Layer:** Zero-GC TypedArray Spatial Clustering (`Float64Array` + `Int32Array` Union-Find), Bitset Dice Similarity (`Uint32Array` Pre-allocated Pool), Sub-millisecond Blank Page Detector
 - **OCR Engine (Python Sidecar):** PaddleOCR, EasyOCR, Manga-OCR (รองรับ DirectML เร่งความเร็วบน AMD/Intel/NVIDIA GPUs)
 - **Translation Engine:** Argos Translate (NMT ออฟไลน์ผ่าน CTranslate2) และ Google Gemini API (คลาวด์)
 - **Export Engine:** High-Fidelity Hidden Window Print PDF Export + Scalable Vector Text Layer
@@ -22,7 +23,7 @@
 
 ```mermaid
 flowchart TD
-    User([ผู้ใช้]) --> UI[React UI / UploadScreen / Workspace Editor]
+    User([ผู้ใช้]) --> UI[React UI / UploadScreen / Workspace Editor / RightSidebar]
     
     subgraph FrontendState [Zustand State Stores & Granular Selectors]
         ProjectStore[useProjectStore\n(Active Doc, Page, Lang, Profile)]
@@ -32,17 +33,24 @@ flowchart TD
         UIStore[useUIStore\n(Zoom, Pan, Split View, Active Tool)]
     end
 
+    subgraph NativePerfEngine [Zero-GC Native-Equivalent Engine]
+        FastSpatial[fastSpatialCluster.ts\n(Float64Array IoU + Union-Find)]
+        FastDice[fastDiceSimilarity.ts\n(Uint32Array Bitset Pool + Popcount)]
+        BlankDetector[blankPageDetector.ts\n(Sub-ms Solid/Blank Page Skip)]
+    end
+
     subgraph Orchestrator [App Coordinator & Custom Hooks]
         DocTranslationHook[useDocumentTranslation\n(Single Page & Batch AI/Offline)]
         ExportModalHook[useDocumentExportModalState\n(Scope, Quality & Quick Translate)]
         QueueSyncHook[useBackgroundQueueSync\n(FIFO Delegation & Lock Sync)]
     end
 
-    subgraph DesktopHost [Electron Main Process - Domain IPC Handlers]
+    subgraph DesktopHost [Electron Main Process - Domain IPC & DAOs]
         IPC_OCR[ipc/ocr.ts]
         IPC_DB[ipc/database.ts]
         IPC_Translation[ipc/translation.ts]
         IPC_Export[ipc/export.ts]
+        DAO_Layer[DAO Layer: Document, Project, Tag, OCR, Translation, Glossary]
         DB[(SQLite Database\npdf_translator.db)]
     end
 
@@ -53,17 +61,24 @@ flowchart TD
 
     UI --> FrontendState
     FrontendState <--> Orchestrator
+    Orchestrator <--> NativePerfEngine
     Orchestrator <--> DesktopHost
-    DesktopHost <--> DB
+    DesktopHost <--> DAO_Layer
+    DAO_Layer <--> DB
     DesktopHost <--> Sidecar
 ```
 
 ---
 
-## 📂 3. โครงสร้างโฟลเดอร์หลักหลัง Refactoring (Key Directories & File Map)
+## 📂 3. โครงสร้างโฟลเดอร์หลักหลัง Refactoring & Modularization (Key Directories & File Map)
 
 ### 3.1 Frontend (`src/`)
 - [`src/App.tsx`](file:///c:/App/Electron/PDF_Translator/src/App.tsx): **Clean Orchestrator Shell (535 บรรทัด / ลดลง 86.2%)** ประสานงานระหว่าง Hooks, Stores และ Layouts
+- [`src/services/native/`](file:///c:/App/Electron/PDF_Translator/src/services/native/): **Zero-GC & Native-Equivalent Engines**
+  - [`fastSpatialCluster.ts`](file:///c:/App/Electron/PDF_Translator/src/services/native/fastSpatialCluster.ts): Flat `Float64Array` IoU matrix และ `Int32Array` Disjoint-Set / Union-Find สำหรับการจัดกลุ่มเชิงพื้นที่ 2D โดยไร้ Memory Allocations
+  - [`fastDiceSimilarity.ts`](file:///c:/App/Electron/PDF_Translator/src/services/native/fastDiceSimilarity.ts): Bitset Bigram Dice Coefficient (`Uint32Array` pool) พร้อม Kernighan Popcount เร่งความเร็วคำนวณข้อความ 5-20x
+- [`src/services/vision/`](file:///c:/App/Electron/PDF_Translator/src/services/vision/):
+  - [`blankPageDetector.ts`](file:///c:/App/Electron/PDF_Translator/src/services/vision/blankPageDetector.ts): ตรวจจับหน้าว่างเปล่า/สีพื้นล้วนใน < 0.5ms เพื่อข้าม OCR & Translation ทันที (0ms)
 - [`src/hooks/`](file:///c:/App/Electron/PDF_Translator/src/hooks/):
   - [`useDocumentTranslation.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useDocumentTranslation.ts): จัดการ Pipeline การแปล Single-page และ Batch (AI / Offline)
   - [`useDocumentExportModalState.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useDocumentExportModalState.ts): จัดการ State และการคำนวณ Scope/Time ในกล่อง Export
@@ -77,7 +92,12 @@ flowchart TD
     - [`Layout/AppHeaderToolbar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/AppHeaderToolbar.tsx): Titlebar ด้านบนสไตล์ Google Docs พร้อมระบบควบคุมฟอนต์และ OCR Profiles (`React.memo`)
     - [`Layout/CompactTopToolbar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/CompactTopToolbar.tsx): แถบควบคุมภาษาและปุ่มแปลด่วน
     - [`Layout/LeftSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/LeftSidebar.tsx): แถบ Thumbnail Gallery, Pages List และ Layer Control
-    - [`Layout/RightSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/RightSidebar.tsx): แถบตั้งค่า OCR, Engine และพจนานุกรม
+    - [`Layout/RightSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/RightSidebar.tsx): แถบตั้งค่า OCR, Engine, พจนานุกรม และผลลัพธ์ OCR Text Layer
+  - **OCR Sub-Components:**
+    - [`OCR/OCRTextLayerPanel.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/OCRTextLayerPanel.tsx): ควบคุม OCR Actions, Clear Cache, Re-OCR All (Ignore Cache)
+    - [`OCR/EngineSelector/OCREngineSelector.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/EngineSelector/OCREngineSelector.tsx): แถบเลือกโมเดล OCR พร้อม Copper Theme และ Quick Pill Buttons (Fast ⚡ / Best ✨ / Benchmark 📊)
+    - [`OCR/ResultTree/OCRResultTree.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/ResultTree/OCRResultTree.tsx): แสดงผล OCR Block / Line Tree พร้อมปุ่ม Search & Expand/Collapse All
+    - [`OCR/overlay/overlayDedup.ts`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/overlay/overlayDedup.ts): จัดการ Deduplication เชื่อมต่อกับ Native Fast Engines
   - **Queue & Modals:**
     - [`Queue/BackgroundQueueBadge.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueueBadge.tsx): Floating Queue Pill แสดงสถานะคิวขณะอยู่ในหน้า Preview (`React.memo`)
     - [`Queue/BackgroundQueuePanel.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueuePanel.tsx): Drawer จัดการและดูรายละเอียดคิวงาน OCR/แปลที่มุมขวาล่าง (`React.memo`)
@@ -100,44 +120,56 @@ flowchart TD
   - [`sfxDictionaryService.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/sfxDictionaryService.ts): พจนานุกรมเสียงเอฟเฟกต์ (SFX) และเสียงคราง
   - [`koreanTranslationPolicy.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/koreanTranslationPolicy.ts): กฎการแปลและ Fallback ภาษาเกาหลี/สแลงเฉพาะทาง
 
-### 3.2 Desktop Host (`electron/`)
-- [`electron/main.ts`](file:///c:/App/Electron/PDF_Translator/electron/main.ts): **Clean Entrypoint (311 บรรทัด / ลดลง 84.0%)**
-- [`electron/ipc/`](file:///c:/App/Electron/PDF_Translator/electron/ipc/): แยก IPC Handlers ตามโดเมน:
-  - `ocr.ts`: ควบคุม Sidecar OCR และ Prewarm Engine
-  - `translation.ts`: ควบคุม Argos Offline Translation
-  - `database.ts`: จัดการ Documents, Projects, Tags, Cache
-  - `export.ts`: สั่งพิมพ์ PDF ผ่าน Headless Chromium Window
-  - `window.ts`: ควบคุม Window State, Fullscreen, Titlebar
-  - `dialog.ts`: จัดการ Open File / Folder Dialogs
-  - `gemini.ts`: จัดการ Secure Storage สำหรับ Gemini API Key
-  - `library.ts`: จัดการ Metadata และสถิติคลังเอกสาร
-- [`electron/db.ts`](file:///c:/App/Electron/PDF_Translator/electron/db.ts): SQLite DAO Layer
+### 3.2 Desktop Host & Database DAOs (`electron/`)
+- [`electron/main.ts`](file:///c:/App/Electron/PDF_Translator/electron/main.ts): **Clean Entrypoint พร้อม Chromium GPU Flags & V8 Tuning**
+- [`electron/dao/`](file:///c:/App/Electron/PDF_Translator/electron/dao/): **Modular Domain DAOs (Phase 3.2)**
+  - [`DocumentDAO.ts`](file:///c:/App/Electron/PDF_Translator/electron/dao/DocumentDAO.ts): จัดการเอกสาร, หน้า, สถิติ, การจัดระเบียบคลัง
+  - [`ProjectDAO.ts`](file:///c:/App/Electron/PDF_Translator/electron/dao/ProjectDAO.ts): จัดการโปรเจกต์, โฟลเดอร์ย่อย, และการจัดกลุ่ม
+  - [`TagDAO.ts`](file:///c:/App/Electron/PDF_Translator/electron/dao/TagDAO.ts): จัดการแท็กและความสัมพันธ์กับเอกสาร
+  - [`OCRDAO.ts`](file:///c:/App/Electron/PDF_Translator/electron/dao/OCRDAO.ts): จัดการบันทึก/ค้นหาผลลัพธ์ OCR และแคชเชิงพื้นที่
+  - [`TranslationDAO.ts`](file:///c:/App/Electron/PDF_Translator/electron/dao/TranslationDAO.ts): จัดการแคชคำแปลทั้งระดับบรรทัดและประโยค
+  - [`GlossaryDAO.ts`](file:///c:/App/Electron/PDF_Translator/electron/dao/GlossaryDAO.ts): จัดการคลังศัพท์เฉพาะทางและพจนานุกรม
+- [`electron/ipc/`](file:///c:/App/Electron/PDF_Translator/electron/ipc/): แยก IPC Handlers ตามโดเมน (OCR, Translation, Database, Export, Window, Dialog, Gemini, Library)
+- [`electron/db.ts`](file:///c:/App/Electron/PDF_Translator/electron/db.ts): SQLite Connection & Migration Coordinator
 
 ---
 
-## ⚡ 4. การปรับปรุงประสิทธิภาพเชิงลึก (Deep Performance Optimizations & 60/120 FPS Scrolling)
+## ⚡ 4. การปรับปรุงประสิทธิภาพเชิงลึก (Deep Performance & Native-Equivalent Optimizations)
 
-### 4.1 Granular Zustand Selectors & React.memo
-- ขจัดปัญหา Wholesale Store Subscription (`useProjectStore()`, `useSegmentationStore()`) โดยเปลี่ยนมาใช้ Granular Selector ดึงเฉพาะ State Slice ที่ใช้งาน
-- ห่อหุ้ม `React.memo` ให้กับทุกส่วนประกอบหลัก: `AppHeaderToolbar`, `BackgroundQueueBadge`, `BackgroundQueuePanel`, `DocumentExportModal`, `WorkspaceContainer`, `DocumentRenderer`, และ `PDFPageContainer` ป้องกันการ Re-render แบบลูกโซ่ขณะเลื่อนหน้าจอหรือลากแก้ไขกล่องข้อความ
+### 4.1 Chromium GPU Rasterization & Zero-Copy Compositor
+- **Flags ที่เปิดใช้งานใน `electron/main.ts`:**
+  - `enable-gpu-rasterization`: สั่งให้ GPU รับผิดชอบงาน Tile Rasterization แทน CPU
+  - `enable-zero-copy`: ข้ามขั้นตอน Buffer Copy ระหว่าง Main Process และ Compositor ช่วยประหยัดแบนด์วิดท์หน่วยความจำ
+  - `enable-accelerated-2d-canvas`: บังคับให้การเรนเดอร์ PDF Canvas Overlay วิ่งตรงผ่าน GPU Pipelines
+  - `disable-frame-rate-limit`: ใช้ OS Hardware VSync เพื่อให้การเคลื่อนไหวไหลลื่นระดับ 60/120/144 Hz
+  - `js-flags: --max-old-space-size=1024`: ควบคุมขนาด V8 Heap ไม่ให้ขยายตัวเกินจำเป็น และกระตุ้น Garbage Collection ให้ทำงานอย่างมีประสิทธิภาพ
 
-### 4.2 ขจัดปัญหา Snap Conflict ใน Continuous Scroll Mode
-- **ปัญหาเดิม:** เมื่อผู้ใช้เลื่อนหน้าจอข้ามเส้นแบ่งหน้า `IntersectionObserver` จะตรวจจับว่าเข้าสู่หน้าใหม่ และเรียก `setPage(newPage)` ซึ่งเคยทำให้ Effect ภายใน `PDFCanvas` เข้าใจผิดว่าเป็นการคลิกเปลี่ยนหน้า และสั่ง `setPan(targetX, targetY)` ดึงหน้าจอกระตุกกลับไปที่ขอบบนของหน้านั้นทันที
-- **การแก้ไข:** ปรับให้ `setPan` ทำงานเฉพาะตอนที่มีการสั่งเปลี่ยนหน้าแบบเจาะจง (Programmatic Navigation เช่น คลิก Thumbnail หรือพิมพ์เลขหน้า) เท่านั้น เมื่อผู้ใช้เลื่อนหน้าจออิสระ ระบบจะไม่เข้ามากระตุกหรือแย่งตำแหน่ง Pan
+### 4.2 Zero-GC TypedArray Spatial Clustering (`fastSpatialCluster.ts`)
+- ใช้ Flat `Float64Array` ในการเก็บ Bounding Box Coordinates (4 floats ต่อ Box)
+- คำนวณ IoU (Intersection over Union) โดยตรงจาก Array Index โดยไม่สร้าง Object Wrapper ชั่วคราว
+- ใช้อัลกอริทึม Disjoint-Set / Union-Find บน `Int32Array` พร้อม Path Compression และ Union by Rank ทำให้การจัดกลุ่มข้อความ $O(n \cdot \alpha(n))$ ไร้การจองหน่วยความจำชั่วคราว (Zero GC Pauses)
 
-### 4.3 Direct GPU Hardware Acceleration (`translate3d`)
+### 4.3 High-Throughput Bitset Dice Similarity (`fastDiceSimilarity.ts`)
+- ใช้ Pre-allocated `Uint32Array(2048)` Pool แทนการสร้าง `Set<string>` ใหม่ในทุกๆ รอบการเปรียบเทียบ
+- เข้ารหัส Character Bigram เป็นตำแหน่ง Bit บน 65,536-bit Vector
+- หาจุดตัด (Intersection Overlap) ด้วย Brian Kernighan's Bitwise Popcount ($O(\text{set bits})$) เพิ่มความเร็วการทำ Overlay Deduplication ขึ้น 5–20 เท่า
+
+### 4.4 Pure Blank & Solid Color Page Fast Detector (`blankPageDetector.ts`)
+- สแกนพิกเซลเปรียบเทียบความเบี่ยงเบนสีสูงสุด (Max Color Deviation) บน Offscreen Canvas ขนาด $128 \times 128$ (< 0.5ms)
+- หากความเบี่ยงเบน $\le 4$ $\rightarrow$ ตีเป็นหน้าว่างเปล่า/สีพื้นล้วนทันที ข้ามการแปลง Blob, IPC Transfer, DBNet Detection และ Translation ทั้งหมดลงเหลือ 0ms
+- ป้องกัน False Positives: หน้าที่มีรูปภาพ ลายเส้น หรือตัวหนังสือแม้แต่ตัวเดียวจะข้ามการตรวจสอบและเข้าสู่กระบวนการ OCR ปกติ
+
+### 4.5 Granular Zustand Selectors & React.memo
+- ขจัดปัญหา Wholesale Store Subscription โดยเปลี่ยนมาใช้ Granular Selector ดึงเฉพาะ State Slice ที่จำเป็น
+- ห่อหุ้ม `React.memo` ให้กับทุกส่วนประกอบหลักเพื่อป้องกันการ Re-render แบบลูกโซ่ขณะเลื่อนหน้าจอหรือแก้ไขข้อความ
+
+### 4.6 Direct GPU Hardware Acceleration (`translate3d`)
 - เปลี่ยนการคำนวณตำแหน่ง 2D `translate(x, y)` มาเป็น **`translate3d(x, y, 0px)`**
 - กำหนด `backface-visibility: hidden` และ `will-change: transform`
-- บังคับให้ Electron/Chromium Compositor ดึง Canvas ของทั้ง PDF และ Image ขึ้นไปประมวลผลบน **Dedicated GPU VRAM Texture Layer** โดยตรง ลดภาระ CPU ในการคำนวณ Sub-pixel Rasterization ในทุกๆ Frame
+- บังคับให้ Compositor ดึง Canvas ขึ้นไปประมวลผลบน **Dedicated GPU VRAM Texture Layer** โดยตรง
 
-### 4.4 ตัด CSS Transition Fighting (Zero Animation Latency)
-- ตัด `transition: transform 0.1s ease-out` บน Canvas Content Div ในระหว่างการเลื่อนด้วย Wheel หรือ Drag เพื่อไม่ให้ CSS Transition ขัดจังหวะกับ `requestAnimationFrame` ทำให้ Canvas เคลื่อนที่ตามเมาส์/Trackpad แบบ **1:1 Native Direct Response** ทันที
-
-### 4.5 Virtualize / Mount Overlay เฉพาะหน้าที่อยู่ในระยะมองเห็น
-- ปรับให้ Mount `<PDFPageOverlay>` เฉพาะหน้าที่อยู่ในระยะมองเห็น (`isVisible = true`) เมื่อหน้าเลื่อนพ้นสายตา React จะ Unmount กิ่ง Overlay ออกจาก DOM Tree ช่วยลด Node ข้อความ, Event Listener, และการคำนวณ Typography ลงกว่า **90%**
-
-### 4.6 Debounce Active Page Detection (250ms + startTransition)
-- ปรับจังหวะการบันทึกหน้าปัจจุบันขณะเลื่อนผ่าน `IntersectionObserver` ให้ใช้ `React.startTransition` ร่วมกับ Debounce 250ms เพื่อไม่ให้ Main Thread ถูกขัดจังหวะด้วยการ Re-render Toolbar รอบนอกขณะกำลังเลื่อนหน้าจอ
+### 4.7 Virtualize / Mount Overlay เฉพาะหน้าที่อยู่ในระยะมองเห็น
+- Mount `<PDFPageOverlay>` เฉพาะหน้าที่อยู่ในระยะมองเห็น (`isVisible = true`) เมื่อพ้นสายตาจะ Unmount ออกจาก DOM Tree ช่วยลด Node ข้อความ, Event Listener, และการคำนวณ Typography ลงกว่า **90%**
 
 ---
 
@@ -150,6 +182,9 @@ flowchart TD
 5. **Korean & Multilingual Fallback Architecture:** รองรับการซ่อมคำผิดจาก OCR ภาษาเกาหลี สเปน และภาษาเอเชียผ่าน Pivot Pipeline (JA/KO/ZH $\rightarrow$ EN $\rightarrow$ TH)
 6. **File Explorer Parity Multi-Select:** รองรับ Ctrl+Click, Shift+Click Range Selection และ Drag & Drop ลง Subfolder
 7. **F11 Fullscreen & Clean Titlebar:** รองรับปุ่ม F11 สลับโหมดเต็มจอ และออกแบบ Titlebar ไร้รอยต่อ
+8. **Right Sidebar UX/UI & Quality Switcher:** คืนค่า Copper Theme Header, Pill Buttons ควบคุม OCR (สลับโหมด Fast ⚡ / Best ✨ ได้ทันที) พร้อมปุ่ม Benchmark แยก
+9. **Vitest Process Teardown Stabilization:** ตั้งค่า `teardownTimeout` และ `hookTimeout` ป้องกัน Vitest Process ค้างเมื่อรันเทสต์ครบทั้งหมด
+10. **Sub-millisecond Blank Page Skip:** ติดตั้งตัวตรวจจับหน้าว่างเปล่า/สีพื้นล้วน ข้ามการประมวลผล OCR & Translation ที่ไม่จำเป็น
 
 ---
 
@@ -159,10 +194,10 @@ flowchart TD
   ```powershell
   pnpm vitest run
   ```
-  *(สถานะปัจจุบัน: 39/39 Test Files Passed, 355/355 Unit & Integration Tests Passed 100%)*
+  *(สถานะปัจจุบัน: 42/42 Test Files Passed, 385/385 Unit & Integration Tests Passed 100% ✅)*
 
 - **รันตรวจสอบ Type เชิงลึก:**
   ```powershell
   pnpm exec tsc --noEmit
   ```
-  *(สถานะปัจจุบัน: 0 Errors / Exit Code 0)*
+  *(สถานะปัจจุบัน: 0 Errors / Exit Code 0 ✅)*

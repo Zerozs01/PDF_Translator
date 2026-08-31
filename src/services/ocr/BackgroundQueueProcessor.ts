@@ -13,6 +13,7 @@ import { applyPanelLanguageScriptGate } from '../vision/scriptGateService';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../vision/ocrVersion';
 import { processKoreanManhwaPipeline } from './ocrManhwaHeuristics';
 import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from './ocrJapaneseVerticalHeuristics';
+import { detectBlankOrSolidCanvas } from '../vision/blankPageDetector';
 
 function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job: BackgroundJob): OCRPageResult {
   // ถ้า result ผ่าน split มาแล้ว (flag _splitDone) ให้ข้ามขั้นตอน split เพื่อป้องกัน double-split bug
@@ -438,6 +439,7 @@ class BackgroundQueueProcessor {
             const targetDpi = job.ocrDpi || options.dpi || 300;
             const ocrLanguage = job.ocrLanguage || options.language || 'eng';
             const ocrQualityProfile = job.ocrQualityProfile || options.ocrQualityProfile || 'best';
+            const resolvedQualityProfile = options.ocrQualityProfile || 'best';
 
             const requestedScale = targetDpi / 72;
             const requestedViewport = page.getViewport({ scale: requestedScale });
@@ -457,7 +459,7 @@ class BackgroundQueueProcessor {
             canvas.style.visibility = 'hidden';
             document.body.appendChild(canvas);
 
-            let imageBlob: Blob;
+            let imageBlob: Blob | undefined;
             try {
               const ctx = canvas.getContext('2d', { alpha: false });
               if (!ctx) throw new Error('Cannot create headless canvas 2D context');
@@ -474,71 +476,103 @@ class BackgroundQueueProcessor {
 
               throwIfAborted();
 
-              imageBlob = await new Promise<Blob>((res, rej) => {
-                canvas.toBlob((b) => b ? res(b) : rej(new Error('Headless Canvas to Blob failed')), 'image/png');
-              });
+              // Fast blank / solid color page detection check
+              const blankCheck = detectBlankOrSolidCanvas(canvas);
+              if (blankCheck.isBlank) {
+                console.log(`[QueueProcessor] Page ${pageNum} is a blank/solid page (maxDeviation: ${blankCheck.maxDeviation}). Skipping OCR & translation.`);
+                ocrResult = {
+                  lines: [],
+                  words: [],
+                  confidence: 100,
+                  language: normalizeLanguage(ocrLanguage),
+                  pageNumber: pageNum,
+                  width: canvas.width,
+                  height: canvas.height,
+                  dpi: targetDpi,
+                  ocrEngine: job.engine,
+                  pipelineProfile: 'panel',
+                  ocrQualityProfile: resolvedQualityProfile,
+                  algorithmVersion: OCR_ALGORITHM_VERSION,
+                  ocrRawVersion: OCR_RAW_VERSION,
+                  text: '',
+                  debug: {
+                    runtimeMs: 0,
+                    droppedWords: [],
+                    dropCounts: {},
+                  },
+                };
+              } else {
+                imageBlob = await new Promise<Blob>((res, rej) => {
+                  canvas.toBlob((b) => b ? res(b) : rej(new Error('Headless Canvas to Blob failed')), 'image/png');
+                });
+              }
             } finally {
               canvas.remove();
             }
 
             throwIfAborted();
 
-            const activeEngine = job.engine;
-            const pipelineProfile = 'panel';
+            if (!ocrResult && imageBlob) {
+              const activeEngine = job.engine;
+              const pipelineProfile = 'panel';
 
-            const shouldPreferFastPaddleProfile = (() => {
-              if (activeEngine !== 'paddleocr') return false;
-              if (pipelineProfile !== 'panel') return false;
+              const shouldPreferFastPaddleProfile = (() => {
+                if (activeEngine !== 'paddleocr') return false;
+                if (pipelineProfile !== 'panel') return false;
 
-              const isCjkLike = ocrLanguage
-                  .split('+')
-                  .map(code => code.trim())
-                  .filter(Boolean)
-                  .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
-              if (isCjkLike) return false;
+                const isCjkLike = ocrLanguage
+                    .split('+')
+                    .map(code => code.trim())
+                    .filter(Boolean)
+                    .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+                if (isCjkLike) return false;
 
-              const longest = Math.max(canvas.width, canvas.height);
-              const shortest = Math.max(1, Math.min(canvas.width, canvas.height));
-              const aspectRatio = longest / shortest;
-              const pixelCount = canvas.width * canvas.height;
-              return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
-            })();
+                const longest = Math.max(canvas.width, canvas.height);
+                const shortest = Math.max(1, Math.min(canvas.width, canvas.height));
+                const aspectRatio = longest / shortest;
+                const pixelCount = canvas.width * canvas.height;
+                return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
+              })();
 
-            const isSensitiveFastLanguage = ocrLanguage
-              .split('+')
-              .map((code) => code.trim())
-              .filter(Boolean)
-              .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
+              const isSensitiveFastLanguage = ocrLanguage
+                .split('+')
+                .map((code) => code.trim())
+                .filter(Boolean)
+                .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
 
-            const resolvedQualityProfile = options.ocrQualityProfile || 'best';
+              const pageSegModeVal = job.ocrPageSegMode !== undefined
+                ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
+                : (options.pageSegMode === null ? undefined : options.pageSegMode);
 
-            const pageSegModeVal = job.ocrPageSegMode !== undefined
-              ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
-              : (options.pageSegMode === null ? undefined : options.pageSegMode);
+              const resolvedUseAngleCls = job.useAngleCls !== undefined
+                ? Boolean(job.useAngleCls)
+                : Boolean(options.useAngleCls);
 
-            const resolvedUseAngleCls = job.useAngleCls !== undefined
-              ? Boolean(job.useAngleCls)
-              : Boolean(options.useAngleCls);
+              const ocrPromise = visionService.ocrForTextLayer(
+                imageBlob,
+                canvas.width,
+                canvas.height,
+                ocrLanguage,
+                targetDpi,
+                pageSegModeVal,
+                signal,
+                false,
+                'panel',
+                resolvedQualityProfile,
+                job.engine,
+                canvas.width * canvas.height,
+                {
+                  useAngleCls: resolvedUseAngleCls
+                }
+              );
 
-            const ocrPromise = visionService.ocrForTextLayer(
-              imageBlob,
-              canvas.width,
-              canvas.height,
-              ocrLanguage,
-              targetDpi,
-              pageSegModeVal,
-              signal,
-              false,
-              'panel',
-              resolvedQualityProfile,
-              job.engine,
-              canvas.width * canvas.height,
-              {
-                useAngleCls: resolvedUseAngleCls
-              }
-            );
+              ocrResult = await ocrPromise;
+            }
 
-            ocrResult = await ocrPromise;
+            if (!ocrResult) {
+              throw new Error(`Headless OCR failed to produce result for page ${pageNum}`);
+            }
+
             ocrResult.pageNumber = pageNum;
             ocrResult.ocrEngine = job.engine;
             ocrResult.language = normalizeLanguage(ocrLanguage);

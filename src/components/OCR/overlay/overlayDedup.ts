@@ -2,6 +2,8 @@ import { BBox, OCRLine, OCRPageResult } from '../../../types';
 import { isKnownShortWordHelper } from '../../../services/ocr/ocrSafetyLineDedup';
 import { lookupShortPhraseTh } from '../../../services/translation/offlineTranslationService';
 import { resolveOverlaySourceBBox } from './overlayGeometry';
+import { fastIoU } from '../../../services/native/fastSpatialCluster';
+import { fastDiceSimilarity } from '../../../services/native/fastDiceSimilarity';
 
 export const normalizeOverlayInlineText = (value: string): string =>
   String(value || '')
@@ -22,37 +24,20 @@ export const buildOverlayKeyBigrams = (value: string): Set<string> => {
   return grams;
 };
 
-export const overlayKeyDiceSimilarity = (a: string, b: string): number => {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
+/**
+ * Dice coefficient similarity via high-throughput bitset engine.
+ * Delegates to fastDiceSimilarity for zero-GC performance.
+ * Original Set-based implementation preserved in buildOverlayKeyBigrams for tests.
+ */
+export const overlayKeyDiceSimilarity = (a: string, b: string): number =>
+  fastDiceSimilarity(a, b);
 
-  const aBigrams = buildOverlayKeyBigrams(a);
-  const bBigrams = buildOverlayKeyBigrams(b);
-  if (aBigrams.size === 0 || bBigrams.size === 0) return 0;
-
-  let overlap = 0;
-  for (const gram of aBigrams) {
-    if (bBigrams.has(gram)) overlap += 1;
-  }
-
-  return (2 * overlap) / (aBigrams.size + bBigrams.size);
-};
-
-export const overlayDedupIou = (a: BBox, b: BBox): number => {
-  const x0 = Math.max(a.x0, b.x0);
-  const y0 = Math.max(a.y0, b.y0);
-  const x1 = Math.min(a.x1, b.x1);
-  const y1 = Math.min(a.y1, b.y1);
-
-  if (x1 <= x0 || y1 <= y0) return 0;
-
-  const intersection = (x1 - x0) * (y1 - y0);
-  const areaA = (a.x1 - a.x0) * (a.y1 - a.y0);
-  const areaB = (b.x1 - b.x0) * (b.y1 - b.y0);
-  const union = areaA + areaB - intersection;
-
-  return union > 0 ? intersection / union : 0;
-};
+/**
+ * IoU (Intersection over Union) via zero-GC spatial engine.
+ * Delegates to fastIoU — same semantics, no temporary object allocations.
+ */
+export const overlayDedupIou = (a: BBox, b: BBox): number =>
+  fastIoU(a, b);
 
 const preserveOverlaySourceTrailingPunctuation = (sourceText: string, replacement: string): string => {
   const punctuation = String(sourceText || '').trim().match(/([.!?…]+)$/)?.[1] || '';

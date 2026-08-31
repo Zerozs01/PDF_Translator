@@ -293,7 +293,7 @@ export const OCRTextLayerPanel: React.FC = () => {
   const ocrQualityMode = options.ocrQualityProfile === 'balanced' || options.ocrQualityProfile === 'best' ? 'high' : 'fast';
   const setOcrQualityMode = useCallback((updater: 'high' | 'fast' | ((prev: 'high' | 'fast') => 'high' | 'fast')) => {
     const nextMode = typeof updater === 'function' ? updater(ocrQualityMode) : updater;
-    setOptions({ ocrQualityProfile: nextMode === 'high' ? 'balanced' : 'fast' });
+    setOptions({ ocrQualityProfile: nextMode === 'high' ? 'best' : 'fast' });
   }, [ocrQualityMode, setOptions]);
 
   const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>

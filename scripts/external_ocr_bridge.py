@@ -3688,6 +3688,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
 
     if pipeline == "panel":
         if profile_key == "cpu_panel_accurate":
+            is_dml_active = bool(GLOBAL_USE_DML)
             if quality_profile == "balanced":
                 if shortest <= 420:
                     det_limit = 2000
@@ -3695,7 +3696,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     det_limit = 2400
                 else:
                     det_limit = 3200
-                rec_batch = 10
+                rec_batch = 12 if is_dml_active else 10
                 det_thresh = 0.15
                 det_box_thresh = 0.40
                 det_unclip_ratio = 1.80
@@ -3707,7 +3708,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     det_limit = 3100
                 else:
                     det_limit = 3600
-                rec_batch = 8
+                rec_batch = 16 if is_dml_active else 8
                 det_thresh = 0.1
                 det_box_thresh = 0.3
                 det_unclip_ratio = 1.96

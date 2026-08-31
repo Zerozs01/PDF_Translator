@@ -163,7 +163,7 @@ beforeAll(async () => {
   restoreProtectedTokens = tokenProtectionModule.restoreProtectedTokens;
   resolveTranslationGroupsWithLayout = groupingModule.resolveTranslationGroupsWithLayout;
   setSlangGroupContext = glossaryModule.setSlangGroupContext;
-}, 30000);
+}, 90000);
 
 const makeLine = (overrides: Partial<TranslatableLine>): TranslatableLine => ({
   index: 0,

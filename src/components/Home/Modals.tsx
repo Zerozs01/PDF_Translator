@@ -319,3 +319,203 @@ export const FolderInfoModal: React.FC<{
     document.body
   );
 };
+
+export const CreateProjectModal: React.FC<{
+  isOpen: boolean;
+  name: string;
+  color: string;
+  parentId?: number | null;
+  onChangeName: (name: string) => void;
+  onChangeColor: (color: string) => void;
+  onCreate: () => void;
+  onClose: () => void;
+}> = ({ isOpen, name, color, parentId, onChangeName, onChangeColor, onCreate, onClose }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
+        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div 
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+              style={{ backgroundColor: hexToRgba(color || '#38BDF8', 0.2) }}
+            >
+              <Folder size={16} style={{ color: color || '#38BDF8' }} />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-100">
+                {parentId ? 'สร้างโฟลเดอร์ย่อย (Create Subfolder)' : 'สร้างโฟลเดอร์ใหม่ (Create Folder)'}
+              </h3>
+              <p className="text-xs text-slate-400">สำหรับจัดหมวดหมู่เอกสารในคลัง</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+            ชื่อโฟลเดอร์ (Folder Name)
+          </label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => onChangeName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onCreate();
+            }}
+            placeholder="Folder name"
+            className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+            เลือกสีไอคอนโฟลเดอร์ (Folder Color)
+          </label>
+          <div className="grid grid-cols-6 gap-2">
+            {['#38BDF8', '#34D399', '#FBBF24', '#F472B6', '#A78BFA', '#FB7185'].map((c) => {
+              const isSelected = (color || '').toUpperCase() === c.toUpperCase();
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onChangeColor(c)}
+                  className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                  style={{ 
+                    backgroundColor: c,
+                    boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                  }}
+                  title={c}
+                >
+                  {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onCreate}
+            disabled={!name.trim()}
+            className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Create (สร้าง)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export const EditProjectModal: React.FC<{
+  isOpen: boolean;
+  name: string;
+  color: string;
+  onChangeName: (name: string) => void;
+  onChangeColor: (color: string) => void;
+  onSave: () => void;
+  onClose: () => void;
+}> = ({ isOpen, name, color, onChangeName, onChangeColor, onSave, onClose }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="absolute inset-0 z-[170] flex items-center justify-center bg-black/55 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] text-left flex flex-col gap-4">
+        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div 
+              className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shadow-inner border border-white/10"
+              style={{ backgroundColor: hexToRgba(color || '#38BDF8', 0.2) }}
+            >
+              <Folder size={16} style={{ color: color || '#38BDF8' }} />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-100">แก้ไขโฟลเดอร์ (Edit Folder)</h3>
+              <p className="text-xs text-slate-400">เปลี่ยนชื่อหรือเลือกสีไอคอนสำหรับโฟลเดอร์นี้</p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+            ชื่อโฟลเดอร์ (Folder Name)
+          </label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => onChangeName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSave();
+            }}
+            placeholder="Folder name"
+            className="w-full rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-sky-400/60"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+            เลือกสีไอคอนโฟลเดอร์ (Folder Color)
+          </label>
+          <div className="grid grid-cols-6 gap-2">
+            {['#38BDF8', '#34D399', '#FBBF24', '#F472B6', '#A78BFA', '#FB7185'].map((c) => {
+              const isSelected = (color || '').toUpperCase() === c.toUpperCase();
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onChangeColor(c)}
+                  className="h-8 w-8 rounded-full border border-white/10 transition-all flex items-center justify-center hover:scale-110 active:scale-95 shadow-sm"
+                  style={{ 
+                    backgroundColor: c,
+                    boxShadow: isSelected ? `0 0 0 2px rgb(15, 23, 42), 0 0 0 4px ${c}` : 'none'
+                  }}
+                  title={c}
+                >
+                  {isSelected && <Check size={13} className="text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-white/10 pt-3">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSave}
+            disabled={!name.trim()}
+            className="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(14,165,233,0.35)] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Save (บันทึก)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
