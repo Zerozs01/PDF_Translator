@@ -142,6 +142,7 @@ console.log('[DB] BenchmarkDAO ready');
         thumbnail_path TEXT,
         project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
         is_favorite INTEGER DEFAULT 0,
+        is_thumbnail_hidden INTEGER DEFAULT 0,
         rating INTEGER DEFAULT 0,
         last_page INTEGER DEFAULT 1,
         last_accessed INTEGER,
@@ -250,6 +251,23 @@ console.log('[DB] BenchmarkDAO ready');
         DELETE FROM document_search WHERE document_id = old.id;
       END;
 
+      -- Table for User Translation Glossary / Custom Terms & SFX
+      CREATE TABLE IF NOT EXISTS translation_glossary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_text TEXT NOT NULL,
+        target_text TEXT NOT NULL,
+        source_lang TEXT DEFAULT 'all',
+        target_lang TEXT DEFAULT 'th',
+        type TEXT CHECK(type IN ('TERM', 'SFX')) DEFAULT 'TERM',
+        is_active INTEGER DEFAULT 1,
+        created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+        updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+        UNIQUE(source_text, source_lang, target_lang, type)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_glossary_lookup ON translation_glossary(source_text, source_lang, target_lang);
+      CREATE INDEX IF NOT EXISTS idx_glossary_active ON translation_glossary(is_active);
+
       -- Initial populate of search table if empty (one-time migration)
       INSERT INTO document_search(document_id, search_text)
       SELECT id, filename FROM documents 
@@ -264,6 +282,14 @@ console.log('[DB] BenchmarkDAO ready');
       console.log('[DB] Added column "rating" to documents table');
     } catch (e) {
       // Column probably already exists, which is expected
+    }
+
+    // Migration: Add is_thumbnail_hidden column to documents table if it doesn't exist
+    try {
+      db.exec('ALTER TABLE documents ADD COLUMN is_thumbnail_hidden INTEGER DEFAULT 0');
+      console.log('[DB] Added column "is_thumbnail_hidden" to documents table');
+    } catch (e) {
+      // Column probably already exists
     }
 
     try {
@@ -291,10 +317,13 @@ type StartupDocumentRow = {
   total_pages: number;
   last_accessed: number | null;
   is_favorite: number;
+  is_thumbnail_hidden?: number;
+  thumbnail_path?: string | null;
   project_id: number | null;
   last_page: number;
   file_type: string;
   file_size: number;
+  rating?: number;
 };
 
 type StartupDocument = StartupDocumentRow & {
@@ -631,7 +660,8 @@ export const DocumentDAO = {
 
     const recentDocs = db.prepare(`
       SELECT d.id, d.filepath, d.filename, d.total_pages, d.last_accessed,
-             d.is_favorite, d.project_id, d.last_page, d.file_type, d.file_size
+             d.is_favorite, d.is_thumbnail_hidden, d.thumbnail_path, d.project_id,
+             d.last_page, d.file_type, d.file_size, d.rating
       FROM documents d
       ORDER BY d.last_accessed DESC
       LIMIT 50
@@ -791,7 +821,7 @@ export const DocumentDAO = {
     `).all(tagId);
   },
 
-  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; total_pages?: number; rating?: number }) => {
+  update: (id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; is_thumbnail_hidden?: boolean | number; total_pages?: number; rating?: number }) => {
     if (!db) throw new Error('DB not initialized');
     const sets: string[] = [];
     const values: any[] = [];
@@ -800,6 +830,7 @@ export const DocumentDAO = {
     if (data.project_id !== undefined) { sets.push('project_id = ?'); values.push(data.project_id); }
     if (data.thumbnail_path !== undefined) { sets.push('thumbnail_path = ?'); values.push(data.thumbnail_path); }
     if (data.is_favorite !== undefined) { sets.push('is_favorite = ?'); values.push(data.is_favorite ? 1 : 0); }
+    if (data.is_thumbnail_hidden !== undefined) { sets.push('is_thumbnail_hidden = ?'); values.push(data.is_thumbnail_hidden ? 1 : 0); }
     if (data.total_pages !== undefined) { sets.push('total_pages = ?'); values.push(data.total_pages); }
     if (data.rating !== undefined) { sets.push('rating = ?'); values.push(data.rating); }
     
@@ -807,6 +838,17 @@ export const DocumentDAO = {
     values.push(id);
     
     return db.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  },
+
+  toggleThumbnailHidden: (id: number) => {
+    if (!db) throw new Error('DB not initialized');
+    const doc = db.prepare('SELECT is_thumbnail_hidden FROM documents WHERE id = ?').get(id) as { is_thumbnail_hidden: number } | undefined;
+    if (doc) {
+      const newValue = doc.is_thumbnail_hidden ? 0 : 1;
+      db.prepare('UPDATE documents SET is_thumbnail_hidden = ? WHERE id = ?').run(newValue, id);
+      return newValue === 1;
+    }
+    return false;
   },
 
   toggleFavorite: (id: number) => {
@@ -1471,6 +1513,140 @@ export const SentenceTranslationDAO = {
       console.error('[DB] Failed to get sentence translations batch:', error);
       return results;
     }
+  }
+};
+
+// ===== Glossary DAO =====
+export interface DBGlossaryEntry {
+  id?: number;
+  source_text: string;
+  target_text: string;
+  source_lang?: string;
+  target_lang?: string;
+  type?: 'TERM' | 'SFX';
+  is_active?: number | boolean;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export const GlossaryDAO = {
+  getAll: (): DBGlossaryEntry[] => {
+    if (!db) throw new Error('DB not initialized');
+    return db.prepare(`
+      SELECT id, source_text, target_text, source_lang, target_lang, type, is_active, created_at, updated_at
+      FROM translation_glossary
+      ORDER BY updated_at DESC, id DESC
+    `).all() as DBGlossaryEntry[];
+  },
+
+  upsert: (entry: {
+    id?: number;
+    sourceText: string;
+    targetText: string;
+    sourceLang?: string;
+    targetLang?: string;
+    type?: 'TERM' | 'SFX';
+    isActive?: boolean | number;
+  }): DBGlossaryEntry => {
+    if (!db) throw new Error('DB not initialized');
+    const sourceText = entry.sourceText.trim();
+    const targetText = entry.targetText.trim();
+    const sourceLang = (entry.sourceLang || 'all').toLowerCase();
+    const targetLang = (entry.targetLang || 'th').toLowerCase();
+    const type = entry.type || 'TERM';
+    const isActive = entry.isActive === undefined ? 1 : (entry.isActive ? 1 : 0);
+    const now = Date.now();
+
+    if (entry.id) {
+      const stmt = getStmt(`
+        UPDATE translation_glossary
+        SET source_text = ?, target_text = ?, source_lang = ?, target_lang = ?, type = ?, is_active = ?, updated_at = ?
+        WHERE id = ?
+      `);
+      stmt.run(sourceText, targetText, sourceLang, targetLang, type, isActive, now, entry.id);
+      return {
+        id: entry.id,
+        source_text: sourceText,
+        target_text: targetText,
+        source_lang: sourceLang,
+        target_lang: targetLang,
+        type,
+        is_active: isActive,
+        updated_at: now,
+      };
+    }
+
+    const stmt = getStmt(`
+      INSERT INTO translation_glossary (source_text, target_text, source_lang, target_lang, type, is_active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_text, source_lang, target_lang, type) DO UPDATE SET
+        target_text = excluded.target_text,
+        is_active = excluded.is_active,
+        updated_at = excluded.updated_at
+      RETURNING *
+    `);
+    const row = stmt.get(sourceText, targetText, sourceLang, targetLang, type, isActive, now, now) as DBGlossaryEntry;
+    return row;
+  },
+
+  delete: (id: number): boolean => {
+    if (!db) throw new Error('DB not initialized');
+    const stmt = getStmt('DELETE FROM translation_glossary WHERE id = ?');
+    const result = stmt.run(id);
+    return result.changes > 0;
+  },
+
+  toggle: (id: number, isActive?: boolean): boolean => {
+    if (!db) throw new Error('DB not initialized');
+    const now = Date.now();
+    if (isActive !== undefined) {
+      const stmt = getStmt('UPDATE translation_glossary SET is_active = ?, updated_at = ? WHERE id = ?');
+      stmt.run(isActive ? 1 : 0, now, id);
+    } else {
+      const stmt = getStmt('UPDATE translation_glossary SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END, updated_at = ? WHERE id = ?');
+      stmt.run(now, id);
+    }
+    return true;
+  },
+
+  importBatch: (entries: Array<{
+    sourceText: string;
+    targetText: string;
+    sourceLang?: string;
+    targetLang?: string;
+    type?: 'TERM' | 'SFX';
+    isActive?: boolean;
+  }>): { inserted: number; updated: number } => {
+    if (!db) throw new Error('DB not initialized');
+    if (!entries || entries.length === 0) return { inserted: 0, updated: 0 };
+
+    const now = Date.now();
+    let count = 0;
+    const insertStmt = getStmt(`
+      INSERT INTO translation_glossary (source_text, target_text, source_lang, target_lang, type, is_active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_text, source_lang, target_lang, type) DO UPDATE SET
+        target_text = excluded.target_text,
+        is_active = excluded.is_active,
+        updated_at = excluded.updated_at
+    `);
+
+    const transaction = db.transaction((rows: typeof entries) => {
+      for (const row of rows) {
+        if (!row.sourceText || !row.targetText) continue;
+        const sText = row.sourceText.trim();
+        const tText = row.targetText.trim();
+        const sLang = (row.sourceLang || 'all').toLowerCase();
+        const tLang = (row.targetLang || 'th').toLowerCase();
+        const type = row.type || 'TERM';
+        const isActive = row.isActive === undefined ? 1 : (row.isActive ? 1 : 0);
+        insertStmt.run(sText, tText, sLang, tLang, type, isActive, now, now);
+        count++;
+      }
+    });
+
+    transaction(entries);
+    return { inserted: count, updated: 0 };
   }
 };
 

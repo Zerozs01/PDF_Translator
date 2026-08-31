@@ -1242,19 +1242,17 @@ const endUserInteraction = (delay = 800) => {
   }, delay);
 };
 
-const PDFPageContainer: React.FC<{
+const PDFPageContainer = React.memo<{
   pageNum: number;
   onPageLoadSuccess?: (page: any) => void;
   onPageRenderSuccess?: () => void;
   isProgrammaticScrollRef?: React.RefObject<boolean>;
   previewModeOverride?: 'original' | 'translated';
-}> = ({ pageNum, onPageLoadSuccess: externalOnLoadSuccess, onPageRenderSuccess: externalOnRenderSuccess, isProgrammaticScrollRef, previewModeOverride }) => {
-  const {
-    viewMode,
-    setPage,
-    documentId,
-    fileUrl,
-  } = useProjectStore();
+}>(({ pageNum, onPageLoadSuccess: externalOnLoadSuccess, onPageRenderSuccess: externalOnRenderSuccess, isProgrammaticScrollRef, previewModeOverride }) => {
+  const viewMode = useProjectStore((s) => s.viewMode);
+  const setPage = useProjectStore((s) => s.setPage);
+  const documentId = useProjectStore((s) => s.documentId);
+  const fileUrl = useProjectStore((s) => s.fileUrl);
 
   const options = useOCRTextLayerStore((s) => s.options);
 
@@ -1308,11 +1306,11 @@ const PDFPageContainer: React.FC<{
             activePageChangeTimeout = setTimeout(() => {
               React.startTransition(() => {
                 if (capturedTime < lastPageUpdateTime) return;
-                if (isProgrammaticScrollRef?.current || !isUserInteracting) return;
+                if (isProgrammaticScrollRef?.current) return;
                 setPage(pendingPage);
               });
               activePageChangeTimeout = null;
-            }, 150);
+            }, 250);
           }
         });
       },
@@ -1510,11 +1508,8 @@ const PDFPageContainer: React.FC<{
           <span className="font-medium tracking-wide">กำลังโหลดแคช...</span>
         </div>
       )}
-      {hasBeenVisible && (
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{ display: isVisible ? 'block' : 'none' }}
-        >
+      {isVisible && (
+        <div className="absolute inset-0 pointer-events-none">
           <PDFPageOverlay
             pageNum={pageNum}
             pageRef={pageRef}
@@ -1526,21 +1521,21 @@ const PDFPageContainer: React.FC<{
       )}
     </div>
   );
-};
+});
+
+PDFPageContainer.displayName = 'PDFPageContainer';
 
 interface PDFCanvasProps {
   previewModeOverride?: 'original' | 'translated';
 }
 
 export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOverride }) => {
-  const {
-    fileUrl,
-    fileData,
-    currentPage,
-    totalPages,
-    setTotalPages,
-    viewMode,
-  } = useProjectStore();
+  const fileUrl = useProjectStore((s) => s.fileUrl);
+  const fileData = useProjectStore((s) => s.fileData);
+  const currentPage = useProjectStore((s) => s.currentPage);
+  const totalPages = useProjectStore((s) => s.totalPages);
+  const setTotalPages = useProjectStore((s) => s.setTotalPages);
+  const viewMode = useProjectStore((s) => s.viewMode);
 
   const zoom = useUIStore((s) => s.zoom);
   const pan = useUIStore((s) => s.pan);
@@ -1548,7 +1543,10 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   const setPan = useUIStore((s) => s.setPan);
   const setView = useUIStore((s) => s.setView);
   const activeTool = useUIStore((s) => s.activeTool);
-  const { regions, setRegions, setIsProcessing, processRequest } = useSegmentationStore();
+  const regions = useSegmentationStore((s) => s.regions);
+  const setRegions = useSegmentationStore((s) => s.setRegions);
+  const setIsProcessing = useSegmentationStore((s) => s.setIsProcessing);
+  const processRequest = useSegmentationStore((s) => s.processRequest);
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
 
 
@@ -1582,9 +1580,11 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     const pageChanged = prevPageRef.current !== null && currentPage !== prevPageRef.current;
     const viewModeChanged = viewMode !== prevViewModeRef.current;
     const isInitialMount = prevPageRef.current === null;
+    const isProgrammatic = isProgrammaticScrollRef.current;
 
-    if (viewMode === 'continuous' && (pageChanged || viewModeChanged || (isInitialMount && currentPage > 1))) {
-      if (isUserInteracting) {
+    // Only snap or adjust pan if explicitly requested by programmatic navigation, mode change, or initial mount
+    if (viewMode === 'continuous' && (viewModeChanged || (isInitialMount && currentPage > 1) || (pageChanged && isProgrammatic))) {
+      if (isUserInteracting && !isProgrammatic) {
         prevPageRef.current = currentPage;
         prevViewModeRef.current = viewMode;
         return;
@@ -1627,7 +1627,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
           }
         }
 
-        // Release the programmatic scroll lock after the transition animation (0.1s transform duration + buffer)
+        // Release the programmatic scroll lock after the transition animation
         setTimeout(() => {
           isProgrammaticScrollRef.current = false;
         }, 500);
@@ -1705,7 +1705,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;
-    const transformStr = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    const transformStr = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0px) scale(${nextZoom})`;
     contentRef.current.style.transform = transformStr;
 
     // Real-time synchronization for split-view:
@@ -1961,13 +1961,12 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       <div 
         ref={contentRef}
         style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0px) scale(${zoom})`,
           transformOrigin: '0 0',
-          // During wheel scroll, transition is disabled directly on the DOM element
-          // (contentRef.current.style.transition = 'none') without React re-renders.
-          // React restores this value after the idle commit via setView.
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-          willChange: 'transform'
+          transition: 'none',
+          willChange: 'transform',
+          backfaceVisibility: 'hidden',
+          WebkitBackfaceVisibility: 'hidden',
         }}
         className="absolute top-0 left-0 origin-top-left pdf-canvas-content"
       >

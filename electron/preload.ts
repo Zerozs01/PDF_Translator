@@ -35,6 +35,7 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:update-document',
   'db:delete-document',
   'db:toggle-favorite',
+  'db:toggle-thumbnail-hidden',
   'db:get-document-cache-size',
   'db:get-documents-by-tag',
   'db:add-document-tag',
@@ -54,6 +55,12 @@ const ALLOWED_INVOKE_CHANNELS = [
   'db:update-project',
   'db:delete-project',
   'db:get-project-stats',
+  // Glossary management
+  'db:glossary-get-all',
+  'db:glossary-save',
+  'db:glossary-delete',
+  'db:glossary-toggle',
+  'db:glossary-import',
   // Window management
   'window:toggle-fullscreen',
   'window:is-fullscreen',
@@ -127,7 +134,9 @@ interface DocumentUpdate {
   project_id?: number | null;
   thumbnail_path?: string;
   is_favorite?: boolean;
+  is_thumbnail_hidden?: boolean | number;
   total_pages?: number;
+  rating?: number;
 }
 
 interface ProjectCreate {
@@ -212,6 +221,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:delete-document', id),
     toggleFavorite: (id: number) =>
       safeInvoke('db:toggle-favorite', id),
+    toggleThumbnailHidden: (id: number) =>
+      safeInvoke('db:toggle-thumbnail-hidden', id),
     getDocumentCacheSize: (id: number) =>
       safeInvoke('db:get-document-cache-size', id),
     getDocumentsByTag: (tagId: number) =>
@@ -249,6 +260,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:update-project', { id, updates }),
     delete: (id: number) => safeInvoke('db:delete-project', id),
     getStats: (projectId: number) => safeInvoke('db:get-project-stats', projectId),
+  },
+
+  // Glossary operations
+  glossary: {
+    getAll: () => safeInvoke('db:glossary-get-all'),
+    save: (entry: {
+      id?: number;
+      sourceText: string;
+      targetText: string;
+      sourceLang?: string;
+      targetLang?: string;
+      type?: 'TERM' | 'SFX';
+      isActive?: boolean | number;
+    }) => safeInvoke('db:glossary-save', entry),
+    delete: (id: number) => safeInvoke('db:glossary-delete', id),
+    toggle: (id: number, isActive?: boolean) => safeInvoke('db:glossary-toggle', { id, isActive }),
+    importBatch: (entries: Array<{
+      sourceText: string;
+      targetText: string;
+      sourceLang?: string;
+      targetLang?: string;
+      type?: 'TERM' | 'SFX';
+      isActive?: boolean;
+    }>) => safeInvoke('db:glossary-import', entries),
   },
 
   // Gemini translation (SECURE: API key stays in main process)

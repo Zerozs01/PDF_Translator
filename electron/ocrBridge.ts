@@ -165,6 +165,7 @@ interface BridgeDaemon {
     timeoutMs: number;
   }>;
   running: boolean;
+  lastStderrLines: string[];
 }
 
 function resolveBridgeScriptPath(): string {
@@ -746,24 +747,35 @@ function ensureDaemon(engine: ExternalBridgeEngine): BridgeDaemon {
     scriptSignature,
     queue: [],
     running: false,
+    lastStderrLines: [],
   };
 
   child.stdout.on('data', (chunk: Buffer) => {
     handleDaemonStdout(engine, chunk);
   });
   child.stderr.on('data', (chunk: Buffer) => {
-    const message = chunk.toString().trim();
-    if (message && !isBenignBridgeStderr(message)) {
-      console.warn(`[ocrBridge:${engine}] ${message}`);
+    const raw = chunk.toString();
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (!isBenignBridgeStderr(line)) {
+        daemon.lastStderrLines.push(line);
+        if (daemon.lastStderrLines.length > 20) {
+          daemon.lastStderrLines.shift();
+        }
+        console.warn(`[ocrBridge:${engine}] ${line}`);
+      }
     }
   });
   child.on('error', (error) => {
     teardownDaemon(engine, error);
   });
   child.on('close', (code, signal) => {
+    const stderrDetails = daemon.lastStderrLines.length > 0
+      ? ` | stderr: ${daemon.lastStderrLines.slice(-3).join('; ')}`
+      : '';
     teardownDaemon(
       engine,
-      new Error(`OCR daemon for ${engine} exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`)
+      new Error(`OCR daemon for ${engine} exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})${stderrDetails}`)
     );
   });
 
@@ -875,7 +887,12 @@ function isRecoverableDaemonError(error: unknown): boolean {
   return (
     message.includes('daemon') ||
     message.includes('stdin is unavailable') ||
-    message.includes('parse ocr bridge response')
+    message.includes('parse ocr bridge response') ||
+    message.includes('exited') ||
+    message.includes('timed out') ||
+    message.includes('econnreset') ||
+    message.includes('pipe') ||
+    message.includes('killed')
   );
 }
 

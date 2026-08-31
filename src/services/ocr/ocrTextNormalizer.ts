@@ -569,6 +569,11 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bSOLACION\b/gi, replacement: 'DESOLACION' },
   { pattern: /\bCREIBLE\.?\s*S[iI]\s*UNN?IESE\b/gi, replacement: 'CREIBLE. SI UNIESE' },
   { pattern: /\bS[iI]UNN?IESE\b/gi, replacement: 'SI UNIESE' },
+  { pattern: /\bDAALAGUA\b/gi, replacement: 'DA AL AGUA' },
+  { pattern: /\bBREPASARON\b/gi, replacement: 'SOBREPASARON' },
+  { pattern: /\bGUIENTE\b/gi, replacement: 'SIGUIENTE' },
+  { pattern: /\bCONDIDAS\b/gi, replacement: 'ESCONDIDAS' },
+  { pattern: /\bRECIDO\b/gi, replacement: 'PARECIDO' },
 ];
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;

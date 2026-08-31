@@ -58,7 +58,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
     items.forEach((item) => {
       if (item.groupType === 'sfx') return; // Handled above
       if (options.targetLanguage === 'th') {
-        const directMatch = lookupShortPhraseTh(item.text);
+        const directMatch = lookupShortPhraseTh(item.text, options.sourceLanguage);
         if (directMatch) {
           console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directMatch}"`);
           results.push({
@@ -99,7 +99,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
           if (koreanFallback) {
             translatedText = koreanFallback;
           } else {
-            const dictFallback = lookupShortPhraseTh(item.text);
+            const dictFallback = lookupShortPhraseTh(item.text, options.sourceLanguage);
             if (dictFallback) {
               translatedText = dictFallback;
             }
@@ -164,7 +164,7 @@ export class M2M100TranslationEngine implements TranslationEngine {
           engineUsed: 'sfx-dict',
         });
       } else {
-        const shortPhraseMatch = lookupShortPhraseTh(item.text);
+        const shortPhraseMatch = lookupShortPhraseTh(item.text, options.sourceLanguage);
         if (shortPhraseMatch) {
           results.push({
             id: item.id,
@@ -338,7 +338,7 @@ export class GeminiTranslationEngine implements TranslationEngine {
           if (koreanFallback) {
             sanitizedText = koreanFallback;
           } else {
-            const dictFallback = lookupShortPhraseTh(item.text);
+            const dictFallback = lookupShortPhraseTh(item.text, options.sourceLanguage);
             if (dictFallback) {
               sanitizedText = dictFallback;
             }
@@ -428,7 +428,7 @@ export class TranslationCoordinator {
       }
       
       if (options.targetLanguage === 'th') {
-        const directDictTranslation = lookupShortPhraseTh(item.text);
+        const directDictTranslation = lookupShortPhraseTh(item.text, options.sourceLanguage);
         if (directDictTranslation) {
           console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directDictTranslation}"`);
           directResults.set(item.id, directDictTranslation);

@@ -22,6 +22,7 @@ import {
   normalizeOverlayInlineText,
   type OverlayTypography,
 } from '../../components/OCR/translationOverlayUtils';
+import { useGlossaryStore } from '../../stores/useGlossaryStore';
 
 // -------------------------------------------------------------
 // Translation Constants and Tables
@@ -70,6 +71,19 @@ export const ARGOS_SHORT_PHRASE_LOOKUP_TH: Record<string, string> = {
   'unidos en la rela-': 'รวมเป็นหนึ่งในความสัมพั-', 'unidos en la rela': 'รวมเป็นหนึ่งในความสัมพั-', 'unidos en la relacion': 'รวมเป็นหนึ่งในความสัมพันธ์',
   'hace': 'ทำ',
   'verdad!': 'จริงเหรอ!', 'verdad': 'จริงเหรอ', '¿verdad!': 'จริงเหรอ!', '¡verdad!': 'จริงเหรอ!',
+  // Spanish terms & OCR cutoffs
+  'da al agua': 'ลงสู่น้ำ!', 'da al agua!': 'ลงสู่น้ำ!', '¡da al agua!': 'ลงสู่น้ำ!', 'daalagua!': 'ลงสู่น้ำ!', 'daalagua': 'ลงสู่น้ำ!',
+  'mejor': 'ดีกว่า', 'mejor!': 'ดีกว่า!', 'mejor...': 'ดีกว่า...', 'mejor?': 'ดีกว่าเหรอ?', '¡mejor!': 'ดีกว่า!', '¿mejor?': 'ดีกว่าเหรอ?',
+  'montado': 'ขี่แล้ว!', 'montado!': 'ขี่แล้ว!', '¡montado!': 'ขี่แล้ว!',
+  'siguiente': 'ต่อไป', 'guiente': 'ต่อไป', 'guiente.': 'ต่อไป.', 'guiente?': 'ต่อไปเหรอ?', 'guiente!': 'ต่อไป!',
+  'sobrepasaron': 'ก้าวข้ามไปแล้ว', 'brepasaron': 'ก้าวข้ามไปแล้ว', 'brepasaron!': 'ก้าวข้ามไปแล้ว!',
+  'escondidas': 'แอบซ่อน', 'condidas': 'แอบซ่อน', 'a escondidas': 'อย่างลับๆ',
+  'parecido': 'ดูเหมือนว่า', 'recido': 'ดูเหมือนว่า', 'recido!': 'ดูเหมือนว่า!', 'recido!!': 'ดูเหมือนว่า!!', '¡recido!': 'ดูเหมือนว่า!', '¡recido!!': 'ดูเหมือนว่า!!', '¡¡recido!!': 'ดูเหมือนว่า!!',
+  'miento': 'ฉันโกหก', 'miento?': 'ฉันโกหกเหรอ?', 'miento...': 'ฉันโกหกเหรอ...', 'miento...?': 'ฉันโกหกเหรอ...?', 'mientos': 'ความรู้สึก',
+  'tadores': 'ผู้ชม', 'dores': 'ผู้กระทำ', 'dores...': 'ผู้กระทำ...',
+  'tarlo': 'ทำมัน', 'tarlo?': 'ทำมันเหรอ?', 'tarlo!': 'ทำมัน!', '¿tarlo?': 'ทำมันเหรอ?',
+  'dolo': 'ทำมัน', 'dolo?': 'ทำมันเหรอ?', 'dolo!': 'ทำมัน!', '¿dolo?': 'ทำมันเหรอ?',
+  'samos': 'พวกเรา', 'samos!': 'พวกเรา!', 'samos...': 'พวกเรา...',
   // Dialogue / Manga vocabulary
   'thisto': 'สิ่งนี้ต่อ...', 'this to': 'สิ่งนี้ต่อ...',
   'youcan': 'เธอทำได้', 'you can': 'เธอทำได้',
@@ -1427,9 +1441,28 @@ function getCompactPhraseMap(): Map<string, string> {
   return _compactPhraseMap;
 }
 
-export const lookupShortPhraseTh = (text: string): string | null => {
+export const lookupShortPhraseTh = (text: string, sourceLang?: string): string | null => {
   if (!text) return null;
   const trimmed = text.trim();
+
+  // -1. Top Priority: Check User Custom Glossary First (O(1) User Override)
+  try {
+    const glossaryEntries = useGlossaryStore.getState()?.entries;
+    if (glossaryEntries && glossaryEntries.length > 0) {
+      const normalizedQuery = trimmed.toLowerCase();
+      const match = glossaryEntries.find((e) => {
+        if (!e.isActive) return false;
+        if (sourceLang && e.sourceLang && e.sourceLang !== 'all' && e.sourceLang.toLowerCase() !== sourceLang.toLowerCase()) {
+          return false;
+        }
+        const eSource = (e.sourceText || '').trim().toLowerCase();
+        return eSource === normalizedQuery;
+      });
+      if (match) {
+        return match.targetText;
+      }
+    }
+  } catch {}
 
   // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
   const tempAlertMatch = trimmed.match(TEMP_ALERT_REGEX);

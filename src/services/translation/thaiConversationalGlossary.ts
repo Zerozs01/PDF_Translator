@@ -98,7 +98,7 @@ const applyThaiConversationalGlossaryInternal = (
       return preserveSourceTrailingPunctuation(sourceOriginal, esResult);
     }
 
-    const esShortPhrase = lookupShortPhraseTh(normalizedSpanishSource) || lookupShortPhraseTh(sourceOriginal);
+    const esShortPhrase = lookupShortPhraseTh(normalizedSpanishSource, 'es') || lookupShortPhraseTh(sourceOriginal, 'es');
     if (esShortPhrase) {
       return preserveSourceTrailingPunctuation(sourceOriginal, esShortPhrase);
     }

@@ -10,7 +10,7 @@ interface DocumentRendererProps {
   renderMode: 'single' | 'scroll';
 }
 
-const DocumentRenderer: React.FC<DocumentRendererProps> = ({ dataSource, renderMode }) => {
+const DocumentRenderer = React.memo<DocumentRendererProps>(({ dataSource, renderMode: _renderMode }) => {
   const file = useProjectStore((s) => s.file);
   if (!file) return null;
 
@@ -27,9 +27,11 @@ const DocumentRenderer: React.FC<DocumentRendererProps> = ({ dataSource, renderM
       )}
     </React.Suspense>
   );
-};
+});
 
-export const WorkspaceContainer = () => {
+DocumentRenderer.displayName = 'DocumentRenderer';
+
+export const WorkspaceContainer = React.memo(() => {
   const viewMode = useUIStore((s) => s.viewMode);
   const pageMode = useUIStore((s) => s.pageMode); // pageMode: 'single' | 'scroll'
   const { leftRef, rightRef } = useSyncScroll();
@@ -60,4 +62,7 @@ export const WorkspaceContainer = () => {
 
     </div>
   );
-};
+});
+
+WorkspaceContainer.displayName = 'WorkspaceContainer';
+

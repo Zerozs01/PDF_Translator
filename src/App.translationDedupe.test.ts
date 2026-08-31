@@ -132,32 +132,36 @@ beforeAll(async () => {
     (globalThis as { DOMMatrix?: unknown }).DOMMatrix = DOMMatrixPolyfill;
   }
 
-  const appModule = await import('./App');
   const heuristicsModule = await import('./services/ocr/ocrTextHeuristics');
   const glossaryModule = await import('./services/translation/thaiConversationalGlossary');
   const technicalGlossaryModule = await import('./services/translation/thaiTechnicalGlossaryService');
   const normalizerModule = await import('./services/ocr/ocrTextNormalizer');
-  dedupeTranslatableLinesForTranslation = appModule.dedupeTranslatableLinesForTranslation;
+  const dialogueGroupingModule = await import('./services/layout/dialogueGroupingService');
+  const redistributionModule = await import('./services/translation/textRedistributionService');
+  const tokenProtectionModule = await import('./services/translation/translationTokenProtection');
+  const groupingModule = await import('./services/translation/translationGrouping');
+
+  dedupeTranslatableLinesForTranslation = dialogueGroupingModule.dedupeTranslatableLinesForTranslation;
   resolveBestOcrLineText = heuristicsModule.resolveBestOcrLineText;
-  buildTranslationGroups = appModule.buildTranslationGroups;
-  shouldUseLineByLineGrouping = appModule.shouldUseLineByLineGrouping;
+  buildTranslationGroups = dialogueGroupingModule.buildTranslationGroups;
+  shouldUseLineByLineGrouping = dialogueGroupingModule.shouldUseLineByLineGrouping;
   applyThaiConversationalGlossary = glossaryModule.applyThaiConversationalGlossary;
   applyThaiTechnicalGlossary = technicalGlossaryModule.applyThaiTechnicalGlossary;
-  resolveRedistributedLineFallback = appModule.resolveRedistributedLineFallback;
-  shouldPreserveSourceLineForTranslation = appModule.shouldPreserveSourceLineForTranslation;
+  resolveRedistributedLineFallback = redistributionModule.resolveRedistributedLineFallback;
+  shouldPreserveSourceLineForTranslation = tokenProtectionModule.shouldPreserveSourceLineForTranslation;
   normalizeSpanishOcrNoiseForTranslation = normalizerModule.normalizeSpanishOcrNoiseForTranslation;
   inferSourceLanguageFromTextHints = heuristicsModule.inferSourceLanguageFromTextHints;
   resolvePreferredSourceLanguageForText = heuristicsModule.resolvePreferredSourceLanguageForText;
   isLikelyGhostTranslatableLine = heuristicsModule.isLikelyGhostTranslatableLine;
-  shouldPruneContextualGhostTranslatableLine = appModule.shouldPruneContextualGhostTranslatableLine;
+  shouldPruneContextualGhostTranslatableLine = dialogueGroupingModule.shouldPruneContextualGhostTranslatableLine;
   cleanJapaneseOcrSpacing = normalizerModule.cleanJapaneseOcrSpacing;
   cleanKoreanOcrSpacing = normalizerModule.cleanKoreanOcrSpacing;
   normalizeJapaneseOcrNoiseForTranslation = normalizerModule.normalizeJapaneseOcrNoiseForTranslation;
   normalizeKoreanOcrNoiseForTranslation = normalizerModule.normalizeKoreanOcrNoiseForTranslation;
   normalizeSourceForTranslation = normalizerModule.normalizeSourceForTranslation;
-  protectTranslationTokens = appModule.protectTranslationTokens;
-  restoreProtectedTokens = appModule.restoreProtectedTokens;
-  resolveTranslationGroupsWithLayout = appModule.resolveTranslationGroupsWithLayout;
+  protectTranslationTokens = tokenProtectionModule.protectTranslationTokens;
+  restoreProtectedTokens = tokenProtectionModule.restoreProtectedTokens;
+  resolveTranslationGroupsWithLayout = groupingModule.resolveTranslationGroupsWithLayout;
   setSlangGroupContext = glossaryModule.setSlangGroupContext;
 }, 30000);
 

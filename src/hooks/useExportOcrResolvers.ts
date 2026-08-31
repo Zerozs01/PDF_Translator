@@ -20,6 +20,39 @@ type UseExportOcrResolversOptions = {
   defaultEngine: OCREngine;
 };
 
+export function resolveModelScopedOriginalPageOCR(
+  ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
+  pageNum: number,
+  selectedEngine: OCREngine
+): OCRPageResult | undefined {
+  const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+  if (engineScoped) return engineScoped;
+
+  const pageScopedEntries = ocrState.ocrByPageEngine.get(pageNum);
+  if (pageScopedEntries && pageScopedEntries.size > 0) {
+    const fallbackEntry = Array.from(pageScopedEntries.entries())[0]?.[1];
+    if (fallbackEntry) return fallbackEntry;
+  }
+
+  const fallback = ocrState.allPagesOCR.get(pageNum);
+  return fallback || undefined;
+}
+
+export function hasModelScopedCachedOCR(
+  ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
+  pageNum: number,
+  selectedEngine: OCREngine
+): boolean {
+  const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
+  if (engineScoped) return true;
+
+  const fallback = ocrState.allPagesOCR.get(pageNum);
+  if (fallback && (fallback.ocrEngine || "paddleocr") === selectedEngine) {
+    return true;
+  }
+  return false;
+}
+
 export function useExportOcrResolvers({
   currentPage,
   fileType,
@@ -28,45 +61,6 @@ export function useExportOcrResolvers({
   translationMode,
   defaultEngine,
 }: UseExportOcrResolversOptions) {
-
-  const resolveModelScopedOriginalPageOCR = useCallback(
-    (
-      ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
-      pageNum: number,
-      selectedEngine: OCREngine
-    ): OCRPageResult | undefined => {
-      const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
-      if (engineScoped) return engineScoped;
-
-      const pageScopedEntries = ocrState.ocrByPageEngine.get(pageNum);
-      if (pageScopedEntries && pageScopedEntries.size > 0) {
-        const fallbackEntry = Array.from(pageScopedEntries.entries())[0]?.[1];
-        if (fallbackEntry) return fallbackEntry;
-      }
-
-      const fallback = ocrState.allPagesOCR.get(pageNum);
-      return fallback || undefined;
-    },
-    []
-  );
-
-  const hasModelScopedCachedOCR = useCallback(
-    (
-      ocrState: ReturnType<typeof useOCRTextLayerStore.getState>,
-      pageNum: number,
-      selectedEngine: OCREngine
-    ): boolean => {
-      const engineScoped = ocrState.ocrByPageEngine.get(pageNum)?.get(selectedEngine);
-      if (engineScoped) return true;
-
-      const fallback = ocrState.allPagesOCR.get(pageNum);
-      if (fallback && (fallback.ocrEngine || "paddleocr") === selectedEngine) {
-        return true;
-      }
-      return false;
-    },
-    []
-  );
 
   const getModelScopedCachedPageNumbers = useCallback(
     (engineOverride?: OCREngine): number[] => {

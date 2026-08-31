@@ -334,7 +334,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;
-    const transformStr = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    const transformStr = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0px) scale(${nextZoom})`;
     contentRef.current.style.transform = transformStr;
 
     // Real-time synchronization for split-view:
@@ -437,7 +437,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
   useEffect(() => {
     if (contentRef.current) {
-      contentRef.current.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+      contentRef.current.style.transform = `translate3d(${pan.x}px, ${pan.y}px, 0px) scale(${zoom})`;
     }
   }, [pan, zoom]);
 
@@ -530,7 +530,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     }
     dragTransformRafRef.current = requestAnimationFrame(() => {
       if (contentRef.current) {
-        const transformStr = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+        contentRef.current.style.transition = 'none';
+        const transformStr = `translate3d(${newX}px, ${newY}px, 0px) scale(${stateRef.current.zoom})`;
         contentRef.current.style.transform = transformStr;
 
         // Real-time synchronization for split-view:
@@ -732,10 +733,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
       <div 
         ref={contentRef}
         style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0px) scale(${zoom})`,
           transformOrigin: '0 0',
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-          willChange: 'transform'
+          transition: 'none',
+          willChange: 'transform',
+          backfaceVisibility: 'hidden',
+          WebkitBackfaceVisibility: 'hidden',
         }}
         className="absolute top-0 left-0 origin-top-left image-canvas-content"
       >
