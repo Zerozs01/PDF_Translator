@@ -5,12 +5,16 @@ export interface UseCanvasNavigationOptions {
   containerRef: React.RefObject<HTMLDivElement | null>;
   contentRef: React.RefObject<HTMLDivElement | null>;
   activeTool: string;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: (delay?: number) => void;
 }
 
 export function useCanvasNavigation({
   containerRef,
   contentRef,
   activeTool,
+  onInteractionStart,
+  onInteractionEnd,
 }: UseCanvasNavigationOptions) {
   const zoom = useUIStore((s) => s.zoom);
   const pan = useUIStore((s) => s.pan);
@@ -61,6 +65,7 @@ export function useCanvasNavigation({
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      onInteractionStart?.();
 
       if (contentRef.current) {
         contentRef.current.style.transition = 'none';
@@ -114,20 +119,22 @@ export function useCanvasNavigation({
       wheelIdleTimerRef.current = setTimeout(() => {
         wheelIdleTimerRef.current = null;
         setView(panRef.current, stateRef.current.zoom);
+        onInteractionEnd?.(300);
       }, 120);
     };
 
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
-  }, [containerRef, contentRef, setView, syncContentTransform]);
+  }, [containerRef, contentRef, onInteractionEnd, onInteractionStart, setView, syncContentTransform]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) {
       setIsDragging(true);
+      onInteractionStart?.();
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
     }
-  }, [activeTool, pan.x, pan.y]);
+  }, [activeTool, onInteractionStart, pan.x, pan.y]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (isDragging) {
@@ -171,8 +178,9 @@ export function useCanvasNavigation({
         dragTransformRafRef.current = null;
       }
       setPan(panRef.current.x, panRef.current.y);
+      onInteractionEnd?.(500);
     }
-  }, [isDragging, setPan]);
+  }, [isDragging, onInteractionEnd, setPan]);
 
   useEffect(() => {
     return () => {

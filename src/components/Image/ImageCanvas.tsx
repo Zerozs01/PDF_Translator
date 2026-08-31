@@ -24,6 +24,7 @@ import {
   resolveOverlaySourceBBox,
   shouldSkipOverlayRenderForSuspiciousLine,
   sampleOverlayPaletteFromLine,
+  sampleOverlayPalettesBatch,
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
@@ -385,20 +386,22 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
         context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-        const next = new Map<number, OverlayPalette>();
+        const activeLinesToSample: Array<{ line: typeof currentPageOCR.lines[0]; index: number }> = [];
         currentPageOCR.lines.forEach((line, index) => {
           if (!translationOverlayContext.translatedByIndex.has(index)) return;
           const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
           if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-          next.set(index, sampleOverlayPaletteFromLine(
-            context,
-            line,
-            currentPageOCR.width,
-            currentPageOCR.height,
-            sampleCanvas.width,
-            sampleCanvas.height
-          ));
+          activeLinesToSample.push({ line, index });
         });
+
+        const next = sampleOverlayPalettesBatch(
+          context,
+          activeLinesToSample,
+          currentPageOCR.width,
+          currentPageOCR.height,
+          sampleCanvas.width,
+          sampleCanvas.height
+        );
         if (!canceled) {
           setTranslatedLinePalette(next);
         }

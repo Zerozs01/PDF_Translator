@@ -80,7 +80,11 @@ flowchart TD
 - [`src/services/vision/`](file:///c:/App/Electron/PDF_Translator/src/services/vision/):
   - [`blankPageDetector.ts`](file:///c:/App/Electron/PDF_Translator/src/services/vision/blankPageDetector.ts): ตรวจจับหน้าว่างเปล่า/สีพื้นล้วนใน < 0.5ms เพื่อข้าม OCR & Translation ทันที (0ms)
 - [`src/hooks/`](file:///c:/App/Electron/PDF_Translator/src/hooks/):
-  - [`useDocumentTranslation.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useDocumentTranslation.ts): จัดการ Pipeline การแปล Single-page และ Batch (AI / Offline)
+  - [`useDocumentTranslation.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useDocumentTranslation.ts): **Modular Orchestrator Hook** ประสานงานระหว่าง Sub-hooks และ Translation Pipelines
+  - [`translation/useTranslationCacheResolver.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/translation/useTranslationCacheResolver.ts): จัดการตรวจสอบ/ค้นหา DB Translation Cache, อัปเกรดแคช, และซิงค์ Layer Store
+  - [`translation/useTranslationRetryManager.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/translation/useTranslationRetryManager.ts): จัดการประเมิน Retry ในระดับกลุ่ม (Capped Budget) และระดับบรรทัด
+  - [`translation/useTranslationCachePersister.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/translation/useTranslationCachePersister.ts): บันทึกผลลัพธ์ลง SQLite และ Zustand Store พร้อม Sync Layer Groups
+  - [`translation/useBatchDocumentTranslation.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/translation/useBatchDocumentTranslation.ts): จัดการคิวแปล All Pages ในพื้นหลัง (Background Queue Delegation)
   - [`useDocumentExportModalState.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useDocumentExportModalState.ts): จัดการ State และการคำนวณ Scope/Time ในกล่อง Export
   - [`useBackgroundQueueSync.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useBackgroundQueueSync.ts): ซิงค์คิวงานพื้นหลัง, Lock Sync และ Delegate เมื่อสลับหน้า
   - [`useExportOrchestration.ts`](file:///c:/App/Electron/PDF_Translator/src/hooks/useExportOrchestration.ts): ประสานงานการส่งออกไฟล์ PDF/Image
@@ -97,20 +101,26 @@ flowchart TD
     - [`OCR/OCRTextLayerPanel.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/OCRTextLayerPanel.tsx): ควบคุม OCR Actions, Clear Cache, Re-OCR All (Ignore Cache)
     - [`OCR/EngineSelector/OCREngineSelector.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/EngineSelector/OCREngineSelector.tsx): แถบเลือกโมเดล OCR พร้อม Copper Theme และ Quick Pill Buttons (Fast ⚡ / Best ✨ / Benchmark 📊)
     - [`OCR/ResultTree/OCRResultTree.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/ResultTree/OCRResultTree.tsx): แสดงผล OCR Block / Line Tree พร้อมปุ่ม Search & Expand/Collapse All
-    - [`OCR/overlay/overlayDedup.ts`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/overlay/overlayDedup.ts): จัดการ Deduplication เชื่อมต่อกับ Native Fast Engines
+    - [`OCR/overlay/`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/overlay/): โดเมนโมดูลย่อยแยกชัดเจน (`overlayPalette`, `overlayGeometry`, `overlayTypes`, `overlayDedup`)
+    - [`OCR/translationOverlayUtils.ts`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/translationOverlayUtils.ts): ฟังก์ชันคำนวณ Overlay, Typography, Masking, Palette Sampling แบบ Single-pass Batched Readback
   - **Queue & Modals:**
     - [`Queue/BackgroundQueueBadge.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueueBadge.tsx): Floating Queue Pill แสดงสถานะคิวขณะอยู่ในหน้า Preview (`React.memo`)
     - [`Queue/BackgroundQueuePanel.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueuePanel.tsx): Drawer จัดการและดูรายละเอียดคิวงาน OCR/แปลที่มุมขวาล่าง (`React.memo`)
     - [`Export/DocumentExportModal.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Export/DocumentExportModal.tsx): กล่องส่งออกไฟล์ PDF/ภาพ พร้อม Console แปลด่วน (`React.memo`)
   - **Canvas & Viewers:**
     - [`Viewer/WorkspaceContainer.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Viewer/WorkspaceContainer.tsx): คอนเทนเนอร์จัดการ Split/Single Viewport (`React.memo`)
-    - [`PDF/PDFCanvas.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx): ตัวเรนเดอร์ PDF รองรับ Continuous Scroll Mode ระดับ 60/120 FPS พร้อม Hardware Acceleration
-    - [`Image/ImageCanvas.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Image/ImageCanvas.tsx): ตัวเรนเดอร์ภาพเดี่ยวพร้อม Direct GPU Transforms
-    - [`Home/UploadScreen.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Home/UploadScreen.tsx): หน้า Home คลังเอกสาร การจัดระเบียบโฟลเดอร์ และแท็ก
+    - [`PDF/PDFCanvas.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx): **Clean PDF Canvas Shell (582 บรรทัด / ลดลง 68%)** เรนเดอร์ PDF ต่อเนื่อง 60/120 FPS ปราศจาก Module-level Mutable State
+    - [`PDF/PDFPageOverlay.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFPageOverlay.tsx): ตัวจัดการเลเยอร์ Masking และ Text Overlays บนหน้า PDF แยกอิสระจาก Canvas
+    - [`PDF/OverlayLineItem.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/PDF/OverlayLineItem.tsx): เลเยอร์ข้อความรายบรรทัดแบบ `React.memo` ป้องกัน cascading re-render เมื่อมีการขยับเมาส์หรือแก้ไขข้อความ
+    - [`Image/ImageCanvas.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Image/ImageCanvas.tsx): ตัวเรนเดอร์ภาพเดี่ยวพร้อม Direct GPU Transforms และ Batched Palette Sampling
+    - [`Home/UploadScreen.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Home/UploadScreen.tsx): **Clean Library Shell (1,805 บรรทัด / ลดลง 40%)** จัดการ State คลังเอกสาร
+    - [`Home/sections/`](file:///c:/App/Electron/PDF_Translator/src/components/Home/sections/): ซับคอมโพเนนต์โมดูลาร์ 6 ส่วน (`LibrarySidebar`, `DocumentGridView`, `LibraryBreadcrumbs`, `FileOpenErrorBanner`, `LibraryModals`, `LibraryRightPanel`)
     - [`Layers/InteractiveLayerOverlay.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx): ตัวจัดการกล่องข้อความแปล (Drag, Resize, Rotate, Text Wrap)
 - [`src/services/translation/`](file:///c:/App/Electron/PDF_Translator/src/services/translation/):
+  - [`pageTranslationPipeline.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/pageTranslationPipeline.ts): **Pure Functional Translation Pipeline** สำหรับการเตรียม Translatable Lines, Balloon Layout Grouping, และ Weight-based Line Redistribution
+  - [`offlineBatchPipeline.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineBatchPipeline.ts): **Concurrent Sliding Window Batch Pipeline** สำหรับการแปลออฟไลน์ทุกหน้าแบบ Multi-page High Throughput
   - [`translatableLineCollector.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/translatableLineCollector.ts): คัดกรองและเรียงลำดับบรรทัดข้อความที่ต้องการแปล
-  - [`translationBridge.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationBridge.ts): ฟังก์ชัน Wrapper สื่อสารกับ IPC ฝั่ง Electron
+  - [`translationBridge.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationBridge.ts): ฟังก์ชัน Wrapper สื่อสารกับ IPC ฝั่ง Electron พร้อม Bounded Concurrency Rate Limiter
   - [`translationLineResolver.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationLineResolver.ts): คัดเลือก Source Text ที่ดีที่สุดและ Cross-Engine Fallback
   - [`technicalGlossary.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/technicalGlossary.ts): ปกป้องและแทนที่ศัพท์เทคนิค/สแลงภาษาไทย
   - [`translationGrouping.ts`](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationGrouping.ts): รวมกลุ่มบรรทัดข้อความในบอลลูนคำพูดตามระยะเชิงพื้นที่ 2D
@@ -159,16 +169,24 @@ flowchart TD
 - หากความเบี่ยงเบน $\le 4$ $\rightarrow$ ตีเป็นหน้าว่างเปล่า/สีพื้นล้วนทันที ข้ามการแปลง Blob, IPC Transfer, DBNet Detection และ Translation ทั้งหมดลงเหลือ 0ms
 - ป้องกัน False Positives: หน้าที่มีรูปภาพ ลายเส้น หรือตัวหนังสือแม้แต่ตัวเดียวจะข้ามการตรวจสอบและเข้าสู่กระบวนการ OCR ปกติ
 
-### 4.5 Granular Zustand Selectors & React.memo
-- ขจัดปัญหา Wholesale Store Subscription โดยเปลี่ยนมาใช้ Granular Selector ดึงเฉพาะ State Slice ที่จำเป็น
-- ห่อหุ้ม `React.memo` ให้กับทุกส่วนประกอบหลักเพื่อป้องกันการ Re-render แบบลูกโซ่ขณะเลื่อนหน้าจอหรือแก้ไขข้อความ
+### 4.5 Batched Canvas Palette Sampling (`sampleOverlayPalettesBatch`)
+- สกัดค่าสีของพื้นหลังและตัวหนังสือ (`textColor`, `backgroundColor`, `textStroke`) ด้วยการดึง **Full-Page `ImageData` เพียง 1 ครั้งต่อหน้า**
+- ขจัดปัญหาการยิงคำสั่ง `ctx.getImageData` ข้าม GPU-to-CPU Boundary ซ้ำๆ 100–160 ครั้งต่อหน้า ลด I/O Overhead ลง **99.4%** และสุ่มอ่านพิกเซลผ่าน TypedArray ในหน่วยความจำโดยตรง ทำให้การเลื่อนหน้าต่อเนื่องไม่มี micro-stutters
 
-### 4.6 Direct GPU Hardware Acceleration (`translate3d`)
+### 4.6 Encapsulated Navigation Context & Zero Global Mutable State
+- ย้ายตัวแปรสถานะการเลื่อนหน้าและตัวจับเวลา (`isUserInteracting`, `activePageChangeTimeout`, `lastPageUpdateTime`, `pendingPage`) จาก Module-level Singleton เข้าสู่ `PDFCanvasNavigationContext`
+- ผูก lifecycle เข้ากับ React Component Scope ป้องกัน memory leaks, timer conflicts และ race conditions เมื่อสลับเอกสารหรือสลับโหมดมุมมอง
+
+### 4.7 Granular Zustand Selectors & React.memo Optimization
+- ขจัดปัญหา Wholesale Store Subscription โดยเปลี่ยนมาใช้ Granular Selector ดึงเฉพาะ State Slice ที่จำเป็น
+- ห่อหุ้ม `React.memo` ให้กับทุก Subcomponent หลัก เช่น `OverlayLineItem`, `LibrarySidebar`, `DocumentGridView`, `BackgroundQueuePanel` ป้องกัน cascading re-render เมื่อมีการขยับเมาส์หรืออัปเดต state เพียงจุดเดียว
+
+### 4.8 Direct GPU Hardware Acceleration (`translate3d`)
 - เปลี่ยนการคำนวณตำแหน่ง 2D `translate(x, y)` มาเป็น **`translate3d(x, y, 0px)`**
 - กำหนด `backface-visibility: hidden` และ `will-change: transform`
 - บังคับให้ Compositor ดึง Canvas ขึ้นไปประมวลผลบน **Dedicated GPU VRAM Texture Layer** โดยตรง
 
-### 4.7 Virtualize / Mount Overlay เฉพาะหน้าที่อยู่ในระยะมองเห็น
+### 4.9 Virtualize / Mount Overlay เฉพาะหน้าที่อยู่ในระยะมองเห็น
 - Mount `<PDFPageOverlay>` เฉพาะหน้าที่อยู่ในระยะมองเห็น (`isVisible = true`) เมื่อพ้นสายตาจะ Unmount ออกจาก DOM Tree ช่วยลด Node ข้อความ, Event Listener, และการคำนวณ Typography ลงกว่า **90%**
 
 ---
@@ -185,6 +203,10 @@ flowchart TD
 8. **Right Sidebar UX/UI & Quality Switcher:** คืนค่า Copper Theme Header, Pill Buttons ควบคุม OCR (สลับโหมด Fast ⚡ / Best ✨ ได้ทันที) พร้อมปุ่ม Benchmark แยก
 9. **Vitest Process Teardown Stabilization:** ตั้งค่า `teardownTimeout` และ `hookTimeout` ป้องกัน Vitest Process ค้างเมื่อรันเทสต์ครบทั้งหมด
 10. **Sub-millisecond Blank Page Skip:** ติดตั้งตัวตรวจจับหน้าว่างเปล่า/สีพื้นล้วน ข้ามการประมวลผล OCR & Translation ที่ไม่จำเป็น
+11. **PDFCanvas & PDFPageOverlay Separation (Phase 2):** แยก Layer Overlay และ Text Item (`OverlayLineItem.tsx`) ออกจาก Canvas ลดขนาด `PDFCanvas.tsx` เหลือ 582 LOC (-68%)
+12. **UploadScreen Decomposition (Phase 2):** ลดขนาด `UploadScreen.tsx` จาก 2,973 เหลือ 1,805 LOC (-40%) โดยแยก 6 Subcomponents ใน `src/components/Home/sections/`
+13. **Batched Palette Sampling:** ปรับปรุงการสุ่มสีพื้นหลัง/ตัวหนังสือด้วย single-pass `ImageData` ลด DOM Canvas readback ลง 99.4%
+14. **Left Sidebar Scroll Snap & Navigation Context:** แก้ปัญหาการคลิก Thumbnail ฝั่งซ้ายแล้ว snap หน้าใน scroll mode และ encapsulate สถานะการเลื่อนหน้าทั้งหมดเข้า Navigation Context
 
 ---
 

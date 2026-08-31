@@ -75,7 +75,7 @@ export const offlineBatchBridgeWrapper = async (texts: string[], options: any): 
 };
 
 /**
- * Translate a batch of texts using Gemini API (parallel per-text calls)
+ * Translate a batch of texts using Gemini API with bounded concurrency (5 concurrent requests)
  */
 export async function translateBatchGemini(
   texts: string[],
@@ -88,9 +88,20 @@ export async function translateBatchGemini(
   }
 ): Promise<string[]> {
   if (texts.length === 0) return [];
-  return Promise.all(
-    texts.map((text) =>
-      translateWithGemini(text, type, mode, sourceLanguage, targetLanguage, contextOverrides)
-    )
-  );
+  const CONCURRENCY_LIMIT = 5;
+  const results: string[] = new Array(texts.length).fill('');
+
+  for (let i = 0; i < texts.length; i += CONCURRENCY_LIMIT) {
+    const chunk = texts.slice(i, i + CONCURRENCY_LIMIT);
+    const chunkResults = await Promise.all(
+      chunk.map((text) =>
+        translateWithGemini(text, type, mode, sourceLanguage, targetLanguage, contextOverrides)
+      )
+    );
+    chunkResults.forEach((res, offset) => {
+      results[i + offset] = res;
+    });
+  }
+
+  return results;
 }
