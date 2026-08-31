@@ -2,7 +2,14 @@ import Database from 'better-sqlite3-multiple-ciphers';
 import path from 'path';
 import { app } from 'electron';
 import { BenchmarkDAO } from './BenchmarkDAO';
-export { BenchmarkDAO };
+import { DocumentDAO as DomainDocumentDAO } from './dao/DocumentDAO';
+import { ProjectDAO as DomainProjectDAO } from './dao/ProjectDAO';
+import { TagDAO as DomainTagDAO } from './dao/TagDAO';
+import { OCRDAO } from './dao/OCRDAO';
+import { TranslationDAO } from './dao/TranslationDAO';
+import { GlossaryDAO as DomainGlossaryDAO } from './dao/GlossaryDAO';
+
+export { BenchmarkDAO, DomainDocumentDAO, DomainProjectDAO, DomainTagDAO, OCRDAO, TranslationDAO, DomainGlossaryDAO };
 
 let db: Database.Database | null = null;
 
@@ -298,6 +305,13 @@ console.log('[DB] BenchmarkDAO ready');
     } catch (e) {
       // Columns probably already exist
     }
+
+    DomainDocumentDAO.init(db);
+    DomainProjectDAO.init(db);
+    DomainTagDAO.init(db);
+    OCRDAO.init(db);
+    TranslationDAO.init(db);
+    DomainGlossaryDAO.init(db);
 
     console.log('[SQLite] Database initialized successfully with WAL, FTS5 & MMap');
     

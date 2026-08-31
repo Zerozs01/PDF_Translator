@@ -86,6 +86,9 @@ import {
   TagPill,
 } from './TagPill';
 
+import { LibraryTopBar } from './Bars/LibraryTopBar';
+import { BackgroundQueueMonitor } from './Panels/BackgroundQueueMonitor';
+
 export { FOLDER_PALETTE_COLORS, TAG_COLOR_PALETTES };
 
 export const UploadScreen: React.FC = () => {
@@ -2020,79 +2023,21 @@ export const UploadScreen: React.FC = () => {
         {/* Main Content Area */}
         <div className="relative flex-1 flex flex-col overflow-hidden bg-[#25272b]">
           {/* Toolbar */}
-          <div className="relative overflow-hidden border-b border-white/6 px-4 pt-4 pb-5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] titlebar-drag">
-            <div className="absolute inset-0 bg-[linear-gradient(98deg,rgba(60,134,223,0.9)_0%,rgba(58,152,224,0.86)_34%,rgba(74,120,213,0.88)_66%,rgba(112,84,194,0.88)_100%)]" />
-            <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.14)_0%,rgba(0,0,0,0.05)_18%,rgba(0,0,0,0.04)_82%,rgba(0,0,0,0.12)_100%)]" />
-            <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.03)_0%,rgba(0,0,0,0.05)_48%,rgba(0,0,0,0.09)_100%)]" />
-            <div className="absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0))]" />
-            <div className="relative z-10 flex items-center gap-4">
-              {/* Sidebar Toggle */}
-              <button
-                onClick={toggleSidebar}
-                className="p-2 rounded-lg bg-[#202329]/90 border border-white/8 text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0"
-                title={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-              >
-                {isSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-              </button>
-
-              {/* Search */}
-              <form onSubmit={handleSearch} className="flex-1 max-w-md">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                  <input
-                    type="text"
-                    placeholder="Search documents..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-[#1f2227]/92 border border-white/10 rounded-lg text-sm focus:outline-none focus:border-[#5CC6F2]/30 focus:ring-2 focus:ring-[#5CC6F2]/10"
-                  />
-                </div>
-              </form>
-
-              {/* View Mode Toggle */}
-              <div className="flex items-center bg-[#202329]/90 rounded-lg p-1 border border-white/8">
-                <button
-                  onClick={() => setViewMode('grid')}
-                  className={`p-2 rounded-md transition-all ${
-                    viewMode === 'grid'
-                      ? 'bg-[#353942] text-slate-100'
-                      : 'text-slate-500 hover:text-slate-200'
-                  }`}
-                >
-                  <Grid3X3 size={16} />
-                </button>
-                <button
-                  onClick={() => setViewMode('detail')}
-                  className={`p-2 rounded-md transition-all ${
-                    viewMode === 'detail'
-                      ? 'bg-[#353942] text-slate-100'
-                      : 'text-slate-500 hover:text-slate-200'
-                  }`}
-                >
-                  <List size={16} />
-                </button>
-              </div>
-
-              {/* Spacer to push filter button to the right corner */}
-              <div className="flex-1" />
-
-              {/* Sort / Filter Button */}
-              <div className="relative">
-                <button
-                  data-sort-menu-trigger="true"
-                  onClick={handleToggleSortMenu}
-                  className={`p-2 rounded-lg bg-[#202329]/90 border text-slate-400 hover:text-slate-100 hover:bg-white/[0.06] transition-all flex items-center justify-center shrink-0 cursor-pointer ${
-                    isSortMenuOpen || activeFilterTag !== null || ratingFilterOnly !== null || ratingFilterMin !== null || ratingFilterMax !== null
-                      ? 'text-[#5CC6F2] border-[#5CC6F2]/40 bg-[#5CC6F2]/10 shadow-[0_0_12px_rgba(92,198,242,0.2)]'
-                      : 'border-white/8'
-                  }`}
-                  title="Sort and filter options"
-                >
-                  <Filter size={16} />
-                </button>
-              </div>
-            </div>
-          </div>
+          <LibraryTopBar
+            isSidebarOpen={isSidebarOpen}
+            toggleSidebar={toggleSidebar}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            handleSearch={handleSearch}
+            viewMode={viewMode}
+            setViewMode={setViewMode}
+            isSortMenuOpen={isSortMenuOpen}
+            activeFilterTag={activeFilterTag}
+            ratingFilterOnly={ratingFilterOnly}
+            ratingFilterMin={ratingFilterMin}
+            ratingFilterMax={ratingFilterMax}
+            handleToggleSortMenu={handleToggleSortMenu}
+          />
 
           {/* File Open Error Banner */}
           {fileOpenError && (
@@ -2858,172 +2803,17 @@ export const UploadScreen: React.FC = () => {
           </details>
 
           {/* Background Queue Monitor */}
-          <div className="mt-4 border-t border-white/6 pt-5">
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-[0.22em] flex items-center gap-1.5">
-                <Cpu size={12} className="text-slate-400" /> Queue Monitor
-              </label>
-              {jobs.some(j => ['completed', 'failed', 'cancelled'].includes(j.status)) && (
-                <button
-                  onClick={clearCompletedJobs}
-                  className="text-[10px] text-[#2B9BFF] hover:text-[#5CC6F2] transition-colors"
-                >
-                  Clear Finished
-                </button>
-              )}
-            </div>
-
-            {jobs.length === 0 ? (
-              <p className="text-[11px] text-slate-500 italic py-3 text-center bg-[#13151a]/40 rounded-xl border border-white/4">
-                No active background tasks
-              </p>
-            ) : (
-              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-                {jobs.map((job) => {
-                  const isActive = job.status === 'processing';
-                  const isPending = job.status === 'pending';
-                  const isJobPaused = job.status === 'paused';
-                  const isFinished = ['completed', 'failed', 'cancelled'].includes(job.status);
-                  
-                  return (
-                    <div 
-                      key={job.id} 
-                      className={`p-2.5 rounded-xl border transition-all text-left ${
-                        isActive 
-                          ? 'border-[#2B9BFF]/35 bg-[#17191d]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]' 
-                          : 'bg-[#13151a]/70 border-white/6 hover:border-white/10'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-1.5 mb-1.5">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold text-slate-200 truncate" title={job.filename}>
-                            {job.filename}
-                          </p>
-                          <p className="text-[9px] text-slate-500 truncate mt-0.5 capitalize">
-                            {job.type.replace('_all', ' all pages')} • {job.engine}
-                          </p>
-                        </div>
-                        
-                        {/* Queue reorder buttons: ^ and v */}
-                        {!isFinished && (
-                          <div className="flex flex-col items-center gap-0.5 shrink-0 mr-0.5">
-                            <button
-                              onClick={() => moveJobUp(job.id)}
-                              disabled={jobs.indexOf(job) === 0}
-                              className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
-                              title="เลื่อนขึ้นในคิว"
-                            >
-                              <ChevronUp size={10} />
-                            </button>
-                            <button
-                              onClick={() => moveJobDown(job.id)}
-                              disabled={jobs.indexOf(job) === jobs.length - 1}
-                              className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
-                              title="เลื่อนลงในคิว"
-                            >
-                              <ChevronDown size={10} />
-                            </button>
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          {isActive && (
-                            <button
-                              onClick={() => pauseJob(job.id)}
-                              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-slate-100 transition-colors"
-                              title="Pause"
-                            >
-                              <Pause size={10} />
-                            </button>
-                          )}
-                          {isJobPaused && (
-                            <button
-                              onClick={() => resumeJob(job.id)}
-                              className="p-1 rounded bg-[#2B9BFF]/20 hover:bg-[#2B9BFF]/35 text-[#2B9BFF] hover:text-white transition-colors"
-                              title="Resume"
-                            >
-                              <Play size={10} />
-                            </button>
-                          )}
-                          {!isFinished && (
-                            <button
-                              onClick={() => cancelJob(job.id)}
-                              className="p-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 hover:text-rose-200 transition-colors"
-                              title="Cancel"
-                            >
-                              <X size={10} />
-                            </button>
-                          )}
-                          {isFinished && (
-                            <div className="flex items-center gap-1 shrink-0">
-                              {job.status === 'completed' && (
-                                <button
-                                  onClick={() => handleOpenJobFile(job)}
-                                  className="p-1 rounded bg-[#EAB308]/15 hover:bg-[#EAB308]/25 text-[#EAB308] hover:text-yellow-400 transition-all flex items-center justify-center"
-                                  title="เปิดไฟล์นี้"
-                                >
-                                  <ArrowRight size={10} className="animate-pulse" />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => removeJob(job.id)}
-                                className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
-                                title="Remove"
-                              >
-                                <Trash2 size={10} />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Progress and status message */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[9px]">
-                          <span className={`truncate max-w-[175px] ${
-                            isActive ? 'text-[#2B9BFF] animate-pulse font-medium' :
-                            isJobPaused ? 'text-amber-400/90' :
-                            job.status === 'completed' ? 'text-emerald-400/90' :
-                            job.status === 'failed' ? 'text-rose-400/90' :
-                            job.status === 'cancelled' ? 'text-slate-400/90' :
-                            'text-slate-400'
-                          }`}>
-                            {job.message}
-                            {job.startTime && (
-                              <span className="text-[8px] text-slate-500 font-normal ml-1">
-                                ({(() => {
-                                  const end = job.completedTime || Date.now();
-                                  const diff = Math.max(0, Math.floor((end - job.startTime) / 1000));
-                                  if (diff < 60) return `${diff}s`;
-                                  return `${Math.floor(diff / 60)}m ${diff % 60}s`;
-                                })()})
-                              </span>
-                            )}
-                          </span>
-                          <span className="font-semibold text-slate-300">
-                            {job.progress}%
-                          </span>
-                        </div>
-                        <div className="w-full h-1 bg-slate-900 rounded-full overflow-hidden border border-white/4">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-300 ${
-                              isActive ? 'bg-[#2B9BFF]' :
-                              isJobPaused ? 'bg-amber-400/80' :
-                              job.status === 'completed' ? 'bg-emerald-400/80' :
-                              job.status === 'failed' ? 'bg-rose-500/80' :
-                              job.status === 'cancelled' ? 'bg-slate-500' :
-                              'bg-slate-700'
-                            }`}
-                            style={{ width: `${job.progress}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <BackgroundQueueMonitor
+            jobs={jobs}
+            clearCompletedJobs={clearCompletedJobs}
+            moveJobUp={moveJobUp}
+            moveJobDown={moveJobDown}
+            pauseJob={pauseJob}
+            resumeJob={resumeJob}
+            cancelJob={cancelJob}
+            removeJob={removeJob}
+            handleOpenJobFile={handleOpenJobFile}
+          />
 
           <div className="mt-auto" />
         </div>

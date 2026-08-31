@@ -35,6 +35,7 @@ import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, t
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
 import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
 import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
+import { useCanvasNavigation } from './hooks/useCanvasNavigation';
 
 const formatOverlayRatioLabel = (value: number): string => `${Math.max(1, Math.round(value * 100))}%`;
 const DOCUMENT_SOURCE_HINT_REGEX = /\b(chapter|table|fig(?:ure)?\.?|reaction|unknowns?|equilibrium|rigid|body|support|diagram|objective|objectives|connection|connections|continued|force|moment|component|unknown|column|columns|bridge|building|beam|beams|welded|surface|bracket|cable|utility|floor|member|pin|hinge)\b/i;
@@ -1537,37 +1538,30 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   const setTotalPages = useProjectStore((s) => s.setTotalPages);
   const viewMode = useProjectStore((s) => s.viewMode);
 
-  const zoom = useUIStore((s) => s.zoom);
-  const pan = useUIStore((s) => s.pan);
-  const setZoom = useUIStore((s) => s.setZoom);
-  const setPan = useUIStore((s) => s.setPan);
-  const setView = useUIStore((s) => s.setView);
+  const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
   const activeTool = useUIStore((s) => s.activeTool);
-  const regions = useSegmentationStore((s) => s.regions);
   const setRegions = useSegmentationStore((s) => s.setRegions);
   const setIsProcessing = useSegmentationStore((s) => s.setIsProcessing);
   const processRequest = useSegmentationStore((s) => s.processRequest);
-  const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
-
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const contentRef = useRef<HTMLDivElement>(null);
-  const panRef = useRef(pan);
-  
-  const wheelTransformRafRef = useRef<number | null>(null);
-  const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dragTransformRafRef = useRef<number | null>(null);
 
-  const stateRef = useRef({ zoom, pan });
-
-  useEffect(() => {
-    stateRef.current = { zoom, pan };
-    if (!isDragging) {
-      panRef.current = pan;
-    }
-  }, [zoom, pan, isDragging]);
+  const {
+    zoom,
+    pan,
+    setZoom,
+    setPan,
+    isDragging,
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+    stateRef,
+  } = useCanvasNavigation({
+    containerRef,
+    contentRef,
+    activeTool,
+  });
 
   const prevPageRef = useRef<number | null>(null);
   const prevViewModeRef = useRef(viewMode);
@@ -1702,244 +1696,6 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       }
     }
   }, [setZoom, setPan, previewModeOverride]);
-
-  const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
-    if (!contentRef.current) return;
-    const transformStr = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0px) scale(${nextZoom})`;
-    contentRef.current.style.transform = transformStr;
-
-    // Real-time synchronization for split-view:
-    const isSplit = useUIStore.getState().viewMode === 'split';
-    if (isSplit) {
-      const workspace = contentRef.current.closest('.workspace-viewport');
-      if (workspace) {
-        const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
-        allContents.forEach((el) => {
-          if (el !== contentRef.current) {
-            (el as HTMLElement).style.transform = transformStr;
-          }
-        });
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (processRequest > 0) {
-      captureAndProcess();
-    }
-  }, [processRequest]);
-
-  const captureAndProcess = async () => {
-    console.log("[PDFCanvas] Processing Triggered...");
-    const canvas = document.querySelector(`.pdf-canvas-document .react-pdf__Page[data-page-number="${currentPage}"] canvas`) as HTMLCanvasElement;
-    
-    if (!canvas) {
-      console.warn("[PDFCanvas] Canvas not found for vision processing");
-      return;
-    }
-
-    console.log("[PDFCanvas] Canvas found, sending to Vision Service...");
-    setIsProcessing(true);
-    
-    try {
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const ctx = tempCanvas.getContext('2d');
-      
-      let imageUrl = '';
-      
-      if (ctx) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-        ctx.drawImage(canvas, 0, 0);
-        imageUrl = tempCanvas.toDataURL('image/jpeg', 0.95);
-        // Optimize Memory: Explicitly release memory by resizing to 0x0
-        try {
-          tempCanvas.width = 0;
-          tempCanvas.height = 0;
-        } catch (e) { /* ignore */ }
-      } else {
-        imageUrl = canvas.toDataURL('image/jpeg', 0.95);
-      }
-
-      console.log(`[PDFCanvas] Image captured: ${canvas.width}x${canvas.height}, URL length: ${imageUrl.length}`);
-      console.log(`[PDFCanvas] OCR Language: ${sourceLanguage}`);
-      
-      const translationMode = useProjectStore.getState().translationMode;
-      const documentType = translationMode === 'official' || translationMode === 'adaptive' ? 'document' : 'manga';
-      
-      console.log(`[PDFCanvas] Document type: ${documentType}`);
-      
-      const detectedRegions = await visionService.segmentImage(
-        imageUrl, 
-        sourceLanguage,
-        documentType
-      );
-      
-      console.log(`[PDFCanvas] Vision Service returned ${detectedRegions.length} regions:`, 
-        detectedRegions.map(r => `${r.type}(${r.originalText?.substring(0, 20)}...)`).join(', ')
-      );
-      
-      setRegions(detectedRegions);
-      
-    } catch (error) {
-      console.error("[PDFCanvas] Vision Service Error:", error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[PDFCanvas] OCR Failed: ${errorMessage}`);
-      setRegions([]);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      startUserInteraction();
-
-      // Immediately kill CSS transition via direct DOM — zero React re-render cost
-      if (contentRef.current) {
-        contentRef.current.style.transition = 'none';
-      }
-
-      if (wheelIdleTimerRef.current) {
-        clearTimeout(wheelIdleTimerRef.current);
-      }
-
-      if (e.ctrlKey) {
-        const scaleAmount = -e.deltaY * 0.001;
-        const newZoom = Math.min(Math.max(0.1, stateRef.current.zoom + scaleAmount), 5);
-        
-        // คำนวณจุดหมุนและระยะเลื่อนชดเชยของภาพ เพื่อซูมตามตำแหน่งเมาส์ (Zoom-to-Mouse Anchor)
-        const rect = container.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-        
-        const zoomFactor = newZoom / stateRef.current.zoom;
-        const nextPan = {
-          x: mouseX - (mouseX - stateRef.current.pan.x) * zoomFactor,
-          y: mouseY - (mouseY - stateRef.current.pan.y) * zoomFactor,
-        };
-
-        panRef.current = nextPan;
-        // Keep stateRef in sync so rapid zoom events accumulate correctly
-        stateRef.current = { zoom: newZoom, pan: nextPan };
-
-        if (wheelTransformRafRef.current !== null) {
-          cancelAnimationFrame(wheelTransformRafRef.current);
-        }
-        wheelTransformRafRef.current = requestAnimationFrame(() => {
-          syncContentTransform(nextPan, newZoom);
-          wheelTransformRafRef.current = null;
-        });
-      } else {
-        const nextPan = {
-          x: stateRef.current.pan.x - e.deltaX,
-          y: stateRef.current.pan.y - e.deltaY,
-        };
-        panRef.current = nextPan;
-        // Keep stateRef in sync so rapid scroll events accumulate correctly
-        stateRef.current = { ...stateRef.current, pan: nextPan };
-
-        if (wheelTransformRafRef.current !== null) {
-          cancelAnimationFrame(wheelTransformRafRef.current);
-        }
-        wheelTransformRafRef.current = requestAnimationFrame(() => {
-          syncContentTransform(nextPan, stateRef.current.zoom);
-          wheelTransformRafRef.current = null;
-        });
-      }
-
-      // Commit to Zustand exactly once when scrolling stops (~120 ms after last tick).
-      // Using setView (atomic pan+zoom) → single React re-render instead of two.
-      // React then restores the CSS transition via the rendered style prop.
-      wheelIdleTimerRef.current = setTimeout(() => {
-        wheelIdleTimerRef.current = null;
-        setView(panRef.current, stateRef.current.zoom);
-        endUserInteraction(200);
-      }, 120);
-    };
-
-    container.addEventListener('wheel', onWheel, { passive: false });
-    return () => container.removeEventListener('wheel', onWheel);
-  }, [setView, syncContentTransform]);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) { 
-      setIsDragging(true);
-      startUserInteraction();
-      setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-      e.preventDefault();
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      e.preventDefault();
-      const newX = e.clientX - dragStart.x;
-      const newY = e.clientY - dragStart.y;
-      
-      panRef.current = { x: newX, y: newY };
-
-      if (dragTransformRafRef.current !== null) {
-        cancelAnimationFrame(dragTransformRafRef.current);
-      }
-      dragTransformRafRef.current = requestAnimationFrame(() => {
-        if (contentRef.current) {
-          const transformStr = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
-          contentRef.current.style.transform = transformStr;
-
-          // Real-time synchronization for split-view:
-          const isSplit = useUIStore.getState().viewMode === 'split';
-          if (isSplit) {
-            const workspace = contentRef.current.closest('.workspace-viewport');
-            if (workspace) {
-              const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
-              allContents.forEach((el) => {
-                if (el !== contentRef.current) {
-                  (el as HTMLElement).style.transform = transformStr;
-                }
-              });
-            }
-          }
-        }
-        dragTransformRafRef.current = null;
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    if (isDragging) {
-      setIsDragging(false);
-      if (dragTransformRafRef.current !== null) {
-        cancelAnimationFrame(dragTransformRafRef.current);
-        dragTransformRafRef.current = null;
-      }
-      setPan(panRef.current.x, panRef.current.y);
-      endUserInteraction(800);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (wheelTransformRafRef.current !== null) {
-        cancelAnimationFrame(wheelTransformRafRef.current);
-        wheelTransformRafRef.current = null;
-      }
-      if (dragTransformRafRef.current !== null) {
-        cancelAnimationFrame(dragTransformRafRef.current);
-        dragTransformRafRef.current = null;
-      }
-      if (wheelIdleTimerRef.current) {
-        clearTimeout(wheelIdleTimerRef.current);
-        wheelIdleTimerRef.current = null;
-      }
-    };
-  }, []);
 
   const pdfSource = useMemo(() => {
     if (fileUrl) return fileUrl;
