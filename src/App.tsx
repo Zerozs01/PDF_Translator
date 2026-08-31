@@ -85,6 +85,11 @@ export default function App() {
     setIsLeftSidebarOpen((prev) => !prev);
   }, []);
 
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  const handleToggleRightSidebar = useCallback(() => {
+    setIsRightSidebarOpen((prev) => !prev);
+  }, []);
+
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
   useEffect(() => {
@@ -459,6 +464,8 @@ export default function App() {
           {!isNarrow && (
             <React.Suspense fallback={<div className="w-65 bg-slate-950/55 border-l border-white/10" />}>
               <RightSidebar 
+                isOpen={isRightSidebarOpen}
+                onToggle={handleToggleRightSidebar}
                 isAiProcessing={isAiProcessing}
                 isOfflineProcessing={isOfflineProcessing}
                 onAiTranslate={handleAiTranslate}

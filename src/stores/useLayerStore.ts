@@ -180,16 +180,38 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
   // ── Selection ─────────────────────────────────────────────────
   selectLayer: (layerId, addToSelection = false) => set((state) => {
     if (layerId === null) return { selectedLayerIds: new Set() };
-    if (addToSelection) {
-      const next = new Set(state.selectedLayerIds);
-      if (next.has(layerId)) {
-        next.delete(layerId); // Toggle off
-      } else {
-        next.add(layerId);
+    const nextSelected = addToSelection
+      ? (() => {
+          const next = new Set(state.selectedLayerIds);
+          if (next.has(layerId)) {
+            next.delete(layerId); // Toggle off
+          } else {
+            next.add(layerId);
+          }
+          return next;
+        })()
+      : new Set([layerId]);
+
+    // Atomic group expansion: Auto-expand parent group instantly in the same state tick
+    let nextGroups = state.groupsByPage;
+    if (layerId && nextSelected.has(layerId)) {
+      for (const [pageNum, groups] of state.groupsByPage.entries()) {
+        const targetGroup = groups.find(g => g.collapsed && g.layerIds.includes(layerId));
+        if (targetGroup) {
+          const updated = groups.map(g => g.id === targetGroup.id ? { ...g, collapsed: false } : g);
+          if (nextGroups === state.groupsByPage) {
+            nextGroups = new Map(state.groupsByPage);
+          }
+          nextGroups.set(pageNum, updated);
+          break;
+        }
       }
-      return { selectedLayerIds: next };
     }
-    return { selectedLayerIds: new Set([layerId]) };
+
+    return { 
+      selectedLayerIds: nextSelected,
+      groupsByPage: nextGroups,
+    };
   }),
 
   clearSelection: () => set({ selectedLayerIds: new Set() }),

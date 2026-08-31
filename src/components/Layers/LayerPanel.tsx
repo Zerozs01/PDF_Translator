@@ -20,6 +20,8 @@ import {
   Package,
   RefreshCw,
   Trash2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
@@ -60,26 +62,38 @@ const LayerRow: React.FC<{
   isHovered: boolean;
   groupColor: string;
   onActivateLayerPanel?: () => void;
-}> = ({ layer, index, pageNum, isSelected, isHovered, groupColor, onActivateLayerPanel }) => {
-  const {
-    toggleLayerVisibility,
-    selectLayer,
-    setHoveredLayer,
-    deleteLayer,
-    activeDragItem,
-    setActiveDragItem,
-    moveLayerToGroup,
-  } = useLayerStore();
+}> = React.memo(({ layer, index, pageNum, isSelected, isHovered, groupColor, onActivateLayerPanel }) => {
+  const toggleLayerVisibility = useLayerStore((s) => s.toggleLayerVisibility);
+  const selectLayer = useLayerStore((s) => s.selectLayer);
+  const setHoveredLayer = useLayerStore((s) => s.setHoveredLayer);
+  const deleteLayer = useLayerStore((s) => s.deleteLayer);
+  const activeDragItem = useLayerStore((s) => s.activeDragItem);
+  const setActiveDragItem = useLayerStore((s) => s.setActiveDragItem);
+  const moveLayerToGroup = useLayerStore((s) => s.moveLayerToGroup);
+
   const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
   const [isDragOver, setIsDragOver] = React.useState(false);
+  const [isCopied, setIsCopied] = React.useState(false);
 
-  // Auto-scroll into view when selected (Figma-style)
+  const textToCopy = translationPreviewMode === 'original'
+    ? layer.sourceText || layer.text
+    : layer.text;
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!textToCopy) return;
+    void navigator.clipboard.writeText(textToCopy);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 1500);
+  };
+
+  // Instant snap scroll into view when selected (Zero animation delay)
   useEffect(() => {
     if (isSelected) {
       const el = document.getElementById(`layer-row-${layer.id}`);
       if (el) {
         el.scrollIntoView({
-          behavior: 'smooth',
+          behavior: 'auto',
           block: 'nearest',
         });
       }
@@ -158,11 +172,7 @@ const LayerRow: React.FC<{
 
       {/* Text preview */}
       <span className={`flex-1 truncate select-none ${!layer.visible ? 'opacity-40 line-through' : ''}`}>
-        {truncateText(
-          translationPreviewMode === 'original'
-            ? layer.sourceText || layer.text
-            : layer.text
-        )}
+        {truncateText(textToCopy)}
       </span>
 
       {/* BBox info (subtle) */}
@@ -196,9 +206,25 @@ const LayerRow: React.FC<{
       >
         {layer.visible ? <Eye size={10} /> : <EyeOff size={10} />}
       </button>
+
+      {/* Copy button */}
+      <button
+        onClick={handleCopy}
+        className={`p-0.5 rounded transition-colors shrink-0 ${
+          isCopied
+            ? 'text-emerald-400 opacity-100'
+            : 'text-slate-500 hover:text-sky-400 opacity-0 group-hover/row:opacity-100'
+        }`}
+        title={isCopied ? "คัดลอกข้อความแล้ว" : "คัดลอกข้อความ"}
+        aria-label={isCopied ? "คัดลอกข้อความแล้ว" : "คัดลอกข้อความ"}
+      >
+        {isCopied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+      </button>
     </div>
   );
-};
+});
+
+LayerRow.displayName = 'LayerRow';
 
 /** Group header with collapse/expand */
 const GroupHeader: React.FC<{
@@ -207,20 +233,40 @@ const GroupHeader: React.FC<{
   pageNum: number;
   layerCount: number;
   isHovered: boolean;
-}> = ({ group, index, pageNum, layerCount, isHovered }) => {
-  const {
-    toggleGroupVisibility,
-    toggleGroupCollapsed,
-    toggleGroupLock,
-    setHoveredGroup,
-    deleteGroup,
-    activeDragItem,
-    setActiveDragItem,
-    moveLayerToGroup,
-    reorderGroups,
-  } = useLayerStore();
+}> = React.memo(({ group, index, pageNum, layerCount, isHovered }) => {
+  const toggleGroupVisibility = useLayerStore((s) => s.toggleGroupVisibility);
+  const toggleGroupCollapsed = useLayerStore((s) => s.toggleGroupCollapsed);
+  const toggleGroupLock = useLayerStore((s) => s.toggleGroupLock);
+  const setHoveredGroup = useLayerStore((s) => s.setHoveredGroup);
+  const deleteGroup = useLayerStore((s) => s.deleteGroup);
+  const activeDragItem = useLayerStore((s) => s.activeDragItem);
+  const setActiveDragItem = useLayerStore((s) => s.setActiveDragItem);
+  const moveLayerToGroup = useLayerStore((s) => s.moveLayerToGroup);
+  const reorderGroups = useLayerStore((s) => s.reorderGroups);
 
   const [isDragOver, setIsDragOver] = React.useState<'group' | 'layer' | null>(null);
+  const [isGroupCopied, setIsGroupCopied] = React.useState(false);
+  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const pageLayers = useLayerStore((s) => s.layersByPage.get(pageNum) || []);
+
+  const groupLayers = React.useMemo(() => {
+    return pageLayers.filter((l) => l.groupId === group.id);
+  }, [pageLayers, group.id]);
+
+  const groupFormattedText = React.useMemo(() => {
+    const words = groupLayers
+      .map((l) => (translationPreviewMode === 'original' ? l.sourceText || l.text : l.text))
+      .filter(Boolean);
+    return JSON.stringify(words);
+  }, [groupLayers, translationPreviewMode]);
+
+  const handleCopyGroup = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!groupFormattedText) return;
+    void navigator.clipboard.writeText(groupFormattedText);
+    setIsGroupCopied(true);
+    setTimeout(() => setIsGroupCopied(false), 1500);
+  };
 
   const isBeingDragged = activeDragItem?.type === 'group' && activeDragItem.id === group.id;
 
@@ -370,9 +416,25 @@ const GroupHeader: React.FC<{
       >
         {group.visible ? <Eye size={10} /> : <EyeOff size={10} />}
       </button>
+
+      {/* Copy group button */}
+      <button
+        onClick={handleCopyGroup}
+        className={`p-0.5 rounded transition-colors shrink-0 ${
+          isGroupCopied
+            ? 'text-emerald-400 opacity-100'
+            : 'text-slate-500 hover:text-sky-400 opacity-0 group-hover:opacity-100'
+        }`}
+        title={isGroupCopied ? "คัดลอกข้อความทั้งกลุ่มแล้ว" : "คัดลอกข้อความทั้งหมดในกลุ่มนี้"}
+        aria-label={isGroupCopied ? "คัดลอกข้อความทั้งกลุ่มแล้ว" : "คัดลอกข้อความทั้งหมดในกลุ่มนี้"}
+      >
+        {isGroupCopied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+      </button>
     </div>
   );
-};
+});
+
+GroupHeader.displayName = 'GroupHeader';
 
 interface LayerPanelProps {
   onActivateLayerPanel?: () => void;

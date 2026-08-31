@@ -94,9 +94,11 @@ flowchart TD
 - [`src/components/`](file:///c:/App/Electron/PDF_Translator/src/components/):
   - **Layout & Toolbars:**
     - [`Layout/AppHeaderToolbar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/AppHeaderToolbar.tsx): Titlebar ด้านบนสไตล์ Google Docs พร้อมระบบควบคุมฟอนต์และ OCR Profiles (`React.memo`)
+    - [`Layers/LayerPanel.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layers/LayerPanel.tsx): จัดการเลเยอร์ข้อความตามกลุ่ม Balloon/SFX พร้อมปุ่ม Copy ข้อความระดับบรรทัดและทั้งกลุ่ม (Balloon-wide copy) และสลับการมองเห็น/ลบ
+    - [`Layers/InteractiveLayerOverlay.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx): ตัวจัดการ Canvas Interactivity รองรับการ Drag, 8-Direction Resize, Rotate, Double-Click Inline Editing (รองรับทั้ง Normal View และ Split View โหมดเปรียบเทียบ)
     - [`Layout/CompactTopToolbar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/CompactTopToolbar.tsx): แถบควบคุมภาษาและปุ่มแปลด่วน
-    - [`Layout/LeftSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/LeftSidebar.tsx): แถบ Thumbnail Gallery, Pages List และ Layer Control
-    - [`Layout/RightSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/RightSidebar.tsx): แถบตั้งค่า OCR, Engine, พจนานุกรม และผลลัพธ์ OCR Text Layer
+    - [`Layout/LeftSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/LeftSidebar.tsx): แถบ Thumbnail Gallery, Pages List และ Layer Control (รองรับการพับและ Drag Resize)
+    - [`Layout/RightSidebar.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/Layout/RightSidebar.tsx): แถบตั้งค่า OCR, Engine, พจนานุกรม และผลลัพธ์ OCR Text Layer (รองรับการพับ Toggle และ Drag Resize)
   - **OCR Sub-Components:**
     - [`OCR/OCRTextLayerPanel.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/OCRTextLayerPanel.tsx): ควบคุม OCR Actions, Clear Cache, Re-OCR All (Ignore Cache)
     - [`OCR/EngineSelector/OCREngineSelector.tsx`](file:///c:/App/Electron/PDF_Translator/src/components/OCR/EngineSelector/OCREngineSelector.tsx): แถบเลือกโมเดล OCR พร้อม Copper Theme และ Quick Pill Buttons (Fast ⚡ / Best ✨ / Benchmark 📊)

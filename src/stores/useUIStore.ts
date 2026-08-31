@@ -12,6 +12,9 @@ interface UIState {
   isSidebarOpen: boolean;
   toggleSidebar: () => void;
   setSidebarOpen: (isOpen: boolean) => void;
+  isRightSidebarOpen: boolean;
+  toggleRightSidebar: () => void;
+  setRightSidebarOpen: (isOpen: boolean) => void;
 
   // Canvas State
   zoom: number;
@@ -42,6 +45,9 @@ export const useUIStore = create<UIState>((set) => ({
   isSidebarOpen: true,
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   setSidebarOpen: (isOpen) => set({ isSidebarOpen: isOpen }),
+  isRightSidebarOpen: true,
+  toggleRightSidebar: () => set((state) => ({ isRightSidebarOpen: !state.isRightSidebarOpen })),
+  setRightSidebarOpen: (isOpen) => set({ isRightSidebarOpen: isOpen }),
 
   // Canvas
   zoom: 1,

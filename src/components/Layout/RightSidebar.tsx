@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import {
   OVERLAY_FONT_OPTIONS,
@@ -17,11 +17,13 @@ import {
   Plus,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
 const OCR_TEXT_LAYER_OPEN_STORAGE_KEY = 'pdf_translator.ocr_text_layer_open';
 const OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_languages_section_open';
+const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'pdf_translator_right_sidebar_width';
 
 const readPersistedPanelOpen = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -65,6 +67,18 @@ const persistLanguagesSectionOpen = (open: boolean): void => {
   }
 };
 
+const readPersistedWidth = (fallback: number): number => {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const saved = window.localStorage.getItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY);
+    if (!saved) return fallback;
+    const parsed = parseInt(saved, 10);
+    return Number.isFinite(parsed) ? Math.min(600, Math.max(260, parsed)) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const LANGUAGES_CONFIG = [
   { code: 'th', flagUrl: 'https://flagcdn.com/w20/th.png', label: 'TH', name: 'Thai (ไทย)' },
   { code: 'en', flagUrl: 'https://flagcdn.com/w20/us.png', label: 'EN', name: 'English' },
@@ -74,6 +88,8 @@ const LANGUAGES_CONFIG = [
 ];
 
 interface RightSidebarProps {
+  isOpen?: boolean;
+  onToggle?: () => void;
   isAiProcessing?: boolean;
   isOfflineProcessing?: boolean;
   onAiTranslate?: () => void;
@@ -86,6 +102,8 @@ interface RightSidebarProps {
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({ 
+  isOpen = true,
+  onToggle,
   isAiProcessing = false, 
   isOfflineProcessing = false,
   onAiTranslate,
@@ -113,6 +131,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     setShowDebugOverlay,
   } = useOCRTextLayerStore();
 
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => readPersistedWidth(320));
+  const [isResizing, setIsResizing] = useState(false);
+
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(() => readPersistedPanelOpen());
   const [isLanguagesSectionOpen, setIsLanguagesSectionOpen] = useState<boolean>(() => readPersistedLanguagesSectionOpen());
   const [isTranslateInfoOpen, setIsTranslateInfoOpen] = useState(false);
@@ -127,6 +148,37 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     const next = Math.round((overlayFontSizeScale + delta) * 100) / 100;
     setOverlayFontSizeScale(next);
   };
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Calculate width from the right edge of the window to cursor
+      const newWidth = window.innerWidth - e.clientX;
+      if (newWidth >= 260 && newWidth <= 600) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        window.localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, sidebarWidth.toString());
+      } catch {}
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, sidebarWidth]);
 
   useEffect(() => {
     persistPanelOpen(isSettingsOpen);
@@ -146,17 +198,36 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     : 'border-white/12 bg-slate-900/60 text-slate-300';
 
   return (
-    <aside className="w-80 bg-slate-950/60 border-l border-white/10 backdrop-blur-xl flex flex-col h-full shrink-0">
-      <div className="border-b border-white/10 bg-slate-950/55">
-        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(122,28,210,0.34)_0%,rgba(219,39,119,0.24)_52%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
-          <div className="min-w-0 flex-1">
-            <label className="flex items-center gap-2 text-xs font-semibold text-white">
-              <Languages size={12} />
-              OCR Languages
-            </label>
-          </div>
+    <aside 
+      style={{
+        width: isOpen ? `${sidebarWidth}px` : '0px',
+        transition: isResizing ? 'none' : 'width 0.2s ease-in-out',
+      }}
+      className="bg-slate-950/60 border-l border-white/10 backdrop-blur-xl flex flex-col h-full shrink-0 relative overflow-visible z-20"
+    >
+      {/* Draggable Resize Handle on Left Edge */}
+      {isOpen && (
+        <div
+          onMouseDown={startResizing}
+          className="absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize hover:bg-sky-500/50 active:bg-sky-500/80 transition-colors z-30 group"
+          title="Drag to resize sidebar"
+        >
+          <div className="w-[1px] h-full mx-auto bg-transparent group-hover:bg-sky-400 group-active:bg-sky-400" />
+        </div>
+      )}
 
-          <div className="min-w-0 max-w-[56%] truncate text-right text-[11px] text-slate-200/85">
+      {/* Inner Content Area */}
+      <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0'} transition-opacity duration-150`}>
+        <div className="border-b border-white/10 bg-slate-950/55">
+          <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(122,28,210,0.34)_0%,rgba(219,39,119,0.24)_52%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <label className="flex items-center gap-2 text-xs font-semibold text-white">
+                <Languages size={12} />
+                OCR Languages
+              </label>
+            </div>
+
+            <div className="min-w-0 max-w-[56%] truncate text-right text-[11px] text-slate-200/85">
             {options.language.split('+').filter(Boolean).map((code) => {
               const found = SUPPORTED_LANGUAGES.find((language) => language.code === code);
               return found ? found.name : code;
@@ -434,8 +505,21 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <OCRTextLayerPanel />
       </div>
-    </aside>
-  );
+    </div>
+
+    {/* Toggle Button */}
+    {onToggle && (
+      <button 
+        onClick={onToggle}
+        className="absolute right-full top-1/2 translate-x-1/2 -translate-y-1/2 bg-slate-950/95 border border-white/20 shadow-xl rounded-full p-1.5 hover:bg-slate-900 hover:text-[#5CC6F2] transition-all z-[70]"
+        aria-label={isOpen ? 'Collapse OCR & Translation panel' : 'Expand OCR & Translation panel'}
+        title={isOpen ? 'Collapse OCR & Translation panel' : 'Expand OCR & Translation panel'}
+      >
+        {isOpen ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+      </button>
+    )}
+  </aside>
+);
 });
 
 RightSidebar.displayName = 'RightSidebar';

@@ -36,6 +36,7 @@ interface Props {
   /** ถ้า false = ซ่อน overlay ทั้งหมด (เมื่อ activeTool ไม่ใช่ 'select' และไม่ใช่ 'region') */
   isActive: boolean;
   layouts?: Map<number, OverlayLayout>;
+  previewModeOverride?: 'original' | 'translated';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -585,6 +586,7 @@ interface SelectionBoxProps {
   layout?: OverlayLayout;
   /** true = layer ถูก suppress โดย overlay dedup (hidden) — แสดง style จางลงแต่ยังเลือกได้ */
   isLayoutHidden?: boolean;
+  previewModeOverride?: 'original' | 'translated';
 }
 
 const areEqualSelectionBox = (prev: SelectionBoxProps, next: SelectionBoxProps) => {
@@ -596,6 +598,7 @@ const areEqualSelectionBox = (prev: SelectionBoxProps, next: SelectionBoxProps) 
   if (prev.startRotation !== next.startRotation) return false;
   if (prev.activeTool !== next.activeTool) return false;
   if (prev.isLayoutHidden !== next.isLayoutHidden) return false;
+  if (prev.previewModeOverride !== next.previewModeOverride) return false;
 
   // ocrTransform check (deep fields check)
   if (
@@ -664,10 +667,11 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   layer, ocrTransform, isSelected, isEditing, isMultiSelected,
   activeResizeDir, isRotating, startRotation, activeTool,
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
-  onDoubleClick, onHover, layout, isLayoutHidden,
+  onDoubleClick, onHover, layout, isLayoutHidden, previewModeOverride,
 }) => {
   const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
-  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const storePreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const translationPreviewMode = previewModeOverride || storePreviewMode;
   const viewMode = useUIStore((state) => state.viewMode);
   
   // ป้ายนี้ถือว่าเป็นฝั่งขวาในโหมดเปรียบเทียบ (split view) ก็ต่อเมื่อ viewMode === 'split' และมีข้อความแปลแล้ว/ภาษาไทย
@@ -905,7 +909,7 @@ const SelectionBox: React.FC<SelectionBoxProps> = React.memo(({
 
 // ─── Main Component: InteractiveLayerOverlay ──────────────────────
 export const InteractiveLayerOverlay: React.FC<Props> = ({
-  pageNum, layers, groups, ocrTransform, isActive, layouts,
+  pageNum, layers, groups, ocrTransform, isActive, layouts, previewModeOverride,
 }) => {
   const {
     selectedLayerIds,
@@ -920,7 +924,8 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     deleteLayer,
   } = useLayerStore();
 
-  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const storePreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const translationPreviewMode = previewModeOverride || storePreviewMode;
   const activeTool = useUIStore((state) => state.activeTool);
   const zoom = useUIStore((state) => state.zoom || 1);
 
@@ -1202,6 +1207,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         );
         const hasMoved = screenMovement >= 3;
         if (hasMoved) {
+          pushUndoSnapshot(pageNum);
           if (idsToMove.length > 1) {
             updateMultiLayerBBoxDelta(pageNum, new Set(idsToMove), { dx, dy });
           } else {
@@ -1236,7 +1242,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     };
   }, [
     pageNum, layers, groups, selectedLayerIds, ocrTransform, drawStartPos, drawCurrentPos,
-    updateLayerBBox, updateLayerRotation, updateMultiLayerBBoxDelta, synchronizeGroupBBox, handleCreateManualRegion, activeTool
+    updateLayerBBox, updateLayerRotation, updateMultiLayerBBoxDelta, synchronizeGroupBBox, handleCreateManualRegion, activeTool, pushUndoSnapshot
   ]);
 
   // ── Handlers ─────────────────────────────────────────────────
@@ -1261,7 +1267,6 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     const layer = layers.find(l => l.id === layerId);
     if (!layer || layer.locked) return;
 
-    pushUndoSnapshot(pageNum);
     dragState.current = {
       type: 'drag',
       layerId,
@@ -1269,7 +1274,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
       startMouseY: e.clientY,
       startBBox: { ...layer.bbox },
     };
-  }, [editingLayerId, layers, pageNum, pushUndoSnapshot, selectLayer, activeTool, setEditingLayerId]);
+  }, [editingLayerId, layers, selectLayer, activeTool, setEditingLayerId]);
 
   const handleMouseDownHandle = useCallback((e: React.MouseEvent, layerId: string, dir: ResizeDirection) => {
     if (e.button !== 0) return; // Only trigger for left-click
@@ -1473,6 +1478,7 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
                 onHover={setHoveredLayer}
                 layout={layout}
                 isLayoutHidden={isLayoutHidden}
+                previewModeOverride={previewModeOverride}
               />
             )}
           </React.Fragment>

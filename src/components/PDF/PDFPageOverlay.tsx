@@ -858,6 +858,7 @@ export const PDFPageOverlay: React.FC<{
         ocrTransform={ocrOverlayTransform}
         isActive={activeTool === 'select' || activeTool === 'region'}
         layouts={overlayLayoutByIndex}
+        previewModeOverride={previewModeOverride}
       />
     </>
   );

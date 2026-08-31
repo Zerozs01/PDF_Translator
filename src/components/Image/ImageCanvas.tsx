@@ -1156,6 +1156,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
               }}
               isActive={activeTool === 'select' || activeTool === 'region'}
               layouts={overlayLayoutByIndex}
+              previewModeOverride={previewModeOverride}
             />
           </div>
         ) : (
