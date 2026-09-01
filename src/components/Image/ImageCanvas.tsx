@@ -271,7 +271,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
           if (preferredKey) {
             ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
-            ocrState.setTranslationPreviewMode('translated');
           }
         }
       } finally {

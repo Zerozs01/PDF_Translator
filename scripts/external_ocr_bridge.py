@@ -921,7 +921,6 @@ def suppress_contained_hangul_fragments(
 
         bbox = line.get("bbox") or {}
         confidence = float(line.get("confidence", 0.0) or 0.0)
-        line_center_x = bbox_center_x(bbox)
         should_drop = False
         drop_meta: Dict[str, Any] | None = None
 
@@ -944,74 +943,21 @@ def suppress_contained_hangul_fragments(
                 continue
 
             other_bbox = other.get("bbox") or {}
-            other_conf = float(other.get("confidence", 0.0) or 0.0)
             overlap_y = vertical_overlap_ratio(bbox, other_bbox)
             overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
             contained_x = horizontal_containment_ratio(bbox, other_bbox)
             center_delta = abs(bbox_center_y(bbox) - bbox_center_y(other_bbox))
-            center_dx = abs(line_center_x - bbox_center_x(other_bbox))
             min_height = max(8.0, min(bbox_height(bbox), bbox_height(other_bbox)))
-            min_width = max(8.0, min(bbox_width(bbox), bbox_width(other_bbox)))
-            narrow_fragment = bbox_width(bbox) <= bbox_width(other_bbox) * 0.58
-            same_band = center_delta <= max(52.0, min_height * 2.4)
-            prefix_shadow = (
-                bool(token)
-                and bool(other_token)
-                and token[:1] == other_token[:1]
-                and narrow_fragment
-                and contained_x >= 0.62
-                and center_delta <= max(120.0, min_height * 5.6)
-            )
-            particle_shadow = False
-            if is_particle_candidate:
-                stem_shadow = (
-                    particle_stem in other_token
-                    or other_token.startswith(particle_stem)
-                    or are_near_duplicate_tokens(particle_stem, other_token[:len(particle_stem)])
-                )
-                particle_shadow = (
-                    stem_shadow
-                    and (narrow_fragment or len(token) <= 3)
-                    and center_delta <= max(420.0, min_height * 16.0)
-                    and (contained_x >= 0.1 or overlap_x >= 0.02 or center_dx <= max(380.0, min_width * 3.5))
-                    and confidence <= other_conf + 12.0
-                )
-            overlap_shadow = same_band and narrow_fragment and overlap_y >= 0.22 and (contained_x >= 0.55 or overlap_x >= 0.42)
-            particle_prefix_clone = False
-            if is_particle_candidate and len(token) <= 4:
-                stem_in_other = particle_stem in other_token or other_token.startswith(particle_stem)
-                longer_other = len(other_token) >= len(particle_stem) + 3
-                same_cluster = center_delta <= max(560.0, min_height * 22.0)
-                particle_prefix_clone = stem_in_other and longer_other and same_cluster
-            symbol_shadow = (
-                has_symbol_noise
-                and len(token) <= 3
-                and narrow_fragment
-                and (token in other_token or are_near_duplicate_tokens(token, other_token[:len(token) + 1]))
-                and (contained_x >= 0.34 or overlap_x >= 0.08 or center_dx <= max(170.0, min_width * 1.5))
-                and center_delta <= max(260.0, min_height * 10.0)
-            )
-            if particle_prefix_clone:
+            narrow_fragment = bbox_width(bbox) <= bbox_width(other_bbox) * 0.70
+
+            # Only suppress if boxes physically overlap on the exact same row/band
+            is_same_row = center_delta <= min_height * 0.85 and overlap_y >= 0.45
+            is_horizontal_overlap = overlap_x >= 0.50 or contained_x >= 0.65
+
+            if is_same_row and is_horizontal_overlap and narrow_fragment and confidence <= 98.0:
                 should_drop = True
                 drop_meta = {
-                    "reason": "particle_prefix_clone",
-                    "source": source,
-                    "text": text,
-                    "shadowWith": other_text,
-                }
-                break
-            if (overlap_shadow or prefix_shadow or particle_shadow or symbol_shadow) and confidence <= 98.0:
-                should_drop = True
-                if particle_shadow:
-                    reason = "particle_shadow"
-                elif symbol_shadow:
-                    reason = "symbol_shadow"
-                elif prefix_shadow:
-                    reason = "prefix_shadow"
-                else:
-                    reason = "overlap_shadow"
-                drop_meta = {
-                    "reason": reason,
+                    "reason": "overlap_shadow",
                     "source": source,
                     "text": text,
                     "shadowWith": other_text,
@@ -1061,6 +1007,7 @@ def drop_final_particle_shadow_lines(
             filtered.append(line)
             continue
 
+        bbox = line.get("bbox") or {}
         line_conf = float(line.get("confidence", 0.0) or 0.0)
         shadow_other: Dict[str, Any] | None = None
         for other in lines:
@@ -1077,10 +1024,19 @@ def drop_final_particle_shadow_lines(
             )
             if not stem_match:
                 continue
-            other_conf = float(other.get("confidence", 0.0) or 0.0)
-            if line_conf <= other_conf + 40.0:
-                shadow_other = other
-                break
+
+            other_bbox = other.get("bbox") or {}
+            overlap_y = vertical_overlap_ratio(bbox, other_bbox)
+            overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+            center_delta = abs(bbox_center_y(bbox) - bbox_center_y(other_bbox))
+            min_height = max(8.0, min(bbox_height(bbox), bbox_height(other_bbox)))
+
+            # Must physically collide on the exact same row
+            if center_delta <= min_height * 0.85 and overlap_y >= 0.45 and overlap_x >= 0.50:
+                other_conf = float(other.get("confidence", 0.0) or 0.0)
+                if line_conf <= other_conf + 15.0:
+                    shadow_other = other
+                    break
 
         if shadow_other is None:
             filtered.append(line)
@@ -2941,14 +2897,6 @@ def cleanup_korean_panel_result(result: Dict[str, Any], width: int, height: int,
             continue
         if near_bottom and any(char.isdigit() for char in text) and not has_hangul:
             continue
-        if near_bottom and line_height <= height * 0.02 and len(text) >= 8:
-            continue
-        if near_bottom and has_hangul and line_width <= width * 0.48 and line_height <= height * 0.022 and len(text) >= 8:
-            continue
-        if near_bottom and has_hangul and any(char.isdigit() for char in text) and len(text) >= 10:
-            continue
-        if lower_band and right_side and line_height <= height * 0.024 and line_width <= width * 0.42 and len(text) >= 8:
-            continue
 
         filtered_candidates.append(line)
 
@@ -3747,22 +3695,21 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     rec_batch = 7
             if lang == "korean" and profile_key != "cpu_panel_accurate":
                 if quality_profile == "fast":
-                    det_thresh = 0.24
-                    det_box_thresh = 0.54
-                    det_unclip_ratio = 1.70
-                    rec_score_thresh = 0.35
-                elif quality_profile == "balanced":
                     det_thresh = 0.20
-                    det_box_thresh = 0.48
-                    det_unclip_ratio = 1.80
-                    rec_score_thresh = 0.32
-                else:
-                    # Wider unclip_ratio to merge adjacent Hangul syllable boxes into
-                    # phrase-level regions, reducing fragmentation in manhwa/webtoon text.
-                    det_thresh = 0.18
+                    det_box_thresh = 0.50
+                    det_unclip_ratio = 1.85
+                    rec_score_thresh = 0.30
+                elif quality_profile == "balanced":
+                    det_thresh = 0.16
                     det_box_thresh = 0.42
                     det_unclip_ratio = 1.95
-                    rec_score_thresh = 0.28
+                    rec_score_thresh = 0.25
+                else:
+                    # Best mode: Optimal unclip_ratio and sensitivity for full Hangul syllable recall
+                    det_thresh = 0.14
+                    det_box_thresh = 0.36
+                    det_unclip_ratio = 2.05
+                    rec_score_thresh = 0.20
         else:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
                 det_limit = 2560 if shortest <= 900 else 2800
@@ -3804,9 +3751,6 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
         else:
             det_limit = min(3600, int(det_limit * 1.08))
             rec_batch = 8
-
-    if lang == "korean":
-        det_unclip_ratio = 1.2
 
     predict_kwargs: Dict[str, Any] = {
         "text_det_limit_type": "max",

@@ -219,7 +219,6 @@ const PDFPageContainer = React.memo<{
 
           if (preferredKey) {
             ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
-            ocrState.setTranslationPreviewMode('translated');
           }
         }
       } finally {
@@ -326,6 +325,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   const totalPages = useProjectStore((s) => s.totalPages);
   const setTotalPages = useProjectStore((s) => s.setTotalPages);
   const viewMode = useProjectStore((s) => s.viewMode);
+  const setPage = useProjectStore((s) => s.setPage);
 
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
   const activeTool = useUIStore((s) => s.activeTool);
@@ -396,6 +396,13 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     navigationStateRef.current.isObserverTriggeredPageChange = false;
 
     // Only snap or adjust pan if page was changed from sidebar/navigation/initial load (NOT from scroll observer)
+    // Secondary split-view canvas (previewModeOverride === 'translated') must NOT dispatch pan updates to avoid fighting the primary canvas
+    if (previewModeOverride === 'translated') {
+      prevPageRef.current = currentPage;
+      prevViewModeRef.current = viewMode;
+      return;
+    }
+
     if (viewMode === 'continuous' && (viewModeChanged || (isInitialMount && currentPage > 1) || (pageChanged && !fromObserver))) {
       // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
       // from firing setPage and overriding the target page before the scroll snap finishes.
@@ -452,6 +459,52 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     prevPageRef.current = currentPage;
     prevViewModeRef.current = viewMode;
   }, [currentPage, viewMode, zoom, setPan, stateRef]);
+
+  // Real-time active page tracking for continuous scroll & split compare modes
+  useEffect(() => {
+    if (viewMode !== 'continuous' || previewModeOverride === 'translated') return;
+    if (isProgrammaticScrollRef.current) return;
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const clientHeight = container.clientHeight || window.innerHeight;
+    const currentZoom = Math.max(0.1, zoom);
+    // Middle of the viewport in content coordinate space
+    const viewportCenterY = (-pan.y + clientHeight / 2) / currentZoom;
+
+    const pageNodes = container.querySelectorAll<HTMLElement>('.pdf-canvas-document [data-page-container]');
+    if (!pageNodes.length) return;
+
+    let targetPage = currentPage;
+    let minDistance = Infinity;
+
+    for (let i = 0; i < pageNodes.length; i++) {
+      const node = pageNodes[i];
+      const pageAttr = node.getAttribute('data-page-container');
+      if (!pageAttr) continue;
+      const pageNum = parseInt(pageAttr, 10);
+      const top = node.offsetTop;
+      const height = node.offsetHeight;
+      const bottom = top + height;
+
+      if (viewportCenterY >= top && viewportCenterY <= bottom) {
+        targetPage = pageNum;
+        break;
+      }
+
+      const pageCenter = top + height / 2;
+      const dist = Math.abs(pageCenter - viewportCenterY);
+      if (dist < minDistance) {
+        minDistance = dist;
+        targetPage = pageNum;
+      }
+    }
+
+    if (targetPage !== currentPage && targetPage >= 1 && targetPage <= totalPages) {
+      navigationStateRef.current.isObserverTriggeredPageChange = true;
+      setPage(targetPage);
+    }
+  }, [pan.y, zoom, viewMode, previewModeOverride, totalPages, currentPage, setPage]);
 
   const onDocumentLoadSuccess = React.useCallback(({ numPages }: { numPages: number }) => {
     setTotalPages(numPages);

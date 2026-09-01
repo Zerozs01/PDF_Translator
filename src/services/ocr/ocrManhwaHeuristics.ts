@@ -318,9 +318,8 @@ export function processKoreanManhwaPipeline(
       const a = items[i].rect;
       const b = items[j].rect;
 
-      const adjacent =
-        isVerticallyAdjacent(a, b, maxVerticalGap, minColumnOverlapRatio) ||
-        isHorizontallyAdjacent(a, b, maxHorizontalGap);
+      // Only merge horizontally adjacent word fragments on the same line row
+      const adjacent = isHorizontallyAdjacent(a, b, maxHorizontalGap);
 
       if (adjacent) {
         if (pageHeight !== undefined) {
@@ -336,13 +335,13 @@ export function processKoreanManhwaPipeline(
 
   for (const [, indices] of uf.groups()) {
     const groupItems = indices.map((i) => items[i]);
-    // Inside a single speech bubble / merged block, CJK/Korean text is read LTR (Left-to-Right)
+    // Inside a single line / horizontal merged block, text is read LTR (Left-to-Right)
     const sorted = sortGroupByReadingOrder(groupItems, "ltr-ttb");
 
     const text = sorted
       .map((item) => item.box.text.trim())
       .filter(Boolean)
-      .join("\n");
+      .join(" ");
 
     const boundingRect = sorted
       .map((item) => item.rect)

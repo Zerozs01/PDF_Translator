@@ -1652,6 +1652,244 @@ const applyThaiConversationalGlossaryInternal = (
     return preserveSourceTrailingPunctuation(source, 'เป็นไปได้ไหมว่า');
   }
 
+  if (compactSpanishSourceAsciiUpper.includes('MALDITASEA') && compactSpanishSourceAsciiUpper.includes('TRAMPA') && compactSpanishSourceAsciiUpper.includes('LLEVARECONMIGO')) {
+    return preserveSourceTrailingPunctuation(source, 'บ้าเอ๊ย! พวกมันวางกับดักเรา.. ขอโทษนะ เคย์ ในเมื่อเรื่องมันมาถึงขั้นนี้แล้ว.. ไม่ว่าต้องทำอะไร ฉันก็ไม่สน ฉันสาบานว่าจะขโมยมันมาและเอาติดตัวไปด้วยให้ได้!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('VACALECHERA') && compactSpanishSourceAsciiUpper.includes('TALLADECOPA')) {
+    return preserveSourceTrailingPunctuation(source, 'โอ้โห...! นี่มันอะไรกันเนี่ย?! เธอเป็นแม่วัวนมหรือไงกัน?! คัพไซส์อะไรเนี่ย ใหญ่โตขนาดนี้?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DOSCAMARASINSTALADAS') && compactSpanishSourceAsciiUpper.includes('GRANANGULAR')) {
+    return preserveSourceTrailingPunctuation(source, 'มีกล้องติดตั้งอยู่ในห้องนอนแค่สองตัว แต่เป็นเลนส์มุมกว้าง เลยมองไม่เห็นรายละเอียดชัดๆ...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('POSETANPROVOCATIVA') && compactSpanishSourceAsciiUpper.includes('LASCIVA')) {
+    return preserveSourceTrailingPunctuation(source, 'โอ้โห ช่างเป็นท่าทางที่ยั่วสวาทอะไรอย่างนี้! ทั้งเซ็กซี่และแหวกตรงนั้นของเธออย่างลามกซะจริง');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('JUGUETESEXUALEXCLUSIVO') && compactSpanishSourceAsciiUpper.includes('ESTOYLISTA')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉัน ฉันคือ.. ของเล่นทางเพศส่วนตัวของนายท่าน ฉันพร้อมแล้ว รีบๆ ทำเถอะค่ะ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('POSETANHUMILLANTE') && compactSpanishSourceAsciiUpper.includes('ACTUACION')) {
+    return preserveSourceTrailingPunctuation(source, 'ท่าทางน่าอับอายอะไรแบบนี้ นี่มันความอับอายที่สุดในชีวิตจอมโจรของฉันเลยนะ เคย์ ได้โปรด อย่ามองนะ! ทั้งหมดนี่มันแค่การแสดงเท่านั้นนะ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('EXCITADAENABSOLUTO')) {
+    return preserveSourceTrailingPunctuation(source, 'จ-จริงด้วย ทำไมล่ะ?! ทั้งๆ ที่ฉันไม่ได้มีอารมณ์เลยสักนิดเนี่ยนะ?! เอ๋?!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('MEVOYADORMIR') && compactSpanishSourceAsciiUpper.includes('CONTINUAREMOS')) {
+    return preserveSourceTrailingPunctuation(source, 'อืมมม~ ฉันจะไปนอนแล้ว เหนื่อยแล้วล่ะ ไว้เรามาต่อกันพรุ่งนี้นะ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('MEDATANTARABIA') && compactSpanishSourceAsciiUpper.includes('SECORRADENTRODEMI')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันเจ็บใจชะมัดที่ต้องยอมให้ไอ้หมอนี่เสร็จข้างในตัวฉัน เพียงเพื่อให้ได้เจอเคย์เร็วที่สุดเท่าที่จะทำได้!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('YAESELQUINTODIA') && compactSpanishSourceAsciiUpper.includes('PODRESALIR')) {
+    return preserveSourceTrailingPunctuation(source, 'นี่ก็เป็นวันที่ห้าแล้ว... ถ้ามัวแต่รอโดยไม่รู้ว่าเมื่อไหร่เขาจะเสร็จ ฉันคงไม่มีวันได้ออกไปจากที่นี่แน่ๆ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ZONADELGLANDE') && compactSpanishSourceAsciiUpper.includes('AGUANTAR')) {
+    return preserveSourceTrailingPunctuation(source, 'ดูเหมือนว่าตรงส่วนหัวจะอ่อนไหวมากเลยสินะ จริงไหมล่ะ? ฮิฮิ... แล้วไงล่ะ? ทนไม่ไหวแล้วล่ะสิ ใช่ไหมล่ะ?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('CANTIDAD') && compactSpanishSourceAsciiUpper.includes('VISCOSIDAD') && compactSpanishSourceAsciiUpper.includes('SEMEN')) {
+    return preserveSourceTrailingPunctuation(source, 'ทั้งปริมาณและความเหนียวข้นของน้ำอสุจิมันแตกต่างจากของเคย์อย่างสิ้นเชิงเลย.');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('SIEMPREESTARODEADODEMUJERES') && compactSpanishSourceAsciiUpper.includes('SORPRENDENTE')) {
+    return preserveSourceTrailingPunctuation(source, 'หมอนี่ถูกรายล้อมไปด้วยผู้หญิงอยู่ตลอดเวลาแท้ๆ ฉันก็นึกว่าจะไม่ค่อยรู้สึกอะไรกับเรื่องแค่นี้ซะอีก แต่กลับน่าประหลาดใจแฮะ.');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DEWILHELMVONREINHARDT') && compactSpanishSourceAsciiUpper.includes('MASRICODELA')) {
+    return preserveSourceTrailingPunctuation(source, 'ของวิลเฮล์ม ฟอน ไรน์ฮาร์ดท์ ชายผู้ร่ำรวยที่สุดในภูมิภาคชลอส');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ESVERDAD') && compactSpanishSourceAsciiUpper.includes('SALADESEGURIDAD') && compactSpanishSourceAsciiUpper.includes('AREAB')) {
+    return preserveSourceTrailingPunctuation(source, 'จริงด้วย... บางทีไม่ใช่แค่ห้องรักษาความปลอดภัย แต่เป้าหมายอาจจะอยู่ในพื้นที่ B ด้วย...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('PORFIN') && compactSpanishSourceAsciiUpper.includes('POLLA') && compactSpanishSourceAsciiUpper.includes('ARDIENDO')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า... ในที่สุด?! ควยของเขา... กำลังลุกเป็นไฟ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ESTEMALDITO') && compactSpanishSourceAsciiUpper.includes('OTRAVEZ') && compactSpanishSourceAsciiUpper.includes('MUERETE')) {
+    return preserveSourceTrailingPunctuation(source, 'ไอ้สารเลวนี้อีกแล้ว.. ไปตายซะ ไปตายซะ ไอ้เวรเอ๊ย!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('METALA') && compactSpanishSourceAsciiUpper.includes('DESTROCEME') && compactSpanishSourceAsciiUpper.includes('UTERO')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า...! ได้โปรดเถอะค่ะ ยัดเข้ามาเลยค่ะนายท่าน ขอร้องล่ะ ฉันทนไม่ไหวอีกต่อไปแล้ว... ทำลายหนูให้ลึกถึงมดลูกด้วยควยของคนหล่อเถอะค่ะ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('QUEPASA') && compactSpanishSourceAsciiUpper.includes('CAMARA') && compactSpanishSourceAsciiUpper.includes('PASANDO')) {
+    return preserveSourceTrailingPunctuation(source, 'เกิดอะไรขึ้นกันแน่?! จู่ๆ กล้องก็... นี่มันเกิดอะไรขึ้นกันเนี่ย?!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('FINALMENTE') && compactSpanishSourceAsciiUpper.includes('METIO') && compactSpanishSourceAsciiUpper.includes('DEJAMEVER')) {
+    return preserveSourceTrailingPunctuation(source, 'ในที่สุด อ่า... ก็ยัดเข้าไปแล้ว ขอร้องล่ะ ให้ฉันดูหน่อยสิ! ไม่... ฉันทำไม่ได้!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ESTETIPO') && compactSpanishSourceAsciiUpper.includes('ESBUENO') && compactSpanishSourceAsciiUpper.includes('FUERTE')) {
+    return preserveSourceTrailingPunctuation(source, 'หมอนี่.. เก่งเป็นบ้า สุดยอดเลย... อ๊า... ช่างรุนแรงอะไรอย่างนี้!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('QUEPROFUNDO') && compactSpanishSourceAsciiUpper.includes('PELIGROSO')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า... ลึกชะมัด นี่มันอันตรายจริงๆ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('VIENEVIENE') && compactSpanishSourceAsciiUpper.includes('CORRER')) {
+    return preserveSourceTrailingPunctuation(source, 'มันมาแล้ว มาแล้ว มาแล้ว!! ฉันกำลังจะเสร็จอีกรอบแล้ว!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('HOMBREMUCHO') && compactSpanishSourceAsciiUpper.includes('PERSISTENTE') && compactSpanishSourceAsciiUpper.includes('ENTREGADO')) {
+    return preserveSourceTrailingPunctuation(source, 'เขาเป็นผู้ชายที่ตื๊อและรับมือยากกว่าที่ฉันคิดไว้เยอะมาก... ทั้งๆ ที่ยอมมอบร่างกายให้ไปแล้ว แต่กลับไม่ได้ประโยชน์อะไรเลย...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DIA2') && compactSpanishSourceAsciiUpper.includes('PEZONES') && compactSpanishSourceAsciiUpper.includes('CLITORIS')) {
+    return preserveSourceTrailingPunctuation(source, 'วันที่ 2 ของภารกิจ หลังจากหัวนมแล้ว ตลอดสองวันนี้เอริชก็เอาแต่รุกรานเฉพาะคลิตอริสของฉันอย่างหมกมุ่น');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('PASABATODOELDIA') && compactSpanishSourceAsciiUpper.includes('SALIVA')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันต้องใช้เวลาทั้งวันแบบนั้น โดยที่ทั้งร่างกาย ยกเว้นหัวนมและคลิตอริส ชุ่มโชกไปด้วยน้ำลายของเอริช');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ODIABA') && compactSpanishSourceAsciiUpper.includes('TOCARA') && compactSpanishSourceAsciiUpper.includes('CLITORIS')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันเกลียดตัวเองเหลือเกินที่เผลอแอบหวังให้เขาสัมผัสหัวนมหรือคลิตอริสของฉัน แม้จะเพียงแค่ชั่วพริบตาก็ตาม');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('RECORDABA') && compactSpanishSourceAsciiUpper.includes('CARADEKEI')) {
+    return preserveSourceTrailingPunctuation(source, 'ทุกๆ ครั้งฉันต้องนึกถึงหน้าของเคย์เพื่อพยายามจะอดทนไว้...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('SOBRESCRIBIENDO') && compactSpanishSourceAsciiUpper.includes('RASTRODEKEI')) {
+    return preserveSourceTrailingPunctuation(source, 'ราวกับว่าเขากำลังเขียนทับร่องรอยของเคย์ที่หลงเหลืออยู่บนร่างกายของฉัน...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('EMBESTIDAS') && compactSpanishSourceAsciiUpper.includes('KEISOLIA')) {
+    return preserveSourceTrailingPunctuation(source, 'การกระแทกของเขากระตุ้นอย่างเชื่องช้าและเหนอะหนะ เข้าไปลึกถึงจุดที่เคย์เคยสัมผัสได้พอดี');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DISFRAZ') && compactSpanishSourceAsciiUpper.includes('TETASDEVACA')) {
+    return preserveSourceTrailingPunctuation(source, 'ฮ่าๆๆ เธอเตรียมชุดนี้เองเหรอเนี่ย? ใส่แล้วเข้ากับนมวัวคู่นั้นของเธอเป๊ะเลย ฉันชอบนะ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('TALVEZ') && compactSpanishSourceAsciiUpper.includes('OPORTUNIDADPERFECTA')) {
+    return preserveSourceTrailingPunctuation(source, 'บางที... นี่อาจจะเป็นโอกาสที่สมบูรณ์แบบก็ได้...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('OFRECER') && compactSpanishSourceAsciiUpper.includes('POLLA') && compactSpanishSourceAsciiUpper.includes('VULNERABLE')) {
+    return preserveSourceTrailingPunctuation(source, 'การเอาควยของตัวเองมาเสนอให้อย่างไร้การป้องกันแบบนี้... ฉันจะปล่อยให้โอกาสนี้หลุดลอยไปไม่ได้เด็ดขาด');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('EYACULEAMEDIAS') && compactSpanishSourceAsciiUpper.includes('DESVENTAJA')) {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าฉันปล่อยให้เขาแตกแค่ครึ่งๆ กลางๆ เหมือนคราวที่แล้ว ฉันจะเสียเปรียบเอาได้ เขาควบคุมการหลั่งของตัวเองได้ดีมาก');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('QUIERESMETERMELA') && compactSpanishSourceAsciiUpper.includes('SOLTARLOTODO')) {
+    return preserveSourceTrailingPunctuation(source, 'แล้วยังไงล่ะ? อยากจะยัดเข้ามาในหีของฉันแล้วปล่อยออกมาให้หมดเลยไหมล่ะ?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ESTEOLOR') && compactSpanishSourceAsciiUpper.includes('CIENTOSDEVECES')) {
+    return preserveSourceTrailingPunctuation(source, 'กลิ่นนี้... มันรุนแรงกว่าน้ำอสุจิที่เขาเคยฉีดราดบนตัวฉันเป็นสิบ ไม่สิ เป็นร้อยเท่าเลย!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('OLORDEUNVERDADEROMACHO') || (compactSpanishSourceAsciiUpper.includes('VERDADEROMACHO') && compactSpanishSourceAsciiUpper.includes('DIFERENTEALDEKEI'))) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า... นี่น่ะเหรอกลิ่นของผู้ชายตัวจริง? มันแตกต่างจากของเคย์อย่างสิ้นเชิง ทั้งเข้มข้นและรุนแรงกว่ามาก');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('COSASOBSCENAS') && compactSpanishSourceAsciiUpper.includes('NINFOMANA')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า... นี่ฉันกำลังคิดเรื่องลามกอะไรอยู่เนี่ย? แปลกชะมัด นี่ฉันกลายเป็นผู้หญิงบ้ากามไปแล้วจริงๆ เหรอ?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('MIERDAMALDITASEA') && compactSpanishSourceAsciiUpper.includes('PAJAMISERABLE')) {
+    return preserveSourceTrailingPunctuation(source, 'โธ่เวรเอ๊ย บ้าชะมัด! เธอต้องพยายามดิ้นรนขนาดนั้นในสถานการณ์แบบนั้นแท้ๆ แต่ฉันกลับมานั่งช่วยตัวเองอย่างน่าสมเพชอยู่ที่นี่เนี่ยนะ!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('NOHAYREMEDIO') && compactSpanishSourceAsciiUpper.includes('METERE')) {
+    return preserveSourceTrailingPunctuation(source, 'อืม... ช่วยไม่ได้แฮะ ถ้านายท่านยืนกรานขนาดนั้นล่ะก็... ง-งั้นฉันจะยัดเข้าไปล่ะนะคะ ตกลงไหม?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('PORFAVOREVE') && compactSpanishSourceAsciiUpper.includes('POCOMAS')) {
+    return preserveSourceTrailingPunctuation(source, 'ได้โปรดเถอะ อีฟ! ขออีกแค่นิดเดียวเท่านั้น!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('LOSIENTOKEI') && compactSpanishSourceAsciiUpper.includes('ESTAVEZ')) {
+    return preserveSourceTrailingPunctuation(source, 'ขอโทษนะ เคย์... แต่มันรู้สึกดีจริงๆ ขอโทษนะ... แค่ครั้งนี้ครั้งเดียวเท่านั้น..');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('CELAYOTAMBIEN') && compactSpanishSourceAsciiUpper.includes('VIGILANCIA')) {
+    return preserveSourceTrailingPunctuation(source, 'เซร่า ฉันก็ต้องขอโทษด้วย ตั้งแต่ตอนนี้เป็นต้นไป ขอยกเลิกการเฝ้าระวังทั้งหมด');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('FUNCIONO') && compactSpanishSourceAsciiUpper.includes('EVEDATEPRISA') && compactSpanishSourceAsciiUpper.includes('TIEMPO')) {
+    return preserveSourceTrailingPunctuation(source, 'เยี่ยม ได้ผลด้วย! อีฟ รีบเข้า! ไม่มีเวลาแล้วนะ!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ROSAETERNA') && compactSpanishSourceAsciiUpper.includes('ESCAPADEAHI')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันไม่สนกุหลาบนิรันดร์อะไรนั่นแล้ว! หนีออกมาจากที่นั่นเดี๋ยวนี้เลย!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('CONSENTIRME') && compactSpanishSourceAsciiUpper.includes('GRANDIOSAPOLLA')) {
+    return preserveSourceTrailingPunctuation(source, 'ช่วยตามใจฉันอีกสักนิด... ด้วยควยอันยิ่งใหญ่ของท่านได้ไหมคะ ท่านเอริช?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('OYEOYE') && compactSpanishSourceAsciiUpper.includes('TIENESSUFICIENTE')) {
+    return preserveSourceTrailingPunctuation(source, 'เฮ้ๆ...นี่ยังไม่พออีกเหรอเนี่ย?!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('SISIGUEOBSESIONANDOSE') && compactSpanishSourceAsciiUpper.includes('FACILMENTE')) {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าเขายิ่งหมกมุ่นกับฉันมากขึ้น ฉันก็น่าจะขโมยกุหลาบนิรันดร์ได้ง่ายขึ้นไม่ใช่เหรอ?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('TUPOLLASESIENTETANBIEN') || (compactSpanishSourceAsciiUpper.includes('AHNQUEBIEN') && compactSpanishSourceAsciiUpper.includes('TUPOLLA'))) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า... ดีจังเลย ควยของนายมันรู้สึกดีชะมัด');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('NOLASAQUES') && compactSpanishSourceAsciiUpper.includes('CORRETEDENTRO')) {
+    return preserveSourceTrailingPunctuation(source, 'อย่าเพิ่งเอาออกนะ แตกข้างในตัวฉันแบบนี้แหละ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('JAJAJA') && compactSpanishSourceAsciiUpper.includes('CARADESORPRESA')) {
+    return preserveSourceTrailingPunctuation(source, 'ฮ่าๆๆ เป็นอะไรไป? ทำไมทำหน้าตกใจขนาดนั้นล่ะ?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('AHMIERDA') && compactSpanishSourceAsciiUpper.includes('ENSERIO') && compactSpanishSourceAsciiUpper.includes('DETODOSMODOS')) {
+    return preserveSourceTrailingPunctuation(source, 'อ่า เวรเอ๊ย... จริงจังเหรอเนี่ย? ช่างเถอะ... ยังไงก็ตาม...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DESPERDICIO') && compactSpanishSourceAsciiUpper.includes('OPORTUNIDAD') && compactSpanishSourceAsciiUpper.includes('OBSESIONARSECONMIPOLLA')) {
+    return preserveSourceTrailingPunctuation(source, 'พอเห็นว่าเธอทิ้งโอกาสที่แกมอบให้ไป เพียงเพราะมัวแต่หมกมุ่นอยู่กับควยของฉัน แกเองก็คงจะรู้ตัวแล้วสินะ จริงไหม?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('QUEESTECONO') && compactSpanishSourceAsciiUpper.includes('VOLVERACONTIGO')) {
+    return preserveSourceTrailingPunctuation(source, 'ว่าหีนี้จะไม่มีวันกลับไปหาแกอีกเป็นอันขาด!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('PORQUELASCOSASTERMINARONASI')) {
+    return preserveSourceTrailingPunctuation(source, 'ทำไมกัน...? ทำไมเรื่องมันถึงได้ลงเอยแบบนี้ล่ะ...?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('QUELEPARECE') && compactSpanishSourceAsciiUpper.includes('ROPA') && compactSpanishSourceAsciiUpper.includes('GUSTA')) {
+    return preserveSourceTrailingPunctuation(source, 'คิดว่ายังไงบ้างคะ? ฉันใส่ชุดที่รู้ว่าท่านชอบมาเลยนะคะ ท่านเอริช');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('YANOTENDRE') && compactSpanishSourceAsciiUpper.includes('CUERDAFLOJA') && compactSpanishSourceAsciiUpper.includes('POLICIA')) {
+    return preserveSourceTrailingPunctuation(source, 'ฉันจะไม่ต้องเดินบนเส้นด้ายเสี่ยงชีวิต หรือต้องคอยอยู่างหลบๆ ซ่อนๆ หนีตำรวจอีกต่อไปแล้ว...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ESTOAH') && compactSpanishSourceAsciiUpper.includes('QUERICOTUPOLLA')) {
+    return preserveSourceTrailingPunctuation(source, 'นี่มัน... อ๊า... อ๊า ฟินจังเลย ควยของนาย...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('SIASIES') && compactSpanishSourceAsciiUpper.includes('FUERTEQUEKEI')) {
+    return preserveSourceTrailingPunctuation(source, 'ใช่... เป็นแบบนั้นแหละ ท่านเอริชคือ... อ๊า! ผู้ชายที่แข็งแกร่งกว่าเคย์มาก');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('UNCUERPOTANFUERTE') && compactSpanishSourceAsciiUpper.includes('UNIDAATULENGUA')) {
+    return preserveSourceTrailingPunctuation(source, 'ร่างกายที่กำยำและเปี่ยมด้วยความเป็นชายแบบนี้มันช่างมีเสน่ห์เหลือล้นจริงๆ... แม้แต่จูบของท่านก็รู้สึกดีจนฉันอยากจะประกบลิ้นแนบชิดกับท่านไปตลอดทั้งวันเลยค่ะ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('PORFAVORLLAMEME') && compactSpanishSourceAsciiUpper.includes('VERDADERONOMBRE')) {
+    return preserveSourceTrailingPunctuation(source, 'ได้โปรด... เรียกฉันด้วยชื่อจริงเถอะค่ะ...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('YSENORERICH') && compactSpanishSourceAsciiUpper.includes('NOMELLAMECELA')) {
+    return preserveSourceTrailingPunctuation(source, 'และท่านเอริชคะ... อย่าเรียกฉันว่าเซร่าเลยค่ะ แต่ให้เรียกว่า...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('CONVIERTESENMIESPOSA') && compactSpanishSourceAsciiUpper.includes('EVEVONREINHARDT')) {
+    return preserveSourceTrailingPunctuation(source, 'ถ้าเธอมาเป็นภรรยาของฉัน เธอก็คือ อีฟ ฟอน ไรน์ฮาร์ดท์');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ENSANCHANDO') && compactSpanishSourceAsciiUpper.includes('AEVEPORCOMPLETO')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า บ้าเอ๊ย! เขากำลังแหกหีของอีฟจนอ้ากว้างไปหมดแล้ว!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DEMASIADOEROTICO') && compactSpanishSourceAsciiUpper.includes('VUELTOLOCO')) {
+    return preserveSourceTrailingPunctuation(source, 'น-นี่มัน... ลามกเกินไปแล้ว... บ้าเอ๊ย... ฮ่าๆ นี่ฉัน... กลายเป็นคนบ้าไปแล้วเหรอเนี่ย...? ฮ่าๆๆ...');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('MALDITASEA') && compactSpanishSourceAsciiUpper.includes('TENDIERONUNATRAMPA') && compactSpanishSourceAsciiUpper.includes('CONMIGO')) {
+    return preserveSourceTrailingPunctuation(source, 'บ้าเอ๊ย! พวกมันวางกับดักพวกเรา... ขอโทษนะเคย์ ในเมื่อเรื่องมันมาถึงขั้นนี้แล้ว... ฉันไม่สนว่าจะต้องทำยังไง ฉันสาบานว่าจะขโมยมันมาและเอากลับไปด้วยให้ได้!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('PRONTO') && compactSpanishSourceAsciiUpper.includes('OPORTUNIDAD') && (compactSpanishSourceAsciiUpper.includes('ESCAPA') || source.includes('หนีไป'))) {
+    return preserveSourceTrailingPunctuation(source, 'เร็วเข้า! หาโอกาสแล้วหนีไปซะ!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('POSETANPROVOCATIVA') && compactSpanishSourceAsciiUpper.includes('LASCIVA')) {
+    return preserveSourceTrailingPunctuation(source, 'โอ้! ท่ายั่วอารมณ์อะไรขนาดนี้! ช่างเย้ายวนเหลือเกิน แหวกลืมน้องสาวของเธออย่างยั่วยวนขนาดนั้น');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('ESVERDAD') && compactSpanishSourceAsciiUpper.includes('NOESTOYEXCITADA') && compactSpanishSourceAsciiUpper.includes('EEH')) {
+    return preserveSourceTrailingPunctuation(source, 'จ-จริงด้วย ทำไมกันล่ะ?! ทั้งที่ฉันไม่ได้มีอารมณ์เลยสักนิดแท้ๆ! เอ๋?!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('TOTALMENTEDIFERENTES') && compactSpanishSourceAsciiUpper.includes('ALASDEKEI')) {
+    return preserveSourceTrailingPunctuation(source, 'แตกต่างจากของเคย์อย่างสิ้นเชิง.');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('DIA28DELAMISION') && compactSpanishSourceAsciiUpper.includes('CERO')) {
+    return preserveSourceTrailingPunctuation(source, 'วันที่ 28 ของภารกิจ จำนวนครั้งที่ฉันเสร็จยังคงเป็น "ศูนย์"');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('LODEAHORANOCUENTA') && compactSpanishSourceAsciiUpper.includes('MUJERDEKEI')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า! ไม่ ไม่ใช่นะ! เมื่อกี้ไม่นับสิ! มันเป็นแค่ความผิดพลาดชั่ววูบเท่านั้น! ฉันเป็นผู้หญิงของเคย์นะ!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('INSISTETANTO') && compactSpanishSourceAsciiUpper.includes('METERE') && compactSpanishSourceAsciiUpper.includes('ACUERDO')) {
+    return preserveSourceTrailingPunctuation(source, 'ถ้ายืนกรานขนาดนั้นล่ะก็... ง-งั้นฉันจะยัดเข้าไปล่ะนะคะ ตกลงไหม?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('AHHHESTASALIENDO') && compactSpanishSourceAsciiUpper.includes('DENTRODEMI')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊าาา... มันกำลังทะลักออกมา เขากำลังจะแตกแล้ว มันไหลทะลักเข้ามาข้างในตัวฉันเยอะมาก');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('QUEESTO') && compactSpanishSourceAsciiUpper.includes('SIGUESALIENDO') && compactSpanishSourceAsciiUpper.includes('SEMEN')) {
+    return preserveSourceTrailingPunctuation(source, 'นี่มันอะไรกันเนี่ย...? ยังไหลออกมาไม่หยุดเลย เมื่อเทียบกับเคย์แล้ว... ปริมาณน้ำอสุจิมันเยอะจนน่าเหลือเชื่อจริงๆ');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('BLACKCAT') && compactSpanishSourceAsciiUpper.includes('ALFRED') && compactSpanishSourceAsciiUpper.includes('SALIONATURAL')) {
+    return preserveSourceTrailingPunctuation(source, 'เซร่า หรือจะให้เรียกว่า... แบล็คแคทดีล่ะ การแสดงของฉันกับอัลเฟรดเป็นยังไงบ้าง? ดูเป็นธรรมชาติดีใช่ไหมล่ะ?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('TANDURA') && compactSpanishSourceAsciiUpper.includes('CARADEFELICIDAD')) {
+    return preserveSourceTrailingPunctuation(source, 'แหม... ดูท่าจะชอบจริงๆ สินะเนี่ย ตั้งแต่วินาทีแรกที่เห็นฉัน มันก็แข็งโป๊กขนาดนั้นเลย ทำไมกันล่ะ?! แล้วทำไมเธอถึงได้ทำหน้ามีความสุขขนาดนั้นด้วยล่ะ?!');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('SERAQUE') && compactSpanishSourceAsciiUpper.includes('VOLVERAROBAR')) {
+    return preserveSourceTrailingPunctuation(source, 'หรือว่าฉันจะไม่ต้องกลับไปขโมยของอีกแล้วนะ...?');
+  }
+  if (compactSpanishSourceAsciiUpper.includes('NOTERMINES') && compactSpanishSourceAsciiUpper.includes('DEMASIADOCORTO')) {
+    return preserveSourceTrailingPunctuation(source, 'อ๊า... อย่าเพิ่งหยุดสิ! มันสั้นเกินไปนะ ได้โปรดเถอะ... ขออีก...');
+  }
+
   if (/^FANTASMA[.!?…]*$/i.test(source) || /^"\s*FANTASMA\s*"[.!?…]*$/i.test(source)) {
     return preserveSourceTrailingPunctuation(source, 'ผี');
   }

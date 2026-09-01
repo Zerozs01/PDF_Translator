@@ -328,6 +328,37 @@ export const splitAggressiveMergedLines = (
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     let line = lines[lineIndex];
+
+    // 0. If line contains multi-line breaks (\n), split each line into its own independent OCRLine
+    if (line.text && line.text.includes('\n')) {
+      const subLines = line.text.split('\n').map(s => s.trim()).filter(Boolean);
+      if (subLines.length > 1) {
+        const totalSubLines = subLines.length;
+        const totalHeight = bboxHeight(line.bbox);
+        const subLineHeight = totalHeight / totalSubLines;
+
+        subLines.forEach((subText, subIdx) => {
+          const matchingWords = line.words?.filter(w => subText.includes(w.text.trim())) || [];
+          const subBBox = matchingWords.length > 0
+            ? mergeBBoxes(matchingWords.map(w => w.bbox))
+            : {
+                x0: line.bbox.x0,
+                y0: line.bbox.y0 + subIdx * subLineHeight,
+                x1: line.bbox.x1,
+                y1: line.bbox.y0 + (subIdx + 1) * subLineHeight,
+              };
+
+          result.push({
+            ...line,
+            text: subText,
+            bbox: subBBox,
+            words: matchingWords.length > 0 ? matchingWords : undefined,
+          });
+        });
+        continue;
+      }
+    }
+
     if (!line.words || line.words.length <= 1) {
       const textWords = (line.text || '').trim().split(/\s+/).filter(Boolean);
       if (textWords.length > 1 && line.bbox && (line.bbox.x1 - line.bbox.x0) > 0) {

@@ -108,23 +108,19 @@ describe('ocrManhwaHeuristics', () => {
         }
       });
 
-      // We expect 2 merged text blocks (left one merged, right one merged)
-      expect(processed.lines.length).toBe(2);
+      // We expect 4 distinct lines preserved and sorted RTL-TTB (right column top->bottom, then left column top->bottom)
+      expect(processed.lines.length).toBe(4);
 
-      // The right-side block should be first in the sorted array (RTL order)
-      const firstLine = processed.lines[0];
-      const secondLine = processed.lines[1];
+      // Right-side bubble lines should come first in RTL order
+      expect(processed.lines[0].text).toBe('오른쪽');
+      expect(processed.lines[1].text).toBe('글상자');
+      expect(processed.lines[2].text).toBe('가장 먼저');
+      expect(processed.lines[3].text).toBe('시작한다');
 
-      expect(firstLine.text).toBe('오른쪽\n글상자');
-      expect(secondLine.text).toBe('가장 먼저\n시작한다');
-
-      // The bounding box of the merged lines should be the union of the parts
-      expect(firstLine.bbox).toEqual({ x0: 600, y0: 100, x1: 750, y1: 170 });
-      expect(secondLine.bbox).toEqual({ x0: 100, y0: 100, x1: 250, y1: 170 });
-
-      // Constituent words should be preserved
-      expect(firstLine.words.length).toBe(2); // "오른쪽" and "글상자"
-      expect(secondLine.words.length).toBe(3); // "가장", "먼저", "시작한다"
+      expect(processed.lines[0].bbox).toEqual({ x0: 600, y0: 100, x1: 750, y1: 130 });
+      expect(processed.lines[1].bbox).toEqual({ x0: 600, y0: 140, x1: 750, y1: 170 });
+      expect(processed.lines[2].bbox).toEqual({ x0: 100, y0: 100, x1: 250, y1: 130 });
+      expect(processed.lines[3].bbox).toEqual({ x0: 100, y0: 140, x1: 250, y1: 170 });
     });
   });
 });

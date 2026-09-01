@@ -90,6 +90,27 @@ describe('normalizeSpanishOcrNoiseForTranslation', () => {
     expect(normalizeSpanishOcrNoiseForTranslation('QUISTA Y ESTUPIDA.')).toBe('CONQUISTA Y ESTUPIDA.');
     expect(normalizeSpanishOcrNoiseForTranslation('TA DE AHORA EN')).toBe('TRATA DE AHORA EN');
     expect(normalizeSpanishOcrNoiseForTranslation('FELICESAAMBOS')).toBe('FELICES A AMBOS');
+    expect(normalizeSpanishOcrNoiseForTranslation('LAPRIVACIDADDEERICH.')).toBe('LA PRIVACIDAD DE ERICH.');
+    expect(normalizeSpanishOcrNoiseForTranslation('EDAD:DESCONOCIDA.')).toBe('EDAD: DESCONOCIDA.');
+    expect(normalizeSpanishOcrNoiseForTranslation('DEWILHELMVON')).toBe('DE WILHELM VON');
+    expect(normalizeSpanishOcrNoiseForTranslation('REINHARDTELHOMBRE')).toBe('REINHARDT EL HOMBRE');
+    expect(normalizeSpanishOcrNoiseForTranslation('MASRICODELA')).toBe('MAS RICO DE LA');
+    expect(normalizeSpanishOcrNoiseForTranslation('REGIONDESCHLOSS.')).toBe('REGION DE SCHLOSS.');
+    expect(normalizeSpanishOcrNoiseForTranslation('ESVERDAD...')).toBe('ES VERDAD...');
+    expect(normalizeSpanishOcrNoiseForTranslation('TAL VEZNO')).toBe('TAL VEZ NO');
+    expect(normalizeSpanishOcrNoiseForTranslation('SOLOLA SALA')).toBe('SOLO LA SALA');
+    expect(normalizeSpanishOcrNoiseForTranslation('SECORRA')).toBe('SE CORRA');
+    expect(normalizeSpanishOcrNoiseForTranslation('DENTRODETI')).toBe('DENTRO DE TI');
+    expect(normalizeSpanishOcrNoiseForTranslation('TECREERE.')).toBe('TE CREERE.');
+    expect(normalizeSpanishOcrNoiseForTranslation('COSA QLE')).toBe('COSA QUE');
+    expect(normalizeSpanishOcrNoiseForTranslation('CONEL')).toBe('CON EL');
+    expect(normalizeSpanishOcrNoiseForTranslation('I MPRES I ONANTE')).toBe('IMPRESIONANTE');
+    expect(normalizeSpanishOcrNoiseForTranslation('POSETAN')).toBe('POSE TAN');
+    expect(normalizeSpanishOcrNoiseForTranslation('METERTELA!O')).toBe('METERTE LA!');
+    expect(normalizeSpanishOcrNoiseForTranslation('TANTO.LA')).toBe('TANTO LA');
+    expect(normalizeSpanishOcrNoiseForTranslation('DEL,SEMEN')).toBe('DEL SEMEN');
+    expect(normalizeSpanishOcrNoiseForTranslation('SIEMPREESTA')).toBe('SIEMPRE ESTA');
+    expect(normalizeSpanishOcrNoiseForTranslation('PENSEQUBNO')).toBe('PENSE QUE NO');
   });
 });
 
@@ -255,7 +276,7 @@ describe('normalizeSourceForTranslation', () => {
     expect(normalizeSourceForTranslation('RON UNA FIESTA', 'es')).toBe('organizaron una fiesta');
     expect(normalizeSourceForTranslation('BIEN TE GUSTAN', 'es')).toBe('también te gustan');
     expect(normalizeSourceForTranslation('SECUNDA RIA', 'es')).toBe('secundaria');
-    expect(normalizeSourceForTranslation('FRAZ PARA', 'es')).toBe('disfraz para');
+    expect(normalizeSourceForTranslation('FRAZ PARA', 'es')).toBe('Disfraz para');
     expect(normalizeSourceForTranslation('TONCES', 'es')).toBe('entonces');
     expect(normalizeSourceForTranslation('RATURA DELAIRE', 'es')).toBe('temperatura del aire');
     expect(normalizeSourceForTranslation('GUIDA.', 'es')).toBe('seguida.');

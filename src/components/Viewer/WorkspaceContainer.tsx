@@ -42,7 +42,7 @@ export const WorkspaceContainer = React.memo(() => {
       <div 
         ref={viewMode === 'split' && pageMode === 'scroll' ? leftRef : null}
         className="original-ocr-pane"
-        style={{ flex: viewMode === 'split' ? '1' : '0 0 100%', height: '100%', overflowY: 'auto', position: 'relative' }}
+        style={{ flex: viewMode === 'split' ? '1' : '0 0 100%', height: '100%', overflow: 'hidden', position: 'relative' }}
       >
         <DocumentRenderer 
           dataSource={viewMode === 'split' ? "original_ocr_cache" : "global_preview_mode"} 
@@ -54,7 +54,7 @@ export const WorkspaceContainer = React.memo(() => {
         <div 
           ref={pageMode === 'scroll' ? rightRef : null}
           className="translated-result-pane"
-          style={{ flex: '1', height: '100%', overflowY: 'auto', borderLeft: '1px solid rgba(255,255,255,0.1)', position: 'relative' }}
+          style={{ flex: '1', height: '100%', overflow: 'hidden', borderLeft: '1px solid rgba(255,255,255,0.1)', position: 'relative' }}
         >
           <DocumentRenderer dataSource="translated_cache" renderMode={pageMode}/>
         </div>

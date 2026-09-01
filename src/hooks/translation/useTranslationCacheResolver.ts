@@ -158,7 +158,6 @@ export function useTranslationCacheResolver() {
         const ocrState = useOCRTextLayerStore.getState();
         ocrState.setTranslationCacheEntry(pageNum, safeMatchedCache.key, safeMatchedCache);
         ocrState.setActiveTranslationCacheKey(pageNum, safeMatchedCache.key);
-        ocrState.setTranslationPreviewMode('translated');
 
         try {
           const layerStore = useLayerStore.getState();

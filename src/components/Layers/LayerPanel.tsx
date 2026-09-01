@@ -254,11 +254,22 @@ const GroupHeader: React.FC<{
   }, [pageLayers, group.id]);
 
   const groupFormattedText = React.useMemo(() => {
-    const words = groupLayers
-      .map((l) => (translationPreviewMode === 'original' ? l.sourceText || l.text : l.text))
+    const targetLayers = groupLayers && groupLayers.length > 0
+      ? groupLayers
+      : (pageLayers || []).filter((l) => l.groupId === group.id || (group.layerIds && group.layerIds.includes(l.id)));
+
+    const words = targetLayers
+      .map((l) => {
+        const textVal = translationPreviewMode === 'original'
+          ? (l.sourceText || l.text || '')
+          : (l.text || l.sourceText || '');
+        return String(textVal || '').trim();
+      })
       .filter(Boolean);
+
+    // If words is empty, fallback to non-empty text string or empty array
     return JSON.stringify(words);
-  }, [groupLayers, translationPreviewMode]);
+  }, [groupLayers, pageLayers, group.id, group.layerIds, translationPreviewMode]);
 
   const handleCopyGroup = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -323,7 +334,7 @@ const GroupHeader: React.FC<{
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-all duration-75 border-t-2 relative ${
+      className={`group/header flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-all duration-75 border-t-2 relative ${
         isBeingDragged ? 'opacity-30 pointer-events-none' : ''
       } ${
         isDragOver === 'group' ? 'border-t-[#2B9BFF]' : 'border-t-transparent'
@@ -385,7 +396,7 @@ const GroupHeader: React.FC<{
             deleteGroup(pageNum, group.id);
           }
         }}
-        className="p-0.5 rounded transition-colors shrink-0 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100"
+        className="p-0.5 rounded transition-colors shrink-0 text-slate-500 hover:text-red-400 opacity-0 group-hover/header:opacity-100"
         title="Delete group"
       >
         <Trash2 size={10} />
@@ -397,7 +408,7 @@ const GroupHeader: React.FC<{
         className={`p-0.5 rounded transition-colors shrink-0 ${
           group.locked
             ? 'text-amber-400/80 hover:text-amber-300'
-            : 'text-slate-600 hover:text-slate-300 opacity-0 group-hover:opacity-100'
+            : 'text-slate-600 hover:text-slate-300 opacity-0 group-hover/header:opacity-100'
         }`}
         title={group.locked ? 'Unlock group' : 'Lock group'}
       >
@@ -423,7 +434,7 @@ const GroupHeader: React.FC<{
         className={`p-0.5 rounded transition-colors shrink-0 ${
           isGroupCopied
             ? 'text-emerald-400 opacity-100'
-            : 'text-slate-500 hover:text-sky-400 opacity-0 group-hover:opacity-100'
+            : 'text-slate-400 hover:text-sky-400 opacity-0 group-hover/header:opacity-100'
         }`}
         title={isGroupCopied ? "คัดลอกข้อความทั้งกลุ่มแล้ว" : "คัดลอกข้อความทั้งหมดในกลุ่มนี้"}
         aria-label={isGroupCopied ? "คัดลอกข้อความทั้งกลุ่มแล้ว" : "คัดลอกข้อความทั้งหมดในกลุ่มนี้"}
