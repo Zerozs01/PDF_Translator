@@ -31,6 +31,12 @@ export interface PreparedPageTranslationPlan {
   preparedGroups: BatchGroupPlan[];
   crossEngineAssistCount: number;
   preservedSourceLineCount: number;
+  detectedLanguageSwitch?: {
+    sourceLanguage: string;
+    ocrLanguageKey: string;
+    languageName: string;
+    confidence: number;
+  };
 }
 
 export interface PreparePagePlanOptions {
@@ -262,6 +268,30 @@ export function preparePageTranslationPlan(
     return null;
   }
 
+  const SOURCE_LANG_TO_OCR_MAP: Record<string, { ocrKey: string; label: string }> = {
+    es: { ocrKey: 'spa', label: 'ภาษาสเปน (Spanish)' },
+    ko: { ocrKey: 'kor', label: 'ภาษาเกาหลี (Korean)' },
+    ja: { ocrKey: 'jpn', label: 'ภาษาญี่ปุ่น (Japanese)' },
+    zh: { ocrKey: 'chi_sim', label: 'ภาษาจีน (Chinese)' },
+    ru: { ocrKey: 'rus', label: 'ภาษารัสเซีย (Russian)' },
+    fr: { ocrKey: 'fra', label: 'ภาษาฝรั่งเศส (French)' },
+    de: { ocrKey: 'deu', label: 'ภาษาเยอรมัน (German)' },
+  };
+
+  let detectedLanguageSwitch: PreparedPageTranslationPlan['detectedLanguageSwitch'] = undefined;
+  if (
+    inferredSourceLanguage !== normalizedUserSourceLanguage &&
+    SOURCE_LANG_TO_OCR_MAP[inferredSourceLanguage]
+  ) {
+    const mapping = SOURCE_LANG_TO_OCR_MAP[inferredSourceLanguage];
+    detectedLanguageSwitch = {
+      sourceLanguage: inferredSourceLanguage,
+      ocrLanguageKey: mapping.ocrKey,
+      languageName: mapping.label,
+      confidence: 0.9,
+    };
+  }
+
   return {
     pageNum,
     pageOCR,
@@ -276,6 +306,7 @@ export function preparePageTranslationPlan(
     preparedGroups,
     crossEngineAssistCount,
     preservedSourceLineCount,
+    detectedLanguageSwitch,
   };
 }
 

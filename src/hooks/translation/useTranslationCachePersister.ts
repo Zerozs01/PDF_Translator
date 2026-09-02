@@ -85,6 +85,7 @@ export function useTranslationCachePersister() {
     if (isActiveDoc) {
       const ocrState = useOCRTextLayerStore.getState();
       ocrState.setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
+      ocrState.setTranslationPreviewMode('translated');
 
       try {
         const layerStore = useLayerStore.getState();

@@ -17,6 +17,7 @@ import {
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
+import { useUIStore } from '../../stores/useUIStore';
 import { dbService } from '../../services/dbService';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 import { visionService } from '../../services/vision/VisionService';
@@ -48,32 +49,7 @@ import { OCRResultTree } from './ResultTree/OCRResultTree';
 import { OCREngineSelector } from './EngineSelector/OCREngineSelector';
 
 const BENCHMARK_ENGINES = OCR_ENGINES;
-const OCR_MODEL_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_model_section_open';
-const AUTO_OCR_REQUEST_EVENT = 'pdf-translator:auto-ocr-request';
-const AUTO_OCR_RESULT_EVENT = 'pdf-translator:auto-ocr-result';
 
-type AutoOCRScope = 'current' | 'all';
-
-const readPersistedSectionOpen = (storageKey: string, defaultValue: boolean): boolean => {
-  if (typeof window === 'undefined') return defaultValue;
-  try {
-    const raw = String(window.localStorage.getItem(storageKey) || '').trim().toLowerCase();
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-    return defaultValue;
-  } catch {
-    return defaultValue;
-  }
-};
-
-const persistSectionOpen = (storageKey: string, value: boolean): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(storageKey, value ? '1' : '0');
-  } catch {
-    // Ignore storage failures.
-  }
-};
 
 const copyTextToClipboard = async (value: string): Promise<boolean> => {
   const normalized = String(value || '');
@@ -296,9 +272,13 @@ export const OCRTextLayerPanel: React.FC = () => {
     setOptions({ ocrQualityProfile: nextMode === 'high' ? 'best' : 'fast' });
   }, [ocrQualityMode, setOptions]);
 
-  const [isModelSectionOpen, setIsModelSectionOpen] = useState<boolean>(() =>
-    readPersistedSectionOpen(OCR_MODEL_SECTION_OPEN_STORAGE_KEY, true)
-  );
+  const isModelSectionOpen = useUIStore((state) => state.isOcrModelSectionOpen);
+  const setOcrModelSectionOpen = useUIStore((state) => state.setOcrModelSectionOpen);
+  const setIsModelSectionOpen = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((valOrUpdater) => {
+    const current = useUIStore.getState().isOcrModelSectionOpen;
+    const next = typeof valOrUpdater === 'function' ? valOrUpdater(current) : valOrUpdater;
+    setOcrModelSectionOpen(next);
+  }, [setOcrModelSectionOpen]);
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied'>('idle');
   const [ocrPreviewSearchActiveIndex, setOcrPreviewSearchActiveIndex] = useState<number>(0);
 

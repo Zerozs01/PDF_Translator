@@ -123,6 +123,28 @@ export function useDocumentTranslation({
   const { evaluateAndApplyGroupRetries, applyLineLevelRetries } = useTranslationRetryManager();
   const { persistTranslationResult } = useTranslationCachePersister();
 
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const cancelSinglePageTranslation = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsOfflineProcessing(false);
+    setIsAiProcessing(false);
+    setTranslationStatus({
+      kind: 'info',
+      message: 'ยกเลิกการแปลหน้าปัจจุบันเรียบร้อยแล้ว (Translation canceled)',
+    });
+    setProgress({
+      stage: 'complete',
+      currentPage,
+      totalPages,
+      message: 'ยกเลิกการแปลแล้ว',
+      progress: 0,
+    });
+  }, [currentPage, totalPages, setIsOfflineProcessing, setIsAiProcessing, setTranslationStatus, setProgress]);
+
   const requestAutoOCRFromPanel = useCallback((scope: AutoOCRScope): Promise<boolean> => {
     if (typeof window === 'undefined') return Promise.resolve(false);
 
@@ -227,6 +249,7 @@ export function useDocumentTranslation({
       engineOverride?: OCREngine;
       ocrResultOverride?: OCRPageResult;
       documentIdOverride?: number;
+      signal?: AbortSignal;
     }
   ): Promise<boolean> => {
     const ocrState = useOCRTextLayerStore.getState();
@@ -254,20 +277,20 @@ export function useDocumentTranslation({
     const matchedDocId = options?.documentIdOverride ?? (await ensureDocumentId().catch(() => null));
     const isActiveDoc = matchedDocId !== null && activeDocId !== null && activeDocId === matchedDocId;
 
-    if (isActiveDoc) {
-      try {
-        const layerStore = useLayerStore.getState();
-        const existingLayers = layerStore.getPageLayers(pageNum);
-        const existingGroups = layerStore.getPageGroups(pageNum);
-        const hasUserModifications = existingLayers.some((l) => l.userEdited || l.id.startsWith('manual-layer-'))
-          || existingGroups.some((g) => g.userCreated);
+    // 0. Verify and synchronously initialize store layers if missing or stale
+    const layerStore = useLayerStore.getState();
+    const existingLayers = layerStore.getPageLayers(pageNum);
+    const hasUserModifications = existingLayers.some((l) => l.userEdited || l.id.startsWith('manual-layer-'))
+      || layerStore.getPageGroups(pageNum).some((g) => g.userCreated);
 
+    if (existingLayers.length === 0 || !hasUserModifications) {
+      try {
         const isStoreStale = existingLayers.length === 0
           || existingLayers.length !== pageOCR.lines.length
           || existingLayers.some((l) => l.lineIndex >= pageOCR.lines.length)
           || (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
 
-        if ((isStoreStale || !hasUserModifications) && !hasUserModifications) {
+        if (isStoreStale) {
           const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
           layerStore.setPageLayers(pageNum, initialLayerResult);
           console.log(`[TranslationSync] Synchronously initialized store layers for page ${pageNum}.`);
@@ -277,12 +300,16 @@ export function useDocumentTranslation({
       }
     }
 
+    if (options?.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+
     // 1. Check DB Cache
     const cacheHit = await checkAndApplyDBCache(
       matchedDocId,
       pageNum,
       pageOCR,
-      ocrEngine,
+      (pageOCR.ocrEngine || selectedEngine) as OCREngine,
       normalizedTargetLanguage,
       resolvedSourceFromOCR,
       engine,
@@ -298,16 +325,20 @@ export function useDocumentTranslation({
       if (!options?.suppressStatus && isActiveDoc) {
         setTranslationStatus({
           kind: 'success',
-          message: `${engine} | Cache Hit for Page ${pageNum} | Loaded from persistent translation cache.`,
+          message: `Loaded translation cache for page ${pageNum} (${(pageOCR.ocrEngine || selectedEngine)} -> ${normalizedTargetLanguage}).`,
         });
       }
       return true;
     }
 
+    if (options?.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+
     // 2. Prepare Translatable Lines & Groups
-    const alternativePages = (pageEngine !== 'paddleocr')
+    const alternativePages = (selectedEngine !== 'paddleocr')
       ? Array.from(ocrState.ocrByPageEngine.get(pageNum)?.entries() || [])
-        .filter(([engineKey, candidate]) => engineKey !== pageEngine && candidate && Array.isArray(candidate.lines) && candidate.lines.length > 0)
+        .filter(([engineKey, candidate]) => engineKey !== selectedEngine && candidate && Array.isArray(candidate.lines) && candidate.lines.length > 0)
         .map(([, candidate]) => candidate!)
       : [];
 
@@ -331,6 +362,28 @@ export function useDocumentTranslation({
         });
       }
       return false;
+    }
+
+    // Phase 2: Auto-detect & Sync Source & OCR Language if detected with high confidence
+    if (plan.detectedLanguageSwitch) {
+      const { sourceLanguage: detectedSource, ocrLanguageKey: detectedOcr, languageName } = plan.detectedLanguageSwitch;
+      const currentProjectSource = useProjectStore.getState().sourceLanguage;
+      const currentOcrLang = useOCRTextLayerStore.getState().options.language;
+      if (currentProjectSource !== detectedSource || !currentOcrLang.includes(detectedOcr)) {
+        console.log(`[LanguageAutoSync] Detected ${languageName} (${detectedSource}/${detectedOcr}). Auto-syncing stores.`);
+        useProjectStore.getState().setSourceLanguage(detectedSource);
+        useOCRTextLayerStore.getState().setOptions({ language: detectedOcr });
+        if (!options?.suppressStatus) {
+          setTranslationStatus({
+            kind: 'info',
+            message: `ตรวจพบภาษา ${languageName} (${detectedSource.toUpperCase()}) อัตโนมัติ — ระบบได้ปรับภาษาต้นทางให้เรียบร้อยแล้ว`,
+          });
+        }
+      }
+    }
+
+    if (options?.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
     }
 
     let translatedGroupsRaw = new Array<string>(plan.preparedGroups.length).fill('');
@@ -798,6 +851,10 @@ export function useDocumentTranslation({
     if (isAiProcessing || isOfflineProcessing) return;
     setIsOfflineProcessing(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     setProgress({
       stage: 'ocr',
       currentPage,
@@ -807,7 +864,9 @@ export function useDocumentTranslation({
     });
 
     try {
+      if (signal.aborted) return;
       const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
+      if (signal.aborted) return;
       if (!ocrReady) {
         setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before offline translation.' });
         return;
@@ -822,8 +881,10 @@ export function useDocumentTranslation({
       });
 
       setTranslationStatus({ kind: 'info', message: 'Running offline translation on current page...' });
-      await runCurrentPageTranslation(offlineEngine === 'm2m100' ? 'm2m100' : 'offline');
+      if (signal.aborted) return;
+      await runCurrentPageTranslation(offlineEngine === 'm2m100' ? 'm2m100' : 'offline', currentPage, { signal });
 
+      if (signal.aborted) return;
       setProgress({
         stage: 'complete',
         currentPage,
@@ -832,11 +893,18 @@ export function useDocumentTranslation({
         progress: 100,
       });
       await new Promise((resolve) => setTimeout(resolve, 800));
-    } catch (err) {
+    } catch (err: any) {
+      if (signal.aborted || err?.name === 'AbortError') {
+        console.log('[OfflineTranslate] Canceled by user.');
+        return;
+      }
       console.error('Offline Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
       setTranslationStatus({ kind: 'error', message: `Offline translation failed: ${message}` });
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setIsOfflineProcessing(false);
     }
   }, [
@@ -856,6 +924,10 @@ export function useDocumentTranslation({
     if (isAiProcessing || isOfflineProcessing) return;
     setIsAiProcessing(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     setProgress({
       stage: 'ocr',
       currentPage,
@@ -865,7 +937,9 @@ export function useDocumentTranslation({
     });
 
     try {
+      if (signal.aborted) return;
       const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
+      if (signal.aborted) return;
       if (!ocrReady) {
         setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before AI translation.' });
         return;
@@ -880,8 +954,10 @@ export function useDocumentTranslation({
       });
 
       setTranslationStatus({ kind: 'info', message: 'Running Gemini translation on current page...' });
-      await runCurrentPageTranslation('ai');
+      if (signal.aborted) return;
+      await runCurrentPageTranslation('ai', currentPage, { signal });
 
+      if (signal.aborted) return;
       setProgress({
         stage: 'complete',
         currentPage,
@@ -890,11 +966,18 @@ export function useDocumentTranslation({
         progress: 100,
       });
       await new Promise((resolve) => setTimeout(resolve, 800));
-    } catch (err) {
+    } catch (err: any) {
+      if (signal.aborted || err?.name === 'AbortError') {
+        console.log('[AiTranslate] Canceled by user.');
+        return;
+      }
       console.error('AI Translation Failed', err);
       const message = err instanceof Error ? err.message : 'Unknown error';
       setTranslationStatus({ kind: 'error', message: `AI translation failed: ${message}` });
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setIsAiProcessing(false);
     }
   }, [
@@ -933,6 +1016,7 @@ export function useDocumentTranslation({
     runOfflineBatchDocumentTranslation,
     handleOfflineTranslate,
     handleAiTranslate,
+    cancelSinglePageTranslation,
     handleOfflineTranslateAllPages,
     handleAiTranslateAllPages,
     ensureCurrentPageOCRReadyForTranslation,

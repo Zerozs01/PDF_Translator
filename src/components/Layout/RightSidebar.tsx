@@ -18,54 +18,13 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronLeft,
+  XCircle,
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
-const OCR_TEXT_LAYER_OPEN_STORAGE_KEY = 'pdf_translator.ocr_text_layer_open';
-const OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_languages_section_open';
+import { useUIStore } from '../../stores/useUIStore';
+
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'pdf_translator_right_sidebar_width';
-
-const readPersistedPanelOpen = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  try {
-    const raw = String(window.localStorage.getItem(OCR_TEXT_LAYER_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-    return false;
-  } catch {
-    return false;
-  }
-};
-
-const persistPanelOpen = (open: boolean): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(OCR_TEXT_LAYER_OPEN_STORAGE_KEY, open ? '1' : '0');
-  } catch {
-    // Ignore local storage failures.
-  }
-};
-
-const readPersistedLanguagesSectionOpen = (): boolean => {
-  if (typeof window === 'undefined') return true;
-  try {
-    const raw = String(window.localStorage.getItem(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-    return true;
-  } catch {
-    return true;
-  }
-};
-
-const persistLanguagesSectionOpen = (open: boolean): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY, open ? '1' : '0');
-  } catch {
-    // Ignore local storage failures.
-  }
-};
 
 const readPersistedWidth = (fallback: number): number => {
   if (typeof window === 'undefined') return fallback;
@@ -94,6 +53,7 @@ interface RightSidebarProps {
   isOfflineProcessing?: boolean;
   onAiTranslate?: () => void;
   onOfflineTranslate?: () => void;
+  onCancelTranslation?: () => void;
   onAiTranslateAllPages?: () => void;
   onOfflineTranslateAllPages?: () => void;
   translationStatus?: { kind: 'info' | 'success' | 'error'; message: string } | null;
@@ -108,6 +68,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
   isOfflineProcessing = false,
   onAiTranslate,
   onOfflineTranslate,
+  onCancelTranslation,
   onAiTranslateAllPages,
   onOfflineTranslateAllPages,
   translationStatus = null,
@@ -134,8 +95,10 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readPersistedWidth(320));
   const [isResizing, setIsResizing] = useState(false);
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(() => readPersistedPanelOpen());
-  const [isLanguagesSectionOpen, setIsLanguagesSectionOpen] = useState<boolean>(() => readPersistedLanguagesSectionOpen());
+  const isSettingsOpen = useUIStore((state) => state.isOcrTextLayerSectionOpen);
+  const toggleSettingsOpen = useUIStore((state) => state.toggleOcrTextLayerSection);
+  const isLanguagesSectionOpen = useUIStore((state) => state.isOcrLanguagesSectionOpen);
+  const toggleLanguagesSectionOpen = useUIStore((state) => state.toggleOcrLanguagesSection);
   const [isTranslateInfoOpen, setIsTranslateInfoOpen] = useState(false);
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
   const isTranslateBusy = isAiProcessing || isOfflineProcessing;
@@ -180,13 +143,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     };
   }, [isResizing, sidebarWidth]);
 
-  useEffect(() => {
-    persistPanelOpen(isSettingsOpen);
-  }, [isSettingsOpen]);
-
-  useEffect(() => {
-    persistLanguagesSectionOpen(isLanguagesSectionOpen);
-  }, [isLanguagesSectionOpen]);
 
   const translationStatusClass = translationStatus?.kind === 'success'
     ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-100'
@@ -236,7 +192,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
 
           <button
             type="button"
-            onClick={() => setIsLanguagesSectionOpen((current) => !current)}
+            onClick={toggleLanguagesSectionOpen}
             className="flex h-5 w-6 items-center justify-center rounded-md border border-fuchsia-200/45 bg-slate-950/60 text-fuchsia-100 transition-colors hover:border-fuchsia-100/60"
             title={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
             aria-label={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
@@ -375,7 +331,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
 
           {/* OCR Text Layer Toggle */}
           <button 
-            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            onClick={toggleSettingsOpen}
             type="button"
             className={`p-1.5 rounded-lg transition-colors ${
               isSettingsOpen
@@ -441,33 +397,49 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
             </div>
 
             <div className="grid grid-cols-2 gap-1.5">
-              <button
-                onClick={onOfflineTranslate}
-                disabled={isTranslateBusy}
-                className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.48)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
-                title="Use local Argos model on current page"
-              >
-                {isOfflineProcessing ? (
-                  <RefreshCw className="animate-spin" size={11} />
-                ) : (
+              {isOfflineProcessing ? (
+                <button
+                  type="button"
+                  onClick={onCancelTranslation}
+                  className="bg-rose-500/25 border border-rose-500/50 hover:bg-rose-500/40 text-rose-200 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse cursor-pointer"
+                  title="ยกเลิกการแปลหน้าปัจจุบัน (Cancel)"
+                >
+                  <XCircle size={11} className="text-rose-400" />
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  onClick={onOfflineTranslate}
+                  disabled={isTranslateBusy}
+                  className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.48)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
+                  title="Use local Argos model on current page"
+                >
                   <Languages size={11} />
-                )}
-                Offline
-              </button>
+                  Offline
+                </button>
+              )}
 
-              <button
-                onClick={onAiTranslate}
-                disabled={isTranslateBusy}
-                className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.58)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
-                title="Use Gemini cloud model on current page"
-              >
-                {isAiProcessing ? (
-                  <RefreshCw className="animate-spin" size={11} />
-                ) : (
+              {isAiProcessing ? (
+                <button
+                  type="button"
+                  onClick={onCancelTranslation}
+                  className="bg-rose-500/25 border border-rose-500/50 hover:bg-rose-500/40 text-rose-200 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse cursor-pointer"
+                  title="ยกเลิกการแปลหน้าปัจจุบัน (Cancel)"
+                >
+                  <XCircle size={11} className="text-rose-400" />
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  onClick={onAiTranslate}
+                  disabled={isTranslateBusy}
+                  className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.58)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-white"
+                  title="Use Gemini cloud model on current page"
+                >
                   <Sparkles size={11} />
-                )}
-                AI
-              </button>
+                  AI
+                </button>
+              )}
             </div>
 
             <div className="mt-1.5 grid grid-cols-2 gap-1.5">

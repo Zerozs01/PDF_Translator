@@ -27,7 +27,6 @@ import { useDocumentExportModalState } from './hooks/useDocumentExportModalState
 import { type DownloadScope } from './constants/translationConstants';
 import { WorkspaceContainer } from './components/Viewer/WorkspaceContainer';
 import { AppHeaderToolbar } from './components/Layout/AppHeaderToolbar';
-import { BackgroundQueueBadge } from './components/Queue/BackgroundQueueBadge';
 import { BackgroundQueuePanel } from './components/Queue/BackgroundQueuePanel';
 import { DocumentExportModal } from './components/Export/DocumentExportModal';
 
@@ -303,6 +302,7 @@ export default function App() {
     runOfflineBatchDocumentTranslation,
     handleOfflineTranslate,
     handleAiTranslate,
+    cancelSinglePageTranslation,
     handleOfflineTranslateAllPages,
     handleAiTranslateAllPages,
     ensureCurrentPageOCRReadyForTranslation,
@@ -433,6 +433,7 @@ export default function App() {
               isOfflineProcessing={isOfflineProcessing}
               onAiTranslate={handleAiTranslate}
               onOfflineTranslate={handleOfflineTranslate}
+              onCancelTranslation={cancelSinglePageTranslation}
               onAiTranslateAllPages={handleAiTranslateAllPages}
               onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
               translationStatus={translationStatus}
@@ -470,6 +471,7 @@ export default function App() {
                 isOfflineProcessing={isOfflineProcessing}
                 onAiTranslate={handleAiTranslate}
                 onOfflineTranslate={handleOfflineTranslate}
+                onCancelTranslation={cancelSinglePageTranslation}
                 onAiTranslateAllPages={handleAiTranslateAllPages}
                 onOfflineTranslateAllPages={handleOfflineTranslateAllPages}
                 translationStatus={translationStatus}
@@ -481,8 +483,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Floating Queue Status Badge (File Preview) */}
-      <BackgroundQueueBadge />
 
       {/* Document Export Modal */}
       <DocumentExportModal

@@ -346,9 +346,19 @@ export const PDFPageOverlay: React.FC<{
       });
 
     if (isFirstBuild || engineChanged || ocrDataChanged || previewModeChanged || translationChanged || (isStoreStale && !hasUserModifications)) {
+      // In split view compare mode, secondary canvas (previewModeOverride === 'translated') must NOT clobber global useLayerStore
+      if (previewModeOverride === 'translated') {
+        lastBuiltEngineRef.current = newEngine;
+        lastBuiltOcrRef.current = currentPageOCRResolved;
+        lastBuiltPreviewModeRef.current = translationPreviewMode;
+        lastBuiltTranslationMapRef.current = new Map(currentTranslationMap);
+        hasBuiltLayersForCurrentPageRef.current = true;
+        return;
+      }
+
       const result = buildLayerGroupsFromOCR(
         currentPageOCRResolved,
-        translationPreviewMode === 'translated' ? currentTranslationMap : undefined
+        storePreviewMode === 'translated' ? currentTranslationMap : undefined
       );
 
       if (isFirstBuild || !lastEngine || (isStoreStale && !hasUserModifications)) {

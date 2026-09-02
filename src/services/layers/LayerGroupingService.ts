@@ -352,7 +352,7 @@ export const splitAggressiveMergedLines = (
             ...line,
             text: subText,
             bbox: subBBox,
-            words: matchingWords.length > 0 ? matchingWords : undefined,
+            words: matchingWords,
           });
         });
         continue;

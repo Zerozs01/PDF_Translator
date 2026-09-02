@@ -592,7 +592,6 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     return {
       translationCacheByPage: nextByPage,
       activeTranslationKeyByPage: nextActiveByPage,
-      translationPreviewMode: 'translated' as OCRPreviewMode,
     };
   }),
   getTranslationCacheEntry: (pageNum, cacheKey) => get().translationCacheByPage.get(pageNum)?.get(cacheKey),

@@ -46,7 +46,7 @@ export const FRENCH_DICTIONARY_TH: Record<string, string> = {
   "les tétes": "นมโตๆ",
   "les tetons": "หัวนม / ยอดอก",
   "les tétons": "หัวนม / ยอดอก",
-  "le cul": "ตูด / บั้นท้าย",
+  "le cul": "ตูด",
   "le cul!": "ตูด!",
   "l'aniss": "รูตูด / ช่องท้องหลัง",
   "l aniss": "รูตูด / ช่องท้องหลัง",

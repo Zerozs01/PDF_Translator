@@ -459,6 +459,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     ocrByPageEngine,
     options,
     translationPreviewMode,
+    setTranslationPreviewMode,
     translationCacheByPage,
     activeTranslationKeyByPage,
   } = useOCRTextLayerStore();
@@ -698,13 +699,31 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
             {groups.length}g · {layers.length}l
           </span>
         </div>
-        <button
-          onClick={() => handleBuildLayers(true)}
-          className="p-1 rounded text-slate-600 hover:text-white transition-colors"
-          title="Rebuild layers from OCR"
-        >
-          <RefreshCw size={10} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setTranslationPreviewMode(translationPreviewMode === 'translated' ? 'original' : 'translated')}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all border flex items-center gap-1 ${
+              translationPreviewMode === 'original'
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 shadow-[0_0_8px_rgba(245,158,11,0.2)]'
+                : 'bg-sky-500/20 text-sky-300 border-sky-500/40 hover:bg-sky-500/30'
+            }`}
+            title={translationPreviewMode === 'original'
+              ? 'กำลังแสดงผลข้อความต้นฉบับ (Original OCR) - คลิกเพื่อสลับเป็นข้อความแปล'
+              : 'กำลังแสดงผลข้อความแปล (Translated) - คลิกเพื่อสลับเป็นข้อความต้นฉบับ'
+            }
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${translationPreviewMode === 'original' ? 'bg-amber-400' : 'bg-sky-400'}`} />
+            <span>{translationPreviewMode === 'original' ? 'Original' : 'Translated'}</span>
+          </button>
+          <button
+            onClick={() => handleBuildLayers(true)}
+            className="p-1 rounded text-slate-600 hover:text-white transition-colors"
+            title="Rebuild layers from OCR"
+          >
+            <RefreshCw size={10} />
+          </button>
+        </div>
       </div>
 
       {/* Tree view */}
