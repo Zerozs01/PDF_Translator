@@ -383,27 +383,32 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
 
   const prevPageRef = useRef<number | null>(null);
   const prevViewModeRef = useRef(viewMode);
+  const splitViewMode = useUIStore((s) => s.viewMode);
+  const prevSplitViewModeRef = useRef(splitViewMode);
 
   // Track programmatic scrolling to lock active page updates during animations & initial mount
   const isProgrammaticScrollRef = useRef(currentPage > 1);
 
-  // Sync scroll position when switching to continuous viewMode or clicking LeftSidebar thumbnails or on initial load
+  // Sync scroll position when switching to continuous viewMode, split mode toggle, or clicking LeftSidebar thumbnails or on initial load
   useEffect(() => {
     const pageChanged = prevPageRef.current !== null && currentPage !== prevPageRef.current;
     const viewModeChanged = viewMode !== prevViewModeRef.current;
+    const splitModeChanged = splitViewMode !== prevSplitViewModeRef.current;
     const isInitialMount = prevPageRef.current === null;
     const fromObserver = navigationStateRef.current.isObserverTriggeredPageChange;
     navigationStateRef.current.isObserverTriggeredPageChange = false;
 
-    // Only snap or adjust pan if page was changed from sidebar/navigation/initial load (NOT from scroll observer)
+    prevPageRef.current = currentPage;
+    prevViewModeRef.current = viewMode;
+    prevSplitViewModeRef.current = splitViewMode;
+
     // Secondary split-view canvas (previewModeOverride === 'translated') must NOT dispatch pan updates to avoid fighting the primary canvas
     if (previewModeOverride === 'translated') {
-      prevPageRef.current = currentPage;
-      prevViewModeRef.current = viewMode;
       return;
     }
 
-    if (viewMode === 'continuous' && (viewModeChanged || (isInitialMount && currentPage > 1) || (pageChanged && !fromObserver))) {
+    const isInteracting = navigationStateRef.current.isUserInteracting || useUIStore.getState().isUserInteracting;
+    if (viewMode === 'continuous' && (viewModeChanged || splitModeChanged || (isInitialMount && currentPage > 1) || (pageChanged && !fromObserver && !isInteracting))) {
       // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
       // from firing setPage and overriding the target page before the scroll snap finishes.
       isProgrammaticScrollRef.current = true;
@@ -430,8 +435,8 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
           const currentPanY = stateRef.current.pan.y;
           const diff = Math.abs(currentPanY - targetY);
 
-          // Snap if the offset diff is substantial or if on initial load / mode switch / page navigation
-          if (diff > 5 || viewModeChanged || isInitialMount || pageChanged) {
+          // Snap if the offset diff is substantial or if on initial load / mode switch / page navigation / split mode toggle
+          if (diff > 5 || viewModeChanged || splitModeChanged || isInitialMount || pageChanged) {
             const { clientWidth } = containerRef.current;
             const pageWidth = pageElement?.clientWidth || 800;
             const scaledWidth = pageWidth * zoom;
@@ -448,23 +453,36 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
 
       }, isInitialMount ? 150 : 80);
 
-      prevPageRef.current = currentPage;
-      prevViewModeRef.current = viewMode;
       return () => {
         clearTimeout(timer);
         isProgrammaticScrollRef.current = false;
       };
+    } else if (viewMode === 'single' && splitModeChanged) {
+      // Re-center horizontally for single mode when split pane changes container width
+      const timer = setTimeout(() => {
+        if (containerRef.current) {
+          const pageElement = containerRef.current.querySelector('.pdf-canvas-document [data-page-container]') as HTMLElement | null;
+          const { clientWidth } = containerRef.current;
+          const pageWidth = pageElement?.clientWidth || 800;
+          const scaledWidth = pageWidth * zoom;
+          const targetX = (clientWidth - scaledWidth) / 2;
+          setPan(targetX, 20);
+        }
+      }, 50);
+      return () => clearTimeout(timer);
     }
-
-    prevPageRef.current = currentPage;
-    prevViewModeRef.current = viewMode;
-  }, [currentPage, viewMode, zoom, setPan, stateRef]);
+  }, [currentPage, viewMode, splitViewMode, zoom, setPan, stateRef, previewModeOverride]);
 
   // Real-time active page tracking for continuous scroll & split compare modes
   useEffect(() => {
     if (viewMode !== 'continuous' || previewModeOverride === 'translated') return;
     if (isProgrammaticScrollRef.current) return;
     if (!containerRef.current) return;
+
+    // Only recalculate active page when user is actively scrolling/interacting,
+    // NEVER on passive container resize, reflow, or split view toggle
+    const isInteracting = navigationStateRef.current.isUserInteracting || useUIStore.getState().isUserInteracting;
+    if (!isInteracting) return;
 
     const container = containerRef.current;
     const clientHeight = container.clientHeight || window.innerHeight;
@@ -482,9 +500,12 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       const node = pageNodes[i];
       const pageAttr = node.getAttribute('data-page-container');
       if (!pageAttr) continue;
+      const height = node.offsetHeight;
+      // Skip unrendered, collapsed, or zero-height placeholder pages
+      if (height <= 50) continue;
+
       const pageNum = parseInt(pageAttr, 10);
       const top = node.offsetTop;
-      const height = node.offsetHeight;
       const bottom = top + height;
 
       if (viewportCenterY >= top && viewportCenterY <= bottom) {

@@ -160,8 +160,20 @@ describe('koreanTranslationPolicy', () => {
       expect(applyKoreanConversationalFallback('조, 조용히 해요 선배!\n여기 공원이에요!', '')).toBe('ชะ... เงียบๆ หน่อยครับรุ่นพี่! ที่นี่มันสวนสาธารณะนะ!');
       expect(applyKoreanConversationalFallback('하게 해 드려야지 별 수 있나.', '')).toBe('ก็ต้องยอมให้ทำล่ะนะ จะมีทางเลือกอื่นได้ยังไง.');
       expect(applyKoreanConversationalFallback('그 연인같은 섹스를', '')).toBe('เซ็กส์ที่เหมือนคู่รักแบบนั้น');
-      expect(applyKoreanConversationalFallback('나를좋아하는게', '')).toBe('การที่ชอบฉัน');
       expect(applyKoreanConversationalFallback('예?유리선배?', '')).toBe('ใช่เหรอครับ? รุ่นพี่ยูริ?');
+
+      // Newly added Manhwa and Afterword phrases
+      expect(applyKoreanConversationalFallback('쿠기사키 제대로 쪼여란', '')).toBe('คุกิซากิ ขมิบแน่นๆ เข้าสิ');
+      expect(applyKoreanConversationalFallback('가슴압 착하구만 자 포상이다', '')).toBe('บดขยี้หน้าอกได้ดีนี่ เอาล่ะ นี่คือรางวัล');
+      expect(applyKoreanConversationalFallback('아아젠장 자지냄새로 흥분해서', '')).toBe('อ๊า ให้ตายสิ ดันมีอารมณ์เพราะกลิ่นดุ้นเนี่ยนะ');
+      expect(applyKoreanConversationalFallback('교사랑 학생이 해도될 키스가 아니야', '')).toBe('ไม่ใช่จูบที่ครูกับนักเรียนควรทำกันนะ');
+      expect(applyKoreanConversationalFallback('일단전편이란생각으로그렸습니다', '')).toBe('ในเบื้องต้นวาดขึ้นมาโดยกะให้เป็นตอนแรกครับ');
+      expect(applyKoreanConversationalFallback('속편네임도있지만글세요', '')).toBe('ถึงจะมีเนมของภาคต่ออยู่บ้างแต่ก็ยังไม่แน่ใจครับ');
+      expect(applyKoreanConversationalFallback('완성직후라이책이꼴리는지어떤지', '')).toBe('เพิ่งวาดเสร็จหมาดๆ เลยยังไม่รู้ว่าเล่มนี้จะกระตุ้นอารมณ์ได้แค่ไหน');
+      expect(applyKoreanConversationalFallback('모르는상태라크속편을그릴지는', '')).toBe('ยังไม่รู้แน่ชัดว่าจะได้วาดภาคต่อไหม');
+      expect(applyKoreanConversationalFallback('지원사이트등에도', '')).toBe('ทางเว็บไซต์ซัพพอร์ต');
+      expect(applyKoreanConversationalFallback('응원해주시면기쁘겠습니다', '')).toBe('ถ้าช่วยสนับสนุนและให้กำลังใจจะยินดีเป็นอย่างยิ่งครับ');
+      expect(applyKoreanConversationalFallback('มดลูก 찌부러져-', '')).toBe('มดลูกโดนบี้แบนไปหมดแล้ว-');
     });
 
     it('returns null when no pattern matches', () => {

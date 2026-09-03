@@ -24,6 +24,8 @@ interface UIState {
   /** Atomic update for both pan and zoom in a single Zustand set (avoids double re-render) */
   setView: (pan: { x: number; y: number }, zoom: number) => void;
   resetView: () => void;
+  isUserInteracting: boolean;
+  setIsUserInteracting: (isInteracting: boolean) => void;
 
   // Tools
   activeTool: ToolType;
@@ -92,6 +94,8 @@ export const useUIStore = create<UIState>((set) => ({
   setPan: (x, y) => set({ pan: { x, y } }),
   setView: (pan, zoom) => set({ pan, zoom }),
   resetView: () => set({ zoom: 1, pan: { x: 0, y: 0 }, viewMode: 'overlay' }),
+  isUserInteracting: false,
+  setIsUserInteracting: (isUserInteracting) => set({ isUserInteracting }),
 
   // Tools
   activeTool: 'select',

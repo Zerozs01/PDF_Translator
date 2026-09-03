@@ -44,7 +44,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v61'; // v61: Force angle classification disabled for panel manga and full 154-word balloon recall
+export const OCR_TRANSLATION_CACHE_VERSION = 'v64'; // v64: Compare mode split-sync fix, Korean dictionary deduplication & new dojin phrases
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')

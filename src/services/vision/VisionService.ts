@@ -80,7 +80,8 @@ const EXTERNAL_NATURAL_LATIN_WORDS = new Set([
 
 const EXTERNAL_SHORT_DIALOGUE_WORDS = new Set([
   'I', 'IN', 'IT', 'IS', 'SO', 'OF', 'OH', 'WE', 'ME', 'UP', 'DO', 'GO', 'NO', 'BY', 'AT', 'IF', 'AN', 'OR', 'AS', 'AM', 'TO', 'HE', 'US', 'PIG', 'DIE', 'CUM', 'COCK',
-  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE', 'HUH', 'HA', 'HEY', 'HMM', 'AH', 'UH', 'UGH', 'YA'
+  'ALL', 'MORE', 'YOU', 'OHHH', 'YOURE', 'HUH', 'HA', 'HEY', 'HMM', 'AH', 'UH', 'UGH', 'YA',
+  'ARE', 'THE', 'WAR', 'TRY', 'NOT', 'YES', 'BOY', 'MAN', 'GUY', 'SEE', 'SAY', 'WIN', 'WAY', 'END', 'CRY', 'DID', 'GET', 'KEY', 'OLD', 'OUR', 'WHO', 'WHY', 'HOW'
 ]);
 
 const collectMeaningfulExternalLatinTokens = (text: string): string[] => (
@@ -276,6 +277,54 @@ const EXTERNAL_PADDLE_DIALOGUE_KEEP_KEYS = new Set([
   'UPLOOKING',
   'IS',
   'USTHE',
+  'ARE',
+  'THE',
+  'BEST',
+  'MONEY',
+  'KINGDOM',
+  'WEVE',
+  'HEIR',
+  'ABLETO',
+  'ENJOY',
+  'WAR',
+  'ORGASM',
+  'TRAINING',
+  'GRATEFUL',
+  'BASTARD',
+  'BASTARDS',
+  'HOLD',
+  'BACK',
+  'VIRGIN',
+  'HOLES',
+  'VIRGINHOLES',
+  'REALLY',
+  'DEALING',
+  'BRAT',
+  'SAME',
+  'TIME',
+  'SHOVED',
+  'ASSHOLE',
+  'START',
+  'STARTED',
+  'WINDING',
+  'PHEW',
+  'TRY',
+  'THEN',
+  'GOHHH',
+  'DOINGTHIS',
+  'TOAPRINCESS',
+  'APRINCESS',
+  'ARETHE',
+  'ARETHEBEST',
+  'THEPIGYOUARE',
+  'YOUARE',
+  'THEPIG',
+  'PIGYOUARE',
+  'LIKEAPIG',
+  'LIKEAPIGYOUARE',
+  'THATSSO',
+  'AGIRLS',
+  'YOUPIG',
 ]);
 
 const shouldKeepExternalPaddleDialogueFragment = (line: OCRLine): boolean => {
@@ -1823,8 +1872,7 @@ class VisionService {
         && /[~!?…]|^(?:O+H+|O+|A+H+|U+H+|H+M+|S+T+O+P+)$/i.test(rawText.replace(/\s+/g, ''));
       if ((!tallOutlier || !narrowOrVertical) && !stylizedWideEffect) return true;
 
-      // ── Safety Gate: prevent filtering standard English dialogue lines ──
-      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME|BITCH|HEY|PIG|ALREADY|GETTING|AWAY|LIKE|COCK|CUM|ASS|ASSHOLE|SHUT|HER|OUT|BACK|MOVE|CHARGE|FRONT|YOUFRONT|THEPIGYOUARE|BITCHHEY|PIGYOUARE)\b/i.test(rawText);
+      const hasKillOrOtherStandardWord = /\b(?:KILL|TO|THE|YOU|AND|THIS|THAT|NOT|BUT|FOR|WITH|HAVE|ARE|WAS|WERE|IS|IT|IN|ON|OF|AT|BY|AN|OR|IF|LIGHT|WAIT|STOP|LOOK|HELP|RUN|DIE|LIVE|YES|NO|OKAY|WHAT|WHY|HOW|WHO|WHEN|WHERE|FROM|JUST|ANIMAL|GET|GIVE|MAKE|TAKE|SOME|BITCH|HEY|PIG|ALREADY|GETTING|AWAY|LIKE|COCK|CUM|ASS|ASSHOLE|SHUT|HER|OUT|BACK|MOVE|CHARGE|FRONT|YOUFRONT|THEPIGYOUARE|BITCHHEY|PIGYOUARE|BEST|MONEY|KINGDOM|WEVE|HEIR|ABLETO|ENJOY|WAR|ORGASM|TRAINING|GRATEFUL|BASTARD|BASTARDS|PRINCESS|HOLD|VIRGIN|HOLES|REALLY|DEALING|BRAT|SAME|TIME|SHOVED|START|STARTED|WINDING|PHEW|TRY|THEN|GOHHH|ARETHE)\b/i.test(rawText);
       const isStandardEnglishDialogue = !stylizedWideEffect && isLikelyEnglishDialogue(rawText) && alphaLength >= 2;
       if (hasKillOrOtherStandardWord || isStandardEnglishDialogue) return true;
 

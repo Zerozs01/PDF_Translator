@@ -417,5 +417,138 @@ export function matchMangaGroupLineOverrides(
     return overrideLines;
   }
 
+  // 14. PHEW! I CAME A LOT! VIRGIN HOLES REALLY ARE THE BEST!
+  if (
+    compactCombined.includes('VIRGINHOLES') ||
+    (compactCombined.includes('VIRGIN') && compactCombined.includes('HOLES')) ||
+    (compactCombined.includes('CAME') && compactCombined.includes('BEST')) ||
+    (compactCombined.includes('ARETHE') && compactCombined.includes('BEST'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+      if (clean === 'PHEW!' || clean === 'PHEW') overrideLines.push('ฟู่...!');
+      else if (clean === 'ICAME' || clean === 'CAME') overrideLines.push('ฉันเสร็จ');
+      else if (clean === 'ALOT!' || clean === 'ALOT' || clean === 'LOT!') overrideLines.push('เยอะมาก!');
+      else if (clean === 'VIRGIN' || clean === 'VIRGINHOLES') overrideLines.push('รู');
+      else if (clean === 'HOLES') overrideLines.push('บริสุทธิ์');
+      else if (clean === 'REALLY') overrideLines.push('นี่มัน');
+      else if (clean === 'ARETHE' || clean === 'ARE') overrideLines.push('สุดยอด');
+      else if (clean === 'BEST!' || clean === 'BEST' || clean === 'THEBEST!') overrideLines.push('จริง ๆ!');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
+  // 15. THEN TRY AND HOLD BACK YOUR ORGASM!! YOU PIG!!
+  if (
+    compactCombined.includes('ORGASM') &&
+    (compactCombined.includes('PIG') || compactCombined.includes('HOLDBACK') || compactCombined.includes('THENTRY'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+      if (clean.includes('THENTRY') || clean === 'THEN' || clean === 'TRY') overrideLines.push('งั้นก็ลอง');
+      else if (clean.includes('ANDHOLD') || clean === 'HOLD' || clean === 'AND') overrideLines.push('กลั้น');
+      else if (clean.includes('BACKYOUR') || clean === 'BACK' || clean === 'YOUR') overrideLines.push('จุดสุดยอด');
+      else if (clean.includes('ORGASM')) overrideLines.push('ของแกไว้ดูสิ!!');
+      else if (clean === 'YOU' || clean === 'YOUPIG') overrideLines.push('ไอ้');
+      else if (clean.includes('PIG')) overrideLines.push('หมูตอน!!');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
+  // 16. HA! YOUR PUSSY STARTED WINDING AFTER YOU GOT A COCK SHOVED INSIDE YOUR ASSHOLE!
+  if (
+    (compactCombined.includes('PUSSY') && compactCombined.includes('WINDING')) ||
+    (compactCombined.includes('COCK') && compactCombined.includes('SHOVED')) ||
+    (compactCombined.includes('INSIDEYOUR') && compactCombined.includes('ASSHOLE'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+      if (clean === 'HA!' || clean === 'HA') overrideLines.push('ฮ่า!');
+      else if (clean.includes('YOURPUSSY') || clean === 'PUSSY') overrideLines.push('หอยของเธอ');
+      else if (clean.includes('STARTED') || clean === 'START') overrideLines.push('เริ่มตอดตุบ ๆ');
+      else if (clean.includes('WINDING') || clean.includes('AFTER')) overrideLines.push('หลังจากที่');
+      else if (clean.includes('YOUGOT') || clean.includes('GOTA')) overrideLines.push('โดนยัด');
+      else if (clean.includes('COCK') || clean.includes('SHOVED')) overrideLines.push('ดุ้นเข้าไป');
+      else if (clean.includes('INSIDE')) overrideLines.push('ข้างใน');
+      else if (clean.includes('ASSHOLE')) overrideLines.push('รูตูดแล้วสินะ!');
+      else if (clean.includes('THISIS') || clean.includes('GONNA')) overrideLines.push('แบบนี้มันจะ');
+      else if (clean.includes('MAKEME') || clean === 'MAKE') overrideLines.push('ทำเอาฉัน');
+      else if (clean.includes('CUMRIGHT') || clean.includes('CUM')) overrideLines.push('แตกออกมา');
+      else if (clean.includes('AWAY') || clean === 'AWAY!') overrideLines.push('เดี๋ยวนี้เลยนะเนี่ย!');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
+  // 17. I'M TRAINING YOU AND DEALING WITH THE BRAT AT THE SAME TIME!! BE GRATEFUL! THERE, ONE MORE TIME!!
+  if (
+    (compactCombined.includes('TRAINING') && compactCombined.includes('BRAT')) ||
+    (compactCombined.includes('GRATEFUL') && compactCombined.includes('TIME')) ||
+    (compactCombined.includes('DEALING') && compactCombined.includes('BRAT'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,]/g, '');
+      if (clean === "I'M" || clean === 'IM') overrideLines.push('ฉันกำลัง');
+      else if (clean.includes('TRAINING')) overrideLines.push('ฝึกสอน');
+      else if (clean.includes('YOUAND')) overrideLines.push('เธอไปพร้อมกับ');
+      else if (clean.includes('DEALING')) overrideLines.push('รับมือกับ');
+      else if (clean.includes('WITHTHE')) overrideLines.push('ไอ้เด็กเปรต');
+      else if (clean.includes('BRATAT') || clean === 'BRAT') overrideLines.push('นั่นอยู่');
+      else if (clean.includes('THESAME') || clean === 'SAME') overrideLines.push('ในเวลา');
+      else if (clean.includes('TIME!!BE') || clean.includes('TIME!!') || clean === 'TIME') overrideLines.push('เดียวกันนะ!!');
+      else if (clean.includes('GRATEFUL')) overrideLines.push('สำนึกบุญคุณซะ!');
+      else if (clean.includes('THERE') || clean.includes('ONEMORE') || clean === 'ONE') overrideLines.push('เอ้า อีกรอบนึง');
+      else if (clean === 'MORE') overrideLines.push('อีกรอบ');
+      else if (clean.includes('TIME')) overrideLines.push('แล้วนะ!!');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
+  // 18. GOHHH... Y-YOU BASTARDS.... DO YOU THINK YOU CAN GET AWAY... WITH. DOING THIS TO A PRINCESS...?
+  if (
+    compactCombined.includes('GOHHH') ||
+    (compactCombined.includes('BASTARDS') && compactCombined.includes('PRINCESS')) ||
+    (compactCombined.includes('GETAWAY') && compactCombined.includes('PRINCESS')) ||
+    (compactCombined.includes('DOINGTHIS') && compactCombined.includes('PRINCESS'))
+  ) {
+    const overrideLines: string[] = [];
+    lines.forEach((line) => {
+      const raw = String(line.text || '').trim();
+      const clean = raw.toUpperCase().replace(/[^A-Z0-9!?,.]/g, '');
+      if (clean.includes('GOHHH')) overrideLines.push('โกหหห...');
+      else if (clean.includes('YOU') || clean.includes('YYOU')) overrideLines.push('พ-พวก');
+      else if (clean.includes('BASTARD')) overrideLines.push('สวะ....');
+      else if (clean.includes('DOYOU') || clean.includes('THINK')) overrideLines.push('คิดว่าพวกแก');
+      else if (clean.includes('GETAWAY') || clean.includes('YOUCAN')) overrideLines.push('จะรอดไปได้');
+      else if (clean.includes('AWAY') || clean.includes('WITH')) overrideLines.push('งั้นเหรอ...');
+      else if (clean.includes('DOINGTHIS') || clean.includes('DOING') || clean === 'THIS') overrideLines.push('ที่ทำแบบนี้');
+      else if (clean.includes('TOAPRIN') || clean.includes('APRIN') || clean === 'TO') overrideLines.push('กับเจ้า');
+      else if (clean.includes('CESS') || clean.includes('PRINCESS')) overrideLines.push('หญิงน่ะ...?');
+      else {
+        overrideLines.push(lookupShortPhraseTh(raw) || raw);
+      }
+    });
+    return overrideLines;
+  }
+
   return null;
 }

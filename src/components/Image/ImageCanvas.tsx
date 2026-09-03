@@ -450,6 +450,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      useUIStore.getState().setIsUserInteracting(true);
 
       if (contentRef.current) {
         contentRef.current.style.transition = 'none';
@@ -505,6 +506,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
       wheelIdleTimerRef.current = setTimeout(() => {
         wheelIdleTimerRef.current = null;
         setView(panRef.current, stateRef.current.zoom);
+        useUIStore.getState().setIsUserInteracting(false);
       }, 120);
     };
 
@@ -515,6 +517,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) {
       setIsDragging(true);
+      useUIStore.getState().setIsUserInteracting(true);
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
     }
@@ -555,8 +558,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
   };
 
   const handleMouseUp = () => {
-    if (!isDragging) return;
-    setIsDragging(false);
+    if (isDragging) {
+      setIsDragging(false);
+      useUIStore.getState().setIsUserInteracting(false);
+    }
     if (dragTransformRafRef.current !== null) {
       cancelAnimationFrame(dragTransformRafRef.current);
       dragTransformRafRef.current = null;

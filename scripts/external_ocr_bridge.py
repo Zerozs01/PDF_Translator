@@ -221,7 +221,11 @@ SHORT_SPEECH_TOKENS = {"EH", "ME", "I", "OH", "AH", "NO", "A"}
 KOREAN_PARTICLE_SUFFIXES = {"이", "가", "은", "는", "을", "를", "의"}
 LATIN_SHORT_KEEP_TOKENS = {
     "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH", "HUH",
-    "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE",
+    "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE", "WAR", "TRY", "YOU",
+    "PIG", "ARE", "HE", "SHE", "DID", "GET", "HAS", "HAD", "CAN", "SEE", "SAY", "MAN", "BOY", "GUY",
+    "ONE", "TWO", "NOW", "YET", "BAD", "END", "HOT", "LOT", "BIG", "CRY", "EAT", "FAR", "FIT", "FLY",
+    "FUN", "JOB", "KEY", "LET", "LIE", "MAD", "MAY", "MOM", "DAD", "OLD", "OWN", "PAY", "SAD", "SON",
+    "USE", "WAY", "WIN", "YES", "CUM", "ASS", "OUT", "HER", "HIS", "HIM", "OUR", "WHO", "WHY", "HOW",
 }
 LATIN_COMMON_WORDS = {
     "THE", "YOU", "HE", "SHE", "WE", "THEY", "TO", "OF", "IN", "ON", "AT", "FOR", "AND", "OR", "ARE",
@@ -231,7 +235,11 @@ LATIN_COMMON_WORDS = {
     "NOT", "JUST", "ALL", "COME", "ACROSS", "POSSIBILITY", "WHAT", "THINK", "BEST", "ITS", "ILL",
     "HERE", "PEOPLE", "LIVE", "THERE", "WHY", "OKAY", "FINE", "ACTING", "MYSTERIOUS", "WHATEVER",
     "WANT", "SAY", "TIANHAI", "CHAPTER", "SECTION", "PART", "FIGURE", "FIG", "TABLE", "UNIT",
-    "LESSON", "VOLUME", "VOL", "APPENDIX",
+    "LESSON", "VOLUME", "VOL", "APPENDIX", "MONEY", "KINGDOM", "WEVE", "HEIR", "ABLETO", "ENJOY",
+    "WAR", "ORGASM", "TRAINING", "GRATEFUL", "BASTARD", "BASTARDS", "PRINCESS", "HOLD", "BACK",
+    "VIRGIN", "HOLES", "REALLY", "DEALING", "BRAT", "SAME", "TIME", "PUSSY", "SHOVED", "ASSHOLE",
+    "START", "STARTED", "WINDING", "PIG", "COCK", "CUM", "AWAY", "RIGHT", "PHEW", "TRY", "THEN",
+    "GOHHH", "DOINGTHIS", "GETAWAY", "THATS", "GIRL", "GIRLS",
 }
 
 
@@ -1376,7 +1384,85 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "MEEEE",
     "5O",
     "S0",
-    "6O"
+    "6O",
+    "MONEY",
+    "KINGDOM",
+    "WEVE",
+    "HEIR",
+    "ARETHE",
+    "BEST",
+    "ABLETO",
+    "ENJOY",
+    "THATSSO",
+    "AGIRLS",
+    "WAR",
+    "THENTRY",
+    "ANDHOLD",
+    "BACKYOUR",
+    "ORGASM",
+    "YOUPIG",
+    "PIG",
+    "IM",
+    "TRAINING",
+    "YOUAND",
+    "DEALING",
+    "WITHTHE",
+    "BRATAT",
+    "THESAME",
+    "TIMEBE",
+    "GRATEFUL",
+    "THEREONE",
+    "MORE",
+    "ONEMORE",
+    "TIME",
+    "GOHHH",
+    "YYOU",
+    "BASTARDS",
+    "DOYOU",
+    "DOYOUTHINK",
+    "THINK",
+    "YOUCAN",
+    "GETAWAY",
+    "AWAY",
+    "WITH",
+    "AWAYWITH",
+    "DOINGTHIS",
+    "TOAPRINCESS",
+    "APRINCESS",
+    "PRINCESS",
+    "PHEW",
+    "ICAME",
+    "ALOT",
+    "VIRGIN",
+    "HOLES",
+    "VIRGINHOLES",
+    "REALLY",
+    "ARETHEBEST",
+    "YOURPUSSY",
+    "STARTED",
+    "WINDING",
+    "WINDINGAFTER",
+    "YOUGOTA",
+    "COCK",
+    "COCKSHOVED",
+    "SHOVED",
+    "INSIDEYOUR",
+    "INSIDE",
+    "ASSHOLE",
+    "THISIS",
+    "THISISGONNA",
+    "GONNA",
+    "MAKEME",
+    "CUM",
+    "CUMRIGHT",
+    "RIGHTAWAY",
+    "RIGHT",
+    "HOLD",
+    "BACK",
+    "TRY",
+    "THEN",
+    "GIRL",
+    "GIRLS"
 }
 
 
@@ -1576,6 +1662,8 @@ def is_probable_ascii_ghost(text: str) -> bool:
         return False
     alpha_num = normalize_alpha_token(raw)
     if re.fullmatch(r"[\W_]+", raw):
+        if re.fullmatch(r"[!?….]+", raw):
+            return False
         return True
 
     # Check if this looks like a valid citation/bracketed reference (e.g., "[1]", "(2)]", "[usually", "[a]")
@@ -2597,9 +2685,9 @@ def prune_paddle_panel_contextual_noise_lines(
 
             trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14 and len(re.sub(r"[^A-Za-z]", "", text)) <= 1
             has_vowel = bool(re.search(r"[aeiouAEIOUyY]", text))
-            # Malformed mixed case is typically consonant-only noise (e.g. "gT", "xY") or tiny isolated casing junk.
-            # Real words with casing typos (e.g. "WOuLD", "tOO") should not be dropped.
-            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text)) and (not has_vowel or (token_count <= 1 and compact_length <= 3))
+            # Malformed mixed case is strictly consonant-only noise (e.g. "gT", "xY").
+            # Real words with casing idiosyncrasies (e.g. "yOU", "WINDiNG", "HEiR", "WOuLD", "tOO") must not be dropped.
+            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text)) and not has_vowel
             oversized_weak_singleton = (
                 token_count <= 1
                 and compact_length <= 3

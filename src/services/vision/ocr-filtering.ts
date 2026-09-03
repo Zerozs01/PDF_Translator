@@ -18,7 +18,9 @@ const KOR_ALLOWED_REPEAT_JAMO_RE = /^([ㅋㅎㅠㅜ])\1+$/;
 const KOR_TERMINAL_PUNCT_RE = /[?!~.…？！〜]+[)"'’”\]\s]*$/u;
 const LATIN_KEEP_SHORT_WORDS = new Set([
   'I', 'A', 'EH', 'ME', 'OH', 'AH', 'IT', 'TO', 'DO', 'IN', 'ON', 'OF', 'IF', 'IS', 'BE', 'WE', 'US', 'MY', 'NO', 'GO', 'OR', 'AN',
-  'SO', 'DIE', 'PIG', 'CUM', 'COCK', 'ALL', 'YOU', 'FRONT', 'YOUFRONT', 'OHHH', 'OHHHH', 'OHHHHH', 'YET', '6O'
+  'SO', 'DIE', 'PIG', 'CUM', 'COCK', 'ALL', 'YOU', 'FRONT', 'YOUFRONT', 'OHHH', 'OHHHH', 'OHHHHH', 'YET', '6O',
+  'ARE', 'THE', 'WAR', 'TRY', 'NOT', 'DID', 'GET', 'SEE', 'SAY', 'MAN', 'BOY', 'GUY', 'ONE', 'TWO', 'NOW', 'CRY',
+  'WAY', 'WIN', 'YES', 'HE', 'SHE', 'OUR', 'WHO', 'WHY', 'HOW', 'HA', 'YA', 'UM', 'UH', 'UGH', 'END', 'OLD'
 ]);
 const LATIN_PROTECT_WORDS = new Set([
   'I', 'A', 'IT', 'ITS', 'ILL', 'GO', 'OVER', 'AND', 'TAKE', 'LOOK', 'BEST', 'IF', 'THINK', 'ME', 'EH',
@@ -26,7 +28,9 @@ const LATIN_PROTECT_WORDS = new Set([
   'AYNAR', 'ESSENCE', 'KNEW', 'NYAH', 'HOW', 'MUCH', 'FOR',
   'YOURE', 'STOOOOP', 'STOAOOP', 'STOAAOP', 'MY', 'HEART', 'BEING', 'TORN', 'BY', 'THEIR', 'COCKS', 'VIRGINITY', 'LOST', 'SOME', 'BARBARIAN', 'RAPING', 'WET', 'PUSSY', 'AGAA',
   'CAME', 'CUMMING', 'PRINCESS', 'NEGO', 'WITHAN', 'HEIRRR', 'RRR', 'USTHE', '6O', 'FRONT', 'YOUFRONT', 'YOUFRONTUSTHEGETTINGAWAYWITH',
-  'LIKETHIS', 'WASTOYED', 'UPLOOKING', 'CUTE', 'SOFT', 'FIRM', 'YET', 'STILL', 'ALIVE', 'FUCK', 'ISSOCUTE', 'SOTIGHT', 'SMACK', 'SMACKV', 'PHEW'
+  'LIKETHIS', 'WASTOYED', 'UPLOOKING', 'CUTE', 'SOFT', 'FIRM', 'YET', 'STILL', 'ALIVE', 'FUCK', 'ISSOCUTE', 'SOTIGHT', 'SMACK', 'SMACKV', 'PHEW',
+  'MONEY', 'KINGDOM', 'WEVE', 'HEIR', 'ABLETO', 'ENJOY', 'WAR', 'ORGASM', 'TRAINING', 'GRATEFUL', 'BASTARD', 'BASTARDS',
+  'WINDING', 'SHOVED', 'ASSHOLE', 'START', 'STARTED', 'HOLES', 'VIRGIN', 'DEALING', 'BRAT', 'SAME', 'TIME', 'GOHHH'
 ]);
 
 function normalizeLatinToken(token: string): string {

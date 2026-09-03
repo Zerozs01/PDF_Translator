@@ -74,13 +74,13 @@ function getCompactPhraseMap(): Map<string, string> {
   if (!_compactPhraseMap) {
     _compactPhraseMap = new Map<string, string>();
     for (const [k, v] of Object.entries(ARGOS_SHORT_PHRASE_LOOKUP_TH)) {
-      const compact = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const compact = k.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
       if (compact && !_compactPhraseMap.has(compact)) {
         _compactPhraseMap.set(compact, v);
       }
     }
     for (const [k, v] of Object.entries(GENERAL_ENGLISH_DICTIONARY_TH)) {
-      const compact = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const compact = k.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
       if (compact && !_compactPhraseMap.has(compact)) {
         _compactPhraseMap.set(compact, v);
       }
@@ -258,10 +258,43 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
     return 'ควยยยยยยพวกนี้';
   }
 
-  // 3. ลองค้นหาผ่าน Compact Alphanumeric Map (ทนทานต่อการตัดคำ/เครื่องหมายวรรคตอน/จุดไข่ปลาทุกประเภท)
-  const compactKey = rawKey.replace(/[^a-z0-9]/g, '');
+  // 3. ลองค้นหาผ่าน Compact Unicode Letter Map (ทนทานต่อการตัดคำ/เครื่องหมายวรรคตอน/จุดไข่ปลาทุกภาษา)
+  const compactKey = rawKey.replace(/[^\p{L}\p{N}]/gu, '');
   if (compactKey && compactKey.length >= 2) {
-    const compactMatch = getCompactPhraseMap().get(compactKey);
+    let compactMatch = getCompactPhraseMap().get(compactKey);
+
+    // Korean particle/suffix fallback decomposition (e.g. 쿠기사키가 -> 쿠기사키, 자궁속까지 -> 자궁 + 속까지)
+    if (!compactMatch && /[\uAC00-\uD7AF]/.test(compactKey)) {
+      if (compactKey.endsWith('속까지')) {
+        const base = compactKey.slice(0, -3);
+        const baseMatch = getCompactPhraseMap().get(base);
+        if (baseMatch) compactMatch = `ลึกเข้าไปถึงใน${baseMatch}`;
+      } else if (compactKey.endsWith('으로') || compactKey.endsWith('로')) {
+        const base = compactKey.endsWith('으로') ? compactKey.slice(0, -2) : compactKey.slice(0, -1);
+        const baseMatch = getCompactPhraseMap().get(base);
+        if (baseMatch) compactMatch = `ด้วย${baseMatch}`;
+      } else if (compactKey.endsWith('에게')) {
+        const base = compactKey.slice(0, -2);
+        const baseMatch = getCompactPhraseMap().get(base);
+        if (baseMatch) compactMatch = `ให้${baseMatch}`;
+      } else if (compactKey.endsWith('에서')) {
+        const base = compactKey.slice(0, -2);
+        const baseMatch = getCompactPhraseMap().get(base);
+        if (baseMatch) compactMatch = `ที่${baseMatch}`;
+      } else if (compactKey.endsWith('까지')) {
+        const base = compactKey.slice(0, -2);
+        const baseMatch = getCompactPhraseMap().get(base);
+        if (baseMatch) compactMatch = `จนถึง${baseMatch}`;
+      } else if (compactKey.endsWith('들과') || compactKey.endsWith('들과는')) {
+        const base = compactKey.replace(/들과는?$/, '');
+        const baseMatch = getCompactPhraseMap().get(base);
+        if (baseMatch) compactMatch = `กับพวก${baseMatch}`;
+      } else if (/[을를이가은는과와도만네라]$/.test(compactKey)) {
+        const base = compactKey.slice(0, -1);
+        compactMatch = getCompactPhraseMap().get(base);
+      }
+    }
+
     if (compactMatch) {
       const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
       let result = (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(compactMatch)) ? compactMatch + trailingPunct[1] : compactMatch;

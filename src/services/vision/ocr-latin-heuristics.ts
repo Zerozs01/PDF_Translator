@@ -456,9 +456,9 @@ export function pruneResidualLatinNoiseLines(
 				return false;
 			}
 			if (alpha.length <= 2 && lexicalSingleton) {
-				if (!protectedLine || line.confidence < 99) return false;
+				if (!protectedLine && line.confidence < 60) return false;
 			}
-			if (alpha.length <= 3 && !lexicalSingleton && line.confidence < 98 && quality < 0.86) {
+			if (alpha.length <= 3 && !lexicalSingleton && line.confidence < 95 && quality < 0.82) {
 				return false;
 			}
 		}
@@ -487,6 +487,9 @@ export function pruneResidualLatinNoiseLines(
 			const tinyTokenCount = lineTokens.filter((token) => token.length <= 2).length;
 			const mixedCaseWordCount = lineWords.filter((word) => {
 				const raw = (word.text || '').trim();
+				const hasVowel = /[aeiouy]/i.test(raw);
+				const isMangaFontCasing = /^[A-Z]*[il][A-Z]*$/i.test(raw);
+				if (hasVowel || isMangaFontCasing) return false;
 				return /[A-Z]/.test(raw) && /[a-z]/.test(raw);
 			}).length;
 			const fragmentedLike = avgTokenLen <= 3.8 && tinyTokenCount >= 1;
@@ -504,6 +507,9 @@ export function pruneResidualLatinNoiseLines(
 			const tinyTokenCount = lineTokens.filter((token) => token.length <= 2).length;
 			const mixedCaseWordCount = lineWords.filter((word) => {
 				const raw = (word.text || '').trim();
+				const hasVowel = /[aeiouy]/i.test(raw);
+				const isMangaFontCasing = /^[A-Z]*[il][A-Z]*$/i.test(raw);
+				if (hasVowel || isMangaFontCasing) return false;
 				return /[A-Z]/.test(raw) && /[a-z]/.test(raw);
 			}).length;
 			const lowLexicalDensity = lexicalHits <= 1;

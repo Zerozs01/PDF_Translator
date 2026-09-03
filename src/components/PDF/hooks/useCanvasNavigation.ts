@@ -66,6 +66,7 @@ export function useCanvasNavigation({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       onInteractionStart?.();
+      useUIStore.getState().setIsUserInteracting(true);
 
       if (contentRef.current) {
         contentRef.current.style.transition = 'none';
@@ -120,6 +121,7 @@ export function useCanvasNavigation({
         wheelIdleTimerRef.current = null;
         setView(panRef.current, stateRef.current.zoom);
         onInteractionEnd?.(300);
+        useUIStore.getState().setIsUserInteracting(false);
       }, 120);
     };
 
@@ -131,6 +133,7 @@ export function useCanvasNavigation({
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) {
       setIsDragging(true);
       onInteractionStart?.();
+      useUIStore.getState().setIsUserInteracting(true);
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
     }
@@ -178,7 +181,8 @@ export function useCanvasNavigation({
         dragTransformRafRef.current = null;
       }
       setPan(panRef.current.x, panRef.current.y);
-      onInteractionEnd?.(500);
+      onInteractionEnd?.(300);
+      useUIStore.getState().setIsUserInteracting(false);
     }
   }, [isDragging, onInteractionEnd, setPan]);
 
