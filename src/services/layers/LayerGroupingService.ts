@@ -9,6 +9,7 @@ import type { BBox, OCRLine, OCRPageResult } from '../../types';
 import type { TextLayer, TextLayerGroup, LayerGroupType, LayerGroupingResult } from '../../types/layers';
 import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
 import { lookupShortPhraseTh } from '../translation/offlineTranslationService';
+import { clusterConnectedComponents } from '../native/fastSpatialCluster';
 
 // Group color palette (Canva-style)
 const GROUP_COLORS = [
@@ -553,41 +554,11 @@ export const buildLayerGroupsFromOCR = (
   groupIdCounter = 0;
 
   const N = lines.length;
-  const adj: number[][] = Array.from({ length: N }, () => []);
 
-  // 1. สร้าง Adjacency Graph ระหว่าง Lines ทั้งหมดที่เข้าเกณฑ์ 2D Spatial
-  for (let i = 0; i < N; i++) {
-    for (let j = i + 1; j < N; j++) {
-      if (shouldGroupLines(lines[i], lines[j], lines)) {
-        adj[i].push(j);
-        adj[j].push(i);
-      }
-    }
-  }
+  // 1 & 2. ค้นหา Connected Components ด้วย Zero-GC Union-Find (Disjoint-Set)
+  const components = clusterConnectedComponents(N, (i, j) => shouldGroupLines(lines[i], lines[j], lines));
 
-  // 2. ค้นหา Connected Components ด้วย BFS เพื่อหากลุ่มอิสระ
-  const visited = new Set<number>();
-  const components: number[][] = [];
-
-  for (let i = 0; i < N; i++) {
-    if (visited.has(i)) continue;
-
-    const component: number[] = [];
-    const queue: number[] = [i];
-    visited.add(i);
-
-    while (queue.length > 0) {
-      const u = queue.shift()!;
-      component.push(u);
-
-      for (const v of adj[u]) {
-        if (!visited.has(v)) {
-          visited.add(v);
-          queue.push(v);
-        }
-      }
-    }
-
+  for (const component of components) {
     // จัดเรียงลำดับบรรทัดในกลุ่มเดียวกันจากบนลงล่าง Y -> X เพื่อความสวยงามของ Layer list
     component.sort((a, b) => {
       const lineA = lines[a];
@@ -603,8 +574,6 @@ export const buildLayerGroupsFromOCR = (
       }
       return lineA.bbox.y0 - lineB.bbox.y0;
     });
-
-    components.push(component);
   }
 
   // จัดเรียงกลุ่มทั้งหมดตามลำดับตำแหน่งการอ่านทั่วไป (บนซ้าย ไป ล่างขวา)

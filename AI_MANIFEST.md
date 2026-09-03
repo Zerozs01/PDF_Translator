@@ -69,11 +69,13 @@
 - **IPC Main Handler:** [electron/main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) — จัดการการสื่อสารระหว่าง Renderer และ Main process
 * **PDF Print Export (Level 2):** [electron/pdfExportService.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportService.ts) — Hidden Window พิมพ์เฉพาะ overlay โปร่งใส → [pdfExportMerge.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportMerge.ts) stamp ทับ Source PDF ด้วย `pdf-lib`
 * **Preload API Wrapper:** [electron/preload.ts](file:///c:/App/Electron/PDF_Translator/electron/preload.ts) — กำหนด API ปลอดภัยที่อนุญาตให้ Renderer เรียกใช้งานระบบได้
-* **Local SQLite Database Layer:** [electron/db.ts](file:///c:/App/Electron/PDF_Translator/electron/db.ts) — จัดการเชื่อมต่อเข้ารหัส SQLCipher, แคช OCR และคำแปล
+* **Local SQLite Database Layer:** [electron/db.ts](file:///c:/App/Electron/PDF_Translator/electron/db.ts) — จัดการเชื่อมต่อเข้ารหัส SQLCipher, WAL Pragmas, FTS5 และ Schema Migrations
+* **Modular DAO Layer:** [electron/dao/](file:///c:/App/Electron/PDF_Translator/electron/dao/) — แยก Data Access Objects แบบโมดูลาร์ (`DocumentDAO`, `ProjectDAO`, `TagDAO`, `OCRCacheDAO`, `TranslationDAO`, `GlossaryDAO`, `BenchmarkDAO`) พร้อม Prepared Statement Caching
 * **IPC Files Access Bridge:** [electron/documentFileAccess.ts](file:///c:/App/Electron/PDF_Translator/electron/documentFileAccess.ts) — จัดการการอ่านเขียนไฟล์ผ่าน IPC (รวมถึงฟังก์ชัน zero-copy path สำหรับการ import ไฟล์ขนาดใหญ่)
 * **Local Cryptography & safeStorage:** [electron/authService.ts](file:///c:/App/Electron/PDF_Translator/electron/authService.ts) — จัดการ Hash PBKDF2, จัดเก็บค่า Config และเข้ารหัส OS Keychain (Relax Mode)
 * **Argos Translate Bridge:** [electron/argosBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/argosBridge.ts) — จัดการ Argos daemon lifecycle, Python runtime resolution, และ offline batch translation IPC helper
 * **Python Runtime Helper:** [electron/pythonRuntime.ts](file:///c:/App/Electron/PDF_Translator/electron/pythonRuntime.ts) — helper กลางสำหรับ resolve Python override และ local virtualenv lookup ที่ใช้ร่วมกันระหว่าง OCR/Argos bridge
+* **Zero-GC Native Algorithms:** [src/services/native/fastSpatialCluster.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastSpatialCluster.ts) & [src/services/native/fastDiceSimilarity.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastDiceSimilarity.ts) — TypedArray Disjoint-Set Connected Components และ 16-bit Unicode popcount bigram similarity สำหรับ 2D grouping และ deduplication ความเร็วสูง
 
 ### 3. OCR Engine & Processing Pipelines
 

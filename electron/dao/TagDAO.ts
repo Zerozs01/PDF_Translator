@@ -26,9 +26,36 @@ export class TagDAO {
     return stmt;
   }
 
-  static getAllTags(): TagRow[] {
-    const stmt = this.getStmt('SELECT * FROM tags ORDER BY name ASC');
+  static getAll(): TagRow[] {
+    const stmt = this.getStmt('SELECT * FROM tags ORDER BY name');
     return stmt.all() as TagRow[];
+  }
+
+  static create(name: string, color: string = '#6366f1'): TagRow {
+    const stmt = this.getStmt('INSERT INTO tags (name, color) VALUES (?, ?) RETURNING *');
+    return stmt.get(name, color) as TagRow;
+  }
+
+  static update(id: number, data: { name?: string; color?: string }): boolean {
+    if (!this.db) throw new Error('TagDAO: DB not initialized');
+    const sets: string[] = [];
+    const values: any[] = [];
+    if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
+    if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
+    if (sets.length === 0) return true;
+    values.push(id);
+    this.db.prepare(`UPDATE tags SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    return true;
+  }
+
+  static delete(id: number): boolean {
+    const stmt = this.getStmt('DELETE FROM tags WHERE id = ?');
+    return stmt.run(id).changes > 0;
+  }
+
+  // Aliases for domain models
+  static getAllTags(): TagRow[] {
+    return this.getAll();
   }
 
   static getTagById(id: number): TagRow | undefined {
@@ -42,31 +69,16 @@ export class TagDAO {
   }
 
   static insertTag(tag: { name: string; color?: string }): TagRow {
-    const now = Date.now();
-    const stmt = this.getStmt(`
-      INSERT INTO tags (name, color, created_at)
-      VALUES (?, ?, ?)
-    `);
-
-    const info = stmt.run(tag.name, tag.color || '#6366f1', now);
-    return this.getTagById(Number(info.lastInsertRowid))!;
+    return this.create(tag.name, tag.color);
   }
 
   static updateTag(id: number, updates: { name?: string; color?: string }): TagRow | undefined {
-    const existing = this.getTagById(id);
-    if (!existing) return undefined;
-
-    const name = updates.name !== undefined ? updates.name : existing.name;
-    const color = updates.color !== undefined ? updates.color : existing.color;
-
-    const stmt = this.getStmt('UPDATE tags SET name = ?, color = ? WHERE id = ?');
-    stmt.run(name, color, id);
+    this.update(id, updates);
     return this.getTagById(id);
   }
 
   static deleteTag(id: number): void {
-    const stmt = this.getStmt('DELETE FROM tags WHERE id = ?');
-    stmt.run(id);
+    this.delete(id);
   }
 
   static getTagsForDocument(documentId: number): TagRow[] {

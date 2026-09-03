@@ -6,6 +6,7 @@ import {
   fastIoU,
   clusterByIoU,
   batchIoUMatrix,
+  clusterConnectedComponents,
 } from '../../services/native/fastSpatialCluster';
 import type { BBox } from '../../types';
 
@@ -117,5 +118,27 @@ describe('batchIoUMatrix', () => {
     expect(m[3]).toBe(1); // [1][1]
     expect(m[1]).toBeCloseTo(m[2], 10); // symmetric
     expect(m[1]).toBeCloseTo(fastIoU(boxes[0], boxes[1]), 10);
+  });
+});
+
+// ─── clusterConnectedComponents ─────────────────────────────────────────────────
+
+describe('clusterConnectedComponents', () => {
+  it('handles empty and singleton inputs', () => {
+    expect(clusterConnectedComponents(0, () => false)).toEqual([]);
+    expect(clusterConnectedComponents(1, () => false)).toEqual([[0]]);
+  });
+
+  it('correctly clusters connected pairs via Union-Find transitive closure', () => {
+    // 0 connects to 1, 1 connects to 2 -> {0, 1, 2}
+    // 3 is isolated -> {3}
+    const isConnected = (i: number, j: number) => {
+      if ((i === 0 && j === 1) || (i === 1 && j === 2)) return true;
+      return false;
+    };
+    const clusters = clusterConnectedComponents(4, isConnected);
+    expect(clusters).toHaveLength(2);
+    const sortedClusters = clusters.map(c => c.sort()).sort((a, b) => a[0] - b[0]);
+    expect(sortedClusters).toEqual([[0, 1, 2], [3]]);
   });
 });

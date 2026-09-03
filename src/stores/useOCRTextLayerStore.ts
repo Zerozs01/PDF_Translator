@@ -291,6 +291,27 @@ export const OCR_ENGINES: Array<{
   },
 ] as const;
 
+function applyUpdatedPageOCR(
+  state: OCRTextLayerState,
+  pageNum: number,
+  updatedOCR: OCRPageResult
+): Pick<OCRTextLayerState, 'allPagesOCR' | 'ocrByPageEngine' | 'currentPageOCR'> {
+  const nextAllPages = new Map(state.allPagesOCR);
+  nextAllPages.set(pageNum, updatedOCR);
+
+  const engine = (updatedOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
+  const nextByPageEngine = new Map(state.ocrByPageEngine);
+  const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
+  perPage.set(engine, updatedOCR);
+  nextByPageEngine.set(pageNum, perPage);
+
+  return {
+    allPagesOCR: nextAllPages,
+    ocrByPageEngine: nextByPageEngine,
+    currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
+  };
+}
+
 export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   // Default options
   options: {
@@ -668,21 +689,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     }
 
     const updatedOCR = { ...pageOCR, lines: nextLines };
-
-    const nextAllPages = new Map(state.allPagesOCR);
-    nextAllPages.set(pageNum, updatedOCR);
-
-    const engine = (pageOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
-    const nextByPageEngine = new Map(state.ocrByPageEngine);
-    const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
-    perPage.set(engine, updatedOCR);
-    nextByPageEngine.set(pageNum, perPage);
-
-    return {
-      allPagesOCR: nextAllPages,
-      ocrByPageEngine: nextByPageEngine,
-      currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
-    };
+    return applyUpdatedPageOCR(state, pageNum, updatedOCR);
   }),
 
   updateTranslationCacheText: (pageNum, lineIndex, newText) => set((state) => {
@@ -763,15 +770,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       nextLines.push(line);
       
       const updatedOCR = { ...pageOCR, lines: nextLines };
-
-      const nextAllPages = new Map(state.allPagesOCR);
-      nextAllPages.set(pageNum, updatedOCR);
-
-      const engine = (pageOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
-      const nextByPageEngine = new Map(state.ocrByPageEngine);
-      const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
-      perPage.set(engine, updatedOCR);
-      nextByPageEngine.set(pageNum, perPage);
+      const updatedPageMaps = applyUpdatedPageOCR(state, pageNum, updatedOCR);
 
       // Also update translation cache if there is an active translation
       const nextTranslationCache = new Map(state.translationCacheByPage);
@@ -800,9 +799,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       }
 
       return {
-        allPagesOCR: nextAllPages,
-        ocrByPageEngine: nextByPageEngine,
-        currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
+        ...updatedPageMaps,
         translationCacheByPage: nextTranslationCache,
       };
     });
@@ -815,15 +812,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
 
     const nextLines = (pageOCR.lines || []).filter((_, idx) => idx !== lineIndex);
     const updatedOCR = { ...pageOCR, lines: nextLines };
-
-    const nextAllPages = new Map(state.allPagesOCR);
-    nextAllPages.set(pageNum, updatedOCR);
-
-    const engine = (pageOCR.ocrEngine || state.options.engine || 'paddleocr') as OCREngine;
-    const nextByPageEngine = new Map(state.ocrByPageEngine);
-    const perPage = new Map(nextByPageEngine.get(pageNum) || new Map<OCREngine, OCRPageResult>());
-    perPage.set(engine, updatedOCR);
-    nextByPageEngine.set(pageNum, perPage);
+    const updatedPageMaps = applyUpdatedPageOCR(state, pageNum, updatedOCR);
 
     // Sync with translationCacheByPage
     const nextTranslationCache = new Map(state.translationCacheByPage);
@@ -850,9 +839,7 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     }
 
     return {
-      allPagesOCR: nextAllPages,
-      ocrByPageEngine: nextByPageEngine,
-      currentPageOCR: state.currentPageOCR && state.currentPageOCR.pageNumber === pageNum ? updatedOCR : state.currentPageOCR,
+      ...updatedPageMaps,
       translationCacheByPage: nextTranslationCache,
     };
   }),

@@ -25,6 +25,7 @@ const BITSET_WORDS = 2048; // 65536 bits / 32 bits per word
  */
 const bitsetA = new Uint32Array(BITSET_WORDS);
 const bitsetB = new Uint32Array(BITSET_WORDS);
+const bitsetRef = new Uint32Array(BITSET_WORDS);
 
 /** Zero-fill a bitset. */
 function clearBitset(bs: Uint32Array): void {
@@ -41,9 +42,9 @@ function clearBitset(bs: Uint32Array): void {
 function fillBigrams(bs: Uint32Array, str: string): number {
   const len = str.length;
   if (len < 2) {
-    // Single char — set its bit directly
+    // Single char — set its bit directly with 16-bit hash
     if (len === 1) {
-      const key = str.charCodeAt(0) & 0xFFFF;
+      const key = (str.charCodeAt(0) * 31) & 0xFFFF;
       const word = key >>> 5;  // key / 32
       const bit = 1 << (key & 31); // key % 32
       bs[word] |= bit;
@@ -54,7 +55,10 @@ function fillBigrams(bs: Uint32Array, str: string): number {
 
   let count = 0;
   for (let i = 0; i < len - 1; i++) {
-    const key = ((str.charCodeAt(i) & 0xFF) << 8) | (str.charCodeAt(i + 1) & 0xFF);
+    const c1 = str.charCodeAt(i);
+    const c2 = str.charCodeAt(i + 1);
+    // Mix full 16-bit code units so Thai (\u0E00-\u0E7F) and CJK (\u4E00-\u9FFF) do not collide
+    const key = ((c1 * 31) ^ c2) & 0xFFFF;
     const word = key >>> 5;
     const bit = 1 << (key & 31);
     if ((bs[word] & bit) === 0) {
@@ -139,9 +143,8 @@ export function batchDiceSimilarity(
   const refCount = fillBigrams(bitsetA, refTrimmed);
   if (refCount === 0) return scores;
 
-  // Save reference bitset (since bitsetB is used for candidates)
-  const refSnapshot = new Uint32Array(BITSET_WORDS);
-  refSnapshot.set(bitsetA);
+  // Save reference bitset to pool (zero GC)
+  bitsetRef.set(bitsetA);
 
   for (let i = 0; i < n; i++) {
     const cand = (candidates[i] || '').trim();
@@ -155,7 +158,7 @@ export function batchDiceSimilarity(
     const candCount = fillBigrams(bitsetB, cand);
     if (candCount === 0) continue;
 
-    const overlap = intersectionPopcount(refSnapshot, bitsetB);
+    const overlap = intersectionPopcount(bitsetRef, bitsetB);
     scores[i] = (2 * overlap) / (refCount + candCount);
   }
 

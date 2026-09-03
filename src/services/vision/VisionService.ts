@@ -606,10 +606,10 @@ class VisionService {
   }
 
   /**
-   * Initialize OCR engine
+   * Initialize OCR engine (no-op since PaddleOCR runs via native Python IPC)
    */
   public async initialize(): Promise<void> {
-    return this.sendMessage('INIT', undefined, { skipQueue: true });
+    return Promise.resolve();
   }
 
   /**

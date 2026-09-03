@@ -223,3 +223,39 @@ export function batchIoUMatrix(boxes: ReadonlyArray<BBox>): Float64Array {
 
   return matrix;
 }
+
+/**
+ * High-performance Connected Components clustering via Zero-GC Union-Find.
+ * Drops memory allocations and replaces BFS queue/Set overhead in spatial graph clustering.
+ */
+export function clusterConnectedComponents(
+  n: number,
+  isConnected: (i: number, j: number) => boolean
+): number[][] {
+  if (n === 0) return [];
+  if (n === 1) return [[0]];
+
+  const parent = makeParent(n);
+  const rank = makeRank(n);
+
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (isConnected(i, j)) {
+        union(parent, rank, i, j);
+      }
+    }
+  }
+
+  const clusters = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(parent, i);
+    let cluster = clusters.get(root);
+    if (!cluster) {
+      cluster = [];
+      clusters.set(root, cluster);
+    }
+    cluster.push(i);
+  }
+
+  return Array.from(clusters.values());
+}
