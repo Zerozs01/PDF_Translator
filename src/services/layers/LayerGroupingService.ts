@@ -58,12 +58,18 @@ const getVerticalGap = (a: BBox, b: BBox): number => {
  */
 const mergeBBoxes = (boxes: BBox[]): BBox => {
   if (boxes.length === 0) return { x0: 0, y0: 0, x1: 1, y1: 1 };
-  return {
-    x0: Math.min(...boxes.map(b => b.x0)),
-    y0: Math.min(...boxes.map(b => b.y0)),
-    x1: Math.max(...boxes.map(b => b.x1)),
-    y1: Math.max(...boxes.map(b => b.y1)),
-  };
+  let x0 = boxes[0].x0;
+  let y0 = boxes[0].y0;
+  let x1 = boxes[0].x1;
+  let y1 = boxes[0].y1;
+  for (let i = 1; i < boxes.length; i++) {
+    const b = boxes[i];
+    if (b.x0 < x0) x0 = b.x0;
+    if (b.y0 < y0) y0 = b.y0;
+    if (b.x1 > x1) x1 = b.x1;
+    if (b.y1 > y1) y1 = b.y1;
+  }
+  return { x0, y0, x1, y1 };
 };
 
 const NEW_BALLOON_PATTERNS = [

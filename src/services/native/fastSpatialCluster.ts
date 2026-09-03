@@ -186,19 +186,21 @@ export function clusterByIoU(
     }
   }
 
-  // Collect clusters by root
-  const clusters = new Map<number, number[]>();
+  // Collect clusters by root using direct array indexing (Zero Map allocations)
+  const clusterBuckets: number[][] = new Array(n);
+  const result: number[][] = [];
   for (let i = 0; i < n; i++) {
     const root = find(parent, i);
-    let cluster = clusters.get(root);
-    if (!cluster) {
-      cluster = [];
-      clusters.set(root, cluster);
+    let bucket = clusterBuckets[root];
+    if (!bucket) {
+      bucket = [];
+      clusterBuckets[root] = bucket;
+      result.push(bucket);
     }
-    cluster.push(i);
+    bucket.push(i);
   }
 
-  return Array.from(clusters.values());
+  return result;
 }
 
 /**
@@ -246,16 +248,19 @@ export function clusterConnectedComponents(
     }
   }
 
-  const clusters = new Map<number, number[]>();
+  // Collect clusters by root using direct array indexing (Zero Map allocations)
+  const clusterBuckets: number[][] = new Array(n);
+  const result: number[][] = [];
   for (let i = 0; i < n; i++) {
     const root = find(parent, i);
-    let cluster = clusters.get(root);
-    if (!cluster) {
-      cluster = [];
-      clusters.set(root, cluster);
+    let bucket = clusterBuckets[root];
+    if (!bucket) {
+      bucket = [];
+      clusterBuckets[root] = bucket;
+      result.push(bucket);
     }
-    cluster.push(i);
+    bucket.push(i);
   }
 
-  return Array.from(clusters.values());
+  return result;
 }

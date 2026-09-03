@@ -6,6 +6,53 @@ import { lookupShortPhraseTh } from './offlineTranslationService';
 import { normalizeTranslationLanguage } from '../ocr/ocrTextNormalizer';
 
 /**
+ * [Scrutinize S8]: Shared SFX/Dictionary resolver — ใช้ร่วมกันระหว่าง 3 engines
+ * แยก SFX items ออก → แปลด้วย Local Dict → คืนผลที่แปลได้ + items ที่ต้องส่งต่อ
+ */
+interface SfxResolveResult {
+  /** ผลแปลที่ได้จาก SFX dict + short phrase dict */
+  resolvedResults: TranslationResult[];
+  /** Items ที่ SFX dict แปลไม่ได้ → ต้องส่งไป engine จริง */
+  unresolvedSfxItems: TranslatableItem[];
+}
+
+function resolveSfxItems(
+  items: TranslatableItem[],
+  sourceLanguage: string,
+): SfxResolveResult {
+  const sfxItems = items.filter((item) => item.groupType === 'sfx');
+  const resolvedResults: TranslationResult[] = [];
+  const unresolvedSfxItems: TranslatableItem[] = [];
+
+  const sfxLang = sourceLanguage.substring(0, 2).toLowerCase() as SFXLanguage;
+  for (const item of sfxItems) {
+    const sfxTranslated = translateSFX(item.text, sfxLang);
+    if (sfxTranslated) {
+      resolvedResults.push({
+        id: item.id,
+        translatedText: sfxTranslated,
+        success: true,
+        engineUsed: 'sfx-dict',
+      });
+    } else {
+      const shortPhraseMatch = lookupShortPhraseTh(item.text, sourceLanguage);
+      if (shortPhraseMatch) {
+        resolvedResults.push({
+          id: item.id,
+          translatedText: shortPhraseMatch,
+          success: true,
+          engineUsed: 'short-phrase-dict',
+        });
+      } else {
+        unresolvedSfxItems.push(item);
+      }
+    }
+  }
+
+  return { resolvedResults, unresolvedSfxItems };
+}
+
+/**
  * Argos Offline Engine Implementation
  * แปลภาษาออฟไลน์ผ่าน Argos Translator โดยข้าม SFX และใช้วิธีดัชนี Index-based Mapping
  */
@@ -22,41 +69,20 @@ export class ArgosTranslationEngine implements TranslationEngine {
       translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
-    const nonSfxItems: TranslatableItem[] = [];
-    const sfxItems = items.filter((item) => item.groupType === 'sfx');
-
-    const results: TranslationResult[] = [];
-
-    // 2. ประมวลผลคำแปลสำหรับ Sfx Items ด้วย Local Dictionary
-    const sfxLang = (options.sourceLanguage.substring(0, 2).toLowerCase()) as SFXLanguage;
-    for (const item of sfxItems) {
-      const sfxTranslated = translateSFX(item.text, sfxLang);
-      if (sfxTranslated) {
-        results.push({
-          id: item.id,
-          translatedText: sfxTranslated,
-          success: true,
-          engineUsed: 'sfx-dict',
-        });
-      } else {
-        const shortPhraseMatch = lookupShortPhraseTh(item.text);
-        if (shortPhraseMatch) {
-          results.push({
-            id: item.id,
-            translatedText: shortPhraseMatch,
-            success: true,
-            engineUsed: 'short-phrase-dict',
-          });
-        } else {
-          nonSfxItems.push(item);
-        }
-      }
-    }
+    // [Scrutinize S8]: ใช้ shared SFX resolver แทน inline loop
+    const { resolvedResults: sfxResults, unresolvedSfxItems } = resolveSfxItems(items, options.sourceLanguage);
+    const results: TranslationResult[] = [...sfxResults];
 
     const batchItems: TranslatableItem[] = [];
 
     items.forEach((item) => {
-      if (item.groupType === 'sfx') return; // Handled above
+      if (item.groupType === 'sfx') {
+        // SFX ที่แปลไม่ได้จาก dict → รวมเข้า batch ส่งไป Argos
+        if (unresolvedSfxItems.some((u) => u.id === item.id)) {
+          batchItems.push(item);
+        }
+        return;
+      }
       if (options.targetLanguage === 'th') {
         const directMatch = lookupShortPhraseTh(item.text, options.sourceLanguage);
         if (directMatch) {
@@ -148,50 +174,30 @@ export class M2M100TranslationEngine implements TranslationEngine {
       translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
-    const nonSfxItems: TranslatableItem[] = [];
-    const sfxItems = items.filter((item) => item.groupType === 'sfx');
+    // [Scrutinize S8]: ใช้ shared SFX resolver แทน inline loop
+    const { resolvedResults: sfxResults, unresolvedSfxItems } = resolveSfxItems(items, options.sourceLanguage);
+    const results: TranslationResult[] = [...sfxResults];
 
-    const results: TranslationResult[] = [];
-
-    const sfxLang = (options.sourceLanguage.substring(0, 2).toLowerCase()) as SFXLanguage;
-    for (const item of sfxItems) {
-      const sfxTranslated = translateSFX(item.text, sfxLang);
-      if (sfxTranslated) {
-        results.push({
-          id: item.id,
-          translatedText: sfxTranslated,
-          success: true,
-          engineUsed: 'sfx-dict',
-        });
-      } else {
-        const shortPhraseMatch = lookupShortPhraseTh(item.text, options.sourceLanguage);
-        if (shortPhraseMatch) {
-          results.push({
-            id: item.id,
-            translatedText: shortPhraseMatch,
-            success: true,
-            engineUsed: 'short-phrase-dict',
-          });
-        } else {
-          nonSfxItems.push(item);
-        }
-      }
-    }
-
+    // รวบรวม non-SFX items + SFX ที่แปลไม่ได้เข้า batch เดียว
+    const batchItems: TranslatableItem[] = [];
     items.forEach((item) => {
-      if (item.groupType !== 'sfx') {
-        nonSfxItems.push(item);
+      if (item.groupType === 'sfx') {
+        if (unresolvedSfxItems.some((u) => u.id === item.id)) {
+          batchItems.push(item);
+        }
+        return;
       }
+      batchItems.push(item);
     });
 
-    if (nonSfxItems.length === 0) {
+    if (batchItems.length === 0) {
       return results;
     }
 
     try {
       // ทำไมถึงเขียนแบบนี้: ไม่ Deduplicate ก่อนส่งแปล เพราะคำที่ซ้ำในหลายบอลลูนจำเป็นต้องได้รับบริบทแยกกันตาม Context
       // การกรองคำซ้ำออกแล้วเอาคำแปลไปแปะทำให้ตัว engine ไม่ได้เห็น Context ที่สมบูรณ์ ทำให้คำแปลทื่อหรือผิดความหมาย
-      const allTexts = nonSfxItems.map((item) => item.text);
+      const allTexts = batchItems.map((item) => item.text);
 
       const translatedTexts = await options.translateBatchOffline(
         allTexts,
@@ -202,7 +208,7 @@ export class M2M100TranslationEngine implements TranslationEngine {
         'm2m100'
       );
 
-      nonSfxItems.forEach((item, index) => {
+      batchItems.forEach((item, index) => {
         const translatedText = translatedTexts[index] || item.text;
         results.push({
           id: item.id,
@@ -213,7 +219,7 @@ export class M2M100TranslationEngine implements TranslationEngine {
       });
     } catch (error: any) {
       console.error('[M2M100TranslationEngine] Offline translation failed:', error);
-      nonSfxItems.forEach((item) => {
+      batchItems.forEach((item) => {
         results.push({
           id: item.id,
           translatedText: item.text,
@@ -250,29 +256,10 @@ export class GeminiTranslationEngine implements TranslationEngine {
       throw new Error('Gemini translation batch function is required.');
     }
 
-    // 1. แยกกลุ่มเพื่อจัดการ: ใช้ Local Dict แปล SFX เป็นด่านแรก
+    // 1. [Scrutinize S8]: แยกกลุ่มและแปล SFX ด้วย Local Dict ผ่าน shared resolver
+    const { resolvedResults: sfxResults, unresolvedSfxItems: sfxToTranslateViaLLM } = resolveSfxItems(items, options.sourceLanguage);
+    const results: TranslationResult[] = [...sfxResults];
     const nonSfxItems = items.filter((item) => item.groupType !== 'sfx');
-    const sfxItems = items.filter((item) => item.groupType === 'sfx');
-
-    const results: TranslationResult[] = [];
-    const sfxToTranslateViaLLM: TranslatableItem[] = [];
-
-    // ดักแปล SFX ด้วย Local Dictionary ก่อน
-    const sfxLang = (options.sourceLanguage.substring(0, 2).toLowerCase()) as SFXLanguage;
-    for (const item of sfxItems) {
-      const sfxTranslated = translateSFX(item.text, sfxLang);
-      if (sfxTranslated) {
-        results.push({
-          id: item.id,
-          translatedText: sfxTranslated,
-          success: true,
-          engineUsed: 'sfx-dict',
-        });
-      } else {
-        // หากไม่เจอใน Local Dict ส่งไปแปลใน LLM ในฐานะ Context ต่อไป
-        sfxToTranslateViaLLM.push(item);
-      }
-    }
 
     // รวมกลุ่มทั้งหมดที่จะส่งแปลผ่าน LLM
     const llmTargetItems = [...nonSfxItems, ...sfxToTranslateViaLLM];

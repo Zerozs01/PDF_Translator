@@ -37,6 +37,7 @@ import {
   FRENCH_DICTIONARY_TH,
   CHINESE_DICTIONARY_TH,
   ENGLISH_DICTIONARY_TH,
+  DICTIONARIES_LIST,
   getDictionaryByLanguage,
 } from './dictionaries';
 
@@ -73,16 +74,13 @@ let _compactPhraseMap: Map<string, string> | null = null;
 function getCompactPhraseMap(): Map<string, string> {
   if (!_compactPhraseMap) {
     _compactPhraseMap = new Map<string, string>();
-    for (const [k, v] of Object.entries(ARGOS_SHORT_PHRASE_LOOKUP_TH)) {
-      const compact = k.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-      if (compact && !_compactPhraseMap.has(compact)) {
-        _compactPhraseMap.set(compact, v);
-      }
-    }
-    for (const [k, v] of Object.entries(GENERAL_ENGLISH_DICTIONARY_TH)) {
-      const compact = k.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-      if (compact && !_compactPhraseMap.has(compact)) {
-        _compactPhraseMap.set(compact, v);
+    for (let d = 0; d < DICTIONARIES_LIST.length; d++) {
+      const dict = DICTIONARIES_LIST[d];
+      for (const [k, v] of Object.entries(dict)) {
+        const compact = k.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+        if (compact && !_compactPhraseMap.has(compact)) {
+          _compactPhraseMap.set(compact, v);
+        }
       }
     }
   }
@@ -307,7 +305,21 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
     if (koreanMatch) return koreanMatch;
   }
 
-  return GENERAL_ENGLISH_DICTIONARY_TH[key] || null;
+  if (GENERAL_ENGLISH_DICTIONARY_TH[key]) {
+    return GENERAL_ENGLISH_DICTIONARY_TH[key];
+  }
+
+  // [Scrutinize S2]: Built-in alphanumeric stripped fallback
+  // Automatically catches noisy OCR punctuation/symbols without callers needing to invoke .replace(/[^A-Za-z0-9]/g, '')
+  const strippedAlpha = rawKey.replace(/[^a-z0-9\uac00-\ud7a3\u3040-\u30ff\u4e00-\u9fff]/g, '');
+  if (strippedAlpha && strippedAlpha !== rawKey && strippedAlpha !== key) {
+    const strippedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedAlpha] || GENERAL_ENGLISH_DICTIONARY_TH[strippedAlpha];
+    if (strippedMatch) {
+      return strippedMatch;
+    }
+  }
+
+  return null;
 };
 
 export const systemicWordFallbackTranslate = (text: string): string | null => {
