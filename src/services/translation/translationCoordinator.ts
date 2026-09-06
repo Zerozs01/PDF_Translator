@@ -1,9 +1,19 @@
 import { TranslatableItem, TranslationResult, TranslationEngine } from '../../types/translation';
 import { translateSFX, SFXLanguage } from './sfxDictionaryService';
 import { dbService } from '../dbService';
-import { hasKoreanTranslationCarryover, applyKoreanConversationalFallback } from './koreanTranslationPolicy';
+import { applyKoreanConversationalFallback } from './koreanTranslationPolicy';
 import { lookupShortPhraseTh } from './offlineTranslationService';
-import { normalizeTranslationLanguage } from '../ocr/ocrTextNormalizer';
+import { isCachedUntranslated } from './translationQualityService';
+
+const phraseCache = new Map<string, string | null>();
+export const cachedLookupShortPhraseTh = (text: string, srcLang?: string): string | null => {
+  const key = `${srcLang || ''}:${text}`;
+  if (phraseCache.has(key)) return phraseCache.get(key)!;
+  const res = lookupShortPhraseTh(text, srcLang);
+  if (phraseCache.size > 2000) phraseCache.clear();
+  phraseCache.set(key, res);
+  return res;
+};
 
 /**
  * [Scrutinize S8]: Shared SFX/Dictionary resolver — ใช้ร่วมกันระหว่าง 3 engines
@@ -35,7 +45,7 @@ function resolveSfxItems(
         engineUsed: 'sfx-dict',
       });
     } else {
-      const shortPhraseMatch = lookupShortPhraseTh(item.text, sourceLanguage);
+      const shortPhraseMatch = cachedLookupShortPhraseTh(item.text, sourceLanguage);
       if (shortPhraseMatch) {
         resolvedResults.push({
           id: item.id,
@@ -72,19 +82,20 @@ export class ArgosTranslationEngine implements TranslationEngine {
     // [Scrutinize S8]: ใช้ shared SFX resolver แทน inline loop
     const { resolvedResults: sfxResults, unresolvedSfxItems } = resolveSfxItems(items, options.sourceLanguage);
     const results: TranslationResult[] = [...sfxResults];
+    const unresolvedSfxIds = new Set(unresolvedSfxItems.map((u) => u.id));
 
     const batchItems: TranslatableItem[] = [];
 
     items.forEach((item) => {
       if (item.groupType === 'sfx') {
         // SFX ที่แปลไม่ได้จาก dict → รวมเข้า batch ส่งไป Argos
-        if (unresolvedSfxItems.some((u) => u.id === item.id)) {
+        if (unresolvedSfxIds.has(item.id)) {
           batchItems.push(item);
         }
         return;
       }
       if (options.targetLanguage === 'th') {
-        const directMatch = lookupShortPhraseTh(item.text, options.sourceLanguage);
+        const directMatch = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
         if (directMatch) {
           console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directMatch}"`);
           results.push({
@@ -125,7 +136,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
           if (koreanFallback) {
             translatedText = koreanFallback;
           } else {
-            const dictFallback = lookupShortPhraseTh(item.text, options.sourceLanguage);
+            const dictFallback = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
             if (dictFallback) {
               translatedText = dictFallback;
             }
@@ -177,12 +188,13 @@ export class M2M100TranslationEngine implements TranslationEngine {
     // [Scrutinize S8]: ใช้ shared SFX resolver แทน inline loop
     const { resolvedResults: sfxResults, unresolvedSfxItems } = resolveSfxItems(items, options.sourceLanguage);
     const results: TranslationResult[] = [...sfxResults];
+    const unresolvedSfxIds = new Set(unresolvedSfxItems.map((u) => u.id));
 
     // รวบรวม non-SFX items + SFX ที่แปลไม่ได้เข้า batch เดียว
     const batchItems: TranslatableItem[] = [];
     items.forEach((item) => {
       if (item.groupType === 'sfx') {
-        if (unresolvedSfxItems.some((u) => u.id === item.id)) {
+        if (unresolvedSfxIds.has(item.id)) {
           batchItems.push(item);
         }
         return;
@@ -209,7 +221,21 @@ export class M2M100TranslationEngine implements TranslationEngine {
       );
 
       batchItems.forEach((item, index) => {
-        const translatedText = translatedTexts[index] || item.text;
+        let translatedText = (translatedTexts && translatedTexts[index]) || item.text;
+
+        // Safety Fallback: ถ้าเป็นภาษาไทย แต่ M2M100 คืนผลลัพธ์ภาษาเกาหลี/ภาษาอังกฤษกลับมา ให้ลองระบบ Fallback ภาษาเกาหลี
+        if (options.targetLanguage === 'th' && (!/[\u0E00-\u0E7F]/.test(translatedText) || /[\uAC00-\uD7AF]/.test(translatedText))) {
+          const koreanFallback = applyKoreanConversationalFallback(item.text, translatedText);
+          if (koreanFallback) {
+            translatedText = koreanFallback;
+          } else {
+            const dictFallback = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
+            if (dictFallback) {
+              translatedText = dictFallback;
+            }
+          }
+        }
+
         results.push({
           id: item.id,
           translatedText,
@@ -325,7 +351,7 @@ export class GeminiTranslationEngine implements TranslationEngine {
           if (koreanFallback) {
             sanitizedText = koreanFallback;
           } else {
-            const dictFallback = lookupShortPhraseTh(item.text, options.sourceLanguage);
+            const dictFallback = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
             if (dictFallback) {
               sanitizedText = dictFallback;
             }
@@ -415,7 +441,7 @@ export class TranslationCoordinator {
       }
       
       if (options.targetLanguage === 'th') {
-        const directDictTranslation = lookupShortPhraseTh(item.text, options.sourceLanguage);
+        const directDictTranslation = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
         if (directDictTranslation) {
           console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directDictTranslation}"`);
           directResults.set(item.id, directDictTranslation);
@@ -472,7 +498,7 @@ export class TranslationCoordinator {
       }
       let cachedText = batchCacheResults[item.text] || null;
       if (options.targetLanguage === 'th') {
-        const dictFallback = lookupShortPhraseTh(item.text);
+        const dictFallback = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
         if (dictFallback && (!cachedText || (/[a-zA-Z]/.test(cachedText) && !/[\u0E00-\u0E7F]/.test(cachedText)))) {
           cachedText = dictFallback;
         }
@@ -482,61 +508,6 @@ export class TranslationCoordinator {
 
     const cachedItems: { item: TranslatableItem; cachedText: string }[] = [];
     const uncachedItems: TranslatableItem[] = [];
-
-    const isCachedUntranslated = (cachedText: string, sourceText: string, targetLang: string, sourceLang: string): boolean => {
-      if (targetLang !== 'th') return false;
-      const trimmed = cachedText.trim();
-      if (!trimmed) return true;
-
-      const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
-      const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
-
-      if (hasLatinLetters && !hasThaiChars) return true;
-
-      const normSource = normalizeTranslationLanguage(sourceLang, '').toLowerCase();
-      if ((normSource === 'es' || normSource === 'spa') && hasLatinLetters && !hasThaiChars) {
-        const lenDelta = Math.abs(trimmed.length - sourceText.length) / Math.max(1, sourceText.length);
-        if (lenDelta < 0.20 && trimmed.toLowerCase() === sourceText.toLowerCase().trim()) {
-          return true;
-        }
-      }
-
-      const hasCjkResidual = /[\uAC00-\uD7A3\u3040-\u30FF\u4E00-\u9FFF]/.test(trimmed);
-      if (hasCjkResidual) return true;
-
-      const sourceHasHangul = /[\uAC00-\uD7AF]/.test(sourceText);
-      if (hasKoreanTranslationCarryover(trimmed) && (normSource === 'ko' || normSource === 'kor' || sourceHasHangul)) return true;
-      const hasKana = /[\u3040-\u30FF]/.test(trimmed);
-      const sourceHasKana = /[\u3040-\u30FF]/.test(sourceText);
-      if (hasKana && (normSource === 'ja' || normSource === 'jpn' || sourceHasKana)) return true;
-      const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(trimmed);
-      const sourceHasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(sourceText);
-      if (hasHan && sourceHasHan) return true;
-
-      const sourceLen = sourceText.trim().length;
-      const resultLen = trimmed.length;
-      if (sourceLen > 15 && resultLen < 4) return true;
-      const resultHasOnlyDots = /^[\s.·•\-_]+$/.test(trimmed);
-      if (resultHasOnlyDots && sourceLen > 5) return true;
-
-      const isCjkSource = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(sourceText);
-      const isActualBoilerplateSource = /회사\s*소개|이용\s*약관|개인정보|서비스\s*약관/.test(sourceText);
-      if (isCjkSource && !isActualBoilerplateSource) {
-        const boilerplateTerms = [
-          'เกี่ยวกับเรา',
-          'เงื่อนไขการบริการ',
-          'นโยบายความเป็นส่วนตัว',
-          'ข้อตกลงในการให้บริการ',
-          'ผมตกลงในเงื่อนไข',
-          'ฉันตกลงในเงื่อนไข',
-          'ข้อมูลส่วนบุคคล'
-        ];
-        const hasBoilerplate = boilerplateTerms.some(term => trimmed.includes(term));
-        if (hasBoilerplate) return true;
-      }
-
-      return false;
-    };
 
     for (const res of cachedLookup) {
       if (res.cachedText !== null && !isCachedUntranslated(res.cachedText, res.item.text, options.targetLanguage, options.sourceLanguage)) {

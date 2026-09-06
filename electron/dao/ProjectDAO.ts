@@ -84,7 +84,7 @@ export class ProjectDAO {
   static update(id: number, data: { name?: string; description?: string; parent_id?: number | null; icon?: string; color?: string }): boolean {
     if (!this.db) throw new Error('ProjectDAO: DB not initialized');
     const sets: string[] = [];
-    const values: any[] = [];
+    const values: (string | number | null)[] = [];
     
     if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
     if (data.description !== undefined) { sets.push('description = ?'); values.push(data.description); }
@@ -92,11 +92,13 @@ export class ProjectDAO {
     if (data.icon !== undefined) { sets.push('icon = ?'); values.push(data.icon); }
     if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
     
+    if (sets.length === 0) return true;
+
     sets.push('updated_at = ?');
     values.push(Date.now());
     values.push(id);
     
-    this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    this.getStmt(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values);
     return true;
   }
 

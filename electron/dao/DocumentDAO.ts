@@ -116,13 +116,16 @@ export class DocumentDAO {
 
   static clearDocumentCache(documentId: number): boolean {
     if (!this.db) throw new Error('DocumentDAO: DB not initialized');
-    const activeDb = this.db;
-    const clearTx = activeDb.transaction(() => {
-      activeDb.prepare('DELETE FROM ocr_cache WHERE document_id = ?').run(documentId);
-      activeDb.prepare('DELETE FROM ocr_cache_engine WHERE document_id = ?').run(documentId);
-      activeDb.prepare('DELETE FROM translation_cache WHERE document_id = ?').run(documentId);
-      activeDb.prepare('DELETE FROM benchmarks WHERE document_id = ?').run(documentId);
-      activeDb.prepare('DELETE FROM sentence_translation_cache').run();
+    const deleteOcr = this.getStmt('DELETE FROM ocr_cache WHERE document_id = ?');
+    const deleteEngine = this.getStmt('DELETE FROM ocr_cache_engine WHERE document_id = ?');
+    const deleteTrans = this.getStmt('DELETE FROM translation_cache WHERE document_id = ?');
+    const deleteBench = this.getStmt('DELETE FROM benchmarks WHERE document_id = ?');
+
+    const clearTx = this.db.transaction(() => {
+      deleteOcr.run(documentId);
+      deleteEngine.run(documentId);
+      deleteTrans.run(documentId);
+      deleteBench.run(documentId);
     });
     clearTx();
     return true;
@@ -351,7 +354,7 @@ export class DocumentDAO {
   static update(id: number, data: { filename?: string; project_id?: number | null; thumbnail_path?: string; is_favorite?: boolean; is_thumbnail_hidden?: boolean | number; total_pages?: number; rating?: number }) {
     if (!this.db) throw new Error('DocumentDAO: DB not initialized');
     const sets: string[] = [];
-    const values: any[] = [];
+    const values: (string | number | null)[] = [];
     
     if (data.filename !== undefined) { sets.push('filename = ?'); values.push(data.filename); }
     if (data.project_id !== undefined) { sets.push('project_id = ?'); values.push(data.project_id); }
@@ -364,7 +367,7 @@ export class DocumentDAO {
     if (sets.length === 0) return true;
     values.push(id);
     
-    const result = this.db.prepare(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    const result = this.getStmt(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
     return result.changes > 0;
   }
 

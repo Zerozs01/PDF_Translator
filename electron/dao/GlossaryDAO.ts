@@ -33,7 +33,7 @@ export class GlossaryDAO {
 
   static getAll(): DBGlossaryEntry[] {
     if (!this.db) throw new Error('DB not initialized');
-    return this.db.prepare(`
+    return this.getStmt(`
       SELECT id, source_text, target_text, source_lang, target_lang, type, is_active, created_at, updated_at
       FROM translation_glossary
       ORDER BY updated_at DESC, id DESC

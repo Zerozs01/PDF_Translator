@@ -113,7 +113,7 @@ export class OCRCacheDAO {
 
   static getLatestForDocument(documentId: number) {
     if (!this.db) throw new Error('OCRCacheDAO: DB not initialized');
-    const engineRow = this.db.prepare(`
+    const engineRow = this.getStmt(`
       SELECT page_number, ocr_data, updated_at
       FROM ocr_cache_engine
       WHERE document_id = ?
@@ -121,7 +121,7 @@ export class OCRCacheDAO {
       LIMIT 1
     `).get(documentId) as { page_number: number; ocr_data: string; updated_at: number } | undefined;
 
-    const legacyRow = this.db.prepare(`
+    const legacyRow = this.getStmt(`
       SELECT page_number, ocr_data, updated_at
       FROM ocr_cache
       WHERE document_id = ?

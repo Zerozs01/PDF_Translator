@@ -2,7 +2,7 @@
 
 > **Last Updated:** 2026-09-04  
 > **Status:** Production-Ready / Fully Refactored  
-> **Test Suite:** 28 Test Files / 356 Unit Tests (100% Passing)  
+> **Test Suite:** 47 Test Files / 409 Unit Tests (100% Passing)  
 > **Type Safety:** Strict TypeScript (`tsc --noEmit` clean / 0 errors)
 
 ---
@@ -115,4 +115,4 @@ ver:v64|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline
 2. **Store Setter Boilerplate:**
    - ใน `useOCRTextLayerStore.ts` ใช้ `applyUpdatedPageOCR` เป็นฟังก์ชันกลางในการอัปเดต `allPagesOCR`, `ocrByPageEngine`, และ `currentPageOCR` ช่วยป้องกัน state inconsistency ระหว่างการเพิ่ม/ลบ/แก้ไขบรรทัด OCR
 3. **Prepared Statements in DAOs:**
-   - ทุก DAO ใน `electron/dao/` มี `stmtCache` เป็นของตนเองและถูกเคลียร์เมื่อ `init(database)` ถูกเรียก ป้องกันการ Recompile SQL ในทุกรอบ IPC
+   - ทุก DAO ใน `electron/dao/` มี `stmtCache` เป็นของตนเองและถูกแคชผ่าน `getStmt(sql)` ทุกคำสั่ง (รวมถึง dynamic UPDATE permutations) ป้องกันการ Recompile SQL ในทุกรอบ IPC และรักษา `sentence_translation_cache` ไม่ให้ถูกลบเมื่อเคลียร์แคชระดับหน้า/ระดับไฟล์

@@ -136,7 +136,7 @@
 - [documents/PIPELINE_HANDOFF_2026_05_09.md](file:///c:/App/Electron/PDF_Translator/documents/PIPELINE_HANDOFF_2026_05_09.md) — รายละเอียดการส่งต่อระบบและโครงสร้างปรับแต่งตอนแปลออฟไลน์
 * [documents/Optimize_Plan/upgrade5.1.md](file:///c:/App/Electron/PDF_Translator/documents/Optimize_Plan/upgrade5.1.md) — รายละเอียดแผน Optimize/Upgrade 5.1
 
-1. **OCR Cache Version Alignment:** อัปเดต [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md#L48) ให้เป็นเวอร์ชันปัจจุบันคือ `'v51'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L42)
+1. **OCR Cache Version Alignment:** อัปเดตเวอร์ชัน Translation Cache ปัจจุบันคือ `'v64'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L44) และ [context.md](file:///c:/App/Electron/PDF_Translator/context.md#L86)
 2. **`Custom Glossary` System:** เพิ่มรายละเอียดของ `useGlossaryStore.ts` และ `GlossarySidebarPanel.tsx` ในโครงสร้างสถาปัตยกรรมของ [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md) เรียบร้อยแล้ว
 3. **Roadmap Progress (P4 & P5):** อัปเดตสถานะของ P4 (Performance) และ P5 (Glossary Pipeline Integration) ใน [Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) เป็น **Completed** เรียบร้อยแล้ว
 4. **Phase 7 Advanced Local Security:** อัปเดตสัญญาระบบความปลอดภัยแบบ Secure-by-default, การเข้ารหัส DB ด้วย SQLCipher (`better-sqlite3-multiple-ciphers`), ระบบ Offline Setup/Login, Relax (Keychain) vs Security App Modes และ Reset System wipe data ลงใน manifest นี้แล้วในวันที่ 2026-06-12

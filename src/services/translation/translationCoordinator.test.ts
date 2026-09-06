@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { translationCoordinator } from './translationCoordinator';
+import { translationCoordinator, M2M100TranslationEngine } from './translationCoordinator';
 import { TranslatableItem } from '../../types/translation';
 import { dbService } from '../dbService';
 
@@ -1024,4 +1024,62 @@ describe('TranslationCoordinator & Engines', () => {
       expect(resMap.get('64')).toBe('"มันเร็วกว่า');
     });
   });
+
+  describe('M2M100TranslationEngine', () => {
+    it('translates balloon layers with M2M100 and bypasses SFX using local dict', async () => {
+      const mockTranslateBatchOffline = vi.fn().mockResolvedValue(['สวัสดี', 'โลก']);
+
+      const items: TranslatableItem[] = [
+        { id: '1', text: 'Hello', groupType: 'balloon' },
+        { id: '2', text: 'BOOM', groupType: 'sfx' },
+        { id: '3', text: 'World', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('m2m100', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'official',
+        translateBatchOffline: mockTranslateBatchOffline,
+      });
+
+      expect(mockTranslateBatchOffline).toHaveBeenCalledWith(
+        ['Hello', 'World'],
+        'text',
+        'official',
+        'en',
+        'th',
+        'm2m100'
+      );
+
+      const sfxResult = results.find((r) => r.id === '2');
+      expect(sfxResult?.translatedText).toBe('ตูม!');
+      expect(sfxResult?.engineUsed).toBe('sfx-dict');
+
+      const helloResult = results.find((r) => r.id === '1');
+      expect(helloResult?.translatedText).toBe('สวัสดี');
+      expect(helloResult?.engineUsed).toBe('m2m100');
+    });
+
+    it('applies Korean fallback when M2M100 returns untranslated Korean for Thai target', async () => {
+      const engine = new M2M100TranslationEngine();
+      // Mock M2M100 returning raw Korean untranslated
+      const mockTranslateBatchOffline = vi.fn().mockResolvedValue(['오빠']);
+
+      const items: TranslatableItem[] = [
+        { id: '1', text: '오빠', groupType: 'balloon' },
+      ];
+
+      const results = await engine.translate(items, {
+        sourceLanguage: 'ko',
+        targetLanguage: 'th',
+        translationMode: 'manhwa',
+        translateBatchOffline: mockTranslateBatchOffline,
+      });
+
+      // Should fallback via applyKoreanConversationalFallback / lookupShortPhraseTh to 'พี่ชาย/โอปป้า'
+      expect(results[0]?.translatedText).toMatch(/[\u0E00-\u0E7F]/);
+      expect(results[0]?.engineUsed).toBe('m2m100');
+    });
+  });
 });
+

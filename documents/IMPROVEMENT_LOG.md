@@ -72,12 +72,35 @@
 
 ### 🌐 2.5 Auto-detect & Source Language Sync
 
-- ใน [pageTranslationPipeline.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/pageTranslationPipeline.ts) ใช้ `inferSourceLanguageFromTextHints` วิเคราะห์ตัวอักษรและตรวจจับภาษาต้นทางที่มีความมั่นใจสูง หากเอกสารไม่ใช่ภาษาอังกฤษ (เช่น เกาหลี สเปน ญี่ปุ่น) ระบบจะแจ้งเตือนและอัปเดตภาษาต้นทางใน Store และฐานข้อมูลโดยอัตโนมัติ ป้องกันการสแกน OCR ผิดภาษา
+### 🛡️ 2.6 DAO Cache Statements & Sentence Translation Protection
+
+- แก้ไขบั๊กข้อมูลสูญหายใน [TranslationDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/TranslationDAO.ts) และ [DocumentDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/DocumentDAO.ts) ที่เคยลบตาราง `sentence_translation_cache` ทั้งหมดเมื่อมีการเคลียร์แคชระดับหน้าหรือระดับเอกสาร
+- ปรับปรุงการใช้งาน `stmtCache` ใน [ProjectDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/ProjectDAO.ts), [TagDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/TagDAO.ts), [DocumentDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/DocumentDAO.ts), [OCRCacheDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/OCRCacheDAO.ts), และ [GlossaryDAO.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/GlossaryDAO.ts) ให้แคชคำสั่ง SQL ผ่าน `getStmt()` ทุกคำสั่ง พร้อม Type-safe parameter values แทน `any[]`
+
+### 👻 2.7 OCR Ghost Filter Extraction & Pipeline Consolidation
+
+- สกัด `filterGhostOcrData` ออกจาก UI store ([useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts)) ไปเป็น Domain Service ใน [ghostFilter.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ghostFilter.ts) แก้ปัญหา Dependency Inversion
+- ยุบโค้ด Pipeline ที่ซ้ำซ้อนใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) ให้เรียกผ่าน `processOCRPageResult` เป็น Single Source of Truth
+
+### ⚡ 2.8 Translation Coordinator Performance & Fallbacks
+
+- ปรับปรุงการค้นหา SFX ที่ยังไม่ได้แปลใน [translationCoordinator.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationCoordinator.ts) จาก $O(N^2)$ `.some()` ให้เป็น $O(1)$ `Set.has()`
+- เพิ่ม Korean conversational fallback ให้กับ `M2M100TranslationEngine` เช่นเดียวกับ Argos และ Gemini
+- สกัด `isCachedUntranslated` ออกเป็นโมดูลกลางใน [translationQualityService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationQualityService.ts)
+- เพิ่ม Memoization แคช `cachedLookupShortPhraseTh` ป้องกันการทำ Regex และ Object traversal ซ้ำซ้อน
+
+### 🎯 2.9 Architecture Audit & Resource Optimization
+- **Type Safety & Build Restoration:** แก้ไข missing `words: []` property ใน Mock `OCRLine` ของ [ghostFilter.test.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ghostFilter.test.ts) คืนความสมบูรณ์ให้คำสั่ง `npx tsc --noEmit` (0 error) ทำให้คำสั่ง build ทำงานได้ 100%
+- **OCR Bridge Watchdog Overhead Reduction:** แทนที่คำสั่ง `powershell -Command` ใน [ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) ด้วย Win32 `tasklist /fo csv /nh` ที่เบากว่า และปรับ Watchdog polling interval จาก 15 วินาที เป็น 30 วินาที ช่วยขจัด CPU Spikes และลดการเรียก Process หนักในขณะ idle
+- **Layer Selection Re-render Cascade Fix:** ปลด Zustand store hooks ออกจาก [LayerSelectionBox.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/LayerSelectionBox.tsx) โดยส่ง props (`showDebugOverlay`, `viewMode`, `translationPreviewMode`) ผ่าน [InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx) แทน พร้อมทั้งแปลง Hover State จาก React `useState` มาใช้ CSS `:hover` ช่วยขจัด Re-render cycle 50-100 กล่องต่อหน้า
+- **Zero-GC Sparse Active-Word Popcount:** เพิ่ม `activeWords` tracking ใน [fastDiceSimilarity.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastDiceSimilarity.ts) ให้ `intersectionPopcount` และ `clearActiveBitset` ตรวจและรีเซ็ตเฉพาะคำที่มีบิตจริง (10-20 words) แทนการวนลูป 2,048 words ทุกครั้ง
+- **Cache Version Documentation Sync:** ปรับแก้เอกสารใน [AI_MANIFEST.md](file:///c:/App/Electron/PDF_Translator/AI_MANIFEST.md) ให้ซิงก์ตรงกับ Translation Cache ปัจจุบัน (`v64`)
 
 ---
 
 ## 🧪 3. Verification & Compliance Standard
 
-- **Vitest Unit Test Suite:** **Passed 100% (44 Test Files / 394 Tests Passed)**
-- **TypeScript Compiler (`tsc --noEmit`):** **0 Error (ผ่านสมบูรณ์)**
+- **Vitest Unit Test Suite:** **Passed 100% (All Unit Tests Passed)**
+- **TypeScript Compiler (`tsc --noEmit`):** **0 Error (ผ่านสมบูรณ์ 100%)**
 - **Core Rules Compliance:** คงความแม่นยำของ Bounding Box / Border Detect ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts), [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) และ [ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) ไว้อย่างเสถียร 100%
+

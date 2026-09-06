@@ -3,83 +3,23 @@ import { visionService } from '../vision/VisionService';
 import { OCREngine, OCRPageResult } from '../../types';
 import { useBackgroundQueueStore, BackgroundJob } from '../../stores/useBackgroundQueueStore';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useOCRTextLayerStore, filterGhostOcrData } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../dbService';
 import type { TranslationMode } from '../../stores/useProjectStore';
 import { useLayerStore } from '../../stores/useLayerStore';
-import { buildLayerGroupsFromOCR, mergeLayersAndGroups, splitAggressiveMergedLines } from '../layers/LayerGroupingService';
+import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../layers/LayerGroupingService';
 import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
 import { applyPanelLanguageScriptGate } from '../vision/scriptGateService';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../vision/ocrVersion';
-import { processKoreanManhwaPipeline } from './ocrManhwaHeuristics';
-import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from './ocrJapaneseVerticalHeuristics';
 import { detectBlankOrSolidCanvas } from '../vision/blankPageDetector';
+import { processOCRPageResult } from './ocrPostProcessingPipeline';
 
 function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job: BackgroundJob): OCRPageResult {
-  // ถ้า result ผ่าน split มาแล้ว (flag _splitDone) ให้ข้ามขั้นตอน split เพื่อป้องกัน double-split bug
-  const processedLines = result._splitDone
-    ? result.lines
-    : splitAggressiveMergedLines(result.lines || [], 2.2);
-  const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
-    processedLines,
-    result.words || [],
-    targetEngine,
-    result.dpi || job.ocrDpi || 300
-  );
-  
-  let ocrResult: OCRPageResult = {
-    ...result,
-    lines: cleanLines,
-    words: cleanWords,
-    _splitDone: true, // Mark ว่า split เสร็จแล้ว ป้องกัน store split ซ้ำ
-  };
-
-  const isKorean = (job.ocrLanguage === 'kor' || job.sourceLanguage === 'kor' || job.targetLanguage === 'kor')
-    && !result._splitDone
-    && !(ocrResult as any)._manhwaDone;
-  if (isKorean) {
-    ocrResult = processKoreanManhwaPipeline(ocrResult, {
-      merge: {
-        maxVerticalGap: 25,
-        maxHorizontalGap: 35,
-        minColumnOverlapRatio: 0.3,
-        maxGroupHeightRatio: 0.3,
-        pageHeight: ocrResult.height || 1200,
-        readingDirection: "rtl-ttb",
-      },
-      debug: false
-    });
-    (ocrResult as any)._manhwaDone = true;
-  }
-
-  const isJapanese = (
-    String(job.ocrLanguage || '').toLowerCase().startsWith('jpn') ||
-    String(job.ocrLanguage || '').toLowerCase() === 'ja' ||
-    String(job.sourceLanguage || '').toLowerCase().startsWith('jpn') ||
-    String(job.sourceLanguage || '').toLowerCase() === 'ja' ||
-    String(job.targetLanguage || '').toLowerCase().startsWith('jpn') ||
-    String(job.targetLanguage || '').toLowerCase() === 'ja'
-  )
-    && !result._splitDone
-    && !(ocrResult as any)._japaneseDone;
-  if (isJapanese && isVerticalJapaneseLayout(ocrResult.lines)) {
-    ocrResult = processJapaneseVerticalPipeline(ocrResult, {
-      merge: {
-        maxVerticalGap: 25,
-        maxHorizontalGap: 18,
-        minColumnOverlapRatio: 0.35,
-        maxGroupHeightRatio: 0.45,
-        pageHeight: ocrResult.height || 1200,
-        readingDirection: "rtl-ttb",
-      },
-      debug: false
-    });
-    (ocrResult as any)._japaneseDone = true;
-  }
-
-  ocrResult = { ...applyPanelSafetyLineDedup(ocrResult), _splitDone: true };
-
-  return ocrResult;
+  return processOCRPageResult(result, {
+    engine: targetEngine,
+    dpi: result.dpi || job.ocrDpi || 300,
+    storeLanguage: job.ocrLanguage || 'eng',
+  });
 }
 
 export interface BackgroundQueueHandlers {

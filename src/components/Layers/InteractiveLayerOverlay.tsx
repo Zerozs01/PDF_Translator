@@ -45,8 +45,10 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
   } = useLayerStore();
 
   const storePreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
   const translationPreviewMode = previewModeOverride || storePreviewMode;
   const activeTool = useUIStore((state) => state.activeTool);
+  const viewMode = useUIStore((state) => state.viewMode);
   const zoom = useUIStore((state) => state.zoom || 1);
 
   // Ref and state for Viewport Virtualization (Correct coordinate space + zoom scale)
@@ -599,6 +601,9 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
                 layout={layout}
                 isLayoutHidden={isLayoutHidden}
                 previewModeOverride={previewModeOverride}
+                showDebugOverlay={showDebugOverlay}
+                viewMode={viewMode}
+                translationPreviewMode={translationPreviewMode}
               />
             )}
           </React.Fragment>

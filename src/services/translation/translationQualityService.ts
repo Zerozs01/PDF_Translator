@@ -480,3 +480,68 @@ export const evaluateThaiCarryoverForEnglish = (
   const shouldFallback = carryoverRatio >= 0.5 && thaiRatio >= 0.25;
   return { shouldFallback, thaiRatio, carryoverRatio, total };
 };
+
+/**
+ * ตรวจสอบว่าผลลัพธ์การแปลที่ถูกแคชไว้เป็นคำที่ไม่ได้แปลจริงหรือไม่ (Untranslated / Hallucination / Residual)
+ * หากคืนค่า true แสดงว่าเป็นแคชที่ไม่มีคุณภาพ ควรส่งแปลใหม่
+ */
+export const isCachedUntranslated = (
+  cachedText: string,
+  sourceText: string,
+  targetLang: string,
+  sourceLang: string
+): boolean => {
+  if (targetLang !== 'th') return false;
+  const trimmed = cachedText.trim();
+  if (!trimmed) return true;
+
+  const hasThaiChars = /[\u0E00-\u0E7F]/.test(trimmed);
+  const hasLatinLetters = /[a-zA-Z]/.test(trimmed);
+
+  if (hasLatinLetters && !hasThaiChars) return true;
+
+  const normSource = normalizeTranslationLanguage(sourceLang, '').toLowerCase();
+  if ((normSource === 'es' || normSource === 'spa') && hasLatinLetters && !hasThaiChars) {
+    const lenDelta = Math.abs(trimmed.length - sourceText.length) / Math.max(1, sourceText.length);
+    if (lenDelta < 0.20 && trimmed.toLowerCase() === sourceText.toLowerCase().trim()) {
+      return true;
+    }
+  }
+
+  const hasCjkResidual = /[\uAC00-\uD7A3\u3040-\u30FF\u4E00-\u9FFF]/.test(trimmed);
+  if (hasCjkResidual) return true;
+
+  const sourceHasHangul = /[\uAC00-\uD7AF]/.test(sourceText);
+  if (hasKoreanTranslationCarryover(trimmed) && (normSource === 'ko' || normSource === 'kor' || sourceHasHangul)) return true;
+  const hasKana = /[\u3040-\u30FF]/.test(trimmed);
+  const sourceHasKana = /[\u3040-\u30FF]/.test(sourceText);
+  if (hasKana && (normSource === 'ja' || normSource === 'jpn' || sourceHasKana)) return true;
+  const hasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(trimmed);
+  const sourceHasHan = /[\u3400-\u4DBF\u4E00-\u9FFF]/.test(sourceText);
+  if (hasHan && sourceHasHan) return true;
+
+  const sourceLen = sourceText.trim().length;
+  const resultLen = trimmed.length;
+  if (sourceLen > 15 && resultLen < 4) return true;
+  const resultHasOnlyDots = /^[\s.·•\-_]+$/.test(trimmed);
+  if (resultHasOnlyDots && sourceLen > 5) return true;
+
+  const isCjkSource = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(sourceText);
+  const isActualBoilerplateSource = /회사\s*소개|이용\s*약관|개인정보|서비스\s*약관/.test(sourceText);
+  if (isCjkSource && !isActualBoilerplateSource) {
+    const boilerplateTerms = [
+      'เกี่ยวกับเรา',
+      'เงื่อนไขการบริการ',
+      'นโยบายความเป็นส่วนตัว',
+      'ข้อตกลงในการให้บริการ',
+      'ผมตกลงในเงื่อนไข',
+      'ฉันตกลงในเงื่อนไข',
+      'ข้อมูลส่วนบุคคล'
+    ];
+    const hasBoilerplate = boilerplateTerms.some(term => trimmed.includes(term));
+    if (hasBoilerplate) return true;
+  }
+
+  return false;
+};
+

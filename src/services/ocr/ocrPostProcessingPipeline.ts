@@ -13,7 +13,7 @@ import { splitAggressiveMergedLines } from '../layers/LayerGroupingService';
 import { processKoreanManhwaPipeline } from './ocrManhwaHeuristics';
 import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from './ocrJapaneseVerticalHeuristics';
 import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
-import { filterGhostOcrData } from '../../stores/useOCRTextLayerStore';
+import { filterGhostOcrData } from './ghostFilter';
 
 export interface OCRPostProcessingOptions {
   engine: OCREngine;

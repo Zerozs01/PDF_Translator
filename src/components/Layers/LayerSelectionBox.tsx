@@ -1,8 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { TextLayer } from '../../types/layers';
 import type { OverlayLayout } from '../OCR/translationOverlayUtils';
-import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
-import { useUIStore } from '../../stores/useUIStore';
 import {
   ResizeDirection,
   OcrTransform,
@@ -30,6 +28,9 @@ export interface SelectionBoxProps {
   /** true = layer ถูก suppress โดย overlay dedup (hidden) — แสดง style จางลงแต่ยังเลือกได้ */
   isLayoutHidden?: boolean;
   previewModeOverride?: 'original' | 'translated';
+  showDebugOverlay?: boolean;
+  viewMode?: string;
+  translationPreviewMode?: 'original' | 'translated';
 }
 
 export const areEqualSelectionBox = (prev: SelectionBoxProps, next: SelectionBoxProps): boolean => {
@@ -42,6 +43,9 @@ export const areEqualSelectionBox = (prev: SelectionBoxProps, next: SelectionBox
   if (prev.activeTool !== next.activeTool) return false;
   if (prev.isLayoutHidden !== next.isLayoutHidden) return false;
   if (prev.previewModeOverride !== next.previewModeOverride) return false;
+  if (prev.showDebugOverlay !== next.showDebugOverlay) return false;
+  if (prev.viewMode !== next.viewMode) return false;
+  if (prev.translationPreviewMode !== next.translationPreviewMode) return false;
 
   // ocrTransform check (deep fields check)
   if (
@@ -111,11 +115,11 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   activeResizeDir, isRotating, startRotation, activeTool,
   onMouseDownBody, onMouseDownHandle, onMouseDownRotate,
   onDoubleClick, onHover, layout, isLayoutHidden, previewModeOverride,
+  showDebugOverlay = false,
+  viewMode = 'single',
+  translationPreviewMode: propTranslationPreviewMode,
 }) => {
-  const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
-  const storePreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
-  const translationPreviewMode = previewModeOverride || storePreviewMode;
-  const viewMode = useUIStore((state) => state.viewMode);
+  const translationPreviewMode = previewModeOverride || propTranslationPreviewMode || 'translated';
   
   // ป้ายนี้ถือว่าเป็นฝั่งขวาในโหมดเปรียบเทียบ (split view) ก็ต่อเมื่อ viewMode === 'split' และมีข้อความแปลแล้ว/ภาษาไทย
   const currentRenderText = (layout && typeof layout.renderText === 'string') ? layout.renderText : layer.text;
@@ -132,12 +136,6 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
   const { left, top, width, height } = toScreen(effectiveBBox, ocrTransform);
   const isHighlighted = isSelected || isMultiSelected;
   const rotation = layer.rotation || 0;
-  
-  // State สำหรับจัดการ Hover Effect ของปุ่มหมุน
-  const [isRotateHovered, setIsRotateHovered] = useState(false);
-
-  // State สำหรับจัดการ Hover Effect ของตัวกล่องข้อความ
-  const [isBoxHovered, setIsBoxHovered] = useState(false);
 
   // ตรวจวัดขนาดกล่องข้อความเพื่อหาว่ากล่องเป็นขนาด Small หรือไม่
   const isSmall = width < 120 || height < 40;
@@ -163,9 +161,22 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
     }
   }, [activeResizeDir, isRotating, isSmall]);
 
+  const hoverBorder = isLayoutHidden
+    ? 'rgba(99,102,241,0.9)'
+    : (isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316');
+  const hoverBg = isTranslatedAreaInSplitView
+    ? 'rgba(0, 210, 255, 0.16)'
+    : 'rgba(249, 115, 22, 0.16)';
+  const hoverShadow = isTranslatedAreaInSplitView
+    ? '0 0 8px rgba(0, 210, 255, 0.35)'
+    : '0 0 8px rgba(249, 115, 22, 0.35)';
+
   return (
     <div
       id={`layer-bbox-${layer.id}`}
+      className="layer-selection-box"
+      data-rotating={isRotating}
+      data-selected={isHighlighted}
       role="button"
       aria-label={`Layer: ${layer.text}`}
       style={{
@@ -177,13 +188,11 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
           ? '2px solid #8B5CF6' // กำลังหมุน -> เส้นทึบสีม่วง Canva พรีเมียม!
           : isHighlighted
             ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.85)' : (isTranslatedAreaInSplitView ? '#00D2FF' : '#3B82F6')}` // กดเลือก Layer -> เส้นประ dashed ชัดเจน!
-            : isBoxHovered
-              ? `2px dashed ${isLayoutHidden ? 'rgba(99,102,241,0.9)' : (isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316')}` // hover -> สีเข้มสว่าง + เส้นประ dashed ชัดเจน!
-              : isLayoutHidden
-                ? '0.75px solid rgba(99,102,241,0.25)' // suppress โดย overlay dedup
-                : (showDebugOverlay || isTranslatedAreaInSplitView)
-                  ? `1.5px solid ${isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316'}` // ปกติ -> เส้นทึบ solid (ฝั่งขวาSplit = สีฟ้าสด #00D2FF, โหมดปกติ/ฝั่งซ้าย = สีส้มสด #F97316)
-                  : 'none',
+            : isLayoutHidden
+              ? '0.75px solid rgba(99,102,241,0.25)' // suppress โดย overlay dedup
+              : (showDebugOverlay || isTranslatedAreaInSplitView)
+                ? `1.5px solid ${isTranslatedAreaInSplitView ? '#00D2FF' : '#F97316'}` // ปกติ -> เส้นทึบ solid (ฝั่งขวาSplit = สีฟ้าสด #00D2FF, โหมดปกติ/ฝั่งซ้าย = สีส้มสด #F97316)
+                : 'none',
         borderRadius: 3,
         cursor: 'move',
         pointerEvents: (activeTool === 'region' || activeTool === 'text') ? 'none' : 'all', // ซ่อน interaction ตอนวาด region หรือ text เพื่อให้ลากคลุมได้โดยไม่ชนกล่องเดิม
@@ -192,25 +201,22 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
           ? 'rgba(139, 92, 246, 0.08)' // ไฮไลท์สีม่วงจางๆ ตอนหมุน
           : isHighlighted 
             ? 'rgba(59,130,246,0.10)' 
-            : isBoxHovered
-              ? (isTranslatedAreaInSplitView ? 'rgba(0, 210, 255, 0.16)' : 'rgba(249, 115, 22, 0.16)') // hover -> สีเข้มชัดเจน!
-              : 'transparent',
+            : 'transparent',
         transition: 'border-color 0.12s, background 0.12s, box-shadow 0.12s',
-        // Glow Effect ตอนหมุนหรือ hover เพื่อความเด่นบนมังงะขาวดำ
+        // Glow Effect ตอนหมุนเพื่อความเด่นบนมังงะขาวดำ
         boxShadow: isRotating
           ? '0 0 12px rgba(139, 92, 246, 0.35)' 
-          : isBoxHovered
-            ? `0 0 8px ${isTranslatedAreaInSplitView ? 'rgba(0, 210, 255, 0.35)' : 'rgba(249, 115, 22, 0.35)'}`
-            : isMultiSelected && !isSelected
-              ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
-              : undefined,
+          : isMultiSelected && !isSelected
+            ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
+            : undefined,
+        ['--hover-border' as any]: `2px dashed ${hoverBorder}`,
+        ['--hover-bg' as any]: hoverBg,
+        ['--hover-shadow' as any]: hoverShadow,
       }}
       onMouseEnter={() => {
-        setIsBoxHovered(true);
         onHover(layer.id);
       }}
       onMouseLeave={() => {
-        setIsBoxHovered(false);
         onHover(null);
       }}
       onMouseDown={(e) => onMouseDownBody(e, layer.id)}
@@ -248,25 +254,22 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
               {/* Connector line */}
               <div style={{ width: 1.5, height: 10, background: isRotating ? '#8B5CF6' : '#3B82F6', opacity: isRotating ? 0.9 : 0.6 }} />
               <div
+                className="layer-rotate-handle"
+                data-rotating={isRotating}
                 onMouseDown={(e) => { e.stopPropagation(); onMouseDownRotate(e, layer.id); }}
-                onMouseEnter={() => setIsRotateHovered(true)}
-                onMouseLeave={() => setIsRotateHovered(false)}
                 style={{
                   width: 28, // ขนาด 28px จับถนัดและมองเห็นชัดเจนยิ่งขึ้นบนมังงะ
                   height: 28,
                   borderRadius: '50%',
-                  background: isRotateHovered || isRotating ? '#8B5CF6' : '#FFFFFF', // Canva Violet
-                  border: isRotateHovered || isRotating ? '2px solid #FFFFFF' : '1.5px solid #9CA3AF',
                   cursor: isRotating ? 'grabbing' : 'grab',
-                  boxShadow: isRotateHovered || isRotating 
+                  boxShadow: isRotating 
                     ? '0 0 12px rgba(139, 92, 246, 0.7), 0 4px 10px rgba(0,0,0,0.3)' 
                     : '0 2px 4px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                  transform: `scale(${isRotateHovered || isRotating ? 1.15 : 1}) rotate(${rotation}deg)`, // หมุนไอคอนและขยายขนาดตอน hover/หมุนจริง
-                  color: isRotateHovered || isRotating ? '#FFFFFF' : '#4B5563', // สีไอคอนขาวเมื่อ active
+                  transform: `scale(${isRotating ? 1.15 : 1}) rotate(${rotation}deg)`,
                   zIndex: 20,
                 }}
                 title="ลากเพื่อหมุนข้อความ"

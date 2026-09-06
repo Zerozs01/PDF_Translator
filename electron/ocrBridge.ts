@@ -426,12 +426,24 @@ const daemonWatchdogs = new Map<ExternalBridgeEngine, NodeJS.Timeout>();
 function getProcessMemory(pid: number): Promise<number> {
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
-      exec(`powershell -NoProfile -Command "Get-Process -Id ${pid} | Select-Object -ExpandProperty WorkingSet64"`, (err, stdout) => {
-        if (err) {
+      // Use lightweight native tasklist CSV query instead of heavyweight powershell spin-up
+      exec(`tasklist /fi "PID eq ${pid}" /fo csv /nh`, { windowsHide: true }, (err, stdout) => {
+        if (err || !stdout) {
           resolve(0);
+          return;
+        }
+        const trimmed = stdout.trim();
+        if (trimmed.startsWith('INFO:')) {
+          resolve(0);
+          return;
+        }
+        const parts = trimmed.split('","');
+        if (parts.length > 0) {
+          const memStr = parts[parts.length - 1];
+          const kb = parseInt(memStr.replace(/[^0-9]/g, ''), 10);
+          resolve(isNaN(kb) ? 0 : kb * 1024);
         } else {
-          const bytes = parseInt(stdout.trim(), 10);
-          resolve(isNaN(bytes) ? 0 : bytes);
+          resolve(0);
         }
       });
     } else {
@@ -508,7 +520,7 @@ function startWatchdog(engine: ExternalBridgeEngine, daemon: BridgeDaemon) {
         stopWatchdog(engine);
       }
     }
-  }, 15000); // Check every 15 seconds
+  }, 30000); // Check every 30 seconds (reduced from 15s to eliminate unnecessary CPU wakeups)
   daemonWatchdogs.set(engine, timer);
 }
 

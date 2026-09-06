@@ -292,23 +292,9 @@ export class TranslationCacheDAO {
   static clearByEngine(documentId: number, pageNumber: number, engine: string = 'offline') {
     if (!this.db) throw new Error('TranslationCacheDAO: DB not initialized');
     const normalizedEngine = String(engine || 'offline').toLowerCase();
-    const activeDb = this.db;
-    let changes = 0;
-
-    const clearTx = activeDb.transaction(() => {
-      const result = this.getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
-        .run(documentId, pageNumber, normalizedEngine);
-      changes = result.changes;
-      
-      try {
-        activeDb.prepare('DELETE FROM sentence_translation_cache').run();
-      } catch (err) {
-        console.warn('[DB] Failed to clear sentence translation cache:', err);
-      }
-    });
-
-    clearTx();
-    return changes > 0;
+    const result = this.getStmt('DELETE FROM translation_cache WHERE document_id = ? AND page_number = ? AND ocr_engine = ?')
+      .run(documentId, pageNumber, normalizedEngine);
+    return result.changes > 0;
   }
 }
 
@@ -319,6 +305,12 @@ export class SentenceTranslationDAO {
   static init(database: Database.Database) {
     this.db = database;
     this.stmtCache.clear();
+  }
+
+  static clearAll(): boolean {
+    if (!this.db) throw new Error('SentenceTranslationDAO: DB not initialized');
+    const result = this.getStmt('DELETE FROM sentence_translation_cache').run();
+    return result.changes > 0;
   }
 
   private static getStmt(sql: string): Database.Statement {

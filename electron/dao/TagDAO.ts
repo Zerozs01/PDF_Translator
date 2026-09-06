@@ -39,12 +39,12 @@ export class TagDAO {
   static update(id: number, data: { name?: string; color?: string }): boolean {
     if (!this.db) throw new Error('TagDAO: DB not initialized');
     const sets: string[] = [];
-    const values: any[] = [];
+    const values: (string | number)[] = [];
     if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name); }
     if (data.color !== undefined) { sets.push('color = ?'); values.push(data.color); }
     if (sets.length === 0) return true;
     values.push(id);
-    this.db.prepare(`UPDATE tags SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+    this.getStmt(`UPDATE tags SET ${sets.join(', ')} WHERE id = ?`).run(...values);
     return true;
   }
 
