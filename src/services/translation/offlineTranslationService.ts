@@ -162,7 +162,9 @@ export async function translateBatchOffline(
 
   for (let i = 0; i < texts.length; i++) {
     const originalText = texts[i] || '';
-    const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
+    const lookupResult = normalizedTarget === 'th'
+      ? (lookupShortPhraseTh(originalText, normalizedSource) || lookupShortPhraseTh(normalizeOfflineSourceText(originalText), normalizedSource))
+      : null;
     if (lookupResult) {
       finalDirectTranslations[i] = lookupResult;
     } else {
@@ -276,7 +278,7 @@ export async function translateBatchOffline(
 
     const originalText = texts[originalIndex] ?? preparedTexts[i] ?? '';
 
-    const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText) : null;
+    const lookupResult = normalizedTarget === 'th' ? lookupShortPhraseTh(originalText, normalizedSource) : null;
     if (lookupResult) {
       finalDirectTranslations[originalIndex] = lookupResult;
       continue;
@@ -284,14 +286,14 @@ export async function translateBatchOffline(
 
     const cleaned = cleanForRetry(preparedTexts[i]);
     if (cleaned && cleaned !== preparedTexts[i].trim()) {
-      const cleanedLookup = normalizedTarget === 'th' ? lookupShortPhraseTh(cleaned) : null;
+      const cleanedLookup = normalizedTarget === 'th' ? lookupShortPhraseTh(cleaned, normalizedSource) : null;
       if (cleanedLookup) {
         finalDirectTranslations[originalIndex] = cleanedLookup;
         continue;
       }
       retriesPending.push({ index: originalIndex, cleaned });
     } else {
-      const fallback = systemicWordFallbackTranslate(originalText);
+      const fallback = systemicWordFallbackTranslate(originalText, normalizedSource);
       if (fallback) {
         finalDirectTranslations[originalIndex] = fallback;
       }
@@ -315,7 +317,7 @@ export async function translateBatchOffline(
           finalDirectTranslations[retry.index] = retryResult;
         } else {
           const origText = texts[retry.index] || retry.cleaned;
-          const fallback = systemicWordFallbackTranslate(origText);
+          const fallback = systemicWordFallbackTranslate(origText, normalizedSource);
           if (fallback) {
             finalDirectTranslations[retry.index] = fallback;
           }

@@ -51,7 +51,15 @@ export function getCompactPhraseMap(): Map<string, string> {
 
 export const lookupShortPhraseTh = (text: string, sourceLang?: string): string | null => {
   if (!text) return null;
-  const trimmed = text.trim();
+  let trimmed = text.trim();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
+        trimmed = parsed.join(' ').trim();
+      }
+    } catch {}
+  }
 
   // -1. Top Priority: Check User Custom Glossary First (O(1) User Override)
   try {
@@ -300,7 +308,7 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
   return null;
 };
 
-export const systemicWordFallbackTranslate = (text: string): string | null => {
+export const systemicWordFallbackTranslate = (text: string, sourceLang?: string): string | null => {
   const trimmed = text.trim();
   if (!trimmed) return null;
   const words = trimmed.split(/[\s,!?.-]+/g).filter(Boolean);
@@ -310,7 +318,7 @@ export const systemicWordFallbackTranslate = (text: string): string | null => {
   let matchedCount = 0;
 
   for (const word of words) {
-    const directLookup = lookupShortPhraseTh(word);
+    const directLookup = lookupShortPhraseTh(word, sourceLang);
     if (directLookup) {
       translatedWords.push(directLookup);
       matchedCount += 1;

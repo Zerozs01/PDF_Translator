@@ -311,7 +311,6 @@ export default function App() {
     handleAiTranslateAllPages,
     ensureCurrentPageOCRReadyForTranslation,
     ensureAllPagesOCRReadyForTranslation,
-    requestAutoOCRFromPanel,
   } = useDocumentTranslation({
     file,
     fileName,

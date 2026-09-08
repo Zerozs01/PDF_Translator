@@ -76,36 +76,40 @@ const PDFPageContainer = React.memo<{
         entries.forEach((entry) => {
           const navState = navContext?.navigationStateRef.current;
           const isProgScroll = navContext?.isProgrammaticScrollRef.current;
+          const isInteracting = navState?.isUserInteracting || useUIStore.getState().isUserInteracting;
           if (
             entry.isIntersecting &&
             !isProgScroll &&
-            navState?.isUserInteracting &&
             previewModeOverride !== 'translated' &&
             useProjectStore.getState().currentPage !== pageNum
           ) {
             const now = performance.now();
-            navState.pendingPage = pageNum;
-            navState.lastPageUpdateTime = now;
-            const capturedTime = now;
+            if (navState) {
+              navState.pendingPage = pageNum;
+              navState.lastPageUpdateTime = now;
+              const capturedTime = now;
 
-            if (navState.activePageChangeTimeout) {
-              clearTimeout(navState.activePageChangeTimeout);
+              if (navState.activePageChangeTimeout) {
+                clearTimeout(navState.activePageChangeTimeout);
+              }
+              navState.activePageChangeTimeout = setTimeout(() => {
+                React.startTransition(() => {
+                  if (capturedTime < navState.lastPageUpdateTime) return;
+                  if (navContext?.isProgrammaticScrollRef.current) return;
+                  navState.isObserverTriggeredPageChange = true;
+                  setPage(navState.pendingPage);
+                });
+                navState.activePageChangeTimeout = null;
+              }, isInteracting ? 150 : 250);
+            } else {
+              setPage(pageNum);
             }
-            navState.activePageChangeTimeout = setTimeout(() => {
-              React.startTransition(() => {
-                if (capturedTime < navState.lastPageUpdateTime) return;
-                if (navContext?.isProgrammaticScrollRef.current) return;
-                navState.isObserverTriggeredPageChange = true;
-                setPage(navState.pendingPage);
-              });
-              navState.activePageChangeTimeout = null;
-            }, 250);
           }
         });
       },
       {
-        threshold: 0,
-        rootMargin: '-45% 0px -45% 0px',
+        threshold: [0, 0.2],
+        rootMargin: '-25% 0px -25% 0px',
       }
     );
 
@@ -474,11 +478,6 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
     if (viewMode !== 'continuous' || previewModeOverride === 'translated') return;
     if (isProgrammaticScrollRef.current) return;
     if (!containerRef.current) return;
-
-    // Only recalculate active page when user is actively scrolling/interacting,
-    // NEVER on passive container resize, reflow, or split view toggle
-    const isInteracting = navigationStateRef.current.isUserInteracting || useUIStore.getState().isUserInteracting;
-    if (!isInteracting) return;
 
     const container = containerRef.current;
     const clientHeight = container.clientHeight || window.innerHeight;

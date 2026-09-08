@@ -835,7 +835,228 @@ class BackgroundQueueProcessor {
       canvas.width = 0;
       canvas.height = 0;
       throw err;
+    } finally {
+      try {
+        page?.cleanup?.();
+      } catch {}
     }
+  }
+
+  /**
+   * รัน OCR สำหรับหน้าเดียวแบบ On-Demand (Foreground)
+   * ตรวจสอบ SQLite แคชก่อน หากไม่มีจะทำการเรนเดอร์ Headless PDF/Image แล้วส่งเข้า OCR Bridge
+   */
+  public async runSinglePageOCR(
+    documentId: number,
+    filePath: string,
+    pageNum: number,
+    engine: OCREngine,
+    signal?: AbortSignal,
+    options?: {
+      ocrLanguage?: string;
+      ocrDpi?: number;
+      ocrPageSegMode?: number | null;
+      ocrQualityProfile?: 'fast' | 'balanced' | 'best';
+      useAngleCls?: boolean;
+      forceRefresh?: boolean;
+    }
+  ): Promise<OCRPageResult> {
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw new Error('Process aborted by signal');
+    };
+
+    throwIfAborted();
+
+    // 1. ตรวจสอบแคชจาก SQLite DB ก่อน (ถ้าไม่ได้สั่ง forceRefresh)
+    if (!options?.forceRefresh) {
+      try {
+        const cached = await dbService.getOCR(documentId, pageNum, engine);
+        if (cached && cached.lines && cached.lines.length > 0) {
+          const cachedRawVersion = cached.ocrRawVersion ?? 1;
+          const targetOcrLanguage = options?.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+          const languageMismatch = normalizeLanguage(cached.language || '') !== normalizeLanguage(targetOcrLanguage);
+
+          if (cachedRawVersion >= OCR_RAW_VERSION && !languageMismatch) {
+            let ocrResult = cached;
+            const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+              ? cached
+              : { ...cached, pipelineProfile: 'panel' as const };
+            const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+            if (
+              scriptGated.pipelineProfile === 'panel' &&
+              scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
+            ) {
+              ocrResult = scriptGated;
+            } else {
+              ocrResult = applyPanelSafetyLineDedup(scriptGated);
+              ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+              if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+              ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
+            }
+
+            ocrResult = processOCRPageResult(ocrResult, {
+              engine,
+              dpi: ocrResult.dpi || options?.ocrDpi || 300,
+              storeLanguage: targetOcrLanguage,
+            });
+
+            ocrResult.pageNumber = pageNum;
+            useOCRTextLayerStore.getState().setPageOCRForEngine(pageNum, engine, ocrResult);
+            useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+            return ocrResult;
+          }
+        }
+      } catch (err) {
+        console.warn(`[runSinglePageOCR] DB cache read warning for page ${pageNum}:`, err);
+      }
+    }
+
+    throwIfAborted();
+
+    // 2. โหลดไฟล์และเรนเดอร์หน้าเอกสาร
+    const isPdf = filePath.toLowerCase().endsWith('.pdf');
+    let pageData: RenderedPageData;
+
+    if (isPdf) {
+      let fileData: ArrayBuffer;
+      const fileRes = await window.electronAPI.fs.readFile(filePath);
+      if (typeof fileRes.data === 'string') {
+        throw new Error('Headless PDF read returned string instead of buffer');
+      }
+      fileData = fileRes.data instanceof ArrayBuffer
+        ? fileRes.data
+        : ((fileRes.data as Uint8Array).buffer as ArrayBuffer);
+
+      throwIfAborted();
+      const pdfDoc = await pdfjs.getDocument({ data: fileData }).promise;
+
+      const mockJob: BackgroundJob = {
+        id: `foreground_${documentId}_p${pageNum}_${Date.now()}`,
+        documentId,
+        filename: filePath.split(/[/\\]/).pop() || 'document.pdf',
+        filepath: filePath,
+        engine,
+        type: 'ocr_single',
+        targetPage: pageNum,
+        status: 'processing',
+        progress: 0,
+        currentPage: pageNum,
+        totalPages: pdfDoc.numPages,
+        message: 'Direct single-page OCR',
+        priority: 100,
+        createdAt: Date.now(),
+        ocrLanguage: options?.ocrLanguage,
+        ocrDpi: options?.ocrDpi,
+        ocrPageSegMode: options?.ocrPageSegMode,
+        ocrQualityProfile: options?.ocrQualityProfile,
+        useAngleCls: options?.useAngleCls,
+      };
+
+      pageData = await this.renderHeadlessPage(pdfDoc, pageNum, mockJob, signal || new AbortController().signal);
+    } else {
+      // Image file handling (PNG, JPG, WebP, etc.)
+      const fileRes = await window.electronAPI.fs.readFile(filePath);
+      const fileData = fileRes.data instanceof ArrayBuffer
+        ? fileRes.data
+        : ((fileRes.data as Uint8Array).buffer as ArrayBuffer);
+      const blob = new Blob([fileData]);
+      const imgBitmap = await createImageBitmap(blob);
+      const canvas = this.getHeadlessCanvas();
+      canvas.width = imgBitmap.width;
+      canvas.height = imgBitmap.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Cannot create headless canvas 2D context for image');
+      ctx.drawImage(imgBitmap, 0, 0);
+      const imageBlob = await new Promise<Blob>((res, rej) => {
+        canvas.toBlob((b) => (b ? res(b) : rej(new Error('Canvas to Blob failed'))), 'image/webp', 0.95);
+      });
+      imgBitmap.close();
+
+      pageData = {
+        pageNum,
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        targetDpi: options?.ocrDpi || 300,
+        ocrLanguage: options?.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng',
+        resolvedQualityProfile: options?.ocrQualityProfile || 'best',
+        imageBlob,
+      };
+    }
+
+    throwIfAborted();
+
+    let ocrResult: OCRPageResult;
+    if (pageData.blankOcrResult) {
+      ocrResult = pageData.blankOcrResult;
+    } else if (pageData.imageBlob) {
+      const storeOptions = useOCRTextLayerStore.getState().options;
+      const pageSegModeVal = options?.ocrPageSegMode !== undefined
+        ? (options.ocrPageSegMode === null ? undefined : options.ocrPageSegMode)
+        : (storeOptions.pageSegMode === null ? undefined : storeOptions.pageSegMode);
+
+      const resolvedUseAngleCls = options?.useAngleCls !== undefined
+        ? Boolean(options.useAngleCls)
+        : Boolean(storeOptions.useAngleCls);
+
+      ocrResult = await visionService.ocrForTextLayer(
+        pageData.imageBlob,
+        pageData.canvasWidth,
+        pageData.canvasHeight,
+        pageData.ocrLanguage,
+        pageData.targetDpi,
+        pageSegModeVal,
+        signal || new AbortController().signal,
+        false,
+        'panel',
+        pageData.resolvedQualityProfile,
+        engine,
+        pageData.canvasWidth * pageData.canvasHeight,
+        {
+          useAngleCls: resolvedUseAngleCls,
+        }
+      );
+    } else {
+      throw new Error(`Failed to produce rendered image for page ${pageNum}`);
+    }
+
+    throwIfAborted();
+
+    ocrResult.pageNumber = pageNum;
+    ocrResult.ocrEngine = engine;
+    ocrResult.language = normalizeLanguage(pageData.ocrLanguage);
+    ocrResult.pipelineProfile = 'panel';
+    ocrResult.ocrQualityProfile = pageData.resolvedQualityProfile;
+    ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+    ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+
+    ocrResult = applyPanelLanguageScriptGate(ocrResult, pageData.ocrLanguage);
+    ocrResult = applyPanelSafetyLineDedup(ocrResult);
+    ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+    ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+    if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+
+    ocrResult = processOCRPageResult(ocrResult, {
+      engine,
+      dpi: pageData.targetDpi,
+      storeLanguage: pageData.ocrLanguage,
+    });
+
+    // บันทึกลง SQLite DB
+    await dbService.saveOCR(documentId, pageNum, ocrResult, engine);
+
+    // อัปเดต In-Memory Store
+    useOCRTextLayerStore.getState().setPageOCRForEngine(pageNum, engine, ocrResult);
+    useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+
+    // อัปเดต Layer Groups ใน LayerStore ถ้ายังไม่มี
+    try {
+      const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
+      useLayerStore.getState().setPageLayers(pageNum, initialLayerResult);
+    } catch (err) {
+      console.warn(`[runSinglePageOCR] Failed to build layer groups for page ${pageNum}:`, err);
+    }
+
+    return ocrResult;
   }
 }
 

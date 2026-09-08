@@ -19,6 +19,7 @@ import { useProjectStore } from '../../stores/useProjectStore';
 import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { dbService } from '../../services/dbService';
+import { backgroundQueueProcessor } from '../../services/ocr/BackgroundQueueProcessor';
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 import { visionService } from '../../services/vision/VisionService';
 import {
@@ -553,21 +554,53 @@ export const OCRTextLayerPanel: React.FC = () => {
 
   const handleStartOCR = useCallback(async (targetPageNum?: number, forceRefresh = false) => {
     if (!file) return;
+    const targetPage = targetPageNum || currentPage;
+    const resolvedPath = filePathRef.current || (file as any)?.path;
+    const docId = await ensureDocumentId().catch(() => null);
+
+    if (!docId || !resolvedPath) {
+      console.warn('[OCRPanel] Missing documentId or filePath for OCR');
+      return;
+    }
+
     setIsProcessing(true);
-    setProgress({ stage: 'ocr', progress: 10, currentPage: targetPageNum || currentPage, totalPages: 1, message: 'Running OCR...' });
+    setProgress({ stage: 'ocr', progress: 10, currentPage: targetPage, totalPages: 1, message: 'Running OCR...' });
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       await ensureEngineReady(selectedOcrEngine);
-      // Simulate/trigger OCR processing
-      setTimeout(() => {
-        setIsProcessing(false);
-        setProgress({ stage: 'complete', progress: 100, currentPage: targetPageNum || currentPage, totalPages: 1, message: 'Done' });
-      }, 1000);
+      setProgress({ stage: 'ocr', progress: 30, currentPage: targetPage, totalPages: 1, message: `Processing ${selectedOcrEngine}...` });
+
+      await backgroundQueueProcessor.runSinglePageOCR(
+        docId,
+        resolvedPath,
+        targetPage,
+        selectedOcrEngine,
+        controller.signal,
+        {
+          ocrLanguage: options.language,
+          ocrDpi: options.dpi,
+          ocrPageSegMode: options.pageSegMode,
+          ocrQualityProfile: options.ocrQualityProfile as 'fast' | 'balanced' | 'best' | undefined,
+          useAngleCls: options.useAngleCls,
+          forceRefresh,
+        }
+      );
+
+      setProgress({ stage: 'complete', progress: 100, currentPage: targetPage, totalPages: 1, message: 'Done' });
     } catch (err) {
-      setIsProcessing(false);
+      if (controller.signal.aborted) {
+        console.log('[OCRPanel] OCR canceled by user.');
+        return;
+      }
       console.error('[OCRPanel] OCR failed:', err);
+    } finally {
+      setIsProcessing(false);
+      abortControllerRef.current = null;
     }
-  }, [currentPage, ensureEngineReady, file, selectedOcrEngine, setIsProcessing, setProgress]);
+  }, [currentPage, ensureDocumentId, ensureEngineReady, file, options, selectedOcrEngine, setIsProcessing, setProgress]);
 
   const handleBenchmarkCurrentPage = useCallback(async () => {
     setBenchmarkRunning(true);

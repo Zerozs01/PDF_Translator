@@ -1065,6 +1065,133 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /&SERA\b/gi, replacement: '¿SERA' },
   { pattern: /\bYANO\b/gi, replacement: 'YA NO' },
   { pattern: /\bEACASO\.\.\.MEHE\b/gi, replacement: '¿ACASO... ME HE' },
+  { pattern: /\bDiA28D[BE]\b/gi, replacement: 'DIA 28 DE' },
+  { pattern: /\bQUBMBH[BE]\b/gi, replacement: 'QUE ME HE' },
+  { pattern: /\bDEVECES\b/gi, replacement: 'DE VECES' },
+  { pattern: /\bMISPEZONESYIMI\b/gi, replacement: 'MIS PEZONES Y MI' },
+  { pattern: /\bVUELVENA\s*LA\b/gi, replacement: 'VUELVEN A LA' },
+  { pattern: /\bHECHOV\b/gi, replacement: 'HECHO' },
+  { pattern: /\bKEl\.\.\.N\b/gi, replacement: 'KEI... NI' },
+  { pattern: /\bHEHECHO\b/gi, replacement: 'HE HECHO' },
+  { pattern: /\bESTOA\s*TI\b/gi, replacement: 'ESTO A TI' },
+  { pattern: /\bAH\.\.\.Q&E\b/gi, replacement: 'AH... QUE' },
+  { pattern: /\bESTBESEL\b/gi, replacement: 'ESTE ES EL' },
+  { pattern: /\bMACHO\?ES\b/gi, replacement: 'MACHO? ES' },
+  { pattern: /\bALDEKEI,?\b/gi, replacement: 'AL DE KEI' },
+  { pattern: /\bNO,NO,EHO\b/gi, replacement: 'NO, NO, ESO' },
+  { pattern: /\bIVIENBALGO\b/gi, replacement: '¡VIENE ALGO' },
+  { pattern: /\bFAVORO\b/gi, replacement: 'FAVOR' },
+  { pattern: /\bAHOSER\b/gi, replacement: 'AH, O SER' },
+  { pattern: /\bVIOLADAPOR\b/gi, replacement: 'VIOLADA POR' },
+  { pattern: /\bENORMEY\b/gi, replacement: 'ENORME Y' },
+  { pattern: /\bQUEMEBESE\b/gi, replacement: 'QUE ME BESE' },
+  { pattern: /\bALAFUERZA\b/gi, replacement: 'A LA FUERZA' },
+  { pattern: /\bSINPODER\b/gi, replacement: 'SIN PODER' },
+  { pattern: /\bSIENTO\.\.SOLO\b/gi, replacement: 'SIENTO... SOLO' },
+  { pattern: /\biBIEN\b/gi, replacement: '¡BIEN' },
+  { pattern: /\bFUNCIONG[!?;:]*/gi, replacement: 'FUNCIONO!' },
+  { pattern: /\bIEVE,DATE\b/gi, replacement: '¡EVE, DATE' },
+  { pattern: /\bPRISA!TYA\b/gi, replacement: 'PRISA! YA' },
+  { pattern: /\bNOHAY\b/gi, replacement: 'NO HAY' },
+  { pattern: /\bIYANOME\b/gi, replacement: '¡YA NO ME' },
+  { pattern: /\bIMPORTALA\b/gi, replacement: 'IMPORTA LA' },
+  { pattern: /\bROSAETERNA[!?;:]*/gi, replacement: 'ROSA ETERNA!' },
+  { pattern: /\biESCAPADBAHi\b/gi, replacement: '¡ESCAPA DE AHI' },
+  { pattern: /\bAHORAMISMO[!?;:]*/gi, replacement: 'AHORA MISMO!' },
+  { pattern: /\bPOR\s*S1\s*ACASO\b/gi, replacement: 'POR SI ACASO' },
+  { pattern: /\bPOLLASE\b/gi, replacement: 'POLLA SE' },
+  { pattern: /\b&ME\s*ESCUCHAS\b/gi, replacement: '¿ME ESCUCHAS' },
+  { pattern: /\bPORAHi\?\b/gi, replacement: 'POR AHI?' },
+  { pattern: /\b&QUE\s*TAL\b/gi, replacement: '¿QUE TAL' },
+  { pattern: /\bYAESEL\b/gi, replacement: 'YA ES EL' },
+  { pattern: /\bDECIMODiA\b/gi, replacement: 'DECIMO DIA' },
+  { pattern: /\bDESDEQUE\b/gi, replacement: 'DESDE QUE' },
+  { pattern: /\bSECORTO\b/gi, replacement: 'SE CORTO' },
+  { pattern: /\bLASENAL\b/gi, replacement: 'LA SEÑAL' },
+  { pattern: /\bDEILA\b/gi, replacement: 'DE LA' },
+  { pattern: /\bCAMARADE\b/gi, replacement: 'CAMARA DE' },
+  { pattern: /\bCONKEL\b/gi, replacement: 'CON KEI' },
+  { pattern: /\bFONDODE\s*MI\b/gi, replacement: 'FONDO DE MI' },
+  { pattern: /\bLOHAGAS[!?;:]*/gi, replacement: 'LO HAGAS!' },
+  { pattern: /\bLASPASAS\b/gi, replacement: 'LAS PASAS' },
+  { pattern: /\bYMENTIRAS\.DELASSUYAS\.\.\./gi, replacement: 'Y MENTIRAS. DE LAS SUYAS...' },
+  { pattern: /\bYMENTIRAS\b/gi, replacement: 'Y MENTIRAS' },
+  { pattern: /\bDELASSUYAS\b/gi, replacement: 'DE LAS SUYAS' },
+  { pattern: /\bDOSDiAS[!?;:]*/gi, replacement: 'DOS DIAS!' },
+  { pattern: /\bREPORTEDEL\b/gi, replacement: 'REPORTE DEL' },
+  { pattern: /\bESTABASHACE\b/gi, replacement: 'ESTABAS HACE' },
+  { pattern: /\bTRES\s*DiAS\s*A\b/gi, replacement: 'TRES DIAS A' },
+  { pattern: /\bLA1DE\s*LA\b/gi, replacement: 'LA 1 DE LA' },
+  { pattern: /\bLA1DE\b/gi, replacement: 'LA 1 DE' },
+  { pattern: /\bBUSCAUNA\b/gi, replacement: 'BUSCA UNA' },
+  { pattern: /\bOPORTUNIDADY\b/gi, replacement: 'OPORTUNIDAD Y' },
+  { pattern: /\bSERA\?ALFRED\b/gi, replacement: 'SERA? ALFRED' },
+  { pattern: /\bDETI\.ERES\b/gi, replacement: 'DE TI. ERES' },
+  { pattern: /\bDETI\b/gi, replacement: 'DE TI' },
+  { pattern: /\bEXCITADAEN\b/gi, replacement: 'EXCITADA EN' },
+  { pattern: /\bPERDÖN\b/gi, replacement: 'PERDON' },
+  { pattern: /\bJODASx\.\s*AGUANTA\s+UN\b/gi, replacement: 'JODAS... AGUANTA UN' },
+  { pattern: /\bDEEVE\.\.\./gi, replacement: 'DE EVE...' },
+  { pattern: /\bHOYESEL\b/gi, replacement: 'HOY ES EL' },
+  { pattern: /\bKEI\.\.\.\s*HOY/gi, replacement: 'KEI... HOY' },
+  { pattern: /\bDiA15MEHAS\b/gi, replacement: 'DIA 15 ME HAS' },
+  { pattern: /\bESTADOVIGILANDO\b/gi, replacement: 'ESTADO VIGILANDO' },
+  { pattern: /\bTODOESTE\s*TIEMPOD?\b/gi, replacement: 'TODO ESTE TIEMPO,' },
+  { pattern: /&VERDAD\.\.\.3?LA\b/gi, replacement: '¿VERDAD?... LA' },
+  { pattern: /\bVIGILANCIAES\b/gi, replacement: 'VIGILANCIA ES' },
+  { pattern: /\bTANESTRICTA\b/gi, replacement: 'TAN ESTRICTA' },
+  { pattern: /\bQUENOPUEDO\b/gi, replacement: 'QUE NO PUEDO' },
+  { pattern: /\biMBDATANTA\b/gi, replacement: '¡ME DA TANTA' },
+  { pattern: /\bTENERQUE\b/gi, replacement: 'TENER QUE' },
+  { pattern: /\bDEJARQUBESTE\b/gi, replacement: 'DEJAR QUE ESTE' },
+  { pattern: /\bTIPOSECORRA\b/gi, replacement: 'TIPO SE CORRA' },
+  { pattern: /\bSOLOPARA\b/gi, replacement: 'SOLO PARA' },
+  { pattern: /\bPODERVERAKEI\b/gi, replacement: 'PODER VER A KEI' },
+  { pattern: /\bCUANTOANTES[!?;:]*/gi, replacement: 'CUANTO ANTES!' },
+  { pattern: /\bJEJE\.\.\.&YIBIEN\?/gi, replacement: 'JEJE... ¿Y BIEN?' },
+  { pattern: /&YIBIEN\?/gi, replacement: '¿Y BIEN?' },
+  { pattern: /\bYOME\b/gi, replacement: 'YO ME' },
+  { pattern: /\biUAJ!iPERO\b/gi, replacement: '¡UAJ! ¡PERO' },
+  { pattern: /\bQUETETAS\b/gi, replacement: 'QUE TETAS' },
+  { pattern: /\bVLLEVAS\b/gi, replacement: 'LLEVAS' },
+  { pattern: /\bMELONES\.\.\.\s*JE/gi, replacement: 'MELONES... JE' },
+  { pattern: /\bQUiTATELO\b/gi, replacement: 'QUITATELO' },
+  { pattern: /\bKEL\.\.\.iPOR\b/gi, replacement: 'KEI... ¿POR' },
+  { pattern: /\bMicrocharas\s+Ene\s+la\s+rea'?c\b/gi, replacement: 'MICROCHARAS ENE LA REA\'C' },
+  { pattern: /\biNORECIBO\b/gi, replacement: '¡NO RECIBO' },
+  { pattern: /\bDBEVE[!?;:]*/gi, replacement: 'DE EVE!' },
+  { pattern: /\biREALMENTE\b/gi, replacement: '¡REALMENTE' },
+  { pattern: /\biESTO\b/gi, replacement: '¡ESTO' },
+  { pattern: /\bIESTA\b/gi, replacement: '¡ESTA' },
+  { pattern: /\bMASDURA\b/gi, replacement: 'MAS DURA' },
+  { pattern: /\bQUELADE\b/gi, replacement: 'QUE LA DE' },
+  { pattern: /iEPOR\s*FIN\?ISU/gi, replacement: '¿POR FIN? ¡SU' },
+  { pattern: /\bFIN\?ISU\b/gi, replacement: 'FIN? ¡SU' },
+  { pattern: /\bAH\.\.\.DESPUES\b/gi, replacement: 'AH... DESPUES' },
+  { pattern: /CANSADO\.&LO\b/gi, replacement: 'CANSADO. ¿LO' },
+  { pattern: /\bDEJAMOSPARA\b/gi, replacement: 'DEJAMOS PARA' },
+  { pattern: /\bMANANA\?/gi, replacement: 'MAÑANA?' },
+  { pattern: /\bVERDAD\?V\b/gi, replacement: 'VERDAD?' },
+  { pattern: /\bESTETIPO\b/gi, replacement: 'ESTE TIPO' },
+  { pattern: /\bCUALES\.SON\b/gi, replacement: 'CUALES SON' },
+  { pattern: /\bLOSPUNTOS\b/gi, replacement: 'LOS PUNTOS' },
+  { pattern: /\bDEBILES\.DE\s*UNA\b/gi, replacement: 'DEBILES DE UNA' },
+  { pattern: /\bCORRERIDESDEEL\b/gi, replacement: 'CORRER! DESDE EL' },
+  { pattern: /\bL'ARGO\./gi, replacement: 'LARGO.' },
+  { pattern: /\bL'ARGO\b/gi, replacement: 'LARGO' },
+  { pattern: /\bSERAPOR\b/gi, replacement: 'SERA POR' },
+  { pattern: /\bESTAVEZ\.\.\./gi, replacement: 'ESTA VEZ...' },
+  { pattern: /\bESTAVEZ\b/gi, replacement: 'ESTA VEZ' },
+  { pattern: /\bPOLLASE\b/gi, replacement: 'POLLA SE' },
+  { pattern: /\bSESIENTEDE\b/gi, replacement: 'SE SIENTE DE' },
+  { pattern: /\bLOMEJOR[!?;:]*/gi, replacement: 'LO MEJOR!' },
+  { pattern: /&EH\?iOYE,/gi, replacement: '¿EH? ¡OYE,' },
+  { pattern: /NO!li&LA/gi, replacement: 'NO! ¿Y LA' },
+  { pattern: /\bNO!li\b/gi, replacement: 'NO!' },
+  { pattern: /\bli&LA\b/gi, replacement: '¿Y LA' },
+  { pattern: /\bOTRAVEZ\b/gi, replacement: 'OTRA VEZ' },
+  { pattern: /\bCOMOLA\b/gi, replacement: 'COMO LA' },
+  { pattern: /\bULTIMA\s*VEZ\?!/gi, replacement: 'ULTIMA VEZ?!' },
 ];
 
 export const SPANISH_FUNCTION_WORD_GLUE_PATTERN = /\b([A-ZÁÉÍÓÚÜÑ]{3,})(QUE|ME|TE|SE|LO|LA|LOS|LAS|UN|UNA|MAS|ASI|CON|SIN|POR|PARA|EN)([A-ZÁÉÍÓÚÜÑ]{3,})\b/g;
@@ -1081,8 +1208,12 @@ export const SPANISH_LEGITIMATE_ENCLITICS = new Set([
   'impresionante', 'impresionantes', 'emocionante', 'emocionantes',
   'pense', 'pensé',
   'metermela', 'metérmela', 'metala', 'métala', 'destroceme', 'destróceme', 'haciendome', 'haciéndome', 'metere', 'meteré',
+  'quitatelo', 'quítatelo',
   'venirme', 'consentirme', 'obsesionandose', 'obsesionándose', 'correte', 'córrete', 'llameme', 'llámeme', 'llevaba',
-  'defenderse', 'defender', 'defenderte', 'defenderme', 'defendernos', 'defenderle', 'defenderles'
+  'defenderse', 'defender', 'defenderte', 'defenderme', 'defendernos', 'defenderle', 'defenderles',
+  'polla', 'pollas', 'botella', 'botellas', 'pantalla', 'pantallas', 'estrella', 'estrellas',
+  'siente', 'sientes', 'siento', 'sienten',
+  'correrme', 'correrse', 'correrte', 'corrernos'
 ]);
 
 export const SPANISH_COMPOUND_SPLIT_EXCLUSIONS = new Set([
@@ -1096,7 +1227,9 @@ export const SPANISH_COMPOUND_SPLIT_EXCLUSIONS = new Set([
   'metermela', 'metérmela', 'metala', 'métala', 'destroceme', 'destróceme', 'haciendome', 'haciéndome', 'metere', 'meteré',
   'venirme', 'consentirme', 'obsesionandose', 'obsesionándose', 'correte', 'córrete', 'llameme', 'llámeme', 'llevaba',
   'sentencia', 'sentimiento', 'entonces', 'encontrar', 'encuentro', 'entero',
-  'entregar', 'entrenar', 'entrada', 'entrar', 'entorno'
+  'entregar', 'entrenar', 'entrada', 'entrar', 'entorno',
+  'vigilancia', 'vigilante', 'vigilantes', 'vigilar', 'vigilando', 'vigilado', 'vigilada',
+  'oportunidad', 'oportunidades'
 ]);
 
 export const THAI_BOUNDARY_ATTACH_TOKENS = new Set([
@@ -1427,6 +1560,14 @@ export const splitSpanishUppercaseCompounds = (text: string): string => {
 
 export const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
   let normalized = normalizeWhitespace(String(text || ''));
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(normalized);
+      if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
+        normalized = normalizeWhitespace(parsed.join(' '));
+      }
+    } catch {}
+  }
   normalized = normalized.replace(/(^|[\s"'([{])iC[-\s]*/gi, '$1¿C');
   normalized = normalized.replace(/(^|[\s"'([{])i(?=COMO\b)/gi, '$1¿');
   SPANISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
@@ -1566,7 +1707,15 @@ export const normalizeSourceForTranslationWithThaiSubs = (normalized: string): s
 
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely (preserving Japanese honorifics and single-letter stutters)
-  let raw = String(text || '').replace(/[\r\n]+/g, ' ');
+  let raw = String(text || '').replace(/[\r\n]+/g, ' ').trim();
+  if (raw.startsWith('[') && raw.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
+        raw = parsed.join(' ').trim();
+      }
+    } catch {}
+  }
   raw = raw.replace(/\b([\p{L}]{2,})-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([\p{L}])/gui, '$1$2');
 
   let normalized = normalizeTechnicalArtifactsForTranslation(raw);

@@ -41,7 +41,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v64'; // v64: Compare mode split-sync fix, Korean dictionary deduplication & new dojin phrases
+export const OCR_TRANSLATION_CACHE_VERSION = 'v65'; // v65: Added Spanish request 9 chapter batch, fixed OPORTUNIDAD compound split, cache refresh for offline all pages
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')

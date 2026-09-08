@@ -649,9 +649,16 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     }
   }, [currentPageOCR, pageNum, setPageLayers, getPageLayers, translationOverlayContext.translatedByIndex, translationPreviewMode]);
 
-  // Note: Auto-building of layers on load is now centrally managed by PDFCanvas.tsx to guarantee
-  // that layers are always initialized even if the Layer Panel sidebar is closed or unmounted.
-  // Manual rebuilds are still supported using handleBuildLayers below.
+  // Auto-sync: When active page changes or OCR data becomes available,
+  // immediately build layers if the current page has OCR lines but no layers in store yet.
+  useEffect(() => {
+    if (currentPageOCR && currentPageOCR.lines && currentPageOCR.lines.length > 0) {
+      const existing = getPageLayers(pageNum);
+      if (!existing || existing.length === 0) {
+        handleBuildLayers(false);
+      }
+    }
+  }, [pageNum, currentPageOCR, getPageLayers, handleBuildLayers]);
 
   const layerMap = useMemo(() => {
     const map = new Map<string, TextLayer>();

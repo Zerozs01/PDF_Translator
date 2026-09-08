@@ -11,11 +11,8 @@ import { dbService } from '../services/dbService';
 import { translationCoordinator } from '../services/translation/translationCoordinator';
 import type { TranslatableItem } from '../types/translation';
 import { buildOCRSourceFingerprint } from '../services/ocrSourceFingerprint';
-import {
-  AUTO_OCR_REQUEST_EVENT,
-  AUTO_OCR_RESULT_EVENT,
-  type AutoOCRScope,
-} from '../constants/translationConstants';
+import { backgroundQueueProcessor } from '../services/ocr/BackgroundQueueProcessor';
+import { useBackgroundQueueStore } from '../stores/useBackgroundQueueStore';
 import {
   buildBatchMarkdownPayload,
   parseBatchJsonResponse,
@@ -145,60 +142,74 @@ export function useDocumentTranslation({
     });
   }, [currentPage, totalPages, setIsOfflineProcessing, setIsAiProcessing, setTranslationStatus, setProgress]);
 
-  const requestAutoOCRFromPanel = useCallback((scope: AutoOCRScope): Promise<boolean> => {
-    if (typeof window === 'undefined') return Promise.resolve(false);
-
-    return new Promise((resolve) => {
-      let settled = false;
-      const timeoutMs = scope === 'all' ? 420_000 : 180_000;
-
-      const cleanup = () => {
-        window.removeEventListener(AUTO_OCR_RESULT_EVENT, handleResult as EventListener);
-      };
-
-      const resolveOnce = (value: boolean) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      };
-
-      const handleResult = (event: Event) => {
-        const detail = (event as CustomEvent<{ scope?: AutoOCRScope; ok?: boolean; error?: string }>).detail;
-        if (!detail || detail.scope !== scope) return;
-        if (!detail.ok && detail.error) {
-          setTranslationStatus({ kind: 'error', message: detail.error });
-        }
-        resolveOnce(Boolean(detail.ok));
-      };
-
-      window.addEventListener(AUTO_OCR_RESULT_EVENT, handleResult as EventListener);
-      window.dispatchEvent(new CustomEvent(AUTO_OCR_REQUEST_EVENT, { detail: { scope } }));
-
-      window.setTimeout(() => {
-        resolveOnce(false);
-      }, timeoutMs);
-    });
-  }, [setTranslationStatus]);
-
-  const ensureCurrentPageOCRReadyForTranslation = useCallback(async (): Promise<boolean> => {
+  const ensureCurrentPageOCRReadyForTranslation = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
     const ocrState = useOCRTextLayerStore.getState();
     const selectedEngine = (ocrOptions.engine || 'paddleocr') as OCREngine;
+
+    // 1. ตรวจสอบจาก In-Memory Zustand Store
     if (hasModelScopedCachedOCR(ocrState, currentPage, selectedEngine)) {
       return true;
     }
 
+    const docId = await ensureDocumentId().catch(() => null);
+
+    // 2. ตรวจสอบแคชจาก SQLite DB
+    if (docId) {
+      try {
+        const cached = await dbService.getOCR(docId, currentPage, selectedEngine);
+        if (cached && cached.lines && cached.lines.length > 0) {
+          cached.pageNumber = currentPage;
+          useOCRTextLayerStore.getState().setPageOCRForEngine(currentPage, selectedEngine, cached);
+          useOCRTextLayerStore.getState().setPageOCR(currentPage, cached);
+          return true;
+        }
+      } catch (err) {
+        console.warn('[ensureOCR] DB cache read warning:', err);
+      }
+    }
+
+    // 3. หากไม่มีทั้งใน Memory และ DB ให้รัน Headless OCR ผ่าน backgroundQueueProcessor
+    if (!docId || !filePath) {
+      setTranslationStatus({
+        kind: 'error',
+        message: 'กรุณาบันทึกหรือยืนยันเอกสารก่อนเริ่มกระบวนการ OCR อัตโนมัติ',
+      });
+      return false;
+    }
+
     setTranslationStatus({
       kind: 'info',
-      message: `No OCR cache for ${selectedEngine} on page ${currentPage}. Auto-running OCR for this page...`,
+      message: `ไม่พบแคช OCR (${selectedEngine}) ในหน้า ${currentPage}. กำลังตรวจจับข้อความอัตโนมัติ...`,
     });
 
-    const ok = await requestAutoOCRFromPanel('current');
-    if (!ok) return false;
+    try {
+      const ocrResult = await backgroundQueueProcessor.runSinglePageOCR(
+        docId,
+        filePath,
+        currentPage,
+        selectedEngine,
+        signal,
+        {
+          ocrLanguage: ocrOptions.language,
+          ocrDpi: ocrOptions.dpi,
+          ocrPageSegMode: ocrOptions.pageSegMode,
+          ocrQualityProfile: ocrOptions.ocrQualityProfile as 'fast' | 'balanced' | 'best' | undefined,
+          useAngleCls: ocrOptions.useAngleCls,
+        }
+      );
 
-    const refreshed = useOCRTextLayerStore.getState();
-    return hasModelScopedCachedOCR(refreshed, currentPage, selectedEngine);
-  }, [currentPage, ocrOptions.engine, requestAutoOCRFromPanel, setTranslationStatus]);
+      return Boolean(ocrResult && ocrResult.lines && ocrResult.lines.length > 0);
+    } catch (err) {
+      if (signal?.aborted) return false;
+      const msg = err instanceof Error ? err.message : 'Unknown OCR error';
+      console.error('[ensureOCR] Single page OCR failed:', err);
+      setTranslationStatus({
+        kind: 'error',
+        message: `ประมวลผล OCR หน้า ${currentPage} ล้มเหลว: ${msg}`,
+      });
+      return false;
+    }
+  }, [currentPage, ensureDocumentId, filePath, ocrOptions, setTranslationStatus]);
 
   const ensureAllPagesOCRReadyForTranslation = useCallback(async (): Promise<boolean> => {
     if (fileType !== 'pdf') {
@@ -213,19 +224,31 @@ export function useDocumentTranslation({
       return true;
     }
 
-    setTranslationStatus({
-      kind: 'info',
-      message: `OCR cache is missing for some pages (found ${cachedPages.length}/${total}). Running Auto-OCR for all pages...`,
-    });
-
-    const ok = await requestAutoOCRFromPanel('all');
-    if (!ok) {
-      return ensureCurrentPageOCRReadyForTranslation();
+    const docId = await ensureDocumentId().catch(() => null);
+    if (!docId || !filePath) {
+      return false;
     }
 
-    const refreshedPages = getModelScopedCachedPageNumbers();
-    return refreshedPages.length > 0;
-  }, [ensureCurrentPageOCRReadyForTranslation, fileType, getModelScopedCachedPageNumbers, requestAutoOCRFromPanel, setTranslationStatus, totalPages]);
+    useBackgroundQueueStore.getState().addJobAsForeground({
+      documentId: docId,
+      filename: fileName,
+      filepath: filePath,
+      engine: (ocrOptions.engine || 'paddleocr') as OCREngine,
+      type: 'ocr_all',
+      totalPages: Math.max(1, totalPages),
+      ocrLanguage: ocrOptions.language,
+      ocrDpi: ocrOptions.dpi,
+      ocrPageSegMode: ocrOptions.pageSegMode,
+      ocrQualityProfile: ocrOptions.ocrQualityProfile as 'fast' | 'balanced' | 'best' | undefined,
+      useAngleCls: ocrOptions.useAngleCls,
+    });
+
+    setTranslationStatus({
+      kind: 'info',
+      message: 'เพิ่มงาน OCR All Pages เข้าสู่คิวเรียบร้อยแล้ว',
+    });
+    return true;
+  }, [ensureCurrentPageOCRReadyForTranslation, ensureDocumentId, fileName, filePath, fileType, getModelScopedCachedPageNumbers, ocrOptions, setTranslationStatus, totalPages]);
 
   const buildGeminiContextOverrides = useCallback((
     mode: TranslationMode,
@@ -865,7 +888,7 @@ export function useDocumentTranslation({
 
     try {
       if (signal.aborted) return;
-      const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
+      const ocrReady = await ensureCurrentPageOCRReadyForTranslation(signal);
       if (signal.aborted) return;
       if (!ocrReady) {
         setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before offline translation.' });
@@ -938,7 +961,7 @@ export function useDocumentTranslation({
 
     try {
       if (signal.aborted) return;
-      const ocrReady = await ensureCurrentPageOCRReadyForTranslation();
+      const ocrReady = await ensureCurrentPageOCRReadyForTranslation(signal);
       if (signal.aborted) return;
       if (!ocrReady) {
         setTranslationStatus({ kind: 'error', message: 'Auto OCR failed before AI translation.' });
@@ -1021,6 +1044,5 @@ export function useDocumentTranslation({
     handleAiTranslateAllPages,
     ensureCurrentPageOCRReadyForTranslation,
     ensureAllPagesOCRReadyForTranslation,
-    requestAutoOCRFromPanel,
   };
 }

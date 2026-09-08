@@ -4,9 +4,29 @@ import { dbService } from '../dbService';
 import { applyKoreanConversationalFallback } from './koreanTranslationPolicy';
 import { lookupShortPhraseTh } from './offlineTranslationService';
 import { isCachedUntranslated } from './translationQualityService';
+import { useGlossaryStore } from '../../stores/useGlossaryStore';
 
+let lastGlossaryEntriesRef: any = null;
 const phraseCache = new Map<string, string | null>();
+
+export const clearPhraseCache = (): void => {
+  phraseCache.clear();
+  lastGlossaryEntriesRef = null;
+};
+
 export const cachedLookupShortPhraseTh = (text: string, srcLang?: string): string | null => {
+  let currentGlossaryEntries: any = null;
+  try {
+    currentGlossaryEntries = useGlossaryStore.getState()?.entries;
+  } catch {
+    currentGlossaryEntries = null;
+  }
+
+  if (currentGlossaryEntries !== lastGlossaryEntriesRef) {
+    phraseCache.clear();
+    lastGlossaryEntriesRef = currentGlossaryEntries;
+  }
+
   const key = `${srcLang || ''}:${text}`;
   if (phraseCache.has(key)) return phraseCache.get(key)!;
   const res = lookupShortPhraseTh(text, srcLang);

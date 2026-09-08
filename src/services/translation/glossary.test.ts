@@ -174,7 +174,7 @@ describe('Dynamic Glossary & Translation Memory System', () => {
       expect(lookupShortPhraseTh('POR QLEDAR', 'es')).toBe('เพื่อให้อยู่');
       expect(lookupShortPhraseTh('QUEINMADURO.', 'es')).toBe('ช่างไม่รู้จักโตเลย.');
       expect(lookupShortPhraseTh('SEDEDICO', 'es')).toBe('ทุ่มเทให้กับ');
-      expect(lookupShortPhraseTh('DEVECES', 'es')).toBe('เท่า / หลายครั้ง');
+      expect(lookupShortPhraseTh('DEVECES', 'es')).toBe('หลายครั้ง');
       expect(lookupShortPhraseTh('CABEZA', 'es')).toBe('หัว');
       expect(lookupShortPhraseTh('AMOVY', 'es')).toBe('นายท่าน');
       expect(lookupShortPhraseTh('CUERPO...?', 'es')).toBe('ร่างกาย...?');
@@ -198,11 +198,11 @@ describe('Dynamic Glossary & Translation Memory System', () => {
       expect(lookupShortPhraseTh('VENGO', 'es')).toBe('ฉันกำลังจะเสร็จ');
       expect(lookupShortPhraseTh('CADERAS', 'es')).toBe('สะโพก');
       expect(lookupShortPhraseTh('VENGOD', 'es')).toBe('ฉันกำลังจะเสร็จ');
-      expect(lookupShortPhraseTh('IDEFINITIVAMENTE', 'es')).toBe('อย่างแน่นอนที่สุด / ชัดเจนเลย');
+      expect(lookupShortPhraseTh('IDEFINITIVAMENTE', 'es')).toBe('อย่างแน่นอน');
       expect(lookupShortPhraseTh('ASiQUENO', 'es')).toBe('เพราะฉะนั้นไม่');
       expect(lookupShortPhraseTh('HUMILLANTE!', 'es')).toBe('น่าอับอายขายหน้า!');
-      expect(lookupShortPhraseTh('CONLAS', 'es')).toBe('ด้วย / กับ');
-      expect(lookupShortPhraseTh('SIENTO.', 'es')).toBe('รู้สึก / ขอโทษ.');
+      expect(lookupShortPhraseTh('CONLAS', 'es')).toBe('กับ');
+      expect(lookupShortPhraseTh('SIENTO.', 'es')).toBe('ขอโทษ.');
       expect(lookupShortPhraseTh('iAH...QUE', 'es')).toBe('อ๊า... ช่าง');
       expect(lookupShortPhraseTh('CORRO!', 'es')).toBe('ฉันกำลังจะเสร็จ!');
       expect(lookupShortPhraseTh('RUEGO...', 'es')).toBe('ขอร้องล่ะ...');

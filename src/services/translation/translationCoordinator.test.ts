@@ -522,7 +522,7 @@ describe('TranslationCoordinator & Engines', () => {
         'sn27': 'เพื่อให้อยู่',
         'sn28': 'ช่างไม่รู้จักโตเลย.',
         'sn29': 'ทุ่มเทให้กับ',
-        'sn30': 'เท่า / หลายครั้ง',
+        'sn30': 'หลายครั้ง',
         'sn31': 'หัว',
         'sn32': 'นายท่าน',
         'sn33': 'ร่างกาย...?',
@@ -546,11 +546,11 @@ describe('TranslationCoordinator & Engines', () => {
         'sn51': 'ฉันกำลังจะเสร็จ',
         'sn52': 'สะโพก',
         'sn53': 'ฉันกำลังจะเสร็จ',
-        'sn54': 'อย่างแน่นอนที่สุด / ชัดเจนเลย',
+        'sn54': 'อย่างแน่นอน',
         'sn55': 'เพราะฉะนั้นไม่',
         'sn56': 'น่าอับอายขายหน้า!',
-        'sn57': 'ด้วย / กับ',
-        'sn58': 'รู้สึก / ขอโทษ.',
+        'sn57': 'กับ',
+        'sn58': 'ขอโทษ.',
         'sn59': 'อ๊า... ช่าง',
         'sn60': 'ฉันกำลังจะเสร็จ!',
         'sn61': 'ขอร้องล่ะ...',
@@ -564,7 +564,7 @@ describe('TranslationCoordinator & Engines', () => {
         'sn69': 'ควย',
         'sn70': 'ห้องเหรอ?',
         'sn71': 'ตอนนี้ยังไม่',
-        'sn72': 'ฉาก / สถานการณ์',
+        'sn72': 'สถานการณ์',
         'sn73': 'นายท่าน',
       };
 
@@ -573,6 +573,190 @@ describe('TranslationCoordinator & Engines', () => {
         expect(item?.translatedText).toBe(val);
         expect(item?.success).toBe(true);
       });
+    });
+
+    it('translates newly reported Spanish manga chapter phrases correctly', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'sp1', text: 'LASPASAS', groupType: 'balloon' },
+        { id: 'sp2', text: 'ARDIENDO..', groupType: 'balloon' },
+        { id: 'sp3', text: 'HECHOV', groupType: 'balloon' },
+        { id: 'sp4', text: 'ESTIMULACION', groupType: 'balloon' },
+        { id: 'sp5', text: 'ABLANDE', groupType: 'balloon' },
+        { id: 'sp6', text: 'SORPRESA?', groupType: 'balloon' },
+        { id: 'sp7', text: 'CONKEL', groupType: 'balloon' },
+        { id: 'sp8', text: 'UTERO!', groupType: 'balloon' },
+        { id: 'sp9', text: 'DiA28DB LAMISION. ELNUMERO DEVECES QUBMBHB CORRIDO SIGUE SIENDO "CERO"', groupType: 'balloon' },
+        { id: 'sp10', text: 'MISPEZONESYIMI CLiTORIS ESTAN CONSTANTEMENTE HINCHADOS Y NO VUELVENA LA NORMALIDAD...', groupType: 'balloon' },
+        { id: 'sp11', text: 'LOSIENTO KEl...N SIQUIERA TE HEHECHO ESTOA TI...', groupType: 'balloon' },
+        { id: 'sp12', text: 'AH...Q&E ESTBESEL OLORDEUN VERDADERO MACHO?ES TOTALMENTE DIFERENTE ALDEKEI, MUCHOMAS INTENSO.', groupType: 'balloon' },
+        { id: 'sp13', text: 'ESTO.. NO,NO,EHO IVIENBALGO INCREIBLEMENTE FUERTE!', groupType: 'balloon' },
+        { id: 'sp14', text: 'iPOR FAVORO EVE! iSOLO UN POCO MAS!', groupType: 'balloon' },
+        { id: 'sp15', text: 'AHOSER VIOLADAPOR UNAPOLLA ENORMEY QUEMEBESE ALAFUERZA SINPODER MOVERME ESTOES DEMASIADO EROTICO', groupType: 'balloon' },
+        { id: 'sp16', text: 'LOSIENTO, KEl.0 ESTO SESIENTE REALMENTE BIEN LO SIENTO..SOLO SERAPOR ESTAVEZ...', groupType: 'balloon' },
+        { id: 'sp17', text: 'iBIEN FUNCIONG! IEVE,DATE PRISA!TYA NOHAY TIEMPO!', groupType: 'balloon' },
+        { id: 'sp18', text: 'IYANOME IMPORTALA ROSAETERNA! iESCAPADBAHi AHORAMISMO!', groupType: 'balloon' },
+        { id: 'sp19', text: 'OYE,ALFRED, LLAMA PARA CONFIRMAR POR S1 ACASO.', groupType: 'balloon' },
+        { id: 'sp20', text: 'AHN QUE BIEN. TU POLLASE SIENTE TAN BIEN', groupType: 'balloon' },
+        { id: 'sp21', text: 'BUEN TRABAJO OYE, &ME ESCUCHAS PORAHi? &QUE TAL?', groupType: 'balloon' },
+        { id: 'sp22', text: 'YAESEL DECIMODiA DESDEQUE SECORTO LASENAL DEILA CAMARADE VIGILANCIA.', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'es',
+        targetLanguage: 'th',
+        translationMode: 'manga',
+        translateBatchOffline: vi.fn(),
+      });
+
+      expect(results.find(r => r.id === 'sp1')?.translatedText).toBe('ลูกเกด');
+      expect(results.find(r => r.id === 'sp2')?.translatedText).toBe('กำลังลุกเป็นไฟ...');
+      expect(results.find(r => r.id === 'sp3')?.translatedText).toBe('เสร็จแล้ว');
+      expect(results.find(r => r.id === 'sp4')?.translatedText).toBe('การกระตุ้น');
+      expect(results.find(r => r.id === 'sp5')?.translatedText).toBe('ทำให้อ่อนนุ่ม');
+      expect(results.find(r => r.id === 'sp6')?.translatedText).toBe('เซอร์ไพรส์เหรอ?');
+      expect(results.find(r => r.id === 'sp7')?.translatedText).toBe('กับเคย์');
+      expect(results.find(r => r.id === 'sp8')?.translatedText).toBe('มดลูก!');
+      expect(results.find(r => r.id === 'sp14')?.translatedText).toBe('ได้โปรดเถอะ อีฟ! อีกแค่นิดเดียวเท่านั้น!');
+      expect(results.find(r => r.id === 'sp17')?.translatedText).toBe('เยี่ยม มันได้ผล! อีฟ เร็วเข้า! ไม่มีเวลาแล้ว!');
+      expect(results.find(r => r.id === 'sp18')?.translatedText).toBe('ฉันไม่สนกุหลาบนิรันดร์อะไรนั่นแล้ว! หนีออกมาจากที่นั่นเดี๋ยวนี้เลย!');
+      expect(results.find(r => r.id === 'sp19')?.translatedText).toBe('นี่ อัลเฟรด โทรไปยืนยันดูหน่อย เผื่อไว้ก่อน.');
+      expect(results.find(r => r.id === 'sp20')?.translatedText).toBe('อ๊า... ดีจังเลย ควยของนายมันรู้สึกดีชะมัด');
+      expect(results.find(r => r.id === 'sp21')?.translatedText).toBe('ทำได้ดีมาก นี่ ได้ยินฉันจากทางนั้นไหม? เป็นยังไงบ้าง?');
+      expect(results.find(r => r.id === 'sp22')?.translatedText).toBe('นี่เป็นวันที่สิบแล้ว นับตั้งแต่สัญญาณจากกล้องวงจรปิดถูกตัดขาดไป.');
+    });
+
+    it('successfully translates user requested batch 9 Spanish manga phrases and OCR normalizations', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'b9_1', text: 'SUBMUNDO!', groupType: 'balloon' },
+        { id: 'b9_2', text: 'DISFRACES', groupType: 'balloon' },
+        { id: 'b9_3', text: 'ESCAPE', groupType: 'balloon' },
+        { id: 'b9_4', text: 'YMENTIRAS.DELASSUYAS...', groupType: 'balloon' },
+        { id: 'b9_5', text: 'EN LOS', groupType: 'balloon' },
+        { id: 'b9_6', text: 'PROXIMOS', groupType: 'balloon' },
+        { id: 'b9_7', text: 'DOSDiAS!', groupType: 'balloon' },
+        { id: 'b9_8', text: 'REPORTEDEL DiA6]', groupType: 'balloon' },
+        { id: 'b9_9', text: 'Microcharas Ene la rea\'c', groupType: 'balloon' },
+        { id: 'b9_10', text: 'ESTABASHACE', groupType: 'balloon' },
+        { id: 'b9_11', text: 'TRES DiAS A', groupType: 'balloon' },
+        { id: 'b9_12', text: 'LA1DE LA', groupType: 'balloon' },
+        { id: 'b9_13', text: 'ESTAR EN TU', groupType: 'balloon' },
+        { id: 'b9_14', text: 'BUSCAUNA', groupType: 'balloon' },
+        { id: 'b9_15', text: 'OPORTUNIDADY', groupType: 'balloon' },
+        { id: 'b9_16', text: 'SERA?ALFRED', groupType: 'balloon' },
+        { id: 'b9_17', text: 'HABLADO', groupType: 'balloon' },
+        { id: 'b9_18', text: 'DETI.ERES', groupType: 'balloon' },
+        { id: 'b9_19', text: 'COLGANDO', groupType: 'balloon' },
+        { id: 'b9_20', text: 'EXCITADAEN', groupType: 'balloon' },
+        { id: 'b9_21', text: 'ABSOLUTO!', groupType: 'balloon' },
+        { id: 'b9_22', text: 'PERDÖN', groupType: 'balloon' },
+        { id: 'b9_23', text: 'ERES', groupType: 'balloon' },
+        { id: 'b9_24', text: 'iUAJ!iPERO QUETETAS TAN EROTICAS! VLLEVAS COLGANDO SEMEJANTES MELONES...JE, JE.VAMOS, QUiTATELO.', groupType: 'balloon' },
+        { id: 'b9_25', text: 'KEL...iPOR', groupType: 'balloon' },
+        { id: 'b9_26', text: 'JODASx.AGUANTA UN', groupType: 'balloon' },
+        { id: 'b9_27', text: 'DEEVE...', groupType: 'balloon' },
+        { id: 'b9_28', text: 'KEI...HOYESEL DiA15MEHAS ESTADOVIGILANDO TODOESTE TIEMPOD &VERDAD...3LA VIGILANCIAES TANESTRICTA QUENOPUEDO CONTACTARTE.', groupType: 'balloon' },
+        { id: 'b9_29', text: 'iMBDATANTA RABIA TENERQUE DEJARQUBESTE TIPOSECORRA DENTRODEMI SOLOPARA PODERVERAKEI CUANTOANTES!', groupType: 'balloon' },
+        { id: 'b9_30', text: 'JEJE...&YIBIEN?', groupType: 'balloon' },
+        { id: 'b9_31', text: 'MUERETE,', groupType: 'balloon' },
+        { id: 'b9_32', text: 'SENTIR', groupType: 'balloon' },
+        { id: 'b9_33', text: 'REPENTE', groupType: 'balloon' },
+        { id: 'b9_34', text: 'YOME', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'es',
+        targetLanguage: 'th',
+        translationMode: 'manga',
+        translateBatchOffline: vi.fn(),
+      });
+
+      expect(results.find(r => r.id === 'b9_1')?.translatedText).toBe('โลกใต้ดิน!');
+      expect(results.find(r => r.id === 'b9_2')?.translatedText).toBe('การปลอมตัว');
+      expect(results.find(r => r.id === 'b9_3')?.translatedText).toBe('การหลบหนี');
+      expect(results.find(r => r.id === 'b9_4')?.translatedText).toBe('และคำโกหกพรรค์นั้นของพวกเขา...');
+      expect(results.find(r => r.id === 'b9_5')?.translatedText).toBe('ในอีก');
+      expect(results.find(r => r.id === 'b9_6')?.translatedText).toBe('ถัดไป');
+      expect(results.find(r => r.id === 'b9_7')?.translatedText).toBe('สองวัน!');
+      expect(results.find(r => r.id === 'b9_8')?.translatedText).toBe('รายงานประจำวันที่ 6');
+      expect(results.find(r => r.id === 'b9_9')?.translatedText).toBe('ในระหว่างนั้น...');
+      expect(results.find(r => r.id === 'b9_10')?.translatedText).toBe('เธอเคยอยู่ที่นี่เมื่อ');
+      expect(results.find(r => r.id === 'b9_11')?.translatedText).toBe('สามวันก่อน ตอน');
+      expect(results.find(r => r.id === 'b9_12')?.translatedText).toBe('ตีหนึ่งของ');
+      expect(results.find(r => r.id === 'b9_13')?.translatedText).toBe('อยู่ใน...ของเธอ');
+      expect(results.find(r => r.id === 'b9_14')?.translatedText).toBe('มองหา');
+      expect(results.find(r => r.id === 'b9_15')?.translatedText).toBe('โอกาส และ');
+      expect(results.find(r => r.id === 'b9_16')?.translatedText).toBe('งั้นเหรอ? อัลเฟรด');
+      expect(results.find(r => r.id === 'b9_17')?.translatedText).toBe('ได้พูด');
+      expect(results.find(r => r.id === 'b9_18')?.translatedText).toBe('เกี่ยวกับนาย นายคือ...');
+      expect(results.find(r => r.id === 'b9_19')?.translatedText).toBe('ห้อยโต่งแต่ง');
+      expect(results.find(r => r.id === 'b9_20')?.translatedText).toBe('มีอารมณ์');
+      expect(results.find(r => r.id === 'b9_21')?.translatedText).toBe('เลยแม้แต่น้อย!');
+      expect(results.find(r => r.id === 'b9_22')?.translatedText).toBe('ยกโทษให้ด้วย');
+      expect(results.find(r => r.id === 'b9_23')?.translatedText).toBe('เธอคือ');
+      expect(results.find(r => r.id === 'b9_24')?.translatedText).toBe('หวา! แต่นมอะไรจะเซ็กซี่เย้ายวนขนาดนี้! แขวนแตงโมใบเบ้อเร่อโต่งแต่งขนาดนี้... หึๆ เอาเถอะ ถอดมันออกซะสิ.');
+      expect(results.find(r => r.id === 'b9_25')?.translatedText).toBe('เคย์... ทำไม');
+      expect(results.find(r => r.id === 'b9_26')?.translatedText).toBe('อย่าล้อเล่นน่า... ทนอีกนิด');
+      expect(results.find(r => r.id === 'b9_27')?.translatedText).toBe('ของอีฟ...');
+      expect(results.find(r => r.id === 'b9_28')?.translatedText).toBe('เคย์... วันนี้เป็นวันที่ 15 แล้ว นายคอยเฝ้าดูฉันตลอดเวลาที่ผ่านมาเลยใช่ไหม?... การเฝ้าระวังเข้มงวดมากจนฉันไม่สามารถติดต่อนายได้เลย.');
+      expect(results.find(r => r.id === 'b9_29')?.translatedText).toBe('ฉันเจ็บใจชะมัดที่ต้องยอมให้ไอ้หมอนี่เสร็จข้างในตัวฉัน เพียงเพื่อให้ได้เจอเคย์เร็วที่สุดเท่าที่จะทำได้!');
+      expect(results.find(r => r.id === 'b9_30')?.translatedText).toBe('ฮิฮิ... แล้วไงล่ะ?');
+      expect(results.find(r => r.id === 'b9_31')?.translatedText).toBe('ไปตายซะ,');
+      expect(results.find(r => r.id === 'b9_32')?.translatedText).toBe('รู้สึก');
+      expect(results.find(r => r.id === 'b9_33')?.translatedText).toBe('ทันใดนั้น');
+      expect(results.find(r => r.id === 'b9_34')?.translatedText).toBe('ฉัน');
+    });
+
+    it('successfully translates user requested batch 10 Spanish manga phrases and OCR normalizations', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'b10_1', text: 'DISFRACES', groupType: 'balloon' },
+        { id: 'b10_2', text: 'ESCAPE', groupType: 'balloon' },
+        { id: 'b10_3', text: '["iNORECIBO","NOTICIAS","DBEVE!","iREALMENTE","LEHAN","PUESTO","VIGILANCIA!"]', groupType: 'balloon' },
+        { id: 'b10_4', text: '["ADEMAS,","IESTA","MUCHO","MASDURA","QUELADE","KEI..."]', groupType: 'balloon' },
+        { id: 'b10_5', text: '["AH.","iEPOR","FIN?ISU","POLLA...","ESTA","ARDIENDO.."]', groupType: 'balloon' },
+        { id: 'b10_6', text: '["AH...DESPUES","DE CORRERME","TANTO CON ESA","PAJA ENTRE TUS","TETAS COPA E...","ESTOY UN POCO","CANSADO.&LO","DEJAMOSPARA","MANANA?"]', groupType: 'balloon' },
+        { id: 'b10_7', text: 'PASANDO?!', groupType: 'balloon' },
+        { id: 'b10_8', text: 'VERDAD?V', groupType: 'balloon' },
+        { id: 'b10_9', text: 'PELIGROSO.', groupType: 'balloon' },
+        { id: 'b10_10', text: '["ESTETIPO","SABE","PERFECTAMENTE","CUALES.SON","LOSPUNTOS","DEBILES.DE UNA","MUJER."]', groupType: 'balloon' },
+        { id: 'b10_11', text: 'CORRERIDESDEEL,PRINCIPIO!', groupType: 'balloon' },
+        { id: 'b10_12', text: "L'ARGO.", groupType: 'balloon' },
+        { id: 'b10_13', text: 'PERFECTA.', groupType: 'balloon' },
+        { id: 'b10_14', text: 'SIENTO..SOLO,SERAPOR,ESTAVEZ...', groupType: 'balloon' },
+        { id: 'b10_15', text: 'REALMENTE,ESTAS,DICIENDO?!', groupType: 'balloon' },
+        { id: 'b10_16', text: '["AHN","QUE","BIEN.","TU","POLLASE","SIENTE TAN","BIEN"]', groupType: 'balloon' },
+        { id: 'b10_17', text: '["ESTO... ESTO","ESTO..","iESTO","SESIENTEDE","LOMEJOR!"]', groupType: 'balloon' },
+        { id: 'b10_18', text: '["&EH?iOYE,","NO!li&LA","CAMARA","OTRAVEZ","COMOLA","ULTIMA","VEZ?!"]', groupType: 'balloon' },
+        { id: 'b10_19', text: '["HOMBRE"]', groupType: 'balloon' },
+        { id: 'b10_20', text: 'NOMBRE...', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'es',
+        targetLanguage: 'th',
+        translationMode: 'manga',
+        translateBatchOffline: vi.fn(),
+      });
+
+      expect(results.find(r => r.id === 'b10_1')?.translatedText).toBe('การปลอมตัว');
+      expect(results.find(r => r.id === 'b10_2')?.translatedText).toBe('การหลบหนี');
+      expect(results.find(r => r.id === 'b10_3')?.translatedText).toBe('ฉันไม่ได้รับข่าวคราวจากอีฟเลย! พวกเขาจับตาเฝ้าระวังเธอจริงๆ สินะ!');
+      expect(results.find(r => r.id === 'b10_4')?.translatedText).toBe('แถมมันยังแข็งกว่าของเคย์ตั้งเยอะ...');
+      expect(results.find(r => r.id === 'b10_5')?.translatedText).toBe('อ๊า ในที่สุดเหรอ? ควยของเขา... มันร้อนผ่าวเหมือนจะลุกเป็นไฟเลย...');
+      expect(results.find(r => r.id === 'b10_6')?.translatedText).toBe('อ๊า... หลังจากแตกไปตั้งเยอะด้วยการเอานมหนีบชักระหว่างเต้าคัพ E ของเธอ... ฉันก็เริ่มเหนื่อยนิดหน่อยแล้วล่ะ เราเก็บไว้ต่อพรุ่งนี้ดีไหม?');
+      expect(results.find(r => r.id === 'b10_7')?.translatedText).toBe('กำลังเกิดขึ้นเนี่ยนะ?!');
+      expect(results.find(r => r.id === 'b10_8')?.translatedText).toBe('จริงไหมล่ะ?');
+      expect(results.find(r => r.id === 'b10_9')?.translatedText).toBe('อันตราย.');
+      expect(results.find(r => r.id === 'b10_10')?.translatedText).toBe('หมอนี่รู้เป็นอย่างดีเลยว่าจุดอ่อนไหวของผู้หญิงอยู่ตรงไหนบ้าง.');
+      expect(results.find(r => r.id === 'b10_11')?.translatedText).toBe('แตกตั้งแต่แรกเลยเหรอเนี่ย!');
+      expect(results.find(r => r.id === 'b10_12')?.translatedText).toBe('ยาวนาน / ไสหัวไป.');
+      expect(results.find(r => r.id === 'b10_13')?.translatedText).toBe('สมบูรณ์แบบ.');
+      expect(results.find(r => r.id === 'b10_14')?.translatedText).toBe('ฉันขอโทษนะ... มันจะเป็นแค่ครั้งนี้ครั้งเดียวเท่านั้น...');
+      expect(results.find(r => r.id === 'b10_15')?.translatedText).toBe('นี่นายกำลังพูดจริงเหรอเนี่ย?!');
+      expect(results.find(r => r.id === 'b10_16')?.translatedText).toBe('อ๊า... ดีจังเลย ควยของนายมันรู้สึกดีชะมัด');
+      expect(results.find(r => r.id === 'b10_17')?.translatedText).toBe('นี่มัน... นี่มัน นี่มัน... นี่มันรู้สึกฟินสุดยอดไปเลย!');
+      expect(results.find(r => r.id === 'b10_18')?.translatedText).toBe('เอ๊ะ? นี่ ไม่นะ! แล้วกล้องอีกแล้วเหรอ เหมือนคราวก่อนอีกแล้วเนี่ยนะ?!');
+      expect(results.find(r => r.id === 'b10_19')?.translatedText).toBe('ผู้ชาย / นาย / ให้ตายสิ');
+      expect(results.find(r => r.id === 'b10_20')?.translatedText).toBe('ชื่อ...');
     });
 
     it('successfully translates newly requested medical/erotic manga phrases and SFX', async () => {
