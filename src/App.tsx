@@ -161,6 +161,10 @@ export default function App() {
   }, [setOcrOptions]);
 
   useEffect(() => {
+    useBackgroundQueueStore.getState().loadPersistedQueue();
+  }, []);
+
+  useEffect(() => {
     if (!isDownloadMenuOpen) return;
     const syncedMode = ocrOptions.ocrQualityProfile === 'balanced' || ocrOptions.ocrQualityProfile === 'best'
       ? 'high'

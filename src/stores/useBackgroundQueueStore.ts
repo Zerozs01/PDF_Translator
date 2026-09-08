@@ -78,10 +78,33 @@ const persistQueue = (jobs: BackgroundJob[], isPaused: boolean) => {
   }
 };
 
+const readPersistedQueue = (): { jobs: BackgroundJob[]; isPaused: boolean } => {
+  if (typeof window === 'undefined') return { jobs: [], isPaused: false };
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.jobs)) {
+        const jobs = parsed.jobs.map((job: BackgroundJob) =>
+          job.status === 'processing'
+            ? { ...job, status: 'queued' as const, message: 'รอดำเนินการต่อ...' }
+            : job
+        );
+        return { jobs, isPaused: Boolean(parsed.isPaused) };
+      }
+    }
+  } catch (err) {
+    console.error('[QueueStore] Failed to read persisted background queue:', err);
+  }
+  return { jobs: [], isPaused: false };
+};
+
+const initialPersisted = readPersistedQueue();
+
 export const useBackgroundQueueStore = create<BackgroundQueueState>((set, get) => ({
-  jobs: [],
+  jobs: initialPersisted.jobs,
   activeJobId: null,
-  isPaused: false,
+  isPaused: initialPersisted.isPaused,
   isPausedForForeground: false,
 
   addJob: (jobData) => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isLikelyGhostTranslatableLine } from '../src/services/ocr/ocrTextHeuristics';
-import { OCRLine } from '../src/types';
+import { isLikelyGhostTranslatableLine } from './ocrTextHeuristics';
+import { OCRLine } from '../../types';
 
 describe('OCR Ghost Line Safety Gate Tests', () => {
   it('should not filter out high-confidence shout words like HHH!', () => {

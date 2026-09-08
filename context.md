@@ -1,8 +1,8 @@
 # 📄 PDF Translator — Master Architectural Context & System State
 
-> **Last Updated:** 2026-09-04  
-> **Status:** Production-Ready / Fully Refactored  
-> **Test Suite:** 47 Test Files / 409 Unit Tests (100% Passing)  
+> **Last Updated:** 2026-09-08  
+> **Status:** Production-Ready / Fully Refactored & Organized  
+> **Test Suite:** 31 Test Files / 372 Unit Tests (100% Passing)  
 > **Type Safety:** Strict TypeScript (`tsc --noEmit` clean / 0 errors)
 
 ---
@@ -77,6 +77,17 @@
 - `LayerGroupingService.ts` — ตัวจัดกลุ่มกล่องข้อความ 2 มิติ (Spatial Graph Clustering) แบ่งแยก Dialogue, SFX, และ Narration พร้อมการตรวจจับบอลลูนซ้อนทับ
 - `balloonAwareGroupingService.ts` — วิเคราะห์รูปทรงและขอบเขตบอลลูนคำพูด manga/manhwa แยกคอลัมน์ซ้าย-ขวา ป้องกันการรวมข้อความข้ามบอลลูน
 
+### 2.4 Canonical Documentation Architecture (`documents/`)
+- เอกสารคู่มือ สถาปัตยกรรม และ Knowledge Base ทั้งหมดถูกจัดระเบียบรวมไว้ใน [documents/](file:///c:/App/Electron/PDF_Translator/documents/) ห้ามวางเกลื่อนที่ Root Directory (ที่ Root จะมีเพียง `context.md`, `README.md` และ Config ของโปรเจกต์เท่านั้น):
+  - `documents/AI_MANIFEST.md` — Master AI Context Map, Common Workflows, และ System Manifest
+  - `documents/ARCHITECTURE.md` — ภาพรวมสถาปัตยกรรมระบบ, Runtime Topology, Zero-GC Algorithms, และ DAOs
+  - `documents/CHANGELOG.md` — บันทึกประวัติการเปลี่ยนแปลงทั้งหมดของแอปพลิเคชัน
+  - `documents/Roadmap.md` — แผนงานพัฒนาปัจจุบันและงานตามลำดับความสำคัญ (P0–P5)
+  - `documents/OCR_OPTIMIZATION.md` — กฎการจูน OCR, Normalization, Heuristics, และการควบคุมหน่วยความจำ
+  - `documents/Knowledge.md` — กฎทอง สัจธรรมของระบบ และ Operating Principles
+  - `documents/IMPROVEMENT_LOG.md` — ประวัติการปรับปรุง Optimization และประสิทธิภาพ
+  - `documents/argostranslation_knowledge/` & `documents/image_processing_knowledge/` — เอกสารเฉพาะทางด้าน NMT และ Image Processing
+
 ---
 
 ## 🏷️ 3. Versioning & Cache Key Contracts
@@ -104,6 +115,7 @@ ver:v64|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline
 4. **Zero-GC in Hot Paths:** ฟังก์ชันการจัดกลุ่มข้อความ, IoU คำนวณขอบเขต, และ Dice similarity ที่ถูกเรียกซ้ำนับพันครั้งต่อหน้า ต้องใช้ `fastSpatialCluster` และ `fastDiceSimilarity` เพื่อป้องกัน Garbage Collection Spikes
 5. **Cross-Document State Isolation:** การประมวลผลพื้นหลังของไฟล์ที่ไม่ได้เปิดอยู่ (non-active documents) ต้องบันทึกลง SQLite DB เท่านั้น ห้ามอัปเดต in-memory React/Zustand Store ของไฟล์ปัจจุบัน
 6. **No Idle Web Workers:** `VisionService.initialize()` ต้องไม่เปิด Web Worker Pool และ Health-Check Timer ค้างไว้ใน RAM โดยไร้ประโยชน์ เพราะการทำ OCR ย้ายไปรันบน Python IPC แล้ว
+7. **Clean Root & Canonical Documentation:** เอกสารคู่มือ, changelog, และ technical deep dives ทั้งหมดต้องจัดเก็บอยู่ใน `documents/` เสมอ ห้ามวางไฟล์ `.md` กระจัดกระจายที่ Root โดยที่ Root จะมีเฉพาะ `context.md` (Master context) และ `README.md` (Repository entry) เท่านั้น
 
 ---
 
@@ -116,3 +128,11 @@ ver:v64|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline
    - ใน `useOCRTextLayerStore.ts` ใช้ `applyUpdatedPageOCR` เป็นฟังก์ชันกลางในการอัปเดต `allPagesOCR`, `ocrByPageEngine`, และ `currentPageOCR` ช่วยป้องกัน state inconsistency ระหว่างการเพิ่ม/ลบ/แก้ไขบรรทัด OCR
 3. **Prepared Statements in DAOs:**
    - ทุก DAO ใน `electron/dao/` มี `stmtCache` เป็นของตนเองและถูกแคชผ่าน `getStmt(sql)` ทุกคำสั่ง (รวมถึง dynamic UPDATE permutations) ป้องกันการ Recompile SQL ในทุกรอบ IPC และรักษา `sentence_translation_cache` ไม่ให้ถูกลบเมื่อเคลียร์แคชระดับหน้า/ระดับไฟล์
+4. **Resolved Dead Code & Purged Protocols:**
+   - `tessdata` custom protocol handler: ลบออกจาก `electron/main.ts` เรียบร้อยแล้ว (ลด overhead ใน Main Process และขจัดโค้ดตกค้างของ Tesseract)
+   - `useSegmentationStore`: ลบไฟล์และถอด subscriptions/renderers ที่ค้างอยู่ใน `PDFCanvas.tsx` และ `PDFPageOverlay.tsx` ออกเรียบร้อยแล้ว (ลด re-render overhead)
+   - Uncalled Store Actions: `deleteOCRLine` ใน `useOCRTextLayerStore.ts` (ระบบใช้ `deleteLayer` + `deletedLineIndexesByPage` ใน `useLayerStore.ts` แทนเพื่อรักษา index mapping)
+5. **System Connections & Wiring Status:**
+   - **`loadPersistedQueue` ใน `useBackgroundQueueStore.ts`:** เชื่อมต่อเรียบร้อยแล้ว โดยโหลดค่าเริ่มต้นลง store ทันทีผ่าน `readPersistedQueue()` และเรียกซ้ำใน `App.tsx` on mount เพื่อกู้คืนคิวงานค้างหลังปิด-เปิดโปรแกรมใหม่
+   - **`useAngleCls` ใน Viewer Settings:** เพิ่ม Checkbox สำหรับเปิด/ปิด Angle Classification ของ PaddleOCR ใน `OCREngineSelector.tsx` เรียบร้อยแล้ว
+   - **`overlayThaiFontEnabled` ใน `useProjectStore.ts`:** ถูกควบคุมอัตโนมัติตาม `isThaiTargetLanguage` โดยผู้ใช้สามารถสลับระหว่างฟอนต์ไทยสวยงาม (`Mitr`, `Sarabun`, `SUPERMARKET` ฯลฯ) กับฟอนต์มาตรฐานของระบบผ่านตัวเลือก `System Thai (system-th)` ในแถบตั้งค่าได้โดยตรง

@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { OCREngine } from '../../types';
 import { useLayerStore } from '../../stores/useLayerStore';
@@ -98,7 +97,6 @@ export const PDFPageOverlay: React.FC<{
   const overlayFontSizeScale = useProjectStore((s) => s.overlayFontSizeScale);
 
   const activeTool = useUIStore((s) => s.activeTool);
-  const regions = useSegmentationStore((s) => s.regions);
 
   const showDebugOverlay = useOCRTextLayerStore((s) => s.showDebugOverlay);
   const storePreviewMode = useOCRTextLayerStore((s) => s.translationPreviewMode);
@@ -673,23 +671,6 @@ export const PDFPageOverlay: React.FC<{
 
   return (
     <>
-      {/* Regions Overlay */}
-      {showDebugOverlay && isCurrentPage && regions.map(reg => (
-        <div 
-          key={reg.id}
-          style={{
-            left: reg.box.x,
-            top: reg.box.y,
-            width: reg.box.w,
-            height: reg.box.h
-          }}
-          className={`absolute border-2 border-dashed transition-all cursor-pointer hover:bg-opacity-20 ${
-            reg.type === 'balloon' ? 'border-green-500 bg-green-500/10' : 
-            reg.type === 'sfx' ? 'border-orange-500 bg-orange-500/10' :
-            'border-blue-500 bg-blue-500/10'
-          }`}
-        />
-      ))}
       {/* OCR Debug Overlay */}
       {translationOverlayContext.shouldRender && currentPageOCRResolved && (
         <div 

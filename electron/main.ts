@@ -51,9 +51,8 @@ console.error = (...args: any[]) => {
   logToFile('ERROR', ...args);
 };
 
-// Register tessdata custom scheme before app ready
+// Register custom schemes before app ready
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'tessdata', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
   { scheme: 'pdf-export', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ]);
 import { initDB, closeDB, checkpointDB } from './db'
@@ -263,41 +262,6 @@ app.whenReady().then(() => {
     }
   }
 
-  // Register tessdata custom protocol handler
-  protocol.handle('tessdata', (request) => {
-    try {
-      const urlStr = request.url;
-      const parsedUrl = new URL(urlStr);
-      const fileName = path.basename(parsedUrl.pathname);
-      if (!fileName) {
-        return new Response('Invalid file request', { status: 400 });
-      }
-
-      // 1. Check in userData/tessdata
-      const userPath = path.join(app.getPath('userData'), 'tessdata', fileName);
-      if (fs.existsSync(userPath)) {
-        return net.fetch(pathToFileURL(userPath).toString());
-      }
-
-      // 2. Check in dist/tessdata
-      const appPath = path.join(process.env.DIST || '', 'tessdata', fileName);
-      if (fs.existsSync(appPath)) {
-        return net.fetch(pathToFileURL(appPath).toString());
-      }
-
-      // 3. Check in public/tessdata (development)
-      const devPath = path.join(process.cwd(), 'public', 'tessdata', fileName);
-      if (fs.existsSync(devPath)) {
-        return net.fetch(pathToFileURL(devPath).toString());
-      }
-
-      console.warn(`[Tessdata Protocol] Model not found: ${fileName}`);
-      return new Response('Model file not found', { status: 404 });
-    } catch (err) {
-      console.error('[Tessdata Protocol] Error:', err);
-      return new Response('Internal Server Error', { status: 500 });
-    }
-  });
 
   protocol.handle('pdf-export', (request) => {
     try {

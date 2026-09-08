@@ -209,10 +209,10 @@ export const LayerSelectionBox: React.FC<SelectionBoxProps> = React.memo(({
           : isMultiSelected && !isSelected
             ? 'inset 0 0 0 1px rgba(99,102,241,0.4)'
             : undefined,
-        ['--hover-border' as any]: `2px dashed ${hoverBorder}`,
-        ['--hover-bg' as any]: hoverBg,
-        ['--hover-shadow' as any]: hoverShadow,
-      }}
+        ['--hover-border']: `2px dashed ${hoverBorder}`,
+        ['--hover-bg']: hoverBg,
+        ['--hover-shadow']: hoverShadow,
+      } as React.CSSProperties & Record<`--${string}`, string | undefined>}
       onMouseEnter={() => {
         onHover(layer.id);
       }}

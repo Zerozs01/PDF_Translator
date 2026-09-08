@@ -3,7 +3,6 @@ import { Document, Page } from 'react-pdf';
 import '../../services/pdf/pdfjsWorker';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useOCRTextLayerStore, OCRTranslationCacheEntry, hasCurrentOCRTranslationCacheVersion } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../../services/dbService';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
@@ -329,9 +328,6 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
 
   const sourceLanguage = useProjectStore((s) => s.sourceLanguage);
   const activeTool = useUIStore((s) => s.activeTool);
-  const setRegions = useSegmentationStore((s) => s.setRegions);
-  const setIsProcessing = useSegmentationStore((s) => s.setIsProcessing);
-  const processRequest = useSegmentationStore((s) => s.processRequest);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);

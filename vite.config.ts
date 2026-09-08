@@ -62,7 +62,6 @@ export default defineConfig({
         name: 'unit',
         environment: 'node',
         include: ['electron/**/*.test.ts', 'src/**/*.test.ts'],
-        exclude: ['src/stories/**'],
       }
     }, {
       extends: true,
@@ -85,7 +84,7 @@ export default defineConfig({
         setupFiles: ['.storybook/vitest.setup.ts']
       }
     }],
-    teardownTimeout: 2000,
+    teardownTimeout: 10000,
     hookTimeout: 10000,
   }
 });

@@ -22,6 +22,17 @@ function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job:
   });
 }
 
+interface RenderedPageData {
+  pageNum: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  targetDpi: number;
+  ocrLanguage: string;
+  resolvedQualityProfile: 'fast' | 'balanced' | 'best';
+  imageBlob?: Blob;
+  blankOcrResult?: OCRPageResult;
+}
+
 export interface BackgroundQueueHandlers {
   translatePage: (
     documentId: number,
@@ -277,7 +288,7 @@ class BackgroundQueueProcessor {
       }
     }
 
-    const CHUNK_SIZE = 3;
+    const CHUNK_SIZE = 8;
     const chunks: number[][] = [];
     for (let i = 0; i < pageNumbers.length; i += CHUNK_SIZE) {
       chunks.push(pageNumbers.slice(i, i + CHUNK_SIZE));
@@ -288,6 +299,29 @@ class BackgroundQueueProcessor {
     let hasApiError = false;
     let lastErrorMessage = '';
 
+    // 2-Stage Pipeline Prefetch State
+    let prefetchedPageData: Promise<RenderedPageData | null> | null = null;
+    let prefetchedPageNum: number | null = null;
+
+    const triggerPrefetch = (nextP: number) => {
+      if (nextP > totalPages || isSinglePage || prefetchedPageData) return;
+      prefetchedPageNum = nextP;
+      prefetchedPageData = (async () => {
+        try {
+          const cached = await dbService.getOCR(job.documentId, nextP, job.engine);
+          if (cached && cached.lines && cached.lines.length > 0 && (cached.ocrRawVersion ?? 1) >= OCR_RAW_VERSION) {
+            return null;
+          }
+        } catch {
+          // ignore cache lookup errors and proceed to render
+        }
+        return this.renderHeadlessPage(pdfDoc, nextP, job, signal);
+      })().catch((err) => {
+        console.warn(`[QueueProcessor] Prefetch render warning for page ${nextP}:`, err);
+        return null;
+      });
+    };
+
     for (const chunk of chunks) {
       throwIfAborted();
       console.log(`[QueueProcessor] Processing chunk: ${chunk.join(', ')}`);
@@ -295,6 +329,11 @@ class BackgroundQueueProcessor {
       try {
         for (const pageNum of chunk) {
           throwIfAborted();
+
+          const pageIndexInAll = pageNumbers.indexOf(pageNum);
+          const nextPageNum = pageIndexInAll >= 0 && pageIndexInAll + 1 < pageNumbers.length
+            ? pageNumbers[pageIndexInAll + 1]
+            : null;
           
           const localProgress = Math.round((processedCount / pagesCount) * 100);
           useBackgroundQueueStore.getState().updateJobProgress(
@@ -362,124 +401,43 @@ class BackgroundQueueProcessor {
                     ocrResult = storeResult;
                   }
                 }
+
+                if (ocrResult && nextPageNum !== null) {
+                  triggerPrefetch(nextPageNum);
+                }
               }
             }
           } catch (err) {
             console.warn(`[QueueProcessor] DB cache read warning for page ${pageNum}:`, err);
           }
 
-          // หากไม่มีแคช ให้ทำ Headless Rendering + OCR
+          // หากไม่มีแคช ให้ทำ Headless Rendering + OCR (ใช้ 2-Stage Prefetch Pipeline)
           if (!ocrResult) {
             throwIfAborted();
             console.log(`[QueueProcessor] Page ${pageNum} Cache Miss. Running Headless OCR...`);
-            
-            const page = await pdfDoc.getPage(pageNum);
-            
-            const options = useOCRTextLayerStore.getState().options;
-            const targetDpi = job.ocrDpi || options.dpi || 300;
-            const ocrLanguage = job.ocrLanguage || options.language || 'eng';
-            const ocrQualityProfile = job.ocrQualityProfile || options.ocrQualityProfile || 'best';
-            const resolvedQualityProfile = options.ocrQualityProfile || 'best';
 
-            const requestedScale = targetDpi / 72;
-            const requestedViewport = page.getViewport({ scale: requestedScale });
-            
-            const renderConstraints = resolveRenderConstraints(job.engine, ocrLanguage, ocrQualityProfile);
-            const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderConstraints);
-            const scale = requestedScale * fitted.scaleFactor;
-            
-            const viewport = page.getViewport({ scale });
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.floor(viewport.width);
-            canvas.height = Math.floor(viewport.height);
-            canvas.style.position = 'absolute';
-            canvas.style.left = '-99999px';
-            canvas.style.top = '-99999px';
-            canvas.style.visibility = 'hidden';
-            document.body.appendChild(canvas);
+            let pageData: RenderedPageData | null = null;
+            if (prefetchedPageNum === pageNum && prefetchedPageData) {
+              pageData = await prefetchedPageData;
+              prefetchedPageData = null;
+              prefetchedPageNum = null;
+            }
 
-            let imageBlob: Blob | undefined;
-            try {
-              const ctx = canvas.getContext('2d', { alpha: false });
-              if (!ctx) throw new Error('Cannot create headless canvas 2D context');
-
-              ctx.fillStyle = '#FFFFFF';
-              ctx.fillRect(0, 0, canvas.width, canvas.height);
-              
-              await page.render({
-                canvasContext: ctx,
-                viewport,
-                intent: 'display',
-                canvas
-              } as any).promise;
-
-              throwIfAborted();
-
-              // Fast blank / solid color page detection check
-              const blankCheck = detectBlankOrSolidCanvas(canvas);
-              if (blankCheck.isBlank) {
-                console.log(`[QueueProcessor] Page ${pageNum} is a blank/solid page (maxDeviation: ${blankCheck.maxDeviation}). Skipping OCR & translation.`);
-                ocrResult = {
-                  lines: [],
-                  words: [],
-                  confidence: 100,
-                  language: normalizeLanguage(ocrLanguage),
-                  pageNumber: pageNum,
-                  width: canvas.width,
-                  height: canvas.height,
-                  dpi: targetDpi,
-                  ocrEngine: job.engine,
-                  pipelineProfile: 'panel',
-                  ocrQualityProfile: resolvedQualityProfile,
-                  algorithmVersion: OCR_ALGORITHM_VERSION,
-                  ocrRawVersion: OCR_RAW_VERSION,
-                  text: '',
-                  debug: {
-                    runtimeMs: 0,
-                    droppedWords: [],
-                    dropCounts: {},
-                  },
-                };
-              } else {
-                imageBlob = await new Promise<Blob>((res, rej) => {
-                  canvas.toBlob((b) => b ? res(b) : rej(new Error('Headless Canvas to Blob failed')), 'image/png');
-                });
-              }
-            } finally {
-              canvas.remove();
+            if (!pageData) {
+              pageData = await this.renderHeadlessPage(pdfDoc, pageNum, job, signal);
             }
 
             throwIfAborted();
 
-            if (!ocrResult && imageBlob) {
-              const activeEngine = job.engine;
-              const pipelineProfile = 'panel';
+            // เรนเดอร์หน้าถัดไปแบบ Prefetch ทันทีในขณะที่ส่ง OCR หน้าปัจจุบันเข้า Python Bridge
+            if (nextPageNum !== null) {
+              triggerPrefetch(nextPageNum);
+            }
 
-              const shouldPreferFastPaddleProfile = (() => {
-                if (activeEngine !== 'paddleocr') return false;
-                if (pipelineProfile !== 'panel') return false;
-
-                const isCjkLike = ocrLanguage
-                    .split('+')
-                    .map(code => code.trim())
-                    .filter(Boolean)
-                    .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
-                if (isCjkLike) return false;
-
-                const longest = Math.max(canvas.width, canvas.height);
-                const shortest = Math.max(1, Math.min(canvas.width, canvas.height));
-                const aspectRatio = longest / shortest;
-                const pixelCount = canvas.width * canvas.height;
-                return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
-              })();
-
-              const isSensitiveFastLanguage = ocrLanguage
-                .split('+')
-                .map((code) => code.trim())
-                .filter(Boolean)
-                .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
-
+            if (pageData.blankOcrResult) {
+              ocrResult = pageData.blankOcrResult;
+            } else if (pageData.imageBlob) {
+              const options = useOCRTextLayerStore.getState().options;
               const pageSegModeVal = job.ocrPageSegMode !== undefined
                 ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
                 : (options.pageSegMode === null ? undefined : options.pageSegMode);
@@ -489,18 +447,18 @@ class BackgroundQueueProcessor {
                 : Boolean(options.useAngleCls);
 
               const ocrPromise = visionService.ocrForTextLayer(
-                imageBlob,
-                canvas.width,
-                canvas.height,
-                ocrLanguage,
-                targetDpi,
+                pageData.imageBlob,
+                pageData.canvasWidth,
+                pageData.canvasHeight,
+                pageData.ocrLanguage,
+                pageData.targetDpi,
                 pageSegModeVal,
                 signal,
                 false,
                 'panel',
-                resolvedQualityProfile,
+                pageData.resolvedQualityProfile,
                 job.engine,
-                canvas.width * canvas.height,
+                pageData.canvasWidth * pageData.canvasHeight,
                 {
                   useAngleCls: resolvedUseAngleCls
                 }
@@ -515,13 +473,13 @@ class BackgroundQueueProcessor {
 
             ocrResult.pageNumber = pageNum;
             ocrResult.ocrEngine = job.engine;
-            ocrResult.language = normalizeLanguage(ocrLanguage);
+            ocrResult.language = normalizeLanguage(pageData.ocrLanguage);
             ocrResult.pipelineProfile = 'panel';
-            ocrResult.ocrQualityProfile = resolvedQualityProfile;
+            ocrResult.ocrQualityProfile = pageData.resolvedQualityProfile;
             ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
             ocrResult.ocrRawVersion = OCR_RAW_VERSION;
 
-            ocrResult = applyPanelLanguageScriptGate(ocrResult, ocrLanguage);
+            ocrResult = applyPanelLanguageScriptGate(ocrResult, pageData.ocrLanguage);
             ocrResult = applyPanelSafetyLineDedup(ocrResult);
             ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
             ocrResult.ocrRawVersion = OCR_RAW_VERSION;
@@ -650,10 +608,9 @@ class BackgroundQueueProcessor {
         break; // Freeze the loop instantly
       }
 
-      // Computational micro-sleep and clear CUDA cache during refractory period
+      // Non-blocking event loop tick and clear CUDA cache between chunks
       throwIfAborted();
-      console.log(`[QueueProcessor] Chunk completed. Entering 500ms refractory sleep...`);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 10));
       
       try {
         if (window.electronAPI?.ocr?.clearCudaCache) {
@@ -687,6 +644,114 @@ class BackgroundQueueProcessor {
       endPage, 
       isSinglePage ? 'ประมวลผลหน้าเดี่ยวสำเร็จเสร็จสิ้น!' : 'แปลภาษาสำเร็จเสร็จสิ้น!'
     );
+  }
+
+  /**
+   * เรนเดอร์หน้าเอกสารแบบ Headless และแปลงเป็น Blob พร้อมระบบตรวจจับหน้าว่าง
+   */
+  private async renderHeadlessPage(
+    pdfDoc: any,
+    pageNum: number,
+    job: BackgroundJob,
+    signal: AbortSignal
+  ): Promise<RenderedPageData> {
+    if (signal.aborted) throw new Error('Process aborted by signal');
+    const page = await pdfDoc.getPage(pageNum);
+
+    const options = useOCRTextLayerStore.getState().options;
+    const targetDpi = job.ocrDpi || options.dpi || 300;
+    const ocrLanguage = job.ocrLanguage || options.language || 'eng';
+    const ocrQualityProfile = (job.ocrQualityProfile || options.ocrQualityProfile || 'best') as 'fast' | 'balanced' | 'best';
+    const resolvedQualityProfile = (options.ocrQualityProfile || 'best') as 'fast' | 'balanced' | 'best';
+
+    const requestedScale = targetDpi / 72;
+    const requestedViewport = page.getViewport({ scale: requestedScale });
+
+    const renderConstraints = resolveRenderConstraints(job.engine, ocrLanguage, ocrQualityProfile);
+    const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderConstraints);
+    const scale = requestedScale * fitted.scaleFactor;
+
+    const viewport = page.getViewport({ scale });
+
+    const canvasWidth = Math.floor(viewport.width);
+    const canvasHeight = Math.floor(viewport.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    canvas.style.position = 'absolute';
+    canvas.style.left = '-99999px';
+    canvas.style.top = '-99999px';
+    canvas.style.visibility = 'hidden';
+    document.body.appendChild(canvas);
+
+    try {
+      if (signal.aborted) throw new Error('Process aborted by signal');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) throw new Error('Cannot create headless canvas 2D context');
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      await page.render({
+        canvasContext: ctx,
+        viewport,
+        intent: 'display',
+        canvas
+      } as any).promise;
+
+      if (signal.aborted) throw new Error('Process aborted by signal');
+
+      // Fast blank / solid color page detection check
+      const blankCheck = detectBlankOrSolidCanvas(canvas);
+      if (blankCheck.isBlank) {
+        console.log(`[QueueProcessor] Page ${pageNum} is a blank/solid page (maxDeviation: ${blankCheck.maxDeviation}). Skipping OCR & translation.`);
+        return {
+          pageNum,
+          canvasWidth,
+          canvasHeight,
+          targetDpi,
+          ocrLanguage,
+          resolvedQualityProfile,
+          blankOcrResult: {
+            lines: [],
+            words: [],
+            confidence: 100,
+            language: normalizeLanguage(ocrLanguage),
+            pageNumber: pageNum,
+            width: canvasWidth,
+            height: canvasHeight,
+            dpi: targetDpi,
+            ocrEngine: job.engine,
+            pipelineProfile: 'panel',
+            ocrQualityProfile: resolvedQualityProfile,
+            algorithmVersion: OCR_ALGORITHM_VERSION,
+            ocrRawVersion: OCR_RAW_VERSION,
+            text: '',
+            debug: {
+              runtimeMs: 0,
+              droppedWords: [],
+              dropCounts: {},
+            },
+          }
+        };
+      }
+
+      const imageBlob = await new Promise<Blob>((res, rej) => {
+        canvas.toBlob((b) => (b ? res(b) : rej(new Error('Headless Canvas to Blob failed'))), 'image/webp', 0.95);
+      });
+
+      return {
+        pageNum,
+        canvasWidth,
+        canvasHeight,
+        targetDpi,
+        ocrLanguage,
+        resolvedQualityProfile,
+        imageBlob,
+      };
+    } finally {
+      canvas.remove();
+    }
   }
 }
 

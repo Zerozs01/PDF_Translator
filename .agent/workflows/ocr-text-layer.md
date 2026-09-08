@@ -1,10 +1,10 @@
 ---
-description: OCR Text Layer Overlay - สร้าง Searchable PDF ด้วย Tesseract.js
+description: OCR Text Layer Overlay - สร้าง Searchable PDF ด้วย PaddleOCR / EasyOCR
 ---
 
 # 🔍 OCR Text Layer Overlay Feature
 
-เป้าหมาย: สร้าง invisible text layer บน PDF เพื่อให้ user สามารถ select/copy ข้อความได้ เหมือน PDF24
+เป้าหมาย: สร้าง invisible text layer บน PDF เพื่อให้ user สามารถ select/copy ข้อความได้ เหมือน PDF24 โดยใช้ข้อมูลพิกัดคำ (Word-level bounding boxes) จาก PaddleOCR / EasyOCR ร่วมกับ pdf-lib
 
 ## ✅ Implementation Status
 

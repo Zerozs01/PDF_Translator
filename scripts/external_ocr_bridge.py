@@ -181,7 +181,8 @@ try:
         
         # Configure SessionOptions to optimize threading and memory patterns for OCR
         sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = 2
+        cpu_count = os.cpu_count() or 4
+        sess_opts.intra_op_num_threads = max(2, min(8, cpu_count - 1))
         sess_opts.inter_op_num_threads = 2
         sess_opts.enable_mem_pattern = False
         sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -226,6 +227,7 @@ LATIN_SHORT_KEEP_TOKENS = {
     "ONE", "TWO", "NOW", "YET", "BAD", "END", "HOT", "LOT", "BIG", "CRY", "EAT", "FAR", "FIT", "FLY",
     "FUN", "JOB", "KEY", "LET", "LIE", "MAD", "MAY", "MOM", "DAD", "OLD", "OWN", "PAY", "SAD", "SON",
     "USE", "WAY", "WIN", "YES", "CUM", "ASS", "OUT", "HER", "HIS", "HIM", "OUR", "WHO", "WHY", "HOW",
+    "HEY", "SHUT", "HOLE",
 }
 LATIN_COMMON_WORDS = {
     "THE", "YOU", "HE", "SHE", "WE", "THEY", "TO", "OF", "IN", "ON", "AT", "FOR", "AND", "OR", "ARE",
@@ -240,6 +242,7 @@ LATIN_COMMON_WORDS = {
     "VIRGIN", "HOLES", "REALLY", "DEALING", "BRAT", "SAME", "TIME", "PUSSY", "SHOVED", "ASSHOLE",
     "START", "STARTED", "WINDING", "PIG", "COCK", "CUM", "AWAY", "RIGHT", "PHEW", "TRY", "THEN",
     "GOHHH", "DOINGTHIS", "GETAWAY", "THATS", "GIRL", "GIRLS",
+    "BITCH", "HEY", "BITCHHEY", "SHOVE", "SHUT", "HOLE", "OTHER", "NOISY", "TSK", "HERUP",
 }
 
 
@@ -1146,6 +1149,12 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "ILISTOCON",
     "PRINCESS",
     "DIE",
+    "BITCH",
+    "HEY",
+    "BITCHHEY",
+    "SHOVE",
+    "SHUT",
+    "HERUP",
     "PIG",
     "THEPIG",
     "YOUARE",
@@ -1857,6 +1866,9 @@ def is_probable_panel_watermark_line(
     tiny_label = line_h <= height * 0.03 and line_w <= width * 0.58
 
     if not cornerish or not tiny_label:
+        return False
+
+    if is_known_paddle_dialogue_fragment(text):
         return False
 
     tokens = [normalize_latin_token_for_lexicon(part) for part in re.split(r"\s+", text)]
@@ -5518,6 +5530,7 @@ def cleanup_memory() -> None:
 
 
 def serve_stdio(default_engine: str) -> None:
+    request_count = 0
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
@@ -5540,10 +5553,12 @@ def serve_stdio(default_engine: str) -> None:
         sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
         sys.stdout.flush()
 
-        try:
-            cleanup_memory()
-        except Exception:
-            pass
+        request_count += 1
+        if request_count % 5 == 0:
+            try:
+                cleanup_memory()
+            except Exception:
+                pass
 
 
 

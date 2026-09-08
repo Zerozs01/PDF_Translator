@@ -96,11 +96,18 @@
 - **Zero-GC Sparse Active-Word Popcount:** เพิ่ม `activeWords` tracking ใน [fastDiceSimilarity.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastDiceSimilarity.ts) ให้ `intersectionPopcount` และ `clearActiveBitset` ตรวจและรีเซ็ตเฉพาะคำที่มีบิตจริง (10-20 words) แทนการวนลูป 2,048 words ทุกครั้ง
 - **Cache Version Documentation Sync:** ปรับแก้เอกสารใน [AI_MANIFEST.md](file:///c:/App/Electron/PDF_Translator/AI_MANIFEST.md) ให้ซิงก์ตรงกับ Translation Cache ปัจจุบัน (`v64`)
 
+### 🧹 2.10 Post-Scrutinize Cleanup & Stability Hardening
+- **Background Queue Dead Code Elimination:** ลบ dead code IIFE `shouldPreferFastPaddleProfile` และ `isSensitiveFastLanguage` ที่คัดลอกตกค้างใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) พร้อมทั้งสกัด `canvasWidth` และ `canvasHeight` ไว้ล่วงหน้าก่อนที่ DOM `canvas.remove()` จะถูกเรียก เพื่อป้องกัน anti-pattern การเข้าถึง Canvas Property หลังลบออกจาก DOM
+- **Strict CSS Custom Properties Typing:** กำจัด `as any` ใน [LayerSelectionBox.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/LayerSelectionBox.tsx) โดยใช้ `React.CSSProperties & Record<`--${string}`, string | undefined>` เพื่อรักษาความปลอดภัยเชิง Type ในระดับสูงสุด
+- **Ghost Filter Strict Typing:** ปรับปรุงพารามิเตอร์ `words: OCRWord[] | any[]` ใน [ghostFilter.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ghostFilter.ts) ให้เป็น `words: OCRWord[]` อย่างเคร่งครัด
+- **Comprehensive DAO Test Coverage:** ขยายชุดทดสอบ [TranslationDAO.test.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/TranslationDAO.test.ts) ให้ครอบคลุม `save`, `saveBatch`, `getByPage` (รวมถึงการกรอง Cache Version < v40 และการรับมือ JSON พัง), และการทำงานของ `SentenceTranslationDAO` (`save`, `get`, `getBatch`, `clearAll`) เต็มรูปแบบ
+- **Vitest Teardown Timeout:** ปรับ `teardownTimeout` ใน [vite.config.ts](file:///c:/App/Electron/PDF_Translator/vite.config.ts) เป็น 10,000ms เพื่อรองรับการปิด Process ย่อยบน Windows อย่างราบรื่น
+
 ---
 
 ## 🧪 3. Verification & Compliance Standard
 
-- **Vitest Unit Test Suite:** **Passed 100% (All Unit Tests Passed)**
+- **Vitest Unit Test Suite:** **Passed 100% (375 unit tests passed across 31 test files, zero hanging handles)**
 - **TypeScript Compiler (`tsc --noEmit`):** **0 Error (ผ่านสมบูรณ์ 100%)**
 - **Core Rules Compliance:** คงความแม่นยำของ Bounding Box / Border Detect ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts), [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) และ [ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) ไว้อย่างเสถียร 100%
 

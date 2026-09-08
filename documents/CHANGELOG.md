@@ -1,136 +1,311 @@
-# Documents Changelog
+# Changelog
 
-This changelog tracks updates in `documents/` only.
+All notable changes to this project will be documented in this file.
 
-## 2026-07-04
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-- **Single-Page PNG Layout, Debug Overlays & Name Bypass Repairs:** 
-  - แก้ไขปัญหา LeftSidebar หายไปเมื่อโหลดไฟล์รูปภาพหน้าเดี่ยว (เช่น PNG) โดยขยายเงื่อนไขการแสดงผลให้ครอบคลุมไฟล์ทั่วไป ไม่จำกัดแค่ PDF
-  - ปรับปรุง `LeftSidebar.tsx` ให้ข้าม Pages Navigator และเปิดหน้า `layers` panel ทันทีสำหรับไฟล์รูปภาพ พร้อมซ่อนตัวเลือกจำพวก continuous scroll/page input
-  - ตั้งค่าดีฟอลต์ของ `showDebugOverlay` ใน `useOCRTextLayerStore` ให้เป็น `false` เพื่อป้องกันแถบ debug สเปกขนาด `%w, %h` และกรอบสัญลักษณ์ขยะแสดงขึ้นมาเองโดยไม่ได้ตั้งใจ
-  - แก้ไขคำผิดของ OCR คลีนคำว่า `PDF TRANSL AT OR` รวมกลุ่มกลับมาเป็น `PDF TRANSLATOR` ใน `ocrTextNormalizer.ts`
-  - ปกป้องคำหลัก `'PDF Translator'`, `'PDF TRANSLATOR'` และ `'OCR'` จากขั้นตอนแปลภาษาใน `App.tsx` ด้วยระบบ Token Protection เพื่อหลีกเลี่ยงผลแปลผิดเพี้ยนและรักษาความเป็นภาษาอังกฤษต้นฉบับไว้
-- **ImageCanvas Interactive Selection & Dialogue Translation Overrides:**
-  - นำตัวควบคุมเลเยอร์ `InteractiveLayerOverlay` มาใส่และเปิดใช้งานใน `ImageCanvas.tsx` สำหรับไฟล์รูปภาพเดี่ยว/PNG ทำให้ผู้ใช้งานสามารถนำเมาส์ไปคลิกที่กล่องข้อความเพื่อเปิดใช้งานบอร์ดควบคุมเลเยอร์ แก้ไข ย้ายตำแหน่ง ปรับขนาดกล่องข้อความได้เหมือน PDF
-  - เพิ่มคู่แปลเฉพาะในพจนานุกรมออฟไลน์ (`ARGOS_SHORT_PHRASE_LOOKUP_TH`) สำหรับบอลลูนคำพูดทั้งสองฝั่ง และปรับแก้ตัวแปลให้ใช้การห่อคำและการจัดกึ่งกลางของระบบ Orbit ตามธรรมชาติเมื่อเปิดใช้งานโหมด Manga/Manhwa (เอาการบังคับตัดบรรทัดแข็งออกเพื่อความลื่นไหลเป็นธรรมชาติ) พร้อมแก้ไขบั๊กจุดทศนิยมรั่วไหลเมื่อแปลสลับบรรทัดในโหมดปกติ และเพิ่มคีย์ดัก `youre` / `you re` เพื่อให้บอลลูนฝั่งซ้ายประมวลผลดึงคำแปลได้สมบูรณ์ไม่ว่าจะถูกแปลงเครื่องหมายวรรคตอนรูปแบบใด
-- **Single-Page PNG Export Layout Z-Index & Translation Cache Hydration Fixes:**
-  - แก้ไขปัญหาเลเยอร์แผ่นถมสีขาว (mask layer) ซ้อนทับข้อความเวลาส่งออกไฟล์ (Export) ในโหมด Manga โดยเพิ่มคุณสมบัติ `z-index` ให้กับคลาส `.export-mask` (z-index: 10), `.export-text-outer` (z-index: 20) และ `.export-user-layer` (z-index: 30) ใน `exportPrint.css` เพื่อควบคุมไม่ให้แผ่นหลังบดบังตัวหนังสือ
-  - เพิ่ม `useEffect` สำหรับโหลด OCR และ Translation cache จาก SQLite เข้าสู่ความจำ (Store) ตั้งแต่รูปภาพ PNG ถูกเปิดขึ้นมาครั้งแรกผ่าน `ImageCanvas.tsx` ทำให้เรียกคืนแคชคำแปลเก่าขึ้นมาแสดงผลได้โดยไม่ต้องกดแปลซ้ำ
+## [Unreleased]
 
-## 2026-06-19
+### Added — Home Library Navigation, Folders & File Management
 
-- **Configurable PaddleOCR Angle Classification (`use_angle_cls`):** ปรับปรุงโครงสร้างของระบบ OCR Bridge และ Python daemon ให้สามารถเลือกเปิด/ปิดการแยกแยะทิศทางตัวอักษรได้ตามต้องการ โดยตั้งค่าเริ่มต้นให้เป็น `False` สำหรับ `panel` profile เพื่อแก้ไขปัญหากล่องข้อความเอียงหรือเพี้ยนในมังงะ/การ์ตูน
-- **Line Grouping Fix for Vertical Speech Columns:** ปรับปรุงเงื่อนไข `shouldGroupLines` ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts) โดยยกเว้นการตรวจสอบ `vertOverlapRatio > 0.25` (Side-by-side guard) หากกล่องข้อความเหล่านั้นมีการทับซ้อนในแนวนอนสูง (`horizOverlap >= 0.50`) ซึ่งชี้ว่าอยู่ในแนวตั้งเดียวกัน และขยายระยะห่างการจัดกลุ่มบรรทัดภาษาอังกฤษที่เรียงตรงกันจาก `2.2 * avgHeight` เป็น `3.2 * avgHeight` เพื่อไม่ให้กลุ่มข้อความแนวตั้งในช่องคำพูดโดนตัดแบ่งท่อน
-- **Conversational Glossary & Offline Translation Lookup:** เพิ่มกฎการซ่อมคำแปลหลังประมวลผล (Post-processing glossary rules) ใน `applyThaiConversationalGlossaryInternal` ของ [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) สำหรับคำแปลพิเศษ เช่น `But in any age...` -> `'แต่ไม่ว่าจะในยุคสมัยใด...'`, `AWAY...WiTH` -> `'ไปให้พ้นกับ'`, และ `getting` -> `'ได้รับ'` พร้อมทั้งบันทึก whitelist คำสั้นใน `ARGOS_SHORT_PHRASE_LOOKUP_TH` ของ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) สำหรับประโยคสนทนาภาษาอังกฤษทั่วไป ป้องกันปัญหาโดนกรองข้าม (Carry-over skip)
+- **Interactive Breadcrumb Navigation:** Added a file-explorer-style breadcrumbs bar (`Home / Folder / Subfolder`) allowing 1-click ancestor navigation while preserving active Tag filters when navigating back to Home.
+- **Top-Right Item Counters:** Moved `Folders (x)` and `Files (x)` counters to the top-right breadcrumb bar with vibrant sky blue count numbers and clean white text labels.
+- **Global `+ Folder` Button:** Made the `+ Folder` action button accessible across all library views (root Home creates top-level folders, subfolders create nested projects).
+- **Expanded 20-Color Folder Palette:** Introduced `FOLDER_PALETTE_COLORS` (20 curated modern tones) with visual color picker grids and live icon previews in both Create and Edit folder dialogs.
+- **Single-Line Compact Folder Cards:** Designed sleek single-line folder elements with inline icons and ambient color glows, maximizing vertical document view real estate.
+- **Document Card Favorite Hover Effects:** Added glassmorphism badge backgrounds, rose glow outlines, and scale animations on Favorite heart buttons matching the thumbnail visibility toggle design.
 
-## 2026-06-16
+### Fixed — UI & Interaction Stability
 
-- Fixed OCR Ghost Line filtering for PaddleOCR when word details are missing (preventing valid English text lines like `and was at a` or `all aristocrats` from being dropped as low-signal/no-word boxes).
-- Resolved translation carry-over skip issues for short dialogue phrases by mapping direct Thai translations in `ARGOS_SHORT_PHRASE_LOOKUP_TH` (for phrases like `and was at a`, `recapturina`, `all aristocrats`, `kina and`, `an all-out`, and `but in any age`).
-- Integrated local debugging tools in electron's main process database handlers (`db:save-ocr` and `db:get-ocr` in `main.ts`) for Doc 3 Page 25 to help audit raw OCR lines.
-- Updated `documents/Knowledge.md` to define translation carry-over rules and short phrase bypass guidelines.
+- **Right Sidebar Smooth Scrolling:** Removed `-webkit-app-region: drag` (`titlebar-drag`) from the scrollable settings container so mouse wheel and drag scrolling in the settings panel work with zero latency.
+- **Filter Dropdown Race Condition:** Resolved mousedown/click race condition on the filter button using `data-sort-menu-trigger` attribute.
+- **DOM Nesting Hydration Error:** Fixed `<button>` inside `<button>` nesting in empty state cards by transitioning container to accessible `<div role="button">`.
 
-## 2026-06-13
+### Added — Generic Intel GPU Support & Automated Offline Translation Setup
 
-- Completed the Tesseract Purge: Removed all Tesseract dependencies, assets, and fallback code from the project. PaddleOCR and EasyOCR are now solidified as the primary local engines.
-  - Deleted `public/tessdata/`, `eng.traineddata`, `spa.traineddata`, `scripts/download-tessdata.js`, and `scripts/ocr-tesseract-helper.js`.
-  - Uninstalled `tesseract.js` package and removed the `"tessdata:download"` npm script.
-  - Refactored `ocr-worker-shared.ts` to remove unused Tesseract lifecycle/pooling functions (`withWorkerInitLock` and `ensureWorkerForLanguage`).
-  - Updated `OCRRegressionHarness.tsx` error message to reference EasyOCR instead of Tesseract.
-  - Patched `AuthGuard.tsx` to bypass authentication checks during OCR regression benchmark runs (`ocr_harness=1`), preventing browser-side TypeError hangs.
-  - Cleaned up Tesseract references and defaults from `run-ocr-regression.mjs`, `ocr-benchmark-matrix.mjs`, and `ocr-table-benchmark.py`.
-- Fixed OCR Model Profile Persistence issue: Normalized the local storage key (`fileKey`) between store hydration (`loadProject`) and option changes subscription (`useOCRTextLayerStore.subscribe`) to ensure custom engine and quality profiles are remembered across app restarts, especially in production environments where path aliasing/switching occurs.
-- Updated translation cache version from `v47` to `v48` in ARCHITECTURE.md to match implementation.
-- Documented background translation queue alignment fixes:
-  - Background queue now aggressively runs OCR split and cleaning (`splitAggressiveMergedLines` and `filterGhostOcrData`) to prevent Index Drift and Layout Grouping Mismatch between background processor and active UI canvas.
-- Re-integrated EasyOCR in the OCR Benchmark Panel and added support for RAW vs FULL pipeline evaluation for EasyOCR by developing `run_easyocr_raw` on the Python daemon and allowing dynamic IPC routing.
-- Fixed an issue in `run_paddleocr_raw` where word and line outputs resolved to 0 due to key mismatches with `ocr.ocr()` output structure, and calculated average confidence values for raw OCR runs (Paddle and Easy) instead of returning 0%.
-- Implemented Side-by-Side Split View & Synchronized Scrolling Architecture:
-  - Integrated `SplitViewToggle` button in the header and created `WorkspaceContainer` to manage dual-pane viewport rendering.
-  - Added bidirectional synchronization subscriptions between `useProjectStore`'s `viewMode` (`'single' | 'continuous'`) and `useUIStore`'s `pageMode` (`'single' | 'scroll'`).
-  - Added high-performance real-time DOM-based transform syncing during scrolls and drags in both `PDFCanvas` and `ImageCanvas` for smooth 60fps lockstep movement.
-  - Implemented automatic split screen reset (`resetView` resetting `viewMode` to `'overlay'`) on project load and close.
+- **Generic Intel GPU Auto-detection**: Enhanced `bootstrap_ocr_env.ps1` to detect generic Intel GPUs (e.g. `Intel(R) Graphics` on Mini PCs) and automatically set up DirectML GPU acceleration via ONNX Runtime & PyTorch-DirectML.
+- **Hardware Acceleration Monitor Widget**: Added a premium hardware acceleration status card on the homepage settings and sidebar panels to display the active GPU model (e.g. `Intel(R) Graphics`), mode (`DirectML` or `CUDA`), and package availability status.
+- **Strict CUDA Verification**: Corrected standard CPU-build library false-positives by strictly limiting CUDA mode activation to devices with active NVIDIA graphics adapters, preventing false-positive CUDA reporting on AMD or Intel graphics controllers.
+- **Automated Argos Translation Setup**: Integrated `argostranslate` installation and automatic downloading of default offline translation model pairs (`en->th`, `ko->en`, `es->en`) directly into the `pnpm install` / `ocr:bootstrap` lifecycle to make the app fully ready for offline translation out-of-the-box.
 
-## 2026-06-01
+### Fixed — Offline Translation Hardening
 
-- Updated the OCR/translation docs to reflect current offline hardening:
-  - offline all-pages translation now uses any cached OCR page instead of a strict selected-engine gate
-  - Korean offline translation prefers the `ko -> en -> th` pivot path more aggressively
-  - short mixed-symbol OCR garbage tokens are filtered before translation
-  - Korean phrase repair rules were added for common noisy comic lines
+- **Offline all-pages translation** now accepts any cached OCR page instead of being blocked by a single selected-engine gate when page OCR already exists in memory or cache.
+- **Korean offline translation** now prefers the `ko -> en -> th` pivot path more aggressively and applies Korean OCR noise cleanup before translation, improving Thai output quality on comic-style dialogue.
+- **OCR garbage filtering** now drops short mixed-symbol artifacts such as `[({2help)` before translation so they do not leak into translated output as bogus text.
+- **Korean phrase repair** adds local Thai fallbacks for common noisy lines such as `걸레년`, `미친`, `몸으로 때운다고?`, `그 사진 지워주면`, and `내가 뭐든 할게`.
+- **Background queue layout alignment:** Fixed a long-standing issue where background All-Pages translation produced scrambled layouts or left raw English text due to index drift. The background queue processor now aggressively splits and cleans OCR lines (`splitAggressiveMergedLines` and `filterGhostOcrData`) before starting translation, guaranteeing 100% alignment with the active UI canvas.
 
-## 2026-05-28
+## [1.2.16] - 2026-05-21
 
-- Synced version constants in docs to match code:
-  - OCR algorithm version `210`
-  - Translation cache version `v45`
-- Updated OCR profile list to include `raw` pipeline profile
+### Added — Phase 3: Interactive Layer Manipulation (Edit Layer)
 
-## 2026-05-31
+- **`userEdited` flag on TextLayer**: Protects manually edited layers from auto-translation overwrite
+- **`editingLayerId` state**: Tracks which layer is currently in inline edit mode
+- **Multi-select support**: `selectedLayerIds` as `Set<string>` with Shift+click toggle
+- **Undo stack**: `undoStackByPage` with MAX_UNDO_DEPTH=20 per page
+- **`deletedLineIndexesByPage`**: Tracks deleted line indexes to suppress ghost overlays in PDFCanvas
+- **Phase 3 layer actions** in `useLayerStore.ts`:
+  - `updateLayerBBox`, `updateLayerText`, `updateLayerRotation`, `updateLayerFontSize`
+  - `updateLayerBackgroundColor`, `updateLayerTextColor`, `updateLayerBold`
+  - `updateMultiLayerBBoxDelta` (multi-select drag), `synchronizeGroupBBox`
+  - `addManualLayer` with auto balloon group creation
+- **Translation Protection Rule**: `App.tsx` (line ~7720) skips auto-translation when `layer.userEdited === true`
 
-- Corrected OCR pipeline profile list to `panel | export` (raw is benchmark-only)
-- Documented panel quality toggle mapping (Paddle: fast/balanced, others: best)
-- Added benchmark notes: Base runs full pipeline, Improve compares raw vs full
+## [1.2.15] - 2026-05-08
 
-## 2026-05-29
+### Added — EasyOCR Chunking Support + Windows Process Cleanup
 
-- OCR progress UI: right-aligned percent and ETA; page-based estimate with single-page fallback
-- Disabled offline translation popup in global loading overlay to reduce UI noise
-- Roadmap version note updated to OCR v210 / cache v45
-- TODO reorganized into open items vs completed notes
-- Added release checklist commands to docs readme
+- **EasyOCR chunking**: Added `EXTERNAL_EASYOCR_CHUNK_*` parameters to `VisionService.ts` for consistent chunking across OCR engines. EasyOCR chunking is now enabled for ALL languages including CJK/Thai (unlike PaddleOCR which only chunks Korean).
+- **Engine-specific chunk parameters**: `shouldChunkExternalImage()` now routes to engine-specific logic; `processLargeExternalImage()` uses `isEasyOCR` flag to select appropriate `chunkTargetHeight` and `chunkOverlap`.
+- **EasyOCR error handling**: Added skip-on-empty logic for EasyOCR empty responses (`EasyOCR did not return usable text boxes`, `Easy-Yolo adapter returned an empty response`, etc.).
 
-## 2026-05-21
+### Fixed — OCR Bridge Windows Force Kill
 
-- **Phase 3: Interactive Manipulation (Edit Layer)**
-  - Added `userEdited` flag to TextLayer to protect manual edits from auto-translation overwrites
-  - Implemented `editingLayerId` state for inline text editing
-  - Added multi-select support (`selectedLayerIds` as Set) with Shift+click toggle
-  - Implemented undo stack (`undoStackByPage`) with MAX_UNDO_DEPTH=20
-  - Added `deletedLineIndexesByPage` tracking to prevent ghost overlay after layer deletion
-  - Phase 3 actions: `updateLayerBBox`, `updateLayerText`, `updateLayerRotation`, `updateLayerFontSize`, `updateLayerBackgroundColor`, `updateLayerTextColor`, `updateLayerBold`
-  - Multi-select drag via `updateMultiLayerBBoxDelta`
-  - Manual layer creation via `addManualLayer` with auto balloon grouping
-  - Translation protection rule: if `layer.userEdited`, skip auto-translation (`App.tsx:7720`)
+- **Windows process termination**: `ocrBridge.ts` now uses `taskkill /F /T /PID` on Windows instead of SIGTERM to forcefully terminate the entire Python process tree. Falls back to `SIGKILL` if taskkill fails.
+- **Daemon reuse logging**: Added `[ocrBridge] Reusing existing daemon` and `[ocrBridge] Script changed...restarting` logs for better debugging.
 
-## 2026-05-09
+### Fixed — Main Process Last-Resort Cleanup
 
-- Optimized Offline (Argos) Translation Pipeline:
-  - Implemented unconditional Latin text lowercasing to resolve translation failures on ALL-CAPS and mixed-case OCR noise.
-  - Applied early-stage OCR noise repair (`normalizeEnglishOcrNoiseForTranslation`) to line collection.
-  - Exempted common short English words ('I', 'A', 'OK', etc.) from ghost and scientific symbol filters.
-  - Relaxed balloon grouping thresholds in `shouldHarmonizeOverlayBlock` to prevent top-line clipping.
-  - Fixed redistribution fallback to use noise-repaired source text.
+- **Exit handler**: Added `process.on('exit')` handler in `main.ts` to ensure `disposeExternalOcrDaemons()` and `disposeArgosTranslateRuntime()` run even when `before-quit` or `window-all-closed` fail to fire (e.g., Vite HMR restarts).
 
-## 2026-05-08
+### ⚠️ OCR Algorithm Version Bump
 
-- Updated changelog to match main `CHANGELOG.md` for v1.2.15 changes:
-  - EasyOCR chunking support with engine-specific chunk parameters
-  - Windows process force kill via `taskkill /F /T /PID`
-  - Main process `process.on('exit')` last-resort cleanup handler
-  - OCR Algorithm version bump **193 → 200**
+- OCR Algorithm version bumped from **193 → 200** to invalidate stale OCR cache. This will force re-OCR on all previously cached pages.
 
-## 2026-04-08
+## [1.2.14] - 2026-03-31
 
-- Performed full documentation refresh to match current codebase state.
-- Updated canonical values:
-  - `OCR_ALGORITHM_VERSION = 200`
-  - `OCR_TRANSLATION_CACHE_VERSION = v18`
-- Rewrote and simplified:
-  - `ARCHITECTURE.md`
-  - `OCR_OPTIMIZATION.md`
-  - `Roadmap.md`
-  - `Knowledge.md`
-  - `Readme.md`
-  - `LOCAL_TESSDATA.md`
-- Removed outdated/unstructured research dump files:
-  - `deep-research-report.md`
-  - `deep-research-report2.md`
-- Added explicit notes for latest OCR stability fixes:
-  - technical-line retention guards for panel/external paths
-  - OCR Result operator UX updates (copy overlay button + in-panel search)
+### Fixed — OCR Algorithm v146 (External Panel Cleanup + Residual Singleton Guard)
 
-## 2026-04-07
+- External `PaddleOCR` panel cleanup now repairs compact merged Latin lines into spaced tokens (for example `INTHEPAST...` -> `IN THE PAST ...`) and reports `mergedLatinSplit` in debug drop counts.
+- Added deterministic panel watermark suppression in the external bridge using geometry + lexical/domain evidence (no text-color based filtering), reducing false retention of corner watermark text.
+- Added external post-cleanup residual singleton suppression in `VisionService` (`externalResidualSingleton`) for panel non-CJK pages to target one-token numeric/CJK/punctuation ghosts.
+- External engine prewarm now starts preferred model almost immediately after file-open (`160ms`, non-idle), with secondary model still deferred/idle-aware (`2200ms`).
 
-- Last pre-refresh doc snapshot before cleanup.
-- Retained as historical anchor only; implementation truth is now in rewritten files above.
+## [1.2.13] - 2026-03-21
+
+### Fixed — OCR Algorithm v71 (Page 21 ME Recovery)
+
+- Added deterministic dialogue repair that restores missing `ME` before singleton `HERE` in speech-context lines (prevents the page-21 `ME HERE!` regression).
+- Increased panel recovery stage budget from 45s to 60s to reduce mid-stage truncation on valid dialogue pages while keeping existing noisy-page fast-fail gates.
+
+## [1.2.12] - 2026-03-21
+
+### Fixed — OCR Algorithm v70 (Panel Noisy-Page Fast Fail)
+
+- Added stricter panel noisy-page detection to disable expensive line-rescan on hostile texture pages (notably page-1 style cases).
+- Added additional panel fail-fast gate based on raw token count, filtered-out ratio, lexical ratio, and meaningful token evidence.
+- Reduced repeat timeout risk by forcing these pages into fast-skip behavior before heavy rescue branches.
+
+## [1.2.11] - 2026-03-21
+
+### Fixed — OCR Algorithm v69 (Current-Page Timeout Guard)
+- Added hard timeout teardown for both Current Page and SearchablePDF paths: per-page timeout now aborts the page signal and force-cancels in-flight worker requests via `visionService.cancelAll(...)`.
+- Added fail-fast detection for non-English/garbage pages with panel/export-aware heuristics using lexical evidence, short-junk ratio, low-confidence ratio, and weak-line ratio.
+- Added raw-before-filter diagnostics (`rawWordCountBeforeNoise`, filtered-out ratio) so texture/noise pages are skipped earlier instead of entering expensive rescue loops.
+- Added worker recovery stage budget gating (panel 45s, export 70s) and propagated `debug.skipReason` to UI for explainable skips (`non_english_or_garbage_page...`, `stage_budget_exceeded`).
+- Guarded remaining heavy rescue stages (top-band probe, post-prune line rescue, edge-token rescue) with budget checks to prevent second-pass timeout regressions on hostile pages.
+
+## [1.2.10] - 2026-03-11
+
+### Fixed — OCR Algorithm v47 (Rollback Recovery)
+- Re-applied the core runtime fixes after rollback: OCR now runs with a single worker, longer request timeout, and cleaner timeout recovery instead of competing 3-worker retries.
+- Re-applied renderer-side OCR protections so stale algorithm cache is no longer shown as a valid preview, page-change cache auto-load pauses while OCR is running, and overlapping OCR starts are ignored.
+- Batch OCR now avoids visible-page navigation as a render fallback, reducing `currentPage` churn during `Re-OCR All`.
+- Re-applied core Latin cleanup improvements: original-image fallback for low-coverage rescans, approximate lexical repair, merged-word splitting, and late cleanup for mixed-case/lowercase ghost fragments.
+
+## [1.2.9] - 2026-03-11
+
+### Fixed — OCR Algorithm v53 (Batch Render Path)
+- `Re-OCR All` no longer navigates the visible PDF pages as a fallback render strategy during batch OCR.
+- Suppressed cache auto-load while OCR is actively running, so page changes during processing cannot overwrite the panel with cached results.
+- Simplified direct pdf.js page rendering for OCR capture to reduce render-fallback failures.
+
+## [1.2.8] - 2026-03-11
+
+### Fixed — OCR Algorithm v52 (Cache Invalidation + Trigger Logging)
+- Bumped OCR algorithm version again so recent runtime/recovery changes cannot be masked by stale v51 OCR cache.
+- Added explicit `OCRTextLayerPanel` logs for current-page changes and OCR starts, making it obvious whether page 2 OCR is actually being triggered or only cached page 1 is being shown.
+
+## [1.2.7] - 2026-03-10
+
+### Fixed — OCR Algorithm v51 (Bottom-Line Recovery)
+- **Timeout stability**: `VisionService` now defaults to a single OCR worker in dev/runtime because the heavy primary pipeline was contending badly with 3 parallel workers and timing out.
+- **Worker recovery**: request timeouts now recreate the timed-out worker and let the normal retry path run, instead of failing early from the health-check loop.
+- **Panel-mode rescue cap**: expensive Latin rescue passes are now limited to sparse pages and a small time budget in panel mode, preventing long stalls after the initial OCR result is already available.
+- **Longer request window**: OCR/Tesseract init timeout increased to 5 minutes to avoid false restarts while local worker startup finishes.
+- Re-aligned the fix direction with the documented analysis: the dominant issue is missing last lines / incomplete line tails, not the OCR model itself.
+- **Low-coverage line rescan** now evaluates original-image retries as well, instead of relying only on preprocessed inputs.
+- **Bottom-tail rescue** added for panel OCR: strong anchor lines now probe a larger region below themselves to recover missing final bubble lines and truncated tails.
+- Extra downward padding is now used on very low-coverage Latin rescans to better catch bottom-of-bubble text.
+
+## [1.2.6] - 2026-03-10
+
+### Fixed — OCR Algorithm v50 (Latin Word Spacing)
+- **Actual missing piece found**: The OCR post-processor was splitting merged tokens into separate `OCRWord`s, but final line text still re-joined adjacent Latin words with no spaces when their boxes touched. This made fixes appear ineffective.
+- **Latin spacing normalization**: `joinWordsForLanguage()` now keeps separate Latin OCR words space-separated even when synthetic split boxes are adjacent or slightly overlap.
+- This specifically unblocks visible text improvements for outputs such as `STUDENTSMAY`, `TAKEA`, `TOLIVE`, `ONLYMAKEDO`, and `NowI`.
+
+## [1.2.5] - 2026-03-10
+
+### Fixed — OCR Algorithm v49 (Primary Worker Line Reconstruction)
+- **Runtime refresh fix**: The OCR worker pool now auto-recreates itself when `OCR_ALGORITHM_VERSION` changes, so dev-session workers do not stay pinned to old logic after code edits.
+- **Stale preview removal**: OCR preview no longer displays results from older algorithm versions, preventing old memory-cache output from masquerading as the latest OCR pass.
+- **Approximate lexicon repair**: Added bounded edit-distance correction for stylized near-matches such as `XUJTA`→`XUJIA`, while keeping the correction scope tight to avoid noisy short-token rewrites.
+- **Recursive merged-word splitting**: `trySplitMergedLatinWord()` now supports multi-part segmentation, so tokens like `ONLYMAKEDO` and `TOLIVE` can be rebuilt as `ONLY MAKE DO` and `TO LIVE`, not just simple two-way splits.
+- **Edge-line protection**: Top/bottom bubble lines now treat near-dictionary tokens as readable, which helps keep lines like `XUJIA TOWN` from being dropped during ghost-edge pruning.
+
+## [1.2.4] - 2026-03-10
+
+### Fixed — OCR Algorithm v48 (Primary Worker Pipeline)
+- **XUJIA TOWN recovery**: Zero-lexical re-OCR now tries the ORIGINAL image first, then grayscale, then binarized input. This avoids the v1.2.1 preprocessing path that was still corrupting the bottom line retry.
+- **Case-transition gibberish**: Enhanced `pruneLatinResidualNoiseWords` to detect and drop alternating-case artifacts (e.g. `CREAweaErSRETHIbe`) — 3+ case transitions = garbage.
+- **Merged word splitting**: Added `trySplitMergedLatinWord` step to split concatenated words (e.g. `STUDENTSMAY`→`STUDENTS MAY`, `TAKEA`→`TAKE A`, `MAKEDO`→`MAKE DO`).
+- **Lowercase noise words**: Added filter to drop non-lexical lowercase artifacts (e.g. `vided`, `wraphimills`) that lack vowels or have long consonant runs.
+- **Single-char line drop**: Lines consisting of a single character (except "I") with low confidence are now removed.
+- **Residual line cleanup**: Added final in-line token cleanup and a final residual ghost-line prune so `CREAweaErSRETHIbe`, `Wis`, and similar leftovers are less likely to survive late rescue stages.
+- **Dictionary expansion**: Expanded `LATIN_COMMON_WORDS` from ~55 to ~200+ words for better lexical matching. Fixed `XUJITA`→`XUJIA` typo.
+
+## [1.1.0] - 2025-01-29
+
+## [1.2.0] - 2026-02-07
+
+### Added
+- Native file open via IPC (`fs:open-file`) to guarantee real file paths for Recent files.
+- OCR cache auto-load on page change (no button needed to show cached OCR).
+- Limited parallel OCR using a worker pool in `VisionService`.
+- OCR metadata now stores `pageSegMode` for cache compatibility checks.
+
+### Changed
+- Current Page button now forces re-OCR for the active page (cache is bypassed on purpose).
+- PDF rendering prefers in-memory `fileData` for Recent-file opens and avoids detached buffers by cloning per `Document`.
+- OCR store resets when loading or closing a file to avoid cross-file leakage.
+
+### Fixed
+- Recent file opens that previously failed due to missing path or detached PDF buffers.
+- React update-depth loop caused by unstable `Document` file props and OCR cache effects.
+
+### 🔒 Security Improvements
+
+- **API Key Protection**: Moved Gemini API calls from renderer to main process via secure IPC. API keys are no longer exposed in client-side bundle.
+- **Electron Security Hardening**: Added explicit security settings (`nodeIntegration: false`, `contextIsolation: true`, `sandbox: true`, `webSecurity: true`).
+- **IPC Whitelist**: Implemented whitelist-based preload API exposure. Only approved channels can be invoked from renderer.
+- **Input Validation**: Added validation and sanitization for all IPC handlers to prevent injection attacks.
+- **`.gitignore` Update**: Added `.env*` files, database files, and IDE configs to prevent accidental exposure.
+
+### 🐛 Bug Fixes
+
+- **Memory Leak Fix**: Fixed `URL.createObjectURL` leak in `useProjectStore` - now properly revokes old URLs before creating new ones.
+- **React Hook Fix**: Removed unused `reset` from `useCallback` dependency array in `OCRTextLayerPanel`.
+- **TypeScript Fixes**: Added proper type declarations for Electron APIs, removing all `@ts-ignore` comments.
+
+### ✨ New Features
+
+- **Error Boundary**: Added React Error Boundary component to catch and display errors gracefully instead of crashing the app.
+- **Typed Electron API**: New `window.electronAPI` interface with type-safe methods for database and Gemini operations.
+
+### 📝 Documentation
+
+- Updated `ARCHITECTURE.md` with security implementation details
+- Created `CHANGELOG.md` (this file)
+- Updated `README.md` with current project status
+- Updated architecture docs with OCR cache and file source changes (fileData + native open).
+- Added `road map.md` and synced documentation index files.
+
+### 🏗️ Technical Improvements
+
+- Created `src/types/electron.d.ts` for proper TypeScript support
+- Migrated from raw `ipcRenderer` to typed `electronAPI` with legacy fallback
+- Improved code organization in main process with validation helpers
+
+### 🎯 OCR & Segmentation Improvements
+
+- **Smart Region Classification**: Regions are now classified as `text`, `balloon`, or `sfx` based on:
+  - Word count and text density
+  - Region size relative to page
+  - OCR confidence levels
+  - Document type (manga vs document)
+- **VisionService Stability**:
+  - Added request timeout (2 minutes) with auto-retry (up to 2 attempts)
+  - Implemented request queue to prevent overlapping OCR requests
+  - Added health check and worker crash recovery
+- **SearchablePDFService Resilience**:
+  - Per-page error handling - failed pages are skipped instead of stopping entire process
+  - OCR retry logic with exponential backoff
+  - Progress reporting for failed pages
+- **TSV Parsing**: Improved word-level bounding box extraction from Tesseract output
+- **Document Type Awareness**: Segmentation adapts based on translation mode (manga/official)
+
+## [1.2.2] - 2026-03-10
+
+### Added
+- **Worker Boot Loader** (`worker-boot.ts`): tiny ES-module entry that dynamically imports `worker.ts` inside try-catch. On crash it reports the real error via `postMessage(WORKER_BOOT_ERROR)` then auto-falls back to `worker-stable.ts`.
+- **7-Layer Filtering Pipeline** in `worker-stable.ts` (expanded from 447→738 lines):
+  1. `filterNoiseWords` — garbage word + watermark word removal
+  2. `buildLines` — group words into lines by Y proximity
+  3. `pruneEdgeGhostLines` — top/bottom 16% band readability gate
+  4. `pruneGarbageLines` — lexical ratio + confidence gating per line
+  5. `pruneShortFragments` — short non-lexical orphan removal
+  6. Density check — totalAlpha ≤ 4 + lexHits < 2 → drop
+  7. Page quality gate — avgReadability < 0.35 + lexCount < 2 → clear all
+- `LATIN_COMMON` dictionary (~200+ common English words) for lexical classification.
+- `LATIN_SHORT_KEEP` set (18 short words: I, A, IT, TO, IN, ON, …) to protect valid short words.
+- `isLexicalWord()` strips punctuation before lookup (e.g. DON'T → DONT → found).
+- `scoreTokenReadability()` — 0-1 score combining vowel ratio, consonant runs, case mixing, length, confidence.
+- Enhanced watermark detection: manga sites (LikeManga, ACloudMerge, ColaManga), standalone COM/IO/NET near edges, URL prefix patterns.
+- **Word-Splitting Post-Processor** (`splitMergedWords`): dictionary-based detection of merged OCR words, splits at case boundaries (NowI→Now+I) and dictionary boundaries (TAKEA→TAKE+A, MAKEDO→MAKE+DO, STUDENTSMAY→STUDENTS+MAY).
+- **Zero-Lexical Catch-All**: lines with zero dictionary words and confidence < 90 are now dropped (catches `vided`, `Wis`, `wraphimills`, `AVIA TOdl CR En Se`).
+- **Mixed-Case Gibberish Detection**: `countCaseTransitions` detects alternating-case garbage (e.g., `CREAweaErSRETHIbe` has 5 case transitions → dropped at word level).
+- **Single-Char Line Filter**: standalone single-character lines (except "I") with confidence < 85 are dropped.
+- **Per-Word Cleanup**: `cleanNoiseWordsWithinLines` removes fully-lowercase non-lexical words from predominantly-uppercase lines (catches `wraphimills` on mixed lines).
+- Expanded `LATIN_COMMON` dictionary to ~260 words: added compound-word prevention (BECOME, FORGET, FOREVER, OVERCOME, etc.) and common words (DONE, GONE, THING, ONE, etc.).
+
+### Changed
+- `VisionService.ts` now loads `worker-boot.ts` (not `worker.ts`) as primary entry; handles `WORKER_BOOT` / `WORKER_BOOT_ERROR` messages.
+- `vite.config.ts` — added `worker: { format: 'es' }` and `optimizeDeps: { include: ['tesseract.js'] }`.
+- OCR Algorithm Version bumped to **46**.
+
+### Improved
+- Ghost text ("text ผี") significantly reduced across all pages. Previous stable worker had only a basic 4-rule `filterGarbageWords`; now uses the full 7-layer pipeline.
+- Page 2: dropped from 59 ghost words to 22 words total (68% confidence). Main bubble text ("THOSE STUDENTS MAY BE DOING / BAD THINGS TO THE ELDERLY / WEAK WOMEN AND CHILDREN IN") is correctly detected.
+- Page 3: dropped from 25 ghost words to 12 words (58% confidence). "I'LL OVER AND / TAKEA LOOK" detected (spacing issue remains: should be "TAKE A LOOK").
+- Page 5: dropped from 60 ghost words to 25 words (74% confidence). Core sentences detected but with some noise.
+
+### Known Issues
+- **Primary worker crash**: all 3 primary workers still crash with opaque "(no message)" in Vite dev-mode; boot loader captures and falls back to stable worker. Root cause suspected in Vite's module-worker handling of large import trees + tesseract.js CJS pre-bundling.
+- **Page 2 line 4**: `XUJIA TOWN` misread as `AVIA TOdl CR En Se` — Tesseract OCR accuracy issue (not fixable by post-filters; the correct text never enters the pipeline).
+- **Page 3**: `TAKEA LOOK` now fixed to `TAKE A LOOK` via word-splitting. Ghost `CREAweaErSRETHIbe` now caught by case-transition detection.
+- **Page 5**: ghost words `vided`, `Wis`, `wraphimills` now caught by zero-lexical catch-all and per-word cleanup. `NowI`→`Now I`, `MAKEDO`→`MAKE DO` fixed by word-splitting. `THIS KIND OF STUFF` still not detected (Tesseract miss).
+- **Page 10**: `THE PEOPLE HERE?` still missing (Tesseract miss).
+
+## [1.2.1] - 2026-03-09
+
+### Changed
+- OCR preprocessing now includes adaptive binarization, dark-border cleanup, and lightweight binary repair for thin manga bubble text.
+- Latin sparse-page handling is more recall-oriented to reduce over-pruning of valid speech-bubble lines.
+
+### Improved
+- Manual validation shows better recovery on sparse manga bubbles, including Page 3 lower-line detection (`TAKE A LOOK!`).
+
+### Known Issues
+- Some final / bottom bubble lines are still missed on difficult pages.
+- Confirmed follow-up cases:
+  - Page 2: missing `Xujia town`
+  - Page 5: partial or missing lines including `IN THE PAST, I ONLY FOUND THE`, `WITH`, `THIS KIND OF STUFF..`
+  - Page 10: missing `THE PEOPLE HERE?`
+
+
+---
+
+## [1.0.0] - 2025-01-27
+
+### Initial Release
+
+- Basic PDF/Image loading and viewing
+- OCR text layer overlay using Tesseract.js
+- Gemini API integration for translation
+- SQLite database for OCR caching
+- Zero-edge sidebar UI with tools palette
+- PDF navigation with thumbnail preview
+- Continuous and single-page view modes

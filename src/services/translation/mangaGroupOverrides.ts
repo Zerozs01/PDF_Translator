@@ -339,6 +339,7 @@ export function matchMangaGroupLineOverrides(
       else if (clean === 'LIKEAPIG') overrideLines.push('เหมือนหมู');
       else if (clean === 'LIKETHEPIG') overrideLines.push('เหมือนไอ้หมู');
       else if (clean === 'LIKETHEPIGYOUARE') overrideLines.push('เหมือนไอ้หมูตอนอย่างแก!');
+      else if (clean === '!!' || clean === '!') overrideLines.push(raw);
       else {
         overrideLines.push(lookupShortPhraseTh(raw) || raw);
       }

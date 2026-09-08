@@ -184,6 +184,21 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
                 );
               })}
             </div>
+
+            {/* PaddleOCR Angle Classification Toggle */}
+            {options.engine === 'paddleocr' && (
+              <div className="pt-2 mt-1.5 border-t border-white/5 flex items-center justify-between">
+                <label className="text-[10px] text-slate-300 flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(options.useAngleCls)}
+                    onChange={(e) => setOptions({ useAngleCls: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded border-white/20 bg-slate-900 text-[#8AB83F] focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span>Angle Classification (ตรวจจับทิศทางข้อความเอียง)</span>
+                </label>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -17,7 +17,7 @@ export interface GhostFilterResult {
  */
 export const filterGhostOcrData = (
   lines: OCRLine[],
-  words: OCRWord[] | any[],
+  words: OCRWord[],
   engine: OCREngine,
   dpi: number = 300
 ): GhostFilterResult => {
