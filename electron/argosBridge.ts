@@ -3,7 +3,9 @@ import path from 'path'
 import fs from 'fs'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
-import { findLocalPythonExecutable, normalizePythonOverride } from './pythonRuntime'
+import { findLocalPythonExecutable, normalizePythonOverride, getDefaultPythonSearchRoots, loadLocalEnv } from './pythonRuntime'
+
+loadLocalEnv();
 
 export type TranslationContext = {
   mode?: string;
@@ -92,18 +94,10 @@ const resolvePythonExecutable = (): string => {
   const appOverride = normalizePythonOverride(process.env.PDF_TRANSLATOR_PYTHON);
   if (appOverride) return appOverride;
 
-  const localVenvPython = findLocalPythonExecutable([
-    process.cwd(),
-    app.getAppPath(),
-    path.resolve(app.getAppPath(), '..'),
-    path.resolve(__dirname, '..'),
-    path.dirname(process.execPath),
-    path.resolve(path.dirname(process.execPath), '..'),
-    path.resolve(path.dirname(process.execPath), '../..'),
-    process.resourcesPath,
-    process.resourcesPath ? path.resolve(process.resourcesPath, '..') : null,
-    process.env.PORTABLE_EXECUTABLE_DIR,
-  ], ['.venv-ocr', '.venv-easy-yolo', '.venv', '.venv-argos']);
+  const localVenvPython = findLocalPythonExecutable(
+    getDefaultPythonSearchRoots(),
+    ['.venv-ocr', '.venv-easy-yolo', '.venv', '.venv-argos']
+  );
   if (localVenvPython) return localVenvPython;
 
   const virtualEnv = process.env.VIRTUAL_ENV;

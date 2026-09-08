@@ -13,6 +13,7 @@ export interface SFXDictionaryEntry {
   source: string;
   target: string;
   notes?: string;
+  _normSource?: string;
 }
 
 export type SFXLanguage = 'en' | 'jp' | 'ko' | 'es';
@@ -422,16 +423,37 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
 const USER_DICT_STORAGE_KEY = 'pdf_translator_user_sfx_dict';
 
 // ── Helper Algorithms ──────────────────────────────────────────────
-/** คำนวณ Levenshtein Distance เพื่อหาจำนวนครั้งในการแก้ไขตัวหนังสือ (ใช้ 1D TypedArray เพื่อประสิทธิภาพสูงสุด) */
+// Reusable row buffers for zero-allocation Levenshtein distance computation
+let rowBufferA = new Int32Array(64);
+let rowBufferB = new Int32Array(64);
+
+function ensureBufferSize(neededSize: number): void {
+  if (rowBufferA.length < neededSize) {
+    let newCap = rowBufferA.length * 2;
+    while (newCap < neededSize) {
+      newCap *= 2;
+    }
+    rowBufferA = new Int32Array(newCap);
+    rowBufferB = new Int32Array(newCap);
+  }
+}
+
+/** คำนวณ Levenshtein Distance เพื่อหาจำนวนครั้งในการแก้ไขตัวหนังสือ (Zero-GC with pooled Int32Array) */
 export function getLevenshteinDistance(a: string, b: string): number {
   if (a === b) return 0;
+  // สลับให้ b เป็นสตริงที่สั้นกว่าเสมอ ช่วยลดขนาด Array และจำนวนรอบใน inner loop
+  if (a.length < b.length) {
+    const tmp = a;
+    a = b;
+    b = tmp;
+  }
   const aLen = a.length;
   const bLen = b.length;
-  if (aLen === 0) return bLen;
   if (bLen === 0) return aLen;
 
-  let prevRow = new Int32Array(bLen + 1);
-  let currRow = new Int32Array(bLen + 1);
+  ensureBufferSize(bLen + 1);
+  let prevRow = rowBufferA;
+  let currRow = rowBufferB;
 
   for (let j = 0; j <= bLen; j++) {
     prevRow[j] = j;
@@ -471,13 +493,13 @@ export function getStringSimilarity(a: string, b: string): number {
 
 // ── In-Memory Memoization & Fast O(1) Lookup Maps ──────────────────
 let cachedMergedDict: SFXDictionary | null = null;
-let cachedExactMap: Record<SFXLanguage, Map<string, string>> | null = null;
+let cachedExactMaps: Partial<Record<SFXLanguage, Map<string, string>>> | null = null;
 let lastUserDictRaw: string | null = null;
 let lastGlossaryEntriesRef: any = null;
 
 export function invalidateSFXCache(): void {
   cachedMergedDict = null;
-  cachedExactMap = null;
+  cachedExactMaps = null;
   lastUserDictRaw = null;
   lastGlossaryEntriesRef = null;
 }
@@ -525,7 +547,6 @@ export function getMergedDictionary(): SFXDictionary {
   // Fast cache hit check
   if (
     cachedMergedDict &&
-    cachedExactMap &&
     currentUserDictRaw === lastUserDictRaw &&
     currentGlossaryEntries === lastGlossaryEntriesRef
   ) {
@@ -556,11 +577,11 @@ export function getMergedDictionary(): SFXDictionary {
     },
   };
   
-  // ลบตัวซ้ำ (กรณีผู้ใช้แก้คำทับคำเดิม) โดยอิงตาม source
+  // ลบตัวซ้ำ (กรณีผู้ใช้แก้คำทับคำเดิม) โดยอิงตาม source พร้อมแคชสตริงที่ Normalize แล้ว
   const deduplicate = (entries: SFXDictionaryEntry[]) => {
     const seen = new Set<string>();
     return entries.filter(e => {
-      const key = e.source.trim().toLowerCase();
+      const key = e._normSource || (e._normSource = e.source.trim().toLowerCase());
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -572,35 +593,33 @@ export function getMergedDictionary(): SFXDictionary {
   merged.data.ko = deduplicate(merged.data.ko);
   merged.data.es = deduplicate(merged.data.es);
 
-  // สร้าง O(1) Exact Map Cache สำหรับทุกลำดับภาษา
-  const exactMap: Record<SFXLanguage, Map<string, string>> = {
-    en: new Map(),
-    jp: new Map(),
-    ko: new Map(),
-    es: new Map(),
-  };
-
-  const populateMap = (lang: SFXLanguage) => {
-    const list = merged.data[lang] || [];
-    for (const item of list) {
-      const key = item.source.trim().toLowerCase();
-      if (key && !exactMap[lang].has(key)) {
-        exactMap[lang].set(key, item.target);
-      }
-    }
-  };
-
-  populateMap('en');
-  populateMap('jp');
-  populateMap('ko');
-  populateMap('es');
-
   cachedMergedDict = merged;
-  cachedExactMap = exactMap;
+  cachedExactMaps = null; // รีเซ็ตเพื่อให้สร้างตามความต้องการ (Lazy populate)
   lastUserDictRaw = currentUserDictRaw;
   lastGlossaryEntriesRef = currentGlossaryEntries;
 
   return merged;
+}
+
+/** ดึงหรือสร้าง O(1) Exact Map แบบ Lazy On-Demand สำหรับภาษาที่เรียกใช้ */
+function getExactMap(lang: SFXLanguage, merged: SFXDictionary): Map<string, string> {
+  if (!cachedExactMaps) {
+    cachedExactMaps = {};
+  }
+  let map = cachedExactMaps[lang];
+  if (!map) {
+    map = new Map<string, string>();
+    const list = merged.data[lang] || [];
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      const key = item._normSource || (item._normSource = item.source.trim().toLowerCase());
+      if (key && !map.has(key)) {
+        map.set(key, item.target);
+      }
+    }
+    cachedExactMaps[lang] = map;
+  }
+  return map;
 }
 
 /**
@@ -617,10 +636,10 @@ export function translateSFX(
   if (!normalizedInput) return null;
 
   const dict = getMergedDictionary();
-  const exactMap = cachedExactMap?.[lang];
+  const exactMap = getExactMap(lang, dict);
 
   // 1st Phase: Exact match (O(1) Map Lookup)
-  if (exactMap && exactMap.has(normalizedInput)) {
+  if (exactMap.has(normalizedInput)) {
     return exactMap.get(normalizedInput)!;
   }
 
@@ -637,8 +656,9 @@ export function translateSFX(
 
   const inputLen = normalizedInput.length;
 
-  for (const entry of entries) {
-    const entrySourceNorm = entry.source.trim().toLowerCase();
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const entrySourceNorm = entry._normSource || (entry._normSource = entry.source.trim().toLowerCase());
     const entryLen = entrySourceNorm.length;
     const maxLen = Math.max(entryLen, inputLen);
     if (maxLen === 0) continue;

@@ -9,8 +9,8 @@
 import { useGlossaryStore } from '../../stores/useGlossaryStore';
 import {
   ARGOS_SHORT_PHRASE_LOOKUP_TH,
-  GENERAL_ENGLISH_DICTIONARY_TH,
   DICTIONARIES_LIST,
+  getDictionaryByLanguage,
 } from './dictionaries';
 import {
   normalizeEnglishOcrNoiseForTranslation,
@@ -72,6 +72,16 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
     }
   } catch {}
 
+  // Scoped dictionary lookup helper (prioritizes active source language, falls back to ARGOS_SHORT_PHRASE_LOOKUP_TH)
+  const scopedDict = sourceLang ? getDictionaryByLanguage(sourceLang) : null;
+  const lookup = (keyCandidate: string): string | undefined => {
+    if (!keyCandidate) return undefined;
+    if (scopedDict && scopedDict[keyCandidate] !== undefined) {
+      return scopedDict[keyCandidate];
+    }
+    return ARGOS_SHORT_PHRASE_LOOKUP_TH[keyCandidate];
+  };
+
   // 0. ตรวจจับและแปลงกรณีพิเศษสำหรับ Log/Status ของอุณหภูมิ เช่น Temp: 45C [Alert] -> อุณหภูมิ: 45°C [แจ้งเตือน]
   const tempAlertMatch = trimmed.match(TEMP_ALERT_REGEX);
   if (tempAlertMatch) {
@@ -83,13 +93,13 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
   }
 
   const rawKey = trimmed.toLowerCase();
-  const directRawMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[rawKey] || GENERAL_ENGLISH_DICTIONARY_TH[rawKey];
+  const directRawMatch = lookup(rawKey);
   if (directRawMatch) return directRawMatch;
 
   const hasOuterParens = /^\s*[\(\[\{<].*[\)\]\}>]\s*$/.test(trimmed);
   const unwrapped = trimmed.replace(/^\s*[\(\[\{<"']+|[\)\]\}>"'\s]+$/g, '').trim().toLowerCase();
   if (unwrapped && unwrapped !== rawKey) {
-    const unwrappedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[unwrapped] || GENERAL_ENGLISH_DICTIONARY_TH[unwrapped];
+    const unwrappedMatch = lookup(unwrapped);
     if (unwrappedMatch) {
       return hasOuterParens && !unwrappedMatch.startsWith('(') ? `(${unwrappedMatch})` : unwrappedMatch;
     }
@@ -99,7 +109,7 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
     .replace(/^[\(\[\{<"'\s¡¿]+/g, '')
     .replace(/[\)\]\}>"'\s]+$/g, '')
     .replace(LEADING_II_REGEX, '');
-  const directCleanedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[cleanedRawKey] || GENERAL_ENGLISH_DICTIONARY_TH[cleanedRawKey];
+  const directCleanedMatch = lookup(cleanedRawKey);
   if (directCleanedMatch) {
     return hasOuterParens && !directCleanedMatch.startsWith('(') ? `(${directCleanedMatch})` : directCleanedMatch;
   }
@@ -107,32 +117,36 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
   // Spanish OCR noise: leading lowercase 'i' misrecognized for inverted exclamation '¡' (e.g. "iTE JURO QUE" -> "te juro que")
   const spanishLeadingIStripped = cleanedRawKey.replace(/^i(?=[a-záéíóúñ])/i, '').trim();
   if (spanishLeadingIStripped && spanishLeadingIStripped !== cleanedRawKey) {
-    const spanishMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[spanishLeadingIStripped] || GENERAL_ENGLISH_DICTIONARY_TH[spanishLeadingIStripped];
+    const spanishMatch = lookup(spanishLeadingIStripped);
     if (spanishMatch) {
       return hasOuterParens && !spanishMatch.startsWith('(') ? `(${spanishMatch})` : spanishMatch;
     }
   }
 
   const strippedDotsKey = cleanedRawKey.replace(STRIP_DOTS_START_REGEX, '').replace(STRIP_DOTS_END_REGEX, '').trim();
-  if (strippedDotsKey && (ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey])) {
-    const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedDotsKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedDotsKey];
-    const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
-    let result = (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(match)) ? match + trailingPunct[1] : match;
-    return hasOuterParens && !result.startsWith('(') ? `(${result})` : result;
+  if (strippedDotsKey) {
+    const match = lookup(strippedDotsKey);
+    if (match) {
+      const trailingPunct = text.match(TRAILING_PUNCT_REGEX);
+      let result = (trailingPunct && !HAS_TRAILING_PUNCT_REGEX.test(match)) ? match + trailingPunct[1] : match;
+      return hasOuterParens && !result.startsWith('(') ? `(${result})` : result;
+    }
   }
 
   // 0.2 ลองค้นหาหลังจากซ่อมแซมเสียงรบกวน OCR (เช่น Suvvenlya -> Suddenly, Bvt -> But, (ME,THERE) -> (ME, THERE))
   const ocrNormalized = normalizeEnglishOcrNoiseForTranslation(trimmed);
   if (ocrNormalized && ocrNormalized.toLowerCase() !== rawKey) {
     const ocrKey = ocrNormalized.toLowerCase();
-    const ocrMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrKey] || GENERAL_ENGLISH_DICTIONARY_TH[ocrKey];
+    const ocrMatch = lookup(ocrKey);
     if (ocrMatch) {
       return hasOuterParens && !ocrMatch.startsWith('(') ? `(${ocrMatch})` : ocrMatch;
     }
     const ocrStripped = ocrKey.replace(STRIP_DOTS_START_REGEX, '').replace(STRIP_DOTS_END_REGEX, '').trim();
-    if (ocrStripped && (ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrStripped] || GENERAL_ENGLISH_DICTIONARY_TH[ocrStripped])) {
-      const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[ocrStripped] || GENERAL_ENGLISH_DICTIONARY_TH[ocrStripped];
-      return hasOuterParens && !match.startsWith('(') ? `(${match})` : match;
+    if (ocrStripped) {
+      const match = lookup(ocrStripped);
+      if (match) {
+        return hasOuterParens && !match.startsWith('(') ? `(${match})` : match;
+      }
     }
   }
 
@@ -140,14 +154,16 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
   const spanishOcrNormalized = normalizeSpanishOcrNoiseForTranslation(trimmed);
   if (spanishOcrNormalized && spanishOcrNormalized.toLowerCase() !== rawKey) {
     const spKey = spanishOcrNormalized.toLowerCase();
-    const spMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[spKey] || GENERAL_ENGLISH_DICTIONARY_TH[spKey];
+    const spMatch = lookup(spKey);
     if (spMatch) {
       return hasOuterParens && !spMatch.startsWith('(') ? `(${spMatch})` : spMatch;
     }
     const spStripped = spKey.replace(STRIP_DOTS_START_REGEX, '').replace(STRIP_DOTS_END_REGEX, '').trim();
-    if (spStripped && (ARGOS_SHORT_PHRASE_LOOKUP_TH[spStripped] || GENERAL_ENGLISH_DICTIONARY_TH[spStripped])) {
-      const match = ARGOS_SHORT_PHRASE_LOOKUP_TH[spStripped] || GENERAL_ENGLISH_DICTIONARY_TH[spStripped];
-      return hasOuterParens && !match.startsWith('(') ? `(${match})` : match;
+    if (spStripped) {
+      const match = lookup(spStripped);
+      if (match) {
+        return hasOuterParens && !match.startsWith('(') ? `(${match})` : match;
+      }
     }
   }
 
@@ -159,12 +175,12 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
     .trim();
   
   // 1. ลองค้นหาแบบตรงตัวใน dictionary ก่อน
-  let directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[key] || GENERAL_ENGLISH_DICTIONARY_TH[key];
+  let directMatch = lookup(key);
   
-  // Try Korean 존나 prefix stripping fallback (e.g. 존나 좋아 -> โคตรชอบ/โคตรฟิน)
-  if (!directMatch && key.startsWith('존나 ') && key.length > 3) {
+  // Try Korean 존นา prefix stripping fallback (e.g. 존นา 좋아 -> โคตรชอบ/โคตรฟิน)
+  if (!directMatch && key.startsWith('존นา ') && key.length > 3) {
     const strippedJonNa = key.slice(3).trim();
-    const subMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedJonNa] || GENERAL_ENGLISH_DICTIONARY_TH[strippedJonNa];
+    const subMatch = lookup(strippedJonNa);
     if (subMatch) {
       directMatch = `โคตร${subMatch}`;
     }
@@ -173,7 +189,7 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
   // Try Spanish diacritic stripping fallback (e.g. bañas -> banas, montón -> monton)
   if (!directMatch) {
     const strippedKey = key.normalize('NFD').replace(DIACRITICS_REGEX, '').replace(/ñ/g, 'n');
-    directMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedKey] || GENERAL_ENGLISH_DICTIONARY_TH[strippedKey];
+    directMatch = lookup(strippedKey);
   }
 
   if (directMatch) {
@@ -185,7 +201,7 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
   // 1.5 ลองค้นหาแบบ No-Apostrophe (เช่น yuuto's mom -> yuutos mom, we'll -> well)
   const noAposKey = rawKey.replace(/['’]/g, '').replace(PUNCT_SPACE_REGEX, ' ').replace(MULTI_SPACE_REGEX, ' ').trim();
   if (noAposKey && noAposKey !== key) {
-    const noAposMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[noAposKey] || GENERAL_ENGLISH_DICTIONARY_TH[noAposKey];
+    const noAposMatch = lookup(noAposKey);
     if (noAposMatch) {
       return hasOuterParens && !noAposMatch.startsWith('(') ? `(${noAposMatch})` : noAposMatch;
     }
@@ -272,14 +288,10 @@ export const lookupShortPhraseTh = (text: string, sourceLang?: string): string |
     if (koreanMatch) return koreanMatch;
   }
 
-  if (GENERAL_ENGLISH_DICTIONARY_TH[key]) {
-    return GENERAL_ENGLISH_DICTIONARY_TH[key];
-  }
-
   // [Scrutinize S2]: Built-in alphanumeric stripped fallback
   const strippedAlpha = rawKey.replace(/[^a-z0-9\uac00-\ud7a3\u3040-\u30ff\u4e00-\u9fff]/g, '');
   if (strippedAlpha && strippedAlpha !== rawKey && strippedAlpha !== key) {
-    const strippedMatch = ARGOS_SHORT_PHRASE_LOOKUP_TH[strippedAlpha] || GENERAL_ENGLISH_DICTIONARY_TH[strippedAlpha];
+    const strippedMatch = lookup(strippedAlpha);
     if (strippedMatch) {
       return strippedMatch;
     }
@@ -298,8 +310,7 @@ export const systemicWordFallbackTranslate = (text: string): string | null => {
   let matchedCount = 0;
 
   for (const word of words) {
-    const key = word.toLowerCase();
-    const directLookup = lookupShortPhraseTh(word) || GENERAL_ENGLISH_DICTIONARY_TH[key];
+    const directLookup = lookupShortPhraseTh(word);
     if (directLookup) {
       translatedWords.push(directLookup);
       matchedCount += 1;
