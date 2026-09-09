@@ -759,6 +759,148 @@ describe('TranslationCoordinator & Engines', () => {
       expect(results.find(r => r.id === 'b10_20')?.translatedText).toBe('ชื่อ...');
     });
 
+    it('successfully translates user requested batch 11 English manga phrases and OCR normalizations', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'b11_1', text: 'libido...', groupType: 'balloon' },
+        { id: 'b11_2', text: '["Recentlyo","OH A VEBEEN","LET TINGH IM","doashe","Pleased","tome."]', groupType: 'balloon' },
+        { id: 'b11_3', text: 'Ooohh...', groupType: 'balloon' },
+        { id: 'b11_4', text: '["Good","grief...","Making","me cum","until I","can\'t","even","talk.."].', groupType: 'balloon' },
+        { id: 'b11_5', text: 'climaxing.', groupType: 'balloon' },
+        { id: 'b11_6', text: 'DOOR', groupType: 'balloon' },
+        { id: 'b11_7', text: 'DUDE', groupType: 'balloon' },
+        { id: 'b11_8', text: 'OUT HERE!', groupType: 'balloon' },
+        { id: 'b11_9', text: 'HARD!', groupType: 'balloon' },
+        { id: 'b11_10', text: 'HOT!', groupType: 'balloon' },
+        { id: 'b11_11', text: 'ALMOST GOOD', groupType: 'balloon' },
+        { id: 'b11_12', text: 'GOING', groupType: 'balloon' },
+        { id: 'b11_13', text: 'IN THERE!', groupType: 'balloon' },
+        { id: 'b11_14', text: "CAAAAN'T!SHOLLD", groupType: 'balloon' },
+        { id: 'b11_15', text: 'PROPER', groupType: 'balloon' },
+        { id: 'b11_16', text: '["IDIOT!","JUST","HOW","DUMB","CAN","yOu","BEP!"]', groupType: 'balloon' },
+        { id: 'b11_17', text: 'HEART IS', groupType: 'balloon' },
+        { id: 'b11_18', text: 'DICK', groupType: 'balloon' },
+        { id: 'b11_19', text: 'SOHARD', groupType: 'balloon' },
+        { id: 'b11_20', text: 'WHAAATP!', groupType: 'balloon' },
+        { id: 'b11_21', text: 'FUHI!', groupType: 'balloon' },
+        { id: 'b11_22', text: 'WAIT', groupType: 'balloon' },
+        { id: 'b11_23', text: 'SERIOLSLY', groupType: 'balloon' },
+        { id: 'b11_24', text: 'Wuh!!', groupType: 'balloon' },
+        { id: 'b11_25', text: 'Oooh!', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga',
+        translateBatchOffline: vi.fn(),
+      });
+
+      expect(results.find(r => r.id === 'b11_1')?.translatedText).toBe('ความต้องการทางเพศ...');
+      expect(results.find(r => r.id === 'b11_2')?.translatedText).toBe('ช่วงนี้ ฉันยอมให้เขาทำตามใจชอบกับฉันมาตลอด...');
+      expect(results.find(r => r.id === 'b11_3')?.translatedText).toBe('อู้ววว...');
+      expect(results.find(r => r.id === 'b11_4')?.translatedText).toBe('ให้ตายสิ... ทำให้ฉันเสร็จจนพูดไม่ออกเลยเนี่ยนะ...');
+      expect(results.find(r => r.id === 'b11_5')?.translatedText).toBe('กำลังถึงจุดสุดยอด.');
+      expect(results.find(r => r.id === 'b11_6')?.translatedText).toBe('ประตู');
+      expect(results.find(r => r.id === 'b11_7')?.translatedText).toBe('นาย / พรรคพวก / ไอ้หมอนี่');
+      expect(results.find(r => r.id === 'b11_8')?.translatedText).toBe('ข้างนอกนี้!');
+      expect(results.find(r => r.id === 'b11_9')?.translatedText).toBe('แข็งโป๊ก! / หนักหน่วง!');
+      expect(results.find(r => r.id === 'b11_10')?.translatedText).toBe('ร้อนจัง! / ร้อนแรง!');
+      expect(results.find(r => r.id === 'b11_11')?.translatedText).toBe('เกือบจะดีแล้ว');
+      expect(results.find(r => r.id === 'b11_12')?.translatedText).toBe('กำลังไป');
+      expect(results.find(r => r.id === 'b11_13')?.translatedText).toBe('ข้างในนั้น!');
+      expect(results.find(r => r.id === 'b11_14')?.translatedText).toBe('ไม่ไหวแล้ว! ควรจะ');
+      expect(results.find(r => r.id === 'b11_15')?.translatedText).toBe('ถูกต้อง / เหมาะสม');
+      expect(results.find(r => r.id === 'b11_16')?.translatedText).toBe('เจ้าบ้าเอ๊ย! นายจะโง่ได้ขนาดไหนกันเนี่ย?!');
+      expect(results.find(r => r.id === 'b11_17')?.translatedText).toBe('หัวใจกำลัง');
+      expect(results.find(r => r.id === 'b11_18')?.translatedText).toBe('ควย / เจ้าโลก');
+      expect(results.find(r => r.id === 'b11_19')?.translatedText).toBe('แข็งมาก / หนักมาก');
+      expect(results.find(r => r.id === 'b11_20')?.translatedText).toBe('อะไรนะ?!');
+      expect(results.find(r => r.id === 'b11_21')?.translatedText).toBe('ฟุฮิ!');
+      expect(results.find(r => r.id === 'b11_22')?.translatedText).toBe('เดี๋ยวก่อน / รอก่อน');
+      expect(results.find(r => r.id === 'b11_23')?.translatedText).toBe('จริงจังเหรอ');
+      expect(results.find(r => r.id === 'b11_24')?.translatedText).toBe('หวา!!');
+      expect(results.find(r => r.id === 'b11_25')?.translatedText).toBe('โอ้! / อู้ว!');
+    });
+
+    it('successfully translates user requested batch 12 laboratory sci-fi manga phrases and hyphenated line-breaks', async () => {
+      const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
+        { id: 'b12_1', text: 'NECTING', groupType: 'balloon' },
+        { id: 'b12_2', text: 'WAKING', groupType: 'balloon' },
+        { id: 'b12_3', text: 'NEBULIZER', groupType: 'balloon' },
+        { id: 'b12_4', text: 'PLETELY', groupType: 'balloon' },
+        { id: 'b12_5', text: 'ERATING', groupType: 'balloon' },
+        { id: 'b12_6', text: '["TERING"]', groupType: 'balloon' },
+        { id: 'b12_7', text: '["SOME-","WHERE IN A","N","COMPANY","\'LAB-","ORATORY\'"]', groupType: 'balloon' },
+        { id: 'b12_8', text: '["MODI-","FICAT I ON","VALUE-","EXCELLENT"]', groupType: 'balloon' },
+        { id: 'b12_9', text: '["THE","STRESS.","RE-","ACTION","IS TOO.","THE","HYP-","NOTIC","EFFECT.","IS","IN-","SUF-","FICIENT.."]', groupType: 'balloon' },
+        { id: 'b12_10', text: '["INCREASING","AER-","OSOL-","IZATION","SPEED.","ASS I STING","VENT-","ILATION AT","DOUBLE","CON-","CEN-","TRATION!"]', groupType: 'balloon' },
+        { id: 'b12_11', text: '["CON-","FIRMED.","THE","TARGET","HAS","RETURNED","TOA","CO-","MATOSE","STATE"]', groupType: 'balloon' },
+        { id: 'b12_12', text: '["DESPITE","LOOKING","LIKEA","FRIGID","PRUDE ON","THE","OUTSIDE.."]', groupType: 'balloon' },
+        { id: 'b12_13', text: '["NNGH...","MMPH!"]', groupType: 'balloon' },
+        { id: 'b12_14', text: '["THE","SUB-","JECT\'S","CON-","DITION","HAS","STA-","BILIZED"]', groupType: 'balloon' },
+        { id: 'b12_15', text: '["ENEMA FLUID","VERIFIC AT I ON","COMPLETE"]', groupType: 'balloon' },
+        { id: 'b12_16', text: '["IF","THERE\'S","ANYRISK","OFTHE","SUBJECT","WAKING","UP..."]', groupType: 'balloon' },
+        { id: 'b12_17', text: '["SUBJECT\'S","INTESTINAL","TRACT","SEXUAL","OR-","GANI-","FICAT I ON"]', groupType: 'balloon' },
+        { id: 'b12_18', text: 'MGH', groupType: 'sfx' },
+        { id: 'b12_19', text: '["THIS IS","ALREADY","THE","FOURTH","TIME WE\'VE","INCREASED","THE","CON-","CEN-","TRATION..."]', groupType: 'balloon' },
+        { id: 'b12_20', text: '["ALL OUR","HARD","WORK","WILL GO","POWN","THE","PRAIN"]', groupType: 'balloon' },
+        { id: 'b12_21', text: '["RE-","STRAINTS","RELEASED"]', groupType: 'balloon' },
+        { id: 'b12_22', text: '["TARGET","SUB-","JECT","SE-","CURED"]', groupType: 'balloon' },
+        { id: 'b12_23', text: '["..BUT","HAVING","F-02-07","DIRECTLY","PARA-","SITIZE THE","TARGETIS","JUSTA","BIT TOO..."]', groupType: 'balloon' },
+        { id: 'b12_24', text: '["H-HEY?","TEAM","LEADER??","THESE","READINGS","ARE","COM-","PLETELY","FUCKED","AREN\'T","THEY?"]', groupType: 'balloon' },
+        { id: 'b12_25', text: '["TH-","THIS?!","WHAT","THE","FUCK IS","THIS!?","I??WH-","WHAT\'S","HAP-","PENING","TOMY","BODY!?"]', groupType: 'balloon' },
+        { id: 'b12_26', text: '["H-HII?","STOP!W","WAIT","JUST","WAITA","MINUTE!"]', groupType: 'balloon' },
+        { id: 'b12_27', text: '["...WILL","COM-","PLETE","ALL THE","RE-","MAINING","MODI-","FIC-","ATIONS"]', groupType: 'balloon' },
+        { id: 'b12_28', text: '["WHAT THE","HELLIS","HAP-","PENING.","WHY IS","THIS","FHCKING","THING."]', groupType: 'balloon' },
+        { id: 'b12_29', text: '["NO...MY","MIND IS","COM-","PLETELY","SCRAMB","LED.I","NEED","TOFIND","AN","OPEN-","ING..."]', groupType: 'balloon' },
+        { id: 'b12_30', text: '["SUB-","CON-","scIous","MOD-","FICAT I ON","HAS","REACHED","100%"]', groupType: 'balloon' },
+        { id: 'b12_31', text: '["THE","SUB-","SEQUENT","WORK WILL","BE HANDLED","BY THE","\\"IN-","TER-","ROGATORS"]', groupType: 'balloon' },
+        { id: 'b12_32', text: '["WHO","ARE...","THESE","FEOPLE"]', groupType: 'balloon' },
+        { id: 'b12_33', text: '["THEN IT","SEEMS","WE\'LL","NEEDTO","BEMORE","CAREFUL","WITH THE","REST OF","THE","MODI-","FICAT I ON","PROCESS"]', groupType: 'balloon' },
+      ];
+
+      const results = await translationCoordinator.runTranslation('argos', items, {
+        sourceLanguage: 'en',
+        targetLanguage: 'th',
+        translationMode: 'manga',
+        translateBatchOffline: vi.fn(),
+      });
+
+      expect(results.find(r => r.id === 'b12_1')?.translatedText).toBe('(กะ... กำลังเชื่อมต่อ)');
+      expect(results.find(r => r.id === 'b12_2')?.translatedText).toBe('กำลังตื่น');
+      expect(results.find(r => r.id === 'b12_3')?.translatedText).toBe('เครื่องพ่นละอองยา');
+      expect(results.find(r => r.id === 'b12_4')?.translatedText).toBe('(อย่างสมบูรณ์...)');
+      expect(results.find(r => r.id === 'b12_5')?.translatedText).toBe('(กำลังทำงาน...)');
+      expect(results.find(r => r.id === 'b12_6')?.translatedText).toBe('(กำลังเข้าไป...)');
+      expect(results.find(r => r.id === 'b12_7')?.translatedText).toBe("ณ ที่ใดสักแห่งใน 'ห้องทดลอง' ของบริษัท N");
+      expect(results.find(r => r.id === 'b12_8')?.translatedText).toBe('ค่าการดัดแปลง - ยอดเยี่ยม');
+      expect(results.find(r => r.id === 'b12_9')?.translatedText).toBe('ปฏิกิริยาต่อความเครียดมากเกินไป ฤทธิ์สะกดจิตยังไม่เพียงพอ...');
+      expect(results.find(r => r.id === 'b12_10')?.translatedText).toBe('กำลังเพิ่มความเร็วการพ่นละอองยา ช่วยระบายอากาศด้วยความเข้มข้นสองเท่า!');
+      expect(results.find(r => r.id === 'b12_11')?.translatedText).toBe('ยืนยันแล้ว เป้าหมายกลับสู่สภาวะโคม่า');
+      expect(results.find(r => r.id === 'b12_12')?.translatedText).toBe('ทั้งที่ภายนอกดูเหมือนสาวขี้อายไร้อารมณ์แท้ๆ...');
+      expect(results.find(r => r.id === 'b12_13')?.translatedText).toBe('อึ่ก... อื้มม!');
+      expect(results.find(r => r.id === 'b12_14')?.translatedText).toBe('อาการของตัวทดลองคงที่แล้ว');
+      expect(results.find(r => r.id === 'b12_15')?.translatedText).toBe('การตรวจสอบของเหลวสำหรับสวนทวารเสร็จสมบูรณ์');
+      expect(results.find(r => r.id === 'b12_16')?.translatedText).toBe('ถ้าหากมีความเสี่ยงที่ตัวทดลองจะตื่นขึ้นมาล่ะก็...');
+      expect(results.find(r => r.id === 'b12_17')?.translatedText).toBe('การดัดแปลงลำไส้ของตัวทดลองให้กลายเป็นอวัยวะทางเพศ');
+      expect(results.find(r => r.id === 'b12_18')?.translatedText).toBe('อึ่ก...');
+      expect(results.find(r => r.id === 'b12_19')?.translatedText).toBe('นี่เป็นครั้งที่สี่แล้วนะที่เราเพิ่มความเข้มข้น...');
+      expect(results.find(r => r.id === 'b12_20')?.translatedText).toBe('ความพยายามทั้งหมดของเราจะสูญเปล่า');
+      expect(results.find(r => r.id === 'b12_21')?.translatedText).toBe('ปลดพันธนาการแล้ว');
+      expect(results.find(r => r.id === 'b12_22')?.translatedText).toBe('ควบคุมตัวทดลองเป้าหมายเรียบร้อย');
+      expect(results.find(r => r.id === 'b12_23')?.translatedText).toBe('...แต่การให้ F-02-07 เข้าไปปรสิตเป้าหมายโดยตรงมันออกจะเกินไปหน่อย...');
+      expect(results.find(r => r.id === 'b12_24')?.translatedText).toBe('ด-เดี๋ยวสิ? หัวหน้าทีม?? ค่าพวกนี้มันพังเละเทะไปหมดแล้วไม่ใช่เหรอ?');
+      expect(results.find(r => r.id === 'b12_25')?.translatedText).toBe('น-นี่มันอะไรกัน?! นี่มันเหี้ยอะไรวะเนี่ย!? ฉ... ฉ-เกิดอะไรขึ้นกับร่างกายฉันเนี่ย!?');
+      expect(results.find(r => r.id === 'b12_26')?.translatedText).toBe('ฮ-ฮี้!? หยุดนะ! เดี๋ยว รอเดี๋ยวก่อนสิ!');
+      expect(results.find(r => r.id === 'b12_27')?.translatedText).toBe('...จะเสร็จสิ้นการดัดแปลงที่เหลือทั้งหมด');
+      expect(results.find(r => r.id === 'b12_28')?.translatedText).toBe('มันเกิดบ้าอะไรขึ้น ทำไมไอ้เวรนี่ถึง...');
+      expect(results.find(r => r.id === 'b12_29')?.translatedText).toBe('ไม่นะ... สมองฉันสับสนไปหมดแล้ว ต้องหาช่องทางหนี...');
+      expect(results.find(r => r.id === 'b12_30')?.translatedText).toBe('การดัดแปลงจิตใต้สำนึกถึง 100% แล้ว');
+      expect(results.find(r => r.id === 'b12_31')?.translatedText).toBe('งานหลังจากนี้จะให้พวก "ผู้สอบสวน" จัดการต่อ');
+      expect(results.find(r => r.id === 'b12_32')?.translatedText).toBe('คนพวกนี้...เป็นใครกัน?');
+      expect(results.find(r => r.id === 'b12_33')?.translatedText).toBe('ถ้าอย่างนั้น ดูเหมือนว่าเราคงต้องระมัดระวังให้มากขึ้นกับขั้นตอนการดัดแปลงที่เหลือ');
+    });
+
     it('successfully translates newly requested medical/erotic manga phrases and SFX', async () => {
       const items: Array<{ id: string; text: string; groupType: 'balloon' | 'sfx' }> = [
         { id: 'm1', text: 'GH...!', groupType: 'sfx' },

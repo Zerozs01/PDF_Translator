@@ -39,6 +39,18 @@ export const TECHNICAL_OCR_NORMALIZERS: Array<{ pattern: RegExp; replacement: st
 export const ENGLISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /\b\(?GTiNKY\)?\b/gi, replacement: 'STINKY' },
   { pattern: /\b\(?GTINKY\)?\b/gi, replacement: 'STINKY' },
+  { pattern: /\bRecentlyo\b/gi, replacement: 'Recently,' },
+  { pattern: /\bOH\s*A\s*VEBEEN\b/gi, replacement: 'I HAVE BEEN' },
+  { pattern: /\bOH\s+A\s+VE\s+BEEN\b/gi, replacement: 'I HAVE BEEN' },
+  { pattern: /\bLET\s+TINGH\s+IM\b/gi, replacement: 'LETTING HIM' },
+  { pattern: /\bdoashe\b/gi, replacement: 'do as he' },
+  { pattern: /\btome\b/gi, replacement: 'to me' },
+  { pattern: /\btome\./gi, replacement: 'to me.' },
+  { pattern: /\bCAAAAN'?T!SHOLLD\b/gi, replacement: "CAN'T! SHOULD" },
+  { pattern: /\bBEP[!?;:]*/gi, replacement: 'BE?!' },
+  { pattern: /\bSOHARD\b/gi, replacement: 'SO HARD' },
+  { pattern: /\bWHAAATP[!?;:]*/gi, replacement: 'WHAT?!' },
+  { pattern: /\bSERIOLSLY\b/gi, replacement: 'SERIOUSLY' },
   { pattern: /\b6[oO]\b/gi, replacement: 'SO' },
   { pattern: /\bIi['’]?m\b/gi, replacement: "I-I'm" },
   { pattern: /\bII['’]?m\b/gi, replacement: "I-I'm" },
@@ -1176,7 +1188,7 @@ export const SPANISH_OCR_NOISE_REPAIRS: Array<{ pattern: RegExp; replacement: st
   { pattern: /\bCUALES\.SON\b/gi, replacement: 'CUALES SON' },
   { pattern: /\bLOSPUNTOS\b/gi, replacement: 'LOS PUNTOS' },
   { pattern: /\bDEBILES\.DE\s*UNA\b/gi, replacement: 'DEBILES DE UNA' },
-  { pattern: /\bCORRERIDESDEEL\b/gi, replacement: 'CORRER! DESDE EL' },
+  { pattern: /\bCORRERIDESDEEL,?\s*/gi, replacement: 'CORRER! DESDE EL ' },
   { pattern: /\bL'ARGO\./gi, replacement: 'LARGO.' },
   { pattern: /\bL'ARGO\b/gi, replacement: 'LARGO' },
   { pattern: /\bSERAPOR\b/gi, replacement: 'SERA POR' },
@@ -1286,9 +1298,63 @@ export const normalizeTranslationLanguage = (value: string, fallback: string): s
 
 export const normalizeEnglishOcrNoiseForTranslation = (text: string): string => {
   let normalized = normalizeWhitespace(String(text || ''));
+  if (normalized.startsWith('[') && /[\]\>]\s*[.!?,;:]*$/.test(normalized)) {
+    const trailingPunct = normalized.match(/[.!?,;:]+$/)?.[0] || '';
+    const cleanArrayStr = normalized.replace(/[.!?,;:]+$/, '').trim();
+    try {
+      const parsed = JSON.parse(cleanArrayStr);
+      if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
+        normalized = normalizeWhitespace(parsed.join(' ') + trailingPunct);
+      }
+    } catch {}
+  }
+
   ENGLISH_OCR_NOISE_REPAIRS.forEach(({ pattern, replacement }) => {
     normalized = normalized.replace(pattern, replacement);
   });
+
+  // 1. Multi-pass dehyphenation for line breaks in balloons while preserving stutters and honorifics
+  for (let pass = 0; pass < 5; pass++) {
+    const prev = normalized;
+    normalized = normalized.replace(/(?<=^|[\s"'“‘(\[])([A-Za-z]{2,})-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono|knight|could)\b)([A-Za-z]+)/gi, (match, p1: string, p2: string) => {
+      const p1Lower = p1.toLowerCase();
+      const p2Lower = p2.toLowerCase();
+      if (p1Lower === 'non' || (p2Lower.startsWith(p1Lower) && p1.length <= 2)) {
+        return `${p1}-${p2}`;
+      }
+      const LABEL_WORDS = new Set(['value', 'status', 'level', 'result', 'rank', 'condition', 'target', 'phase', 'stage', 'mode', 'class', 'grade', 'code']);
+      if (LABEL_WORDS.has(p1Lower)) {
+        return `${p1} - ${p2}`;
+      }
+      return `${p1}${p2}`;
+    });
+    if (normalized === prev) break;
+  }
+
+  // 2. OCR Spaced Suffixes & Letters (e.g. "FICAT I ON", "VERIFIC AT I ON", "ASS I STING")
+  normalized = normalized.replace(/\b([A-Za-z]+)\s+AT\s+I\s+ON\b/gi, '$1ATION');
+  normalized = normalized.replace(/\b([A-Za-z]+)\s+I\s+(ON|ONS|NG|VE|TY)\b/gi, '$1I$2');
+  normalized = normalized.replace(/\bASS\s+I\s+STING\b/gi, 'ASSISTING');
+  normalized = normalized.replace(/\bSCRAMB\s+LED\b/gi, 'SCRAMBLED');
+  normalized = normalized.replace(/\bMOD-?\s*FICAT\s*I\s*ON\b/gi, 'MODIFICATION');
+  normalized = normalized.replace(/\bSTOP!W\s*WAIT\b/gi, 'STOP! WAIT');
+
+  // 3. Common OCR Fused Functional Words
+  normalized = normalized.replace(/\bTOA\b/gi, 'TO A');
+  normalized = normalized.replace(/\bLIKEA\b/gi, 'LIKE A');
+  normalized = normalized.replace(/\bANYRISK\b/gi, 'ANY RISK');
+  normalized = normalized.replace(/\bOFTHE\b/gi, 'OF THE');
+  normalized = normalized.replace(/\bTARGETIS\b/gi, 'TARGET IS');
+  normalized = normalized.replace(/\bJUSTA\b/gi, 'JUST A');
+  normalized = normalized.replace(/\bTOMY\b/gi, 'TO MY');
+  normalized = normalized.replace(/\bWAITA\b/gi, 'WAIT A');
+  normalized = normalized.replace(/\bHELLIS\b/gi, 'HELL IS');
+  normalized = normalized.replace(/\bTOFIND\b/gi, 'TO FIND');
+  normalized = normalized.replace(/\bNEEDTO\b/gi, 'NEED TO');
+  normalized = normalized.replace(/\bBEMORE\b/gi, 'BE MORE');
+  normalized = normalized.replace(/\bFEOPLE\b/gi, 'PEOPLE');
+  normalized = normalized.replace(/\bPOWN\s+THE\s+PRAIN\b/gi, 'DOWN THE DRAIN');
+  normalized = normalized.replace(/\bFHCKING\b/gi, 'FUCKING');
 
   // Repair OCR digit-to-letter confusion (e.g., '4O%' -> '40%', '1O0' -> '100')
   normalized = normalized.replace(/(?<=\d)[oO]+(?=\D|$|%)/g, '0');
@@ -1560,11 +1626,13 @@ export const splitSpanishUppercaseCompounds = (text: string): string => {
 
 export const normalizeSpanishOcrNoiseForTranslation = (text: string): string => {
   let normalized = normalizeWhitespace(String(text || ''));
-  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+  if (normalized.startsWith('[') && /[\]\>]\s*[.!?,;:]*$/.test(normalized)) {
+    const trailingPunct = normalized.match(/[.!?,;:]+$/)?.[0] || '';
+    const cleanArrayStr = normalized.replace(/[.!?,;:]+$/, '').trim();
     try {
-      const parsed = JSON.parse(normalized);
+      const parsed = JSON.parse(cleanArrayStr);
       if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
-        normalized = normalizeWhitespace(parsed.join(' '));
+        normalized = normalizeWhitespace(parsed.join(' ') + trailingPunct);
       }
     } catch {}
   }
@@ -1708,15 +1776,33 @@ export const normalizeSourceForTranslationWithThaiSubs = (normalized: string): s
 export const normalizeSourceForTranslation = (text: string, sourceLanguage = ''): string => {
   // Pre-process text to remove carriage returns, newlines and handle hyphenated word splits safely (preserving Japanese honorifics and single-letter stutters)
   let raw = String(text || '').replace(/[\r\n]+/g, ' ').trim();
-  if (raw.startsWith('[') && raw.endsWith(']')) {
+  if (raw.startsWith('[') && /[\]\>]\s*[.!?,;:]*$/.test(raw)) {
+    const trailingPunct = raw.match(/[.!?,;:]+$/)?.[0] || '';
+    const cleanArrayStr = raw.replace(/[.!?,;:]+$/, '').trim();
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(cleanArrayStr);
       if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
-        raw = parsed.join(' ').trim();
+        raw = (parsed.join(' ').trim() + trailingPunct).trim();
       }
     } catch {}
   }
-  raw = raw.replace(/\b([\p{L}]{2,})-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono)\b)([\p{L}])/gui, '$1$2');
+  // Pre-process multi-pass dehyphenation while preserving honorifics and stutters
+  for (let pass = 0; pass < 5; pass++) {
+    const prev = raw;
+    raw = raw.replace(/(?<=^|[\s"'“‘(\[])([\p{L}]{2,})-\s*(?!(?:san|chan|kun|sama|sensei|senpai|dono|knight|could)\b)([\p{L}]+)/gui, (match, p1: string, p2: string) => {
+      const p1Lower = p1.toLowerCase();
+      const p2Lower = p2.toLowerCase();
+      if (p2Lower.startsWith(p1Lower) && p1.length <= 2) {
+        return `${p1}-${p2}`;
+      }
+      const LABEL_WORDS = new Set(['value', 'status', 'level', 'result', 'rank', 'condition', 'target', 'phase', 'stage', 'mode', 'class', 'grade', 'code']);
+      if (LABEL_WORDS.has(p1Lower)) {
+        return `${p1} - ${p2}`;
+      }
+      return `${p1}${p2}`;
+    });
+    if (raw === prev) break;
+  }
 
   let normalized = normalizeTechnicalArtifactsForTranslation(raw);
   normalized = normalizePossessiveCompoundsForTranslation(normalized);

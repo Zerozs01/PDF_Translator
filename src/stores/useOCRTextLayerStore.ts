@@ -41,7 +41,7 @@ export interface OCRTranslationCacheEntry {
   height?: number;
 }
 
-export const OCR_TRANSLATION_CACHE_VERSION = 'v65'; // v65: Added Spanish request 9 chapter batch, fixed OPORTUNIDAD compound split, cache refresh for offline all pages
+export const OCR_TRANSLATION_CACHE_VERSION = 'v66'; // v66: Batch 12 sci-fi manga phrases, multi-pass dehyphenation, stutter & label preservation, cache refresh
 
 const normalizeKeyPart = (value: string): string =>
   String(value || '')

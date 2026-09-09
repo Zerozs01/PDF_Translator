@@ -164,6 +164,24 @@ export const composeGroupSourceText = (
       const firstToken = nextTokens[0] || '';
       const restTokens = nextTokens.slice(1).join(' ');
 
+      const cleanParentLower = cleanParentText.toLowerCase();
+      const firstTokenLower = firstToken.toLowerCase();
+
+      // Check for stutters: e.g. TH- THIS?! -> TH-THIS?!, WH- WHAT -> WH-WHAT
+      if (firstTokenLower.startsWith(cleanParentLower) && cleanParentText.length <= 2) {
+        currItem.text = `${cleanParentText}-${firstToken}`;
+        nextItem.text = restTokens;
+        continue;
+      }
+
+      // Check for stat/field labels: e.g. VALUE- EXCELLENT -> VALUE - EXCELLENT
+      const LABEL_WORDS = new Set(['value', 'status', 'level', 'result', 'rank', 'condition', 'target', 'phase', 'stage', 'mode', 'class', 'grade', 'code']);
+      if (LABEL_WORDS.has(cleanParentLower)) {
+        currItem.text = `${cleanParentText} - ${firstToken}`;
+        nextItem.text = restTokens;
+        continue;
+      }
+
       if (!restTokens) {
         currItem.text = cleanParentText + firstToken;
         nextItem.text = '';

@@ -52,11 +52,13 @@ export function getCompactPhraseMap(): Map<string, string> {
 export const lookupShortPhraseTh = (text: string, sourceLang?: string): string | null => {
   if (!text) return null;
   let trimmed = text.trim();
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+  if (trimmed.startsWith('[') && /[\]\>]\s*[.!?,;:]*$/.test(trimmed)) {
+    const trailingPunct = trimmed.match(/[.!?,;:]+$/)?.[0] || '';
+    const cleanArrayStr = trimmed.replace(/[.!?,;:]+$/, '').trim();
     try {
-      const parsed = JSON.parse(trimmed);
+      const parsed = JSON.parse(cleanArrayStr);
       if (Array.isArray(parsed) && parsed.every(x => typeof x === 'string')) {
-        trimmed = parsed.join(' ').trim();
+        trimmed = (parsed.join(' ').trim() + trailingPunct).trim();
       }
     } catch {}
   }

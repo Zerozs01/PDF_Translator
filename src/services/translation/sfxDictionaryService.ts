@@ -55,6 +55,9 @@ export const DEFAULT_SFX_DICTIONARY: SFXDictionary = {
     ],
     en: [
       { source: 'CRASH', target: 'โครม!', notes: 'เสียงสิ่งของชนหรือพังทลายอย่างรุนแรง' },
+      { source: 'MGH', target: 'อึ่ก...', notes: 'เสียงครางในลำคอ' },
+      { source: 'MMPH', target: 'อื้มม!', notes: 'เสียงอู้อี้ในลำคอ' },
+      { source: 'NNGH', target: 'อึ่ก...', notes: 'เสียงครางกลั้นหายใจ' },
       { source: 'BOOM', target: 'ตูม!', notes: 'เสียงระเบิดกระแทก' },
       { source: 'BANG', target: 'ปัง!', notes: 'เสียงปืนหรือเสียงกระแทกดัง' },
       { source: 'SLAM', target: 'ปัง!', notes: 'เสียงปิดประตูกระแทกดัง' },

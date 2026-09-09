@@ -216,7 +216,7 @@ describe('Dynamic Glossary & Translation Memory System', () => {
       expect(lookupShortPhraseTh('UNAPOLLA', 'es')).toBe('ควย');
       expect(lookupShortPhraseTh('HABITACION?', 'es')).toBe('ห้องเหรอ?');
       expect(lookupShortPhraseTh('AHORAMISMONO', 'es')).toBe('ตอนนี้ยังไม่');
-      expect(lookupShortPhraseTh('ESCENARIO', 'es')).toBe('ฉาก / สถานการณ์');
+      expect(lookupShortPhraseTh('ESCENARIO', 'es')).toBe('สถานการณ์');
       expect(lookupShortPhraseTh('ELSENOR', 'es')).toBe('นายท่าน');
     });
 
