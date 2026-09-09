@@ -1,193 +1,101 @@
-# 📄 PDF Translator — Master Architectural Context & System State
+# Architecture Context & Index (L1)
 
-> **Last Updated:** 2026-09-08  
-> **Status:** Production-Ready / Fully Refactored & Performance-Optimized  
-> **Test Suite:** 31 Test Files / 372 Unit Tests (100% Passing)  
-> **Type Safety:** Strict TypeScript (`tsc --noEmit` clean / 0 errors)
+## 1. System High-Level
+- Summary: แอปพลิเคชันเดสก์ท็อปสำหรับการแปลเอกสารและมังงะ/มันฮวาแบบออฟไลน์ 100% พร้อมระบบจัดกลุ่มบอลลูนคำพูดและฐานข้อมูลเข้ารหัส
+- Core Stack:
+  - Frontend: React 19, TypeScript (Strict), Vite, TailwindCSS v4
+  - Backend: Electron 39 (Node.js)
+  - Database: SQLite via better-sqlite3-multiple-ciphers (SQLCipher, WAL, FTS5)
+  - State: Zustand (5.x) with custom persistent storage
+  - Auth: Local Passphrase / PIN with PBKDF2 key derivation
+  - IPC: Electron contextBridge + Modular typed IPC channels
+  - Python Daemons: Subprocess JSONL bridge for PaddleOCR / EasyOCR and Argos Translate
+- Key Entry Points:
+  - Client / UI: src/main.tsx -> src/App.tsx
+  - Server / Main Process: electron/main.ts (Preload: electron/preload.ts)
+  - Models / Schemas: src/types/index.ts, src/types/electron.d.ts, electron/db.ts
 
----
+## 2. Architecture & Data Flow
+User Interaction -> React Component / Canvas -> Zustand Store / Hook -> IPC Bridge -> Electron Main / DAO / Python Subprocess -> SQLite / Canvas
+- Global State:
+  - src/stores/useProjectStore.ts (Active document, pages, zoom, app modes)
+  - src/stores/useOCRTextLayerStore.ts (OCR bounding boxes, lines, detection engine cache)
+  - src/stores/useLayerStore.ts (Translated layers, positions, balloon groups)
+  - src/stores/useBackgroundQueueStore.ts (Batch background OCR and translation tasks)
+  - src/stores/useGlossaryStore.ts (User custom dictionary, terms, SFX overrides)
+  - src/stores/useFileBrowserStore.ts (Project tree, file management, favorites)
+  - src/stores/useExportStore.ts (Export queue, modal state, output parameters)
+  - src/stores/useAuthStore.ts (Session lock state, auth status)
+  - src/stores/useUIStore.ts (Sidebar toggles, modals, viewer layout state)
+- Shared Modules / Services:
+  - src/services/ocr/ (Background OCR pipeline, text normalization, heuristics)
+  - src/services/translation/ (Translation orchestration, offline NMT, dictionaries)
+  - src/services/layers/ & src/services/layout/ (Spatial grouping, balloon detection)
+  - src/services/native/ (Zero-GC Union-Find clustering, bigram popcount similarity)
+  - src/services/pdf/ (PDF.js rendering, text layer, searchable PDF generator)
+  - electron/dao/ (Data access objects with prepared statement caching)
 
-## 📌 Executive Summary
+## 3. Directory Map (Critical Only)
+- electron/ -> จัดการวงจรชีวิต Main Process, การเข้ารหัสฐานข้อมูล, และ Subprocess Bridges
+- electron/ipc/ -> ตัวจัดการ IPC รายโมดูล (DB, OCR, Translation, Auth, Export, FS)
+- electron/dao/ -> โมดูล Data Access Object พร้อมระบบ Prepared Statement Caching
+- scripts/ -> สคริปต์ Python OCR Bridge, Argos NMT Bridge, และการทดสอบ Benchmark
+- src/components/ -> React UI Components (Viewer, PDF Canvas, Layers, Export, Modals)
+- src/hooks/ -> Custom React Hooks ควบคุม Business Flow (Translation, Export, Queue Sync)
+- src/services/ -> Business Logic หลัก (OCR, Translation, Layout, Native Buffers, PDF)
+- src/stores/ -> Zustand Stores จัดการ State ส่วนกลางและการบันทึกค่าถาวร
+- src/types/ -> TypeScript Type Definitions, IPC Contracts, และ Data Schemas
+- src/export/ -> Headless Canvas Compositing และการเรนเดอร์เอกสารสำหรับพิมพ์/ส่งออก
+- documents/ -> เอกสารสถาปัตยกรรมฉบับเต็ม, บันทึกการเพิ่มประสิทธิภาพ, และ Knowledge Base
 
-**PDF Translator** เป็น Desktop Application ประสิทธิภาพสูงสำหรับการแปลเอกสารและหนังสือการ์ตูน (Manga / Manhwa / Comic) โดยเน้นความแม่นยำของ Bounding Box, การจัดกลุ่มบอลลูนคำพูด 2 มิติ (Spatial Graph Clustering), การจำกัดหน่วยความจำและขจัด Garbage Collection (Zero-GC Native Algorithms), ฐานข้อมูลเข้ารหัสความเร็วสูงระดับ Local ด้วย SQLCipher (WAL Mode), และไปป์ไลน์ OCR/Translation ออฟไลน์ที่ทำงานผ่าน Python IPC Daemons (PaddleOCR + Argos Translate)
+## 4. Feature-to-File Routing
+- OCR Processing & Lifecycle
+  - Primary: src/services/ocr/BackgroundQueueProcessor.ts
+  - Secondary: electron/ocrBridge.ts, electron/ocrDaemonManager.ts, src/services/ocr/ocrTextNormalizer.ts
+  - Scope: ควบคุมคิว OCR เบื้องหลังและสื่อสารกับ Python Daemon
+- Offline Translation Pipeline
+  - Primary: src/services/translation/translationCoordinator.ts
+  - Secondary: src/hooks/useDocumentTranslation.ts, src/services/translation/offlineTranslationService.ts, electron/argosBridge.ts
+  - Scope: ประสานงานแปลออฟไลน์ กรองคำสแลง และเชื่อมต่อพจนานุกรม
+- Text Layer Grouping & Balloon Detection
+  - Primary: src/services/layers/LayerGroupingService.ts
+  - Secondary: src/services/layout/balloonAwareGroupingService.ts, src/services/native/fastSpatialCluster.ts, src/services/layout/dialogueGroupingService.ts
+  - Scope: จัดกลุ่มกล่องข้อความ 2 มิติและตรวจจับขอบเขตบอลลูน
+- Canvas & Document Overlay Rendering
+  - Primary: src/components/PDF/PDFCanvas.tsx
+  - Secondary: src/components/PDF/PDFPageOverlay.tsx, src/components/Layers/InteractiveLayerOverlay.tsx, src/services/pdf/TextLayerService.ts
+  - Scope: เรนเดอร์หน้า PDF และวาดเลเยอร์ข้อความแปลซ้อนทับ
+- Layer Editing & Manipulation UI
+  - Primary: src/components/Layers/LayerPanel.tsx
+  - Secondary: src/stores/useLayerStore.ts, src/components/Layers/LayerInlineEditor.tsx, src/components/Layers/LayerSelectionBox.tsx
+  - Scope: แผงควบคุมเลเยอร์ข้อความและการแก้ไขคำแปลแบบเรียลไทม์
+- Database & Persistent Storage
+  - Primary: electron/db.ts
+  - Secondary: electron/dao/index.ts, electron/ipc/dbIpc.ts, src/services/dbService.ts
+  - Scope: จัดการฐานข้อมูล SQLite เข้ารหัสและแคชข้อมูลคำแปล
+- Document Export & Merging
+  - Primary: src/hooks/useExportOrchestration.ts
+  - Secondary: src/export/renderExportPrintPage.ts, electron/pdfExportService.ts, src/components/Export/DocumentExportModal.tsx
+  - Scope: รวมภาพและเลเยอร์คำแปลส่งออกเป็น PDF/Image คุณภาพสูง
+- Security & User Authentication
+  - Primary: electron/authService.ts
+  - Secondary: electron/ipc/authIpc.ts, src/stores/useAuthStore.ts, src/components/Auth/LoginScreen.tsx
+  - Scope: จัดการรหัสผ่าน ปลดล็อกฐานข้อมูล และสิทธิ์เข้าถึงข้อมูล
+- Project & Library Management
+  - Primary: src/stores/useProjectStore.ts
+  - Secondary: src/stores/useFileBrowserStore.ts, src/services/libraryService.ts, src/components/Home/UploadScreen.tsx
+  - Scope: จัดการโครงการ ไฟล์เอกสาร รายการโปรด และสถานะการนำเข้า
 
----
+## 5. High-Risk & Coupling Zones
+- Shared State / Types: src/types/index.ts & src/types/electron.d.ts -> กระทบ: สัญญา IPC, Zustand Stores, และการทำงานร่วมกันทุกเลเยอร์
+- API Contracts / IPC Channels: electron/preload.ts & electron/ipc/ -> กระทบ: การเรียกใช้ฟังก์ชันข้าม Process ระหว่าง Renderer และ Main
+- Database Schema / Migrations: electron/db.ts -> ข้อควรระวัง: กระทบโครงสร้างตาราง SQLite, คีย์การเข้ารหัส SQLCipher, และ Data Integrity
+- Spatial Clustering & Native Buffers: src/services/native/fastSpatialCluster.ts -> กระทบ: ประสิทธิภาพ Zero-GC และความแม่นยำในการจัดกลุ่มบอลลูน
+- OCR & Translation Subprocess Bridges: scripts/external_ocr_bridge.py & scripts/argos_translate_bridge.py -> กระทบ: ไปป์ไลน์ JSONL IPC, ความเสถียรของ Daemon, และ Watchdog
 
-## 🏗️ 1. Technology Stack & Topology
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                   Electron Renderer                      │
-│   React 18 + TypeScript + Vite + Zustand + Canvas/DOM    │
-│   - Zero-GC Spatial Clustering (fastSpatialCluster.ts)   │
-│   - 16-bit Unicode Popcount Bigram (fastDiceSimilarity)  │
-│   - Zero-GC Pooled SFX Levenshtein (sfxDictionaryService)│
-│   - Balloon/SFX Classification (LayerGroupingService)    │
-│   - Reusable Headless Canvas Queue & PDF.js Lifecycle    │
-└────────────────────────────┬─────────────────────────────┘
-                             │ IPC (contextBridge)
-┌────────────────────────────▼─────────────────────────────┐
-│                    Electron Main Process                 │
-│   Node.js + better-sqlite3-multiple-ciphers              │
-│   - SQLite Database & WAL / FTS5 (electron/db.ts)        │
-│   - Modular DAOs + Prepared Statement Cache (dao/)       │
-│   - Modular OCR Subsystem (ocrBridge / Daemon / Temp)    │
-│   - Zero-Spawn Native Liveness Watchdog (process.kill 0) │
-│   - Unified Python Resolution (electron/pythonRuntime.ts)│
-└────────────────────────────┬─────────────────────────────┘
-                             │ Subprocess JSON Lines IPC (Daemon)
-┌────────────────────────────▼─────────────────────────────┐
-│                   Python Backend Daemons                 │
-│   - PaddleOCR / EasyOCR Engine (scripts/ocr_bridge/)     │
-│   - Argos Translate Daemon (scripts/argos_translate.py)  │
-└──────────────────────────────────────────────────────────┘
-```
-
-- **Renderer UI:** React 18, TypeScript (Strict), Vite, TailwindCSS, Zustand (State Management with custom persistent storage)
-- **Database & Storage:** `better-sqlite3-multiple-ciphers` (SQLCipher 256-bit AES), WAL journal mode, Memory-mapped I/O (128MB), FTS5 full-text search, Prepared Statement caching
-- **OCR Subsystem:** PaddleOCR (Primary default engine via Python bridge), EasyOCR (Secondary automatic fallback). **Tesseract ถูกถอดออกจากการทำงานหลักทั้งหมด**
-- **Translation Subsystem:** Argos Translate (Offline NMT Daemon via Python bridge), Direct Phrase Dictionaries (English, Korean, Japanese, Chinese, Spanish, French), Dynamic User Glossary & Translation Memory
-
----
-
-## 🧩 2. Core Architecture & Directory Layout
-
-### 2.1 Backend / Electron Layer (`electron/`)
-- `electron/db.ts` — ตัวจัดการ Database Lifecycle, รหัสผ่าน SQLCipher, SQLite PRAGMAs (WAL, page_size=4096, cache_size=-64000, mmap_size=128MB), FTS5 Virtual Table, Triggers, และ Database Schema Migrations
-- `electron/dao/` — Modular Data Access Objects พร้อม Prepared Statement Caching:
-  - `DocumentDAO.ts` — CRUD, FTS5 Search, Startup Batch Hydration, Cache Size, Favorites, Tags
-  - `ProjectDAO.ts` — โครงสร้างโฟลเดอร์/โปรเจกต์ต้นไม้ (Tree structure) และสถิติเอกสารในโปรเจกต์
-  - `TagDAO.ts` — ป้ายกำกับและสีสำหรับเอกสาร (Many-to-Many)
-  - `OCRCacheDAO.ts` — แคชผลลัพธ์ OCR แยกตามเลขหน้าและ Engine (`ocr_cache_engine`)
-  - `TranslationDAO.ts` — `TranslationCacheDAO` (แคชผลการแปลระดับหน้า) และ `SentenceTranslationDAO` (แคชคำแปลระดับประโยคข้ามเอกสาร)
-  - `GlossaryDAO.ts` — คำศัพท์เฉพาะและ SFX ของผู้ใช้
-  - `BenchmarkDAO.ts` — ประวัติการทดสอบ Benchmark และผลลัพธ์ Baseline vs Improved
-  - `index.ts` — Barrel export พร้อมฟังก์ชัน `initAllDAOs(db)` สำหรับผูก Connection
-- `electron/pythonRuntime.ts` — รวมศูนย์การค้นหาและ Resolve Python Virtual Environment (`.venv-ocr`, `.venv`) ผ่าน `loadLocalEnv()` และ `getDefaultPythonSearchRoots()` รองรับทั้ง Windows และ macOS/Linux
-- `electron/ocrBridge.ts` — Clean Orchestration Facade จัดการ Retry, Automatic Engine Fallback (PaddleOCR -> EasyOCR), และรักษา API เดิมสำหรับ Main Process 100%
-- `electron/ocrBridgeTypes.ts` — ศูนย์รวม Interface, Types, Engine Status, Request Payload, และ Stderr Regex Filters
-- `electron/ocrTempManager.ts` — จัดการ OCR Temporary Image Files พร้อมระบบป้องกัน Directory Traversal และฟังก์ชันทำความสะอาดไฟล์ขยะตกค้าง (`cleanupOrphanedOcrTempFiles`)
-- `electron/ocrDaemonManager.ts` — จัดการ Lifecycle ของ Python OCR Daemon, Queue Serialization, Stdout Buffer, Stderr Filter, และ Watchdog ตรวจจับ Liveness ด้วย `process.kill(pid, 0)` Native Win32 API (<0.1ms, 0 process spawn ขณะ Idle)
-- `electron/argosBridge.ts` — เชื่อมต่อ Main Process กับ Python Argos Translate Subprocess Daemon
-
-### 2.2 Native & High-Performance Algorithms (`src/services/native/` & `src/services/translation/`)
-- `fastSpatialCluster.ts` — Zero-GC Disjoint-Set (Union-Find) with Path Compression และ TypedArray Buffer สำหรับ IoU Matrix และ Connected Components
-  - `clusterConnectedComponents(n, isConnected)` — ใช้ `Int32Array` ทำ transitive closure $O(N \cdot \alpha(N))$ ไร้การจองหน่วยความจำ Heap (แทนที่ BFS queues และ adjacency list)
-  - `fastIoU(a, b)` / `clusterByIoU(boxes, threshold)` / `batchIoUMatrix(boxes)`
-- `fastDiceSimilarity.ts` — High-Throughput Bigram Similarity Engine สำหรับ Token Deduplication
-  - ใช้ 65,536-bit Typed Bitset Pool (`Uint32Array(2048)`)
-  - Brian Kernighan's popcount บน bitwise AND
-  - ผสม 16-bit code unit `((c1 * 31) ^ c2) & 0xFFFF` ป้องกัน Hash Collision ของภาษาไทย (`\u0E00-\u0E7F`) และ CJK
-  - `batchDiceSimilarity(reference, candidates)` ใช้ `bitsetRef` ใน pool แบบ 100% Zero-GC
-- `sfxDictionaryService.ts` — Zero-GC Sound Effects Engine
-  - `getLevenshteinDistance(a, b)` ใช้โมดูล-เลเวล Reusable `Int32Array` Row Buffers (`rowBufferA`, `rowBufferB`) ขจัด GC churn ในการจับคู่ Fuzzy match
-  - สลับสตริงให้อาร์กิวเมนต์ที่ 2 สั้นกว่าเสมอ (`b.length <= a.length`) เพื่อลดขนาด Buffer และจำนวนรอบของ inner loop
-  - สร้าง `Map<string, string>` แบบ Lazy On-Demand (`getExactMap(lang, merged)`) ตามภาษาที่เรียกใช้จริง
-  - พรีแคชสตริงที่ Normalize แล้วบน `_normSource` ระหว่างขั้นตอน deduplicate ลดการ allocate สตริงซ้ำๆ ในลูป
-- `shortPhraseDictionaryService.ts` & `dictionaries/index.ts` — คลังคำสั้นและ Fallback Dictionary:
-  - ใช้ `getDictionaryByLanguage(sourceLang)` ค้นหา Scoped Dictionary ตรงภาษาก่อน แล้วจึงค้นหาผ่าน `ARGOS_SHORT_PHRASE_LOOKUP_TH` Proxy
-  - กำจัด fallback ซ้ำซ้อนของ `GENERAL_ENGLISH_DICTIONARY_TH` ออกทั้งหมด
-  - รองรับการส่ง `sourceLang` ใน `systemicWordFallbackTranslate(text, sourceLang)`
-- `translationCoordinator.ts` — จัดการคิวและแคชคำแปลสั้นระดับหน้า:
-  - มี `phraseCache` พร้อมระบบ Invalidation อัตโนมัติตาม Reference ของ `useGlossaryStore.getState().entries`
-  - มี `clearPhraseCache()` ป้องกันการแสดงผลลัพธ์คำแปลเดิมค้างหลังผู้ใช้แก้ไข Glossary
-
-### 2.3 Background Queue & Headless Processing (`src/services/ocr/`)
-- `BackgroundQueueProcessor.ts` — ระบบประมวลผลคิวเบื้องหลังสำหรับ OCR และแปลทั้งเล่ม:
-  - **Reusable Headless Canvas Pool:** สลับใช้ Canvas Instance เดียว ปรับเปลี่ยนเฉพาะ `width`/`height` และคืน Backing buffer ทันที (`width = 0; height = 0`) เมื่อ abort หรือเกิดข้อผิดพลาด
-  - **PDF.js Lifecycle Discipline:** สั่ง `page?.cleanup?.()` ในบล็อก `finally` ของ `renderHeadlessPage` ทุกหน้า ปลด Font caches, Glyph vectors, และ Decoded stream memory ของ PDF.js ทันที ป้องกัน Memory Accumulation ในเอกสาร 100+ หน้า
-  - **2-Stage Prefetch Pipeline:** เรนเดอร์หน้าถัดไปแบบ Prefetch ใน background ล่วงหน้าขณะที่ Python Daemon กำลังประมวลผล OCR หน้าปัจจุบัน พร้อมระบบเคลียร์ stale prefetch อัตโนมัติเมื่อหน้าปัจจุบันเป็น DB Cache Hit
-  - **Foreground On-Demand Single-Page OCR (`runSinglePageOCR`):** เมธอดสาธารณะสำหรับรัน OCR หน้าเดียวแบบ On-Demand รองรับทั้ง PDF และไฟล์รูปภาพ ตรวจสอบ SQLite Cache ก่อน หากแคชหลุดจะเรนเดอร์ Headless Page แล้วส่งเข้า OCR Daemon พร้อมบันทึกแคชและอัปเดต Zustand Store ทันที
-  - **Unified Single-Page & Batch Architecture:** `useDocumentTranslation.ts` ใช้งาน `runSinglePageOCR` และดึง DB Cache โดยตรง ขจัดปัญหา Dead Event Protocol (`AUTO_OCR_REQUEST_EVENT`) ที่เคยทำให้การกดแปล Offline/AI หน้าเดียวค้าง 180 วินาที
-  - **SRP Decomposed Methods:** ลูปประมวลผล `processJob()` ถูกแบ่งความรับผิดชอบอย่างชัดเจนออกเป็น `executePageOCR`, `syncPageLayers` (ปฏิบัติตามกฎ Cross-Document Isolation อย่างเคร่งครัด), และ `dispatchPageTranslation`
-  - **Declarative Constraints Matrix:** ฟังก์ชัน `resolveRenderConstraints()` ใช้ Profile Lookup Table ยุบโค้ดซ้ำซ้อน 117 บรรทัดเหลือโครงสร้างที่อ่านง่ายและขยายได้สะดวก
-
-### 2.4 Layout & Grouping Engine (`src/services/layers/` & `src/services/layout/`)
-- `LayerGroupingService.ts` — ตัวจัดกลุ่มกล่องข้อความ 2 มิติ (Spatial Graph Clustering) แบ่งแยก Dialogue, SFX, และ Narration พร้อมการตรวจจับบอลลูนซ้อนทับ
-- `balloonAwareGroupingService.ts` — วิเคราะห์รูปทรงและขอบเขตบอลลูนคำพูด manga/manhwa แยกคอลัมน์ซ้าย-ขวา ป้องกันการรวมข้อความข้ามบอลลูน
-
-### 2.5 Canonical Documentation Architecture (`documents/`)
-- เอกสารคู่มือ สถาปัตยกรรม และ Knowledge Base ทั้งหมดถูกจัดระเบียบรวมไว้ใน [documents/](file:///c:/App/Electron/PDF_Translator/documents/) ห้ามวางเกลื่อนที่ Root Directory (ที่ Root จะมีเพียง `context.md`, `README.md` และ Config ของโปรเจกต์เท่านั้น):
-  - `documents/AI_MANIFEST.md` — Master AI Context Map, Common Workflows, และ System Manifest
-  - `documents/ARCHITECTURE.md` — ภาพรวมสถาปัตยกรรมระบบ, Runtime Topology, Zero-GC Algorithms, และ DAOs
-  - `documents/CHANGELOG.md` — บันทึกประวัติการเปลี่ยนแปลงทั้งหมดของแอปพลิเคชัน
-  - `documents/Roadmap.md` — แผนงานพัฒนาปัจจุบันและงานตามลำดับความสำคัญ (P0–P5)
-  - `documents/OCR_OPTIMIZATION.md` — กฎการจูน OCR, Normalization, Heuristics, และการควบคุมหน่วยความจำ
-  - `documents/Knowledge.md` — กฎทอง สัจธรรมของระบบ และ Operating Principles
-  - `documents/IMPROVEMENT_LOG.md` — ประวัติการปรับปรุง Optimization และประสิทธิภาพ
-  - `documents/argostranslation_knowledge/` & `documents/image_processing_knowledge/` — เอกสารเฉพาะทางด้าน NMT และ Image Processing
-
----
-
-## 🏷️ 3. Versioning & Cache Key Contracts
-
-| Component | Current Version | Description |
-|---|---|---|
-| **Translation Cache** | `v64` | `OCR_TRANSLATION_CACHE_VERSION = 'v64'` ใน `useOCRTextLayerStore.ts` |
-| **OCR Algorithm** | `230` | `OCR_ALGORITHM_VERSION = 230` ใน `ocrVersion.ts` |
-| **OCR Raw Engine** | `7` | `OCR_RAW_VERSION = 7` ใน `ocrVersion.ts` |
-
-### Cache Key Syntax
-```text
-ver:v64|ocr:paddleocr|ocrLang:eng|src:en|dst:th|mode:manga|translator:offline
-```
-- แคชคำแปลถูกตรวจสอบความถูกต้องโดย `ver:v{N}` โดยระบบจะกรองเอาเฉพาะแคชที่ `N >= 40`
-- การเปลี่ยนหรือ Clear Engine จะไม่กระทบแคชของโมเดลอื่นเพราะแยกเก็บตาม `ocr_engine`
-
----
-
-## 🔒 4. Golden Architectural Rules
-
-1. **ห้ามแตะต้อง Git Repository โดยพลการ:** ห้ามสั่ง Commit, Revert หรือทำ Staged Changes โดยไม่ได้รับคำสั่งยืนยันชัดเจนจากผู้ใช้
-2. **ห้ามคำสั่งทำลายล้าง (`rm -rf`, `dd`):** ตรวจสอบความปลอดภัยของ Path เสมอ
-3. **No Legacy Tesseract Defaults:** ค่า Fallback Engine ทั้งหมดต้องเป็น `'paddleocr'` สำหรับ OCR และ `'offline'` สำหรับ Translation
-4. **Zero-GC in Hot Paths:** ฟังก์ชันการจัดกลุ่มข้อความ, IoU คำนวณขอบเขต, Dice similarity, และ SFX Levenshtein Distance ที่ถูกเรียกซ้ำนับพันครั้งต่อหน้า ต้องใช้ TypedArray Buffer Pooling เพื่อป้องกัน Garbage Collection Spikes
-5. **Cross-Document State Isolation:** การประมวลผลพื้นหลังของไฟล์ที่ไม่ได้เปิดอยู่ (non-active documents) ต้องบันทึกลง SQLite DB เท่านั้น ห้ามอัปเดต in-memory React/Zustand Store ของไฟล์ปัจจุบัน
-6. **No Idle Web Workers & Daemons:** `VisionService.initialize()` ต้องไม่เปิด Web Worker Pool และ Health-Check Timer ค้างไว้ใน RAM โดยไร้ประโยชน์ และ Watchdog ของ Daemon ต้องไม่ spawn CLI process ซ้ำซ้อนขณะ Idle
-7. **Canvas & PDF.js Lifecycle Discipline:** Headless Canvas ต้องถูกเคลียร์ Backing buffer (`width = 0; height = 0`) ทันทีเมื่อ abort/error และทุก `PDFPageProxy` ต้องสั่ง `page.cleanup()` ในบล็อก `finally` เสมอ
-8. **Clean Root & Canonical Documentation:** เอกสารคู่มือ, changelog, และ technical deep dives ทั้งหมดต้องจัดเก็บอยู่ใน `documents/` เสมอ ห้ามวางไฟล์ `.md` กระจัดกระจายที่ Root โดยที่ Root จะมีเฉพาะ `context.md` (Master context) และ `README.md` (Repository entry) เท่านั้น
-
----
-
-## 🔍 5. Architectural Scrutinize Notes & Watch-outs
-
-1. **Page 5 Coordinate Shift Patch:**
-   - ใน `LayerGroupingService.ts:459-488` มีโค้ดปรับพิกัดเฉพาะกรณี `if (ocrResult.pageNumber === 5)` สำหรับคำว่า `"AROUND ABOUT"`
-   - **บริบท:** โค้ดส่วนนี้เป็น Regression Test Fixture Patch ของหน้าทดสอบ PaddleOCR coordinate drift หากต้องการนำออกในอนาคต ต้องปรับปรุง Test Fixture ใน `LayerGroupingService.test.ts:240-275` ควบคู่กัน
-2. **Store Setter Boilerplate:**
-   - ใน `useOCRTextLayerStore.ts` ใช้ `applyUpdatedPageOCR` เป็นฟังก์ชันกลางในการอัปเดต `allPagesOCR`, `ocrByPageEngine`, และ `currentPageOCR` ช่วยป้องกัน state inconsistency ระหว่างการเพิ่ม/ลบ/แก้ไขบรรทัด OCR
-3. **Prepared Statements in DAOs:**
-   - ทุก DAO ใน `electron/dao/` มี `stmtCache` เป็นของตนเองและถูกแคชผ่าน `getStmt(sql)` ทุกคำสั่ง (รวมถึง dynamic UPDATE permutations) ป้องกันการ Recompile SQL ในทุกรอบ IPC และรักษา `sentence_translation_cache` ไม่ให้ถูกลบเมื่อเคลียร์แคชระดับหน้า/ระดับไฟล์
-4. **Resolved Dead Code & Purged Protocols:**
-   - `tessdata` custom protocol handler: ลบออกจาก `electron/main.ts` เรียบร้อยแล้ว (ลด overhead ใน Main Process และขจัดโค้ดตกค้างของ Tesseract)
-   - `useSegmentationStore`: ลบไฟล์และถอด subscriptions/renderers ที่ค้างอยู่ใน `PDFCanvas.tsx` และ `PDFPageOverlay.tsx` ออกเรียบร้อยแล้ว (ลด re-render overhead)
-   - Uncalled Store Actions: `deleteOCRLine` ใน `useOCRTextLayerStore.ts` (ระบบใช้ `deleteLayer` + `deletedLineIndexesByPage` ใน `useLayerStore.ts` แทนเพื่อรักษา index mapping)
-5. **System Connections & Wiring Status:**
-   - **`loadPersistedQueue` ใน `useBackgroundQueueStore.ts`:** เชื่อมต่อเรียบร้อยแล้ว โดยโหลดค่าเริ่มต้นลง store ทันทีผ่าน `readPersistedQueue()` และเรียกซ้ำใน `App.tsx` on mount เพื่อกู้คืนคิวงานค้างหลังปิด-เปิดโปรแกรมใหม่
-   - **`useAngleCls` ใน Viewer Settings:** เพิ่ม Checkbox สำหรับเปิด/ปิด Angle Classification ของ PaddleOCR ใน `OCREngineSelector.tsx` เรียบร้อยแล้ว
-   - **`overlayThaiFontEnabled` ใน `useProjectStore.ts`:** ถูกควบคุมอัตโนมัติตาม `isThaiTargetLanguage` โดยผู้ใช้สามารถสลับระหว่างฟอนต์ไทยสวยงาม (`Mitr`, `Sarabun`, `SUPERMARKET` ฯลฯ) กับฟอนต์มาตรฐานของระบบผ่านตัวเลือก `System Thai (system-th)` ในแถบตั้งค่าได้โดยตรง
-   - **Glossary Reactivity ใน `phraseCache`:** เชื่อมต่อการตรวจจับการเปลี่ยนแปลงของ `useGlossaryStore` เข้ากับ `cachedLookupShortPhraseTh` และ `clearPhraseCache` ใน `translationCoordinator.ts` เรียบร้อยแล้ว คำแปลที่ผู้ใช้แก้ไขจะมีผลทันทีโดยไม่ต้องรีสตาร์ตแอป
-6. **Spanish Manga Translation & OCR Normalizer Pipeline (v65):**
-   - ปรับปรุง `SPANISH_OCR_NOISE_REPAIRS` และ Dictionary ครอบคลุมชุดคำศัพท์/ประโยคสเปนชุดล่าสุด (Request 9 & 10) อย่างครบถ้วน เช่น `SUBMUNDO`, `DISFRACES`, `ESCAPE`, `YMENTIRAS.DELASSUYAS...`, `COLGANDO`, `OPORTUNIDAD`, `EXCITADAEN`, `PERDÖN`, `JODASx.AGUANTA UN` ฯลฯ
-   - ป้องกันการตัดคำเพี้ยนใน `splitSpanishUppercaseCompounds`: บรรจุ `oportunidad`, `oportunidades`, `vigilancia`, `vigilante`, `vigilando`, `vigilar` ลงใน `SPANISH_COMPOUND_SPLIT_EXCLUSIONS` และ `quitatelo`, `quítatelo` ลงใน `SPANISH_LEGITIMATE_ENCLITICS`
-   - **อัปเกรด `OCR_TRANSLATION_CACHE_VERSION = 'v65'`:** เพื่อ Invalidate แคชเดิมในฐานข้อมูล SQLite ที่เคยแปลค้างหรือแปลไม่สำเร็จ ทำให้เมื่อกด "Offline All Pages" หรือ "Offline Single Page" ระบบจะดึงคำแปลและกฎซ่อมข้อความใหม่ทั้งหมดมาแปลใหม่ทันทีโดยไม่ติดแคชเก่า
-7. **Continuous Scroll & Comparison Mode Layer Sync:**
-   - ใน `PDFCanvas.tsx`: ปลดล็อกเงื่อนไขบล็อก `isInteracting` ใน IntersectionObserver และ Scroll Tracker สำหรับ Continuous mode ทำให้การเลื่อนเมาส์บนจอ Split Comparison Mode (ไม่ว่าจะเลื่อนบน Canvas ซ้ายหรือขวา) สามารถตรวจจับหน้าและอัปเดต `currentPage` ใน `useProjectStore` ได้อย่างแม่นยำ
-   - ใน `LayerPanel.tsx`: เพิ่ม Auto-Build Layers effect ตรวจจับการเปลี่ยนหน้าและเรียกสร้างเลเยอร์อัตโนมัติทันทีหากหน้านั้นยังไม่มีเลเยอร์ในสโตร์ แก้ไขปัญหาแผงควบคุมเลเยอร์ค้างอยู่ที่หน้าเดิมขณะเลื่อนอ่านแบบ Continuous Scroll
-8. **Batch 10 (Spanish) & Batch 11 (English) OCR Noise Normalization & JSON Array Unpacking:**
-   - รองรับการ Unpack ข้อความที่ OCR แยกเป็น JSON Array พร้อมเครื่องหมายวรรคตอนต่อท้าย เช่น `["Good","grief..."].,` หรือ `["Recentlyo", ...]` ให้คลี่ออกเป็นประโยคปกติอย่างราบรื่นทั้งใน `ocrTextNormalizer.ts` และ `shortPhraseDictionaryService.ts`
-   - เพิ่มกฎ Regex ซ่อมแซมคำผิดของ OCR ภาษาอังกฤษ: `Recentlyo` -> `Recently`, `OH A VEBEEN` -> `I have been`, `LET TINGH IM` -> `letting him`, `doashe` -> `do as he`, `tome.` -> `to me.`, `CAAAAN'T!SHOLLD` -> `Can't! Should`, `BEP!` -> `be?!`, `SOHARD` -> `so hard`, `WHAAATP!` -> `What?!`, `SERIOLSLY` -> `Seriously`
-   - บรรจุคำแปลไทยและคำสแลง มังงะ/การ์ตูน ภาษาอังกฤษลงใน `englishDictionary.ts`: `libido`, `climaxing`, `DUDE`, `OUT HERE!`, `ALMOST GOOD`, `IN THERE!`, `PROPER`, `HEART IS`, `DICK`, `FUHI!`, `Wuh!!`, `Oooh!` พร้อมทั้งรองรับทั้งประโยคเต็มและคำแยกย่อย
-   - ป้องกันการแบ่ง Enclitic ผิดในภาษาสเปน: บรรจุ `polla`, `pollas`, `siente`, `correrme` ลงใน `SPANISH_LEGITIMATE_ENCLITICS` และเพิ่มคู่คำศัพท์ภาษาสเปนชุดที่ 10 ทั้งหมดลงใน `spanishDictionary.ts`
-9. **Batch 12 (Sci-Fi/Lab Manga) Core Architectural Normalization & Multi-Syllable Dehyphenation Pipeline:**
-   - **Multi-Pass Dehyphenation Loop (แก้ที่ Core Problem ไม่ Overfit):** ใน `ocrTextNormalizer.ts` (`normalizeEnglishOcrNoiseForTranslation` และ `normalizeSourceForTranslation`) เพิ่ม dehyphenation loop ที่ทำซ้ำสูงสุด 5 รอบ เพื่อต่อคำที่ถูกแบ่งข้ามบรรทัดหลายพยางค์ เช่น `AER- OSOL- IZATION` -> `AEROSOLIZATION`, `CON- CEN- TRATION` -> `CONCENTRATION`, `IN- SUF- FICIENT` -> `INSUFFICIENT`, `OR- GANI- FICAT` -> `ORGANIFICAT`, `COM- PLETELY` -> `COMPLETELY`
-   - **Stutter & Honorific Preservation:** รักษารูปแบบคำพูดติดอ่าง (`TH-THIS`, `WH-WHAT`, `H-HEY`, `W-WAIT`) โดยตรวจสอบ `p2Lower.startsWith(p1Lower) && p1.length <= 2` และยกเว้นคำลงท้ายเกียรติยศญี่ปุ่น (`-san`, `-chan`, `-kun`, `-sama`, `-sensei`, `-senpai`, `-dono`, `-knight`, `-could`) ผ่าน flag `/gui` ป้องกันการถูกกลืนเป็นคำเดียว
-   - **Generalized OCR Artefacts Repair:**
-     - Spaced suffixes & letters: `FICAT I ON` -> `FICATION`, `VERIFIC AT I ON` -> `VERIFICATION`, `ASS I STING` -> `ASSISTING`, `SCRAMB LED` -> `SCRAMBLED`, `MOD- FICAT I ON` -> `MODIFICATION`
-     - Common OCR word fusions: `TOA` -> `TO A`, `LIKEA` -> `LIKE A`, `ANYRISK` -> `ANY RISK`, `OFTHE` -> `OF THE`, `TARGETIS` -> `TARGET IS`, `JUSTA` -> `JUST A`, `TOMY` -> `TO MY`, `WAITA` -> `WAIT A`, `HELLIS` -> `HELL IS`, `TOFIND` -> `TO FIND`, `POWN THE PRAIN` -> `DOWN THE DRAIN`, `FHCKING` -> `FUCKING`
-   - **SFX & Sci-Fi Dictionaries:** เพิ่มเสียงคราง `MGH`, `MMPH`, `NNGH` ลงใน `sfxDictionaryService.ts` และคำศัพท์แนวห้องทดลอง/วิทยาศาสตร์/มังงะ 31 ประโยคของ Batch 12 พร้อมคำเดี่ยวลงใน `englishDictionary.ts` โดย Unit Tests ทั้ง 31 ไฟล์ (377 tests) ผ่าน 100%
-   - **Stat/Field Label Dash Preservation & Stutter Preservation in `translationGrouping.ts`:**
-     - ใน `translationGrouping.ts` (`composeGroupSourceText`) และ `ocrTextNormalizer.ts`: ป้องกันไม่ให้คำที่เป็น Label สถิติ/สถานะ เช่น `VALUE-`, `STATUS-`, `LEVEL-`, `RANK-`, `CONDITION-` ถูก dehyphenate กลืนคำเป็น `VALUEEXCELLENT` โดยแปลงเป็น `VALUE - EXCELLENT`
-     - ป้องกันไม่ให้คำติดอ่างถูกเชื่อมเป็นคำติดกันใน `composeGroupSourceText`: เช่น `TH- THIS?!` -> `TH-THIS?!` (ไม่ใช่ `THTHIS?!`)
-     - เพิ่มตัวซ่อมแซม OCR Fusions ใหม่: `NEEDTO` -> `NEED TO`, `BEMORE` -> `BE MORE`, `FEOPLE` -> `PEOPLE`
-     - **อัปเกรด `OCR_TRANSLATION_CACHE_VERSION = 'v66'` ใน `useOCRTextLayerStore.ts`:** เพื่อ Invalidate แคชเดิมในฐานข้อมูล SQLite ที่เคยแปลค้างเป็นภาษาอังกฤษหรือแปลไม่สำเร็จ ทำให้เมื่อแปลหน้านี้ใหม่ ระบบจะดึงคำแปลและกฎซ่อมข้อความใหม่ทั้งหมดมาแปลทันที
+## 6. Agent Navigation Rules
+- เริ่มงานใหม่ด้วยการเทียบหา Feature ใน Routing Map เสมอ
+- อ่านเฉพาะ Primary File ก่อน ห้ามอ่าน Secondary หรือ scan ทั้งโฟลเดอร์เว้นแต่ Primary จะมีข้อมูลไม่พอ
+- Source Consistency:
+  - หากพบ path ใน context.md ไม่ตรงกับ Codebase ให้ยึด Codebase เป็นหลัก และอัปเดต context.md ทันที
+  - ห้ามแก้ไข โยกย้าย หรือสร้างไฟล์โค้ดใหม่ขึ้นมาเพียงเพื่อให้ตรงกับ context.md เด็ดขาด

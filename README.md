@@ -1,61 +1,86 @@
-# 📄 PDF Translator
+# PDF Translator
+แอปพลิเคชันเดสก์ท็อปสำหรับการแปลเอกสาร PDF และมังงะ/มันฮวาแบบออฟไลน์ 100% พร้อมระบบจัดกลุ่มบอลลูนคำพูดและฐานข้อมูลเข้ารหัสความเร็วสูง
 
-**Next-Gen Local OCR & Manga Translation Engine**  
-Desktop Application ประสิทธิภาพสูงสำหรับการแปลเอกสารและหนังสือการ์ตูน (Manga / Manhwa / Comic) โดยเน้นความแม่นยำของ Bounding Box, การจัดกลุ่มบอลลูนคำพูด 2 มิติ (Spatial Graph Clustering), การประมวลผลไร้ Garbage Collection (Zero-GC Native Algorithms), ฐานข้อมูลเข้ารหัส SQLCipher, และไปป์ไลน์ OCR/Translation ออฟไลน์ 100% ผ่าน Python IPC Daemon
+## Overview
+- **What it does:** แก้ปัญหาการแปลเอกสารและการ์ตูนที่ล่าช้าและข้อมูลรั่วไหล โดยประมวลผลด้วย OCR ออฟไลน์ (PaddleOCR/EasyOCR) ผสานการจัดกลุ่มบอลลูนคำพูด 2 มิติ (Spatial Clustering) และแปลภาษาด้วย NMT ออฟไลน์ (Argos Translate) พร้อมวางเลเยอร์คำแปลทับข้อความเดิมได้อย่างแนบเนียนโดยไม่ต้องส่งข้อมูลออกนอกเครื่อง
+- **Target Audience:** ผู้อ่านและนักแปลเอกสาร/มังงะ (End-users) ที่ต้องการความปลอดภัยและความเป็นส่วนตัวของข้อมูล, นักพัฒนา (Developers) ที่ต้องการศึกษาหรือต่อยอดระบบ Local Document Processing Pipeline
 
----
+## Key Features
+- **Offline OCR Engine:** ตรวจจับและอ่านข้อความจากไฟล์ PDF และรูปภาพด้วย PaddleOCR และ EasyOCR แบบออฟไลน์ 100%
+- **Spatial Balloon Clustering:** รวมกลุ่มและแยกแยะกล่องข้อความ คำพูดตัวละคร และ Sound Effects (SFX) อัตโนมัติ
+- **Local NMT Translation:** แปลภาษาแบบออฟไลน์ด้วย Argos Translate พร้อมคลังพจนานุกรมคำสั้นและสแลงเฉพาะทาง
+- **Interactive Layer Editing:** ปรับแต่ง แก้ไขข้อความ เปลี่ยนฟอนต์ และปรับตำแหน่งเลเยอร์คำแปลแบบเรียลไทม์
+- **Encrypted Local Storage:** บันทึกและแคชผลลัพธ์ด้วย SQLite เข้ารหัสระดับ 256-bit AES (SQLCipher) ในโหมด WAL
+- **High-Fidelity Document Export:** ส่งออกเอกสารเป็นไฟล์ PDF หรือรูปภาพความละเอียดสูงพร้อมฝังเลเยอร์ข้อความแปล
 
-## ⚡ Quick Start (Windows)
+## Tech Stack
+- **Core:** Electron 39, React 19, TypeScript (Strict), Vite, Node.js
+- **State / Storage:** Zustand (5.x), SQLite via better-sqlite3-multiple-ciphers (SQLCipher, WAL, FTS5)
+- **Styling / UI:** TailwindCSS v4, Lucide React
+- **Key Libraries:** pdfjs-dist (PDF Rendering), pdf-lib (PDF Modification), Python IPC Bridge (PaddleOCR, EasyOCR, Argos Translate)
 
-### Prerequisites
-- **Node.js:** LTS (v20+ or v22+)
-- **Python:** 3.10+ (สำหรับ PaddleOCR / EasyOCR และ Argos Translate / M2M100)
+## High-Level Architecture
+ระบบทำงานด้วยสถาปัตยกรรมแบบ 3 เลเยอร์ โดย Client UI (React/Zustand) สื่อสารกับ Electron Main Process ผ่าน Typed IPC channels (`contextBridge`) และ Main Process ทำหน้าที่จัดการฐานข้อมูล SQLite เข้ารหัส พร้อมควบคุม Background Daemons (Python Subprocess) สำหรับประมวลผล OCR และ NMT ผ่าน JSONL IPC
 
-### 1. Install Node Dependencies
-```bash
-pnpm install # or npm install
+## Project Structure
+```text
+PDF_Translator/
+├── electron/         # Electron main process, modular IPC handlers, DAOs, and SQLite setup
+├── scripts/          # Python OCR & Argos translation daemons, setup & benchmark scripts
+├── src/              # React frontend application source code
+│   ├── components/   # UI components (Viewer, PDF Canvas, Overlays, Layer panels, Modals)
+│   ├── hooks/        # Application lifecycle & translation/export orchestration hooks
+│   ├── services/     # Core business logic (OCR pipeline, NMT, layout grouping, native algorithms)
+│   ├── stores/       # Zustand global stores with custom persistence
+│   └── types/        # TypeScript type contracts and Electron IPC definitions
+├── documents/        # In-depth architectural documentation and knowledge base
+└── context.md        # L1 Master Index & feature-to-file routing for AI coding agents
 ```
 
-### 2. Bootstrap Python OCR & Translation Environment
-สคริปต์นี้จะสร้าง `.venv-ocr`, ติดตั้ง PyTorch, PaddlePaddle, PaddleOCR, EasyOCR, และ Argos Translate พร้อมดาวน์โหลดโมเดลเริ่มต้นอัตโนมัติ:
+## Prerequisites
+- **Runtime:** Node.js >= 20.0.0, Python 3.10+
+- **Package Manager:** `pnpm` (แนะนำตาม lockfile) หรือ `npm`
+- **Operating System:** Windows 10/11 (แนะนำสำหรับการรันสคริปต์อัตโนมัติ)
+
+## Getting Started
+
+### 1. Installation
 ```bash
+# ติดตั้ง Node dependencies
+pnpm install
+# หรือ npm install
+```
+
+### 2. Environment Setup
+```bash
+# สร้าง .venv-ocr และติดตั้งโมเดล PaddleOCR, EasyOCR และ Argos Translate
 npm run ocr:bootstrap
 ```
 
-### 3. Launch Development Server
+Required & Optional Variables (ยืนยันจาก Codebase):
+- `OCR_PYTHON_PATH`: พาธไปยัง Python executable สำหรับรัน OCR Daemon (ค่าเริ่มต้นถูกตั้งอัตโนมัติในสคริปต์ dev ให้ชี้ไปที่ `.venv-ocr`)
+- `GEMINI_API_KEY`: API Key สำหรับทางเลือกการแปลผ่านโมเดล Gemini ออนไลน์ (Optional)
+- `OCR_USE_ZLUDA`: กำหนดเป็น `1` หากต้องการเปิดใช้งานการเร่งความเร็วด้วย AMD GPU ผ่าน ZLUDA (Optional)
+- `ZLUDA_PATH`: พาธไปยังโฟลเดอร์หรือไฟล์ `zluda.exe` เมื่อเปิดใช้งาน ZLUDA (Optional)
+
+### 3. Running Development
 ```bash
+# เริ่มต้น Vite Dev Server และเปิดหน้าต่าง Electron App
 npm run dev
 ```
 
-### 4. Run Tests & Build
+### 4. Build & Package
 ```bash
-npm run test          # Run Unit Tests (Vitest)
-npm run test:e2e      # Run End-to-End Tests (Playwright)
-npm run build         # Production Package via Electron-Builder
+# Compile TypeScript, Bundle Frontend ด้วย Vite และแพ็กเกจเป็นไฟล์ติดตั้งผ่าน Electron-Builder
+npm run build
 ```
 
----
+คำสั่งทดสอบและตรวจสอบคุณภาพ:
+```bash
+npm run test          # รัน Unit Tests ด้วย Vitest
+npm run test:e2e      # รัน End-to-End Tests ด้วย Playwright
+```
 
-## 🏗️ Core Architecture & Features
-
-- **OCR Engines:** PaddleOCR (Primary default engine via Python bridge), EasyOCR (Secondary fallback)
-- **Translation Subsystem:** Argos Translate (Offline NMT Daemon), CTranslate2 / M2M100, Direct Phrase Dictionaries, Dynamic User Glossary & SFX Dictionary
-- **Spatial Clustering:** Zero-GC Disjoint-Set Union-Find algorithm with Brian Kernighan popcount bitset deduplication
-- **Encrypted Local Storage:** SQLCipher 256-bit AES (`better-sqlite3-multiple-ciphers`), WAL mode, Memory-mapped I/O (128MB), FTS5 full-text search
-
----
-
-## 📚 Canonical Documentation
-
-เอกสารทางเทคนิคและคู่มือการพัฒนาระบบทั้งหมดถูกจัดเก็บไว้อย่างเป็นระเบียบในโฟลเดอร์ [documents/](file:///c:/App/Electron/PDF_Translator/documents/):
-
-- [documents/Readme.md](file:///c:/App/Electron/PDF_Translator/documents/Readme.md) — แผนผังเอกสารและข้อมูลรวมของโปรเจกต์
-- [documents/AI_MANIFEST.md](file:///c:/App/Electron/PDF_Translator/documents/AI_MANIFEST.md) — Master AI Context Map & Technical Workflow
-- [documents/ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md) — Runtime Topology & Subsystem Architecture
-- [documents/CHANGELOG.md](file:///c:/App/Electron/PDF_Translator/documents/CHANGELOG.md) — Full Application Changelog
-- [documents/OCR_OPTIMIZATION.md](file:///c:/App/Electron/PDF_Translator/documents/OCR_OPTIMIZATION.md) — OCR Tuning, Heuristics, & Memory Controls
-- [documents/Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) — Prioritized Implementation Tasks (P0–P5)
-- [documents/Knowledge.md](file:///c:/App/Electron/PDF_Translator/documents/Knowledge.md) — System Design Principles & Rules
-- [documents/IMPROVEMENT_LOG.md](file:///c:/App/Electron/PDF_Translator/documents/IMPROVEMENT_LOG.md) — Optimization & Performance History
-
-> สรุปสถาปัตยกรรมระดับ Master และ Golden Architectural Rules ดูได้ที่ [context.md](file:///c:/App/Electron/PDF_Translator/context.md)
+## Documentation
+- `context.md` — L1 Architecture & Feature Routing Index สำหรับ AI Coding Agents (ชี้เป้า Primary/Secondary files สำหรับการแก้ไขฟีเจอร์)
+- `documents/` — รายละเอียดสถาปัตยกรรมเชิงลึก, เอกสาร Knowledge Base, คู่มือการจูน OCR, และ Roadmaps
