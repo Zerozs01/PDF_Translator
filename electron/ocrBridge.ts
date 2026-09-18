@@ -281,33 +281,76 @@ export async function runExternalOcrRaw(payload: {
   }
 }
 
+const activePrewarmPromises = new Map<string, Promise<ExternalOcrWarmupResponse>>();
+const recentPrewarmTimestamps = new Map<string, number>();
+const PREWARM_DEDUPE_TTL_MS = 60_000; // 60s cache window to prevent repeated warmups
+
 export async function prewarmExternalOcrEngine(
   engine: ExternalBridgeEngine,
   language: string = 'eng'
 ): Promise<ExternalOcrWarmupResponse> {
-  const response = await requestDaemon(engine, {
-    action: 'prewarm',
-    engine,
-    language,
-  });
+  const cacheKey = `${engine}:${language}`;
+  const now = Date.now();
+  const lastPrewarmed = recentPrewarmTimestamps.get(cacheKey);
 
-  if (!response.ok) {
-    throw new Error(response.reason || `Failed to prewarm external OCR engine "${engine}"`);
+  // Return instantly if successfully prewarmed recently
+  if (lastPrewarmed && now - lastPrewarmed < PREWARM_DEDUPE_TTL_MS) {
+    return {
+      ok: true,
+      engine,
+      runtime: 'Python bridge',
+      description: `${engine} already warm (${language})`,
+    };
   }
 
-  return {
-    ok: true,
-    engine,
-    runtime: response.runtime || 'Python bridge',
-    description: response.description || `${engine} warmed`,
-  };
+  // Deduplicate in-flight prewarm requests
+  const existingPromise = activePrewarmPromises.get(cacheKey);
+  if (existingPromise) {
+    return await existingPromise;
+  }
+
+  const prewarmPromise = (async () => {
+    try {
+      const response = await requestDaemon(engine, {
+        action: 'prewarm',
+        engine,
+        language,
+      });
+
+      if (!response.ok) {
+        throw new Error(response.reason || `Failed to prewarm external OCR engine "${engine}"`);
+      }
+
+      recentPrewarmTimestamps.set(cacheKey, Date.now());
+
+      return {
+        ok: true,
+        engine,
+        runtime: response.runtime || 'Python bridge',
+        description: response.description || `${engine} warmed`,
+      };
+    } finally {
+      activePrewarmPromises.delete(cacheKey);
+    }
+  })();
+
+  activePrewarmPromises.set(cacheKey, prewarmPromise);
+  return await prewarmPromise;
 }
 
 export function cancelExternalOcr(engine?: ExternalBridgeEngine): void {
   if (engine) {
+    for (const key of Array.from(recentPrewarmTimestamps.keys())) {
+      if (key.startsWith(`${engine}:`)) {
+        recentPrewarmTimestamps.delete(key);
+      }
+    }
+    activePrewarmPromises.delete(engine);
     teardownDaemon(engine, new Error(`External OCR canceled for ${engine}`));
     return;
   }
+  recentPrewarmTimestamps.clear();
+  activePrewarmPromises.clear();
   disposeExternalOcrDaemons();
 }
 

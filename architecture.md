@@ -152,7 +152,7 @@ User Enqueues Job -> BackgroundQueueProcessor -> Reusable Headless Canvas Pool (
 ## 6. Technical Debt & Prototype Limitations
 
 - **Tight Coupling:**
-  - `LayerGroupingService.ts` มีโค้ดดักพิกัดเฉพาะกรณี `if (ocrResult.pageNumber === 5)` สำหรับ Regression Test Fixture ซึ่งเป็นร่องรอยการผูกติดกับหน้าทดสอบเฉพาะกิจ
+  - `[Resolved]` `LayerGroupingService.ts`: ขจัดโค้ดดักพิกัดเฉพาะกรณี `if (ocrResult.pageNumber === 5)` ออกจาก Production Code เรียบร้อยแล้ว โดยย้ายการจัดเรียงพิกัดที่สมจริงเข้าสู่ Test Fixture โดยตรง
   - `BackgroundQueueProcessor.ts` มีความรับผิดชอบหลายด้านรวมกัน (เรนเดอร์ Headless Canvas, ประสานงาน IPC, จัดการ Prefetch, และซิงค์ Store) ทำให้ไฟล์มีขนาดใหญ่กว่า 50KB
 - **Prototype Shortcuts:**
   - `useDocumentTranslation.ts` มีขนาดโค้ดกว่า 40KB (800+ บรรทัด) ทำหน้าที่เป็น Orchestrator ครอบคลุมทั้ง Single-page, Batch, Error Retries, และ Layer Sync

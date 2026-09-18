@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import type { TextLayer, TextLayerGroup } from '../../types/layers';
+import type { OCRLine } from '../../types';
 import {
   clampOverlayRect,
   computeOverlayTypography,
@@ -124,7 +125,7 @@ const renderOverlayTextWithSearchHighlight = (
 
 export interface OverlayLineItemProps {
   idx: number;
-  line: any;
+  line: OCRLine;
   layout?: OverlayLayout;
   layer?: TextLayer;
   renderText: string;

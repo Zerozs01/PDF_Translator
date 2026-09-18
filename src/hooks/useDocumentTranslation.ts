@@ -243,6 +243,11 @@ export function useDocumentTranslation({
       useAngleCls: ocrOptions.useAngleCls,
     });
 
+    const engineToPrewarm = (ocrOptions.engine || 'paddleocr') as OCREngine;
+    if (window.electronAPI?.ocr?.prewarmEngine && (engineToPrewarm === 'paddleocr' || engineToPrewarm === 'easyocr')) {
+      void window.electronAPI.ocr.prewarmEngine({ engine: engineToPrewarm, language: ocrOptions.language || 'eng' }).catch(() => {});
+    }
+
     setTranslationStatus({
       kind: 'info',
       message: 'เพิ่มงาน OCR All Pages เข้าสู่คิวเรียบร้อยแล้ว',

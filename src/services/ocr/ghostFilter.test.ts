@@ -54,4 +54,40 @@ describe('filterGhostOcrData', () => {
     expect(cleanWords).toHaveLength(1);
     expect(cleanWords[0].text).toBe('Good');
   });
+
+  it('records dropCounts and droppedWords diagnostics categorized by noise signature', () => {
+    const lines: OCRLine[] = [
+      { text: 'AAAANLWAL', bbox: { x0: 10, y0: 10, x1: 50, y1: 30 }, confidence: 90, words: [] },
+      { text: 'lll|||', bbox: { x0: 10, y0: 40, x1: 30, y1: 80 }, confidence: 85, words: [] },
+      { text: '@@@###', bbox: { x0: 10, y0: 90, x1: 50, y1: 110 }, confidence: 80, words: [] },
+      { text: 'Valid dialogue', bbox: { x0: 100, y0: 100, x1: 300, y1: 140 }, confidence: 95, words: [] },
+    ];
+
+    const result = filterGhostOcrData(lines, [], 'paddleocr');
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0].text).toBe('Valid dialogue');
+
+    // Diagnostics assertions
+    expect(result.dropCounts).toBeDefined();
+    expect(result.dropCounts?.ghostGarbageHallucinationDrop).toBe(1);
+    expect(result.dropCounts?.ghostVerticalLineJunkDrop).toBe(1);
+    expect(result.dropCounts?.ghostPureSymbolNoiseDrop).toBe(1);
+
+    expect(result.droppedWords).toHaveLength(3);
+    expect(result.droppedWords).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filter: 'ghostFilter',
+          reason: 'garbageHallucination',
+          text: 'AAAANLWAL',
+        }),
+        expect.objectContaining({
+          filter: 'ghostFilter',
+          reason: 'verticalLineJunk',
+          text: 'lll|||',
+        }),
+      ])
+    );
+  });
 });
+

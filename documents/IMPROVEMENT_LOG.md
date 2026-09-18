@@ -103,11 +103,36 @@
 - **Comprehensive DAO Test Coverage:** ขยายชุดทดสอบ [TranslationDAO.test.ts](file:///c:/App/Electron/PDF_Translator/electron/dao/TranslationDAO.test.ts) ให้ครอบคลุม `save`, `saveBatch`, `getByPage` (รวมถึงการกรอง Cache Version < v40 และการรับมือ JSON พัง), และการทำงานของ `SentenceTranslationDAO` (`save`, `get`, `getBatch`, `clearAll`) เต็มรูปแบบ
 - **Vitest Teardown Timeout:** ปรับ `teardownTimeout` ใน [vite.config.ts](file:///c:/App/Electron/PDF_Translator/vite.config.ts) เป็น 10,000ms เพื่อรองรับการปิด Process ย่อยบน Windows อย่างราบรื่น
 
+### 🏗️ 2.11 Deep Architectural Refactoring, Layer Ghost Centralization & Security Hardening
+- **Layer Ghost Noise Filter Centralization ([layerGhostFilter.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/layerGhostFilter.ts)):** รวมศูนย์ Heuristic Filter เลเยอร์ขยะจาก spiky balloon border, noise symbols, และ phantom `BELIEVE` ขจัดโค้ดซ้ำซ้อน ~125 บรรทัดระหว่าง [PDFPageOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFPageOverlay.tsx) และ [LayerPanel.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/LayerPanel.tsx) ป้องกันปัญหา Visual Desync ระหว่าง Panel ซ้ายมือและ Canvas พร้อม 8 Unit Tests ครอบคลุม 100%
+- **Production Logger Hardening & Non-blocking Stream ([main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts)):**
+  - เปลี่ยนจากการเขียนไฟล์แบบ Sync (`fs.appendFileSync`) มาเป็น Non-blocking `fs.createWriteStream`
+  - เพิ่มระบบ Auto-Rotation ที่ขนาด 10MB พร้อมสำรองไฟล์ `.old` ป้องกันปัญหา Disk Space Exhaustion (DoS)
+  - เพิ่มการ Sanitize Newlines (`\r\n` -> `\n`) เพื่อป้องกัน Log Injection (CWE-117) และจำกัดขนาด Argument สูงสุด 4,000 ตัวอักษร
+- **PDF Canvas Decoupling & Strict Typing:** สกัด [PDFPageContainer.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFPageContainer.tsx) และ [PDFCanvasContext.ts](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvasContext.ts) ออกจาก [PDFCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx) (ลดขนาดไฟล์ลงจาก 651 เหลือ ~345 บรรทัด) พร้อมบังคับใช้ Strict Type `PDFPageLoadedEvent` และเพิ่ม Early Return Guard ข้ามการตั้ง Timer แคชเมื่อข้อมูลหน้ามีอยู่ใน Memory แล้ว
+- **Smooth 60FPS Interactive Layer Transforms ([InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx)):**
+  - บังคับใช้ `useShallow` Selector ป้องกัน Re-render กระจายตัว
+  - หน่วงเวลาการ Resize กล่องข้อความผ่าน `requestAnimationFrame` ตาม Refresh Rate หน้าจอ ลด Store Churn ลงกว่า 75% บนจอ 144Hz+
+  - ปรับการหมุนเลเยอร์ (`rotate`) ให้ใช้ Optimistic Direct DOM Style (`rotate(...)`) ลื่นไหล 60FPS และ Commit ลง Zustand Store ครั้งเดียวตอนปล่อยเมาส์
+- **Removal of Hardcoded Test Fixture Hack ([LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts)):** ขจัดเงื่อนไข `if (ocrResult.pageNumber === 5)` ออกจาก Production Code และย้ายพิกัดเรขาคณิตที่สมจริงเข้าสู่ [LayerGroupingService.test.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.test.ts)
+- **OCR Post-Processing Pipeline Tests (Roadmap P1):** เพิ่มชุดทดสอบ [ocrPostProcessingPipeline.test.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrPostProcessingPipeline.test.ts) 5 ข้อ เพื่อยืนยันการคงอยู่ของบรรทัด Technical/Formulas/Captions และความเสถียรข้าม Engine
+
+### 🐞 1.10 Background Queue Page 1 Latency & React Hook Order Crash
+
+- **สาเหตุ:**
+  1. การประมวลผลหน้าแรกกินเวลารวมเกือบ 50 วินาที เนื่องจาก Python Bridge + PyTorch + DirectML initialization (~12.4s) ถูกเรียกแบบ Sequential หลัง PDF.js เรนเดอร์ Canvas 300 DPI เสร็จแล้ว
+  2. UI แสดงผล Runtime ค้างที่ "0s" เพราะตัวแสดงผลไม่ได้ผูกกับ Live Interval Ticker และตัวกรองข้อความตัด Stage การทำงานจริงออก
+  3. เกิด React Error Boundary Crash (`Rendered more hooks than during the previous render`) ใน [BackgroundQueuePanel.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueuePanel.tsx) เมื่อ Vite ทำ Fast Refresh (HMR) เนื่องจากจำนวน Hook เปลี่ยนแปลง
+- **การแก้ไข:**
+  - **Eager Daemon Prewarm:** สั่ง `prewarmEngine` ตั้งแต่วินาทีที่ 0 เมื่อเริ่มงานคิว ขนานไปกับการอ่านไฟล์และการเรนเดอร์ Canvas 300 DPI ตัดเวลา Cold Start ออกจากหน้าแรกได้สำเร็จ 100% (ลดเวลาจาก ~50s เหลือ ~12-15s โดยคงความละเอียด 300 DPI ไว้ตามเดิม)
+  - **Prewarm Deduplication & TTL Cache:** ใน [electron/ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) เพิ่มระบบ In-flight Promise reuse และ TTL Cache 60 วินาที ป้องกันการส่งคำสั่ง Prewarm ซ้ำซ้อนจาก UI Dialog และ Queue Processor
+  - **Container/Presenter Architecture:** แยก [BackgroundQueuePanel.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueuePanel.tsx) เป็น Container (`BackgroundQueuePanel`) ที่มี Hook ระดับบนสุดตัวเดียว และ Presenter (`BackgroundQueuePanelContent`) ที่โหลดเฉพาะเมื่อมีงาน พร้อมติดตั้ง Live 1-Second Interval Ticker แสดงผลเวลานับถอยหลัง/เดินหน้าแบบ Real-time และปลดล็อกข้อความแสดงสถานะงานจริง
+
 ---
 
 ## 🧪 3. Verification & Compliance Standard
 
-- **Vitest Unit Test Suite:** **Passed 100% (375 unit tests passed across 31 test files, zero hanging handles)**
+- **Vitest Unit Test Suite:** **Passed 100% (407 unit tests passed across 35 test files, zero hanging handles)**
 - **TypeScript Compiler (`tsc --noEmit`):** **0 Error (ผ่านสมบูรณ์ 100%)**
-- **Core Rules Compliance:** คงความแม่นยำของ Bounding Box / Border Detect ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts), [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) และ [ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) ไว้อย่างเสถียร 100%
+- **Core Rules Compliance:** คงความละเอียด 300 DPI, `maxPixels: 37,650,000` และ Bounding Box / Border Detect ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts), [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) ไว้อย่างเสถียร 100%
 

@@ -434,6 +434,11 @@ export const UploadScreen: React.FC = () => {
       });
     }
 
+    // Eagerly prewarm daemon in background while queue initializes
+    if (window.electronAPI?.ocr?.prewarmEngine && (model === 'paddleocr' || model === 'easyocr')) {
+      void window.electronAPI.ocr.prewarmEngine({ engine: model, language: ocrLanguage }).catch(() => {});
+    }
+
     // ไม่เรียก boostPriorityForDocument สำหรับคิวเบื้องหลัง (Case 1)
     // งานที่เพิ่มจาก OCR Panel จะต่อท้ายคิวตาม FIFO โดยไม่แทรกคิวหรือยกเลิกงานที่กำลังรันอยู่
     setOcrBackgroundDialog(prev => ({ ...prev, isOpen: false, doc: null }));

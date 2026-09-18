@@ -29,7 +29,7 @@ import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
 import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
-import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
+import { filterGhostTextLayers } from '../../services/layers/layerGhostFilter';
 import { OverlayLineItem } from './OverlayLineItem';
 
 // ─── Helper Functions ───────────────────────────────────────────
@@ -77,7 +77,8 @@ const getOffsetRelativeTo = (child: HTMLElement, ancestor: HTMLElement) => {
   return { x, y };
 };
 
-const EMPTY_ARRAY: any[] = [];
+const EMPTY_LAYERS: TextLayer[] = [];
+const EMPTY_GROUPS: TextLayerGroup[] = [];
 
 // ─── PDFPageOverlay Component ───────────────────────────────────
 
@@ -102,7 +103,7 @@ export const PDFPageOverlay: React.FC<{
   const storePreviewMode = useOCRTextLayerStore((s) => s.translationPreviewMode);
   const translationPreviewMode = previewModeOverride || storePreviewMode;
   const ocrResultSearchQuery = useOCRTextLayerStore((s) => s.ocrResultSearchQuery);
-  const options = useOCRTextLayerStore((s) => s.options);
+  const optionsLanguage = useOCRTextLayerStore((s) => s.options.language || 'eng');
 
   const currentPageOCR = useOCRTextLayerStore((s) => {
     const selectedEngine = s.options.engine || 'paddleocr';
@@ -123,8 +124,8 @@ export const PDFPageOverlay: React.FC<{
   const currentPageTranslationMap = useOCRTextLayerStore((s) => s.translationCacheByPage.get(pageNum));
   const activeTranslationKey = useOCRTextLayerStore((s) => s.activeTranslationKeyByPage.get(pageNum));
 
-  const rawCurrentPageLayers = useLayerStore((s) => s.layersByPage.get(pageNum) || (EMPTY_ARRAY as TextLayer[]));
-  const rawCurrentPageGroups = useLayerStore((s) => s.groupsByPage.get(pageNum) || (EMPTY_ARRAY as TextLayerGroup[]));
+  const rawCurrentPageLayers = useLayerStore((s) => s.layersByPage.get(pageNum) || EMPTY_LAYERS);
+  const rawCurrentPageGroups = useLayerStore((s) => s.groupsByPage.get(pageNum) || EMPTY_GROUPS);
   const editingLayerId = useLayerStore((s) => s.editingLayerId);
   const deletedLineIndexes = useLayerStore((s) => s.deletedLineIndexesByPage.get(pageNum));
 
@@ -152,8 +153,8 @@ export const PDFPageOverlay: React.FC<{
 
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR: currentPageOCRResolved,
-    optionsEngine: effectiveOCREngineResolved as any,
-    optionsLanguage: options.language || 'eng',
+    optionsEngine: effectiveOCREngineResolved as OCREngine,
+    optionsLanguage,
     translationMode,
     sourceLanguage,
     targetLanguage,
@@ -166,7 +167,7 @@ export const PDFPageOverlay: React.FC<{
     currentPageOCRResolved,
     currentPageTranslationMap,
     effectiveOCREngineResolved,
-    options.language,
+    optionsLanguage,
     sourceLanguage,
     targetLanguage,
     translationMode,
@@ -176,72 +177,7 @@ export const PDFPageOverlay: React.FC<{
 
   // Real-Time Layer Ghost Noise Filter: surgical cleanup of spiky balloon border layers in frontend view
   const currentPageLayers = useMemo(() => {
-    const thaiLayers = rawCurrentPageLayers.filter(l => 
-      l && l.visible && /[\u0E00-\u0E7F]/.test(String(l.text || ''))
-    );
-
-    return rawCurrentPageLayers.filter((layer) => {
-      if (!layer) return false;
-      if (layer.userEdited) return true;
-
-      const sourceText = String(layer.sourceText || '').trim();
-      const currentText = String(layer.text || '').trim();
-      const text = sourceText || currentText;
-      if (!text) return false;
-
-      const compact = text.replace(/\s+/g, '');
-      const compactUpper = compact.toUpperCase();
-      if (compactUpper === 'AAAANLWAL') return false; // Garbage filter
-
-      if (compactUpper === 'BELIEVE') {
-        const hasOverlapWithThai = thaiLayers.some(thaiLayer => {
-          if (!layer.bbox || !thaiLayer.bbox) return false;
-          const areaA = (layer.bbox.x1 - layer.bbox.x0) * (layer.bbox.y1 - layer.bbox.y0);
-          if (areaA <= 0) return false;
-          
-          const interX0 = Math.max(layer.bbox.x0, thaiLayer.bbox.x0);
-          const interY0 = Math.max(layer.bbox.y0, thaiLayer.bbox.y0);
-          const interX1 = Math.min(layer.bbox.x1, thaiLayer.bbox.x1);
-          const interY1 = Math.min(layer.bbox.y1, thaiLayer.bbox.y1);
-          
-          const interArea = Math.max(0, interX1 - interX0) * Math.max(0, interY1 - interY0);
-          return (interArea / areaA) >= 0.7;
-        });
-        if (hasOverlapWithThai) {
-          return false;
-        }
-      }
-
-      const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
-      const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(sourceText)
-        || /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(currentText);
-
-      const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
-      if (isPureSymbolNoise) return false;
-
-      const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
-      if (isVerticalLineJunk) return false;
-
-      const isSingleCharJunk = !hasCjkOrThai && asciiCompact.length === 1 && !/^[IAO]$/i.test(asciiCompact) && !/^[0-9]$/.test(asciiCompact);
-      if (isSingleCharJunk) return false;
-
-      const bbox = layer.bbox;
-      if (bbox) {
-        const width = Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
-        const height = Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
-        const area = width * height;
-
-        const isKnownShortWord = isKnownShortWordHelper(asciiCompact)
-          || Boolean(lookupShortPhraseTh(sourceText))
-          || Boolean(lookupShortPhraseTh(currentText))
-          || Boolean(lookupShortPhraseTh(asciiCompact));
-        const isTinyJunkBox = !hasCjkOrThai && asciiCompact.length <= 3 && area <= 8000 && !isKnownShortWord;
-
-        if (isTinyJunkBox) return false;
-      }
-
-      return true;
-    });
+    return filterGhostTextLayers(rawCurrentPageLayers);
   }, [rawCurrentPageLayers]);
 
   // Synchronized groups filter to strip ghost layers and drop empty groups on Canvas

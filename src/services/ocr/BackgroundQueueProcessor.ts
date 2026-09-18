@@ -279,9 +279,17 @@ class BackgroundQueueProcessor {
       throw new Error('Process aborted by signal');
     }
 
+    // 0. Eager prewarm OCR daemon in background (parallel to PDF read/render)
+    if (window.electronAPI?.ocr?.prewarmEngine && (job.engine === 'paddleocr' || job.engine === 'easyocr')) {
+      const targetLang = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+      void window.electronAPI.ocr.prewarmEngine({ engine: job.engine, language: targetLang }).catch((err: unknown) => {
+        console.warn(`[QueueProcessor] Background prewarm warning for ${job.engine}:`, err);
+      });
+    }
+
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
     // แสดง immediate feedback บอก user ว่าเริ่มงานแล้ว (ลด delay การ perceive)
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 0, 0, 'เตรียมงาน...');
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 1, 0, 'กำลังโหลดไฟล์เอกสาร...');
     let fileData: ArrayBuffer;
     try {
       const fileRes = await window.electronAPI.fs.readFile(job.filepath);
@@ -299,12 +307,12 @@ class BackgroundQueueProcessor {
     throwIfAborted();
 
     // 2. โหลด PDF ผ่าน pdfjs ในหน่วยความจำ (Headless Mode)
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 5, 1, 'กำลังเตรียมโครงสร้างรูปภาพ...');
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 3, 1, 'กำลังเตรียมโครงสร้างเอกสาร...');
     const pdfDoc = await pdfjs.getDocument({ data: fileData }).promise;
     const totalPages = pdfDoc.numPages;
 
     console.log(`[QueueProcessor] PDF loaded. Total pages: ${totalPages}`);
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 5, 1, 'กำลังเตรียมโครงสร้างรูปภาพ...', totalPages);
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 5, 1, 'กำลังเตรียมเรนเดอร์หน้าแรก...', totalPages);
 
     const isSinglePage = job.type.endsWith('_single') && typeof job.targetPage === 'number';
     const startPage = isSinglePage ? (job.targetPage as number) : 1;
@@ -558,6 +566,12 @@ class BackgroundQueueProcessor {
       }
 
       if (!pageData) {
+        useBackgroundQueueStore.getState().updateJobProgress(
+          job.id,
+          Math.max(5, useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id)?.progress || 5),
+          pageNum,
+          `กำลังเรนเดอร์ภาพหน้าที่ ${pageNum} (300 DPI)...`
+        );
         pageData = await this.renderHeadlessPage(pdfDoc, pageNum, job, signal);
       }
 
@@ -579,6 +593,13 @@ class BackgroundQueueProcessor {
         const resolvedUseAngleCls = job.useAngleCls !== undefined
           ? Boolean(job.useAngleCls)
           : Boolean(options.useAngleCls);
+
+        useBackgroundQueueStore.getState().updateJobProgress(
+          job.id,
+          Math.max(10, useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id)?.progress || 10),
+          pageNum,
+          `กำลังตรวจจับตัวอักษรหน้าที่ ${pageNum} ด้วย ${job.engine}...`
+        );
 
         const ocrPromise = visionService.ocrForTextLayer(
           pageData.imageBlob,
@@ -913,7 +934,15 @@ class BackgroundQueueProcessor {
 
     throwIfAborted();
 
-    // 2. โหลดไฟล์และเรนเดอร์หน้าเอกสาร
+    // 2. Eager prewarm OCR daemon in background (parallel to PDF read/render)
+    if (window.electronAPI?.ocr?.prewarmEngine && (engine === 'paddleocr' || engine === 'easyocr')) {
+      const targetLang = options?.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+      void window.electronAPI.ocr.prewarmEngine({ engine, language: targetLang }).catch((err: unknown) => {
+        console.warn(`[runSinglePageOCR] Background prewarm warning for ${engine}:`, err);
+      });
+    }
+
+    // 3. โหลดไฟล์และเรนเดอร์หน้าเอกสาร
     const isPdf = filePath.toLowerCase().endsWith('.pdf');
     let pageData: RenderedPageData;
 

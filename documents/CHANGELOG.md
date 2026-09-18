@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed & Optimized — Architectural Refactoring, Layer Ghost Centralization & Security Hardening
+
+- **Layer Ghost Noise Filter Centralization (`layerGhostFilter.ts`):** Extracted unified heuristic filtering for spiky balloon borders, pure symbol debris, and phantom `BELIEVE` artifacts out of `PDFPageOverlay.tsx` and `LayerPanel.tsx`, eliminating duplicate code and preventing visual desynchronization. Added 8 unit tests in `layerGhostFilter.test.ts`.
+- **Canvas Decoupling & Strict Typing (`PDFPageContainer.tsx`, `PDFCanvasContext.ts`):** Decoupled page rendering out of `PDFCanvas.tsx` into a standalone container component, reducing `PDFCanvas.tsx` from 651 to ~345 lines. Strictly typed page load proxy events via `PDFPageLoadedEvent` (zero `any`). Added early return cache guard in `PDFPageContainer.tsx` to eliminate redundant timer and microtask allocations for in-memory pages.
+- **60FPS Layer Interaction & Throttled Resize (`InteractiveLayerOverlay.tsx`):** Throttled bounding box `resize` dispatches using `requestAnimationFrame` matching screen refresh rates (eliminating store churn and frame drops on 144Hz+ monitors). Applied optimistic direct DOM transforms (`rotate(...)`) for layer rotation, committing to Zustand store only upon mouse release. Replaced whole-store destructuring with `useShallow` selectors.
+- **Production Logger Hardening (`electron/main.ts`):** Converted synchronous disk appends into a non-blocking `fs.WriteStream` with graceful flush handlers on application shutdown. Added 10MB auto-rotation (`main.log.old`) to eliminate disk space exhaustion risks, and sanitized log parameters against newlines to prevent Log Injection (CWE-117).
+- **Removal of Hardcoded Test Fixture Hack (`LayerGroupingService.ts`):** Removed `if (ocrResult.pageNumber === 5)` from production grouping logic, moving realistic coordinate alignments into `LayerGroupingService.test.ts`.
+- **Background Queue Cold-Start Elimination & Eager Prewarm (`BackgroundQueueProcessor.ts`, `UploadScreen.tsx`, `useDocumentTranslation.ts`):** Triggered eager OCR engine prewarming in the background at second 0 concurrently with PDF.js 300 DPI canvas rendering. Reduced page 1 turnaround time from ~50s to ~12-15s without lowering DPI or maxPixels.
+- **In-Flight Prewarm Deduplication & 60s TTL Cache (`electron/ocrBridge.ts`):** Added active Promise deduplication and a 60-second TTL cache for `prewarmExternalOcrEngine` to eliminate redundant IPC and daemon queue calls between UI dialogs and background processors.
+- **React Hook Order Hardening & Live Ticker (`BackgroundQueuePanel.tsx`):** Refactored background queue drawer into Container/Presenter architecture (`BackgroundQueuePanel` + `BackgroundQueuePanelContent`), strictly eliminating Hook order mismatches under Vite Fast Refresh (HMR). Added live 1-second interval runtime ticker and granular progress stages.
+- **OCR Post-Processing Pipeline Test Suite (`ocrPostProcessingPipeline.test.ts`):** Added 5 unit tests for P1 roadmap action (validating technical row retention: formulas, equations, captions, and multi-engine consistency).
+- **Expanded Test Coverage:** Increased automated Vitest test suite to 35 test files and 407 unit tests (100% pass rate).
+
 ### Added — Home Library Navigation, Folders & File Management
 
 - **Interactive Breadcrumb Navigation:** Added a file-explorer-style breadcrumbs bar (`Home / Folder / Subfolder`) allowing 1-click ancestor navigation while preserving active Tag filters when navigating back to Home.

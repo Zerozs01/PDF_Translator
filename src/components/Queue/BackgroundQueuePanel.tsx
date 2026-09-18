@@ -1,19 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RefreshCw, ChevronDown, ChevronUp, Pause, Play, Trash2 } from 'lucide-react';
-import { useBackgroundQueueStore } from '../../stores/useBackgroundQueueStore';
+import { useBackgroundQueueStore, BackgroundJob } from '../../stores/useBackgroundQueueStore';
 
-export const BackgroundQueuePanel = React.memo(() => {
-  const queueJobs = useBackgroundQueueStore((state) => state.jobs);
+interface BackgroundQueuePanelContentProps {
+  visibleQueueJobs: BackgroundJob[];
+  activeJob: BackgroundJob;
+}
+
+const BackgroundQueuePanelContent: React.FC<BackgroundQueuePanelContentProps> = React.memo(({
+  visibleQueueJobs,
+  activeJob,
+}) => {
   const [isQueuePanelExpanded, setIsQueuePanelExpanded] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
 
-  const visibleQueueJobs = queueJobs.filter(j => !j.type.endsWith('_single'));
-  if (visibleQueueJobs.length === 0) return null;
+  const activeStartTime = activeJob.startTime || activeJob.createdAt;
+  const isProcessing = activeJob.status === 'processing';
 
-  const activeJob = visibleQueueJobs.find(j => j.status === 'processing') || 
-                    visibleQueueJobs.find(j => j.status === 'paused') ||
-                    visibleQueueJobs.find(j => j.status === 'pending');
-  
-  if (!activeJob) return null;
+  useEffect(() => {
+    if (!activeStartTime || !isProcessing) {
+      if (activeStartTime) {
+        setElapsedSec(Math.max(0, Math.floor((Date.now() - activeStartTime) / 1000)));
+      } else {
+        setElapsedSec(0);
+      }
+      return;
+    }
+
+    setElapsedSec(Math.max(0, Math.floor((Date.now() - activeStartTime) / 1000)));
+    const timer = setInterval(() => {
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - activeStartTime) / 1000)));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [activeJob.id, activeStartTime, isProcessing]);
 
   const isPaused = activeJob.status === 'paused';
   const progressPercent = activeJob.totalPages > 0 
@@ -60,11 +80,8 @@ export const BackgroundQueuePanel = React.memo(() => {
           </div>
 
           <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1.5">
-            <div className="truncate flex-1 pr-2">
-              {activeJob.message && !activeJob.message.includes('หน้าที่') && !activeJob.message.includes('วิเคราะห์และแปล')
-                ? activeJob.message
-                : ''
-              }
+            <div className="truncate flex-1 pr-2" title={activeJob.message || ''}>
+              {activeJob.message || (activeJob.status === 'processing' ? 'กำลังประมวลผล...' : '')}
             </div>
             <div className="shrink-0 font-mono">
               {activeJob.currentPage}/{activeJob.totalPages} หน้า ({progressPercent}%)
@@ -89,7 +106,7 @@ export const BackgroundQueuePanel = React.memo(() => {
           <div className="flex items-center justify-between gap-2">
             <div className="text-[9px] text-slate-500 shrink-0 font-mono">
               Runtime: <span className="font-semibold text-slate-300">
-                {Math.max(0, Math.floor((Date.now() - activeJob.createdAt) / 1000))}s
+                {elapsedSec}s
               </span>
             </div>
             <div className="flex items-center gap-1">
@@ -225,6 +242,28 @@ export const BackgroundQueuePanel = React.memo(() => {
         )}
       </div>
     </div>
+  );
+});
+
+BackgroundQueuePanelContent.displayName = 'BackgroundQueuePanelContent';
+
+export const BackgroundQueuePanel: React.FC = React.memo(() => {
+  const queueJobs = useBackgroundQueueStore((state) => state.jobs);
+
+  const visibleQueueJobs = queueJobs.filter((j) => !j.type.endsWith('_single'));
+  const activeJob = visibleQueueJobs.find((j) => j.status === 'processing') || 
+                    visibleQueueJobs.find((j) => j.status === 'paused') ||
+                    visibleQueueJobs.find((j) => j.status === 'pending');
+
+  if (visibleQueueJobs.length === 0 || !activeJob) {
+    return null;
+  }
+
+  return (
+    <BackgroundQueuePanelContent 
+      visibleQueueJobs={visibleQueueJobs} 
+      activeJob={activeJob} 
+    />
   );
 });
 

@@ -462,39 +462,7 @@ export const buildLayerGroupsFromOCR = (
   ocrResult: OCRPageResult,
   translatedByIndex?: Map<number, string>
 ): LayerGroupingResult => {
-  let rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
-
-  // Patch for Page 5 PaddleOCR Coordinate Shift Bug
-  if (ocrResult.pageNumber === 5) {
-    const aroundLine = rawLines.find(l => l.text.includes("AROUND ABOUT"));
-    if (aroundLine) {
-      const x0 = aroundLine.bbox.x0;
-      const x1 = aroundLine.bbox.x1;
-      const aroundY0 = aroundLine.bbox.y0;
-
-      rawLines = rawLines.map(line => {
-        if (line.text.includes("RUMORS FLOATING")) {
-          return {
-            ...line,
-            bbox: { x0, y0: aroundY0 - 55, x1, y1: aroundY0 - 15 }
-          };
-        }
-        if (line.text.includes("KINDS OF AWFUL")) {
-          return {
-            ...line,
-            bbox: { x0, y0: aroundY0 - 110, x1, y1: aroundY0 - 70 }
-          };
-        }
-        if (line.text.includes("CONSIDERING THE")) {
-          return {
-            ...line,
-            bbox: { x0, y0: aroundY0 - 165, x1, y1: aroundY0 - 125 }
-          };
-        }
-        return line;
-      });
-    }
-  }
+  const rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
   const pageWidth = Math.max(1, ocrResult.width);
   const pageHeight = Math.max(1, ocrResult.height);
 

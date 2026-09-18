@@ -51,7 +51,7 @@ User Interaction -> React Component / Canvas -> Zustand Store / Hook -> IPC Brid
 ## 4. Feature-to-File Routing
 - OCR Processing & Lifecycle
   - Primary: src/services/ocr/BackgroundQueueProcessor.ts
-  - Secondary: electron/ocrBridge.ts, electron/ocrDaemonManager.ts, src/services/ocr/ocrTextNormalizer.ts
+  - Secondary: electron/ocrBridge.ts, electron/ocrDaemonManager.ts, src/services/ocr/ocrTextNormalizer.ts, src/services/ocr/ocrPostProcessingPipeline.ts, src/services/ocr/ghostFilter.ts
   - Scope: ควบคุมคิว OCR เบื้องหลังและสื่อสารกับ Python Daemon
 - Offline Translation Pipeline
   - Primary: src/services/translation/translationCoordinator.ts
@@ -59,11 +59,11 @@ User Interaction -> React Component / Canvas -> Zustand Store / Hook -> IPC Brid
   - Scope: ประสานงานแปลออฟไลน์ กรองคำสแลง และเชื่อมต่อพจนานุกรม
 - Text Layer Grouping & Balloon Detection
   - Primary: src/services/layers/LayerGroupingService.ts
-  - Secondary: src/services/layout/balloonAwareGroupingService.ts, src/services/native/fastSpatialCluster.ts, src/services/layout/dialogueGroupingService.ts
+  - Secondary: src/services/layers/layerGhostFilter.ts, src/services/layout/balloonAwareGroupingService.ts, src/services/native/fastSpatialCluster.ts, src/services/layout/dialogueGroupingService.ts
   - Scope: จัดกลุ่มกล่องข้อความ 2 มิติและตรวจจับขอบเขตบอลลูน
 - Canvas & Document Overlay Rendering
   - Primary: src/components/PDF/PDFCanvas.tsx
-  - Secondary: src/components/PDF/PDFPageOverlay.tsx, src/components/Layers/InteractiveLayerOverlay.tsx, src/services/pdf/TextLayerService.ts
+  - Secondary: src/components/PDF/PDFPageContainer.tsx, src/components/PDF/PDFCanvasContext.ts, src/components/PDF/translationLineNormalizer.ts, src/components/PDF/PDFPageOverlay.tsx, src/components/Layers/InteractiveLayerOverlay.tsx, src/services/pdf/TextLayerService.ts
   - Scope: เรนเดอร์หน้า PDF และวาดเลเยอร์ข้อความแปลซ้อนทับ
 - Layer Editing & Manipulation UI
   - Primary: src/components/Layers/LayerPanel.tsx

@@ -285,6 +285,11 @@ erDiagram
 - คำนวณความเหมือนของข้อความ (Sørensen–Dice Coefficient) โดยใช้ **Brian Kernighan's popcount** บน bitwise AND (`a & b`)
 - ใช้สมการ Hash: `((char1 * 31) ^ char2) & 0xFFFF` เพื่อรองรับรหัสภาษาไทย (`\u0E00-\u0E7F`) และ CJK โดยไม่เกิด Hash Collision
 
+### 5.3 60FPS UI Interaction & Render Optimization
+- **Centralized Layer Ghost Filter ([layerGhostFilter.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/layerGhostFilter.ts)):** รวมศูนย์ Heuristic Filter เลเยอร์ขยะจาก Spiky Balloon Border, Noise Symbols, และ Phantom `BELIEVE` ขจัดโค้ดซ้ำซ้อน ~125 บรรทัดและป้องกันการเกิด Visual Desync ระหว่าง Panel ซ้ายมือกับ Canvas
+- **RequestAnimationFrame Throttled Resize & Optimistic Transform ([InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx)):** หน่วงเวลาการส่งพิกัด BBox เข้า Store ผ่าน `requestAnimationFrame` ตามอัตราการรีเฟรชหน้าจอ (ขจัด Store Churn ลง 75% บนจอ 144Hz+) พร้อมใช้ Direct DOM Transform สำหรับการหมุนกล่องข้อความลื่นไหล 60FPS
+- **PDF Canvas Decoupling & Early Return Cache ([PDFPageContainer.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFPageContainer.tsx)):** แยกคอมโพเนนต์ระดับหน้าออกจาก [PDFCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx) (ลดขนาดไฟล์เหลือ ~345 บรรทัด) พร้อมบังคับใช้ Strict Type `PDFPageLoadedEvent` และ Early Return Guard ข้าม Timer เมื่อแคชหน้าเอกสารอยู่ใน Memory แล้ว
+
 ---
 
 ## 🏷️ 6. Versioning Contracts & System Keys

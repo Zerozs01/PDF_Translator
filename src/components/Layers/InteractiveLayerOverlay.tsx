@@ -11,6 +11,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { BBox } from '../../types';
 import type { TextLayer, TextLayerGroup } from '../../types/layers';
 import type { OverlayLayout } from '../OCR/translationOverlayUtils';
+import { useShallow } from 'zustand/react/shallow';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useUIStore } from '../../stores/useUIStore';
@@ -42,7 +43,28 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     setEditingLayerId,
     addManualLayer,
     deleteLayer,
-  } = useLayerStore();
+    undoLastAction,
+    deleteSelectedLayers,
+  } = useLayerStore(
+    useShallow((s) => ({
+      selectedLayerIds: s.selectedLayerIds,
+      selectLayer: s.selectLayer,
+      clearSelection: s.clearSelection,
+      updateLayerBBox: s.updateLayerBBox,
+      updateLayerText: s.updateLayerText,
+      updateLayerRotation: s.updateLayerRotation,
+      updateMultiLayerBBoxDelta: s.updateMultiLayerBBoxDelta,
+      synchronizeGroupBBox: s.synchronizeGroupBBox,
+      setHoveredLayer: s.setHoveredLayer,
+      pushUndoSnapshot: s.pushUndoSnapshot,
+      editingLayerId: s.editingLayerId,
+      setEditingLayerId: s.setEditingLayerId,
+      addManualLayer: s.addManualLayer,
+      deleteLayer: s.deleteLayer,
+      undoLastAction: s.undoLastAction,
+      deleteSelectedLayers: s.deleteSelectedLayers,
+    }))
+  );
 
   const storePreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
   const showDebugOverlay = useOCRTextLayerStore((state) => state.showDebugOverlay);
@@ -132,15 +154,19 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     startMouseX: number;
     startMouseY: number;
     startBBox?: BBox;
+    currentBBox?: BBox;
     resizeDir?: ResizeDirection;
     startRotation?: number;
+    currentRotation?: number;
     startCenterX?: number;
     startCenterY?: number;
     startAngle?: number;
   } | null>(null);
 
+  const resizeRafId = useRef<number | null>(null);
+  const pendingResizeBBox = useRef<{ pageNum: number; layerId: string; bbox: BBox } | null>(null);
+
   // ── Keyboard: Ctrl+Z Undo & Delete ──────────────────────────────
-  const { undoLastAction, deleteSelectedLayers } = useLayerStore();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !editingLayerId) {
@@ -231,14 +257,33 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
         });
       } else if (ds.type === 'resize' && ds.resizeDir && ds.layerId) {
         const newBBox = applyResize(ds.startBBox!, { dx, dy }, ds.resizeDir);
-        updateLayerBBox(pageNum, ds.layerId, newBBox);
+        ds.currentBBox = newBBox;
+        pendingResizeBBox.current = { pageNum, layerId: ds.layerId, bbox: newBBox };
+
+        if (!resizeRafId.current) {
+          resizeRafId.current = requestAnimationFrame(() => {
+            resizeRafId.current = null;
+            if (pendingResizeBBox.current) {
+              const { pageNum: p, layerId: lid, bbox: b } = pendingResizeBBox.current;
+              updateLayerBBox(p, lid, b);
+            }
+          });
+        }
       } else if (ds.type === 'rotate' && ds.startCenterX !== undefined && ds.layerId) {
         const cx = ds.startCenterX;
         const cy = ds.startCenterY!;
         const currentAngle = Math.atan2(e.clientY - cy, e.clientX - cx);
         const deltaAngle = currentAngle - ds.startAngle!;
-        const newRotation = (ds.startRotation || 0) + deltaAngle * (180 / Math.PI);
-        updateLayerRotation(pageNum, ds.layerId, Math.round(newRotation));
+        const newRotation = Math.round((ds.startRotation || 0) + deltaAngle * (180 / Math.PI));
+        ds.currentRotation = newRotation;
+
+        // Optimistic DOM transform for 60FPS rotation without store churn
+        const el = document.getElementById(`layer-bbox-${ds.layerId}`);
+        if (el) el.style.transform = `rotate(${newRotation}deg)`;
+        const maskEl = document.getElementById(`layer-mask-${ds.layerId}`);
+        if (maskEl) maskEl.style.transform = `rotate(${newRotation}deg)`;
+        const textEl = document.getElementById(`layer-text-${ds.layerId}`);
+        if (textEl) textEl.style.transform = `rotate(${newRotation}deg)`;
       } else if (ds.type === 'draw') {
         if (drawStartPos) {
           const zoom = useUIStore.getState().zoom || 1;
@@ -254,6 +299,11 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     const handleMouseUp = (e: MouseEvent) => {
       setActiveResizeDir(null);
       setIsRotating(false);
+
+      if (resizeRafId.current) {
+        cancelAnimationFrame(resizeRafId.current);
+        resizeRafId.current = null;
+      }
       
       const ds = dragState.current;
       if (!ds) return;
@@ -347,6 +397,22 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
           const layer = layers.find(l => l.id === ds.layerId);
           if (layer?.groupId) synchronizeGroupBBox(pageNum, layer.groupId);
         }
+      } else if (ds.type === 'resize' && ds.layerId && ds.currentBBox) {
+        updateLayerBBox(pageNum, ds.layerId, ds.currentBBox);
+        const layer = layers.find(l => l.id === ds.layerId);
+        if (layer?.groupId) synchronizeGroupBBox(pageNum, layer.groupId);
+      } else if (ds.type === 'rotate' && ds.layerId && ds.currentRotation !== undefined) {
+        // Clean up temporary DOM transform styles before committing to Zustand
+        const el = document.getElementById(`layer-bbox-${ds.layerId}`);
+        if (el) el.style.transform = ds.currentRotation ? `rotate(${ds.currentRotation}deg)` : '';
+        const maskEl = document.getElementById(`layer-mask-${ds.layerId}`);
+        if (maskEl) maskEl.style.transform = ds.currentRotation ? `rotate(${ds.currentRotation}deg)` : '';
+        const textEl = document.getElementById(`layer-text-${ds.layerId}`);
+        if (textEl) textEl.style.transform = ds.currentRotation ? `rotate(${ds.currentRotation}deg)` : '';
+
+        updateLayerRotation(pageNum, ds.layerId, ds.currentRotation);
+        const layer = layers.find(l => l.id === ds.layerId);
+        if (layer?.groupId) synchronizeGroupBBox(pageNum, layer.groupId);
       } else if (ds.layerId) {
         // Sync group BBox หลัง resize หรือ rotate เสร็จ
         const layer = layers.find(l => l.id === ds.layerId);
@@ -359,6 +425,10 @@ export const InteractiveLayerOverlay: React.FC<Props> = ({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => {
+      if (resizeRafId.current) {
+        cancelAnimationFrame(resizeRafId.current);
+        resizeRafId.current = null;
+      }
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };

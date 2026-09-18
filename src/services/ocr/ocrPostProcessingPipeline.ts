@@ -42,14 +42,35 @@ export function processOCRPageResult(
     : splitAggressiveMergedLines(result.lines || [], 2.2);
 
   // Step 2: Ghost noise filter
-  const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
+  const {
+    lines: cleanLines,
+    words: cleanWords,
+    droppedWords: ghostDroppedWords,
+    dropCounts: ghostDropCounts,
+  } = filterGhostOcrData(
     processedLines,
     result.words || [],
     options.engine,
     result.dpi || options.dpi || 300
   );
 
-  let processed: OCRPageResult = { ...result, lines: cleanLines, words: cleanWords, _splitDone: true };
+  let processed: OCRPageResult = {
+    ...result,
+    lines: cleanLines,
+    words: cleanWords,
+    _splitDone: true,
+    debug: {
+      ...(result.debug || {}),
+      droppedWords: [
+        ...(result.debug?.droppedWords || []),
+        ...(ghostDroppedWords || []),
+      ],
+      dropCounts: {
+        ...(result.debug?.dropCounts || {}),
+        ...(ghostDropCounts || {}),
+      },
+    },
+  };
 
   // Step 3: Korean Manhwa Pipeline
   const isKorean = String(processed.language || '').toLowerCase() === 'kor'
@@ -92,3 +113,11 @@ export function processOCRPageResult(
 
   return processed;
 }
+
+/**
+ * Returns a breakdown distribution of dropped lines by reason category
+ */
+export function getDroppedLineReasonDistribution(result: OCRPageResult): Record<string, number> {
+  return { ...(result.debug?.dropCounts || {}) };
+}
+

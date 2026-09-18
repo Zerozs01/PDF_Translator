@@ -3,50 +3,111 @@ import path from 'path'
 import fs from 'fs'
 import { pathToFileURL } from 'url'
 
-// --- Production Logger Fallback ---
-let logFilePath: string | null = null;
-function getLogFilePath() {
-  if (!logFilePath) {
-    try {
-      logFilePath = path.join(app.getPath('userData'), 'main.log');
-      if (!fs.existsSync(logFilePath)) {
-        fs.writeFileSync(logFilePath, '', 'utf8');
+// --- Production Logger Fallback (Non-blocking Async Stream with Auto-Rotation & Sanitization) ---
+const MAX_LOG_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit per log file
+const MAX_ARG_LENGTH = 4000; // Cap single-arg dumps to prevent unbounded memory/buffer usage
+
+let logStream: fs.WriteStream | null = null;
+let isShuttingDown = false;
+let approxLogBytesWritten = 0;
+
+function rotateLogFileIfNeeded(logFilePath: string): void {
+  try {
+    if (fs.existsSync(logFilePath)) {
+      const stats = fs.statSync(logFilePath);
+      if (stats.size >= MAX_LOG_FILE_SIZE) {
+        const backupPath = `${logFilePath}.old`;
+        if (fs.existsSync(backupPath)) {
+          try { fs.unlinkSync(backupPath); } catch {}
+        }
+        fs.renameSync(logFilePath, backupPath);
       }
-    } catch (e) {
+    }
+  } catch {
+    // Best-effort rotation; failures must not block app startup
+  }
+}
+
+function getLogStream(): fs.WriteStream | null {
+  if (isShuttingDown) return null;
+  if (!logStream) {
+    try {
+      const logFilePath = path.join(app.getPath('userData'), 'main.log');
+      rotateLogFileIfNeeded(logFilePath);
+      if (fs.existsSync(logFilePath)) {
+        try { approxLogBytesWritten = fs.statSync(logFilePath).size; } catch { approxLogBytesWritten = 0; }
+      } else {
+        approxLogBytesWritten = 0;
+      }
+      logStream = fs.createWriteStream(logFilePath, { flags: 'a', encoding: 'utf8' });
+      logStream.on('error', () => {
+        // Prevent unhandled stream error from crashing app
+        logStream = null;
+      });
+    } catch {
       return null;
     }
   }
-  return logFilePath;
+  return logStream;
 }
 
-function logToFile(level: string, ...args: any[]) {
-  const file = getLogFilePath();
-  if (!file) return;
-  const message = args.map(arg => {
-    if (typeof arg === 'object') {
-      try { return JSON.stringify(arg); } catch (e) { return String(arg); }
+function flushAndCloseLogger(): void {
+  isShuttingDown = true;
+  if (logStream) {
+    try {
+      logStream.end();
+    } catch {}
+    logStream = null;
+  }
+}
+
+function sanitizeLogArg(arg: unknown): string {
+  let str: string;
+  if (typeof arg === 'object' && arg !== null) {
+    try {
+      str = JSON.stringify(arg);
+    } catch {
+      str = String(arg);
     }
-    return String(arg);
-  }).join(' ');
+  } else {
+    str = String(arg);
+  }
+  if (str.length > MAX_ARG_LENGTH) {
+    str = `${str.slice(0, MAX_ARG_LENGTH)}... [truncated]`;
+  }
+  // Neutralize newlines to prevent Log Injection (CWE-117)
+  return str.replace(/\r\n|\r|\n/g, ' \\n ');
+}
+
+function logToFile(level: string, ...args: unknown[]) {
+  const stream = getLogStream();
+  if (!stream) return;
+  const message = args.map(sanitizeLogArg).join(' ');
   const logLine = `[${new Date().toISOString()}] [${level}] ${message}\n`;
   try {
-    fs.appendFileSync(file, logLine, 'utf8');
-  } catch (e) {}
+    stream.write(logLine);
+    approxLogBytesWritten += logLine.length;
+    if (approxLogBytesWritten >= MAX_LOG_FILE_SIZE) {
+      approxLogBytesWritten = 0;
+      try { stream.end(); } catch {}
+      logStream = null;
+    }
+  } catch {}
 }
 
 const originalLog = console.log;
 const originalWarn = console.warn;
 const originalError = console.error;
 
-console.log = (...args: any[]) => {
+console.log = (...args: unknown[]) => {
   originalLog(...args);
   logToFile('INFO', ...args);
 };
-console.warn = (...args: any[]) => {
+console.warn = (...args: unknown[]) => {
   originalWarn(...args);
   logToFile('WARN', ...args);
 };
-console.error = (...args: any[]) => {
+console.error = (...args: unknown[]) => {
   originalError(...args);
   logToFile('ERROR', ...args);
 };
@@ -176,6 +237,7 @@ app.on('before-quit', () => {
   void disposeAllStagedPdfExportJobs()
   // Flush WAL so the .db file is fully up-to-date when the process exits
   checkpointDB('FULL')
+  flushAndCloseLogger()
 })
 
 // Last-resort cleanup: ensure all child processes are killed even if
@@ -188,6 +250,7 @@ process.on('exit', () => {
   }
   disposeExternalOcrDaemons()
   disposeArgosTranslateRuntime?.()
+  flushAndCloseLogger()
 })
 
 // ─── Chromium / GPU flags (must be set before app.whenReady) ────────────────
