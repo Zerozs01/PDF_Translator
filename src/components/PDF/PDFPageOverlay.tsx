@@ -137,19 +137,9 @@ export const PDFPageOverlay: React.FC<{
   });
   const [translatedLinePalette, setTranslatedLinePalette] = useState<Map<number, OverlayPalette>>(new Map());
 
-  const resolveEngineScopedPageOCR = (pNum: number) => {
-    const byEngine = pageOCRsByEngine?.get(effectiveOCREngine as OCREngine);
-    if (byEngine) return { ocr: byEngine, effectiveEngine: effectiveOCREngine };
-
-    const fallback = useOCRTextLayerStore.getState().allPagesOCR.get(pNum);
-    if (!fallback) return undefined;
-    const fallbackEngine = (fallback.ocrEngine || effectiveOCREngine);
-    return { ocr: fallback, effectiveEngine: fallbackEngine };
-  };
-
-  const resolvedPageOCR = resolveEngineScopedPageOCR(pageNum);
-  const currentPageOCRResolved = resolvedPageOCR?.ocr || currentPageOCR;
-  const effectiveOCREngineResolved = resolvedPageOCR?.effectiveEngine || effectiveOCREngine;
+  // Reactive OCR and engine states subscribed directly from useOCRTextLayerStore
+  const currentPageOCRResolved = currentPageOCR;
+  const effectiveOCREngineResolved = effectiveOCREngine;
 
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR: currentPageOCRResolved,
@@ -188,6 +178,30 @@ export const PDFPageOverlay: React.FC<{
       return { ...group, layerIds: filteredLayerIds };
     }).filter(group => group.layerIds.length > 0);
   }, [rawCurrentPageGroups, currentPageLayers]);
+
+  // O(1) indexed lookup maps for layers and groups to eliminate O(n^2) sweeps in flatMap and render loops
+  // Why !map.has(): preserves first-match semantics strictly equivalent to Array.prototype.find
+  const layerByLineIndexMap = useMemo(() => {
+    const map = new Map<number, (typeof currentPageLayers)[number]>();
+    for (let i = 0; i < currentPageLayers.length; i++) {
+      const layer = currentPageLayers[i];
+      if (layer && typeof layer.lineIndex === 'number' && !map.has(layer.lineIndex)) {
+        map.set(layer.lineIndex, layer);
+      }
+    }
+    return map;
+  }, [currentPageLayers]);
+
+  const groupByGroupIdMap = useMemo(() => {
+    const map = new Map<string, (typeof currentPageGroups)[number]>();
+    for (let i = 0; i < currentPageGroups.length; i++) {
+      const group = currentPageGroups[i];
+      if (group && group.id && !map.has(group.id)) {
+        map.set(group.id, group);
+      }
+    }
+    return map;
+  }, [currentPageGroups]);
 
   const hiddenLineIndexes = useMemo(() => {
     const hidden = new Set(currentPageLayers.filter(l => !l.visible).map(l => l.lineIndex));
@@ -379,7 +393,7 @@ export const PDFPageOverlay: React.FC<{
 
     return computeOverlayLayoutMap(
       currentPageOCRResolved.lines.flatMap((line, index) => {
-        const lineLayer = currentPageLayers.find(l => l.lineIndex === index);
+        const lineLayer = layerByLineIndexMap.get(index);
         const fallbackText = lineLayer?.translatedText
           || lineLayer?.text
           || lookupShortPhraseTh(line.text)
@@ -425,7 +439,7 @@ export const PDFPageOverlay: React.FC<{
         const typographyWidth = overlayLayoutProfile === 'official' ? baseWidth : rect.width;
         const typographyHeight = overlayLayoutProfile === 'official' ? baseHeight : rect.height;
 
-        const group = layer ? rawCurrentPageGroups.find(g => g.id === layer.groupId) : undefined;
+        const group = (layer && layer.groupId) ? groupByGroupIdMap.get(layer.groupId) : undefined;
         const groupType = group?.groupType;
 
         return [{
@@ -459,7 +473,8 @@ export const PDFPageOverlay: React.FC<{
     overlayFontFamily,
     translationOverlayContext.shouldRender,
     translationOverlayContext.translatedByIndex,
-    currentPageLayers,
+    layerByLineIndexMap,
+    groupByGroupIdMap,
   ]);
 
   // ทำไมถึงเขียนแบบนี้: เคลียร์ค่าสีพื้นหลังที่เก็บไว้เมื่อมีการเปลี่ยนหน้า หรือรีเซ็ตคีย์แปลภาษา เพื่อไม่ให้สีของหน้าก่อนหน้าค้างแสดงผลผิดพลาดบนหน้าใหม่
@@ -625,8 +640,8 @@ export const PDFPageOverlay: React.FC<{
               const layout = overlayLayoutByIndex.get(idx);
               const isMaskOnlyLine = Boolean(layout?.hidden);
 
-              const layer = currentPageLayers.find(l => l.lineIndex === idx);
-              const group = layer ? currentPageGroups.find(g => g.id === layer.groupId) : undefined;
+              const layer = layerByLineIndexMap.get(idx);
+              const group = (layer && layer.groupId) ? groupByGroupIdMap.get(layer.groupId) : undefined;
               const isSfxGroup = group?.groupType === 'sfx';
               const translatedText = (() => {
                 if (!layer) {

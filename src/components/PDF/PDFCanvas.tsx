@@ -18,6 +18,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   const fileUrl = useProjectStore((s) => s.fileUrl);
   const fileData = useProjectStore((s) => s.fileData);
   const currentPage = useProjectStore((s) => s.currentPage);
+  const pageChangeSource = useProjectStore((s) => s.pageChangeSource);
   const totalPages = useProjectStore((s) => s.totalPages);
   const setTotalPages = useProjectStore((s) => s.setTotalPages);
   const viewMode = useProjectStore((s) => s.viewMode);
@@ -81,6 +82,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
 
   // Track programmatic scrolling to lock active page updates during animations & initial mount
   const isProgrammaticScrollRef = useRef(currentPage > 1);
+  const hasInitialPageLoadedRef = useRef(false);
 
   // Sync scroll position when switching to continuous viewMode, split mode toggle, or clicking LeftSidebar thumbnails or on initial load
   useEffect(() => {
@@ -100,9 +102,15 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       return;
     }
 
-    const isInteracting = navigationStateRef.current.isUserInteracting || useUIStore.getState().isUserInteracting;
-    if (viewMode === 'continuous' && (viewModeChanged || splitModeChanged || (isInitialMount && currentPage > 1) || (pageChanged && !fromObserver && !isInteracting))) {
-      // Set programmatic scroll lock to prevent IntersectionObservers on off-target pages
+    const shouldSnapToPage = viewMode === 'continuous' && (
+      viewModeChanged ||
+      splitModeChanged ||
+      (isInitialMount && currentPage > 1) ||
+      (pageChanged && pageChangeSource === 'user')
+    );
+
+    if (shouldSnapToPage) {
+      // Set programmatic scroll lock to prevent active page tracking
       // from firing setPage and overriding the target page before the scroll snap finishes.
       isProgrammaticScrollRef.current = true;
       if (navigationStateRef.current.activePageChangeTimeout) {
@@ -164,7 +172,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [currentPage, viewMode, splitViewMode, zoom, setPan, stateRef, previewModeOverride]);
+  }, [currentPage, pageChangeSource, viewMode, splitViewMode, zoom, setPan, stateRef, previewModeOverride]);
 
   // Real-time active page tracking for continuous scroll & split compare modes (Throttled via RAF)
   const pageTrackingRafRef = useRef<number | null>(null);
@@ -221,7 +229,7 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
 
       if (targetPage !== currentPage && targetPage >= 1 && targetPage <= totalPages) {
         navigationStateRef.current.isObserverTriggeredPageChange = true;
-        setPage(targetPage);
+        setPage(targetPage, { source: 'scroll' });
       }
     });
 
@@ -242,6 +250,11 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
       // Secondary split-view canvas should not reset or recalculate global zoom/pan
       return;
     }
+
+    if (hasInitialPageLoadedRef.current) {
+      return;
+    }
+    hasInitialPageLoadedRef.current = true;
 
     if (containerRef.current) {
       const { clientWidth, clientHeight } = containerRef.current;
@@ -298,6 +311,10 @@ export const PDFCanvas: React.FC<PDFCanvasProps> = React.memo(({ previewModeOver
   }, [fileUrl, fileData]);
 
   const docKey = fileUrl ?? 'pdf-document';
+
+  useEffect(() => {
+    hasInitialPageLoadedRef.current = false;
+  }, [docKey]);
 
   const navContextValue = useMemo(() => ({
     navigationStateRef,

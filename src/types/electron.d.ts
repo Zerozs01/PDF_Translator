@@ -251,10 +251,10 @@ export interface ElectronAPI {
     ) => Promise<Record<string, string>>;
     
     // Benchmark CRUD
-    saveBenchmark?: (params: { docId: number; pageNum: number; key: string; payload: string }) => Promise<boolean>;
-    getBenchmark?: (params: { docId: number; pageNum: number; key: string }) => Promise<string | null>;
-    clearBenchmark?: (params: { docId: number; pageNum: number; key?: string }) => Promise<boolean>;
-    listBenchmarks?: (params: { docId: number; pageNum: number }) => Promise<any[]>;
+    saveBenchmark?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string; payload: string }) => Promise<boolean>;
+    getBenchmark?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string }) => Promise<string | null>;
+    clearBenchmark?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key?: string }) => Promise<boolean>;
+    listBenchmarks?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve' }) => Promise<any[]>;
 
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;

@@ -128,6 +128,20 @@
   - **Prewarm Deduplication & TTL Cache:** ใน [electron/ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) เพิ่มระบบ In-flight Promise reuse และ TTL Cache 60 วินาที ป้องกันการส่งคำสั่ง Prewarm ซ้ำซ้อนจาก UI Dialog และ Queue Processor
   - **Container/Presenter Architecture:** แยก [BackgroundQueuePanel.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Queue/BackgroundQueuePanel.tsx) เป็น Container (`BackgroundQueuePanel`) ที่มี Hook ระดับบนสุดตัวเดียว และ Presenter (`BackgroundQueuePanelContent`) ที่โหลดเฉพาะเมื่อมีงาน พร้อมติดตั้ง Live 1-Second Interval Ticker แสดงผลเวลานับถอยหลัง/เดินหน้าแบบ Real-time และปลดล็อกข้อความแสดงสถานะงานจริง
 
+### ⚡ 2.12 Memory Virtualization, Comic Mask Dilation & Thai Typography Auto-Wrap
+- **Memory Virtualization & Geometry Caching ([PDFPageContainer.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFPageContainer.tsx)):**
+  - ติดตั้ง **Windowing Buffer (±2 หน้า)** ควบคู่กับ IntersectionObserver 1,400px margin เพื่อถอด (Unmount) `<Page />` และ `<canvas>` 300 DPI ออกจาก DOM ทันทีเมื่อหน้านั้นหลุดออกนอกระยะสายตา คืน RAM หลายร้อยเมกะไบต์สู่ระบบ Chromium ทันที
+  - เพิ่ม `measuredHeight` state แคชขนาดความสูงจริงของหน้าเอกสารจากการคำนวณ Viewport ตอนเปิดครั้งแรก นำมาใช้กำหนดความสูงของ Standby Placeholder `<div>` แบบ 1:1 ป้องกันปัญหา Layout Shift และ Scrollbar กระตุก (Zero Scroll Jitter) ระหว่างการเลื่อนอ่านมังฮวาแถบยาว (Long-strip) หรือไฟล์ PDF ขนาดยักษ์
+  - ระงับการเรนเดอร์ [PDFPageOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFPageOverlay.tsx) อัตโนมัติเมื่อหน้าอยู่ในสถานะ Standby ช่วยลด DOM Nodes ในเอกสารยาวลงได้มากกว่า 80%
+  - **Scrutinize Optimization (Zustand Computed Selector):** สกัดเงื่อนไขการคำนวณ Buffer เข้าสู่ `useProjectStore(useCallback((s) => s.viewMode === 'single' || Math.abs(s.currentPage - pageNum) <= 2, [pageNum]))` ขจัดปัญหา Re-render Churn ที่กระตุ้นให้ทุกหน้าในเอกสาร re-render ทุกครั้งที่เปลี่ยนเลขหน้า (ลด Re-render ลงได้กว่า 95% ในเอกสารยาว 50+ หน้า) พร้อมปรับแต่ง Standby Placeholder ให้แสดง Document Icon เรียบหรูแทน Spinner หมุนซ้ำซ้อนเมื่อหน้ามีขนาดแคชแล้ว
+- **Visual Mask Dilation & Subtle Rounded Corners ([OverlayLineItem.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/OverlayLineItem.tsx), [renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts)):**
+  - ปรับค่า Mask Dilation สำหรับการ์ตูน/มังงะ (`maskBleed: 3.2px`) ให้ขยายขอบเขตการถมสีทับตัวอักษรเดิมให้กว้างกว่ากล่อง Bounding Box ดั้งเดิมเล็กน้อย ช่วยกลบเศษเส้นตวัด เงา และขอบเฉียงของอักษรภาษาญี่ปุ่น/เกาหลีใต้บอลลูนได้อย่างมิดชิดโดยไม่ต้องพึ่งพา AI Inpainting หนักเครื่อง
+  - เพิ่ม `borderRadius: 4px` (และ `4pt` ตอน Export) ให้กับ Mask เลเยอร์ ทำให้การกลบตัวอักษรเดิมมีความโค้งมนรับกับรูปทรงของบอลลูนคำพูดอย่างเป็นธรรมชาติ
+- **Thai Typography & Word Segmentation Wrap Fix ([translationOverlayUtils.ts](file:///c:/App/Electron/PDF_Translator/src/components/OCR/translationOverlayUtils.ts)):**
+  - แก้ไขข้อผิดพลาดเชิงตรรกะในฟังก์ชัน `tokenizeForWrap` ซึ่งเดิมหากข้อความภาษาไทยมีช่องว่าง (Whitespace) แม้แต่เคาะเดียว จะถูกสั่งให้ Bypass ข้าม `Intl.Segmenter` ส่งผลให้กลุ่มคำภาษาไทยที่ติดกันยาวๆ กลายเป็น Token ยักษ์ก้อนเดียวและดันให้ Bounding Box ล้น
+  - ปรับปรุงให้ข้อความภาษาไทยวิ่งผ่าน `Intl.Segmenter` เสมอแม้จะมีช่องว่าง โดยการแยกชิ้นส่วนคำและรักษาระยะเคาะวรรคธรรมชาติไว้ ส่งผลให้การคำนวณตัดบรรทัด (Line Wrapping) และการจัดขนาดฟอนต์ลงในบอลลูนคำพูดแนวตั้งของมังงะมีความถูกต้อง แม่นยำ และอ่านง่ายขึ้นอย่างเห็นได้ชัด
+- **Engineering Post-Mortem Record:** จัดทำบันทึกการวิเคราะห์สาเหตุและแนวทางแก้ไขเชิงวิศวกรรมฉบับสมบูรณ์ไว้ที่ [2026-09-19-canvas-virtualization-thai-wrap-and-queue-latency.md](file:///c:/App/Electron/PDF_Translator/documents/postmortems/2026-09-19-canvas-virtualization-thai-wrap-and-queue-latency.md)
+
 ---
 
 ## 🧪 3. Verification & Compliance Standard

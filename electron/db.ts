@@ -46,7 +46,7 @@ export type { ProjectRow, ProjectStatsResult } from './dao/ProjectDAO';
 export type { TagRow } from './dao/TagDAO';
 export type { TranslationCacheEntryRecord } from './dao/TranslationDAO';
 export type { DBGlossaryEntry } from './dao/GlossaryDAO';
-export type { BenchmarkRecord } from './dao/BenchmarkDAO';
+export type { BenchmarkRecord, BenchmarkMode } from './dao/BenchmarkDAO';
 
 let db: Database.Database | null = null;
 
@@ -83,10 +83,11 @@ export function initDB(key?: string): Database.Database | null {
   try {
     db = new Database(dbPath);
     
-    // Explicitly configure SQLCipher cipher and apply the encryption key
+    // Explicitly configure SQLCipher cipher and apply the encryption key via native Buffer API
+    // Why: Passing Buffer directly to db.key() invokes the underlying C API sqlite3_key,
+    // completely eliminating SQL injection and quote escaping vulnerabilities while preserving PBKDF2 derivation.
     db.pragma("cipher='sqlcipher'");
-    const escapedKey = key.replace(/'/g, "''");
-    db.pragma(`key = '${escapedKey}'`);
+    db.key(Buffer.from(key, 'utf8'));
     
     // Force SQLite to run a fast query to verify if the key is valid.
     db.pragma('user_version');

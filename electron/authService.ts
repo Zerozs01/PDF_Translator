@@ -12,9 +12,13 @@ export interface AuthConfig {
   pinSalt: string;
   appMode: AppMode;
   encryptedMaster?: string; // Hex string from safeStorage.encryptString(password)
+  iterations?: number;
+  pinIterations?: number;
 }
 
 const CONFIG_FILE = 'authConfig.json';
+export const DEFAULT_PBKDF2_ITERATIONS = 100_000;
+export const LEGACY_PBKDF2_ITERATIONS = 1_000;
 
 // Get config path in app userData directory
 export function getAuthConfigPath(): string {
@@ -26,11 +30,20 @@ function generateSalt(length = 16): string {
   return crypto.randomBytes(length).toString('hex');
 }
 
-// PBKDF2 hash password
-function hashPassword(password: string, salt: string): string {
-  // Why PBKDF2 with 10,000 iterations: Strong enough for local offline auth,
-  // fast enough to not cause noticeable lag on desktop startup (~50-100ms).
-  return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+// PBKDF2 hash password with configurable iterations
+function hashPassword(password: string, salt: string, iterations: number = DEFAULT_PBKDF2_ITERATIONS): string {
+  // Why PBKDF2 with 100,000 iterations: Complies with OWASP security guidelines while
+  // remaining fast on modern desktop CPUs (~30-60ms) without noticeable startup lag.
+  return crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+}
+
+// Constant-time hex string comparison to eliminate timing attacks
+function safeCompareHex(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 // Read config from disk
@@ -91,8 +104,8 @@ export function setupCredentials(password: string, emergencyPin: string): boolea
   const salt = generateSalt();
   const pinSalt = generateSalt();
 
-  const masterHash = hashPassword(password, salt);
-  const emergencyPinHash = hashPassword(emergencyPin, pinSalt);
+  const masterHash = hashPassword(password, salt, DEFAULT_PBKDF2_ITERATIONS);
+  const emergencyPinHash = hashPassword(emergencyPin, pinSalt, DEFAULT_PBKDF2_ITERATIONS);
 
   const config: AuthConfig = {
     masterHash,
@@ -100,6 +113,8 @@ export function setupCredentials(password: string, emergencyPin: string): boolea
     emergencyPinHash,
     pinSalt,
     appMode: 'SECURITY', // Default to SECURITY mode on setup
+    iterations: DEFAULT_PBKDF2_ITERATIONS,
+    pinIterations: DEFAULT_PBKDF2_ITERATIONS,
   };
 
   writeAuthConfig(config);
@@ -107,22 +122,68 @@ export function setupCredentials(password: string, emergencyPin: string): boolea
   return true;
 }
 
-// Verify master password
+// Verify master password with lazy upgrade migration
 export function verifyMasterPassword(password: string): boolean {
   const config = readAuthConfig();
   if (!config) return false;
 
-  const hash = hashPassword(password, config.salt);
-  return hash === config.masterHash;
+  const currentIterations = config.iterations ?? LEGACY_PBKDF2_ITERATIONS;
+  const hash = hashPassword(password, config.salt, currentIterations);
+  const isValid = safeCompareHex(hash, config.masterHash);
+
+  // Lazy migration: if authenticating with legacy iterations (<100,000), upgrade immediately
+  if (isValid && currentIterations < DEFAULT_PBKDF2_ITERATIONS) {
+    try {
+      const newSalt = generateSalt();
+      config.salt = newSalt;
+      config.masterHash = hashPassword(password, newSalt, DEFAULT_PBKDF2_ITERATIONS);
+      config.iterations = DEFAULT_PBKDF2_ITERATIONS;
+      writeAuthConfig(config);
+      console.log(`[AuthService] Successfully migrated master password to ${DEFAULT_PBKDF2_ITERATIONS} iterations.`);
+    } catch (migErr) {
+      console.error('[AuthService] Failed to auto-migrate master password hash:', migErr);
+    }
+  }
+
+  return isValid;
 }
 
-// Verify emergency PIN
+// Verify emergency PIN with constant-time comparison, legacy fallback, and lazy upgrade migration
 export function verifyEmergencyPin(pin: string): boolean {
   const config = readAuthConfig();
   if (!config) return false;
 
-  const hash = hashPassword(pin, config.pinSalt);
-  return hash === config.emergencyPinHash;
+  // Why separate pinIterations: Master password and emergency PIN are migrated independently.
+  // If master password migrated first, config.iterations becomes 100k while emergencyPinHash is still legacy 1k.
+  const targetIterations = config.pinIterations ?? (config.iterations === DEFAULT_PBKDF2_ITERATIONS ? undefined : config.iterations) ?? DEFAULT_PBKDF2_ITERATIONS;
+  let hash = hashPassword(pin, config.pinSalt, targetIterations);
+  let isValid = safeCompareHex(hash, config.emergencyPinHash);
+
+  // Fallback: If verification failed with targetIterations and target wasn't already legacy, test legacy iterations
+  let matchedLegacy = false;
+  if (!isValid && targetIterations !== LEGACY_PBKDF2_ITERATIONS) {
+    const legacyHash = hashPassword(pin, config.pinSalt, LEGACY_PBKDF2_ITERATIONS);
+    if (safeCompareHex(legacyHash, config.emergencyPinHash)) {
+      isValid = true;
+      matchedLegacy = true;
+    }
+  }
+
+  // Lazy migration for emergency PIN
+  if (isValid && (matchedLegacy || (config.pinIterations ?? LEGACY_PBKDF2_ITERATIONS) < DEFAULT_PBKDF2_ITERATIONS)) {
+    try {
+      const newPinSalt = generateSalt();
+      config.pinSalt = newPinSalt;
+      config.emergencyPinHash = hashPassword(pin, newPinSalt, DEFAULT_PBKDF2_ITERATIONS);
+      config.pinIterations = DEFAULT_PBKDF2_ITERATIONS;
+      writeAuthConfig(config);
+      console.log(`[AuthService] Successfully migrated emergency PIN to ${DEFAULT_PBKDF2_ITERATIONS} iterations.`);
+    } catch (migErr) {
+      console.error('[AuthService] Failed to auto-migrate emergency PIN hash:', migErr);
+    }
+  }
+
+  return isValid;
 }
 
 // Get auto-login password if in RELAX mode

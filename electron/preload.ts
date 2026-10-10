@@ -197,13 +197,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       safeInvoke('db:get-sentence-translation-batch', { sourceTexts, sourceLanguage, targetLanguage, translatorEngine, translationMode }),
 
     // Benchmark CRUD (Phase 1.3)
-    saveBenchmark: (params: { docId: number; pageNum: number; key: string; payload: string }) =>
+    saveBenchmark: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string; payload: string }) =>
       safeInvoke('db:save-benchmark', params),
-    getBenchmark: (params: { docId: number; pageNum: number; key: string }) =>
+    getBenchmark: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string }) =>
       safeInvoke('db:get-benchmark', params),
-    clearBenchmark: (params: { docId: number; pageNum: number; key?: string }) =>
+    clearBenchmark: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key?: string }) =>
       safeInvoke('db:clear-benchmark', params),
-    listBenchmarks: (params: { docId: number; pageNum: number }) =>
+    listBenchmarks: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve' }) =>
       safeInvoke('db:list-benchmarks', params),
 
     // Document management

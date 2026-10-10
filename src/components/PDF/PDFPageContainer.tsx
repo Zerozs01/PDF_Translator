@@ -12,7 +12,6 @@ import { dbService } from '../../services/dbService';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../../services/vision/ocrVersion';
 import type { OCREngine } from '../../types';
 import { PDFPageOverlay } from './PDFPageOverlay';
-import { PDFCanvasNavigationContext } from './PDFCanvasContext';
 import {
   normalizeTranslatedLineItem,
   type RawTranslatedInput,
@@ -46,11 +45,15 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
   onPageRenderSuccess: externalOnRenderSuccess,
   previewModeOverride,
 }) => {
-  const navContext = React.useContext(PDFCanvasNavigationContext);
   const viewMode = useProjectStore((s) => s.viewMode);
   const setPage = useProjectStore((s) => s.setPage);
   const documentId = useProjectStore((s) => s.documentId);
   const fileUrl = useProjectStore((s) => s.fileUrl);
+
+  // Fine-grained selector: only re-render this page when entering/leaving the active ±2 page buffer window
+  const isNearCurrentPage = useProjectStore(
+    useCallback((s) => s.viewMode === 'single' || Math.abs(s.currentPage - pageNum) <= 2, [pageNum])
+  );
 
   // Fine-grained selector: only re-render if active engine changes
   const activeEngine = useOCRTextLayerStore((s) => (s.options.engine || 'paddleocr') as OCREngine);
@@ -58,14 +61,11 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
   const [pageRenderTick, setPageRenderTick] = useState(0);
   const [isCacheLoading, setIsCacheLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(viewMode === 'single');
-  const [hasBeenVisible, setHasBeenVisible] = useState(viewMode === 'single');
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (isVisible) {
-      setHasBeenVisible(true);
-    }
-  }, [isVisible]);
+  // Windowing Buffer: Keep canvas in DOM only when visible within 1400px margin or within ±2 pages of current view
+  const shouldRenderCanvas = isVisible || isNearCurrentPage;
 
   useEffect(() => {
     if (viewMode === 'single') {
@@ -84,58 +84,14 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
       }
     );
 
-    const activePageObserver = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const navState = navContext?.navigationStateRef.current;
-          const isProgScroll = navContext?.isProgrammaticScrollRef.current;
-          const isInteracting = navState?.isUserInteracting || useUIStore.getState().isUserInteracting;
-          if (
-            entry.isIntersecting &&
-            !isProgScroll &&
-            previewModeOverride !== 'translated' &&
-            useProjectStore.getState().currentPage !== pageNum
-          ) {
-            const now = performance.now();
-            if (navState) {
-              navState.pendingPage = pageNum;
-              navState.lastPageUpdateTime = now;
-              const capturedTime = now;
-
-              if (navState.activePageChangeTimeout) {
-                clearTimeout(navState.activePageChangeTimeout);
-              }
-              navState.activePageChangeTimeout = setTimeout(() => {
-                React.startTransition(() => {
-                  if (capturedTime < navState.lastPageUpdateTime) return;
-                  if (navContext?.isProgrammaticScrollRef.current) return;
-                  navState.isObserverTriggeredPageChange = true;
-                  setPage(navState.pendingPage);
-                });
-                navState.activePageChangeTimeout = null;
-              }, isInteracting ? 150 : 250);
-            } else {
-              setPage(pageNum);
-            }
-          }
-        });
-      },
-      {
-        threshold: [0, 0.2],
-        rootMargin: '-25% 0px -25% 0px',
-      }
-    );
-
     if (pageRef.current) {
       preloadObserver.observe(pageRef.current);
-      activePageObserver.observe(pageRef.current);
     }
 
     return () => {
       preloadObserver.disconnect();
-      activePageObserver.disconnect();
     };
-  }, [pageNum, viewMode, navContext, previewModeOverride, setPage]);
+  }, [viewMode]);
 
   // Background load OCR and translation cache from IndexedDB/SQLite for this page when it mounts
   useEffect(() => {
@@ -242,11 +198,21 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
 
   const handlePageClick = useCallback(() => {
     if (useProjectStore.getState().currentPage !== pageNum) {
-      setPage(pageNum);
+      setPage(pageNum, { source: 'scroll' });
     }
   }, [pageNum, setPage]);
 
   const onPageLoadSuccess = useCallback((page: PDFPageProxy) => {
+    try {
+      const viewport = page.getViewport({ scale: 1 });
+      if (viewport.width > 0 && viewport.height > 0) {
+        // Calculate proportional height based on fixed width of 800px
+        const calculatedHeight = Math.round((viewport.height / viewport.width) * 800);
+        setMeasuredHeight(calculatedHeight);
+      }
+    } catch {
+      // Ignore calculation fallback
+    }
     if (externalOnLoadSuccess) {
       externalOnLoadSuccess(page as unknown as PDFPageLoadedEvent);
     }
@@ -259,15 +225,17 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
     }
   }, [externalOnRenderSuccess]);
 
+  const targetHeight = measuredHeight || 1130;
+
   return (
     <div 
       ref={pageRef}
       onMouseDown={handlePageClick}
       data-page-container={pageNum}
-      style={{ minHeight: pageRenderTick > 0 ? undefined : 1130 }}
+      style={{ minHeight: targetHeight }}
       className="relative mb-4 group pdf-page-container"
     >
-      {hasBeenVisible ? (
+      {shouldRenderCanvas ? (
         <Page 
           pageNumber={pageNum} 
           renderTextLayer={false} 
@@ -282,11 +250,22 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
         />
       ) : (
         <div 
-          className="border border-slate-700/60 bg-[#0d1117] flex flex-col items-center justify-center text-slate-500 select-none"
-          style={{ width: 800, height: 1130 }}
+          className="border border-slate-700/60 bg-[#0d1117] flex flex-col items-center justify-center text-slate-500 select-none transition-opacity duration-200"
+          style={{ width: 800, height: targetHeight }}
         >
-          <div className="h-8 w-8 rounded-full border-2 border-slate-700 border-t-sky-400 animate-spin mb-2 opacity-50" />
-          <span className="text-xs font-mono opacity-60">Page {pageNum}</span>
+          {measuredHeight ? (
+            <div className="flex flex-col items-center justify-center opacity-40">
+              <svg className="w-8 h-8 mb-1.5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="text-xs font-mono">Page {pageNum}</span>
+            </div>
+          ) : (
+            <>
+              <div className="h-6 w-6 rounded-full border-2 border-slate-700 border-t-sky-400 animate-spin mb-2 opacity-40" />
+              <span className="text-xs font-mono opacity-50">Page {pageNum}</span>
+            </>
+          )}
         </div>
       )}
       {isCacheLoading && (
@@ -298,7 +277,7 @@ export const PDFPageContainer = React.memo<PDFPageContainerProps>(({
           <span className="font-medium tracking-wide">กำลังโหลดแคช...</span>
         </div>
       )}
-      {isVisible && (
+      {isVisible && shouldRenderCanvas && (
         <div className="absolute inset-0 pointer-events-none">
           <PDFPageOverlay
             pageNum={pageNum}

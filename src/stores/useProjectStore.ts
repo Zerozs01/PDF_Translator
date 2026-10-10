@@ -19,6 +19,7 @@ import type { GeminiApiKeySource } from '../types/electron.d';
 
 export type TranslationMode = 'adaptive' | 'manga' | 'manhwa' | 'official';
 export type ViewMode = 'single' | 'continuous';
+export type PageChangeSource = 'user' | 'scroll';
 
 const LEGACY_GEMINI_API_KEY_STORAGE_KEY = 'pdf_translator.gemini_api_key';
 const OVERLAY_THAI_FONT_ENABLED_STORAGE_KEY = 'pdf_translator.overlay_thai_font_enabled';
@@ -168,6 +169,7 @@ interface ProjectState {
 
   // Navigation
   currentPage: number;
+  pageChangeSource: PageChangeSource;
   totalPages: number;
   viewMode: ViewMode;
 
@@ -192,7 +194,7 @@ interface ProjectState {
   ensureDocumentId: () => Promise<number | null>;
   closeProject: () => void;
   setFileData: (data: Uint8Array | null) => void;
-  setPage: (page: number, options?: { persist?: boolean }) => void;
+  setPage: (page: number, options?: { persist?: boolean; source?: PageChangeSource }) => void;
   setTotalPages: (total: number) => void;
   setViewMode: (mode: ViewMode) => void;
   setTranslationMode: (mode: TranslationMode) => void;
@@ -217,6 +219,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   fileData: null,
   
   currentPage: 1,
+  pageChangeSource: 'user',
   totalPages: 0,
   viewMode: 'single',
 
@@ -411,7 +414,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setFileData: (data) => set({ fileData: data }),
 
   setPage: (page, options) => {
-    set({ currentPage: page });
+    set({
+      currentPage: page,
+      pageChangeSource: options?.source ?? 'user',
+    });
     const documentId = get().documentId;
     if (documentId && options?.persist !== false) {
       void persistProjectDocumentPage(dbService, documentId, page);

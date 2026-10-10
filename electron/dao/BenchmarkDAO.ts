@@ -1,8 +1,11 @@
 import type Database from 'better-sqlite3-multiple-ciphers';
 
+export type BenchmarkMode = 'baseline' | 'improve';
+
 export interface BenchmarkRecord {
   document_id: number;
   page_number: number;
+  mode: BenchmarkMode;
   config_hash: string;
   results: string;
   created_at: number;
@@ -28,31 +31,31 @@ export class BenchmarkDAO {
     return stmt;
   }
 
-  static save(docId: number, pageNum: number, key: string, jsonPayload: string): boolean {
+  static save(docId: number, pageNum: number, mode: BenchmarkMode, configHash: string, jsonPayload: string): boolean {
     if (!this.db) return false;
     try {
       const now = Date.now();
       const stmt = this.getStmt(`
-        INSERT INTO benchmarks (document_id, page_number, config_hash, results, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(document_id, page_number, config_hash)
+        INSERT INTO benchmarks (document_id, page_number, mode, config_hash, results, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(document_id, page_number, mode, config_hash)
         DO UPDATE SET results = excluded.results, updated_at = excluded.updated_at
       `);
-      return Boolean(stmt.run(docId, pageNum, key, jsonPayload, now, now).changes);
+      return Boolean(stmt.run(docId, pageNum, mode, configHash, jsonPayload, now, now).changes);
     } catch (err) {
       console.error('[BenchmarkDAO] save error:', err);
       return false;
     }
   }
 
-  static get(docId: number, pageNum: number, key: string): string | null {
+  static get(docId: number, pageNum: number, mode: BenchmarkMode, configHash: string): string | null {
     if (!this.db) return null;
     try {
       const stmt = this.getStmt(`
         SELECT results FROM benchmarks
-        WHERE document_id = ? AND page_number = ? AND config_hash = ?
+        WHERE document_id = ? AND page_number = ? AND mode = ? AND config_hash = ?
       `);
-      const row = stmt.get(docId, pageNum, key) as { results?: string } | undefined;
+      const row = stmt.get(docId, pageNum, mode, configHash) as { results?: string } | undefined;
       return row?.results ?? null;
     } catch (err) {
       console.error('[BenchmarkDAO] get error:', err);
@@ -60,12 +63,17 @@ export class BenchmarkDAO {
     }
   }
 
-  static clear(docId: number, pageNum: number, key?: string): boolean {
+  static clear(docId: number, pageNum: number, mode?: BenchmarkMode, configHash?: string): boolean {
     if (!this.db) return false;
     try {
-      if (key) {
-        const stmt = this.getStmt('DELETE FROM benchmarks WHERE document_id = ? AND page_number = ? AND config_hash = ?');
-        const res = stmt.run(docId, pageNum, key);
+      if (mode && configHash) {
+        const stmt = this.getStmt('DELETE FROM benchmarks WHERE document_id = ? AND page_number = ? AND mode = ? AND config_hash = ?');
+        const res = stmt.run(docId, pageNum, mode, configHash);
+        return res.changes > 0;
+      }
+      if (mode) {
+        const stmt = this.getStmt('DELETE FROM benchmarks WHERE document_id = ? AND page_number = ? AND mode = ?');
+        const res = stmt.run(docId, pageNum, mode);
         return res.changes > 0;
       }
       const stmt = this.getStmt('DELETE FROM benchmarks WHERE document_id = ? AND page_number = ?');
@@ -77,11 +85,20 @@ export class BenchmarkDAO {
     }
   }
 
-  static list(docId: number, pageNum: number): BenchmarkRecord[] {
+  static list(docId: number, pageNum: number, mode?: BenchmarkMode): BenchmarkRecord[] {
     if (!this.db) return [];
     try {
+      if (mode) {
+        const stmt = this.getStmt(`
+          SELECT document_id, page_number, mode, config_hash, results, created_at, updated_at
+          FROM benchmarks
+          WHERE document_id = ? AND page_number = ? AND mode = ?
+          ORDER BY updated_at DESC
+        `);
+        return stmt.all(docId, pageNum, mode) as BenchmarkRecord[];
+      }
       const stmt = this.getStmt(`
-        SELECT document_id, page_number, config_hash, results, created_at, updated_at
+        SELECT document_id, page_number, mode, config_hash, results, created_at, updated_at
         FROM benchmarks
         WHERE document_id = ? AND page_number = ?
         ORDER BY updated_at DESC

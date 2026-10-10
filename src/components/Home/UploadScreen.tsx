@@ -168,15 +168,22 @@ export const UploadScreen: React.FC = () => {
   useEffect(() => {
     if (documents && documents.length > 0) {
       setHiddenThumbnails(prev => {
-        let changed = false;
-        const next = new Set(prev);
+        const next = new Set<number>();
         documents.forEach(doc => {
-          if (doc.is_thumbnail_hidden && !next.has(doc.id)) {
+          if (doc.is_thumbnail_hidden) {
             next.add(doc.id);
-            changed = true;
           }
         });
-        return changed ? next : prev;
+        // Retain any IDs for documents not currently in documents array
+        prev.forEach(id => {
+          if (!documents.some(d => d.id === id)) {
+            next.add(id);
+          }
+        });
+        if (next.size !== prev.size || [...next].some(id => !prev.has(id))) {
+          return next;
+        }
+        return prev;
       });
     }
   }, [documents]);
@@ -194,14 +201,15 @@ export const UploadScreen: React.FC = () => {
         localStorage.setItem('pdf_translator.hidden_thumbnails', JSON.stringify(Array.from(next)));
       } catch {}
 
-      // Persist to SQLite DB so it is synchronized across production and dev mode
+      // Persist to SQLite DB and FileBrowserStore so it is synchronized across views
+      persistDocumentPatch(docId, { is_thumbnail_hidden: isNowHidden ? 1 : 0 });
       dbService.toggleThumbnailHidden(docId).catch(err => {
         console.warn('[UploadScreen] Failed to persist toggleThumbnailHidden in DB:', err);
       });
 
       return next;
     });
-  }, []);
+  }, [persistDocumentPatch]);
 
   const [activePage, setActivePage] = useState<SidebarPage>('home');
   const [gpuInfo, setGpuInfo] = useState<{

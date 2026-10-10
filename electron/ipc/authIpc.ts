@@ -5,6 +5,12 @@ import { initDB, closeDB } from '../db';
 import { disposeExternalOcrDaemons } from '../ocrBridge';
 import { disposeArgosTranslateRuntime } from '../argosBridge';
 
+// Emergency PIN lockout state (in-memory per session, module scope)
+let emergencyPinAttempts = 0;
+let emergencyPinLockedUntil = 0;
+const MAX_EMERGENCY_PIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
 export function registerAuthIpcHandlers(powerSaveState: { powerSaveBlockerId: number | null }) {
   // Power management IPC handlers
   ipcMain.handle('power:prevent-sleep', () => {
@@ -55,12 +61,19 @@ export function registerAuthIpcHandlers(powerSaveState: { powerSaveBlockerId: nu
     }
   });
 
+  // 🔒 Advanced Security Phase 7: Auth IPC Handlers
+
   ipcMain.handle('auth:login', async (_, { password }) => {
     try {
+      if (typeof password !== 'string' || !password) {
+        return { success: false, error: 'Password is required.' };
+      }
       if (authService.verifyMasterPassword(password)) {
         initDB(password); // will throw error if database is not unlockable
         return { success: true };
       } else {
+        // Artificial delay against dictionary brute-force
+        await new Promise((resolve) => setTimeout(resolve, 500));
         return { success: false, error: 'Incorrect master password.' };
       }
     } catch (err: any) {
@@ -85,7 +98,24 @@ export function registerAuthIpcHandlers(powerSaveState: { powerSaveBlockerId: nu
 
   ipcMain.handle('auth:hard-reset', async (_, { emergencyPin }) => {
     try {
+      const now = Date.now();
+      if (emergencyPinLockedUntil > now) {
+        const remainingMinutes = Math.ceil((emergencyPinLockedUntil - now) / 60000);
+        return {
+          success: false,
+          error: `Emergency PIN reset is temporarily locked. Try again in ${remainingMinutes} minute(s).`,
+        };
+      }
+
+      if (typeof emergencyPin !== 'string' || !emergencyPin) {
+        return { success: false, error: 'Emergency PIN is required.' };
+      }
+
       if (authService.verifyEmergencyPin(emergencyPin)) {
+        // Reset counters on success
+        emergencyPinAttempts = 0;
+        emergencyPinLockedUntil = 0;
+
         console.warn('[Main IPC] HARD RESET / DATA WIPE TRIGGERED!');
         
         // Stop all background child processes / translation engines immediately
@@ -114,7 +144,24 @@ export function registerAuthIpcHandlers(powerSaveState: { powerSaveBlockerId: nu
         app.exit(0);
         return { success: true };
       } else {
-        return { success: false, error: 'Incorrect Emergency PIN.' };
+        emergencyPinAttempts++;
+        // Throttling delay to prevent automated high-speed enumeration
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        if (emergencyPinAttempts >= MAX_EMERGENCY_PIN_ATTEMPTS) {
+          emergencyPinLockedUntil = Date.now() + LOCKOUT_DURATION_MS;
+          emergencyPinAttempts = 0;
+          return {
+            success: false,
+            error: 'Too many incorrect attempts. Emergency PIN verification is locked out for 15 minutes.',
+          };
+        }
+
+        const remaining = MAX_EMERGENCY_PIN_ATTEMPTS - emergencyPinAttempts;
+        return {
+          success: false,
+          error: `Incorrect Emergency PIN. (${remaining} attempt${remaining > 1 ? 's' : ''} remaining)`,
+        };
       }
     } catch (err: any) {
       console.error('[Main IPC] auth:hard-reset error:', err);

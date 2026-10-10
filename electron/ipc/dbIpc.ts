@@ -169,48 +169,60 @@ export function registerDbIpcHandlers() {
   });
 
   // Benchmark handlers
-  ipcMain.handle('db:save-benchmark', async (_, { docId, pageNum, key, payload }: { docId: number; pageNum: number; key: string; payload: string }) => {
+  ipcMain.handle('db:save-benchmark', async (_, { docId, pageNum, mode, key, payload }: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string; payload: string }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum) || !isValidString(key) || !isValidString(payload)) {
       throw new Error('Invalid benchmark save input');
     }
+    const resolvedMode = mode && (mode === 'baseline' || mode === 'improve')
+      ? mode
+      : (key.startsWith('improve:') ? 'improve' : 'baseline');
+
     try {
-      return BenchmarkDAO.save(docId, pageNum, key, payload);
+      return BenchmarkDAO.save(docId, pageNum, resolvedMode, key, payload);
     } catch (error) {
       console.error('db:save-benchmark error:', error);
       return false;
     }
   });
 
-  ipcMain.handle('db:get-benchmark', async (_, { docId, pageNum, key }: { docId: number; pageNum: number; key: string }) => {
+  ipcMain.handle('db:get-benchmark', async (_, { docId, pageNum, mode, key }: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum) || !isValidString(key)) {
       throw new Error('Invalid benchmark get input');
     }
+    const resolvedMode = mode && (mode === 'baseline' || mode === 'improve')
+      ? mode
+      : (key.startsWith('improve:') ? 'improve' : 'baseline');
+
     try {
-      return BenchmarkDAO.get(docId, pageNum, key);
+      return BenchmarkDAO.get(docId, pageNum, resolvedMode, key);
     } catch (error) {
       console.error('db:get-benchmark error:', error);
       return null;
     }
   });
 
-  ipcMain.handle('db:clear-benchmark', async (_, { docId, pageNum, key }: { docId: number; pageNum: number; key?: string }) => {
+  ipcMain.handle('db:clear-benchmark', async (_, { docId, pageNum, mode, key }: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key?: string }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid benchmark clear input');
     }
+    const resolvedMode = mode && (mode === 'baseline' || mode === 'improve')
+      ? mode
+      : (key?.startsWith('improve:') ? 'improve' : (key?.startsWith('baseline:') ? 'baseline' : undefined));
+
     try {
-      return BenchmarkDAO.clear(docId, pageNum, key);
+      return BenchmarkDAO.clear(docId, pageNum, resolvedMode, key);
     } catch (error) {
       console.error('db:clear-benchmark error:', error);
       return false;
     }
   });
 
-  ipcMain.handle('db:list-benchmarks', async (_, { docId, pageNum }: { docId: number; pageNum: number }) => {
+  ipcMain.handle('db:list-benchmarks', async (_, { docId, pageNum, mode }: { docId: number; pageNum: number; mode?: 'baseline' | 'improve' }) => {
     if (!isValidNumber(docId) || !isValidNumber(pageNum)) {
       throw new Error('Invalid benchmark list input');
     }
     try {
-      return BenchmarkDAO.list(docId, pageNum);
+      return BenchmarkDAO.list(docId, pageNum, mode);
     } catch (error) {
       console.error('db:list-benchmarks error:', error);
       return [];

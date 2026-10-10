@@ -1146,18 +1146,7 @@ const chooseReadablePair = (rawBackground: RGB): { bg: RGB; text: RGB } => {
     background = { r: 255, g: 255, b: 255 };
   }
 
-  let bestText = contrastRatio(background, black) >= contrastRatio(background, white) ? black : white;
-  let bestContrast = contrastRatio(background, bestText);
-
-  for (let i = 0; i < 4 && bestContrast < 4.5; i += 1) {
-    if (bestText === black) {
-      background = blendRgb(background, { r: 255, g: 255, b: 255 }, 0.16);
-    } else {
-      background = blendRgb(background, { r: 0, g: 0, b: 0 }, 0.16);
-    }
-    bestText = contrastRatio(background, black) >= contrastRatio(background, white) ? black : white;
-    bestContrast = contrastRatio(background, bestText);
-  }
+  const bestText = contrastRatio(background, black) >= contrastRatio(background, white) ? black : white;
 
   return { bg: background, text: bestText };
 };
@@ -2333,7 +2322,6 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
 
   const containsThai = THAI_CHAR_REGEX.test(normalized);
   const containsCjk = CJK_CHAR_REGEX.test(normalized);
-  const hasWhitespaceBoundaries = /\s/.test(normalized);
   if (!containsThai && !containsCjk) {
     return {
       tokens: normalized.split(/\s+/g).filter(Boolean),
@@ -2341,18 +2329,44 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
     };
   }
 
-  // Keep explicit spacing for Thai when present to avoid breaking semantic phrase boundaries.
-  if (containsThai && hasWhitespaceBoundaries) {
-    return {
-      tokens: normalized.split(/\s+/g).filter(Boolean),
-      joinWithSpace: true,
-    };
+  // For Thai text, always run through Intl.Segmenter (even when whitespace exists)
+  // so that long compound phrases between spaces are properly segmented into wrap-friendly word tokens.
+  if (containsThai) {
+    const segmenter = getTextSegmenter('th');
+    if (!segmenter) {
+      return {
+        tokens: Array.from(normalized),
+        joinWithSpace: false,
+      };
+    }
+
+    const rawParts = normalized.split(/(\s+)/);
+    const tokens: string[] = [];
+    for (const part of rawParts) {
+      if (!part) continue;
+      if (/^\s+$/.test(part)) {
+        tokens.push(' ');
+      } else {
+        for (const seg of segmenter.segment(part)) {
+          if (seg.segment) tokens.push(seg.segment);
+        }
+      }
+    }
+
+    if (tokens.length === 0) {
+      return {
+        tokens: Array.from(normalized),
+        joinWithSpace: false,
+      };
+    }
+
+    return { tokens, joinWithSpace: false };
   }
 
-  const locale = containsThai ? 'th' : 'ja';
+  const locale = 'ja';
   const segmenter = getTextSegmenter(locale);
   if (!segmenter) {
-    // Correct fallback: split CJK or Thai character-by-character to prevent returning a single massive unsplit string
+    // Correct fallback: split CJK character-by-character to prevent returning a single massive unsplit string
     return {
       tokens: Array.from(normalized),
       joinWithSpace: false,
@@ -2360,7 +2374,7 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
   }
 
   const tokens = Array.from(segmenter.segment(normalized))
-    .map((segment) => segment.segment) // Do not trim, we want to keep structure if needed, or filter empty
+    .map((segment) => segment.segment)
     .filter(Boolean);
 
   if (tokens.length === 0) {
@@ -3953,8 +3967,12 @@ export const computeOverlayLayoutMap = (
       groupColumnCoherence.medianWidth * (mergedStyleKind === 'comic-bubble' ? 2.1 : 1.9)
     );
 
+    const maxLinesForMerge = (mergedStyleKind === 'comic-bubble' || mergedStyleKind === 'comic-box' || hasBalloonMember || !effectiveDocumentProfile)
+      ? 12
+      : 3;
+
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && group.length <= 3
+      && group.length <= maxLinesForMerge
       && hasStrongColumnContinuity
       && !overlyWideSectionSpan;
 
@@ -4080,11 +4098,14 @@ export const computeOverlayLayoutMap = (
       })();
 
       const mergedFillRatio = mergedTypographyAdjusted.contentHeight / Math.max(1, mergedHeightBudget);
-      const mergeIsUseful = hasBalloonMember || (
-        mergedTypographyAdjusted.estimatedLines >= 1
-        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
-        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52)
-      );
+      const mergeIsUseful = hasBalloonMember
+        || mergedStyleKind === 'comic-bubble'
+        || mergedStyleKind === 'comic-box'
+        || (
+          mergedTypographyAdjusted.estimatedLines >= 1
+          && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * 0.88
+          && mergedFillRatio >= 0.45
+        );
       if (mergeIsUseful) {
         const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';
         const mergedCenterX = mergedBBox.x0 + (mergedBBox.x1 - mergedBBox.x0) * 0.5;

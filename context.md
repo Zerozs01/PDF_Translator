@@ -5,9 +5,9 @@
 - Core Stack:
   - Frontend: React 19, TypeScript (Strict), Vite, TailwindCSS v4
   - Backend: Electron 39 (Node.js)
-  - Database: SQLite via better-sqlite3-multiple-ciphers (SQLCipher, WAL, FTS5)
+  - Database: SQLite via better-sqlite3-multiple-ciphers (SQLCipher, WAL, FTS5, native C Buffer keying)
   - State: Zustand (5.x) with custom persistent storage
-  - Auth: Local Passphrase / PIN with PBKDF2 key derivation
+  - Auth: Local Passphrase / PIN with PBKDF2 key derivation (100,000 iterations with lazy migration)
   - IPC: Electron contextBridge + Modular typed IPC channels
   - Python Daemons: Subprocess JSONL bridge for PaddleOCR / EasyOCR and Argos Translate
 - Key Entry Points:

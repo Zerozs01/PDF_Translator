@@ -76,9 +76,10 @@ export const dbService = {
         console.warn('[DB] saveBenchmark skipped: DB not available');
         return false;
       }
+      const dbMode: 'baseline' | 'improve' = mode === 'improve' ? 'improve' : 'baseline';
       const key = `${mode}:${configHash}:${engine}`;
       const payload = JSON.stringify(result);
-      return await window.electronAPI.db.saveBenchmark?.({ docId, pageNum, key, payload }) ?? false;
+      return await window.electronAPI.db.saveBenchmark?.({ docId, pageNum, mode: dbMode, key, payload }) ?? false;
     } catch (error) {
       console.error('Failed to save benchmark:', error);
       return false;
@@ -88,8 +89,9 @@ export const dbService = {
   async getBenchmark(docId: number, pageNum: number, mode: BenchmarkMode, configHash: string, engine: OCREngine): Promise<BenchmarkResultSnapshot | null> {
     try {
       if (!isDbAvailable()) return null;
+      const dbMode: 'baseline' | 'improve' = mode === 'improve' ? 'improve' : 'baseline';
       const key = `${mode}:${configHash}:${engine}`;
-      const jsonStr = await window.electronAPI.db.getBenchmark?.({ docId, pageNum, key }) ?? null;
+      const jsonStr = await window.electronAPI.db.getBenchmark?.({ docId, pageNum, mode: dbMode, key }) ?? null;
       return jsonStr ? JSON.parse(jsonStr) : null;
     } catch (error) {
       console.error('Failed to get benchmark:', error);
@@ -100,8 +102,9 @@ export const dbService = {
   async clearBenchmark(docId: number, pageNum: number, mode?: BenchmarkMode, configHash?: string, engine?: OCREngine): Promise<boolean> {
     try {
       if (!isDbAvailable()) return false;
+      const dbMode: 'baseline' | 'improve' | undefined = mode ? (mode === 'improve' ? 'improve' : 'baseline') : undefined;
       const key = mode && configHash && engine ? `${mode}:${configHash}:${engine}` : undefined;
-      return await window.electronAPI.db.clearBenchmark?.({ docId, pageNum, key }) ?? false;
+      return await window.electronAPI.db.clearBenchmark?.({ docId, pageNum, mode: dbMode, key }) ?? false;
     } catch (error) {
       console.error('Failed to clear benchmark:', error);
       return false;
