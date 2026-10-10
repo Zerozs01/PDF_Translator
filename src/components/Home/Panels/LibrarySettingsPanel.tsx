@@ -167,14 +167,14 @@ export const LibrarySettingsPanel: React.FC<LibrarySettingsPanelProps> = React.m
         <div className="rounded-xl border border-white/10 bg-[#13151a]/92 p-3 space-y-3">
           <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
             <Download size={12} className="text-slate-400" />
-            การจัดการโมเดล OCR (Model Management)
+             OCR Model
           </label>
           
           <div className="space-y-3 text-xs">
             {/* Thai OCR Model */}
             <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-200">โมเดลภาษาไทย (Thai Model)</span>
+                <span className="font-semibold text-slate-200">Thai Model</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
                   paddleThaiStatus.downloading
                     ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
@@ -206,7 +206,7 @@ export const LibrarySettingsPanel: React.FC<LibrarySettingsPanelProps> = React.m
             {/* English OCR Model */}
             <div className="rounded-lg bg-slate-900/50 p-2 border border-white/5 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-200">โมเดลภาษาอังกฤษ (English Model)</span>
+                <span className="font-semibold text-slate-200">English Model</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
                   paddleEnglishStatus.downloading
                     ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'

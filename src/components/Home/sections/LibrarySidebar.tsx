@@ -300,8 +300,8 @@ export const LibrarySidebar: React.FC<LibrarySidebarProps> = React.memo(({
                   </span>
                 </div>
                 <div className="text-[9px] text-slate-500 leading-normal">
-                  <div className="font-semibold text-slate-300 truncate" title={gpuInfo?.gpus.join(', ')}>
-                    Device: {gpuInfo?.gpus[0] || 'Loading...'}
+                  <div className="font-semibold text-slate-300 truncate" title={Array.isArray(gpuInfo?.gpus) ? gpuInfo.gpus.join(', ') : 'CPU'}>
+                    Device: {gpuInfo?.gpus?.[0] || 'CPU'}
                   </div>
                 </div>
               </div>

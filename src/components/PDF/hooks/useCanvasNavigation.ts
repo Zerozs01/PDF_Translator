@@ -93,13 +93,12 @@ export function useCanvasNavigation({
         panRef.current = nextPan;
         stateRef.current = { zoom: newZoom, pan: nextPan };
 
-        if (wheelTransformRafRef.current !== null) {
-          cancelAnimationFrame(wheelTransformRafRef.current);
+        if (wheelTransformRafRef.current === null) {
+          wheelTransformRafRef.current = requestAnimationFrame(() => {
+            syncContentTransform(stateRef.current.pan, stateRef.current.zoom);
+            wheelTransformRafRef.current = null;
+          });
         }
-        wheelTransformRafRef.current = requestAnimationFrame(() => {
-          syncContentTransform(nextPan, newZoom);
-          wheelTransformRafRef.current = null;
-        });
       } else {
         const nextPan = {
           x: stateRef.current.pan.x - e.deltaX,
@@ -108,13 +107,12 @@ export function useCanvasNavigation({
         panRef.current = nextPan;
         stateRef.current = { ...stateRef.current, pan: nextPan };
 
-        if (wheelTransformRafRef.current !== null) {
-          cancelAnimationFrame(wheelTransformRafRef.current);
+        if (wheelTransformRafRef.current === null) {
+          wheelTransformRafRef.current = requestAnimationFrame(() => {
+            syncContentTransform(stateRef.current.pan, stateRef.current.zoom);
+            wheelTransformRafRef.current = null;
+          });
         }
-        wheelTransformRafRef.current = requestAnimationFrame(() => {
-          syncContentTransform(nextPan, stateRef.current.zoom);
-          wheelTransformRafRef.current = null;
-        });
       }
 
       wheelIdleTimerRef.current = setTimeout(() => {
@@ -147,31 +145,16 @@ export function useCanvasNavigation({
 
       panRef.current = { x: newX, y: newY };
 
-      if (dragTransformRafRef.current !== null) {
-        cancelAnimationFrame(dragTransformRafRef.current);
-      }
-      dragTransformRafRef.current = requestAnimationFrame(() => {
-        if (contentRef.current) {
-          const transformStr = `translate3d(${newX}px, ${newY}px, 0px) scale(${stateRef.current.zoom})`;
-          contentRef.current.style.transform = transformStr;
-
-          const isSplit = useUIStore.getState().viewMode === 'split';
-          if (isSplit) {
-            const workspace = contentRef.current.closest('.workspace-viewport');
-            if (workspace) {
-              const allContents = workspace.querySelectorAll('.pdf-canvas-content, .image-canvas-content');
-              allContents.forEach((el) => {
-                if (el !== contentRef.current) {
-                  (el as HTMLElement).style.transform = transformStr;
-                }
-              });
-            }
+      if (dragTransformRafRef.current === null) {
+        dragTransformRafRef.current = requestAnimationFrame(() => {
+          if (contentRef.current) {
+            syncContentTransform(panRef.current, stateRef.current.zoom);
           }
-        }
-        dragTransformRafRef.current = null;
-      });
+          dragTransformRafRef.current = null;
+        });
+      }
     }
-  }, [contentRef, dragStart.x, dragStart.y, isDragging]);
+  }, [contentRef, dragStart.x, dragStart.y, isDragging, syncContentTransform]);
 
   const handleMouseUp = useCallback(() => {
     if (isDragging) {

@@ -1,12 +1,11 @@
 @import "tailwindcss";
-@import url("https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap");
 
 @font-face {
   font-family: 'Mitr';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local('Mitr'), url('../public/fonts/overlay/Mitr-Regular.ttf') format('truetype');
+  src: local('Mitr'), url('/fonts/overlay/Mitr-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -14,7 +13,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local('SUPERMARKET'), local('Supermarket'), url('../public/fonts/overlay/SUPERMARKET.woff') format('woff');
+  src: local('SUPERMARKET'), local('Supermarket'), url('/fonts/overlay/SUPERMARKET.woff') format('woff');
 }
 
 @font-face {
@@ -22,7 +21,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local('FC Iconic'), local('FC Iconic Regular'), url('../public/fonts/overlay/fc-iconic-regular.otf') format('opentype');
+  src: local('FC Iconic'), local('FC Iconic Regular'), url('/fonts/overlay/fc-iconic-regular.otf') format('opentype');
 }
 
 /* Minimal Scrollbar */

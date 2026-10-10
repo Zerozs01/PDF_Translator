@@ -17,8 +17,7 @@
     "jsx": "react-jsx",
     "types": ["vite/client"]
   },
-  "include": ["src", "electron"],
+  "include": ["src"],
   "exclude": ["**/*.stories.ts", "**/*.stories.tsx", "src/stories"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
-

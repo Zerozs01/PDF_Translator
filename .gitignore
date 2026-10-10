@@ -62,3 +62,20 @@ models/
 benchmark-results.json
 benchmark-results.md
 bridge_response.json
+
+# Rust & Tauri Build Artifacts
+target/
+src-tauri/target/
+src-tauri/gen/
+**/*.rs.bk
+*.pdb
+
+# Local Data & Temp Test Files
+.data/
+temp_in.json
+temp_out.json
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+

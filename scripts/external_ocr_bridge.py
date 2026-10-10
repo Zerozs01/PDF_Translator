@@ -4319,7 +4319,7 @@ def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple
             enhanced_img = enhancer.enhance(1.3)
             arr = np.array(enhanced_img)[:, :, ::-1]
 
-            print(f"[ocrBridge] Resized and sharpened image in-memory {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})")
+            print(f"[ocrBridge] Resized and sharpened image in-memory {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})", file=sys.stderr)
             return arr, scale_x, scale_y
     except Exception as e:
         print(f"[WARN] Failed to resize large image: {e}", file=sys.stderr)
@@ -4359,7 +4359,7 @@ def chunk_tall_image_for_paddle(
                 break
             y += stride
 
-    print(f"[ocrBridge] Split tall image {w}x{h} into {len(chunks)} chunks (max_chunk_height={max_chunk_height}, overlap={overlap_px})")
+    print(f"[ocrBridge] Split tall image {w}x{h} into {len(chunks)} chunks (max_chunk_height={max_chunk_height}, overlap={overlap_px})", file=sys.stderr)
     return chunks
 
 
@@ -4640,7 +4640,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
 
     if use_chunked_path:
         # ── Chunked tall-image path ──────────────────────────────────────────
-        print(f"[ocrBridge] Tall image detected ({_iw}x{_ih}, ratio={aspect_ratio:.1f}): using chunked OCR path")
+        print(f"[ocrBridge] Tall image detected ({_iw}x{_ih}, ratio={aspect_ratio:.1f}): using chunked OCR path", file=sys.stderr)
         chunks = chunk_tall_image_for_paddle(args.image, max_chunk_height=CHUNK_HEIGHT, overlap_px=CHUNK_OVERLAP)
         chunk_results: List[Tuple[Dict[str, Any], int]] = []
         total_chunks = len(chunks)
@@ -5429,14 +5429,14 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
         id=payload.get("id"),
         action=str(payload.get("action") or "ocr"),
         engine=str(payload.get("engine") or fallback_engine),
-        image=payload.get("image"),
+        image=payload.get("image") or payload.get("imagePath") or payload.get("image_path"),
         language=str(payload.get("language") or "eng"),
-        width=int(payload.get("width") or 0),
-        height=int(payload.get("height") or 0),
+        width=int(payload.get("width") or payload.get("imageWidth") or 0),
+        height=int(payload.get("height") or payload.get("imageHeight") or 0),
         dpi=int(payload.get("dpi") or 300),
         page_seg_mode=int(payload.get("pageSegMode") or payload.get("page_segm_mode") or 0),
         pipeline_profile=str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel"),
-        quality_profile=str(payload.get("qualityProfile") or payload.get("quality_profile") or "best"),
+        quality_profile=str(payload.get("qualityProfile") or payload.get("quality_profile") or payload.get("ocrQualityProfile") or "best"),
         # maxSideLen (camelCase from TS) or max_side_len (snake_case) — 0 means use profile default
         max_side_len=int(payload.get("maxSideLen") or payload.get("max_side_len") or 0),
         # maxPixels (camelCase from TS) or max_pixels (snake_case)
@@ -5488,6 +5488,8 @@ def prewarm_engine(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
+    if args.action == "ping":
+        return {"ok": True, "pong": True, "engine": args.engine}
     if args.action == "status":
         if args.engine == "paddleocr":
             return status_paddleocr()
@@ -5564,7 +5566,7 @@ def serve_stdio(default_engine: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup"])
+    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup", "ping"])
     parser.add_argument("--engine", required=True, choices=["paddleocr", "easyocr"])
     parser.add_argument("--image")
     parser.add_argument("--language", default="eng")

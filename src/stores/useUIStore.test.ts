@@ -11,8 +11,8 @@ if (typeof localStorage === 'undefined') {
     key: (index: number) => Object.keys(store)[index] || null,
     get length() { return Object.keys(store).length; },
   };
-  Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writable: true });
-  Object.defineProperty(global, 'window', { value: { localStorage: mockLocalStorage }, writable: true });
+  Object.defineProperty(globalThis, 'localStorage', { value: mockLocalStorage, writable: true });
+  Object.defineProperty(globalThis, 'window', { value: { localStorage: mockLocalStorage }, writable: true });
 }
 
 import { useUIStore } from './useUIStore';

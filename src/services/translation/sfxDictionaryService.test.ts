@@ -19,7 +19,7 @@ if (typeof localStorage === 'undefined') {
     key: (index: number) => Object.keys(store)[index] || null,
     get length() { return Object.keys(store).length; },
   };
-  Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writable: true });
+  Object.defineProperty(globalThis, 'localStorage', { value: mockLocalStorage, writable: true });
 }
 
 describe('sfxDictionaryService', () => {

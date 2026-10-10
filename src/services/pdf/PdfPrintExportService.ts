@@ -22,6 +22,10 @@ import type {
 import { useExportStore } from '../../stores/useExportStore';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { normalizeWhitespace } from '../ocr/ocrTextNormalizer';
+import { renderPageOverlayToRaster } from './overlayCanvasRenderer';
+import { platformBridge } from '../bridge';
+import type { TextOverlayItem, PageImageOverlay } from '../bridge/pdfContracts';
+import { invoke } from '@tauri-apps/api/core';
 
 type ExportTranslatedPdfInput = {
   fileType: PdfPrintExportFileType;
@@ -113,14 +117,80 @@ const buildPageConfig = async (
   };
 };
 
+const exportTranslatedPdfViaNativeRust = async (
+  input: ExportTranslatedPdfInput,
+  pages: PdfPrintExportPageConfig[],
+  signal?: AbortSignal
+): Promise<Uint8Array> => {
+  let sourceFilePath = input.sourceFilePath?.trim() || null;
+
+  if (!sourceFilePath && input.sourceBytes) {
+    const tempRes = await invoke<{ filepath: string }>('import_file_binary', {
+      name: `temp_source_${Date.now()}.pdf`,
+      data: new Uint8Array(input.sourceBytes),
+    });
+    sourceFilePath = tempRes.filepath;
+  }
+
+  if (!sourceFilePath) {
+    throw new Error('PDF export requires a source file path.');
+  }
+
+  const meta = await platformBridge.pdf.openDocument(sourceFilePath);
+  const docId = meta.docId;
+
+  useExportStore.getState().startExport(pages.length);
+
+  try {
+    const pageImages: PageImageOverlay[] = [];
+    const overlays: TextOverlayItem[] = [];
+
+    for (let i = 0; i < pages.length; i++) {
+      if (signal?.aborted) {
+        throw new Error('PDF export was cancelled.');
+      }
+
+      const pageConfig = pages[i];
+      const rendered = await renderPageOverlayToRaster(pageConfig);
+      pageImages.push({
+        pageNumber: pageConfig.pageNum,
+        imageData: rendered.imageBytes,
+      });
+      overlays.push(...rendered.textOverlays);
+
+      useExportStore.getState().updateProgress(i + 1);
+    }
+
+    const normalizedDir = sourceFilePath.replace(/[/][^/]+$/u, '').replace(/[\\][^\\]+$/u, '');
+    const outFileName = `exported_${Date.now()}_${crypto.randomUUID().slice(0, 8)}.pdf`;
+    const outputPath = `${normalizedDir}/${outFileName}`;
+
+    const exportResult = await platformBridge.pdf.exportPdf({
+      docId,
+      outputPath,
+      pageImages,
+      overlays,
+      embedOriginalImages: true,
+    });
+
+    if (!exportResult.success) {
+      throw new Error('Failed to export PDF in native engine.');
+    }
+
+    const buffer = await invoke<ArrayBuffer>('read_file_raw', {
+      filePath: exportResult.outputPath,
+    });
+
+    return new Uint8Array(buffer);
+  } finally {
+    useExportStore.getState().finishExport();
+  }
+};
+
 export const exportTranslatedPdfViaPrint = async (
   input: ExportTranslatedPdfInput,
   signal?: AbortSignal
 ): Promise<Uint8Array> => {
-  if (!window.electronAPI?.pdfExport) {
-    throw new Error('PDF print export is only available in the Electron app.');
-  }
-
   const preferredFont = getOverlayFontOption(input.overlayFontPreset).fontFamily;
   const overlayFontFamily = await buildCanvasFontFamily(
     resolveOverlayFontFamily({
@@ -148,35 +218,42 @@ export const exportTranslatedPdfViaPrint = async (
     throw new Error('PDF export requires a source file path or in-memory bytes.');
   }
 
-  const jobId = crypto.randomUUID();
-  const job: PdfPrintExportJob = {
-    jobId,
-    fileType: input.fileType,
-    sourceMimeType: input.sourceMimeType,
-    sourceFilePath: hasSourceFilePath ? input.sourceFilePath : null,
-    sourceBytes: hasSourceFilePath ? null : new Uint8Array(input.sourceBytes!),
-    pages,
-  };
+  // 1. Electron Print Pipeline (ถ้ามี API ของ Electron)
+  if (typeof window !== 'undefined' && window.electronAPI?.pdfExport?.start) {
+    const jobId = crypto.randomUUID();
+    const job: PdfPrintExportJob = {
+      jobId,
+      fileType: input.fileType,
+      sourceMimeType: input.sourceMimeType,
+      sourceFilePath: hasSourceFilePath ? input.sourceFilePath : null,
+      sourceBytes: hasSourceFilePath ? null : new Uint8Array(input.sourceBytes!),
+      pages,
+    };
 
-  useExportStore.getState().startExport(pages.length);
-  const unsubscribe = window.electronAPI.pdfExport.onProgress(({ done }) => {
-    useExportStore.getState().updateProgress(done);
-  });
+    useExportStore.getState().startExport(pages.length);
+    const unsubscribe = window.electronAPI.pdfExport.onProgress(({ done }) => {
+      useExportStore.getState().updateProgress(done);
+    });
 
-  const abortHandler = () => {
-    void window.electronAPI.pdfExport.cancel(jobId);
-  };
-  signal?.addEventListener('abort', abortHandler, { once: true });
+    const abortHandler = () => {
+      void window.electronAPI.pdfExport?.cancel?.(jobId);
+    };
+    signal?.addEventListener('abort', abortHandler, { once: true });
 
-  try {
-    const result = await window.electronAPI.pdfExport.start(job);
-    if (!result.ok || !result.bytes) {
-      throw new Error(result.error || 'PDF print export failed.');
+    try {
+      const result = await window.electronAPI.pdfExport.start(job);
+      if (!result.ok || !result.bytes) {
+        throw new Error(result.error || 'PDF print export failed.');
+      }
+      return result.bytes;
+    } finally {
+      signal?.removeEventListener('abort', abortHandler);
+      unsubscribe();
+      useExportStore.getState().finishExport();
     }
-    return result.bytes;
-  } finally {
-    signal?.removeEventListener('abort', abortHandler);
-    unsubscribe();
-    useExportStore.getState().finishExport();
   }
+
+  // 2. Tauri / Native Rust Pdfium Reconstructor Pipeline
+  return exportTranslatedPdfViaNativeRust(input, pages, signal);
 };
+

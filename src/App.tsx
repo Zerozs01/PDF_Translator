@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UploadScreen } from './components/Home/UploadScreen';
-import { OCRRegressionHarness } from './components/OCR/OCRRegressionHarness';
 import { useUIStore } from './stores/useUIStore';
 import { GlobalLoadingOverlay } from './components/UI/GlobalLoadingOverlay';
 import { useProjectStore, type TranslationMode } from './stores/useProjectStore';
 import { useOCRTextLayerStore } from './stores/useOCRTextLayerStore';
-import { ExportOverlay } from './components/Export/ExportOverlay';
 import { useBackgroundQueueStore } from './stores/useBackgroundQueueStore';
 import { useLayerStore } from './stores/useLayerStore';
 import { visionService } from './services/vision/VisionService';
@@ -15,7 +13,11 @@ import { useExportOrchestration } from './hooks/useExportOrchestration';
 import { useDocumentTranslation } from './hooks/useDocumentTranslation';
 import { useBackgroundQueueSync } from './hooks/useBackgroundQueueSync';
 
-// Lazy Load Heavy Components
+// Lazy Load Heavy Components (Avoid bundling 20MB+ PDF/Canvas/Export parsers into startup bundle)
+const OCRRegressionHarness = React.lazy(() => import('./components/OCR/OCRRegressionHarness').then(module => ({ default: module.OCRRegressionHarness })));
+const WorkspaceContainer = React.lazy(() => import('./components/Viewer/WorkspaceContainer').then(module => ({ default: module.WorkspaceContainer })));
+const DocumentExportModal = React.lazy(() => import('./components/Export/DocumentExportModal').then(module => ({ default: module.DocumentExportModal })));
+const ExportOverlay = React.lazy(() => import('./components/Export/ExportOverlay').then(module => ({ default: module.ExportOverlay })));
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
 const CompactTopToolbar = React.lazy(() => import('./components/Layout/CompactTopToolbar').then(module => ({ default: module.CompactTopToolbar })));
 const LeftSidebar = React.lazy(() => import('./components/Layout/LeftSidebar').then(module => ({ default: module.LeftSidebar })));
@@ -25,10 +27,8 @@ import { useExportCacheHydration } from './hooks/useExportCacheHydration';
 import { useExportOcrResolvers } from './hooks/useExportOcrResolvers';
 import { useDocumentExportModalState } from './hooks/useDocumentExportModalState';
 import { type DownloadScope } from './constants/translationConstants';
-import { WorkspaceContainer } from './components/Viewer/WorkspaceContainer';
 import { AppHeaderToolbar } from './components/Layout/AppHeaderToolbar';
 import { BackgroundQueuePanel } from './components/Queue/BackgroundQueuePanel';
-import { DocumentExportModal } from './components/Export/DocumentExportModal';
 
 export default function App() {
   const showOCRHarness = typeof window !== 'undefined'
@@ -389,7 +389,11 @@ export default function App() {
   });
 
   if (showOCRHarness) {
-    return <OCRRegressionHarness />;
+    return (
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-[#0a0c10] text-slate-400">กำลังโหลด OCR Harness...</div>}>
+        <OCRRegressionHarness />
+      </React.Suspense>
+    );
   }
 
   // If no file is loaded, show Upload Screen
@@ -488,42 +492,46 @@ export default function App() {
 
 
       {/* Document Export Modal */}
-      <DocumentExportModal
-        isOpen={isDownloadMenuOpen}
-        onClose={() => setIsDownloadMenuOpen(false)}
-        downloadMenuRef={downloadMenuRef}
-        downloadScopeSelection={downloadScopeSelection}
-        setDownloadScopeSelection={setDownloadScopeSelection}
-        downloadModeSelection={downloadModeSelection}
-        setDownloadModeSelection={setDownloadModeSelection}
-        selectedExportEngine={selectedExportEngine}
-        setSelectedExportEngine={setSelectedExportEngine}
-        popupOcrQualityMode={popupOcrQualityMode}
-        changeOcrQualityMode={changeOcrQualityMode}
-        isDownloadingResult={isDownloadingResult}
-        isAiProcessing={isAiProcessing}
-        isOfflineProcessing={isOfflineProcessing}
-        triggerPopupTranslation={triggerPopupTranslation}
-        handleHeaderDownload={handleHeaderDownload}
-        currentPage={currentPage}
-        totalPages={totalPages}
-        fileType={fileType}
-        targetLanguage={targetLanguage}
-        setTargetLanguage={setTargetLanguage}
-        ocrLanguage={ocrLanguage}
-        getEngineCacheStatus={getEngineCacheStatus}
-        ocrCoveredPageNumbers={ocrCoveredPageNumbers}
-        missingOcrPageNumbers={missingOcrPageNumbers}
-        translatedAvailablePageNumbers={translatedAvailablePageNumbers}
-        missingTranslatedPageNumbers={missingTranslatedPageNumbers}
-        canExportOriginalSelection={canExportOriginalSelection}
-        canExportTranslatedSelection={canExportTranslatedSelection}
-        effectiveDownloadScope={effectiveDownloadScope}
-        selectedDownloadEngine={selectedDownloadEngine}
-        computedProgressPercent={computedProgressPercent}
-        getRemainingSecondsText={getRemainingSecondsText}
-        ocrProgress={ocrProgress}
-      />
+      {isDownloadMenuOpen && (
+        <React.Suspense fallback={null}>
+          <DocumentExportModal
+            isOpen={isDownloadMenuOpen}
+            onClose={() => setIsDownloadMenuOpen(false)}
+            downloadMenuRef={downloadMenuRef}
+            downloadScopeSelection={downloadScopeSelection}
+            setDownloadScopeSelection={setDownloadScopeSelection}
+            downloadModeSelection={downloadModeSelection}
+            setDownloadModeSelection={setDownloadModeSelection}
+            selectedExportEngine={selectedExportEngine}
+            setSelectedExportEngine={setSelectedExportEngine}
+            popupOcrQualityMode={popupOcrQualityMode}
+            changeOcrQualityMode={changeOcrQualityMode}
+            isDownloadingResult={isDownloadingResult}
+            isAiProcessing={isAiProcessing}
+            isOfflineProcessing={isOfflineProcessing}
+            triggerPopupTranslation={triggerPopupTranslation}
+            handleHeaderDownload={handleHeaderDownload}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            fileType={fileType}
+            targetLanguage={targetLanguage}
+            setTargetLanguage={setTargetLanguage}
+            ocrLanguage={ocrLanguage}
+            getEngineCacheStatus={getEngineCacheStatus}
+            ocrCoveredPageNumbers={ocrCoveredPageNumbers}
+            missingOcrPageNumbers={missingOcrPageNumbers}
+            translatedAvailablePageNumbers={translatedAvailablePageNumbers}
+            missingTranslatedPageNumbers={missingTranslatedPageNumbers}
+            canExportOriginalSelection={canExportOriginalSelection}
+            canExportTranslatedSelection={canExportTranslatedSelection}
+            effectiveDownloadScope={effectiveDownloadScope}
+            selectedDownloadEngine={selectedDownloadEngine}
+            computedProgressPercent={computedProgressPercent}
+            getRemainingSecondsText={getRemainingSecondsText}
+            ocrProgress={ocrProgress}
+          />
+        </React.Suspense>
+      )}
 
       {/* Background Processing Queue Status Drawer */}
       <BackgroundQueuePanel />
@@ -533,7 +541,9 @@ export default function App() {
           progress={loadingState.progress} 
         />
       )}
-      <ExportOverlay />
+      <React.Suspense fallback={null}>
+        <ExportOverlay />
+      </React.Suspense>
     </div>
   );
 }

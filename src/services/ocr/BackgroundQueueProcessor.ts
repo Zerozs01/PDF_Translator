@@ -61,7 +61,7 @@ class BackgroundQueueProcessor {
   private isProcessing = false;
   private currentAbortController: AbortController | null = null;
   private activeJobId: string | null = null;
-  private checkInterval: NodeJS.Timeout | null = null;
+  private checkInterval: ReturnType<typeof setTimeout> | null = null;
   private headlessCanvas: HTMLCanvasElement | null = null;
 
   private getHeadlessCanvas(): HTMLCanvasElement {

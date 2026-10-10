@@ -1,12 +1,15 @@
 {
   "name": "pdf_translator",
   "version": "1.0.0",
-  "description": "**Next-Gen Local OCR & Manga Translation Engine**\r แอปพลิเคชันเวอร์ชันยกเครื่องใหม่ (Rebirth) ที่สร้างขึ้นเพื่อแก้ปัญหาความล่าช้าและการแยกแยะองค์ประกอบภาพที่ไม่แม่นยำ โดยเน้นการประมวลผลแบบ Offline 100% และมี UI ที่ยืดหยุ่นสูงสุด",
-  "main": "dist-electron/main.js",
+  "description": "**Next-Gen Local OCR & Manga Translation Engine**\r แอปพลิเคชันเวอร์ชันยกเครื่องใหม่ที่สร้างขึ้นเพื่อแก้ปัญหาความล่าช้าและการแยกแยะองค์ประมวลผลแบบ Offline 100% บน Tauri 2.x และ Rust Native Engine",
   "scripts": {
-    "dev": "set \"OCR_PYTHON_PATH=%CD%\\.venv-ocr\\Scripts\\python.exe\" && vite",
-    "benchmark:memory-leak": "electron . --benchmark-memory-leak",
-    "build": "tsc && vite build && electron-builder",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "dev": "tauri dev",
+    "dev:vite": "vite",
+    "build": "tsc && vite build",
+    "package": "tauri build",
     "test": "vitest run --project unit",
     "test:e2e": "playwright test",
     "preview": "vite preview",
@@ -33,7 +36,7 @@
     "ocr:gate:kor": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk --require-language kor",
     "ocr:benchmark:ci": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
     "test:ocr:compare-pipeline": "node scripts/compare-pipeline.mjs",
-    "postinstall": "node scripts/postinstall-electron.js && node scripts/postinstall-ocr.js && node scripts/download-overlay-fonts.js"
+    "postinstall": "node scripts/postinstall-ocr.js && node scripts/download-overlay-fonts.js"
   },
   "repository": {
     "type": "git",
@@ -47,34 +50,6 @@
     "url": "https://github.com/Zerozs01/PDF_Translator/issues"
   },
   "homepage": "https://github.com/Zerozs01/PDF_Translator#readme",
-  "build": {
-    "appId": "com.pdftranslator.app",
-    "productName": "PDF Translator",
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "package.json",
-      "!dist/fixtures/**/*",
-      "!node_modules/@napi-rs/canvas-android-arm64"
-    ],
-    "extraResources": [
-      {
-        "from": "scripts/external_ocr_bridge.py",
-        "to": "ocr-bridge/external_ocr_bridge.py"
-      },
-      {
-        "from": "scripts/argos_translate_bridge.py",
-        "to": "ocr-bridge/argos_translate_bridge.py"
-      }
-    ],
-    "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
-    },
-    "mac": {
-      "icon": "build/icon.icns"
-    }
-  },
   "devDependencies": {
     "@chromatic-com/storybook": "^5.0.0",
     "@storybook/addon-a11y": "^10.2.1",
@@ -83,28 +58,25 @@
     "@storybook/addon-vitest": "^10.2.1",
     "@storybook/react-vite": "^10.2.1",
     "@tailwindcss/postcss": "^4.1.18",
-    "@types/better-sqlite3": "^7.6.13",
+    "@tauri-apps/cli": "^2.12.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
     "@vitest/browser-playwright": "^4.0.18",
     "@vitest/coverage-v8": "^4.0.18",
     "autoprefixer": "^10.4.23",
-    "electron": "^39.2.7",
-    "electron-builder": "^26.0.12",
-    "electron-rebuild": "^3.2.9",
     "playwright": "^1.58.0",
     "postcss": "^8.5.6",
     "storybook": "^10.2.1",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
-    "vite-plugin-electron": "^0.29.0",
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.2",
     "adm-zip": "^0.5.16",
-    "better-sqlite3-multiple-ciphers": "^12.10.0",
+    "better-sqlite3-multiple-ciphers": "^13.0.3",
     "lucide-react": "^0.562.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.296",

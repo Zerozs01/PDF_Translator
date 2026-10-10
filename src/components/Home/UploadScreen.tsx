@@ -943,10 +943,11 @@ export const UploadScreen: React.FC = () => {
     if (filterType === 'favorites' || filterType === 'tag') {
       return [];
     }
+    const safeProjects = Array.isArray(projects) ? projects : [];
     if (selectedProjectId !== null) {
-      return projects.filter(p => p.parent_id === selectedProjectId);
+      return safeProjects.filter(p => p.parent_id === selectedProjectId);
     }
-    return projects.filter(p => p.parent_id === null);
+    return safeProjects.filter(p => p.parent_id === null);
   }, [projects, selectedProjectId, filterType]);
 
   const breadcrumbItems = useMemo(() => {
