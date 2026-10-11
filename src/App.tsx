@@ -12,6 +12,7 @@ import type { OCREngine, OCRQualityProfile } from './types';
 import { useExportOrchestration } from './hooks/useExportOrchestration';
 import { useDocumentTranslation } from './hooks/useDocumentTranslation';
 import { useBackgroundQueueSync } from './hooks/useBackgroundQueueSync';
+import { backgroundQueueProcessor } from './services/ocr/BackgroundQueueProcessor';
 
 // Lazy Load Heavy Components (Avoid bundling 20MB+ PDF/Canvas/Export parsers into startup bundle)
 const OCRRegressionHarness = import.meta.env.DEV
@@ -95,6 +96,20 @@ export default function App() {
   }, []);
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  // T3: Eager warm-up on app launch
+  useEffect(() => {
+    const targetLang = ocrLanguage || 'eng';
+    void backgroundQueueProcessor.prewarm('paddleocr', targetLang);
+  }, []);
+
+  // T3: Eager warm-up on document open
+  useEffect(() => {
+    if (file && documentId) {
+      const targetLang = ocrLanguage || 'eng';
+      void backgroundQueueProcessor.prewarm(ocrOptions.engine || 'paddleocr', targetLang);
+    }
+  }, [file, documentId, ocrLanguage, ocrOptions.engine]);
 
   useEffect(() => {
     const handleResize = () => {

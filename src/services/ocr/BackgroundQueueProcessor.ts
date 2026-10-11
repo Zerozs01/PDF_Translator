@@ -117,6 +117,40 @@ class BackgroundQueueProcessor {
   private activeJobId: string | null = null;
   private checkInterval: ReturnType<typeof setTimeout> | null = null;
   private headlessCanvas: HTMLCanvasElement | null = null;
+  private activePrewarmPromise: Promise<any> | null = null;
+  private prewarmedKey: string | null = null;
+
+  public prewarm(engine: OCREngine = 'paddleocr', language: string = 'eng'): Promise<any> {
+    const key = `${engine}:${language}`;
+    if (this.prewarmedKey === key && this.activePrewarmPromise) {
+      return this.activePrewarmPromise;
+    }
+    if (window.electronAPI?.ocr?.prewarmEngine) {
+      console.log(`[QueueProcessor] Triggering eager prewarm for ${engine} (${language})...`);
+      this.prewarmedKey = key;
+      this.activePrewarmPromise = window.electronAPI.ocr.prewarmEngine({ engine, language })
+        .then((res) => {
+          console.log(`[QueueProcessor] Eager prewarm completed for ${engine} (${language})`);
+          return res;
+        })
+        .catch((err) => {
+          console.warn(`[QueueProcessor] Eager prewarm warning for ${engine}:`, err);
+          return null;
+        });
+      return this.activePrewarmPromise;
+    }
+    return Promise.resolve(null);
+  }
+
+  public async waitForPrewarm(): Promise<void> {
+    if (this.activePrewarmPromise) {
+      try {
+        await this.activePrewarmPromise;
+      } catch {
+        // ignore prewarm failure
+      }
+    }
+  }
 
   private getHeadlessCanvas(): HTMLCanvasElement {
     if (!this.headlessCanvas && typeof document !== 'undefined') {
@@ -333,13 +367,8 @@ class BackgroundQueueProcessor {
       throw new Error('Process aborted by signal');
     }
 
-    // 0. Eager prewarm OCR daemon in background (parallel to PDF read/render)
-    if (window.electronAPI?.ocr?.prewarmEngine && (job.engine === 'paddleocr' || job.engine === 'easyocr')) {
-      const targetLang = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
-      void window.electronAPI.ocr.prewarmEngine({ engine: job.engine, language: targetLang }).catch((err: unknown) => {
-        console.warn(`[QueueProcessor] Background prewarm warning for ${job.engine}:`, err);
-      });
-    }
+    // 0. รอให้ eager prewarm ที่ยิงตั้งแต่เปิดแอป/เปิดเอกสารทำงานเสร็จ ไม่สร้าง session ซ้ำซ้อน
+    await this.waitForPrewarm();
 
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
     // แสดง immediate feedback บอก user ว่าเริ่มงานแล้ว (ลด delay การ perceive)
