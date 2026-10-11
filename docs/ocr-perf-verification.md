@@ -1,11 +1,26 @@
 # OCR Pipeline Performance & Verification Report
 
-**Environment Snapshot:**
+**Environment Snapshot & Tested Hardware Provenance:**
 - OS: Windows 11 (64-bit)
-- Target GPU: AMD Radeon RX 6700 XT (12GB/16GB VRAM)
+- Tested GPU: AMD Radeon RX 6700 XT 12GB (Gigabyte Gaming OC)
+  - Device PNP ID: `PCI\VEN_1002&DEV_73DF&SUBSYS_23311458&REV_C5`
+  - Adapter LUID: `Low=68666, High=0 (0x0000000000010C3A)`
+  - Driver Version: `32.0.21045.5002`
 - RAM: 32 GB
 - Python venv: `.venv-ocr` (Python 3.11.9)
-- Date Verified: 2026-10-11
+- Date Verified: 2026-10-11 / 2026-10-12
+
+---
+
+## 0. Configuration & Environment Variables Reference
+
+| Variable | Values | Default | Purpose & Fail-Closed Behavior |
+|---|---|---|---|
+| `OCR_BACKEND` | `paddle` \| `ort_dml` | `paddle` | เลือก Backend หลัก โดยค่าเริ่มต้นเป็น Native Paddle C++ (A) สำหรับ Production |
+| `OCR_DISABLE_DML` | `0` \| `1` | `0` | สั่งปิด DirectML ทันทีในระดับ Bridge เพื่อบังคับ fallback ไปใช้ Native Paddle CPU |
+| `OCR_DML_ADAPTER_NAME` | string | unset | ระบุชื่อ GPU adapter ที่ต้องการบังคับใช้ หากไม่พบจะ Fail-Closed ไปยัง Native Paddle CPU ทันที |
+| `OCR_DML_ADAPTER_LUID` | string / hex | unset | ระบุ DXGI LUID ของ GPU adapter หากไม่พบจะ Fail-Closed ไปยัง Native Paddle CPU ทันที |
+| `OCR_DML_DEVICE_ID` | integer | unset | บังคับ device_id ของ DirectML หากระบุไม่ถูกต้องจะ Fail-Closed ไปยัง Native Paddle CPU |
 
 ---
 
