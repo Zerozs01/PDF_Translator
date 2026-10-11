@@ -16,6 +16,7 @@ import { OCRPageResult, OCROptions, OCRPipelineProfile, OCRQualityProfile } from
 import { dbService } from '../dbService';
 import { pdfjs } from './pdfjsWorker';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
+import { detectBlankOrSolidCanvas } from '../vision/blankPageDetector';
 
 export interface ProcessingProgress {
   stage: 'init' | 'rendering' | 'ocr' | 'text-layer' | 'saving' | 'complete';
@@ -282,12 +283,18 @@ export class SearchablePDFService {
             const { canvas, width: imageWidth, height: imageHeight } = await renderPageToCanvas(pageNum, options.dpi);
             stepProgress('rendering', `Render หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
-            const imageBlob = await new Promise<Blob>((resolve, reject) => {
-              canvas.toBlob((blob) => {
-                if (blob) resolve(blob);
-                else reject(new Error('Failed to convert canvas to Blob'));
-              }, 'image/png');
-            });
+            const blankCheck = detectBlankOrSolidCanvas(canvas);
+            let imageBlob: Blob | null = null;
+            if (!blankCheck.isBlank) {
+              imageBlob = await new Promise<Blob>((resolve, reject) => {
+                canvas.toBlob((blob) => {
+                  if (blob) resolve(blob);
+                  else reject(new Error('Failed to convert canvas to Blob'));
+                }, 'image/png');
+              });
+            } else {
+              console.log(`[SearchablePDF] Page ${pageNum} is a blank/solid page. Fast-skipping OCR.`);
+            }
 
             stepProgress('ocr', `กำลัง OCR หน้า ${pageNum}/${pagesToProcess} (${options.language})...`);
 
@@ -333,50 +340,79 @@ export class SearchablePDFService {
                   : (isSensitiveFastLanguage ? 'balanced' : 'best')))
               : 'best';
 
-            const ocrPromise = visionService.ocrForTextLayer(
-              imageBlob,
-              imageWidth,
-              imageHeight,
-              options.language,
-              options.dpi,
-              options.pageSegMode,
-              pageSignal,
-              debugCollectDrops,
-              pipelineProfile,
-              resolvedQualityProfile,
-              options.engine,
-              undefined,
-              {
-                useAngleCls: options.useAngleCls
-              }
-            );
-
-            try {
-              const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'paddleocr');
-              ocrResult = await withPerPageOCRTimeout(
-                ocrPromise,
-                pageNum,
-                effectiveTimeoutSec,
-                () => {
-                  pageAbortController.abort();
-                  // Ensure the in-flight worker request is torn down immediately
-                  // so timeout pages do not keep consuming OCR time in the background.
-                  visionService.cancelAll(`OCR timeout on page ${pageNum}`);
+            if (blankCheck.isBlank || !imageBlob) {
+              ocrResult = {
+                lines: [],
+                words: [],
+                confidence: 100,
+                language: (options.language || 'eng'),
+                pageNumber: pageNum,
+                width: imageWidth,
+                height: imageHeight,
+                dpi: options.dpi || 300,
+                ocrEngine: activeEngine,
+                pipelineProfile,
+                ocrQualityProfile: resolvedQualityProfile,
+                algorithmVersion: OCR_ALGORITHM_VERSION,
+                ocrRawVersion: OCR_RAW_VERSION,
+                text: '',
+                debug: {
+                  runtimeMs: 0,
+                  droppedWords: [],
+                  dropCounts: {},
+                },
+              };
+            } else {
+              const ocrPromise = visionService.ocrForTextLayer(
+                imageBlob,
+                imageWidth,
+                imageHeight,
+                options.language,
+                options.dpi,
+                options.pageSegMode,
+                pageSignal,
+                debugCollectDrops,
+                pipelineProfile,
+                resolvedQualityProfile,
+                options.engine,
+                undefined,
+                {
+                  useAngleCls: options.useAngleCls
                 }
               );
-            } finally {
-              if (signal) {
-                signal.removeEventListener('abort', parentAbortHandler);
+
+              try {
+                const effectiveTimeoutSec = resolvePerPageTimeoutSec(options.perPageTimeoutSec, options.engine || 'paddleocr');
+                ocrResult = await withPerPageOCRTimeout(
+                  ocrPromise,
+                  pageNum,
+                  effectiveTimeoutSec,
+                  () => {
+                    pageAbortController.abort();
+                    visionService.cancelAll(`OCR timeout on page ${pageNum}`);
+                  }
+                );
+              } catch (error) {
+                if (signal?.aborted) {
+                  throw new Error(`การแปลง Searchable PDF ถูกยกเลิกที่หน้า ${pageNum}`);
+                }
+                throw error;
+              } finally {
+                if (signal) {
+                  signal.removeEventListener('abort', parentAbortHandler);
+                }
               }
             }
-            ocrResult.language = normalizedLanguage;
-            ocrResult.pageNumber = pageNum;
-            ocrResult.pipelineProfile = pipelineProfile;
-            ocrResult.ocrEngine = options.engine || 'paddleocr';
-            ocrResult.ocrQualityProfile = resolvedQualityProfile;
+            if (ocrResult) {
+              ocrResult.language = normalizedLanguage;
+              ocrResult.pageNumber = pageNum;
+              ocrResult.pipelineProfile = pipelineProfile;
+              ocrResult.ocrEngine = options.engine || 'paddleocr';
+              ocrResult.ocrQualityProfile = resolvedQualityProfile;
+            }
             stepProgress('ocr', `OCR หน้า ${pageNum}/${pagesToProcess} เสร็จแล้ว`, 1);
 
-            if (cacheDocId && dbService.isAvailable()) {
+            if (ocrResult && cacheDocId && dbService.isAvailable()) {
               const saved = await dbService.saveOCR(cacheDocId, pageNum, ocrResult, options.engine || 'paddleocr');
               if (!saved) {
                 console.warn(`[SearchablePDF] Failed to persist OCR cache for page ${pageNum} (docId=${cacheDocId})`);

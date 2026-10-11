@@ -3,6 +3,8 @@ import { hasCurrentOCRTranslationCacheVersion, OCRPreviewMode, OCRTranslationCac
 import { buildOCRSourceFingerprint } from '../../services/ocrSourceFingerprint';
 import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
 import { lookupShortPhraseTh } from '../../services/translation/offlineTranslationService';
+import { fastIoU } from '../../services/native/fastSpatialCluster';
+import { fastDiceSimilarity } from '../../services/native/fastDiceSimilarity';
 
 const TRANSLATION_LANGUAGE_ALIASES: Record<string, string> = {
   en: 'en',
@@ -119,21 +121,8 @@ const buildOverlayKeyBigrams = (value: string): Set<string> => {
   return grams;
 };
 
-const overlayKeyDiceSimilarity = (a: string, b: string): number => {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-
-  const aBigrams = buildOverlayKeyBigrams(a);
-  const bBigrams = buildOverlayKeyBigrams(b);
-  if (aBigrams.size === 0 || bBigrams.size === 0) return 0;
-
-  let overlap = 0;
-  for (const gram of aBigrams) {
-    if (bBigrams.has(gram)) overlap += 1;
-  }
-
-  return (2 * overlap) / (aBigrams.size + bBigrams.size);
-};
+const overlayKeyDiceSimilarity = (a: string, b: string): number =>
+  fastDiceSimilarity(a, b);
 
 const buildOverlayWordSet = (value: string): Set<string> => {
   const normalized = normalizeOverlayInlineText(String(value || ''))
@@ -176,15 +165,8 @@ const overlayDedupOverlapRatioY = (a: BBox, b: BBox): number => {
   return overlap / minHeight;
 };
 
-const overlayDedupIou = (a: BBox, b: BBox): number => {
-  const overlapWidth = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
-  const overlapHeight = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
-  const intersection = overlapWidth * overlapHeight;
-  if (intersection <= 0) return 0;
-
-  const union = overlayDedupBoxArea(a) + overlayDedupBoxArea(b) - intersection;
-  return union > 0 ? intersection / union : 0;
-};
+const overlayDedupIou = (a: BBox, b: BBox): number =>
+  fastIoU(a, b);
 
 const shouldCollapseTranslatedOverlayDuplicate = (
   existing: TranslatedOverlayCandidate,
@@ -1164,18 +1146,7 @@ const chooseReadablePair = (rawBackground: RGB): { bg: RGB; text: RGB } => {
     background = { r: 255, g: 255, b: 255 };
   }
 
-  let bestText = contrastRatio(background, black) >= contrastRatio(background, white) ? black : white;
-  let bestContrast = contrastRatio(background, bestText);
-
-  for (let i = 0; i < 4 && bestContrast < 4.5; i += 1) {
-    if (bestText === black) {
-      background = blendRgb(background, { r: 255, g: 255, b: 255 }, 0.16);
-    } else {
-      background = blendRgb(background, { r: 0, g: 0, b: 0 }, 0.16);
-    }
-    bestText = contrastRatio(background, black) >= contrastRatio(background, white) ? black : white;
-    bestContrast = contrastRatio(background, bestText);
-  }
+  const bestText = contrastRatio(background, black) >= contrastRatio(background, white) ? black : white;
 
   return { bg: background, text: bestText };
 };
@@ -1546,8 +1517,26 @@ const registerPaletteSample = (
   stats.totalB += b * weight;
 };
 
+const readPixelsFromSource = (
+  source: CanvasRenderingContext2D | ImageData,
+  x0: number,
+  y0: number,
+  readW: number,
+  readH: number
+): { data: Uint8ClampedArray; fullWidth: number; isFullPage: boolean } | null => {
+  if ('data' in source && source.data instanceof Uint8ClampedArray) {
+    return { data: source.data, fullWidth: source.width, isFullPage: true };
+  }
+  try {
+    const imgData = (source as CanvasRenderingContext2D).getImageData(x0, y0, readW, readH);
+    return { data: imgData.data, fullWidth: readW, isFullPage: false };
+  } catch {
+    return null;
+  }
+};
+
 const accumulateRegionSamples = (
-  context: CanvasRenderingContext2D,
+  context: CanvasRenderingContext2D | ImageData,
   bbox: BBox,
   sourceWidth: number,
   sourceHeight: number,
@@ -1580,21 +1569,19 @@ const accumulateRegionSamples = (
   const readW = Math.max(1, x1 - x0);
   const readH = Math.max(1, y1 - y0);
 
-  let imageData: ImageData;
-  try {
-    imageData = context.getImageData(x0, y0, readW, readH);
-  } catch {
-    return;
-  }
+  const pixelBuffer = readPixelsFromSource(context, x0, y0, readW, readH);
+  if (!pixelBuffer) return;
 
-  const pixels = imageData.data;
+  const { data: pixels, fullWidth, isFullPage } = pixelBuffer;
   const stride = Math.max(1, Math.floor(Math.sqrt((readW * readH) / 240)));
   const centerX = (readW - 1) / 2;
   const centerY = (readH - 1) / 2;
 
-  for (let y = 0; y < readH; y += stride) {
-    for (let x = 0; x < readW; x += stride) {
-      const idx = (y * readW + x) * 4;
+  for (let localY = 0; localY < readH; localY += stride) {
+    const globalY = isFullPage ? y0 + localY : localY;
+    for (let localX = 0; localX < readW; localX += stride) {
+      const globalX = isFullPage ? x0 + localX : localX;
+      const idx = (globalY * fullWidth + globalX) * 4;
       const alpha = pixels[idx + 3] / 255;
       if (alpha <= 0.05) continue;
 
@@ -1602,8 +1589,8 @@ const accumulateRegionSamples = (
       const g = pixels[idx + 1];
       const b = pixels[idx + 2];
 
-      const dx = (x - centerX) / Math.max(1, readW * 0.5);
-      const dy = (y - centerY) / Math.max(1, readH * 0.5);
+      const dx = (localX - centerX) / Math.max(1, readW * 0.5);
+      const dy = (localY - centerY) / Math.max(1, readH * 0.5);
       const distance = Math.min(1, Math.sqrt(dx * dx + dy * dy));
       const centerWeight = clamp(1 - distance * 0.7, 0.16, 1);
 
@@ -1732,6 +1719,203 @@ const resolveSampleRgb = (stats: PaletteSampleStats): RGB => {
   return resolved;
 };
 
+const sampleForegroundRgbFromLine = (
+  context: CanvasRenderingContext2D | ImageData,
+  line: OCRLine,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number,
+  background: RGB
+): RGB | null => {
+  if (!sourceWidth || !sourceHeight || !sampleWidth || !sampleHeight) return null;
+
+  const wordBoxes = Array.isArray(line.words)
+    ? line.words.map((word) => word.bbox).filter(hasPositiveBBox)
+    : [];
+
+  const regions = wordBoxes.length > 0
+    ? wordBoxes
+    : (hasPositiveBBox(line.bbox) ? [line.bbox] : []);
+
+  if (regions.length === 0) return null;
+
+  const stats = createPaletteSampleStats();
+  const backgroundLum = luminance(background);
+
+  regions.forEach((bbox) => {
+    const mappedX0 = Math.floor((bbox.x0 / sourceWidth) * sampleWidth);
+    const mappedX1 = Math.ceil((bbox.x1 / sourceWidth) * sampleWidth);
+    const mappedY0 = Math.floor((bbox.y0 / sourceHeight) * sampleHeight);
+    const mappedY1 = Math.ceil((bbox.y1 / sourceHeight) * sampleHeight);
+
+    const x0 = clamp(mappedX0, 0, sampleWidth - 1);
+    const y0 = clamp(mappedY0, 0, sampleHeight - 1);
+    const x1 = clamp(mappedX1, x0 + 1, sampleWidth);
+    const y1 = clamp(mappedY1, y0 + 1, sampleHeight);
+
+    const readW = Math.max(1, x1 - x0);
+    const readH = Math.max(1, y1 - y0);
+
+    const pixelBuffer = readPixelsFromSource(context, x0, y0, readW, readH);
+    if (!pixelBuffer) return;
+
+    const { data: pixels, fullWidth, isFullPage } = pixelBuffer;
+    const stride = Math.max(1, Math.floor(Math.sqrt((readW * readH) / 260)));
+    const centerX = (readW - 1) / 2;
+    const centerY = (readH - 1) / 2;
+
+    for (let localY = 0; localY < readH; localY += stride) {
+      const globalY = isFullPage ? y0 + localY : localY;
+      for (let localX = 0; localX < readW; localX += stride) {
+        const globalX = isFullPage ? x0 + localX : localX;
+        const idx = (globalY * fullWidth + globalX) * 4;
+        const alpha = pixels[idx + 3] / 255;
+        if (alpha <= 0.08) continue;
+
+        const rgb: RGB = { r: pixels[idx], g: pixels[idx + 1], b: pixels[idx + 2] };
+        const distance = rgbDistance(rgb, background);
+        const minDistance = backgroundLum < 0.35 ? 14 : 34;
+        if (distance < minDistance) continue;
+
+        const contrast = contrastRatio(rgb, background);
+        const saturation = computeSaturation(rgb.r, rgb.g, rgb.b);
+        const allowColoredFallback = contrast >= 1.2
+          && saturation >= 0.24
+          && (backgroundLum <= 0.52 || luminance(rgb) >= 0.62);
+        const allowBrightOnDarkFallback = contrast >= 1.15
+          && backgroundLum <= 0.42
+          && luminance(rgb) >= 0.72;
+        if (contrast < 1.35 && !allowColoredFallback && !allowBrightOnDarkFallback) continue;
+
+        const dx = (localX - centerX) / Math.max(1, readW * 0.5);
+        const dy = (localY - centerY) / Math.max(1, readH * 0.5);
+        const radialDistance = Math.min(1, Math.sqrt(dx * dx + dy * dy));
+        const centerWeight = clamp(1 - radialDistance * 0.55, 0.3, 1);
+        let weight = alpha * centerWeight * clamp(distance / 160, 0.28, 1.36) * clamp(contrast / 2.8, 0.52, 1.32);
+
+        // Prefer colorful non-black text when available (e.g., blue headers).
+        if (saturation >= 0.16) {
+          weight *= 1.28;
+        }
+        if (saturation >= 0.26) {
+          weight *= 1.32;
+        }
+        if (saturation >= 0.34 && backgroundLum <= 0.62) {
+          weight *= 1.25;
+        }
+        if (luminance(rgb) >= 0.72 && backgroundLum <= 0.45) {
+          weight *= 1.14;
+        }
+
+        registerPaletteSample(stats, rgb.r, rgb.g, rgb.b, weight, radialDistance);
+      }
+    }
+  });
+
+  if (stats.totalWeight <= 0) return null;
+  const candidate = resolveSampleRgb(stats);
+  const finalMinDistance = backgroundLum < 0.35 ? 14 : 26;
+  if (rgbDistance(candidate, background) < finalMinDistance) return null;
+  return candidate;
+};
+
+const sampleDominantRgb = (
+  context: CanvasRenderingContext2D | ImageData,
+  bbox: BBox,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number
+): RGB => {
+  const stats = createPaletteSampleStats();
+  if (!hasPositiveBBox(bbox)) return DEFAULT_SAMPLE_RGB;
+  accumulateRegionSamples(
+    context,
+    bbox,
+    sourceWidth,
+    sourceHeight,
+    sampleWidth,
+    sampleHeight,
+    0.32,
+    0.42,
+    44,
+    52,
+    1,
+    stats
+  );
+  return resolveSampleRgb(stats);
+};
+
+const sampleDominantRgbFromLine = (
+  context: CanvasRenderingContext2D | ImageData,
+  line: OCRLine,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number
+): RGB => {
+  const stats = createPaletteSampleStats();
+  const wordBoxes = Array.isArray(line.words)
+    ? line.words.map((word) => word.bbox).filter(hasPositiveBBox)
+    : [];
+
+  if (hasPositiveBBox(line.bbox)) {
+    accumulateRegionSamples(
+      context,
+      line.bbox,
+      sourceWidth,
+      sourceHeight,
+      sampleWidth,
+      sampleHeight,
+      0.42,
+      0.62,
+      58,
+      62,
+      1.35,
+      stats
+    );
+  }
+
+  if (wordBoxes.length > 0) {
+    wordBoxes.forEach((bbox) => {
+      accumulateRegionSamples(
+        context,
+        bbox,
+        sourceWidth,
+        sourceHeight,
+        sampleWidth,
+        sampleHeight,
+        0.08,
+        0.12,
+        8,
+        10,
+        0.2,
+        stats
+      );
+    });
+  }
+
+  if (hasPositiveBBox(line.bbox)) {
+    accumulateRegionSamples(
+      context,
+      line.bbox,
+      sourceWidth,
+      sourceHeight,
+      sampleWidth,
+      sampleHeight,
+      0.14,
+      0.18,
+      16,
+      18,
+      wordBoxes.length > 0 ? 0.45 : 1,
+      stats
+    );
+  }
+
+  return resolveSampleRgb(stats);
+};
+
 const isWarmBackdropTitleLine = (line: OCRLine): boolean => {
   const key = normalizeOverlayLatinContextKey(String(line.text || ''));
   if (!key) return false;
@@ -1780,7 +1964,7 @@ const pickWarmBackdropRgb = (stats: PaletteSampleStats, minWeightRatio: number):
 };
 
 const sampleWarmBackdropTitleRgbFromLine = (
-  context: CanvasRenderingContext2D,
+  context: CanvasRenderingContext2D | ImageData,
   line: OCRLine,
   sourceWidth: number,
   sourceHeight: number,
@@ -1818,108 +2002,6 @@ const sampleWarmBackdropTitleRgbFromLine = (
     stats
   );
   return pickWarmBackdropRgb(stats, 0.08);
-};
-
-const sampleForegroundRgbFromLine = (
-  context: CanvasRenderingContext2D,
-  line: OCRLine,
-  sourceWidth: number,
-  sourceHeight: number,
-  sampleWidth: number,
-  sampleHeight: number,
-  background: RGB
-): RGB | null => {
-  if (!sourceWidth || !sourceHeight || !sampleWidth || !sampleHeight) return null;
-
-  const wordBoxes = Array.isArray(line.words)
-    ? line.words.map((word) => word.bbox).filter(hasPositiveBBox)
-    : [];
-
-  const regions = wordBoxes.length > 0
-    ? wordBoxes
-    : (hasPositiveBBox(line.bbox) ? [line.bbox] : []);
-
-  if (regions.length === 0) return null;
-
-  const stats = createPaletteSampleStats();
-  const backgroundLum = luminance(background);
-
-  regions.forEach((bbox) => {
-    const mappedX0 = Math.floor((bbox.x0 / sourceWidth) * sampleWidth);
-    const mappedX1 = Math.ceil((bbox.x1 / sourceWidth) * sampleWidth);
-    const mappedY0 = Math.floor((bbox.y0 / sourceHeight) * sampleHeight);
-    const mappedY1 = Math.ceil((bbox.y1 / sourceHeight) * sampleHeight);
-
-    const x0 = clamp(mappedX0, 0, sampleWidth - 1);
-    const y0 = clamp(mappedY0, 0, sampleHeight - 1);
-    const x1 = clamp(mappedX1, x0 + 1, sampleWidth);
-    const y1 = clamp(mappedY1, y0 + 1, sampleHeight);
-
-    const readW = Math.max(1, x1 - x0);
-    const readH = Math.max(1, y1 - y0);
-    let imageData: ImageData;
-    try {
-      imageData = context.getImageData(x0, y0, readW, readH);
-    } catch {
-      return;
-    }
-
-    const pixels = imageData.data;
-    const stride = Math.max(1, Math.floor(Math.sqrt((readW * readH) / 260)));
-    const centerX = (readW - 1) / 2;
-    const centerY = (readH - 1) / 2;
-
-    for (let y = 0; y < readH; y += stride) {
-      for (let x = 0; x < readW; x += stride) {
-        const idx = (y * readW + x) * 4;
-        const alpha = pixels[idx + 3] / 255;
-        if (alpha <= 0.08) continue;
-
-        const rgb: RGB = { r: pixels[idx], g: pixels[idx + 1], b: pixels[idx + 2] };
-        const distance = rgbDistance(rgb, background);
-        const minDistance = backgroundLum < 0.35 ? 14 : 34;
-        if (distance < minDistance) continue;
-
-        const contrast = contrastRatio(rgb, background);
-        const saturation = computeSaturation(rgb.r, rgb.g, rgb.b);
-        const allowColoredFallback = contrast >= 1.2
-          && saturation >= 0.24
-          && (backgroundLum <= 0.52 || luminance(rgb) >= 0.62);
-        const allowBrightOnDarkFallback = contrast >= 1.15
-          && backgroundLum <= 0.42
-          && luminance(rgb) >= 0.72;
-        if (contrast < 1.35 && !allowColoredFallback && !allowBrightOnDarkFallback) continue;
-
-        const dx = (x - centerX) / Math.max(1, readW * 0.5);
-        const dy = (y - centerY) / Math.max(1, readH * 0.5);
-        const radialDistance = Math.min(1, Math.sqrt(dx * dx + dy * dy));
-        const centerWeight = clamp(1 - radialDistance * 0.55, 0.3, 1);
-        let weight = alpha * centerWeight * clamp(distance / 160, 0.28, 1.36) * clamp(contrast / 2.8, 0.52, 1.32);
-
-        // Prefer colorful non-black text when available (e.g., blue headers).
-        if (saturation >= 0.16) {
-          weight *= 1.28;
-        }
-        if (saturation >= 0.26) {
-          weight *= 1.32;
-        }
-        if (saturation >= 0.34 && backgroundLum <= 0.62) {
-          weight *= 1.25;
-        }
-        if (luminance(rgb) >= 0.72 && backgroundLum <= 0.45) {
-          weight *= 1.14;
-        }
-
-        registerPaletteSample(stats, rgb.r, rgb.g, rgb.b, weight, radialDistance);
-      }
-    }
-  });
-
-  if (stats.totalWeight <= 0) return null;
-  const candidate = resolveSampleRgb(stats);
-  const finalMinDistance = backgroundLum < 0.35 ? 14 : 26;
-  if (rgbDistance(candidate, background) < finalMinDistance) return null;
-  return candidate;
 };
 
 const ensureReadableTextColor = (candidate: RGB, background: RGB, fallback: RGB): RGB => {
@@ -2006,104 +2088,8 @@ const shouldForceWarmBackdropWhiteText = (line: OCRLine, background: RGB): boole
     && luminance(background) >= 0.32;
 };
 
-const sampleDominantRgb = (
-  context: CanvasRenderingContext2D,
-  bbox: BBox,
-  sourceWidth: number,
-  sourceHeight: number,
-  sampleWidth: number,
-  sampleHeight: number
-): RGB => {
-  const stats = createPaletteSampleStats();
-  if (!hasPositiveBBox(bbox)) return DEFAULT_SAMPLE_RGB;
-  accumulateRegionSamples(
-    context,
-    bbox,
-    sourceWidth,
-    sourceHeight,
-    sampleWidth,
-    sampleHeight,
-    0.32,
-    0.42,
-    44,
-    52,
-    1,
-    stats
-  );
-  return resolveSampleRgb(stats);
-};
-
-const sampleDominantRgbFromLine = (
-  context: CanvasRenderingContext2D,
-  line: OCRLine,
-  sourceWidth: number,
-  sourceHeight: number,
-  sampleWidth: number,
-  sampleHeight: number
-): RGB => {
-  const stats = createPaletteSampleStats();
-  const wordBoxes = Array.isArray(line.words)
-    ? line.words.map((word) => word.bbox).filter(hasPositiveBBox)
-    : [];
-
-  if (hasPositiveBBox(line.bbox)) {
-    accumulateRegionSamples(
-      context,
-      line.bbox,
-      sourceWidth,
-      sourceHeight,
-      sampleWidth,
-      sampleHeight,
-      0.42,
-      0.62,
-      58,
-      62,
-      1.35,
-      stats
-    );
-  }
-
-  if (wordBoxes.length > 0) {
-    wordBoxes.forEach((bbox) => {
-      accumulateRegionSamples(
-        context,
-        bbox,
-        sourceWidth,
-        sourceHeight,
-        sampleWidth,
-        sampleHeight,
-        0.08,
-        0.12,
-        8,
-        10,
-        0.2,
-        stats
-      );
-    });
-  }
-
-  if (hasPositiveBBox(line.bbox)) {
-    accumulateRegionSamples(
-      context,
-      line.bbox,
-      sourceWidth,
-      sourceHeight,
-      sampleWidth,
-      sampleHeight,
-      0.14,
-      0.18,
-      16,
-      18,
-      wordBoxes.length > 0 ? 0.45 : 1,
-      stats
-    );
-  }
-
-  return resolveSampleRgb(stats);
-};
-
 export const sampleOverlayPaletteFromBbox = (
-  context: CanvasRenderingContext2D,
+  context: CanvasRenderingContext2D | ImageData,
   bbox: BBox,
   sourceWidth: number,
   sourceHeight: number,
@@ -2121,7 +2107,7 @@ export const sampleOverlayPaletteFromBbox = (
 };
 
 export const sampleOverlayPaletteFromLine = (
-  context: CanvasRenderingContext2D,
+  context: CanvasRenderingContext2D | ImageData,
   line: OCRLine,
   sourceWidth: number,
   sourceHeight: number,
@@ -2168,6 +2154,47 @@ export const sampleOverlayPaletteFromLine = (
     textColor: `rgb(${finalText.r}, ${finalText.g}, ${finalText.b})`,
     ...textStroke,
   };
+};
+
+export const sampleOverlayPalettesBatch = (
+  contextOrData: CanvasRenderingContext2D | ImageData,
+  lines: Array<{ line: OCRLine; index: number }>,
+  sourceWidth: number,
+  sourceHeight: number,
+  sampleWidth: number,
+  sampleHeight: number
+): Map<number, OverlayPalette> => {
+  const result = new Map<number, OverlayPalette>();
+  if (lines.length === 0) return result;
+
+  let fullPageData: ImageData | null = null;
+  if ('data' in contextOrData && contextOrData.data instanceof Uint8ClampedArray) {
+    fullPageData = contextOrData;
+  } else if ('getImageData' in contextOrData) {
+    try {
+      fullPageData = (contextOrData as CanvasRenderingContext2D).getImageData(0, 0, sampleWidth, sampleHeight);
+    } catch {
+      fullPageData = null;
+    }
+  }
+
+  const samplingSource = fullPageData || contextOrData;
+
+  lines.forEach(({ line, index }) => {
+    result.set(
+      index,
+      sampleOverlayPaletteFromLine(
+        samplingSource,
+        line,
+        sourceWidth,
+        sourceHeight,
+        sampleWidth,
+        sampleHeight
+      )
+    );
+  });
+
+  return result;
 };
 
 export const estimateLineRotationDeg = (line: OCRLine): number => {
@@ -2295,7 +2322,6 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
 
   const containsThai = THAI_CHAR_REGEX.test(normalized);
   const containsCjk = CJK_CHAR_REGEX.test(normalized);
-  const hasWhitespaceBoundaries = /\s/.test(normalized);
   if (!containsThai && !containsCjk) {
     return {
       tokens: normalized.split(/\s+/g).filter(Boolean),
@@ -2303,18 +2329,44 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
     };
   }
 
-  // Keep explicit spacing for Thai when present to avoid breaking semantic phrase boundaries.
-  if (containsThai && hasWhitespaceBoundaries) {
-    return {
-      tokens: normalized.split(/\s+/g).filter(Boolean),
-      joinWithSpace: true,
-    };
+  // For Thai text, always run through Intl.Segmenter (even when whitespace exists)
+  // so that long compound phrases between spaces are properly segmented into wrap-friendly word tokens.
+  if (containsThai) {
+    const segmenter = getTextSegmenter('th');
+    if (!segmenter) {
+      return {
+        tokens: Array.from(normalized),
+        joinWithSpace: false,
+      };
+    }
+
+    const rawParts = normalized.split(/(\s+)/);
+    const tokens: string[] = [];
+    for (const part of rawParts) {
+      if (!part) continue;
+      if (/^\s+$/.test(part)) {
+        tokens.push(' ');
+      } else {
+        for (const seg of segmenter.segment(part)) {
+          if (seg.segment) tokens.push(seg.segment);
+        }
+      }
+    }
+
+    if (tokens.length === 0) {
+      return {
+        tokens: Array.from(normalized),
+        joinWithSpace: false,
+      };
+    }
+
+    return { tokens, joinWithSpace: false };
   }
 
-  const locale = containsThai ? 'th' : 'ja';
+  const locale = 'ja';
   const segmenter = getTextSegmenter(locale);
   if (!segmenter) {
-    // Correct fallback: split CJK or Thai character-by-character to prevent returning a single massive unsplit string
+    // Correct fallback: split CJK character-by-character to prevent returning a single massive unsplit string
     return {
       tokens: Array.from(normalized),
       joinWithSpace: false,
@@ -2322,7 +2374,7 @@ const tokenizeForWrap = (text: string): { tokens: string[]; joinWithSpace: boole
   }
 
   const tokens = Array.from(segmenter.segment(normalized))
-    .map((segment) => segment.segment) // Do not trim, we want to keep structure if needed, or filter empty
+    .map((segment) => segment.segment)
     .filter(Boolean);
 
   if (tokens.length === 0) {
@@ -3915,8 +3967,12 @@ export const computeOverlayLayoutMap = (
       groupColumnCoherence.medianWidth * (mergedStyleKind === 'comic-bubble' ? 2.1 : 1.9)
     );
 
+    const maxLinesForMerge = (mergedStyleKind === 'comic-bubble' || mergedStyleKind === 'comic-box' || hasBalloonMember || !effectiveDocumentProfile)
+      ? 12
+      : 3;
+
     const canMergeSectionBlock = shouldMergeAsSectionBlock
-      && group.length <= 3
+      && group.length <= maxLinesForMerge
       && hasStrongColumnContinuity
       && !overlyWideSectionSpan;
 
@@ -4042,11 +4098,14 @@ export const computeOverlayLayoutMap = (
       })();
 
       const mergedFillRatio = mergedTypographyAdjusted.contentHeight / Math.max(1, mergedHeightBudget);
-      const mergeIsUseful = hasBalloonMember || (
-        mergedTypographyAdjusted.estimatedLines >= 1
-        && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * (mergedStyleKind === 'comic-bubble' ? 0.9 : 0.88)
-        && mergedFillRatio >= (mergedStyleKind === 'comic-bubble' ? 0.58 : 0.52)
-      );
+      const mergeIsUseful = hasBalloonMember
+        || mergedStyleKind === 'comic-bubble'
+        || mergedStyleKind === 'comic-box'
+        || (
+          mergedTypographyAdjusted.estimatedLines >= 1
+          && mergedTypographyAdjusted.fontSize >= mergedBaselineFont * 0.88
+          && mergedFillRatio >= 0.45
+        );
       if (mergeIsUseful) {
         const mergedAlignment: 'left' | 'center' = mergedStyleKind === 'comic-bubble' ? 'center' : 'left';
         const mergedCenterX = mergedBBox.x0 + (mergedBBox.x1 - mergedBBox.x0) * 0.5;

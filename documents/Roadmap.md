@@ -6,7 +6,7 @@ This roadmap tracks only active and near-term work.
 
 - Consolidated `documents/` into one clean canonical set
 - Removed stale deep research dump files
-- Updated architecture/optimization docs to match current code (`OCR v215`, translation cache `v51`, and custom glossary)
+- Updated architecture/optimization docs to match current code (`OCR v230`, translation cache `v64`, and custom glossary)
 
 ## P1 - OCR Reliability (In Progress)
 
@@ -18,24 +18,22 @@ This roadmap tracks only active and near-term work.
 
 ### Next Actions
 
-1. Add fixture-backed tests for technical-row line retention (caption/equation-like lines)
-2. Add regression assertions for external anomaly fallback behavior
-3. Add diagnostics for dropped-line reason distribution by page type
+1. [Completed] Add fixture-backed tests for technical-row line retention (caption/equation-like lines) — Added in `ocrPostProcessingPipeline.test.ts`
+2. [Completed] Add regression assertions for external anomaly fallback behavior (`dropMinorPaddleGeometryAnomalies`) — Added in `VisionService.geometry.test.ts`
+3. [Completed] Add diagnostics for dropped-line reason distribution by page type — Added in `ghostFilter.ts` & `ocrPostProcessingPipeline.ts`
 
-## P2 - Test Coverage And Fixtures (In Progress)
+## P2 - Test Coverage And Fixtures (Completed)
 
 ### Objectives
 
 - Make OCR tuning reproducible
 - Reduce screenshot-only debugging loops
 
-### Next Actions
+### Completed Actions
 
-1. Expand fixtures:
-   - tall comic sparse balloons
-   - dense technical tables/labels
-2. Add stable expected-output checks for each OCR engine
-3. Add focused tests for translatedByIndex completeness
+1. [Completed] Expand fixtures: tall comic sparse balloons and dense technical tables/labels — Added in `public/fixtures/ocr/manga/expectations.json` & `public/fixtures/ocr/document_test/`
+2. [Completed] Add stable expected-output checks for each OCR engine — Added in `ocrEngineExpectedOutput.test.ts` & `scripts/ocr-table-benchmark.py`
+3. [Completed] Add focused tests for translatedByIndex completeness and dictionary normalization — Added in `translationLineNormalizer.test.ts`
 
 ## P3 - Layer Interactive Manipulation (Completed)
 

@@ -1,45 +1,43 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-
-import electron from 'vite-plugin-electron';
-
-// https://vitejs.dev/config/
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { playwright } from '@vitest/browser-playwright';
+
 const dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
 // More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
 export default defineConfig({
+  clearScreen: false,
+  server: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    watch: {
+      ignored: ['**/src-tauri/**', '**/target/**', '**/.data/**', '**/.venv-ocr/**'],
+    },
+  },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'lucide-react',
+      'zustand',
+      '@tauri-apps/api/core',
+    ],
+  },
   esbuild: {
     target: 'es2022'
   },
   worker: {
     format: 'es',
   },
-  plugins: [react(), electron([{
-    entry: 'electron/main.ts',
-    vite: {
-      define: {
-        __DEV_PROJECT_ROOT__: JSON.stringify(dirname),
-      },
-      build: {
-        rollupOptions: {
-          external: ['better-sqlite3-multiple-ciphers']
-        }
-      }
-    },
-    onstart(options) {
-      options.startup();
-    }
-  }, {
-    entry: 'electron/preload.ts',
-    onstart(options) {
-      options.reload();
-    }
-  }])],
+  plugins: [
+    react()
+  ],
   build: {
     target: 'es2022',
     rollupOptions: {
@@ -61,17 +59,15 @@ export default defineConfig({
       test: {
         name: 'unit',
         environment: 'node',
-        include: ['electron/**/*.test.ts', 'src/**/*.test.ts'],
-        exclude: ['src/stories/**'],
+        include: ['src/**/*.test.ts'],
       }
     }, {
       extends: true,
       plugins: [
-      // The plugin will run tests for the stories defined in your Storybook config
-      // See options at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon#storybooktest
-      storybookTest({
-        configDir: path.join(dirname, '.storybook')
-      })],
+        storybookTest({
+          configDir: path.join(dirname, '.storybook')
+        })
+      ],
       test: {
         name: 'storybook',
         browser: {
@@ -84,7 +80,8 @@ export default defineConfig({
         },
         setupFiles: ['.storybook/vitest.setup.ts']
       }
-    }]
+    }],
+    teardownTimeout: 10000,
+    hookTimeout: 10000,
   }
 });
-

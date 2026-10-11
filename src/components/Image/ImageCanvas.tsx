@@ -24,6 +24,7 @@ import {
   resolveOverlaySourceBBox,
   shouldSkipOverlayRenderForSuspiciousLine,
   sampleOverlayPaletteFromLine,
+  sampleOverlayPalettesBatch,
 } from '../OCR/translationOverlayUtils';
 import { resolveOverlayFontFamily } from '../../constants/overlayFonts';
 import { buildTextSearchPattern, collectTextSearchMatches, hasTextSearchMatch, type TextSearchPattern } from '../../services/textSearch';
@@ -270,7 +271,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
           if (preferredKey) {
             ocrState.setActiveTranslationCacheKey(pageNum, preferredKey);
-            ocrState.setTranslationPreviewMode('translated');
           }
         }
       } finally {
@@ -334,7 +334,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
   const syncContentTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: number) => {
     if (!contentRef.current) return;
-    const transformStr = `translate(${nextPan.x}px, ${nextPan.y}px) scale(${nextZoom})`;
+    const transformStr = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0px) scale(${nextZoom})`;
     contentRef.current.style.transform = transformStr;
 
     // Real-time synchronization for split-view:
@@ -385,20 +385,22 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
         context.drawImage(img, 0, 0, sampleCanvas.width, sampleCanvas.height);
 
-        const next = new Map<number, OverlayPalette>();
+        const activeLinesToSample: Array<{ line: typeof currentPageOCR.lines[0]; index: number }> = [];
         currentPageOCR.lines.forEach((line, index) => {
           if (!translationOverlayContext.translatedByIndex.has(index)) return;
           const translatedText = translationOverlayContext.translatedByIndex.get(index) || '';
           if (shouldSkipOverlayRenderForSuspiciousLine(line) && !isSourceFallbackOverlayText(line.text, translatedText)) return;
-          next.set(index, sampleOverlayPaletteFromLine(
-            context,
-            line,
-            currentPageOCR.width,
-            currentPageOCR.height,
-            sampleCanvas.width,
-            sampleCanvas.height
-          ));
+          activeLinesToSample.push({ line, index });
         });
+
+        const next = sampleOverlayPalettesBatch(
+          context,
+          activeLinesToSample,
+          currentPageOCR.width,
+          currentPageOCR.height,
+          sampleCanvas.width,
+          sampleCanvas.height
+        );
         if (!canceled) {
           setTranslatedLinePalette(next);
         }
@@ -437,7 +439,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
   useEffect(() => {
     if (contentRef.current) {
-      contentRef.current.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+      contentRef.current.style.transform = `translate3d(${pan.x}px, ${pan.y}px, 0px) scale(${zoom})`;
     }
   }, [pan, zoom]);
 
@@ -448,6 +450,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      useUIStore.getState().setIsUserInteracting(true);
 
       if (contentRef.current) {
         contentRef.current.style.transition = 'none';
@@ -503,6 +506,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
       wheelIdleTimerRef.current = setTimeout(() => {
         wheelIdleTimerRef.current = null;
         setView(panRef.current, stateRef.current.zoom);
+        useUIStore.getState().setIsUserInteracting(false);
       }, 120);
     };
 
@@ -513,6 +517,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTool === 'hand' || e.button === 1 || e.ctrlKey) {
       setIsDragging(true);
+      useUIStore.getState().setIsUserInteracting(true);
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
     }
@@ -530,7 +535,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
     }
     dragTransformRafRef.current = requestAnimationFrame(() => {
       if (contentRef.current) {
-        const transformStr = `translate(${newX}px, ${newY}px) scale(${stateRef.current.zoom})`;
+        contentRef.current.style.transition = 'none';
+        const transformStr = `translate3d(${newX}px, ${newY}px, 0px) scale(${stateRef.current.zoom})`;
         contentRef.current.style.transform = transformStr;
 
         // Real-time synchronization for split-view:
@@ -552,8 +558,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
   };
 
   const handleMouseUp = () => {
-    if (!isDragging) return;
-    setIsDragging(false);
+    if (isDragging) {
+      setIsDragging(false);
+      useUIStore.getState().setIsUserInteracting(false);
+    }
     if (dragTransformRafRef.current !== null) {
       cancelAnimationFrame(dragTransformRafRef.current);
       dragTransformRafRef.current = null;
@@ -732,10 +740,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
       <div 
         ref={contentRef}
         style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0px) scale(${zoom})`,
           transformOrigin: '0 0',
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-          willChange: 'transform'
+          transition: 'none',
+          willChange: 'transform',
+          backfaceVisibility: 'hidden',
+          WebkitBackfaceVisibility: 'hidden',
         }}
         className="absolute top-0 left-0 origin-top-left image-canvas-content"
       >
@@ -1150,6 +1160,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = React.memo(({ previewMode
               }}
               isActive={activeTool === 'select' || activeTool === 'region'}
               layouts={overlayLayoutByIndex}
+              previewModeOverride={previewModeOverride}
             />
           </div>
         ) : (

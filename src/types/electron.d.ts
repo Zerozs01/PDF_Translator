@@ -15,6 +15,7 @@ export interface DBDocument {
   thumbnail_path: string | null;
   project_id: number | null;
   is_favorite: boolean;
+  is_thumbnail_hidden?: number | boolean;
   rating?: number;
   last_page: number;
   tag_ids?: string | null;
@@ -59,6 +60,18 @@ export interface DBOcrCacheStatsRow {
   last_cache_update: number | null;
 }
 
+export interface DBGlossaryEntry {
+  id?: number;
+  source_text: string;
+  target_text: string;
+  source_lang?: string;
+  target_lang?: string;
+  type?: 'TERM' | 'SFX';
+  is_active?: number | boolean;
+  created_at?: number;
+  updated_at?: number;
+}
+
 export interface DBOCRTranslationCacheEntry {
   key: string;
   pageNum: number;
@@ -82,6 +95,7 @@ export interface DocumentUpdate {
   project_id?: number | null;
   thumbnail_path?: string;
   is_favorite?: boolean;
+  is_thumbnail_hidden?: number | boolean;
   total_pages?: number;
   rating?: number;
 }
@@ -237,10 +251,10 @@ export interface ElectronAPI {
     ) => Promise<Record<string, string>>;
     
     // Benchmark CRUD
-    saveBenchmark?: (params: { docId: number; pageNum: number; key: string; payload: string }) => Promise<boolean>;
-    getBenchmark?: (params: { docId: number; pageNum: number; key: string }) => Promise<string | null>;
-    clearBenchmark?: (params: { docId: number; pageNum: number; key?: string }) => Promise<boolean>;
-    listBenchmarks?: (params: { docId: number; pageNum: number }) => Promise<any[]>;
+    saveBenchmark?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string; payload: string }) => Promise<boolean>;
+    getBenchmark?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key: string }) => Promise<string | null>;
+    clearBenchmark?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve'; key?: string }) => Promise<boolean>;
+    listBenchmarks?: (params: { docId: number; pageNum: number; mode?: 'baseline' | 'improve' }) => Promise<any[]>;
 
     // Document management
     getRecentDocuments: (limit?: number) => Promise<DBDocument[]>;
@@ -250,6 +264,7 @@ export interface ElectronAPI {
     updateDocument: (id: number, updates: DocumentUpdate) => Promise<boolean>;
     deleteDocument: (id: number) => Promise<boolean>;
     toggleFavorite: (id: number) => Promise<boolean>;
+    toggleThumbnailHidden?: (id: number) => Promise<boolean>;
     getDocumentCacheSize?: (id: number) => Promise<number>;
     getDocumentsByTag: (tagId: number) => Promise<DBDocument[]>;
     addDocumentTag: (documentId: number, tagId: number) => Promise<boolean>;
@@ -273,6 +288,29 @@ export interface ElectronAPI {
     update: (id: number, updates: ProjectUpdate) => Promise<boolean>;
     delete: (id: number) => Promise<boolean>;
     getStats: (projectId: number) => Promise<ProjectStatsResult | null>;
+  };
+
+  glossary: {
+    getAll: () => Promise<DBGlossaryEntry[]>;
+    save: (entry: {
+      id?: number;
+      sourceText: string;
+      targetText: string;
+      sourceLang?: string;
+      targetLang?: string;
+      type?: 'TERM' | 'SFX';
+      isActive?: boolean | number;
+    }) => Promise<DBGlossaryEntry | null>;
+    delete: (id: number) => Promise<boolean>;
+    toggle: (id: number, isActive?: boolean) => Promise<boolean>;
+    importBatch: (entries: Array<{
+      sourceText: string;
+      targetText: string;
+      sourceLang?: string;
+      targetLang?: string;
+      type?: 'TERM' | 'SFX';
+      isActive?: boolean;
+    }>) => Promise<{ inserted: number; updated: number }>;
   };
   
   gemini: {

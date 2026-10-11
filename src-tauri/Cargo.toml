@@ -1,0 +1,33 @@
+[package]
+name = "pdf_translator"
+version = "1.0.0"
+description = "PDF Translator Native Shell Core"
+authors = [""]
+edition = "2021"
+
+[lib]
+name = "pdf_translator_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = ["tray-icon", "devtools"] }
+tauri-plugin-shell = "2.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tokio = { version = "1.38", features = ["full", "sync"] }
+thiserror = "1.0"
+rfd = "0.14"
+
+# PDF Processing
+pdfium-render = { version = "0.8", features = ["image"] }
+lopdf = "0.35"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Concurrency & Memory
+rayon = "1.10"
+bytes = "1.6"
+lru = "0.12"

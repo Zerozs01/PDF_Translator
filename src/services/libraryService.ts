@@ -99,8 +99,10 @@ const withProjectsClient = async <T>(
 
 export const isVirtualDocumentPath = (filepath: string): boolean => String(filepath || '').startsWith('virtual://');
 
-export const filterLibraryDocuments = (documents: DBDocument[]): DBDocument[] =>
-  documents.filter((doc) => !isVirtualDocumentPath(doc.filepath));
+export const filterLibraryDocuments = (documents: DBDocument[] | null | undefined): DBDocument[] => {
+  if (!Array.isArray(documents)) return [];
+  return documents.filter((doc) => !isVirtualDocumentPath(doc.filepath));
+};
 
 const getDocumentSortValue = (document: DBDocument, sortBy: LibrarySortBy): number | string => {
   switch (sortBy) {
@@ -120,12 +122,13 @@ const getDocumentSortValue = (document: DBDocument, sortBy: LibrarySortBy): numb
 };
 
 export const sortLibraryDocuments = (
-  documents: DBDocument[],
+  documents: DBDocument[] | null | undefined,
   sortBy: LibrarySortBy,
   sortOrder: LibrarySortOrder
 ): DBDocument[] => {
+  const safeDocs = Array.isArray(documents) ? documents : [];
   const multiplier = sortOrder === 'asc' ? 1 : -1;
-  return [...documents].sort((left, right) => {
+  return [...safeDocs].sort((left, right) => {
     const leftValue = getDocumentSortValue(left, sortBy);
     const rightValue = getDocumentSortValue(right, sortBy);
 

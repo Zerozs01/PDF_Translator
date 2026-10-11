@@ -4,6 +4,7 @@ import type {
   DBOCRTranslationCacheEntry,
   DBOcrCacheStatsRow,
   DocumentUpdate,
+  DBGlossaryEntry,
 } from '../types/electron.d';
 import '../types/electron.d';
 
@@ -75,9 +76,10 @@ export const dbService = {
         console.warn('[DB] saveBenchmark skipped: DB not available');
         return false;
       }
+      const dbMode: 'baseline' | 'improve' = mode === 'improve' ? 'improve' : 'baseline';
       const key = `${mode}:${configHash}:${engine}`;
       const payload = JSON.stringify(result);
-      return await window.electronAPI.db.saveBenchmark?.({ docId, pageNum, key, payload }) ?? false;
+      return await window.electronAPI.db.saveBenchmark?.({ docId, pageNum, mode: dbMode, key, payload }) ?? false;
     } catch (error) {
       console.error('Failed to save benchmark:', error);
       return false;
@@ -87,8 +89,9 @@ export const dbService = {
   async getBenchmark(docId: number, pageNum: number, mode: BenchmarkMode, configHash: string, engine: OCREngine): Promise<BenchmarkResultSnapshot | null> {
     try {
       if (!isDbAvailable()) return null;
+      const dbMode: 'baseline' | 'improve' = mode === 'improve' ? 'improve' : 'baseline';
       const key = `${mode}:${configHash}:${engine}`;
-      const jsonStr = await window.electronAPI.db.getBenchmark?.({ docId, pageNum, key }) ?? null;
+      const jsonStr = await window.electronAPI.db.getBenchmark?.({ docId, pageNum, mode: dbMode, key }) ?? null;
       return jsonStr ? JSON.parse(jsonStr) : null;
     } catch (error) {
       console.error('Failed to get benchmark:', error);
@@ -99,8 +102,9 @@ export const dbService = {
   async clearBenchmark(docId: number, pageNum: number, mode?: BenchmarkMode, configHash?: string, engine?: OCREngine): Promise<boolean> {
     try {
       if (!isDbAvailable()) return false;
+      const dbMode: 'baseline' | 'improve' | undefined = mode ? (mode === 'improve' ? 'improve' : 'baseline') : undefined;
       const key = mode && configHash && engine ? `${mode}:${configHash}:${engine}` : undefined;
-      return await window.electronAPI.db.clearBenchmark?.({ docId, pageNum, key }) ?? false;
+      return await window.electronAPI.db.clearBenchmark?.({ docId, pageNum, mode: dbMode, key }) ?? false;
     } catch (error) {
       console.error('Failed to clear benchmark:', error);
       return false;
@@ -529,6 +533,18 @@ export const dbService = {
     }
   },
 
+  async toggleThumbnailHidden(docId: number): Promise<boolean> {
+    try {
+      if (!isDbAvailable() || !window.electronAPI.db.toggleThumbnailHidden) {
+        return false;
+      }
+      return await window.electronAPI.db.toggleThumbnailHidden(docId);
+    } catch (error) {
+      console.error('Failed to toggle thumbnail hidden:', error);
+      return false;
+    }
+  },
+
   async getLatestOCR(docId: number): Promise<{
     page_number: number;
     updated_at: number;
@@ -543,6 +559,72 @@ export const dbService = {
     } catch (error) {
       console.error('Failed to get latest OCR:', error);
       return null;
+    }
+  },
+
+  // ─── Glossary CRUD ──────────────────────────────────────────────
+  async getGlossaryEntries(): Promise<DBGlossaryEntry[]> {
+    try {
+      if (typeof window === 'undefined' || !window.electronAPI?.glossary?.getAll) return [];
+      return await window.electronAPI.glossary.getAll();
+    } catch (error) {
+      console.error('[DB] Failed to get glossary entries:', error);
+      return [];
+    }
+  },
+
+  async saveGlossaryEntry(entry: {
+    id?: number;
+    sourceText: string;
+    targetText: string;
+    sourceLang?: string;
+    targetLang?: string;
+    type?: 'TERM' | 'SFX';
+    isActive?: boolean | number;
+  }): Promise<DBGlossaryEntry | null> {
+    try {
+      if (typeof window === 'undefined' || !window.electronAPI?.glossary?.save) return null;
+      return await window.electronAPI.glossary.save(entry);
+    } catch (error) {
+      console.error('[DB] Failed to save glossary entry:', error);
+      return null;
+    }
+  },
+
+  async deleteGlossaryEntry(id: number): Promise<boolean> {
+    try {
+      if (typeof window === 'undefined' || !window.electronAPI?.glossary?.delete) return false;
+      return await window.electronAPI.glossary.delete(id);
+    } catch (error) {
+      console.error('[DB] Failed to delete glossary entry:', error);
+      return false;
+    }
+  },
+
+  async toggleGlossaryEntry(id: number, isActive?: boolean): Promise<boolean> {
+    try {
+      if (typeof window === 'undefined' || !window.electronAPI?.glossary?.toggle) return false;
+      return await window.electronAPI.glossary.toggle(id, isActive);
+    } catch (error) {
+      console.error('[DB] Failed to toggle glossary entry:', error);
+      return false;
+    }
+  },
+
+  async importGlossaryBatch(entries: Array<{
+    sourceText: string;
+    targetText: string;
+    sourceLang?: string;
+    targetLang?: string;
+    type?: 'TERM' | 'SFX';
+    isActive?: boolean;
+  }>): Promise<{ inserted: number; updated: number }> {
+    try {
+      if (typeof window === 'undefined' || !window.electronAPI?.glossary?.importBatch) return { inserted: 0, updated: 0 };
+      return await window.electronAPI.glossary.importBatch(entries);
+    } catch (error) {
+      console.error('[DB] Failed to batch import glossary:', error);
+      return { inserted: 0, updated: 0 };
     }
   }
 };

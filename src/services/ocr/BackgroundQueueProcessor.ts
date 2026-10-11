@@ -3,82 +3,40 @@ import { visionService } from '../vision/VisionService';
 import { OCREngine, OCRPageResult } from '../../types';
 import { useBackgroundQueueStore, BackgroundJob } from '../../stores/useBackgroundQueueStore';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useOCRTextLayerStore, filterGhostOcrData } from '../../stores/useOCRTextLayerStore';
+import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { dbService } from '../dbService';
 import type { TranslationMode } from '../../stores/useProjectStore';
 import { useLayerStore } from '../../stores/useLayerStore';
-import { buildLayerGroupsFromOCR, mergeLayersAndGroups, splitAggressiveMergedLines } from '../layers/LayerGroupingService';
+import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../layers/LayerGroupingService';
 import { applyPanelSafetyLineDedup } from './ocrSafetyLineDedup';
 import { applyPanelLanguageScriptGate } from '../vision/scriptGateService';
 import { OCR_ALGORITHM_VERSION, OCR_RAW_VERSION } from '../vision/ocrVersion';
-import { processKoreanManhwaPipeline } from './ocrManhwaHeuristics';
-import { processJapaneseVerticalPipeline, isVerticalJapaneseLayout } from './ocrJapaneseVerticalHeuristics';
+import { detectBlankOrSolidCanvas } from '../vision/blankPageDetector';
+import { processOCRPageResult } from './ocrPostProcessingPipeline';
 
 function processAndCleanOCR(result: OCRPageResult, targetEngine: OCREngine, job: BackgroundJob): OCRPageResult {
-  // ถ้า result ผ่าน split มาแล้ว (flag _splitDone) ให้ข้ามขั้นตอน split เพื่อป้องกัน double-split bug
-  const processedLines = result._splitDone
-    ? result.lines
-    : splitAggressiveMergedLines(result.lines || [], 2.2);
-  const { lines: cleanLines, words: cleanWords } = filterGhostOcrData(
-    processedLines,
-    result.words || [],
-    targetEngine,
-    result.dpi || job.ocrDpi || 300
-  );
-  
-  let ocrResult: OCRPageResult = {
-    ...result,
-    lines: cleanLines,
-    words: cleanWords,
-    _splitDone: true, // Mark ว่า split เสร็จแล้ว ป้องกัน store split ซ้ำ
-  };
+  return processOCRPageResult(result, {
+    engine: targetEngine,
+    dpi: result.dpi || job.ocrDpi || 300,
+    storeLanguage: job.ocrLanguage || 'eng',
+  });
+}
 
-  const isKorean = (job.ocrLanguage === 'kor' || job.sourceLanguage === 'kor' || job.targetLanguage === 'kor')
-    && !result._splitDone
-    && !(ocrResult as any)._manhwaDone;
-  if (isKorean) {
-    ocrResult = processKoreanManhwaPipeline(ocrResult, {
-      merge: {
-        maxVerticalGap: 25,
-        maxHorizontalGap: 35,
-        minColumnOverlapRatio: 0.3,
-        maxGroupHeightRatio: 0.3,
-        pageHeight: ocrResult.height || 1200,
-        readingDirection: "rtl-ttb",
-      },
-      debug: false
-    });
-    (ocrResult as any)._manhwaDone = true;
-  }
+interface RenderedPageData {
+  pageNum: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  targetDpi: number;
+  ocrLanguage: string;
+  resolvedQualityProfile: 'fast' | 'balanced' | 'best';
+  imageBlob?: Blob;
+  blankOcrResult?: OCRPageResult;
+}
 
-  const isJapanese = (
-    String(job.ocrLanguage || '').toLowerCase().startsWith('jpn') ||
-    String(job.ocrLanguage || '').toLowerCase() === 'ja' ||
-    String(job.sourceLanguage || '').toLowerCase().startsWith('jpn') ||
-    String(job.sourceLanguage || '').toLowerCase() === 'ja' ||
-    String(job.targetLanguage || '').toLowerCase().startsWith('jpn') ||
-    String(job.targetLanguage || '').toLowerCase() === 'ja'
-  )
-    && !result._splitDone
-    && !(ocrResult as any)._japaneseDone;
-  if (isJapanese && isVerticalJapaneseLayout(ocrResult.lines)) {
-    ocrResult = processJapaneseVerticalPipeline(ocrResult, {
-      merge: {
-        maxVerticalGap: 25,
-        maxHorizontalGap: 18,
-        minColumnOverlapRatio: 0.35,
-        maxGroupHeightRatio: 0.45,
-        pageHeight: ocrResult.height || 1200,
-        readingDirection: "rtl-ttb",
-      },
-      debug: false
-    });
-    (ocrResult as any)._japaneseDone = true;
-  }
-
-  ocrResult = { ...applyPanelSafetyLineDedup(ocrResult), _splitDone: true };
-
-  return ocrResult;
+interface PrefetchPipelineController {
+  data: Promise<RenderedPageData | null> | null;
+  pageNum: number | null;
+  trigger: (nextP: number) => void;
 }
 
 export interface BackgroundQueueHandlers {
@@ -103,7 +61,30 @@ class BackgroundQueueProcessor {
   private isProcessing = false;
   private currentAbortController: AbortController | null = null;
   private activeJobId: string | null = null;
-  private checkInterval: NodeJS.Timeout | null = null;
+  private checkInterval: ReturnType<typeof setTimeout> | null = null;
+  private headlessCanvas: HTMLCanvasElement | null = null;
+
+  private getHeadlessCanvas(): HTMLCanvasElement {
+    if (!this.headlessCanvas && typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas');
+      canvas.style.position = 'absolute';
+      canvas.style.left = '-99999px';
+      canvas.style.top = '-99999px';
+      canvas.style.visibility = 'hidden';
+      document.body.appendChild(canvas);
+      this.headlessCanvas = canvas;
+    }
+    return this.headlessCanvas!;
+  }
+
+  private releaseHeadlessCanvas(): void {
+    if (this.headlessCanvas) {
+      this.headlessCanvas.width = 0;
+      this.headlessCanvas.height = 0;
+      this.headlessCanvas.remove();
+      this.headlessCanvas = null;
+    }
+  }
 
   constructor() {
     // สมัครรับข้อมูลการเปลี่ยนแปลงในคิว เพื่อให้เริ่มประมวลผลทันทีเมื่อมีงาน pending
@@ -246,6 +227,7 @@ class BackgroundQueueProcessor {
         }
       } finally {
         this.isProcessing = false;
+        this.releaseHeadlessCanvas();
         console.log('[QueueProcessor] Background processing loop ended.');
 
         try {
@@ -278,6 +260,7 @@ class BackgroundQueueProcessor {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
     }
+    this.releaseHeadlessCanvas();
     this.isProcessing = false;
   }
 
@@ -296,9 +279,17 @@ class BackgroundQueueProcessor {
       throw new Error('Process aborted by signal');
     }
 
+    // 0. Eager prewarm OCR daemon in background (parallel to PDF read/render)
+    if (window.electronAPI?.ocr?.prewarmEngine && (job.engine === 'paddleocr' || job.engine === 'easyocr')) {
+      const targetLang = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+      void window.electronAPI.ocr.prewarmEngine({ engine: job.engine, language: targetLang }).catch((err: unknown) => {
+        console.warn(`[QueueProcessor] Background prewarm warning for ${job.engine}:`, err);
+      });
+    }
+
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
     // แสดง immediate feedback บอก user ว่าเริ่มงานแล้ว (ลด delay การ perceive)
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 0, 0, 'เตรียมงาน...');
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 1, 0, 'กำลังโหลดไฟล์เอกสาร...');
     let fileData: ArrayBuffer;
     try {
       const fileRes = await window.electronAPI.fs.readFile(job.filepath);
@@ -316,12 +307,12 @@ class BackgroundQueueProcessor {
     throwIfAborted();
 
     // 2. โหลด PDF ผ่าน pdfjs ในหน่วยความจำ (Headless Mode)
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 5, 1, 'กำลังเตรียมโครงสร้างรูปภาพ...');
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 3, 1, 'กำลังเตรียมโครงสร้างเอกสาร...');
     const pdfDoc = await pdfjs.getDocument({ data: fileData }).promise;
     const totalPages = pdfDoc.numPages;
 
     console.log(`[QueueProcessor] PDF loaded. Total pages: ${totalPages}`);
-    useBackgroundQueueStore.getState().updateJobProgress(job.id, 5, 1, 'กำลังเตรียมโครงสร้างรูปภาพ...', totalPages);
+    useBackgroundQueueStore.getState().updateJobProgress(job.id, 5, 1, 'กำลังเตรียมเรนเดอร์หน้าแรก...', totalPages);
 
     const isSinglePage = job.type.endsWith('_single') && typeof job.targetPage === 'number';
     const startPage = isSinglePage ? (job.targetPage as number) : 1;
@@ -336,7 +327,7 @@ class BackgroundQueueProcessor {
       }
     }
 
-    const CHUNK_SIZE = 3;
+    const CHUNK_SIZE = 8;
     const chunks: number[][] = [];
     for (let i = 0; i < pageNumbers.length; i += CHUNK_SIZE) {
       chunks.push(pageNumbers.slice(i, i + CHUNK_SIZE));
@@ -347,6 +338,29 @@ class BackgroundQueueProcessor {
     let hasApiError = false;
     let lastErrorMessage = '';
 
+    const prefetch: PrefetchPipelineController = {
+      data: null,
+      pageNum: null,
+      trigger: (nextP: number) => {
+        if (nextP > totalPages || isSinglePage || prefetch.data) return;
+        prefetch.pageNum = nextP;
+        prefetch.data = (async () => {
+          try {
+            const cached = await dbService.getOCR(job.documentId, nextP, job.engine);
+            if (cached && cached.lines && cached.lines.length > 0 && (cached.ocrRawVersion ?? 1) >= OCR_RAW_VERSION) {
+              return null;
+            }
+          } catch {
+            // ignore cache lookup errors and proceed to render
+          }
+          return this.renderHeadlessPage(pdfDoc, nextP, job, signal);
+        })().catch((err) => {
+          console.warn(`[QueueProcessor] Prefetch render warning for page ${nextP}:`, err);
+          return null;
+        });
+      },
+    };
+
     for (const chunk of chunks) {
       throwIfAborted();
       console.log(`[QueueProcessor] Processing chunk: ${chunk.join(', ')}`);
@@ -354,291 +368,41 @@ class BackgroundQueueProcessor {
       try {
         for (const pageNum of chunk) {
           throwIfAborted();
-          
+
+          const pageIndexInAll = pageNumbers.indexOf(pageNum);
+          const nextPageNum = pageIndexInAll >= 0 && pageIndexInAll + 1 < pageNumbers.length
+            ? pageNumbers[pageIndexInAll + 1]
+            : null;
+
           const localProgress = Math.round((processedCount / pagesCount) * 100);
           useBackgroundQueueStore.getState().updateJobProgress(
-            job.id, 
-            localProgress, 
-            pageNum, 
-            isSinglePage 
-              ? `กำลังวิเคราะห์และแปลหน้าที่ ${pageNum}...` 
+            job.id,
+            localProgress,
+            pageNum,
+            isSinglePage
+              ? `กำลังวิเคราะห์และแปลหน้าที่ ${pageNum}...`
               : `กำลังวิเคราะห์และแปลหน้าที่ ${pageNum}/${totalPages}...`
           );
 
-          // --- ขั้นตอนที่ 1: ตรวจหาหรือทำ OCR ของหน้านั้นๆ ---
-          let ocrResult: OCRPageResult | null = null;
-          
-          // ลองค้นหา OCR แคชจากฐานข้อมูลก่อน
-          try {
-            const cached = await dbService.getOCR(job.documentId, pageNum, job.engine);
-            if (cached && cached.lines && cached.lines.length > 0) {
-              const cachedRawVersion = cached.ocrRawVersion ?? 1;
-              const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
-              const languageMismatch = normalizeLanguage(cached.language || '') !== normalizeLanguage(targetOcrLanguage);
-              
-              if (cachedRawVersion < OCR_RAW_VERSION) {
-                console.log(`[QueueProcessor] Page ${pageNum} raw OCR version mismatch (${cachedRawVersion} < ${OCR_RAW_VERSION}). Re-running OCR...`);
-              } else if (languageMismatch) {
-                console.log(`[QueueProcessor] Page ${pageNum} language mismatch (cached: "${cached.language}", target: "${targetOcrLanguage}"). Re-running OCR...`);
-              } else {
-                const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
-                  ? cached
-                  : {
-                    ...cached,
-                    pipelineProfile: 'panel' as const,
-                  };
-                const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
-                let needResave = false;
-                if (
-                  scriptGated.pipelineProfile === 'panel'
-                  && scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
-                ) {
-                  ocrResult = scriptGated;
-                } else {
-                  ocrResult = applyPanelSafetyLineDedup(scriptGated);
-                  ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
-                  if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
-                  ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
-                  needResave = true;
-                }
-
-                if (ocrResult) {
-                  ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
-                }
-                console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
-                
-                if (needResave) {
-                  await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
-                  console.log(`[QueueProcessor] Saved updated OCR cache for page ${pageNum} after background deduplication upgrade (v${OCR_ALGORITHM_VERSION}).`);
-                }
-
-                const activeFile = useProjectStore.getState().file;
-                if (activeFile && useProjectStore.getState().documentId === job.documentId) {
-                  useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
-                  const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
-                    || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
-                  if (storeResult) {
-                    ocrResult = storeResult;
-                  }
-                }
-              }
-            }
-          } catch (err) {
-            console.warn(`[QueueProcessor] DB cache read warning for page ${pageNum}:`, err);
-          }
-
-          // หากไม่มีแคช ให้ทำ Headless Rendering + OCR
-          if (!ocrResult) {
-            throwIfAborted();
-            console.log(`[QueueProcessor] Page ${pageNum} Cache Miss. Running Headless OCR...`);
-            
-            const page = await pdfDoc.getPage(pageNum);
-            
-            const options = useOCRTextLayerStore.getState().options;
-            const targetDpi = job.ocrDpi || options.dpi || 300;
-            const ocrLanguage = job.ocrLanguage || options.language || 'eng';
-            const ocrQualityProfile = job.ocrQualityProfile || options.ocrQualityProfile || 'best';
-
-            const requestedScale = targetDpi / 72;
-            const requestedViewport = page.getViewport({ scale: requestedScale });
-            
-            const renderConstraints = resolveRenderConstraints(job.engine, ocrLanguage, ocrQualityProfile);
-            const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderConstraints);
-            const scale = requestedScale * fitted.scaleFactor;
-            
-            const viewport = page.getViewport({ scale });
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.floor(viewport.width);
-            canvas.height = Math.floor(viewport.height);
-            canvas.style.position = 'absolute';
-            canvas.style.left = '-99999px';
-            canvas.style.top = '-99999px';
-            canvas.style.visibility = 'hidden';
-            document.body.appendChild(canvas);
-
-            let imageBlob: Blob;
-            try {
-              const ctx = canvas.getContext('2d', { alpha: false });
-              if (!ctx) throw new Error('Cannot create headless canvas 2D context');
-
-              ctx.fillStyle = '#FFFFFF';
-              ctx.fillRect(0, 0, canvas.width, canvas.height);
-              
-              await page.render({
-                canvasContext: ctx,
-                viewport,
-                intent: 'display',
-                canvas
-              } as any).promise;
-
-              throwIfAborted();
-
-              imageBlob = await new Promise<Blob>((res, rej) => {
-                canvas.toBlob((b) => b ? res(b) : rej(new Error('Headless Canvas to Blob failed')), 'image/png');
-              });
-            } finally {
-              canvas.remove();
-            }
-
-            throwIfAborted();
-
-            const activeEngine = job.engine;
-            const pipelineProfile = 'panel';
-
-            const shouldPreferFastPaddleProfile = (() => {
-              if (activeEngine !== 'paddleocr') return false;
-              if (pipelineProfile !== 'panel') return false;
-
-              const isCjkLike = ocrLanguage
-                  .split('+')
-                  .map(code => code.trim())
-                  .filter(Boolean)
-                  .some(code => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
-              if (isCjkLike) return false;
-
-              const longest = Math.max(canvas.width, canvas.height);
-              const shortest = Math.max(1, Math.min(canvas.width, canvas.height));
-              const aspectRatio = longest / shortest;
-              const pixelCount = canvas.width * canvas.height;
-              return (pixelCount >= 16_000_000 && aspectRatio >= 3.0) || longest >= 8000;
-            })();
-
-            const isSensitiveFastLanguage = ocrLanguage
-              .split('+')
-              .map((code) => code.trim())
-              .filter(Boolean)
-              .some((code) => ['kor', 'jpn', 'jpn_vert', 'chi_sim', 'chi_tra', 'tha'].includes(code));
-
-            const resolvedQualityProfile = options.ocrQualityProfile || 'best';
-
-            const pageSegModeVal = job.ocrPageSegMode !== undefined
-              ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
-              : (options.pageSegMode === null ? undefined : options.pageSegMode);
-
-            const resolvedUseAngleCls = job.useAngleCls !== undefined
-              ? Boolean(job.useAngleCls)
-              : Boolean(options.useAngleCls);
-
-            const ocrPromise = visionService.ocrForTextLayer(
-              imageBlob,
-              canvas.width,
-              canvas.height,
-              ocrLanguage,
-              targetDpi,
-              pageSegModeVal,
-              signal,
-              false,
-              'panel',
-              resolvedQualityProfile,
-              job.engine,
-              canvas.width * canvas.height,
-              {
-                useAngleCls: resolvedUseAngleCls
-              }
-            );
-
-            ocrResult = await ocrPromise;
-            ocrResult.pageNumber = pageNum;
-            ocrResult.ocrEngine = job.engine;
-            ocrResult.language = normalizeLanguage(ocrLanguage);
-            ocrResult.pipelineProfile = 'panel';
-            ocrResult.ocrQualityProfile = resolvedQualityProfile;
-            ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
-            ocrResult.ocrRawVersion = OCR_RAW_VERSION;
-
-            ocrResult = applyPanelLanguageScriptGate(ocrResult, ocrLanguage);
-            ocrResult = applyPanelSafetyLineDedup(ocrResult);
-            ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
-            ocrResult.ocrRawVersion = OCR_RAW_VERSION;
-            if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
-            ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
-
-            throwIfAborted();
-
-            // Save the raw/unmerged OCR result to the DB (matching OCRTextLayerPanel.tsx)
-            await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
-
-            // Process (split, filter, merge) the result for the active session
-            ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
-            
-            const activeFile = useProjectStore.getState().file;
-            if (activeFile && useProjectStore.getState().documentId === job.documentId) {
-              useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
-              const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
-                || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
-              if (storeResult) {
-                ocrResult = storeResult;
-              }
-            }
-          }
-
-          if (ocrResult) {
-            try {
-              const activeDocId = useProjectStore.getState().documentId;
-              const isActiveDoc = activeDocId !== null && activeDocId === job.documentId;
-
-              if (!isActiveDoc) {
-                console.log(
-                  `[QueueProcessor] Skipping layerStore.setPageLayers for page ${pageNum}: ` +
-                  `active doc (${activeDocId}) ≠ job doc (${job.documentId}). Layers will be built on open.`
-                );
-              } else {
-                const layerStore = useLayerStore.getState();
-                const existingLayers = layerStore.getPageLayers(pageNum);
-                const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
-                const existingGroups = layerStore.getPageGroups(pageNum);
-                const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
-                  || existingGroups.some(g => g.userCreated);
-
-                if (existingLayers.length === 0 || !hasUserModifications) {
-                  layerStore.setPageLayers(pageNum, initialLayerResult);
-                  console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
-                } else {
-                  const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
-                  layerStore.setPageLayers(pageNum, mergedResult);
-                  console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
-                }
-              }
-            } catch (err) {
-              console.warn(`[QueueProcessor] Failed to initialize layers from OCR for page ${pageNum}:`, err);
-            }
-          }
+          // 1. ดำเนินการ OCR (DB Cache หรือ Headless OCR พร้อม 2-Stage Prefetch)
+          const ocrResult = await this.executePageOCR(
+            pdfDoc,
+            job,
+            pageNum,
+            nextPageNum,
+            signal,
+            prefetch
+          );
 
           throwIfAborted();
 
-          // --- ขั้นตอนที่ 2: ดำเนินการแปลภาษาในหน่วยความจำ ---
-          if (
-            job.type === 'offline_all' || 
-            job.type === 'ai_all' || 
-            job.type === 'offline_single' || 
-            job.type === 'ai_single'
-          ) {
-            if (!this.handlers) {
-              throw new Error('Translation handlers not registered in BackgroundQueueProcessor');
-            }
+          // 2. จัดกลุ่มเลเยอร์และบันทึกลง store (Cross-Document Safe)
+          this.syncPageLayers(job.documentId, pageNum, ocrResult);
 
-            console.log(`[QueueProcessor] Translating Page ${pageNum}/${totalPages}...`);
-            const translationEngine = (job.type === 'offline_all' || job.type === 'offline_single') ? 'offline' : 'ai';
-            
-            const success = await this.handlers.translatePage(
-              job.documentId,
-              pageNum,
-              ocrResult,
-              translationEngine,
-              signal,
-              {
-                ocrLanguage: job.ocrLanguage,
-                sourceLanguage: job.sourceLanguage,
-                targetLanguage: job.targetLanguage,
-                translationMode: job.translationMode
-              }
-            );
+          throwIfAborted();
 
-            if (!success) {
-              console.log(`[QueueProcessor] Page ${pageNum} translation was skipped (possibly no translatable text).`);
-            }
-          }
+          // 3. ส่งคำแปลภาษาเข้า Background Handlers
+          await this.dispatchPageTranslation(job, pageNum, totalPages, ocrResult, signal);
 
           processedCount++;
           successPagesCount++;
@@ -652,14 +416,6 @@ class BackgroundQueueProcessor {
               ? `แปลหน้าที่ ${pageNum} เรียบร้อยแล้ว!`
               : `แปลหน้าที่ ${pageNum} สำเร็จ (${processedCount}/${pagesCount}) • กำลังประมวลผลต่อ...`
           );
-
-          if (typeof window !== 'undefined') {
-            const activePage = useProjectStore.getState().currentPage;
-            const activeDoc = useProjectStore.getState().documentId;
-            if (activeDoc === job.documentId && activePage === pageNum) {
-              window.dispatchEvent(new CustomEvent('page-translation-updated', { detail: { pageNum } }));
-            }
-          }
 
           throwIfAborted();
         }
@@ -676,10 +432,9 @@ class BackgroundQueueProcessor {
         break; // Freeze the loop instantly
       }
 
-      // Computational micro-sleep and clear CUDA cache during refractory period
+      // Non-blocking event loop tick and clear CUDA cache between chunks
       throwIfAborted();
-      console.log(`[QueueProcessor] Chunk completed. Entering 500ms refractory sleep...`);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 10));
       
       try {
         if (window.electronAPI?.ocr?.clearCudaCache) {
@@ -713,6 +468,654 @@ class BackgroundQueueProcessor {
       endPage, 
       isSinglePage ? 'ประมวลผลหน้าเดี่ยวสำเร็จเสร็จสิ้น!' : 'แปลภาษาสำเร็จเสร็จสิ้น!'
     );
+  }
+
+  /**
+   * ค้นหาแคช OCR ใน SQLite หรือเรนเดอร์ Headless + รัน OCR พร้อม 2-Stage Prefetch Pipeline
+   */
+  private async executePageOCR(
+    pdfDoc: any,
+    job: BackgroundJob,
+    pageNum: number,
+    nextPageNum: number | null,
+    signal: AbortSignal,
+    prefetch: PrefetchPipelineController
+  ): Promise<OCRPageResult> {
+    const throwIfAborted = () => {
+      if (signal.aborted) throw new Error('Process aborted by user');
+    };
+
+    let ocrResult: OCRPageResult | null = null;
+
+    // ลองค้นหา OCR แคชจากฐานข้อมูลก่อน
+    try {
+      const cached = await dbService.getOCR(job.documentId, pageNum, job.engine);
+      if (cached && cached.lines && cached.lines.length > 0) {
+        const cachedRawVersion = cached.ocrRawVersion ?? 1;
+        const targetOcrLanguage = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+        const languageMismatch = normalizeLanguage(cached.language || '') !== normalizeLanguage(targetOcrLanguage);
+
+        if (cachedRawVersion < OCR_RAW_VERSION) {
+          console.log(`[QueueProcessor] Page ${pageNum} raw OCR version mismatch (${cachedRawVersion} < ${OCR_RAW_VERSION}). Re-running OCR...`);
+        } else if (languageMismatch) {
+          console.log(`[QueueProcessor] Page ${pageNum} language mismatch (cached: "${cached.language}", target: "${targetOcrLanguage}"). Re-running OCR...`);
+        } else {
+          const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+            ? cached
+            : { ...cached, pipelineProfile: 'panel' as const };
+          const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+          let needResave = false;
+          if (
+            scriptGated.pipelineProfile === 'panel' &&
+            scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
+          ) {
+            ocrResult = scriptGated;
+          } else {
+            ocrResult = applyPanelSafetyLineDedup(scriptGated);
+            ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+            if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+            ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
+            needResave = true;
+          }
+
+          if (ocrResult) {
+            ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
+          }
+          console.log(`[QueueProcessor] Page ${pageNum} OCR Cache Hit!`);
+
+          if (needResave) {
+            await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
+            console.log(`[QueueProcessor] Saved updated OCR cache for page ${pageNum} after background deduplication upgrade (v${OCR_ALGORITHM_VERSION}).`);
+          }
+
+          const activeFile = useProjectStore.getState().file;
+          if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+            useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+            const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
+              || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
+            if (storeResult) {
+              ocrResult = storeResult;
+            }
+          }
+
+          // เคลียร์ Stale Prefetch ของหน้าปัจจุบันที่แคชฮิต เพื่อให้หน้าถัดไป prefetch ต่อได้
+          if (prefetch.pageNum !== null && prefetch.pageNum <= pageNum) {
+            prefetch.data = null;
+            prefetch.pageNum = null;
+          }
+
+          if (ocrResult && nextPageNum !== null) {
+            prefetch.trigger(nextPageNum);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[QueueProcessor] DB cache read warning for page ${pageNum}:`, err);
+    }
+
+    // หากไม่มีแคช ให้ทำ Headless Rendering + OCR (ใช้ 2-Stage Prefetch Pipeline)
+    if (!ocrResult) {
+      throwIfAborted();
+      console.log(`[QueueProcessor] Page ${pageNum} Cache Miss. Running Headless OCR...`);
+
+      let pageData: RenderedPageData | null = null;
+      if (prefetch.pageNum === pageNum && prefetch.data) {
+        pageData = await prefetch.data;
+        prefetch.data = null;
+        prefetch.pageNum = null;
+      }
+
+      if (!pageData) {
+        useBackgroundQueueStore.getState().updateJobProgress(
+          job.id,
+          Math.max(5, useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id)?.progress || 5),
+          pageNum,
+          `กำลังเรนเดอร์ภาพหน้าที่ ${pageNum} (300 DPI)...`
+        );
+        pageData = await this.renderHeadlessPage(pdfDoc, pageNum, job, signal);
+      }
+
+      throwIfAborted();
+
+      // เรนเดอร์หน้าถัดไปแบบ Prefetch ทันทีในขณะที่ส่ง OCR หน้าปัจจุบันเข้า Python Bridge
+      if (nextPageNum !== null) {
+        prefetch.trigger(nextPageNum);
+      }
+
+      if (pageData.blankOcrResult) {
+        ocrResult = pageData.blankOcrResult;
+      } else if (pageData.imageBlob) {
+        const options = useOCRTextLayerStore.getState().options;
+        const pageSegModeVal = job.ocrPageSegMode !== undefined
+          ? (job.ocrPageSegMode === null ? undefined : job.ocrPageSegMode)
+          : (options.pageSegMode === null ? undefined : options.pageSegMode);
+
+        const resolvedUseAngleCls = job.useAngleCls !== undefined
+          ? Boolean(job.useAngleCls)
+          : Boolean(options.useAngleCls);
+
+        useBackgroundQueueStore.getState().updateJobProgress(
+          job.id,
+          Math.max(10, useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id)?.progress || 10),
+          pageNum,
+          `กำลังตรวจจับตัวอักษรหน้าที่ ${pageNum} ด้วย ${job.engine}...`
+        );
+
+        const ocrPromise = visionService.ocrForTextLayer(
+          pageData.imageBlob,
+          pageData.canvasWidth,
+          pageData.canvasHeight,
+          pageData.ocrLanguage,
+          pageData.targetDpi,
+          pageSegModeVal,
+          signal,
+          false,
+          'panel',
+          pageData.resolvedQualityProfile,
+          job.engine,
+          pageData.canvasWidth * pageData.canvasHeight,
+          {
+            useAngleCls: resolvedUseAngleCls
+          }
+        );
+
+        ocrResult = await ocrPromise;
+      }
+
+      if (!ocrResult) {
+        throw new Error(`Headless OCR failed to produce result for page ${pageNum}`);
+      }
+
+      ocrResult.pageNumber = pageNum;
+      ocrResult.ocrEngine = job.engine;
+      ocrResult.language = normalizeLanguage(pageData.ocrLanguage);
+      ocrResult.pipelineProfile = 'panel';
+      ocrResult.ocrQualityProfile = pageData.resolvedQualityProfile;
+      ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+      ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+
+      ocrResult = applyPanelLanguageScriptGate(ocrResult, pageData.ocrLanguage);
+      ocrResult = applyPanelSafetyLineDedup(ocrResult);
+      ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+      ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+      if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+      ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
+
+      throwIfAborted();
+
+      // บันทึก OCR ดิบลง DB
+      await dbService.saveOCR(job.documentId, pageNum, ocrResult, job.engine);
+
+      // Process (split, filter, merge) สำหรับ Active session
+      ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
+
+      const activeFile = useProjectStore.getState().file;
+      if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+        useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+        const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
+          || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
+        if (storeResult) {
+          ocrResult = storeResult;
+        }
+      }
+    }
+
+    return ocrResult;
+  }
+
+  /**
+   * ซิงค์และสร้างเลเยอร์จากผลลัพธ์ OCR ลง useLayerStore โดยเคารพกฎ Cross-Document Isolation
+   */
+  private syncPageLayers(documentId: number, pageNum: number, ocrResult: OCRPageResult): void {
+    const activeDocId = useProjectStore.getState().documentId;
+    const isActiveDoc = activeDocId !== null && activeDocId === documentId;
+
+    if (!isActiveDoc) {
+      console.log(
+        `[QueueProcessor] Skipping layerStore.setPageLayers for page ${pageNum}: ` +
+        `active doc (${activeDocId}) ≠ job doc (${documentId}). Layers will be built on open.`
+      );
+      return;
+    }
+
+    try {
+      const layerStore = useLayerStore.getState();
+      const existingLayers = layerStore.getPageLayers(pageNum);
+      const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
+      const existingGroups = layerStore.getPageGroups(pageNum);
+      const hasUserModifications = existingLayers.some(l => l.userEdited || l.id.startsWith('manual-layer-'))
+        || existingGroups.some(g => g.userCreated);
+
+      if (existingLayers.length === 0 || !hasUserModifications) {
+        layerStore.setPageLayers(pageNum, initialLayerResult);
+        console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
+      } else {
+        const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
+        layerStore.setPageLayers(pageNum, mergedResult);
+        console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
+      }
+    } catch (err) {
+      console.warn(`[QueueProcessor] Failed to initialize layers from OCR for page ${pageNum}:`, err);
+    }
+  }
+
+  /**
+   * ดำเนินการแปลภาษาในหน้าเอกสารผ่าน Background Handlers
+   */
+  private async dispatchPageTranslation(
+    job: BackgroundJob,
+    pageNum: number,
+    totalPages: number,
+    ocrResult: OCRPageResult,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    const isTranslationJob =
+      job.type === 'offline_all' ||
+      job.type === 'ai_all' ||
+      job.type === 'offline_single' ||
+      job.type === 'ai_single';
+
+    if (!isTranslationJob) return false;
+
+    if (!this.handlers) {
+      throw new Error('Translation handlers not registered in BackgroundQueueProcessor');
+    }
+
+    const targetLang = job.targetLanguage || 'th';
+    if (dbService.isAvailable() && (job.type === 'offline_all' || job.type === 'ai_all')) {
+      try {
+        const transCache = await dbService.getTranslationCachePage(job.documentId, pageNum);
+        if (Array.isArray(transCache) && transCache.length > 0) {
+          const matched = transCache.find((row) => {
+            const rowTargetLang = String(row.targetLanguage || '').toLowerCase();
+            const targetRowLang = targetLang.toLowerCase();
+            const hasContent = (row.translatedText && row.translatedText.trim().length > 0)
+              || (Array.isArray(row.translatedByIndex) && row.translatedByIndex.length > 0);
+            return rowTargetLang === targetRowLang && hasContent;
+          });
+
+          if (matched) {
+            console.log(`[QueueProcessor] Page ${pageNum} Translation Cache Hit! Fast-skipping background translation...`);
+            if (typeof window !== 'undefined') {
+              const activePage = useProjectStore.getState().currentPage;
+              const activeDoc = useProjectStore.getState().documentId;
+              if (activeDoc === job.documentId && activePage === pageNum) {
+                window.dispatchEvent(new CustomEvent('page-translation-updated', { detail: { pageNum } }));
+              }
+            }
+            return true;
+          }
+        }
+      } catch (err) {
+        console.warn(`[QueueProcessor] Failed to check translation cache for page ${pageNum}:`, err);
+      }
+    }
+
+    console.log(`[QueueProcessor] Translating Page ${pageNum}/${totalPages}...`);
+    const translationEngine = (job.type === 'offline_all' || job.type === 'offline_single') ? 'offline' : 'ai';
+
+    const success = await this.handlers.translatePage(
+      job.documentId,
+      pageNum,
+      ocrResult,
+      translationEngine,
+      signal,
+      {
+        ocrLanguage: job.ocrLanguage,
+        sourceLanguage: job.sourceLanguage,
+        targetLanguage: job.targetLanguage,
+        translationMode: job.translationMode,
+      }
+    );
+
+    if (!success) {
+      console.log(`[QueueProcessor] Page ${pageNum} translation was skipped (possibly no translatable text).`);
+    }
+
+    if (typeof window !== 'undefined') {
+      const activePage = useProjectStore.getState().currentPage;
+      const activeDoc = useProjectStore.getState().documentId;
+      if (activeDoc === job.documentId && activePage === pageNum) {
+        window.dispatchEvent(new CustomEvent('page-translation-updated', { detail: { pageNum } }));
+      }
+    }
+
+    return success;
+  }
+
+  /**
+   * เรนเดอร์หน้าเอกสารแบบ Headless และแปลงเป็น Blob พร้อมระบบตรวจจับหน้าว่าง
+   */
+  private async renderHeadlessPage(
+    pdfDoc: any,
+    pageNum: number,
+    job: BackgroundJob,
+    signal: AbortSignal
+  ): Promise<RenderedPageData> {
+    if (signal.aborted) throw new Error('Process aborted by signal');
+    const page = await pdfDoc.getPage(pageNum);
+
+    const options = useOCRTextLayerStore.getState().options;
+    const targetDpi = job.ocrDpi || options.dpi || 300;
+    const ocrLanguage = job.ocrLanguage || options.language || 'eng';
+    const ocrQualityProfile = (job.ocrQualityProfile || options.ocrQualityProfile || 'best') as 'fast' | 'balanced' | 'best';
+    const resolvedQualityProfile = (options.ocrQualityProfile || 'best') as 'fast' | 'balanced' | 'best';
+
+    const requestedScale = targetDpi / 72;
+    const requestedViewport = page.getViewport({ scale: requestedScale });
+
+    const renderConstraints = resolveRenderConstraints(job.engine, ocrLanguage, ocrQualityProfile);
+    const fitted = fitDimensionsToConstraints(requestedViewport.width, requestedViewport.height, renderConstraints);
+    const scale = requestedScale * fitted.scaleFactor;
+
+    const viewport = page.getViewport({ scale });
+
+    const canvasWidth = Math.floor(viewport.width);
+    const canvasHeight = Math.floor(viewport.height);
+    const canvas = this.getHeadlessCanvas();
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+
+    try {
+      if (signal.aborted) throw new Error('Process aborted by signal');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) throw new Error('Cannot create headless canvas 2D context');
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      await page.render({
+        canvasContext: ctx,
+        viewport,
+        intent: 'display',
+        canvas
+      } as any).promise;
+
+      if (signal.aborted) throw new Error('Process aborted by signal');
+
+      // Fast blank / solid color page detection check
+      const blankCheck = detectBlankOrSolidCanvas(canvas);
+      if (blankCheck.isBlank) {
+        console.log(`[QueueProcessor] Page ${pageNum} is a blank/solid page (maxDeviation: ${blankCheck.maxDeviation}). Skipping OCR & translation.`);
+        return {
+          pageNum,
+          canvasWidth,
+          canvasHeight,
+          targetDpi,
+          ocrLanguage,
+          resolvedQualityProfile,
+          blankOcrResult: {
+            lines: [],
+            words: [],
+            confidence: 100,
+            language: normalizeLanguage(ocrLanguage),
+            pageNumber: pageNum,
+            width: canvasWidth,
+            height: canvasHeight,
+            dpi: targetDpi,
+            ocrEngine: job.engine,
+            pipelineProfile: 'panel',
+            ocrQualityProfile: resolvedQualityProfile,
+            algorithmVersion: OCR_ALGORITHM_VERSION,
+            ocrRawVersion: OCR_RAW_VERSION,
+            text: '',
+            debug: {
+              runtimeMs: 0,
+              droppedWords: [],
+              dropCounts: {},
+            },
+          }
+        };
+      }
+
+      const imageBlob = await new Promise<Blob>((res, rej) => {
+        canvas.toBlob((b) => (b ? res(b) : rej(new Error('Headless Canvas to Blob failed'))), 'image/webp', 0.95);
+      });
+
+      return {
+        pageNum,
+        canvasWidth,
+        canvasHeight,
+        targetDpi,
+        ocrLanguage,
+        resolvedQualityProfile,
+        imageBlob,
+      };
+    } catch (err) {
+      // Free buffer immediately on abort or failure
+      canvas.width = 0;
+      canvas.height = 0;
+      throw err;
+    } finally {
+      try {
+        page?.cleanup?.();
+      } catch {}
+    }
+  }
+
+  /**
+   * รัน OCR สำหรับหน้าเดียวแบบ On-Demand (Foreground)
+   * ตรวจสอบ SQLite แคชก่อน หากไม่มีจะทำการเรนเดอร์ Headless PDF/Image แล้วส่งเข้า OCR Bridge
+   */
+  public async runSinglePageOCR(
+    documentId: number,
+    filePath: string,
+    pageNum: number,
+    engine: OCREngine,
+    signal?: AbortSignal,
+    options?: {
+      ocrLanguage?: string;
+      ocrDpi?: number;
+      ocrPageSegMode?: number | null;
+      ocrQualityProfile?: 'fast' | 'balanced' | 'best';
+      useAngleCls?: boolean;
+      forceRefresh?: boolean;
+    }
+  ): Promise<OCRPageResult> {
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw new Error('Process aborted by signal');
+    };
+
+    throwIfAborted();
+
+    // 1. ตรวจสอบแคชจาก SQLite DB ก่อน (ถ้าไม่ได้สั่ง forceRefresh)
+    if (!options?.forceRefresh) {
+      try {
+        const cached = await dbService.getOCR(documentId, pageNum, engine);
+        if (cached && cached.lines && cached.lines.length > 0) {
+          const cachedRawVersion = cached.ocrRawVersion ?? 1;
+          const targetOcrLanguage = options?.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+          const languageMismatch = normalizeLanguage(cached.language || '') !== normalizeLanguage(targetOcrLanguage);
+
+          if (cachedRawVersion >= OCR_RAW_VERSION && !languageMismatch) {
+            let ocrResult = cached;
+            const normalizedProfile = (cached.pipelineProfile || 'panel') === 'panel'
+              ? cached
+              : { ...cached, pipelineProfile: 'panel' as const };
+            const scriptGated = applyPanelLanguageScriptGate(normalizedProfile, targetOcrLanguage);
+            if (
+              scriptGated.pipelineProfile === 'panel' &&
+              scriptGated.debug?.panelSafetyNormalizedVersion === OCR_ALGORITHM_VERSION
+            ) {
+              ocrResult = scriptGated;
+            } else {
+              ocrResult = applyPanelSafetyLineDedup(scriptGated);
+              ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+              if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+              ocrResult.debug.panelSafetyNormalizedVersion = OCR_ALGORITHM_VERSION;
+            }
+
+            ocrResult = processOCRPageResult(ocrResult, {
+              engine,
+              dpi: ocrResult.dpi || options?.ocrDpi || 300,
+              storeLanguage: targetOcrLanguage,
+            });
+
+            ocrResult.pageNumber = pageNum;
+            useOCRTextLayerStore.getState().setPageOCRForEngine(pageNum, engine, ocrResult);
+            useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+            return ocrResult;
+          }
+        }
+      } catch (err) {
+        console.warn(`[runSinglePageOCR] DB cache read warning for page ${pageNum}:`, err);
+      }
+    }
+
+    throwIfAborted();
+
+    // 2. Eager prewarm OCR daemon in background (parallel to PDF read/render)
+    if (window.electronAPI?.ocr?.prewarmEngine && (engine === 'paddleocr' || engine === 'easyocr')) {
+      const targetLang = options?.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
+      void window.electronAPI.ocr.prewarmEngine({ engine, language: targetLang }).catch((err: unknown) => {
+        console.warn(`[runSinglePageOCR] Background prewarm warning for ${engine}:`, err);
+      });
+    }
+
+    // 3. โหลดไฟล์และเรนเดอร์หน้าเอกสาร
+    const isPdf = filePath.toLowerCase().endsWith('.pdf');
+    let pageData: RenderedPageData;
+
+    if (isPdf) {
+      let fileData: ArrayBuffer;
+      const fileRes = await window.electronAPI.fs.readFile(filePath);
+      if (typeof fileRes.data === 'string') {
+        throw new Error('Headless PDF read returned string instead of buffer');
+      }
+      fileData = fileRes.data instanceof ArrayBuffer
+        ? fileRes.data
+        : ((fileRes.data as Uint8Array).buffer as ArrayBuffer);
+
+      throwIfAborted();
+      const pdfDoc = await pdfjs.getDocument({ data: fileData }).promise;
+
+      const mockJob: BackgroundJob = {
+        id: `foreground_${documentId}_p${pageNum}_${Date.now()}`,
+        documentId,
+        filename: filePath.split(/[/\\]/).pop() || 'document.pdf',
+        filepath: filePath,
+        engine,
+        type: 'ocr_single',
+        targetPage: pageNum,
+        status: 'processing',
+        progress: 0,
+        currentPage: pageNum,
+        totalPages: pdfDoc.numPages,
+        message: 'Direct single-page OCR',
+        priority: 100,
+        createdAt: Date.now(),
+        ocrLanguage: options?.ocrLanguage,
+        ocrDpi: options?.ocrDpi,
+        ocrPageSegMode: options?.ocrPageSegMode,
+        ocrQualityProfile: options?.ocrQualityProfile,
+        useAngleCls: options?.useAngleCls,
+      };
+
+      pageData = await this.renderHeadlessPage(pdfDoc, pageNum, mockJob, signal || new AbortController().signal);
+    } else {
+      // Image file handling (PNG, JPG, WebP, etc.)
+      const fileRes = await window.electronAPI.fs.readFile(filePath);
+      const fileData = fileRes.data instanceof ArrayBuffer
+        ? fileRes.data
+        : ((fileRes.data as Uint8Array).buffer as ArrayBuffer);
+      const blob = new Blob([fileData]);
+      const imgBitmap = await createImageBitmap(blob);
+      const canvas = this.getHeadlessCanvas();
+      canvas.width = imgBitmap.width;
+      canvas.height = imgBitmap.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Cannot create headless canvas 2D context for image');
+      ctx.drawImage(imgBitmap, 0, 0);
+      const imageBlob = await new Promise<Blob>((res, rej) => {
+        canvas.toBlob((b) => (b ? res(b) : rej(new Error('Canvas to Blob failed'))), 'image/webp', 0.95);
+      });
+      imgBitmap.close();
+
+      pageData = {
+        pageNum,
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        targetDpi: options?.ocrDpi || 300,
+        ocrLanguage: options?.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng',
+        resolvedQualityProfile: options?.ocrQualityProfile || 'best',
+        imageBlob,
+      };
+    }
+
+    throwIfAborted();
+
+    let ocrResult: OCRPageResult;
+    if (pageData.blankOcrResult) {
+      ocrResult = pageData.blankOcrResult;
+    } else if (pageData.imageBlob) {
+      const storeOptions = useOCRTextLayerStore.getState().options;
+      const pageSegModeVal = options?.ocrPageSegMode !== undefined
+        ? (options.ocrPageSegMode === null ? undefined : options.ocrPageSegMode)
+        : (storeOptions.pageSegMode === null ? undefined : storeOptions.pageSegMode);
+
+      const resolvedUseAngleCls = options?.useAngleCls !== undefined
+        ? Boolean(options.useAngleCls)
+        : Boolean(storeOptions.useAngleCls);
+
+      ocrResult = await visionService.ocrForTextLayer(
+        pageData.imageBlob,
+        pageData.canvasWidth,
+        pageData.canvasHeight,
+        pageData.ocrLanguage,
+        pageData.targetDpi,
+        pageSegModeVal,
+        signal || new AbortController().signal,
+        false,
+        'panel',
+        pageData.resolvedQualityProfile,
+        engine,
+        pageData.canvasWidth * pageData.canvasHeight,
+        {
+          useAngleCls: resolvedUseAngleCls,
+        }
+      );
+    } else {
+      throw new Error(`Failed to produce rendered image for page ${pageNum}`);
+    }
+
+    throwIfAborted();
+
+    ocrResult.pageNumber = pageNum;
+    ocrResult.ocrEngine = engine;
+    ocrResult.language = normalizeLanguage(pageData.ocrLanguage);
+    ocrResult.pipelineProfile = 'panel';
+    ocrResult.ocrQualityProfile = pageData.resolvedQualityProfile;
+    ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+    ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+
+    ocrResult = applyPanelLanguageScriptGate(ocrResult, pageData.ocrLanguage);
+    ocrResult = applyPanelSafetyLineDedup(ocrResult);
+    ocrResult.algorithmVersion = OCR_ALGORITHM_VERSION;
+    ocrResult.ocrRawVersion = OCR_RAW_VERSION;
+    if (!ocrResult.debug) ocrResult.debug = { droppedWords: [], dropCounts: {} };
+
+    ocrResult = processOCRPageResult(ocrResult, {
+      engine,
+      dpi: pageData.targetDpi,
+      storeLanguage: pageData.ocrLanguage,
+    });
+
+    // บันทึกลง SQLite DB
+    await dbService.saveOCR(documentId, pageNum, ocrResult, engine);
+
+    // อัปเดต In-Memory Store
+    useOCRTextLayerStore.getState().setPageOCRForEngine(pageNum, engine, ocrResult);
+    useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
+
+    // อัปเดต Layer Groups ใน LayerStore ถ้ายังไม่มี
+    try {
+      const initialLayerResult = buildLayerGroupsFromOCR(ocrResult);
+      useLayerStore.getState().setPageLayers(pageNum, initialLayerResult);
+    } catch (err) {
+      console.warn(`[runSinglePageOCR] Failed to build layer groups for page ${pageNum}:`, err);
+    }
+
+    return ocrResult;
   }
 }
 
@@ -749,123 +1152,71 @@ const hasKoreanOcrLanguage = (lang: string) => {
   return lang.split('+').map(c => c.trim()).filter(Boolean).some(c => c === 'kor');
 };
 
+interface ConstraintSpec {
+  maxSide: number;
+  maxPixels: number;
+  boostedMaxPixels?: number;
+}
+
+const TALL_PAGE_BOOST_ASPECT_RATIO = 2.35;
+const TALL_PAGE_BOOST_MIN_LONG_SIDE = 9000;
+
+function createRenderConstraints(spec: ConstraintSpec): RenderConstraints {
+  return {
+    maxSide: spec.maxSide,
+    maxPixels: spec.maxPixels,
+    minWidth: null,
+    ...(spec.boostedMaxPixels
+      ? {
+          tallPageBoost: {
+            minAspectRatio: TALL_PAGE_BOOST_ASPECT_RATIO,
+            minLongSide: TALL_PAGE_BOOST_MIN_LONG_SIDE,
+            boostedMaxSide: spec.maxSide,
+            boostedMaxPixels: spec.boostedMaxPixels,
+          },
+        }
+      : {}),
+  };
+}
+
+const PADDLE_CONSTRAINT_PROFILES: Record<'korean' | 'cjk' | 'high' | 'fast', ConstraintSpec> = {
+  korean: { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
+  cjk:    { maxSide: 21500, maxPixels: 37950000, boostedMaxPixels: 37950000 },
+  high:   { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
+  fast:   { maxSide: 19700, maxPixels: 18800000, boostedMaxPixels: 18800000 },
+};
+
+const EASY_CONSTRAINT_PROFILES: Record<'cjk' | 'high' | 'fast', ConstraintSpec> = {
+  cjk:  { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
+  high: { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
+  fast: { maxSide: 19700, maxPixels: 12800000, boostedMaxPixels: 12800000 },
+};
+
 function resolveRenderConstraints(
   engine: string,
   ocrLanguage: string,
   ocrQualityProfile: 'fast' | 'balanced' | 'best'
 ): RenderConstraints {
-  const activePipelineProfile = 'panel';
-  
-  const cjkPanelExternal = activePipelineProfile === 'panel'
-    && hasCjkOrThaiOcrLanguage(ocrLanguage);
-  const koreanPaddlePanel = activePipelineProfile === 'panel'
-    && engine === 'paddleocr'
-    && hasKoreanOcrLanguage(ocrLanguage);
+  const isHighQuality = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best';
 
   if (engine === 'paddleocr') {
-    if (koreanPaddlePanel) {
-      return {
-        maxSide: 21500,
-        maxPixels: 37650000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 21500,
-          boostedMaxPixels: 37950000,
-        },
-      };
+    if (hasKoreanOcrLanguage(ocrLanguage)) {
+      return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.korean);
     }
-    if (cjkPanelExternal) {
-      return {
-        maxSide: 21500,
-        maxPixels: 37950000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 21500,
-          boostedMaxPixels: 37950000,
-        },
-      };
+    if (hasCjkOrThaiOcrLanguage(ocrLanguage)) {
+      return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.cjk);
     }
-    
-    const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
-    if (ocrQualityMode === 'high') {
-      return {
-        maxSide: 21500,
-        maxPixels: 37650000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 21500,
-          boostedMaxPixels: 37950000,
-        },
-      };
-    } else {
-      return {
-        maxSide: 19700,
-        maxPixels: 18800000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 19700,
-          boostedMaxPixels: 18800000,
-        },
-      };
-    }
-  }
-  
-  if (engine === 'easyocr') {
-    if (cjkPanelExternal) {
-      return {
-        maxSide: 21500,
-        maxPixels: 23800000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 21500,
-          boostedMaxPixels: 23800000,
-        },
-      };
-    }
-    
-    const ocrQualityMode = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best' ? 'high' : 'fast';
-    if (ocrQualityMode === 'high') {
-      return {
-        maxSide: 21500,
-        maxPixels: 23800000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 21500,
-          boostedMaxPixels: 23800000,
-        },
-      };
-    } else {
-      return {
-        maxSide: 19700,
-        maxPixels: 12800000,
-        minWidth: null,
-        tallPageBoost: {
-          minAspectRatio: 2.35,
-          minLongSide: 9000,
-          boostedMaxSide: 19700,
-          boostedMaxPixels: 12800000,
-        },
-      };
-    }
+    return createRenderConstraints(isHighQuality ? PADDLE_CONSTRAINT_PROFILES.high : PADDLE_CONSTRAINT_PROFILES.fast);
   }
 
-  return {
-    maxSide: 21500,
-    maxPixels: 23800000,
-    minWidth: null,
-  };
+  if (engine === 'easyocr') {
+    if (hasCjkOrThaiOcrLanguage(ocrLanguage)) {
+      return createRenderConstraints(EASY_CONSTRAINT_PROFILES.cjk);
+    }
+    return createRenderConstraints(isHighQuality ? EASY_CONSTRAINT_PROFILES.high : EASY_CONSTRAINT_PROFILES.fast);
+  }
+
+  return createRenderConstraints({ maxSide: 21500, maxPixels: 23800000 });
 }
 
 function fitDimensionsToConstraints(

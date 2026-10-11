@@ -260,6 +260,7 @@ const appendAutoOverlayElements = (
     maskEl.style.width = `${maskRect.width}pt`;
     maskEl.style.height = `${maskRect.height}pt`;
     maskEl.style.backgroundColor = maskBackgroundColor;
+    maskEl.style.overflow = 'hidden';
     root.appendChild(maskEl);
     if (isMaskOnly) return;
 

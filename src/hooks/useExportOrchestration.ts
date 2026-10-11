@@ -20,6 +20,7 @@ import {
   estimateLineRotationDeg,
   shouldSkipOverlayRenderForSuspiciousLine,
   sampleOverlayPaletteFromLine,
+  sampleOverlayPalettesBatch,
   DEFAULT_OVERLAY_PALETTE,
   OverlayPalette,
 } from '../components/OCR/translationOverlayUtils';
@@ -397,19 +398,25 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
     const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
     if (sampleContext) {
       sampleContext.drawImage(canvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+      const activeLinesToSample: Array<{ line: typeof pageOCR.lines[0]; index: number }> = [];
       pageOCR.lines.forEach((line, index) => {
         if (!translatedByIndex.has(index)) return;
         const translatedText = translatedByIndex.get(index) || '';
         const sourceFallbackOverlay = isSourceFallbackOverlayText(line.text, translatedText);
         if (shouldSkipOverlayRenderForSuspiciousLine(line) && !sourceFallbackOverlay) return;
-        translatedLinePalette.set(index, sampleOverlayPaletteFromLine(
-          sampleContext,
-          line,
-          sourceWidth,
-          sourceHeight,
-          sampleCanvas.width,
-          sampleCanvas.height
-        ));
+        activeLinesToSample.push({ line, index });
+      });
+
+      const batchPalettes = sampleOverlayPalettesBatch(
+        sampleContext,
+        activeLinesToSample,
+        sourceWidth,
+        sourceHeight,
+        sampleCanvas.width,
+        sampleCanvas.height
+      );
+      batchPalettes.forEach((palette, idx) => {
+        translatedLinePalette.set(idx, palette);
       });
     }
 

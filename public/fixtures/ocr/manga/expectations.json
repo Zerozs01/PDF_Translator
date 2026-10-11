@@ -20,66 +20,152 @@
       "image": "fixtures/ocr/manga/manga3.png",
       "language": "eng",
       "dpi": 300
+    },
+    {
+      "id": "doc-tech-1",
+      "page": 101,
+      "image": "fixtures/ocr/document_test/document1.png",
+      "language": "eng",
+      "dpi": 300
+    },
+    {
+      "id": "doc-tech-2",
+      "page": 102,
+      "image": "fixtures/ocr/document_test/document2.png",
+      "language": "eng",
+      "dpi": 300
+    },
+    {
+      "id": "doc-tech-3",
+      "page": 103,
+      "image": "fixtures/ocr/document_test/document3.png",
+      "language": "eng",
+      "dpi": 300
     }
   ],
   "expectations": [
     {
       "page": 2,
-      "minLines": 4,
-      "minMeaningfulWords": 10,
+      "minLines": 15,
+      "minMeaningfulWords": 40,
       "mustContainAny": [
-        ["those"],
-        ["students"],
-        ["bad"],
-        ["things"],
-        ["elderly"],
-        ["weak"],
-        ["women"],
-        ["children"],
-        ["xujita"],
-        ["town"]
+        ["latecomer"],
+        ["boat"],
+        ["player"],
+        ["yuki"],
+        ["azuma"],
+        ["search"],
+        ["bath"],
+        ["keys"],
+        ["shower", "stalls"],
+        ["survival", "rate"],
+        ["estimate", "number"]
       ],
-      "mustNotContainNormalized": [],
-      "maxStandaloneShortTokens": 1,
-      "maxSuspiciousRatio": 0.18
+      "mustNotContainNormalized": [
+        "xujita",
+        "tianhai"
+      ],
+      "maxStandaloneShortTokens": 2,
+      "maxSuspiciousRatio": 0.1
     },
     {
       "page": 3,
-      "minLines": 2,
-      "minMeaningfulWords": 6,
+      "minLines": 10,
+      "minMeaningfulWords": 30,
       "mustContainAny": [
-        ["i", "ill", "itll"],
-        ["go"],
-        ["over"],
-        ["and"],
-        ["take"],
-        ["look"]
+        ["divided", "areas"],
+        ["indoor", "bath"],
+        ["open", "air"],
+        ["entrance"],
+        ["enough", "keys"],
+        ["players"],
+        ["shoe", "locker"],
+        ["building"],
+        ["waiting", "chance"]
       ],
-      "mustNotContainNormalized": [],
-      "maxStandaloneShortTokens": 1,
-      "maxSuspiciousRatio": 0.16
+      "mustNotContainNormalized": [
+        "xujita",
+        "elderly"
+      ],
+      "maxStandaloneShortTokens": 2,
+      "maxSuspiciousRatio": 0.1
     },
     {
       "page": 5,
-      "minLines": 4,
-      "minMeaningfulWords": 14,
+      "minLines": 10,
+      "minMeaningfulWords": 20,
       "mustContainAny": [
-        ["past"],
-        ["only"],
-        ["found"],
-        ["top"],
-        ["girls"],
-        ["tianhai"],
-        ["city"],
-        ["now"],
-        ["make"],
-        ["with"],
-        ["kind"],
-        ["stuff"]
+        ["delivery", "eaters"],
+        ["glaring"],
+        ["reason"],
+        ["because"],
+        ["happened"],
+        ["avoiding"],
+        ["looks", "fuwari"]
+      ],
+      "mustNotContainNormalized": [
+        "xujita",
+        "town"
+      ],
+      "maxStandaloneShortTokens": 3,
+      "maxSuspiciousRatio": 0.12
+    },
+    {
+      "page": 101,
+      "minLines": 30,
+      "minMeaningfulWords": 100,
+      "mustContainAny": [
+        ["free-body", "diagrams"],
+        ["table", "continued"],
+        ["types", "connection"],
+        ["reaction"],
+        ["number", "unknowns"],
+        ["smooth", "hinge"],
+        ["fixed", "support"],
+        ["girder"],
+        ["bracket", "cable"],
+        ["concrete"]
       ],
       "mustNotContainNormalized": [],
-      "maxStandaloneShortTokens": 1,
-      "maxSuspiciousRatio": 0.18
+      "maxStandaloneShortTokens": 5,
+      "maxSuspiciousRatio": 0.1
+    },
+    {
+      "page": 102,
+      "minLines": 15,
+      "minMeaningfulWords": 60,
+      "mustContainAny": [
+        ["equilibrium"],
+        ["rigid", "body"],
+        ["chapter", "objectives"],
+        ["develop", "equations"],
+        ["free-body", "diagram"],
+        ["conditions"],
+        ["gravitational", "forces"],
+        ["newton"]
+      ],
+      "mustNotContainNormalized": [],
+      "maxStandaloneShortTokens": 2,
+      "maxSuspiciousRatio": 0.08
+    },
+    {
+      "page": 103,
+      "minLines": 20,
+      "minMeaningfulWords": 80,
+      "mustContainAny": [
+        ["equations", "equilibrium"],
+        ["alternative"],
+        ["procedure", "analysis"],
+        ["coplanar", "force"],
+        ["problems"],
+        ["free-body", "diagram"],
+        ["moments"],
+        ["coordinate"],
+        ["solution", "scalar"]
+      ],
+      "mustNotContainNormalized": [],
+      "maxStandaloneShortTokens": 4,
+      "maxSuspiciousRatio": 0.1
     }
   ]
 }

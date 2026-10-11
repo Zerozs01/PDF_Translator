@@ -2,7 +2,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { RightSidebar } from './RightSidebar';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useSegmentationStore } from '../../stores/useSegmentationStore';
 import { useEffect } from 'react';
 
 // Mock component for OCRTextLayerPanel since it has its own complex logic
@@ -36,10 +35,6 @@ const meta: Meta<typeof RightSidebar> = {
             totalPages: 5,
             fileType: 'pdf',
         });
-        useSegmentationStore.setState({
-            isProcessing: false,
-            regions: [],
-        });
       }, []);
       
       return (
@@ -58,36 +53,6 @@ export const Default: Story = {
   render: () => <RightSidebar />,
 };
 
-export const WithRegions: Story = {
-    decorators: [
-        (Story) => {
-            useEffect(() => {
-                 useSegmentationStore.setState({
-                    regions: [
-                        { id: '1', type: 'balloon', confidence: 0.95, originalText: 'Hello World' },
-                        { id: '2', type: 'sfx', confidence: 0.85, originalText: 'BOOM!' },
-                        { id: '3', type: 'text', confidence: 0.90, originalText: 'Some narration text' },
-                    ] as any 
-                 })
-            }, []);
-            return <Story />
-        }
-    ]
-};
-
-export const Processing: Story = {
-    decorators: [
-        (Story) => {
-             useEffect(() => {
-                 useSegmentationStore.setState({
-                    isProcessing: true,
-                    regions: []
-                 })
-            }, []);
-            return <Story />
-        }
-    ]
-};
 
 export const ImageMode: Story = {
      decorators: [

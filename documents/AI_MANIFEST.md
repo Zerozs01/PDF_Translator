@@ -1,0 +1,166 @@
+# AI Project Manifest & Context Map
+
+> [!IMPORTANT]
+> **คำสั่งสำหรับ AI (Self-Instruction):**
+> เมื่อได้รับมอบหมายงานใหม่ ให้เริ่มจากการอ่านไฟล์นี้เพื่อหา Path ที่เกี่ยวข้องก่อนเสมอ ห้ามเดา Path เองเพื่อประหยัด Token และรักษาความแม่นยำในการระบุไฟล์
+
+---
+
+## 🛠️ Common Task Workflow (ทางลัดในการทำงาน)
+
+เมื่อต้องแก้ไขปัญหาหรือพัฒนาฟีเจอร์ ให้จัดลำดับการเข้าถึงไฟล์ตามทิศทางนี้เป็นหลัก:
+
+* **โจทย์ "OCR อ่านผิด / ผลลัพธ์เพี้ยน":**
+  1. ตรวจสอบ [VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) (Orchestrator และคิวงาน)
+  2. ตรวจสอบ [ocrTextNormalizer.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrTextNormalizer.ts) (ตัวจัดการ Regex คลีนและลดรูปข้อความ)
+  3. ดู [ocr_orchestrator_flow.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_orchestrator_flow.md) (สถาปัตยกรรมการประกอบคำ/การเลือก Engine)
+
+* **โจทย์ "แปลภาษาผิด / ไม่ยอมใช้ Glossary":**
+  1. ตรวจสอบ [translationCoordinator.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationCoordinator.ts) (ตัวประกอบข้อความแบบกลุ่ม/ประสานงานแปล)
+  2. ตรวจสอบ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) (การเรียกตัวแปลภาษาออฟไลน์หลัก)
+  3. ตรวจสอบโครงสร้างข้อมูลใน [useGlossaryStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useGlossaryStore.ts) และตัวแปลง [sfxDictionaryService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/sfxDictionaryService.ts)
+
+* **โจทย์ "แอปกระตุก / UI ค้าง":**
+  1. ตรวจสอบ [InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx) (การวาดและ event handling กล่องข้อความจำนวนมาก)
+  2. ตรวจสอบ [ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) (การส่งข้อมูลผ่าน IPC และความปลอดภัยในฝั่ง Main Process)
+
+* **โจทย์ "Export PDF ช้า / UI ค้างตอนส่งออก":**
+  1. ตรวจสอบ [pdfExportService.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportService.ts) (Hidden BrowserWindow + `printToPDF` + stitch + `finally` destroy)
+  2. ตรวจสอบ [pdfExportStaging.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportStaging.ts) (เขียน payload ลง `%TEMP%` + ส่งแค่ path/protocol URL แทน base64 ยัด IPC)
+  3. ตรวจสอบ [PdfPrintExportService.ts](file:///c:/App/Electron/PDF_Translator/src/services/pdf/PdfPrintExportService.ts) (ใช้ `sourceFilePath` ก่อน, fallback เป็น raw bytes)
+  4. ตรวจสอบ [renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts) (DOM overlay + `@media print` zero margin)
+
+* **โจทย์ "แอปพลิเคชันไม่ยอมเปิด / ติดล็อกอิน / บั๊กความปลอดภัย / รีเซ็ตระบบ":**
+  1. ตรวจสอบ [authService.ts](file:///c:/App/Electron/PDF_Translator/electron/authService.ts) (ระบบ Hash, Salt และ safeStorage)
+  2. ตรวจสอบ [AuthGuard.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/AuthGuard.tsx) (ดักและปิดกั้น UI ทั้งหมดก่อนปลดล็อกสำเร็จ)
+  3. ตรวจสอบ [useAuthStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useAuthStore.ts) และ IPC Handles ใน [main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) (ช่องทางสื่อสารปลดล็อก/สลับโหมด/รีเซ็ตระบบ)
+
+---
+
+## 🗺️ Project Structure Index
+
+### 1. Frontend Core (React App)
+
+- **Application Shell & Orchestrator:** [src/App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) — จัดการ logic การแปล, overlay rendering, และ line grouping/deduplication
+* **Export Print Page (Hidden Renderer):** [src/export/renderExportPrintPage.ts](file:///c:/App/Electron/PDF_Translator/src/export/renderExportPrintPage.ts) — DOM overlay บนพื้นหลังโปร่งใส (หน่วย `pt` ตรง PDF page size) ไม่ใช้ pdf.js
+* **Viewer & Workspace Layout:**
+  * [src/components/Viewer/Toolbar.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Viewer/Toolbar.tsx) — ปุ่มควบคุมหน้าจอ `SplitViewToggle` สำหรับสลับระหว่าง Overlay และ Split view
+  * [src/components/Viewer/WorkspaceContainer.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Viewer/WorkspaceContainer.tsx) — จัดการหน้าต่างแบ่งซีก (Split-Viewport) แสดงต้นฉบับคู่บทแปล
+  * [src/hooks/useSyncScroll.ts](file:///c:/App/Electron/PDF_Translator/src/hooks/useSyncScroll.ts) — Hook ซิงโครไนซ์ตำแหน่งการเลื่อนของ Pane ซ้ายและขวา
+  * [src/hooks/useDownloadMenuState.ts](file:///c:/App/Electron/PDF_Translator/src/hooks/useDownloadMenuState.ts) — Hook state/lifecycle ของเมนู Download/Export ใน App shell
+  * [src/hooks/useTranslationLoadingState.ts](file:///c:/App/Electron/PDF_Translator/src/hooks/useTranslationLoadingState.ts) — Hook ซิงก์สถานะ loading/เวลาเริ่มแปลกับ UI store
+* **Main Viewport & Canvas:**
+  * [src/components/PDF/PDFCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/PDF/PDFCanvas.tsx) — เรนเดอร์หน้าเอกสาร PDF และจัดการ overlay text layers
+  * [src/components/Image/ImageCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Image/ImageCanvas.tsx) — เรนเดอร์หน้าเอกสารรูปภาพ และจัดการการวาดตรวจจับคำ
+* **Interactive Layers & Overlays:**
+  * [src/components/Layers/InteractiveLayerOverlay.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layers/InteractiveLayerOverlay.tsx) — ควบคุมปฏิสัมพันธ์กับ layer เช่น การเลือก, การย้ายตำแหน่ง, หรือการปรับขนาดกล่องข้อความ
+* **Glossary UI Panel:**
+  * [src/components/Layout/GlossarySidebarPanel.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layout/GlossarySidebarPanel.tsx) — หน้าจอด้านข้าง (Sidebar Panel) สำหรับจัดการคำเฉพาะพจนานุกรม
+  * [src/components/Layout/LeftSidebar.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Layout/LeftSidebar.tsx) — แถบเมนูด้านซ้ายที่ผูกแผงควบคุมหลักรวมถึง Glossary Panel
+* **Security & Authentication UI:**
+  * [src/components/Auth/AuthGuard.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/AuthGuard.tsx) — ตัวควบคุมปิดกั้นการเรนเดอร์แอปหลักก่อนการ Unlock
+  * [src/components/Auth/SetupScreen.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/SetupScreen.tsx) — หน้าตั้งรหัสผ่านหลักและรหัส PIN รีเซ็ตระบบครั้งแรก
+  * [src/components/Auth/LoginScreen.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/LoginScreen.tsx) — หน้าจอป้อนรหัสผ่านปลดล็อกและทางเข้ารีเซ็ตระบบ
+  * [src/components/Auth/EmergencyModal.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/EmergencyModal.tsx) — ป๊อปอัปกรอก PIN ยืนยันเพื่อกู้คืน/รีเซ็ตระบบ
+  * [src/components/Auth/SecuritySettings.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Auth/SecuritySettings.tsx) — วิดเจ็ตตั้งค่าเปลี่ยนแอปโหมด (Relax vs Security) ในหน้า Settings หลัก
+
+### 2. Electron Core (Main Process)
+
+- **IPC Main Handler:** [electron/main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) — จัดการการสื่อสารระหว่าง Renderer และ Main process
+* **PDF Print Export (Level 2):** [electron/pdfExportService.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportService.ts) — Hidden Window พิมพ์เฉพาะ overlay โปร่งใส → [pdfExportMerge.ts](file:///c:/App/Electron/PDF_Translator/electron/pdfExportMerge.ts) stamp ทับ Source PDF ด้วย `pdf-lib`
+* **Preload API Wrapper:** [electron/preload.ts](file:///c:/App/Electron/PDF_Translator/electron/preload.ts) — กำหนด API ปลอดภัยที่อนุญาตให้ Renderer เรียกใช้งานระบบได้
+* **Local SQLite Database Layer:** [electron/db.ts](file:///c:/App/Electron/PDF_Translator/electron/db.ts) — จัดการเชื่อมต่อเข้ารหัส SQLCipher, WAL Pragmas, FTS5 และ Schema Migrations
+* **Modular DAO Layer:** [electron/dao/](file:///c:/App/Electron/PDF_Translator/electron/dao/) — แยก Data Access Objects แบบโมดูลาร์ (`DocumentDAO`, `ProjectDAO`, `TagDAO`, `OCRCacheDAO`, `TranslationDAO`, `GlossaryDAO`, `BenchmarkDAO`) พร้อม Prepared Statement Caching
+* **IPC Files Access Bridge:** [electron/documentFileAccess.ts](file:///c:/App/Electron/PDF_Translator/electron/documentFileAccess.ts) — จัดการการอ่านเขียนไฟล์ผ่าน IPC (รวมถึงฟังก์ชัน zero-copy path สำหรับการ import ไฟล์ขนาดใหญ่)
+* **Local Cryptography & safeStorage:** [electron/authService.ts](file:///c:/App/Electron/PDF_Translator/electron/authService.ts) — จัดการ Hash PBKDF2, จัดเก็บค่า Config และเข้ารหัส OS Keychain (Relax Mode)
+* **Argos Translate Bridge:** [electron/argosBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/argosBridge.ts) — จัดการ Argos daemon lifecycle, Python runtime resolution, และ offline batch translation IPC helper
+* **Python Runtime Helper:** [electron/pythonRuntime.ts](file:///c:/App/Electron/PDF_Translator/electron/pythonRuntime.ts) — helper กลางสำหรับ resolve Python override และ local virtualenv lookup ที่ใช้ร่วมกันระหว่าง OCR/Argos bridge
+* **Zero-GC Native Algorithms:** [src/services/native/fastSpatialCluster.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastSpatialCluster.ts) & [src/services/native/fastDiceSimilarity.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastDiceSimilarity.ts) — TypedArray Disjoint-Set Connected Components และ 16-bit Unicode popcount bigram similarity สำหรับ 2D grouping และ deduplication ความเร็วสูง
+
+### 3. OCR Engine & Processing Pipelines
+
+- **OCR Electron Bridge:** [electron/ocrBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/ocrBridge.ts) — สื่อสารประสานงานระบบ OCR ฝั่ง Main Process
+* **OCR Main Orchestrator (Frontend):** [src/services/vision/VisionService.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/VisionService.ts) — จัดการคิวงาน, worker lifecycle (Tesseract-free layout segmentation), และการรวมผลลัพธ์ของ OCR
+  * [src/services/vision/visionGeometry.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/visionGeometry.ts) — geometry helpers สำหรับ bbox/overlap/IoU/coverage ที่ใช้ใน VisionService
+  * [src/services/vision/externalOcrDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/vision/externalOcrDedup.ts) — helper สำหรับ external OCR dedupe/scoring, Latin/Korean token normalization, และ dialogue fragment guards
+* **Python OCR Pipeline (Daemon/External):** [scripts/external_ocr_bridge.py](file:///c:/App/Electron/PDF_Translator/scripts/external_ocr_bridge.py) — รันโมเดล OCR ภายนอก (เช่น PaddleOCR/EasyOCR) ทำงานเป็น Daemon เพื่อลดเวลาบูตระบบ
+* **OCR Geometry Normalization:** [src/services/ocr/ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) — จัดการความเสถียรของกล่องข้อความ คำที่ซ้อนทับกัน และการขจัดสถิติ ghost lines
+
+### 4. Translation & Glossary Services
+
+- **SFX & Glossary Translation Logic:** [src/services/translation/sfxDictionaryService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/sfxDictionaryService.ts) — จัดการและแปลคำเฉพาะ เสียงเอฟเฟกต์ (SFX) ภาษาไทยตามพจนานุกรมของผู้ใช้
+* **Offline Translator (Argos):** [src/services/translation/offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) — ตัวแปลภาษาออฟไลน์หลักและ routing patterns
+* **Argos Main-Process Daemon Bridge:** [electron/argosBridge.ts](file:///c:/App/Electron/PDF_Translator/electron/argosBridge.ts) — แยก daemon/pending-request/dedupe ออกจาก [electron/main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts)
+* **Translation Coordinator:** [src/services/translation/translationCoordinator.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/translationCoordinator.ts) — ประสานงานจัดส่งชุดคำแปลแบบ batch และเกลี่ยข้อความกลับเข้า index เดิม
+
+### 5. Zustand State Stores
+
+- **Glossary Store:** [src/stores/useGlossaryStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useGlossaryStore.ts) — จัดเก็บและควบคุมข้อมูล Custom Glossary ของผู้ใช้
+* **OCR Text Layer Store:** [src/stores/useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts) — จัดการแคช OCR และแคชคำแปลในแต่หน้าและแต่ละโมเดล
+* **Layer Control Store:** [src/stores/useLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useLayerStore.ts) — ควบคุมการแก้ไขสไตล์, ขนาด, และพิกัดตำแหน่งของกล่องข้อความ
+* **Project Store:** [src/stores/useProjectStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useProjectStore.ts) — จัดการข้อมูลโปรเจกต์และไฟล์ PDF ปัจจุบัน
+* **UI Store:** [src/stores/useUIStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useUIStore.ts) — จัดการสถานะการซูม/แพน แถบข้าง และสลับโหมด Split View / Overlay
+* **Security & Authentication Store:** [src/stores/useAuthStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useAuthStore.ts) — จัดการสถานะ Unlock, โหมดความปลอดภัยของแอป และเชื่อมต่อ IPC API คีย์หลักของระบบ
+
+---
+
+## 📚 Documents & Knowledge Base Index
+
+### 🏢 Architecture & Overview
+
+- [documents/ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md) — ภาพรวมสถาปัตยกรรมหลักของระบบ, Runtime Topology, ข้อมูล Cache และ Flow การแปล
+* [documents/Knowledge.md](file:///c:/App/Electron/PDF_Translator/documents/Knowledge.md) — สรุปกฎเหล็ก (Golden Rules) ด้าน Geometry, Cache, และกลไกของแอปพลิเคชัน
+* [documents/Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) — บันทึก Roadmap การพัฒนาฟีเจอร์หลัก (P0 ถึง P5) และสิ่งที่ทำเสร็จแล้ว
+* [documents/CHANGELOG.md](file:///c:/App/Electron/PDF_Translator/documents/CHANGELOG.md) — ประวัติการเปลี่ยนแปลงรายละเอียดเอกสารความรู้และฟีเจอร์ภายในโฟลเดอร์ `documents/`
+
+### 👁️ Image & OCR Processing
+
+- [documents/OCR_OPTIMIZATION.md](file:///c:/App/Electron/PDF_Translator/documents/OCR_OPTIMIZATION.md) — เทคนิคการปรับปรุงความเร็วและความแม่นยำของ OCR
+* [documents/image_processing_knowledge/electron_ocr_runtime_architecture.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/electron_ocr_runtime_architecture.md) — โครงสร้างและ IPC Contract ระหว่าง Node.js และ Python OCR
+* [documents/image_processing_knowledge/ocr_engine_selection_policy.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_engine_selection_policy.md) — นโยบายการเลือกใช้ OCR Engine ให้เหมาะสมกับชนิดของหน้าเอกสาร
+* [documents/image_processing_knowledge/ocr_preprocessing_rules.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_preprocessing_rules.md) — กฎการบีบอัดและปรับคุณภาพภาพก่อนส่งให้ OCR Engine
+* [documents/image_processing_knowledge/ocr_candidate_selection_rules.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_candidate_selection_rules.md) — กฎการคัดเลือกข้อความและแยกแยะกล่องคำศัพท์
+* [documents/image_processing_knowledge/ocr_orchestrator_flow.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_orchestrator_flow.md) — ลำดับการทำงานของคิวประมวลผลและการรวมผลลัพธ์จากหลาย Engine
+* [documents/image_processing_knowledge/ocr_output_schema.md](file:///c:/App/Electron/PDF_Translator/documents/image_processing_knowledge/ocr_output_schema.md) — โครงสร้างข้อมูล JSON สัญญาระหว่าง Engine และแอปพลิเคชันหลัก
+
+### 🌐 Translation Pipeline & Argos Translate
+
+- [documents/argostranslation_knowledge/argos_translation_knowledge.md](file:///c:/App/Electron/PDF_Translator/documents/argostranslation_knowledge/argos_translation_knowledge.md) — ข้อมูลความรู้การใช้งานและข้อจำกัดของ Argos Translate
+* [documents/argostranslation_knowledge/argos_translation_quality_control.md](file:///c:/App/Electron/PDF_Translator/documents/argostranslation_knowledge/argos_translation_quality_control.md) — กลไกการประเมินคุณภาพคำแปลและการควบคุมผลลัพธ์
+* [documents/argostranslation_knowledge/argos_pair_config_templates.md](file:///c:/App/Electron/PDF_Translator/documents/argostranslation_knowledge/argos_pair_config_templates.md) — การตั้งค่าคู่ภาษาและค่า Glossary Bias ต่างๆ
+* [documents/argostranslation_knowledge/thai_repair_rule_patterns.md](file:///c:/App/Electron/PDF_Translator/documents/argostranslation_knowledge/thai_repair_rule_patterns.md) — กฎและ regex สำหรับการซ่อมแซมประโยคภาษาไทยที่แปลไม่สมบูรณ์
+* [documents/argostranslation_knowledge/translation_glossary_seed.md](file:///c:/App/Electron/PDF_Translator/documents/argostranslation_knowledge/translation_glossary_seed.md) — รายชื่อศัพท์ตั้งต้น (Seed) สำหรับระบบจัดระบบพจนานุกรมในโปรเจกต์
+
+### ⚙️ System Handoffs & Upgrades
+
+- [documents/PIPELINE_HANDOFF_2026_05_09.md](file:///c:/App/Electron/PDF_Translator/documents/PIPELINE_HANDOFF_2026_05_09.md) — รายละเอียดการส่งต่อระบบและโครงสร้างปรับแต่งตอนแปลออฟไลน์
+* [documents/Optimize_Plan/upgrade5.1.md](file:///c:/App/Electron/PDF_Translator/documents/Optimize_Plan/upgrade5.1.md) — รายละเอียดแผน Optimize/Upgrade 5.1
+
+1. **OCR Cache Version Alignment:** อัปเดตเวอร์ชัน Translation Cache ปัจจุบันคือ `'v64'` ตรงกับ [useOCRTextLayerStore.ts](file:///c:/App/Electron/PDF_Translator/src/stores/useOCRTextLayerStore.ts#L44) และ [context.md](file:///c:/App/Electron/PDF_Translator/context.md#L86)
+2. **`Custom Glossary` System:** เพิ่มรายละเอียดของ `useGlossaryStore.ts` และ `GlossarySidebarPanel.tsx` ในโครงสร้างสถาปัตยกรรมของ [ARCHITECTURE.md](file:///c:/App/Electron/PDF_Translator/documents/ARCHITECTURE.md) เรียบร้อยแล้ว
+3. **Roadmap Progress (P4 & P5):** อัปเดตสถานะของ P4 (Performance) และ P5 (Glossary Pipeline Integration) ใน [Roadmap.md](file:///c:/App/Electron/PDF_Translator/documents/Roadmap.md) เป็น **Completed** เรียบร้อยแล้ว
+4. **Phase 7 Advanced Local Security:** อัปเดตสัญญาระบบความปลอดภัยแบบ Secure-by-default, การเข้ารหัส DB ด้วย SQLCipher (`better-sqlite3-multiple-ciphers`), ระบบ Offline Setup/Login, Relax (Keychain) vs Security App Modes และ Reset System wipe data ลงใน manifest นี้แล้วในวันที่ 2026-06-12
+5. **All Pages / Background Queue Alignment:** อัปเดตเอกสารสถาปัตยกรรมการแปลและการจัดกลุ่ม เพิ่มรายละเอียดการผูกฟังก์ชัน `splitAggressiveMergedLines` และ `filterGhostOcrData` ใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) เพื่อแก้ไขปัญหาคำแปลเหลื่อมดัชนี (Index Drift) เมื่อแปลในแบบ Background / All Pages ในวันที่ 2026-06-13
+6. **OCR Model Profile Persistence Alignment:** ปรับปรุงและบันทึกสถาปัตยกรรมการจำโมเดลและโปรไฟล์ OCR รายไฟล์ (per-file) โดยแก้ไขจุดที่คีย์ `fileKey` ในการดึงค่า (`loadProject`) และการบันทึกค่า (`subscribe`) ไม่ตรงกันเมื่อรันในสภาพแวดล้อม Production (ซึ่งระบบจะมีการสลับพาธเพื่อความเข้ากันได้ของ OCR Cache) ในวันที่ 2026-06-13
+7. **PaddleOCR Cold Start & Memory Optimization:** ปรับปรุงประสิทธิภาพของ OCR Daemon และหน่วยความจำของ Main process โดยทำระบบ Lazy Loading (เอาตัว prewarm ตอนบูตออก), เพิ่มฟังก์ชัน `cleanup_memory` (สั่ง GC และ CUDA cache empty ใน Python หลังทำงานเสร็จ), เพิ่มระบบ Idle Process Lifecycle (ปิดตัวเองหลังไม่มีงานวิ่ง 5 นาที หรือเมื่อปิด Workspace) และสร้างระบบตรวจสอบประสิทธิภาพผ่าน `--benchmark-memory-leak` วัดหน่วยความจำเริ่มต้น RSS ได้ 109.82 MB (เป้าหมาย < 120MB) ในวันที่ 2026-06-13
+8. **The Tesseract Purge:** ลบ Tesseract dependencies, assets และ fallback logic ออกจากโปรเจกต์อย่างสมบูรณ์เพื่อทำให้ตัวแอปพลิเคชันมีขนาดเบาลงและมีความเสถียรมากขึ้นโดยอิงเฉพาะ PaddleOCR และ EasyOCR เป็นหลักในวันที่ 2026-06-13
+9. **AuthGuard Bypass in Harness:** เพิ่มการตรวจสอบ query param `ocr_harness=1` เพื่อ bypass AuthGuard ในระหว่างรัน regression test ใน Playwright เพื่อไม่ให้แอปพลิเคชันค้างในระบบ CI/CD ในวันที่ 2026-06-13
+10. **Benchmark & EasyOCR RAW Integration:** ปรับปรุงระบบประเมินเปรียบเทียบให้รองรับการรัน EasyOCR ในโหมดเปรียบเทียบ RAW vs FULL โดยสร้างฟังก์ชัน `run_easyocr_raw` ใน Python bridge daemon และขยายสัญญาณส่ง IPC จากฝั่ง UI ไปยัง main process สำเร็จในวันที่ 2026-06-13
+11. **Raw OCR Parsing & Confidence Fix:** แก้ไขบั๊กโครงสร้างใน `run_paddleocr_raw` ที่ดึงข้อมูลผ่านคีย์ `predict()` เปล่าๆ ทำให้คำที่แสกนได้กลายเป็น 0 ในระหว่างประมวลผลโมเดลที่ใช้ `ocr()` ในฝั่ง Python พร้อมทั้งเพิ่มฟังก์ชันคำนวณเฉลี่ยค่าความมั่นใจ (Average Confidence) ของ RAW pass ทั้งของ Paddle และ Easy ในวันที่ 2026-06-13
+12. **Split-View & Sync-Scroll:** เพิ่มฟังก์ชัน Side-by-Side Split View เพื่อให้ผู้ใช้สามารถตรวจสอบ Original OCR เคียงคู่กับบทแปลแบบเรียลไทม์ โดยรองรับการซิงโครไนซ์ตำแหน่งการเลื่อน (Synchronized Scrolling) และพิกัดซูมแบบ 60fps Zero-Latency ข้ามหน้าต่าง และจะปิดการแบ่งช่องแสดงผลโดยอัตโนมัติเมื่อเปลี่ยนหน้าหรือปิดไฟล์ถัดไปในวันที่ 2026-06-13
+13. **OCR Ghost Line & Translation Carry-over Repairs:** แก้ไขปัญหาคำแปลโดนเมินหรือไม่แสดง Overlay ทับตัวอักษรภาษาอังกฤษในหน้า 25 โดยทำการอัปเดต [ocrTextHeuristics.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrTextHeuristics.ts) และ [ocrSafetyLineDedup.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/ocrSafetyLineDedup.ts) เพื่อป้องกันการลบประโยคภาษาอังกฤษจริงออกเป็น Ghost line สำหรับ PaddleOCR ที่ไม่มีข้อมูลคำย่อย (validWords.length = 0) พร้อมทั้งเพิ่มคำแปลภาษาไทยโดยตรงสำหรับประโยคที่มีแนวโน้มเป็นภาษาอังกฤษ carry-over (เช่น `and was at a`, `recapturina`, `all aristocrats` ฯลฯ) ใน `ARGOS_SHORT_PHRASE_LOOKUP_TH` ของ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) และเพิ่มกลไกสืบค้นประมวลผล OCR ใน [main.ts](file:///c:/App/Electron/PDF_Translator/electron/main.ts) เมื่อวันที่ 2026-06-16
+14. **Configurable PaddleOCR Angle Classification & Vertical Line Grouping Fixes:** เพิ่มตัวเลือก `useAngleCls` เพื่อให้ผู้ใช้สามารถกำหนดเปิด/ปิด Angle Classification ของ PaddleOCR เพื่อหลีกเลี่ยงข้อความเอียงในโหมดมังงะ (ตั้งค่าเริ่มต้นเป็น false สำหรับ panel profile) พร้อมแก้ปัญหากลุ่มข้อความแนวตั้งในช่องคำพูดโดนแบ่งครึ่งเนื่องจากทับซ้อนแนวตั้ง โดยปรับปรุง `shouldGroupLines` ใน [LayerGroupingService.ts](file:///c:/App/Electron/PDF_Translator/src/services/layers/LayerGroupingService.ts) ให้ข้าม side-by-side guard เมื่อ horizontal overlap >= 50% และขยายขนาดช่องไฟดักภาษาอังกฤษแนวตั้งเพิ่มขึ้นเป็น `3.2 * avgHeight` นอกจากนี้ยังเพิ่มคีย์แปลภาษาใน [App.tsx](file:///c:/App/Electron/PDF_Translator/src/App.tsx) และ [offlineTranslationService.ts](file:///c:/App/Electron/PDF_Translator/src/services/translation/offlineTranslationService.ts) สำหรับประโยคยอดฮิต เช่น `"but in any age"`, `"away with"`, `"getting"` ให้แสดงผลแปลไทยสนทนาที่เหมาะสม ในวันที่ 2026-06-19
+15. **Generic Intel GPU Support & Automated Translation Environment setup:** เพิ่มการตรวจจับการ์ดจอ Intel (`Intel(R) Graphics`) และเปิดใช้งาน GPU acceleration อัตโนมัติในสคริปต์ [bootstrap_ocr_env.ps1](file:///c:/Users/beelink/Downloads/Code/Personal/Electron/PDF_Translator/scripts/bootstrap_ocr_env.ps1) เพื่อทำ OCR แบบเร่งความเร็วผ่าน DirectML พร้อมทั้งยัดการติดตั้งโมดูลแปลภาษา `argostranslate` และดาวน์โหลดโมเดลแปลภาษา (`en->th`, `ko->en`, `es->en`) ให้เบ็ดเสร็จในขั้นตอน `pnpm install` / `ocr:bootstrap` และเพิ่ม API ค้นหาการ์ดจอ `getGpuInfo` ใน [main.ts](file:///c:/Users/beelink/Downloads/Code/Personal/Electron/PDF_Translator/electron/main.ts) / [preload.ts](file:///c:/App/Electron/PDF_Translator/electron/preload.ts) พร้อมวาดวิดเจ็ตแสดงสถานะ Hardware Acceleration ที่หน้า Homepage / Settings ในไฟล์ [UploadScreen.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Home/UploadScreen.tsx) ในวันที่ 2026-06-29
+16. **Intel GPU DirectML Full Performance Parity:** ปิดช่องว่างประสิทธิภาพ Intel GPU ให้เทียบเท่า AMD โดย (1) แยก vendor detection ใน `bootstrap_ocr_env.ps1` ออกเป็น `nvidia/amd/intel` พร้อม set `$env:OCR_GPU_VENDOR` ส่งต่อ Python bridge (2) เพิ่มฟังก์ชัน `_select_directml_device()` ใน `external_ocr_bridge.py` ที่ enumerate DirectML devices และเลือก Intel device โดยเฉพาะ from `OCR_GPU_VENDOR` env var (3) อัปเดต `_detect_torch_device()` รับ vendor hint (4) อัปเดต `cleanup_memory()` เพิ่ม DirectML buffer sync สำหรับ Intel/AMD shared VRAM (5) เพิ่ม `gpuVendor: 'intel'|'amd'|'nvidia'|'unknown'` field ใน `ocr:get-gpu-info` IPC ใน `main.ts` และ TypeScript type ใน `electron.d.ts` (6) อัปเดต UI ใน `UploadScreen.tsx` ให้แสดง "Intel DirectML" / "AMD DirectML" แทน "DirectML" เฉยๆ ในวันที่ 2026-06-30
+17. **Single-Page PNG Layout, Debug Overlays & Name Bypass Repairs:** แก้ไขปัญหาการไม่เรนเดอร์ LeftSidebar สำหรับรูปภาพเดี่ยว โดยการปรับเงื่อนไขให้แสดงผลทุกไฟล์แทนที่จะจำกัดเฉพาะ PDF และปรับปรุง LeftSidebar ให้เข้าสู่โหมด Layers/Glossary โดยอัตโนมัติ พร้อมตั้งค่าปิด showDebugOverlay (กรอบสัญลักษณ์และอัตราส่วนขนาด) เป็น false ตั้งต้น นอกจากนี้ยังแก้ไขปัญหา OCR แยกรวมคำ PDF TRANSLATOR และป้องการการแปลคำว่า PDF TRANSLATOR / OCR โดยการบังคับครอบ Token ก่อนเข้าสู่ขั้นตอนแปล ในวันที่ 2026-07-04
+18. **ImageCanvas Interactive Selection & Dialogue Translation Overrides:** นำตัวควบคุมเลเยอร์ `InteractiveLayerOverlay` มาเรนเดอร์ใน `ImageCanvas.tsx` สำหรับไฟล์รูปภาพ/PNG ทำให้สามารถคลิกจับขอบ ลาก ย้าย แก้ไขข้อความในโหมด Select/Region ได้เหมือน PDF และเพิ่มการ Overrides คำแปลของบอลลูนคำพูดทั้งฝั่งซ้ายและขวาใน `ARGOS_SHORT_PHRASE_LOOKUP_TH` โดยยกเลิกการบังคับแบ่งบรรทัดแข็ง (Hard line overrides) ในโหมด Manga/Manhwa เพื่อปล่อยให้ระบบ Orbit ห่อข้อความ (Word-wrap) และจัดกึ่งกลางลูกโป่งคำพูดได้สมดุลเป็นธรรมชาติเหมือนเดิม พร้อมแก้ปัญหาจุดทศนิยมรั่วไหลและเพิ่มคีย์ดัก `youre` / `you re` ของบอลลูนฝั่งซ้ายให้จับคู่พจนานุกรมได้อย่างถูกต้องสมบูรณ์ ในวันที่ 2026-07-04
+19. **Single-Page PNG Export Layout Z-Index & Translation Cache Hydration Fixes:** (1) แก้ไขปัญหาการเรนเดอร์ export ที่แผ่นถมสีขาว (mask layer) ซ้อนทับบนตัวอักษรของบอลลูนคำพูดในโหมด Manga/Manhwa โดยเพิ่มคุณสมบัติ `z-index` ในไฟล์ [exportPrint.css](file:///c:/App/Electron/PDF_Translator/src/export/exportPrint.css) แยกความสูงของเลเยอร์ (mask=10, text=20, user-layer=30) อย่างชัดเจน (2) แก้ไขปัญหาการไม่ดึงผลลัพธ์คำแปลที่เซฟไว้ก่อนหน้ามาแสดงผลเมื่อโหลดรูปภาพ PNG โดยเพิ่ม `useEffect` ใน [ImageCanvas.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Image/ImageCanvas.tsx) เพื่อทำ Background load OCR และ Translation cache จาก SQLite ในวันที่ 2026-07-04
+20. **Background Queue System, Positional Preemption, & UI Stability Fixes:**
+    * พัฒนาระบบ Background Queue แบบ FIFO:
+      * เพิ่มเมธอด `addJobAsForeground` แทรกงานใหม่ที่ตำแหน่ง 0 ของคิวเมื่อเรียกจาก File Preview และล้าง duplicate เก่าที่ค้างอยู่ใน queued/paused ออกทันที
+      * พัฒนาระบบ **Positional Preemption** ใน [BackgroundQueueProcessor.ts](file:///c:/App/Electron/PDF_Translator/src/services/ocr/BackgroundQueueProcessor.ts) สั่ง Pause งานปัจจุบัน เปลี่ยนสถานะเป็น `queued` และ `abort()` เมื่อมีงานอื่นขึ้นมาแทนที่ด้านหน้า
+      * แก้ไข unhandled `Worker was terminated` ของ PDF.js worker เมื่อถูก Preempt เพื่อป้องกันการติดสถานะ `failed` โดยไม่ได้ตั้งใจ
+    * ปรับปรุง UI/UX Feedback:
+      * สร้าง component `BackgroundQueueBadge` และ Mini Queue Panel ลอยซ้ายล่างในหน้า File Preview ให้ผู้ใช้ตรวจสอบสถานะได้ทันที
+      * เพิ่มสถานะ feedback ทันที "กำลังแทรกคิว..." เมื่อสั่งงาน และ "เตรียมงาน..." เมื่อเริ่มต้นประมวลผล เพื่อลบล้าง delay 5-10 วินาที
+      * แก้ไข nested `<button>` inside `<button>` HTML error ใน [UploadScreen.tsx](file:///c:/App/Electron/PDF_Translator/src/components/Home/UploadScreen.tsx)

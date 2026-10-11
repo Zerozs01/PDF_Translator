@@ -181,7 +181,8 @@ try:
         
         # Configure SessionOptions to optimize threading and memory patterns for OCR
         sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = 2
+        cpu_count = os.cpu_count() or 4
+        sess_opts.intra_op_num_threads = max(2, min(8, cpu_count - 1))
         sess_opts.inter_op_num_threads = 2
         sess_opts.enable_mem_pattern = False
         sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -221,7 +222,12 @@ SHORT_SPEECH_TOKENS = {"EH", "ME", "I", "OH", "AH", "NO", "A"}
 KOREAN_PARTICLE_SUFFIXES = {"이", "가", "은", "는", "을", "를", "의"}
 LATIN_SHORT_KEEP_TOKENS = {
     "A", "I", "IN", "ON", "AT", "TO", "OF", "DO", "GO", "NO", "MY", "WE", "ME", "OH", "AH", "HUH",
-    "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE",
+    "IT", "IS", "BE", "IF", "OR", "AN", "AS", "AM", "UP", "SO", "IM", "US", "THE", "WAR", "TRY", "YOU",
+    "PIG", "ARE", "HE", "SHE", "DID", "GET", "HAS", "HAD", "CAN", "SEE", "SAY", "MAN", "BOY", "GUY",
+    "ONE", "TWO", "NOW", "YET", "BAD", "END", "HOT", "LOT", "BIG", "CRY", "EAT", "FAR", "FIT", "FLY",
+    "FUN", "JOB", "KEY", "LET", "LIE", "MAD", "MAY", "MOM", "DAD", "OLD", "OWN", "PAY", "SAD", "SON",
+    "USE", "WAY", "WIN", "YES", "CUM", "ASS", "OUT", "HER", "HIS", "HIM", "OUR", "WHO", "WHY", "HOW",
+    "HEY", "SHUT", "HOLE",
 }
 LATIN_COMMON_WORDS = {
     "THE", "YOU", "HE", "SHE", "WE", "THEY", "TO", "OF", "IN", "ON", "AT", "FOR", "AND", "OR", "ARE",
@@ -231,7 +237,12 @@ LATIN_COMMON_WORDS = {
     "NOT", "JUST", "ALL", "COME", "ACROSS", "POSSIBILITY", "WHAT", "THINK", "BEST", "ITS", "ILL",
     "HERE", "PEOPLE", "LIVE", "THERE", "WHY", "OKAY", "FINE", "ACTING", "MYSTERIOUS", "WHATEVER",
     "WANT", "SAY", "TIANHAI", "CHAPTER", "SECTION", "PART", "FIGURE", "FIG", "TABLE", "UNIT",
-    "LESSON", "VOLUME", "VOL", "APPENDIX",
+    "LESSON", "VOLUME", "VOL", "APPENDIX", "MONEY", "KINGDOM", "WEVE", "HEIR", "ABLETO", "ENJOY",
+    "WAR", "ORGASM", "TRAINING", "GRATEFUL", "BASTARD", "BASTARDS", "PRINCESS", "HOLD", "BACK",
+    "VIRGIN", "HOLES", "REALLY", "DEALING", "BRAT", "SAME", "TIME", "PUSSY", "SHOVED", "ASSHOLE",
+    "START", "STARTED", "WINDING", "PIG", "COCK", "CUM", "AWAY", "RIGHT", "PHEW", "TRY", "THEN",
+    "GOHHH", "DOINGTHIS", "GETAWAY", "THATS", "GIRL", "GIRLS",
+    "BITCH", "HEY", "BITCHHEY", "SHOVE", "SHUT", "HOLE", "OTHER", "NOISY", "TSK", "HERUP",
 }
 
 
@@ -921,7 +932,6 @@ def suppress_contained_hangul_fragments(
 
         bbox = line.get("bbox") or {}
         confidence = float(line.get("confidence", 0.0) or 0.0)
-        line_center_x = bbox_center_x(bbox)
         should_drop = False
         drop_meta: Dict[str, Any] | None = None
 
@@ -944,74 +954,21 @@ def suppress_contained_hangul_fragments(
                 continue
 
             other_bbox = other.get("bbox") or {}
-            other_conf = float(other.get("confidence", 0.0) or 0.0)
             overlap_y = vertical_overlap_ratio(bbox, other_bbox)
             overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
             contained_x = horizontal_containment_ratio(bbox, other_bbox)
             center_delta = abs(bbox_center_y(bbox) - bbox_center_y(other_bbox))
-            center_dx = abs(line_center_x - bbox_center_x(other_bbox))
             min_height = max(8.0, min(bbox_height(bbox), bbox_height(other_bbox)))
-            min_width = max(8.0, min(bbox_width(bbox), bbox_width(other_bbox)))
-            narrow_fragment = bbox_width(bbox) <= bbox_width(other_bbox) * 0.58
-            same_band = center_delta <= max(52.0, min_height * 2.4)
-            prefix_shadow = (
-                bool(token)
-                and bool(other_token)
-                and token[:1] == other_token[:1]
-                and narrow_fragment
-                and contained_x >= 0.62
-                and center_delta <= max(120.0, min_height * 5.6)
-            )
-            particle_shadow = False
-            if is_particle_candidate:
-                stem_shadow = (
-                    particle_stem in other_token
-                    or other_token.startswith(particle_stem)
-                    or are_near_duplicate_tokens(particle_stem, other_token[:len(particle_stem)])
-                )
-                particle_shadow = (
-                    stem_shadow
-                    and (narrow_fragment or len(token) <= 3)
-                    and center_delta <= max(420.0, min_height * 16.0)
-                    and (contained_x >= 0.1 or overlap_x >= 0.02 or center_dx <= max(380.0, min_width * 3.5))
-                    and confidence <= other_conf + 12.0
-                )
-            overlap_shadow = same_band and narrow_fragment and overlap_y >= 0.22 and (contained_x >= 0.55 or overlap_x >= 0.42)
-            particle_prefix_clone = False
-            if is_particle_candidate and len(token) <= 4:
-                stem_in_other = particle_stem in other_token or other_token.startswith(particle_stem)
-                longer_other = len(other_token) >= len(particle_stem) + 3
-                same_cluster = center_delta <= max(560.0, min_height * 22.0)
-                particle_prefix_clone = stem_in_other and longer_other and same_cluster
-            symbol_shadow = (
-                has_symbol_noise
-                and len(token) <= 3
-                and narrow_fragment
-                and (token in other_token or are_near_duplicate_tokens(token, other_token[:len(token) + 1]))
-                and (contained_x >= 0.34 or overlap_x >= 0.08 or center_dx <= max(170.0, min_width * 1.5))
-                and center_delta <= max(260.0, min_height * 10.0)
-            )
-            if particle_prefix_clone:
+            narrow_fragment = bbox_width(bbox) <= bbox_width(other_bbox) * 0.70
+
+            # Only suppress if boxes physically overlap on the exact same row/band
+            is_same_row = center_delta <= min_height * 0.85 and overlap_y >= 0.45
+            is_horizontal_overlap = overlap_x >= 0.50 or contained_x >= 0.65
+
+            if is_same_row and is_horizontal_overlap and narrow_fragment and confidence <= 98.0:
                 should_drop = True
                 drop_meta = {
-                    "reason": "particle_prefix_clone",
-                    "source": source,
-                    "text": text,
-                    "shadowWith": other_text,
-                }
-                break
-            if (overlap_shadow or prefix_shadow or particle_shadow or symbol_shadow) and confidence <= 98.0:
-                should_drop = True
-                if particle_shadow:
-                    reason = "particle_shadow"
-                elif symbol_shadow:
-                    reason = "symbol_shadow"
-                elif prefix_shadow:
-                    reason = "prefix_shadow"
-                else:
-                    reason = "overlap_shadow"
-                drop_meta = {
-                    "reason": reason,
+                    "reason": "overlap_shadow",
                     "source": source,
                     "text": text,
                     "shadowWith": other_text,
@@ -1061,6 +1018,7 @@ def drop_final_particle_shadow_lines(
             filtered.append(line)
             continue
 
+        bbox = line.get("bbox") or {}
         line_conf = float(line.get("confidence", 0.0) or 0.0)
         shadow_other: Dict[str, Any] | None = None
         for other in lines:
@@ -1077,10 +1035,19 @@ def drop_final_particle_shadow_lines(
             )
             if not stem_match:
                 continue
-            other_conf = float(other.get("confidence", 0.0) or 0.0)
-            if line_conf <= other_conf + 40.0:
-                shadow_other = other
-                break
+
+            other_bbox = other.get("bbox") or {}
+            overlap_y = vertical_overlap_ratio(bbox, other_bbox)
+            overlap_x = horizontal_overlap_ratio(bbox, other_bbox)
+            center_delta = abs(bbox_center_y(bbox) - bbox_center_y(other_bbox))
+            min_height = max(8.0, min(bbox_height(bbox), bbox_height(other_bbox)))
+
+            # Must physically collide on the exact same row
+            if center_delta <= min_height * 0.85 and overlap_y >= 0.45 and overlap_x >= 0.50:
+                other_conf = float(other.get("confidence", 0.0) or 0.0)
+                if line_conf <= other_conf + 15.0:
+                    shadow_other = other
+                    break
 
         if shadow_other is None:
             filtered.append(line)
@@ -1182,6 +1149,12 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "ILISTOCON",
     "PRINCESS",
     "DIE",
+    "BITCH",
+    "HEY",
+    "BITCHHEY",
+    "SHOVE",
+    "SHUT",
+    "HERUP",
     "PIG",
     "THEPIG",
     "YOUARE",
@@ -1420,7 +1393,85 @@ PADDLE_DIALOGUE_FRAGMENT_KEEP_KEYS = {
     "MEEEE",
     "5O",
     "S0",
-    "6O"
+    "6O",
+    "MONEY",
+    "KINGDOM",
+    "WEVE",
+    "HEIR",
+    "ARETHE",
+    "BEST",
+    "ABLETO",
+    "ENJOY",
+    "THATSSO",
+    "AGIRLS",
+    "WAR",
+    "THENTRY",
+    "ANDHOLD",
+    "BACKYOUR",
+    "ORGASM",
+    "YOUPIG",
+    "PIG",
+    "IM",
+    "TRAINING",
+    "YOUAND",
+    "DEALING",
+    "WITHTHE",
+    "BRATAT",
+    "THESAME",
+    "TIMEBE",
+    "GRATEFUL",
+    "THEREONE",
+    "MORE",
+    "ONEMORE",
+    "TIME",
+    "GOHHH",
+    "YYOU",
+    "BASTARDS",
+    "DOYOU",
+    "DOYOUTHINK",
+    "THINK",
+    "YOUCAN",
+    "GETAWAY",
+    "AWAY",
+    "WITH",
+    "AWAYWITH",
+    "DOINGTHIS",
+    "TOAPRINCESS",
+    "APRINCESS",
+    "PRINCESS",
+    "PHEW",
+    "ICAME",
+    "ALOT",
+    "VIRGIN",
+    "HOLES",
+    "VIRGINHOLES",
+    "REALLY",
+    "ARETHEBEST",
+    "YOURPUSSY",
+    "STARTED",
+    "WINDING",
+    "WINDINGAFTER",
+    "YOUGOTA",
+    "COCK",
+    "COCKSHOVED",
+    "SHOVED",
+    "INSIDEYOUR",
+    "INSIDE",
+    "ASSHOLE",
+    "THISIS",
+    "THISISGONNA",
+    "GONNA",
+    "MAKEME",
+    "CUM",
+    "CUMRIGHT",
+    "RIGHTAWAY",
+    "RIGHT",
+    "HOLD",
+    "BACK",
+    "TRY",
+    "THEN",
+    "GIRL",
+    "GIRLS"
 }
 
 
@@ -1620,6 +1671,8 @@ def is_probable_ascii_ghost(text: str) -> bool:
         return False
     alpha_num = normalize_alpha_token(raw)
     if re.fullmatch(r"[\W_]+", raw):
+        if re.fullmatch(r"[!?….]+", raw):
+            return False
         return True
 
     # Check if this looks like a valid citation/bracketed reference (e.g., "[1]", "(2)]", "[usually", "[a]")
@@ -1813,6 +1866,9 @@ def is_probable_panel_watermark_line(
     tiny_label = line_h <= height * 0.03 and line_w <= width * 0.58
 
     if not cornerish or not tiny_label:
+        return False
+
+    if is_known_paddle_dialogue_fragment(text):
         return False
 
     tokens = [normalize_latin_token_for_lexicon(part) for part in re.split(r"\s+", text)]
@@ -2641,9 +2697,9 @@ def prune_paddle_panel_contextual_noise_lines(
 
             trailing_hyphen_fragment = text.endswith("-") and compact_length <= 14 and len(re.sub(r"[^A-Za-z]", "", text)) <= 1
             has_vowel = bool(re.search(r"[aeiouAEIOUyY]", text))
-            # Malformed mixed case is typically consonant-only noise (e.g. "gT", "xY") or tiny isolated casing junk.
-            # Real words with casing typos (e.g. "WOuLD", "tOO") should not be dropped.
-            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text)) and (not has_vowel or (token_count <= 1 and compact_length <= 3))
+            # Malformed mixed case is strictly consonant-only noise (e.g. "gT", "xY").
+            # Real words with casing idiosyncrasies (e.g. "yOU", "WINDiNG", "HEiR", "WOuLD", "tOO") must not be dropped.
+            malformed_mixed_case = bool(re.search(r"[a-z][A-Z]", text)) and not has_vowel
             oversized_weak_singleton = (
                 token_count <= 1
                 and compact_length <= 3
@@ -2940,14 +2996,6 @@ def cleanup_korean_panel_result(result: Dict[str, Any], width: int, height: int,
         if near_bottom and (not has_hangul and len(alpha_num) <= 12):
             continue
         if near_bottom and any(char.isdigit() for char in text) and not has_hangul:
-            continue
-        if near_bottom and line_height <= height * 0.02 and len(text) >= 8:
-            continue
-        if near_bottom and has_hangul and line_width <= width * 0.48 and line_height <= height * 0.022 and len(text) >= 8:
-            continue
-        if near_bottom and has_hangul and any(char.isdigit() for char in text) and len(text) >= 10:
-            continue
-        if lower_band and right_side and line_height <= height * 0.024 and line_width <= width * 0.42 and len(text) >= 8:
             continue
 
         filtered_candidates.append(line)
@@ -3688,6 +3736,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
 
     if pipeline == "panel":
         if profile_key == "cpu_panel_accurate":
+            is_dml_active = bool(GLOBAL_USE_DML)
             if quality_profile == "balanced":
                 if shortest <= 420:
                     det_limit = 2000
@@ -3695,7 +3744,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     det_limit = 2400
                 else:
                     det_limit = 3200
-                rec_batch = 10
+                rec_batch = 12 if is_dml_active else 10
                 det_thresh = 0.15
                 det_box_thresh = 0.40
                 det_unclip_ratio = 1.80
@@ -3707,7 +3756,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     det_limit = 3100
                 else:
                     det_limit = 3600
-                rec_batch = 8
+                rec_batch = 16 if is_dml_active else 8
                 det_thresh = 0.1
                 det_box_thresh = 0.3
                 det_unclip_ratio = 1.96
@@ -3746,22 +3795,21 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     rec_batch = 7
             if lang == "korean" and profile_key != "cpu_panel_accurate":
                 if quality_profile == "fast":
-                    det_thresh = 0.24
-                    det_box_thresh = 0.54
-                    det_unclip_ratio = 1.70
-                    rec_score_thresh = 0.35
-                elif quality_profile == "balanced":
                     det_thresh = 0.20
-                    det_box_thresh = 0.48
-                    det_unclip_ratio = 1.80
-                    rec_score_thresh = 0.32
-                else:
-                    # Wider unclip_ratio to merge adjacent Hangul syllable boxes into
-                    # phrase-level regions, reducing fragmentation in manhwa/webtoon text.
-                    det_thresh = 0.18
+                    det_box_thresh = 0.50
+                    det_unclip_ratio = 1.85
+                    rec_score_thresh = 0.30
+                elif quality_profile == "balanced":
+                    det_thresh = 0.16
                     det_box_thresh = 0.42
                     det_unclip_ratio = 1.95
-                    rec_score_thresh = 0.28
+                    rec_score_thresh = 0.25
+                else:
+                    # Best mode: Optimal unclip_ratio and sensitivity for full Hangul syllable recall
+                    det_thresh = 0.14
+                    det_box_thresh = 0.36
+                    det_unclip_ratio = 2.05
+                    rec_score_thresh = 0.20
         else:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
                 det_limit = 2560 if shortest <= 900 else 2800
@@ -3803,9 +3851,6 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
         else:
             det_limit = min(3600, int(det_limit * 1.08))
             rec_batch = 8
-
-    if lang == "korean":
-        det_unclip_ratio = 1.2
 
     predict_kwargs: Dict[str, Any] = {
         "text_det_limit_type": "max",
@@ -4274,7 +4319,7 @@ def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple
             enhanced_img = enhancer.enhance(1.3)
             arr = np.array(enhanced_img)[:, :, ::-1]
 
-            print(f"[ocrBridge] Resized and sharpened image in-memory {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})")
+            print(f"[ocrBridge] Resized and sharpened image in-memory {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})", file=sys.stderr)
             return arr, scale_x, scale_y
     except Exception as e:
         print(f"[WARN] Failed to resize large image: {e}", file=sys.stderr)
@@ -4314,7 +4359,7 @@ def chunk_tall_image_for_paddle(
                 break
             y += stride
 
-    print(f"[ocrBridge] Split tall image {w}x{h} into {len(chunks)} chunks (max_chunk_height={max_chunk_height}, overlap={overlap_px})")
+    print(f"[ocrBridge] Split tall image {w}x{h} into {len(chunks)} chunks (max_chunk_height={max_chunk_height}, overlap={overlap_px})", file=sys.stderr)
     return chunks
 
 
@@ -4595,7 +4640,7 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
 
     if use_chunked_path:
         # ── Chunked tall-image path ──────────────────────────────────────────
-        print(f"[ocrBridge] Tall image detected ({_iw}x{_ih}, ratio={aspect_ratio:.1f}): using chunked OCR path")
+        print(f"[ocrBridge] Tall image detected ({_iw}x{_ih}, ratio={aspect_ratio:.1f}): using chunked OCR path", file=sys.stderr)
         chunks = chunk_tall_image_for_paddle(args.image, max_chunk_height=CHUNK_HEIGHT, overlap_px=CHUNK_OVERLAP)
         chunk_results: List[Tuple[Dict[str, Any], int]] = []
         total_chunks = len(chunks)
@@ -5384,14 +5429,14 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
         id=payload.get("id"),
         action=str(payload.get("action") or "ocr"),
         engine=str(payload.get("engine") or fallback_engine),
-        image=payload.get("image"),
+        image=payload.get("image") or payload.get("imagePath") or payload.get("image_path"),
         language=str(payload.get("language") or "eng"),
-        width=int(payload.get("width") or 0),
-        height=int(payload.get("height") or 0),
+        width=int(payload.get("width") or payload.get("imageWidth") or 0),
+        height=int(payload.get("height") or payload.get("imageHeight") or 0),
         dpi=int(payload.get("dpi") or 300),
         page_seg_mode=int(payload.get("pageSegMode") or payload.get("page_segm_mode") or 0),
         pipeline_profile=str(payload.get("pipelineProfile") or payload.get("pipeline_profile") or "panel"),
-        quality_profile=str(payload.get("qualityProfile") or payload.get("quality_profile") or "best"),
+        quality_profile=str(payload.get("qualityProfile") or payload.get("quality_profile") or payload.get("ocrQualityProfile") or "best"),
         # maxSideLen (camelCase from TS) or max_side_len (snake_case) — 0 means use profile default
         max_side_len=int(payload.get("maxSideLen") or payload.get("max_side_len") or 0),
         # maxPixels (camelCase from TS) or max_pixels (snake_case)
@@ -5443,6 +5488,8 @@ def prewarm_engine(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
+    if args.action == "ping":
+        return {"ok": True, "pong": True, "engine": args.engine}
     if args.action == "status":
         if args.engine == "paddleocr":
             return status_paddleocr()
@@ -5485,6 +5532,7 @@ def cleanup_memory() -> None:
 
 
 def serve_stdio(default_engine: str) -> None:
+    request_count = 0
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
@@ -5507,16 +5555,18 @@ def serve_stdio(default_engine: str) -> None:
         sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
         sys.stdout.flush()
 
-        try:
-            cleanup_memory()
-        except Exception:
-            pass
+        request_count += 1
+        if request_count % 5 == 0:
+            try:
+                cleanup_memory()
+            except Exception:
+                pass
 
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup"])
+    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup", "ping"])
     parser.add_argument("--engine", required=True, choices=["paddleocr", "easyocr"])
     parser.add_argument("--image")
     parser.add_argument("--language", default="eng")

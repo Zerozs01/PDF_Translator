@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useProjectStore } from '../../stores/useProjectStore';
 import {
   OVERLAY_FONT_OPTIONS,
@@ -17,51 +17,24 @@ import {
   Plus,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
+  XCircle,
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
-const OCR_TEXT_LAYER_OPEN_STORAGE_KEY = 'pdf_translator.ocr_text_layer_open';
-const OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY = 'pdf_translator.ocr_languages_section_open';
+import { useUIStore } from '../../stores/useUIStore';
 
-const readPersistedPanelOpen = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  try {
-    const raw = String(window.localStorage.getItem(OCR_TEXT_LAYER_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-    return false;
-  } catch {
-    return false;
-  }
-};
+const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = 'pdf_translator_right_sidebar_width';
 
-const persistPanelOpen = (open: boolean): void => {
-  if (typeof window === 'undefined') return;
+const readPersistedWidth = (fallback: number): number => {
+  if (typeof window === 'undefined') return fallback;
   try {
-    window.localStorage.setItem(OCR_TEXT_LAYER_OPEN_STORAGE_KEY, open ? '1' : '0');
+    const saved = window.localStorage.getItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY);
+    if (!saved) return fallback;
+    const parsed = parseInt(saved, 10);
+    return Number.isFinite(parsed) ? Math.min(600, Math.max(260, parsed)) : fallback;
   } catch {
-    // Ignore local storage failures.
-  }
-};
-
-const readPersistedLanguagesSectionOpen = (): boolean => {
-  if (typeof window === 'undefined') return true;
-  try {
-    const raw = String(window.localStorage.getItem(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-    return true;
-  } catch {
-    return true;
-  }
-};
-
-const persistLanguagesSectionOpen = (open: boolean): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(OCR_LANGUAGES_SECTION_OPEN_STORAGE_KEY, open ? '1' : '0');
-  } catch {
-    // Ignore local storage failures.
+    return fallback;
   }
 };
 
@@ -74,10 +47,13 @@ const LANGUAGES_CONFIG = [
 ];
 
 interface RightSidebarProps {
+  isOpen?: boolean;
+  onToggle?: () => void;
   isAiProcessing?: boolean;
   isOfflineProcessing?: boolean;
   onAiTranslate?: () => void;
   onOfflineTranslate?: () => void;
+  onCancelTranslation?: () => void;
   onAiTranslateAllPages?: () => void;
   onOfflineTranslateAllPages?: () => void;
   translationStatus?: { kind: 'info' | 'success' | 'error'; message: string } | null;
@@ -86,10 +62,13 @@ interface RightSidebarProps {
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({ 
+  isOpen = true,
+  onToggle,
   isAiProcessing = false, 
   isOfflineProcessing = false,
   onAiTranslate,
   onOfflineTranslate,
+  onCancelTranslation,
   onAiTranslateAllPages,
   onOfflineTranslateAllPages,
   translationStatus = null,
@@ -113,8 +92,13 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     setShowDebugOverlay,
   } = useOCRTextLayerStore();
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(() => readPersistedPanelOpen());
-  const [isLanguagesSectionOpen, setIsLanguagesSectionOpen] = useState<boolean>(() => readPersistedLanguagesSectionOpen());
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => readPersistedWidth(320));
+  const [isResizing, setIsResizing] = useState(false);
+
+  const isSettingsOpen = useUIStore((state) => state.isOcrTextLayerSectionOpen);
+  const toggleSettingsOpen = useUIStore((state) => state.toggleOcrTextLayerSection);
+  const isLanguagesSectionOpen = useUIStore((state) => state.isOcrLanguagesSectionOpen);
+  const toggleLanguagesSectionOpen = useUIStore((state) => state.toggleOcrLanguagesSection);
   const [isTranslateInfoOpen, setIsTranslateInfoOpen] = useState(false);
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
   const isTranslateBusy = isAiProcessing || isOfflineProcessing;
@@ -128,13 +112,37 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     setOverlayFontSizeScale(next);
   };
 
-  useEffect(() => {
-    persistPanelOpen(isSettingsOpen);
-  }, [isSettingsOpen]);
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
 
   useEffect(() => {
-    persistLanguagesSectionOpen(isLanguagesSectionOpen);
-  }, [isLanguagesSectionOpen]);
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Calculate width from the right edge of the window to cursor
+      const newWidth = window.innerWidth - e.clientX;
+      if (newWidth >= 260 && newWidth <= 600) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        window.localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, sidebarWidth.toString());
+      } catch {}
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, sidebarWidth]);
+
 
   const translationStatusClass = translationStatus?.kind === 'success'
     ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-100'
@@ -146,17 +154,36 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
     : 'border-white/12 bg-slate-900/60 text-slate-300';
 
   return (
-    <aside className="w-80 bg-slate-950/60 border-l border-white/10 backdrop-blur-xl flex flex-col h-full shrink-0">
-      <div className="border-b border-white/10 bg-slate-950/55">
-        <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(122,28,210,0.34)_0%,rgba(219,39,119,0.24)_52%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
-          <div className="min-w-0 flex-1">
-            <label className="flex items-center gap-2 text-xs font-semibold text-white">
-              <Languages size={12} />
-              OCR Languages
-            </label>
-          </div>
+    <aside 
+      style={{
+        width: isOpen ? `${sidebarWidth}px` : '0px',
+        transition: isResizing ? 'none' : 'width 0.2s ease-in-out',
+      }}
+      className="bg-slate-950/60 border-l border-white/10 backdrop-blur-xl flex flex-col h-full shrink-0 relative overflow-visible z-20"
+    >
+      {/* Draggable Resize Handle on Left Edge */}
+      {isOpen && (
+        <div
+          onMouseDown={startResizing}
+          className="absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize hover:bg-sky-500/50 active:bg-sky-500/80 transition-colors z-30 group"
+          title="Drag to resize sidebar"
+        >
+          <div className="w-[1px] h-full mx-auto bg-transparent group-hover:bg-sky-400 group-active:bg-sky-400" />
+        </div>
+      )}
 
-          <div className="min-w-0 max-w-[56%] truncate text-right text-[11px] text-slate-200/85">
+      {/* Inner Content Area */}
+      <div className={`flex-1 min-h-0 overflow-hidden flex flex-col ${isOpen ? 'opacity-100' : 'opacity-0'} transition-opacity duration-150`}>
+        <div className="border-b border-white/10 bg-slate-950/55">
+          <div className="flex items-center justify-between gap-3 border-y border-black/55 bg-[linear-gradient(124deg,rgba(122,28,210,0.34)_0%,rgba(219,39,119,0.24)_52%,rgba(17,24,39,0.92)_100%)] px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <label className="flex items-center gap-2 text-xs font-semibold text-white">
+                <Languages size={12} />
+                OCR Languages
+              </label>
+            </div>
+
+            <div className="min-w-0 max-w-[56%] truncate text-right text-[11px] text-slate-200/85">
             {options.language.split('+').filter(Boolean).map((code) => {
               const found = SUPPORTED_LANGUAGES.find((language) => language.code === code);
               return found ? found.name : code;
@@ -165,7 +192,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
 
           <button
             type="button"
-            onClick={() => setIsLanguagesSectionOpen((current) => !current)}
+            onClick={toggleLanguagesSectionOpen}
             className="flex h-5 w-6 items-center justify-center rounded-md border border-fuchsia-200/45 bg-slate-950/60 text-fuchsia-100 transition-colors hover:border-fuchsia-100/60"
             title={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
             aria-label={isLanguagesSectionOpen ? 'Collapse OCR languages' : 'Expand OCR languages'}
@@ -304,7 +331,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
 
           {/* OCR Text Layer Toggle */}
           <button 
-            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            onClick={toggleSettingsOpen}
             type="button"
             className={`p-1.5 rounded-lg transition-colors ${
               isSettingsOpen
@@ -370,33 +397,49 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
             </div>
 
             <div className="grid grid-cols-2 gap-1.5">
-              <button
-                onClick={onOfflineTranslate}
-                disabled={isTranslateBusy}
-                className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.48)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
-                title="Use local Argos model on current page"
-              >
-                {isOfflineProcessing ? (
-                  <RefreshCw className="animate-spin" size={11} />
-                ) : (
+              {isOfflineProcessing ? (
+                <button
+                  type="button"
+                  onClick={onCancelTranslation}
+                  className="bg-rose-500/25 border border-rose-500/50 hover:bg-rose-500/40 text-rose-200 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse cursor-pointer"
+                  title="ยกเลิกการแปลหน้าปัจจุบัน (Cancel)"
+                >
+                  <XCircle size={11} className="text-rose-400" />
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  onClick={onOfflineTranslate}
+                  disabled={isTranslateBusy}
+                  className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.48)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
+                  title="Use local Argos model on current page"
+                >
                   <Languages size={11} />
-                )}
-                Offline
-              </button>
+                  Offline
+                </button>
+              )}
 
-              <button
-                onClick={onAiTranslate}
-                disabled={isTranslateBusy}
-                className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.58)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all"
-                title="Use Gemini cloud model on current page"
-              >
-                {isAiProcessing ? (
-                  <RefreshCw className="animate-spin" size={11} />
-                ) : (
+              {isAiProcessing ? (
+                <button
+                  type="button"
+                  onClick={onCancelTranslation}
+                  className="bg-rose-500/25 border border-rose-500/50 hover:bg-rose-500/40 text-rose-200 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse cursor-pointer"
+                  title="ยกเลิกการแปลหน้าปัจจุบัน (Cancel)"
+                >
+                  <XCircle size={11} className="text-rose-400" />
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  onClick={onAiTranslate}
+                  disabled={isTranslateBusy}
+                  className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.58)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 py-1.5 rounded-md text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-white"
+                  title="Use Gemini cloud model on current page"
+                >
                   <Sparkles size={11} />
-                )}
-                AI
-              </button>
+                  AI
+                </button>
+              )}
             </div>
 
             <div className="mt-1.5 grid grid-cols-2 gap-1.5">
@@ -434,8 +477,21 @@ export const RightSidebar: React.FC<RightSidebarProps> = React.memo(({
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <OCRTextLayerPanel />
       </div>
-    </aside>
-  );
+    </div>
+
+    {/* Toggle Button */}
+    {onToggle && (
+      <button 
+        onClick={onToggle}
+        className="absolute right-full top-1/2 translate-x-1/2 -translate-y-1/2 bg-slate-950/95 border border-white/20 shadow-xl rounded-full p-1.5 hover:bg-slate-900 hover:text-[#5CC6F2] transition-all z-[70]"
+        aria-label={isOpen ? 'Collapse OCR & Translation panel' : 'Expand OCR & Translation panel'}
+        title={isOpen ? 'Collapse OCR & Translation panel' : 'Expand OCR & Translation panel'}
+      >
+        {isOpen ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+      </button>
+    )}
+  </aside>
+);
 });
 
 RightSidebar.displayName = 'RightSidebar';

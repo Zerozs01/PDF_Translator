@@ -11,7 +11,8 @@ import {
   Info, 
   FileText, 
   Layers,
-  X
+  X,
+  XCircle
 } from 'lucide-react';
 import { OCRTextLayerPanel } from '../OCR/OCRTextLayerPanel';
 
@@ -28,6 +29,7 @@ interface CompactTopToolbarProps {
   isOfflineProcessing?: boolean;
   onAiTranslate?: () => void;
   onOfflineTranslate?: () => void;
+  onCancelTranslation?: () => void;
   onAiTranslateAllPages?: () => void;
   onOfflineTranslateAllPages?: () => void;
   translationStatus?: { kind: 'info' | 'success' | 'error'; message: string } | null;
@@ -40,6 +42,7 @@ export const CompactTopToolbar: React.FC<CompactTopToolbarProps> = React.memo(({
   isOfflineProcessing = false,
   onAiTranslate,
   onOfflineTranslate,
+  onCancelTranslation,
   onAiTranslateAllPages,
   onOfflineTranslateAllPages,
   translationStatus = null,
@@ -297,33 +300,49 @@ export const CompactTopToolbar: React.FC<CompactTopToolbarProps> = React.memo(({
 
         {/* Translate Triggers */}
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={onOfflineTranslate}
-            disabled={isTranslateBusy}
-            className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.35)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 px-2.5 h-7 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
-            title="Use local Argos model on current page"
-          >
-            {isOfflineProcessing ? (
-              <RefreshCw className="animate-spin" size={10} />
-            ) : (
+          {isOfflineProcessing ? (
+            <button
+              type="button"
+              onClick={onCancelTranslation}
+              className="bg-rose-500/25 border border-rose-500/50 hover:bg-rose-500/40 text-rose-200 px-2.5 h-7 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-all shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse cursor-pointer"
+              title="ยกเลิกการแปลหน้าปัจจุบัน (Cancel)"
+            >
+              <XCircle size={11} className="text-rose-400" />
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={onOfflineTranslate}
+              disabled={isTranslateBusy}
+              className="bg-[#8BC3E5] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(139,195,229,0.35)] shadow-[0_2px_4px_rgba(0,0,0,0.15)] disabled:opacity-50 px-2.5 h-7 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-slate-900"
+              title="Use local Argos model on current page"
+            >
               <Languages size={10} />
-            )}
-            Offline
-          </button>
+              Offline
+            </button>
+          )}
 
-          <button
-            onClick={onAiTranslate}
-            disabled={isTranslateBusy}
-            className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.45)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 px-2.5 h-7 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-white"
-            title="Use Gemini cloud model on current page"
-          >
-            {isAiProcessing ? (
-              <RefreshCw className="animate-spin" size={10} />
-            ) : (
+          {isAiProcessing ? (
+            <button
+              type="button"
+              onClick={onCancelTranslation}
+              className="bg-rose-500/25 border border-rose-500/50 hover:bg-rose-500/40 text-rose-200 px-2.5 h-7 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-all shadow-[0_0_8px_rgba(244,63,94,0.3)] animate-pulse cursor-pointer"
+              title="ยกเลิกการแปลหน้าปัจจุบัน (Cancel)"
+            >
+              <XCircle size={11} className="text-rose-400" />
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={onAiTranslate}
+              disabled={isTranslateBusy}
+              className="bg-gradient-to-r from-[#2B9BFF] to-[#2776FF] hover:brightness-105 hover:shadow-[0_3px_12px_rgba(43,155,255,0.45)] shadow-[0_2px_4px_rgba(0,0,0,0.2)] disabled:opacity-50 px-2.5 h-7 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-all text-white"
+              title="Use Gemini cloud model on current page"
+            >
               <Sparkles size={10} />
-            )}
-            AI
-          </button>
+              AI
+            </button>
+          )}
         </div>
       </div>
 

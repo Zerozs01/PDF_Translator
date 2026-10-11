@@ -181,9 +181,9 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       const result = await window.electronAPI.startupLoad?.();
       if (result) {
         set({
-          documents: result.recentDocuments,
-          tags: result.allTags,
-          projects: result.allProjects,
+          documents: Array.isArray(result.recentDocuments) ? result.recentDocuments : (Array.isArray((result as any).documents) ? (result as any).documents : []),
+          tags: Array.isArray(result.allTags) ? result.allTags : (Array.isArray((result as any).tags) ? (result as any).tags : []),
+          projects: Array.isArray(result.allProjects) ? result.allProjects : (Array.isArray((result as any).projects) ? (result as any).projects : []),
           isLoading: false,
           filterType: 'recent',
         });

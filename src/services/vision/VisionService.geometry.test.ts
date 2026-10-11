@@ -546,4 +546,79 @@ describe('VisionService paddle geometry guard', () => {
       expect.objectContaining({ text: 'THAVE', reason: 'contextualDialogueGhostLine' }),
     ]);
   });
+
+  test('dropMinorPaddleGeometryAnomalies preserves critical technical lines while dropping malformed slivers', () => {
+    const service = visionService as unknown as {
+      dropMinorPaddleGeometryAnomalies: (
+        externalResult: OCRPageResult,
+        anomalies: OCRLine[],
+        skipReason: string
+      ) => OCRPageResult;
+    };
+
+    const technicalEquationLine = makeLine('Resultant force magnitude (1)', 100, 100, 600, 140);
+    const sliverAnomalyLine = makeLine('|||', 50, 50, 60, 200);
+    const normalDialogueLine = makeLine('HELLO THERE', 200, 300, 400, 340);
+
+    const inputResult: OCRPageResult = {
+      pageNumber: 1,
+      width: 1000,
+      height: 1500,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 1,
+      lines: [technicalEquationLine, sliverAnomalyLine, normalDialogueLine],
+      words: [],
+      text: 'Resultant force magnitude (1)\n|||\nHELLO THERE',
+      confidence: 90,
+    };
+
+    const anomalies = [technicalEquationLine, sliverAnomalyLine];
+    const result = service.dropMinorPaddleGeometryAnomalies(inputResult, anomalies, 'testAnomalyDrop');
+
+    // Technical line must be preserved
+    expect(result.lines.map((l) => l.text)).toContain('Resultant force magnitude (1)');
+    expect(result.lines.map((l) => l.text)).toContain('HELLO THERE');
+    // Sliver anomaly must be dropped
+    expect(result.lines.map((l) => l.text)).not.toContain('|||');
+    // Drop counts and debug diagnostics must be updated
+    expect(result.debug?.dropCounts?.externalPaddleGeometryAnomalyDrop).toBe(1);
+    expect(result.debug?.droppedWords).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filter: 'externalPaddleFallback',
+          reason: 'malformedPanelGeometry',
+          text: '|||',
+        }),
+      ])
+    );
+  });
+
+  test('dropMinorPaddleGeometryAnomalies returns original result when anomalies array is empty', () => {
+    const service = visionService as unknown as {
+      dropMinorPaddleGeometryAnomalies: (
+        externalResult: OCRPageResult,
+        anomalies: OCRLine[],
+        skipReason: string
+      ) => OCRPageResult;
+    };
+
+    const line = makeLine('NORMAL LINE', 100, 100, 300, 140);
+    const inputResult: OCRPageResult = {
+      pageNumber: 1,
+      width: 1000,
+      height: 1500,
+      dpi: 300,
+      language: 'eng',
+      algorithmVersion: 1,
+      lines: [line],
+      words: [],
+      text: 'NORMAL LINE',
+      confidence: 95,
+    };
+
+    const result = service.dropMinorPaddleGeometryAnomalies(inputResult, [], 'none');
+    expect(result).toBe(inputResult);
+  });
 });
+

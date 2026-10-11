@@ -9,6 +9,7 @@ import type { BBox, OCRLine, OCRPageResult } from '../../types';
 import type { TextLayer, TextLayerGroup, LayerGroupType, LayerGroupingResult } from '../../types/layers';
 import { isKnownShortWordHelper } from '../ocr/ocrSafetyLineDedup';
 import { lookupShortPhraseTh } from '../translation/offlineTranslationService';
+import { clusterConnectedComponents } from '../native/fastSpatialCluster';
 
 // Group color palette (Canva-style)
 const GROUP_COLORS = [
@@ -57,12 +58,18 @@ const getVerticalGap = (a: BBox, b: BBox): number => {
  */
 const mergeBBoxes = (boxes: BBox[]): BBox => {
   if (boxes.length === 0) return { x0: 0, y0: 0, x1: 1, y1: 1 };
-  return {
-    x0: Math.min(...boxes.map(b => b.x0)),
-    y0: Math.min(...boxes.map(b => b.y0)),
-    x1: Math.max(...boxes.map(b => b.x1)),
-    y1: Math.max(...boxes.map(b => b.y1)),
-  };
+  let x0 = boxes[0].x0;
+  let y0 = boxes[0].y0;
+  let x1 = boxes[0].x1;
+  let y1 = boxes[0].y1;
+  for (let i = 1; i < boxes.length; i++) {
+    const b = boxes[i];
+    if (b.x0 < x0) x0 = b.x0;
+    if (b.y0 < y0) y0 = b.y0;
+    if (b.x1 > x1) x1 = b.x1;
+    if (b.y1 > y1) y1 = b.y1;
+  }
+  return { x0, y0, x1, y1 };
 };
 
 const NEW_BALLOON_PATTERNS = [
@@ -214,15 +221,17 @@ const shouldGroupLines = (a: OCRLine, b: OCRLine, allLines?: OCRLine[]): boolean
   // 3. Horizontal overlap >= 30% ของ line ที่แคบกว่า
   // 4. Vertical gap <= 2.2x ความสูงเฉลี่ยของสอง lines (หรือ 3.2x สำหรับภาษาอังกฤษแนวตั้งที่จัดระนาบเดียวกัน)
   const isBothEnglish = isLikelyEnglishDialogue(a.text) && isLikelyEnglishDialogue(b.text);
-  const maxVertGap = isBothEnglish && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
+  const isPunctuationOnly = /^[\s\.\!\?\,\-\_…~]+$/.test(a.text) || /^[\s\.\!\?\,\-\_…~]+$/.test(b.text);
+  const isEnglishDialogueOrPunct = isBothEnglish || ((isLikelyEnglishDialogue(a.text) || isLikelyEnglishDialogue(b.text)) && isPunctuationOnly);
+  const maxVertGap = isEnglishDialogueOrPunct && horizOverlap >= 0.50 ? 3.2 * avgHeight : 2.2 * avgHeight;
 
   // ปรับปรุง: สำหรับบทสนทนาภาษาอังกฤษในบอลลูนแนวตั้งที่มีการจัดกึ่งกลาง (Centered-aligned speech balloon)
-  // หากเป็นบรรทัดที่เรียงซ้อนกันในแนวดิ่ง (isStacked) และระยะห่างแนวดิ่งชิดกัน (vertGap <= 1.8 * avgHeight) ให้ผ่อนปรน horizOverlap ลงมาเป็น 0.20
+  // หากเป็นบรรทัดที่เรียงซ้อนกันในแนวดิ่ง (isStacked) และระยะห่างแนวดิ่งชิดกัน (vertGap <= 2.0 * avgHeight) ให้ผ่อนปรน horizOverlap ลงมาเป็น 0.20
   // เพื่อป้องกันไม่ให้คำสั้นสลับคำยาว (เช่น "NOISY" กับ "BITCH... HEY!" หรือ "LIKE" กับ "THE PIG YOU ARE") ถูกตัดขาดออกจากกัน
   const isStacked = (bottomLine.bbox.y0 >= topLine.bbox.y0 + avgHeight * 0.4);
   const centerDeltaX = Math.abs((a.bbox.x0 + a.bbox.x1) * 0.5 - (b.bbox.x0 + b.bbox.x1) * 0.5);
   const maxAllowedCenterDeltaX = Math.max(bboxWidth(a.bbox), bboxWidth(b.bbox)) * 0.6;
-  if (isBothEnglish && isStacked && vertGap <= 1.8 * avgHeight && horizOverlap >= 0.20 && centerDeltaX <= maxAllowedCenterDeltaX) {
+  if (isEnglishDialogueOrPunct && isStacked && vertGap <= 2.0 * avgHeight && horizOverlap >= 0.20 && centerDeltaX <= maxAllowedCenterDeltaX) {
     return true;
   }
 
@@ -328,6 +337,37 @@ export const splitAggressiveMergedLines = (
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     let line = lines[lineIndex];
+
+    // 0. If line contains multi-line breaks (\n), split each line into its own independent OCRLine
+    if (line.text && line.text.includes('\n')) {
+      const subLines = line.text.split('\n').map(s => s.trim()).filter(Boolean);
+      if (subLines.length > 1) {
+        const totalSubLines = subLines.length;
+        const totalHeight = bboxHeight(line.bbox);
+        const subLineHeight = totalHeight / totalSubLines;
+
+        subLines.forEach((subText, subIdx) => {
+          const matchingWords = line.words?.filter(w => subText.includes(w.text.trim())) || [];
+          const subBBox = matchingWords.length > 0
+            ? mergeBBoxes(matchingWords.map(w => w.bbox))
+            : {
+                x0: line.bbox.x0,
+                y0: line.bbox.y0 + subIdx * subLineHeight,
+                x1: line.bbox.x1,
+                y1: line.bbox.y0 + (subIdx + 1) * subLineHeight,
+              };
+
+          result.push({
+            ...line,
+            text: subText,
+            bbox: subBBox,
+            words: matchingWords,
+          });
+        });
+        continue;
+      }
+    }
+
     if (!line.words || line.words.length <= 1) {
       const textWords = (line.text || '').trim().split(/\s+/).filter(Boolean);
       if (textWords.length > 1 && line.bbox && (line.bbox.x1 - line.bbox.x0) > 0) {
@@ -422,39 +462,7 @@ export const buildLayerGroupsFromOCR = (
   ocrResult: OCRPageResult,
   translatedByIndex?: Map<number, string>
 ): LayerGroupingResult => {
-  let rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
-
-  // Patch for Page 5 PaddleOCR Coordinate Shift Bug
-  if (ocrResult.pageNumber === 5) {
-    const aroundLine = rawLines.find(l => l.text.includes("AROUND ABOUT"));
-    if (aroundLine) {
-      const x0 = aroundLine.bbox.x0;
-      const x1 = aroundLine.bbox.x1;
-      const aroundY0 = aroundLine.bbox.y0;
-
-      rawLines = rawLines.map(line => {
-        if (line.text.includes("RUMORS FLOATING")) {
-          return {
-            ...line,
-            bbox: { x0, y0: aroundY0 - 55, x1, y1: aroundY0 - 15 }
-          };
-        }
-        if (line.text.includes("KINDS OF AWFUL")) {
-          return {
-            ...line,
-            bbox: { x0, y0: aroundY0 - 110, x1, y1: aroundY0 - 70 }
-          };
-        }
-        if (line.text.includes("CONSIDERING THE")) {
-          return {
-            ...line,
-            bbox: { x0, y0: aroundY0 - 165, x1, y1: aroundY0 - 125 }
-          };
-        }
-        return line;
-      });
-    }
-  }
+  const rawLines = Array.isArray(ocrResult.lines) ? ocrResult.lines : [];
   const pageWidth = Math.max(1, ocrResult.width);
   const pageHeight = Math.max(1, ocrResult.height);
 
@@ -522,41 +530,11 @@ export const buildLayerGroupsFromOCR = (
   groupIdCounter = 0;
 
   const N = lines.length;
-  const adj: number[][] = Array.from({ length: N }, () => []);
 
-  // 1. สร้าง Adjacency Graph ระหว่าง Lines ทั้งหมดที่เข้าเกณฑ์ 2D Spatial
-  for (let i = 0; i < N; i++) {
-    for (let j = i + 1; j < N; j++) {
-      if (shouldGroupLines(lines[i], lines[j], lines)) {
-        adj[i].push(j);
-        adj[j].push(i);
-      }
-    }
-  }
+  // 1 & 2. ค้นหา Connected Components ด้วย Zero-GC Union-Find (Disjoint-Set)
+  const components = clusterConnectedComponents(N, (i, j) => shouldGroupLines(lines[i], lines[j], lines));
 
-  // 2. ค้นหา Connected Components ด้วย BFS เพื่อหากลุ่มอิสระ
-  const visited = new Set<number>();
-  const components: number[][] = [];
-
-  for (let i = 0; i < N; i++) {
-    if (visited.has(i)) continue;
-
-    const component: number[] = [];
-    const queue: number[] = [i];
-    visited.add(i);
-
-    while (queue.length > 0) {
-      const u = queue.shift()!;
-      component.push(u);
-
-      for (const v of adj[u]) {
-        if (!visited.has(v)) {
-          visited.add(v);
-          queue.push(v);
-        }
-      }
-    }
-
+  for (const component of components) {
     // จัดเรียงลำดับบรรทัดในกลุ่มเดียวกันจากบนลงล่าง Y -> X เพื่อความสวยงามของ Layer list
     component.sort((a, b) => {
       const lineA = lines[a];
@@ -572,8 +550,6 @@ export const buildLayerGroupsFromOCR = (
       }
       return lineA.bbox.y0 - lineB.bbox.y0;
     });
-
-    components.push(component);
   }
 
   // จัดเรียงกลุ่มทั้งหมดตามลำดับตำแหน่งการอ่านทั่วไป (บนซ้าย ไป ล่างขวา)

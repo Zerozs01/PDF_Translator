@@ -79,12 +79,21 @@ interface LayerStoreState {
 // ────────────────────────────────────────────────────────────────
 // Helper: คำนวณ Union BBox จาก BBox array
 // ────────────────────────────────────────────────────────────────
-const unionBBox = (bboxes: BBox[]): BBox => ({
-  x0: Math.min(...bboxes.map(b => b.x0)),
-  y0: Math.min(...bboxes.map(b => b.y0)),
-  x1: Math.max(...bboxes.map(b => b.x1)),
-  y1: Math.max(...bboxes.map(b => b.y1)),
-});
+const unionBBox = (bboxes: BBox[]): BBox => {
+  if (bboxes.length === 0) return { x0: 0, y0: 0, x1: 0, y1: 0 };
+  let x0 = bboxes[0].x0;
+  let y0 = bboxes[0].y0;
+  let x1 = bboxes[0].x1;
+  let y1 = bboxes[0].y1;
+  for (let i = 1; i < bboxes.length; i++) {
+    const b = bboxes[i];
+    if (b.x0 < x0) x0 = b.x0;
+    if (b.y0 < y0) y0 = b.y0;
+    if (b.x1 > x1) x1 = b.x1;
+    if (b.y1 > y1) y1 = b.y1;
+  }
+  return { x0, y0, x1, y1 };
+};
 
 const MAX_UNDO_DEPTH = 20;
 
@@ -180,16 +189,38 @@ export const useLayerStore = create<LayerStoreState>((set, get) => ({
   // ── Selection ─────────────────────────────────────────────────
   selectLayer: (layerId, addToSelection = false) => set((state) => {
     if (layerId === null) return { selectedLayerIds: new Set() };
-    if (addToSelection) {
-      const next = new Set(state.selectedLayerIds);
-      if (next.has(layerId)) {
-        next.delete(layerId); // Toggle off
-      } else {
-        next.add(layerId);
+    const nextSelected = addToSelection
+      ? (() => {
+          const next = new Set(state.selectedLayerIds);
+          if (next.has(layerId)) {
+            next.delete(layerId); // Toggle off
+          } else {
+            next.add(layerId);
+          }
+          return next;
+        })()
+      : new Set([layerId]);
+
+    // Atomic group expansion: Auto-expand parent group instantly in the same state tick
+    let nextGroups = state.groupsByPage;
+    if (layerId && nextSelected.has(layerId)) {
+      for (const [pageNum, groups] of state.groupsByPage.entries()) {
+        const targetGroup = groups.find(g => g.collapsed && g.layerIds.includes(layerId));
+        if (targetGroup) {
+          const updated = groups.map(g => g.id === targetGroup.id ? { ...g, collapsed: false } : g);
+          if (nextGroups === state.groupsByPage) {
+            nextGroups = new Map(state.groupsByPage);
+          }
+          nextGroups.set(pageNum, updated);
+          break;
+        }
       }
-      return { selectedLayerIds: next };
     }
-    return { selectedLayerIds: new Set([layerId]) };
+
+    return { 
+      selectedLayerIds: nextSelected,
+      groupsByPage: nextGroups,
+    };
   }),
 
   clearSelection: () => set({ selectedLayerIds: new Set() }),

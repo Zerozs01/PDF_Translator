@@ -29,6 +29,9 @@ DEFAULT_IMAGES = [
     REPO_ROOT / "public/fixtures/ocr/manga/manga1.png",
     REPO_ROOT / "public/fixtures/ocr/manga/manga2.png",
     REPO_ROOT / "public/fixtures/ocr/manga/manga3.png",
+    REPO_ROOT / "public/fixtures/ocr/document_test/document1.png",
+    REPO_ROOT / "public/fixtures/ocr/document_test/document2.png",
+    REPO_ROOT / "public/fixtures/ocr/document_test/document3.png",
 ]
 
 

@@ -20,14 +20,18 @@ import {
   Package,
   RefreshCw,
   Trash2,
+  Copy,
+  Check,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { useOCRTextLayerStore } from '../../stores/useOCRTextLayerStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { buildLayerGroupsFromOCR, mergeLayersAndGroups } from '../../services/layers/LayerGroupingService';
 import { resolveTranslationOverlayContext } from '../OCR/translationOverlayUtils';
-import { isKnownShortWordHelper } from '../../services/ocr/ocrSafetyLineDedup';
+import { filterGhostTextLayers } from '../../services/layers/layerGhostFilter';
 import type { TextLayer, TextLayerGroup, LayerGroupType } from '../../types/layers';
+import type { OCREngine } from '../../types';
 
 const GROUP_TYPE_ICONS: Record<LayerGroupType, React.ReactNode> = {
   balloon: <MessageCircle size={11} />,
@@ -45,6 +49,9 @@ const GROUP_TYPE_LABELS: Record<LayerGroupType, string> = {
   ungrouped: 'Ungrouped',
 };
 
+const EMPTY_LAYERS: TextLayer[] = [];
+const EMPTY_GROUPS: TextLayerGroup[] = [];
+
 const truncateText = (text: string, maxLen: number = 28): string => {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (clean.length <= maxLen) return clean;
@@ -60,26 +67,38 @@ const LayerRow: React.FC<{
   isHovered: boolean;
   groupColor: string;
   onActivateLayerPanel?: () => void;
-}> = ({ layer, index, pageNum, isSelected, isHovered, groupColor, onActivateLayerPanel }) => {
-  const {
-    toggleLayerVisibility,
-    selectLayer,
-    setHoveredLayer,
-    deleteLayer,
-    activeDragItem,
-    setActiveDragItem,
-    moveLayerToGroup,
-  } = useLayerStore();
+}> = React.memo(({ layer, index, pageNum, isSelected, isHovered, groupColor, onActivateLayerPanel }) => {
+  const toggleLayerVisibility = useLayerStore((s) => s.toggleLayerVisibility);
+  const selectLayer = useLayerStore((s) => s.selectLayer);
+  const setHoveredLayer = useLayerStore((s) => s.setHoveredLayer);
+  const deleteLayer = useLayerStore((s) => s.deleteLayer);
+  const activeDragItem = useLayerStore((s) => s.activeDragItem);
+  const setActiveDragItem = useLayerStore((s) => s.setActiveDragItem);
+  const moveLayerToGroup = useLayerStore((s) => s.moveLayerToGroup);
+
   const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
   const [isDragOver, setIsDragOver] = React.useState(false);
+  const [isCopied, setIsCopied] = React.useState(false);
 
-  // Auto-scroll into view when selected (Figma-style)
+  const textToCopy = translationPreviewMode === 'original'
+    ? layer.sourceText || layer.text
+    : layer.text;
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!textToCopy) return;
+    void navigator.clipboard.writeText(textToCopy);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 1500);
+  };
+
+  // Instant snap scroll into view when selected (Zero animation delay)
   useEffect(() => {
     if (isSelected) {
       const el = document.getElementById(`layer-row-${layer.id}`);
       if (el) {
         el.scrollIntoView({
-          behavior: 'smooth',
+          behavior: 'auto',
           block: 'nearest',
         });
       }
@@ -158,11 +177,7 @@ const LayerRow: React.FC<{
 
       {/* Text preview */}
       <span className={`flex-1 truncate select-none ${!layer.visible ? 'opacity-40 line-through' : ''}`}>
-        {truncateText(
-          translationPreviewMode === 'original'
-            ? layer.sourceText || layer.text
-            : layer.text
-        )}
+        {truncateText(textToCopy)}
       </span>
 
       {/* BBox info (subtle) */}
@@ -196,9 +211,25 @@ const LayerRow: React.FC<{
       >
         {layer.visible ? <Eye size={10} /> : <EyeOff size={10} />}
       </button>
+
+      {/* Copy button */}
+      <button
+        onClick={handleCopy}
+        className={`p-0.5 rounded transition-colors shrink-0 ${
+          isCopied
+            ? 'text-emerald-400 opacity-100'
+            : 'text-slate-500 hover:text-sky-400 opacity-0 group-hover/row:opacity-100'
+        }`}
+        title={isCopied ? "คัดลอกข้อความแล้ว" : "คัดลอกข้อความ"}
+        aria-label={isCopied ? "คัดลอกข้อความแล้ว" : "คัดลอกข้อความ"}
+      >
+        {isCopied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+      </button>
     </div>
   );
-};
+});
+
+LayerRow.displayName = 'LayerRow';
 
 /** Group header with collapse/expand */
 const GroupHeader: React.FC<{
@@ -207,20 +238,51 @@ const GroupHeader: React.FC<{
   pageNum: number;
   layerCount: number;
   isHovered: boolean;
-}> = ({ group, index, pageNum, layerCount, isHovered }) => {
-  const {
-    toggleGroupVisibility,
-    toggleGroupCollapsed,
-    toggleGroupLock,
-    setHoveredGroup,
-    deleteGroup,
-    activeDragItem,
-    setActiveDragItem,
-    moveLayerToGroup,
-    reorderGroups,
-  } = useLayerStore();
+}> = React.memo(({ group, index, pageNum, layerCount, isHovered }) => {
+  const toggleGroupVisibility = useLayerStore((s) => s.toggleGroupVisibility);
+  const toggleGroupCollapsed = useLayerStore((s) => s.toggleGroupCollapsed);
+  const toggleGroupLock = useLayerStore((s) => s.toggleGroupLock);
+  const setHoveredGroup = useLayerStore((s) => s.setHoveredGroup);
+  const deleteGroup = useLayerStore((s) => s.deleteGroup);
+  const activeDragItem = useLayerStore((s) => s.activeDragItem);
+  const setActiveDragItem = useLayerStore((s) => s.setActiveDragItem);
+  const moveLayerToGroup = useLayerStore((s) => s.moveLayerToGroup);
+  const reorderGroups = useLayerStore((s) => s.reorderGroups);
 
   const [isDragOver, setIsDragOver] = React.useState<'group' | 'layer' | null>(null);
+  const [isGroupCopied, setIsGroupCopied] = React.useState(false);
+  const translationPreviewMode = useOCRTextLayerStore((state) => state.translationPreviewMode);
+  const pageLayers = useLayerStore((s) => s.layersByPage.get(pageNum) || []);
+
+  const groupLayers = React.useMemo(() => {
+    return pageLayers.filter((l) => l.groupId === group.id);
+  }, [pageLayers, group.id]);
+
+  const groupFormattedText = React.useMemo(() => {
+    const targetLayers = groupLayers && groupLayers.length > 0
+      ? groupLayers
+      : (pageLayers || []).filter((l) => l.groupId === group.id || (group.layerIds && group.layerIds.includes(l.id)));
+
+    const words = targetLayers
+      .map((l) => {
+        const textVal = translationPreviewMode === 'original'
+          ? (l.sourceText || l.text || '')
+          : (l.text || l.sourceText || '');
+        return String(textVal || '').trim();
+      })
+      .filter(Boolean);
+
+    // If words is empty, fallback to non-empty text string or empty array
+    return JSON.stringify(words);
+  }, [groupLayers, pageLayers, group.id, group.layerIds, translationPreviewMode]);
+
+  const handleCopyGroup = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!groupFormattedText) return;
+    void navigator.clipboard.writeText(groupFormattedText);
+    setIsGroupCopied(true);
+    setTimeout(() => setIsGroupCopied(false), 1500);
+  };
 
   const isBeingDragged = activeDragItem?.type === 'group' && activeDragItem.id === group.id;
 
@@ -277,7 +339,7 @@ const GroupHeader: React.FC<{
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-all duration-75 border-t-2 relative ${
+      className={`group/header flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-all duration-75 border-t-2 relative ${
         isBeingDragged ? 'opacity-30 pointer-events-none' : ''
       } ${
         isDragOver === 'group' ? 'border-t-[#2B9BFF]' : 'border-t-transparent'
@@ -339,7 +401,7 @@ const GroupHeader: React.FC<{
             deleteGroup(pageNum, group.id);
           }
         }}
-        className="p-0.5 rounded transition-colors shrink-0 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100"
+        className="p-0.5 rounded transition-colors shrink-0 text-slate-500 hover:text-red-400 opacity-0 group-hover/header:opacity-100"
         title="Delete group"
       >
         <Trash2 size={10} />
@@ -351,7 +413,7 @@ const GroupHeader: React.FC<{
         className={`p-0.5 rounded transition-colors shrink-0 ${
           group.locked
             ? 'text-amber-400/80 hover:text-amber-300'
-            : 'text-slate-600 hover:text-slate-300 opacity-0 group-hover:opacity-100'
+            : 'text-slate-600 hover:text-slate-300 opacity-0 group-hover/header:opacity-100'
         }`}
         title={group.locked ? 'Unlock group' : 'Lock group'}
       >
@@ -370,9 +432,25 @@ const GroupHeader: React.FC<{
       >
         {group.visible ? <Eye size={10} /> : <EyeOff size={10} />}
       </button>
+
+      {/* Copy group button */}
+      <button
+        onClick={handleCopyGroup}
+        className={`p-0.5 rounded transition-colors shrink-0 ${
+          isGroupCopied
+            ? 'text-emerald-400 opacity-100'
+            : 'text-slate-400 hover:text-sky-400 opacity-0 group-hover/header:opacity-100'
+        }`}
+        title={isGroupCopied ? "คัดลอกข้อความทั้งกลุ่มแล้ว" : "คัดลอกข้อความทั้งหมดในกลุ่มนี้"}
+        aria-label={isGroupCopied ? "คัดลอกข้อความทั้งกลุ่มแล้ว" : "คัดลอกข้อความทั้งหมดในกลุ่มนี้"}
+      >
+        {isGroupCopied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+      </button>
     </div>
   );
-};
+});
+
+GroupHeader.displayName = 'GroupHeader';
 
 interface LayerPanelProps {
   onActivateLayerPanel?: () => void;
@@ -380,17 +458,36 @@ interface LayerPanelProps {
 
 /** Main Layer Panel */
 export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) => {
-  const { currentPage, sourceLanguage, targetLanguage, translationMode } = useProjectStore();
+  const { currentPage, sourceLanguage, targetLanguage, translationMode } = useProjectStore(
+    useShallow((s) => ({
+      currentPage: s.currentPage,
+      sourceLanguage: s.sourceLanguage,
+      targetLanguage: s.targetLanguage,
+      translationMode: s.translationMode,
+    }))
+  );
   const {
     allPagesOCR,
     ocrByPageEngine,
-    options,
+    selectedEngine,
+    optionsLanguage,
     translationPreviewMode,
+    setTranslationPreviewMode,
     translationCacheByPage,
     activeTranslationKeyByPage,
-  } = useOCRTextLayerStore();
+  } = useOCRTextLayerStore(
+    useShallow((s) => ({
+      allPagesOCR: s.allPagesOCR,
+      ocrByPageEngine: s.ocrByPageEngine,
+      selectedEngine: (s.options.engine || 'paddleocr'),
+      optionsLanguage: (s.options.language || 'eng'),
+      translationPreviewMode: s.translationPreviewMode,
+      setTranslationPreviewMode: s.setTranslationPreviewMode,
+      translationCacheByPage: s.translationCacheByPage,
+      activeTranslationKeyByPage: s.activeTranslationKeyByPage,
+    }))
+  );
 
-  const selectedEngine = (options.engine || 'paddleocr');
   const resolveEngineScopedPageOCR = (pageNum: number) => {
     const byEngine = ocrByPageEngine.get(pageNum)?.get(selectedEngine);
     if (byEngine) return { ocr: byEngine, effectiveEngine: selectedEngine };
@@ -416,66 +513,25 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     hoveredLayerId,
     hoveredGroupId,
     expandGroup,
-  } = useLayerStore();
+  } = useLayerStore(
+    useShallow((s) => ({
+      getPageLayers: s.getPageLayers,
+      getPageGroups: s.getPageGroups,
+      setPageLayers: s.setPageLayers,
+      selectedLayerIds: s.selectedLayerIds,
+      hoveredLayerId: s.hoveredLayerId,
+      hoveredGroupId: s.hoveredGroupId,
+      expandGroup: s.expandGroup,
+    }))
+  );
 
   const pageNum = currentPage;
-  const rawLayers = getPageLayers(pageNum);
-  const rawGroups = getPageGroups(pageNum);
+  const rawLayers = useLayerStore((s) => s.layersByPage.get(pageNum) || EMPTY_LAYERS);
+  const rawGroups = useLayerStore((s) => s.groupsByPage.get(pageNum) || EMPTY_GROUPS);
 
   // Real-Time Layer Ghost Noise Filter: surgical cleanup of spiky balloon border layers in Left Panel
   const layers = useMemo(() => {
-    return rawLayers.filter((layer) => {
-      if (!layer) return false;
-      // 1. If explicitly edited by user, always keep it (safety first)
-      if (layer.userEdited) return true;
-
-      const text = String(layer.sourceText || layer.text || '').trim();
-      if (!text) return false;
-
-      const compact = text.replace(/\s+/g, '');
-      const asciiCompact = compact.replace(/[^A-Za-z0-9]/g, '');
-      const hasCjkOrThai = /[\u0E00-\u0E7F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(compact);
-
-      // A. Pure symbol/punctuation noise layers generated by spiky balloon edges (e.g. "|||", "///", "\\", "---")
-      const isPureSymbolNoise = !hasCjkOrThai && asciiCompact.length === 0;
-      if (isPureSymbolNoise) {
-        return false;
-      }
-
-      // B. Repetitive vertical lines, slashes, or symbol junk (classic signature of spiky balloon borders, e.g. "lll", "III", "111", "I l I")
-      const isVerticalLineJunk = !hasCjkOrThai && /^[lI1|!/\\_\-]+$/i.test(compact) && !/^[IAO]$/i.test(asciiCompact);
-      if (isVerticalLineJunk) {
-        return false;
-      }
-
-      // C. Single-character junk (English letters or digits that aren't valid single-letter words like I, A, O)
-      const isSingleCharJunk = !hasCjkOrThai
-        && asciiCompact.length === 1
-        && !/^[IAO]$/i.test(asciiCompact);
-      if (isSingleCharJunk) {
-        return false;
-      }
-
-      // D. Tiny noise junk boxes with very small area and short ascii text
-      const bbox = layer.bbox;
-      if (bbox) {
-        const width = Math.max(1, Number(bbox.x1 || 0) - Number(bbox.x0 || 0));
-        const height = Math.max(1, Number(bbox.y1 || 0) - Number(bbox.y0 || 0));
-        const area = width * height;
-
-        const isKnownShortWord = isKnownShortWordHelper(asciiCompact);
-        const isTinyJunkBox = !hasCjkOrThai
-          && asciiCompact.length <= 3
-          && area <= 8000
-          && !isKnownShortWord;
-
-        if (isTinyJunkBox) {
-          return false;
-        }
-      }
-
-      return true;
-    });
+    return filterGhostTextLayers(rawLayers);
   }, [rawLayers]);
 
   // Synchronized groups filter to strip ghost layers and drop empty groups
@@ -492,8 +548,8 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
 
   const translationOverlayContext = useMemo(() => resolveTranslationOverlayContext({
     currentPageOCR,
-    optionsEngine: effectiveOCREngine as any,
-    optionsLanguage: options.language || 'eng',
+    optionsEngine: effectiveOCREngine as OCREngine,
+    optionsLanguage: optionsLanguage,
     translationMode,
     sourceLanguage,
     targetLanguage,
@@ -506,7 +562,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     currentPageOCR,
     currentPageTranslationMap,
     effectiveOCREngine,
-    options.language,
+    optionsLanguage,
     sourceLanguage,
     targetLanguage,
     translationMode,
@@ -575,9 +631,16 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
     }
   }, [currentPageOCR, pageNum, setPageLayers, getPageLayers, translationOverlayContext.translatedByIndex, translationPreviewMode]);
 
-  // Note: Auto-building of layers on load is now centrally managed by PDFCanvas.tsx to guarantee
-  // that layers are always initialized even if the Layer Panel sidebar is closed or unmounted.
-  // Manual rebuilds are still supported using handleBuildLayers below.
+  // Auto-sync: When active page changes or OCR data becomes available,
+  // immediately build layers if the current page has OCR lines but no layers in store yet.
+  useEffect(() => {
+    if (currentPageOCR && currentPageOCR.lines && currentPageOCR.lines.length > 0) {
+      const existing = getPageLayers(pageNum);
+      if (!existing || existing.length === 0) {
+        handleBuildLayers(false);
+      }
+    }
+  }, [pageNum, currentPageOCR, getPageLayers, handleBuildLayers]);
 
   const layerMap = useMemo(() => {
     const map = new Map<string, TextLayer>();
@@ -625,13 +688,31 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({ onActivateLayerPanel }) 
             {groups.length}g · {layers.length}l
           </span>
         </div>
-        <button
-          onClick={() => handleBuildLayers(true)}
-          className="p-1 rounded text-slate-600 hover:text-white transition-colors"
-          title="Rebuild layers from OCR"
-        >
-          <RefreshCw size={10} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setTranslationPreviewMode(translationPreviewMode === 'translated' ? 'original' : 'translated')}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all border flex items-center gap-1 ${
+              translationPreviewMode === 'original'
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 shadow-[0_0_8px_rgba(245,158,11,0.2)]'
+                : 'bg-sky-500/20 text-sky-300 border-sky-500/40 hover:bg-sky-500/30'
+            }`}
+            title={translationPreviewMode === 'original'
+              ? 'กำลังแสดงผลข้อความต้นฉบับ (Original OCR) - คลิกเพื่อสลับเป็นข้อความแปล'
+              : 'กำลังแสดงผลข้อความแปล (Translated) - คลิกเพื่อสลับเป็นข้อความต้นฉบับ'
+            }
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${translationPreviewMode === 'original' ? 'bg-amber-400' : 'bg-sky-400'}`} />
+            <span>{translationPreviewMode === 'original' ? 'Original' : 'Translated'}</span>
+          </button>
+          <button
+            onClick={() => handleBuildLayers(true)}
+            className="p-1 rounded text-slate-600 hover:text-white transition-colors"
+            title="Rebuild layers from OCR"
+          >
+            <RefreshCw size={10} />
+          </button>
+        </div>
       </div>
 
       {/* Tree view */}

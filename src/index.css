@@ -1,12 +1,11 @@
 @import "tailwindcss";
-@import url("https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap");
 
 @font-face {
   font-family: 'Mitr';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local('Mitr'), url('../public/fonts/overlay/Mitr-Regular.ttf') format('truetype');
+  src: local('Mitr'), url('/fonts/overlay/Mitr-Regular.ttf') format('truetype');
 }
 
 @font-face {
@@ -14,7 +13,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local('SUPERMARKET'), local('Supermarket'), url('../public/fonts/overlay/SUPERMARKET.woff') format('woff');
+  src: local('SUPERMARKET'), local('Supermarket'), url('/fonts/overlay/SUPERMARKET.woff') format('woff');
 }
 
 @font-face {
@@ -22,7 +21,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: local('FC Iconic'), local('FC Iconic Regular'), url('../public/fonts/overlay/fc-iconic-regular.otf') format('opentype');
+  src: local('FC Iconic'), local('FC Iconic Regular'), url('/fonts/overlay/fc-iconic-regular.otf') format('opentype');
 }
 
 /* Minimal Scrollbar */
@@ -71,4 +70,27 @@ form,
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
+
+/* Interactive Layer Selection Box Styles (Zero-JS Hover) */
+.layer-selection-box:hover:not([data-rotating="true"]):not([data-selected="true"]) {
+  border: var(--hover-border) !important;
+  background: var(--hover-bg) !important;
+  box-shadow: var(--hover-shadow) !important;
+}
+
+.layer-rotate-handle {
+  background: #FFFFFF;
+  border: 1.5px solid #9CA3AF;
+  color: #4B5563;
+  transform: scale(1);
+}
+.layer-rotate-handle:hover,
+.layer-rotate-handle[data-rotating="true"] {
+  background: #8B5CF6 !important;
+  border: 2px solid #FFFFFF !important;
+  color: #FFFFFF !important;
+  transform: scale(1.15) !important;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.7), 0 4px 10px rgba(0,0,0,0.3) !important;
+}
+
 
