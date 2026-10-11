@@ -1,3 +1,20 @@
+# ==============================================================================
+# OCR ENVIRONMENT SNAPSHOT (VERIFIED 2026-10-11)
+# ==============================================================================
+# Python Executable: C:\App\Electron\PDF_Translator\.venv-ocr\Scripts\python.exe
+# PaddleOCR Version: 2.8.1 (PaddleOCR 2.x, NOT 3.x)
+# PaddleOCR Module:  C:\App\Electron\PDF_Translator\.venv-ocr\lib\site-packages\paddleocr\__init__.py
+# PaddleOCR Class:   paddleocr.paddleocr.PaddleOCR (defined in paddleocr/paddleocr.py)
+# Models Loaded:     PP-OCRv3 det (en_PP-OCRv3_det_infer) + PP-OCRv4 rec (en_PP-OCRv4_rec_infer)
+#
+# RETROSPECTIVE NOTE:
+# รายงานก่อนหน้านี้เกิดความสับสนเนื่องจากมี paddlex==3.6.1 ติดตั้งอยู่ใน venv
+# ซึ่งมีโมเดล PP-OCRv5 ถูกดาวน์โหลดไว้ใน ~/.paddlex/official_models/
+# แต่ใน Production Path ที่เรียก get_paddle_ocr() -> from paddleocr import PaddleOCR
+# ระบบนำเข้า PaddleOCR 2.8.1 ซึ่งโหลดโมเดล PP-OCRv4/v3 จาก ~/.paddleocr/whl/
+# และเนื่องจาก valid_paddle_kwargs.pop('use_onnx') ถูกเรียก ทำให้รันบน Paddle CPU เสมอ
+# ==============================================================================
+
 Name: paddleocr
 Version: 2.8.1
 Summary: Awesome OCR toolkits based on PaddlePaddle(8.6M ultra-lightweight pre-trained model, support training and deployment among server, mobile, embedded and IoT devices)

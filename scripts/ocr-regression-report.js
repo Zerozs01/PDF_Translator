@@ -42,7 +42,18 @@ function loadJson(filePath) {
   return JSON.parse(raw);
 }
 
+const PAGE_ID_MAP = {
+  'manga1': 2, 'manga-1': 2,
+  'manga2': 3, 'manga-2': 3,
+  'manga3': 5, 'manga-3': 5,
+  'document1': 101, 'doc-tech-1': 101,
+  'document2': 102, 'doc-tech-2': 102,
+  'document3': 103, 'doc-tech-3': 103,
+};
+
 function inferPageNumber(page, fallbackIndex) {
+  if (page && page.id && PAGE_ID_MAP[page.id]) return PAGE_ID_MAP[page.id];
+  if (page && page.fixtureId && PAGE_ID_MAP[page.fixtureId]) return PAGE_ID_MAP[page.fixtureId];
   const pageNumber = Number(page && page.pageNumber);
   if (Number.isFinite(pageNumber) && pageNumber > 0) return pageNumber;
   return fallbackIndex + 1;
@@ -263,9 +274,17 @@ function metric(page) {
     ? page.lines.length
     : (page && typeof page.text === 'string' ? page.text.split('\n').filter((line) => line.trim().length > 0).length : 0);
   const wordCount = tokens.length;
-  const confAvg = Array.isArray(page.words) && page.words.length > 0
-    ? page.words.reduce((sum, word) => sum + Number(word && word.confidence ? word.confidence : 0), 0) / Math.max(1, page.words.length)
-    : Number(page && page.confidence ? page.confidence : 0);
+  let confAvg = 0;
+  if (Array.isArray(page.words) && page.words.length > 0) {
+    confAvg = page.words.reduce((sum, word) => sum + Number(word && word.confidence ? word.confidence : 0), 0) / Math.max(1, page.words.length);
+  } else if (Array.isArray(page.lines) && page.lines.length > 0) {
+    confAvg = page.lines.reduce((sum, line) => {
+      const s = line && (line.score != null ? line.score : (line.confidence != null ? line.confidence : 0));
+      return sum + Number(s || 0);
+    }, 0) / Math.max(1, page.lines.length);
+  } else if (page && (page.confidence != null || page.score != null)) {
+    confAvg = Number(page.confidence != null ? page.confidence : page.score);
+  }
   const suspicious = suspiciousBreakdown(tokens, language);
   const droppedCount = page && page.debug && Array.isArray(page.debug.droppedWords)
     ? page.debug.droppedWords.length
@@ -372,7 +391,10 @@ function computeGarbageRatio(candMetric) {
 
 function computeLexicalAxis(baseMetric, candMetric, expectation) {
   const hasReference = Boolean(baseMetric && baseMetric.normalizedTokens.length > 0);
-  const garbageRatio = computeGarbageRatio(candMetric);
+  const candGarbage = computeGarbageRatio(candMetric);
+  const baseGarbage = hasReference ? computeGarbageRatio(baseMetric) : 0;
+  // When comparing to a reference baseline, penalize excess garbage introduced over baseline
+  const garbagePenalty = hasReference ? Math.max(0, candGarbage - baseGarbage) : candGarbage;
 
   let werError = hasReference
     ? normalizedEditError(baseMetric.normalizedTokens, candMetric.normalizedTokens)
@@ -387,13 +409,13 @@ function computeLexicalAxis(baseMetric, candMetric, expectation) {
     cerError = expectationCerProxy(expectation, candMetric);
   }
 
-  if (typeof werError !== 'number') werError = garbageRatio;
-  if (typeof cerError !== 'number') cerError = garbageRatio;
+  if (typeof werError !== 'number') werError = garbagePenalty;
+  if (typeof cerError !== 'number') cerError = garbagePenalty;
 
   const lexicalPenalty = clampUnit(
     (werError * LEXICAL_WEIGHTS.wer)
     + (cerError * LEXICAL_WEIGHTS.cer)
-    + (garbageRatio * LEXICAL_WEIGHTS.garbage)
+    + (garbagePenalty * LEXICAL_WEIGHTS.garbage)
   );
 
   return {
@@ -401,7 +423,7 @@ function computeLexicalAxis(baseMetric, candMetric, expectation) {
     mode: hasReference ? 'reference' : 'proxy',
     werError: clampUnit(werError),
     cerError: clampUnit(cerError),
-    garbageRatio,
+    garbageRatio: candGarbage,
   };
 }
 
@@ -422,7 +444,15 @@ function computeYieldAxis(baseMetric, candMetric) {
 }
 
 function computeCompositeEvaluation(baseMetric, candMetric, expectation) {
-  const rawConfidence = normalizeConfidenceScore(candMetric.confidence);
+  const hasReference = Boolean(baseMetric && baseMetric.confidence > 0);
+  const candConf = normalizeConfidenceScore(candMetric.confidence);
+  const baseConf = hasReference ? normalizeConfidenceScore(baseMetric.confidence) : 0;
+
+  // Against reference baseline, rawConfidence measures confidence retention vs baseline
+  const rawConfidence = hasReference
+    ? (baseConf > 0 ? clampUnit(candConf / baseConf) : 1)
+    : candConf;
+
   const lexical = computeLexicalAxis(baseMetric, candMetric, expectation);
   const yieldAxis = computeYieldAxis(baseMetric, candMetric);
 
@@ -819,7 +849,13 @@ function main() {
     console.log(`\nReport written to ${outPath}`);
   }
 
+  if (candPages.size === 0 || summary.comparedPages === 0) {
+    console.error('\n[OCR Regression] FATAL: 0 candidate pages found or compared!');
+    process.exit(1);
+  }
+
   if (args.failOnRisk && risky.length > 0) {
+    console.error(`\n[OCR Regression] FATAL: ${risky.length} risky/regressed pages detected with --fail-on-risk active!`);
     process.exit(2);
   }
 }
