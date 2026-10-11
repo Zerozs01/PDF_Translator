@@ -29,8 +29,35 @@ interface RenderedPageData {
   targetDpi: number;
   ocrLanguage: string;
   resolvedQualityProfile: 'fast' | 'balanced' | 'best';
+  renderDurationMs?: number;
   imageBlob?: Blob;
   blankOcrResult?: OCRPageResult;
+}
+
+interface PageStageTimings {
+  pageNum: number;
+  renderMs: number;
+  ocrIpcMs: number;
+  syncLayersMs: number;
+  translationMs: number;
+  totalMs: number;
+}
+
+function calculateStageStats(values: number[]) {
+  if (values.length === 0) {
+    return { medianMs: 0, meanMs: 0, minMs: 0, maxMs: 0, count: 0 };
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  return {
+    medianMs: Number(median.toFixed(2)),
+    meanMs: Number((sum / sorted.length).toFixed(2)),
+    minMs: Number(sorted[0].toFixed(2)),
+    maxMs: Number(sorted[sorted.length - 1].toFixed(2)),
+    count: sorted.length,
+  };
 }
 
 interface PrefetchPipelineController {
@@ -337,6 +364,7 @@ class BackgroundQueueProcessor {
     let successPagesCount = 0;
     let hasApiError = false;
     let lastErrorMessage = '';
+    const jobStageTimings: PageStageTimings[] = [];
 
     const prefetch: PrefetchPipelineController = {
       data: null,
@@ -385,7 +413,7 @@ class BackgroundQueueProcessor {
           );
 
           // 1. ดำเนินการ OCR (DB Cache หรือ Headless OCR พร้อม 2-Stage Prefetch)
-          const ocrResult = await this.executePageOCR(
+          const { ocrResult, renderDurationMs, ocrIpcDurationMs } = await this.executePageOCR(
             pdfDoc,
             job,
             pageNum,
@@ -397,12 +425,49 @@ class BackgroundQueueProcessor {
           throwIfAborted();
 
           // 2. จัดกลุ่มเลเยอร์และบันทึกลง store (Cross-Document Safe)
+          const syncStartMark = `job-${job.id}-p${pageNum}-syncLayers-start`;
+          const syncEndMark = `job-${job.id}-p${pageNum}-syncLayers-end`;
+          const syncMeasureName = `job-${job.id}-p${pageNum}-syncLayers`;
+          performance.mark(syncStartMark);
           this.syncPageLayers(job.documentId, pageNum, ocrResult);
+          performance.mark(syncEndMark);
+          let syncLayersDurationMs = 0;
+          try {
+            const m = performance.measure(syncMeasureName, syncStartMark, syncEndMark);
+            syncLayersDurationMs = m.duration;
+            performance.clearMarks(syncStartMark);
+            performance.clearMarks(syncEndMark);
+          } catch {
+            // ignore mark measure failures
+          }
 
           throwIfAborted();
 
           // 3. ส่งคำแปลภาษาเข้า Background Handlers
+          const transStartMark = `job-${job.id}-p${pageNum}-trans-start`;
+          const transEndMark = `job-${job.id}-p${pageNum}-trans-end`;
+          const transMeasureName = `job-${job.id}-p${pageNum}-trans`;
+          performance.mark(transStartMark);
           await this.dispatchPageTranslation(job, pageNum, totalPages, ocrResult, signal);
+          performance.mark(transEndMark);
+          let transDurationMs = 0;
+          try {
+            const m = performance.measure(transMeasureName, transStartMark, transEndMark);
+            transDurationMs = m.duration;
+            performance.clearMarks(transStartMark);
+            performance.clearMarks(transEndMark);
+          } catch {
+            // ignore mark measure failures
+          }
+
+          jobStageTimings.push({
+            pageNum,
+            renderMs: Number(renderDurationMs.toFixed(2)),
+            ocrIpcMs: Number(ocrIpcDurationMs.toFixed(2)),
+            syncLayersMs: Number(syncLayersDurationMs.toFixed(2)),
+            translationMs: Number(transDurationMs.toFixed(2)),
+            totalMs: Number((renderDurationMs + ocrIpcDurationMs + syncLayersDurationMs + transDurationMs).toFixed(2)),
+          });
 
           processedCount++;
           successPagesCount++;
@@ -462,6 +527,20 @@ class BackgroundQueueProcessor {
       throw new Error(`Queue processing halted: ${targetMessage}`);
     }
 
+    if (jobStageTimings.length > 0) {
+      console.log(`\n[QueueProcessor] =======================================================`);
+      console.log(`[QueueProcessor] PERFORMANCE TIMING SUMMARY: Job ${job.id} (${job.filename})`);
+      console.log(`[QueueProcessor] Engine: ${job.engine} | Pages Measured: ${jobStageTimings.length}`);
+      console.log(`[QueueProcessor] =======================================================`);
+      console.table({
+        '1. Render (Headless 300DPI)': calculateStageStats(jobStageTimings.map(t => t.renderMs)),
+        '2. OCR (IPC Round-Trip)': calculateStageStats(jobStageTimings.map(t => t.ocrIpcMs)),
+        '3. Sync Page Layers': calculateStageStats(jobStageTimings.map(t => t.syncLayersMs)),
+        '4. Translation': calculateStageStats(jobStageTimings.map(t => t.translationMs)),
+        'Total Per Page Pipeline': calculateStageStats(jobStageTimings.map(t => t.totalMs)),
+      });
+    }
+
     useBackgroundQueueStore.getState().updateJobProgress(
       job.id, 
       100, 
@@ -480,12 +559,14 @@ class BackgroundQueueProcessor {
     nextPageNum: number | null,
     signal: AbortSignal,
     prefetch: PrefetchPipelineController
-  ): Promise<OCRPageResult> {
+  ): Promise<{ ocrResult: OCRPageResult; renderDurationMs: number; ocrIpcDurationMs: number }> {
     const throwIfAborted = () => {
       if (signal.aborted) throw new Error('Process aborted by user');
     };
 
     let ocrResult: OCRPageResult | null = null;
+    let pageData: RenderedPageData | null = null;
+    let ocrIpcDurationMs = 0;
 
     // ลองค้นหา OCR แคชจากฐานข้อมูลก่อน
     try {
@@ -547,6 +628,12 @@ class BackgroundQueueProcessor {
           if (ocrResult && nextPageNum !== null) {
             prefetch.trigger(nextPageNum);
           }
+
+          return {
+            ocrResult,
+            renderDurationMs: 0,
+            ocrIpcDurationMs: 0,
+          };
         }
       }
     } catch (err) {
@@ -558,7 +645,6 @@ class BackgroundQueueProcessor {
       throwIfAborted();
       console.log(`[QueueProcessor] Page ${pageNum} Cache Miss. Running Headless OCR...`);
 
-      let pageData: RenderedPageData | null = null;
       if (prefetch.pageNum === pageNum && prefetch.data) {
         pageData = await prefetch.data;
         prefetch.data = null;
@@ -601,6 +687,11 @@ class BackgroundQueueProcessor {
           `กำลังตรวจจับตัวอักษรหน้าที่ ${pageNum} ด้วย ${job.engine}...`
         );
 
+        const ocrStartMark = `job-${job.id}-p${pageNum}-ocr-start`;
+        const ocrEndMark = `job-${job.id}-p${pageNum}-ocr-end`;
+        const ocrMeasureName = `job-${job.id}-p${pageNum}-ocr`;
+        performance.mark(ocrStartMark);
+
         const ocrPromise = visionService.ocrForTextLayer(
           pageData.imageBlob,
           pageData.canvasWidth,
@@ -620,6 +711,17 @@ class BackgroundQueueProcessor {
         );
 
         ocrResult = await ocrPromise;
+
+        performance.mark(ocrEndMark);
+        let ocrIpcDurationMs = 0;
+        try {
+          const m = performance.measure(ocrMeasureName, ocrStartMark, ocrEndMark);
+          ocrIpcDurationMs = m.duration;
+          performance.clearMarks(ocrStartMark);
+          performance.clearMarks(ocrEndMark);
+        } catch {
+          // ignore mark measure failures
+        }
       }
 
       if (!ocrResult) {
@@ -660,7 +762,11 @@ class BackgroundQueueProcessor {
       }
     }
 
-    return ocrResult;
+    return {
+      ocrResult,
+      renderDurationMs: pageData?.renderDurationMs || 0,
+      ocrIpcDurationMs: ocrIpcDurationMs || 0,
+    };
   }
 
   /**
@@ -816,6 +922,11 @@ class BackgroundQueueProcessor {
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
 
+    const renderStartMark = `job-${job.id}-p${pageNum}-render-start`;
+    const renderEndMark = `job-${job.id}-p${pageNum}-render-end`;
+    const renderMeasureName = `job-${job.id}-p${pageNum}-render`;
+    performance.mark(renderStartMark);
+
     try {
       if (signal.aborted) throw new Error('Process aborted by signal');
       const ctx = canvas.getContext('2d', { alpha: false });
@@ -832,6 +943,17 @@ class BackgroundQueueProcessor {
       } as any).promise;
 
       if (signal.aborted) throw new Error('Process aborted by signal');
+
+      performance.mark(renderEndMark);
+      let renderDurationMs = 0;
+      try {
+        const m = performance.measure(renderMeasureName, renderStartMark, renderEndMark);
+        renderDurationMs = m.duration;
+        performance.clearMarks(renderStartMark);
+        performance.clearMarks(renderEndMark);
+      } catch {
+        // ignore mark measure failures
+      }
 
       // Fast blank / solid color page detection check
       const blankCheck = detectBlankOrSolidCanvas(canvas);
@@ -879,6 +1001,7 @@ class BackgroundQueueProcessor {
         targetDpi,
         ocrLanguage,
         resolvedQualityProfile,
+        renderDurationMs,
         imageBlob,
       };
     } catch (err) {
