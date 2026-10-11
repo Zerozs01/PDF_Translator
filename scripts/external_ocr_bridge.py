@@ -180,7 +180,7 @@ try:
             path = ensure_onnx_model_converted(path)
         
         # Configure SessionOptions to optimize threading and memory patterns for OCR
-        sess_opts = ort.SessionOptions()
+        sess_opts = kwargs.get("sess_options") or ort.SessionOptions()
         cpu_count = os.cpu_count() or 4
         sess_opts.intra_op_num_threads = max(2, min(8, cpu_count - 1))
         sess_opts.inter_op_num_threads = 2

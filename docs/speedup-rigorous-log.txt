@@ -1,0 +1,91 @@
+======================================================================
+STEP A: RIGOROUS SPEEDUP & ONNX RUNTIME NODE PROFILING BENCHMARK
+Timestamp: 2026-10-11 17:34:30
+Target Image: public/fixtures/ocr/manga/manga1.png
+======================================================================
+
+## 1. CONTROLLED VARIABLES & ENVIRONMENT
+- **Power Scheme:** Power Scheme GUID: 94d9e253-41e1-4449-908f-18bad0fe33b4 (My Custom Plan 1)
+- **Physical Cores:** 4, **Logical Processors:** 8
+- **CPU Load Before Run:** 24.5%
+- **Pinned Thread Count (`cpu_threads`):** 8 (OMP_NUM_THREADS=8, CPU_NUM_THREADS=8)
+- **Target Image:** `public/fixtures/ocr/manga/manga1.png`
+
+## 2. 10 CONSECUTIVE INFERENCES IN SINGLE PROCESS (UNWARMED COLD TO STEADY)
+Process PID: Fresh Python 3.10.9 Process
+PaddleOCR Constructor Init Time: 1.2142s
+
+| Run | Inference Time (s) | Box Count | Delta from Steady-State |
+|---|---|---|---|
+| Run 1 | 0.4777s | 52 | +0.2412s (Cold first infer overhead) |
+| Run 2 | 0.2681s | 52 | +0.0316s |
+| Run 3 | 0.2460s | 52 | +0.0095s |
+| Run 4 | 0.2495s | 52 | +0.0130s |
+| Run 5 | 0.2392s | 52 | +0.0027s |
+| Run 6 | 0.2347s | 52 | -0.0018s |
+| Run 7 | 0.2330s | 52 | -0.0035s |
+| Run 8 | 0.2336s | 52 | -0.0029s |
+| Run 9 | 0.2325s | 52 | -0.0040s |
+| Run 10 | 0.2365s | 52 | 0.0000s (Baseline steady-state) |
+
+Observation: Inference time drops by 43.9% between Run 1 (0.4777s) and Run 2 (0.2681s), reaching a flat asymptotic plateau at ~0.233s from Run 6 onwards.
+
+## 3. ONNX RUNTIME NODE PROFILING (1st Infer Kernel Breakdown)
+Generated ORT Profile Traces:
+- Detector (`ch_PP-OCRv4_det_infer`): 2,628 node events
+- Recognizer (`en_PP-OCRv4_rec_infer`): 1,071 node events
+
+### Top Slowest Operators in Detector (`ch_PP-OCRv4_det_infer`):
+| Rank | Operator Name | Kernel Time (ms) | Execution Provider | Node Name |
+|---|---|---|---|---|
+| 1 | FusedMatMulActivation | 10.76 ms | DmlExecutionProvider | MatMul.7/MatMulScaleFusion/_FusedActivation |
+| 2 | MatMul | 5.82 ms | DmlExecutionProvider | MatMul.9 |
+| 3 | Concat | 5.79 ms | DmlExecutionProvider | Concat.3 |
+| 4 | LayerNormalization | 4.04 ms | DmlExecutionProvider | Mul.135/LayerNormFusion/ |
+| 5 | LayerNormalization | 1.97 ms | DmlExecutionProvider | Mul.126/LayerNormFusion/ |
+| 6 | Conv | 1.83 ms | DmlExecutionProvider | Conv.9 |
+| 7 | Conv | 1.80 ms | DmlExecutionProvider | Conv.33 |
+| 8 | FusedMatMulActivation | 1.73 ms | DmlExecutionProvider | MatMul.1/MatMulScaleFusion/_FusedActivation |
+| 9 | Conv | 1.64 ms | DmlExecutionProvider | Conv.0 |
+| 10 | Transpose | 1.55 ms | DmlExecutionProvider | Transpose_token_5 |
+
+### Top Slowest Operators in Recognizer (`en_PP-OCRv4_rec_infer`):
+| Rank | Operator Name | Kernel Time (ms) | Execution Provider | Node Name |
+|---|---|---|---|---|
+| 1 | DmlFusedConv | 1.79 ms | DmlExecutionProvider | fused op (#55 'Conv.19') + (#56 'Relu.8') |
+| 2 | DmlFusedConv | 1.30 ms | DmlExecutionProvider | fused op (#10 'Conv.3') + (#11 'Relu.2') |
+| 3 | Softmax | 1.26 ms | DmlExecutionProvider | Softmax.0 |
+| 4 | DmlFusedConv | 1.06 ms | DmlExecutionProvider | fused op (#17 'Conv.6') + (#19 'Relu.3') |
+| 5 | Conv | 0.88 ms | DmlExecutionProvider | Conv.0 |
+| 6 | DmlFusedConv | 0.87 ms | DmlExecutionProvider | fused op (#25 'Conv.9') + (#27 'Relu.5') |
+| 7 | Conv | 0.84 ms | DmlExecutionProvider | Conv.32 |
+| 8 | Conv | 0.84 ms | DmlExecutionProvider | Conv.8 |
+| 9 | DmlFusedConv | 0.81 ms | DmlExecutionProvider | fused op (#72 'Conv.25') + (#73 'HardSigmoid.3') |
+| 10 | Conv | 0.81 ms | DmlExecutionProvider | Conv.11 |
+
+Conclusion: 100% of top computational operators in both Detection and Recognition are executed via DirectML (`DmlExecutionProvider`) on AMD Radeon RX 6700 XT.
+
+## 4. N=20 STEADY-STATE INFERENCE COMPARISON (DML VS CPU)
+
+Raw Iterations (CPU, pinned 8 threads):
+[9.8112s, 9.2181s, 9.2582s, 9.0505s, 9.4233s, 9.7643s, 8.9960s, 9.6904s, 9.2594s, 9.1198s, 8.6458s, 9.4732s, 9.9446s, 9.0849s, 10.0716s, 9.6696s, 9.3550s, 9.8446s, 8.7023s, 8.8620s]
+
+| Engine | N | Median | Mean +- Std | p95 | Min | Max |
+|---|---|---|---|---|---|---|
+| DirectML (GPU) | 20 | 0.2547s | 0.2594s +- 0.0180s | 0.2902s | 0.2390s | 0.3122s |
+| Paddle CPU Ref | 20 | 9.3072s | 9.3622s +- 0.4040s | 9.9509s | 8.6458s | 10.0716s |
+
+- **Speedup from Median:** **36.54x** (9.3072s / 0.2547s)
+- **Speedup from p95:** **34.29x** (9.9509s / 0.2902s)
+
+## 5. OUTLIER ANALYSIS (> 2x Median)
+- **DML Outliers count:** 0 (Threshold: >0.5094s, Max observed: 0.3122s)
+- **CPU Outliers count:** 0 (Threshold: >18.6144s, Max observed: 10.0716s)
+
+## 6. RECONCILIATION OF CPU TIMING (8.46s vs 9.21s vs 12.74s)
+1. **8.46s (Steady-state Warm, Idle Host):**
+   - Measured in warm loop with minimal background activity on the machine.
+2. **9.21s - 9.36s (Pinned 8 Threads, Controlled Baseline):**
+   - Measured across 20 iterations with pinned `cpu_threads=8` under normal development idle load (Mean = 9.36s +- 0.40s).
+3. **12.74s (Concurrent Background Development Load):**
+   - Measured while active background services (`pnpm tauri dev` file watcher & dual dev instances) consumed ~44% host CPU, starving OpenMP thread time slices.

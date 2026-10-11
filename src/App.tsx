@@ -14,7 +14,9 @@ import { useDocumentTranslation } from './hooks/useDocumentTranslation';
 import { useBackgroundQueueSync } from './hooks/useBackgroundQueueSync';
 
 // Lazy Load Heavy Components (Avoid bundling 20MB+ PDF/Canvas/Export parsers into startup bundle)
-const OCRRegressionHarness = React.lazy(() => import('./components/OCR/OCRRegressionHarness').then(module => ({ default: module.OCRRegressionHarness })));
+const OCRRegressionHarness = import.meta.env.DEV
+  ? React.lazy(() => import('./components/OCR/OCRRegressionHarness').then(module => ({ default: module.OCRRegressionHarness })))
+  : () => null;
 const WorkspaceContainer = React.lazy(() => import('./components/Viewer/WorkspaceContainer').then(module => ({ default: module.WorkspaceContainer })));
 const DocumentExportModal = React.lazy(() => import('./components/Export/DocumentExportModal').then(module => ({ default: module.DocumentExportModal })));
 const ExportOverlay = React.lazy(() => import('./components/Export/ExportOverlay').then(module => ({ default: module.ExportOverlay })));
@@ -31,8 +33,11 @@ import { AppHeaderToolbar } from './components/Layout/AppHeaderToolbar';
 import { BackgroundQueuePanel } from './components/Queue/BackgroundQueuePanel';
 
 export default function App() {
-  const showOCRHarness = typeof window !== 'undefined'
-    && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
+  const showOCRHarness = Boolean(
+    import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('ocr_harness') === '1'
+  );
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const loadingState = useUIStore((s) => s.loadingState);

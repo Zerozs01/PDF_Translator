@@ -1,0 +1,37 @@
+======================================================================
+P0 PLAYWRIGHT SECURITY & HARNESS GATE AUDIT
+Timestamp: 2026-10-11T10:23:34.128Z
+======================================================================
+
+## 1. STATIC BUNDLE ANALYSIS (Grep dist/ for dev harness bypass)
+Total occurrences of [ocr_harness, isDevHarness, OCRRegressionHarness, URLSearchParams, location.search] in dist/: 0
+PASS: Dead-code elimination succeeded. 0 occurrences found in production build.
+
+## 2. DEV SERVER TEST (Vite Dev)
+Dev server started at http://127.0.0.1:5183
+[TEST 2A] Dev with ?ocr_harness=1:
+  URL: http://127.0.0.1:5183/?ocr_harness=1
+  Title: "PDF_TRANSLATE"
+  Found Harness Content: true
+  Status: PASS (Harness accessible in dev with query param)
+
+[TEST 2B] Dev without query param:
+  URL: http://127.0.0.1:5183/
+  Blocked by AuthGuard: true
+  Status: PASS (AuthGuard active, cannot bypass to harness)
+Dev server stopped.
+
+## 3. PRODUCTION PREVIEW TEST (Vite Preview on dist/)
+Preview server started at http://127.0.0.1:4183
+[TEST 3A] Production Preview with ?ocr_harness=1:
+  URL: http://127.0.0.1:4183/?ocr_harness=1
+  Harness rendered in production: false
+  AuthGuard enforced: true
+  Status: PASS (ทดสอบ 1 production URL, ไม่พบ harness, grep ไม่พบ pattern ที่ระบุ)
+Preview server stopped.
+
+## 4. PRODUCTION REGRESSION PROPOSAL
+If OCR regression tests must ever be executed against a production-like artifact,
+DO NOT weaken AuthGuard. Instead, provide an isolated build target:
+  1. Introduce npm script: "build:test-harness" with VITE_APP_ENV=test
+  2. Never deploy test-harness build to end-users/distribution release.

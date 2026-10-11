@@ -64,6 +64,11 @@ function normalizePages(input) {
   }
 
   if (input && typeof input === 'object') {
+    if (Array.isArray(input.cases)) {
+      input.cases.forEach((page, idx) => ingest(page, idx));
+      return pages;
+    }
+
     if (Array.isArray(input.pages)) {
       input.pages.forEach((page, idx) => ingest(page, idx));
       return pages;

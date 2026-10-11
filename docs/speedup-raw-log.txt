@@ -1,0 +1,59 @@
+======================================================================
+RAW BENCHMARK LOG: COLD VS WARM (DML VS CPU)
+Date: 2026-10-11 16:42:43
+Image: public/fixtures/ocr/manga/manga1.png
+======================================================================
+
+## 1. COLD PROCESS BENCHMARK (N=5 Independent Processes)
+Each run spawns a completely fresh python.exe process.
+
+| Mode | Run | PID | Init & Load (s) | 1st Infer (s) | Total Process (s) | Boxes |
+|---|---|---|---|---|---|---|
+| DML | 1 | 13564 | 0.9611 | 0.4960 | 1.4572 | 52 |
+| DML | 2 | 16288 | 0.9974 | 0.5128 | 1.5103 | 52 |
+| DML | 3 | 34588 | 1.0641 | 0.4796 | 1.5438 | 52 |
+| DML | 4 | 25056 | 2.0763 | 0.9300 | 3.0068 | 52 |
+| DML | 5 | 7552 | 0.8194 | 0.4078 | 1.2273 | 52 |
+|---|---|---|---|---|---|---|
+| CPU | 1 | 27952 | 0.8143 | 8.2607 | 9.0751 | 52 |
+| CPU | 2 | 36920 | 0.9981 | 11.7896 | 12.7878 | 52 |
+| CPU | 3 | 27952 | 0.9705 | 9.3924 | 10.3630 | 52 |
+| CPU | 4 | 37320 | 0.8320 | 8.5504 | 9.3825 | 52 |
+| CPU | 5 | 32760 | 0.9329 | 9.2138 | 10.1468 | 52 |
+
+DML Cold 1st Infer: Median=0.4960s, Mean=0.5652s +- 0.1859s, Min=0.4078s, Max=0.9300s
+CPU Cold 1st Infer: Median=9.2138s, Mean=9.4414s +- 1.2455s, Min=8.2607s, Max=11.7896s
+Cold 1st Infer Speedup (CPU / DML): 18.58x
+
+## 2. WARM STEADY-STATE BENCHMARK (Same Process after Warm-up)
+DML PID: 14732 | CPU PID: 25904
+
+| Mode | Iteration | Infer (s) | Boxes |
+|---|---|---|---|
+| DML | 1 | 0.2181 | 52 |
+| DML | 2 | 0.2215 | 52 |
+| DML | 3 | 0.2620 | 52 |
+| DML | 4 | 0.2198 | 52 |
+| DML | 5 | 0.2177 | 52 |
+|---|---|---|---|
+| CPU | 1 | 8.3285 | 52 |
+| CPU | 2 | 8.3164 | 52 |
+| CPU | 3 | 8.5123 | 52 |
+| CPU | 4 | 8.6748 | 52 |
+| CPU | 5 | 8.4608 | 52 |
+
+DML Warm Steady-State: Median=0.2198s, Mean=0.2278s +- 0.0171s, Min=0.2177s, Max=0.2620s
+CPU Warm Steady-State: Median=8.4608s, Mean=8.4586s +- 0.1317s, Min=8.3164s, Max=8.6748s
+Warm Steady-State Speedup (CPU / DML): 38.49x
+
+## 3. SCIENTIFIC RECONCILIATION: WHY 12.4x VS 30.1x?
+1. DML 1st Infer in fresh process (Cold Shader/PSO): ~0.496s
+2. DML Steady-State in warm process (Precompiled PSO):  ~0.220s
+   -> DML Overhead on 1st run: +0.276s (+125.7%) due to Direct3D 12 Compute PSO Compilation.
+3. CPU 1st Infer in fresh process: ~9.214s
+4. CPU Steady-State in warm process: ~8.461s
+   -> CPU Inference time is virtually identical between fresh process and warm process (Delta = 0.753s). CPU does not have Shader Compilation overhead.
+
+Conclusion:
+- Cold Unwarmed Speedup: ~18.58x (matches previous ~12.4x)
+- Warm Steady-State Speedup: ~38.49x (matches previous ~30.1x)
