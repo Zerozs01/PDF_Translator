@@ -63,6 +63,7 @@ impl TranslationManager {
         if cfg!(windows) {
             venv_candidates.push(self.project_root.join(".venv-ocr").join("Scripts").join("python.exe"));
             venv_candidates.push(self.project_root.join(".venv").join("Scripts").join("python.exe"));
+            venv_candidates.push(PathBuf::from(r"C:\App\Electron\PDF_Translator\.venv-ocr\Scripts\python.exe"));
             if let Some(parent) = self.project_root.parent() {
                 venv_candidates.push(parent.join(".venv-ocr").join("Scripts").join("python.exe"));
                 venv_candidates.push(parent.join(".venv").join("Scripts").join("python.exe"));
@@ -99,6 +100,10 @@ impl TranslationManager {
         let candidate = self.project_root.join("scripts").join("argos_translate_bridge.py");
         if candidate.exists() {
             return candidate;
+        }
+        let fallback_fixed = PathBuf::from(r"C:\App\Electron\PDF_Translator\scripts\argos_translate_bridge.py");
+        if fallback_fixed.exists() {
+            return fallback_fixed;
         }
         if let Some(parent) = self.project_root.parent() {
             let parent_cand = parent.join("scripts").join("argos_translate_bridge.py");

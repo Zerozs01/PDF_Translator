@@ -54,15 +54,20 @@ export function useTranslationCacheResolver() {
           hasThai = /[\u0E00-\u0E7F]/.test(sample);
         }
 
-        const isVersionMatch = row.key ? hasCurrentOCRTranslationCacheVersion(row.key) : false;
-        const activeFingerprint = buildOCRSourceFingerprint(pageOCR, ocrEngine);
-        const isFingerprintMatch = row.sourceFingerprint === activeFingerprint;
+        const isEngineMatch = !rowEngine || rowEngine === targetRowEngine
+          || (rowEngine.includes('paddle') && targetRowEngine.includes('paddle'))
+          || (rowEngine.includes('easy') && targetRowEngine.includes('easy'));
 
-        return rowEngine === targetRowEngine
-          && row.translationMode === effectiveTranslationMode
+        const isTranslatorMatch = rowTranslatorEngine === targetTranslatorEngine
+          || (['offline', 'argos'].includes(rowTranslatorEngine) && ['offline', 'argos'].includes(targetTranslatorEngine));
+
+        const isVersionMatch = row.key ? hasCurrentOCRTranslationCacheVersion(row.key) : true;
+        const activeFingerprint = buildOCRSourceFingerprint(pageOCR, ocrEngine);
+        const isFingerprintMatch = !row.sourceFingerprint || !activeFingerprint || row.sourceFingerprint === activeFingerprint;
+
+        return isEngineMatch
           && rowTargetLang === targetRowTargetLang
-          && rowSourceLang === targetRowSourceLang
-          && rowTranslatorEngine === targetTranslatorEngine
+          && isTranslatorMatch
           && hasThai
           && isVersionMatch
           && isFingerprintMatch;
@@ -70,38 +75,40 @@ export function useTranslationCacheResolver() {
 
       if (!matchedCache) return false;
 
-      const isCacheIncomplete = Array.isArray(matchedCache.translatedByIndex) && (
-        pageOCR.lines.some((line) => {
-          const text = String(line.text || '').trim();
-          if (!text) return false;
-          const hasTranslatableChars = /[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(text) || /[a-zA-Z]{2,}/.test(text) || isKnownShortWordHelper(text.replace(/[^A-Za-z0-9]/g, ''));
-          if (!hasTranslatableChars) return false;
+      // Resilient completeness check: Avoid discarding the whole page cache just because of 1 SFX/short word
+      const translatableLines = pageOCR.lines.filter((line) => {
+        const text = String(line.text || '').trim();
+        return text && (/[\uAC00-\uD7AF\u3040-\u30FF\u4E00-\u9FFF]/.test(text) || /[a-zA-Z]{2,}/.test(text));
+      });
 
+      let isCacheIncomplete = false;
+      if (translatableLines.length > 0 && Array.isArray(matchedCache.translatedByIndex)) {
+        let missingCount = 0;
+        for (const line of translatableLines) {
+          const text = String(line.text || '').trim().toLowerCase();
           const item = (matchedCache.translatedByIndex as any[]).find((c: any) => {
             const itemSrc = String(c.sourceText || c.rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-            return itemSrc === text.toLowerCase();
+            return itemSrc === text;
           });
 
-          if (!item || !item.text) return true;
-
-          if (normalizedTargetLanguage === 'th') {
+          if (!item || !item.text) {
+            missingCount += 1;
+          } else if (normalizedTargetLanguage === 'th') {
             const transText = String(item.text).trim();
-            if (!/[\u0E00-\u0E7F]/.test(transText)) return true;
-            if (hasKoreanTranslationCarryover(transText) || isBoilerplateHallucination(text, transText)) return true;
+            if (!/[\u0E00-\u0E7F]/.test(transText)) {
+              missingCount += 1;
+            }
           }
-          return false;
-        }) || (normalizedTargetLanguage === 'th' && (matchedCache.translatedByIndex as any[]).some((item: any) => {
-          const src = String(item.sourceText || item.rawText || '').trim();
-          const trans = String(item.text || '').trim();
-          if (/[\uAC00-\uD7AF]/.test(src)) {
-            if (hasKoreanTranslationCarryover(trans) || isBoilerplateHallucination(src, trans)) return true;
-          }
-          return false;
-        }))
-      );
+        }
+
+        // Only invalidate if more than 50% of substantial lines are missing
+        if (missingCount > Math.ceil(translatableLines.length * 0.5)) {
+          isCacheIncomplete = true;
+        }
+      }
 
       if (isCacheIncomplete) {
-        console.log(`[Translation] DB cache for page ${pageNum} is incomplete (missing translation for dialogue lines). Re-translating...`);
+        console.log(`[Translation] DB cache for page ${pageNum} is incomplete (>50% missing). Re-translating...`);
         return false;
       }
 

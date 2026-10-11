@@ -721,6 +721,36 @@ class BackgroundQueueProcessor {
       throw new Error('Translation handlers not registered in BackgroundQueueProcessor');
     }
 
+    const targetLang = job.targetLanguage || 'th';
+    if (dbService.isAvailable() && (job.type === 'offline_all' || job.type === 'ai_all')) {
+      try {
+        const transCache = await dbService.getTranslationCachePage(job.documentId, pageNum);
+        if (Array.isArray(transCache) && transCache.length > 0) {
+          const matched = transCache.find((row) => {
+            const rowTargetLang = String(row.targetLanguage || '').toLowerCase();
+            const targetRowLang = targetLang.toLowerCase();
+            const hasContent = (row.translatedText && row.translatedText.trim().length > 0)
+              || (Array.isArray(row.translatedByIndex) && row.translatedByIndex.length > 0);
+            return rowTargetLang === targetRowLang && hasContent;
+          });
+
+          if (matched) {
+            console.log(`[QueueProcessor] Page ${pageNum} Translation Cache Hit! Fast-skipping background translation...`);
+            if (typeof window !== 'undefined') {
+              const activePage = useProjectStore.getState().currentPage;
+              const activeDoc = useProjectStore.getState().documentId;
+              if (activeDoc === job.documentId && activePage === pageNum) {
+                window.dispatchEvent(new CustomEvent('page-translation-updated', { detail: { pageNum } }));
+              }
+            }
+            return true;
+          }
+        }
+      } catch (err) {
+        console.warn(`[QueueProcessor] Failed to check translation cache for page ${pageNum}:`, err);
+      }
+    }
+
     console.log(`[QueueProcessor] Translating Page ${pageNum}/${totalPages}...`);
     const translationEngine = (job.type === 'offline_all' || job.type === 'offline_single') ? 'offline' : 'ai';
 

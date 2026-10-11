@@ -69,6 +69,40 @@ export async function executeOfflineAllPagesPipeline(
       return;
     }
 
+    // 0. Fast-skip check: ถ้ามี Translation Cache ใน DB สำหรับหน้านี้อยู่แล้ว ให้ข้ามทันที
+    const docId = options?.documentIdOverride;
+    const targetLang = options?.targetLanguage || 'th';
+    if (docId && dbService.isAvailable()) {
+      try {
+        const transCache = await dbService.getTranslationCachePage(docId, pageNum);
+        if (Array.isArray(transCache) && transCache.length > 0) {
+          const matched = transCache.find((row) => {
+            const rowTargetLang = String(row.targetLanguage || '').toLowerCase();
+            const targetRowLang = targetLang.toLowerCase();
+            const hasContent = (row.translatedText && row.translatedText.trim().length > 0)
+              || (Array.isArray(row.translatedByIndex) && row.translatedByIndex.length > 0);
+            return rowTargetLang === targetRowLang && hasContent;
+          });
+
+          if (matched) {
+            console.log(`[OfflineBatchPipeline] Page ${pageNum} Translation Cache Hit! Fast-skipping...`);
+            ocrState.setTranslationCacheEntry(pageNum, matched.key, matched);
+            translatedPages += 1;
+            totalLines += (matched.lineCount || (matched.translatedByIndex?.length) || 0);
+            options?.onProgress?.({
+              pageNum,
+              index: pageIndex + 1,
+              total,
+              message: `Offline Batch: พบแคชการแปลหน้าที่ ${pageNum} เรียบร้อยแล้ว (Fast-skip)`,
+            });
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn(`[OfflineBatchPipeline] DB cache check error for page ${pageNum}:`, err);
+      }
+    }
+
     const alternativePages = Array.from(ocrState.ocrByPageEngine.get(pageNum)?.entries() || [])
       .filter(([engineKey, candidate]) => engineKey !== selectedEngine && candidate && Array.isArray(candidate.lines) && candidate.lines.length > 0)
       .map(([, candidate]) => candidate!);

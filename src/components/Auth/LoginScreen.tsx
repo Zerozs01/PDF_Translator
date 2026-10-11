@@ -112,6 +112,7 @@ export const LoginScreen: React.FC = () => {
         {/* Footer / System Reset trigger */}
         <div className="mt-8 flex justify-center border-t border-white/5 pt-5 text-center">
           <button
+            type="button"
             onClick={() => setIsEmergencyOpen(true)}
             className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500/70 uppercase tracking-widest hover:text-slate-400 transition-colors py-1.5 px-3 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/5"
           >
