@@ -79,6 +79,23 @@ export const OCRResultTree: React.FC<OCRResultTreeProps> = ({
           <span className="text-xs font-normal" style={{ color: '#D7CE93' }}>
             runtime {currentRuntimeSecLabel}
           </span>
+          {(() => {
+            const debugObj = previewSourceOCR?.debug as any;
+            const activeBackend = debugObj?.activeBackend;
+            const providers = debugObj?.activeProviders;
+            const isDml =
+              activeBackend === 'ort_dml' ||
+              (providers?.rec && Array.isArray(providers.rec) && providers.rec.includes('DmlExecutionProvider'));
+            return isDml ? (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                DirectML
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+                Paddle CPU
+              </span>
+            );
+          })()}
         </div>
 
         {/* Mode Toggle Button */}

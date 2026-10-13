@@ -921,6 +921,40 @@ export function initPlatformBridgeCompat(): void {
             return false;
           }
         },
+        listAdapters: async () => {
+          try {
+            const res = await invoke<any>('send_sidecar_command', {
+              payload: { action: 'list-adapters', engine: 'paddleocr' },
+            });
+            return (res?.adapters || []) as Array<{ index: number; name: string; id: string }>;
+          } catch (err) {
+            console.warn('[Bridge] listAdapters warning:', err);
+            return [];
+          }
+        },
+        setBackend: async (payload: { backend: 'paddle' | 'ort_dml'; adapterName?: string }) => {
+          try {
+            await invoke<void>('set_ocr_backend', {
+              backend: payload.backend,
+              adapterName: payload.adapterName || null,
+            });
+          } catch (err) {
+            console.error('[Bridge] set_ocr_backend failed:', err);
+            throw err;
+          }
+        },
+        getBackend: async () => {
+          try {
+            const [backend, adapterName] = await invoke<[string, string | null]>('get_ocr_backend');
+            return {
+              backend: (backend === 'ort_dml' ? 'ort_dml' : 'paddle') as 'paddle' | 'ort_dml',
+              adapterName: adapterName || undefined,
+            };
+          } catch (err) {
+            console.warn('[Bridge] get_ocr_backend warning:', err);
+            return { backend: 'paddle' as const, adapterName: undefined };
+          }
+        },
         cancelExternal: async () => true,
         writeTempImage: async (payload: { imageData: Uint8Array | ArrayBuffer | number[]; imageMimeType?: string }) => {
           try {
@@ -1244,8 +1278,10 @@ export function initPlatformBridgeCompat(): void {
     };
 
     (window as any).electronAPI = createSafeBridgeSection(rawElectronAPI);
+    (window as any).platformBridge = platformBridge;
   }
 }
 
 // Auto-run compatibility shim upon module import
 initPlatformBridgeCompat();
+(window as any).platformBridge = platformBridge;

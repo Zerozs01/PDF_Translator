@@ -230,6 +230,8 @@ export interface OCROptions {
   language: string;
   dpi: number;
   engine: OCREngine;
+  backend?: 'paddle' | 'ort_dml';
+  dmlAdapterName?: string;
   pageSegMode?: number;
   skipIfTextExists?: boolean;
   /** Per-page OCR timeout in seconds (0 = no timeout). Default: 120 */

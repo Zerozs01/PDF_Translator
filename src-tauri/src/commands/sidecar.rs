@@ -20,3 +20,19 @@ pub async fn send_sidecar_command(
 ) -> Result<Value, String> {
     state.process_manager.send_command(payload).await.map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn set_ocr_backend(
+    state: State<'_, AppState>,
+    backend: String,
+    adapter_name: Option<String>,
+) -> Result<(), String> {
+    state.process_manager.set_ocr_backend(backend, adapter_name).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_ocr_backend(
+    state: State<'_, AppState>,
+) -> Result<(String, Option<String>), String> {
+    Ok(state.process_manager.get_ocr_backend().await)
+}

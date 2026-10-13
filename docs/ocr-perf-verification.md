@@ -91,3 +91,9 @@ rec_batch_num=32 -> 0.689s (boxes=52)
 
 ### Phase P3: Publish ผลลัพธ์ต่อหน้าทันที (Per-Page UI Streaming)
 - แก้ไขปัญหาผลลัพธ์ไม่ขึ้น UI หาก active document ไม่ตรง และปล่อย text layer ทันทีที่แต่ละหน้าทำ OCR เสร็จโดยไม่ต้องรอ translation จบทั้งชุด
+
+---
+
+## 4. Post-Mortems & Incident Records
+- [2026-10-12: DirectML UI Badge Fallback to "Paddle CPU" & Stale Cache Anomaly](file:///c:/App/Electron/PDF_Translator/docs/postmortems/2026-10-12-directml-ui-badge-and-runtime-anomaly.md)
+

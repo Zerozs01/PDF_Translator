@@ -113,6 +113,8 @@ pub fn run() {
             commands::sidecar::check_health,
             commands::sidecar::restart_worker,
             commands::sidecar::send_sidecar_command,
+            commands::sidecar::set_ocr_backend,
+            commands::sidecar::get_ocr_backend,
             commands::pdf::open_document,
             commands::pdf::export_translated_pdf,
             commands::pdf::render_page_binary,

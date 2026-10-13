@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Cpu, ChevronDown, Sparkles, Gauge, Zap } from 'lucide-react';
 import type { OCREngine, OCROptions } from '../../../types';
 import { OCR_ENGINES } from '../../../stores/useOCRTextLayerStore';
@@ -29,6 +29,31 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
   ocrQualityMode,
   setOcrQualityMode,
 }) => {
+  const [adapters, setAdapters] = useState<Array<{ index: number; name: string; id: string }>>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchAdapters = async () => {
+      try {
+        const bridge = (window as any).electronBridge || (window as any).platformBridge;
+        if (bridge?.ocr?.listAdapters) {
+          const list = await bridge.ocr.listAdapters();
+          if (isMounted && Array.isArray(list) && list.length > 0) {
+            setAdapters(list);
+            if (!options.dmlAdapterName && list[0]?.name) {
+              setOptions({ dmlAdapterName: list[0].name });
+            }
+          }
+        }
+      } catch {
+        // Ignored
+      }
+    };
+    void fetchAdapters();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
   return (
     <div className="order-1 space-y-1.5 shrink-0">
       {/* Model Selection Container */}
@@ -197,6 +222,67 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
                   />
                   <span>Angle Classification (ตรวจจับทิศทางข้อความเอียง)</span>
                 </label>
+              </div>
+            )}
+
+            {/* PaddleOCR Backend & Hardware Acceleration Selector */}
+            {options.engine === 'paddleocr' && (
+              <div className="pt-2 mt-1.5 border-t border-white/5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-medium text-slate-300">Acceleration Backend</span>
+                  <div className="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-white/10">
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => setOptions({ backend: 'paddle' })}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                        (options.backend || 'paddle') === 'paddle'
+                          ? 'bg-slate-700 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Paddle CPU
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => setOptions({ backend: 'ort_dml' })}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                        options.backend === 'ort_dml'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      DirectML GPU
+                    </button>
+                  </div>
+                </div>
+
+                {options.backend === 'ort_dml' && (
+                  <div className="space-y-1.5 p-2 rounded-lg bg-emerald-950/20 border border-emerald-500/20">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-emerald-400 font-medium">GPU Adapter:</span>
+                      {adapters.length > 0 ? (
+                        <select
+                          value={options.dmlAdapterName || adapters[0]?.name || ''}
+                          onChange={(e) => setOptions({ dmlAdapterName: e.target.value })}
+                          className="bg-slate-900 border border-emerald-500/30 rounded px-1.5 py-0.5 text-[10px] text-white focus:outline-none"
+                        >
+                          {adapters.map((a) => (
+                            <option key={a.id || a.name} value={a.name}>
+                              {a.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-slate-400">AMD Radeon RX 6700 XT</span>
+                      )}
+                    </div>
+                    <p className="text-[9px] text-emerald-300/80 leading-relaxed">
+                      * DirectML เร่งความเร็วโมเดลละติน (อังกฤษ) หากใช้ภาษาอื่น ระบบจะ fallback ไป Paddle CPU อัตโนมัติ
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -178,21 +178,8 @@ def ensure_onnx_model_converted(model_dir: str) -> str:
 
 _cached_video_adapters = None
 
-def resolve_dml_device_id() -> Tuple[Optional[int], str]:
+def list_video_adapters() -> List[Dict[str, Any]]:
     global _cached_video_adapters
-    if "OCR_DML_DEVICE_ID" in os.environ and os.environ["OCR_DML_DEVICE_ID"].strip():
-        try:
-            return int(os.environ["OCR_DML_DEVICE_ID"].strip()), "explicit_device_id"
-        except ValueError:
-            pass
-
-    target_name = os.environ.get("OCR_DML_ADAPTER_NAME", "").strip().lower()
-    target_luid = os.environ.get("OCR_DML_ADAPTER_LUID", "").strip().lower()
-
-    if not target_name and not target_luid:
-        print("[ocrBridge] No specific DML adapter specified. Strict policy: Fail closed to Paddle Native CPU.", file=sys.stderr)
-        return None, "adapter_unspecified"
-
     if _cached_video_adapters is None:
         _cached_video_adapters = []
         try:
@@ -207,11 +194,36 @@ def resolve_dml_device_id() -> Tuple[Optional[int], str]:
         except Exception:
             _cached_video_adapters = []
 
+    result = []
     for idx, a in enumerate(_cached_video_adapters):
-        name = str(a.get("Name") or "").lower()
-        pnp = str(a.get("PNPDeviceID") or "").lower()
+        result.append({
+            "index": idx,
+            "name": str(a.get("Name") or f"Device {idx}"),
+            "id": str(a.get("PNPDeviceID") or ""),
+        })
+    return result
+
+
+def resolve_dml_device_id() -> Tuple[Optional[int], str]:
+    if "OCR_DML_DEVICE_ID" in os.environ and os.environ["OCR_DML_DEVICE_ID"].strip():
+        try:
+            return int(os.environ["OCR_DML_DEVICE_ID"].strip()), "explicit_device_id"
+        except ValueError:
+            pass
+
+    target_name = os.environ.get("OCR_DML_ADAPTER_NAME", "").strip().lower()
+    target_luid = os.environ.get("OCR_DML_ADAPTER_LUID", "").strip().lower()
+
+    if not target_name and not target_luid:
+        print("[ocrBridge] No specific DML adapter specified. Strict policy: Fail closed to Paddle Native CPU.", file=sys.stderr)
+        return None, "adapter_unspecified"
+
+    adapters = list_video_adapters()
+    for a in adapters:
+        name = str(a.get("name") or "").lower()
+        pnp = str(a.get("id") or "").lower()
         if (target_name and target_name in name) or (target_luid and target_luid in pnp):
-            return idx, str(a.get("Name") or f"device_{idx}")
+            return int(a.get("index", 0)), str(a.get("name") or f"device_{a.get('index', 0)}")
 
     target_query = target_name or target_luid
     print(f"[ocrBridge] Warning: Requested DML adapter '{target_query}' not found. Fail closed: falling back to Paddle Native CPU (A).", file=sys.stderr)
@@ -3720,7 +3732,8 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
             # Check DirectML (AMD/Intel) via ONNX Runtime
             import onnxruntime as ort
             providers = ort.get_available_providers()
-            if "DmlExecutionProvider" in providers and os.environ.get("OCR_DISABLE_DML", "0") != "1" and _OCR_BACKEND_ORT_DML:
+            is_latin_only = lang in {"en", "latin", "eng", "english"}
+            if "DmlExecutionProvider" in providers and os.environ.get("OCR_DISABLE_DML", "0") != "1" and _OCR_BACKEND_ORT_DML and is_latin_only:
                 dev_id, matched_name = resolve_dml_device_id()
                 if dev_id is None:
                     use_gpu = False
@@ -3731,10 +3744,13 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
                     use_gpu = True
                     use_onnx = True
                     GLOBAL_USE_DML = True
-                    print(f"[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider device_id={dev_id}) enabled successfully", file=sys.stderr)
+                    print(f"[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider device_id={dev_id}, name={matched_name}) enabled successfully", file=sys.stderr)
             else:
                 GLOBAL_USE_DML = False
-                print("[ocrBridge] PaddleOCR DirectML disabled or NOT available", file=sys.stderr)
+                if _OCR_BACKEND_ORT_DML and not is_latin_only:
+                    print(f"[ocrBridge] DirectML opt-in active but language '{lang}' is not Latin. Enforcing fallback to Paddle Native CPU.", file=sys.stderr)
+                else:
+                    print("[ocrBridge] PaddleOCR DirectML disabled or NOT available", file=sys.stderr)
         except Exception as exc:
             print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
 
@@ -4669,6 +4685,7 @@ def run_paddleocr_pass(
             "predictConfig": applied_predict_kwargs,
             "paddlePass": pass_label,
             "activeProviders": active_providers,
+            "activeBackend": "ort_dml" if bool(GLOBAL_USE_DML) else "paddle",
         }
         return cleaned
 
@@ -4707,6 +4724,7 @@ def run_paddleocr_pass(
             "predictConfig": predict_kwargs,
             "paddlePass": pass_label,
             "activeProviders": active_providers,
+            "activeBackend": "ort_dml" if bool(GLOBAL_USE_DML) else "paddle",
         }
         return cleaned
 
@@ -4824,6 +4842,8 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
             "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
             "paddlePass": "chunked",
             "chunkCount": len(chunk_results),
+            "activeBackend": (chunk_results[0][0].get("debug") or {}).get("activeBackend") if chunk_results else ("ort_dml" if bool(GLOBAL_USE_DML) else "paddle"),
+            "activeProviders": (chunk_results[0][0].get("debug") or {}).get("activeProviders") if chunk_results else {},
         }
         return merged
 
@@ -4894,6 +4914,8 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                 "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
                 "dropCounts": dict(merged_debug.get("dropCounts") or {}),
                 "droppedWords": list(merged_debug.get("droppedWords") or []),
+                "activeBackend": (original_result.get("debug") or {}).get("activeBackend") or ("ort_dml" if bool(GLOBAL_USE_DML) else "paddle"),
+                "activeProviders": (original_result.get("debug") or {}).get("activeProviders") or {},
                 "timingsMs": {
                     "ocr": round((time.perf_counter() - started_at) * 1000, 1),
                     "originalPassMs": float((original_result.get("debug") or {}).get("runtimeMs") or 0.0),
@@ -5607,6 +5629,8 @@ def prewarm_engine(args: argparse.Namespace) -> Dict[str, Any]:
 def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
     if args.action == "ping":
         return {"ok": True, "pong": True, "engine": args.engine}
+    if args.action == "list-adapters":
+        return {"ok": True, "adapters": list_video_adapters()}
     if args.action == "status":
         if args.engine == "paddleocr":
             return status_paddleocr()
@@ -5683,8 +5707,8 @@ def serve_stdio(default_engine: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup", "ping"])
-    parser.add_argument("--engine", required=True, choices=["paddleocr", "easyocr"])
+    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup", "ping", "list-adapters"])
+    parser.add_argument("--engine", default="paddleocr", choices=["paddleocr", "easyocr"])
     parser.add_argument("--image")
     parser.add_argument("--language", default="eng")
     parser.add_argument("--width", type=int, default=0)
