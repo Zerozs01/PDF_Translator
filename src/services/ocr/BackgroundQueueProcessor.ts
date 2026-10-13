@@ -29,9 +29,39 @@ interface RenderedPageData {
   targetDpi: number;
   ocrLanguage: string;
   resolvedQualityProfile: 'fast' | 'balanced' | 'best';
+  renderDurationMs?: number;
   imageBlob?: Blob;
   blankOcrResult?: OCRPageResult;
 }
+
+interface PageStageTimings {
+  pageNum: number;
+  renderMs: number;
+  ocrIpcMs: number;
+  syncLayersMs: number;
+  translationMs: number;
+  totalMs: number;
+}
+
+function calculateStageStats(values: number[]) {
+  if (values.length === 0) {
+    return { medianMs: 0, meanMs: 0, minMs: 0, maxMs: 0, count: 0 };
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  return {
+    medianMs: Number(median.toFixed(2)),
+    meanMs: Number((sum / sorted.length).toFixed(2)),
+    minMs: Number(sorted[0].toFixed(2)),
+    maxMs: Number(sorted[sorted.length - 1].toFixed(2)),
+    count: sorted.length,
+  };
+}
+
+import { ConcurrencyLimiter } from './ConcurrencyLimiter';
+export { ConcurrencyLimiter };
 
 interface PrefetchPipelineController {
   data: Promise<RenderedPageData | null> | null;
@@ -63,6 +93,54 @@ class BackgroundQueueProcessor {
   private activeJobId: string | null = null;
   private checkInterval: ReturnType<typeof setTimeout> | null = null;
   private headlessCanvas: HTMLCanvasElement | null = null;
+  private activePrewarmPromise: Promise<any> | null = null;
+  private prewarmedKey: string | null = null;
+
+  public prewarm(
+    engine: OCREngine = 'paddleocr',
+    language: string = 'eng',
+    options?: { qualityProfile?: string; pipelineProfile?: string }
+  ): Promise<any> {
+    const qualityProfile = options?.qualityProfile || 'best';
+    const pipelineProfile = options?.pipelineProfile || 'panel';
+    const key = `${engine}:${language}:${qualityProfile}:${pipelineProfile}`;
+    if (this.prewarmedKey === key && this.activePrewarmPromise) {
+      return this.activePrewarmPromise;
+    }
+    if (window.electronAPI?.ocr?.prewarmEngine) {
+      console.log(`[QueueProcessor] Triggering eager prewarm for ${engine} (${language}, ${qualityProfile})...`);
+      this.prewarmedKey = key;
+      this.activePrewarmPromise = window.electronAPI.ocr
+        .prewarmEngine({
+          engine,
+          language,
+          qualityProfile,
+          pipelineProfile,
+        })
+        .then((res) => {
+          console.log(`[QueueProcessor] Eager prewarm completed for ${engine} (${language}, ${qualityProfile})`);
+          return res;
+        })
+        .catch((err) => {
+          console.warn(`[QueueProcessor] Eager prewarm warning for ${engine}:`, err);
+          this.prewarmedKey = null;
+          this.activePrewarmPromise = null;
+          throw err;
+        });
+      return this.activePrewarmPromise;
+    }
+    return Promise.resolve(null);
+  }
+
+  public async waitForPrewarm(): Promise<void> {
+    if (this.activePrewarmPromise) {
+      try {
+        await this.activePrewarmPromise;
+      } catch {
+        // ignore prewarm failure
+      }
+    }
+  }
 
   private getHeadlessCanvas(): HTMLCanvasElement {
     if (!this.headlessCanvas && typeof document !== 'undefined') {
@@ -279,12 +357,24 @@ class BackgroundQueueProcessor {
       throw new Error('Process aborted by signal');
     }
 
-    // 0. Eager prewarm OCR daemon in background (parallel to PDF read/render)
-    if (window.electronAPI?.ocr?.prewarmEngine && (job.engine === 'paddleocr' || job.engine === 'easyocr')) {
-      const targetLang = job.ocrLanguage || useOCRTextLayerStore.getState().options.language || 'eng';
-      void window.electronAPI.ocr.prewarmEngine({ engine: job.engine, language: targetLang }).catch((err: unknown) => {
-        console.warn(`[QueueProcessor] Background prewarm warning for ${job.engine}:`, err);
-      });
+    // 0. Prewarm engine with idempotent key and 60s timeout
+    const prewarmStartTime = performance.now();
+    try {
+      const prewarmTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Prewarm timed out after 60s')), 60000)
+      );
+      await Promise.race([
+        this.prewarm(job.engine, job.ocrLanguage || 'eng', {
+          qualityProfile: job.ocrQualityProfile || 'best',
+          pipelineProfile: 'panel',
+        }),
+        prewarmTimeout,
+      ]);
+      console.log(`[QueueProcessor] Prewarm ready in ${(performance.now() - prewarmStartTime).toFixed(1)}ms`);
+    } catch (prewarmErr) {
+      console.warn('[QueueProcessor] Prewarm skipped or failed:', prewarmErr);
+      this.prewarmedKey = null;
+      this.activePrewarmPromise = null;
     }
 
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
@@ -337,6 +427,10 @@ class BackgroundQueueProcessor {
     let successPagesCount = 0;
     let hasApiError = false;
     let lastErrorMessage = '';
+    const jobStageTimings: PageStageTimings[] = [];
+    const translationLimiter = new ConcurrencyLimiter(2);
+    const translationTasks: Promise<void>[] = [];
+    const translationErrors: { pageNum: number; message: string }[] = [];
 
     const prefetch: PrefetchPipelineController = {
       data: null,
@@ -385,7 +479,7 @@ class BackgroundQueueProcessor {
           );
 
           // 1. ดำเนินการ OCR (DB Cache หรือ Headless OCR พร้อม 2-Stage Prefetch)
-          const ocrResult = await this.executePageOCR(
+          const { ocrResult, renderDurationMs, ocrIpcDurationMs } = await this.executePageOCR(
             pdfDoc,
             job,
             pageNum,
@@ -396,30 +490,98 @@ class BackgroundQueueProcessor {
 
           throwIfAborted();
 
-          // 2. จัดกลุ่มเลเยอร์และบันทึกลง store (Cross-Document Safe)
+          // 2. จัดกลุ่มเลเยอร์และบันทึกลง store / DB ทันที (ผลหน้า N ขึ้น UI ทันที!)
+          const syncStartMark = `job-${job.id}-p${pageNum}-syncLayers-start`;
+          const syncEndMark = `job-${job.id}-p${pageNum}-syncLayers-end`;
+          const syncMeasureName = `job-${job.id}-p${pageNum}-syncLayers`;
+          performance.mark(syncStartMark);
           this.syncPageLayers(job.documentId, pageNum, ocrResult);
+          performance.mark(syncEndMark);
+          let syncLayersDurationMs = 0;
+          try {
+            const m = performance.measure(syncMeasureName, syncStartMark, syncEndMark);
+            syncLayersDurationMs = m.duration;
+            performance.clearMarks(syncStartMark);
+            performance.clearMarks(syncEndMark);
+          } catch {
+            // ignore mark measure failures
+          }
 
           throwIfAborted();
 
-          // 3. ส่งคำแปลภาษาเข้า Background Handlers
-          await this.dispatchPageTranslation(job, pageNum, totalPages, ocrResult, signal);
-
+          // 3. บันทึกผลสำเร็จของ OCR และ timing สำหรับหน้านี้ทันที
           processedCount++;
           successPagesCount++;
 
-          const finishedProgress = Math.round((processedCount / pagesCount) * 100);
+          const pageTiming: PageStageTimings = {
+            pageNum,
+            renderMs: Number(renderDurationMs.toFixed(2)),
+            ocrIpcMs: Number(ocrIpcDurationMs.toFixed(2)),
+            syncLayersMs: Number(syncLayersDurationMs.toFixed(2)),
+            translationMs: 0,
+            totalMs: Number((renderDurationMs + ocrIpcDurationMs + syncLayersDurationMs).toFixed(2)),
+          };
+          jobStageTimings.push(pageTiming);
+
+          const isTrans = this.isTranslationJob(job);
+          if (processedCount === 1) {
+            console.log(
+              `[QueueProcessor] [FirstPageTiming] Page ${pageNum}: OCR IPC = ${pageTiming.ocrIpcMs}ms, Total = ${pageTiming.totalMs}ms (prewarmed=${Boolean(this.prewarmedKey)})`
+            );
+          }
+
+          const progressScale = isTrans ? 85 : 100;
+          const finishedOcrProgress = Math.round((processedCount / pagesCount) * progressScale);
           useBackgroundQueueStore.getState().updateJobProgress(
             job.id,
-            finishedProgress,
+            finishedOcrProgress,
             pageNum,
             isSinglePage
-              ? `แปลหน้าที่ ${pageNum} เรียบร้อยแล้ว!`
-              : `แปลหน้าที่ ${pageNum} สำเร็จ (${processedCount}/${pagesCount}) • กำลังประมวลผลต่อ...`
+              ? `ตรวจจับตัวอักษรหน้าที่ ${pageNum} เสร็จสมบูรณ์!`
+              : `ตรวจจับตัวอักษรหน้าที่ ${pageNum} สำเร็จ (${processedCount}/${pagesCount}) • กำลังอ่านหน้าถัดไป...`
           );
+
+          // 4. ส่งคำแปลภาษาเข้า Limiter (Concurrency 2) แบบ Asynchronous (ไม่บล็อก loop OCR ของหน้า N+1!)
+          if (isTrans) {
+            const transTask = translationLimiter
+              .run(async () => {
+                if (signal.aborted) return;
+                const transStartMark = `job-${job.id}-p${pageNum}-trans-start`;
+                const transEndMark = `job-${job.id}-p${pageNum}-trans-end`;
+                const transMeasureName = `job-${job.id}-p${pageNum}-trans`;
+                performance.mark(transStartMark);
+
+                try {
+                  await this.dispatchPageTranslation(job, pageNum, totalPages, ocrResult, signal);
+                  performance.mark(transEndMark);
+                  try {
+                    const m = performance.measure(transMeasureName, transStartMark, transEndMark);
+                    pageTiming.translationMs = Number(m.duration.toFixed(2));
+                    pageTiming.totalMs = Number((pageTiming.renderMs + pageTiming.ocrIpcMs + pageTiming.syncLayersMs + pageTiming.translationMs).toFixed(2));
+                    performance.clearMarks(transStartMark);
+                    performance.clearMarks(transEndMark);
+                  } catch {}
+                } catch (transErr: any) {
+                  if (signal.aborted) throw transErr;
+                  const errMsg = transErr?.message || String(transErr);
+                  console.warn(`[QueueProcessor] Translation failed for page ${pageNum} (isolated error, OCR kept):`, errMsg);
+                  translationErrors.push({ pageNum, message: errMsg });
+                }
+              })
+              .catch((limiterErr: any) => {
+                // Catch limiter/abort errors right at task creation so no unhandled rejections escape
+                if (limiterErr?.name === 'AbortError' || signal.aborted) {
+                  return;
+                }
+                console.warn(`[QueueProcessor] Translation limiter task error on page ${pageNum}:`, limiterErr);
+              });
+            translationTasks.push(transTask);
+          }
 
           throwIfAborted();
         }
       } catch (err: any) {
+        translationLimiter.clear();
         // ถ้า signal ถูก abort เจตนา (Preemption/Foreground) → re-throw ทันที ไม่ treat เป็น chunk failure
         if (signal.aborted) {
           throw err; // re-throw ให้ main catch handle ตาม job status ที่ตั้งไว้แล้ว
@@ -446,9 +608,26 @@ class BackgroundQueueProcessor {
       }
     }
 
+    // รอให้งานแปลภาษาที่ค้างอยู่ใน Limiter ทำงานเสร็จครบทุกหน้า
+    if (this.isTranslationJob(job) && translationTasks.length > 0) {
+      throwIfAborted();
+      useBackgroundQueueStore.getState().updateJobProgress(
+        job.id,
+        90,
+        endPage,
+        'ตรวจจับตัวอักษรครบทุกหน้าแล้ว กำลังรอการแปลภาษาหน้าสุดท้าย...'
+      );
+      try {
+        await Promise.all(translationTasks);
+      } catch (err) {
+        if (signal.aborted) throw err;
+      }
+    }
+
     // ถ้า signal ถูก abort เจตนา (Preemption) → ออกจาก processJob โดยไม่ mark ว่า failed
     // สถานะ 'queued' ถูกตั้งไว้โดย Subscriber ก่อน abort แล้ว ไม่ต้องทำอะไรเพิ่ม
     if (signal.aborted) {
+      translationLimiter.clear();
       throw new Error('Process aborted by signal');
     }
 
@@ -462,12 +641,32 @@ class BackgroundQueueProcessor {
       throw new Error(`Queue processing halted: ${targetMessage}`);
     }
 
-    useBackgroundQueueStore.getState().updateJobProgress(
-      job.id, 
-      100, 
-      endPage, 
-      isSinglePage ? 'ประมวลผลหน้าเดี่ยวสำเร็จเสร็จสิ้น!' : 'แปลภาษาสำเร็จเสร็จสิ้น!'
-    );
+    if (jobStageTimings.length > 0) {
+      console.log(`\n[QueueProcessor] =======================================================`);
+      console.log(`[QueueProcessor] PERFORMANCE TIMING SUMMARY: Job ${job.id} (${job.filename})`);
+      console.log(`[QueueProcessor] Engine: ${job.engine} | Pages Measured: ${jobStageTimings.length}`);
+      console.log(`[QueueProcessor] =======================================================`);
+      console.table({
+        '1. Render (Headless 300DPI)': calculateStageStats(jobStageTimings.map(t => t.renderMs)),
+        '2. OCR (IPC Round-Trip)': calculateStageStats(jobStageTimings.map(t => t.ocrIpcMs)),
+        '3. Sync Page Layers': calculateStageStats(jobStageTimings.map(t => t.syncLayersMs)),
+        '4. Translation': calculateStageStats(jobStageTimings.map(t => t.translationMs)),
+        'Total Per Page Pipeline': calculateStageStats(jobStageTimings.map(t => t.totalMs)),
+      });
+    }
+
+    if (translationErrors.length > 0) {
+      const targetStatus = 'partial_success';
+      const targetMessage = `ประมวลผล OCR สำเร็จทุกหน้า (${pagesCount}/${pagesCount}) แต่การแปลล้มเหลว ${translationErrors.length} หน้า: ${translationErrors.map(e => `หน้า ${e.pageNum}`).join(', ')}`;
+      useBackgroundQueueStore.getState().updateJobStatus(job.id, targetStatus, targetMessage);
+    } else {
+      useBackgroundQueueStore.getState().updateJobProgress(
+        job.id, 
+        100, 
+        endPage, 
+        isSinglePage ? 'ประมวลผลหน้าเดี่ยวสำเร็จเสร็จสิ้น!' : (this.isTranslationJob(job) ? 'แปลภาษาสำเร็จเสร็จสิ้น!' : 'ตรวจจับตัวอักษรสำเร็จเสร็จสิ้น!')
+      );
+    }
   }
 
   /**
@@ -480,12 +679,14 @@ class BackgroundQueueProcessor {
     nextPageNum: number | null,
     signal: AbortSignal,
     prefetch: PrefetchPipelineController
-  ): Promise<OCRPageResult> {
+  ): Promise<{ ocrResult: OCRPageResult; renderDurationMs: number; ocrIpcDurationMs: number }> {
     const throwIfAborted = () => {
       if (signal.aborted) throw new Error('Process aborted by user');
     };
 
     let ocrResult: OCRPageResult | null = null;
+    let pageData: RenderedPageData | null = null;
+    let ocrIpcDurationMs = 0;
 
     // ลองค้นหา OCR แคชจากฐานข้อมูลก่อน
     try {
@@ -547,6 +748,12 @@ class BackgroundQueueProcessor {
           if (ocrResult && nextPageNum !== null) {
             prefetch.trigger(nextPageNum);
           }
+
+          return {
+            ocrResult,
+            renderDurationMs: 0,
+            ocrIpcDurationMs: 0,
+          };
         }
       }
     } catch (err) {
@@ -558,7 +765,6 @@ class BackgroundQueueProcessor {
       throwIfAborted();
       console.log(`[QueueProcessor] Page ${pageNum} Cache Miss. Running Headless OCR...`);
 
-      let pageData: RenderedPageData | null = null;
       if (prefetch.pageNum === pageNum && prefetch.data) {
         pageData = await prefetch.data;
         prefetch.data = null;
@@ -601,6 +807,11 @@ class BackgroundQueueProcessor {
           `กำลังตรวจจับตัวอักษรหน้าที่ ${pageNum} ด้วย ${job.engine}...`
         );
 
+        const ocrStartMark = `job-${job.id}-p${pageNum}-ocr-start`;
+        const ocrEndMark = `job-${job.id}-p${pageNum}-ocr-end`;
+        const ocrMeasureName = `job-${job.id}-p${pageNum}-ocr`;
+        performance.mark(ocrStartMark);
+
         const ocrPromise = visionService.ocrForTextLayer(
           pageData.imageBlob,
           pageData.canvasWidth,
@@ -620,6 +831,17 @@ class BackgroundQueueProcessor {
         );
 
         ocrResult = await ocrPromise;
+
+        performance.mark(ocrEndMark);
+        let ocrIpcDurationMs = 0;
+        try {
+          const m = performance.measure(ocrMeasureName, ocrStartMark, ocrEndMark);
+          ocrIpcDurationMs = m.duration;
+          performance.clearMarks(ocrStartMark);
+          performance.clearMarks(ocrEndMark);
+        } catch {
+          // ignore mark measure failures
+        }
       }
 
       if (!ocrResult) {
@@ -660,7 +882,11 @@ class BackgroundQueueProcessor {
       }
     }
 
-    return ocrResult;
+    return {
+      ocrResult,
+      renderDurationMs: pageData?.renderDurationMs || 0,
+      ocrIpcDurationMs: ocrIpcDurationMs || 0,
+    };
   }
 
   /**
@@ -672,9 +898,12 @@ class BackgroundQueueProcessor {
 
     if (!isActiveDoc) {
       console.log(
-        `[QueueProcessor] Skipping layerStore.setPageLayers for page ${pageNum}: ` +
-        `active doc (${activeDocId}) ≠ job doc (${documentId}). Layers will be built on open.`
+        `[QueueProcessor] Document ${documentId} is inactive (active doc is ${activeDocId}). ` +
+        `Persisting OCR to DB; viewer will hydrate layers upon document switch.`
       );
+      void dbService.saveOCR(documentId, pageNum, ocrResult, ocrResult.ocrEngine || 'paddleocr').catch((err) => {
+        console.warn(`[QueueProcessor] Failed to persist OCR cache for inactive doc ${documentId}:`, err);
+      });
       return;
     }
 
@@ -699,6 +928,15 @@ class BackgroundQueueProcessor {
     }
   }
 
+  private isTranslationJob(job: BackgroundJob): boolean {
+    return (
+      job.type === 'offline_all' ||
+      job.type === 'ai_all' ||
+      job.type === 'offline_single' ||
+      job.type === 'ai_single'
+    );
+  }
+
   /**
    * ดำเนินการแปลภาษาในหน้าเอกสารผ่าน Background Handlers
    */
@@ -709,13 +947,7 @@ class BackgroundQueueProcessor {
     ocrResult: OCRPageResult,
     signal: AbortSignal
   ): Promise<boolean> {
-    const isTranslationJob =
-      job.type === 'offline_all' ||
-      job.type === 'ai_all' ||
-      job.type === 'offline_single' ||
-      job.type === 'ai_single';
-
-    if (!isTranslationJob) return false;
+    if (!this.isTranslationJob(job)) return false;
 
     if (!this.handlers) {
       throw new Error('Translation handlers not registered in BackgroundQueueProcessor');
@@ -816,6 +1048,11 @@ class BackgroundQueueProcessor {
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
 
+    const renderStartMark = `job-${job.id}-p${pageNum}-render-start`;
+    const renderEndMark = `job-${job.id}-p${pageNum}-render-end`;
+    const renderMeasureName = `job-${job.id}-p${pageNum}-render`;
+    performance.mark(renderStartMark);
+
     try {
       if (signal.aborted) throw new Error('Process aborted by signal');
       const ctx = canvas.getContext('2d', { alpha: false });
@@ -832,6 +1069,17 @@ class BackgroundQueueProcessor {
       } as any).promise;
 
       if (signal.aborted) throw new Error('Process aborted by signal');
+
+      performance.mark(renderEndMark);
+      let renderDurationMs = 0;
+      try {
+        const m = performance.measure(renderMeasureName, renderStartMark, renderEndMark);
+        renderDurationMs = m.duration;
+        performance.clearMarks(renderStartMark);
+        performance.clearMarks(renderEndMark);
+      } catch {
+        // ignore mark measure failures
+      }
 
       // Fast blank / solid color page detection check
       const blankCheck = detectBlankOrSolidCanvas(canvas);
@@ -879,6 +1127,7 @@ class BackgroundQueueProcessor {
         targetDpi,
         ocrLanguage,
         resolvedQualityProfile,
+        renderDurationMs,
         imageBlob,
       };
     } catch (err) {

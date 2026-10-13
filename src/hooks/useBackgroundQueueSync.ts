@@ -19,6 +19,38 @@ export interface UseBackgroundQueueSyncParams {
   runCurrentPageTranslation: (engine: 'offline' | 'ai', pageNum: number, options?: any) => Promise<boolean>;
 }
 
+export interface ExecuteTranslationPayload {
+  docId: number;
+  pageNum: number;
+  ocrResult: any;
+  engine: 'offline' | 'ai';
+  signal?: AbortSignal;
+  options?: {
+    ocrLanguage?: string;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+    translationMode?: TranslationMode;
+  };
+}
+
+export async function executePageTranslation(
+  payload: ExecuteTranslationPayload,
+  translationRunner: (engine: 'offline' | 'ai', pageNum: number, options?: any) => Promise<boolean>
+): Promise<boolean> {
+  const { docId, pageNum, ocrResult, engine, signal, options } = payload;
+  return translationRunner(engine, pageNum, {
+    suppressStatus: true,
+    bypassPageCache: false,
+    ocrLanguage: options?.ocrLanguage,
+    sourceLanguage: options?.sourceLanguage,
+    targetLanguage: options?.targetLanguage,
+    translationMode: options?.translationMode,
+    ocrResultOverride: ocrResult,
+    documentIdOverride: docId,
+    signal,
+  });
+}
+
 export function useBackgroundQueueSync({
   documentId,
   currentPage,
@@ -42,19 +74,12 @@ export function useBackgroundQueueSync({
     useGlossaryStore.getState().initSync();
 
     backgroundQueueProcessor.registerHandlers({
-      translatePage: async (docId, pageNum, ocrResult, engine, _signal, options) => {
+      translatePage: async (docId, pageNum, ocrResult, engine, signal, options) => {
         try {
-          const result = await runCurrentPageTranslationRef.current(engine, pageNum, { 
-            suppressStatus: true,
-            bypassPageCache: false,
-            ocrLanguage: options?.ocrLanguage,
-            sourceLanguage: options?.sourceLanguage,
-            targetLanguage: options?.targetLanguage,
-            translationMode: options?.translationMode,
-            ocrResultOverride: ocrResult,
-            documentIdOverride: docId,
-          });
-          return result;
+          return await executePageTranslation(
+            { docId, pageNum, ocrResult, engine, signal, options },
+            runCurrentPageTranslationRef.current
+          );
         } catch (err) {
           console.error(`[AppQueueHandler] translatePage error on page ${pageNum}:`, err);
           throw err;

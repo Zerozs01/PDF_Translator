@@ -305,26 +305,28 @@ export function useDocumentTranslation({
     const matchedDocId = options?.documentIdOverride ?? (await ensureDocumentId().catch(() => null));
     const isActiveDoc = matchedDocId !== null && activeDocId !== null && activeDocId === matchedDocId;
 
-    // 0. Verify and synchronously initialize store layers if missing or stale
-    const layerStore = useLayerStore.getState();
-    const existingLayers = layerStore.getPageLayers(pageNum);
-    const hasUserModifications = existingLayers.some((l) => l.userEdited || l.id.startsWith('manual-layer-'))
-      || layerStore.getPageGroups(pageNum).some((g) => g.userCreated);
+    // 0. Verify and synchronously initialize store layers if missing or stale (Only for active document)
+    if (isActiveDoc) {
+      const layerStore = useLayerStore.getState();
+      const existingLayers = layerStore.getPageLayers(pageNum);
+      const hasUserModifications = existingLayers.some((l) => l.userEdited || l.id.startsWith('manual-layer-'))
+        || layerStore.getPageGroups(pageNum).some((g) => g.userCreated);
 
-    if (existingLayers.length === 0 || !hasUserModifications) {
-      try {
-        const isStoreStale = existingLayers.length === 0
-          || existingLayers.length !== pageOCR.lines.length
-          || existingLayers.some((l) => l.lineIndex >= pageOCR.lines.length)
-          || (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
+      if (existingLayers.length === 0 || !hasUserModifications) {
+        try {
+          const isStoreStale = existingLayers.length === 0
+            || existingLayers.length !== pageOCR.lines.length
+            || existingLayers.some((l) => l.lineIndex >= pageOCR.lines.length)
+            || (existingLayers.length > 0 && !hasUserModifications && existingLayers.some((l, idx) => l.sourceText !== String(pageOCR.lines[idx]?.text || '').replace(/\s+/g, ' ').trim()));
 
-        if (isStoreStale) {
-          const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
-          layerStore.setPageLayers(pageNum, initialLayerResult);
-          console.log(`[TranslationSync] Synchronously initialized store layers for page ${pageNum}.`);
+          if (isStoreStale) {
+            const initialLayerResult = buildLayerGroupsFromOCR(pageOCR);
+            layerStore.setPageLayers(pageNum, initialLayerResult);
+            console.log(`[TranslationSync] Synchronously initialized store layers for page ${pageNum}.`);
+          }
+        } catch (err) {
+          console.warn('[TranslationSync] Failed to verify/rebuild store layers:', err);
         }
-      } catch (err) {
-        console.warn('[TranslationSync] Failed to verify/rebuild store layers:', err);
       }
     }
 
@@ -392,8 +394,8 @@ export function useDocumentTranslation({
       return false;
     }
 
-    // Phase 2: Auto-detect & Sync Source & OCR Language if detected with high confidence
-    if (plan.detectedLanguageSwitch) {
+    // Phase 2: Auto-detect & Sync Source & OCR Language if detected with high confidence (Only for active document)
+    if (plan.detectedLanguageSwitch && isActiveDoc) {
       const { sourceLanguage: detectedSource, ocrLanguageKey: detectedOcr, languageName } = plan.detectedLanguageSwitch;
       const currentProjectSource = useProjectStore.getState().sourceLanguage;
       const currentOcrLang = useOCRTextLayerStore.getState().options.language;

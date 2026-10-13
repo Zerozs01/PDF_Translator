@@ -892,13 +892,15 @@ export function initPlatformBridgeCompat(): void {
             return { ok: false };
           }
         },
-        prewarmEngine: async (payload: { engine: string; language?: string }) => {
+        prewarmEngine: async (payload: { engine: string; language?: string; qualityProfile?: string; pipelineProfile?: string }) => {
           try {
             const res = await invoke<any>('send_sidecar_command', {
               payload: {
                 action: 'prewarm',
                 engine: payload.engine || 'paddleocr',
                 language: payload.language || 'eng',
+                qualityProfile: payload.qualityProfile || 'best',
+                pipelineProfile: payload.pipelineProfile || 'panel',
               },
             });
             return res;
@@ -919,6 +921,53 @@ export function initPlatformBridgeCompat(): void {
           } catch (err) {
             console.warn('[Bridge] clearCudaCache warning:', err);
             return false;
+          }
+        },
+        listAdapters: (() => {
+          let cachedPromise: Promise<Array<{ index: number; name: string; id: string }>> | null = null;
+          return async () => {
+            if (!cachedPromise) {
+              cachedPromise = (async () => {
+                try {
+                  const res = await invoke<any>('send_sidecar_command', {
+                    payload: {
+                      id: `adapters_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                      action: 'list-adapters',
+                      engine: 'paddleocr',
+                    },
+                  });
+                  return (res?.adapters || []) as Array<{ index: number; name: string; id: string }>;
+                } catch (err) {
+                  console.warn('[Bridge] listAdapters warning:', err);
+                  cachedPromise = null;
+                  return [];
+                }
+              })();
+            }
+            return cachedPromise;
+          };
+        })(),
+        setBackend: async (payload: { backend: 'paddle' | 'ort_dml'; adapterName?: string }) => {
+          try {
+            await invoke<void>('set_ocr_backend', {
+              backend: payload.backend,
+              adapterName: payload.adapterName || null,
+            });
+          } catch (err) {
+            console.error('[Bridge] set_ocr_backend failed:', err);
+            throw err;
+          }
+        },
+        getBackend: async () => {
+          try {
+            const [backend, adapterName] = await invoke<[string, string | null]>('get_ocr_backend');
+            return {
+              backend: (backend === 'ort_dml' ? 'ort_dml' : 'paddle') as 'paddle' | 'ort_dml',
+              adapterName: adapterName || undefined,
+            };
+          } catch (err) {
+            console.warn('[Bridge] get_ocr_backend warning:', err);
+            return { backend: 'paddle' as const, adapterName: undefined };
           }
         },
         cancelExternal: async () => true,
@@ -1244,8 +1293,10 @@ export function initPlatformBridgeCompat(): void {
     };
 
     (window as any).electronAPI = createSafeBridgeSection(rawElectronAPI);
+    (window as any).platformBridge = platformBridge;
   }
 }
 
 // Auto-run compatibility shim upon module import
 initPlatformBridgeCompat();
+(window as any).platformBridge = platformBridge;

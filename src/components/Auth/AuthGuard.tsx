@@ -11,14 +11,26 @@ interface AuthGuardProps {
 export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   const { isUnlocked, isSetup, isLoading, checkStatus, autoLogin } = useAuthStore();
 
+  // Allow OCR test harness ONLY during local development (import.meta.env.DEV is statically stripped in production)
+  const isDevHarness = Boolean(
+    import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('ocr_harness') === '1'
+  );
+
   useEffect(() => {
+    if (isDevHarness) return;
     // ตรวจสอบสถานะการตั้งค่าความปลอดภัยและพยายามทำ auto-login หากเปิด Relax Mode
     const initAuth = async () => {
       await checkStatus();
       await autoLogin();
     };
     void initAuth();
-  }, [checkStatus, autoLogin]);
+  }, [checkStatus, autoLogin, isDevHarness]);
+
+  if (isDevHarness) {
+    return <>{children}</>;
+  }
 
   if (isLoading) {
     return (

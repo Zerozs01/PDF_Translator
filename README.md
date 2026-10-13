@@ -13,7 +13,7 @@
 ## Key Features
 - **Native PDF Engine (Rust + Pdfium):** เรนเดอร์และประมวลผลหน้าเอกสารแบบ Multi-threaded พร้อมระบบ Bounded LRU Cache ป้องกันปัญหา Out-of-Memory
 - **Custom Protocol Streaming:** สตรีมภาพหน้าเอกสารและ Thumbnail สู่ Frontend ด้วย Zero-Copy ผ่านโปรโตคอล `pdf-page://`
-- **Offline OCR Engine:** ตรวจจับและอ่านข้อความจากไฟล์ PDF และรูปภาพด้วย PaddleOCR และ EasyOCR แบบออฟไลน์ 100% ผ่าน Python Sidecar Daemon
+- **Offline OCR Engine & Hardware Acceleration:** ตรวจจับและอ่านข้อความจากไฟล์ PDF และรูปภาพด้วย PaddleOCR และ EasyOCR แบบออฟไลน์ 100% ผ่าน Python Sidecar Daemon โหมดเริ่มต้นเป็น **Paddle Native CPU** ปลอดภัย 100% (สถานะเริ่มต้น: `[ocrBridge] PaddleOCR DirectML opt-in inactive (current backend: 'paddle'). Using Paddle Native CPU.`) พร้อมระบบ Opt-in เร่งความเร็วด้วย GPU ผ่าน DirectML (AMD/Intel/NVIDIA) สำหรับภาษาอังกฤษ/ละติน และมีระบบ Fail-Closed Fallback สลับกลับเป็น CPU อัตโนมัติเมื่อเกิดข้อผิดพลาด
 - **Spatial Balloon Clustering:** รวมกลุ่มและแยกแยะกล่องข้อความ คำพูดตัวละคร และ Sound Effects (SFX) อัตโนมัติ
 - **Local NMT Translation:** แปลภาษาแบบออฟไลน์ด้วย Argos Translate พร้อมคลังพจนานุกรมคำสั้นและสแลงเฉพาะทาง
 - **High-Performance SQLite:** จัดเก็บข้อมูลและแคชผลลัพธ์ผ่าน Rusqlite (WAL mode) ในตัวเครื่องอย่างปลอดภัย
@@ -89,7 +89,7 @@ pnpm run package
 
 ### 5. รันชุดทดสอบ (Testing)
 ```bash
-# รัน Frontend Unit Tests (30 ไฟล์, 383 เคส)
+# รัน Frontend Unit Tests (32 ไฟล์, 387 เคส ผ่าน 100%)
 pnpm test
 
 # รัน Rust Native Engine Tests (5 เคส)

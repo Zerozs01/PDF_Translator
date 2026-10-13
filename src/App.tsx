@@ -12,9 +12,12 @@ import type { OCREngine, OCRQualityProfile } from './types';
 import { useExportOrchestration } from './hooks/useExportOrchestration';
 import { useDocumentTranslation } from './hooks/useDocumentTranslation';
 import { useBackgroundQueueSync } from './hooks/useBackgroundQueueSync';
+import { backgroundQueueProcessor } from './services/ocr/BackgroundQueueProcessor';
 
 // Lazy Load Heavy Components (Avoid bundling 20MB+ PDF/Canvas/Export parsers into startup bundle)
-const OCRRegressionHarness = React.lazy(() => import('./components/OCR/OCRRegressionHarness').then(module => ({ default: module.OCRRegressionHarness })));
+const OCRRegressionHarness = import.meta.env.DEV
+  ? React.lazy(() => import('./components/OCR/OCRRegressionHarness').then(module => ({ default: module.OCRRegressionHarness })))
+  : () => null;
 const WorkspaceContainer = React.lazy(() => import('./components/Viewer/WorkspaceContainer').then(module => ({ default: module.WorkspaceContainer })));
 const DocumentExportModal = React.lazy(() => import('./components/Export/DocumentExportModal').then(module => ({ default: module.DocumentExportModal })));
 const ExportOverlay = React.lazy(() => import('./components/Export/ExportOverlay').then(module => ({ default: module.ExportOverlay })));
@@ -31,8 +34,11 @@ import { AppHeaderToolbar } from './components/Layout/AppHeaderToolbar';
 import { BackgroundQueuePanel } from './components/Queue/BackgroundQueuePanel';
 
 export default function App() {
-  const showOCRHarness = typeof window !== 'undefined'
-    && new URLSearchParams(window.location.search).get('ocr_harness') === '1';
+  const showOCRHarness = Boolean(
+    import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('ocr_harness') === '1'
+  );
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const loadingState = useUIStore((s) => s.loadingState);
@@ -90,6 +96,20 @@ export default function App() {
   }, []);
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  // T3: Eager warm-up on app launch
+  useEffect(() => {
+    const targetLang = ocrLanguage || 'eng';
+    void backgroundQueueProcessor.prewarm('paddleocr', targetLang);
+  }, []);
+
+  // T3: Eager warm-up on document open
+  useEffect(() => {
+    if (file && documentId) {
+      const targetLang = ocrLanguage || 'eng';
+      void backgroundQueueProcessor.prewarm(ocrOptions.engine || 'paddleocr', targetLang);
+    }
+  }, [file, documentId, ocrLanguage, ocrOptions.engine]);
 
   useEffect(() => {
     const handleResize = () => {

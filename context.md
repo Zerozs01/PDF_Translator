@@ -54,14 +54,14 @@ User Interaction -> React Component / Canvas -> Zustand Store / Hook -> Platform
   - Primary: src-tauri/src/core/pdf/engine.rs, src-tauri/src/protocol/document_stream.rs
   - Secondary: src/services/bridge/pdfBridge.ts, src-tauri/src/core/pdf/cache.rs, src-tauri/src/core/pdf/reconstructor.rs
   - Scope: ประมวลผลและสตรีมภาพ PDF ผ่านโปรโตคอล `pdf-page://` และประกอบ Canvas Overlay + Invisible Text Layer คืนเอกสาร Searchable PDF
-- OCR Processing & Lifecycle
-  - Primary: src/services/ocr/BackgroundQueueProcessor.ts
-  - Secondary: src-tauri/src/core/process_manager.rs, scripts/external_ocr_bridge.py
-  - Scope: ควบคุมคิว OCR เบื้องหลังและสื่อสารกับ Python Sidecar ผ่าน JSONL Stdio
+- OCR Processing, Hardware Acceleration & Lifecycle
+  - Primary: src/services/ocr/BackgroundQueueProcessor.ts, src/services/ocr/ConcurrencyLimiter.ts
+  - Secondary: src-tauri/src/core/process_manager.rs, scripts/external_ocr_bridge.py, src/stores/useOCRTextLayerStore.ts, src/components/OCR/EngineSelector/OCREngineSelector.tsx
+  - Scope: ควบคุมคิว OCR เบื้องหลัง, จัดการ Concurrency Slot ปลอดภัยจาก Unhandled Rejection, รองรับ Hardware Discovery (`list-adapters`) และ DirectML Opt-in (Default ปัจจุบันเป็น Paddle Native CPU ปลอดภัย 100% มีข้อความสถานะ `opt-in inactive`, DirectML เปิดใช้เฉพาะ Latin/en พร้อมระบบ Fail-Closed Fallback), และ IPC ID แบบ Monotonic Sequence ป้องกัน Race Condition
 - Offline Translation Pipeline
-  - Primary: src/services/translation/translationCoordinator.ts
-  - Secondary: src/hooks/useDocumentTranslation.ts, src/services/translation/offlineTranslationService.ts, scripts/argos_translate_bridge.py
-  - Scope: ประสานงานแปลออฟไลน์ กรองคำสแลง และเชื่อมต่อพจนานุกรม
+  - Primary: src/services/translation/translationCoordinator.ts, src/hooks/useDocumentTranslation.ts
+  - Secondary: src/hooks/translation/useTranslationCachePersister.ts, src/services/translation/offlineTranslationService.ts, scripts/argos_translate_bridge.py
+  - Scope: ประสานงานแปลออฟไลน์ กรองคำสแลง เชื่อมต่อพจนานุกรม และมี Cross-Document Isolation (`persistTranslationResultCore`) ป้องกัน State Bleed ข้ามเอกสารขณะแปลพื้นหลัง
 - Text Layer Grouping & Balloon Detection
   - Primary: src/services/layout/balloonAwareGroupingService.ts
   - Secondary: src/services/layers/LayerGroupingService.ts, src/services/native/fastSpatialCluster.ts
@@ -70,3 +70,4 @@ User Interaction -> React Component / Canvas -> Zustand Store / Hook -> Platform
   - Primary: src-tauri/src/core/db.rs, src-tauri/src/commands/database.rs
   - Secondary: src/services/bridge/TauriBridge.ts, src/services/dbService.ts
   - Scope: อ่าน/เขียนฐานข้อมูล SQLite ในเครื่อง (WAL mode) จัดการแคช OCR และ Benchmark
+

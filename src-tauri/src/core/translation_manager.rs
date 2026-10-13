@@ -281,7 +281,12 @@ impl TranslationManager {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
-                let id = format!("trans_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                static TRANS_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                let id = format!(
+                    "trans_{}_{}",
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros(),
+                    TRANS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
                 if let Value::Object(ref mut map) = payload {
                     map.insert("id".to_string(), json!(id));
                 }

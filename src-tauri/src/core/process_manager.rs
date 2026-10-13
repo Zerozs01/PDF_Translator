@@ -29,10 +29,17 @@ pub struct ProcessManager {
     project_root: PathBuf,
     inflight: InflightMap,
     is_shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    ocr_backend: Arc<Mutex<String>>,
+    dml_adapter_name: Arc<Mutex<Option<String>>>,
 }
 
 impl ProcessManager {
     pub fn new(project_root: PathBuf) -> Self {
+        let (initial_backend, initial_adapter) = if let Ok(b) = std::env::var("OCR_BACKEND") {
+            (b, std::env::var("OCR_DML_ADAPTER_NAME").ok().filter(|s| !s.trim().is_empty()))
+        } else {
+            ("paddle".to_string(), None)
+        };
         Self {
             child: Arc::new(Mutex::new(None)),
             stdin: Arc::new(Mutex::new(None)),
@@ -42,6 +49,8 @@ impl ProcessManager {
             project_root,
             inflight: Arc::new(Mutex::new(HashMap::new())),
             is_shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ocr_backend: Arc::new(Mutex::new(initial_backend)),
+            dml_adapter_name: Arc::new(Mutex::new(initial_adapter)),
         }
     }
 
@@ -142,15 +151,22 @@ impl ProcessManager {
         stdin_arc: &Arc<Mutex<Option<ChildStdin>>>,
         reader_handle: &Arc<Mutex<Option<JoinHandle<()>>>>,
         pending: &PendingMap,
+        ocr_backend: &Arc<Mutex<String>>,
+        dml_adapter_name: &Arc<Mutex<Option<String>>>,
     ) -> Result<(), AppError> {
         let python_exe = Self::resolve_python_executable(project_root);
         let script_path = Self::resolve_bridge_script_path(project_root);
 
+        let backend_val = ocr_backend.lock().await.clone();
+        let adapter_val = dml_adapter_name.lock().await.clone();
+
         eprintln!(
-            "[ProcessManager] Spawning Python worker (exe: {}, script: {}, cwd: {})",
+            "[ProcessManager] Spawning Python worker (exe: {}, script: {}, cwd: {}, backend: {}, adapter: {:?})",
             python_exe,
             script_path.display(),
-            project_root.display()
+            project_root.display(),
+            backend_val,
+            adapter_val
         );
 
         let mut cmd = Command::new(&python_exe);
@@ -162,7 +178,19 @@ impl ProcessManager {
             .arg("paddleocr")
             .current_dir(project_root)
             .env("PYTHONUNBUFFERED", "1")
-            .stdin(Stdio::piped())
+            .env("OCR_BACKEND", &backend_val);
+
+        if let Some(ref adapter) = adapter_val {
+            if !adapter.trim().is_empty() {
+                cmd.env("OCR_DML_ADAPTER_NAME", adapter);
+            } else {
+                cmd.env_remove("OCR_DML_ADAPTER_NAME");
+            }
+        } else {
+            cmd.env_remove("OCR_DML_ADAPTER_NAME");
+        }
+
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -260,6 +288,8 @@ impl ProcessManager {
             &self.stdin,
             &self.reader_handle,
             &self.pending,
+            &self.ocr_backend,
+            &self.dml_adapter_name,
         ).await?;
 
         // Proactive Watchdog task with auto-recovery within <= 3 seconds
@@ -271,6 +301,8 @@ impl ProcessManager {
             let reader_handle_clone = Arc::clone(&self.reader_handle);
             let project_root_clone = self.project_root.clone();
             let is_shutting_down_clone = Arc::clone(&self.is_shutting_down);
+            let ocr_backend_clone = Arc::clone(&self.ocr_backend);
+            let dml_adapter_clone = Arc::clone(&self.dml_adapter_name);
 
             let watchdog_task = tokio::spawn(async move {
                 loop {
@@ -305,6 +337,8 @@ impl ProcessManager {
                                         &stdin_arc,
                                         &reader_handle_clone,
                                         &pending_for_watchdog,
+                                        &ocr_backend_clone,
+                                        &dml_adapter_clone,
                                     ).await {
                                         eprintln!("[ProcessManager Watchdog] Auto-recovery failed: {}", e);
                                     } else {
@@ -368,7 +402,9 @@ impl ProcessManager {
             let action = payload.get("action").and_then(|v| v.as_str()).unwrap_or("");
             let engine = payload.get("engine").and_then(|v| v.as_str()).unwrap_or("");
             let img = payload.get("image").or_else(|| payload.get("imagePath")).and_then(|v| v.as_str()).unwrap_or("");
-            if !action.is_empty() && !img.is_empty() {
+            if action == "list-adapters" {
+                "action:list-adapters".to_string()
+            } else if !action.is_empty() && !img.is_empty() {
                 format!("{}:{}:{}", action, engine, img)
             } else {
                 String::new()
@@ -414,7 +450,12 @@ impl ProcessManager {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
-                let id = format!("req_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                static REQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                let id = format!(
+                    "req_{}_{}",
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros(),
+                    REQ_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
                 if let Value::Object(ref mut map) = payload {
                     map.insert("id".to_string(), json!(id));
                 }
@@ -499,6 +540,22 @@ impl ProcessManager {
         self.internal_reset().await;
         self.ensure_started().await?;
         Ok(())
+    }
+
+    pub async fn set_ocr_backend(&self, backend: String, adapter_name: Option<String>) -> Result<(), AppError> {
+        {
+            let mut b = self.ocr_backend.lock().await;
+            *b = backend;
+            let mut a = self.dml_adapter_name.lock().await;
+            *a = adapter_name.filter(|s| !s.trim().is_empty());
+        }
+        self.restart_worker().await
+    }
+
+    pub async fn get_ocr_backend(&self) -> (String, Option<String>) {
+        let b = self.ocr_backend.lock().await.clone();
+        let a = self.dml_adapter_name.lock().await.clone();
+        (b, a)
     }
 }
 
