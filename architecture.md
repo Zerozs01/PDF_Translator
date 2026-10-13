@@ -71,12 +71,16 @@ flowchart TD
 - **Boundary Rules:** รันใน Main Process เท่านั้น; การเข้าถึงข้อมูลต้องผ่าน DAO Methods ห้ามยิง Dynamic Raw SQL จากภายนอก
 - **Implementation Status:** Implemented
 
-### 3.5 OCR Execution Subsystem (Python Bridge)
-- **Boundary:** `electron/ocrDaemonManager.ts`, `electron/ocrBridge.ts` & `scripts/external_ocr_bridge.py`
-- **Responsibility:** ดูแลวงจรชีวิตของ Python Daemon, จัดการคิวงาน OCR, ดักจับข้อผิดพลาดและตรวจวัด Liveness ผ่าน `process.kill(pid, 0)`, และสลับ Fallback อัตโนมัติ (PaddleOCR -> EasyOCR)
-- **Depends On:** Python Virtualenv (`.venv-ocr`), PaddlePaddle, PaddleOCR, EasyOCR
-- **Boundary Rules:** สื่อสารผ่าน JSON Lines ผ่าน Stdio เท่านั้น; กักกันข้อผิดพลาดของ Python ไม่ให้กระทบ Main Process
-- **Implementation Status:** Implemented
+### 3.5 OCR Execution Subsystem (Python Bridge & Native Process Manager)
+- **Boundary:** `src-tauri/src/core/process_manager.rs`, `scripts/external_ocr_bridge.py`, `src/services/ocr/ConcurrencyLimiter.ts` & `src/services/ocr/BackgroundQueueProcessor.ts`
+- **Responsibility:** บริหารวงจรชีวิต Python Sidecar Daemon, จัดการคิวงาน OCR ผ่าน `ConcurrencyLimiter` แบบ Atomic Slot Transfer, ตรวจจับ Hardware อัตโนมัติ (`list-adapters`), และบริหาร Backend การประมวลผล (Dual-Backend):
+  - **Paddle Native CPU (Default Safe Mode):** โหมดมาตรฐานปลอดภัย 100% สำหรับทุกภาษา แสดงข้อความสถานะ `[ocrBridge] PaddleOCR DirectML opt-in inactive (current backend: 'paddle'). Using Paddle Native CPU.` เมื่อเริ่มต้น
+  - **DirectML GPU (Opt-in Mode):** เร่งความเร็วด้วย GPU (AMD, Intel, NVIDIA) ผ่าน ONNX Runtime `DmlExecutionProvider` โดยเปิดใช้เฉพาะภาษา Latin/English (`en`) เท่านั้น
+  - **Fail-Closed Fallback Wrapper:** หาก DirectML เกิดข้อผิดพลาด ระบบจะสลับกลับมาประมวลผลบน Paddle Native CPU ทันทีโดยไม่ส่งผลให้ Application แครช
+  - **Monotonic Request ID & Deduplication:** ใน `process_manager.rs` สร้าง Request ID ด้วย `as_micros() + AtomicU64 counter` และทำ In-flight Deduplication ป้องกัน Race Condition และ Channel Closed Prematurely
+- **Depends On:** Python Virtualenv (`.venv-ocr`), PaddlePaddle, PaddleOCR, ONNX Runtime (`DmlExecutionProvider`), EasyOCR
+- **Boundary Rules:** สื่อสารผ่าน JSON Lines Stdio IPC เท่านั้น; ป้องกัน Exception ภายใน Python ไม่ให้กระทบ Rust Core และ Frontend; ห้ามเปิดใช้ DirectML กับภาษาไทยโดยเด็ดขาด
+- **Implementation Status:** Implemented (พร้อมชุดทดสอบครบถ้วน)
 
 ### 3.6 Translation Subsystem (Offline NMT & Dictionaries)
 - **Boundary:** `electron/argosBridge.ts`, `scripts/argos_translate_bridge.py` & `src/services/translation/`
@@ -121,7 +125,12 @@ User Enqueues Job -> BackgroundQueueProcessor -> Reusable Headless Canvas Pool (
   -> Prefetch Pipeline -> Execute OCR & Translation -> Direct DB Writes (Isolate Non-active Doc)
   -> LocalStorage Queue Persisted -> Job Completed
 ```
-*คำอธิบาย:* คิวงานเบื้องหลังสลับใช้ Reusable Canvas Pool เรนเดอร์หน้าถัดไปล่วงหน้า และบันทึกผลลง SQLite โดยตรงโดยไม่แทรกแซง In-Memory Store ของหน้าที่ผู้ใช้กำลังเปิดอ่านอยู่
+*คำอธิบายและกลไกความปลอดภัย (Safety & Resilience Patterns):*
+- **F1 (Cross-Document Isolation):** คิวงานเบื้องหลังแยกการบันทึกข้อมูลของ Inactive Document ผ่าน `persistTranslationResultCore` ลง SQLite DB Cache โดยตรง ไม่มีการเรียก `setPageLayers` หรือ `detectedLanguageSwitch` ไปกวน Active Store ที่ผู้ใช้กำลังเปิดอ่านอยู่
+- **F2 (Concurrency & Rejection Safety):** คิวงานประมวลผลผ่าน `ConcurrencyLimiter` ซึ่งส่งต่อ Slot ให้ Task ถัดไปแบบ Atomic และมี Handler ดักจับ `.catch()` ทันทีที่สร้าง Promise ป้องกัน Unhandled Rejection
+- **F3 (Idempotent Prewarm & Profile Forwarding):** แคชสถานะการ Prewarm อิงตาม Key `${engine}:${language}:${qualityProfile}:${pipelineProfile}` มี Timeout 60 วินาที และล้างสถานะข้อผิดพลาดเพื่อเปิดโอกาสให้ Retry
+- **F4 (Progress Monotonicity):** Progress Bar แยกตรรกะการคำนวณ: งาน OCR เพียวๆ จะรายงานความคืบหน้าแบบ Linear 0–100% ตามหน้าจริง ส่วนงานแปลภาษาจะคงสเกล 85%/90% สำหรับขั้นตอน NMT
+
 
 ### 4.4 State Ownership
 - **UI / Client State:** อยู่ใน React Component State (`useState`, `useRef`) รับผิดชอบสถานะชั่วคราว เช่น พิกัดการลาก Bounding Box, การขยาย Zoom, และการเปิด/ปิด Context Menu

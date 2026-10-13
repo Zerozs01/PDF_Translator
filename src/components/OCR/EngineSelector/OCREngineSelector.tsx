@@ -35,7 +35,7 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
     let isMounted = true;
     const fetchAdapters = async () => {
       try {
-        const bridge = (window as any).electronBridge || (window as any).platformBridge;
+        const bridge = (window as any).electronAPI || (window as any).electronBridge || (window as any).platformBridge;
         if (bridge?.ocr?.listAdapters) {
           const list = await bridge.ocr.listAdapters();
           if (isMounted && Array.isArray(list) && list.length > 0) {

@@ -38,12 +38,7 @@ impl ProcessManager {
         let (initial_backend, initial_adapter) = if let Ok(b) = std::env::var("OCR_BACKEND") {
             (b, std::env::var("OCR_DML_ADAPTER_NAME").ok().filter(|s| !s.trim().is_empty()))
         } else {
-            let has_directml = std::path::Path::new("C:\\Windows\\System32\\DirectML.dll").exists();
-            if has_directml {
-                ("ort_dml".to_string(), Some("AMD Radeon RX 6700 XT".to_string()))
-            } else {
-                ("paddle".to_string(), None)
-            }
+            ("paddle".to_string(), None)
         };
         Self {
             child: Arc::new(Mutex::new(None)),
@@ -188,7 +183,11 @@ impl ProcessManager {
         if let Some(ref adapter) = adapter_val {
             if !adapter.trim().is_empty() {
                 cmd.env("OCR_DML_ADAPTER_NAME", adapter);
+            } else {
+                cmd.env_remove("OCR_DML_ADAPTER_NAME");
             }
+        } else {
+            cmd.env_remove("OCR_DML_ADAPTER_NAME");
         }
 
         cmd.stdin(Stdio::piped())
@@ -403,7 +402,9 @@ impl ProcessManager {
             let action = payload.get("action").and_then(|v| v.as_str()).unwrap_or("");
             let engine = payload.get("engine").and_then(|v| v.as_str()).unwrap_or("");
             let img = payload.get("image").or_else(|| payload.get("imagePath")).and_then(|v| v.as_str()).unwrap_or("");
-            if !action.is_empty() && !img.is_empty() {
+            if action == "list-adapters" {
+                "action:list-adapters".to_string()
+            } else if !action.is_empty() && !img.is_empty() {
                 format!("{}:{}:{}", action, engine, img)
             } else {
                 String::new()
@@ -449,7 +450,12 @@ impl ProcessManager {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
-                let id = format!("req_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                static REQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                let id = format!(
+                    "req_{}_{}",
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros(),
+                    REQ_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
                 if let Value::Object(ref mut map) = payload {
                     map.insert("id".to_string(), json!(id));
                 }

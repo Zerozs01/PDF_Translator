@@ -892,13 +892,15 @@ export function initPlatformBridgeCompat(): void {
             return { ok: false };
           }
         },
-        prewarmEngine: async (payload: { engine: string; language?: string }) => {
+        prewarmEngine: async (payload: { engine: string; language?: string; qualityProfile?: string; pipelineProfile?: string }) => {
           try {
             const res = await invoke<any>('send_sidecar_command', {
               payload: {
                 action: 'prewarm',
                 engine: payload.engine || 'paddleocr',
                 language: payload.language || 'eng',
+                qualityProfile: payload.qualityProfile || 'best',
+                pipelineProfile: payload.pipelineProfile || 'panel',
               },
             });
             return res;
@@ -921,17 +923,30 @@ export function initPlatformBridgeCompat(): void {
             return false;
           }
         },
-        listAdapters: async () => {
-          try {
-            const res = await invoke<any>('send_sidecar_command', {
-              payload: { action: 'list-adapters', engine: 'paddleocr' },
-            });
-            return (res?.adapters || []) as Array<{ index: number; name: string; id: string }>;
-          } catch (err) {
-            console.warn('[Bridge] listAdapters warning:', err);
-            return [];
-          }
-        },
+        listAdapters: (() => {
+          let cachedPromise: Promise<Array<{ index: number; name: string; id: string }>> | null = null;
+          return async () => {
+            if (!cachedPromise) {
+              cachedPromise = (async () => {
+                try {
+                  const res = await invoke<any>('send_sidecar_command', {
+                    payload: {
+                      id: `adapters_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                      action: 'list-adapters',
+                      engine: 'paddleocr',
+                    },
+                  });
+                  return (res?.adapters || []) as Array<{ index: number; name: string; id: string }>;
+                } catch (err) {
+                  console.warn('[Bridge] listAdapters warning:', err);
+                  cachedPromise = null;
+                  return [];
+                }
+              })();
+            }
+            return cachedPromise;
+          };
+        })(),
         setBackend: async (payload: { backend: 'paddle' | 'ort_dml'; adapterName?: string }) => {
           try {
             await invoke<void>('set_ocr_backend', {

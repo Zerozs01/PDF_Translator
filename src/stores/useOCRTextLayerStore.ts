@@ -197,8 +197,8 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     language: 'eng',
     dpi: 300,
     engine: 'paddleocr',
-    backend: (typeof window !== 'undefined' && (localStorage.getItem('pdf_translator.ocr_backend') as any)) || 'ort_dml',
-    dmlAdapterName: (typeof window !== 'undefined' && localStorage.getItem('pdf_translator.ocr_dml_adapter')) || 'AMD Radeon RX 6700 XT',
+    backend: (typeof window !== 'undefined' && (localStorage.getItem('pdf_translator.ocr_backend') as any)) || 'paddle',
+    dmlAdapterName: (typeof window !== 'undefined' && localStorage.getItem('pdf_translator.ocr_dml_adapter')) || '',
     skipIfTextExists: true,
     perPageTimeoutSec: OCR_PER_PAGE_TIMEOUT_SEC_DEFAULT,
     ocrQualityProfile: 'best',
@@ -224,10 +224,10 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
       (newOptions.backend !== undefined && newOptions.backend !== prev.backend) ||
       (newOptions.dmlAdapterName !== undefined && newOptions.dmlAdapterName !== prev.dmlAdapterName)
     ) {
-      const backend = next.backend || 'ort_dml';
+      const backend = next.backend || 'paddle';
       const adapterName = next.dmlAdapterName || undefined;
       try {
-        const bridge = (window as any).platformBridge || (window as any).electronBridge;
+        const bridge = (window as any).electronAPI || (window as any).platformBridge || (window as any).electronBridge;
         if (bridge?.ocr?.setBackend) {
           void bridge.ocr.setBackend({ backend, adapterName });
         }

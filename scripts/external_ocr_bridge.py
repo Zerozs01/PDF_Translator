@@ -186,7 +186,7 @@ def list_video_adapters() -> List[Dict[str, Any]]:
             import subprocess, json
             p = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", "Get-CimInstance Win32_VideoController | Select-Object Name, PNPDeviceID | ConvertTo-Json"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=10
             )
             if p.returncode == 0 and p.stdout.strip():
                 raw = json.loads(p.stdout)
@@ -3749,8 +3749,12 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
                 GLOBAL_USE_DML = False
                 if _OCR_BACKEND_ORT_DML and not is_latin_only:
                     print(f"[ocrBridge] DirectML opt-in active but language '{lang}' is not Latin. Enforcing fallback to Paddle Native CPU.", file=sys.stderr)
+                elif not _OCR_BACKEND_ORT_DML:
+                    print(f"[ocrBridge] PaddleOCR DirectML opt-in inactive (current backend: '{OCR_BACKEND}'). Using Paddle Native CPU.", file=sys.stderr)
+                elif "DmlExecutionProvider" not in providers:
+                    print("[ocrBridge] PaddleOCR DirectML not available in ONNX Runtime. Using Paddle Native CPU.", file=sys.stderr)
                 else:
-                    print("[ocrBridge] PaddleOCR DirectML disabled or NOT available", file=sys.stderr)
+                    print("[ocrBridge] PaddleOCR DirectML disabled via OCR_DISABLE_DML. Using Paddle Native CPU.", file=sys.stderr)
         except Exception as exc:
             print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
 
@@ -4745,7 +4749,7 @@ def report_progress(request_id: str | None, current_chunk: int, total_chunks: in
         pass
 
 
-def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
+def _run_paddleocr_impl(args: argparse.Namespace) -> Dict[str, Any]:
     request_id = getattr(args, "id", None)
     lang = select_paddle_lang(args.language)
     profile_key = get_paddle_profile_key(args)
@@ -4951,6 +4955,19 @@ def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
                 os.remove(working_image)
             except OSError:
                 pass
+
+
+def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
+    global GLOBAL_USE_DML
+    try:
+        return _run_paddleocr_impl(args)
+    except Exception as exc:
+        if GLOBAL_USE_DML:
+            print(f"[ocrBridge] Runtime DML execution error ({exc}). Fail closed: falling back to Paddle Native CPU...", file=sys.stderr)
+            GLOBAL_USE_DML = False
+            PADDLE_OCR_CACHE.clear()
+            return _run_paddleocr_impl(args)
+        raise
 
 
 def run_adapter(adapter_path: str, args: argparse.Namespace) -> Dict[str, Any]:
