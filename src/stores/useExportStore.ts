@@ -6,9 +6,11 @@ interface ExportState {
   completedPages: number;
   startTime: number | null;
   etaSeconds: number | null;
+  title?: string;
+  subtitle?: string;
   
-  startExport: (total: number) => void;
-  updateProgress: (completed: number) => void;
+  startExport: (total: number, title?: string, subtitle?: string) => void;
+  updateProgress: (completed: number, subtitle?: string) => void;
   finishExport: () => void;
 }
 
@@ -18,16 +20,20 @@ export const useExportStore = create<ExportState>((set, get) => ({
   completedPages: 0,
   startTime: null,
   etaSeconds: null,
+  title: undefined,
+  subtitle: undefined,
 
-  startExport: (total) => set({ 
+  startExport: (total, title, subtitle) => set({ 
     isExporting: true, 
-    totalPages: total, 
+    totalPages: Math.max(1, total), 
     completedPages: 0, 
     startTime: Date.now(),
-    etaSeconds: null
+    etaSeconds: null,
+    title: title || 'กำลังส่งออกไฟล์ PDF...',
+    subtitle,
   }),
 
-  updateProgress: (completed) => {
+  updateProgress: (completed, subtitle) => {
     const { startTime, totalPages } = get();
     if (!startTime) return;
     if (completed <= 0) return; // ป้องกันการหารด้วยศูนย์ (Division by zero safety)
@@ -39,13 +45,16 @@ export const useExportStore = create<ExportState>((set, get) => ({
 
     set({ 
       completedPages: completed, 
-      etaSeconds: remainingSeconds >= 0 ? remainingSeconds : 0 
+      etaSeconds: remainingSeconds >= 0 ? remainingSeconds : 0,
+      ...(subtitle !== undefined ? { subtitle } : {}),
     });
   },
 
   finishExport: () => set({ 
     isExporting: false, 
     startTime: null, 
-    etaSeconds: null 
+    etaSeconds: null,
+    title: undefined,
+    subtitle: undefined,
   }),
 }));

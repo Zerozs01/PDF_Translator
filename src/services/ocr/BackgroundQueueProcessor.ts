@@ -512,21 +512,22 @@ class BackgroundQueueProcessor {
     const jobBackend = job.backend || useOCRTextLayerStore.getState().options.backend || 'paddle';
     let maxInFlight = jobBackend === 'ort_dml' ? 3 : 4;
 
-    // Dynamic VRAM Guard: Check Free VRAM before launching job to prevent zombie/OOM freeze
+    // Dynamic VRAM Guard: Check VRAM status before launching job (fast in-memory cache, 0ms)
     try {
       const gpuInfo = await window.electronAPI?.ocr?.getGpuInfo?.();
-      if (gpuInfo?.freeVramMb !== undefined && gpuInfo.freeVramMb !== null) {
-        if (gpuInfo.freeVramMb < 2048) {
-          maxInFlight = 2;
-          console.warn(
-            `[QueueProcessor] Dynamic VRAM Guard Active: Free VRAM is low (${gpuInfo.freeVramMb} MB < 2048 MB). ` +
-            `Throttling maxInFlight from ${jobBackend === 'ort_dml' ? 3 : 4} to 2 to prevent zombie/OOM state.`
-          );
-        } else {
-          console.log(
-            `[QueueProcessor] Dynamic VRAM Guard: Free VRAM is healthy (${gpuInfo.freeVramMb} MB). Using maxInFlight = ${maxInFlight}.`
-          );
-        }
+      const totalVram = gpuInfo?.totalVramMb;
+      const freeVram = gpuInfo?.freeVramMb;
+      // Only throttle if total hardware VRAM is genuinely constrained (< 3072 MB)
+      if (totalVram !== null && totalVram !== undefined && totalVram > 0 && totalVram < 3072) {
+        maxInFlight = 2;
+        console.warn(
+          `[QueueProcessor] Dynamic VRAM Guard: Constrained hardware VRAM detected (${totalVram} MB). ` +
+          `Throttling maxInFlight from ${jobBackend === 'ort_dml' ? 3 : 4} to 2 to prevent memory pressure.`
+        );
+      } else {
+        console.log(
+          `[QueueProcessor] Dynamic VRAM Guard: Hardware VRAM is adequate (Total: ${totalVram ?? 'N/A'} MB, Free: ${freeVram ?? 'N/A'} MB). Using maxInFlight = ${maxInFlight}.`
+        );
       }
     } catch (vramErr) {
       console.warn('[QueueProcessor] Dynamic VRAM Guard query skipped:', vramErr);

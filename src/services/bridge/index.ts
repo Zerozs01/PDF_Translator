@@ -1176,6 +1176,9 @@ export function initPlatformBridgeCompat(): void {
           }
         },
         getGpuInfo: async () => {
+          if ((window as any).__CACHED_GPU_INFO__ && (window as any).__CACHED_GPU_INFO__.mode !== 'CPU') {
+            return (window as any).__CACHED_GPU_INFO__;
+          }
           try {
             const info = await invoke<{
               gpus: string[];
@@ -1289,6 +1292,7 @@ export function initPlatformBridgeCompat(): void {
         getPageStreamUrl: (docId: string, pageNumber: number, scale?: number) =>
           platformBridge.pdf.getPageStreamUrl(docId, pageNumber, scale),
         exportPdf: (options: any) => platformBridge.pdf.exportPdf(options),
+        exportPsd: (options: any) => platformBridge.pdf.exportPsd ? platformBridge.pdf.exportPsd(options) : Promise.reject(new Error('PSD export not supported')),
       }),
       gemini: createSafeBridgeSection({
         getApiKeyStatus: async () => ({ hasKey: Boolean(window.localStorage?.getItem('gemini_api_key')) }),

@@ -38,6 +38,7 @@ export interface DocumentExportModalProps {
   isOfflineProcessing: boolean;
   triggerPopupTranslation: (engine: 'offline' | 'ai') => void;
   handleHeaderDownload: (scope: DownloadScope, mode: DownloadContentMode) => void;
+  handleExportPsd?: () => void;
   currentPage: number;
   totalPages: number;
   fileType: string | null;
@@ -75,6 +76,7 @@ export const DocumentExportModal = React.memo<DocumentExportModalProps>(({
   isOfflineProcessing,
   triggerPopupTranslation,
   handleHeaderDownload,
+  handleExportPsd,
   currentPage,
   totalPages,
   fileType,
@@ -463,6 +465,22 @@ export const DocumentExportModal = React.memo<DocumentExportModalProps>(({
               </div>
             )}
           </button>
+
+          {/* 7. Photoshop PSD Native Export Button */}
+          {handleExportPsd && (
+            <button
+              type="button"
+              onClick={() => void handleExportPsd()}
+              disabled={isDownloadingResult}
+              className="w-full relative overflow-hidden group rounded-xl bg-gradient-to-r from-[#001E36] to-[#0D1F2D] hover:from-[#002848] hover:to-[#122B3E] text-[#31A8FF] hover:text-white font-semibold py-2.5 px-3 text-[11px] tracking-wide transition-all duration-200 border border-[#31A8FF]/30 hover:border-[#31A8FF]/60 shadow-sm disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Layers size={13} className="text-[#31A8FF] shrink-0" />
+              <span>ส่งออกเลเยอร์ Photoshop (.psd) หน้า {currentPage}</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#31A8FF]/20 text-[#31A8FF] font-mono">
+                Native Rust
+              </span>
+            </button>
+          )}
         </div>
       </div>
     </div>

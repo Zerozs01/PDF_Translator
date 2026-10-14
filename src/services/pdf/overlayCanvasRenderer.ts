@@ -18,7 +18,7 @@ import {
   shouldSkipOverlayForUntranslatedCarryOver,
   shouldUseDocumentCoverageFallback,
 } from '../translation/offlineTranslationService';
-import { wrapCanvasText } from '../layout/canvasLayoutService';
+import { wrapCanvasText, wrapCanvasTextInShape } from '../layout/canvasLayoutService';
 import { isSourceFallbackOverlayText } from '../translation/textRedistributionService';
 import { normalizeWhitespace } from '../ocr/ocrTextNormalizer';
 
@@ -277,19 +277,38 @@ export async function renderPageOverlayToRaster(
     ctx.font = `${textWeight} ${typography.fontSize}px ${pageConfig.overlayFontFamily}`;
     ctx.fillStyle = palette.textColor || '#000000';
     ctx.textBaseline = 'top';
-    ctx.textAlign = layout?.alignment === 'center' ? 'center' : 'left';
+    const isCentered = layout?.alignment === 'center';
+    ctx.textAlign = isCentered ? 'center' : 'left';
 
     const textBoxWidth = Math.max(1, textRect.width - typography.padX * 2);
     const lineHeightPx = Math.max(1, typography.fontSize * typography.lineHeight);
     const maxLines = Math.max(1, typography.estimatedLines);
-    const lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
 
-    const startX = ctx.textAlign === 'center' ? originLeft + textRect.width / 2 : originLeft + typography.padX;
+    let lines: string[];
+    let lineWidths: number[] | null = null;
+
+    if (isCentered && maxLines > 1 && !typography.forceSingleLine) {
+      const shaped = wrapCanvasTextInShape(
+        ctx,
+        overlayText,
+        textRect.width,
+        textRect.height,
+        maxLines,
+        { shape: 'ellipse', forceSingleLine: false }
+      );
+      lines = shaped.lines;
+      lineWidths = shaped.lineWidths;
+    } else {
+      lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
+    }
+
+    const startX = isCentered ? originLeft + textRect.width / 2 : originLeft + typography.padX;
     const startY = originTop + typography.padY;
 
     lines.forEach((lText, lIdx) => {
       const y = startY + lIdx * lineHeightPx;
-      ctx.fillText(lText, startX, y, textBoxWidth);
+      const allowedW = lineWidths && lineWidths[lIdx] ? lineWidths[lIdx] : textBoxWidth;
+      ctx.fillText(lText, startX, y, allowedW);
     });
     ctx.restore();
 

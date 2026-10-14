@@ -21,7 +21,7 @@ const OCRRegressionHarness = import.meta.env.DEV
   : () => null;
 const WorkspaceContainer = React.lazy(() => import('./components/Viewer/WorkspaceContainer').then(module => ({ default: module.WorkspaceContainer })));
 const DocumentExportModal = React.lazy(() => import('./components/Export/DocumentExportModal').then(module => ({ default: module.DocumentExportModal })));
-const ExportOverlay = React.lazy(() => import('./components/Export/ExportOverlay').then(module => ({ default: module.ExportOverlay })));
+import { ExportOverlay } from './components/Export/ExportOverlay';
 const RightSidebar = React.lazy(() => import('./components/Layout/RightSidebar').then(module => ({ default: module.RightSidebar })));
 const CompactTopToolbar = React.lazy(() => import('./components/Layout/CompactTopToolbar').then(module => ({ default: module.CompactTopToolbar })));
 const LeftSidebar = React.lazy(() => import('./components/Layout/LeftSidebar').then(module => ({ default: module.LeftSidebar })));
@@ -242,7 +242,7 @@ export default function App() {
     defaultEngine: (ocrOptions.engine || 'paddleocr') as OCREngine,
   });
 
-  const { handleHeaderDownload } = useExportOrchestration({
+  const { handleHeaderDownload, handleExportPsd } = useExportOrchestration({
     popupOcrQualityMode,
     setTranslationStatus,
     selectedExportEngine,
@@ -547,6 +547,7 @@ export default function App() {
             isOfflineProcessing={isOfflineProcessing}
             triggerPopupTranslation={triggerPopupTranslation}
             handleHeaderDownload={handleHeaderDownload}
+            handleExportPsd={handleExportPsd}
             currentPage={currentPage}
             totalPages={totalPages}
             fileType={fileType}
@@ -577,9 +578,7 @@ export default function App() {
           progress={loadingState.progress} 
         />
       )}
-      <React.Suspense fallback={null}>
-        <ExportOverlay />
-      </React.Suspense>
+      <ExportOverlay />
     </div>
   );
 }

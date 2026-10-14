@@ -19,7 +19,7 @@ In ADR-0005 through ADR-0008, OCR latency was optimized using DirectML GPU accel
 3. **Decouple Pipeline Stages & Telemetry (Step 2d):**
    - Eliminate `ocrIpcDurationMs` variable shadowing in `BackgroundQueueProcessor.ts`.
    - Separate `ocrStageLimiter` and `translationStageLimiter` and instrument `transQueueWaitMs` and `slotHoldMs`.
-   - Implement **Active-Document Per-Page Hydration**: Immediately hydrate `useOCRTextLayerStore` and `useLayerStore` per completed page when `activeDocId === job.documentId`, while skipping UI store mutations for inactive background documents.
+   - Implement **Selective Store Hydration + On-Demand Viewport Loading**: Only hydrate `useOCRTextLayerStore` and `useLayerStore` in memory when `activeDocId === job.documentId && activeCurrentPage === pageNum`. Background pages are safely persisted directly to SQLite and hydrated on-demand when the viewport scrolls to them, preventing main-thread layout thrashing and Map cloning storms.
 4. **Multi-Row Chunked SQLite Writes:**
    Update `src/services/bridge/index.ts` to batch sentence translations in chunks of 100 via multi-row `INSERT OR REPLACE INTO sentence_translation_cache`.
 

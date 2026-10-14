@@ -24,7 +24,7 @@ import { useLayerStore } from '../../stores/useLayerStore';
 import { normalizeWhitespace } from '../ocr/ocrTextNormalizer';
 import { renderPageOverlayToRaster } from './overlayCanvasRenderer';
 import { platformBridge } from '../bridge';
-import type { TextOverlayItem, PageImageOverlay } from '../bridge/pdfContracts';
+import type { TextOverlayItem, PageImageOverlay, PsdLayerData } from '../bridge/pdfContracts';
 import { invoke } from '@tauri-apps/api/core';
 
 type ExportTranslatedPdfInput = {
@@ -139,7 +139,9 @@ const exportTranslatedPdfViaNativeRust = async (
   const meta = await platformBridge.pdf.openDocument(sourceFilePath);
   const docId = meta.docId;
 
-  useExportStore.getState().startExport(pages.length);
+  if (!useExportStore.getState().isExporting) {
+    useExportStore.getState().startExport(pages.length);
+  }
 
   try {
     const pageImages: PageImageOverlay[] = [];
@@ -159,6 +161,8 @@ const exportTranslatedPdfViaNativeRust = async (
       overlays.push(...rendered.textOverlays);
 
       useExportStore.getState().updateProgress(i + 1);
+      // Yield to browser UI event loop so React can render ExportOverlay animation & progress smoothly
+      await new Promise((r) => setTimeout(r, 0));
     }
 
     const normalizedDir = sourceFilePath.replace(/[/][^/]+$/u, '').replace(/[\\][^\\]+$/u, '');
@@ -182,8 +186,9 @@ const exportTranslatedPdfViaNativeRust = async (
     });
 
     return new Uint8Array(buffer);
-  } finally {
+  } catch (err) {
     useExportStore.getState().finishExport();
+    throw err;
   }
 };
 
@@ -256,4 +261,67 @@ export const exportTranslatedPdfViaPrint = async (
   // 2. Tauri / Native Rust Pdfium Reconstructor Pipeline
   return exportTranslatedPdfViaNativeRust(input, pages, signal);
 };
+
+export async function exportPageToPsd(params: {
+  sourceFilePath?: string | null;
+  pageNum: number;
+  width: number;
+  height: number;
+  bgRgbaData: Uint8Array;
+  layers: Array<{
+    name: string;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    isText?: boolean;
+    textContent?: string;
+    fontSize?: number;
+    visible?: boolean;
+  }>;
+}): Promise<Uint8Array> {
+  const dir = params.sourceFilePath?.replace(/[/][^/]+$/u, '').replace(/[\\][^\\]+$/u, '') || '.';
+  const outFileName = `psd_export_${Date.now()}_p${params.pageNum}.psd`;
+  const outputPath = `${dir}/${outFileName}`;
+
+  const psdLayers: PsdLayerData[] = [
+    {
+      name: 'Background Image',
+      left: 0,
+      top: 0,
+      width: params.width,
+      height: params.height,
+      rgbaData: params.bgRgbaData,
+      opacity: 255,
+      visible: true,
+      isText: false,
+    },
+    ...params.layers.map((l) => ({
+      name: l.name,
+      left: l.left,
+      top: l.top,
+      width: l.width,
+      height: l.height,
+      isText: l.isText ?? true,
+      textContent: l.textContent || '',
+      fontSize: l.fontSize || 14,
+      opacity: 255,
+      visible: l.visible ?? true,
+    })),
+  ];
+
+  if (!platformBridge.pdf.exportPsd) {
+    throw new Error('PSD Export is not supported on this platform');
+  }
+
+  const result = await platformBridge.pdf.exportPsd({
+    outputPath,
+    width: params.width,
+    height: params.height,
+    layers: psdLayers,
+  });
+
+  const buffer = await invoke<ArrayBuffer>('read_file_raw', { filePath: result.outputPath });
+  return new Uint8Array(buffer);
+}
 

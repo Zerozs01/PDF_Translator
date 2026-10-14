@@ -3,11 +3,11 @@ import { useExportStore } from '../../stores/useExportStore';
 import { CheckCircle2 } from 'lucide-react';
 
 export const ExportOverlay: React.FC = () => {
-  const { isExporting, totalPages, completedPages, etaSeconds } = useExportStore();
+  const { isExporting, totalPages, completedPages, etaSeconds, title, subtitle } = useExportStore();
 
   if (!isExporting) return null;
 
-  const progressPercent = totalPages === 0 ? 0 : Math.round((completedPages / totalPages) * 100);
+  const progressPercent = totalPages === 0 ? 0 : Math.min(100, Math.max(0, Math.round((completedPages / totalPages) * 100)));
   
   // แปลงวินาทีเป็น นาที:วินาที ในรูปแบบภาษาไทย
   const formatETA = (seconds: number | null) => {
@@ -96,9 +96,17 @@ export const ExportOverlay: React.FC = () => {
           </div>
         </div>
 
-        <h2 className="text-xl font-bold mb-1 tracking-tight text-slate-100">กำลังส่งออกไฟล์ PDF...</h2>
+        <h2 className="text-xl font-bold mb-1 tracking-tight text-slate-100">
+          {title || 'กำลังส่งออกไฟล์ PDF...'}
+        </h2>
         <p className="text-slate-400 text-xs mb-6">
-          ประมวลผลหน้าที่ <span className="font-mono text-cyan-400 font-bold text-sm">{completedPages}</span> จาก <span className="font-mono text-slate-300 font-semibold">{totalPages}</span> หน้า
+          {subtitle ? (
+            <span>{subtitle}</span>
+          ) : (
+            <>
+              ประมวลผลหน้าที่ <span className="font-mono text-cyan-400 font-bold text-sm">{completedPages}</span> จาก <span className="font-mono text-slate-300 font-semibold">{totalPages}</span> หน้า
+            </>
+          )}
         </p>
 
         {/* Custom Progress Bar */}

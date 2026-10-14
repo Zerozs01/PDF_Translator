@@ -519,7 +519,8 @@ export class SearchablePDFService {
   async createSearchablePDFWithOCR(
     pdfBytes: ArrayBuffer,
     ocrPages: Map<number, OCRPageResult>,
-    pageRange?: number[]
+    pageRange?: number[],
+    onProgress?: (completed: number, total: number) => void
   ): Promise<Uint8Array> {
     const normalizedPageRange = pageRange
       ? Array.from(new Set(pageRange)).filter((pageNum) => Number.isInteger(pageNum) && pageNum > 0)
@@ -541,12 +542,16 @@ export class SearchablePDFService {
 
     for (let i = 0; i < pages.length; i++) {
       const pageNum = normalizedPageRange ? normalizedPageRange[i] : i + 1;
-      if (!pageNum) continue;
+      if (pageNum) {
+        const ocrResult = ocrPages.get(pageNum);
+        if (ocrResult) {
+          await this.textLayerService.addTextLayerToPage(i, ocrResult, 1, { invisible: true });
+        }
+      }
 
-      const ocrResult = ocrPages.get(pageNum);
-      if (!ocrResult) continue;
-
-      await this.textLayerService.addTextLayerToPage(i, ocrResult, 1, { invisible: true });
+      onProgress?.(i + 1, pages.length);
+      // Yield to browser UI event loop so React can render ExportOverlay animation & progress smoothly
+      await new Promise((r) => setTimeout(r, 0));
     }
 
     return await this.textLayerService.savePDF();

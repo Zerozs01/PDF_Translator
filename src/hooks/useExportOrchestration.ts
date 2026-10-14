@@ -7,6 +7,7 @@ import { OCRPageResult, OCREngine, OCRQualityProfile } from '../types';
 import { DBOCRTranslationCacheEntry as OCRTranslationCacheEntry } from '../types/electron';
 import { ExportOverlayPaletteEntry } from '../types/pdfExport';
 import { searchablePDFService, exportTranslatedPdfViaPrint } from '../services/pdf';
+import { exportPageToPsd } from '../services/pdf/PdfPrintExportService';
 import { pdfjs } from '../services/pdf/pdfjsWorker';
 import {
   OverlayLayoutProfile,
@@ -36,7 +37,7 @@ import {
   shouldSkipOverlayForUntranslatedCarryOver,
 } from '../services/translation/offlineTranslationService';
 import { normalizeWhitespace } from '../services/ocr/ocrTextNormalizer';
-import { wrapCanvasText, buildCanvasFontFamily } from '../services/layout/canvasLayoutService';
+import { wrapCanvasText, wrapCanvasTextInShape, buildCanvasFontFamily } from '../services/layout/canvasLayoutService';
 import { isSourceFallbackOverlayText } from '../services/translation/textRedistributionService';
 
 export type DownloadScope = 'current' | 'all';
@@ -183,6 +184,9 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
         } catch {
           // Ignore sample errors and fallback to default palette
         }
+
+        // Allow UI event loop to breathe so laser scanning animation runs at 60fps
+        await new Promise((r) => setTimeout(r, 0));
       }
     } finally {
       await (pdfDocForSample as { destroy?: () => Promise<void> } | null)?.destroy?.();
@@ -660,31 +664,50 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
       const resolvedTextWeight = Math.max(400, Math.min(700, Math.round(overlayTextWeight)));
 
       ctx.font = `${resolvedTextWeight} ${typography.fontSize}px ${canvasOverlayFontFamily}`;
-      const lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
+      const isCentered = layout?.alignment === 'center';
+      let lines: string[];
+      let lineWidths: number[] | null = null;
+
+      if (isCentered && maxLines > 1 && !typography.forceSingleLine) {
+        const shaped = wrapCanvasTextInShape(
+          ctx,
+          overlayText,
+          textBoxWidth,
+          textBoxHeight,
+          maxLines,
+          { shape: 'ellipse', forceSingleLine: false }
+        );
+        lines = shaped.lines;
+        lineWidths = shaped.lineWidths;
+      } else {
+        lines = wrapCanvasText(ctx, overlayText, textBoxWidth, maxLines, typography.forceSingleLine);
+      }
+
       ctx.fillStyle = palette.textColor;
       const strokeBaseWidth = Number(palette.textStrokeWidth || 0);
       const resolvedStrokeWidth = strokeBaseWidth > 0
         ? Math.max(0.55, Math.min(1.35, strokeBaseWidth * (typography.fontSize / 14)))
         : 0;
       ctx.textBaseline = 'top';
-      ctx.textAlign = layout?.alignment === 'center' ? 'center' : 'left';
+      ctx.textAlign = isCentered ? 'center' : 'left';
 
       lines.forEach((lineText, lineIndex) => {
         const y = textBoxTop + (lineIndex * lineHeightPx);
         if (lineIndex > 0 && y + lineHeightPx > textBoxTop + textBoxHeight + 0.5) return;
-        const x = ctx.textAlign === 'center'
+        const x = isCentered
           ? textRect.left + innerLeft + (innerWidth / 2)
           : textBoxLeft;
+        const currentAllowedW = lineWidths && lineWidths[lineIndex] ? lineWidths[lineIndex] : textBoxWidth;
         if (resolvedStrokeWidth > 0 && palette.textStrokeColor) {
           ctx.save();
           ctx.lineJoin = 'round';
           ctx.miterLimit = 2;
           ctx.lineWidth = resolvedStrokeWidth;
           ctx.strokeStyle = palette.textStrokeColor;
-          ctx.strokeText(lineText, x, y, textBoxWidth);
+          ctx.strokeText(lineText, x, y, currentAllowedW);
           ctx.restore();
         }
-        ctx.fillText(lineText, x, y, textBoxWidth);
+        ctx.fillText(lineText, x, y, currentAllowedW);
       });
 
       ctx.restore();
@@ -781,6 +804,8 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
 
     try {
       setIsDownloadingResult(true);
+      setIsDownloadMenuOpen(false);
+
       if (mode === 'original') {
         const pageMap = new Map<number, OCRPageResult>();
         scopedPages.forEach(({ pageNum, ocr }) => {
@@ -790,11 +815,20 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
         const pageRange = scope === 'current'
           ? [currentPage]
           : scopedPages.map((item) => item.pageNum);
+
+        useExportStore.getState().startExport(
+          pageRange.length,
+          'กำลังสร้างไฟล์ PDF ต้นฉบับพร้อมค้นหา (Searchable PDF)...'
+        );
+
         const arrayBuffer = await file.arrayBuffer();
         const resultBytes = await searchablePDFService.createSearchablePDFWithOCR(
           arrayBuffer,
           pageMap,
-          pageRange
+          pageRange,
+          (done) => {
+            useExportStore.getState().updateProgress(done);
+          }
         );
         const url = URL.createObjectURL(new Blob([resultBytes.buffer as ArrayBuffer], { type: 'application/pdf' }));
         const anchor = document.createElement('a');
@@ -835,12 +869,18 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
           const currentSourcePage = sourcePageMap.get(currentPage);
           const currentEntry = translatedEntryMap.get(currentPage);
           if (currentSourcePage && currentEntry) {
+            useExportStore.getState().startExport(1, `กำลังส่งออกหน้า ${currentPage} (PNG Overlay)...`);
             await exportTranslatedOverlayPngForSinglePage(currentPage, currentSourcePage, currentEntry);
+            useExportStore.getState().updateProgress(1);
           }
         }
 
         if (scope === 'all' && fileType === 'pdf') {
           const pageRange = Array.from(translatedPageMap.keys()).sort((a, b) => a - b);
+          useExportStore.getState().startExport(
+            pageRange.length,
+            'กำลังส่งออกไฟล์ PDF (Translated Overlay)...'
+          );
           const paletteByPage = await buildPaletteByPageForExport(pageRange, sourcePageMap, translatedEntryMap);
           const resultBytes = await exportTranslatedPdfViaPrint({
             fileType: 'pdf',
@@ -886,8 +926,6 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
           });
         }
       }
-
-      setIsDownloadMenuOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown download error';
       setTranslationStatus({ kind: 'error', message: `Download failed: ${message}` });
@@ -897,8 +935,82 @@ export function useExportOrchestration(params: UseExportOrchestrationParams) {
     }
   };
 
+  const handleExportPsd = useCallback(async () => {
+    if (!file) return;
+    setIsDownloadingResult(true);
+    setIsDownloadMenuOpen(false);
+    useExportStore.getState().startExport(1, `กำลังส่งออกเลเยอร์ Photoshop (.psd) หน้า ${currentPage}...`);
+
+    try {
+      const pageNum = currentPage;
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.0 });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) throw new Error('Cannot acquire canvas context');
+
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+      const bgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+      const currentLayers = useLayerStore.getState().getPageLayers(pageNum);
+      const textLayers = currentLayers.map((l) => ({
+        name: (l.text || 'Text Layer').slice(0, 24),
+        left: Math.round(l.bbox.x0),
+        top: Math.round(l.bbox.y0),
+        width: Math.max(1, Math.round(l.bbox.x1 - l.bbox.x0)),
+        height: Math.max(1, Math.round(l.bbox.y1 - l.bbox.y0)),
+        isText: true,
+        textContent: l.text || '',
+        fontSize: l.fontSize || 14,
+        visible: l.visible,
+      }));
+
+      const psdBytes = await exportPageToPsd({
+        sourceFilePath: filePath,
+        pageNum,
+        width: canvas.width,
+        height: canvas.height,
+        bgRgbaData: new Uint8Array(bgData.buffer),
+        layers: textLayers,
+      });
+
+      useExportStore.getState().updateProgress(1);
+
+      const blob = new Blob([psdBytes.buffer as ArrayBuffer], { type: 'image/vnd.adobe.photoshop' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = file.name.replace(/\.[^.]+$/u, `_page_${pageNum}.psd`);
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+
+      setTranslationStatus({
+        kind: 'success',
+        message: `ส่งออก Photoshop PSD หน้า ${pageNum} สำเร็จ (${textLayers.length} layers)`,
+      });
+    } catch (err: unknown) {
+      console.error('PSD Export failed:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setTranslationStatus({
+        kind: 'error',
+        message: `ส่งออก PSD ไม่สำเร็จ: ${errMsg}`,
+      });
+    } finally {
+      setIsDownloadingResult(false);
+      useExportStore.getState().finishExport();
+    }
+  }, [file, currentPage, filePath, setIsDownloadingResult, setIsDownloadMenuOpen, setTranslationStatus]);
+
   return {
     handleHeaderDownload,
+    handleExportPsd,
     buildPaletteByPageForExport,
     exportTranslatedOverlayPngForSinglePage,
   };

@@ -413,3 +413,5 @@ export const wrapBalloonCanvasText = (
   return { lines, lineWidths };
 };
 
+export const wrapCanvasTextInShape = wrapBalloonCanvasText;
+

@@ -29,9 +29,31 @@ export interface PdfExportOptions {
   embedOriginalImages: boolean;
 }
 
+export interface PsdLayerData {
+  name: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  rgbaData?: Uint8Array | number[];
+  opacity?: number;
+  visible?: boolean;
+  isText?: boolean;
+  textContent?: string;
+  fontSize?: number;
+}
+
+export interface PsdExportOptions {
+  outputPath: string;
+  width: number;
+  height: number;
+  layers: PsdLayerData[];
+}
+
 export interface PdfBridge {
   openDocument(filePath: string): Promise<PdfDocumentMeta>;
   getPageStreamUrl(docId: string, pageNumber: number, scale?: number): string;
   renderPageBinary?(docId: string, pageNumber: number, scale?: number): Promise<Uint8Array>;
   exportPdf(options: PdfExportOptions): Promise<{ success: boolean; outputPath: string }>;
+  exportPsd?(options: PsdExportOptions): Promise<{ success: boolean; outputPath: string }>;
 }
