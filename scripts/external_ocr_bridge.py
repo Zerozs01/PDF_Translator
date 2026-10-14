@@ -314,6 +314,7 @@ try:
         sess_opts.inter_op_num_threads = 2
         sess_opts.enable_mem_pattern = False
         sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         kwargs["sess_options"] = sess_opts
 
         if GLOBAL_USE_DML and "DmlExecutionProvider" in ort.get_available_providers():
@@ -4323,6 +4324,12 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
         valid_paddle_kwargs.pop(unsupported_key, None)
     if constructor_kwargs.get("use_angle_cls") and "use_textline_orientation" not in valid_paddle_kwargs:
         valid_paddle_kwargs["use_textline_orientation"] = True
+    if _keep_use_onnx:
+        try:
+            dml_rec_batch = int(os.environ.get("OCR_DML_REC_BATCH_NUM", "6"))
+            valid_paddle_kwargs["rec_batch_num"] = max(1, dml_rec_batch)
+        except (ValueError, TypeError):
+            valid_paddle_kwargs["rec_batch_num"] = 6
 
     try:
         ppocr_log = logging.getLogger("ppocr")

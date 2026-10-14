@@ -144,6 +144,9 @@ impl TranslationManager {
             .env("PYTHONUTF8", "1")
             .env("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
             .env("ARGOS_CHUNK_TYPE", "MINISBD")
+            .env("OMP_NUM_THREADS", "4")
+            .env("MKL_NUM_THREADS", "4")
+            .env("CT2_USE_EXPERIMENTAL_PACKED_GEMM", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -187,6 +190,10 @@ impl TranslationManager {
             while let Ok(Some(line)) = reader.next_line().await {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
+                    continue;
+                }
+                if !trimmed.starts_with('{') {
+                    eprintln!("[Argos worker non-JSON line]: {}", trimmed);
                     continue;
                 }
                 if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {

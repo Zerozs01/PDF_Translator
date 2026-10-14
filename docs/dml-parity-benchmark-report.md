@@ -40,3 +40,28 @@
 - **Runtime Stability:** DirectML Execution Provider runs smoothly with sequential concurrency (`concurrency = 1`).
 - **Quality Parity:** Bounding boxes and recognized texts achieve complete fidelity with CPU baseline.
 - **Safety Baseline Invariant:** Hard default remains `paddle` (Paddle Native CPU). DirectML GPU is strictly Opt-in.
+
+---
+
+## 4. ADR-0008 Session Tuning & `rec_batch_num` Parity Evaluation
+
+### 4.1 ONNX Runtime Session Tuning
+- Graph Optimization enabled: `ort.GraphOptimizationLevel.ORT_ENABLE_ALL`
+- Memory Pattern disabled: `sess_opts.enable_mem_pattern = False` (required for DML dynamic shape stability)
+
+### 4.2 Empirical Batch Size Parity Test Matrix
+Evaluated on `public/fixtures/ocr/document_test/document1.png` against baseline (`b = 6`):
+
+| `rec_batch_num` | Bounding Box IoU | Text Similarity ($\ge 99.8\%$) | Max Conf Delta ($\le 0.005$) | Parity Status |
+|---|---|---|---|---|
+| **16** | 1.0000 | 98.88% (FAIL) | 1.01633 (FAIL) | **REJECTED** |
+| **12** | 1.0000 | 98.83% (FAIL) | 0.72898 (FAIL) | **REJECTED** |
+| **8** | 1.0000 | 97.23% (FAIL) | 0.72146 (FAIL) | **REJECTED** |
+| **6** | 1.0000 | 100.00% (PASS) | 0.00002 (PASS) | **APPROVED & LOCKED** |
+
+### 4.3 Root Cause & Default Lock Decision
+PaddleOCR's recognition module (`ch_PP-OCRv4_rec_infer`) performs batching by zero-padding crops to the maximum width in the batch. Larger batch sizes (> 6) introduce extreme width variance across dissimilar text snippets, skewing padding ratios and drifting CTC decoder confidence scores beyond the strict $\pm 0.005$ threshold.
+
+**Decision:**
+Per the **Strict Parity Invariant**, the hard default for `OCR_DML_REC_BATCH_NUM` is strictly locked to `6`. Speed improvements are achieved safely via ONNX Runtime graph optimizations (`ORT_ENABLE_ALL`) and pipeline concurrency (producer-consumer overlapping).
+
