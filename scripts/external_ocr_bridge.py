@@ -141,6 +141,68 @@ GLOBAL_USE_DML = False
 # Default is 'paddle' — do NOT change default until gate passes on all 6 pages
 OCR_BACKEND = os.environ.get("OCR_BACKEND", "paddle").strip().lower()
 _OCR_BACKEND_ORT_DML = (OCR_BACKEND == "ort_dml")
+_dml_session_disabled = False  # Sticky session downgrade flag for worker lifecycle
+
+
+def resolve_runtime_backend_status(lang: str) -> Dict[str, Any]:
+    global _dml_session_disabled
+    if not _OCR_BACKEND_ORT_DML:
+        return {
+            "requested_backend": "paddle",
+            "actual_backend": "paddle",
+            "fallback_reason": None,
+            "session_downgraded": False,
+        }
+
+    if _dml_session_disabled:
+        return {
+            "requested_backend": "ort_dml",
+            "actual_backend": "paddle",
+            "fallback_reason": "dml_runtime_error",
+            "session_downgraded": True,
+        }
+
+    is_latin_only = str(lang or "").strip().lower() in {"en", "latin", "eng", "english"}
+    if not is_latin_only:
+        return {
+            "requested_backend": "ort_dml",
+            "actual_backend": "paddle",
+            "fallback_reason": "unsupported_language",
+            "session_downgraded": False,
+        }
+
+    try:
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        if "DmlExecutionProvider" not in providers or os.environ.get("OCR_DISABLE_DML", "0") == "1":
+            return {
+                "requested_backend": "ort_dml",
+                "actual_backend": "paddle",
+                "fallback_reason": "dml_unavailable",
+                "session_downgraded": False,
+            }
+        dev_id, _ = resolve_dml_device_id()
+        if dev_id is None:
+            return {
+                "requested_backend": "ort_dml",
+                "actual_backend": "paddle",
+                "fallback_reason": "dml_unavailable",
+                "session_downgraded": False,
+            }
+        return {
+            "requested_backend": "ort_dml",
+            "actual_backend": "ort_dml",
+            "fallback_reason": None,
+            "session_downgraded": False,
+        }
+    except Exception:
+        return {
+            "requested_backend": "ort_dml",
+            "actual_backend": "paddle",
+            "fallback_reason": "dml_unavailable",
+            "session_downgraded": False,
+        }
+
 
 def ensure_onnx_model_converted(model_dir: str) -> str:
     if not model_dir:
@@ -204,21 +266,27 @@ def list_video_adapters() -> List[Dict[str, Any]]:
     return result
 
 
-def resolve_dml_device_id() -> Tuple[Optional[int], str]:
+def resolve_dml_device_id(target_adapter: Optional[str] = None) -> Tuple[Optional[int], str]:
     if "OCR_DML_DEVICE_ID" in os.environ and os.environ["OCR_DML_DEVICE_ID"].strip():
         try:
             return int(os.environ["OCR_DML_DEVICE_ID"].strip()), "explicit_device_id"
         except ValueError:
             pass
 
-    target_name = os.environ.get("OCR_DML_ADAPTER_NAME", "").strip().lower()
+    target_name = (target_adapter or os.environ.get("OCR_DML_ADAPTER_NAME", "")).strip().lower()
     target_luid = os.environ.get("OCR_DML_ADAPTER_LUID", "").strip().lower()
 
+    adapters = list_video_adapters()
     if not target_name and not target_luid:
-        print("[ocrBridge] No specific DML adapter specified. Strict policy: Fail closed to Paddle Native CPU.", file=sys.stderr)
+        # Check if there is a detected dedicated GPU (not Microsoft Basic Render Driver)
+        for a in adapters:
+            name = str(a.get("name") or "").lower()
+            if name and "basic render" not in name and "microsoft basic" not in name:
+                print(f"[ocrBridge] Using detected dedicated DML adapter: {a.get('name')} (device_id={a.get('index', 0)})", file=sys.stderr)
+                return int(a.get("index", 0)), str(a.get("name") or f"device_{a.get('index', 0)}")
+        print("[ocrBridge] No specific DML adapter specified and no dedicated GPU found. Strict policy: Fail closed to Paddle Native CPU.", file=sys.stderr)
         return None, "adapter_unspecified"
 
-    adapters = list_video_adapters()
     for a in adapters:
         name = str(a.get("name") or "").lower()
         pnp = str(a.get("id") or "").lower()
@@ -3729,32 +3797,29 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
 
     if not use_gpu:
         try:
-            # Check DirectML (AMD/Intel) via ONNX Runtime
-            import onnxruntime as ort
-            providers = ort.get_available_providers()
-            is_latin_only = lang in {"en", "latin", "eng", "english"}
-            if "DmlExecutionProvider" in providers and os.environ.get("OCR_DISABLE_DML", "0") != "1" and _OCR_BACKEND_ORT_DML and is_latin_only:
+            status_meta = resolve_runtime_backend_status(lang)
+            if status_meta["actual_backend"] == "ort_dml":
                 dev_id, matched_name = resolve_dml_device_id()
-                if dev_id is None:
-                    use_gpu = False
-                    use_onnx = False
-                    GLOBAL_USE_DML = False
-                    print("[ocrBridge] DML adapter resolution failed. Fail closed: falling back to Paddle Native CPU.", file=sys.stderr)
-                else:
-                    use_gpu = True
-                    use_onnx = True
-                    GLOBAL_USE_DML = True
-                    print(f"[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider device_id={dev_id}, name={matched_name}) enabled successfully", file=sys.stderr)
+                use_gpu = True
+                use_onnx = True
+                GLOBAL_USE_DML = True
+                print(f"[ocrBridge] DirectML GPU backend enabled (adapter: {matched_name}).", file=sys.stderr)
+                print(f"[ocrBridge] PaddleOCR DirectML (DmlExecutionProvider device_id={dev_id}, name={matched_name}) enabled successfully", file=sys.stderr)
             else:
+                use_gpu = False
+                use_onnx = False
                 GLOBAL_USE_DML = False
-                if _OCR_BACKEND_ORT_DML and not is_latin_only:
+                reason = status_meta["fallback_reason"]
+                if reason == "unsupported_language":
                     print(f"[ocrBridge] DirectML opt-in active but language '{lang}' is not Latin. Enforcing fallback to Paddle Native CPU.", file=sys.stderr)
+                elif reason == "dml_runtime_error":
+                    print(f"[ocrBridge] DirectML sticky session downgraded due to prior runtime error. Enforcing Paddle Native CPU.", file=sys.stderr)
                 elif not _OCR_BACKEND_ORT_DML:
                     print(f"[ocrBridge] PaddleOCR DirectML opt-in inactive (current backend: '{OCR_BACKEND}'). Using Paddle Native CPU.", file=sys.stderr)
-                elif "DmlExecutionProvider" not in providers:
-                    print("[ocrBridge] PaddleOCR DirectML not available in ONNX Runtime. Using Paddle Native CPU.", file=sys.stderr)
+                elif reason == "dml_unavailable":
+                    print("[ocrBridge] PaddleOCR DirectML unavailable. Using Paddle Native CPU.", file=sys.stderr)
                 else:
-                    print("[ocrBridge] PaddleOCR DirectML disabled via OCR_DISABLE_DML. Using Paddle Native CPU.", file=sys.stderr)
+                    print(f"[ocrBridge] PaddleOCR DirectML fallback: {reason}. Using Paddle Native CPU.", file=sys.stderr)
         except Exception as exc:
             print(f"[ocrBridge] Failed to check ONNX Runtime DirectML: {exc}", file=sys.stderr)
 
@@ -4260,7 +4325,22 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
         valid_paddle_kwargs["use_textline_orientation"] = True
 
     try:
+        ppocr_log = logging.getLogger("ppocr")
+        ppocr_log.setLevel(logging.ERROR)
+        for h in ppocr_log.handlers:
+            h.setLevel(logging.ERROR)
+    except Exception:
+        pass
+
+    try:
         ocr = PaddleOCR(**valid_paddle_kwargs)
+        try:
+            ppocr_log = logging.getLogger("ppocr")
+            ppocr_log.setLevel(logging.ERROR)
+            for h in ppocr_log.handlers:
+                h.setLevel(logging.ERROR)
+        except Exception:
+            pass
     except Exception as e:
         print(f"[WARN] Failed to initialize PaddleOCR with primary kwargs: {e}", file=sys.stderr)
         if valid_paddle_kwargs.get("use_onnx"):
@@ -4743,8 +4823,7 @@ def report_progress(request_id: str | None, current_chunk: int, total_chunks: in
     progress_val = int((current_chunk / total_chunks) * 90)
     progress_val = max(0, min(90, progress_val))
     try:
-        sys.stdout.write(json.dumps({"id": request_id, "type": "progress", "progress": progress_val, "value": progress_val}) + "\n")
-        sys.stdout.flush()
+        send_ipc_json({"id": request_id, "type": "progress", "progress": progress_val, "value": progress_val})
     except Exception:
         pass
 
@@ -4958,16 +5037,37 @@ def _run_paddleocr_impl(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def run_paddleocr(args: argparse.Namespace) -> Dict[str, Any]:
-    global GLOBAL_USE_DML
+    global GLOBAL_USE_DML, _dml_session_disabled
+    lang = select_paddle_lang(args.language)
+    status_meta = resolve_runtime_backend_status(lang)
     try:
-        return _run_paddleocr_impl(args)
+        result = _run_paddleocr_impl(args)
     except Exception as exc:
-        if GLOBAL_USE_DML:
-            print(f"[ocrBridge] Runtime DML execution error ({exc}). Fail closed: falling back to Paddle Native CPU...", file=sys.stderr)
+        if status_meta["actual_backend"] == "ort_dml" or GLOBAL_USE_DML:
+            print(f"[ocrBridge] Runtime DML execution error ({exc}). Downgrading session to Paddle Native CPU permanently...", file=sys.stderr)
+            _dml_session_disabled = True
             GLOBAL_USE_DML = False
             PADDLE_OCR_CACHE.clear()
-            return _run_paddleocr_impl(args)
-        raise
+            status_meta = {
+                "requested_backend": "ort_dml",
+                "actual_backend": "paddle",
+                "fallback_reason": "dml_runtime_error",
+                "session_downgraded": True,
+            }
+            result = _run_paddleocr_impl(args)
+        else:
+            raise
+
+    # Guarantee runtime truth metadata is attached to response root & debug
+    for k, v in status_meta.items():
+        result[k] = v
+    if "debug" not in result or not isinstance(result["debug"], dict):
+        result["debug"] = {}
+    result["debug"]["requestedBackend"] = status_meta["requested_backend"]
+    result["debug"]["actualBackend"] = status_meta["actual_backend"]
+    result["debug"]["fallbackReason"] = status_meta["fallback_reason"]
+    result["debug"]["sessionDowngraded"] = status_meta["session_downgraded"]
+    return result
 
 
 def run_adapter(adapter_path: str, args: argparse.Namespace) -> Dict[str, Any]:
@@ -5174,19 +5274,26 @@ def _detect_torch_device() -> Tuple[Any, bool, bool]:
       (must be injected after EasyOCR Reader init, NOT passed as constructor arg)
     """
     # 1. Check for DirectML (High priority for Windows/AMD stability — no CUDA DLLs)
-    if os.environ.get("OCR_USE_DIRECTML", "0") == "1":
-        try:
-            import torch_directml  # type: ignore
-            if torch_directml.is_available():
-                return torch_directml.device(), False, True  # gpu=False to skip CUDA init
-        except Exception:
-            pass
-
+    # ABI Guard: torch-directml 0.2.5.dev240914 requires torch==2.4.x strictly.
+    # When torch is >= 2.5 or 2.14+, importing torch_directml raises DLL procedure not found / OSError.
     try:
-        import torch_directml  # type: ignore
-        if torch_directml.is_available():
-            return torch_directml.device(), False, True
-    except Exception:
+        import torch
+        torch_ver = getattr(torch, "__version__", "")
+        if torch_ver.startswith("2.4."):
+            try:
+                import torch_directml  # type: ignore
+                if hasattr(torch_directml, "is_available") and torch_directml.is_available():
+                    return torch_directml.device(), False, True  # gpu=False to skip CUDA init
+            except (ImportError, OSError, RuntimeError, Exception) as dml_exc:
+                print(f"[ocrBridge] EasyOCR torch-directml init failed: {dml_exc}. Falling back.", file=sys.stderr)
+        else:
+            if os.environ.get("OCR_USE_DIRECTML", "0") == "1":
+                print(
+                    f"[ocrBridge] EasyOCR torch-directml requires PyTorch 2.4.x but found {torch_ver}. "
+                    "Skipping DirectML and falling back to CPU to prevent ABI crash.",
+                    file=sys.stderr,
+                )
+    except (ImportError, OSError, RuntimeError, Exception):
         pass
 
     # 2. Check for CUDA
@@ -5503,10 +5610,8 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
 
         # Calculate average confidence for the raw run
         avg_confidence = 0.0
-        if lines:
-            avg_confidence = sum(line["confidence"] for line in lines) / len(lines)
-
-        return {
+        status_meta = resolve_runtime_backend_status(lang)
+        res = {
             "ok": True,
             "engine": "paddleocr-true-raw",
             "elapsed_ms": round(elapsed_ms, 1),
@@ -5516,6 +5621,8 @@ def run_paddleocr_raw(args: argparse.Namespace) -> Dict[str, Any]:
             "confidence": round(avg_confidence * 100, 2) if avg_confidence <= 1.0 else round(avg_confidence, 2),
             "text": " ".join(words),
         }
+        res.update(status_meta)
+        return res
     except Exception as exc:
         return {"ok": False, "reason": str(exc)}
 
@@ -5602,21 +5709,141 @@ def make_namespace_from_payload(payload: Dict[str, Any], fallback_engine: str) -
                 payload.get("use_angle_cls") if payload.get("use_angle_cls") is not None else True
             )
         ),
+        adapter=payload.get("adapter") or payload.get("adapterName") or payload.get("adapter_name"),
         stdio_server=False,
     )
+
+
+def check_model_artifact_dir(model_dir: str) -> Tuple[bool, str]:
+    if not os.path.exists(model_dir):
+        return False, f"Directory does not exist: {model_dir}"
+    onnx_file = os.path.join(model_dir, "model.onnx")
+    if os.path.exists(onnx_file):
+        if not os.path.isfile(onnx_file) or os.path.getsize(onnx_file) == 0:
+            return False, f"Corrupted 0-byte ONNX model at {onnx_file}"
+        return True, "onnx_ready"
+
+    pdmodel = os.path.join(model_dir, "inference.pdmodel")
+    pdiparams = os.path.join(model_dir, "inference.pdiparams")
+    if os.path.isfile(pdmodel) and os.path.getsize(pdmodel) > 0 and os.path.isfile(pdiparams) and os.path.getsize(pdiparams) > 0:
+        if not os.access(model_dir, os.W_OK):
+            return False, f"Model directory is not writable for conversion: {model_dir}"
+        return True, "ready_for_conversion"
+    return False, f"Missing inference model files in {model_dir}"
+
+
+def verify_en_model_artifacts_readiness() -> Tuple[bool, str]:
+    home_dir = os.path.expanduser("~")
+    det_candidates = [
+        os.path.join(home_dir, ".paddleocr", "whl", "det", "en", "en_PP-OCRv3_det_infer"),
+        os.path.join(home_dir, ".paddleocr", "whl", "det", "ch", "ch_PP-OCRv4_det_infer"),
+        str(LOCAL_MODEL_BASE / "PP-OCRv4_det"),
+    ]
+    rec_candidates = [
+        os.path.join(home_dir, ".paddleocr", "whl", "rec", "en", "en_PP-OCRv4_rec_infer"),
+        os.path.join(home_dir, ".paddleocr", "whl", "rec", "latin", "latin_PP-OCRv3_rec_infer"),
+        str(LOCAL_MODEL_BASE / "en_PP-OCRv4_rec"),
+    ]
+
+    for d in det_candidates + rec_candidates:
+        if os.path.exists(d):
+            onnx_f = os.path.join(d, "model.onnx")
+            if os.path.exists(onnx_f) and (not os.path.isfile(onnx_f) or os.path.getsize(onnx_f) == 0):
+                return False, f"missing_or_corrupted_model_artifacts: 0-byte or corrupted file at {onnx_f}"
+
+    det_ok = any(check_model_artifact_dir(d)[0] for d in det_candidates)
+    rec_ok = any(check_model_artifact_dir(r)[0] for r in rec_candidates)
+
+    if not det_ok or not rec_ok:
+        return False, "missing_or_corrupted_model_artifacts"
+    return True, "ok"
+
+
+def verify_dml_readiness(target_adapter: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        if "DmlExecutionProvider" not in providers:
+            return {"ok": False, "ready": False, "reason": "DmlExecutionProvider is not available in onnxruntime"}
+        dev_id, matched_name = resolve_dml_device_id(target_adapter)
+        if dev_id is None:
+            return {"ok": False, "ready": False, "reason": "No compatible DirectML GPU adapter found"}
+
+        # Lightweight DirectML device probe (< 0.5s) instead of loading the full 300MB PaddleOCR pipeline
+        session_verified = False
+        last_err: Optional[Exception] = None
+
+        # Method 1: Try onnxruntime sample dataset if present
+        try:
+            import onnxruntime.datasets as ort_datasets
+            sample_model = ort_datasets.get_example("mul_1.onnx")
+            if os.path.exists(sample_model):
+                sess = ort.InferenceSession(sample_model, providers=[("DmlExecutionProvider", {"device_id": dev_id})])
+                if "DmlExecutionProvider" in sess.get_providers():
+                    session_verified = True
+        except Exception as e:
+            last_err = e
+
+        # Method 2: In-memory minimal ONNX model fallback
+        if not session_verified:
+            try:
+                import onnx
+                from onnx import helper, TensorProto
+                X = helper.make_tensor_value_info("X", TensorProto.FLOAT, [1, 2])
+                Y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, 2])
+                node = helper.make_node("Relu", ["X"], ["Y"])
+                graph = helper.make_graph([node], "dml-probe-graph", [X], [Y])
+                model = helper.make_model(graph, producer_name="dml-probe")
+                sess = ort.InferenceSession(model.SerializeToString(), providers=[("DmlExecutionProvider", {"device_id": dev_id})])
+                if "DmlExecutionProvider" in sess.get_providers():
+                    session_verified = True
+            except Exception as e:
+                last_err = e
+
+        if not session_verified and last_err is not None:
+            return {
+                "ok": False,
+                "ready": False,
+                "reason": f"DirectML session initialization failed: {last_err}",
+            }
+
+        # Stage 2: Disk Artifact Check (verify required 'en' OCR model files on disk)
+        artifacts_ok, artifact_reason = verify_en_model_artifacts_readiness()
+        if not artifacts_ok:
+            return {
+                "ok": False,
+                "ready": False,
+                "reason": artifact_reason,
+            }
+
+        return {
+            "ok": True,
+            "ready": True,
+            "adapter": matched_name,
+            "device_id": dev_id,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "ready": False,
+            "reason": str(exc),
+        }
 
 
 def prewarm_engine(args: argparse.Namespace) -> Dict[str, Any]:
     if args.engine == "paddleocr":
         lang = select_paddle_lang(args.language)
         profile_key = get_paddle_profile_key(args)
+        status_meta = resolve_runtime_backend_status(lang)
         get_paddle_ocr(lang, profile_key)
-        return {
+        res = {
             "ok": True,
             "available": True,
             "runtime": "Python bridge",
-            "description": f"PaddleOCR warmed ({lang}, {profile_key})",
+            "description": f"PaddleOCR warmed ({lang}, {profile_key}, backend={status_meta['actual_backend']})",
         }
+        res.update(status_meta)
+        return res
 
     adapter = os.environ.get("EASY_YOLO_OCR_ADAPTER")
     if adapter:
@@ -5648,6 +5875,9 @@ def handle_action(args: argparse.Namespace) -> Dict[str, Any]:
         return {"ok": True, "pong": True, "engine": args.engine}
     if args.action == "list-adapters":
         return {"ok": True, "adapters": list_video_adapters()}
+    if args.action == "verify-dml-ready":
+        adapter = getattr(args, "adapter", None) or getattr(args, "adapter_name", None)
+        return verify_dml_readiness(adapter)
     if args.action == "status":
         if args.engine == "paddleocr":
             return status_paddleocr()
@@ -5689,7 +5919,27 @@ def cleanup_memory() -> None:
         pass
 
 
+_ipc_stdout = sys.stdout
+
+
+def send_ipc_json(payload: Dict[str, Any]) -> None:
+    global _ipc_stdout
+    out = _ipc_stdout or sys.stdout
+    out.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    out.flush()
+
+
 def serve_stdio(default_engine: str) -> None:
+    global _ipc_stdout
+    _ipc_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
+    try:
+        import logging
+        logging.getLogger("ppocr").setLevel(logging.ERROR)
+        logging.getLogger("paddle").setLevel(logging.ERROR)
+    except Exception:
+        pass
     request_count = 0
     for raw_line in sys.stdin:
         line = raw_line.strip()
@@ -5710,8 +5960,7 @@ def serve_stdio(default_engine: str) -> None:
         if request_id:
             response["id"] = request_id
 
-        sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
-        sys.stdout.flush()
+        send_ipc_json(response)
 
         request_count += 1
         if request_count % 5 == 0:
@@ -5724,7 +5973,7 @@ def serve_stdio(default_engine: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup", "ping", "list-adapters"])
+    parser.add_argument("--action", required=True, choices=["status", "ocr", "prewarm", "raw_ocr", "cleanup", "ping", "list-adapters", "verify-dml-ready"])
     parser.add_argument("--engine", default="paddleocr", choices=["paddleocr", "easyocr"])
     parser.add_argument("--image")
     parser.add_argument("--language", default="eng")

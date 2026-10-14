@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, ChevronDown, Sparkles, Gauge, Zap } from 'lucide-react';
+import { Cpu, ChevronDown, Sparkles, Gauge, Zap, Loader2 } from 'lucide-react';
 import type { OCREngine, OCROptions } from '../../../types';
-import { OCR_ENGINES } from '../../../stores/useOCRTextLayerStore';
+import { OCR_ENGINES, useOCRTextLayerStore } from '../../../stores/useOCRTextLayerStore';
 import type { EngineWarmState } from '../hooks/useEnginePrewarm';
+import { bootstrapOcrBackend } from '../../../services/ocr/ocrBackendBootstrap';
 
 export interface OCREngineSelectorProps {
   options: OCROptions;
@@ -30,17 +31,25 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
   setOcrQualityMode,
 }) => {
   const [adapters, setAdapters] = useState<Array<{ index: number; name: string; id: string }>>([]);
+  const [isVerifyingDml, setIsVerifyingDml] = useState(false);
+  const [dmlVerificationError, setDmlVerificationError] = useState<string | null>(null);
+
+  const runtimeBackendStatus = useOCRTextLayerStore((state) => state.runtimeBackendStatus);
+  const setBackendFromUI = useOCRTextLayerStore((state) => state.setBackendFromUI);
+  const lastFallbackReason = useOCRTextLayerStore((state) => state.lastFallbackReason);
 
   useEffect(() => {
     let isMounted = true;
     const fetchAdapters = async () => {
       try {
         const bridge = (window as any).electronAPI || (window as any).electronBridge || (window as any).platformBridge;
+        // Ordered boot sync + smart GPU auto-promotion (ADR-0006) must finish before adapters are shown.
+        await bootstrapOcrBackend(bridge?.ocr);
         if (bridge?.ocr?.listAdapters) {
           const list = await bridge.ocr.listAdapters();
           if (isMounted && Array.isArray(list) && list.length > 0) {
             setAdapters(list);
-            if (!options.dmlAdapterName && list[0]?.name) {
+            if (!useOCRTextLayerStore.getState().options.dmlAdapterName && list[0]?.name) {
               setOptions({ dmlAdapterName: list[0].name });
             }
           }
@@ -226,65 +235,147 @@ export const OCREngineSelector: React.FC<OCREngineSelectorProps> = ({
             )}
 
             {/* PaddleOCR Backend & Hardware Acceleration Selector */}
-            {options.engine === 'paddleocr' && (
-              <div className="pt-2 mt-1.5 border-t border-white/5 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-medium text-slate-300">Acceleration Backend</span>
-                  <div className="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-white/10">
-                    <button
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={() => setOptions({ backend: 'paddle' })}
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
-                        (options.backend || 'paddle') === 'paddle'
-                          ? 'bg-slate-700 text-white shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Paddle CPU
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={() => setOptions({ backend: 'ort_dml' })}
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
-                        options.backend === 'ort_dml'
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      DirectML GPU
-                    </button>
-                  </div>
-                </div>
+            {options.engine === 'paddleocr' && (() => {
+              const hasDedicatedGpu = adapters.some(
+                (a) =>
+                  a.name &&
+                  !a.name.toLowerCase().includes('basic render') &&
+                  !a.name.toLowerCase().includes('microsoft basic')
+              );
 
-                {options.backend === 'ort_dml' && (
-                  <div className="space-y-1.5 p-2 rounded-lg bg-emerald-950/20 border border-emerald-500/20">
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="text-emerald-400 font-medium">GPU Adapter:</span>
-                      {adapters.length > 0 ? (
-                        <select
-                          value={options.dmlAdapterName || adapters[0]?.name || ''}
-                          onChange={(e) => setOptions({ dmlAdapterName: e.target.value })}
-                          className="bg-slate-900 border border-emerald-500/30 rounded px-1.5 py-0.5 text-[10px] text-white focus:outline-none"
-                        >
-                          {adapters.map((a) => (
-                            <option key={a.id || a.name} value={a.name}>
-                              {a.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="text-slate-400">AMD Radeon RX 6700 XT</span>
-                      )}
+              const handleSelectDml = async () => {
+                if (isProcessing || isVerifyingDml) return;
+                setIsVerifyingDml(true);
+                setDmlVerificationError(null);
+                try {
+                  const targetAdapter =
+                    options.dmlAdapterName ||
+                    adapters.find(
+                      (a) =>
+                        a.name &&
+                        !a.name.toLowerCase().includes('basic render') &&
+                        !a.name.toLowerCase().includes('microsoft basic')
+                    )?.name ||
+                    adapters[0]?.name;
+
+                  const bridge = (window as any).electronAPI || (window as any).electronBridge || (window as any).platformBridge;
+                  if (bridge?.ocr?.verifyDmlReady) {
+                    const verifyPromise = bridge.ocr.verifyDmlReady(targetAdapter);
+                    const timeoutPromise = new Promise<{ ready: boolean; reason: string }>((_, reject) => {
+                      setTimeout(() => reject(new Error('DirectML verification timed out after 10s')), 10000);
+                    });
+                    const res = await Promise.race([verifyPromise, timeoutPromise]);
+                    if (!res?.ready) {
+                      const errMsg = res?.reason || 'DirectML runtime or models are not ready.';
+                      setDmlVerificationError(errMsg);
+                      setOptions({ backend: 'paddle', forceRestart: true });
+                      if (bridge?.ocr?.setBackend) {
+                        void bridge.ocr.setBackend({ backend: 'paddle', forceRestart: true });
+                      }
+                      return;
+                    }
+                  }
+                  setBackendFromUI('ort_dml', targetAdapter);
+                } catch (err: any) {
+                  setDmlVerificationError(err?.message || String(err));
+                  setOptions({ backend: 'paddle', forceRestart: true });
+                  const bridge = (window as any).electronAPI || (window as any).electronBridge || (window as any).platformBridge;
+                  if (bridge?.ocr?.setBackend) {
+                    void bridge.ocr.setBackend({ backend: 'paddle', forceRestart: true });
+                  }
+                } finally {
+                  setIsVerifyingDml(false);
+                }
+              };
+
+              return (
+                <div className="pt-2 mt-1.5 border-t border-white/5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    
+                    <div className="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-white/10">
+                      <button
+                        type="button"
+                        disabled={isProcessing || isVerifyingDml}
+                        onClick={() => {
+                          setDmlVerificationError(null);
+                          setBackendFromUI('paddle');
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                          (options.backend || 'paddle') === 'paddle'
+                            ? 'bg-slate-700 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Paddle CPU
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isProcessing || isVerifyingDml}
+                        onClick={() => void handleSelectDml()}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                          options.backend === 'ort_dml'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {isVerifyingDml && <Loader2 size={10} className="animate-spin text-white" />}
+                        <span>{isVerifyingDml ? 'Verifying...' : 'DirectML GPU'}</span>
+                      </button>
                     </div>
-                    <p className="text-[9px] text-emerald-300/80 leading-relaxed">
-                      * DirectML เร่งความเร็วโมเดลละติน (อังกฤษ) หากใช้ภาษาอื่น ระบบจะ fallback ไป Paddle CPU อัตโนมัติ
-                    </p>
                   </div>
-                )}
-              </div>
-            )}
+
+                  {dmlVerificationError && (
+                    <div className="p-1.5 rounded bg-rose-950/40 border border-rose-500/30 text-[9px] text-rose-300">
+                      DirectML verification failed: {dmlVerificationError} (reverted to Paddle CPU)
+                    </div>
+                  )}
+
+                  {options.backend === 'ort_dml' && (
+                    <div className="space-y-1.5 p-2 rounded-lg bg-emerald-950/20 border border-emerald-500/20">
+                      <div className="flex items-center justify-between text-[10px]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-emerald-400 font-medium">GPU Adapter:</span>
+                          {/* DirectML Runtime Truth Status Badge */}
+                          {runtimeBackendStatus === 'active_dml' && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              DirectML Active
+                            </span>
+                          )}
+                          {runtimeBackendStatus === 'fallback_cpu' && (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40 cursor-help"
+                              title={`CPU Fallback: ${lastFallbackReason || 'Language not supported by ONNX or DML execution error'}`}
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                              CPU Fallback ({lastFallbackReason === 'unsupported_language' ? 'Language' : 'Driver'})
+                            </span>
+                          )}
+                        </div>
+                        {adapters.length > 0 ? (
+                          <select
+                            value={options.dmlAdapterName || adapters[0]?.name || ''}
+                            onChange={(e) => setOptions({ dmlAdapterName: e.target.value })}
+                            className="bg-slate-900 border border-emerald-500/30 rounded px-1.5 py-0.5 text-[10px] text-white focus:outline-none"
+                          >
+                            {adapters.map((a) => (
+                              <option key={a.id || a.name} value={a.name}>
+                                {a.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-slate-400">AMD Radeon RX 6700 XT</span>
+                        )}
+                      </div>
+                      <p className="text-[9px] text-emerald-300/80 leading-relaxed">
+                        * DirectML เร่งความเร็วโมเดลละติน (อังกฤษ) หากใช้ภาษาอื่น ระบบจะ fallback ไป Paddle CPU อัตโนมัติ
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>

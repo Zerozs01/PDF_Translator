@@ -937,21 +937,67 @@ export function initPlatformBridgeCompat(): void {
                     },
                   });
                   return (res?.adapters || []) as Array<{ index: number; name: string; id: string }>;
-                } catch (err) {
-                  console.warn('[Bridge] listAdapters warning:', err);
-                  cachedPromise = null;
-                  return [];
+                } catch (firstErr) {
+                  // If worker was resetting during backend promotion, retry once smoothly
+                  try {
+                    await new Promise((r) => setTimeout(r, 400));
+                    const retryRes = await invoke<any>('send_sidecar_command', {
+                      payload: {
+                        id: `adapters_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                        action: 'list-adapters',
+                        engine: 'paddleocr',
+                      },
+                    });
+                    return (retryRes?.adapters || []) as Array<{ index: number; name: string; id: string }>;
+                  } catch (err) {
+                    console.warn('[Bridge] listAdapters warning:', err);
+                    cachedPromise = null;
+                    return [];
+                  }
                 }
               })();
             }
             return cachedPromise;
           };
         })(),
-        setBackend: async (payload: { backend: 'paddle' | 'ort_dml'; adapterName?: string }) => {
+        verifyDmlReady: async (adapterName?: string) => {
+          try {
+            const res = await invoke<any>('send_sidecar_command', {
+              payload: {
+                action: 'verify-dml-ready',
+                engine: 'paddleocr',
+                adapter: adapterName,
+              },
+            });
+            return {
+              ok: Boolean(res?.ok),
+              ready: Boolean(res?.ready),
+              adapter: res?.adapter,
+              reason: res?.reason,
+            };
+          } catch (err: any) {
+            console.warn('[Bridge] verifyDmlReady warning:', err);
+            return {
+              ok: false,
+              ready: false,
+              reason: err?.message || String(err),
+            };
+          }
+        },
+        setBackend: async (
+          payloadOrBackend: { backend: 'paddle' | 'ort_dml'; adapterName?: string; forceRestart?: boolean } | 'paddle' | 'ort_dml',
+          adapterName?: string,
+          options?: { forceRestart?: boolean }
+        ) => {
+          const backend = typeof payloadOrBackend === 'object' ? payloadOrBackend.backend : payloadOrBackend;
+          const targetAdapter = typeof payloadOrBackend === 'object' ? payloadOrBackend.adapterName : adapterName;
+          const forceRestart = typeof payloadOrBackend === 'object' ? payloadOrBackend.forceRestart : options?.forceRestart;
+
           try {
             await invoke<void>('set_ocr_backend', {
-              backend: payload.backend,
-              adapterName: payload.adapterName || null,
+              backend,
+              adapterName: targetAdapter || null,
+              forceRestart: forceRestart ?? false,
             });
           } catch (err) {
             console.error('[Bridge] set_ocr_backend failed:', err);
@@ -1033,13 +1079,26 @@ export function initPlatformBridgeCompat(): void {
             if (res.ok === false) {
               throw new Error(res.reason || res.error || 'Sidecar OCR failed');
             }
+            const actualBackend = res.actual_backend || res.actualBackend || res.debug?.actualBackend;
+            const requestedBackend = res.requested_backend || res.requestedBackend || res.debug?.requestedBackend;
+            const fallbackReason = res.fallback_reason !== undefined ? res.fallback_reason : (res.debug?.fallbackReason ?? null);
+            const sessionDowngraded = res.session_downgraded ?? res.sessionDowngraded ?? res.debug?.sessionDowngraded;
+
             return {
               lines: res.lines || [],
               words: res.words || [],
               text: res.text || '',
               confidence: typeof res.confidence === 'number' ? res.confidence : 0,
               pageSegMode: res.pageSegMode ?? request.pageSegMode,
-              debug: res.debug,
+              actualBackend,
+              fallbackReason,
+              debug: {
+                ...(res.debug || {}),
+                actualBackend,
+                requestedBackend,
+                fallbackReason,
+                sessionDowngraded,
+              },
             };
           } catch (err) {
             console.error('[Bridge] runExternal error:', err);

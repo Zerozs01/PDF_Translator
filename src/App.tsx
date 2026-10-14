@@ -13,6 +13,7 @@ import { useExportOrchestration } from './hooks/useExportOrchestration';
 import { useDocumentTranslation } from './hooks/useDocumentTranslation';
 import { useBackgroundQueueSync } from './hooks/useBackgroundQueueSync';
 import { backgroundQueueProcessor } from './services/ocr/BackgroundQueueProcessor';
+import { bootstrapOcrBackend } from './services/ocr/ocrBackendBootstrap';
 
 // Lazy Load Heavy Components (Avoid bundling 20MB+ PDF/Canvas/Export parsers into startup bundle)
 const OCRRegressionHarness = import.meta.env.DEV
@@ -97,10 +98,25 @@ export default function App() {
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
-  // T3: Eager warm-up on app launch
+  // T3: Eager warm-up on app launch (guarded by bootstrap backend sync)
   useEffect(() => {
-    const targetLang = ocrLanguage || 'eng';
-    void backgroundQueueProcessor.prewarm('paddleocr', targetLang);
+    let isCancelled = false;
+    const runBootAndPrewarm = async () => {
+      try {
+        const bridge = (window as any).electronAPI || (window as any).electronBridge || (window as any).platformBridge;
+        await bootstrapOcrBackend(bridge?.ocr);
+      } catch (err) {
+        console.warn('[App] bootstrapOcrBackend warning:', err);
+      }
+      if (!isCancelled) {
+        const targetLang = ocrLanguage || 'eng';
+        void backgroundQueueProcessor.prewarm('paddleocr', targetLang);
+      }
+    };
+    void runBootAndPrewarm();
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   // T3: Eager warm-up on document open

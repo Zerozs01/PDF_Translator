@@ -56,8 +56,8 @@ User Interaction -> React Component / Canvas -> Zustand Store / Hook -> Platform
   - Scope: ประมวลผลและสตรีมภาพ PDF ผ่านโปรโตคอล `pdf-page://` และประกอบ Canvas Overlay + Invisible Text Layer คืนเอกสาร Searchable PDF
 - OCR Processing, Hardware Acceleration & Lifecycle
   - Primary: src/services/ocr/BackgroundQueueProcessor.ts, src/services/ocr/ConcurrencyLimiter.ts
-  - Secondary: src-tauri/src/core/process_manager.rs, scripts/external_ocr_bridge.py, src/stores/useOCRTextLayerStore.ts, src/components/OCR/EngineSelector/OCREngineSelector.tsx
-  - Scope: ควบคุมคิว OCR เบื้องหลัง, จัดการ Concurrency Slot ปลอดภัยจาก Unhandled Rejection, รองรับ Hardware Discovery (`list-adapters`) และ DirectML Opt-in (Default ปัจจุบันเป็น Paddle Native CPU ปลอดภัย 100% มีข้อความสถานะ `opt-in inactive`, DirectML เปิดใช้เฉพาะ Latin/en พร้อมระบบ Fail-Closed Fallback), และ IPC ID แบบ Monotonic Sequence ป้องกัน Race Condition
+  - Secondary: src-tauri/src/core/process_manager.rs, scripts/external_ocr_bridge.py, src/services/ocr/ocrBackendBootstrap.ts, src/stores/useOCRTextLayerStore.ts, src/components/OCR/EngineSelector/OCREngineSelector.tsx
+  - Scope: ควบคุมคิว OCR เบื้องหลัง, จัดการ Concurrency Slot ปลอดภัยจาก Unhandled Rejection, รองรับ Hardware Discovery (`list-adapters`), Fast DirectML Probe (<0.8s ด้วย ONNX minimal probe), Worker Idempotency ป้องกัน Thrashing Restarts, Single-Flight Boot Sync (`bootstrapOcrBackend`), DirectML Opt-in (Default ปัจจุบันเป็น Paddle Native CPU ปลอดภัย 100% มีข้อความสถานะ `opt-in inactive`, DirectML เปิดใช้เฉพาะ Latin/en พร้อมระบบ Fail-Closed Fallback), และ IPC ID แบบ Monotonic Sequence ป้องกัน Race Condition
 - Offline Translation Pipeline
   - Primary: src/services/translation/translationCoordinator.ts, src/hooks/useDocumentTranslation.ts
   - Secondary: src/hooks/translation/useTranslationCachePersister.ts, src/services/translation/offlineTranslationService.ts, scripts/argos_translate_bridge.py

@@ -25,6 +25,7 @@ export interface BackgroundJob {
   ocrPageSegMode?: number | null;
   ocrQualityProfile?: 'fast' | 'balanced' | 'best';
   useAngleCls?: boolean;
+  backend?: 'paddle' | 'ort_dml';
   startTime?: number;
   completedTime?: number;
 }

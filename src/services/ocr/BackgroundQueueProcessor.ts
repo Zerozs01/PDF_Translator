@@ -432,6 +432,12 @@ class BackgroundQueueProcessor {
     const translationTasks: Promise<void>[] = [];
     const translationErrors: { pageNum: number; message: string }[] = [];
 
+    // Strict GPU Concurrency Cap (ADR-0005): ort_dml must run sequential (concurrency = 1) to prevent VRAM spikes
+    const jobBackend = job.backend || useOCRTextLayerStore.getState().options.backend || 'paddle';
+    const ocrConcurrency = jobBackend === 'ort_dml' ? 1 : 2;
+    const ocrLimiter = new ConcurrencyLimiter(ocrConcurrency);
+    let hasNotifiedFallback = false;
+
     const prefetch: PrefetchPipelineController = {
       data: null,
       pageNum: null,
@@ -479,14 +485,33 @@ class BackgroundQueueProcessor {
           );
 
           // 1. ดำเนินการ OCR (DB Cache หรือ Headless OCR พร้อม 2-Stage Prefetch)
-          const { ocrResult, renderDurationMs, ocrIpcDurationMs } = await this.executePageOCR(
-            pdfDoc,
-            job,
-            pageNum,
-            nextPageNum,
-            signal,
-            prefetch
+          const { ocrResult, renderDurationMs, ocrIpcDurationMs } = await ocrLimiter.run(() =>
+            this.executePageOCR(
+              pdfDoc,
+              job,
+              pageNum,
+              nextPageNum,
+              signal,
+              prefetch
+            )
           );
+
+          // Runtime Truth Sync & Fallback Monitoring (ADR-0005)
+          const resBackend = ocrResult.actualBackend || ocrResult.debug?.actualBackend;
+          const resFallbackReason = ocrResult.fallbackReason || ocrResult.debug?.fallbackReason;
+          if (jobBackend === 'ort_dml') {
+            if (resBackend === 'ort_dml') {
+              useOCRTextLayerStore.getState().setRuntimeBackendStatus('active_dml', null);
+            } else if (resBackend === 'paddle') {
+              useOCRTextLayerStore.getState().setRuntimeBackendStatus('fallback_cpu', resFallbackReason || 'unknown');
+              if (!hasNotifiedFallback) {
+                hasNotifiedFallback = true;
+                console.warn(
+                  `[QueueProcessor] DirectML OCR fell back to CPU for job ${job.id}: ${resFallbackReason || 'unspecified'}`
+                );
+              }
+            }
+          }
 
           throwIfAborted();
 
@@ -581,6 +606,7 @@ class BackgroundQueueProcessor {
           throwIfAborted();
         }
       } catch (err: any) {
+        ocrLimiter.clear();
         translationLimiter.clear();
         // ถ้า signal ถูก abort เจตนา (Preemption/Foreground) → re-throw ทันที ไม่ treat เป็น chunk failure
         if (signal.aborted) {
@@ -627,6 +653,7 @@ class BackgroundQueueProcessor {
     // ถ้า signal ถูก abort เจตนา (Preemption) → ออกจาก processJob โดยไม่ mark ว่า failed
     // สถานะ 'queued' ถูกตั้งไว้โดย Subscriber ก่อน abort แล้ว ไม่ต้องทำอะไรเพิ่ม
     if (signal.aborted) {
+      ocrLimiter.clear();
       translationLimiter.clear();
       throw new Error('Process aborted by signal');
     }
