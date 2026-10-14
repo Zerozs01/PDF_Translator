@@ -1126,9 +1126,6 @@ class BackgroundQueueProcessor {
       };
     } finally {
       this.cleanupCanvas(canvas);
-      try {
-        page?.cleanup?.();
-      } catch {}
     }
   }
 

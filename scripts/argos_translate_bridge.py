@@ -56,6 +56,7 @@ LANGUAGE_ALIASES: Dict[str, str] = {
 }
 
 TRANSLATION_CACHE: Dict[Tuple[str, str, bool], Any] = {}
+# Strictly caches raw model output before glossary/rule post-processing
 TEXT_TRANSLATION_CACHE: "OrderedDict[Tuple[str, str, bool, str], str]" = OrderedDict()
 TEXT_TRANSLATION_CACHE_LIMIT = 4096
 INSTALLED_LANGUAGE_CODES_CACHE: List[str] | None = None

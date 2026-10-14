@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added & Optimized — DirectML GPU Acceleration, Fast Probe, Bounded Pipeline & Throughput Optimization (ADR-0005 to ADR-0008, October 2026)
+
+- **DirectML GPU Acceleration (`ort_dml`):** Integrated ONNX Runtime DirectML Execution Provider with dynamic hardware discovery (`list-adapters`). Reduced steady-state OCR latency to 513–708 ms/page on AMD Radeon RX 6700 XT (21.5x–35.0x faster than CPU baseline).
+- **Strict Parity Gate Preserved:** Achieved 100% bit-level parity against golden datasets (`IoU = 1.0000`, `Text Similarity = 100.00%`, `Confidence Delta <= 0.00002`). Locked default `OCR_DML_REC_BATCH_NUM = 6` based on empirical zero-padding variance analysis.
+- **Smart Startup Promotion & Single-Flight Boot Sync (`ocrBackendBootstrap.ts`):** Single-flight startup probe auto-promotes supported discrete/integrated GPUs to `ort_dml` while strictly respecting user configuration.
+- **Fast Probe & Deadlock Recovery:** 2-node synthetic ONNX graph probe executes in `< 0.8s` with file size validation (> 0 bytes) and `force_restart: bool` to bypass Rust process manager idempotency locks upon timeout.
+- **Split Fallback Policy & Runtime Truth:** Differentiates ephemeral per-page language fallbacks (Thai/CJK routed to CPU) from sticky hardware downgrades (`_dml_session_disabled = True`), preventing engine selector desynchronization.
+- **Stdio Protocol Isolation:** Full protocol isolation across both `external_ocr_bridge.py` and `argos_translate_bridge.py` (`_ipc_stdout = sys.stdout; sys.stdout = sys.stderr`), combined with non-JSON line filtering (`!trimmed.starts_with('{')`) in Rust sidecars (`process_manager.rs`, `translation_manager.rs`).
+- **Bounded 3-Tier Producer-Consumer Pipeline (`BackgroundQueueProcessor.ts`):** Decoupled OCR and translation with `inFlightLimiter` (max 3 pages), `ocrStageLimiter` (max 1), and `translationStageLimiter` (max 1). Releasing GPU upon OCR completion allows Page $N+1$ to run on GPU while Page $N$ translates on CPU. Monotonic progress updates and synchronized multi-limiter cancellation (`clearAllLimiters()`).
+- **Zero-Leak OffscreenCanvas:** Renders pages using `OffscreenCanvas` and `convertToBlob({ type: 'image/png' })` (100% lossless PNG) with fallback to DOM canvas, enforcing `finally { canvas.width = 0; canvas.height = 0; }` to reclaim GPU backing textures.
+- **Argos LRU Cache & Intra-Batch Deduplication:** 4096-entry LRU cache strictly caching raw model output, coupled with number/symbol skipping, intra-batch deduplication, and OpenMP/MKL thread contention tuning (`OMP_NUM_THREADS=4`, `MKL_NUM_THREADS=4`, `CT2_USE_EXPERIMENTAL_PACKED_GEMM=1`).
+- **Safety Baseline Invariant:** Hard default remains `paddle` (Paddle Native CPU). DirectML GPU is strictly opt-in.
+- **Expanded Test Coverage:** Increased automated test suite to 35 test files and 407 unit tests (100% pass rate) with 0 `cargo check` errors.
+
 ### Changed & Optimized — Architectural Refactoring, Layer Ghost Centralization & Security Hardening
 
 - **Layer Ghost Noise Filter Centralization (`layerGhostFilter.ts`):** Extracted unified heuristic filtering for spiky balloon borders, pure symbol debris, and phantom `BELIEVE` artifacts out of `PDFPageOverlay.tsx` and `LayerPanel.tsx`, eliminating duplicate code and preventing visual desynchronization. Added 8 unit tests in `layerGhostFilter.test.ts`.

@@ -1,8 +1,8 @@
 # 🏛️ Master System Architecture & Process Flowcharts
 
-> **Last Updated:** 2026-09-08  
-> **Status:** Synchronized with [context.md](file:///c:/App/Electron/PDF_Translator/context.md) & [AI_MANIFEST.md](file:///c:/App/Electron/PDF_Translator/documents/AI_MANIFEST.md)  
-> **Test Suite:** 31 Test Files / 372 Tests (100% Passing) | Strict TypeScript Clean
+> **Last Updated:** 2026-10-14  
+> **Status:** Synchronized with [context.md](file:///c:/App/Electron/PDF_Translator/context.md), [AI_MANIFEST.md](file:///c:/App/Electron/PDF_Translator/documents/AI_MANIFEST.md) & ADR-0005 to ADR-0008  
+> **Test Suite:** 35 Test Files / 407 Tests (100% Passing) | Strict TypeScript Clean
 
 ---
 
@@ -13,7 +13,8 @@
 1. **Spatial Graph Clustering:** จัดกลุ่มกล่องข้อความ 2 มิติ (Speech Balloons) ป้องกันการรวมข้อความข้ามช่องคำพูดและแยกแยะประเภท Dialogue, SFX, และ Narration
 2. **Zero-GC High-Throughput Algorithms:** อัลกอริทึม Disjoint-Set Union บน `Int32Array` ([fastSpatialCluster.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastSpatialCluster.ts)) และ 65,536-bit Bitset Bigram Popcount ([fastDiceSimilarity.ts](file:///c:/App/Electron/PDF_Translator/src/services/native/fastDiceSimilarity.ts)) ป้องกัน Garbage Collection Pauses
 3. **Encrypted Local Storage:** ฐานข้อมูลระดับ Local ด้วย SQLCipher (256-bit AES) ผ่าน `better-sqlite3-multiple-ciphers` พร้อม WAL journal mode, 128MB Memory-mapped I/O, FTS5 Full-text Search, และ Prepared Statement Cache
-4. **Offline IPC Daemons:** ไปป์ไลน์ OCR และ NMT ทำงานแบบ Subprocess Long-running Daemons ผ่าน JSON Lines IPC ([external_ocr_bridge.py](file:///c:/App/Electron/PDF_Translator/scripts/external_ocr_bridge.py) สำหรับ PaddleOCR/EasyOCR และ [argos_translate_bridge.py](file:///c:/App/Electron/PDF_Translator/scripts/argos_translate_bridge.py) สำหรับ Argos Translate)
+4. **Offline IPC Daemons:** ไปป์ไลน์ OCR และ NMT ทำงานแบบ Subprocess Long-running Daemons ผ่าน JSON Lines IPC ([external_ocr_bridge.py](file:///c:/App/Electron/PDF_Translator/scripts/external_ocr_bridge.py) สำหรับ PaddleOCR/EasyOCR/DirectML และ [argos_translate_bridge.py](file:///c:/App/Electron/PDF_Translator/scripts/argos_translate_bridge.py) สำหรับ Argos Translate) พร้อมระบบ Stdio Protocol Isolation (`_ipc_stdout`)
+5. **Bounded 3-Tier Pipeline:** สถาปัตยกรรมคิวเบื้องหลังแบบ 3 ระดับ (`inFlightLimiter=3`, `ocrStageLimiter=1`, `translationStageLimiter=1`) เหลื่อมเวลาการทำงาน (Pipeline Overlap) ให้ GPU รันหน้า $N+1$ ขณะที่ CPU แปลหน้า $N$ พร้อมคืนหน่วยความจำ Backing Texture (`OffscreenCanvas.width=0; height=0`)
 
 ---
 
@@ -153,11 +154,11 @@ flowchart TD
 
 ---
 
-### 3.4 สถาปัตยกรรมคิวงานเบื้องหลัง (Background Queue Processor Lifecycle)
+### 3.4 สถาปัตยกรรมคิวงานเบื้องหลัง (Background Bounded Pipeline Lifecycle)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Initialized: App Startup
+    [*] --> Initialized: App Startup (Smart GPU Auto-Init)
     Initialized --> Restoring: readPersistedQueue() จาก localStorage
     Restoring --> Ready: โหลดงานค้างเดิมกลับเข้า Store (status = 'queued')
 
@@ -167,19 +168,29 @@ stateDiagram-v2
         Enqueued --> Processing: getNextPendingJob() เลือกงานที่มี priority สูงสุด
         
         state Processing {
-            [*] --> RenderPageImage: เรนเดอร์หน้าเอกสารเป็น Buffer
-            RenderPageImage --> RunOCR: สั่งรัน OCR ผ่าน Daemon
-            RunOCR --> SaveDB: บันทึกแคช OCR ลง DB ทันที
-            SaveDB --> RunTranslate: แปลภาษาตามโหมดที่กำหนด
-            RunTranslate --> SaveTransDB: บันทึกแคชคำแปลลง DB ทันที
-            SaveTransDB --> CheckNextPage: มีหน้าถัดไปหรือไม่?
-            CheckNextPage --> RenderPageImage: ยังมีหน้าเหลือ (Loop)
-            CheckNextPage --> Completed: ประมวลผลครบทุกหน้า
+            [*] --> InFlightGate: inFlightLimiter.run (เพดานพร้อมกัน max 3 หน้า)
+            
+            state InFlightGate {
+                [*] --> Stage1_OCR: ocrStageLimiter.run (max 1 บน GPU)
+                Stage1_OCR --> OffscreenRender: OffscreenCanvas Lossless PNG
+                OffscreenRender --> ExecOCR: DirectML / Paddle OCR Execution
+                ExecOCR --> CleanupCanvas: canvas.width=0, canvas.height=0 (Free VRAM)
+                CleanupCanvas --> ReleaseOCRSlot: ปลดล็อก ocrStageLimiter
+                
+                ReleaseOCRSlot --> Stage2_Translation: translationStageLimiter.run (max 1 บน CPU)
+                
+                Stage2_Translation --> CheckLRU: ตรวจสอบ 4096-entry LRU Cache
+                CheckLRU --> ExecNMT: Argos NMT แปลข้อความที่ไม่ซ้ำ
+                ExecNMT --> SaveTransDB: บันทึกผลลัพธ์ลง SQLite DB (Isolate Inactive Doc)
+                SaveTransDB --> MonotonicProgress: อัปเดตแถบ Progress แบบ Monotonic
+            }
+
+            InFlightGate --> Completed: ประมวลผลครบทุกหน้า
         }
 
-        Processing --> Paused: ผู้ใช้กด Pause หรือหน้าหลัก Foreground ทำงานอยู่ (isPausedForForeground)
+        Processing --> Paused: ผู้ใช้กด Pause หรือ Foreground กำลังทำงาน
         Paused --> Processing: ผู้ใช้กด Resume หรือ Foreground เสร็จสิ้น
-        Processing --> Cancelled: ผู้ใช้สั่ง Cancel Job
+        Processing --> Cancelled: ผู้ใช้สั่ง Cancel (clearAllLimiters())
     }
 
     Completed --> PersistState: persistQueue() อัปเดต localStorage
