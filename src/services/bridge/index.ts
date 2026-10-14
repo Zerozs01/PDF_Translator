@@ -670,16 +670,64 @@ export function initPlatformBridgeCompat(): void {
       },
       saveSentenceTranslationBatch: async (items: any[]) => {
         try {
+          if (!Array.isArray(items) || items.length === 0) return true;
           const now = Date.now();
-          for (const item of items) {
+          const CHUNK_SIZE = 100;
+          for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+            const chunk = items.slice(i, i + CHUNK_SIZE);
+            const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const params: any[] = [];
+            for (const item of chunk) {
+              params.push(
+                item.sourceText,
+                item.sourceLanguage,
+                item.targetLanguage,
+                item.translatorEngine,
+                item.translationMode,
+                item.translatedText,
+                now
+              );
+            }
             await platformBridge.db.execute(
-              'INSERT OR REPLACE INTO sentence_translation_cache (source_text, source_language, target_language, translator_engine, translation_mode, translated_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              [item.sourceText, item.sourceLanguage, item.targetLanguage, item.translatorEngine, item.translationMode, item.translatedText, now]
+              `INSERT OR REPLACE INTO sentence_translation_cache (source_text, source_language, target_language, translator_engine, translation_mode, translated_text, created_at) VALUES ${placeholders}`,
+              params
             );
           }
           return true;
-        } catch {
+        } catch (e) {
+          console.error('[DBCompat] saveSentenceTranslationBatch failed:', e);
           return false;
+        }
+      },
+      getSentenceTranslationBatch: async (
+        sourceTexts: string[],
+        sourceLanguage: string,
+        targetLanguage: string,
+        translatorEngine: string,
+        translationMode: string
+      ) => {
+        try {
+          if (!Array.isArray(sourceTexts) || sourceTexts.length === 0) return {};
+          const result: Record<string, string> = {};
+          const CHUNK_SIZE = 100;
+          for (let i = 0; i < sourceTexts.length; i += CHUNK_SIZE) {
+            const chunk = sourceTexts.slice(i, i + CHUNK_SIZE);
+            const placeholders = chunk.map(() => '?').join(', ');
+            const rows = await platformBridge.db.query<{ source_text: string; translated_text: string }>(
+              `SELECT source_text, translated_text FROM sentence_translation_cache 
+               WHERE source_language = ? AND target_language = ? AND translator_engine = ? AND source_text IN (${placeholders})`,
+              [sourceLanguage, targetLanguage, translatorEngine, ...chunk]
+            );
+            for (const r of rows) {
+              if (r.source_text && r.translated_text) {
+                result[r.source_text] = r.translated_text;
+              }
+            }
+          }
+          return result;
+        } catch (e) {
+          console.error('[DBCompat] getSentenceTranslationBatch failed:', e);
+          return {};
         }
       },
     };

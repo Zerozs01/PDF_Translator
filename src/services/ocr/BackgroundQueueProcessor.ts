@@ -40,8 +40,11 @@ interface PageStageTimings {
   renderMs: number;
   ocrIpcMs: number;
   ocrCacheLoadMs: number;
+  ocrStageWallMs: number;
   syncLayersMs: number;
+  transQueueWaitMs: number;
   translationMs: number;
+  slotHoldMs: number;
   totalMs: number;
 }
 
@@ -553,9 +556,11 @@ class BackgroundQueueProcessor {
 
       await inFlightLimiter.run(async () => {
         throwIfAborted();
-        queueWaitMs = Number((performance.now() - taskEnqueueTime).toFixed(2));
+        const slotEnterTime = performance.now();
+        queueWaitMs = Number((slotEnterTime - taskEnqueueTime).toFixed(2));
 
         // ── Stage 1: GPU/CPU OCR Stage (Render Canvas + OCR IPC strictly inside ocrStageLimiter) ──
+        const ocrStageStartTime = performance.now();
         const { ocrResult, renderDurationMs, ocrIpcDurationMs, ocrCacheLoadDurationMs } = await ocrStageLimiter.run(async () => {
           throwIfAborted();
           updateMonotonicProgress(
@@ -568,6 +573,7 @@ class BackgroundQueueProcessor {
 
           return await this.executePageOCR(pdfDoc, job, pageNum, signal);
         });
+        const ocrStageWallMs = Number((performance.now() - ocrStageStartTime).toFixed(2));
         // <-- ocrStageLimiter slot is released immediately! Next page starts GPU OCR right now!
 
         throwIfAborted();
@@ -622,8 +628,11 @@ class BackgroundQueueProcessor {
           renderMs: Number(renderDurationMs.toFixed(2)),
           ocrIpcMs: Number(ocrIpcDurationMs.toFixed(2)),
           ocrCacheLoadMs: Number(ocrCacheLoadDurationMs.toFixed(2)),
+          ocrStageWallMs,
           syncLayersMs: Number(syncLayersDurationMs.toFixed(2)),
+          transQueueWaitMs: 0,
           translationMs: 0,
+          slotHoldMs: 0,
           totalMs: Number((renderDurationMs + ocrIpcDurationMs + ocrCacheLoadDurationMs + syncLayersDurationMs).toFixed(2)),
         };
         jobStageTimings.push(pageTiming);
@@ -637,7 +646,9 @@ class BackgroundQueueProcessor {
         // ── Stage 2: CPU Translation Stage ──
         if (isTrans) {
           throwIfAborted();
+          const transQueueStartTime = performance.now();
           await translationStageLimiter.run(async () => {
+            pageTiming.transQueueWaitMs = Number((performance.now() - transQueueStartTime).toFixed(2));
             if (signal.aborted) return;
             const transStartMark = `job-${job.id}-p${pageNum}-trans-start`;
             const transEndMark = `job-${job.id}-p${pageNum}-trans-end`;
@@ -672,6 +683,8 @@ class BackgroundQueueProcessor {
             await window.electronAPI.ocr.clearCudaCache({ engine: job.engine });
           } catch {}
         }
+
+        pageTiming.slotHoldMs = Number((performance.now() - slotEnterTime).toFixed(2));
       });
     };
 
@@ -720,12 +733,15 @@ class BackgroundQueueProcessor {
       console.log(`[QueueProcessor] Engine: ${job.engine} | Pages Measured: ${jobStageTimings.length}`);
       console.log(`[QueueProcessor] =======================================================`);
       console.table({
-        '0. Limiter Queue Wait Time': calculateStageStats(jobStageTimings.map(t => t.queueWaitMs)),
+        '0a. Limiter Queue Wait Time': calculateStageStats(jobStageTimings.map(t => t.queueWaitMs)),
+        '0b. Translation Queue Wait': calculateStageStats(jobStageTimings.map(t => t.transQueueWaitMs)),
         '1. Render (Headless 300DPI)': calculateStageStats(jobStageTimings.map(t => t.renderMs)),
         '2. OCR (IPC Round-Trip)': calculateStageStats(jobStageTimings.map(t => t.ocrIpcMs)),
         '2a. OCR Cache Load (DB Hit)': calculateStageStats(jobStageTimings.map(t => t.ocrCacheLoadMs)),
+        '2b. OCR Stage Wall Time': calculateStageStats(jobStageTimings.map(t => t.ocrStageWallMs)),
         '3. Sync Page Layers': calculateStageStats(jobStageTimings.map(t => t.syncLayersMs)),
         '4. Translation': calculateStageStats(jobStageTimings.map(t => t.translationMs)),
+        '5. In-Flight Slot Hold Time': calculateStageStats(jobStageTimings.map(t => t.slotHoldMs)),
         'Total Per Page Pipeline': calculateStageStats(jobStageTimings.map(t => t.totalMs)),
       });
     }
@@ -801,11 +817,14 @@ class BackgroundQueueProcessor {
         pagesMeasured: jobStageTimings.length,
         stageTimings: {
           queueWait: calculateStageStats(jobStageTimings.map((t) => t.queueWaitMs)),
+          transQueueWait: calculateStageStats(jobStageTimings.map((t) => t.transQueueWaitMs)),
           render: calculateStageStats(jobStageTimings.map((t) => t.renderMs)),
           ocrIpc: calculateStageStats(jobStageTimings.map((t) => t.ocrIpcMs)),
           ocrCacheLoad: calculateStageStats(jobStageTimings.map((t) => t.ocrCacheLoadMs)),
+          ocrStageWall: calculateStageStats(jobStageTimings.map((t) => t.ocrStageWallMs)),
           syncLayers: calculateStageStats(jobStageTimings.map((t) => t.syncLayersMs)),
           translation: calculateStageStats(jobStageTimings.map((t) => t.translationMs)),
+          slotHold: calculateStageStats(jobStageTimings.map((t) => t.slotHoldMs)),
           totalPerPage: calculateStageStats(jobStageTimings.map((t) => t.totalMs)),
         },
         pageTranslationBreakdown: (window as any).__PAGE_TRANSLATION_TIMINGS__ || [],
@@ -905,7 +924,10 @@ class BackgroundQueueProcessor {
           }
 
           const activeFile = useProjectStore.getState().file;
-          if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+          const activeDocId = useProjectStore.getState().documentId;
+          const activeCurrentPage = useProjectStore.getState().currentPage;
+          // Step 2d: Selective Store Hydration - only hydrate for active visible page
+          if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
             useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
             const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
               || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
@@ -981,7 +1003,6 @@ class BackgroundQueueProcessor {
         ocrResult = await ocrPromise;
 
         performance.mark(ocrEndMark);
-        let ocrIpcDurationMs = 0;
         try {
           const m = performance.measure(ocrMeasureName, ocrStartMark, ocrEndMark);
           ocrIpcDurationMs = m.duration;
@@ -1020,7 +1041,10 @@ class BackgroundQueueProcessor {
       ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
 
       const activeFile = useProjectStore.getState().file;
-      if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+      const activeDocId = useProjectStore.getState().documentId;
+      const activeCurrentPage = useProjectStore.getState().currentPage;
+      // Step 2d: Selective Store Hydration - only hydrate for active visible page
+      if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
         useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
         const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
           || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);

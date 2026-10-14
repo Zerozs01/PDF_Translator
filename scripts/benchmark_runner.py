@@ -16,6 +16,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 DB_PATH = Path(os.path.expandvars(r"%APPDATA%\com.pdftranslator.app\pdf_translator.db"))
 BACKUP_PATH = Path(os.path.expandvars(r"%APPDATA%\com.pdftranslator.app\pdf_translator_backup_adr0009.db"))
 
