@@ -1176,9 +1176,6 @@ export function initPlatformBridgeCompat(): void {
           }
         },
         getGpuInfo: async () => {
-          if ((window as any).__CACHED_GPU_INFO__ && (window as any).__CACHED_GPU_INFO__.mode !== 'CPU') {
-            return (window as any).__CACHED_GPU_INFO__;
-          }
           try {
             const info = await invoke<{
               gpus: string[];
@@ -1186,6 +1183,9 @@ export function initPlatformBridgeCompat(): void {
               has_cuda: boolean;
               mode: string;
               gpu_vendor: string;
+              total_vram_mb?: number | null;
+              free_vram_mb?: number | null;
+              used_vram_mb?: number | null;
             }>('get_gpu_info');
             const result = {
               gpus: info.gpus,
@@ -1193,6 +1193,9 @@ export function initPlatformBridgeCompat(): void {
               hasCuda: info.has_cuda,
               mode: (info.mode || 'DirectML') as 'CUDA' | 'DirectML' | 'CPU',
               gpuVendor: (info.gpu_vendor || 'amd') as 'intel' | 'amd' | 'nvidia' | 'unknown',
+              totalVramMb: info.total_vram_mb ?? null,
+              freeVramMb: info.free_vram_mb ?? null,
+              usedVramMb: info.used_vram_mb ?? null,
             };
             if (result.mode !== 'CPU') {
               (window as any).__CACHED_GPU_INFO__ = result;
@@ -1206,6 +1209,9 @@ export function initPlatformBridgeCompat(): void {
               hasCuda: false,
               mode: 'DirectML' as const,
               gpuVendor: 'amd' as const,
+              totalVramMb: null,
+              freeVramMb: null,
+              usedVramMb: null,
             };
           }
         },

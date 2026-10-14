@@ -12,6 +12,9 @@ pub struct GpuInfoResponse {
     pub has_cuda: bool,
     pub mode: String,
     pub gpu_vendor: String,
+    pub total_vram_mb: Option<u64>,
+    pub free_vram_mb: Option<u64>,
+    pub used_vram_mb: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,14 +39,101 @@ pub struct ImportResultResponse {
 
 static CACHED_GPU: Mutex<Option<GpuInfoResponse>> = Mutex::new(None);
 
-/// ตรวจจับ GPU ในเครื่องและการรองรับ Hardware Acceleration (DirectML / CUDA)
+#[cfg(target_os = "windows")]
+fn query_vram_info() -> (Option<u64>, Option<u64>, Option<u64>) {
+    use std::process::Command;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut total_vram_bytes: Option<u64> = None;
+
+    // 1. ตรวจสอบ Total VRAM ผ่าน Windows Registry (<5ms)
+    for subkey in ["0000", "0001", "0002"] {
+        let key_path = format!(
+            "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e968-e325-11ce-bfc1-08002be10318}}\\{}",
+            subkey
+        );
+        let mut cmd = Command::new("reg");
+        cmd.args(["query", &key_path, "/v", "HardwareInformation.qwMemorySize"])
+            .creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(out) = cmd.output() {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    if line.contains("HardwareInformation.qwMemorySize") && line.contains("REG_QWORD") {
+                        if let Some(val_str) = line.split("REG_QWORD").nth(1) {
+                            let trimmed = val_str.trim().trim_start_matches("0x");
+                            if let Ok(bytes) = u64::from_str_radix(trimmed, 16) {
+                                if bytes > 0 {
+                                    total_vram_bytes = Some(bytes);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if total_vram_bytes.is_some() {
+            break;
+        }
+    }
+
+    let total_vram_mb = total_vram_bytes.map(|b| b / (1024 * 1024));
+
+    // 2. ตรวจสอบ Dedicated GPU VRAM Usage ผ่าน Performance Counter
+    let mut used_vram_mb: Option<u64> = None;
+    let mut cmd = Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-Command",
+        "(Get-Counter '\\GPU Adapter Memory(*)\\Dedicated Usage' -ErrorAction SilentlyContinue).CounterSamples | Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum",
+    ])
+    .creation_flags(CREATE_NO_WINDOW);
+
+    if let Ok(out) = cmd.output() {
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if let Ok(val) = stdout.trim().parse::<f64>() {
+                used_vram_mb = Some((val / (1024.0 * 1024.0)) as u64);
+            }
+        }
+    }
+
+    let free_vram_mb = match (total_vram_mb, used_vram_mb) {
+        (Some(total), Some(used)) => Some(total.saturating_sub(used)),
+        (Some(total), None) => Some(total),
+        _ => None,
+    };
+
+    (total_vram_mb, free_vram_mb, used_vram_mb)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn query_vram_info() -> (Option<u64>, Option<u64>, Option<u64>) {
+    (None, None, None)
+}
+
+/// ตรวจจับ GPU ในเครื่องและการรองรับ Hardware Acceleration (DirectML / CUDA) พร้อม Dynamic VRAM Status
 #[tauri::command]
 pub async fn get_gpu_info(_app: AppHandle) -> Result<GpuInfoResponse, String> {
-    // 🚀 Fast-path: คืนค่าจากหน่วยความจำทันที 0ms หากเคยตรวจจับไปแล้ว
-    if let Ok(guard) = CACHED_GPU.lock() {
-        if let Some(cached) = guard.as_ref() {
-            return Ok(cached.clone());
-        }
+    // Fast-path: หากเคย query metadata แล้ว ให้อัปเดตเฉพาะ VRAM แบบ real-time
+    let maybe_cached = if let Ok(guard) = CACHED_GPU.lock() {
+        guard.clone()
+    } else {
+        None
+    };
+
+    if let Some(cached) = maybe_cached {
+        let (total_vram_mb, free_vram_mb, used_vram_mb) = tokio::task::spawn_blocking(query_vram_info)
+            .await
+            .unwrap_or((None, None, None));
+        let mut updated = cached;
+        updated.total_vram_mb = total_vram_mb;
+        updated.free_vram_mb = free_vram_mb;
+        updated.used_vram_mb = used_vram_mb;
+        return Ok(updated);
     }
 
     let res = tokio::task::spawn_blocking(move || {
@@ -180,12 +270,17 @@ pub async fn get_gpu_info(_app: AppHandle) -> Result<GpuInfoResponse, String> {
             "CPU".to_string()
         };
 
+        let (total_vram_mb, free_vram_mb, used_vram_mb) = query_vram_info();
+
         GpuInfoResponse {
             gpus,
             has_directml,
             has_cuda: has_cuda && has_nvidia,
             mode,
             gpu_vendor,
+            total_vram_mb,
+            free_vram_mb,
+            used_vram_mb,
         }
     })
     .await

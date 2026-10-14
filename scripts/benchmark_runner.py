@@ -42,67 +42,73 @@ def ensure_backup() -> None:
 
 def print_status(doc_id: int | None = None) -> None:
     conn = get_connection()
-    c = conn.cursor()
-    print("=" * 60)
-    print("  ADR-0009 Benchmark Corpus & Cache Status")
-    print("=" * 60)
-    print(f"Database: {DB_PATH}")
+    try:
+        c = conn.cursor()
+        print("=" * 60)
+        print("  ADR-0009 Benchmark Corpus & Cache Status")
+        print("=" * 60)
+        print(f"Database: {DB_PATH}")
 
-    total_sentence_cache = c.execute("SELECT count(*) FROM sentence_translation_cache").fetchone()[0]
-    total_trans_cache = c.execute("SELECT count(*) FROM translation_cache").fetchone()[0]
-    total_ocr_cache = c.execute("SELECT count(*) FROM ocr_cache_engine").fetchone()[0]
+        total_sentence_cache = c.execute("SELECT count(*) FROM sentence_translation_cache").fetchone()[0]
+        total_trans_cache = c.execute("SELECT count(*) FROM translation_cache").fetchone()[0]
+        total_ocr_cache = c.execute("SELECT count(*) FROM ocr_cache_engine").fetchone()[0]
 
-    print(f"Global sentence_translation_cache: {total_sentence_cache} rows")
-    print(f"Global translation_cache:          {total_trans_cache} rows")
-    print(f"Global ocr_cache_engine:            {total_ocr_cache} rows")
+        print(f"Global sentence_translation_cache: {total_sentence_cache} rows")
+        print(f"Global translation_cache:          {total_trans_cache} rows")
+        print(f"Global ocr_cache_engine:            {total_ocr_cache} rows")
 
-    if doc_id:
-        doc = c.execute("SELECT id, filename, total_pages FROM documents WHERE id=?", (doc_id,)).fetchone()
-        if doc:
-            print(f"\nDocument [{doc[0]}]: '{doc[1]}' ({doc[2]} pages)")
-            d_ocr = c.execute("SELECT count(*) FROM ocr_cache_engine WHERE document_id=?", (doc_id,)).fetchone()[0]
-            d_trans = c.execute("SELECT count(*) FROM translation_cache WHERE document_id=?", (doc_id,)).fetchone()[0]
-            print(f" - Cached OCR pages:         {d_ocr} / {doc[2]}")
-            print(f" - Cached Translation pages: {d_trans} / {doc[2]}")
-        else:
-            print(f"\n[Warning] Document ID {doc_id} not found in database.")
+        if doc_id:
+            doc = c.execute("SELECT id, filename, total_pages FROM documents WHERE id=?", (doc_id,)).fetchone()
+            if doc:
+                print(f"\nDocument [{doc[0]}]: '{doc[1]}' ({doc[2]} pages)")
+                d_ocr = c.execute("SELECT count(*) FROM ocr_cache_engine WHERE document_id=?", (doc_id,)).fetchone()[0]
+                d_trans = c.execute("SELECT count(*) FROM translation_cache WHERE document_id=?", (doc_id,)).fetchone()[0]
+                print(f" - Cached OCR pages:         {d_ocr} / {doc[2]}")
+                print(f" - Cached Translation pages: {d_trans} / {doc[2]}")
+            else:
+                print(f"\n[Warning] Document ID {doc_id} not found in database.")
+    finally:
+        conn.close()
 
 
 def prepare_benchmark(doc_id: int, mode: str) -> None:
     ensure_backup()
     conn = get_connection()
-    c = conn.cursor()
+    try:
+        c = conn.cursor()
 
-    print("\n" + "=" * 60)
-    if mode == "warm":
-        print(f"  Preparing Mode: OCR Warm + แปล Cold (Doc ID: {doc_id})")
-        print("=" * 60)
-        c.execute("DELETE FROM translation_cache WHERE document_id = ?", (doc_id,))
-        del_trans = c.rowcount
-        c.execute("DELETE FROM sentence_translation_cache")
-        del_sent = c.rowcount
-        conn.commit()
-        print(f"[Cache Cleaned] Deleted {del_trans} rows from translation_cache (doc {doc_id})")
-        print(f"[Cache Cleaned] Deleted {del_sent} rows from sentence_translation_cache (all)")
-        print("[Status] OCR Cache kept intact for Warm OCR.")
+        print("\n" + "=" * 60)
+        if mode == "warm":
+            print(f"  Preparing Mode: OCR Warm + แปล Cold (Doc ID: {doc_id})")
+            print("=" * 60)
+            c.execute("DELETE FROM translation_cache WHERE document_id = ?", (doc_id,))
+            del_trans = c.rowcount
+            c.execute("DELETE FROM sentence_translation_cache")
+            del_sent = c.rowcount
+            conn.commit()
+            print(f"[Cache Cleaned] Deleted {del_trans} rows from translation_cache (doc {doc_id})")
+            print(f"[Cache Cleaned] Deleted {del_sent} rows from sentence_translation_cache (all)")
+            print("[Status] OCR Cache kept intact for Warm OCR.")
 
-    elif mode == "cold":
-        print(f"  Preparing Mode: OCR Cold + แปล Cold (Doc ID: {doc_id})")
-        print("=" * 60)
-        c.execute("DELETE FROM translation_cache WHERE document_id = ?", (doc_id,))
-        del_trans = c.rowcount
-        c.execute("DELETE FROM sentence_translation_cache")
-        del_sent = c.rowcount
-        c.execute("DELETE FROM ocr_cache WHERE document_id = ?", (doc_id,))
-        del_ocr = c.rowcount
-        c.execute("DELETE FROM ocr_cache_engine WHERE document_id = ?", (doc_id,))
-        del_ocr_eng = c.rowcount
-        conn.commit()
-        print(f"[Cache Cleaned] Deleted {del_trans} rows from translation_cache (doc {doc_id})")
-        print(f"[Cache Cleaned] Deleted {del_sent} rows from sentence_translation_cache (all)")
-        print(f"[Cache Cleaned] Deleted {del_ocr} rows from ocr_cache (doc {doc_id})")
-        print(f"[Cache Cleaned] Deleted {del_ocr_eng} rows from ocr_cache_engine (doc {doc_id})")
-        print("[Status] Both OCR & Translation caches fully cleared for Cold Run.")
+        elif mode == "cold":
+            print(f"  Preparing Mode: OCR Cold + แปล Cold (Doc ID: {doc_id})")
+            print("=" * 60)
+            c.execute("DELETE FROM translation_cache WHERE document_id = ?", (doc_id,))
+            del_trans = c.rowcount
+            c.execute("DELETE FROM sentence_translation_cache")
+            del_sent = c.rowcount
+            c.execute("DELETE FROM ocr_cache WHERE document_id = ?", (doc_id,))
+            del_ocr = c.rowcount
+            c.execute("DELETE FROM ocr_cache_engine WHERE document_id = ?", (doc_id,))
+            del_ocr_eng = c.rowcount
+            conn.commit()
+            print(f"[Cache Cleaned] Deleted {del_trans} rows from translation_cache (doc {doc_id})")
+            print(f"[Cache Cleaned] Deleted {del_sent} rows from sentence_translation_cache (all)")
+            print(f"[Cache Cleaned] Deleted {del_ocr} rows from ocr_cache (doc {doc_id})")
+            print(f"[Cache Cleaned] Deleted {del_ocr_eng} rows from ocr_cache_engine (doc {doc_id})")
+            print("[Status] Both OCR & Translation caches fully cleared for Cold Run.")
+    finally:
+        conn.close()
 
     print("\n>>> NEXT STEP IN APP:")
     print("1. In browser/webview Console (F12), ensure profiling flag is set:")

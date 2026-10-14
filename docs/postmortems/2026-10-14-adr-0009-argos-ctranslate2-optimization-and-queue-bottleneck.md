@@ -64,7 +64,7 @@ The fix was implemented across four phases (Steps 2a–2d):
 3. **Variable Shadowing Removal & Limiter Stage Decoupling (Step 2d - `BackgroundQueueProcessor.ts`):**
    - Removed the shadowed `let ocrIpcDurationMs = 0;` declaration, unmasking the true 5,163 ms mean OCR time.
    - Introduced dedicated `translationStageLimiter` and granular timing `transQueueWaitMs` to measure translation queue contention independently from OCR.
-   - Implemented **Selective Store Hydration**: `setPageOCR` is only triggered if `activeDocId === job.documentId && activeCurrentPage === pageNum`, eliminating 36 unnecessary map clones and React re-render storms.
+   - Implemented **Active-Document Per-Page Hydration**: Store hydration and layer syncing trigger immediately per completed page for the active document (`activeDocId === job.documentId`), unlocking instant per-page pop-in while skipping UI mutations for inactive background documents.
 4. **Multi-Row Chunked SQLite Queries (`src/services/bridge/index.ts`):**
    Replaced sequential SQLite loops with multi-row `INSERT OR REPLACE` (100 sentences per chunk) and multi-item `SELECT ... WHERE source_text IN (...)`.
 5. **Benchmark Harness Automation (`scripts/benchmark_runner.py`):**

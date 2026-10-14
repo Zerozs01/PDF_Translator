@@ -495,11 +495,6 @@ class BackgroundQueueProcessor {
       }
     }
 
-    const CHUNK_SIZE = 8;
-    const chunks: number[][] = [];
-    for (let i = 0; i < pageNumbers.length; i += CHUNK_SIZE) {
-      chunks.push(pageNumbers.slice(i, i + CHUNK_SIZE));
-    }
 
     let processedCount = 0;
     let processedOcrCount = 0;
@@ -515,7 +510,28 @@ class BackgroundQueueProcessor {
     // 2. ocrStageLimiter (max = 1 for DirectML to protect VRAM, 2 for CPU)
     // 3. translationStageLimiter (max = 1 for Argos worker)
     const jobBackend = job.backend || useOCRTextLayerStore.getState().options.backend || 'paddle';
-    const maxInFlight = jobBackend === 'ort_dml' ? 3 : 4;
+    let maxInFlight = jobBackend === 'ort_dml' ? 3 : 4;
+
+    // Dynamic VRAM Guard: Check Free VRAM before launching job to prevent zombie/OOM freeze
+    try {
+      const gpuInfo = await window.electronAPI?.ocr?.getGpuInfo?.();
+      if (gpuInfo?.freeVramMb !== undefined && gpuInfo.freeVramMb !== null) {
+        if (gpuInfo.freeVramMb < 2048) {
+          maxInFlight = 2;
+          console.warn(
+            `[QueueProcessor] Dynamic VRAM Guard Active: Free VRAM is low (${gpuInfo.freeVramMb} MB < 2048 MB). ` +
+            `Throttling maxInFlight from ${jobBackend === 'ort_dml' ? 3 : 4} to 2 to prevent zombie/OOM state.`
+          );
+        } else {
+          console.log(
+            `[QueueProcessor] Dynamic VRAM Guard: Free VRAM is healthy (${gpuInfo.freeVramMb} MB). Using maxInFlight = ${maxInFlight}.`
+          );
+        }
+      }
+    } catch (vramErr) {
+      console.warn('[QueueProcessor] Dynamic VRAM Guard query skipped:', vramErr);
+    }
+
     const inFlightLimiter = new ConcurrencyLimiter(maxInFlight);
 
     const ocrConcurrency = jobBackend === 'ort_dml' ? 1 : 2;
@@ -926,7 +942,8 @@ class BackgroundQueueProcessor {
           const activeFile = useProjectStore.getState().file;
           const activeDocId = useProjectStore.getState().documentId;
           const activeCurrentPage = useProjectStore.getState().currentPage;
-          // Step 2d: Selective Store Hydration - only hydrate for active visible page
+          // Selective hydration: background pages stay in SQLite and hydrate on-demand when viewed.
+          // Eagerly hydrating every page cloned Zustand Maps + ran layout grouping N times on the main thread.
           if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
             useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
             const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
@@ -1043,7 +1060,7 @@ class BackgroundQueueProcessor {
       const activeFile = useProjectStore.getState().file;
       const activeDocId = useProjectStore.getState().documentId;
       const activeCurrentPage = useProjectStore.getState().currentPage;
-      // Step 2d: Selective Store Hydration - only hydrate for active visible page
+      // Selective hydration: only the visible page of the active document touches React stores.
       if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
         useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
         const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
@@ -1070,20 +1087,12 @@ class BackgroundQueueProcessor {
     const isActiveDoc = activeDocId !== null && activeDocId === documentId;
 
     if (!isActiveDoc) {
-      console.log(
-        `[QueueProcessor] Document ${documentId} is inactive (active doc is ${activeDocId}). ` +
-        `Persisting OCR to DB; viewer will hydrate layers upon document switch.`
-      );
-      void dbService.saveOCR(documentId, pageNum, ocrResult, ocrResult.ocrEngine || 'paddleocr').catch((err) => {
-        console.warn(`[QueueProcessor] Failed to persist OCR cache for inactive doc ${documentId}:`, err);
-      });
+      // OCR is already persisted to SQLite in executePageOCR; skip UI layer store mutation for inactive documents.
       return;
     }
 
-    const activePage = useProjectStore.getState().currentPage;
-    // Step 2c Optimization: Only hydrate React UI layer store for the CURRENT visible page!
-    // Background pages are safely persisted in SQLite DB and hydrate on-demand when viewed.
-    if (pageNum !== activePage) {
+    // Background pages hydrate on-demand when viewed; skip layout grouping + Map cloning here.
+    if (pageNum !== useProjectStore.getState().currentPage) {
       return;
     }
 
