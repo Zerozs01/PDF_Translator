@@ -170,6 +170,8 @@ export interface OfflineTranslationContext {
   sourceLanguage?: string;
   targetLanguage?: string;
   timeoutMs?: number;
+  engine?: string;
+  profileTag?: string;
 }
 
 export type GeminiApiKeySource = 'secure-storage' | 'environment' | 'none';

@@ -85,7 +85,9 @@ export function useTranslationRetryManager() {
           effectiveTranslationMode,
           groupSourceLanguage,
           normalizedTargetLanguage,
-          offlineBatchBridgeWrapper
+          offlineBatchBridgeWrapper,
+          undefined,
+          'group_retry_whole'
         );
         const retryGroupRestored = restoreProtectedTokens(
           retryGroupRaw[0] || '',
@@ -109,7 +111,9 @@ export function useTranslationRetryManager() {
         effectiveTranslationMode,
         groupSourceLanguage,
         normalizedTargetLanguage,
-        offlineBatchBridgeWrapper
+        offlineBatchBridgeWrapper,
+        undefined,
+        'group_retry_per_line'
       );
       setSlangGroupContext(group.lines.map((l) => l.text || '').join(' '));
       const retryLineOutputs = group.lines.map((line, lineIndex) => {
@@ -188,7 +192,16 @@ export function useTranslationRetryManager() {
     for (const [retrySourceLanguage, indexes] of retryBuckets.entries()) {
       const retryInputs = indexes.map((index) => retryPrepared[index]?.protectedText || '');
       const retryRaw = effectiveEngine === 'offline'
-        ? await translateBatchOffline(retryInputs, 'text', effectiveTranslationMode, retrySourceLanguage, normalizedTargetLanguage, offlineBatchBridgeWrapper)
+        ? await translateBatchOffline(
+            retryInputs,
+            'text',
+            effectiveTranslationMode,
+            retrySourceLanguage,
+            normalizedTargetLanguage,
+            offlineBatchBridgeWrapper,
+            undefined,
+            'line_level_retry'
+          )
         : await translateBatchGemini(
           retryInputs,
           'text',

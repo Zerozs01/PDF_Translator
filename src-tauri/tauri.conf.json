@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: blob: https://fonts.gstatic.com; img-src 'self' data: blob: asset: https://asset.localhost http://pdf-page.localhost pdf-page: https://flagcdn.com; connect-src 'self' blob: data: ipc: tauri: asset: https://asset.localhost http://ipc.localhost https://ipc.localhost http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* https://generativelanguage.googleapis.com; worker-src 'self' blob:;"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' data: blob: https://fonts.gstatic.com; img-src 'self' data: blob: asset: https://asset.localhost http://pdf-page.localhost pdf-page: https://flagcdn.com; connect-src 'self' blob: data: ipc: tauri: asset: https://asset.localhost http://ipc.localhost https://ipc.localhost http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* https://generativelanguage.googleapis.com; worker-src 'self' blob:;"
     }
   },
   "bundle": {

@@ -8,12 +8,15 @@ import json
 import os
 import re
 import sys
+import time
 import traceback
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 _ipc_stdout = sys.stdout
+_profile_seq = 0
+
 
 
 def send_ipc_json(payload: Dict[str, Any]) -> None:
@@ -206,7 +209,16 @@ def translate_texts(
     source_language: str,
     target_language: str,
     force_noop_sentencizer: bool = False,
+    stats: Dict[str, int] | None = None,
 ) -> List[str]:
+    if stats is not None:
+        stats["n_texts"] = len(texts)
+        stats.setdefault("n_skipped", 0)
+        stats.setdefault("n_lru_hit", 0)
+        stats.setdefault("n_unique", 0)
+        stats.setdefault("n_model_calls", 0)
+        stats.setdefault("n_variant_calls", 0)
+
     translation = get_translation(
         argos_translate_module,
         source_language,
@@ -225,12 +237,16 @@ def translate_texts(
             continue
 
         if should_skip_translation(normalized_text):
+            if stats is not None:
+                stats["n_skipped"] += 1
             translations[idx] = normalized_text
             continue
 
         cache_key = (source_language, target_language, force_noop_sentencizer, normalized_text)
         cached = TEXT_TRANSLATION_CACHE.get(cache_key)
         if cached is not None:
+            if stats is not None:
+                stats["n_lru_hit"] += 1
             TEXT_TRANSLATION_CACHE.move_to_end(cache_key)
             translations[idx] = cached
             continue
@@ -239,8 +255,13 @@ def translate_texts(
             unique_to_translate[normalized_text] = []
         unique_to_translate[normalized_text].append(idx)
 
+    if stats is not None:
+        stats["n_unique"] = len(unique_to_translate)
+
     for unique_text, indices in unique_to_translate.items():
         cache_key = (source_language, target_language, force_noop_sentencizer, unique_text)
+        if stats is not None:
+            stats["n_model_calls"] += 1
         translated = str(translation.translate(unique_text) or "")
 
         # OpenNMT SentencePiece Casing & Punctuation Fallback:
@@ -258,6 +279,8 @@ def translate_texts(
             for variant in variants:
                 if not variant or variant == unique_text:
                     continue
+                if stats is not None:
+                    stats["n_variant_calls"] += 1
                 alt_translated = str(translation.translate(variant) or "")
                 if alt_translated and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated):
                     if trailing_punct and not any(alt_translated.endswith(p) for p in "!?.,…"):
@@ -426,7 +449,7 @@ def process_m2m_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def process_payload(payload: Dict[str, Any], stats: Dict[str, int] | None = None) -> Dict[str, Any]:
     engine = payload.get("engine", "argos")
     if engine == "m2m100":
         return process_m2m_payload(payload)
@@ -471,6 +494,7 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             source_language,
             target_language,
             force_noop_sentencizer=True,
+            stats=stats,
         )
     else:
         try:
@@ -480,6 +504,7 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 source_language,
                 target_language,
                 force_noop_sentencizer=False,
+                stats=stats,
             )
         except Exception as primary_error:
             if not is_sentence_split_network_error(primary_error):
@@ -492,6 +517,7 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 source_language,
                 target_language,
                 force_noop_sentencizer=True,
+                stats=stats,
             )
 
     output: Dict[str, Any] = {
@@ -508,15 +534,29 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def serve_stdio() -> None:
-    global _ipc_stdout
+    global _ipc_stdout, _profile_seq
     _ipc_stdout = sys.stdout
     sys.stdout = sys.stderr
 
     request_count = 0
+    profile_log_enabled = os.getenv("ARGOS_PROFILE_LOG") == "1"
+    dump_payloads_path = os.getenv("ARGOS_DUMP_PAYLOADS")
+
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
             continue
+
+        _profile_seq += 1
+        t_start_epoch_ms = round(time.time() * 1000)
+        stats = {
+            "n_texts": 0,
+            "n_skipped": 0,
+            "n_lru_hit": 0,
+            "n_unique": 0,
+            "n_model_calls": 0,
+            "n_variant_calls": 0,
+        }
 
         request_id: str | None = None
         try:
@@ -524,8 +564,25 @@ def serve_stdio() -> None:
             if not isinstance(payload, dict):
                 raise ValueError("Payload must be a JSON object")
             request_id = str(payload.get("id")) if payload.get("id") is not None else None
-            response = process_payload(payload)
+
+            if dump_payloads_path:
+                try:
+                    with open(dump_payloads_path, "a", encoding="utf-8") as dump_file:
+                        dump_file.write(
+                            json.dumps(
+                                {"seq": _profile_seq, "t_start_epoch_ms": t_start_epoch_ms, "payload": payload},
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                except Exception as dump_err:
+                    print(f"[ARGOS_PROFILE] Failed to dump payload: {dump_err}", file=sys.stderr)
+
+            t0 = time.perf_counter()
+            response = process_payload(payload, stats=stats)
+            compute_ms = (time.perf_counter() - t0) * 1000
         except Exception as exc:
+            compute_ms = 0.0
             response = {"ok": False, "reason": str(exc)}
 
         if request_id:
@@ -533,9 +590,19 @@ def serve_stdio() -> None:
 
         send_ipc_json(response)
 
+        gc_ms = 0.0
         request_count += 1
         if request_count % 10 == 0:
+            t_gc0 = time.perf_counter()
             gc.collect()
+            gc_ms = (time.perf_counter() - t_gc0) * 1000
+
+        if profile_log_enabled:
+            print(
+                f"[ARGOS_PROFILE] {json.dumps({'seq': _profile_seq, 'id': request_id, 'pid': os.getpid(), 't_start_epoch_ms': t_start_epoch_ms, 'n_texts': stats['n_texts'], 'n_skipped': stats['n_skipped'], 'n_lru_hit': stats['n_lru_hit'], 'n_unique': stats['n_unique'], 'n_model_calls': stats['n_model_calls'], 'n_variant_calls': stats['n_variant_calls'], 'compute_ms': round(compute_ms, 2), 'gc_ms': round(gc_ms, 2)})}",
+                file=sys.stderr,
+                flush=True,
+            )
 
 
 def init_argos_module() -> Any:
@@ -560,6 +627,7 @@ def init_argos_module() -> Any:
 
 
 def main() -> None:
+    global _profile_seq
     parser = argparse.ArgumentParser()
     parser.add_argument("--stdio-server", action="store_true")
     args = parser.parse_args()
@@ -568,11 +636,44 @@ def main() -> None:
         serve_stdio()
         return
 
+    _profile_seq += 1
+    t_start_epoch_ms = round(time.time() * 1000)
+    stats = {
+        "n_texts": 0,
+        "n_skipped": 0,
+        "n_lru_hit": 0,
+        "n_unique": 0,
+        "n_model_calls": 0,
+        "n_variant_calls": 0,
+    }
+
     payload = load_payload()
-    response = process_payload(payload)
+    dump_payloads_path = os.getenv("ARGOS_DUMP_PAYLOADS")
+    if dump_payloads_path:
+        try:
+            with open(dump_payloads_path, "a", encoding="utf-8") as dump_file:
+                dump_file.write(
+                    json.dumps(
+                        {"seq": _profile_seq, "t_start_epoch_ms": t_start_epoch_ms, "payload": payload},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+    t0 = time.perf_counter()
+    response = process_payload(payload, stats=stats)
+    compute_ms = (time.perf_counter() - t0) * 1000
     send_ipc_json(response)
 
-
+    if os.getenv("ARGOS_PROFILE_LOG") == "1":
+        request_id = str(payload.get("id")) if isinstance(payload, dict) and payload.get("id") is not None else None
+        print(
+            f"[ARGOS_PROFILE] {json.dumps({'seq': _profile_seq, 'id': request_id, 'pid': os.getpid(), 't_start_epoch_ms': t_start_epoch_ms, 'n_texts': stats['n_texts'], 'n_skipped': stats['n_skipped'], 'n_lru_hit': stats['n_lru_hit'], 'n_unique': stats['n_unique'], 'n_model_calls': stats['n_model_calls'], 'n_variant_calls': stats['n_variant_calls'], 'compute_ms': round(compute_ms, 2), 'gc_ms': 0.0})}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
@@ -581,3 +682,4 @@ if __name__ == "__main__":
     except Exception as error:
         print(str(error), file=sys.stderr)
         raise
+

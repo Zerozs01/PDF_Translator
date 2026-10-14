@@ -2061,7 +2061,9 @@ describe('Sentence-level Translation Caching & Deduplication', () => {
       'text',
       'official',
       'en',
-      'th'
+      'th',
+      undefined,
+      'coordinator'
     );
 
     expect(saveBatchSpy).toHaveBeenCalledWith([

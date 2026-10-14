@@ -60,6 +60,13 @@ function calculateStageStats(values: number[]) {
   };
 }
 
+function calculatePercentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.ceil((p / 100) * sorted.length) - 1;
+  return Number((sorted[Math.max(0, Math.min(sorted.length - 1, index))] || 0).toFixed(2));
+}
+
 import { ConcurrencyLimiter } from './ConcurrencyLimiter';
 export { ConcurrencyLimiter };
 
@@ -382,6 +389,19 @@ class BackgroundQueueProcessor {
    * ประมวลผลงาน (Job) ทีละหน้า
    */
   private async processJob(job: BackgroundJob, signal: AbortSignal): Promise<void> {
+    const jobStartTime = performance.now();
+    const isArgosProfiling = typeof window !== 'undefined' && window.localStorage?.getItem('pdf_translator_argos_profile') === '1';
+    if (isArgosProfiling && typeof window !== 'undefined') {
+      (window as any).__ARGOS_IPC_LOG__ = [];
+      (window as any).__PAGE_TRANSLATION_TIMINGS__ = [];
+      (window as any).__ARGOS_COORDINATOR_STATS__ = {
+        n_dict_hits: 0,
+        n_mem_cache_hits: 0,
+        n_db_sentence_cache_hits: 0,
+        n_engine_calls: 0,
+      };
+    }
+
     const throwIfAborted = () => {
       if (signal.aborted) {
         throw new Error('Process aborted by user');
@@ -682,6 +702,102 @@ class BackgroundQueueProcessor {
         '4. Translation': calculateStageStats(jobStageTimings.map(t => t.translationMs)),
         'Total Per Page Pipeline': calculateStageStats(jobStageTimings.map(t => t.totalMs)),
       });
+    }
+
+    const jobWallClockMs = Number((performance.now() - jobStartTime).toFixed(2));
+
+    if (isArgosProfiling && typeof window !== 'undefined') {
+      const ipcLogs: Array<{
+        seq: number;
+        tag: string;
+        n_texts: number;
+        t_start_epoch_ms: number;
+        ipc_ms: number;
+        ipc_status: 'ok' | 'bad_response' | 'exception_or_timeout';
+      }> = (window as any).__ARGOS_IPC_LOG__ || [];
+
+      interface IpcTagStat {
+        calls: number;
+        totalMs: number;
+        meanMs: number;
+        minMs: number;
+        maxMs: number;
+        p95Ms: number;
+        badResponseCount: number;
+        exceptionOrTimeoutCount: number;
+      }
+
+      const byTag: Record<string, IpcTagStat> = {};
+      ipcLogs.forEach((log) => {
+        const tag = log.tag || 'untagged';
+        if (!byTag[tag]) {
+          byTag[tag] = {
+            calls: 0,
+            totalMs: 0,
+            meanMs: 0,
+            minMs: Infinity,
+            maxMs: -Infinity,
+            p95Ms: 0,
+            badResponseCount: 0,
+            exceptionOrTimeoutCount: 0,
+          };
+        }
+        const s = byTag[tag];
+        s.calls++;
+        s.totalMs += log.ipc_ms;
+        s.minMs = Math.min(s.minMs, log.ipc_ms);
+        s.maxMs = Math.max(s.maxMs, log.ipc_ms);
+        if (log.ipc_status === 'bad_response') s.badResponseCount++;
+        if (log.ipc_status === 'exception_or_timeout') s.exceptionOrTimeoutCount++;
+      });
+
+      Object.keys(byTag).forEach((tag) => {
+        const s = byTag[tag];
+        s.totalMs = Number(s.totalMs.toFixed(2));
+        s.meanMs = Number((s.totalMs / Math.max(1, s.calls)).toFixed(2));
+        s.minMs = s.minMs === Infinity ? 0 : Number(s.minMs.toFixed(2));
+        s.maxMs = s.maxMs === -Infinity ? 0 : Number(s.maxMs.toFixed(2));
+        const tagIpcTimes = ipcLogs.filter((l) => (l.tag || 'untagged') === tag).map((l) => l.ipc_ms);
+        s.p95Ms = calculatePercentile(tagIpcTimes, 95);
+      });
+
+      const allIpcTimes = ipcLogs.map((l) => l.ipc_ms);
+      const badResponseCount = ipcLogs.filter((l) => l.ipc_status === 'bad_response').length;
+      const exceptionOrTimeoutCount = ipcLogs.filter((l) => l.ipc_status === 'exception_or_timeout').length;
+      const p95_ipc_ms = calculatePercentile(allIpcTimes, 95);
+
+      const report = {
+        jobId: job.id,
+        filename: job.filename,
+        engine: job.engine,
+        jobWallClockMs,
+        pagesMeasured: jobStageTimings.length,
+        stageTimings: {
+          render: calculateStageStats(jobStageTimings.map((t) => t.renderMs)),
+          ocrIpc: calculateStageStats(jobStageTimings.map((t) => t.ocrIpcMs)),
+          syncLayers: calculateStageStats(jobStageTimings.map((t) => t.syncLayersMs)),
+          translation: calculateStageStats(jobStageTimings.map((t) => t.translationMs)),
+          totalPerPage: calculateStageStats(jobStageTimings.map((t) => t.totalMs)),
+        },
+        pageTranslationBreakdown: (window as any).__PAGE_TRANSLATION_TIMINGS__ || [],
+        coordinatorStats: (window as any).__ARGOS_COORDINATOR_STATS__ || {},
+        ipcSummary: {
+          totalCalls: ipcLogs.length,
+          badResponseCount,
+          exceptionOrTimeoutCount,
+          p95_ipc_ms,
+          byTag,
+        },
+      };
+
+      (window as any).__LAST_ARGOS_BENCHMARK_REPORT__ = report;
+
+      console.log(`\n[QueueProcessor] =======================================================`);
+      console.log(`[QueueProcessor] ARGOS BENCHMARK REPORT (ADR-0009 Phase 0)`);
+      console.log(`[QueueProcessor] Job Wall Clock: ${jobWallClockMs}ms | IPC Calls: ${ipcLogs.length} | p95 IPC: ${p95_ipc_ms}ms | Non-OK Statuses: ${badResponseCount + exceptionOrTimeoutCount}`);
+      console.log(`[QueueProcessor] =======================================================`);
+      console.table(byTag);
+      console.log('[QueueProcessor] Full report available at window.__LAST_ARGOS_BENCHMARK_REPORT__:', report);
     }
 
     if (translationErrors.length > 0) {

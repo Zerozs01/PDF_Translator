@@ -1169,6 +1169,25 @@ export function initPlatformBridgeCompat(): void {
       translate: createSafeBridgeSection({
         offlineBatch: async (texts: string[], options?: any) => {
           if (!texts || texts.length === 0) return [];
+          const isProfiling = typeof window !== 'undefined' && window.localStorage?.getItem('pdf_translator_argos_profile') === '1';
+          const t_start_epoch_ms = Date.now();
+          const t0 = performance.now();
+          const profileTag = options?.profileTag || 'untagged';
+
+          const recordLog = (ipc_status: 'ok' | 'bad_response' | 'exception_or_timeout', ipc_ms: number) => {
+            if (!isProfiling || typeof window === 'undefined') return;
+            const logArr = ((window as any).__ARGOS_IPC_LOG__ = (window as any).__ARGOS_IPC_LOG__ || []);
+            const seq = logArr.length + 1;
+            logArr.push({
+              seq,
+              tag: profileTag,
+              n_texts: texts.length,
+              t_start_epoch_ms,
+              ipc_ms: Number(ipc_ms.toFixed(2)),
+              ipc_status,
+            });
+          };
+
           try {
             const res = await withTimeout(
               invoke<{
@@ -1190,15 +1209,22 @@ export function initPlatformBridgeCompat(): void {
               'Argos translation timed out after 45s'
             );
 
+            const ipc_ms = performance.now() - t0;
+
             if (res && res.ok && Array.isArray(res.translations) && res.translations.length === texts.length) {
+              recordLog('ok', ipc_ms);
               return res.translations;
             }
             if (res && Array.isArray(res.translations)) {
+              recordLog(res.ok ? 'ok' : 'bad_response', ipc_ms);
               return res.translations;
             }
+            recordLog('bad_response', ipc_ms);
             console.warn('[Bridge] translate_batch_offline returned unexpected response:', res);
             return texts;
           } catch (err) {
+            const ipc_ms = performance.now() - t0;
+            recordLog('exception_or_timeout', ipc_ms);
             console.error('[Bridge] translate_batch_offline failed:', err);
             return texts;
           }
