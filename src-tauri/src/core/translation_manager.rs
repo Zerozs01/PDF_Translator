@@ -7,6 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
+use crate::core::process_manager::strip_windows_unc_prefix;
 use crate::error::AppError;
 
 type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, AppError>>>>>;
@@ -22,6 +23,7 @@ pub struct TranslationManager {
 
 impl TranslationManager {
     pub fn new(project_root: PathBuf) -> Self {
+        let project_root = strip_windows_unc_prefix(project_root);
         Self {
             child: Arc::new(Mutex::new(None)),
             stdin: Arc::new(Mutex::new(None)),
@@ -122,8 +124,10 @@ impl TranslationManager {
             }
         }
 
-        let python_exe = self.find_python_executable();
-        let script_path = self.get_bridge_script_path();
+        let python_exe = strip_windows_unc_prefix(PathBuf::from(self.find_python_executable()))
+            .to_string_lossy()
+            .to_string();
+        let script_path = strip_windows_unc_prefix(self.get_bridge_script_path());
 
         eprintln!(
             "[TranslationManager] Spawning Argos Python worker (exe: {}, script: {}, cwd: {})",
@@ -138,7 +142,11 @@ impl TranslationManager {
             .current_dir(&self.project_root)
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONUTF8", "1")
+            .env("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
             .env("ARGOS_CHUNK_TYPE", "MINISBD")
+            .env("OMP_NUM_THREADS", "4")
+            .env("MKL_NUM_THREADS", "4")
+            .env("CT2_USE_EXPERIMENTAL_PACKED_GEMM", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -182,6 +190,10 @@ impl TranslationManager {
             while let Ok(Some(line)) = reader.next_line().await {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
+                    continue;
+                }
+                if !trimmed.starts_with('{') {
+                    eprintln!("[Argos worker non-JSON line]: {}", trimmed);
                     continue;
                 }
                 if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {

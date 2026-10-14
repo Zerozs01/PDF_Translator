@@ -171,7 +171,10 @@ export interface OCRDebugInfo {
   raw?: boolean;
   panelSafetyNormalizedVersion?: number;
   fallbackFromEngine?: string;
-  fallbackReason?: string;
+  fallbackReason?: 'unsupported_language' | 'dml_runtime_error' | 'dml_unavailable' | string | null;
+  actualBackend?: 'paddle' | 'ort_dml';
+  requestedBackend?: 'paddle' | 'ort_dml';
+  sessionDowngraded?: boolean;
   preprocessing_latency_ms?: number;
 }
 
@@ -210,6 +213,8 @@ export interface OCRPageResult {
   pipelineProfile?: OCRPipelineProfile;
   ocrEngine?: OCREngine;
   ocrQualityProfile?: OCRQualityProfile;
+  actualBackend?: 'paddle' | 'ort_dml';
+  fallbackReason?: string | null;
   lines: OCRLine[];
   words: OCRWord[];
   text: string;
@@ -238,6 +243,7 @@ export interface OCROptions {
   perPageTimeoutSec?: number;
   ocrQualityProfile?: OCRQualityProfile;
   useAngleCls?: boolean;
+  forceRestart?: boolean;
 }
 
 /** Text Layer Generation Options */

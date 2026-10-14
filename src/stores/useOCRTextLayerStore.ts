@@ -127,6 +127,16 @@ interface OCRTextLayerState {
   ocrResultSearchQuery: string;
   setOcrResultSearchQuery: (query: string) => void;
 
+  // DirectML Runtime Truth & Fallback Monitoring
+  runtimeBackendStatus: 'idle' | 'active_dml' | 'fallback_cpu';
+  lastFallbackReason: string | null;
+  setRuntimeBackendStatus: (status: 'idle' | 'active_dml' | 'fallback_cpu', reason?: string | null) => void;
+
+  // ADR-0006: distinguishes a user's explicit backend choice from smart auto-promotion
+  hasUserManuallySelectedBackend: boolean;
+  setBackendFromUI: (backend: 'paddle' | 'ort_dml', adapterName?: string) => void;
+  applyAutoPromotedBackend: (backend: 'ort_dml', adapterName?: string) => void;
+
   // Actions
   reset: () => void;
 }
@@ -170,6 +180,16 @@ export const OCR_ENGINES: Array<{
   },
 ] as const;
 
+const OCR_BACKEND_MANUAL_KEY = 'pdf_translator.ocr_backend_manual';
+
+function readManualBackendFlag(): boolean {
+  try {
+    return typeof window !== 'undefined' && typeof localStorage !== 'undefined' && localStorage.getItem(OCR_BACKEND_MANUAL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function applyUpdatedPageOCR(
   state: OCRTextLayerState,
   pageNum: number,
@@ -211,28 +231,37 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
 
     if (newOptions.backend !== undefined) {
       try {
-        localStorage.setItem('pdf_translator.ocr_backend', newOptions.backend);
+        if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+          localStorage.setItem('pdf_translator.ocr_backend', newOptions.backend);
+        }
       } catch {}
     }
     if (newOptions.dmlAdapterName !== undefined) {
       try {
-        localStorage.setItem('pdf_translator.ocr_dml_adapter', newOptions.dmlAdapterName);
+        if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+          localStorage.setItem('pdf_translator.ocr_dml_adapter', newOptions.dmlAdapterName);
+        }
       } catch {}
     }
 
-    if (
-      (newOptions.backend !== undefined && newOptions.backend !== prev.backend) ||
-      (newOptions.dmlAdapterName !== undefined && newOptions.dmlAdapterName !== prev.dmlAdapterName)
-    ) {
+    const backendChanged = newOptions.backend !== undefined && newOptions.backend !== prev.backend;
+    const adapterChanged = newOptions.dmlAdapterName !== undefined && newOptions.dmlAdapterName !== prev.dmlAdapterName;
+    const isOrtDml = (next.backend || 'paddle') === 'ort_dml';
+    const forceRestart = Boolean(newOptions.forceRestart);
+
+    if (forceRestart || backendChanged || (adapterChanged && isOrtDml)) {
       const backend = next.backend || 'paddle';
       const adapterName = next.dmlAdapterName || undefined;
-      try {
-        const bridge = (window as any).electronAPI || (window as any).platformBridge || (window as any).electronBridge;
-        if (bridge?.ocr?.setBackend) {
-          void bridge.ocr.setBackend({ backend, adapterName });
+      if (typeof window !== 'undefined') {
+        try {
+          const win = window as any;
+          const bridge = win.electronAPI || win.platformBridge || win.electronBridge;
+          if (bridge?.ocr?.setBackend) {
+            void bridge.ocr.setBackend({ backend, adapterName, forceRestart });
+          }
+        } catch (err) {
+          console.warn('[useOCRTextLayerStore] Failed to sync backend to bridge:', err);
         }
-      } catch (err) {
-        console.warn('[useOCRTextLayerStore] Failed to sync backend to bridge:', err);
       }
     }
   },
@@ -666,6 +695,32 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
   ocrResultSearchQuery: '',
   setOcrResultSearchQuery: (query) => set({ ocrResultSearchQuery: String(query || '') }),
 
+  // DirectML Runtime Truth & Fallback Monitoring
+  runtimeBackendStatus: 'idle',
+  lastFallbackReason: null,
+  setRuntimeBackendStatus: (status, reason = null) =>
+    set({ runtimeBackendStatus: status, lastFallbackReason: reason }),
+
+  hasUserManuallySelectedBackend: readManualBackendFlag(),
+  setBackendFromUI: (backend, adapterName) => {
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        localStorage.setItem(OCR_BACKEND_MANUAL_KEY, '1');
+      }
+    } catch {}
+    set({ hasUserManuallySelectedBackend: true });
+    if (adapterName !== undefined) {
+      get().setOptions({ backend, dmlAdapterName: adapterName });
+    } else {
+      get().setOptions({ backend });
+    }
+  },
+  applyAutoPromotedBackend: (backend, adapterName) => {
+    // Intentionally leaves hasUserManuallySelectedBackend untouched (stays false).
+    get().setOptions(adapterName ? { backend, dmlAdapterName: adapterName } : { backend });
+    set({ runtimeBackendStatus: 'active_dml', lastFallbackReason: null });
+  },
+
   // Actions
   reset: () => set((state) => ({
     isProcessing: false,
@@ -679,6 +734,8 @@ export const useOCRTextLayerStore = create<OCRTextLayerState>((set, get) => ({
     translationCacheByPage: new Map(),
     activeTranslationKeyByPage: new Map(),
     ocrResultSearchQuery: '',
+    runtimeBackendStatus: 'idle',
+    lastFallbackReason: null,
     options: {
       ...state.options,
       language: 'eng',

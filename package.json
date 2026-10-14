@@ -35,6 +35,7 @@
     "ocr:gate": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
     "ocr:gate:kor": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk --require-language kor",
     "ocr:benchmark:ci": "node scripts/ocr-benchmark-matrix.mjs --fail-on-risk",
+    "ocr:benchmark:dml": "powershell -ExecutionPolicy Bypass -Command \"if (Test-Path .venv-ocr) { .venv-ocr\\Scripts\\python.exe scripts/benchmark_dml_parity.py } else { python scripts/benchmark_dml_parity.py }\"",
     "test:ocr:compare-pipeline": "node scripts/compare-pipeline.mjs",
     "postinstall": "node scripts/postinstall-ocr.js && node scripts/download-overlay-fonts.js"
   },

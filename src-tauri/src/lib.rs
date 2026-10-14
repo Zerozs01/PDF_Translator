@@ -58,7 +58,7 @@ pub fn run() {
                     let manifest_path = std::path::PathBuf::from(manifest_dir);
                     if manifest_path.join("../scripts/external_ocr_bridge.py").exists() {
                         if let Ok(canonical) = manifest_path.parent().unwrap().canonicalize() {
-                            return canonical;
+                            return crate::core::process_manager::strip_windows_unc_prefix(canonical);
                         }
                     }
                 }

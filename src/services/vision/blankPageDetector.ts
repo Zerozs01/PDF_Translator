@@ -76,7 +76,7 @@ export function isImageDataBlankOrSolid(
 /**
  * ตรวจสอบว่า Canvas เป็นหน้าว่างเปล่าหรือสีพื้นล้วนหรือไม่
  */
-export function detectBlankOrSolidCanvas(canvas: HTMLCanvasElement): BlankPageDetectionResult {
+export function detectBlankOrSolidCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): BlankPageDetectionResult {
   if (!canvas || canvas.width === 0 || canvas.height === 0) {
     return { isBlank: true, maxDeviation: 0, baseColor: { r: 255, g: 255, b: 255 } };
   }

@@ -17,6 +17,23 @@ pub struct HealthStatus {
     pub message: Option<String>,
 }
 
+/// Windows `canonicalize()` returns `\\?\C:\...` (extended-length). Some C++ native libs
+/// loaded by the Python sidecar mis-resolve relative paths with that prefix, so strip it.
+pub fn strip_windows_unc_prefix(path: PathBuf) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(s) = path.to_str() {
+            if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                // Keep real UNC shares (\\?\UNC\server\share) untouched.
+                if !stripped.starts_with("UNC\\") {
+                    return PathBuf::from(stripped);
+                }
+            }
+        }
+    }
+    path
+}
+
 type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, AppError>>>>>;
 type InflightMap = Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<Result<Value, String>>>>>;
 
@@ -35,6 +52,7 @@ pub struct ProcessManager {
 
 impl ProcessManager {
     pub fn new(project_root: PathBuf) -> Self {
+        let project_root = strip_windows_unc_prefix(project_root);
         let (initial_backend, initial_adapter) = if let Ok(b) = std::env::var("OCR_BACKEND") {
             (b, std::env::var("OCR_DML_ADAPTER_NAME").ok().filter(|s| !s.trim().is_empty()))
         } else {
@@ -154,8 +172,12 @@ impl ProcessManager {
         ocr_backend: &Arc<Mutex<String>>,
         dml_adapter_name: &Arc<Mutex<Option<String>>>,
     ) -> Result<(), AppError> {
-        let python_exe = Self::resolve_python_executable(project_root);
-        let script_path = Self::resolve_bridge_script_path(project_root);
+        let project_root_buf = strip_windows_unc_prefix(project_root.to_path_buf());
+        let project_root = project_root_buf.as_path();
+        let python_exe = strip_windows_unc_prefix(PathBuf::from(Self::resolve_python_executable(project_root)))
+            .to_string_lossy()
+            .to_string();
+        let script_path = strip_windows_unc_prefix(Self::resolve_bridge_script_path(project_root));
 
         let backend_val = ocr_backend.lock().await.clone();
         let adapter_val = dml_adapter_name.lock().await.clone();
@@ -233,6 +255,10 @@ impl ProcessManager {
             while let Ok(Some(line)) = reader.next_line().await {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
+                    continue;
+                }
+                if !trimmed.starts_with('{') {
+                    eprintln!("[ProcessManager Stdout Filter] Ignored non-JSON line from Python worker: {}", trimmed);
                     continue;
                 }
                 if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
@@ -542,14 +568,37 @@ impl ProcessManager {
         Ok(())
     }
 
-    pub async fn set_ocr_backend(&self, backend: String, adapter_name: Option<String>) -> Result<(), AppError> {
-        {
+    pub async fn set_ocr_backend(
+        &self,
+        backend: String,
+        adapter_name: Option<String>,
+        force_restart: Option<bool>,
+    ) -> Result<(), AppError> {
+        let norm_adapter = adapter_name.filter(|s| !s.trim().is_empty());
+        let forced = force_restart.unwrap_or(false);
+        let needs_restart = {
             let mut b = self.ocr_backend.lock().await;
-            *b = backend;
             let mut a = self.dml_adapter_name.lock().await;
-            *a = adapter_name.filter(|s| !s.trim().is_empty());
+            if forced {
+                *b = backend;
+                *a = norm_adapter;
+                true
+            } else if *b == backend && *a == norm_adapter {
+                false
+            } else if *b == "paddle" && backend == "paddle" {
+                // If staying on native CPU, updating the preferred adapter target does not require restarting the CPU worker
+                *a = norm_adapter;
+                false
+            } else {
+                *b = backend;
+                *a = norm_adapter;
+                true
+            }
+        };
+        if needs_restart {
+            self.restart_worker().await?;
         }
-        self.restart_worker().await
+        Ok(())
     }
 
     pub async fn get_ocr_backend(&self) -> (String, Option<String>) {
@@ -579,6 +628,27 @@ mod tests {
         println!("Sidecar health status: {:?}", health);
         assert_eq!(health.status, "ready");
         assert!(health.message.unwrap().contains("Pong"));
+    }
+
+    #[tokio::test]
+    async fn test_set_ocr_backend_idempotency_and_force_restart() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let pm = ProcessManager::new(root);
+        let (b, a) = pm.get_ocr_backend().await;
+        assert_eq!(b, "paddle");
+        assert_eq!(a, None);
+
+        // Idempotency: setting same backend without force does not error
+        pm.set_ocr_backend("paddle".to_string(), None, None).await.unwrap();
+        let (b, a) = pm.get_ocr_backend().await;
+        assert_eq!(b, "paddle");
+        assert_eq!(a, None);
+
+        // Force restart flag
+        pm.set_ocr_backend("paddle".to_string(), None, Some(true)).await.unwrap();
+        let (b, a) = pm.get_ocr_backend().await;
+        assert_eq!(b, "paddle");
+        assert_eq!(a, None);
     }
 }
 

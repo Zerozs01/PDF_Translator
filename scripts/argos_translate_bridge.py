@@ -6,11 +6,22 @@ import argparse
 import gc
 import json
 import os
+import re
 import sys
 import traceback
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+_ipc_stdout = sys.stdout
+
+
+def send_ipc_json(payload: Dict[str, Any]) -> None:
+    global _ipc_stdout
+    out = _ipc_stdout or sys.stdout
+    out.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    out.flush()
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -45,9 +56,22 @@ LANGUAGE_ALIASES: Dict[str, str] = {
 }
 
 TRANSLATION_CACHE: Dict[Tuple[str, str, bool], Any] = {}
+# Strictly caches raw model output before glossary/rule post-processing
 TEXT_TRANSLATION_CACHE: "OrderedDict[Tuple[str, str, bool, str], str]" = OrderedDict()
-TEXT_TRANSLATION_CACHE_LIMIT = 2048
+TEXT_TRANSLATION_CACHE_LIMIT = 4096
 INSTALLED_LANGUAGE_CODES_CACHE: List[str] | None = None
+
+
+def should_skip_translation(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or len(stripped) <= 1:
+        return True
+    # If all characters are digits, punctuation, whitespace, or symbols (no translatable words)
+    # e.g. "12", "2024", "1.23", "$100", "---", "...", "1/2", "#99"
+    if all(not ch.isalnum() or ch.isdigit() for ch in stripped):
+        return True
+    return False
+
 
 
 def normalize_language(raw_value: Any, fallback: str) -> str:
@@ -190,39 +214,49 @@ def translate_texts(
         force_noop_sentencizer=force_noop_sentencizer,
     )
 
-    translations: List[str] = []
-    for text in texts:
+    translations: List[str | None] = [None] * len(texts)
+    unique_to_translate: Dict[str, List[int]] = {}
+
+    for idx, text in enumerate(texts):
         normalized_text = str(text or "")
-        if not normalized_text.strip():
-            translations.append("")
+        stripped = normalized_text.strip()
+        if not stripped:
+            translations[idx] = ""
+            continue
+
+        if should_skip_translation(normalized_text):
+            translations[idx] = normalized_text
             continue
 
         cache_key = (source_language, target_language, force_noop_sentencizer, normalized_text)
         cached = TEXT_TRANSLATION_CACHE.get(cache_key)
         if cached is not None:
             TEXT_TRANSLATION_CACHE.move_to_end(cache_key)
-            translations.append(cached)
+            translations[idx] = cached
             continue
 
-        translated = str(translation.translate(normalized_text) or "")
+        if normalized_text not in unique_to_translate:
+            unique_to_translate[normalized_text] = []
+        unique_to_translate[normalized_text].append(idx)
 
-        # OpenNMT SentencePiece Casing Fallback:
-        # ALL-CAPS text (e.g. "SUPPOSED", "STUDENTS", "APOLOGIES") confuses OpenNMT subword tokenizers.
-        # If translation produced no target script (e.g. Thai), retry with Title-case ("Supposed") or Lower-case ("supposed").
+    for unique_text, indices in unique_to_translate.items():
+        cache_key = (source_language, target_language, force_noop_sentencizer, unique_text)
+        translated = str(translation.translate(unique_text) or "")
+
         # OpenNMT SentencePiece Casing & Punctuation Fallback:
         # ALL-CAPS text (e.g. "SUPPOSED", "MONEY!", "ORGASM!!") or mixed-case OCR artifacts (e.g. "HEiR!", "WINDiNG")
         # confuses OpenNMT subword tokenizers. If translation produced no target script (e.g. Thai),
         # strip punctuation and retry with Title-case ("Money") or Lower-case ("money").
-        if target_language == "th" and (not translated or translated == normalized_text or not any('\u0e00' <= c <= '\u0e7f' for c in translated)):
-            stripped = normalized_text.rstrip("!?.,… ")
-            trailing_punct = normalized_text[len(stripped):]
+        if target_language == "th" and (not translated or translated == unique_text or not any('\u0e00' <= c <= '\u0e7f' for c in translated)):
+            stripped = unique_text.rstrip("!?.,… ")
+            trailing_punct = unique_text[len(stripped):]
             variants: List[str] = []
             if stripped:
                 variants.extend([stripped.title(), stripped.lower(), stripped.capitalize()])
-            if "ABLETO" in normalized_text.upper():
-                variants.append(re.sub(r"\bABLETO\b", "able to", normalized_text, flags=re.I))
+            if "ABLETO" in unique_text.upper():
+                variants.append(re.sub(r"\bABLETO\b", "able to", unique_text, flags=re.I))
             for variant in variants:
-                if not variant or variant == normalized_text:
+                if not variant or variant == unique_text:
                     continue
                 alt_translated = str(translation.translate(variant) or "")
                 if alt_translated and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated):
@@ -233,8 +267,11 @@ def translate_texts(
                     break
 
         remember_text_translation(cache_key, translated)
-        translations.append(translated)
-    return translations
+        for idx in indices:
+            translations[idx] = translated
+
+    return [t if t is not None else "" for t in translations]
+
 
 
 def get_installed_language_codes(argos_translate_module: Any) -> List[str]:
@@ -471,6 +508,10 @@ def process_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def serve_stdio() -> None:
+    global _ipc_stdout
+    _ipc_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
     request_count = 0
     for raw_line in sys.stdin:
         line = raw_line.strip()
@@ -490,8 +531,7 @@ def serve_stdio() -> None:
         if request_id:
             response["id"] = request_id
 
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        send_ipc_json(response)
 
         request_count += 1
         if request_count % 10 == 0:
@@ -530,7 +570,8 @@ def main() -> None:
 
     payload = load_payload()
     response = process_payload(payload)
-    print(json.dumps(response, ensure_ascii=False))
+    send_ipc_json(response)
+
 
 
 

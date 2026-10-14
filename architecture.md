@@ -71,22 +71,27 @@ flowchart TD
 - **Boundary Rules:** รันใน Main Process เท่านั้น; การเข้าถึงข้อมูลต้องผ่าน DAO Methods ห้ามยิง Dynamic Raw SQL จากภายนอก
 - **Implementation Status:** Implemented
 
-### 3.5 OCR Execution Subsystem (Python Bridge & Native Process Manager)
-- **Boundary:** `src-tauri/src/core/process_manager.rs`, `scripts/external_ocr_bridge.py`, `src/services/ocr/ConcurrencyLimiter.ts` & `src/services/ocr/BackgroundQueueProcessor.ts`
-- **Responsibility:** บริหารวงจรชีวิต Python Sidecar Daemon, จัดการคิวงาน OCR ผ่าน `ConcurrencyLimiter` แบบ Atomic Slot Transfer, ตรวจจับ Hardware อัตโนมัติ (`list-adapters`), และบริหาร Backend การประมวลผล (Dual-Backend):
+### 3.5 OCR Execution Subsystem (Python Bridge, Native Process Manager & Bounded Pipeline)
+- **Boundary:** `src-tauri/src/core/process_manager.rs`, `scripts/external_ocr_bridge.py`, `src/services/ocr/ocrBackendBootstrap.ts`, `src/services/ocr/ConcurrencyLimiter.ts` & `src/services/ocr/BackgroundQueueProcessor.ts`
+- **Responsibility:** บริหารวงจรชีวิต Python Sidecar Daemon, จัดการคิวงาน OCR ผ่าน Bounded 3-Tier Pipeline, ตรวจจับ Hardware อัตโนมัติ (`list-adapters`), และบริหาร Backend การประมวลผล (Dual-Backend):
   - **Paddle Native CPU (Default Safe Mode):** โหมดมาตรฐานปลอดภัย 100% สำหรับทุกภาษา แสดงข้อความสถานะ `[ocrBridge] PaddleOCR DirectML opt-in inactive (current backend: 'paddle'). Using Paddle Native CPU.` เมื่อเริ่มต้น
-  - **DirectML GPU (Opt-in Mode):** เร่งความเร็วด้วย GPU (AMD, Intel, NVIDIA) ผ่าน ONNX Runtime `DmlExecutionProvider` โดยเปิดใช้เฉพาะภาษา Latin/English (`en`) เท่านั้น
-  - **Fail-Closed Fallback Wrapper:** หาก DirectML เกิดข้อผิดพลาด ระบบจะสลับกลับมาประมวลผลบน Paddle Native CPU ทันทีโดยไม่ส่งผลให้ Application แครช
+  - **DirectML GPU (Opt-in Mode):** เร่งความเร็วด้วย GPU (AMD, Intel, NVIDIA) ผ่าน ONNX Runtime `DmlExecutionProvider` โดยเปิดใช้เฉพาะภาษา Latin/English (`en`) พร้อม Graph Optimization (`ORT_ENABLE_ALL`) และล็อกค่า `rec_batch_num = 6` ภายใต้ Strict Parity Gate 100%
+  - **Smart Startup Promotion & Single-Flight Boot Sync (`ocrBackendBootstrap.ts`):** โพรบ GPU ตอนเริ่มต้นระบบเพียงครั้งเดียวและเลื่อนขั้นเป็น `ort_dml` อัตโนมัติหากมี GPU รองรับ โดยเคารพการตั้งค่าของผู้ใช้เสมอ
+  - **Fast DirectML Probe & Deadlock Recovery:** โพรบด้วย Minimal ONNX Model ในเวลา `< 0.8s` ตรวจสอบขนาดไฟล์โมเดล (`> 0 bytes`) และรองรับ `force_restart: bool` ทะลุ Idempotency Guard เมื่อเกิด Timeout
+  - **Split Fallback Policy & Runtime Truth:** แยก Ephemeral Language Fallback (เช่น หน้าภาษาไทยสลับไปใช้ CPU เฉพาะหน้านั้น) ออกจาก Sticky Hardware Downgrade (`_dml_session_disabled = True`) ป้องกัน UI หลุดการซิงก์
+  - **Stdio Protocol Isolation:** แยก `_ipc_stdout` ออกจาก `sys.stdout = sys.stderr` คู่กับตัวกรองบรรทัดขยะ (`!trimmed.starts_with('{')`) ใน Rust ป้องกัน JSON-lines Stream ปนเปื้อน
+  - **Zero-Leak OffscreenCanvas Rendering:** เรนเดอร์ผ่าน `OffscreenCanvas` แบบ Lossless PNG (`convertToBlob({ type: 'image/png' })`) พร้อมบังคับคืนหน่วยความจำ Backing Texture ใน `finally { canvas.width = 0; canvas.height = 0; }`
   - **Monotonic Request ID & Deduplication:** ใน `process_manager.rs` สร้าง Request ID ด้วย `as_micros() + AtomicU64 counter` และทำ In-flight Deduplication ป้องกัน Race Condition และ Channel Closed Prematurely
 - **Depends On:** Python Virtualenv (`.venv-ocr`), PaddlePaddle, PaddleOCR, ONNX Runtime (`DmlExecutionProvider`), EasyOCR
 - **Boundary Rules:** สื่อสารผ่าน JSON Lines Stdio IPC เท่านั้น; ป้องกัน Exception ภายใน Python ไม่ให้กระทบ Rust Core และ Frontend; ห้ามเปิดใช้ DirectML กับภาษาไทยโดยเด็ดขาด
-- **Implementation Status:** Implemented (พร้อมชุดทดสอบครบถ้วน)
+- **Implementation Status:** Implemented (พร้อมชุดทดสอบครบถ้วน 35 Suites, 407 Tests)
 
-### 3.6 Translation Subsystem (Offline NMT & Dictionaries)
-- **Boundary:** `electron/argosBridge.ts`, `scripts/argos_translate_bridge.py` & `src/services/translation/`
-- **Responsibility:** แปลประโยคออฟไลน์ผ่าน Argos Translate Daemon, ค้นหาพจนานุกรมคำสั้น/สแลงเฉพาะทาง, กรอง Carryover ภาษาต้นทาง, และเชื่อมต่อ Gemini API สำรอง
-- **Depends On:** Argos Translate Python Subprocess, ตารางพจนานุกรมภาษาไทย/สเปน/เกาหลี/อังกฤษ, Gemini REST API
-- **Boundary Rules:** ยึดการทำงานแบบ Offline-first; กรอง Hallucination และอักขระ CJK แปลค้างก่อนส่งผลลัพธ์กลับสู่ Renderer
+### 3.6 Translation Subsystem (Offline NMT, Caching & Dictionaries)
+- **Boundary:** `src-tauri/src/core/translation_manager.rs`, `scripts/argos_translate_bridge.py` & `src/services/translation/`
+- **Responsibility:** แปลประโยคออฟไลน์ผ่าน Argos Translate Daemon, แคชผลการแปลระดับโมเดลด้วย LRU Cache (4096 รายการ), ทำ Intra-batch Deduplication, กรอง Carryover ภาษาต้นทาง, และเชื่อมต่อ Gemini API สำรอง
+- **Protocol Isolation & Thread Tuning:** สำรอง `_ipc_stdout` แยกขาดจาก `sys.stdout = sys.stderr`, กรอง Non-JSON Stderr/Stdout ใน `translation_manager.rs`, และปรับตั้งค่า `OMP_NUM_THREADS=4`, `MKL_NUM_THREADS=4`, `CT2_USE_EXPERIMENTAL_PACKED_GEMM=1`
+- **Depends On:** Argos Translate Python Subprocess, CTranslate2, ตารางพจนานุกรมภาษาไทย/สเปน/เกาหลี/อังกฤษ, Gemini REST API
+- **Boundary Rules:** ยึดการทำงานแบบ Offline-first; กรอง Hallucination และอักขระ CJK แปลค้างก่อนส่งผลลัพธ์กลับสู่ Renderer; In-memory LRU Cache ครอบเฉพาะผลแปลระดับโมเดลดิบคั่นก่อนกระบวนการ Glossary/Repair Rules
 - **Implementation Status:** Implemented
 
 ### 3.7 Document Export Subsystem
@@ -113,23 +118,34 @@ User Navigate Page -> BackgroundQueueProcessor.runSinglePageOCR()
 ### 4.2 Offline Batch Translation Flow
 ```text
 Prepared Text Groups -> translationCoordinator -> phraseCache / SentenceTranslationDAO Check
-  -> [Uncached Sentences] -> IPC (translation:translate-batch) -> Python Argos Daemon
+  -> [Uncached Sentences] -> IPC (translation:translate-batch) -> Python Argos Daemon (LRU Cache Check)
   -> Quality & Hallucination Guard -> Save to TranslationCacheDAO & SentenceTranslationDAO
   -> Synchronize to useLayerStore -> Interactive Text Layers Displayed
 ```
 *คำอธิบาย:* ข้อความที่จัดกลุ่มแล้วจะถูกตรวจเช็คแคชระดับประโยค ประโยคใหม่จะส่งเข้า Argos Daemon จากนั้นผ่านระบบตรวจสอบคุณภาพก่อนบันทึกลงฐานข้อมูลและอัปเดตเลเยอร์
 
-### 4.3 Background Whole-Document Processing Flow
+### 4.3 Background Bounded Producer-Consumer Pipeline Flow
 ```text
-User Enqueues Job -> BackgroundQueueProcessor -> Reusable Headless Canvas Pool (Render N+1)
-  -> Prefetch Pipeline -> Execute OCR & Translation -> Direct DB Writes (Isolate Non-active Doc)
-  -> LocalStorage Queue Persisted -> Job Completed
+User Enqueues Job -> BackgroundQueueProcessor
+  -> [inFlightLimiter: max 3]
+       -> [ocrStageLimiter: max 1 DML / 2 CPU]
+            - OffscreenCanvas lossless render (PNG)
+            - Run GPU OCR (DirectML)
+            - Release canvas backing texture (width=0, height=0)
+          <-- ocrStageLimiter released! Page N+1 enters GPU OCR immediately
+       -> [translationStageLimiter: max 1]
+            - Run CPU Translation (Argos NMT + LRU Cache)
+            - Direct DB Writes (Isolate Non-active Doc)
+  -> Page N finishes -> inFlightLimiter slot released
+  -> Queue Monotonic Progress Updated -> Job Completed
 ```
 *คำอธิบายและกลไกความปลอดภัย (Safety & Resilience Patterns):*
+- **Bounded Backpressure:** คุมเพดานหน้าที่อยู่ระหว่างการประมวลผลพร้อมกันไม่เกิน `3` หน้า (`inFlightLimiter = 3`) ป้องกัน GPU วิ่งแซง CPU จนเกิด RAM Spike
+- **Stage Decoupling & Overlap:** ปลดล็อก `ocrStageLimiter` ทันทีที่หน้า $N$ ทำ OCR เสร็จ ทำให้หน้า $N+1$ สามารถขึ้น GPU ทำ OCR ได้ทันทีในขณะที่หน้า $N$ กำลังแปลภาษาอยู่บน CPU
 - **F1 (Cross-Document Isolation):** คิวงานเบื้องหลังแยกการบันทึกข้อมูลของ Inactive Document ผ่าน `persistTranslationResultCore` ลง SQLite DB Cache โดยตรง ไม่มีการเรียก `setPageLayers` หรือ `detectedLanguageSwitch` ไปกวน Active Store ที่ผู้ใช้กำลังเปิดอ่านอยู่
 - **F2 (Concurrency & Rejection Safety):** คิวงานประมวลผลผ่าน `ConcurrencyLimiter` ซึ่งส่งต่อ Slot ให้ Task ถัดไปแบบ Atomic และมี Handler ดักจับ `.catch()` ทันทีที่สร้าง Promise ป้องกัน Unhandled Rejection
 - **F3 (Idempotent Prewarm & Profile Forwarding):** แคชสถานะการ Prewarm อิงตาม Key `${engine}:${language}:${qualityProfile}:${pipelineProfile}` มี Timeout 60 วินาที และล้างสถานะข้อผิดพลาดเพื่อเปิดโอกาสให้ Retry
-- **F4 (Progress Monotonicity):** Progress Bar แยกตรรกะการคำนวณ: งาน OCR เพียวๆ จะรายงานความคืบหน้าแบบ Linear 0–100% ตามหน้าจริง ส่วนงานแปลภาษาจะคงสเกล 85%/90% สำหรับขั้นตอน NMT
+- **F4 (Progress Monotonicity & Synchronized Abort):** แถบ Progress Bar ปรับค่าแบบ Monotonic (`Math.max(current, next)`) เสมอ และเมื่อยกเลิกคิวงานจะสั่ง `clearAllLimiters()` ปลดปล่อยทรัพยากรทุก Stage พร้อมกันอย่างปลอดภัย
 
 
 ### 4.4 State Ownership

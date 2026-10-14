@@ -26,8 +26,9 @@ pub async fn set_ocr_backend(
     state: State<'_, AppState>,
     backend: String,
     adapter_name: Option<String>,
+    force_restart: Option<bool>,
 ) -> Result<(), String> {
-    state.process_manager.set_ocr_backend(backend, adapter_name).await.map_err(|e| e.to_string())
+    state.process_manager.set_ocr_backend(backend, adapter_name, force_restart).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
