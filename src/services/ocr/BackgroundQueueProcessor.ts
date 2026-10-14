@@ -36,8 +36,10 @@ interface RenderedPageData {
 
 interface PageStageTimings {
   pageNum: number;
+  queueWaitMs: number;
   renderMs: number;
   ocrIpcMs: number;
+  ocrCacheLoadMs: number;
   syncLayersMs: number;
   translationMs: number;
   totalMs: number;
@@ -414,6 +416,7 @@ class BackgroundQueueProcessor {
     }
 
     // 0. Prewarm engine with idempotent key and 60s timeout
+    let prewarmDurationMs = 0;
     const prewarmStartTime = performance.now();
     try {
       const prewarmTimeout = new Promise((_, reject) =>
@@ -426,11 +429,27 @@ class BackgroundQueueProcessor {
         }),
         prewarmTimeout,
       ]);
-      console.log(`[QueueProcessor] Prewarm ready in ${(performance.now() - prewarmStartTime).toFixed(1)}ms`);
+      prewarmDurationMs = Number((performance.now() - prewarmStartTime).toFixed(2));
+      console.log(`[QueueProcessor] Prewarm ready in ${prewarmDurationMs}ms`);
     } catch (prewarmErr) {
+      prewarmDurationMs = Number((performance.now() - prewarmStartTime).toFixed(2));
       console.warn('[QueueProcessor] Prewarm skipped or failed:', prewarmErr);
       this.prewarmedKey = null;
       this.activePrewarmPromise = null;
+    }
+
+    // Eager Prewarm Argos worker for translation jobs (ADR-0009 Phase 1)
+    if (this.isTranslationJob(job) && window.electronAPI?.translate?.offlineBatch) {
+      window.electronAPI.translate.offlineBatch(['Hello'], {
+        profileTag: 'prewarm',
+        sourceLanguage: job.sourceLanguage || 'en',
+        targetLanguage: job.targetLanguage || 'th',
+        mode: 'manga',
+        sourceType: 'text',
+        engine: 'argos',
+      }).catch((err) => {
+        console.warn('[QueueProcessor] Eager Argos prewarm dispatch warning:', err);
+      });
     }
 
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
@@ -529,12 +548,15 @@ class BackgroundQueueProcessor {
 
     const processPageTask = async (pageNum: number): Promise<void> => {
       throwIfAborted();
+      const taskEnqueueTime = performance.now();
+      let queueWaitMs = 0;
 
       await inFlightLimiter.run(async () => {
         throwIfAborted();
+        queueWaitMs = Number((performance.now() - taskEnqueueTime).toFixed(2));
 
         // ── Stage 1: GPU/CPU OCR Stage (Render Canvas + OCR IPC strictly inside ocrStageLimiter) ──
-        const { ocrResult, renderDurationMs, ocrIpcDurationMs } = await ocrStageLimiter.run(async () => {
+        const { ocrResult, renderDurationMs, ocrIpcDurationMs, ocrCacheLoadDurationMs } = await ocrStageLimiter.run(async () => {
           throwIfAborted();
           updateMonotonicProgress(
             Math.round((processedOcrCount / pagesCount) * progressScale),
@@ -596,11 +618,13 @@ class BackgroundQueueProcessor {
 
         const pageTiming: PageStageTimings = {
           pageNum,
+          queueWaitMs,
           renderMs: Number(renderDurationMs.toFixed(2)),
           ocrIpcMs: Number(ocrIpcDurationMs.toFixed(2)),
+          ocrCacheLoadMs: Number(ocrCacheLoadDurationMs.toFixed(2)),
           syncLayersMs: Number(syncLayersDurationMs.toFixed(2)),
           translationMs: 0,
-          totalMs: Number((renderDurationMs + ocrIpcDurationMs + syncLayersDurationMs).toFixed(2)),
+          totalMs: Number((renderDurationMs + ocrIpcDurationMs + ocrCacheLoadDurationMs + syncLayersDurationMs).toFixed(2)),
         };
         jobStageTimings.push(pageTiming);
 
@@ -626,7 +650,7 @@ class BackgroundQueueProcessor {
               try {
                 const m = performance.measure(transMeasureName, transStartMark, transEndMark);
                 pageTiming.translationMs = Number(m.duration.toFixed(2));
-                pageTiming.totalMs = Number((pageTiming.renderMs + pageTiming.ocrIpcMs + pageTiming.syncLayersMs + pageTiming.translationMs).toFixed(2));
+                pageTiming.totalMs = Number((pageTiming.renderMs + pageTiming.ocrIpcMs + pageTiming.ocrCacheLoadMs + pageTiming.syncLayersMs + pageTiming.translationMs).toFixed(2));
                 performance.clearMarks(transStartMark);
                 performance.clearMarks(transEndMark);
               } catch {}
@@ -642,8 +666,8 @@ class BackgroundQueueProcessor {
         processedCount++;
         successPagesCount++;
 
-        // Periodic driver cache clear every 8 completed pages
-        if (processedCount % 8 === 0 && window.electronAPI?.ocr?.clearCudaCache) {
+        // Periodic driver cache clear every 8 completed pages (only when GPU OCR ran on this page)
+        if (processedCount % 8 === 0 && pageTiming.ocrIpcMs > 0 && window.electronAPI?.ocr?.clearCudaCache) {
           try {
             await window.electronAPI.ocr.clearCudaCache({ engine: job.engine });
           } catch {}
@@ -696,8 +720,10 @@ class BackgroundQueueProcessor {
       console.log(`[QueueProcessor] Engine: ${job.engine} | Pages Measured: ${jobStageTimings.length}`);
       console.log(`[QueueProcessor] =======================================================`);
       console.table({
+        '0. Limiter Queue Wait Time': calculateStageStats(jobStageTimings.map(t => t.queueWaitMs)),
         '1. Render (Headless 300DPI)': calculateStageStats(jobStageTimings.map(t => t.renderMs)),
         '2. OCR (IPC Round-Trip)': calculateStageStats(jobStageTimings.map(t => t.ocrIpcMs)),
+        '2a. OCR Cache Load (DB Hit)': calculateStageStats(jobStageTimings.map(t => t.ocrCacheLoadMs)),
         '3. Sync Page Layers': calculateStageStats(jobStageTimings.map(t => t.syncLayersMs)),
         '4. Translation': calculateStageStats(jobStageTimings.map(t => t.translationMs)),
         'Total Per Page Pipeline': calculateStageStats(jobStageTimings.map(t => t.totalMs)),
@@ -771,10 +797,13 @@ class BackgroundQueueProcessor {
         filename: job.filename,
         engine: job.engine,
         jobWallClockMs,
+        prewarmMs: prewarmDurationMs,
         pagesMeasured: jobStageTimings.length,
         stageTimings: {
+          queueWait: calculateStageStats(jobStageTimings.map((t) => t.queueWaitMs)),
           render: calculateStageStats(jobStageTimings.map((t) => t.renderMs)),
           ocrIpc: calculateStageStats(jobStageTimings.map((t) => t.ocrIpcMs)),
+          ocrCacheLoad: calculateStageStats(jobStageTimings.map((t) => t.ocrCacheLoadMs)),
           syncLayers: calculateStageStats(jobStageTimings.map((t) => t.syncLayersMs)),
           translation: calculateStageStats(jobStageTimings.map((t) => t.translationMs)),
           totalPerPage: calculateStageStats(jobStageTimings.map((t) => t.totalMs)),
@@ -824,7 +853,7 @@ class BackgroundQueueProcessor {
     signal: AbortSignal,
     _nextPageNum?: number | null,
     _prefetch?: PrefetchPipelineController | null
-  ): Promise<{ ocrResult: OCRPageResult; renderDurationMs: number; ocrIpcDurationMs: number }> {
+  ): Promise<{ ocrResult: OCRPageResult; renderDurationMs: number; ocrIpcDurationMs: number; ocrCacheLoadDurationMs: number }> {
     const throwIfAborted = () => {
       if (signal.aborted) throw new Error('Process aborted by user');
     };
@@ -832,6 +861,7 @@ class BackgroundQueueProcessor {
     let ocrResult: OCRPageResult | null = null;
     let pageData: RenderedPageData | null = null;
     let ocrIpcDurationMs = 0;
+    const cacheLoadStartTime = performance.now();
 
     // ลองค้นหา OCR แคชจากฐานข้อมูลก่อน
     try {
@@ -884,10 +914,12 @@ class BackgroundQueueProcessor {
             }
           }
 
+          const ocrCacheLoadDurationMs = Number((performance.now() - cacheLoadStartTime).toFixed(2));
           return {
             ocrResult,
             renderDurationMs: 0,
             ocrIpcDurationMs: 0,
+            ocrCacheLoadDurationMs,
           };
         }
       }
@@ -1002,6 +1034,7 @@ class BackgroundQueueProcessor {
       ocrResult,
       renderDurationMs: pageData?.renderDurationMs || 0,
       ocrIpcDurationMs: ocrIpcDurationMs || 0,
+      ocrCacheLoadDurationMs: 0,
     };
   }
 
@@ -1023,6 +1056,13 @@ class BackgroundQueueProcessor {
       return;
     }
 
+    const activePage = useProjectStore.getState().currentPage;
+    // Step 2c Optimization: Only hydrate React UI layer store for the CURRENT visible page!
+    // Background pages are safely persisted in SQLite DB and hydrate on-demand when viewed.
+    if (pageNum !== activePage) {
+      return;
+    }
+
     try {
       const layerStore = useLayerStore.getState();
       const existingLayers = layerStore.getPageLayers(pageNum);
@@ -1033,11 +1073,11 @@ class BackgroundQueueProcessor {
 
       if (existingLayers.length === 0 || !hasUserModifications) {
         layerStore.setPageLayers(pageNum, initialLayerResult);
-        console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
+        console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for active page ${pageNum} after OCR (overwrite).`);
       } else {
         const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
         layerStore.setPageLayers(pageNum, mergedResult);
-        console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
+        console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for active page ${pageNum} after OCR.`);
       }
     } catch (err) {
       console.warn(`[QueueProcessor] Failed to initialize layers from OCR for page ${pageNum}:`, err);

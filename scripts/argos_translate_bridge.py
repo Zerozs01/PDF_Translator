@@ -203,6 +203,109 @@ def get_translation(
     return translation
 
 
+def _extract_ct2_hops(translation_obj: Any) -> List[Tuple[Any, Any, str]] | None:
+    """Extract CTranslate2 (translator, tokenizer, target_prefix) pipeline hops.
+
+    Returns None if the translation object structure cannot be decomposed into
+    CTranslate2 components (e.g. unit test mocks or custom objects), allowing safe,
+    100% backward-compatible fallback to translation.translate().
+    """
+    if translation_obj is None:
+        return None
+
+    # Unwrap CachedTranslation or wrappers
+    curr = translation_obj
+    while hasattr(curr, "underlying") and curr.underlying is not None and curr.underlying is not curr:
+        curr = curr.underlying
+
+    # CompositeTranslation (multi-hop pipeline, e.g. en -> es -> th)
+    if hasattr(curr, "t1") and hasattr(curr, "t2"):
+        h1 = _extract_ct2_hops(curr.t1)
+        h2 = _extract_ct2_hops(curr.t2)
+        if h1 is not None and h2 is not None:
+            return h1 + h2
+        return None
+
+    # PackageTranslation
+    pkg = getattr(curr, "pkg", None)
+    if pkg is None:
+        return None
+
+    translator = getattr(curr, "translator", None)
+    if translator is None:
+        try:
+            import argostranslate.settings as settings
+            import ctranslate2
+
+            model_path = str(pkg.package_path / "model")
+            translator = ctranslate2.Translator(
+                model_path,
+                device=settings.device,
+                inter_threads=settings.inter_threads,
+                intra_threads=settings.intra_threads,
+                compute_type=settings.compute_type,
+            )
+            curr.translator = translator
+        except Exception:
+            return None
+
+    tokenizer = getattr(pkg, "tokenizer", None)
+    if tokenizer is None:
+        return None
+
+    target_prefix = str(getattr(pkg, "target_prefix", "") or "")
+    return [(translator, tokenizer, target_prefix)]
+
+
+def _run_ct2_batch_hops(
+    hops: List[Tuple[Any, Any, str]],
+    texts: List[str],
+    beam_size: int | None = None,
+) -> List[str]:
+    """Execute vectorized batch translation through CTranslate2 hop pipeline.
+
+    Defaults to beam_size=4 (Argos default for exact output parity), but can be
+    configured via the ARGOS_BEAM_SIZE environment variable.
+    """
+    if not texts or not hops:
+        return texts
+
+    if beam_size is None:
+        try:
+            beam_size = int(os.getenv("ARGOS_BEAM_SIZE", "4"))
+        except ValueError:
+            beam_size = 4
+
+    current_texts = texts
+    for translator, tokenizer, target_prefix in hops:
+        tokenized_batch = [tokenizer.encode(t) for t in current_texts]
+        target_prefixes = [[target_prefix]] * len(tokenized_batch) if target_prefix else None
+
+        results = translator.translate_batch(
+            tokenized_batch,
+            target_prefix=target_prefixes,
+            beam_size=beam_size,
+            max_batch_size=2048,
+            batch_type="tokens",
+            replace_unknowns=True,
+            length_penalty=0.2,
+        )
+
+        decoded_batch: List[str] = []
+        for res in results:
+            toks = res.hypotheses[0]
+            text = tokenizer.decode(toks)
+            if target_prefix and text.startswith(target_prefix):
+                text = text[len(target_prefix):]
+            if text.startswith(" "):
+                text = text[1:]
+            decoded_batch.append(text)
+
+        current_texts = decoded_batch
+
+    return current_texts
+
+
 def translate_texts(
     argos_translate_module: Any,
     texts: List[str],
@@ -210,6 +313,7 @@ def translate_texts(
     target_language: str,
     force_noop_sentencizer: bool = False,
     stats: Dict[str, int] | None = None,
+    beam_size: int | None = None,
 ) -> List[str]:
     if stats is not None:
         stats["n_texts"] = len(texts)
@@ -218,6 +322,12 @@ def translate_texts(
         stats.setdefault("n_unique", 0)
         stats.setdefault("n_model_calls", 0)
         stats.setdefault("n_variant_calls", 0)
+
+    if beam_size is None:
+        try:
+            beam_size = int(os.getenv("ARGOS_BEAM_SIZE", "4"))
+        except ValueError:
+            beam_size = 4
 
     translation = get_translation(
         argos_translate_module,
@@ -255,42 +365,105 @@ def translate_texts(
             unique_to_translate[normalized_text] = []
         unique_to_translate[normalized_text].append(idx)
 
+    unique_texts = list(unique_to_translate.keys())
     if stats is not None:
-        stats["n_unique"] = len(unique_to_translate)
+        stats["n_unique"] = len(unique_texts)
 
-    for unique_text, indices in unique_to_translate.items():
-        cache_key = (source_language, target_language, force_noop_sentencizer, unique_text)
+    hops = _extract_ct2_hops(translation)
+    if hops is None:
+        # Fallback to legacy loop for Mock / non-CT2 objects
+        for unique_text, indices in unique_to_translate.items():
+            cache_key = (source_language, target_language, force_noop_sentencizer, unique_text)
+            if stats is not None:
+                stats["n_model_calls"] += 1
+            translated = str(translation.translate(unique_text) or "")
+
+            if target_language == "th" and (not translated or translated == unique_text or not any('\u0e00' <= c <= '\u0e7f' for c in translated)):
+                stripped = unique_text.rstrip("!?.,… ")
+                trailing_punct = unique_text[len(stripped):]
+                variants: List[str] = []
+                if stripped:
+                    variants.extend([stripped.title(), stripped.lower(), stripped.capitalize()])
+                if "ABLETO" in unique_text.upper():
+                    variants.append(re.sub(r"\bABLETO\b", "able to", unique_text, flags=re.I))
+                for variant in variants:
+                    if not variant or variant == unique_text:
+                        continue
+                    if stats is not None:
+                        stats["n_variant_calls"] += 1
+                    alt_translated = str(translation.translate(variant) or "")
+                    if alt_translated and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated):
+                        if trailing_punct and not any(alt_translated.endswith(p) for p in "!?.,…"):
+                            translated = alt_translated + trailing_punct
+                        else:
+                            translated = alt_translated
+                        break
+
+            remember_text_translation(cache_key, translated)
+            for idx in indices:
+                translations[idx] = translated
+
+        return [t if t is not None else "" for t in translations]
+
+    # --- Vectorized Fast Path (2 Waves) ---
+    # Wave 1: Main Vectorized Batch
+    if unique_texts:
         if stats is not None:
-            stats["n_model_calls"] += 1
-        translated = str(translation.translate(unique_text) or "")
+            stats["n_model_calls"] += len(unique_texts)
+        wave1_results = _run_ct2_batch_hops(hops, unique_texts, beam_size=beam_size)
+    else:
+        wave1_results = []
 
-        # OpenNMT SentencePiece Casing & Punctuation Fallback:
-        # ALL-CAPS text (e.g. "SUPPOSED", "MONEY!", "ORGASM!!") or mixed-case OCR artifacts (e.g. "HEiR!", "WINDiNG")
-        # confuses OpenNMT subword tokenizers. If translation produced no target script (e.g. Thai),
-        # strip punctuation and retry with Title-case ("Money") or Lower-case ("money").
-        if target_language == "th" and (not translated or translated == unique_text or not any('\u0e00' <= c <= '\u0e7f' for c in translated)):
-            stripped = unique_text.rstrip("!?.,… ")
-            trailing_punct = unique_text[len(stripped):]
-            variants: List[str] = []
-            if stripped:
-                variants.extend([stripped.title(), stripped.lower(), stripped.capitalize()])
-            if "ABLETO" in unique_text.upper():
-                variants.append(re.sub(r"\bABLETO\b", "able to", unique_text, flags=re.I))
-            for variant in variants:
-                if not variant or variant == unique_text:
-                    continue
-                if stats is not None:
-                    stats["n_variant_calls"] += 1
-                alt_translated = str(translation.translate(variant) or "")
-                if alt_translated and any('\u0e00' <= c <= '\u0e7f' for c in alt_translated):
-                    if trailing_punct and not any(alt_translated.endswith(p) for p in "!?.,…"):
-                        translated = alt_translated + trailing_punct
+    unique_results: Dict[str, str] = dict(zip(unique_texts, wave1_results))
+
+    # Wave 2: Vectorized Variant Fallback (Uses beam_size=max(beam_size, 4) for high-accuracy artifact fallback)
+    needs_retry: List[str] = []
+    variants_by_word: Dict[str, Tuple[List[str], str]] = {}
+    all_unique_variants: List[str] = []
+    seen_variants = set()
+
+    if target_language == "th":
+        for u_text in unique_texts:
+            t_res = unique_results[u_text]
+            if not t_res or t_res == u_text or not any('\u0e00' <= c <= '\u0e7f' for c in t_res):
+                stripped = u_text.rstrip("!?.,… ")
+                trailing_punct = u_text[len(stripped):]
+                word_vars: List[str] = []
+                if stripped:
+                    word_vars.extend([stripped.title(), stripped.lower(), stripped.capitalize()])
+                if "ABLETO" in u_text.upper():
+                    word_vars.append(re.sub(r"\bABLETO\b", "able to", u_text, flags=re.I))
+
+                filtered_vars = [v for v in word_vars if v and v != u_text]
+                if filtered_vars:
+                    needs_retry.append(u_text)
+                    variants_by_word[u_text] = (filtered_vars, trailing_punct)
+                    for v in filtered_vars:
+                        if v not in seen_variants:
+                            seen_variants.add(v)
+                            all_unique_variants.append(v)
+
+    if all_unique_variants:
+        if stats is not None:
+            stats["n_variant_calls"] += len(all_unique_variants)
+        retry_results = _run_ct2_batch_hops(hops, all_unique_variants, beam_size=max(beam_size, 4))
+        variant_translation_map = dict(zip(all_unique_variants, retry_results))
+
+        for u_text in needs_retry:
+            vars_list, trailing_punct = variants_by_word[u_text]
+            for var in vars_list:
+                alt_trans = variant_translation_map.get(var, "")
+                if alt_trans and any('\u0e00' <= c <= '\u0e7f' for c in alt_trans):
+                    if trailing_punct and not any(alt_trans.endswith(p) for p in "!?.,…"):
+                        unique_results[u_text] = alt_trans + trailing_punct
                     else:
-                        translated = alt_translated
+                        unique_results[u_text] = alt_trans
                     break
 
+    for u_text, translated in unique_results.items():
+        cache_key = (source_language, target_language, force_noop_sentencizer, u_text)
         remember_text_translation(cache_key, translated)
-        for idx in indices:
+        for idx in unique_to_translate[u_text]:
             translations[idx] = translated
 
     return [t if t is not None else "" for t in translations]
@@ -454,14 +627,37 @@ def process_payload(payload: Dict[str, Any], stats: Dict[str, int] | None = None
     if engine == "m2m100":
         return process_m2m_payload(payload)
 
+    source_language = normalize_language(payload.get("sourceLanguage"), "en")
+    target_language = normalize_language(payload.get("targetLanguage"), "th")
+
+    if payload.get("action") == "prewarm":
+        argos_translate_module = get_argos_translate_module()
+        validate_languages(argos_translate_module, source_language, target_language)
+        translation = get_translation(
+            argos_translate_module,
+            source_language,
+            target_language,
+            force_noop_sentencizer=True,
+        )
+        hops = _extract_ct2_hops(translation)
+        if hops is not None:
+            _ = _run_ct2_batch_hops(hops, ["Hello"])
+        else:
+            _ = translation.translate("Hello")
+        return {
+            "ok": True,
+            "action": "prewarm",
+            "prewarmed": True,
+            "engine": "argos",
+            "sourceLanguage": source_language,
+            "targetLanguage": target_language,
+        }
+
     raw_texts = payload.get("texts", [])
     if not isinstance(raw_texts, list):
         raise ValueError("Field 'texts' must be an array")
 
     texts: List[str] = [str(item or "") for item in raw_texts]
-    source_language = normalize_language(payload.get("sourceLanguage"), "en")
-    target_language = normalize_language(payload.get("targetLanguage"), "th")
-
     argos_translate_module = get_argos_translate_module()
     validate_languages(argos_translate_module, source_language, target_language)
 
@@ -479,6 +675,14 @@ def process_payload(payload: Dict[str, Any], stats: Dict[str, int] | None = None
             "translations": texts,
         }
 
+    beam_size_arg = payload.get("beamSize") if payload.get("beamSize") is not None else payload.get("beam_size")
+    beam_size: int | None = None
+    if beam_size_arg is not None:
+        try:
+            beam_size = int(beam_size_arg)
+        except ValueError:
+            beam_size = None
+
     fallback_reason: str | None = None
     force_noop = (
         os.getenv("ARGOS_FORCE_NOOP_SENTENCIZER", "1") == "1"
@@ -495,6 +699,7 @@ def process_payload(payload: Dict[str, Any], stats: Dict[str, int] | None = None
             target_language,
             force_noop_sentencizer=True,
             stats=stats,
+            beam_size=beam_size,
         )
     else:
         try:
@@ -505,6 +710,7 @@ def process_payload(payload: Dict[str, Any], stats: Dict[str, int] | None = None
                 target_language,
                 force_noop_sentencizer=False,
                 stats=stats,
+                beam_size=beam_size,
             )
         except Exception as primary_error:
             if not is_sentence_split_network_error(primary_error):
@@ -518,6 +724,7 @@ def process_payload(payload: Dict[str, Any], stats: Dict[str, int] | None = None
                 target_language,
                 force_noop_sentencizer=True,
                 stats=stats,
+                beam_size=beam_size,
             )
 
     output: Dict[str, Any] = {

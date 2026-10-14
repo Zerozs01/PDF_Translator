@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { OCREngine, OCRPageResult } from '../../types';
 import type { TranslationMode } from '../../stores/useProjectStore';
+import { useProjectStore } from '../../stores/useProjectStore';
 import { useOCRTextLayerStore, buildOCRTranslationCacheKey } from '../../stores/useOCRTextLayerStore';
 import { useLayerStore } from '../../stores/useLayerStore';
 import { dbService } from '../../services/dbService';
@@ -84,24 +85,33 @@ export async function persistTranslationResultCore({
   if (isActiveDoc) {
     const ocrState = useOCRTextLayerStore.getState();
     ocrState.setTranslationCacheEntry(pageNum, cacheKey, translationEntry);
-    ocrState.setTranslationPreviewMode('translated');
 
-    try {
-      const layerStore = useLayerStore.getState();
-      const pageLayers = layerStore.getPageLayers(pageNum);
-      const existingGroups = layerStore.getPageGroups(pageNum);
-      const hasUserModifications = pageLayers.some((l) => l.userEdited || l.id.startsWith('manual-layer-'))
-        || existingGroups.some((g) => g.userCreated);
+    const activePage = useProjectStore.getState().currentPage;
+    const isCurrentVisiblePage = activePage === pageNum;
 
-      const freshResult = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
-      if (pageLayers.length > 0 && hasUserModifications) {
-        const merged = mergeLayersAndGroups(freshResult, pageLayers, existingGroups);
-        layerStore.setPageLayers(pageNum, merged);
-      } else {
-        layerStore.setPageLayers(pageNum, freshResult);
+    // Step 2c Optimization: Only hydrate LayerStore & set preview mode if this page is actively visible.
+    // For non-visible background pages, entries are safely persisted to SQLite DB and ocrState cache,
+    // avoiding massive React layout thrashing / GC freeze during bulk translation.
+    if (isCurrentVisiblePage) {
+      ocrState.setTranslationPreviewMode('translated');
+
+      try {
+        const layerStore = useLayerStore.getState();
+        const pageLayers = layerStore.getPageLayers(pageNum);
+        const existingGroups = layerStore.getPageGroups(pageNum);
+        const hasUserModifications = pageLayers.some((l) => l.userEdited || l.id.startsWith('manual-layer-'))
+          || existingGroups.some((g) => g.userCreated);
+
+        const freshResult = buildLayerGroupsFromOCR(pageOCR, translatedByIndex);
+        if (pageLayers.length > 0 && hasUserModifications) {
+          const merged = mergeLayersAndGroups(freshResult, pageLayers, existingGroups);
+          layerStore.setPageLayers(pageNum, merged);
+        } else {
+          layerStore.setPageLayers(pageNum, freshResult);
+        }
+      } catch (err) {
+        console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
       }
-    } catch (err) {
-      console.warn('[TranslationSync] Failed to synchronize translation back to Layer Store:', err);
     }
   }
 
