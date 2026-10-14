@@ -131,7 +131,8 @@ export async function translateBatchOffline(
   sourceLanguage: string,
   targetLanguage: string,
   offlineBatchBridge: (texts: string[], options: any) => Promise<string[]>,
-  engine?: string
+  engine?: string,
+  profileContext: string = 'main'
 ): Promise<string[]> {
   if (texts.length === 0) return [];
 
@@ -218,6 +219,7 @@ export async function translateBatchOffline(
         sourceLanguage: normalizedSource,
         targetLanguage: 'en',
         engine: engine || 'argos',
+        profileTag: `${profileContext}:pivot_1`,
       });
 
       // Step 2: English -> Thai
@@ -233,6 +235,7 @@ export async function translateBatchOffline(
         sourceType: type,
         sourceLanguage: 'en',
         targetLanguage: normalizedTarget,
+        profileTag: `${profileContext}:pivot_2`,
       });
 
       indicesToTranslate.forEach((originalIndex, i) => {
@@ -257,6 +260,7 @@ export async function translateBatchOffline(
     sourceLanguage: normalizedSource,
     targetLanguage: normalizedTarget,
     engine: engine || 'argos',
+    profileTag: `${profileContext}:direct`,
   }).catch((err) => {
     console.error(`[translateBatchOffline] Direct translation call failed for ${normalizedSource}->${normalizedTarget}:`, err);
     return new Array<string>(preparedTexts.length).fill('');
@@ -308,6 +312,7 @@ export async function translateBatchOffline(
         sourceType: type,
         sourceLanguage: normalizedSource,
         targetLanguage: normalizedTarget,
+        profileTag: `${profileContext}:internal_retry`,
       });
 
       retriesPending.forEach((retry, batchIdx) => {

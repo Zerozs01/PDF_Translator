@@ -453,7 +453,12 @@ export function useDocumentTranslation({
     const coordinatorEngineId = engine === 'offline' ? 'argos' : (engine === 'ai' ? 'gemini' : 'm2m100');
     let effectiveEngine: 'offline' | 'ai' | 'm2m100' = engine;
     let fallbackNote = '';
+    let coordinator_ms = 0;
+    let group_retry_ms = 0;
+    let line_retry_ms = 0;
+    let post_persist_ms = 0;
 
+    const tCoord0 = performance.now();
     try {
       const translationResults = await translationCoordinator.runTranslation(
         coordinatorEngineId,
@@ -507,6 +512,8 @@ export function useDocumentTranslation({
         console.error('[TranslationCoordinator] Run translation error:', err);
         throw err;
       }
+    } finally {
+      coordinator_ms = performance.now() - tCoord0;
     }
 
     let translatedGroups = translatedGroupsRaw.map((text, index) => {
@@ -548,6 +555,7 @@ export function useDocumentTranslation({
     }
 
     // 3. Evaluate Group Retries
+    const tGroup0 = performance.now();
     const { groupLineOverrides, groupRetryAppliedCount } = await evaluateAndApplyGroupRetries({
       preparedGroups: plan.preparedGroups,
       translatedGroups,
@@ -556,6 +564,7 @@ export function useDocumentTranslation({
       normalizedTargetLanguage,
       targetLanguage: options?.targetLanguage || targetLanguage,
     });
+    group_retry_ms = performance.now() - tGroup0;
 
     // 4. Redistribute translated groups into line-level text
     const translatedByIndex = redistributeTranslatedGroups(plan, translatedGroups, groupLineOverrides);
@@ -576,6 +585,7 @@ export function useDocumentTranslation({
       }
     });
 
+    const tLine0 = performance.now();
     const { appliedMap: retryAppliedMap, retryAppliedCount } = await applyLineLevelRetries(
       retryLineMap,
       effectiveEngine,
@@ -585,6 +595,7 @@ export function useDocumentTranslation({
       options?.targetLanguage || targetLanguage,
       buildGeminiContextOverrides(effectiveTranslationMode, plan.translationSourceLanguage, normalizedTargetLanguage)
     );
+    line_retry_ms = performance.now() - tLine0;
 
     retryAppliedMap.forEach((text, index) => {
       translatedByIndex.set(index, text);
@@ -622,6 +633,7 @@ export function useDocumentTranslation({
     }
 
     // 7. Persist Result & Sync Stores
+    const tPersist0 = performance.now();
     await persistTranslationResult({
       pageNum,
       pageOCR: plan.pageOCR,
@@ -636,6 +648,19 @@ export function useDocumentTranslation({
       isActiveDoc,
       cacheDocId: matchedDocId,
     });
+    post_persist_ms = performance.now() - tPersist0;
+
+    if (typeof window !== 'undefined' && window.localStorage?.getItem('pdf_translator_argos_profile') === '1') {
+      const pageTimings = ((window as any).__PAGE_TRANSLATION_TIMINGS__ = (window as any).__PAGE_TRANSLATION_TIMINGS__ || []);
+      pageTimings.push({
+        pageNum,
+        coordinator_ms: Number(coordinator_ms.toFixed(2)),
+        group_retry_ms: Number(group_retry_ms.toFixed(2)),
+        line_retry_ms: Number(line_retry_ms.toFixed(2)),
+        post_persist_ms: Number(post_persist_ms.toFixed(2)),
+        total_page_trans_ms: Number((coordinator_ms + group_retry_ms + line_retry_ms + post_persist_ms).toFixed(2)),
+      });
+    }
 
     const totalPageCaches = useOCRTextLayerStore.getState().getTranslationCacheEntries(pageNum).length;
     const groupRetryHint = groupRetryAppliedCount > 0 ? ` group retries applied: ${groupRetryAppliedCount}.` : '';

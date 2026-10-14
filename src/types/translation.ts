@@ -29,7 +29,7 @@ export interface TranslationEngine {
       sourceLanguage: string;
       targetLanguage: string;
       translationMode: string;
-      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string, profileContext?: string) => Promise<string[]>;
       translateBatchGemini?: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]>;

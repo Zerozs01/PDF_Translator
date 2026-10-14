@@ -36,10 +36,15 @@ interface RenderedPageData {
 
 interface PageStageTimings {
   pageNum: number;
+  queueWaitMs: number;
   renderMs: number;
   ocrIpcMs: number;
+  ocrCacheLoadMs: number;
+  ocrStageWallMs: number;
   syncLayersMs: number;
+  transQueueWaitMs: number;
   translationMs: number;
+  slotHoldMs: number;
   totalMs: number;
 }
 
@@ -58,6 +63,13 @@ function calculateStageStats(values: number[]) {
     maxMs: Number(sorted[sorted.length - 1].toFixed(2)),
     count: sorted.length,
   };
+}
+
+function calculatePercentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.ceil((p / 100) * sorted.length) - 1;
+  return Number((sorted[Math.max(0, Math.min(sorted.length - 1, index))] || 0).toFixed(2));
 }
 
 import { ConcurrencyLimiter } from './ConcurrencyLimiter';
@@ -382,6 +394,19 @@ class BackgroundQueueProcessor {
    * ประมวลผลงาน (Job) ทีละหน้า
    */
   private async processJob(job: BackgroundJob, signal: AbortSignal): Promise<void> {
+    const jobStartTime = performance.now();
+    const isArgosProfiling = typeof window !== 'undefined' && window.localStorage?.getItem('pdf_translator_argos_profile') === '1';
+    if (isArgosProfiling && typeof window !== 'undefined') {
+      (window as any).__ARGOS_IPC_LOG__ = [];
+      (window as any).__PAGE_TRANSLATION_TIMINGS__ = [];
+      (window as any).__ARGOS_COORDINATOR_STATS__ = {
+        n_dict_hits: 0,
+        n_mem_cache_hits: 0,
+        n_db_sentence_cache_hits: 0,
+        n_engine_calls: 0,
+      };
+    }
+
     const throwIfAborted = () => {
       if (signal.aborted) {
         throw new Error('Process aborted by user');
@@ -394,6 +419,7 @@ class BackgroundQueueProcessor {
     }
 
     // 0. Prewarm engine with idempotent key and 60s timeout
+    let prewarmDurationMs = 0;
     const prewarmStartTime = performance.now();
     try {
       const prewarmTimeout = new Promise((_, reject) =>
@@ -406,11 +432,27 @@ class BackgroundQueueProcessor {
         }),
         prewarmTimeout,
       ]);
-      console.log(`[QueueProcessor] Prewarm ready in ${(performance.now() - prewarmStartTime).toFixed(1)}ms`);
+      prewarmDurationMs = Number((performance.now() - prewarmStartTime).toFixed(2));
+      console.log(`[QueueProcessor] Prewarm ready in ${prewarmDurationMs}ms`);
     } catch (prewarmErr) {
+      prewarmDurationMs = Number((performance.now() - prewarmStartTime).toFixed(2));
       console.warn('[QueueProcessor] Prewarm skipped or failed:', prewarmErr);
       this.prewarmedKey = null;
       this.activePrewarmPromise = null;
+    }
+
+    // Eager Prewarm Argos worker for translation jobs (ADR-0009 Phase 1)
+    if (this.isTranslationJob(job) && window.electronAPI?.translate?.offlineBatch) {
+      window.electronAPI.translate.offlineBatch(['Hello'], {
+        profileTag: 'prewarm',
+        sourceLanguage: job.sourceLanguage || 'en',
+        targetLanguage: job.targetLanguage || 'th',
+        mode: 'manga',
+        sourceType: 'text',
+        engine: 'argos',
+      }).catch((err) => {
+        console.warn('[QueueProcessor] Eager Argos prewarm dispatch warning:', err);
+      });
     }
 
     // 1. โหลดข้อมูลไฟล์ PDF จาก filesystem มาเป็น ArrayBuffer
@@ -509,12 +551,17 @@ class BackgroundQueueProcessor {
 
     const processPageTask = async (pageNum: number): Promise<void> => {
       throwIfAborted();
+      const taskEnqueueTime = performance.now();
+      let queueWaitMs = 0;
 
       await inFlightLimiter.run(async () => {
         throwIfAborted();
+        const slotEnterTime = performance.now();
+        queueWaitMs = Number((slotEnterTime - taskEnqueueTime).toFixed(2));
 
         // ── Stage 1: GPU/CPU OCR Stage (Render Canvas + OCR IPC strictly inside ocrStageLimiter) ──
-        const { ocrResult, renderDurationMs, ocrIpcDurationMs } = await ocrStageLimiter.run(async () => {
+        const ocrStageStartTime = performance.now();
+        const { ocrResult, renderDurationMs, ocrIpcDurationMs, ocrCacheLoadDurationMs } = await ocrStageLimiter.run(async () => {
           throwIfAborted();
           updateMonotonicProgress(
             Math.round((processedOcrCount / pagesCount) * progressScale),
@@ -526,6 +573,7 @@ class BackgroundQueueProcessor {
 
           return await this.executePageOCR(pdfDoc, job, pageNum, signal);
         });
+        const ocrStageWallMs = Number((performance.now() - ocrStageStartTime).toFixed(2));
         // <-- ocrStageLimiter slot is released immediately! Next page starts GPU OCR right now!
 
         throwIfAborted();
@@ -576,11 +624,16 @@ class BackgroundQueueProcessor {
 
         const pageTiming: PageStageTimings = {
           pageNum,
+          queueWaitMs,
           renderMs: Number(renderDurationMs.toFixed(2)),
           ocrIpcMs: Number(ocrIpcDurationMs.toFixed(2)),
+          ocrCacheLoadMs: Number(ocrCacheLoadDurationMs.toFixed(2)),
+          ocrStageWallMs,
           syncLayersMs: Number(syncLayersDurationMs.toFixed(2)),
+          transQueueWaitMs: 0,
           translationMs: 0,
-          totalMs: Number((renderDurationMs + ocrIpcDurationMs + syncLayersDurationMs).toFixed(2)),
+          slotHoldMs: 0,
+          totalMs: Number((renderDurationMs + ocrIpcDurationMs + ocrCacheLoadDurationMs + syncLayersDurationMs).toFixed(2)),
         };
         jobStageTimings.push(pageTiming);
 
@@ -593,7 +646,9 @@ class BackgroundQueueProcessor {
         // ── Stage 2: CPU Translation Stage ──
         if (isTrans) {
           throwIfAborted();
+          const transQueueStartTime = performance.now();
           await translationStageLimiter.run(async () => {
+            pageTiming.transQueueWaitMs = Number((performance.now() - transQueueStartTime).toFixed(2));
             if (signal.aborted) return;
             const transStartMark = `job-${job.id}-p${pageNum}-trans-start`;
             const transEndMark = `job-${job.id}-p${pageNum}-trans-end`;
@@ -606,7 +661,7 @@ class BackgroundQueueProcessor {
               try {
                 const m = performance.measure(transMeasureName, transStartMark, transEndMark);
                 pageTiming.translationMs = Number(m.duration.toFixed(2));
-                pageTiming.totalMs = Number((pageTiming.renderMs + pageTiming.ocrIpcMs + pageTiming.syncLayersMs + pageTiming.translationMs).toFixed(2));
+                pageTiming.totalMs = Number((pageTiming.renderMs + pageTiming.ocrIpcMs + pageTiming.ocrCacheLoadMs + pageTiming.syncLayersMs + pageTiming.translationMs).toFixed(2));
                 performance.clearMarks(transStartMark);
                 performance.clearMarks(transEndMark);
               } catch {}
@@ -622,12 +677,14 @@ class BackgroundQueueProcessor {
         processedCount++;
         successPagesCount++;
 
-        // Periodic driver cache clear every 8 completed pages
-        if (processedCount % 8 === 0 && window.electronAPI?.ocr?.clearCudaCache) {
+        // Periodic driver cache clear every 8 completed pages (only when GPU OCR ran on this page)
+        if (processedCount % 8 === 0 && pageTiming.ocrIpcMs > 0 && window.electronAPI?.ocr?.clearCudaCache) {
           try {
             await window.electronAPI.ocr.clearCudaCache({ engine: job.engine });
           } catch {}
         }
+
+        pageTiming.slotHoldMs = Number((performance.now() - slotEnterTime).toFixed(2));
       });
     };
 
@@ -676,12 +733,119 @@ class BackgroundQueueProcessor {
       console.log(`[QueueProcessor] Engine: ${job.engine} | Pages Measured: ${jobStageTimings.length}`);
       console.log(`[QueueProcessor] =======================================================`);
       console.table({
+        '0a. Limiter Queue Wait Time': calculateStageStats(jobStageTimings.map(t => t.queueWaitMs)),
+        '0b. Translation Queue Wait': calculateStageStats(jobStageTimings.map(t => t.transQueueWaitMs)),
         '1. Render (Headless 300DPI)': calculateStageStats(jobStageTimings.map(t => t.renderMs)),
         '2. OCR (IPC Round-Trip)': calculateStageStats(jobStageTimings.map(t => t.ocrIpcMs)),
+        '2a. OCR Cache Load (DB Hit)': calculateStageStats(jobStageTimings.map(t => t.ocrCacheLoadMs)),
+        '2b. OCR Stage Wall Time': calculateStageStats(jobStageTimings.map(t => t.ocrStageWallMs)),
         '3. Sync Page Layers': calculateStageStats(jobStageTimings.map(t => t.syncLayersMs)),
         '4. Translation': calculateStageStats(jobStageTimings.map(t => t.translationMs)),
+        '5. In-Flight Slot Hold Time': calculateStageStats(jobStageTimings.map(t => t.slotHoldMs)),
         'Total Per Page Pipeline': calculateStageStats(jobStageTimings.map(t => t.totalMs)),
       });
+    }
+
+    const jobWallClockMs = Number((performance.now() - jobStartTime).toFixed(2));
+
+    if (isArgosProfiling && typeof window !== 'undefined') {
+      const ipcLogs: Array<{
+        seq: number;
+        tag: string;
+        n_texts: number;
+        t_start_epoch_ms: number;
+        ipc_ms: number;
+        ipc_status: 'ok' | 'bad_response' | 'exception_or_timeout';
+      }> = (window as any).__ARGOS_IPC_LOG__ || [];
+
+      interface IpcTagStat {
+        calls: number;
+        totalMs: number;
+        meanMs: number;
+        minMs: number;
+        maxMs: number;
+        p95Ms: number;
+        badResponseCount: number;
+        exceptionOrTimeoutCount: number;
+      }
+
+      const byTag: Record<string, IpcTagStat> = {};
+      ipcLogs.forEach((log) => {
+        const tag = log.tag || 'untagged';
+        if (!byTag[tag]) {
+          byTag[tag] = {
+            calls: 0,
+            totalMs: 0,
+            meanMs: 0,
+            minMs: Infinity,
+            maxMs: -Infinity,
+            p95Ms: 0,
+            badResponseCount: 0,
+            exceptionOrTimeoutCount: 0,
+          };
+        }
+        const s = byTag[tag];
+        s.calls++;
+        s.totalMs += log.ipc_ms;
+        s.minMs = Math.min(s.minMs, log.ipc_ms);
+        s.maxMs = Math.max(s.maxMs, log.ipc_ms);
+        if (log.ipc_status === 'bad_response') s.badResponseCount++;
+        if (log.ipc_status === 'exception_or_timeout') s.exceptionOrTimeoutCount++;
+      });
+
+      Object.keys(byTag).forEach((tag) => {
+        const s = byTag[tag];
+        s.totalMs = Number(s.totalMs.toFixed(2));
+        s.meanMs = Number((s.totalMs / Math.max(1, s.calls)).toFixed(2));
+        s.minMs = s.minMs === Infinity ? 0 : Number(s.minMs.toFixed(2));
+        s.maxMs = s.maxMs === -Infinity ? 0 : Number(s.maxMs.toFixed(2));
+        const tagIpcTimes = ipcLogs.filter((l) => (l.tag || 'untagged') === tag).map((l) => l.ipc_ms);
+        s.p95Ms = calculatePercentile(tagIpcTimes, 95);
+      });
+
+      const allIpcTimes = ipcLogs.map((l) => l.ipc_ms);
+      const badResponseCount = ipcLogs.filter((l) => l.ipc_status === 'bad_response').length;
+      const exceptionOrTimeoutCount = ipcLogs.filter((l) => l.ipc_status === 'exception_or_timeout').length;
+      const p95_ipc_ms = calculatePercentile(allIpcTimes, 95);
+
+      const report = {
+        jobId: job.id,
+        filename: job.filename,
+        engine: job.engine,
+        jobWallClockMs,
+        prewarmMs: prewarmDurationMs,
+        pagesMeasured: jobStageTimings.length,
+        stageTimings: {
+          queueWait: calculateStageStats(jobStageTimings.map((t) => t.queueWaitMs)),
+          transQueueWait: calculateStageStats(jobStageTimings.map((t) => t.transQueueWaitMs)),
+          render: calculateStageStats(jobStageTimings.map((t) => t.renderMs)),
+          ocrIpc: calculateStageStats(jobStageTimings.map((t) => t.ocrIpcMs)),
+          ocrCacheLoad: calculateStageStats(jobStageTimings.map((t) => t.ocrCacheLoadMs)),
+          ocrStageWall: calculateStageStats(jobStageTimings.map((t) => t.ocrStageWallMs)),
+          syncLayers: calculateStageStats(jobStageTimings.map((t) => t.syncLayersMs)),
+          translation: calculateStageStats(jobStageTimings.map((t) => t.translationMs)),
+          slotHold: calculateStageStats(jobStageTimings.map((t) => t.slotHoldMs)),
+          totalPerPage: calculateStageStats(jobStageTimings.map((t) => t.totalMs)),
+        },
+        pageTranslationBreakdown: (window as any).__PAGE_TRANSLATION_TIMINGS__ || [],
+        coordinatorStats: (window as any).__ARGOS_COORDINATOR_STATS__ || {},
+        ipcSummary: {
+          totalCalls: ipcLogs.length,
+          badResponseCount,
+          exceptionOrTimeoutCount,
+          p95_ipc_ms,
+          byTag,
+        },
+      };
+
+      (window as any).__LAST_ARGOS_BENCHMARK_REPORT__ = report;
+
+      console.log(`\n[QueueProcessor] =======================================================`);
+      console.log(`[QueueProcessor] ARGOS BENCHMARK REPORT (ADR-0009 Phase 0)`);
+      console.log(`[QueueProcessor] Job Wall Clock: ${jobWallClockMs}ms | IPC Calls: ${ipcLogs.length} | p95 IPC: ${p95_ipc_ms}ms | Non-OK Statuses: ${badResponseCount + exceptionOrTimeoutCount}`);
+      console.log(`[QueueProcessor] =======================================================`);
+      console.table(byTag);
+      console.log('[QueueProcessor] Full report available at window.__LAST_ARGOS_BENCHMARK_REPORT__:', report);
     }
 
     if (translationErrors.length > 0) {
@@ -708,7 +872,7 @@ class BackgroundQueueProcessor {
     signal: AbortSignal,
     _nextPageNum?: number | null,
     _prefetch?: PrefetchPipelineController | null
-  ): Promise<{ ocrResult: OCRPageResult; renderDurationMs: number; ocrIpcDurationMs: number }> {
+  ): Promise<{ ocrResult: OCRPageResult; renderDurationMs: number; ocrIpcDurationMs: number; ocrCacheLoadDurationMs: number }> {
     const throwIfAborted = () => {
       if (signal.aborted) throw new Error('Process aborted by user');
     };
@@ -716,6 +880,7 @@ class BackgroundQueueProcessor {
     let ocrResult: OCRPageResult | null = null;
     let pageData: RenderedPageData | null = null;
     let ocrIpcDurationMs = 0;
+    const cacheLoadStartTime = performance.now();
 
     // ลองค้นหา OCR แคชจากฐานข้อมูลก่อน
     try {
@@ -759,7 +924,10 @@ class BackgroundQueueProcessor {
           }
 
           const activeFile = useProjectStore.getState().file;
-          if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+          const activeDocId = useProjectStore.getState().documentId;
+          const activeCurrentPage = useProjectStore.getState().currentPage;
+          // Step 2d: Selective Store Hydration - only hydrate for active visible page
+          if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
             useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
             const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
               || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
@@ -768,10 +936,12 @@ class BackgroundQueueProcessor {
             }
           }
 
+          const ocrCacheLoadDurationMs = Number((performance.now() - cacheLoadStartTime).toFixed(2));
           return {
             ocrResult,
             renderDurationMs: 0,
             ocrIpcDurationMs: 0,
+            ocrCacheLoadDurationMs,
           };
         }
       }
@@ -833,7 +1003,6 @@ class BackgroundQueueProcessor {
         ocrResult = await ocrPromise;
 
         performance.mark(ocrEndMark);
-        let ocrIpcDurationMs = 0;
         try {
           const m = performance.measure(ocrMeasureName, ocrStartMark, ocrEndMark);
           ocrIpcDurationMs = m.duration;
@@ -872,7 +1041,10 @@ class BackgroundQueueProcessor {
       ocrResult = processAndCleanOCR(ocrResult, job.engine, job);
 
       const activeFile = useProjectStore.getState().file;
-      if (activeFile && useProjectStore.getState().documentId === job.documentId) {
+      const activeDocId = useProjectStore.getState().documentId;
+      const activeCurrentPage = useProjectStore.getState().currentPage;
+      // Step 2d: Selective Store Hydration - only hydrate for active visible page
+      if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
         useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
         const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
           || useOCRTextLayerStore.getState().allPagesOCR.get(pageNum);
@@ -886,6 +1058,7 @@ class BackgroundQueueProcessor {
       ocrResult,
       renderDurationMs: pageData?.renderDurationMs || 0,
       ocrIpcDurationMs: ocrIpcDurationMs || 0,
+      ocrCacheLoadDurationMs: 0,
     };
   }
 
@@ -907,6 +1080,13 @@ class BackgroundQueueProcessor {
       return;
     }
 
+    const activePage = useProjectStore.getState().currentPage;
+    // Step 2c Optimization: Only hydrate React UI layer store for the CURRENT visible page!
+    // Background pages are safely persisted in SQLite DB and hydrate on-demand when viewed.
+    if (pageNum !== activePage) {
+      return;
+    }
+
     try {
       const layerStore = useLayerStore.getState();
       const existingLayers = layerStore.getPageLayers(pageNum);
@@ -917,11 +1097,11 @@ class BackgroundQueueProcessor {
 
       if (existingLayers.length === 0 || !hasUserModifications) {
         layerStore.setPageLayers(pageNum, initialLayerResult);
-        console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for page ${pageNum} after OCR (overwrite).`);
+        console.log(`[QueueProcessor] Initialized ${initialLayerResult.layers.length} layers in ${initialLayerResult.groups.length} groups for active page ${pageNum} after OCR (overwrite).`);
       } else {
         const mergedResult = mergeLayersAndGroups(initialLayerResult, existingLayers, existingGroups);
         layerStore.setPageLayers(pageNum, mergedResult);
-        console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for page ${pageNum} after OCR.`);
+        console.log(`[QueueProcessor] Merged ${mergedResult.layers.length} layers in ${mergedResult.groups.length} groups for active page ${pageNum} after OCR.`);
       }
     } catch (err) {
       console.warn(`[QueueProcessor] Failed to initialize layers from OCR for page ${pageNum}:`, err);

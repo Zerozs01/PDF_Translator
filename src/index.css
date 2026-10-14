@@ -93,4 +93,19 @@ form,
   box-shadow: 0 0 12px rgba(139, 92, 246, 0.7), 0 4px 10px rgba(0,0,0,0.3) !important;
 }
 
+/* Export overlay animations: kept in bundled CSS because runtime <style> tags
+   have no nonce and are blocked by the production CSP. */
+@keyframes export-scan {
+  0% { transform: translateY(0px); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translateY(75px); opacity: 0; }
+}
+@keyframes export-float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+.export-anim-scan { animation: export-scan 2.8s linear infinite; }
+.export-anim-float { animation: export-float 4s ease-in-out infinite; }
+
 

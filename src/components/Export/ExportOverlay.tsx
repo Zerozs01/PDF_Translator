@@ -42,8 +42,7 @@ export const ExportOverlay: React.FC = () => {
             viewBox="0 0 120 120"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
-            className="relative"
-            style={{ animation: 'float 4s ease-in-out infinite' }}
+            className="relative export-anim-float"
           >
             {/* Back Page (Shadow) */}
             <path
@@ -78,25 +77,12 @@ export const ExportOverlay: React.FC = () => {
             <rect x="50" y="85" width="30" height="6" rx="2" fill="#6366F1" opacity="0.4" />
 
             {/* Glowing Scan Line (Laser) */}
-            <g style={{ animation: 'scan 2.8s linear infinite' }}>
+            <g className="export-anim-scan">
               <rect x="36" y="20" width="48" height="2" fill="#22D3EE" />
               <rect x="36" y="18" width="48" height="6" fill="#22D3EE" opacity="0.2" filter="blur(2px)" />
             </g>
           </svg>
 
-          {/* Micro Animation CSS */}
-          <style>{`
-            @keyframes scan {
-              0% { transform: translateY(0px); opacity: 0; }
-              10% { opacity: 1; }
-              90% { opacity: 1; }
-              100% { transform: translateY(75px); opacity: 0; }
-            }
-            @keyframes float {
-              0%, 100% { transform: translateY(0px); }
-              50% { transform: translateY(-6px); }
-            }
-          `}</style>
 
           {/* Processing Glowing Indicator */}
           <div className="absolute bottom-3 right-3 flex items-center gap-2 px-2.5 py-1 bg-slate-950/80 border border-slate-800 rounded-full shadow-inner">

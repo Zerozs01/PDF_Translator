@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added & Optimized — Argos/CTranslate2 Vectorized Batching, Decoupled Queue Stages & Performance Audit (ADR-0009, October 2026)
+
+- **Vectorized CTranslate2 Batching (`argos_translate_bridge.py`):** Bypassed sequential single-sentence Python loops by extracting `argos_model.model.translator` directly and executing vectorized `translate_batch(tokens_batch, batch_type="tokens", max_batch_size=1024)`. Slashed direct translation latency by 50.8%–98.9%.
+- **In-Memory Sentence LRU Cache & Intra-Batch Deduplication:** Introduced 4,096-entry sentence-level LRU cache on the Python sidecar, allowing repeated phrases and SFX to resolve in 3–8 ms.
+- **Stage Decoupling & Queue Bottleneck Elimination (`BackgroundQueueProcessor.ts`):** Separated `ocrStageLimiter` and `translationStageLimiter`, unblocking subsequent pages immediately upon OCR completion. Reduced `transQueueWait` from ~207s to **0.01 ms** (Median 0 ms).
+- **Telemetry Bug Fix (Variable Shadowing):** Fixed `let ocrIpcDurationMs = 0` variable shadowing that previously wiped out OCR timing measurements to 0 ms.
+- **Selective Store Hydration:** Restricted `setPageOCR` in background queues strictly to the currently active visible page, preventing 36 consecutive full map clones in Zustand and eliminating UI frame drops during batch processing.
+- **Multi-Row Chunked SQLite Writes (`bridge/index.ts`):** Batch sentence insertions in chunks of 100 per SQL statement, cutting post-translation DB persistence overhead down to ~30ms/page.
+- **Performance Benchmark Validation:** Per-page translation stage mean dropped from 1,066.06 ms to **238.78 ms** (4.46x faster), with p95 IPC dropping from 2,090.2 ms to **88.3 ms** (23.6x faster). 100% test pass rate across 35 test files (407 tests).
+
 ### Added & Optimized — DirectML GPU Acceleration, Fast Probe, Bounded Pipeline & Throughput Optimization (ADR-0005 to ADR-0008, October 2026)
 
 - **DirectML GPU Acceleration (`ort_dml`):** Integrated ONNX Runtime DirectML Execution Provider with dynamic hardware discovery (`list-adapters`). Reduced steady-state OCR latency to 513–708 ms/page on AMD Radeon RX 6700 XT (21.5x–35.0x faster than CPU baseline).

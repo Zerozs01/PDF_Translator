@@ -670,16 +670,64 @@ export function initPlatformBridgeCompat(): void {
       },
       saveSentenceTranslationBatch: async (items: any[]) => {
         try {
+          if (!Array.isArray(items) || items.length === 0) return true;
           const now = Date.now();
-          for (const item of items) {
+          const CHUNK_SIZE = 100;
+          for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+            const chunk = items.slice(i, i + CHUNK_SIZE);
+            const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const params: any[] = [];
+            for (const item of chunk) {
+              params.push(
+                item.sourceText,
+                item.sourceLanguage,
+                item.targetLanguage,
+                item.translatorEngine,
+                item.translationMode,
+                item.translatedText,
+                now
+              );
+            }
             await platformBridge.db.execute(
-              'INSERT OR REPLACE INTO sentence_translation_cache (source_text, source_language, target_language, translator_engine, translation_mode, translated_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              [item.sourceText, item.sourceLanguage, item.targetLanguage, item.translatorEngine, item.translationMode, item.translatedText, now]
+              `INSERT OR REPLACE INTO sentence_translation_cache (source_text, source_language, target_language, translator_engine, translation_mode, translated_text, created_at) VALUES ${placeholders}`,
+              params
             );
           }
           return true;
-        } catch {
+        } catch (e) {
+          console.error('[DBCompat] saveSentenceTranslationBatch failed:', e);
           return false;
+        }
+      },
+      getSentenceTranslationBatch: async (
+        sourceTexts: string[],
+        sourceLanguage: string,
+        targetLanguage: string,
+        translatorEngine: string,
+        translationMode: string
+      ) => {
+        try {
+          if (!Array.isArray(sourceTexts) || sourceTexts.length === 0) return {};
+          const result: Record<string, string> = {};
+          const CHUNK_SIZE = 100;
+          for (let i = 0; i < sourceTexts.length; i += CHUNK_SIZE) {
+            const chunk = sourceTexts.slice(i, i + CHUNK_SIZE);
+            const placeholders = chunk.map(() => '?').join(', ');
+            const rows = await platformBridge.db.query<{ source_text: string; translated_text: string }>(
+              `SELECT source_text, translated_text FROM sentence_translation_cache 
+               WHERE source_language = ? AND target_language = ? AND translator_engine = ? AND source_text IN (${placeholders})`,
+              [sourceLanguage, targetLanguage, translatorEngine, ...chunk]
+            );
+            for (const r of rows) {
+              if (r.source_text && r.translated_text) {
+                result[r.source_text] = r.translated_text;
+              }
+            }
+          }
+          return result;
+        } catch (e) {
+          console.error('[DBCompat] getSentenceTranslationBatch failed:', e);
+          return {};
         }
       },
     };
@@ -1169,6 +1217,25 @@ export function initPlatformBridgeCompat(): void {
       translate: createSafeBridgeSection({
         offlineBatch: async (texts: string[], options?: any) => {
           if (!texts || texts.length === 0) return [];
+          const isProfiling = typeof window !== 'undefined' && window.localStorage?.getItem('pdf_translator_argos_profile') === '1';
+          const t_start_epoch_ms = Date.now();
+          const t0 = performance.now();
+          const profileTag = options?.profileTag || 'untagged';
+
+          const recordLog = (ipc_status: 'ok' | 'bad_response' | 'exception_or_timeout', ipc_ms: number) => {
+            if (!isProfiling || typeof window === 'undefined') return;
+            const logArr = ((window as any).__ARGOS_IPC_LOG__ = (window as any).__ARGOS_IPC_LOG__ || []);
+            const seq = logArr.length + 1;
+            logArr.push({
+              seq,
+              tag: profileTag,
+              n_texts: texts.length,
+              t_start_epoch_ms,
+              ipc_ms: Number(ipc_ms.toFixed(2)),
+              ipc_status,
+            });
+          };
+
           try {
             const res = await withTimeout(
               invoke<{
@@ -1190,15 +1257,22 @@ export function initPlatformBridgeCompat(): void {
               'Argos translation timed out after 45s'
             );
 
+            const ipc_ms = performance.now() - t0;
+
             if (res && res.ok && Array.isArray(res.translations) && res.translations.length === texts.length) {
+              recordLog('ok', ipc_ms);
               return res.translations;
             }
             if (res && Array.isArray(res.translations)) {
+              recordLog(res.ok ? 'ok' : 'bad_response', ipc_ms);
               return res.translations;
             }
+            recordLog('bad_response', ipc_ms);
             console.warn('[Bridge] translate_batch_offline returned unexpected response:', res);
             return texts;
           } catch (err) {
+            const ipc_ms = performance.now() - t0;
+            recordLog('exception_or_timeout', ipc_ms);
             console.error('[Bridge] translate_batch_offline failed:', err);
             return texts;
           }

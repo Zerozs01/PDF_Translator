@@ -41,7 +41,8 @@ export async function translateBatchOfflineBridge(
   type: string,
   mode: TranslationMode,
   sourceLanguage: string,
-  targetLanguage: string
+  targetLanguage: string,
+  profileTag?: string
 ): Promise<string[]> {
   if (!window.electronAPI?.translate?.offlineBatch) {
     throw new Error('Offline translation bridge is not available.');
@@ -52,6 +53,7 @@ export async function translateBatchOfflineBridge(
     sourceType: type,
     sourceLanguage,
     targetLanguage,
+    profileTag,
   });
 
   if (!Array.isArray(translated) || translated.length !== texts.length) {
@@ -70,7 +72,8 @@ export const offlineBatchBridgeWrapper = async (texts: string[], options: any): 
     options.sourceType || 'text',
     options.mode || 'adaptive',
     options.sourceLanguage || 'eng',
-    options.targetLanguage || 'tha'
+    options.targetLanguage || 'tha',
+    options.profileTag
   );
 };
 

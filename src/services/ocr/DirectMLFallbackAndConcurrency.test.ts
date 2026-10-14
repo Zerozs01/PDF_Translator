@@ -39,9 +39,11 @@ describe('DirectML Runtime Truth & Concurrency Guardrails (ADR-0005 Phase 1)', (
   });
 
   describe('Strict GPU Concurrency Cap Policy', () => {
+    const resolveMaxConcurrency = (backend: 'paddle' | 'ort_dml'): number =>
+      backend === 'ort_dml' ? 1 : 2;
+
     it('enforces concurrency = 1 when backend is ort_dml', async () => {
-      const backend: 'paddle' | 'ort_dml' = 'ort_dml';
-      const maxConcurrency = backend === 'ort_dml' ? 1 : 2;
+      const maxConcurrency = resolveMaxConcurrency('ort_dml');
       const limiter = new ConcurrencyLimiter(maxConcurrency);
 
       let peakActive = 0;
@@ -62,8 +64,7 @@ describe('DirectML Runtime Truth & Concurrency Guardrails (ADR-0005 Phase 1)', (
     });
 
     it('permits concurrency = 2 when backend is paddle CPU', async () => {
-      const backend: 'paddle' | 'ort_dml' = 'paddle';
-      const maxConcurrency = backend === 'ort_dml' ? 1 : 2;
+      const maxConcurrency = resolveMaxConcurrency('paddle');
       const limiter = new ConcurrencyLimiter(maxConcurrency);
 
       let peakActive = 0;

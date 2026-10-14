@@ -52,7 +52,9 @@ describe('TranslationCoordinator & Engines', () => {
         'text',
         'official',
         'en',
-        'th'
+        'th',
+        undefined,
+        'coordinator'
       );
 
       // Check results mapping

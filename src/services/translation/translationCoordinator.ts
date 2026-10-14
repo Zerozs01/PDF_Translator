@@ -96,7 +96,7 @@ export class ArgosTranslationEngine implements TranslationEngine {
       sourceLanguage: string;
       targetLanguage: string;
       translationMode: string;
-      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string, profileContext?: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
     // [Scrutinize S8]: ใช้ shared SFX resolver แทน inline loop
@@ -143,7 +143,9 @@ export class ArgosTranslationEngine implements TranslationEngine {
         'text',
         options.translationMode,
         options.sourceLanguage,
-        options.targetLanguage
+        options.targetLanguage,
+        undefined,
+        'coordinator'
       );
 
       // 5. Post-processing: คืนค่าไปตามลำดับ ID ตามลำดับของ items
@@ -202,7 +204,7 @@ export class M2M100TranslationEngine implements TranslationEngine {
       sourceLanguage: string;
       targetLanguage: string;
       translationMode: string;
-      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string) => Promise<string[]>;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string, profileContext?: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
     // [Scrutinize S8]: ใช้ shared SFX resolver แทน inline loop
@@ -294,7 +296,7 @@ export class GeminiTranslationEngine implements TranslationEngine {
       sourceLanguage: string;
       targetLanguage: string;
       translationMode: string;
-      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string, profileContext?: string) => Promise<string[]>;
       translateBatchGemini?: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
@@ -438,7 +440,7 @@ export class TranslationCoordinator {
       sourceLanguage: string;
       targetLanguage: string;
       translationMode: string;
-      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string) => Promise<string[]>;
+      translateBatchOffline: (texts: string[], type: string, mode: any, src: string, tgt: string, engine?: string, profileContext?: string) => Promise<string[]>;
       translateBatchGemini?: (texts: string[], type: string, mode: any, src: string, tgt: string) => Promise<string[]>;
     }
   ): Promise<TranslationResult[]> {
@@ -454,6 +456,18 @@ export class TranslationCoordinator {
     const dbQueryItems: TranslatableItem[] = [];
     const directResults = new Map<string, string | null>();
 
+    const isProfiling = typeof window !== 'undefined' && window.localStorage?.getItem('pdf_translator_argos_profile') === '1';
+    const bumpCoordStat = (key: 'n_dict_hits' | 'n_mem_cache_hits' | 'n_db_sentence_cache_hits' | 'n_engine_calls') => {
+      if (!isProfiling || typeof window === 'undefined') return;
+      const stats = ((window as any).__ARGOS_COORDINATOR_STATS__ = (window as any).__ARGOS_COORDINATOR_STATS__ || {
+        n_dict_hits: 0,
+        n_mem_cache_hits: 0,
+        n_db_sentence_cache_hits: 0,
+        n_engine_calls: 0,
+      });
+      stats[key] = (stats[key] || 0) + 1;
+    };
+
     for (const item of activeItems) {
       if (item.groupType === 'sfx') {
         directResults.set(item.id, null);
@@ -464,6 +478,7 @@ export class TranslationCoordinator {
         const directDictTranslation = cachedLookupShortPhraseTh(item.text, options.sourceLanguage);
         if (directDictTranslation) {
           console.log(`[TranslationCoordinator] Direct dictionary hit for: "${item.text}" -> "${directDictTranslation}"`);
+          bumpCoordStat('n_dict_hits');
           directResults.set(item.id, directDictTranslation);
           continue;
         }
@@ -474,6 +489,7 @@ export class TranslationCoordinator {
         const cachedVal = this.memoryCache.get(cacheKey)!;
         this.memoryCache.delete(cacheKey);
         this.memoryCache.set(cacheKey, cachedVal);
+        bumpCoordStat('n_mem_cache_hits');
         directResults.set(item.id, cachedVal);
         continue;
       }
@@ -531,6 +547,13 @@ export class TranslationCoordinator {
 
     for (const res of cachedLookup) {
       if (res.cachedText !== null && !isCachedUntranslated(res.cachedText, res.item.text, options.targetLanguage, options.sourceLanguage)) {
+        if (!directResults.has(res.item.id)) {
+          if (batchCacheResults[res.item.text] && res.cachedText === batchCacheResults[res.item.text]) {
+            bumpCoordStat('n_db_sentence_cache_hits');
+          } else {
+            bumpCoordStat('n_dict_hits');
+          }
+        }
         cachedItems.push({ item: res.item, cachedText: res.cachedText });
       } else {
         uncachedItems.push(res.item);
@@ -539,6 +562,7 @@ export class TranslationCoordinator {
 
     let engineResults: TranslationResult[] = [];
     if (uncachedItems.length > 0) {
+      bumpCoordStat('n_engine_calls');
       engineResults = await engine.translate(uncachedItems, options);
 
       const itemsToSave: Array<{
