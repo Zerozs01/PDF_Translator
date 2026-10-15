@@ -130,6 +130,9 @@ class BackgroundQueueProcessor {
           pipelineProfile,
         })
         .then((res) => {
+          if (res && (res as any).ok === false) {
+            throw new Error((res as any).reason || 'Prewarm engine failed');
+          }
           console.log(`[QueueProcessor] Eager prewarm completed for ${engine} (${language}, ${qualityProfile})`);
           return res;
         })
@@ -347,9 +350,31 @@ class BackgroundQueueProcessor {
             this.activeJobId = null;
             this.currentAbortController = null;
           }
-          
-          // หน่วงเวลาเล็กน้อยก่อนประมวลผลงานชิ้นถัดไป เพื่อให้ JS event loop ได้หายใจ
-          await new Promise(resolve => setTimeout(resolve, 160));
+
+          // หากงานก่อนหน้าถูกยกเลิก (Abort/Cancelled) ให้เคลียร์ Sidecar worker และ reset prewarm cache ให้สะอาด
+          const wasAbortedOrCancelled = Boolean(
+            isSignalAborted ||
+            isAbortLike ||
+            currentJob?.status === 'cancelled' ||
+            useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id)?.status === 'cancelled'
+          );
+
+          if (wasAbortedOrCancelled) {
+            this.prewarmedKey = null;
+            this.activePrewarmPromise = null;
+            try {
+              if (window.electronAPI?.ocr?.cancelExternal) {
+                await window.electronAPI.ocr.cancelExternal();
+              }
+              // หน่วงเวลารอให้ Python worker ตัวใหม่ฟื้นตัวเต็มที่ก่อนเริ่มงานถัดไป
+              await new Promise(resolve => setTimeout(resolve, 350));
+            } catch (resetErr) {
+              console.warn('[QueueProcessor] Worker reset after abort warning:', resetErr);
+            }
+          } else {
+            // หน่วงเวลาเล็กน้อยก่อนประมวลผลงานชิ้นถัดไป เพื่อให้ JS event loop ได้หายใจ
+            await new Promise(resolve => setTimeout(resolve, 160));
+          }
         }
       } finally {
         this.isProcessing = false;
@@ -371,9 +396,16 @@ class BackgroundQueueProcessor {
    * ยกเลิกงานที่กำลังทำงานอยู่
    */
   public abortCurrentJob() {
+    this.prewarmedKey = null;
+    this.activePrewarmPromise = null;
     if (this.currentAbortController) {
       this.currentAbortController.abort();
       this.currentAbortController = null;
+    }
+    if (window.electronAPI?.ocr?.cancelExternal) {
+      window.electronAPI.ocr.cancelExternal().catch((err) => {
+        console.warn('[QueueProcessor] cancelExternal during abort warning:', err);
+      });
     }
   }
 
@@ -535,7 +567,9 @@ class BackgroundQueueProcessor {
 
     const inFlightLimiter = new ConcurrencyLimiter(maxInFlight);
 
-    const ocrConcurrency = jobBackend === 'ort_dml' ? 1 : 2;
+    // Python worker is a single-process stdio server; keep OCR concurrency strictly at 1
+    // to avoid thread contention, pipe buffer backlog, and watchdog timeouts.
+    const ocrConcurrency = 1;
     const ocrStageLimiter = new ConcurrencyLimiter(ocrConcurrency);
 
     const translationStageLimiter = new ConcurrencyLimiter(1);
@@ -1012,7 +1046,11 @@ class BackgroundQueueProcessor {
           'panel',
           pageData.resolvedQualityProfile,
           job.engine,
-          pageData.canvasWidth * pageData.canvasHeight,
+          resolveMaxPixelsForQualityProfile(
+            pageData.resolvedQualityProfile,
+            pageData.canvasWidth,
+            pageData.canvasHeight
+          ),
           {
             useAngleCls: resolvedUseAngleCls
           }
@@ -1494,7 +1532,11 @@ class BackgroundQueueProcessor {
         'panel',
         pageData.resolvedQualityProfile,
         engine,
-        pageData.canvasWidth * pageData.canvasHeight,
+        resolveMaxPixelsForQualityProfile(
+          pageData.resolvedQualityProfile,
+          pageData.canvasWidth,
+          pageData.canvasHeight
+        ),
         {
           useAngleCls: resolvedUseAngleCls,
         }
@@ -1604,17 +1646,40 @@ function createRenderConstraints(spec: ConstraintSpec): RenderConstraints {
   };
 }
 
-const PADDLE_CONSTRAINT_PROFILES: Record<'korean' | 'cjk' | 'high' | 'fast', ConstraintSpec> = {
-  korean: { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
-  cjk:    { maxSide: 21500, maxPixels: 37950000, boostedMaxPixels: 37950000 },
-  high:   { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
-  fast:   { maxSide: 19700, maxPixels: 18800000, boostedMaxPixels: 18800000 },
+export function resolveMaxPixelsForQualityProfile(
+  qualityProfile: 'fast' | 'balanced' | 'best',
+  canvasWidth: number,
+  canvasHeight: number
+): number {
+  const isTall = canvasHeight / Math.max(1, canvasWidth) >= 2.35;
+  const totalPixels = canvasWidth * canvasHeight;
+  if (isTall) return totalPixels;
+
+  if (qualityProfile === 'fast') {
+    return Math.min(totalPixels, 9_000_000);
+  }
+  if (qualityProfile === 'balanced') {
+    return Math.min(totalPixels, 16_000_000);
+  }
+  // 'best' mode: maintain high resolution for intricate speech bubbles & small manga text
+  return Math.min(totalPixels, 28_000_000);
+}
+
+const PADDLE_CONSTRAINT_PROFILES: Record<'korean' | 'cjk' | 'best' | 'balanced' | 'fast' | 'high', ConstraintSpec> = {
+  korean:   { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
+  cjk:      { maxSide: 21500, maxPixels: 37950000, boostedMaxPixels: 37950000 },
+  best:     { maxSide: 21500, maxPixels: 28000000, boostedMaxPixels: 37950000 },
+  high:     { maxSide: 21500, maxPixels: 28000000, boostedMaxPixels: 37950000 },
+  balanced: { maxSide: 21500, maxPixels: 16000000, boostedMaxPixels: 24000000 },
+  fast:     { maxSide: 19700, maxPixels: 9000000,  boostedMaxPixels: 14000000 },
 };
 
-const EASY_CONSTRAINT_PROFILES: Record<'cjk' | 'high' | 'fast', ConstraintSpec> = {
-  cjk:  { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
-  high: { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
-  fast: { maxSide: 19700, maxPixels: 12800000, boostedMaxPixels: 12800000 },
+const EASY_CONSTRAINT_PROFILES: Record<'cjk' | 'best' | 'balanced' | 'fast' | 'high', ConstraintSpec> = {
+  cjk:      { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
+  best:     { maxSide: 21500, maxPixels: 24000000, boostedMaxPixels: 24000000 },
+  high:     { maxSide: 21500, maxPixels: 24000000, boostedMaxPixels: 24000000 },
+  balanced: { maxSide: 21500, maxPixels: 15000000, boostedMaxPixels: 18000000 },
+  fast:     { maxSide: 19700, maxPixels: 9000000,  boostedMaxPixels: 12000000 },
 };
 
 function resolveRenderConstraints(
@@ -1622,8 +1687,6 @@ function resolveRenderConstraints(
   ocrLanguage: string,
   ocrQualityProfile: 'fast' | 'balanced' | 'best'
 ): RenderConstraints {
-  const isHighQuality = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best';
-
   if (engine === 'paddleocr') {
     if (hasKoreanOcrLanguage(ocrLanguage)) {
       return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.korean);
@@ -1631,17 +1694,29 @@ function resolveRenderConstraints(
     if (hasCjkOrThaiOcrLanguage(ocrLanguage)) {
       return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.cjk);
     }
-    return createRenderConstraints(isHighQuality ? PADDLE_CONSTRAINT_PROFILES.high : PADDLE_CONSTRAINT_PROFILES.fast);
+    if (ocrQualityProfile === 'best') {
+      return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.best);
+    }
+    if (ocrQualityProfile === 'balanced') {
+      return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.balanced);
+    }
+    return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.fast);
   }
 
   if (engine === 'easyocr') {
     if (hasCjkOrThaiOcrLanguage(ocrLanguage)) {
       return createRenderConstraints(EASY_CONSTRAINT_PROFILES.cjk);
     }
-    return createRenderConstraints(isHighQuality ? EASY_CONSTRAINT_PROFILES.high : EASY_CONSTRAINT_PROFILES.fast);
+    if (ocrQualityProfile === 'best') {
+      return createRenderConstraints(EASY_CONSTRAINT_PROFILES.best);
+    }
+    if (ocrQualityProfile === 'balanced') {
+      return createRenderConstraints(EASY_CONSTRAINT_PROFILES.balanced);
+    }
+    return createRenderConstraints(EASY_CONSTRAINT_PROFILES.fast);
   }
 
-  return createRenderConstraints({ maxSide: 21500, maxPixels: 23800000 });
+  return createRenderConstraints({ maxSide: 21500, maxPixels: 24000000 });
 }
 
 function fitDimensionsToConstraints(

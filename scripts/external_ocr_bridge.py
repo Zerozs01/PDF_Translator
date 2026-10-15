@@ -3858,6 +3858,8 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
         "lang": lang,
         "device": paddle_device,
         "use_onnx": use_onnx,
+        "enable_mkldnn": False,
+        "use_onednn": False,
         "cpu_threads": os.cpu_count() or 8,
         "use_angle_cls": use_angle_cls,
     }
@@ -3928,15 +3930,15 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 rec_score_thresh = 0.22 if is_cjk_like else 0.24
             else:  # "best"
                 if shortest <= 420:
-                    det_limit = 3000
+                    det_limit = 2400 if is_cjk_like else 3000
                 elif shortest <= 720:
-                    det_limit = 3100
+                    det_limit = 2400 if is_cjk_like else 3100
                 else:
-                    det_limit = 3600
+                    det_limit = 2400 if is_cjk_like else 3600
                 rec_batch = 16 if is_dml_active else 8
                 det_thresh = 0.1
                 det_box_thresh = 0.3
-                det_unclip_ratio = 1.96
+                det_unclip_ratio = 1.85
                 rec_score_thresh = 0.225
         elif profile_key == "cpu_panel_fast":
             if shortest <= 420:
@@ -3968,7 +3970,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 elif quality_profile == "balanced":
                     rec_batch = 9
                 else:
-                    det_limit = min(3200, int(det_limit * 1.08))
+                    det_limit = min(2600, int(det_limit * 1.08))
                     rec_batch = 7
             if lang == "korean" and profile_key != "cpu_panel_accurate":
                 if quality_profile == "fast":
@@ -3985,7 +3987,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                     # Best mode: Optimal unclip_ratio and sensitivity for full Hangul syllable recall
                     det_thresh = 0.14
                     det_box_thresh = 0.36
-                    det_unclip_ratio = 2.05
+                    det_unclip_ratio = 1.95
                     rec_score_thresh = 0.20
         else:
             if profile_key not in {"cpu_panel_fast", "cpu_panel_accurate"}:
@@ -4003,7 +4005,7 @@ def build_paddle_predict_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
                 if profile_key == "cpu_panel_accurate":
                     det_thresh = 0.12
                     det_box_thresh = 0.24
-                    det_unclip_ratio = 2.10
+                    det_unclip_ratio = 1.85
                     rec_score_thresh = 0.18
                 elif profile_key == "cpu_panel_fast":
                     det_thresh = 0.18
@@ -4317,7 +4319,7 @@ def get_paddle_ocr(lang: str, profile_key: str, quality_profile: str = "best", p
     # creates InferenceSession objects which our patched_InferenceSession intercepts.
     # Otherwise (Paddle CPU), pop use_onnx — PaddleOCR 2.x does not accept it.
     _keep_use_onnx = bool(constructor_kwargs.get("use_onnx", False))
-    _strip_keys = ["use_angle_cls", "show_log", "enable_mkldnn", "use_onednn"]
+    _strip_keys = ["use_angle_cls", "show_log", "use_onednn"]
     if not _keep_use_onnx:
         _strip_keys.append("use_onnx")
     for unsupported_key in _strip_keys:
@@ -4458,12 +4460,21 @@ def should_try_inverted_paddle_pass(
     result_words = list(original_result.get("words") or [])
     result_confidence = normalize_confidence(original_result.get("confidence", 0.0))
 
-    if len(result_lines) >= 8 and result_confidence >= 84.0:
-        return False
+    all_text = "".join(str(l.get("text") or "") for l in result_lines)
+    is_non_latin = has_non_latin_characters(all_text)
+
+    if is_non_latin:
+        if len(result_lines) >= 4 and result_confidence >= 75.0:
+            return False
+        total_chars = len(all_text.strip())
+        weak_original_pass = len(result_lines) <= 1 or total_chars <= 6 or result_confidence < 62.0
+    else:
+        if len(result_lines) >= 8 and result_confidence >= 84.0:
+            return False
+        weak_original_pass = len(result_lines) <= 2 or len(result_words) <= 12 or result_confidence < 68.0
 
     strong_dark_page = average_luma <= 156.0 and dark_ratio >= 0.36
     mixed_polarity_page = average_luma <= 172.0 and dark_ratio >= 0.26 and bright_ratio >= 0.08
-    weak_original_pass = len(result_lines) <= 2 or len(result_words) <= 12 or result_confidence < 68.0
 
     if quality_profile == "fast":
         return strong_dark_page and weak_original_pass
@@ -4502,14 +4513,14 @@ def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple
             w, h = img.size
             pixel_count = w * h
             if pixel_count <= max_pixels:
-                # Flat alpha channel on white background and apply Sharpness boost before inference
+                # Flat alpha channel on white background and apply subtle Sharpness boost before inference
                 rgba = img.convert("RGBA")
                 background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
                 background.alpha_composite(rgba)
                 rgb = background.convert("RGB")
                 
                 enhancer = ImageEnhance.Sharpness(rgb)
-                enhanced_img = enhancer.enhance(1.3)
+                enhanced_img = enhancer.enhance(1.05)
                 arr = np.array(enhanced_img)[:, :, ::-1]
                 return arr, 1.0, 1.0
 
@@ -4538,9 +4549,9 @@ def resize_image_if_large(image_path: str, max_pixels: int = 9_000_000) -> Tuple
 
             resized_img = rgb.resize((new_w, new_h), filter_type)
             
-            # Apply Sharpness boost
+            # Apply moderate Sharpness boost when downscaled
             enhancer = ImageEnhance.Sharpness(resized_img)
-            enhanced_img = enhancer.enhance(1.3)
+            enhanced_img = enhancer.enhance(1.1)
             arr = np.array(enhanced_img)[:, :, ::-1]
 
             print(f"[ocrBridge] Resized and sharpened image in-memory {w}x{h} ({pixel_count//1000}K px) -> {new_w}x{new_h} (scale_x={scale_x:.4f}, scale_y={scale_y:.4f})", file=sys.stderr)
@@ -4852,7 +4863,18 @@ def _run_paddleocr_impl(args: argparse.Namespace) -> Dict[str, Any]:
     TALL_HEIGHT_THRESHOLD = 3000
     CHUNK_HEIGHT = 2800
     CHUNK_OVERLAP = 120
-    MAX_PIXELS = args.max_pixels if getattr(args, "max_pixels", 0) > 0 else 9_000_000
+    user_max_pixels = getattr(args, "max_pixels", 0) or 0
+    if quality_profile == "best":
+        quality_ceiling = 28_000_000
+    elif quality_profile == "balanced":
+        quality_ceiling = 16_000_000
+    else:
+        quality_ceiling = 9_000_000
+
+    if user_max_pixels > 0:
+        MAX_PIXELS = min(user_max_pixels, quality_ceiling)
+    else:
+        MAX_PIXELS = quality_ceiling
 
     try:
         with Image.open(args.image) as _probe:
@@ -5376,28 +5398,61 @@ def run_easyocr_python(args: argparse.Namespace) -> Dict[str, Any]:
     report_progress(request_id, 10, 100)
     langs = select_easyocr_langs(args.language)
     reader = get_easyocr_reader(langs)
+    quality_profile = normalize_quality_profile(getattr(args, "quality_profile", "best"))
+    user_max_pixels = getattr(args, "max_pixels", 0) or 0
+    if quality_profile == "best":
+        easy_ceiling = 24_000_000
+    elif quality_profile == "balanced":
+        easy_ceiling = 15_000_000
+    else:
+        easy_ceiling = 9_000_000
+    effective_easy_max = min(user_max_pixels, easy_ceiling) if user_max_pixels > 0 else easy_ceiling
+    working_image, scale_x, scale_y = resize_image_if_large(args.image, max_pixels=effective_easy_max)
     started_at = time.perf_counter()
-    result = reader.readtext(args.image, detail=1, paragraph=False)
-    cleaned = cleanup_external_result(
-        normalize_easyocr_output(result),
-        "easyocr",
-        args.pipeline_profile,
-        args.width,
-        args.height,
-        args.language,
-    )
-    cleanup_debug = cleaned.get("debug") or {}
-    cleaned["debug"] = {
-        "profile": "+".join(langs),
-        "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
-        "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
-        "droppedWords": list(cleanup_debug.get("droppedWords") or []),
-        "timingsMs": {
-            "ocr": round((time.perf_counter() - started_at) * 1000, 1),
-        },
-    }
-    report_progress(request_id, 100, 100)
-    return cleaned
+    try:
+        result = reader.readtext(working_image, detail=1, paragraph=False)
+        normalized = normalize_easyocr_output(result)
+        if scale_x != 1.0 or scale_y != 1.0:
+            for line in normalized.get("lines", []):
+                bbox = line.get("bbox")
+                if bbox:
+                    bbox["x0"] = round(bbox["x0"] * scale_x, 2)
+                    bbox["x1"] = round(bbox["x1"] * scale_x, 2)
+                    bbox["y0"] = round(bbox["y0"] * scale_y, 2)
+                    bbox["y1"] = round(bbox["y1"] * scale_y, 2)
+                for w in line.get("words", []):
+                    wbox = w.get("bbox")
+                    if wbox:
+                        wbox["x0"] = round(wbox["x0"] * scale_x, 2)
+                        wbox["x1"] = round(wbox["x1"] * scale_x, 2)
+                        wbox["y0"] = round(wbox["y0"] * scale_y, 2)
+                        wbox["y1"] = round(wbox["y1"] * scale_y, 2)
+        cleaned = cleanup_external_result(
+            normalized,
+            "easyocr",
+            args.pipeline_profile,
+            args.width,
+            args.height,
+            args.language,
+        )
+        cleanup_debug = cleaned.get("debug") or {}
+        cleaned["debug"] = {
+            "profile": "+".join(langs),
+            "runtimeMs": round((time.perf_counter() - started_at) * 1000, 1),
+            "dropCounts": dict(cleanup_debug.get("dropCounts") or {}),
+            "droppedWords": list(cleanup_debug.get("droppedWords") or []),
+            "timingsMs": {
+                "ocr": round((time.perf_counter() - started_at) * 1000, 1),
+            },
+        }
+        report_progress(request_id, 100, 100)
+        return cleaned
+    finally:
+        if isinstance(working_image, str) and working_image != args.image:
+            try:
+                os.remove(working_image)
+            except OSError:
+                pass
 
 
 def run_easy_yolo(args: argparse.Namespace) -> Dict[str, Any]:

@@ -1064,7 +1064,15 @@ export function initPlatformBridgeCompat(): void {
             return { backend: 'paddle' as const, adapterName: undefined };
           }
         },
-        cancelExternal: async () => true,
+        cancelExternal: async () => {
+          try {
+            await invoke<void>('restart_worker');
+            return true;
+          } catch (err) {
+            console.warn('[Bridge] cancelExternal restart_worker warning:', err);
+            return false;
+          }
+        },
         writeTempImage: async (payload: { imageData: Uint8Array | ArrayBuffer | number[]; imageMimeType?: string }) => {
           try {
             const rawBytes = payload.imageData instanceof Uint8Array
@@ -1118,8 +1126,8 @@ export function initPlatformBridgeCompat(): void {
 
             const res = await withTimeout(
               invoke<any>('send_sidecar_command', { payload: commandPayload }),
-              90_000,
-              'OCR sidecar processing timed out after 90s'
+              185_000,
+              'OCR sidecar processing timed out after 185s'
             );
             if (!res) {
               throw new Error('Empty response from OCR sidecar');
@@ -1166,8 +1174,8 @@ export function initPlatformBridgeCompat(): void {
             };
             const res = await withTimeout(
               invoke<any>('send_sidecar_command', { payload: commandPayload }),
-              90_000,
-              'Raw OCR sidecar processing timed out after 90s'
+              185_000,
+              'Raw OCR sidecar processing timed out after 185s'
             );
             return res;
           } catch (err) {
