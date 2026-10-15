@@ -122,7 +122,7 @@ class BackgroundQueueProcessor {
     if (window.electronAPI?.ocr?.prewarmEngine) {
       console.log(`[QueueProcessor] Triggering eager prewarm for ${engine} (${language}, ${qualityProfile})...`);
       this.prewarmedKey = key;
-      this.activePrewarmPromise = window.electronAPI.ocr
+      const prewarmPromise = window.electronAPI.ocr
         .prewarmEngine({
           engine,
           language,
@@ -140,8 +140,16 @@ class BackgroundQueueProcessor {
           console.warn(`[QueueProcessor] Eager prewarm warning for ${engine}:`, err);
           this.prewarmedKey = null;
           this.activePrewarmPromise = null;
+          // Re-throw so callers that await this can catch; the stored promise
+          // already has a .catch attached below to prevent unhandled rejection
+          // when the promise is abandoned (e.g. after abortCurrentJob()).
           throw err;
         });
+      // Attach a silent no-op handler immediately so that if this promise is later
+      // abandoned (activePrewarmPromise nulled by abortCurrentJob) without a
+      // consumer attached, the JS engine won't raise an unhandled rejection.
+      prewarmPromise.catch(() => {});
+      this.activePrewarmPromise = prewarmPromise;
       return this.activePrewarmPromise;
     }
     return Promise.resolve(null);
@@ -302,6 +310,11 @@ class BackgroundQueueProcessor {
             break;
           }
 
+
+          let isSignalAborted = false;
+          let isAbortLike = false;
+          let currentJob: ReturnType<typeof useBackgroundQueueStore.getState>['jobs'][number] | undefined;
+
           try {
             this.activeJobId = job.id;
             useBackgroundQueueStore.getState().updateJobStatus(job.id, 'processing', 'เริ่มกระบวนการ...');
@@ -313,10 +326,10 @@ class BackgroundQueueProcessor {
             useBackgroundQueueStore.getState().updateJobStatus(job.id, 'completed', 'เสร็จสมบูรณ์!');
           } catch (error) {
             // ดึงสถานะปัจจุบันของ Job จาก Store
-            const currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
+            currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
 
-            const isSignalAborted = Boolean(this.currentAbortController?.signal?.aborted);
-            const isAbortLike = error instanceof Error && (
+            isSignalAborted = Boolean(this.currentAbortController?.signal?.aborted);
+            isAbortLike = error instanceof Error && (
               error.name === 'AbortError' ||
               error.message.includes('canceled') ||
               error.message.includes('aborted') ||
@@ -396,6 +409,11 @@ class BackgroundQueueProcessor {
    * ยกเลิกงานที่กำลังทำงานอยู่
    */
   public abortCurrentJob() {
+    // Silence any in-flight prewarm before abandoning it, so the pending
+    // rejection doesn't surface as an unhandled promise rejection.
+    if (this.activePrewarmPromise) {
+      this.activePrewarmPromise.catch(() => {});
+    }
     this.prewarmedKey = null;
     this.activePrewarmPromise = null;
     if (this.currentAbortController) {

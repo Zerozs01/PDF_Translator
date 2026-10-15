@@ -12,6 +12,15 @@ import sys
 import tempfile
 import time
 
+# Ensure stdout/stderr are UTF-8 on Windows to prevent [Errno 22] Invalid argument
+# when writing OCR results containing non-ASCII characters (Korean, Chinese, Thai, etc.)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
 # Resolve potential DLL loading conflicts for PyTorch/EasyOCR on Windows (e.g. WinError 127 in shm.dll)
 if sys.platform == "win32":
     import ctypes
@@ -144,6 +153,16 @@ _OCR_BACKEND_ORT_DML = (OCR_BACKEND == "ort_dml")
 _dml_session_disabled = False  # Sticky session downgrade flag for worker lifecycle
 
 
+_DEFAULT_DML_LANGS = "en,latin,eng,english,es,fr,german,korean"
+
+
+def _dml_allowed_langs() -> set:
+    # Allowlist (not "Latin-only") so we can opt languages in/out via OCR_DML_LANGS
+    # without code changes if a model misbehaves on DirectML.
+    raw = os.environ.get("OCR_DML_LANGS", _DEFAULT_DML_LANGS)
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
 def resolve_runtime_backend_status(lang: str) -> Dict[str, Any]:
     global _dml_session_disabled
     if not _OCR_BACKEND_ORT_DML:
@@ -162,8 +181,7 @@ def resolve_runtime_backend_status(lang: str) -> Dict[str, Any]:
             "session_downgraded": True,
         }
 
-    is_latin_only = str(lang or "").strip().lower() in {"en", "latin", "eng", "english"}
-    if not is_latin_only:
+    if str(lang or "").strip().lower() not in _dml_allowed_langs():
         return {
             "requested_backend": "ort_dml",
             "actual_backend": "paddle",
@@ -3812,7 +3830,7 @@ def build_paddle_constructor_kwargs(lang: str, profile_key: str, use_angle_cls: 
                 GLOBAL_USE_DML = False
                 reason = status_meta["fallback_reason"]
                 if reason == "unsupported_language":
-                    print(f"[ocrBridge] DirectML opt-in active but language '{lang}' is not Latin. Enforcing fallback to Paddle Native CPU.", file=sys.stderr)
+                    print(f"[ocrBridge] DirectML opt-in active but language '{lang}' is not in allowed DirectML languages. Enforcing fallback to Paddle Native CPU.", file=sys.stderr)
                 elif reason == "dml_runtime_error":
                     print(f"[ocrBridge] DirectML sticky session downgraded due to prior runtime error. Enforcing Paddle Native CPU.", file=sys.stderr)
                 elif not _OCR_BACKEND_ORT_DML:
@@ -5987,8 +6005,18 @@ _ipc_stdout = sys.stdout
 def send_ipc_json(payload: Dict[str, Any]) -> None:
     global _ipc_stdout
     out = _ipc_stdout or sys.stdout
-    out.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    out.flush()
+    # Always encode as UTF-8 bytes and write via the binary buffer to avoid
+    # Windows cp1252/mbcs codec errors ([Errno 22] Invalid argument) when OCR
+    # results contain non-ASCII characters (Korean, Chinese, Thai, Spanish, etc.).
+    # ensure_ascii=False preserves Unicode code-points; we own the byte encoding.
+    line_bytes = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    buf = getattr(out, "buffer", None)
+    if buf is not None:
+        buf.write(line_bytes)
+        buf.flush()
+    else:
+        out.write(line_bytes.decode("utf-8", errors="replace"))
+        out.flush()
 
 
 def serve_stdio(default_engine: str) -> None:
