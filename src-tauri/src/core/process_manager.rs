@@ -34,13 +34,19 @@ pub fn strip_windows_unc_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
-type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, AppError>>>>>;
+pub struct PendingItem {
+    pub sender: oneshot::Sender<Result<Value, AppError>>,
+    pub generation: u64,
+}
+
+type PendingMap = Arc<Mutex<HashMap<String, PendingItem>>>;
 type InflightMap = Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<Result<Value, String>>>>>;
 
 pub struct ProcessManager {
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     pending: PendingMap,
+    generation: Arc<std::sync::atomic::AtomicU64>,
     watchdog_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     reader_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     project_root: PathBuf,
@@ -62,6 +68,7 @@ impl ProcessManager {
             child: Arc::new(Mutex::new(None)),
             stdin: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_handle: Arc::new(Mutex::new(None)),
             reader_handle: Arc::new(Mutex::new(None)),
             project_root,
@@ -169,9 +176,12 @@ impl ProcessManager {
         stdin_arc: &Arc<Mutex<Option<ChildStdin>>>,
         reader_handle: &Arc<Mutex<Option<JoinHandle<()>>>>,
         pending: &PendingMap,
+        generation: &Arc<std::sync::atomic::AtomicU64>,
         ocr_backend: &Arc<Mutex<String>>,
         dml_adapter_name: &Arc<Mutex<Option<String>>>,
+        is_shutting_down: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<(), AppError> {
+        let active_gen = generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let project_root_buf = strip_windows_unc_prefix(project_root.to_path_buf());
         let project_root = project_root_buf.as_path();
         let python_exe = strip_windows_unc_prefix(PathBuf::from(Self::resolve_python_executable(project_root)))
@@ -183,7 +193,8 @@ impl ProcessManager {
         let adapter_val = dml_adapter_name.lock().await.clone();
 
         eprintln!(
-            "[ProcessManager] Spawning Python worker (exe: {}, script: {}, cwd: {}, backend: {}, adapter: {:?})",
+            "[ProcessManager] Spawning Python worker gen #{} (exe: {}, script: {}, cwd: {}, backend: {}, adapter: {:?})",
+            active_gen,
             python_exe,
             script_path.display(),
             project_root.display(),
@@ -250,6 +261,7 @@ impl ProcessManager {
 
         // Dedicated background stdout reader task with Request ID demuxing
         let pending_clone = Arc::clone(pending);
+        let is_shutting_down_clone = Arc::clone(is_shutting_down);
         let reader_task = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -267,8 +279,8 @@ impl ProcessManager {
                     }
                     if let Some(resp_id) = parsed.get("id").and_then(|v| v.as_str()) {
                         let mut map = pending_clone.lock().await;
-                        if let Some(sender) = map.remove(resp_id) {
-                            let _ = sender.send(Ok(parsed));
+                        if let Some(item) = map.remove(resp_id) {
+                            let _ = item.sender.send(Ok(parsed));
                             continue;
                         }
                     }
@@ -277,18 +289,30 @@ impl ProcessManager {
                         let mut map = pending_clone.lock().await;
                         let first_key = map.keys().next().cloned();
                         if let Some(k) = first_key {
-                            if let Some(sender) = map.remove(&k) {
-                                let _ = sender.send(Ok(parsed));
+                            if let Some(item) = map.remove(&k) {
+                                let _ = item.sender.send(Ok(parsed));
                             }
                         }
                     }
                 }
             }
-            // Stream EOF
+            // Stream EOF - only fail requests that belong to this worker generation or older
+            let is_shutting_down = is_shutting_down_clone.load(std::sync::atomic::Ordering::Relaxed);
             let mut map = pending_clone.lock().await;
-            let senders: Vec<_> = map.drain().map(|(_, s)| s).collect();
-            for sender in senders {
-                let _ = sender.send(Err(AppError::Process("Python worker stdout closed unexpectedly".to_string())));
+            let keys_to_remove: Vec<String> = map
+                .iter()
+                .filter(|(_, item)| item.generation <= active_gen)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in keys_to_remove {
+                if let Some(item) = map.remove(&key) {
+                    let err_msg = if is_shutting_down {
+                        "Python worker was reset or timed out".to_string()
+                    } else {
+                        "Python worker stdout closed unexpectedly".to_string()
+                    };
+                    let _ = item.sender.send(Err(AppError::Process(err_msg)));
+                }
             }
         });
 
@@ -314,8 +338,10 @@ impl ProcessManager {
             &self.stdin,
             &self.reader_handle,
             &self.pending,
+            &self.generation,
             &self.ocr_backend,
             &self.dml_adapter_name,
+            &self.is_shutting_down,
         ).await?;
 
         // Proactive Watchdog task with auto-recovery within <= 3 seconds
@@ -324,6 +350,7 @@ impl ProcessManager {
             let child_arc = Arc::clone(&self.child);
             let stdin_arc = Arc::clone(&self.stdin);
             let pending_for_watchdog = Arc::clone(&self.pending);
+            let generation_clone = Arc::clone(&self.generation);
             let reader_handle_clone = Arc::clone(&self.reader_handle);
             let project_root_clone = self.project_root.clone();
             let is_shutting_down_clone = Arc::clone(&self.is_shutting_down);
@@ -341,15 +368,22 @@ impl ProcessManager {
                         match c.try_wait() {
                             Ok(Some(status)) => {
                                 eprintln!("[ProcessManager Watchdog] Python worker terminated unexpectedly: {:?}", status);
+                                let current_child_gen = generation_clone.load(std::sync::atomic::Ordering::SeqCst);
                                 *lock = None;
                                 *stdin_arc.lock().await = None;
                                 let mut map = pending_for_watchdog.lock().await;
-                                let senders: Vec<_> = map.drain().map(|(_, s)| s).collect();
-                                for sender in senders {
-                                    let _ = sender.send(Err(AppError::Process(format!(
-                                        "Python worker exited unexpectedly with status: {:?}",
-                                        status
-                                    ))));
+                                let keys_to_remove: Vec<String> = map
+                                    .iter()
+                                    .filter(|(_, item)| item.generation <= current_child_gen)
+                                    .map(|(k, _)| k.clone())
+                                    .collect();
+                                for key in keys_to_remove {
+                                    if let Some(item) = map.remove(&key) {
+                                        let _ = item.sender.send(Err(AppError::Process(format!(
+                                            "Python worker exited unexpectedly with status: {:?}",
+                                            status
+                                        ))));
+                                    }
                                 }
                                 drop(lock);
 
@@ -357,14 +391,22 @@ impl ProcessManager {
                                 if !is_shutting_down_clone.load(std::sync::atomic::Ordering::Relaxed) {
                                     eprintln!("[ProcessManager Watchdog] Proactively reviving Python worker in <= 3s...");
                                     tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
+                                    let check_lock = child_arc.lock().await;
+                                    if check_lock.is_some() {
+                                        eprintln!("[ProcessManager Watchdog] Python worker already revived by another request.");
+                                        continue;
+                                    }
+                                    drop(check_lock);
                                     if let Err(e) = Self::spawn_child_and_reader(
                                         &project_root_clone,
                                         &child_arc,
                                         &stdin_arc,
                                         &reader_handle_clone,
                                         &pending_for_watchdog,
+                                        &generation_clone,
                                         &ocr_backend_clone,
                                         &dml_adapter_clone,
+                                        &is_shutting_down_clone,
                                     ).await {
                                         eprintln!("[ProcessManager Watchdog] Auto-recovery failed: {}", e);
                                     } else {
@@ -411,15 +453,30 @@ impl ProcessManager {
         }
         let mut child_lock = self.child.lock().await;
         if let Some(mut child) = child_lock.take() {
+            #[cfg(windows)]
+            if let Some(pid) = child.id() {
+                // Kill the entire process tree on Windows so child Python wrappers don't become zombies
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output();
+            }
             let _ = child.kill().await;
             let _ = child.wait().await; // Clean up zombie handle
         }
         *self.stdin.lock().await = None;
+        let current_gen = self.generation.load(std::sync::atomic::Ordering::SeqCst);
         let mut map = self.pending.lock().await;
-        let senders: Vec<_> = map.drain().map(|(_, s)| s).collect();
-        for sender in senders {
-            let _ = sender.send(Err(AppError::Process("Process reset while awaiting response".to_string())));
+        let keys_to_remove: Vec<String> = map
+            .iter()
+            .filter(|(_, item)| item.generation <= current_gen)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in keys_to_remove {
+            if let Some(item) = map.remove(&key) {
+                let _ = item.sender.send(Err(AppError::Process("Process reset while awaiting response".to_string())));
+            }
         }
+        self.inflight.lock().await.clear();
         self.is_shutting_down.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
@@ -488,10 +545,11 @@ impl ProcessManager {
                 id
             });
 
+        let active_gen = self.generation.load(std::sync::atomic::Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(req_id.clone(), tx);
+            pending.insert(req_id.clone(), PendingItem { sender: tx, generation: active_gen });
         }
 
         let serialized = serde_json::to_string(&payload)?;
@@ -516,7 +574,7 @@ impl ProcessManager {
             return Err(AppError::Process(format!("Pipe write failed: {}", e)));
         }
 
-        let timeout_duration = std::time::Duration::from_secs(60);
+        let timeout_duration = std::time::Duration::from_secs(180);
         match tokio::time::timeout(timeout_duration, rx).await {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => {
@@ -525,9 +583,9 @@ impl ProcessManager {
             }
             Err(_) => {
                 self.pending.lock().await.remove(&req_id);
-                eprintln!("[ProcessManager] Timeout waiting for Python response. Resetting worker...");
+                eprintln!("[ProcessManager] Timeout waiting for Python response (>180s). Resetting worker...");
                 self.internal_reset().await;
-                Err(AppError::Process("Timeout waiting for Python worker response".to_string()))
+                Err(AppError::Process("Timeout waiting for Python worker response (OCR sidecar exceeded 180s limit)".to_string()))
             }
         }
     }

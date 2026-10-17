@@ -377,6 +377,9 @@ export interface ElectronAPI {
       hasCuda: boolean;
       mode: 'CUDA' | 'DirectML' | 'CPU';
       gpuVendor: 'intel' | 'amd' | 'nvidia' | 'unknown';
+      totalVramMb?: number | null;
+      freeVramMb?: number | null;
+      usedVramMb?: number | null;
     }>;
   };
 

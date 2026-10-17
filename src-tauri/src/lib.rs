@@ -118,6 +118,7 @@ pub fn run() {
             commands::pdf::open_document,
             commands::pdf::export_translated_pdf,
             commands::pdf::render_page_binary,
+            commands::pdf::export_psd,
             commands::system::get_gpu_info,
             commands::system::read_file_binary,
             commands::system::read_file_raw,

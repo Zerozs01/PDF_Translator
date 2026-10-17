@@ -13,20 +13,20 @@ In ADR-0005 through ADR-0008, OCR latency was optimized using DirectML GPU accel
 
 ## Decision
 1. **Vectorized CTranslate2 Batching (Step 2a):**
-   Directly extract `argos_model.model.translator` in `scripts/argos_translate_bridge.py` and replace sequential translation with vectorized `translate_batch(tokens, batch_type="tokens", max_batch_size=1024)`.
+   Decompose Argos translation pipelines (including multi-hop `CompositeTranslation` pivots) via `_extract_ct2_hops()` in `scripts/argos_translate_bridge.py` and execute two-wave vectorized `translate_batch(tokenized_batch, beam_size=4, max_batch_size=2048, batch_type="tokens", replace_unknowns=True, length_penalty=0.2)`.
 2. **In-Memory Sentence LRU Cache & Intra-Batch Deduplication (Step 2b/2c):**
-   Add a 4,096-entry LRU cache to Python sidecar memory with punctuation/whitespace preservation.
+   Maintain a 4,096-entry `OrderedDict` LRU cache keyed by `(source_language, target_language, force_noop_sentencizer, normalized_text)` with intra-batch deduplication and deduplicated Wave 2 variant retries.
 3. **Decouple Pipeline Stages & Telemetry (Step 2d):**
    - Eliminate `ocrIpcDurationMs` variable shadowing in `BackgroundQueueProcessor.ts`.
    - Separate `ocrStageLimiter` and `translationStageLimiter` and instrument `transQueueWaitMs` and `slotHoldMs`.
-   - Implement **Selective Store Hydration**: Only update Zustand store if the background page matches the active visible page in UI.
+   - Implement **Selective Store Hydration + On-Demand Viewport Loading**: Only hydrate `useOCRTextLayerStore` and `useLayerStore` in memory when `activeDocId === job.documentId && activeCurrentPage === pageNum`. Background pages are safely persisted directly to SQLite and hydrated on-demand when the viewport scrolls to them, preventing main-thread layout thrashing and Map cloning storms.
 4. **Multi-Row Chunked SQLite Writes:**
    Update `src/services/bridge/index.ts` to batch sentence translations in chunks of 100 via multi-row `INSERT OR REPLACE INTO sentence_translation_cache`.
 
 ## Consequences
 ### Positive
 - **Translation Stage Throughput:** Per-page translation dropped from 1,066.06 ms to **238.78 ms** (4.46x faster, -77.6%).
-- **Queue Overhead Eliminated:** `transQueueWait` dropped from ~207s to **0.01 ms** (Median 0 ms, Max 0.2 ms).
+- **Queue Overhead Eliminated:** In Cold Run (CPU OCR-bound at ~5.16s/page), `transQueueWait` is ~0.01 ms (Median 0 ms, Max 0.2 ms) because translation consumes pages faster than OCR produces them. In Warm Run (OCR cached), `transQueueWait` reflects the sequential translation limiter backlog (~0.00 ms to ~3.9s total wait).
 - **Direct IPC Latency:** `main:direct` IPC dropped from 723.10 ms to **8.10 ms** (cached) / **348.35 ms** (cold).
 - **p95 Latency:** p95 IPC dropped from 2,090.2 ms to **88.3 ms** (23.6x faster).
 - **UI Responsiveness:** Zero map cloning and zero UI frame drop during 36-page background runs.

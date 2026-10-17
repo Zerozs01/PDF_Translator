@@ -126,7 +126,13 @@ export const PDFPageOverlay: React.FC<{
 
   const rawCurrentPageLayers = useLayerStore((s) => s.layersByPage.get(pageNum) || EMPTY_LAYERS);
   const rawCurrentPageGroups = useLayerStore((s) => s.groupsByPage.get(pageNum) || EMPTY_GROUPS);
-  const editingLayerId = useLayerStore((s) => s.editingLayerId);
+  const editingLineIndexForPage = useLayerStore((s) => {
+    if (!s.editingLayerId) return null;
+    const layers = s.layersByPage.get(pageNum);
+    if (!layers) return null;
+    const target = layers.find((l) => l.id === s.editingLayerId);
+    return target ? target.lineIndex : null;
+  });
   const deletedLineIndexes = useLayerStore((s) => s.deletedLineIndexesByPage.get(pageNum));
 
   const [ocrOverlayTransform, setOcrOverlayTransform] = useState({
@@ -204,17 +210,16 @@ export const PDFPageOverlay: React.FC<{
   }, [currentPageGroups]);
 
   const hiddenLineIndexes = useMemo(() => {
-    const hidden = new Set(currentPageLayers.filter(l => !l.visible).map(l => l.lineIndex));
-    const editingLayer = currentPageLayers.find(l => l.id === editingLayerId);
-    if (editingLayer) {
-      hidden.add(editingLayer.lineIndex);
+    const hidden = new Set(currentPageLayers.filter((l) => !l.visible).map((l) => l.lineIndex));
+    if (typeof editingLineIndexForPage === 'number') {
+      hidden.add(editingLineIndexForPage);
     }
     const deletedForPage = deletedLineIndexes;
     if (deletedForPage) {
-      deletedForPage.forEach(idx => hidden.add(idx));
+      deletedForPage.forEach((idx) => hidden.add(idx));
     }
     return hidden;
-  }, [currentPageLayers, editingLayerId, deletedLineIndexes, pageNum]);
+  }, [currentPageLayers, editingLineIndexForPage, deletedLineIndexes]);
 
   const hasLayers = rawCurrentPageLayers.length > 0;
 

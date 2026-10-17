@@ -122,7 +122,7 @@ class BackgroundQueueProcessor {
     if (window.electronAPI?.ocr?.prewarmEngine) {
       console.log(`[QueueProcessor] Triggering eager prewarm for ${engine} (${language}, ${qualityProfile})...`);
       this.prewarmedKey = key;
-      this.activePrewarmPromise = window.electronAPI.ocr
+      const prewarmPromise = window.electronAPI.ocr
         .prewarmEngine({
           engine,
           language,
@@ -130,6 +130,9 @@ class BackgroundQueueProcessor {
           pipelineProfile,
         })
         .then((res) => {
+          if (res && (res as any).ok === false) {
+            throw new Error((res as any).reason || 'Prewarm engine failed');
+          }
           console.log(`[QueueProcessor] Eager prewarm completed for ${engine} (${language}, ${qualityProfile})`);
           return res;
         })
@@ -137,8 +140,16 @@ class BackgroundQueueProcessor {
           console.warn(`[QueueProcessor] Eager prewarm warning for ${engine}:`, err);
           this.prewarmedKey = null;
           this.activePrewarmPromise = null;
+          // Re-throw so callers that await this can catch; the stored promise
+          // already has a .catch attached below to prevent unhandled rejection
+          // when the promise is abandoned (e.g. after abortCurrentJob()).
           throw err;
         });
+      // Attach a silent no-op handler immediately so that if this promise is later
+      // abandoned (activePrewarmPromise nulled by abortCurrentJob) without a
+      // consumer attached, the JS engine won't raise an unhandled rejection.
+      prewarmPromise.catch(() => {});
+      this.activePrewarmPromise = prewarmPromise;
       return this.activePrewarmPromise;
     }
     return Promise.resolve(null);
@@ -299,6 +310,11 @@ class BackgroundQueueProcessor {
             break;
           }
 
+
+          let isSignalAborted = false;
+          let isAbortLike = false;
+          let currentJob: ReturnType<typeof useBackgroundQueueStore.getState>['jobs'][number] | undefined;
+
           try {
             this.activeJobId = job.id;
             useBackgroundQueueStore.getState().updateJobStatus(job.id, 'processing', 'เริ่มกระบวนการ...');
@@ -310,10 +326,10 @@ class BackgroundQueueProcessor {
             useBackgroundQueueStore.getState().updateJobStatus(job.id, 'completed', 'เสร็จสมบูรณ์!');
           } catch (error) {
             // ดึงสถานะปัจจุบันของ Job จาก Store
-            const currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
+            currentJob = useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id);
 
-            const isSignalAborted = Boolean(this.currentAbortController?.signal?.aborted);
-            const isAbortLike = error instanceof Error && (
+            isSignalAborted = Boolean(this.currentAbortController?.signal?.aborted);
+            isAbortLike = error instanceof Error && (
               error.name === 'AbortError' ||
               error.message.includes('canceled') ||
               error.message.includes('aborted') ||
@@ -347,9 +363,31 @@ class BackgroundQueueProcessor {
             this.activeJobId = null;
             this.currentAbortController = null;
           }
-          
-          // หน่วงเวลาเล็กน้อยก่อนประมวลผลงานชิ้นถัดไป เพื่อให้ JS event loop ได้หายใจ
-          await new Promise(resolve => setTimeout(resolve, 160));
+
+          // หากงานก่อนหน้าถูกยกเลิก (Abort/Cancelled) ให้เคลียร์ Sidecar worker และ reset prewarm cache ให้สะอาด
+          const wasAbortedOrCancelled = Boolean(
+            isSignalAborted ||
+            isAbortLike ||
+            currentJob?.status === 'cancelled' ||
+            useBackgroundQueueStore.getState().jobs.find(j => j.id === job.id)?.status === 'cancelled'
+          );
+
+          if (wasAbortedOrCancelled) {
+            this.prewarmedKey = null;
+            this.activePrewarmPromise = null;
+            try {
+              if (window.electronAPI?.ocr?.cancelExternal) {
+                await window.electronAPI.ocr.cancelExternal();
+              }
+              // หน่วงเวลารอให้ Python worker ตัวใหม่ฟื้นตัวเต็มที่ก่อนเริ่มงานถัดไป
+              await new Promise(resolve => setTimeout(resolve, 350));
+            } catch (resetErr) {
+              console.warn('[QueueProcessor] Worker reset after abort warning:', resetErr);
+            }
+          } else {
+            // หน่วงเวลาเล็กน้อยก่อนประมวลผลงานชิ้นถัดไป เพื่อให้ JS event loop ได้หายใจ
+            await new Promise(resolve => setTimeout(resolve, 160));
+          }
         }
       } finally {
         this.isProcessing = false;
@@ -371,9 +409,21 @@ class BackgroundQueueProcessor {
    * ยกเลิกงานที่กำลังทำงานอยู่
    */
   public abortCurrentJob() {
+    // Silence any in-flight prewarm before abandoning it, so the pending
+    // rejection doesn't surface as an unhandled promise rejection.
+    if (this.activePrewarmPromise) {
+      this.activePrewarmPromise.catch(() => {});
+    }
+    this.prewarmedKey = null;
+    this.activePrewarmPromise = null;
     if (this.currentAbortController) {
       this.currentAbortController.abort();
       this.currentAbortController = null;
+    }
+    if (window.electronAPI?.ocr?.cancelExternal) {
+      window.electronAPI.ocr.cancelExternal().catch((err) => {
+        console.warn('[QueueProcessor] cancelExternal during abort warning:', err);
+      });
     }
   }
 
@@ -495,11 +545,6 @@ class BackgroundQueueProcessor {
       }
     }
 
-    const CHUNK_SIZE = 8;
-    const chunks: number[][] = [];
-    for (let i = 0; i < pageNumbers.length; i += CHUNK_SIZE) {
-      chunks.push(pageNumbers.slice(i, i + CHUNK_SIZE));
-    }
 
     let processedCount = 0;
     let processedOcrCount = 0;
@@ -515,10 +560,34 @@ class BackgroundQueueProcessor {
     // 2. ocrStageLimiter (max = 1 for DirectML to protect VRAM, 2 for CPU)
     // 3. translationStageLimiter (max = 1 for Argos worker)
     const jobBackend = job.backend || useOCRTextLayerStore.getState().options.backend || 'paddle';
-    const maxInFlight = jobBackend === 'ort_dml' ? 3 : 4;
+    let maxInFlight = jobBackend === 'ort_dml' ? 3 : 4;
+
+    // Dynamic VRAM Guard: Check VRAM status before launching job (fast in-memory cache, 0ms)
+    try {
+      const gpuInfo = await window.electronAPI?.ocr?.getGpuInfo?.();
+      const totalVram = gpuInfo?.totalVramMb;
+      const freeVram = gpuInfo?.freeVramMb;
+      // Only throttle if total hardware VRAM is genuinely constrained (< 3072 MB)
+      if (totalVram !== null && totalVram !== undefined && totalVram > 0 && totalVram < 3072) {
+        maxInFlight = 2;
+        console.warn(
+          `[QueueProcessor] Dynamic VRAM Guard: Constrained hardware VRAM detected (${totalVram} MB). ` +
+          `Throttling maxInFlight from ${jobBackend === 'ort_dml' ? 3 : 4} to 2 to prevent memory pressure.`
+        );
+      } else {
+        console.log(
+          `[QueueProcessor] Dynamic VRAM Guard: Hardware VRAM is adequate (Total: ${totalVram ?? 'N/A'} MB, Free: ${freeVram ?? 'N/A'} MB). Using maxInFlight = ${maxInFlight}.`
+        );
+      }
+    } catch (vramErr) {
+      console.warn('[QueueProcessor] Dynamic VRAM Guard query skipped:', vramErr);
+    }
+
     const inFlightLimiter = new ConcurrencyLimiter(maxInFlight);
 
-    const ocrConcurrency = jobBackend === 'ort_dml' ? 1 : 2;
+    // Python worker is a single-process stdio server; keep OCR concurrency strictly at 1
+    // to avoid thread contention, pipe buffer backlog, and watchdog timeouts.
+    const ocrConcurrency = 1;
     const ocrStageLimiter = new ConcurrencyLimiter(ocrConcurrency);
 
     const translationStageLimiter = new ConcurrencyLimiter(1);
@@ -926,7 +995,8 @@ class BackgroundQueueProcessor {
           const activeFile = useProjectStore.getState().file;
           const activeDocId = useProjectStore.getState().documentId;
           const activeCurrentPage = useProjectStore.getState().currentPage;
-          // Step 2d: Selective Store Hydration - only hydrate for active visible page
+          // Selective hydration: background pages stay in SQLite and hydrate on-demand when viewed.
+          // Eagerly hydrating every page cloned Zustand Maps + ran layout grouping N times on the main thread.
           if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
             useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
             const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
@@ -994,7 +1064,11 @@ class BackgroundQueueProcessor {
           'panel',
           pageData.resolvedQualityProfile,
           job.engine,
-          pageData.canvasWidth * pageData.canvasHeight,
+          resolveMaxPixelsForQualityProfile(
+            pageData.resolvedQualityProfile,
+            pageData.canvasWidth,
+            pageData.canvasHeight
+          ),
           {
             useAngleCls: resolvedUseAngleCls
           }
@@ -1043,7 +1117,7 @@ class BackgroundQueueProcessor {
       const activeFile = useProjectStore.getState().file;
       const activeDocId = useProjectStore.getState().documentId;
       const activeCurrentPage = useProjectStore.getState().currentPage;
-      // Step 2d: Selective Store Hydration - only hydrate for active visible page
+      // Selective hydration: only the visible page of the active document touches React stores.
       if (activeFile && activeDocId === job.documentId && activeCurrentPage === pageNum) {
         useOCRTextLayerStore.getState().setPageOCR(pageNum, ocrResult);
         const storeResult = useOCRTextLayerStore.getState().ocrByPageEngine.get(pageNum)?.get(job.engine)
@@ -1070,20 +1144,12 @@ class BackgroundQueueProcessor {
     const isActiveDoc = activeDocId !== null && activeDocId === documentId;
 
     if (!isActiveDoc) {
-      console.log(
-        `[QueueProcessor] Document ${documentId} is inactive (active doc is ${activeDocId}). ` +
-        `Persisting OCR to DB; viewer will hydrate layers upon document switch.`
-      );
-      void dbService.saveOCR(documentId, pageNum, ocrResult, ocrResult.ocrEngine || 'paddleocr').catch((err) => {
-        console.warn(`[QueueProcessor] Failed to persist OCR cache for inactive doc ${documentId}:`, err);
-      });
+      // OCR is already persisted to SQLite in executePageOCR; skip UI layer store mutation for inactive documents.
       return;
     }
 
-    const activePage = useProjectStore.getState().currentPage;
-    // Step 2c Optimization: Only hydrate React UI layer store for the CURRENT visible page!
-    // Background pages are safely persisted in SQLite DB and hydrate on-demand when viewed.
-    if (pageNum !== activePage) {
+    // Background pages hydrate on-demand when viewed; skip layout grouping + Map cloning here.
+    if (pageNum !== useProjectStore.getState().currentPage) {
       return;
     }
 
@@ -1484,7 +1550,11 @@ class BackgroundQueueProcessor {
         'panel',
         pageData.resolvedQualityProfile,
         engine,
-        pageData.canvasWidth * pageData.canvasHeight,
+        resolveMaxPixelsForQualityProfile(
+          pageData.resolvedQualityProfile,
+          pageData.canvasWidth,
+          pageData.canvasHeight
+        ),
         {
           useAngleCls: resolvedUseAngleCls,
         }
@@ -1594,17 +1664,40 @@ function createRenderConstraints(spec: ConstraintSpec): RenderConstraints {
   };
 }
 
-const PADDLE_CONSTRAINT_PROFILES: Record<'korean' | 'cjk' | 'high' | 'fast', ConstraintSpec> = {
-  korean: { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
-  cjk:    { maxSide: 21500, maxPixels: 37950000, boostedMaxPixels: 37950000 },
-  high:   { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
-  fast:   { maxSide: 19700, maxPixels: 18800000, boostedMaxPixels: 18800000 },
+export function resolveMaxPixelsForQualityProfile(
+  qualityProfile: 'fast' | 'balanced' | 'best',
+  canvasWidth: number,
+  canvasHeight: number
+): number {
+  const isTall = canvasHeight / Math.max(1, canvasWidth) >= 2.35;
+  const totalPixels = canvasWidth * canvasHeight;
+  if (isTall) return totalPixels;
+
+  if (qualityProfile === 'fast') {
+    return Math.min(totalPixels, 9_000_000);
+  }
+  if (qualityProfile === 'balanced') {
+    return Math.min(totalPixels, 16_000_000);
+  }
+  // 'best' mode: maintain high resolution for intricate speech bubbles & small manga text
+  return Math.min(totalPixels, 28_000_000);
+}
+
+const PADDLE_CONSTRAINT_PROFILES: Record<'korean' | 'cjk' | 'best' | 'balanced' | 'fast' | 'high', ConstraintSpec> = {
+  korean:   { maxSide: 21500, maxPixels: 37650000, boostedMaxPixels: 37950000 },
+  cjk:      { maxSide: 21500, maxPixels: 37950000, boostedMaxPixels: 37950000 },
+  best:     { maxSide: 21500, maxPixels: 28000000, boostedMaxPixels: 37950000 },
+  high:     { maxSide: 21500, maxPixels: 28000000, boostedMaxPixels: 37950000 },
+  balanced: { maxSide: 21500, maxPixels: 16000000, boostedMaxPixels: 24000000 },
+  fast:     { maxSide: 19700, maxPixels: 9000000,  boostedMaxPixels: 14000000 },
 };
 
-const EASY_CONSTRAINT_PROFILES: Record<'cjk' | 'high' | 'fast', ConstraintSpec> = {
-  cjk:  { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
-  high: { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
-  fast: { maxSide: 19700, maxPixels: 12800000, boostedMaxPixels: 12800000 },
+const EASY_CONSTRAINT_PROFILES: Record<'cjk' | 'best' | 'balanced' | 'fast' | 'high', ConstraintSpec> = {
+  cjk:      { maxSide: 21500, maxPixels: 23800000, boostedMaxPixels: 23800000 },
+  best:     { maxSide: 21500, maxPixels: 24000000, boostedMaxPixels: 24000000 },
+  high:     { maxSide: 21500, maxPixels: 24000000, boostedMaxPixels: 24000000 },
+  balanced: { maxSide: 21500, maxPixels: 15000000, boostedMaxPixels: 18000000 },
+  fast:     { maxSide: 19700, maxPixels: 9000000,  boostedMaxPixels: 12000000 },
 };
 
 function resolveRenderConstraints(
@@ -1612,8 +1705,6 @@ function resolveRenderConstraints(
   ocrLanguage: string,
   ocrQualityProfile: 'fast' | 'balanced' | 'best'
 ): RenderConstraints {
-  const isHighQuality = ocrQualityProfile === 'balanced' || ocrQualityProfile === 'best';
-
   if (engine === 'paddleocr') {
     if (hasKoreanOcrLanguage(ocrLanguage)) {
       return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.korean);
@@ -1621,17 +1712,29 @@ function resolveRenderConstraints(
     if (hasCjkOrThaiOcrLanguage(ocrLanguage)) {
       return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.cjk);
     }
-    return createRenderConstraints(isHighQuality ? PADDLE_CONSTRAINT_PROFILES.high : PADDLE_CONSTRAINT_PROFILES.fast);
+    if (ocrQualityProfile === 'best') {
+      return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.best);
+    }
+    if (ocrQualityProfile === 'balanced') {
+      return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.balanced);
+    }
+    return createRenderConstraints(PADDLE_CONSTRAINT_PROFILES.fast);
   }
 
   if (engine === 'easyocr') {
     if (hasCjkOrThaiOcrLanguage(ocrLanguage)) {
       return createRenderConstraints(EASY_CONSTRAINT_PROFILES.cjk);
     }
-    return createRenderConstraints(isHighQuality ? EASY_CONSTRAINT_PROFILES.high : EASY_CONSTRAINT_PROFILES.fast);
+    if (ocrQualityProfile === 'best') {
+      return createRenderConstraints(EASY_CONSTRAINT_PROFILES.best);
+    }
+    if (ocrQualityProfile === 'balanced') {
+      return createRenderConstraints(EASY_CONSTRAINT_PROFILES.balanced);
+    }
+    return createRenderConstraints(EASY_CONSTRAINT_PROFILES.fast);
   }
 
-  return createRenderConstraints({ maxSide: 21500, maxPixels: 23800000 });
+  return createRenderConstraints({ maxSide: 21500, maxPixels: 24000000 });
 }
 
 function fitDimensionsToConstraints(

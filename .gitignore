@@ -77,7 +77,5 @@ src-tauri/gen/
 temp_in.json
 temp_out.json
 pnpm-debug.log*
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
+# Repomix outputs
+repomix*

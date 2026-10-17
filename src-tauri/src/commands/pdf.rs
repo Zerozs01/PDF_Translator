@@ -43,3 +43,50 @@ pub async fn render_page_binary(
     .await
     .map_err(|e| e.to_string())?
 }
+
+use crate::core::pdf::psd::{PsdDocument, PsdLayer, PsdLayerInput, PsdWriter};
+
+#[derive(serde::Deserialize)]
+pub struct PsdExportOptions {
+    pub output_path: String,
+    pub width: u32,
+    pub height: u32,
+    pub layers: Vec<PsdLayerInput>,
+}
+
+#[tauri::command]
+pub async fn export_psd(options: PsdExportOptions) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut doc = PsdDocument::new(options.width, options.height);
+
+        for l in options.layers {
+            let opacity = l.opacity.unwrap_or(255);
+            let visible = l.visible.unwrap_or(true);
+            let rgba = l.rgba_data.unwrap_or_default();
+
+            let mut layer = PsdLayer::new(
+                l.name,
+                l.left,
+                l.top,
+                l.width,
+                l.height,
+                &rgba,
+                opacity,
+                visible,
+            );
+            layer.is_text = l.is_text.unwrap_or(false);
+            layer.text_content = l.text_content;
+            layer.font_size = l.font_size;
+            doc.add_layer(layer);
+        }
+
+        let bytes = PsdWriter::write_to_bytes(&doc)?;
+        std::fs::write(&options.output_path, &bytes)
+            .map_err(|e| format!("Failed to write PSD file {}: {}", options.output_path, e))?;
+
+        Ok(options.output_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+

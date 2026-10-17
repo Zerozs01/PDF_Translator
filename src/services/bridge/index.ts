@@ -1064,7 +1064,15 @@ export function initPlatformBridgeCompat(): void {
             return { backend: 'paddle' as const, adapterName: undefined };
           }
         },
-        cancelExternal: async () => true,
+        cancelExternal: async () => {
+          try {
+            await invoke<void>('restart_worker');
+            return true;
+          } catch (err) {
+            console.warn('[Bridge] cancelExternal restart_worker warning:', err);
+            return false;
+          }
+        },
         writeTempImage: async (payload: { imageData: Uint8Array | ArrayBuffer | number[]; imageMimeType?: string }) => {
           try {
             const rawBytes = payload.imageData instanceof Uint8Array
@@ -1118,8 +1126,8 @@ export function initPlatformBridgeCompat(): void {
 
             const res = await withTimeout(
               invoke<any>('send_sidecar_command', { payload: commandPayload }),
-              90_000,
-              'OCR sidecar processing timed out after 90s'
+              185_000,
+              'OCR sidecar processing timed out after 185s'
             );
             if (!res) {
               throw new Error('Empty response from OCR sidecar');
@@ -1166,8 +1174,8 @@ export function initPlatformBridgeCompat(): void {
             };
             const res = await withTimeout(
               invoke<any>('send_sidecar_command', { payload: commandPayload }),
-              90_000,
-              'Raw OCR sidecar processing timed out after 90s'
+              185_000,
+              'Raw OCR sidecar processing timed out after 185s'
             );
             return res;
           } catch (err) {
@@ -1186,6 +1194,9 @@ export function initPlatformBridgeCompat(): void {
               has_cuda: boolean;
               mode: string;
               gpu_vendor: string;
+              total_vram_mb?: number | null;
+              free_vram_mb?: number | null;
+              used_vram_mb?: number | null;
             }>('get_gpu_info');
             const result = {
               gpus: info.gpus,
@@ -1193,6 +1204,9 @@ export function initPlatformBridgeCompat(): void {
               hasCuda: info.has_cuda,
               mode: (info.mode || 'DirectML') as 'CUDA' | 'DirectML' | 'CPU',
               gpuVendor: (info.gpu_vendor || 'amd') as 'intel' | 'amd' | 'nvidia' | 'unknown',
+              totalVramMb: info.total_vram_mb ?? null,
+              freeVramMb: info.free_vram_mb ?? null,
+              usedVramMb: info.used_vram_mb ?? null,
             };
             if (result.mode !== 'CPU') {
               (window as any).__CACHED_GPU_INFO__ = result;
@@ -1206,6 +1220,9 @@ export function initPlatformBridgeCompat(): void {
               hasCuda: false,
               mode: 'DirectML' as const,
               gpuVendor: 'amd' as const,
+              totalVramMb: null,
+              freeVramMb: null,
+              usedVramMb: null,
             };
           }
         },
@@ -1283,6 +1300,7 @@ export function initPlatformBridgeCompat(): void {
         getPageStreamUrl: (docId: string, pageNumber: number, scale?: number) =>
           platformBridge.pdf.getPageStreamUrl(docId, pageNumber, scale),
         exportPdf: (options: any) => platformBridge.pdf.exportPdf(options),
+        exportPsd: (options: any) => platformBridge.pdf.exportPsd ? platformBridge.pdf.exportPsd(options) : Promise.reject(new Error('PSD export not supported')),
       }),
       gemini: createSafeBridgeSection({
         getApiKeyStatus: async () => ({ hasKey: Boolean(window.localStorage?.getItem('gemini_api_key')) }),

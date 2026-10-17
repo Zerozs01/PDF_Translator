@@ -386,7 +386,7 @@ def translate_texts(
                     variants.extend([stripped.title(), stripped.lower(), stripped.capitalize()])
                 if "ABLETO" in unique_text.upper():
                     variants.append(re.sub(r"\bABLETO\b", "able to", unique_text, flags=re.I))
-                for variant in variants:
+                for variant in dict.fromkeys(variants):
                     if not variant or variant == unique_text:
                         continue
                     if stats is not None:
@@ -434,7 +434,7 @@ def translate_texts(
                 if "ABLETO" in u_text.upper():
                     word_vars.append(re.sub(r"\bABLETO\b", "able to", u_text, flags=re.I))
 
-                filtered_vars = [v for v in word_vars if v and v != u_text]
+                filtered_vars = list(dict.fromkeys(v for v in word_vars if v and v != u_text))
                 if filtered_vars:
                     needs_retry.append(u_text)
                     variants_by_word[u_text] = (filtered_vars, trailing_punct)
